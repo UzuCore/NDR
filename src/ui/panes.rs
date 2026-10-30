@@ -872,6 +872,11 @@ impl App {
         if remember {
             pane.back.push(pane.path.clone());
             pane.forward.clear();
+            // 원본 기록 목록 용량 20(FUN_00480d58 → FUN_0045806c(…, 0x14)): 꽉 차면 가장 오래된 것을 지운다(FUN_00458348).
+            if pane.back.len() > 19 {
+                let extra = pane.back.len() - 19;
+                pane.back.drain(..extra);
+            }
         }
         // 고친 것(사용자 요청): 뒤로·주소 줄 등으로 지금 폴더의 상위 폴더로 가면 떠나온 하위 폴더에 커서를 둔다(그 쪽이 보인다).
         // 원본 FUN_00486694는 ".."(1)·"\"(2)로 갈 때만 그렇게 하고, 뒤로(FUN_0048d58c)는 첫 항목으로 돌아갔다.

@@ -1259,5 +1259,12 @@ fn back_wheel_and_dot_files_follow_the_user_requests() {
     assert_eq!(app.panes[0].entries[app.panes[0].cursor].name, "dir800", "back puts the cursor on the folder we came from");
     run(&mut app, vec![]);
     assert_eq!(app.panes[0].first_column, first, "and shows its page again");
+    // 원본 기록 용량 20: 뒤로 갈 곳은 19개(지금 폴더까지 20)를 넘지 않는다.
+    for i in 0..25 {
+        app.navigate(0, left.join(format!("dir{i:03}")), true);
+    }
+    wait(&mut app, &ctx);
+    assert_eq!(app.history_list(0).len(), 20);
+    assert_eq!(app.panes[0].back.first(), Some(&left.join("dir005")), "the oldest entries are dropped");
     let _ = fs::remove_dir_all(root);
 }
