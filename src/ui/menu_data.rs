@@ -11,8 +11,6 @@ pub const ORIGINAL_HIDDEN: &[&str] = &[
 ];
 /// 원본 TfMain 메뉴 단추(tbFile … tbHelp, DropdownMenu = pmFile … pmHelp)의 차례와 항목(docs/original-menus.txt).
 /// (제목 언어 키, 한국어, 영어, 항목). 항목 "-"은 구분선, "@…"은 하위 메뉴(checksum, workFolders, listStyle, columns, sort, filter).
-/// C# 판에만 있는 명령(deletePermanent, toggleExtensionInfoBar, createArchive, createZip, merge, remote, remoteCommand,
-/// ndrShortcuts, importLegacy, shellIntegration)은 가까운 원본 항목 뒤에 두고, 스킨 테마(원본 모양)에서는 숨긴다.
 pub const MENUS: &[(&str,&str,&str,&[(&str,&str,&str)])] = &[
 ("ToolButton.tbFile","파일","File",&[
 ("open","열기 / 실행","Open/Execute"),
@@ -24,7 +22,6 @@ pub const MENUS: &[(&str,&str,&str,&[(&str,&str,&str)])] = &[
 ("moveToFolder","다른 폴더로 이동…","Move to folder..."),
 ("-","",""),
 ("deleteRecycle","휴지통으로 삭제","Delete"),
-("deletePermanent","영구 삭제","Delete permanent"),
 ("shred","완전 삭제…","Shred and Delete..."),
 ("-","",""),
 ("rename","이름 변경","Rename"),
@@ -103,7 +100,6 @@ pub const MENUS: &[(&str,&str,&str,&[(&str,&str,&str)])] = &[
 ("toggleDriveButtons","드라이브 버튼","Drive Buttons"),
 ("toggleFolderInfoBar","폴더/디스크 정보 표시줄","Folder/Disk information"),
 ("toggleFileInfoBar","파일 정보 표시줄","File information"),
-("toggleExtensionInfoBar","확장자 정보","Extension information"),
 ("-","",""),
 ("newTab","새 탭","New Tab"),
 ("-","",""),
@@ -146,19 +142,15 @@ pub const MENUS: &[(&str,&str,&str,&[(&str,&str,&str)])] = &[
 ("archiveInstall","압축 파일 설치…","Archive install"),
 ("-","",""),
 ("archiveProperties","압축 파일 속성…","Archive properties"),
-("createArchive","압축 파일 만들기…","Create archive"),
-("createZip","ZIP 만들기…","Create zip"),
 ]),
 ("ToolButton.tbConnect","네트워크","Network",&[
 ("ftpQuickConnect","FTP 빠른 연결…","FTP Quick Connect..."),
-("remote","원격 창(FTP / FTPS / SFTP)…","Remote window (FTP / FTPS / SFTP)..."),
 ("-","",""),
 ("@ftpSites","",""),
 ("ftpDisconnect","FTP 연결 끊기","FTP Disconnect"),
 ("-","",""),
 ("ftpDownload","FTP 내려받기","FTP Download"),
 ("ftpUpload","FTP 올리기","FTP Upload"),
-("remoteCommand","원격 파일 명령…","Remote command"),
 ("-","",""),
 ("mapDrive","네트워크 드라이브 연결…","Connect Network Drive..."),
 ("unmapDrive","네트워크 드라이브 연결 해제…","Disconnect Network Drive..."),
@@ -173,7 +165,6 @@ pub const MENUS: &[(&str,&str,&str,&[(&str,&str,&str)])] = &[
 ("-","",""),
 ("split","파일 분할…","Split File..."),
 ("join","분할 파일 합치기…","Join Files..."),
-("merge","텍스트 파일 합치기…","Merge"),
 ("-","",""),
 ("diskCopy","디스크 이미지 복사…","Disk Copy..."),
 ("-","",""),
@@ -184,9 +175,6 @@ pub const MENUS: &[(&str,&str,&str,&[(&str,&str,&str)])] = &[
 ("search","검색…","Search..."),
 ("-","",""),
 ("options","환경 설정…","Options..."),
-("ndrShortcuts","NDR 단축키 설정…","Ndr shortcuts"),
-("importLegacy","레거시 INI 설정 가져오기…","Import legacy"),
-("shellIntegration","탐색기 메뉴 통합…","Shell integration"),
 ]),
 ("ToolButton.tbHelp","도움말","Help",&[
 ("help","도움말","Help"),

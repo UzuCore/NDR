@@ -304,23 +304,6 @@ fn function_key_tab_keys_follow_the_original_list() {
     fs::remove_dir_all(root).unwrap();
 }
 
-fn key_frame(app: &mut App, ctx: &egui::Context, key: egui::Key, modifiers: egui::Modifiers) {
-    let down = egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
-    let up = egui::Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers };
-    let raw = egui::RawInput { events: vec![down, up], modifiers, screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 900.0))), ..Default::default() };
-    let _ = ctx.run(raw, |ctx| {
-        app.original_dialog_ui(ctx);
-        app.msgbox_ui(ctx);
-    });
-}
-fn select_row(app: &mut App, id: &str) {
-    let form = app.ndr_shortcuts_form().unwrap();
-    form.search.clear();
-    let index = form.rows.iter().position(|r| r.definition.id == id).unwrap();
-    form.grid = super::grid::GridState::new(form.rows.len());
-    form.grid.click(index, egui::Modifiers::NONE, false);
-}
-
 thread_local! {
     static CARET_RUNS: std::cell::RefCell<Vec<(PathBuf, String)>> = const { std::cell::RefCell::new(Vec::new()) };
 }
@@ -342,61 +325,6 @@ fn ctrl_function_keys_run_the_original_caret_bindings() {
     let _ = app.shortcut_key(egui::Key::F3, egui::Modifiers::NONE, &ctx);
     assert!(CARET_RUNS.with(|r| r.borrow().is_empty()), "plain F3 keeps its own meaning");
     let _ = fs::remove_dir_all(root);
-}
-
-#[test]
-fn ndr_shortcut_window_follows_csharp() {
-    use super::ndr_shortcuts::ShortcutsAction;
-    let (root, ctx, mut app) = fixture("keys", "ko");
-    app.dispatch("ndrShortcuts", &ctx);
-    assert!(matches!(app.original_dialogs.last().map(|d| &d.kind), Some(DialogKind::NdrShortcuts(_))));
-    {
-        let form = app.ndr_shortcuts_form().unwrap();
-        assert_eq!(form.rows.len(), ndr::shortcut_bindings::definitions().len());
-        let cycle = form.rows.iter().find(|r| r.definition.id == "cycleSelection").unwrap();
-        assert_eq!((cycle.command.as_str(), cycle.scope.as_str(), cycle.raw.as_str()), ("파일/폴더 선택 순환", "파일 패널", "Alt+U"));
-    }
-    // 새 단축키 누르기(Ctrl+Shift+K): 충돌이 없으면 바뀐다.
-    select_row(&mut app, "cycleSelection");
-    app.ndr_shortcuts_action(ShortcutsAction::Edit, &ctx);
-    assert!(matches!(&app.original_dialogs.last().unwrap().kind, DialogKind::ShortcutCapture { display } if display == "현재: Alt+U"));
-    key_frame(&mut app, &ctx, egui::Key::K, egui::Modifiers { ctrl: true, shift: true, ..Default::default() });
-    assert!(matches!(app.original_dialogs.last().map(|d| &d.kind), Some(DialogKind::NdrShortcuts(_))), "the capture window closes");
-    // 같은 범위에서 쓰는 글쇠(F7 = 새 폴더)는 충돌 상자.
-    select_row(&mut app, "rename");
-    app.ndr_shortcuts_action(ShortcutsAction::Edit, &ctx);
-    key_frame(&mut app, &ctx, egui::Key::F7, egui::Modifiers::NONE);
-    let message = app.msgboxes.first().map(|m| (m.title.clone(), m.text.clone())).unwrap();
-    assert_eq!(message.0, "단축키 충돌");
-    assert!(message.1.starts_with("같은 범위에서 이미 사용 중인 단축키입니다: "), "{}", message.1);
-    app.answer_message_box(1, &ctx);
-    // 사용 안 함 → 저장: 기본값과 다른 것만 KeyboardShortcuts에.
-    select_row(&mut app, "newFolder");
-    app.ndr_shortcuts_action(ShortcutsAction::Disable, &ctx);
-    app.ndr_shortcuts_action(ShortcutsAction::Ok, &ctx);
-    assert_eq!(app.settings.values["KeyboardShortcuts"], serde_json::json!({"cycleSelection": "Ctrl+Shift+K", "newFolder": ""}));
-    assert_eq!(app.status, "단축키 설정을 저장했습니다.");
-    // 다시 열어 기본값으로 되돌리면 저장할 때 빠진다. 같은 글쇠 둘이면 저장 전에 충돌 상자.
-    app.dispatch("ndrShortcuts", &ctx);
-    select_row(&mut app, "cycleSelection");
-    app.ndr_shortcuts_action(ShortcutsAction::Default, &ctx);
-    {
-        let form = app.ndr_shortcuts_form().unwrap();
-        let index = form.rows.iter().position(|r| r.definition.id == "copy").unwrap();
-        form.rows[index].raw = "Ctrl+X".into();
-    }
-    app.ndr_shortcuts_action(ShortcutsAction::Ok, &ctx);
-    assert!(app.msgboxes.first().is_some_and(|m| m.text.starts_with("단축키 충돌을 해결한 뒤 저장하세요: ")));
-    app.answer_message_box(1, &ctx);
-    {
-        let form = app.ndr_shortcuts_form().unwrap();
-        let index = form.rows.iter().position(|r| r.definition.id == "copy").unwrap();
-        form.rows[index].raw = "Ctrl+C".into();
-    }
-    app.ndr_shortcuts_action(ShortcutsAction::Ok, &ctx);
-    assert_eq!(app.settings.values["KeyboardShortcuts"], serde_json::json!({"newFolder": ""}));
-    assert_eq!(ndr::shortcut_bindings::format("D1", ndr::shortcut_bindings::Modifiers { ctrl: true, alt: true, shift: false }), "Ctrl+Alt+1");
-    fs::remove_dir_all(root).unwrap();
 }
 
 

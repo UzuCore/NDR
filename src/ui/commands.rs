@@ -639,7 +639,7 @@ impl App {
             "theme"=>self.theme_command(),"language"=>self.language_command(),
             "options"=>self.open_settings_window(),
             "importLegacy"=>self.import_legacy_command(),
-            "shortcuts"=>self.show_shortcut_window(),"ndrShortcuts"=>self.open_ndr_shortcuts(),
+            "shortcuts"=>self.show_shortcut_window(),
             "textView"|"textEdit"=>self.text_command(id=="textEdit"),
             "properties"=>self.properties_command(),
             "attributes"=>self.change_attributes(),

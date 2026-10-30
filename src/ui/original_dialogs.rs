@@ -68,10 +68,7 @@ pub(super) enum DialogKind {
     Settings(Box<super::settings_window::SettingsForm>),
     /// C# FunctionKeyEditWindow.
     FunctionKeyEdit(Box<super::function_key_editor::FunctionKeyEditForm>),
-    /// C# ShortcutWindow(NDR 단축키 설정).
-    NdrShortcuts(Box<super::ndr_shortcuts::NdrShortcutsForm>),
-    /// C# ShortcutCaptureWindow.
-    ShortcutCapture { display: String },
+
     /// C# FileConflictWindow.
     FileConflict(Box<super::file_operation::ConflictForm>),
     /// 원본 TfChecksum(제목 CRC/MD5/SHA1): 결과 글(처음 CALCULATING, 실패면 ERROR)과, 결과가 나오면 켜지는 복사 단추.
@@ -128,10 +125,7 @@ pub(super) enum DialogResult {
     /// 확인한 설정 사본. 취소면 None.
     Settings(Option<ndr::settings::Settings>),
     FunctionKeyEdit(Option<super::function_key_editor::Binding>),
-    /// 새 KeyboardShortcuts. 취소면 None.
-    NdrShortcuts(Option<serde_json::Map<String, serde_json::Value>>),
-    /// 누른 글쇠 글. 취소면 None.
-    ShortcutCapture(Option<String>),
+
     /// (고른 답, 모두 적용). 창을 닫으면 None(= 취소).
     FileConflict(Option<(ndr::fsops::ConflictChoice, bool)>),
     /// 체크섬 창이 닫힘.
@@ -520,8 +514,7 @@ impl App {
         let mut settings_action = None;
         let mut function_key_edit = None;
         let mut ftp_quick = None;
-        let mut shortcuts_action = None;
-        let mut captured = None;
+
         let mut conflict_choice = None;
         let remote_labels = if matches!(dialog.kind, DialogKind::Remote(_)) {
             let mut labels = self.remote_labels();
@@ -742,17 +735,11 @@ impl App {
                 DialogKind::FunctionKeyEdit(form) => {
                     function_key_edit = super::function_key_editor::function_key_edit_ui(ui, form, &self.language_pack, enter);
                 }
-                DialogKind::NdrShortcuts(form) => {
-                    shortcuts_action = super::ndr_shortcuts::shortcuts_ui(ui, form, &self.language_pack, enter, first_frame);
-                }
+
                 DialogKind::FileConflict(form) => {
                     conflict_choice = super::file_operation::conflict_ui(ui, form, &self.language_pack, ko, enter).map(|c| (c, form.apply_all));
                 }
-                DialogKind::ShortcutCapture { display } => {
-                    if !escape {
-                        captured = super::ndr_shortcuts::capture_ui(ui, display, ko);
-                    }
-                }
+
                 DialogKind::Credentials { user, password } => {
                     if let Some(ok) = super::tools_dialog::credentials_ui(ui, user, password, &self.language_pack, enter, first_frame) {
                         outcome = if ok { Outcome::Ok } else { Outcome::Cancel };
@@ -932,12 +919,7 @@ impl App {
             };
             return self.answer_dialog(DialogResult::FtpQuickConnect(form), ctx);
         }
-        if let Some(action) = shortcuts_action {
-            return self.ndr_shortcuts_action(action, ctx);
-        }
-        if let Some(gesture) = captured {
-            return self.answer_dialog(DialogResult::ShortcutCapture(Some(gesture)), ctx);
-        }
+
         if let Some(choice) = conflict_choice {
             return self.answer_dialog(DialogResult::FileConflict(Some(choice)), ctx);
         }
@@ -1000,8 +982,7 @@ impl App {
             (_, DialogKind::FtpQuickConnect(_)) => DialogResult::FtpQuickConnect(None),
             (_, DialogKind::Settings(_)) => DialogResult::Settings(None),
             (_, DialogKind::FunctionKeyEdit(_)) => DialogResult::FunctionKeyEdit(None),
-            (_, DialogKind::NdrShortcuts(_)) => DialogResult::NdrShortcuts(None),
-            (_, DialogKind::ShortcutCapture { .. }) => DialogResult::ShortcutCapture(None),
+
             (_, DialogKind::FileConflict(_)) => DialogResult::FileConflict(None),
             // 원본 btnCopyClick: 결과 글을 클립보드로(창은 그대로).
             (Outcome::Choice(0), DialogKind::Checksum { .. }) => return self.copy_checksum(),

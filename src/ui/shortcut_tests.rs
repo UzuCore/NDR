@@ -350,15 +350,11 @@ fn ctrl_f_and_ctrl_alt_0_follow_the_original_menu() {
 }
 
 
-/// 스킨 테마의 메뉴는 원본 항목만: 원본 이름(MENU_CAPTIONS·ORIGINAL_ACTIONS)이 없는 명령은 C# 판에만 있는 것이다.
+/// 메뉴는 원본 항목만: 원본 이름(MENU_CAPTIONS·ORIGINAL_ACTIONS)이 없는 명령(C# 판에만 있던 것)은 메뉴 표에 없다.
 #[test]
-fn skin_menu_hides_only_the_csharp_only_commands() {
-    let mut hidden: Vec<&str> = menu_data::MENUS.iter().flat_map(|(_, _, _, items)| items.iter().map(|(id, _, _)| *id)).filter(|id| *id != "-" && App::csharp_only_menu_item(id)).collect();
-    hidden.sort_unstable();
-    hidden.dedup();
-    let mut expected = vec!["deletePermanent", "toggleExtensionInfoBar", "createArchive", "createZip", "merge", "remote", "remoteCommand", "ndrShortcuts", "importLegacy", "shellIntegration"];
-    expected.sort_unstable();
-    assert_eq!(hidden, expected);
+fn menus_have_only_original_commands() {
+    let foreign: Vec<&str> = menu_data::MENUS.iter().flat_map(|(_, _, _, items)| items.iter().map(|(id, _, _)| *id)).filter(|id| *id != "-" && App::csharp_only_menu_item(id)).collect();
+    assert!(foreign.is_empty(), "{foreign:?}");
     // ORIGINAL_HIDDEN = 원본 DFM에서 Visible=False인 항목 가운데 NDR 메뉴에 있는 것, 빠짐없이.
     let dfm = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/original-menus.txt")).unwrap();
     let invisible: Vec<&str> = dfm.lines().filter(|l| l.contains("Visible=False")).filter_map(|l| l.trim().strip_prefix("TMenuItem ")?.split(' ').next()).collect();

@@ -229,7 +229,6 @@ impl App {
             "credentials" => self.credentials_dialog("Network drive credentials", |_, _| {}),
             // C# 원격 창(연결하지 않음): 가운데 올리기·내려받기 단추의 스킨 그림 확인용.
             "remote" => self.open_remote_window(None, None),
-            "ndirshortcuts" => self.open_ndr_shortcuts(),
             "search" => self.search_command(),
             "advselect" => self.advanced_select(false),
             "compareopts" | "compareresult" => {

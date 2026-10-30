@@ -21,7 +21,6 @@ mod list_view;
 mod main_window;
 mod menu_data;
 mod msgbox;
-mod ndr_shortcuts;
 mod original_dialogs;
 mod pane_chrome;
 mod pane_commands;
