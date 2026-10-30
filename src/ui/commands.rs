@@ -624,7 +624,13 @@ impl App {
             },
             "filter"=>self.show_filter_prompt(),
             "find"=>self.find_command(),"findNext"=>self.find_next(),
-            "favorites"=>self.manage_favorites(),"favoritesMenu"=>self.show_favorites_menu(),"addToFavorites"=>self.add_to_favorites_command(),
+            // 원본 miFavoritesClick(0x4339d0): 도구 모음에 command가 favorites인 단추가 있으면 그 단추의 DropDown(단추 아래),
+            // 없으면 pmFavorites.Popup(GetCursorPos).
+            "favorites"=>self.manage_favorites(),"favoritesMenu"=>{
+                self.show_favorites_menu();
+                let at=self.favorites_button.or_else(||ctx.input(|i|i.pointer.latest_pos()));
+                if let Some(popup)=self.popup.as_mut(){popup.position=at;}
+            },"addToFavorites"=>self.add_to_favorites_command(),
             
             "options"=>self.open_settings_window(),
             "importLegacy"=>self.import_legacy_command(),

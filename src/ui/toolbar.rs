@@ -238,8 +238,12 @@ impl App {
         let mut clicked = None;
         let mut favorites_at = None;
         let mut container_at = None;
+        self.favorites_button = None;
         for (item, x) in left.iter().zip(left_x).chain(right.iter().zip(right_x)) {
             let slot = egui::Rect::from_min_size(egui::pos2(rect.left() + x, rect.top() + top), egui::vec2(width_of(item), button.y));
+            if item.action == "favorites" {
+                self.favorites_button = Some(slot.left_bottom());
+            }
             let before = clicked.is_some();
             self.skin_toolbar_item(ui, ctx, item, slot, &mut clicked);
             if !before && clicked.as_deref() == Some("favorites") {

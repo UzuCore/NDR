@@ -526,6 +526,8 @@ pub struct App {
     list_font_size: f32,
     /// 원본 btnFTPShowDetail(">>"): pBottom 높이가 30을 넘으면 22(단추 줄만), 아니면 100.
     results_collapsed: bool,
+    /// 지난 그림의 도구 모음 즐겨찾기 단추 왼쪽 아래(원본 miFavoritesClick이 그 단추의 DropDown을 연다). 단추가 없으면 None.
+    favorites_button: Option<egui::Pos2>,
     /// 패널 폴더 바뀜 감시(원본 TNXShellChangeNotify). 시험에서는 끈다(시험이 만든 파일 때문에 늦게 새로 읽지 않게).
     watch_folders: bool,
     /// 전송을 시작한 때(lFTPTransferred의 KB/s).
@@ -830,6 +832,7 @@ impl App {
             window_maximized: None,
             list_font_size: ndr::settings::DEFAULT_LIST_FONT_PIXELS as f32,
             results_collapsed: false,
+            favorites_button: None,
             watch_folders: !cfg!(test),
             ftp_started: None,
             ftp_results: Arc::new(Mutex::new(Vec::new())),
