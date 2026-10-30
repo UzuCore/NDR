@@ -572,6 +572,7 @@ fn attribute_window_asks_per_item_like_changeattributesasync() {
     wait_dialog(&mut app, &ctx);
     wait_listing(&mut app, &ctx);
     assert!(app.original_dialogs.is_empty());
+    assert!(app.panes[0].selected.is_empty(), "applied and skipped items are unmarked (Select(i, false))");
     assert_eq!(attributes("beta.txt") & 3, 1, "skipped: still read-only");
     let _ = native::set_attributes(&left.join("beta.txt"), false, false);
     assert_eq!(attributes("gamma.log") & 2, 2);

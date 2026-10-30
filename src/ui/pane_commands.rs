@@ -10,6 +10,8 @@ pub(super) struct AttributeRun {
     completed: usize,
     skipped: usize,
     errors: Vec<String>,
+    /// 원본 FUN_0043657c: 적용했거나 건너뛴 항목(실패하지 않은 것)은 목록 표시를 푼다(Select(번호, false)). 취소한 항목부터는 남는다.
+    processed: Vec<PathBuf>,
 }
 
 impl App {
@@ -189,7 +191,7 @@ impl App {
         if paths.is_empty() {
             return self.warn("속성을 바꿀 파일이나 폴더를 선택하세요.", "Select the files or folders to change.");
         }
-        self.attribute_step(AttributeRun { pane: i, paths, index: 0, completed: 0, skipped: 0, errors: vec![] });
+        self.attribute_step(AttributeRun { pane: i, paths, index: 0, completed: 0, skipped: 0, errors: vec![], processed: vec![] });
     }
 
     pub(super) fn attribute_step(&mut self, mut run: AttributeRun) {
@@ -200,6 +202,7 @@ impl App {
                 if action == super::original_dialogs::AttributeAction::Skip {
                     run.skipped += 1;
                 }
+                run.processed.push(run.paths[run.index].clone());
                 run.index += 1;
                 app.attribute_step(run);
             }
@@ -209,6 +212,8 @@ impl App {
                 let tx = app.async_tx.clone();
                 thread::spawn(move || {
                     let errors = ndr::tools::change_attributes_and_time(&targets, &changes);
+                    let failed = |path: &PathBuf| errors.iter().any(|e| e.starts_with(&format!("{}: ", path.display())));
+                    run.processed.extend(targets.iter().filter(|p| !failed(p)).cloned());
                     run.errors.extend(errors);
                     run.completed += targets.len();
                     run.index = if all { run.paths.len() } else { run.index + 1 };
@@ -219,6 +224,11 @@ impl App {
     }
 
     pub(super) fn finish_attributes(&mut self, run: AttributeRun) {
+        let pane = &mut self.panes[run.pane];
+        let rows: Vec<usize> = pane.entries.iter().enumerate().filter(|(_, e)| run.processed.contains(&e.path)).map(|(row, _)| row).collect();
+        for row in rows {
+            pane.selected.remove(&row);
+        }
         self.refresh(run.pane);
         let ko = self.language == "ko";
         let n = |value: usize| ndr::parity::format_size(value as u64, "B", true).trim_end_matches(" B").to_owned();
