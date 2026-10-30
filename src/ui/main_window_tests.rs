@@ -1375,3 +1375,61 @@ fn resize_and_refresh_adjust_the_page_like_the_original() {
     assert_eq!(app.panes[0].first_column, (column + 1).saturating_sub(columns), "FileListChanged → AdjustPage");
     let _ = fs::remove_dir_all(root);
 }
+
+/// 원본 FUN_00487ce8·SetSortType(0x7dbb28): 자세히 보기에서 같은 폴더를 다시 읽으면 옛 세로 위치(SetScrollTop), 정렬을 바꾸면 커서
+/// 항목이 보이게(SetItemIndex), 다른 폴더로 가면 첫 항목부터 보인다.
+#[test]
+fn details_scroll_follows_refresh_sort_and_navigation_like_the_original() {
+    let (root, ctx, mut app) = fixture("details-scroll");
+    let left = app.panes[0].path.clone();
+    for i in 0..300 {
+        fs::write(left.join(format!("f{i:03}.txt")), b"x").unwrap();
+    }
+    fs::create_dir_all(left.join("sub")).unwrap();
+    for i in 0..300 {
+        fs::write(left.join("sub").join(format!("g{i:03}.txt")), b"x").unwrap();
+    }
+    app.settings.set_text("LeftViewStyle", "Details");
+    app.refresh(0);
+    wait(&mut app, &ctx);
+    let run = |app: &mut App| {
+        let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 850.0))), ..Default::default() };
+        let _ = ctx.run(raw, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.columns(2, |columns| {
+                    app.pane_ui(&mut columns[0], 0, ctx);
+                    app.pane_ui(&mut columns[1], 1, ctx);
+                });
+            });
+        });
+    };
+    run(&mut app);
+    run(&mut app);
+    let row = |app: &App, name: &str| app.panes[0].entries.iter().position(|e| e.name == name).unwrap();
+    app.panes[0].cursor = row(&app, "f250.txt");
+    app.panes[0].reveal = true;
+    run(&mut app);
+    let top = app.panes[0].page.top;
+    assert!(top > 0, "scrolled down to the cursor");
+    // 같은 폴더 다시 읽기: 옛 위치를 지킨다.
+    app.refresh(0);
+    wait(&mut app, &ctx);
+    run(&mut app);
+    run(&mut app);
+    assert_eq!(app.panes[0].page.top, top, "SetScrollTop(old top)");
+    // 내림차순으로 정렬: 커서 항목(f250)이 앞쪽으로 옮겨 가고 보인다.
+    assert!(app.sort_command("sortDescending"));
+    run(&mut app);
+    run(&mut app);
+    let page = app.panes[0].page.clone();
+    let cursor = app.panes[0].cursor;
+    assert_eq!(app.panes[0].entries[cursor].name, "f250.txt");
+    assert!(page.top <= cursor && cursor <= page.last, "SetSortDescend → SetItemIndex: {page:?} {cursor}");
+    // 다른 폴더: 첫 항목부터.
+    app.navigate(0, left.join("sub"), true);
+    wait(&mut app, &ctx);
+    run(&mut app);
+    run(&mut app);
+    assert_eq!((app.panes[0].cursor, app.panes[0].page.top), (0, 0), "a new folder starts at the top");
+    let _ = fs::remove_dir_all(root);
+}

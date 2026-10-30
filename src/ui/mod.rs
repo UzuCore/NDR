@@ -1120,14 +1120,23 @@ impl App {
             }
             let pane = &mut self.panes[listing.pane];
             let mut focused = false;
+            // 같은 위치를 다시 읽으면서 따로 고른 이름이 없으면(원본 FUN_00487ce8 param_2, param_4 빈 글) 원본은 SetItemIndex 뒤
+            // SetScrollTop(옛 위치)로 되돌린다: 자세히·미리 보기는 옛 위치를 지키고, 열로 흐르는 목록만 AdjustPage + SetItemIndex.
+            let restore_top = kept.as_ref().is_some_and(|k| !k.4);
             if let Some(name) = self.pending_focus[listing.pane].take() {
                 if let Some(row) = pane.entries.iter().position(|e| ndr::names::equals_ignore_case(&e.name, &name)) {
                     pane.cursor = row;
                     pane.selected.clear();
                     // 원본 FUN_00486694 → SetItemIndex: 커서 항목이 보이게 넘긴다(쪽 단위면 그 쪽). 고친 것: 전에는 첫 쪽에 머물렀다.
-                    pane.reveal = true;
+                    pane.reveal = !restore_top;
                     focused = true;
                 }
+            }
+            // 새 위치: 원본은 언제나 SetItemIndex(0 또는 고른 이름)라 그 항목이 보인다. 고친 것: 자세히 보기는 전 폴더의 세로 위치가
+            // 남아 첫 항목이 안 보일 수 있었다. (원본은 그 앞에 전 폴더의 커서 번호로 AdjustPage를 하지만, 전 폴더에 따라 화면이
+            // 달라지는 부작용이라 옮기지 않았다.)
+            if kept.is_none() {
+                pane.reveal = true;
             }
             if let Some((marks, sizes, first_column, old_cursor, explicit)) = kept {
                 if !focused && !explicit && !pane.entries.is_empty() {
@@ -1149,9 +1158,9 @@ impl App {
                 }
                 pane.first_column = first_column;
                 // 원본 FileListChanged(0x7d79c8) → AdjustPage(옛 커서 번호, 목록 길이로 자름), 그 뒤 FUN_00487ce8이 SetItemIndex.
+                // 자세히·미리 보기는 그 뒤 SetScrollTop(옛 위치)로 되돌리므로 열로 흐르는 목록만 위치가 바뀐다(adjust 두 번째 값).
                 if !pane.entries.is_empty() {
                     pane.adjust = Some((old_cursor.min(pane.entries.len() - 1), true));
-                    pane.reveal = true;
                 }
             }
         }

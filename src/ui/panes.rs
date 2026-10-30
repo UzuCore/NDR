@@ -1142,7 +1142,17 @@ impl App {
         }
         self.compute_view(index);
     }
-    /// C# SetSortMode / SetFolderSortMode / SetGroupMode / SetFolderCategoryMode와 내림차순·묶음 이름 전환. 처리했으면 true.
+    /// 원본 SetSortType·SetSortDescend(0x7dbb28·0x7dba3c): 정렬을 바꾸면 목록의 FileListChanged → AdjustPage(옛 커서 번호)가 돌고,
+    /// 그 뒤 커서 이름의 새 자리로 SetItemIndex(보이게)한다. 고친 것: 전에는 커서 항목이 정렬로 옮겨 가도 화면이 그대로라 안 보일 수 있었다.
+    pub(super) fn resort_pane(&mut self, index: usize) {
+        let old = self.panes[index].cursor;
+        self.sort_pane(index);
+        let pane = &mut self.panes[index];
+        if !pane.entries.is_empty() {
+            pane.adjust = Some((old.min(pane.entries.len() - 1), false));
+            pane.reveal = true;
+        }
+    }
     pub(super) fn sort_command(&mut self, command: &str) -> bool {
         let i = self.active;
         let set = |app: &mut App, name: &str, value: &str| app.settings.set_text(&Self::side_key(i, name), value);
@@ -1199,7 +1209,7 @@ impl App {
                 _ => return false,
             }
         }
-        self.sort_pane(i);
+        self.resort_pane(i);
         true
     }
     pub(super) fn pane_ui(&mut self, ui: &mut egui::Ui, index: usize, ctx: &egui::Context) {
@@ -1301,7 +1311,7 @@ impl App {
                         let flip = if current == mode { !old } else { old };
                         self.settings.set_flag(&descending, flip);
                         self.settings.set_text(&Self::side_key(index, "SortMode"), mode);
-                        self.sort_pane(index);
+                        self.resort_pane(index);
                     }
                 }
                 if let Some(error) = &self.panes[index].error {

@@ -448,7 +448,7 @@ impl App {
         }
         // 원본 AdjustPage(0x7daf24, 형식 0·1): 쪽 단위면 그 항목의 쪽, 아니면 그 열이 왼쪽 밖일 때 그 열부터, 그 밖에는 언제나 그 열이
         // 마지막 보이는 열이 되게(0보다 작으면 0) 둔다. 그 뒤 SetItemIndex(reveal)가 커서를 보이게 한다.
-        if let Some((item, _)) = self.panes[index].adjust.take() {
+        if let Some((item, reload)) = self.panes[index].adjust.take() {
             let column = item.min(count.saturating_sub(1)) / rows;
             first = if by_page {
                 (column / columns) * columns
@@ -458,6 +458,10 @@ impl App {
                 (column + 1).saturating_sub(columns)
             };
             first = first.min(last_first);
+            // 다시 읽은 목록: 원본 FUN_00487ce8이 그 뒤 커서 항목에 SetItemIndex.
+            if reload {
+                self.panes[index].reveal = true;
+            }
         }
         // 원본 SetItemIndex(형식 0·1): 커서 열이 왼쪽 밖이면 그 열부터, 오른쪽 밖이면 그 열이 마지막 열이 되게(쪽 단위는 그 쪽의 처음 열).
         if std::mem::take(&mut self.panes[index].reveal) {
