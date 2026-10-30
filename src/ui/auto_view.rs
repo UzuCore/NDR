@@ -587,9 +587,11 @@ impl App {
                         if let Some(o) = original.filter(|_| marked) {
                             ui.painter().extend(super::skin_pane::selection_mark_shapes(cell, o.select));
                         }
-                        // 줄 어디를 눌러도 그 항목(원본 GetItemAt = 항목 칸 전체).
+                        // 줄 어디를 눌러도 그 항목. 원본 GetItemAt(형식 0·1): 줄 = y / (높이 + LineSpace)라 항목 아래 틈도 그 항목이고,
+                        // 한 열 마지막 줄 아래 틈((높이 + LineSpace) × 줄 수 − LineSpace 밖)은 아무 항목도 아니다.
                         let _ = response;
-                        let response = ui.interact(cell, ui.id().with(("ndr-flow-row", index, row)), egui::Sense::click_and_drag());
+                        let hit = if line + 1 < rows { egui::Rect::from_min_size(cell.min, egui::vec2(column_width, pitch)) } else { cell };
+                        let response = ui.interact(hit, ui.id().with(("ndr-flow-row", index, row)), egui::Sense::click_and_drag());
                         // 원본 MouseDown: 스킨 테마는 누르는 순간 처리(항목 칸 왼쪽 12화소는 표시 칸, Shift는 범위 끌기).
                         let in_area = original_click && super::panes::original_press_input(&mut self.panes[index], row, response.rect, ui);
                         let area_hit = original_click && super::panes::pointer_in_selection_area(response.rect, ui);
@@ -602,7 +604,7 @@ impl App {
                             begin_drag = Some((row, true));
                         }
                         if self.panes[index].entries[row].is_dir {
-                            folder_rows.push((index, response.rect.intersect(ui.clip_rect()), self.panes[index].entries[row].path.clone()));
+                            folder_rows.push((index, cell.intersect(ui.clip_rect()), self.panes[index].entries[row].path.clone()));
                         }
                         if response.clicked() || response.secondary_clicked() {
                             activate = true;

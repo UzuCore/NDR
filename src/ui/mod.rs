@@ -152,6 +152,9 @@ struct Pane {
     detail_x: f32,
     /// 지난 그림의 미리 보기 줄 자리(줄마다 위·높이, 맨 위 위치, 목록 높이, 열 수). 원본 형식 3 PageUp·PageDown이 쓴다.
     thumb_rows: Option<(Vec<f32>, Vec<f32>, f32, f32, usize)>,
+    /// 원본 패널 폴더 트리(TNXShellTreeView, miShowFoldersClick): 펼친 폴더와, 펼침을 맞춘 마지막 패널 위치(SetPath).
+    tree_open: HashSet<PathBuf>,
+    tree_synced: Option<PathBuf>,
     /// 다음 그림에서 커서가 보이게 넘긴다(원본 SetItemIndex).
     reveal: bool,
     /// 원본 AdjustPage(0x7daf24): 다음 그림에서 이 항목 번호에 맞춰 위치를 다시 잡는다. 목록 크기가 바뀔 때(WMSize 0x7d5814),
@@ -207,6 +210,8 @@ impl Pane {
             first_column: 0,
             detail_x: 0.0,
             thumb_rows: None,
+            tree_open: HashSet::new(),
+            tree_synced: None,
             reveal: false,
             adjust: None,
             list_shape: None,
@@ -527,7 +532,6 @@ pub struct App {
     last_find: String,
     started: Instant,
     frames: u64,
-    show_tree: bool,
     clipboard: Option<(Vec<PathBuf>, bool)>,
     last_selection: [Vec<PathBuf>; 2],
     saved: bool,
@@ -829,7 +833,6 @@ impl App {
             last_find: String::new(),
             started: Instant::now(),
             frames: 0,
-            show_tree: false,
             clipboard: None,
             last_selection: [vec![], vec![]],
             saved: false,
@@ -991,7 +994,8 @@ impl App {
         self.settings.set_text("Language", &self.language);
         // Theme은 설정 값 그대로(Dark/Light/System/Black/Classic/Gray). self.dark는 그 결과일 뿐이다.
         self.settings.set_flag("DualPaneMode", self.dual);
-        self.settings.set_flag("ShowFolderTree", self.show_tree);
+        let any_tree = self.settings.flag("ShowLeftFolderTree", false) || self.settings.flag("ShowRightFolderTree", false);
+        self.settings.set_flag("ShowFolderTree", any_tree);
         match self.settings.save(&self.profile.join("settings.json")) {
             Ok(()) => {
                 self.saved = true;
@@ -1681,12 +1685,7 @@ impl eframe::App for App {
             let panel = if self.results_collapsed { panel.resizable(false).exact_height(24.0) } else { panel.resizable(true).default_height(100.0) };
             panel.show(ctx, |ui| self.ftp_results_ui(ui));
         }
-        if self.show_tree {
-            egui::SidePanel::left("folder-tree")
-                .resizable(true)
-                .default_width(220.0)
-                .show(ctx, |ui| self.tree_ui(ui));
-        }
+        // 원본 폴더 보기(Alt+F3)는 패널마다 목록 왼쪽에 그린다(pane_ui → pane_tree_ui).
         // 놓을 곳 찾기: 이번 화면에 그리는 패널과 폴더 줄만(한 패널 보기면 숨은 패널은 없다).
         self.pane_rects = [egui::Rect::NOTHING; 2];
         self.folder_rows.clear();

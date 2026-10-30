@@ -567,7 +567,13 @@ impl App {
             "explorerMenu"=>result=ndr::shell_menu::show(&targets),
             "sortNone"|"sortName"|"sortExtension"|"sortSize"|"sortTime"|"sortAttributes"|"sortColor"|"folderSortDescending"|"groupDescending"|"groupShowName"=>{self.sort_command(id);},
             "sortDescending"=>{self.sort_command(id);},
-            "toggleFolders"|"toggleFolderTree"=>self.show_tree=!self.show_tree,
+            // 원본 miShowFoldersClick(0x445258): 지금 패널(+0xe08)의 트리를 켜고 끄며 그 패널 설정(+0x50 + 패널 번호)에 남긴다.
+            "toggleFolders"|"toggleFolderTree"=>{
+                let key=if self.active==0{"ShowLeftFolderTree"}else{"ShowRightFolderTree"};
+                let shown=!self.settings.flag(key,false);
+                self.settings.set_flag(key,shown);
+                self.save();
+            },
             "toggleToolBar"|"toggleFunctionBar"|"toggleVerticalBar"|"toggleDriveButtons"=>{let (key,default)=match id{"toggleToolBar"=>("ShowToolBar",true),"toggleFunctionBar"=>("ShowFunctionBar",true),"toggleVerticalBar"=>("ShowVerticalBar",true),_=>("ShowDriveButtons",false)};let old=self.settings.flag(key,default);self.settings.set_flag(key,!old);self.save();},
             "exit"=>ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             "refresh"=>{super::panes::DriveListCache::invalidate(&self.drive_list);self.refresh(i)},"goParent"=>self.parent(),

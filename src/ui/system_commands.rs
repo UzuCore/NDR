@@ -140,7 +140,7 @@ impl App {
             "toggleVerticalBar" => self.settings.flag("ShowVerticalBar", true),
             "toggleToolBar" => self.settings.flag("ShowToolBar", true),
             "toggleResults" => self.show_results,
-            "toggleFolders" => self.show_tree,
+            "toggleFolders" => self.settings.flag(if self.active == 0 { "ShowLeftFolderTree" } else { "ShowRightFolderTree" }, false),
             "toggleFunctionBar" => self.settings.flag("ShowFunctionBar", true),
             "toggleDriveButtons" => self.settings.flag("ShowDriveButtons", false),
             "toggleFolderInfoBar" => self.settings.flag("ShowFolderDiskInfoBar", true),

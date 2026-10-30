@@ -223,8 +223,9 @@ impl Settings {
             self.values.insert("EscapeKeyAction".into(), Value::Null);
         }
         for (key, default, min, max) in [
-            ("LeftFolderTreeWidth", 180., 100., 600.),
-            ("RightFolderTreeWidth", 180., 100., 600.),
+            // 원본 패널 폴더 트리 너비(ini treewidth1/2 처음 120, 나눔 막대 MinSize 50 — FUN_0048da38).
+            ("LeftFolderTreeWidth", 120., 50., 600.),
+            ("RightFolderTreeWidth", 120., 50., 600.),
             ("LeftPaneWidth", 50., 20., 80.),
             ("RightPaneWidth", 50., 20., 80.),
             ("WindowWidth", 1450., 1024., 8192.),

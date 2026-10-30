@@ -314,7 +314,6 @@ impl App {
             }
         });
         self.dual = self.settings.flag("DualPaneMode", self.dual);
-        self.show_tree = self.settings.flag("ShowFolderTree", false);
         // C# WindowOpacity: 알파를 바로 적용(다시 시작 필요 없음). 창 글 = clamp(WindowAlpha/255, 0.35, 1.0).
         // 시작 확인 때는 화면 밖 창이라 건드리지 않는다.
         if self.options.smoke_seconds.is_none() {

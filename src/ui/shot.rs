@@ -316,6 +316,11 @@ impl App {
                 }
                 self.show_results = true;
             }
+            "panetree" => {
+                // 원본 miShowFoldersClick(Alt+F3): 왼쪽 패널 안 목록 왼쪽에 폴더 트리.
+                self.settings.set_flag("ShowLeftFolderTree", true);
+                self.refresh(0);
+            }
             "gridlines" | "rowlines" => {
                 // 원본 ShowGridColumn·ShowGridRow·LineSpace 확인: 이름 보기(열 선·줄 선)와 자세히 보기(줄 선).
                 self.settings.set_flag("ShowRowLines", true);

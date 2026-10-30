@@ -575,57 +575,131 @@ impl App {
         }
         (activate, open, command)
     }
-    pub(super) fn tree_ui(&mut self, ui: &mut egui::Ui) {
-        ui.heading(self.tr("폴더 트리", "Folder tree"));
-        let path = self.panes[self.active].path.clone();
-        if self.panes[self.active].archive.is_some() {
-            ui.label(self.tr("로컬 패널에서 사용하세요.", "Use a local pane."));
-            return;
+    /// 원본 패널 폴더 트리(miShowFoldersClick 0x445258 → FUN_0048da38): 패널 안 목록 왼쪽(alLeft TNXPaintPanel 안 TNXShellTreeView).
+    /// 바탕·글꼴은 목록과 같고(FUN_0048e1ac: 목록 Color·Font, 글 색 GetBasic(1)), 패널 위치가 바뀌면 그 폴더까지 펼쳐 고른다(SetPath).
+    /// 고르면(FUN_0048e320) 그 패널을 그 폴더로 옮긴다. 뿌리는 드라이브(원본은 셸 바탕 화면 이름 공간; 셸 폴더는 폴더 트리 단계에서).
+    pub(super) fn pane_tree_ui(&mut self, ui: &mut egui::Ui, index: usize, rect: egui::Rect) {
+        // FUN_0048e1ac: 바탕 = 목록 Color(NXBACK), 글 = GetBasic(1)(NXFORE). 고른 줄은 NXSELECT 바탕에 NXBACK 글.
+        let (background, text, select) = (self.basic_list_color("NXBACK"), self.basic_list_color("NXFORE"), self.basic_list_color("NXSELECT"));
+        ui.painter().rect_filled(rect, 0.0, background);
+        let path = self.panes[index].path.clone();
+        let local = self.panes[index].archive.is_none() && self.panes[index].remote.is_none() && !super::panes::is_drives(&path);
+        // SetPath: 위치가 바뀌면 뿌리부터 그 폴더까지 펼치고 그 줄이 보이게 넘긴다.
+        let mut reveal = false;
+        if local && self.panes[index].tree_synced.as_ref() != Some(&path) {
+            let ancestors: Vec<PathBuf> = path.ancestors().skip(1).map(Path::to_path_buf).collect();
+            self.panes[index].tree_open.extend(ancestors);
+            self.panes[index].tree_synced = Some(path.clone());
+            reveal = true;
         }
-        let root = path.ancestors().last().unwrap_or(&path).to_path_buf();
-        egui::ScrollArea::both().show(ui, |ui| self.tree_node(ui, &root, &path, 0));
-    }
-    fn tree_node(&mut self, ui: &mut egui::Ui, path: &Path, current: &Path, depth: usize) {
-        if depth > 32 {
-            return;
-        }
-        let label = path
-            .file_name()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_else(|| path.to_string_lossy().into_owned());
-        let state = egui::CollapsingHeader::new(label)
-            .id_salt(path)
-            .default_open(current.starts_with(path))
-            .show(ui, |ui| {
-                if !self.tree_requests.contains(path) {
-                    self.tree_requests.insert(path.to_path_buf());
-                    let path = path.to_path_buf();
-                    let tx = self.async_tx.clone();
-                    thread::spawn(move || {
-                        let directories = fsops::list_dir(&path, false)
-                            .unwrap_or_default()
-                            .into_iter()
-                            .filter(|e| {
-                                e.is_dir
-                                    && std::fs::symlink_metadata(&e.path)
-                                        .is_ok_and(|m| !fsops::is_reparse(&m))
-                            })
-                            .map(|e| e.path)
-                            .collect();
-                        let _ = tx.send(AsyncResult::Tree { path, directories });
-                    });
-                }
-                if let Some(directories) = self.tree_cache.get(path).cloned() {
-                    for directory in directories {
-                        self.tree_node(ui, &directory, current, depth + 1);
+        let roots: Vec<PathBuf> = ndr::native::listed_drives();
+        let font = egui::FontId::new(self.list_font_size, egui::FontFamily::Name(super::LIST_FONT_FAMILY.into()));
+        let row_height = (ui.fonts_mut(|f| f.row_height(&font)).ceil() + 2.0).max(18.0);
+        let mut rows: Vec<(PathBuf, usize)> = Vec::new();
+        fn walk(app: &mut App, index: usize, path: &Path, depth: usize, rows: &mut Vec<(PathBuf, usize)>) {
+            rows.push((path.to_path_buf(), depth));
+            if depth > 32 || !app.panes[index].tree_open.contains(path) {
+                return;
+            }
+            match app.tree_cache.get(path).cloned() {
+                Some(children) => {
+                    for child in children {
+                        walk(app, index, &child, depth + 1, rows);
                     }
-                } else {
-                    ui.spinner();
                 }
-            });
-        if super::panes::windows_double_clicked(&state.header_response) {
-            self.navigate(self.active, path.to_path_buf(), true);
+                None => app.request_tree_children(index, path),
+            }
         }
+        for root in &roots {
+            walk(self, index, root, 0, &mut rows);
+        }
+        let mut child = ui.new_child(egui::UiBuilder::new().id_salt(("ndr-pane-tree", index)).max_rect(rect).layout(egui::Layout::top_down(egui::Align::Min)));
+        child.set_clip_rect(rect.intersect(ui.clip_rect()));
+        let mut picked = None;
+        let mut toggled = None;
+        // 하위 폴더를 아직 읽는 중이면 고른 줄이 없으므로, 그 줄이 나올 때까지 넘기기를 미룬다.
+        let reveal_id = egui::Id::new(("ndr-pane-tree-reveal", index));
+        let reveal = reveal || ui.ctx().data(|d| d.get_temp::<bool>(reveal_id)).unwrap_or(false);
+        let selected_line = rows.iter().position(|(p, _)| *p == path);
+        ui.ctx().data_mut(|d| d.insert_temp(reveal_id, reveal && selected_line.is_none()));
+        let mut area = egui::ScrollArea::both().id_salt(("ndr-pane-tree-scroll", index)).auto_shrink([false, false]).max_height(rect.height());
+        if let (true, Some(line)) = (reveal, selected_line) {
+            let depth = rows[line].1 as f32;
+            area = area.vertical_scroll_offset((line as f32 * row_height - rect.height() / 2.0).max(0.0)).horizontal_scroll_offset((depth * 16.0 - 16.0).max(0.0));
+        }
+        area.show_rows(&mut child, row_height, rows.len(), |ui, range| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            for (path, depth) in &rows[range] {
+                let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string_lossy().trim_end_matches('\\').to_owned());
+                let galley = ui.painter().layout_no_wrap(name, font.clone(), Color32::PLACEHOLDER);
+                let indent = *depth as f32 * 16.0;
+                let width = (indent + 16.0 + 18.0 + galley.size().x + 6.0).max(ui.available_width());
+                let (row, response) = ui.allocate_exact_size(egui::vec2(width, row_height), egui::Sense::click());
+                let selected = local && *path == self.panes[index].path;
+                let text_rect = egui::Rect::from_min_size(egui::pos2(row.left() + indent + 34.0, row.top()), egui::vec2(galley.size().x + 4.0, row_height));
+                if selected {
+                    ui.painter().rect_filled(text_rect, 0.0, select);
+                }
+                // 펼침 표시(▸/▾): 자식이 없다고 알려진 폴더는 그리지 않는다.
+                let arrow = egui::Rect::from_min_size(egui::pos2(row.left() + indent, row.top()), egui::vec2(16.0, row_height));
+                let open = self.panes[index].tree_open.contains(path);
+                let empty = self.tree_cache.get(path).is_some_and(|c| c.is_empty());
+                if !empty {
+                    // 목록 글꼴에 ▸·▾ 글자가 없을 수 있어 세모 도형으로 그린다.
+                    let c = arrow.center();
+                    let points = if open { vec![c + egui::vec2(-4.0, -2.0), c + egui::vec2(4.0, -2.0), c + egui::vec2(0.0, 3.0)] } else { vec![c + egui::vec2(-2.0, -4.0), c + egui::vec2(3.0, 0.0), c + egui::vec2(-2.0, 4.0)] };
+                    ui.painter().add(egui::Shape::convex_polygon(points, text, egui::Stroke::NONE));
+                }
+                if let Some(icon) = if *depth == 0 { self.drive_icon(ui.ctx(), path) } else { self.path_icon(ui.ctx(), path, true) } {
+                    ui.painter().image(icon.id(), egui::Rect::from_center_size(egui::pos2(row.left() + indent + 25.0, row.center().y), egui::vec2(16.0, 16.0)), egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
+                }
+                ui.painter().galley(egui::pos2(text_rect.left() + 2.0, row.center().y - galley.size().y / 2.0), galley, if selected { background } else { text });
+                if response.clicked() {
+                    let on_arrow = response.interact_pointer_pos().is_some_and(|p| arrow.contains(p));
+                    if on_arrow && !empty {
+                        toggled = Some(path.clone());
+                    } else {
+                        picked = Some(path.clone());
+                    }
+                }
+                if response.double_clicked() && !empty {
+                    toggled = Some(path.clone());
+                }
+            }
+        });
+        if let Some(path) = toggled {
+            let open = &mut self.panes[index].tree_open;
+            if !open.remove(&path) {
+                open.insert(path);
+            }
+        }
+        if let Some(path) = picked {
+            // 원본 FUN_0048e530(트리에 초점): 그 패널이 지금 패널이 된다.
+            self.active = index;
+            if path != self.panes[index].path {
+                self.navigate(index, path, true);
+            }
+        }
+    }
+
+    /// 트리의 하위 폴더 목록을 따로 읽는다(재분석 지점은 넣지 않고, 숨김 폴더는 그 패널의 숨김 보기를 따른다).
+    fn request_tree_children(&mut self, index: usize, path: &Path) {
+        if !self.tree_requests.insert(path.to_path_buf()) {
+            return;
+        }
+        let path = path.to_path_buf();
+        let show_hidden = self.panes[index].show_hidden;
+        let tx = self.async_tx.clone();
+        thread::spawn(move || {
+            let mut directories: Vec<PathBuf> = fsops::list_dir(&path, show_hidden)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|e| e.is_dir && std::fs::symlink_metadata(&e.path).is_ok_and(|m| !fsops::is_reparse(&m)))
+                .map(|e| e.path)
+                .collect();
+            directories.sort_by_key(|p| p.file_name().map(|n| n.to_string_lossy().to_uppercase()).unwrap_or_default());
+            let _ = tx.send(AsyncResult::Tree { path, directories });
+        });
     }
 }
 

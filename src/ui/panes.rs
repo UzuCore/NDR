@@ -1268,6 +1268,35 @@ impl App {
                         self.skin_folder_info_bar(ui, index, skin);
                     });
                 }
+                // 원본 FUN_0048da38(miShowFoldersClick 0x445258, Alt+F3): 패널마다 목록 왼쪽(alLeft, 위 주소 줄·폴더 정보줄과 아래 파일 정보줄
+                // 사이)에 폴더 트리(너비 = 설정 +0x48 + 패널 × 4, ini treewidth1/2), 그 오른쪽에 3화소 나눔 막대(MinSize 50, 끌어 놓으면
+                // FUN_0048e2c0이 너비를 남긴다). 목록은 그 오른쪽 나머지.
+                let outer: &mut egui::Ui = ui;
+                let full = outer.available_rect_before_wrap();
+                let tree_shown = self.settings.flag(if index == 0 { "ShowLeftFolderTree" } else { "ShowRightFolderTree" }, false);
+                let tree_key = if index == 0 { "LeftFolderTreeWidth" } else { "RightFolderTreeWidth" };
+                let tree_width = if tree_shown { (self.settings.values.get(tree_key).and_then(|v| v.as_f64()).unwrap_or(120.0) as f32).clamp(50.0, (full.width() - 53.0).max(50.0)) } else { 0.0 };
+                let splitter = if tree_shown { 3.0 } else { 0.0 };
+                if tree_shown {
+                    let spacing = outer.spacing().item_spacing.y;
+                    let below = self.skin_file_info_height() + spacing + self.ftp_log_reserve(index, spacing);
+                    let height = (full.height() - below).max(80.0);
+                    let tree_rect = egui::Rect::from_min_size(full.min, egui::vec2(tree_width, height));
+                    self.pane_tree_ui(outer, index, tree_rect);
+                    let split = egui::Rect::from_min_size(egui::pos2(tree_rect.right(), full.top()), egui::vec2(splitter, height));
+                    let drag = outer.interact(split, egui::Id::new(("ndr-pane-tree-split", index)), egui::Sense::drag()).on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
+                    if drag.dragged() {
+                        if let Some(pointer) = drag.interact_pointer_pos() {
+                            let width = (pointer.x - full.left()).clamp(50.0, (full.width() - 53.0).max(50.0)).round();
+                            self.settings.values.insert(tree_key.into(), serde_json::json!(width as f64));
+                        }
+                    }
+                    if drag.drag_stopped() {
+                        self.save();
+                    }
+                }
+                let mut list_ui = outer.new_child(egui::UiBuilder::new().id_salt("ndr-pane-list").max_rect(egui::Rect::from_min_max(egui::pos2(full.left() + tree_width + splitter, full.top()), full.max)).layout(egui::Layout::top_down(egui::Align::Min)));
+                let ui = &mut list_ui;
                 // C# ConfigureGrid 열: 이름, 확장자(이름에 붙이지 않을 때), 종류(ShowFileType), 크기, 수정한 날짜, 속성, 설명.
                 let columns = self.detail_columns(self.language == "ko");
                 // 원본 처음 값 viewstyle1/2=0(자동 보기).
@@ -1406,10 +1435,11 @@ impl App {
                     Some(bar) => (height - bar).max(row_height),
                     None => height,
                 };
-                // 원본 UpdateDisplayDetails: 줄 간격 = 항목 높이 + LineSpace(+0x364). egui는 줄마다 item_spacing.y를 더하므로 거기에 더한다.
+                // 원본 UpdateDisplayDetails: 줄 간격 = 항목 높이 + LineSpace(+0x364). egui는 줄마다 item_spacing.y를 더하므로 그것을 LineSpace로 둔다.
+                // 고친 것: 전에는 egui 기본 틈(3화소)이 더해져 줄이 원본보다 성겼고 그 틈을 누르면 아무 항목도 아니었다.
                 let line_space = self.list_line_space();
                 let saved_spacing = ui.spacing().item_spacing.y;
-                ui.spacing_mut().item_spacing.y += line_space;
+                ui.spacing_mut().item_spacing.y = line_space;
                 let (row_lines, line_color) = (self.settings.flag("ShowRowLines", false), self.grid_line_color(ui));
                 // show_rows는 줄마다 item_spacing.y를 더해 쌓으므로 위치 계산도 그 간격(stride)으로 한다.
                 let stride = row_height + ui.spacing().item_spacing.y;
@@ -1564,8 +1594,10 @@ impl App {
                                 let left = line.response.rect.left();
                                 ui.painter().hline(left..=left + width, y, egui::Stroke::new(1.0, line_color));
                             }
-                            // 줄 어디를 눌러도 그 항목(이름 칸만이 아니라 줄 전체, 원본 GetItemAt = 항목 줄 전체).
-                            let row_rect = egui::Rect::from_min_size(line.response.rect.left_top(), egui::vec2(width, row_height));
+                            // 줄 어디를 눌러도 그 항목(이름 칸만이 아니라 줄 전체). 원본 GetItemAt(형식 2): 번호 = (y + 위치 + LineSpace − 머리)
+                            // / (높이 + LineSpace)라 줄 위의 틈(LineSpace)도 그 항목이다.
+                            let gap = ui.spacing().item_spacing.y;
+                            let row_rect = egui::Rect::from_min_size(line.response.rect.left_top() - egui::vec2(0.0, gap), egui::vec2(width, row_height + gap));
                             let response = ui.interact(row_rect, ui.id().with(("ndr-detail-row", index, row)), egui::Sense::click_and_drag());
                             // C# BeginFileDragTracking: 왼쪽 단추로 끌면 항목 끌기. 원본은 오른쪽 단추 끌기도 받아 놓을 때 pmDrop을 연다.
                             let folder_path = entry.is_dir.then(|| entry.path.clone());
@@ -1579,7 +1611,8 @@ impl App {
                                 begin_drag = Some((row, true));
                             }
                             if let Some(path) = folder_path {
-                                folder_rows.push((index, response.rect.intersect(ui.clip_rect()), path));
+                                let visual = egui::Rect::from_min_size(line.response.rect.left_top(), egui::vec2(width, row_height));
+                                folder_rows.push((index, visual.intersect(ui.clip_rect()), path));
                             }
                             if response.clicked() {
                                 activate = true;
@@ -1686,6 +1719,10 @@ impl App {
                 });
                 self.panes[index].drop_drive_marks();
                 self.original_name_tip(ctx, index);
+                // 목록 자리를 바깥 Ui에 반영하고 그 아래(FTP 기록 칸, 파일 정보줄)는 패널 너비 전체에.
+                let used = ui.min_rect();
+                let ui = outer;
+                ui.advance_cursor_after_rect(egui::Rect::from_min_max(full.min, egui::pos2(full.right(), used.bottom().max(full.top()))));
                 self.ftp_log_ui(ui, index, ftp_log_room);
                 if let Some(skin) = &skin {
                     self.skin_file_info_bar(ui, index, skin);

@@ -578,7 +578,7 @@ pub fn import_ini(path: &Path) -> Result<Settings, String> {
             settings.set_flag(&key, value);
         }
         for (property, key, default) in [
-            ("FolderTreeWidth", "treewidth", 180),
+            ("FolderTreeWidth", "treewidth", 120),
             ("PaneWidth", "viewwidth", 50),
             ("ScrollStep", "scrollstep", 2),
             ("ColumnCount", "listcolumn", 0),

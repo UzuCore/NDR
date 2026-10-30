@@ -1470,6 +1470,90 @@ fn middle_click_moves_the_cursor_like_the_original() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// 원본 GetItemAt(0x7dac1c): 자세히(형식 2) 줄 간격 = 항목 높이 + LineSpace이고 줄 위의 틈은 그 항목, 열로 흐르는 목록(형식 0·1)은
+/// 항목 아래 틈이 그 항목이다.
+#[test]
+fn clicks_in_the_line_space_pick_the_original_item() {
+    let (root, ctx, mut app) = fixture("line-space");
+    let left = app.panes[0].path.clone();
+    for i in 0..8 {
+        fs::create_dir_all(left.join(format!("d{i:03}"))).unwrap();
+    }
+    app.settings.values.insert("ListLineSpace".into(), serde_json::json!(6));
+    let run = |app: &mut App, events: Vec<egui::Event>| {
+        let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 850.0))), events, ..Default::default() };
+        let _ = ctx.run(raw, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.columns(2, |columns| {
+                    app.pane_ui(&mut columns[0], 0, ctx);
+                    app.pane_ui(&mut columns[1], 1, ctx);
+                });
+            });
+        });
+    };
+    for (view, gap_above) in [("Details", true), ("Auto", false)] {
+        app.settings.set_text("LeftViewStyle", view);
+        app.refresh(0);
+        wait(&mut app, &ctx);
+        run(&mut app, vec![]);
+        app.folder_rows.clear();
+        run(&mut app, vec![]);
+        let rect = |app: &App, name: &str| app.folder_rows.iter().find(|(pane, _, path)| *pane == 0 && *path == left.join(name)).map(|(_, rect, _)| *rect).expect("the folder row is drawn");
+        let (a, b) = (rect(&app, "d002"), rect(&app, "d003"));
+        assert_eq!(b.top() - a.bottom(), 6.0, "{view}: the gap between items is exactly LineSpace");
+        let at = egui::pos2(a.center().x, a.bottom() + 3.0);
+        let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Middle, pressed, modifiers: Default::default() };
+        run(&mut app, vec![egui::Event::PointerMoved(at), button(true)]);
+        run(&mut app, vec![button(false)]);
+        let pane = &app.panes[0];
+        assert_eq!(pane.entries[pane.cursor].name, if gap_above { "d003" } else { "d002" }, "{view}");
+    }
+    let _ = fs::remove_dir_all(root);
+}
+
+/// 원본 miShowFoldersClick(0x445258) → FUN_0048da38: 지금 패널에만 목록 왼쪽 폴더 트리(너비 treewidth, 처음 120)와 3화소 나눔 막대,
+/// 목록은 그 오른쪽. 그 패널 설정(ShowLeft/RightFolderTree)에 남는다.
+#[test]
+fn show_folders_adds_a_tree_inside_the_active_pane() {
+    let (root, ctx, mut app) = fixture("pane-tree");
+    let left = app.panes[0].path.clone();
+    for i in 0..3 {
+        fs::create_dir_all(left.join(format!("d{i:03}"))).unwrap();
+    }
+    app.settings.set_text("LeftViewStyle", "Details");
+    app.refresh(0);
+    wait(&mut app, &ctx);
+    let run = |app: &mut App| {
+        app.folder_rows.clear();
+        let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 850.0))), ..Default::default() };
+        let _ = ctx.run(raw, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.columns(2, |columns| {
+                    app.pane_ui(&mut columns[0], 0, ctx);
+                    app.pane_ui(&mut columns[1], 1, ctx);
+                });
+            });
+        });
+    };
+    let row_left = |app: &App| app.folder_rows.iter().find(|(pane, _, path)| *pane == 0 && *path == left.join("d001")).map(|(_, rect, _)| rect.left()).expect("drawn");
+    run(&mut app);
+    run(&mut app);
+    let before = row_left(&app);
+    app.active = 0;
+    app.dispatch("toggleFolders", &ctx);
+    assert!(app.settings.flag("ShowLeftFolderTree", false) && !app.settings.flag("ShowRightFolderTree", false), "only the active pane");
+    assert_eq!(app.menu_checked("toggleFolders"), Some(true));
+    run(&mut app);
+    run(&mut app);
+    assert_eq!(row_left(&app) - before, 123.0, "the list starts after the 120 px tree and the 3 px splitter");
+    assert!(app.panes[0].tree_open.iter().any(|p| left.starts_with(p)), "SetPath opens the ancestors of the pane folder");
+    app.dispatch("toggleFolders", &ctx);
+    run(&mut app);
+    run(&mut app);
+    assert_eq!(row_left(&app), before);
+    let _ = fs::remove_dir_all(root);
+}
+
 
 /// 원본 UpdateScrollBar·ArrowKey·AdjustPage(형식 2): 칸 너비 합이 목록보다 넓으면 가로로 넘길 수 있고, 오른쪽·왼쪽 글쇠는 20씩,
 /// 목록 크기가 바뀌면 가로 위치가 0이 된다.
