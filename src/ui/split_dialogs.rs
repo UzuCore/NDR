@@ -1,7 +1,7 @@
-//! C# SplitFileWindow / JoinFilesWindow와 SplitFileAsync / JoinPartsAsync 흐름. 규칙은 ndir::split.
+//! C# SplitFileWindow / JoinFilesWindow와 SplitFileAsync / JoinPartsAsync 흐름. 규칙은 ndr::split.
 use super::original_dialogs::{DialogKind, DialogResult};
 use super::*;
-use ndir::msgbox::{MB_ICONASTERISK, MB_ICONEXCLAMATION, MB_OK};
+use ndr::msgbox::{MB_ICONASTERISK, MB_ICONEXCLAMATION, MB_OK};
 use std::fs;
 
 /// SplitFileWindow 입력.
@@ -48,7 +48,7 @@ impl JoinForm {
             return;
         }
         let full = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
-        if self.files.iter().any(|(known, _)| ndir::names::equals_ignore_case(&known.to_string_lossy(), &full.to_string_lossy())) {
+        if self.files.iter().any(|(known, _)| ndr::names::equals_ignore_case(&known.to_string_lossy(), &full.to_string_lossy())) {
             return;
         }
         let length = fs::metadata(&full).ok().map(|m| m.len());
@@ -77,7 +77,7 @@ impl JoinForm {
     fn size_info(&self, ko: bool) -> String {
         let total: u64 = self.files.iter().filter_map(|(_, l)| *l).sum();
         let unknown = self.files.iter().filter(|(_, l)| l.is_none()).count();
-        let total = ndir::parity::format_size(total, "B", true).trim_end_matches(" B").to_owned();
+        let total = ndr::parity::format_size(total, "B", true).trim_end_matches(" B").to_owned();
         match (unknown, ko) {
             (0, true) => format!("전체 크기: {total}바이트"),
             (0, false) => format!("Total size: {total} bytes"),
@@ -102,7 +102,7 @@ pub(super) fn split_ui(ui: &mut egui::Ui, form: &mut SplitForm, language: &compa
         // 원본(0x423b8e): FILESPLIT + SELECTDEST.
         let title = format!("{}{}", language.text("RES.FILESPLIT", "Split File"), language.text("RES.SELECTDEST", " - Select a destination"));
         let initial = Path::new(&form.path).is_dir().then(|| PathBuf::from(&form.path)).or_else(|| form.source.parent().map(Path::to_path_buf));
-        if let Some(folder) = ndir::file_dialogs::browse_folder(&title, initial.as_deref()) {
+        if let Some(folder) = ndr::file_dialogs::browse_folder(&title, initial.as_deref()) {
             form.path = folder.to_string_lossy().into_owned();
         }
     }
@@ -110,7 +110,7 @@ pub(super) fn split_ui(ui: &mut egui::Ui, form: &mut SplitForm, language: &compa
     ui.put(at(103.0, 96.0, 116.0, 21.0), egui::TextEdit::singleline(&mut form.size));
     ui.scope_builder(egui::UiBuilder::new().max_rect(at(219.0, 96.0, 22.0, 21.0)), |ui| {
         ui.menu_button("▼", |ui| {
-            for preset in ndir::split::SPLIT_SIZE_PRESETS {
+            for preset in ndr::split::SPLIT_SIZE_PRESETS {
                 if ui.button(preset).clicked() {
                     form.size = preset.into();
                     ui.close();
@@ -118,9 +118,9 @@ pub(super) fn split_ui(ui: &mut egui::Ui, form: &mut SplitForm, language: &compa
             }
         });
     });
-    if let Some(size) = ndir::split::parse_split_size(&form.size) {
+    if let Some(size) = ndr::split::parse_split_size(&form.size) {
         let template = language.text("RES.SPLITTED_INFO", "Number of splitted files: %d");
-        super::original_dialogs::put_left(ui, at(260.0, 99.0, 200.0, 15.0), egui::Label::new(template.replace("%d", &ndir::split::part_count(form.length, size).to_string())).truncate());
+        super::original_dialogs::put_left(ui, at(260.0, 99.0, 200.0, 15.0), egui::Label::new(template.replace("%d", &ndr::split::part_count(form.length, size).to_string())).truncate());
     }
     if ui.put(at(303.0, 151.0, 75.0, 25.0), egui::Button::new(split_text(language, "Caption.btnOk", "OK"))).clicked() {
         choice = Some(0);
@@ -151,7 +151,7 @@ pub(super) fn join_ui(ui: &mut egui::Ui, form: &mut JoinForm, language: &compat:
         let directory = full.parent().map(Path::to_path_buf).unwrap_or_else(|| form.base.clone());
         let file_name = typed.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         // C# Filter "All files (*.*)|*.*", AddExtension false.
-        if let Some(chosen) = ndir::file_dialogs::save_file(&title, Some(&directory), &file_name, &[("All files (*.*)", "*.*")], "", true) {
+        if let Some(chosen) = ndr::file_dialogs::save_file(&title, Some(&directory), &file_name, &[("All files (*.*)", "*.*")], "", true) {
             form.overwrite_confirmed = chosen.is_file().then(|| chosen.clone());
             form.name = chosen.to_string_lossy().into_owned();
         }
@@ -174,7 +174,7 @@ pub(super) fn join_ui(ui: &mut egui::Ui, form: &mut JoinForm, language: &compat:
     if button(ui, 16.0, true, join_text(language, "Caption.btnAdd", "Add")) {
         let title = join_text(language, "Form.Caption", "Join Files");
         let initial = form.files.first().and_then(|(p, _)| p.parent().map(Path::to_path_buf));
-        for path in ndir::file_dialogs::open_files(&title, initial.as_deref()) {
+        for path in ndr::file_dialogs::open_files(&title, initial.as_deref()) {
             form.add(&path);
         }
         if form.selected.is_none() && !form.files.is_empty() {
@@ -219,13 +219,13 @@ impl App {
         let Some(dialog) = self.original_dialogs.last() else { return };
         let title = dialog.title.clone();
         let outcome = match &dialog.kind {
-            DialogKind::Split(form) => match ndir::split::parse_split_size(&form.size) {
+            DialogKind::Split(form) => match ndr::split::parse_split_size(&form.size) {
                 None => Err(if ko { "분할 크기를 입력하세요. 예: 1440 KB 또는 100 MB." } else { "Enter a positive split size, such as 1440 KB or 100 MB." }),
                 Some(_) if form.path.trim().is_empty() => Err(if ko { "저장 경로를 입력하세요." } else { "Enter an output folder." }),
                 Some(size) => match std::path::absolute(form.path.trim()) {
                     Err(_) => Err(if ko { "올바른 저장 경로를 입력하세요." } else { "Enter a valid output folder." }),
                     Ok(folder) if !folder.is_dir() => Err(if ko { "저장할 폴더가 없습니다." } else { "The output folder does not exist." }),
-                    Ok(folder) => Ok(DialogResult::Split(Some((folder, size, ndir::split::part_count(form.length, size))))),
+                    Ok(folder) => Ok(DialogResult::Split(Some((folder, size, ndr::split::part_count(form.length, size))))),
                 },
             },
             DialogKind::Join(form) => {
@@ -235,7 +235,7 @@ impl App {
                 } else if form.name.trim().is_empty() || form.name.chars().any(|c| c < ' ' || c == '|' || c == '"' || c == '<' || c == '>') || file_name.is_empty() || invalid_file_name(&file_name) {
                     Err(if ko { "올바른 결과 파일 이름을 입력하세요." } else { "Enter a valid output file name." })
                 } else {
-                    let confirmed = form.overwrite_confirmed.as_ref().is_some_and(|p| ndir::names::equals_ignore_case(&p.to_string_lossy(), &form.name));
+                    let confirmed = form.overwrite_confirmed.as_ref().is_some_and(|p| ndr::names::equals_ignore_case(&p.to_string_lossy(), &form.name));
                     Ok(DialogResult::Join(Some(JoinOptions { files: form.files.iter().map(|(p, _)| p.clone()).collect(), join_text: form.join_text, name: form.name.clone(), overwrite_confirmed: confirmed })))
                 }
             }
@@ -259,7 +259,7 @@ impl App {
         let length = fs::metadata(&file).map(|m| m.len()).unwrap_or(0);
         let form = SplitForm {
             path: file.parent().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default(),
-            size: ndir::split::default_split_size(length).into(),
+            size: ndr::split::default_split_size(length).into(),
             source: file.clone(),
             length,
         };
@@ -279,7 +279,7 @@ impl App {
                 caption: Some(app.language_pack.text("RES.SPLITTING", "Splitting a file...")),
             };
             let started = app.start_pausable_task(title.clone(), progress, move |events, cancel, pause| {
-                let outcome = ndir::split::split_file(&source, size, &destination, &cancel, &mut |files, bytes, path| {
+                let outcome = ndr::split::split_file(&source, size, &destination, &cancel, &mut |files, bytes, path| {
                     let _ = events.send(Event::Progress { path: path.to_path_buf(), bytes, files });
                     super::commands::wait_while_paused(&pause, &cancel);
                 });
@@ -293,7 +293,7 @@ impl App {
         });
     }
 
-    pub(super) fn split_done(&mut self, source: PathBuf, outcome: Result<ndir::split::SplitResult, String>, cancelled: bool) {
+    pub(super) fn split_done(&mut self, source: PathBuf, outcome: Result<ndr::split::SplitResult, String>, cancelled: bool) {
         let title = self.language_pack.text("formFileSplit.Form.Caption", "Split File");
         let result = match outcome {
             Err(_) if cancelled => {
@@ -304,11 +304,11 @@ impl App {
             Ok(result) => result,
         };
         if let Some(first) = result.parts.first() {
-            if let Err(error) = ndir::split::write_split_metadata(first, &source, result.source_size, &result.crc32) {
+            if let Err(error) = ndr::split::write_split_metadata(first, &source, result.source_size, &result.crc32) {
                 self.system_box(&title, &error, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
             }
         }
-        let count = ndir::parity::format_size(result.parts.len() as u64, "B", true).trim_end_matches(" B").to_owned();
+        let count = ndr::parity::format_size(result.parts.len() as u64, "B", true).trim_end_matches(" B").to_owned();
         self.status = if self.language == "ko" { format!("{count}개 조각 파일을 만들었습니다.") } else { format!("Created {count} parts.") };
         self.refresh(self.active);
     }
@@ -323,9 +323,9 @@ impl App {
         }
         let mut inputs = selected.clone();
         if selected.len() == 1 {
-            let parts = ndir::split::find_numbered_parts(&selected[0]);
+            let parts = ndr::split::find_numbered_parts(&selected[0]);
             if !parts.is_empty() {
-                if !ndir::split::has_continuous_numbered_parts(&parts) {
+                if !ndr::split::has_continuous_numbered_parts(&parts) {
                     let title = self.tr("파일 합치기", "Join Files").into_owned();
                     let text = self.tr("분할 파일 번호가 빠져 있거나 001부터 시작하지 않습니다.", "A part number is missing or the parts do not start at 001.").into_owned();
                     return self.system_box(&title, &text, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
@@ -334,7 +334,7 @@ impl App {
             }
         }
         let base = self.panes[i].path.clone();
-        let mut form = JoinForm { files: vec![], selected: None, join_text: false, name: ndir::split::suggest_joined_file_name(&inputs[0]), base: base.clone(), overwrite_confirmed: None };
+        let mut form = JoinForm { files: vec![], selected: None, join_text: false, name: ndr::split::suggest_joined_file_name(&inputs[0]), base: base.clone(), overwrite_confirmed: None };
         for input in &inputs {
             form.add(input);
         }
@@ -365,7 +365,7 @@ impl App {
             };
             let started = app.start_pausable_task(task_title, progress, move |events, cancel, pause| {
                 let count = options.files.len();
-                let outcome = ndir::split::join_ordered_files(&options.files, &destination, options.join_text, options.overwrite_confirmed, &cancel, &mut |files, bytes, path| {
+                let outcome = ndr::split::join_ordered_files(&options.files, &destination, options.join_text, options.overwrite_confirmed, &cancel, &mut |files, bytes, path| {
                     let _ = events.send(Event::Progress { path: path.to_path_buf(), bytes, files });
                     super::commands::wait_while_paused(&pause, &cancel);
                 });
@@ -388,7 +388,7 @@ impl App {
                 self.system_box(&title, &error, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
             }
             Ok(()) => {
-                let count = ndir::parity::format_size(count as u64, "B", true).trim_end_matches(" B").to_owned();
+                let count = ndr::parity::format_size(count as u64, "B", true).trim_end_matches(" B").to_owned();
                 self.status = if ko { format!("{count}개 파일을 합쳤습니다.") } else { format!("Joined {count} files.") };
                 self.refresh(self.active);
             }

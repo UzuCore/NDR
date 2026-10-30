@@ -18,7 +18,7 @@ impl App {
         let names: Vec<String> = p.entries.iter().map(|e| e.name.clone()).collect();
         let cursor = (!names.is_empty()).then_some(p.cursor);
         let caption = self.quick_search_caption();
-        match ndir::parity::quick_search_match(&names, cursor, query, cycle_from_next) {
+        match ndr::parity::quick_search_match(&names, cursor, query, cycle_from_next) {
             Some(row) => {
                 self.panes[pane].cursor = row;
                 self.status = format!("{caption}: {query}");
@@ -81,7 +81,7 @@ impl App {
         for text in texts {
             let search = &mut self.typed_search[pane];
             let expired = search.query.is_empty()
-                || search.last_input.is_none_or(|at| at.elapsed().as_millis() > ndir::parity::QUICK_SEARCH_TIMEOUT_MS);
+                || search.last_input.is_none_or(|at| at.elapsed().as_millis() > ndr::parity::QUICK_SEARCH_TIMEOUT_MS);
             if expired {
                 search.query = text.clone();
             } else {
@@ -101,7 +101,7 @@ impl App {
 
     /// C# QuickFilterAsync: 검색 칸이나 도구 모음 빠른 찾기 칸에서 Enter.
     pub(super) fn quick_filter(&mut self, pane: usize, text: &str) {
-        self.panes[pane].filter = ndir::parity::quick_filter_pattern(text);
+        self.panes[pane].filter = ndr::parity::quick_filter_pattern(text);
         self.refresh(pane);
     }
 
@@ -241,7 +241,7 @@ impl App {
             let typed: String = composition.chars().last().map(String::from).unwrap_or_default();
             if !result {
                 // 고친 것: 원본은 조합 중간 글자(예: "방"을 치는 동안의 "바")로 찾지 못하면 찾는 글을 비워 한글 찾기가 끊긴다.
-                // NDIR은 조합 중에는 찾지 못해도 글을 남기고 커서를 그대로 두며, 결과 글이 오면 원본 규칙대로 찾는다.
+                // NDR은 조합 중에는 찾지 못해도 글을 남기고 커서를 그대로 두며, 결과 글이 오면 원본 규칙대로 찾는다.
                 let names: Vec<String> = self.panes[pane].entries.iter().map(|e| e.name.clone()).collect();
                 if let Some(row) = original_quick_search(&names, self.panes[pane].cursor, &text, true) {
                     self.panes[pane].cursor = row;

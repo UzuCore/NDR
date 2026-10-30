@@ -1,11 +1,11 @@
 //! C# SearchWindow + SearchAsync(파일 및 폴더 검색): 검색 위치 목록(사전 설정·찾아보기·추가·위/아래/제거·저장), 이름 기록,
 //! 범주, 확장자, 내용, 크기 범위, 날짜 범위, 날짜 기준, 옵션. 결과는 C#처럼 활성 패널 목록이 된다(F5로 원래 목록).
-//! 규칙은 ndir::tools::search_advanced. 차이: 날짜는 달력 대신 "yyyy-MM-dd" 글자 입력.
+//! 규칙은 ndr::tools::search_advanced. 차이: 날짜는 달력 대신 "yyyy-MM-dd" 글자 입력.
 use super::original_dialogs::{DialogKind, DialogResult};
 use super::*;
 use super::tools_dialog::network_share_code;
-use ndir::msgbox::{MB_ICONASTERISK, MB_ICONEXCLAMATION, MB_OK};
-use ndir::tools::{SearchCategory, SearchCriteria, SearchTimeKind};
+use ndr::msgbox::{MB_ICONASTERISK, MB_ICONEXCLAMATION, MB_OK};
+use ndr::tools::{SearchCategory, SearchCriteria, SearchTimeKind};
 
 const MAXIMUM_PATTERN_HISTORY: usize = 20;
 
@@ -99,7 +99,7 @@ fn date_time(date: &str, time: &str, inclusive_end: bool) -> Result<Option<std::
 
 fn add_unique(form: &mut SearchForm, value: &str) {
     if let Some(path) = normalize_location(value) {
-        if !form.locations.iter().any(|known| ndir::names::equals_ignore_case(known.trim_end_matches('\\'), path.trim_end_matches('\\'))) {
+        if !form.locations.iter().any(|known| ndr::names::equals_ignore_case(known.trim_end_matches('\\'), path.trim_end_matches('\\'))) {
             form.locations.push(path);
         }
     }
@@ -242,7 +242,7 @@ impl SearchForm {
 
 /// 창 그리기.
 pub(super) fn search_ui(ui: &mut egui::Ui, form: &mut SearchForm, language: &compat::Language, ko: bool, enter: bool) -> Option<SearchAction> {
-    // C# LanguageService.TranslateControls: 창 글(한국어)을 ko.lang에서 찾아 그 키의 지금 언어 글로([formNDIRSearch] 등). 없으면 그대로.
+    // C# LanguageService.TranslateControls: 창 글(한국어)을 ko.lang에서 찾아 그 키의 지금 언어 글로([formNDRSearch] 등). 없으면 그대로.
     let _ = ko;
     let t = |ko_text: &str, en: &str| language.translate_pair(ko_text, en);
     let mut action = None;
@@ -260,13 +260,13 @@ pub(super) fn search_ui(ui: &mut egui::Ui, form: &mut SearchForm, language: &com
                 }
             });
             let presets = [
-                language.text("NDIRSearch.AllLocalDrives", &t("모든 로컬 드라이브", "All local drives")),
-                language.text("NDIRSearch.DriveC", "C:"),
-                language.text("NDIRSearch.DriveD", "D:"),
-                language.text("NDIRSearch.DriveE", "E:"),
-                language.text("NDIRSearch.DriveF", "F:"),
-                language.text("NDIRSearch.Documents", "Documents"),
-                language.text("NDIRSearch.Custom2", &t("사용자지정2", "Custom 2")),
+                language.text("NDRSearch.AllLocalDrives", &t("모든 로컬 드라이브", "All local drives")),
+                language.text("NDRSearch.DriveC", "C:"),
+                language.text("NDRSearch.DriveD", "D:"),
+                language.text("NDRSearch.DriveE", "E:"),
+                language.text("NDRSearch.DriveF", "F:"),
+                language.text("NDRSearch.Documents", "Documents"),
+                language.text("NDRSearch.Custom2", &t("사용자지정2", "Custom 2")),
             ];
             egui::ComboBox::from_id_salt("search-presets").width(300.0).selected_text("").show_opaque(ui, |ui| {
                 for (index, label) in presets.iter().enumerate() {
@@ -418,7 +418,7 @@ impl App {
             };
             let title = app.search_progress_title(&criteria.roots);
             app.start_modal_task(title, modal, move |events, cancel| {
-                let outcome = ndir::tools::search_advanced_with_progress(&criteria, &cancel, &mut |scanned, matches, path| {
+                let outcome = ndr::tools::search_advanced_with_progress(&criteria, &cancel, &mut |scanned, matches, path| {
                     let _ = events.send(Event::Progress { path: path.to_path_buf(), bytes: matches as u64, files: scanned as u64 });
                 });
                 let _ = tx.send(AsyncResult::SearchInPane { pane: i, root, outcome, cancelled: cancel.load(Ordering::Relaxed) });
@@ -438,7 +438,7 @@ impl App {
         }
         let searching = self.tr("검색 중", "Searching");
         if distinct.len() > 1 {
-            let count = ndir::parity::format_size(distinct.len() as u64, "B", true).trim_end_matches(" B").to_owned();
+            let count = ndr::parity::format_size(distinct.len() as u64, "B", true).trim_end_matches(" B").to_owned();
             return format!("{searching} · {count} {}", self.tr("개 위치", "locations"));
         }
         let root = distinct.first().map(String::as_str).unwrap_or("");
@@ -490,7 +490,7 @@ impl App {
             }
             SearchAction::Preset(index) => {
                 let documents = PathBuf::from(std::env::var_os("USERPROFILE").unwrap_or_default()).join("Documents");
-                let unavailable = self.language_pack.text("NDIRSearch.Custom2Unavailable", if ko { "작업 폴더 2가 설정되어 있지 않습니다. 설정에서 작업 폴더 2를 지정하세요." } else { "Work folder 2 is not set. Set it in the options." });
+                let unavailable = self.language_pack.text("NDRSearch.Custom2Unavailable", if ko { "작업 폴더 2가 설정되어 있지 않습니다. 설정에서 작업 폴더 2를 지정하세요." } else { "Work folder 2 is not set. Set it in the options." });
                 let Some(form) = self.search_form() else { return };
                 let outcome = match index {
                     0 => {
@@ -568,8 +568,8 @@ impl App {
         p.error = None;
         let count = p.entries.len();
         self.sort_pane(pane);
-        let template = self.language_pack.text("formNDIRSearch.Status.ResultCount", "검색 결과 {0:N0}개 · F5로 원래 목록 새로고침");
-        let count = ndir::parity::format_size(count as u64, "B", true).trim_end_matches(" B").to_owned();
+        let template = self.language_pack.text("formNDRSearch.Status.ResultCount", "검색 결과 {0:N0}개 · F5로 원래 목록 새로고침");
+        let count = ndr::parity::format_size(count as u64, "B", true).trim_end_matches(" B").to_owned();
         self.status = template.replace("{0:N0}", &count);
     }
 }

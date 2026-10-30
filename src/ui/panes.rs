@@ -57,7 +57,7 @@ pub(super) fn paint_original_cell(ui: &mut egui::Ui, rect: egui::Rect, column: D
 }
 
 /// 원본 DrawListItem(0x7d8f58)은 이름을 DT_END_ELLIPSIS | DT_MODIFYSTRING으로 그려 줄였는지(+0x65)를 남긴다.
-/// NDIR은 커서 줄 이름 칸과 보인 이름·온 이름의 글 모양을 기억해 두고, 툴팁(original_name_tip)이 쓴다.
+/// NDR은 커서 줄 이름 칸과 보인 이름·온 이름의 글 모양을 기억해 두고, 툴팁(original_name_tip)이 쓴다.
 pub(super) type NameTip = std::cell::RefCell<Option<(usize, usize, egui::Rect, std::sync::Arc<egui::Galley>, std::sync::Arc<egui::Galley>)>>;
 
 /// 원본 DrawThumbnailItem(0x7da1c4)은 DrawThumbnailText가 이름을 줄였는지(+0x65)를 남긴다. 이번 그림에서 커서 칸의 이름이 줄었으면
@@ -177,7 +177,7 @@ impl App {
             (pane.generation, pane.entries.len(), self.list_font_size.to_bits(), pane.view.cells.len(), pane.view.cells.first().map(|c| c[0].clone()), self.language_pack.text("RES.FIELD_SIZE", "Size")).hash(&mut h);
             h.finish()
         };
-        let id = egui::Id::new(("ndir-original-field-max", index));
+        let id = egui::Id::new(("ndr-original-field-max", index));
         if let Some((_, fm)) = ui.data(|d| d.get_temp::<(u64, FieldMax)>(id)).filter(|c| c.0 == key) {
             return fm;
         }
@@ -266,7 +266,7 @@ impl App {
     /// 속성 칸은 "ARHS"(SFTP는 "drwxrwxrwx") + 10이다. 모두 합쳐 `avail`(세로 막대를 뺀 목록 너비)을 넘으면 이름을 GetAdjustedNameWidth,
     /// 확장자를 GetAdjustedExtWidth로 줄인다. 그러고 나서 남는 자리가 있으면 FitFileNameFields(나머지 칸을 뺀 너비)로 이름·확장자를
     /// 다시 맞추고("WWWWAAAA"·"WWA" 최소), 여전히 넘치면 그대로 둔다(가로로 넘긴다). 남는 너비는 채우지 않는다.
-    /// NDIR 이름 칸은 아이콘 머리(GetListHeaderWidth)를 함께 담는다.
+    /// NDR 이름 칸은 아이콘 머리(GetListHeaderWidth)를 함께 담는다.
     pub(super) fn original_detail_widths(&self, ui: &egui::Ui, index: usize, avail: f32, columns: &[(super::list_view::DetailColumn, String, f32)]) -> Vec<Option<f32>> {
         use super::list_view::DetailColumn as C;
         let fm = self.original_field_max(ui, index);
@@ -350,7 +350,7 @@ impl App {
         };
         // 원본 ShowToolTip 형식 3(미리 보기): 글 자리 왼쪽 = 항목 왼쪽 + (항목 너비 − 썸네일 크기) / 2, 너비 = 썸네일 크기,
         // DrawTextW(DT_CALCRECT | DT_WORDBREAK | DT_CENTER | DT_NOPREFIX)로 높이를 재고(더 좁으면 썸네일 크기), 사방 4를 넓혀
-        // 이름 글 위에 겹친다(+0x2cc = 0: 여러 줄 가운데). NDIR은 칸 안 이름 글 첫 줄에 맞춘다.
+        // 이름 글 위에 겹친다(+0x2cc = 0: 여러 줄 가운데). NDR은 칸 안 이름 글 첫 줄에 맞춘다.
         if let Some((_, row, cell, text_top, thumb, lines)) = thumb_tip {
             let drive = self.panes[index].entries.get(row).is_none_or(|e| e.drive);
             if row != cursor || drive || self.active != index || !ctx.input(|i| i.focused) || lines.is_empty() {
@@ -391,7 +391,7 @@ impl App {
             if rect.bottom() > screen.bottom() {
                 rect = rect.translate(egui::vec2(0.0, screen.bottom() - rect.bottom()));
             }
-            let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new(("ndir-name-tip", index))));
+            let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new(("ndr-name-tip", index))));
             paint(&painter, rect);
             self.name_tip_shown[index] = Some(rect);
             return;
@@ -433,7 +433,7 @@ impl App {
         if rect.bottom() > screen.bottom() {
             rect = rect.translate(egui::vec2(0.0, screen.bottom() - rect.bottom()));
         }
-        let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new(("ndir-name-tip", index))));
+        let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new(("ndr-name-tip", index))));
         paint(&painter, rect);
         self.name_tip_shown[index] = Some(rect);
     }
@@ -455,7 +455,7 @@ pub(super) fn show_tip_window(ctx: &egui::Context, index: usize, rect: egui::Rec
         at.y = at.y.min(monitor.y - rect.height()).max(0.0);
     }
     let builder = egui::ViewportBuilder::default()
-        .with_title("NDIR")
+        .with_title("NDR")
         .with_decorations(false)
         .with_resizable(false)
         .with_taskbar(false)
@@ -464,7 +464,7 @@ pub(super) fn show_tip_window(ctx: &egui::Context, index: usize, rect: egui::Rec
         .with_mouse_passthrough(true)
         .with_position(at)
         .with_inner_size(rect.size());
-    ctx.show_viewport_immediate(egui::ViewportId::from_hash_of(("ndir-name-tip-window", index)), builder, |ctx, _| {
+    ctx.show_viewport_immediate(egui::ViewportId::from_hash_of(("ndr-name-tip-window", index)), builder, |ctx, _| {
         egui::CentralPanel::default().frame(egui::Frame::NONE).show(ctx, |ui| {
             let local = egui::Rect::from_min_size(ui.max_rect().min, rect.size());
             paint(ui.painter(), local);
@@ -512,7 +512,7 @@ struct PressTrack {
 /// 누름이고, 그다음 누름은 다시 보통 누름이다. egui는 시간만 보므로(다른 줄을 빨리 두 번 눌러도 두 번 누르기) 이것을 함께 본다.
 /// 그림마다 한 번 셈한다(App::update 첫머리와 목록 줄이 부른다).
 pub(super) fn windows_double_press(ctx: &egui::Context) -> bool {
-    let id = egui::Id::new("ndir-windows-double-press");
+    let id = egui::Id::new("ndr-windows-double-press");
     let frame = ctx.cumulative_frame_nr() + 1;
     let (press, time, scale) = ctx.input(|i| {
         let press = i.events.iter().rev().find_map(|e| match e {
@@ -692,7 +692,7 @@ impl App {
         // 내 PC 보기의 드라이브는 전처럼 부른 스레드에서 읽는다(캐시가 있으면 바로).
         let this_pc: Option<Vec<(PathBuf, Option<DriveInfo>)>> = drives_view.then(|| if show_drive_list { drive_items(&drive_list) } else { Vec::new() });
         thread::spawn(move || {
-            // 원본 TNXDriveList는 시작할 때 한 번 만들어 들고 있다(목록마다 드라이브를 다시 묻지 않음). NDIR은 패널 목록마다
+            // 원본 TNXDriveList는 시작할 때 한 번 만들어 들고 있다(목록마다 드라이브를 다시 묻지 않음). NDR은 패널 목록마다
             // 드라이브를 읽던 것을 캐시로 바꿨다(5초 안이면 그대로, 지나면 그대로 쓰고 뒤에서 새로 읽음). 끊긴 네트워크 드라이브처럼
             // 볼륨 정보가 늦게 오는 드라이브가 있어도 폴더를 옮길 때마다 기다리지 않는다.
             let listed = match this_pc {
@@ -713,7 +713,7 @@ impl App {
                     .map(|root| Entry { name: root.to_string_lossy().into_owned(), path: root, is_dir: true, size: 0, modified: None, hidden: false, attributes: 0x10, drive: false })
                     .collect())
             } else if let Some(location) = archive {
-                ndir::archive::list(
+                ndr::archive::list(
                     &location.file,
                     if location.password.is_empty() {
                         None
@@ -909,11 +909,11 @@ impl App {
         }
         // C# OpenItemAsync: IsArchive(형식 표) → GetArchiveFirstVolumePath로 첫 볼륨을 연다.
         // 동봉 7-Zip이 못 읽는 형식(.ace)은 C# TryGetExternalArchiveProgram처럼 외부 프로그램으로 풀고 그 폴더로.
-        if ndir::archive::archive_format(&entry.path).is_some() && !ndir::archive::bundled_can_browse(&entry.path) {
-            self.open_with_external_archive_program(i, ndir::archive::first_volume_path(&entry.path), true);
-        } else if ndir::archive::archive_format(&entry.path).is_some() {
+        if ndr::archive::archive_format(&entry.path).is_some() && !ndr::archive::bundled_can_browse(&entry.path) {
+            self.open_with_external_archive_program(i, ndr::archive::first_volume_path(&entry.path), true);
+        } else if ndr::archive::archive_format(&entry.path).is_some() {
             self.panes[i].archive = Some(ArchiveLocation {
-                file: ndir::archive::first_volume_path(&entry.path),
+                file: ndr::archive::first_volume_path(&entry.path),
                 prefix: String::new(),
                 password: String::new(),
             });
@@ -925,7 +925,7 @@ impl App {
         } else {
             // C# OpenItemAsync: RememberOpenedExecutable(.exe/.lnk) 후 실행.
             let mut rows = self.settings.strings("ExecutableHistory");
-            ndir::command_line::remember_opened_executable(&mut rows, &entry.path.to_string_lossy());
+            ndr::command_line::remember_opened_executable(&mut rows, &entry.path.to_string_lossy());
             self.settings.set_strings("ExecutableHistory", rows);
             if let Err(e) = native::shell_open(&entry.path, None, "open") {
                 self.status = e;
@@ -998,14 +998,14 @@ impl App {
         nexus
             .and_then(|map| map.get("NXLINE"))
             .and_then(|v| v.as_str())
-            .and_then(ndir::styles::parse_color)
+            .and_then(ndr::styles::parse_color)
             .map(|[r, g, b, _]| Color32::from_rgb(r, g, b))
             .unwrap_or(ui.visuals().widgets.noninteractive.bg_stroke.color)
     }
     /// C# SortPaneItems + ReorderPane: 패널 설정(정렬 방식·내림차순·폴더 정렬·논리 정렬·묶음)으로 다시 늘어놓고,
     /// 표시와 커서는 같은 항목에 둔다.
     pub(super) fn sort_pane(&mut self, index: usize) {
-        let options = ndir::listing::SortOptions {
+        let options = ndr::listing::SortOptions {
             folder_mode: self.side_text(index, "FolderSortMode", "Name"),
             folder_descending: self.side_flag(index, "FolderSortDescending", false),
             file_mode: self.side_text(index, "SortMode", "Name"),
@@ -1017,15 +1017,15 @@ impl App {
         let group_descending = self.side_flag(index, "GroupDescending", false);
         let (extension_colors, nexus_colors) = self.color_maps();
         let (extension_colors, nexus_colors) = (extension_colors.cloned(), nexus_colors.cloned());
-        let color = |entry: &Entry| ndir::listing::color_sort_key(entry, extension_colors.as_ref(), nexus_colors.as_ref());
+        let color = |entry: &Entry| ndr::listing::color_sort_key(entry, extension_colors.as_ref(), nexus_colors.as_ref());
         let pane = &mut self.panes[index];
         let cursor = pane.entries.get(pane.cursor).map(|e| e.path.clone());
         let marked: HashSet<PathBuf> = pane.selected.iter().filter_map(|i| pane.entries.get(*i).map(|e| e.path.clone())).collect();
         // 원본 ".." 항목은 정렬과 상관없이 맨 앞이다.
         let (mut parents, rest): (Vec<Entry>, Vec<Entry>) = std::mem::take(&mut pane.entries).into_iter().partition(|e| e.is_parent());
         pane.entries = rest;
-        ndir::listing::sort_entries(&mut pane.entries, &options, &color);
-        ndir::listing::sort_groups(&mut pane.entries, &group_mode, &category_mode, group_descending);
+        ndr::listing::sort_entries(&mut pane.entries, &options, &color);
+        ndr::listing::sort_groups(&mut pane.entries, &group_mode, &category_mode, group_descending);
         // 원본 드라이브 항목(종류 4)은 정렬과 상관없이 목록 끝에 TNXDriveList 차례(글자 순)로 있다.
         let (mut items, mut drives): (Vec<Entry>, Vec<Entry>) = std::mem::take(&mut pane.entries).into_iter().partition(|e| !e.drive);
         drives.sort_by(|a, b| a.path.cmp(&b.path));
@@ -1189,7 +1189,7 @@ impl App {
                     Some(s) => self.skin_scrollbar_width(ctx, s),
                     None => None,
                 };
-                let bar_flag = egui::Id::new(("ndir-skin-vbar", index));
+                let bar_flag = egui::Id::new(("ndr-skin-vbar", index));
                 let bar_reserve = match skin_bar {
                     Some(w) if ui.data(|d| d.get_temp::<bool>(bar_flag)).unwrap_or(false) => w,
                     _ => 0.0,
@@ -1424,7 +1424,7 @@ impl App {
                             }
                             // 줄 어디를 눌러도 그 항목(이름 칸만이 아니라 줄 전체, 원본 GetItemAt = 항목 줄 전체).
                             let row_rect = egui::Rect::from_min_size(line.response.rect.left_top(), egui::vec2(width, row_height));
-                            let response = ui.interact(row_rect, ui.id().with(("ndir-detail-row", index, row)), egui::Sense::click_and_drag());
+                            let response = ui.interact(row_rect, ui.id().with(("ndr-detail-row", index, row)), egui::Sense::click_and_drag());
                             // C# BeginFileDragTracking: 왼쪽 단추로 끌면 항목 끌기. 원본은 오른쪽 단추 끌기도 받아 놓을 때 pmDrop을 연다.
                             let folder_path = entry.is_dir.then(|| entry.path.clone());
                             // 원본 MouseDown: 스킨 테마는 누르는 순간 처리(줄 왼쪽 12화소는 표시 칸, Shift는 범위 끌기).

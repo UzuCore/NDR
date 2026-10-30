@@ -267,7 +267,7 @@ mod tests {
 
     #[test]
     fn scan_and_delete_follow_the_cleanup_services() {
-        let root = std::env::temp_dir().join(format!("ndir-cleanup-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let root = std::env::temp_dir().join(format!("ndr-cleanup-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
         fs::create_dir_all(root.join("sub")).unwrap();
         for name in ["a.tmp", "b.TXT", "sub/c.bak", "sub/d.tmp"] {
             fs::write(root.join(name), b"12345").unwrap();

@@ -5,7 +5,7 @@ use super::original_dialogs::{DialogKind, DialogResult};
 use super::remote_window::{self as rw, RemoteAction};
 use super::remote_sites::SitesAction;
 use super::*;
-use ndir::remote::{Client, Config, RemoteEntry};
+use ndr::remote::{Client, Config, RemoteEntry};
 use std::fs;
 
 static REMOTE_LOCK: Mutex<()> = Mutex::new(());
@@ -41,7 +41,7 @@ fn ftp_attributes_end_key_applies_to_all() {
 }
 
 fn fixture(label: &str, language: &str) -> (PathBuf, egui::Context, App) {
-    let root = std::env::temp_dir().join(format!("ndir-remote-{}-{}-{label}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    let root = std::env::temp_dir().join(format!("ndr-remote-{}-{}-{label}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
     let (left, right) = (root.join("left"), root.join("right"));
     fs::create_dir_all(left.join("folder1")).unwrap();
     fs::create_dir_all(&right).unwrap();
@@ -97,7 +97,7 @@ fn remote_window_follows_the_csharp_connection_and_local_flows() {
     let (root, ctx, mut app) = fixture("ko", "ko");
     let left = root.join("left");
     app.dispatch("remote", &ctx);
-    assert_eq!(app.original_dialogs.last().unwrap().title, "NDIR 원격 연결");
+    assert_eq!(app.original_dialogs.last().unwrap().title, "NDR 원격 연결");
     wait_local(&mut app, &ctx);
     {
         let f = form(&mut app);
@@ -240,7 +240,7 @@ fn remote_sites_editor_and_command_follow_the_csharp_flows() {
     let (root, ctx, mut app) = fixture("sites", "en");
     // 원격 명령: 사이트가 없으면 RunSafely 경고.
     app.dispatch("remoteCommand", &ctx);
-    assert_eq!(boxed(&app), ("NDIR".to_owned(), "Save a remote site from the Network menu first.".to_owned()));
+    assert_eq!(boxed(&app), ("NDR".to_owned(), "Save a remote site from the Network menu first.".to_owned()));
     app.answer_message_box(1, &ctx);
     app.dispatch("sites", &ctx);
     assert_eq!(app.original_dialogs.last().unwrap().title, "FTP Site Manager");
@@ -256,7 +256,7 @@ fn remote_sites_editor_and_command_follow_the_csharp_flows() {
     // 이름이나 주소가 비면 FTPSITE_INVALIDINFO(TfMsgBox, 별표 아이콘).
     app.sites_action(SitesAction::Save, &ctx);
     assert_eq!(boxed(&app), ("FTP Site Manager".to_owned(), "Site name or address is empty.".to_owned()));
-    assert_eq!(app.msgboxes[0].flags, ndir::msgbox::MB_OK | ndir::msgbox::MB_ICONASTERISK);
+    assert_eq!(app.msgboxes[0].flags, ndr::msgbox::MB_OK | ndr::msgbox::MB_ICONASTERISK);
     app.answer_message_box(1, &ctx);
     {
         let f = app.sites_form().unwrap();
@@ -322,7 +322,7 @@ fn remote_sites_editor_and_command_follow_the_csharp_flows() {
     assert!(matches!(&dialog.kind, DialogKind::Prompt { message, value, .. } if message == "Command to run on alpha (SFTP)" && value == "pwd"));
     app.answer_dialog(DialogResult::Text(Some("ls -l".into())), &ctx);
     wait_until(&mut app, &ctx, |app| !app.msgboxes.is_empty());
-    assert_eq!(boxed(&app), ("NDIR".to_owned(), "530 Login incorrect.".to_owned()));
+    assert_eq!(boxed(&app), ("NDR".to_owned(), "530 Login incorrect.".to_owned()));
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -477,16 +477,16 @@ impl super::ftp_pane::PaneFs for FakeFtp {
             })
             .collect())
     }
-    fn download(&mut self, remote: &str, local: &Path, _cancel: &AtomicBool, _resolve: &mut dyn FnMut(&str, &str) -> ConflictChoice, progress: &mut dyn FnMut(ndir::remote::TransferProgress)) -> Result<(), String> {
+    fn download(&mut self, remote: &str, local: &Path, _cancel: &AtomicBool, _resolve: &mut dyn FnMut(&str, &str) -> ConflictChoice, progress: &mut dyn FnMut(ndr::remote::TransferProgress)) -> Result<(), String> {
         let (dir, data) = FAKE_FTP.lock().unwrap().get(remote).cloned().ok_or("no such remote file")?;
         if dir {
             return Err("folders are not used in this test".into());
         }
         fs::write(local, &data).map_err(|e| e.to_string())?;
-        progress(ndir::remote::TransferProgress { path: remote.to_owned(), bytes: data.len() as u64, files: 1 });
+        progress(ndr::remote::TransferProgress { path: remote.to_owned(), bytes: data.len() as u64, files: 1 });
         Ok(())
     }
-    fn upload(&mut self, local: &Path, remote: &str, _cancel: &AtomicBool, _resolve: &mut dyn FnMut(&str, &str) -> ConflictChoice, _progress: &mut dyn FnMut(ndir::remote::TransferProgress)) -> Result<(), String> {
+    fn upload(&mut self, local: &Path, remote: &str, _cancel: &AtomicBool, _resolve: &mut dyn FnMut(&str, &str) -> ConflictChoice, _progress: &mut dyn FnMut(ndr::remote::TransferProgress)) -> Result<(), String> {
         let data = fs::read(local).map_err(|e| e.to_string())?;
         FAKE_FTP.lock().unwrap().insert(remote.to_owned(), (false, data));
         Ok(())
@@ -622,7 +622,7 @@ fn ftp_pane_mode_connects_lists_transfers_and_disconnects_like_the_original() {
     app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == "a.txt").unwrap();
     app.dispatch("copyToOther", &ctx);
     // 원본 FTP 엔진: 진행 창 없이 아래 결과 칸에만 진행을 보이고 메인 창은 그대로 쓸 수 있다.
-    assert!(app.job.as_ref().is_some_and(|j| j.progress.is_none()), "no NDIR progress window for panel FTP transfers");
+    assert!(app.job.as_ref().is_some_and(|j| j.progress.is_none()), "no NDR progress window for panel FTP transfers");
     wait_until(&mut app, &ctx, |app| app.job.as_ref().is_none_or(|j| j.finished) && app.panes.iter().all(|p| !p.loading));
     assert_eq!(fs::read(right.join("a.txt")).unwrap(), b"hello");
     // 원본 FUN_0043f800은 결과창(pBottom)을 보이고, 항목이 끝나면 줄을 지우며(FUN_0043f04c 이벤트 2),
@@ -753,7 +753,7 @@ fn quick_connect_site_save_failure_shows_the_csharp_warning() {
     app.status.clear();
     app.save_quick_connect_site(rw::SiteProfile { name: "Example".into(), host: "ftp.example.invalid".into(), ..Default::default() });
     // C# SaveQuickConnectSite catch: MessageBox(오류, SaveFailedTitle, 경고). 성공 상태 글("Saved FTP site")은 쓰지 않는다.
-    let title = app.language_pack.text("NDIRRemoteSites.SaveFailedTitle", "FTP site save failed");
+    let title = app.language_pack.text("NDRRemoteSites.SaveFailedTitle", "FTP site save failed");
     let warning = app.msgboxes.last().expect("save failure warning");
     assert_eq!(warning.title, title);
     assert!(!app.status.contains("Example"), "status: {}", app.status);

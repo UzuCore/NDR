@@ -12,8 +12,8 @@
 use super::original_dialogs::{DeleteWarningChoice, DeleteWarningMode, DialogKind, DialogResult};
 use super::remote_window::{PermissionAction, PermissionForm, SiteProfile, load_sites, parent_path, parse_port, prepare_host, store_sites};
 use super::*;
-use ndir::msgbox::{MB_ICONEXCLAMATION, MB_OK};
-use ndir::remote::{Client, Config, RemoteEntry, TransferProgress};
+use ndr::msgbox::{MB_ICONEXCLAMATION, MB_OK};
+use ndr::remote::{Client, Config, RemoteEntry, TransferProgress};
 
 /// 원본 FUN_0048d7ac: 기록 칸 처음 높이 0x3c, TSplitter MinSize 0x1e(+0x1f8), 나눔 막대 높이(TSplitter 처음 값 3).
 pub(super) const FTP_LOG_HEIGHT: f32 = 60.0;
@@ -83,14 +83,14 @@ pub(super) fn connect_client(config: &Config) -> Result<Box<dyn PaneFs>, String>
 /// 보낸 줄 앞 글(원본 엔진 +0x1c)은 PWD·CWD로 알게 된 지금 원격 폴더.
 pub(super) struct LoggedFs {
     pub inner: Box<dyn PaneFs>,
-    pub log: Arc<Mutex<ndir::remote::ProtocolLog>>,
+    pub log: Arc<Mutex<ndr::remote::ProtocolLog>>,
 }
 
 impl LoggedFs {
     fn run<R>(&mut self, f: impl FnOnce(&mut dyn PaneFs) -> R) -> R {
         let log = self.log.clone();
         let inner = self.inner.as_mut();
-        ndir::remote::with_protocol_log(Some(&log), || f(inner))
+        ndr::remote::with_protocol_log(Some(&log), || f(inner))
     }
     fn set_prefix(&self, path: &str) {
         if let Ok(mut log) = self.log.lock() {
@@ -115,7 +115,7 @@ impl PaneFs for LoggedFs {
         result
     }
     fn list(&mut self, path: &str) -> Result<Vec<RemoteEntry>, String> {
-        // 원본은 그 폴더로 CWD(엔진 +0x1c)한 뒤 목록을 받는다. NDIR은 경로로 바로 받으므로 그 폴더를 앞 글로 쓴다.
+        // 원본은 그 폴더로 CWD(엔진 +0x1c)한 뒤 목록을 받는다. NDR은 경로로 바로 받으므로 그 폴더를 앞 글로 쓴다.
         self.set_prefix(path);
         self.run(|fs| fs.list(path))
     }
@@ -156,7 +156,7 @@ pub(super) struct PaneRemote {
     /// 마지막 목록의 권한 비트(원격 경로 → 모드). 원본 항목 +0x74(TfFTPAttributes에 넘기는 값).
     pub modes: Arc<Mutex<std::collections::HashMap<String, u32>>>,
     /// 원본 패널 +0x358 FTP 기록 칸(FUN_0048d7ac)의 줄. SFTP 사이트로 처음 연결하면 없다.
-    pub log: Option<Arc<Mutex<ndir::remote::ProtocolLog>>>,
+    pub log: Option<Arc<Mutex<ndr::remote::ProtocolLog>>>,
 }
 
 impl PaneRemote {
@@ -297,7 +297,7 @@ pub(super) fn ftp_transferred_text(percent: u64, done: &str, total: &str, kb_per
 impl FtpResultRow {
     /// 원본 FUN_0043f04c 이벤트 1의 lvFTPProgress 칸 글: Progress 칸 = 백분율/10개의 '>'(올리기, 로컬 → 원격) 또는 '<'(내려받기),
     /// 넷째 칸(오른쪽 맞춤) = "%d%"(wsprintf "%d%%"). 항목 크기를 모르면 원본처럼 전체 백분율(`overall`)을 쓴다.
-    /// 기다리는 줄은 둘 다 빈칸, 취소·실패한 줄은 NDIR 상태 글(원본은 끝난 줄을 지운다).
+    /// 기다리는 줄은 둘 다 빈칸, 취소·실패한 줄은 NDR 상태 글(원본은 끝난 줄을 지운다).
     pub(super) fn progress_cells(&self, overall: u64, ko: bool) -> (String, String) {
         let percent = match self.size.filter(|s| *s > 0) {
             Some(size) => self.done.min(size) * 100 / size,
@@ -471,7 +471,7 @@ impl App {
         let log = existing.or_else(|| (!site.protocol.eq_ignore_ascii_case("sftp")).then(Arc::default));
         self.status = format!("{} {host}…", self.ftp_title());
         thread::spawn(move || {
-            let result = ndir::remote::with_protocol_log(log.as_ref(), || connect(&config)).and_then(|fs| {
+            let result = ndr::remote::with_protocol_log(log.as_ref(), || connect(&config)).and_then(|fs| {
                 let mut fs: Box<dyn PaneFs> = match &log {
                     Some(log) => Box::new(LoggedFs { inner: fs, log: log.clone() }),
                     None => fs,
@@ -640,7 +640,7 @@ impl App {
     }
 
     /// 원본 FTP 전송(FTP 엔진 스레드)은 진행 창 없이 아래 결과 칸(pBottom)에만 진행을 보이고 메인 창은 그대로 쓸 수 있다.
-    /// NDIR 파일 작업 진행 창(job.progress)을 감춘다. 충돌·오류 상자는 그대로 뜬다.
+    /// NDR 파일 작업 진행 창(job.progress)을 감춘다. 충돌·오류 상자는 그대로 뜬다.
     pub(super) fn ftp_progress_in_results_only(&mut self, started: bool) {
         if let Some(job) = self.job.as_mut().filter(|_| started) {
             job.progress = None;
@@ -814,8 +814,8 @@ impl App {
         let mut clicked = None;
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::top_down(egui::Align::Min)));
         child.spacing_mut().item_spacing.y = 0.0;
-        let count_id = egui::Id::new(("ndir-ftp-log-count", index));
-        let mut area = egui::ScrollArea::vertical().id_salt(("ndir-ftp-log", index)).auto_shrink([false, false]);
+        let count_id = egui::Id::new(("ndr-ftp-log-count", index));
+        let mut area = egui::ScrollArea::vertical().id_salt(("ndr-ftp-log", index)).auto_shrink([false, false]);
         if ui.ctx().data(|d| d.get_temp::<usize>(count_id)) != Some(lines.len()) {
             area = area.vertical_scroll_offset(lines.len() as f32 * row);
         }
@@ -950,7 +950,7 @@ impl App {
         }
         let title = self.language_pack.text("RES.TITLE_NEWFOLDER", "New Folder");
         let message = self.language_pack.text("RES.MSG_NEWFOLDER", "Type a folder name to be created.");
-        self.prompt(&title, &message, &ndir::names::new_folder_default_name(), None, false, move |app, value, _| {
+        self.prompt(&title, &message, &ndr::names::new_folder_default_name(), None, false, move |app, value, _| {
             let Some(name) = value.filter(|v| !v.trim().is_empty()) else { return };
             let path = join_remote(&remote.path, &name);
             app.ftp_edit(index, remote, Some(name), move |fs| fs.mkdir(&path));
@@ -976,7 +976,7 @@ impl App {
         let Some((source, name)) = items.get(at).cloned() else {
             return self.ftp_rename_run(index, remote, renames, focused);
         };
-        let (stem, extension) = ndir::names::split_for_rename(&name, false);
+        let (stem, extension) = ndr::names::split_for_rename(&name, false);
         let (stem, extension) = if stem.is_empty() { (name.clone(), String::new()) } else { (stem, extension) };
         let count = items.len();
         let original = name.clone();

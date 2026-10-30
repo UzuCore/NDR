@@ -455,7 +455,7 @@ fn ensure_no_reparse(root: &Path, candidate: &Path, include_target: bool) -> Res
     Ok(())
 }
 
-/// 바꿔 놓은 항목(.ndir-sync-replaced-…)을 지운다(휴지통 설정을 따름).
+/// 바꿔 놓은 항목(.ndr-sync-replaced-…)을 지운다(휴지통 설정을 따름).
 fn delete_backup(path: &Path, recycle: bool) -> Vec<String> {
     let (tx, rx) = std::sync::mpsc::channel();
     crate::fsops::run(crate::fsops::Operation::Delete { sources: vec![path.to_path_buf()], recycle }, tx, std::sync::Arc::new(AtomicBool::new(false)));
@@ -483,7 +483,7 @@ fn create_directories(root: &Path, destination: &Path, replace_files: bool, recy
             if !replace_files {
                 return Err(format!("A file blocks the required destination folder: {}", current.display()));
             }
-            let backup = unique(current.parent().unwrap_or(Path::new(".")), ".ndir-sync-replaced-");
+            let backup = unique(current.parent().unwrap_or(Path::new(".")), ".ndr-sync-replaced-");
             fs::rename(&current, &backup).map_err(|e| e.to_string())?;
             if let Err(error) = fs::create_dir(&current) {
                 let _ = fs::rename(&backup, &current);
@@ -569,7 +569,7 @@ pub fn copy_differences(source_root: &Path, destination_root: &Path, differences
                 result.skipped_existing += 1;
                 return Ok(());
             }
-            let temporary = unique(&directory, ".ndir-sync-");
+            let temporary = unique(&directory, ".ndr-sync-");
             let copied = (|| -> Result<(), String> {
                 let mut input = File::open(&source).map_err(|e| e.to_string())?;
                 let mut output = OpenOptions::new().write(true).create_new(true).open(&temporary).map_err(|e| e.to_string())?;
@@ -589,7 +589,7 @@ pub fn copy_differences(source_root: &Path, destination_root: &Path, differences
                 drop(output);
                 ensure_no_reparse(&destination_root, &destination, true)?;
                 if is_dir {
-                    let backup = unique(&directory, ".ndir-sync-replaced-");
+                    let backup = unique(&directory, ".ndr-sync-replaced-");
                     fs::rename(&destination, &backup).map_err(|e| e.to_string())?;
                     if let Err(error) = fs::rename(&temporary, &destination) {
                         let _ = fs::rename(&backup, &destination);
@@ -627,7 +627,7 @@ mod tests {
 
     #[test]
     fn compare_and_copy_follow_foldercomparisonservice() {
-        let root = std::env::temp_dir().join(format!("ndir-compare-{}-{}", std::process::id(), SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_nanos()));
+        let root = std::env::temp_dir().join(format!("ndr-compare-{}-{}", std::process::id(), SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_nanos()));
         let (left, right) = (root.join("left"), root.join("right"));
         fs::create_dir_all(left.join("sub")).unwrap();
         fs::create_dir_all(&right).unwrap();
@@ -682,7 +682,7 @@ mod tests {
 
     #[test]
     fn time_comparison_follows_original_comparefiletime() {
-        let root = std::env::temp_dir().join(format!("ndir-compare-time-{}-{}", std::process::id(), SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_nanos()));
+        let root = std::env::temp_dir().join(format!("ndr-compare-time-{}-{}", std::process::id(), SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_nanos()));
         let (left, right) = (root.join("left"), root.join("right"));
         fs::create_dir_all(&left).unwrap();
         fs::create_dir_all(&right).unwrap();
@@ -706,7 +706,7 @@ mod tests {
 
     #[test]
     fn stop_keeps_rows_and_right_names_keep_their_case() {
-        let root = std::env::temp_dir().join(format!("ndir-compare-partial-{}-{}", std::process::id(), SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_nanos()));
+        let root = std::env::temp_dir().join(format!("ndr-compare-partial-{}-{}", std::process::id(), SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_nanos()));
         let (left, right) = (root.join("left"), root.join("right"));
         fs::create_dir_all(&left).unwrap();
         fs::create_dir_all(&right).unwrap();

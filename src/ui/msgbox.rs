@@ -2,7 +2,7 @@
 //! egui에는 OS 대화 상자가 없으므로 모달 영역 안에 DFM 좌표대로 그린다. 결과는 콜백으로 돌려준다.
 use super::*;
 use eframe::egui::{FontId, Rect, Sense, Vec2, pos2, text::LayoutJob, vec2};
-use ndir::msgbox as mb;
+use ndr::msgbox as mb;
 
 pub(super) type MsgBoxCallback = Box<dyn FnOnce(&mut App, i32, &egui::Context)>;
 
@@ -102,7 +102,7 @@ impl App {
         }
         let (width, height, rgba) = native::system_icon_rgba(id).ok()?;
         let texture = ctx.load_texture(
-            format!("ndir-system-icon-{id:x}"),
+            format!("ndr-system-icon-{id:x}"),
             egui::ColorImage::from_rgba_unmultiplied([width, height], &rgba),
             egui::TextureOptions::NEAREST,
         );
@@ -135,7 +135,7 @@ impl App {
         let mut pressed: Option<i32> = None;
         let mut layout = MsgBoxLayout::default();
 
-        let modal_id = egui::Id::new(("ndir-msgbox", serial));
+        let modal_id = egui::Id::new(("ndr-msgbox", serial));
         super::keep_opaque(ctx, modal_id);
         egui::Modal::new(modal_id).show(ctx, |ui| {
             let font = FontId::proportional(FONT);

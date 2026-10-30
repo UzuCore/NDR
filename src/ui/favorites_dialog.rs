@@ -18,7 +18,7 @@ pub(super) struct FavoritesForm {
 }
 
 /// ShortcutBindingService.GetFavoriteGesture: KeyboardShortcuts["favoriteOpenN"], 없으면 Shift+F1~F10, Ctrl+Shift+F1~F10.
-pub(super) fn favorite_gesture(settings: &ndir::settings::Settings, index: usize) -> String {
+pub(super) fn favorite_gesture(settings: &ndr::settings::Settings, index: usize) -> String {
     if index >= SLOTS {
         return String::new();
     }
@@ -33,7 +33,7 @@ fn trimmed_name(path: &str) -> String {
 
 impl FavoritesForm {
     /// 이름이나 경로가 빈 항목은 빈 칸, 20칸까지 채운다.
-    pub(super) fn new(favorites: Vec<(String, String)>, current: String, settings: &ndir::settings::Settings) -> Self {
+    pub(super) fn new(favorites: Vec<(String, String)>, current: String, settings: &ndr::settings::Settings) -> Self {
         let mut items: Vec<(String, String)> = favorites.into_iter().map(|(name, path)| if name.is_empty() || path.is_empty() { (String::new(), String::new()) } else { (name, path) }).collect();
         while items.len() < SLOTS {
             items.push((String::new(), String::new()));
@@ -44,7 +44,7 @@ impl FavoritesForm {
 
     /// AddEntry: 같은 경로가 있으면 그대로, 이름은 마지막 폴더 이름(없으면 경로), 첫 빈 칸(없으면 끝)에 넣고 고른다.
     pub(super) fn add_entry(&mut self, path: &str) {
-        if self.items.iter().any(|(_, known)| ndir::names::equals_ignore_case(known, path)) {
+        if self.items.iter().any(|(_, known)| ndr::names::equals_ignore_case(known, path)) {
             return;
         }
         let name = trimmed_name(path);
@@ -429,7 +429,7 @@ impl App {
             .language_pack
             .text("RES.MSG_ADDFAV", "Adding a following folder to favorites.\nType a name for this folder.\n<b><c0000FF>%s</c></b>")
             .replace("%s", &shown);
-        let initial = ndir::names::find_file_name(&folder);
+        let initial = ndr::names::find_file_name(&folder);
         self.prompt(&title, &message, &initial, None, false, move |app, name, _| {
             let Some(name) = name else { return };
             let mut paths = app.settings.strings("Favorites");
@@ -556,7 +556,7 @@ impl App {
         }
         let screen = ctx.content_rect();
         let position = popup.position.unwrap_or(egui::pos2(screen.center().x - 150.0, screen.top() + 28.0));
-        let area = egui::Area::new(egui::Id::new("ndir-popup-menu")).order(egui::Order::Foreground).fixed_pos(position).show(ctx, |ui| {
+        let area = egui::Area::new(egui::Id::new("ndr-popup-menu")).order(egui::Order::Foreground).fixed_pos(position).show(ctx, |ui| {
             // 스킨 테마면 원본 메뉴 색(skin_menu_style).
             super::skin_pane::apply_menu_style(ui);
             egui::Frame::menu(ui.style()).show(ui, |ui| {

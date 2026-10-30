@@ -1517,7 +1517,7 @@ fn apply_renames_inner(
         for (source, target) in &plan {
             let temporary = loop {
                 let p = source.parent().unwrap().join(format!(
-                    ".ndir-rename-{}-{}",
+                    ".ndr-rename-{}-{}",
                     std::process::id(),
                     NEXT.fetch_add(1, Ordering::Relaxed)
                 ));
@@ -2167,7 +2167,7 @@ impl ShortcutMap {
 mod tests {
     use super::*;
     fn sandbox(label: &str) -> PathBuf {
-        let root = std::env::temp_dir().join(format!("ndir-compat-{}-{label}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("ndr-compat-{}-{label}", std::process::id()));
         fs::create_dir_all(&root).unwrap();
         root
     }
@@ -2347,7 +2347,7 @@ mod tests {
             e.unwrap()
                 .file_name()
                 .to_string_lossy()
-                .starts_with(".ndir-rename-")
+                .starts_with(".ndr-rename-")
         }));
         apply_renames(&paths, &["two".into(), "three".into(), "one".into()]).unwrap();
         assert_eq!(read_descriptions(&root, true).unwrap()["two"], "first");

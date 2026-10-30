@@ -1,13 +1,13 @@
 //! C# MainWindow.HandleKeyboardAsync(파일 목록 글쇠) 순서:
 //! Esc(EscapeKeyAction) → Shift+글자 드라이브(UseAlternateDriveHandling, 영어가 아닌 입력 언어) → 원본 단축키 표(shortcut.ini,
-//! 사용자가 KeyboardShortcuts로 바꾼 NDIR 글쇠가 맞으면 건너뜀) → NDIR 단축키(ShortcutBindingService) → 기능키 → 나머지 NDIR 단축키 →
+//! 사용자가 KeyboardShortcuts로 바꾼 NDR 글쇠가 맞으면 건너뜀) → NDR 단축키(ShortcutBindingService) → 기능키 → 나머지 NDR 단축키 →
 //! Space(지금 항목 표시 전환) → 동작이 있는 정의(legacy*, favoriteOpenN). 그 뒤 목록 이동(위/아래/Home/End/Tab, egui에는 목록 상자가 없다).
 //! 함께: CycleFileSelection, ToggleFocusedItemSelection, ExecuteShortcutActionAsync, ExecuteMenuCommandAsync의 favoriteOpen:/workOpen:/
 //! workSet:/column:, RememberDriveFolder/RestoreLastDriveFolder, 드라이브 단추(ShowDriveButtons, 준비된 드라이브, 볼륨 이름 도움말).
 //! 차이(HANDOFF): 글 입력 칸에 초점이 있으면 목록 글쇠를 하나도 받지 않는다(C#은 뒤로·앞으로 등 몇 개를 받는다). F10(폴더 선택 창)은 보류.
 use super::remote_window::wpf_key;
 use super::*;
-use ndir::shortcut_bindings::{self as bindings, Modifiers as KeyMods};
+use ndr::shortcut_bindings::{self as bindings, Modifiers as KeyMods};
 
 const PANEL_SCOPE: &str = "파일 패널";
 
@@ -40,7 +40,7 @@ impl App {
             return;
         }
         // 원본 ApplicationEvents1Message(0x442984): WM_XBUTTONDOWN(0x20b)의 XBUTTON1이면 HistoryBack, XBUTTON2면 HistoryForward.
-        // (NDIR은 대화 상자·진행 창이 떠 있는 동안에는 받지 않는다.)
+        // (NDR은 대화 상자·진행 창이 떠 있는 동안에는 받지 않는다.)
         let (back, forward) = ctx.input(|i| (i.pointer.button_pressed(egui::PointerButton::Extra1), i.pointer.button_pressed(egui::PointerButton::Extra2)));
         if back {
             self.dispatch("back", ctx);
@@ -124,13 +124,13 @@ impl App {
         false
     }
 
-    /// 사용자가 KeyboardShortcuts로 바꿔 둔 NDIR 글쇠가 이 글쇠와 맞는가(C# UserShortcutOverrideMatches).
+    /// 사용자가 KeyboardShortcuts로 바꿔 둔 NDR 글쇠가 이 글쇠와 맞는가(C# UserShortcutOverrideMatches).
     fn user_override_matches(&self, key: &str, modifiers: KeyMods) -> bool {
         let Some(configured) = self.settings.values.get("KeyboardShortcuts").and_then(|v| v.as_object()) else { return false };
         bindings::definitions().iter().any(|d| configured.contains_key(&d.id) && bindings::matches(&self.settings, &d.id, key, modifiers))
     }
 
-    /// 원본 단축키 표(shortcut.ini)로 고른 메뉴 항목·내부 명령. None이면 NDIR 단축키로 넘긴다.
+    /// 원본 단축키 표(shortcut.ini)로 고른 메뉴 항목·내부 명령. None이면 NDR 단축키로 넘긴다.
     fn original_shortcut(&mut self, key: egui::Key, modifiers: egui::Modifiers, ctx: &egui::Context) -> bool {
         let custom = self.settings.values.get("OriginalShortcutMapText").and_then(|v| v.as_str());
         let shortcuts = compat::ShortcutMap::parse(custom);
@@ -184,7 +184,7 @@ impl App {
             "miSearchFile" | "miArcMove" | "miArcInstall" => return true,
             // 원본 miFind(Ctrl+F) = 찾기 입력 상자(TfGetText). C# 판은 같은 글쇠로 도구 모음 빠른 찾기 칸에 초점을 주므로,
             // 그 칸이 도구 모음에 있을 때만 C# 판처럼 하고, 없으면(원본 도구 모음) 원본 찾기 상자를 연다.
-            "miFind" if !self.toolbar.items.iter().any(|i| i.kind == ndir::commands::ToolbarKind::QuickSearch) => {
+            "miFind" if !self.toolbar.items.iter().any(|i| i.kind == ndr::commands::ToolbarKind::QuickSearch) => {
                 self.dispatch("find", ctx);
                 return true;
             }
@@ -345,7 +345,7 @@ impl App {
             }
         }
         if m(self, "focusSearch") {
-            ctx.memory_mut(|memory| memory.request_focus(egui::Id::new("ndir-toolbar-query")));
+            ctx.memory_mut(|memory| memory.request_focus(egui::Id::new("ndr-toolbar-query")));
             return true;
         }
         if m(self, "selectAll") {
@@ -367,7 +367,7 @@ impl App {
             "filterOrInstall" => {
                 let pane = &self.panes[self.active];
                 let archive_selected = pane.archive.is_none()
-                    && self.target_entries(self.active).iter().any(|e| !e.is_dir && ndir::archive::archive_format(&e.path).is_some());
+                    && self.target_entries(self.active).iter().any(|e| !e.is_dir && ndr::archive::archive_format(&e.path).is_some());
                 if archive_selected { self.dispatch("archiveInstall", ctx) } else { self.dispatch("filter", ctx) }
             }
             other => self.dispatch(other, ctx),
@@ -404,7 +404,7 @@ impl App {
                 self.navigate(self.active, PathBuf::from(path), true);
             } else {
                 let text = if ko { format!("작업 폴더 {}이 설정되지 않았습니다.", index + 1) } else { format!("Work folder {} is not set.", index + 1) };
-                self.system_box("NDIR", &text, ndir::msgbox::MB_OK, |_, _, _| {});
+                self.system_box("NDR", &text, ndr::msgbox::MB_OK, |_, _, _| {});
             }
             return true;
         }
@@ -427,8 +427,8 @@ impl App {
                         .language_pack
                         .text("RES.MSG_UNSETWORKFOLDER", "A following folder is already assigned to this work folder. You want to replace this with current folder?\n%s")
                         .replace("%s", &existing);
-                    self.message_box(&title, "", &text, ndir::msgbox::MB_YESNO | ndir::msgbox::MB_ICONQUESTION, move |app, answer, _| {
-                        if answer == ndir::msgbox::IDYES {
+                    self.message_box(&title, "", &text, ndr::msgbox::MB_YESNO | ndr::msgbox::MB_ICONQUESTION, move |app, answer, _| {
+                        if answer == ndr::msgbox::IDYES {
                             app.set_work_folder(index, path);
                         }
                     });
@@ -484,7 +484,7 @@ impl App {
         let pane = &mut self.panes[index];
         pane.address_editing = true;
         pane.address = text;
-        let id = egui::Id::new(("ndir-address", index));
+        let id = egui::Id::new(("ndr-address", index));
         ctx.memory_mut(|memory| memory.request_focus(id));
         let length = pane.address.chars().count();
         let mut state = egui::TextEdit::load_state(ctx, id).unwrap_or_default();

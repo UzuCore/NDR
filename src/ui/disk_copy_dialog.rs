@@ -1,7 +1,7 @@
 //! C# DiskCopyWindow(디스크 복사, 610×630) + DiskImageService 호출 흐름.
 //! 방식 = 이동식 드라이브에서 이미지 만들기 / 이미지를 이동식 드라이브에 복원 / 다른 이동식 드라이브로 직접 복사(처음 선택).
 //! "파티션 테이블과 모든 파티션 포함"이면 볼륨 대신 물리 디스크 전체. 직접 복사 + 전체 디스크는 "한 드라이브로 복사(미디어 교체)"
-//! (%TEMP%\NDIR-DiskCopy-{guid}.img에 읽고 → 미디어 교체 확인 → 같은 디스크 번호에 쓰기, 쓰기가 실패하면 그 이미지를 복구용으로 남기고
+//! (%TEMP%\NDR-DiskCopy-{guid}.img에 읽고 → 미디어 교체 확인 → 같은 디스크 번호에 쓰기, 쓰기가 실패하면 그 이미지를 복구용으로 남기고
 //! 복원 방식으로 바꿔 둔다). 직접 복사는 "복사 후 데이터 읽기 검증".
 //! 진행은 창 안의 상태 글과 막대다. 취소는 이미지 만들기와 한 드라이브 복사의 읽기 단계만. 작업 중에는 창을 닫을 수 없고
 //! 닫으려 하면(×, Esc, 메인 창 닫기) 이미지 만들기만 취소를 요청한다(C# OnClosing). 성공하면 창이 닫힌다(C# DialogResult = true).
@@ -9,8 +9,8 @@
 //! 장치 오류 글은 Rust 디스크 모듈의 영어 글, Rust 디스크 모듈의 안전 검사(보호 디스크·이미지는 다른 물리 디스크·볼륨 잠금)는 C#보다 엄격하다.
 use super::original_dialogs::{DialogKind, DialogResult};
 use super::*;
-use ndir::disk::{PhysicalDisk, RemovableDrive};
-use ndir::msgbox::{IDYES, MB_ICONEXCLAMATION, MB_OK, MB_YESNO};
+use ndr::disk::{PhysicalDisk, RemovableDrive};
+use ndr::msgbox::{IDYES, MB_ICONEXCLAMATION, MB_OK, MB_YESNO};
 
 type DiskProgress<'a> = &'a mut dyn FnMut(u64, u64, bool);
 
@@ -32,11 +32,11 @@ pub(super) struct DiskHooks {
 impl Default for DiskHooks {
     fn default() -> Self {
         Self {
-            drives: ndir::disk::ready_removable_drives,
-            physical_disks: ndir::disk::ready_removable_physical_disks,
-            read_image: ndir::disk::read_image,
-            write_image: ndir::disk::write_image,
-            copy_device: ndir::disk::copy_device,
+            drives: ndr::disk::ready_removable_drives,
+            physical_disks: ndr::disk::ready_removable_physical_disks,
+            read_image: ndr::disk::read_image,
+            write_image: ndr::disk::write_image,
+            copy_device: ndr::disk::copy_device,
             temp_dir: std::env::temp_dir,
         }
     }
@@ -209,7 +209,7 @@ impl DiskCopyForm {
 
     /// DriveChoice.ToString: "{Root} {Label} · {FormatSize(Bytes)}".
     pub(super) fn drive_text(&self, drive: &RemovableDrive) -> String {
-        format!("{} {} · {}", drive.root, self.label_of(drive), ndir::parity::format_size(drive.bytes, "Auto", true))
+        format!("{} {} · {}", drive.root, self.label_of(drive), ndr::parity::format_size(drive.bytes, "Auto", true))
     }
 
     pub(super) fn drive_label(&self) -> &'static str {
@@ -244,7 +244,7 @@ impl DiskCopyForm {
             let mut text = String::from(if self.direct() {
                 if self.same() {
                     t(ko, "원본을 Windows 임시 폴더의 이미지 파일로 저장한 뒤 미디어를 바꿉니다. 같은 용량의 대상 미디어를 넣으면 전체 데이터를 덮어씁니다.",
-                        "NDIR saves the source to a temporary image on another local disk. Swap in destination media with the same capacity; every byte on it will be overwritten.")
+                        "NDR saves the source to a temporary image on another local disk. Swap in destination media with the same capacity; every byte on it will be overwritten.")
                 } else {
                     t(ko, "대상 물리 디스크의 파티션 테이블과 모든 데이터를 덮어씁니다. 디스크 용량이 정확히 같아야 하며, 작업 중에는 취소할 수 없습니다.",
                         "This overwrites the target disk's partition table and every byte. Disk capacities must match exactly. The operation cannot be cancelled.")
@@ -337,9 +337,9 @@ impl DiskCopyForm {
             };
             let scope = t(ko, "파티션 테이블과 모든 파티션을 포함한 물리 디스크 전체가", "The entire physical disk, including its partition table and every partition,");
             let message = if ko {
-                format!("{destination}의 {scope} {source} 내용으로 덮어써집니다.\n\n작업 중에는 디스크를 분리하거나 NDIR을 종료하지 마세요. 계속할까요?")
+                format!("{destination}의 {scope} {source} 내용으로 덮어써집니다.\n\n작업 중에는 디스크를 분리하거나 NDR을 종료하지 마세요. 계속할까요?")
             } else {
-                format!("{scope} {destination} will be overwritten with {source}.\n\nDo not disconnect the disk or close NDIR during the operation. Continue?")
+                format!("{scope} {destination} will be overwritten with {source}.\n\nDo not disconnect the disk or close NDR during the operation. Continue?")
             };
             return (title.into(), message);
         }
@@ -349,9 +349,9 @@ impl DiskCopyForm {
         let source = if direct { format!("{} ({})", drive.root, self.label_of(drive)) } else { file_name };
         let title = if direct { t(ko, "이동식 드라이브 직접 복사", "Direct removable drive copy") } else { t(ko, "이동식 드라이브 복원", "Restore removable drive") };
         let message = if ko {
-            format!("{destination}의 기존 볼륨 데이터가 {source} 내용으로 덮어씁니다.\n\n작업 중에는 드라이브를 분리하거나 NDIR을 종료하지 마세요. 계속할까요?")
+            format!("{destination}의 기존 볼륨 데이터가 {source} 내용으로 덮어씁니다.\n\n작업 중에는 드라이브를 분리하거나 NDR을 종료하지 마세요. 계속할까요?")
         } else {
-            format!("The existing volume data on {destination} will be overwritten with {source}.\n\nDo not disconnect the drive or close NDIR during the operation. Continue?")
+            format!("The existing volume data on {destination} will be overwritten with {source}.\n\nDo not disconnect the drive or close NDR during the operation. Continue?")
         };
         (title.into(), message)
     }
@@ -646,7 +646,7 @@ impl App {
         } else if plan.restore {
             (DiskStage::Restore, spawn(move |cancel, progress| (hooks.write_image)(&image, &source, false, cancel, progress)))
         } else if plan.same {
-            let path = (hooks.temp_dir)().join(format!("NDIR-DiskCopy-{}.img", guid_n()));
+            let path = (hooks.temp_dir)().join(format!("NDR-DiskCopy-{}.img", guid_n()));
             temp = Some(path.clone());
             (DiskStage::SameRead, spawn(move |cancel, progress| (hooks.read_image)(&source, &path, cancel, progress)))
         } else {

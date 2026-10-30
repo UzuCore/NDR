@@ -559,7 +559,7 @@ mod win {
             encode_request(&request)?;
             Self::open(profile, Some(request)).map(|outcome| outcome.unwrap_or(InstanceOutcome::Forwarded))
         }
-        /// C# ApplySingleInstanceModeAsync(true): 실행 중에 켤 때. 다른 NDIR이 이미 이 사용자·프로필을 쓰면 None이고
+        /// C# ApplySingleInstanceModeAsync(true): 실행 중에 켤 때. 다른 NDR이 이미 이 사용자·프로필을 쓰면 None이고
         /// 그쪽에 아무것도 보내지 않는다.
         pub fn try_acquire(profile: &Path) -> Result<Option<(Self, Receiver<NavigationRequest>)>, String> {
             match Self::open(profile, None)? {
@@ -572,7 +572,7 @@ mod win {
             let sid = user_sid(unsafe { GetCurrentProcess() })?;
             let profile = profile_identity(profile)?;
             let identity = format!("{:X}", Sha256::digest(format!("{sid}\0{profile}")));
-            let object = format!("NDIR-Rust-{}", &identity[..32]);
+            let object = format!("NDR-Rust-{}", &identity[..32]);
             let descriptor = descriptor(&sid)?;
             let attrs = SecurityAttributes {
                 size: std::mem::size_of::<SecurityAttributes>() as u32,
@@ -881,7 +881,7 @@ mod win {
             || process != unsafe { GetCurrentProcessId() }
         {
             return Err(
-                "Lifecycle operation requires a live window owned by this NDIR process".into(),
+                "Lifecycle operation requires a live window owned by this NDR process".into(),
             );
         }
         Ok(hwnd)
@@ -896,7 +896,7 @@ mod win {
     ) {
         static ID: AtomicU64 = AtomicU64::new(0);
         let class_name = wide(format!(
-            "NDIR.RustLifecycle.{}.{}",
+            "NDR.RustLifecycle.{}.{}",
             std::process::id(),
             ID.fetch_add(1, Ordering::Relaxed)
         ));
@@ -921,10 +921,10 @@ mod win {
             taskbar_created: unsafe { RegisterWindowMessageW(wide("TaskbarCreated").as_ptr()) },
             key: None,
             key_id: 0,
-            open_label: "Open NDIR".into(),
+            open_label: "Open NDR".into(),
             exit_label: "Exit".into(),
         });
-        let title = wide("NDIR lifecycle");
+        let title = wide("NDR lifecycle");
         let hwnd = unsafe {
             CreateWindowExW(
                 WS_EX_TOOLWINDOW,
@@ -954,7 +954,7 @@ mod win {
         state.icon.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_SHOWTIP;
         state.icon.uCallbackMessage = TRAY;
         state.icon.hIcon = unsafe { LoadIconW(std::ptr::null_mut(), 32512usize as *const u16) };
-        for (i, c) in "NDIR".encode_utf16().enumerate() {
+        for (i, c) in "NDR".encode_utf16().enumerate() {
             state.icon.szTip[i] = c
         }
         let _ = state.tray(tray);
@@ -1140,7 +1140,7 @@ mod tests {
     };
     fn fixture() -> PathBuf {
         let p = std::env::temp_dir().join(format!(
-            "ndir-lifecycle-{}-{}",
+            "ndr-lifecycle-{}-{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(SystemTime::UNIX_EPOCH)
@@ -1232,7 +1232,7 @@ mod tests {
             fn DestroyWindow(hwnd: *mut std::ffi::c_void) -> i32;
         }
         let class: Vec<_> = "STATIC".encode_utf16().chain(Some(0)).collect();
-        let name: Vec<_> = "NDIR owned lifecycle test"
+        let name: Vec<_> = "NDR owned lifecycle test"
             .encode_utf16()
             .chain(Some(0))
             .collect();
@@ -1261,7 +1261,7 @@ mod tests {
         assert!(lifecycle.set_hotkey(Some("Ctrl+E")).is_err());
         lifecycle.set_tray(false).unwrap();
         lifecycle
-            .set_tray_labels("\u{C5F4}\u{AE30}", "\u{C885}\u{B8CC}", "NDIR")
+            .set_tray_labels("\u{C5F4}\u{AE30}", "\u{C885}\u{B8CC}", "NDR")
             .unwrap();
         drop(lifecycle);
         assert!(NativeLifecycle::attach(0, None, false).is_err());

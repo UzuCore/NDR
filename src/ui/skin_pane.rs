@@ -4,7 +4,7 @@
 //! - 패널 테두리: 스킨 [List] lframelocal·lframenet·lframearc·lframeftp·lframeinactive, lframewidth.
 use super::pane_chrome::CrumbTarget;
 use super::*;
-use ndir::styles::Skin;
+use ndr::styles::Skin;
 
 /// 주소 줄 조각 하나: 보이는 글, 누르면 갈 곳, 갈매기(>)를 누르면 하위 폴더를 보일 로컬 폴더(없으면 None).
 pub(super) struct CrumbSegment {
@@ -58,13 +58,13 @@ pub(super) fn skin_menu_style(skin: &Skin) -> egui::style::StyleModifier {
             state.corner_radius = egui::CornerRadius::ZERO;
         }
         v.widgets.inactive.corner_radius = egui::CornerRadius::ZERO;
-        // NDIR 메뉴(PopupMenu)의 글쇠로 고른 줄(Button::selected)도 원본 고른 줄 색.
+        // NDR 메뉴(PopupMenu)의 글쇠로 고른 줄(Button::selected)도 원본 고른 줄 색.
         v.selection.bg_fill = high;
         v.selection.stroke.color = over;
     })
 }
 
-const MENU_STYLE_ID: &str = "ndir-skin-menu-style";
+const MENU_STYLE_ID: &str = "ndr-skin-menu-style";
 
 /// 원본 MenuDrawItem의 단축키 칸: 바탕 mrback(+0x48, 너비 = 단축키 글 너비), 글 mrtext(+0x4c), 고른 줄은 mrover(+0x50).
 pub(super) fn skin_menu_shortcut_colors(skin: &Skin) -> (Color32, Color32, Color32) {
@@ -92,7 +92,7 @@ pub(super) fn fill_menu_shortcut_column(ui: &egui::Ui, slot: egui::layers::Shape
     ui.painter().set(slot, egui::Shape::rect_filled(column, 0.0, colors.0));
 }
 
-/// 이 장면의 펼침 메뉴 모양(스킨 테마면 skin_menu_style, 아니면 없음)을 ctx에 둔다. 오른쪽 단추 메뉴·NDIR 메뉴가 읽는다.
+/// 이 장면의 펼침 메뉴 모양(스킨 테마면 skin_menu_style, 아니면 없음)을 ctx에 둔다. 오른쪽 단추 메뉴·NDR 메뉴가 읽는다.
 pub(super) fn set_menu_style(ctx: &egui::Context, style: Option<egui::style::StyleModifier>) {
     ctx.data_mut(|d| d.insert_temp(egui::Id::new(MENU_STYLE_ID), style));
 }
@@ -424,7 +424,7 @@ pub(super) fn scrollbar_thumb(track: f32, thickness: f32, button: f32, offset: f
 /// TNXLabel 마크업(스킨 테마): 색 태그가 없는 글은 라벨 글색, &lt;b&gt;는 같은 크기의 굵은 꼴(Segoe UI Bold·맑은 고딕 Bold).
 fn skin_markup_job(text: &str, base: Color32) -> egui::text::LayoutJob {
     let mut job = egui::text::LayoutJob::default();
-    for span in ndir::markup::render(text) {
+    for span in ndr::markup::render(text) {
         let family = if span.bold { egui::FontFamily::Name(super::BOLD_FONT_FAMILY.into()) } else { egui::FontFamily::Proportional };
         let color = span.color.map_or(base, |(r, g, b)| Color32::from_rgb(r, g, b));
         job.append(&span.text, 0.0, egui::TextFormat { font_id: egui::FontId::new(super::BASE_TEXT_SIZE, family), color, ..Default::default() });
@@ -612,7 +612,7 @@ impl App {
         let painter = ui.painter().with_clip_rect(rect);
         painter.rect_filled(rect, 0.0, skin_color(skin, "laback", Color32::from_rgb(0x20, 0x20, 0x20)));
         if self.panes[index].address_editing {
-            let id = egui::Id::new(("ndir-address", index));
+            let id = egui::Id::new(("ndr-address", index));
             let response = ui.put(rect.shrink2(egui::vec2(ADDRESS_BUTTON_WIDTH, 0.0)), egui::TextEdit::singleline(&mut self.panes[index].address).id(id).desired_width(f32::INFINITY));
             if response.lost_focus() {
                 let go = ui.input(|i| i.key_pressed(egui::Key::Enter));
@@ -633,7 +633,7 @@ impl App {
         let right_button = egui::Rect::from_min_size(egui::pos2(rect.right() - ADDRESS_BUTTON_WIDTH, rect.top()), egui::vec2(ADDRESS_BUTTON_WIDTH, rect.height()));
         let mut clicked_button = None;
         for (cell, slot) in [(0usize, left_button), (1, right_button)] {
-            let response = ui.interact(slot, egui::Id::new(("ndir-skin-address-button", index, cell)), egui::Sense::click());
+            let response = ui.interact(slot, egui::Id::new(("ndr-skin-address-button", index, cell)), egui::Sense::click());
             if let Some(texture) = &buttons {
                 let row = usize::from(response.hovered());
                 let uv = egui::Rect::from_min_max(egui::pos2(cell as f32 / 2.0, row as f32 / 2.0), egui::pos2((cell + 1) as f32 / 2.0, (row + 1) as f32 / 2.0));
@@ -772,7 +772,7 @@ impl App {
         let widths: Vec<i32> = names.iter().map(|n| ui.fonts_mut(|f| f.layout_no_wrap(n.clone(), font.clone(), Color32::WHITE)).size().x.ceil() as i32).collect();
         let layout = tab_set_layout(&widths, rect.width() as i32);
         let active = self.panes[index].tab.min(count - 1);
-        let first_id = egui::Id::new(("ndir-tab-first", index));
+        let first_id = egui::Id::new(("ndr-tab-first", index));
         let first = tab_first_index(ui.data(|d| d.get_temp::<usize>(first_id)).unwrap_or(0), active, layout.visible, count);
         ui.data_mut(|d| d.insert_temp(first_id, first));
         let lead = if layout.scroll { 32.0 } else { 16.0 };
@@ -781,7 +781,7 @@ impl App {
         // 단추(나중에 등록해 탭 줄보다 먼저 포인터를 받는다).
         let buttons = skin.values.get("list.tabbtnimgs").cloned().and_then(|file| self.toolbar_icon(ctx, &file));
         let button = |ui: &mut egui::Ui, column: usize, slot: egui::Rect, enabled: bool, salt: &str| {
-            let response = ui.interact(slot, egui::Id::new(("ndir-skin-tab-button", index, salt)), if enabled { egui::Sense::click() } else { egui::Sense::hover() });
+            let response = ui.interact(slot, egui::Id::new(("ndr-skin-tab-button", index, salt)), if enabled { egui::Sense::click() } else { egui::Sense::hover() });
             if let Some(texture) = &buttons {
                 let row = usize::from(enabled && response.hovered());
                 let uv = egui::Rect::from_min_max(egui::pos2(column as f32 / 4.0, row as f32 / 2.0), egui::pos2((column + 1) as f32 / 4.0, (row + 1) as f32 / 2.0));
@@ -880,7 +880,7 @@ impl App {
                 command = Some(format!("tab:{t}"));
             }
         }
-        let menu_tab = egui::Id::new(("ndir-tab-menu-tab", index));
+        let menu_tab = egui::Id::new(("ndr-tab-menu-tab", index));
         if response.secondary_clicked() {
             let under = pointer.and_then(tab_at);
             ui.data_mut(|d| d.insert_temp(menu_tab, under));
@@ -950,8 +950,8 @@ impl App {
         painter.galley(right_rect.min, right, right_color);
         let local = !drives && self.panes[index].archive.is_none() && self.panes[index].remote.is_none();
         let sense = if local { egui::Sense::click() } else { egui::Sense::hover() };
-        let folder = ui.interact(left_rect, egui::Id::new(("ndir-skin-folder-info", index)), sense).on_hover_cursor(egui::CursorIcon::PointingHand);
-        let disk = ui.interact(drive_rect.union(right_rect), egui::Id::new(("ndir-skin-disk-info", index)), sense).on_hover_cursor(egui::CursorIcon::PointingHand);
+        let folder = ui.interact(left_rect, egui::Id::new(("ndr-skin-folder-info", index)), sense).on_hover_cursor(egui::CursorIcon::PointingHand);
+        let disk = ui.interact(drive_rect.union(right_rect), egui::Id::new(("ndr-skin-disk-info", index)), sense).on_hover_cursor(egui::CursorIcon::PointingHand);
         let disk = if hint.is_empty() { disk } else { disk.on_hover_text(hint) };
         let target = if folder.clicked() {
             Some(self.panes[index].path.clone())
@@ -1171,8 +1171,8 @@ impl App {
         nexus
             .and_then(|map| map.get(key))
             .and_then(|v| v.as_str())
-            .and_then(ndir::styles::parse_color)
-            .or_else(|| ndir::styles::DEFAULT_ELEMENTS.iter().find(|(k, _)| *k == key).and_then(|(_, v)| ndir::styles::parse_color(v)))
+            .and_then(ndr::styles::parse_color)
+            .or_else(|| ndr::styles::DEFAULT_ELEMENTS.iter().find(|(k, _)| *k == key).and_then(|(_, v)| ndr::styles::parse_color(v)))
             .map(|[r, g, b, _]| Color32::from_rgb(r, g, b))
             .unwrap_or(Color32::BLACK)
     }
@@ -1211,7 +1211,7 @@ impl App {
             let galley = ui.fonts_mut(|f| f.layout_job(job));
             painter.galley(egui::pos2(text.left(), rect.top() + ((rect.height() - galley.size().y) / 2.0).floor()), galley, color);
             painter.vline(cell.right() - 0.5, rect.y_range(), egui::Stroke::new(1.0, mix_color(line, back, 0.3)));
-            if ui.interact(cell, egui::Id::new(("ndir-skin-header", index, i)), egui::Sense::click()).clicked() {
+            if ui.interact(cell, egui::Id::new(("ndr-skin-header", index, i)), egui::Sense::click()).clicked() {
                 clicked = mode;
             }
             x = cell.right();
@@ -1235,7 +1235,7 @@ impl App {
         let mut chosen = None;
         for (i, (root, tip)) in drives.iter().enumerate() {
             let button = egui::Rect::from_min_size(rect.min + egui::vec2(i as f32 * 36.0, 0.0), egui::vec2(36.0, 20.0));
-            let response = ui.interact(button, egui::Id::new(("ndir-skin-drive", index, i)), egui::Sense::click());
+            let response = ui.interact(button, egui::Id::new(("ndr-skin-drive", index, i)), egui::Sense::click());
             let label = root.to_string_lossy().trim_end_matches(['\\', '/']).to_owned();
             let font = egui::FontId::proportional(super::BASE_TEXT_SIZE);
             let label_color = if response.hovered() { hot } else { text };
@@ -1300,9 +1300,9 @@ impl App {
             let line = egui::Rect::from_min_size(at, egui::vec2(width, 14.0));
             painter.galley(at, galley, base);
             if *top > 20.0 {
-                open_extension |= ui.interact(line, egui::Id::new(("ndir-skin-file-info", index, *top as i32)), egui::Sense::click()).clicked();
+                open_extension |= ui.interact(line, egui::Id::new(("ndr-skin-file-info", index, *top as i32)), egui::Sense::click()).clicked();
             } else {
-                ui.interact(line, egui::Id::new(("ndir-skin-file-info", index, *top as i32)), egui::Sense::hover()).on_hover_text(ndir::markup::plain_text(text));
+                ui.interact(line, egui::Id::new(("ndr-skin-file-info", index, *top as i32)), egui::Sense::hover()).on_hover_text(ndr::markup::plain_text(text));
             }
         }
         if open_extension {
@@ -1315,7 +1315,7 @@ impl App {
     pub(super) fn open_extension_info(&mut self, index: usize) {
         let pane = &self.panes[index];
         let Some(entry) = pane.entries.get(pane.cursor).filter(|e| !e.is_dir && !e.drive) else { return };
-        let extension = ndir::parity::dotnet_extension(&entry.name).trim_start_matches('.').to_owned();
+        let extension = ndr::parity::dotnet_extension(&entry.name).trim_start_matches('.').to_owned();
         let url = format!("https://ext.xiles.app/?ext={extension}");
         if let Err(error) = (self.shell_runner)(std::path::Path::new(&url), "", std::path::Path::new("")) {
             self.status = error;
@@ -1330,7 +1330,7 @@ impl App {
         }
         let children = self.crumb_children(index, &folder, drives);
         let mut chosen = None;
-        let area = egui::Area::new(egui::Id::new(("ndir-skin-crumb-menu", index))).order(egui::Order::Foreground).fixed_pos(position).show(ctx, |ui| {
+        let area = egui::Area::new(egui::Id::new(("ndr-skin-crumb-menu", index))).order(egui::Order::Foreground).fixed_pos(position).show(ctx, |ui| {
             apply_menu_style(ui);
             egui::Frame::menu(ui.style()).show(ui, |ui| {
                 if children.is_empty() {

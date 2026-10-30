@@ -1,5 +1,5 @@
-//! C# NDIR(원본 NexusFile 이식본)의 동작 규칙 중 화면과 무관한 부분.
-//! 각 함수 주석에 원본 함수 주소와 C# NDIR 쪽 이름을 적는다.
+//! C# NDR(원본 NexusFile 이식본)의 동작 규칙 중 화면과 무관한 부분.
+//! 각 함수 주석에 원본 함수 주소와 C# NDR 쪽 이름을 적는다.
 use crate::names;
 use std::collections::BTreeSet;
 
@@ -21,7 +21,7 @@ pub enum PathPart {
     Folder,
 }
 
-/// 항목이 있는 곳. 로컬은 shlwapi 규칙, 압축 파일은 C# NDIR의 "archive!/entry" 형식, 원격은 '/' 경로.
+/// 항목이 있는 곳. 로컬은 shlwapi 규칙, 압축 파일은 C# NDR의 "archive!/entry" 형식, 원격은 '/' 경로.
 #[derive(Clone, Debug)]
 pub enum ItemPath<'a> {
     Local(&'a str),
@@ -75,7 +75,7 @@ pub fn copy_path_text(items: &[ItemPath<'_>], part: PathPart, escape_backslashes
 }
 
 /// FUN_00437828 — C# `OriginalFindInList`: 커서 다음 항목부터 끝까지, 이어서 처음부터 커서까지.
-/// prefix면 StrCmpNIW 접두 일치, 아니면 StrStrIW 부분 일치(빈 글은 찾지 못함). 커서가 없으면 첫 항목으로 본다(NDIR 차이).
+/// prefix면 StrCmpNIW 접두 일치, 아니면 StrStrIW 부분 일치(빈 글은 찾지 못함). 커서가 없으면 첫 항목으로 본다(NDR 차이).
 pub fn find_in_list(names: &[String], cursor: Option<usize>, text: &str, prefix: bool) -> Option<usize> {
     if names.is_empty() {
         return None;
@@ -413,7 +413,7 @@ mod tests {
         assert_eq!(find_in_list(&names, Some(0), "G", true), Some(4), "prefix search");
         assert_eq!(find_in_list(&names, Some(0), "eta", true), None, "prefix only, no substring fallback");
         assert_eq!(find_in_list(&[], Some(0), "a", false), None);
-        assert_eq!(find_in_list(&names, None, "fold", false), Some(0), "no cursor counts as the first item (NDIR deviation)");
+        assert_eq!(find_in_list(&names, None, "fold", false), Some(0), "no cursor counts as the first item (NDR deviation)");
     }
 
     #[test]

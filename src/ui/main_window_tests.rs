@@ -4,7 +4,7 @@ use super::*;
 use std::fs;
 
 fn fixture(label: &str) -> (PathBuf, egui::Context, App) {
-    let root = std::env::temp_dir().join(format!("ndir-main-{}-{}-{label}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    let root = std::env::temp_dir().join(format!("ndr-main-{}-{}-{label}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
     let (left, right) = (root.join("left"), root.join("right"));
     fs::create_dir_all(left.join("folder")).unwrap();
     fs::create_dir_all(&right).unwrap();
@@ -279,17 +279,17 @@ fn main_window_frame_info_bars_tabs_and_address_follow_csharp() {
 thread_local! {
     static FEED: std::cell::RefCell<Vec<u8>> = const { std::cell::RefCell::new(Vec::new()) };
 }
-fn newer_feed(_: &str, _: usize) -> Result<ndir::update::HttpResponse, ndir::update::HttpError> {
-    Ok(ndir::update::HttpResponse { status: 200, secure: true, body: br#"{"version":"99.0","url":"https://example.invalid/ndir"}"#.to_vec() })
+fn newer_feed(_: &str, _: usize) -> Result<ndr::update::HttpResponse, ndr::update::HttpError> {
+    Ok(ndr::update::HttpResponse { status: 200, secure: true, body: br#"{"version":"99.0","url":"https://example.invalid/ndr"}"#.to_vec() })
 }
-fn latest_feed(_: &str, _: usize) -> Result<ndir::update::HttpResponse, ndir::update::HttpError> {
-    Ok(ndir::update::HttpResponse { status: 200, secure: true, body: br#"{"version":"1.0"}"#.to_vec() })
+fn latest_feed(_: &str, _: usize) -> Result<ndr::update::HttpResponse, ndr::update::HttpError> {
+    Ok(ndr::update::HttpResponse { status: 200, secure: true, body: br#"{"version":"1.0"}"#.to_vec() })
 }
-fn missing_feed(_: &str, _: usize) -> Result<ndir::update::HttpResponse, ndir::update::HttpError> {
-    Ok(ndir::update::HttpResponse { status: 404, secure: true, body: vec![] })
+fn missing_feed(_: &str, _: usize) -> Result<ndr::update::HttpResponse, ndr::update::HttpError> {
+    Ok(ndr::update::HttpResponse { status: 404, secure: true, body: vec![] })
 }
-fn timeout_feed(_: &str, _: usize) -> Result<ndir::update::HttpResponse, ndir::update::HttpError> {
-    Err(ndir::update::HttpError::Timeout)
+fn timeout_feed(_: &str, _: usize) -> Result<ndr::update::HttpResponse, ndr::update::HttpError> {
+    Err(ndr::update::HttpError::Timeout)
 }
 fn launched(path: &Path, _: &str, _: &Path) -> Result<(), String> {
     FEED.with(|f| *f.borrow_mut() = path.to_string_lossy().as_bytes().to_vec());
@@ -311,11 +311,11 @@ fn update_check_context_menu_and_folder_sizes_follow_csharp() {
     };
     // 피드가 없으면 안내, HTTPS가 아니면 오류.
     app.dispatch("update", &ctx);
-    assert_eq!(wait_box(&mut app, &ctx), (app.language_pack.text("NDIRUpdate.Title", "?"), app.language_pack.text("NDIRUpdate.FeedMissing", "?")));
+    assert_eq!(wait_box(&mut app, &ctx), (app.language_pack.text("NDRUpdate.Title", "?"), app.language_pack.text("NDRUpdate.FeedMissing", "?")));
     app.answer_message_box(1, &ctx);
     app.settings.set_text("UpdateManifestUrl", "http://example.invalid/feed.json");
     app.dispatch("update", &ctx);
-    assert_eq!(wait_box(&mut app, &ctx).1, app.language_pack.text("NDIRUpdate.FeedHttpsRequired", "?"));
+    assert_eq!(wait_box(&mut app, &ctx).1, app.language_pack.text("NDRUpdate.FeedHttpsRequired", "?"));
     app.answer_message_box(1, &ctx);
     // 새 버전: 원본 UPDATE_NEWUPDATE(제목 UPDATE), 예면 다운로드 주소를 연다.
     app.settings.set_text("UpdateManifestUrl", "https://example.invalid/feed.json");
@@ -323,24 +323,24 @@ fn update_check_context_menu_and_folder_sizes_follow_csharp() {
     app.shell_runner = launched;
     app.dispatch("update", &ctx);
     assert_eq!(wait_box(&mut app, &ctx), (app.language_pack.text("RES.UPDATE", "?"), app.language_pack.text("RES.UPDATE_NEWUPDATE", "?")));
-    app.answer_message_box(ndir::msgbox::IDYES, &ctx);
-    assert_eq!(FEED.with(|f| f.borrow().clone()), b"https://example.invalid/ndir");
+    app.answer_message_box(ndr::msgbox::IDYES, &ctx);
+    assert_eq!(FEED.with(|f| f.borrow().clone()), b"https://example.invalid/ndr");
     app.http_get = latest_feed;
     app.dispatch("update", &ctx);
-    assert_eq!(wait_box(&mut app, &ctx), ("NDIR".to_owned(), app.language_pack.text("RES.UPDATE_NOUPDATE", "?")));
+    assert_eq!(wait_box(&mut app, &ctx), ("NDR".to_owned(), app.language_pack.text("RES.UPDATE_NOUPDATE", "?")));
     app.answer_message_box(1, &ctx);
     app.http_get = missing_feed;
     app.dispatch("update", &ctx);
-    assert_eq!(wait_box(&mut app, &ctx), ("NDIR".to_owned(), app.language_pack.text("NDIRUpdate.RequestFailedStatus", "?").replace("{0}", "404")));
+    assert_eq!(wait_box(&mut app, &ctx), ("NDR".to_owned(), app.language_pack.text("NDRUpdate.RequestFailedStatus", "?").replace("{0}", "404")));
     app.answer_message_box(1, &ctx);
     app.http_get = timeout_feed;
     app.dispatch("update", &ctx);
-    assert_eq!(wait_box(&mut app, &ctx).1, app.language_pack.text("NDIRUpdate.RequestTimedOut", "?"));
+    assert_eq!(wait_box(&mut app, &ctx).1, app.language_pack.text("NDRUpdate.RequestTimedOut", "?"));
     app.answer_message_box(1, &ctx);
     // 원본 조용한 확인(시작할 때, FUN_00441dd8 [+0x54]): 상자 없이 새 버전이면 메뉴 줄 "새 업데이트" 단추만. 누르면 그 주소.
     app.update_done(newer_feed("", 0), true);
     assert!(app.msgboxes.is_empty());
-    assert_eq!(app.update_available.as_deref(), Some("https://example.invalid/ndir"));
+    assert_eq!(app.update_available.as_deref(), Some("https://example.invalid/ndr"));
     app.update_done(timeout_feed("", 0), true);
     assert!(app.msgboxes.is_empty(), "silent errors");
     draw(&mut app, &ctx);
@@ -392,8 +392,8 @@ fn drag_and_drop_follows_csharp() {
     // ConfirmDragDrop(기본) = 원본 FUN_00488b64: 같은 드라이브면 이동을 DRAGDROP / DROPMOVE_CONFIRM(개수)로 묻는다. 예면 진행 창 작업.
     app.handle_drop(1, vec![left.join("a.txt")], right.clone(), egui::Modifiers::NONE);
     let question = app.msgboxes.first().map(|m| (m.title.clone(), m.text.clone(), m.flags)).expect("the drop question");
-    assert_eq!(question, (app.language_pack.text("RES.DRAGDROP", "?"), app.language_pack.text("RES.DROPMOVE_CONFIRM", "?").replace("%d", "1"), ndir::msgbox::MB_YESNO | ndir::msgbox::MB_ICONQUESTION));
-    app.answer_message_box(ndir::msgbox::IDYES, &ctx);
+    assert_eq!(question, (app.language_pack.text("RES.DRAGDROP", "?"), app.language_pack.text("RES.DROPMOVE_CONFIRM", "?").replace("%d", "1"), ndr::msgbox::MB_YESNO | ndr::msgbox::MB_ICONQUESTION));
+    app.answer_message_box(ndr::msgbox::IDYES, &ctx);
     assert_eq!(app.job.as_ref().map(|j| j.title.as_str()), Some("항목 이동"));
     wait_job(&mut app, &ctx);
     assert!(right.join("a.txt").exists() && !left.join("a.txt").exists());
@@ -734,7 +734,7 @@ fn skin_drag_follows_the_original_list_mouse_move() {
     let question = app.msgboxes.first().map(|m| m.text.clone()).expect("the drop question");
     assert_eq!(question, app.language_pack.text("RES.DROPCOPY_CONFIRM", "?").replace("%d", "1"));
     assert_eq!(app.panes[0].selected.len(), 1, "the marks stay until the drop is applied");
-    app.answer_message_box(ndir::msgbox::IDYES, &ctx);
+    app.answer_message_box(ndr::msgbox::IDYES, &ctx);
     assert!(app.panes[0].selected.is_empty(), "the source marks are cleared");
     assert_eq!(app.last_selection[0], vec![left.join("b.txt")], "and kept as the last selection");
     let end = Instant::now() + Duration::from_secs(20);
@@ -769,18 +769,18 @@ fn skin_drop_effects_follow_the_original_drop_target() {
     // 글쇠 없음: 같은 드라이브면 이동을 묻는다.
     app.handle_drop(1, vec![left.join("a.txt")], right.clone(), egui::Modifiers::NONE);
     assert_eq!(question(&app), Some(text(&app, "RES.DROPMOVE_CONFIRM")));
-    app.answer_message_box(ndir::msgbox::IDNO, &ctx);
+    app.answer_message_box(ndr::msgbox::IDNO, &ctx);
     assert!(left.join("a.txt").exists(), "No keeps the file");
     // 끌기를 Ctrl로 시작하면 복사만 허용: 글쇠 없이 놓아도 복사.
     app.handle_drop_with(1, vec![left.join("a.txt")], right.clone(), egui::Modifiers::NONE, 1);
     assert_eq!(question(&app), Some(text(&app, "RES.DROPCOPY_CONFIRM")));
-    app.answer_message_box(ndir::msgbox::IDYES, &ctx);
+    app.answer_message_box(ndr::msgbox::IDYES, &ctx);
     wait_job(&mut app);
     assert!(left.join("a.txt").exists() && right.join("a.txt").exists());
     // Shift로 시작하면 이동만: Ctrl을 누르고 놓아도 이동.
     app.handle_drop_with(1, vec![left.join("b.txt")], right.clone(), egui::Modifiers::CTRL, 2);
     assert_eq!(question(&app), Some(text(&app, "RES.DROPMOVE_CONFIRM")));
-    app.answer_message_box(ndir::msgbox::IDYES, &ctx);
+    app.answer_message_box(ndr::msgbox::IDYES, &ctx);
     wait_job(&mut app);
     assert!(!left.join("b.txt").exists() && right.join("b.txt").exists());
     // Ctrl+Shift = 바로 가기, 묻지 않는다.
@@ -873,7 +873,7 @@ fn window_bounds_are_saved_like_csharp_closing() {
     let number = |key: &str| app.settings.values.get(key).and_then(|v| v.as_f64());
     assert_eq!((number("WindowLeft"), number("WindowTop"), number("WindowWidth"), number("WindowHeight")), (Some(120.0), Some(80.0), Some(1216.0), Some(839.0)), "outer size like the original TForm/C# Window");
     // 다시 열 때 빼는 테두리·제목 줄 크기(보통 창).
-    let (frame_width, frame_height) = ndir::native::window_frame_points().expect("AdjustWindowRectEx");
+    let (frame_width, frame_height) = ndr::native::window_frame_points().expect("AdjustWindowRectEx");
     assert!(frame_width > 0.0 && frame_height > frame_width, "{frame_width} x {frame_height}");
     assert!(app.settings.flag("WindowMaximized", false));
     assert!(app.settings.flag("HasWindowBounds", false));
@@ -988,10 +988,10 @@ fn executables_get_their_own_icon_like_the_original_shell_image_list() {
     assert!(app.per_file_icon_type(std::path::Path::new("C:\\x\\Setup.MSI")) && app.per_file_icon_type(std::path::Path::new("C:\\y\\other.msi")));
     assert!(!app.per_file_icon_type(std::path::Path::new("C:\\x\\a.doc")) && app.per_file_icon_type(std::path::Path::new("C:\\x\\b.LNK")));
     assert_eq!(PER_FILE_ASKED.with(|a| a.take()), ["msi", "doc"], "the fixed list is not asked; each extension once");
-    assert!(ndir::native::per_file_icon_rule(Some("\"%1\""), false) && ndir::native::per_file_icon_rule(None, true));
-    assert!(!ndir::native::per_file_icon_rule(Some("%SystemRoot%\\System32\\imageres.dll,-102"), false));
+    assert!(ndr::native::per_file_icon_rule(Some("\"%1\""), false) && ndr::native::per_file_icon_rule(None, true));
+    assert!(!ndr::native::per_file_icon_rule(Some("%SystemRoot%\\System32\\imageres.dll,-102"), false));
     // 이 PC의 HKCR(읽기만): 실행 파일은 "%1", 글 파일은 확장자마다 하나.
-    assert!(ndir::native::extension_has_per_file_icon("exe") && !ndir::native::extension_has_per_file_icon("txt"));
+    assert!(ndr::native::extension_has_per_file_icon("exe") && !ndr::native::extension_has_per_file_icon("txt"));
     // 폴더는 셸이 desktop.ini를 읽는 읽기 전용·시스템 속성일 때만 실제 경로로 읽는다(사용자 지정 폴더 아이콘). 보통 폴더는 "<DIR>" 캐시.
     let (custom, plain) = (root.join("left").join("custom"), root.join("left").join("plain"));
     fs::create_dir(&custom).unwrap();

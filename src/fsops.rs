@@ -330,7 +330,7 @@ mod tests {
     use std::thread;
     pub(super) fn fixture() -> PathBuf {
         let p = std::env::temp_dir().join(format!(
-            "ndir-core-{}-{}",
+            "ndr-core-{}-{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(SystemTime::UNIX_EPOCH)
@@ -346,7 +346,7 @@ mod tests {
         let first = unique_path(&p, "probe");
         let id: u64 = first.file_name().unwrap().to_string_lossy().rsplit('-').next().unwrap().parse().unwrap();
         // 같은 PID의 예전 프로세스가 남긴 다음 번호 이름들.
-        let left: Vec<PathBuf> = (1..=3).map(|n| p.join(format!(".ndir-probe-{}-{}", std::process::id(), id + n))).collect();
+        let left: Vec<PathBuf> = (1..=3).map(|n| p.join(format!(".ndr-probe-{}-{}", std::process::id(), id + n))).collect();
         for path in &left {
             fs::create_dir(path).unwrap();
         }
@@ -575,11 +575,11 @@ pub(crate) fn open_read(path: &Path) -> Result<File, String> {
 pub(crate) fn unique_path(parent: &Path, prefix: &str) -> PathBuf {
     use std::sync::atomic::AtomicU64;
     static ID: AtomicU64 = AtomicU64::new(0);
-    // 같은 번호(PID)를 쓰던 예전 프로세스가 남긴 이름(예: %TEMP%\NDIR\.ndir-entry-PID-0)은 건너뛴다.
+    // 같은 번호(PID)를 쓰던 예전 프로세스가 남긴 이름(예: %TEMP%\NDR\.ndr-entry-PID-0)은 건너뛴다.
     // 같은 프로세스 안에서는 번호가 겹치지 않고, 같은 PID의 프로세스는 동시에 있을 수 없다.
     loop {
         let candidate = parent.join(format!(
-            ".ndir-{}-{}-{}",
+            ".ndr-{}-{}-{}",
             prefix,
             std::process::id(),
             ID.fetch_add(1, Ordering::Relaxed)
@@ -1213,7 +1213,7 @@ impl Job {
         for _ in 0..32 {
             let mut bytes = [0u8; 16];
             crate::native::random_bytes(&mut bytes)?;
-            let name = format!(".ndir-shred-{}.tmp", bytes.iter().map(|b| format!("{b:02X}")).collect::<String>());
+            let name = format!(".ndr-shred-{}.tmp", bytes.iter().map(|b| format!("{b:02X}")).collect::<String>());
             let candidate = parent.join(name);
             if fs::symlink_metadata(&candidate).is_err() {
                 randomized = Some(candidate);

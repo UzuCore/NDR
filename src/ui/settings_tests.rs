@@ -20,7 +20,7 @@ fn save_pick(_: &str, _: Option<&Path>, _: &str, _: &[(&str, &str)], _: &str, _:
 }
 
 fn fixture(label: &str, language: &str) -> (PathBuf, egui::Context, App) {
-    let root = std::env::temp_dir().join(format!("ndir-settings-{}-{}-{label}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    let root = std::env::temp_dir().join(format!("ndr-settings-{}-{}-{label}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
     fs::create_dir_all(root.join("left")).unwrap();
     fs::create_dir_all(root.join("right")).unwrap();
     let ctx = egui::Context::default();
@@ -67,7 +67,7 @@ fn extension_colors_follow_the_original_color_page() {
     app.answer_dialog(DialogResult::Text(Some("log;.ini".into())), &ctx);
     let question = app.msgboxes.first().map(|m| (m.title.clone(), m.text.clone())).expect("the merge question");
     assert_eq!(question, (app.language_pack.text("RES.PREF_SETCOLOR", "?"), app.language_pack.text("RES.PREF_COLOREXISTS", "?")));
-    app.answer_message_box(ndir::msgbox::IDYES, &ctx);
+    app.answer_message_box(ndr::msgbox::IDYES, &ctx);
     assert_eq!(groups(&mut app)[0], row("#FF0000", &["TXT", "DOC", "LOG", "INI"]));
     // 편집(0x44f7c0): PREF_TITLE_EDITEXTS, 옛 확장자를 지우고 새 확장자를 같은 색으로.
     app.settings_form().unwrap().color_selected = Some(1);
@@ -131,8 +131,8 @@ fn settings_window_commits_like_csharp() {
     app.settings_action(SettingsAction::ChooseFont(false), &ctx);
     {
         let form = app.settings_form().unwrap();
-        // 원본 TfPreferences 쪽(파일목록 … 기타) + C# 판에만 있는 줄의 "NDIR" 쪽.
-        assert_eq!(form.tab_titles, ["파일목록", "폴더트리", "색", "옵션", "프로그램", "경로", "기능키", "기타", "NDIR"]);
+        // 원본 TfPreferences 쪽(파일목록 … 기타) + C# 판에만 있는 줄의 "NDR" 쪽.
+        assert_eq!(form.tab_titles, ["파일목록", "폴더트리", "색", "옵션", "프로그램", "경로", "기능키", "기타", "NDR"]);
         assert_eq!(form.tabs.len(), 9);
         assert!(matches!(&form.tabs[0][1], Row::Text { key, label, .. } if key == "ListFont" && label == "파일 목록:"));
         assert!(matches!(&form.tabs[3][0], Row::Check { key, label, .. } if key == "SelectFolders" && label == "전체선택 할 때 폴더도 모두 선택하기"));
@@ -141,7 +141,7 @@ fn settings_window_commits_like_csharp() {
         assert!(matches!(&form.tabs[8][0], Row::Check { key, label, .. } if key == "DualPaneMode" && label == "두 패널 표시"));
         // 원본 ComboBox 글(값은 그대로): cbSort1.
         assert!(form.tabs[0].iter().any(|row| matches!(row, Row::Combo { key, choices, .. } if key == "LeftSortMode" && choices[1] == ("Name".to_owned(), "이름순".to_owned()))));
-        // 원본 cbColumn1: "자동;1열;…;6열", NDIR만의 7~19열은 같은 꼴.
+        // 원본 cbColumn1: "자동;1열;…;6열", NDR만의 7~19열은 같은 꼴.
         assert!(form.tabs[0].iter().any(|row| matches!(row, Row::Combo { key, choices, .. } if key == "LeftColumnCount"
             && choices[0] == ("Auto".to_owned(), "자동".to_owned()) && choices[6] == ("6".to_owned(), "6열".to_owned()) && choices[19] == ("19".to_owned(), "19열".to_owned()))));
         // 모든 줄이 한 번씩만 있다.
@@ -314,7 +314,7 @@ fn key_frame(app: &mut App, ctx: &egui::Context, key: egui::Key, modifiers: egui
     });
 }
 fn select_row(app: &mut App, id: &str) {
-    let form = app.ndir_shortcuts_form().unwrap();
+    let form = app.ndr_shortcuts_form().unwrap();
     form.search.clear();
     let index = form.rows.iter().position(|r| r.definition.id == id).unwrap();
     form.grid = super::grid::GridState::new(form.rows.len());
@@ -345,26 +345,26 @@ fn ctrl_function_keys_run_the_original_caret_bindings() {
 }
 
 #[test]
-fn ndir_shortcut_window_follows_csharp() {
-    use super::ndir_shortcuts::ShortcutsAction;
+fn ndr_shortcut_window_follows_csharp() {
+    use super::ndr_shortcuts::ShortcutsAction;
     let (root, ctx, mut app) = fixture("keys", "ko");
-    app.dispatch("ndirShortcuts", &ctx);
-    assert!(matches!(app.original_dialogs.last().map(|d| &d.kind), Some(DialogKind::NdirShortcuts(_))));
+    app.dispatch("ndrShortcuts", &ctx);
+    assert!(matches!(app.original_dialogs.last().map(|d| &d.kind), Some(DialogKind::NdrShortcuts(_))));
     {
-        let form = app.ndir_shortcuts_form().unwrap();
-        assert_eq!(form.rows.len(), ndir::shortcut_bindings::definitions().len());
+        let form = app.ndr_shortcuts_form().unwrap();
+        assert_eq!(form.rows.len(), ndr::shortcut_bindings::definitions().len());
         let cycle = form.rows.iter().find(|r| r.definition.id == "cycleSelection").unwrap();
         assert_eq!((cycle.command.as_str(), cycle.scope.as_str(), cycle.raw.as_str()), ("파일/폴더 선택 순환", "파일 패널", "Alt+U"));
     }
     // 새 단축키 누르기(Ctrl+Shift+K): 충돌이 없으면 바뀐다.
     select_row(&mut app, "cycleSelection");
-    app.ndir_shortcuts_action(ShortcutsAction::Edit, &ctx);
+    app.ndr_shortcuts_action(ShortcutsAction::Edit, &ctx);
     assert!(matches!(&app.original_dialogs.last().unwrap().kind, DialogKind::ShortcutCapture { display } if display == "현재: Alt+U"));
     key_frame(&mut app, &ctx, egui::Key::K, egui::Modifiers { ctrl: true, shift: true, ..Default::default() });
-    assert!(matches!(app.original_dialogs.last().map(|d| &d.kind), Some(DialogKind::NdirShortcuts(_))), "the capture window closes");
+    assert!(matches!(app.original_dialogs.last().map(|d| &d.kind), Some(DialogKind::NdrShortcuts(_))), "the capture window closes");
     // 같은 범위에서 쓰는 글쇠(F7 = 새 폴더)는 충돌 상자.
     select_row(&mut app, "rename");
-    app.ndir_shortcuts_action(ShortcutsAction::Edit, &ctx);
+    app.ndr_shortcuts_action(ShortcutsAction::Edit, &ctx);
     key_frame(&mut app, &ctx, egui::Key::F7, egui::Modifiers::NONE);
     let message = app.msgboxes.first().map(|m| (m.title.clone(), m.text.clone())).unwrap();
     assert_eq!(message.0, "단축키 충돌");
@@ -372,30 +372,30 @@ fn ndir_shortcut_window_follows_csharp() {
     app.answer_message_box(1, &ctx);
     // 사용 안 함 → 저장: 기본값과 다른 것만 KeyboardShortcuts에.
     select_row(&mut app, "newFolder");
-    app.ndir_shortcuts_action(ShortcutsAction::Disable, &ctx);
-    app.ndir_shortcuts_action(ShortcutsAction::Ok, &ctx);
+    app.ndr_shortcuts_action(ShortcutsAction::Disable, &ctx);
+    app.ndr_shortcuts_action(ShortcutsAction::Ok, &ctx);
     assert_eq!(app.settings.values["KeyboardShortcuts"], serde_json::json!({"cycleSelection": "Ctrl+Shift+K", "newFolder": ""}));
     assert_eq!(app.status, "단축키 설정을 저장했습니다.");
     // 다시 열어 기본값으로 되돌리면 저장할 때 빠진다. 같은 글쇠 둘이면 저장 전에 충돌 상자.
-    app.dispatch("ndirShortcuts", &ctx);
+    app.dispatch("ndrShortcuts", &ctx);
     select_row(&mut app, "cycleSelection");
-    app.ndir_shortcuts_action(ShortcutsAction::Default, &ctx);
+    app.ndr_shortcuts_action(ShortcutsAction::Default, &ctx);
     {
-        let form = app.ndir_shortcuts_form().unwrap();
+        let form = app.ndr_shortcuts_form().unwrap();
         let index = form.rows.iter().position(|r| r.definition.id == "copy").unwrap();
         form.rows[index].raw = "Ctrl+X".into();
     }
-    app.ndir_shortcuts_action(ShortcutsAction::Ok, &ctx);
+    app.ndr_shortcuts_action(ShortcutsAction::Ok, &ctx);
     assert!(app.msgboxes.first().is_some_and(|m| m.text.starts_with("단축키 충돌을 해결한 뒤 저장하세요: ")));
     app.answer_message_box(1, &ctx);
     {
-        let form = app.ndir_shortcuts_form().unwrap();
+        let form = app.ndr_shortcuts_form().unwrap();
         let index = form.rows.iter().position(|r| r.definition.id == "copy").unwrap();
         form.rows[index].raw = "Ctrl+C".into();
     }
-    app.ndir_shortcuts_action(ShortcutsAction::Ok, &ctx);
+    app.ndr_shortcuts_action(ShortcutsAction::Ok, &ctx);
     assert_eq!(app.settings.values["KeyboardShortcuts"], serde_json::json!({"newFolder": ""}));
-    assert_eq!(ndir::shortcut_bindings::format("D1", ndir::shortcut_bindings::Modifiers { ctrl: true, alt: true, shift: false }), "Ctrl+Alt+1");
+    assert_eq!(ndr::shortcut_bindings::format("D1", ndr::shortcut_bindings::Modifiers { ctrl: true, alt: true, shift: false }), "Ctrl+Alt+1");
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -440,8 +440,8 @@ fn list_font_style_picks_the_styled_font_file_like_the_original() {
     let mut job = egui::text::LayoutJob::default();
     super::list_text("a", 4 | 8).append_to(&mut job, &ctx.style(), egui::FontSelection::Default, egui::Align::LEFT);
     assert!(job.sections[0].format.underline.width > 0.0 && job.sections[0].format.strikethrough.width > 0.0);
-    assert_eq!(ndir::native::styled_font_names("Segoe UI", 0), ["Segoe UI"]);
-    assert_eq!(ndir::native::styled_font_names("Segoe UI", 2), ["Segoe UI Italic", "Segoe UI"]);
+    assert_eq!(ndr::native::styled_font_names("Segoe UI", 0), ["Segoe UI"]);
+    assert_eq!(ndr::native::styled_font_names("Segoe UI", 2), ["Segoe UI Italic", "Segoe UI"]);
     let _ = fs::remove_dir_all(root);
 }
 
@@ -474,7 +474,7 @@ fn line_space_and_grid_lines_follow_the_original_file_list() {
 #[test]
 fn applying_options_on_a_fresh_profile_keeps_default_on_settings() {
     let (root, ctx, mut app) = fixture("fresh-defaults", "ko");
-    // C# NdirSettings·원본 ini 처음 값이 켬인 설정은 창에서 그대로 적용해도 켬으로 남는다(전에는 창의 처음 값이 꺼짐이라 적용하면 꺼졌다).
+    // C# NdrSettings·원본 ini 처음 값이 켬인 설정은 창에서 그대로 적용해도 켬으로 남는다(전에는 창의 처음 값이 꺼짐이라 적용하면 꺼졌다).
     let keys = ["UseTabs", "ShowFolderDiskInfoBar", "ShowFileInfoBar", "ShowFavoritesBar", "RemoveReadOnlyWhenCopying", "ShowColumnLines", "ShowDeleteButton"];
     for key in keys {
         app.settings.values.remove(key);

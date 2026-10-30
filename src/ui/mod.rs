@@ -21,7 +21,7 @@ mod list_view;
 mod main_window;
 mod menu_data;
 mod msgbox;
-mod ndir_shortcuts;
+mod ndr_shortcuts;
 mod original_dialogs;
 mod pane_chrome;
 mod pane_commands;
@@ -63,7 +63,7 @@ mod views;
 use crate::Options;
 use list_view::{DetailColumn, DetailRow, PaneView};
 use eframe::egui::{self, Color32, RichText};
-use ndir::{
+use ndr::{
     compat,
     fsops::{self, ConflictChoice, Entry, Event, Operation},
     native,
@@ -82,7 +82,7 @@ use std::{
 };
 
 pub(super) fn resource_dir() -> PathBuf {
-    if let Some(p) = std::env::var_os("NDIR_RESOURCE_DIR") {
+    if let Some(p) = std::env::var_os("NDR_RESOURCE_DIR") {
         return p.into();
     }
     let executable = std::env::current_exe().unwrap_or_default();
@@ -430,18 +430,18 @@ enum AsyncResult {
     },
     Error(String),
     ProtectedItems(file_commands::DeleteRun),
-    FolderSize(ndir::tools::FolderSizeSummary),
+    FolderSize(ndr::tools::FolderSizeSummary),
     AttributesApplied(pane_commands::AttributeRun),
-    SplitDone { source: PathBuf, outcome: Result<ndir::split::SplitResult, String>, cancelled: bool },
+    SplitDone { source: PathBuf, outcome: Result<ndr::split::SplitResult, String>, cancelled: bool },
     JoinDone { count: usize, outcome: Result<(), String>, cancelled: bool },
     SearchInPane { pane: usize, root: PathBuf, outcome: Result<Vec<Entry>, String>, cancelled: bool },
-    CompareDone(compare_dialog::CompareRun, Result<(Vec<ndir::folder_compare::Difference>, Vec<String>), String>, bool),
-    SyncDone(Result<ndir::folder_compare::SyncResult, String>, bool),
-    CleanupScanned(cleanup_dialog::ScanPurpose, Result<Vec<ndir::cleanup::Candidate>, String>, bool),
+    CompareDone(compare_dialog::CompareRun, Result<(Vec<ndr::folder_compare::Difference>, Vec<String>), String>, bool),
+    SyncDone(Result<ndr::folder_compare::SyncResult, String>, bool),
+    CleanupScanned(cleanup_dialog::ScanPurpose, Result<Vec<ndr::cleanup::Candidate>, String>, bool),
     /// 휴지통 비우기 결과. Some(정리할 경로)면 컴퓨터 청소의 한 단계.
     RecycleEmptied(Option<Vec<PathBuf>>, Result<(), String>),
-    CleanupDeleted(cleanup_dialog::CleanupDone, ndir::cleanup::DeleteResult, bool),
-    /// C# RunSafely 모양의 경고 상자(MessageBox(글, "NDIR", 경고)).
+    CleanupDeleted(cleanup_dialog::CleanupDone, ndr::cleanup::DeleteResult, bool),
+    /// C# RunSafely 모양의 경고 상자(MessageBox(글, "NDR", 경고)).
     Warning(String),
     MergeSources(PathBuf, Result<Vec<PathBuf>, String>),
     MergeDone(usize, Result<(), String>),
@@ -458,7 +458,7 @@ enum AsyncResult {
     FolderSizeRow { pane: usize, generation: u64, path: PathBuf, text: String, bytes: u64 },
     /// 업데이트 피드를 받음.
     /// 업데이트 피드 결과. bool = 시작할 때의 조용한 확인(원본 [+0x54], 새 버전이면 메뉴 줄 단추만).
-    Update(Result<ndir::update::HttpResponse, ndir::update::HttpError>, bool),
+    Update(Result<ndr::update::HttpResponse, ndr::update::HttpError>, bool),
     /// 정보 표시줄의 디스크 재료(패널, 목록 세대, (드라이브 글, 여유, 전체)).
     DiskCapacity { pane: usize, generation: u64, disk: Option<(String, u64, u64)> },
     /// 원본 TfChecksum 계산 끝(대화 상자 번호, 결과 글. 실패면 None).
@@ -538,11 +538,11 @@ pub struct App {
     last_selection: [Vec<PathBuf>; 2],
     saved: bool,
     tool_cancel: Arc<AtomicBool>,
-    lifecycle: Option<ndir::lifecycle::NativeLifecycle>,
-    lifecycle_events: Option<Receiver<ndir::lifecycle::LifecycleEvent>>,
-    navigation: Option<Receiver<ndir::lifecycle::NavigationRequest>>,
+    lifecycle: Option<ndr::lifecycle::NativeLifecycle>,
+    lifecycle_events: Option<Receiver<ndr::lifecycle::LifecycleEvent>>,
+    navigation: Option<Receiver<ndr::lifecycle::NavigationRequest>>,
     /// C# _instanceMutex/_instancePipeTask: 한 번에 하나만 실행(UseSingleInstance)일 때 잡은 사용자·프로필 뮤텍스와 이동 요청 수신.
-    instance_guard: Option<ndir::lifecycle::InstanceGuard>,
+    instance_guard: Option<ndr::lifecycle::InstanceGuard>,
     /// 도구 모음 그림(테마|파일 이름 → 그림, 못 읽으면 None).
     toolbar_icons: HashMap<String, Option<egui::TextureHandle>>,
     /// 지난 장면의 도구 모음 왼쪽/오른쪽 묶음 너비(창보다 넓으면 오른쪽 묶음을 이어 붙이고 가로로 굴린다).
@@ -552,7 +552,7 @@ pub struct App {
     close_when_idle: bool,
     /// 원본 FormCloseQuery(0x42a798)의 STILL_HAVE_OPERATION 질문이 떠 있는 동안.
     close_asking: bool,
-    toolbar: ndir::commands::ToolbarConfig,
+    toolbar: ndr::commands::ToolbarConfig,
     /// 도구 모음 빠른 찾기 칸의 글(C# _toolbarQuickSearchBox). Enter에서 빠른 필터가 된다.
     toolbar_query: String,
     /// 파일 목록에서 바로 입력하는 빠른 찾기(C# _quickSearchByPane), 패널마다 하나.
@@ -573,7 +573,7 @@ pub struct App {
     /// 원본 TNXShellImageList.Draw(0x7b8ebc)의 흐린 아이콘(ILD_BLEND50, 섞는 색 흰색): 아이콘 그림마다 하나.
     ghost_icons: HashMap<egui::TextureId, egui::TextureHandle>,
     /// 지금 테마의 원본 스킨(conf.ini) — (테마 이름, 스킨). 검정·클래식·회색이 아니면 None.
-    skin_cache: Option<(String, Option<ndir::styles::Skin>)>,
+    skin_cache: Option<(String, Option<ndr::styles::Skin>)>,
     /// 스킨 주소 줄에서 연 하위 폴더 목록: (패널, 폴더, 드라이브 목록인가, 위치).
     skin_crumb_menu: Option<(usize, PathBuf, bool, egui::Pos2)>,
     /// 확장자(소문자, 점 없이)마다 셸 아이콘이 파일마다 다른지(system.per_file_icon, 한 번만 묻는다).
@@ -620,7 +620,7 @@ pub struct App {
     folder_size_queue: pane_chrome::FolderSizeQueue,
     folder_size_workers: bool,
     /// 업데이트 피드 받기(C# UpdateHttpClient). 테스트에서 바꿔 끼운다.
-    http_get: fn(&str, usize) -> Result<ndir::update::HttpResponse, ndir::update::HttpError>,
+    http_get: fn(&str, usize) -> Result<ndr::update::HttpResponse, ndr::update::HttpError>,
     /// 새로 고친 목록이 오면 커서를 둘 이름(C# FocusPaneItemByName).
     pending_focus: [Option<String>; 2],
     /// 인수와 함께 열기의 ShellExecuteExW(테스트에서 실제 프로그램을 띄우지 않도록 교체 가능).
@@ -628,7 +628,7 @@ pub struct App {
     /// 프로그램을 바로 실행하고 끝 코드를 기다린다(외부 복사 프로그램). 테스트에서 바꿔 끼운다.
     program_runner: fn(&Path, &[String], &Path) -> Result<i32, String>,
     /// 저장 대화 상자(제목, 처음 폴더, 이름, 형식, 기본 확장자). 테스트에서 바꿔 끼운다.
-    save_dialog: ndir::file_dialogs::SaveFileFn,
+    save_dialog: ndr::file_dialogs::SaveFileFn,
     /// F12 단축키 창(원본 fShortcut), 하나만.
     shortcut_window: Option<shortcut_window::ShortcutWindow>,
     /// Clipboard text writer (replaceable so tests never touch the user's real clipboard; C# `_setClipboardText`).
@@ -670,7 +670,7 @@ pub struct App {
     /// 네트워크 드라이브·탐색기 메뉴·셸 동사(테스트에서 바꿔 끼운다).
     system: tools_dialog::SystemHooks,
     /// 열기 대화 상자(제목, 처음 폴더, 이름, 형식). 테스트에서 바꿔 끼운다.
-    open_dialog: ndir::file_dialogs::OpenFileFn,
+    open_dialog: ndr::file_dialogs::OpenFileFn,
     /// 디스크 복사 창의 장치 목록·읽기·쓰기·복사(테스트는 실제 장치를 건드리지 않도록 바꿔 끼운다).
     disk: disk_copy_dialog::DiskHooks,
     /// 원격 창의 서버 연결과 여러 파일 열기 대화 상자(테스트에서 바꿔 끼운다).
@@ -685,8 +685,8 @@ impl App {
     pub fn new(
         cc: &eframe::CreationContext<'_>,
         options: Options,
-        navigation: Option<Receiver<ndir::lifecycle::NavigationRequest>>,
-        instance_guard: Option<ndir::lifecycle::InstanceGuard>,
+        navigation: Option<Receiver<ndr::lifecycle::NavigationRequest>>,
+        instance_guard: Option<ndr::lifecycle::InstanceGuard>,
     ) -> Self {
         use raw_window_handle::{HasWindowHandle, RawWindowHandle};
         let mut app = Self::from_context(&cc.egui_ctx, options);
@@ -695,13 +695,13 @@ impl App {
         if let Ok(handle) = cc.window_handle() {
             if let RawWindowHandle::Win32(handle) = handle.as_raw() {
                 app.hwnd = handle.hwnd.get();
-                if let Err(error) = ndir::shell_menu::install_paste_key_hook(handle.hwnd.get()) {
+                if let Err(error) = ndr::shell_menu::install_paste_key_hook(handle.hwnd.get()) {
                     app.status = error;
                 }
                 let key = app.settings.text("ExplorerShortcutKey", "Q");
                 let tray = app.settings.flag("HideWhenMinimized", false)
                     && app.options.smoke_seconds.is_none();
-                match ndir::lifecycle::NativeLifecycle::attach(
+                match ndr::lifecycle::NativeLifecycle::attach(
                     handle.hwnd.get(),
                     if app.options.smoke_seconds.is_some() {
                         None
@@ -794,8 +794,8 @@ impl App {
         let resources = resource_dir();
         let language_pack = compat::Language::load(&resources.join("Languages"), &language);
         let toolbar =
-            ndir::commands::load_toolbar(&profile, include_bytes!("../../Resources/toolbar.xml"))
-                .unwrap_or(ndir::commands::ToolbarConfig {
+            ndr::commands::load_toolbar(&profile, include_bytes!("../../Resources/toolbar.xml"))
+                .unwrap_or(ndr::commands::ToolbarConfig {
                     items: vec![],
                     warning: None,
                 });
@@ -892,7 +892,7 @@ impl App {
             pending_focus: [None, None],
             shell_runner: native::shell_execute,
             program_runner: file_operation::run_program,
-            save_dialog: ndir::file_dialogs::save_file,
+            save_dialog: ndr::file_dialogs::save_file,
             shortcut_window: None,
             clipboard_writer: native::clipboard_text,
             recycle_emptier: native::empty_recycle_bin,
@@ -900,8 +900,8 @@ impl App {
             file_clipboard: if cfg!(test) { |_, _| Ok(()) } else { native::clipboard_files },
             auth_pending: Vec::new(),
             pending_numpad: Vec::new(),
-            folder_picker: ndir::file_dialogs::browse_folder,
-            network_picker: if cfg!(test) { |_, _| None } else { ndir::file_dialogs::browse_network },
+            folder_picker: ndr::file_dialogs::browse_folder,
+            network_picker: if cfg!(test) { |_, _| None } else { ndr::file_dialogs::browse_network },
             color_picker: if cfg!(test) { |_| None } else { native::choose_color },
             font_picker: if cfg!(test) { |_, _, _| None } else { native::choose_font },
             popup: None,
@@ -913,7 +913,7 @@ impl App {
             update_available: None,
             last_command_directory: None,
             system: tools_dialog::SystemHooks::default(),
-            open_dialog: ndir::file_dialogs::open_file,
+            open_dialog: ndr::file_dialogs::open_file,
             disk: disk_copy_dialog::DiskHooks::default(),
             remote_hooks: remote_window::RemoteHooks::default(),
             drive_cache: None,
@@ -1017,7 +1017,7 @@ impl App {
         let text = self.language_pack.text("RES.STILL_HAVE_OPERATION", "There is an working operation.\nDo you really want to quit this operation and close the program?");
         self.system_box(&title, &text, 0x2124, |app, answer, _| {
             app.close_asking = false;
-            if answer == ndir::msgbox::IDYES {
+            if answer == ndr::msgbox::IDYES {
                 app.close_when_idle = true;
                 if let Some(job) = &app.job {
                     job.cancel.store(true, Ordering::Relaxed);
@@ -1096,7 +1096,7 @@ impl App {
                     }
                     pane.listed = Some(location);
                     if !pane.filter.is_empty() {
-                        entries.retain(|e| e.drive || ndir::parity::matches_filter(&pane.filter, &e.name));
+                        entries.retain(|e| e.drive || ndr::parity::matches_filter(&pane.filter, &e.name));
                     }
                     // 원본 GetList(0x45a34c)·압축 목록(0x45ecd0)·SFTP 목록(0x45bb0c), C# ListLocal: 루트가 아니면 맨 앞에 "..".
                     if let Some(parent) = parent_item_for(pane) {
@@ -1131,7 +1131,7 @@ impl App {
             let pane = &mut self.panes[listing.pane];
             let mut focused = false;
             if let Some(name) = self.pending_focus[listing.pane].take() {
-                if let Some(row) = pane.entries.iter().position(|e| ndir::names::equals_ignore_case(&e.name, &name)) {
+                if let Some(row) = pane.entries.iter().position(|e| ndr::names::equals_ignore_case(&e.name, &name)) {
                     pane.cursor = row;
                     pane.selected.clear();
                     focused = true;
@@ -1143,7 +1143,7 @@ impl App {
                     pane.cursor = if old_cursor < pane.entries.len() { old_cursor } else { (pane.entries.len() - drives).saturating_sub(1) };
                 }
                 for name in &marks {
-                    if let Some(row) = pane.entries.iter().position(|e| !e.drive && !e.is_parent() && ndir::names::equals_ignore_case(&e.name, name)) {
+                    if let Some(row) = pane.entries.iter().position(|e| !e.drive && !e.is_parent() && ndr::names::equals_ignore_case(&e.name, name)) {
                         pane.selected.insert(row);
                     }
                 }
@@ -1175,7 +1175,7 @@ impl App {
                     let ko = self.language == "ko";
                     let message = native::win32_message(connection);
                     let text = if ko { format!("네트워크 공유 인증에 실패했습니다. Windows 오류 {connection}: {message}") } else { format!("Network share authentication failed. Windows error {connection}: {message}") };
-                    self.system_box(if ko { "네트워크 연결" } else { "Network connection" }, &text, ndir::msgbox::MB_OK | ndir::msgbox::MB_ICONEXCLAMATION, |_, _, _| {});
+                    self.system_box(if ko { "네트워크 연결" } else { "Network connection" }, &text, ndr::msgbox::MB_OK | ndr::msgbox::MB_ICONEXCLAMATION, |_, _, _| {});
                 }
             }
         }
@@ -1211,8 +1211,8 @@ impl App {
                     // 원본 0x439593: wsprintf(ARC_CHANGEVOL, 볼륨 이름) → TfMsgBox(TITLE_ERROR, "", 글, 0x31). 확인(1)이면 다시 시도.
                     let title = self.language_pack.text("RES.TITLE_ERROR", "Error");
                     let text = self.language_pack.text("RES.ARC_CHANGEVOL", "%s\nPlease, insert a disk containing this file and click 'OK'").replacen("%s", &volume, 1);
-                    self.message_box(&title, "", &text, ndir::msgbox::MB_OKCANCEL | ndir::msgbox::MB_ICONEXCLAMATION, move |_, answer, _| {
-                        let _ = reply.send(answer == ndir::msgbox::IDOK);
+                    self.message_box(&title, "", &text, ndr::msgbox::MB_OKCANCEL | ndr::msgbox::MB_ICONEXCLAMATION, move |_, answer, _| {
+                        let _ = reply.send(answer == ndr::msgbox::IDOK);
                     });
                 }
                 Event::Finished { cancelled, files, bytes } => {
@@ -1292,7 +1292,7 @@ impl App {
                 AsyncResult::CleanupScanned(purpose, outcome, cancelled) => self.cleanup_scanned(purpose, outcome, cancelled),
                 AsyncResult::RecycleEmptied(cleanup, outcome) => self.recycle_emptied(cleanup, outcome),
                 AsyncResult::CleanupDeleted(done, result, cancelled) => self.cleanup_finished(done, result, cancelled),
-                AsyncResult::Warning(text) => self.system_box("NDIR", &text, ndir::msgbox::MB_OK | ndir::msgbox::MB_ICONEXCLAMATION, |_, _, _| {}),
+                AsyncResult::Warning(text) => self.system_box("NDR", &text, ndr::msgbox::MB_OK | ndr::msgbox::MB_ICONEXCLAMATION, |_, _, _| {}),
                 AsyncResult::MergeSources(output, sources) => self.merge_sources_ready(output, sources),
                 AsyncResult::MergeDone(count, outcome) => self.merge_done(count, outcome),
                 AsyncResult::OpenWithSources(program, template, paths) => self.launch_open_with(&program, &template, paths),
@@ -1334,7 +1334,7 @@ impl App {
                         self.ghost_icons.retain(|id, _| kept.contains(id));
                     }
                     let texture = image.map(|(width, height, rgba)| {
-                        self.icon_texture(ctx, format!("ndir-overlay|{}", path.display()), width, height, &rgba)
+                        self.icon_texture(ctx, format!("ndr-overlay|{}", path.display()), width, height, &rgba)
                     });
                     self.overlay_icons.insert(path, texture);
                     ctx.request_repaint();
@@ -1348,8 +1348,8 @@ impl App {
     }
 }
 /// C# RestorePaneTabs: 저장한 탭 가운데 있는 폴더만 남기고, 저장한 고른 탭(SelectedLeftTab, 원래 번호)이 남아 있으면 그 탭을 고른다.
-/// 남은 탭이 없으면 시작 폴더 하나. 차이: C#은 탭이 있으면 명령줄·시작 폴더를 쓰지 않지만, NDIR은 정해 준 폴더(fixed)면
-/// 그 폴더의 탭을 고르고 없으면 맨 앞에 더한다(전부터의 NDIR 동작). 돌려주는 값 = (탭 목록, 고른 탭 번호).
+/// 남은 탭이 없으면 시작 폴더 하나. 차이: C#은 탭이 있으면 명령줄·시작 폴더를 쓰지 않지만, NDR은 정해 준 폴더(fixed)면
+/// 그 폴더의 탭을 고르고 없으면 맨 앞에 더한다(전부터의 NDR 동작). 돌려주는 값 = (탭 목록, 고른 탭 번호).
 pub(super) fn restore_tabs(saved: &[String], selected: Option<usize>, start: &Path, fixed: bool, exists: impl Fn(&Path) -> bool) -> (Vec<PathBuf>, usize) {
     let available: Vec<(usize, PathBuf)> = saved.iter().enumerate().map(|(index, path)| (index, PathBuf::from(path))).filter(|(_, path)| exists(path)).collect();
     if available.is_empty() {
@@ -1373,7 +1373,7 @@ pub(super) fn restore_tabs(saved: &[String], selected: Option<usize>, start: &Pa
 /// C# 판 MainMenu·ContextMenu.Opacity = 0.94.
 pub(super) const MENU_ALPHA: f32 = 240.0 / 255.0;
 /// 이 프레임에 흐리게 하지 않을 앞쪽 층 id 목록(ctx 임시 자료).
-const OPAQUE_LAYERS: &str = "ndir-opaque-foreground-layers";
+const OPAQUE_LAYERS: &str = "ndr-opaque-foreground-layers";
 
 /// 앞쪽(Foreground) 층에 그리지만 메뉴가 아닌 것(egui::Modal 창 등)을 이 프레임의 투명 메뉴 처리에서 뺀다.
 pub(super) fn keep_opaque(ctx: &egui::Context, id: egui::Id) {
@@ -1402,7 +1402,7 @@ pub(super) fn fade_foreground_layers(ctx: &egui::Context, alpha: f32) {
     if alpha >= 1.0 {
         return;
     }
-    let skip = egui::LayerId::new(egui::Order::Foreground, egui::Id::new("ndir-pane-message"));
+    let skip = egui::LayerId::new(egui::Order::Foreground, egui::Id::new("ndr-pane-message"));
     let layers: Vec<egui::LayerId> = ctx
         .memory(|m| m.areas().visible_layer_ids())
         .into_iter()
@@ -1495,8 +1495,8 @@ impl eframe::App for App {
     /// 클립보드에 글이 없으면 붙여넣기는 버린다. 글 입력 칸에 초점이 없으면 원본 단축키(miEditCopy·miEditCut·miEditPaste)가
     /// 받도록 글쇠 사건으로 되돌린다.
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
-        let pastes = ndir::shell_menu::take_paste_keys();
-        let numpad = ndir::shell_menu::take_numpad_keys();
+        let pastes = ndr::shell_menu::take_paste_keys();
+        let numpad = ndr::shell_menu::take_numpad_keys();
         let text_focus = ctx.memory(|m| m.focused()).is_some_and(|id| egui::text_edit::TextEditState::load(ctx, id).is_some());
         if !text_focus {
             use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_INSERT};
@@ -1566,12 +1566,12 @@ impl eframe::App for App {
             .unwrap_or_default();
         for event in events {
             match event {
-                ndir::lifecycle::LifecycleEvent::Restore => {
+                ndr::lifecycle::LifecycleEvent::Restore => {
                     if let Some(lifecycle) = &self.lifecycle {
                         let _ = lifecycle.show();
                     }
                 }
-                ndir::lifecycle::LifecycleEvent::Exit => {
+                ndr::lifecycle::LifecycleEvent::Exit => {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close)
                 }
             }
@@ -1613,7 +1613,7 @@ impl eframe::App for App {
             self.paint_original_search_text(ui);
         });
         // C# MainWindow.xaml: 메뉴, 도구 모음(ShowToolBar), 즐겨찾기 줄, 두 패널, 아래 줄(상태 글 + 기능키).
-        // 원본 NexusFile에는 없는 제목 배너(N 로고·NDIR·설명·LOCAL·ARCHIVE·FTP·SFTP 줄)는 두지 않는다.
+        // 원본 NexusFile에는 없는 제목 배너(N 로고·NDR·설명·LOCAL·ARCHIVE·FTP·SFTP 줄)는 두지 않는다.
         // 배너의 비교/체크섬/원격 단추는 메뉴(compare, miChecksum, miFTPQuickConnect)로 그대로 닿는다.
         if self.settings.flag("ShowToolBar", true) {
             match self.current_skin() {
@@ -1636,7 +1636,7 @@ impl eframe::App for App {
         let function_bar = self.settings.flag("ShowFunctionBar", true);
         match self.current_skin() {
             // 원본 bbFunctions(DFM Height 20): 스킨 테마면 F2~F8 칸(user_commands.rs skin_function_key_bar). 끄면 아무 줄도 없다.
-            // NDIR 상태 글은 원본에 없으므로(원본 창에는 상태 줄이 없음) 목록 자리를 줄이지 않고 기능키 줄 위에 잠깐 겹쳐 보인다.
+            // NDR 상태 글은 원본에 없으므로(원본 창에는 상태 줄이 없음) 목록 자리를 줄이지 않고 기능키 줄 위에 잠깐 겹쳐 보인다.
             Some(skin) => {
                 if function_bar {
                     egui::TopBottomPanel::bottom("functionbar").exact_height(20.0).frame(egui::Frame::NONE).show_separator_line(false).show(ctx, |ui| self.skin_function_key_bar(ui, ctx, &skin));
@@ -1683,7 +1683,7 @@ impl eframe::App for App {
                 let left = egui::Rect::from_min_size(full.min, egui::vec2(left_width, full.height()));
                 let middle = egui::Rect::from_min_size(egui::pos2(left.max.x + gap, full.min.y), egui::vec2(bar, full.height()));
                 let right = egui::Rect::from_min_size(egui::pos2(middle.max.x + gap, full.min.y), egui::vec2((usable - left_width).max(0.0), full.height()));
-                let divider = ui.interact(middle, egui::Id::new("ndir-pane-divider"), egui::Sense::click_and_drag()).on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
+                let divider = ui.interact(middle, egui::Id::new("ndr-pane-divider"), egui::Sense::click_and_drag()).on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
                 if panes::windows_double_clicked(&divider) {
                     self.set_left_pane_width(50.0);
                     self.save();
@@ -1799,7 +1799,7 @@ impl eframe::App for App {
         }
         // C# Closing: PruneMissing(ExecutableHistory, _lastCommandWorkingDirectory).
         let mut rows = self.settings.strings("ExecutableHistory");
-        ndir::command_line::prune_missing(&mut rows, self.last_command_directory.as_deref());
+        ndr::command_line::prune_missing(&mut rows, self.last_command_directory.as_deref());
         self.settings.set_strings("ExecutableHistory", rows);
         self.save();
     }

@@ -102,9 +102,9 @@ impl App {
         }
     }
     pub(super) fn original_internal(&mut self,name:&str,ctx:&egui::Context)->bool{
-        // r62 internal commands: same table as C# ExecuteFunctionKeyMacroAsync (ndir::parity::internal_command).
-        use ndir::parity::InternalCommand as C;
-        match ndir::parity::internal_command(name){
+        // r62 internal commands: same table as C# ExecuteFunctionKeyMacroAsync (ndr::parity::internal_command).
+        use ndr::parity::InternalCommand as C;
+        match ndr::parity::internal_command(name){
             C::None=>{},
             C::Unknown=>return false,
             C::CopyToOther{source,moving}=>self.original_copy_to_other(source,moving,ctx),
@@ -146,8 +146,8 @@ impl App {
         let verb=self.language_pack.text(if moving{"RES.MOVE"}else{"RES.COPY"},if moving{"Move"}else{"Copy"});
         let message=if source==0{self.language_pack.text("RES.MSG_TORIGHT","Do you want to %s to the right?")}else{self.language_pack.text("RES.MSG_TOLEFT","Do you want to %s to the left?")}.replace("%s",&verb);
         let title=self.language_pack.text("RES.TITLE_FILEOPERATION","File Operation");
-        self.message_box(&title,"",&message,ndir::msgbox::MB_YESNO|ndir::msgbox::MB_ICONQUESTION,move|app,result,_|{
-            if result==ndir::msgbox::IDYES{app.transfer_from(source,sources,destination,moving,super::file_operation::TransferKind::OtherPane);}
+        self.message_box(&title,"",&message,ndr::msgbox::MB_YESNO|ndr::msgbox::MB_ICONQUESTION,move|app,result,_|{
+            if result==ndr::msgbox::IDYES{app.transfer_from(source,sources,destination,moving,super::file_operation::TransferKind::OtherPane);}
         });
     }
     pub(super) fn copy_to_other(&mut self,source:usize,moving:bool,_ctx:&egui::Context){
@@ -165,16 +165,16 @@ impl App {
     }
     /// C# CopyPathToClipboard (original 0x43317c): items like FUN_00485bbc, Shift doubles every backslash,
     /// CRLF between lines, nothing copied without items, clipboard failures are silent.
-    pub(super) fn copy_item_paths(&mut self,part:ndir::parity::PathPart,escape:bool){
+    pub(super) fn copy_item_paths(&mut self,part:ndr::parity::PathPart,escape:bool){
         let pane=&self.panes[self.active];
-        let indices=ndir::parity::collect_items(pane.entries.len(),&pane.selected,(!pane.loading).then_some(pane.cursor));
+        let indices=ndr::parity::collect_items(pane.entries.len(),&pane.selected,(!pane.loading).then_some(pane.cursor));
         let archive_file=pane.archive.as_ref().map(|a|a.file.to_string_lossy().into_owned());
         let strings:Vec<(String,String)>=indices.iter().filter_map(|i|pane.entries.get(*i)).map(|e|(e.path.to_string_lossy().into_owned(),e.name.clone())).collect();
-        let items:Vec<ndir::parity::ItemPath>=strings.iter().map(|(path,name)|{
-            if let Some(archive)=&archive_file{ndir::parity::ItemPath::Archive{archive,key:path,name}}
-            else{ndir::parity::ItemPath::Local(path)}
+        let items:Vec<ndr::parity::ItemPath>=strings.iter().map(|(path,name)|{
+            if let Some(archive)=&archive_file{ndr::parity::ItemPath::Archive{archive,key:path,name}}
+            else{ndr::parity::ItemPath::Local(path)}
         }).collect();
-        if let Some(text)=ndir::parity::copy_path_text(&items,part,escape){let _=(self.clipboard_writer)(&text);}
+        if let Some(text)=ndr::parity::copy_path_text(&items,part,escape){let _=(self.clipboard_writer)(&text);}
     }
     /// C# OriginalFindAsync (miFindClick 0x437b2c): TfGetText(TITLE_FIND, MSG_FIND, ""), clears the typed quick-search
     /// text, then FUN_00437828 substring search. The last find text is stored only on a hit.
@@ -186,7 +186,7 @@ impl App {
         let pane=&mut self.panes[self.active];
         if pane.loading{return;}
         let names:Vec<String>=pane.entries.iter().map(|e|e.name.clone()).collect();
-        if let Some(index)=ndir::parity::find_in_list(&names,Some(pane.cursor),text,prefix){
+        if let Some(index)=ndr::parity::find_in_list(&names,Some(pane.cursor),text,prefix){
             pane.cursor=index;
             self.last_find=text.to_owned();
         }
@@ -220,7 +220,7 @@ impl App {
                     // 하위 메뉴가 열려 있으면 친 글자는 그 하위 메뉴의 항목이 받는다.
                     let sub_open = Self::submenu_open(ui);
                     // 스킨 테마의 단축키 칸(원본 MenuMeasureItem: 단축키 최대 너비 + 0xe): 항목 뒤에 깔 자리와 지난 장면의 너비.
-                    let width_id = egui::Id::new(("ndir-menu-shortcut-width", *title_key));
+                    let width_id = egui::Id::new(("ndr-menu-shortcut-width", *title_key));
                     let previous_width = ui.data(|d| d.get_temp::<f32>(width_id)).unwrap_or(0.0);
                     let column_slot = shortcut_colors.map(|_| ui.painter().add(egui::Shape::Noop));
                     let mut widest = 0.0f32;
@@ -587,7 +587,7 @@ impl App {
             },"extractToolbar"=>self.dispatch("extractSelected",ctx),
             "open"=>self.open_current(),
             "openAll"=>self.open_all_command(),
-            "explorerMenu"=>result=ndir::shell_menu::show(&targets),
+            "explorerMenu"=>result=ndr::shell_menu::show(&targets),
             "sortNone"|"sortName"|"sortExtension"|"sortSize"|"sortTime"|"sortAttributes"|"sortColor"|"folderSortDescending"|"groupDescending"|"groupShowName"=>{self.sort_command(id);},
             "sortDescending"=>{self.sort_command(id);},
             "toggleFolders"|"toggleFolderTree"=>self.show_tree=!self.show_tree,
@@ -615,7 +615,7 @@ impl App {
             "paste"=>{let copied=native::read_clipboard_files().ok().filter(|(p,_)|!p.is_empty()).or_else(||self.clipboard.clone());if let Some((sources,moving))=copied{self.transfer_from(i,sources,path,moving,super::file_operation::TransferKind::Paste);}},
             "deleteRecycle"|"deletePermanent"=>self.delete_items(id=="deleteRecycle"),
             "shred"=>self.shred_items(),
-            "copyFullPath"|"copyPathOnly"|"copyName"=>{let escape=ctx.input(|input|input.modifiers.shift);self.copy_item_paths(match id{"copyName"=>ndir::parity::PathPart::Name,"copyPathOnly"=>ndir::parity::PathPart::Folder,_=>ndir::parity::PathPart::Full},escape);},
+            "copyFullPath"|"copyPathOnly"|"copyName"=>{let escape=ctx.input(|input|input.modifiers.shift);self.copy_item_paths(match id{"copyName"=>ndr::parity::PathPart::Name,"copyPathOnly"=>ndr::parity::PathPart::Folder,_=>ndr::parity::PathPart::Full},escape);},
             "copyFolder"=>{result=(self.clipboard_writer)(&path.to_string_lossy());},
             "selectAll" if self.skin_active() => {let shift=ctx.input(|i|i.modifiers.shift);self.cycle_selection(shift);},
             "selectAll"=>{let folders=self.settings.flag("SelectFolders",false);let pane=&mut self.panes[i];pane.selected=pane.entries.iter().enumerate().filter(|(_,e)|!e.drive&&!e.is_parent()&&(folders||!e.is_dir)).map(|(j,_)|j).collect();},
@@ -639,7 +639,7 @@ impl App {
             "theme"=>self.theme_command(),"language"=>self.language_command(),
             "options"=>self.open_settings_window(),
             "importLegacy"=>self.import_legacy_command(),
-            "shortcuts"=>self.show_shortcut_window(),"ndirShortcuts"=>self.open_ndir_shortcuts(),
+            "shortcuts"=>self.show_shortcut_window(),"ndrShortcuts"=>self.open_ndr_shortcuts(),
             "textView"|"textEdit"=>self.text_command(id=="textEdit"),
             "properties"=>self.properties_command(),
             "attributes"=>self.change_attributes(),
@@ -692,7 +692,7 @@ impl App {
     /// search, else the last find text -> substring search, else nothing.
     pub(super) fn find_next(&mut self) {
         let (typed, last) = (self.typed_search[self.active].query.clone(), self.last_find.clone());
-        if let Some((text, prefix)) = ndir::parity::find_next_query(&typed, &last) {
+        if let Some((text, prefix)) = ndr::parity::find_next_query(&typed, &last) {
             self.find_in_active(&text.to_owned(), prefix);
         }
     }
@@ -709,8 +709,8 @@ impl App {
         }
         let title = self.language_pack.text("RES.TITLE_DELDESCFILE", "Delete Comments");
         let text = self.language_pack.text("RES.MSG_DELDESCFILE", "Are you sure you want to delete all comment of files in this folder?");
-        self.message_box(&title, "", &text, ndir::msgbox::MB_YESNO | ndir::msgbox::MB_ICONQUESTION, move |app, result, _| {
-            if result != ndir::msgbox::IDYES {
+        self.message_box(&title, "", &text, ndr::msgbox::MB_YESNO | ndr::msgbox::MB_ICONQUESTION, move |app, result, _| {
+            if result != ndr::msgbox::IDYES {
                 return;
             }
             match compat::clear_descriptions(&folder) {
@@ -727,7 +727,7 @@ impl App {
             return;
         }
         let text = self.language_pack.text("RES.EMAILCOPIED", "Email address(xiles@xiles.net) is copied to the clipboard.\nPaste(Ctrl+V) into any textbox to use this Email address.");
-        self.message_box(ndir::msgbox::FORM_CAPTION, "", &text, ndir::msgbox::MB_OK | ndir::msgbox::MB_ICONASTERISK, |_, _, _| {});
+        self.message_box(ndr::msgbox::FORM_CAPTION, "", &text, ndr::msgbox::MB_OK | ndr::msgbox::MB_ICONASTERISK, |_, _, _| {});
     }
     pub(super) fn transfer_from(&mut self, i: usize, sources: Vec<PathBuf>, destination: PathBuf, moving: bool, kind: super::file_operation::TransferKind) {
         if sources.is_empty() {

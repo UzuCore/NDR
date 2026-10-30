@@ -1,14 +1,14 @@
 //! C# CompareAsync / SynchronizeFoldersAsync(MainWindow.ParityFeatures.cs)와 FolderComparisonOptionsWindow,
 //! 폴더 비교는 원본 TfCompareFolder 한 창(FolderCompareForm, btnOkClick 0x41d464·btnSaveClick 0x41e2d0).
-//! 동기화는 C# 판 흐름: FolderComparisonProgressWindow, FolderComparisonWindow(동기화 미리보기). 규칙은 ndir::folder_compare.
+//! 동기화는 C# 판 흐름: FolderComparisonProgressWindow, FolderComparisonWindow(동기화 미리보기). 규칙은 ndr::folder_compare.
 //! 모달 진행 창(modal_progress_ui)은 검색(SearchProgressWindow)도 쓴다.
 //! 차이(HANDOFF): 한쪽에만 있는 폴더의 종류는 "폴더"(C#은 "파일/폴더 충돌"로 잘못 보임), 영어 화면에서는 창 글과 저장 결과도
 //! 영어, 동기화 진행 창에 일시 정지 단추가 없다.
 use super::grid::{self, Column, GridState, GridView};
 use super::original_dialogs::{DialogKind, DialogResult};
 use super::*;
-use ndir::folder_compare::{self as fc, Difference, DifferenceKind, ExistingBehavior};
-use ndir::msgbox::{IDYES, MB_ICONASTERISK, MB_ICONEXCLAMATION, MB_ICONHAND, MB_ICONQUESTION, MB_OK, MB_YESNO};
+use ndr::folder_compare::{self as fc, Difference, DifferenceKind, ExistingBehavior};
+use ndr::msgbox::{IDYES, MB_ICONASTERISK, MB_ICONEXCLAMATION, MB_ICONHAND, MB_ICONQUESTION, MB_OK, MB_YESNO};
 use std::fs;
 
 /// FolderComparisonWindow 열 너비(복사, 상태, 종류, 상대 경로(나머지), 크기 둘, 날짜 둘).
@@ -18,7 +18,7 @@ const ERROR_LINES: usize = 500;
 
 /// .NET "N0".
 fn n0(value: usize) -> String {
-    ndir::parity::format_size(value as u64, "B", true).trim_end_matches(" B").to_owned()
+    ndr::parity::format_size(value as u64, "B", true).trim_end_matches(" B").to_owned()
 }
 
 const DISTINCT_KO: &str = "비교하거나 동기화할 두 폴더는 서로 같거나 포함 관계일 수 없습니다.";
@@ -71,7 +71,7 @@ pub(super) fn folder_compare_cell(d: &Difference, column: usize) -> String {
 /// 원본 btnSaveClick(0x41e2d0) 머리 글(0x8de604, 탭이 든 한 줄).
 const REPORT_HEAD: &str = "<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//ENhttp://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd\">\t<html xmlns=\"http://www.w3.org/1999/xhtml\">\t<head>\t<meta http-equiv=\"Content-Type\" content=\"text/html; charset=utf-8\" />\t<title>NexusFile Folder Compare</title>\t<style type=\"text/css\">\tbody,td {font-family:Tahoma,Arial,Verdana;font-size:9pt}\t.onlyleft {color:#008000;padding:4px}\t.onlyright {color:#0000FF;padding:4px}\t.same {color:#666666;padding:4px}\t.diff {color:#FF0000;padding:4px}\t.line1 {background-color:#FFFFFF}\t.line2 {background-color:#F1F5FA}\t.header {background-color:#666666;color:#FFFFFF}\t.headleft {padding-top:2px;padding-bottom:2px;padding-left:12px}\t.headright {padding-top:2px;padding-bottom:2px;padding-right:12px}\t</style>\t</head>\t<body>\t<div style=\"border:1px solid silver;padding:4px;position:absolute\">\t<table border=\"0\" cellspacing=\"0\" cellpadding=\"0\">\t";
 
-/// HTML에 넣는 이름(원본은 그대로 넣지만 NDIR은 &, <, >를 바꾼다).
+/// HTML에 넣는 이름(원본은 그대로 넣지만 NDR은 &, <, >를 바꾼다).
 fn html_text(text: &str) -> String {
     text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
 }
@@ -96,7 +96,7 @@ pub(super) struct FolderCompareForm {
     pub right_caption: String,
     /// chkRecursive(DFM 꺼짐).
     pub recursive: bool,
-    /// chkCompareContents(DFM Checked, NDIR은 C# UseContentComparison에서 처음 값).
+    /// chkCompareContents(DFM Checked, NDR은 C# UseContentComparison에서 처음 값).
     pub contents: bool,
     /// lvList 줄(원본 항목 순서: 두 목록을 이름순으로 맞춘 순서).
     pub rows: Vec<Difference>,
@@ -154,8 +154,8 @@ impl FolderCompareForm {
         let name = |row: usize, c: usize| self.cell(row, c);
         let mut order: Vec<usize> = (0..self.rows.len()).collect();
         order.sort_by(|&a, &b| match column {
-            2 => original_code(self.rows[a].kind).cmp(&original_code(self.rows[b].kind)).then_with(|| ndir::listing::compare_text(&name(a, 1), &name(b, 1), false)),
-            c => ndir::listing::compare_text(&name(a, c), &name(b, c), false),
+            2 => original_code(self.rows[a].kind).cmp(&original_code(self.rows[b].kind)).then_with(|| ndr::listing::compare_text(&name(a, 1), &name(b, 1), false)),
+            c => ndr::listing::compare_text(&name(a, c), &name(b, c), false),
         });
         self.grid.order = order;
         self.grid.sort = Some((column, false));
@@ -304,7 +304,7 @@ impl ComparisonForm {
         let (rows, sync) = (&self.rows, self.select_for_sync);
         self.grid.toggle_sort(column, |a, b| match (sync, column) {
             (true, 0) => rows[a].include.cmp(&rows[b].include),
-            _ => ndir::listing::compare_text(&cell_text(rows, sync, a, column), &cell_text(rows, sync, b, column), false),
+            _ => ndr::listing::compare_text(&cell_text(rows, sync, a, column), &cell_text(rows, sync, b, column), false),
         });
     }
 
@@ -540,7 +540,7 @@ impl App {
     }
 
     /// 비교가 끝나면(원본 루프 뒤): 결과 글(FUN_0041e0b4), btnSave 켬, ProgressBar 숨김, btnOk 다시 보임.
-    /// 중단하면 원본은 거기까지 넣은 줄을 남기지만 NDIR은 빈 목록이다. 창을 이미 닫았으면 상태 줄만.
+    /// 중단하면 원본은 거기까지 넣은 줄을 남기지만 NDR은 빈 목록이다. 창을 이미 닫았으면 상태 줄만.
     fn folder_compare_done(&mut self, outcome: Result<(Vec<Difference>, Vec<String>), String>, cancelled: bool) {
         let ko = self.language == "ko";
         let template = self.language_pack.text(
@@ -588,7 +588,7 @@ impl App {
             form.running = None;
         }
         let text = localized_error(&error, ko);
-        self.system_box("NDIR", &text, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
+        self.system_box("NDR", &text, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
     }
 
     /// 원본 btnSaveClick: SaveDialog(FileName "compare result.html", Filter "HTML File (*.html)", DefaultExt html, 덮어쓰기 확인) →
@@ -671,7 +671,7 @@ impl App {
             }
             Err(error) => {
                 let text = localized_error(&error, ko);
-                return self.system_box("NDIR", &text, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
+                return self.system_box("NDR", &text, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
             }
             Ok(result) => result,
         };
@@ -844,7 +844,7 @@ impl App {
         } else {
             [("HTML files (*.html)", "*.html"), ("TSV files (*.tsv)", "*.tsv"), ("Text files (*.txt)", "*.txt"), ("All files (*.*)", "*.*")]
         };
-        let Some(path) = (self.save_dialog)(&dialog_title, None, "NDIR-folder-comparison.html", &filters, "html", true) else { return };
+        let Some(path) = (self.save_dialog)(&dialog_title, None, "NDR-folder-comparison.html", &filters, "html", true) else { return };
         let Some(form) = self.comparison_form() else { return };
         let rows: Vec<(Difference, bool)> = form.rows.iter().map(|r| (r.difference.clone(), r.include)).collect();
         let text = if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("html")) {
@@ -877,8 +877,8 @@ impl App {
             }
         };
         let status = if stopping { modal.stopping_text.clone() } else { status };
-        super::keep_opaque(ctx, egui::Id::new("ndir-modal-progress"));
-        egui::Modal::new(egui::Id::new("ndir-modal-progress")).show(ctx, |ui| {
+        super::keep_opaque(ctx, egui::Id::new("ndr-modal-progress"));
+        egui::Modal::new(egui::Id::new("ndr-modal-progress")).show(ctx, |ui| {
             ui.set_width(424.0);
             ui.label(RichText::new(&job.title).strong().family(egui::FontFamily::Name(super::BOLD_FONT_FAMILY.into())));
             ui.separator();

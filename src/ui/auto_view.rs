@@ -223,8 +223,8 @@ impl App {
         let mut column = 0;
         let mut row = 0;
         while row < count {
-            let key = ndir::listing::group_key(&pane.entries[row], &mode, &category);
-            let end = (row..count).find(|r| ndir::listing::group_key(&pane.entries[*r], &mode, &category) != key).unwrap_or(count);
+            let key = ndr::listing::group_key(&pane.entries[row], &mode, &category);
+            let end = (row..count).find(|r| ndr::listing::group_key(&pane.entries[*r], &mode, &category) != key).unwrap_or(count);
             if column < columns - 1 && !result[column].is_empty() && result[column].len() + (end - row) > per_column {
                 column += 1;
             }
@@ -258,7 +258,7 @@ impl App {
                 let mut previous: Option<String> = None;
                 for row in rows {
                     if mode != "None" && show_names {
-                        let key = ndir::listing::group_key(&self.panes[index].entries[row], &mode, &category);
+                        let key = ndr::listing::group_key(&self.panes[index].entries[row], &mode, &category);
                         if previous.as_deref() != Some(key.as_str()) {
                             list.push(DetailRow::Header(self.group_caption(&key)));
                             previous = Some(key);
@@ -361,7 +361,7 @@ impl App {
                                 }
                                 // 줄 어디를 눌러도 그 항목(이름 칸만이 아니라 줄 전체, 원본 GetItemAt = 항목 칸 전체).
                                 let row_rect = egui::Rect::from_min_size(response.rect.min, egui::vec2(column_width, row_height));
-                                let response = ui.interact(row_rect, ui.id().with(("ndir-auto-row", index, row)), egui::Sense::click_and_drag());
+                                let response = ui.interact(row_rect, ui.id().with(("ndr-auto-row", index, row)), egui::Sense::click_and_drag());
                                 // 원본 MouseDown: 스킨 테마는 누르는 순간 처리(항목 칸 왼쪽 12화소는 표시 칸, Shift는 범위 끌기).
                                 let in_area = original_click && super::panes::original_press_input(&mut self.panes[index], row, response.rect, ui);
                                 let area_hit = original_click && super::panes::pointer_in_selection_area(response.rect, ui);
@@ -437,7 +437,7 @@ impl App {
         let item = self.list_item_height(ui);
         let rows_full = (((height + space) / (item + space)).floor() as usize).max(1);
         // 넘치면 가로 막대 자리를 뺀다. 스킨 테마는 원본 TNXScrollBar 두께(scrollbg 너비, flow_rows가 남김), 아니면 egui 막대.
-        let bar = ui.data(|d| d.get_temp::<f32>(egui::Id::new(("ndir-skin-hbar-width", index)))).unwrap_or(Self::FLOW_BAR);
+        let bar = ui.data(|d| d.get_temp::<f32>(egui::Id::new(("ndr-skin-hbar-width", index)))).unwrap_or(Self::FLOW_BAR);
         let rows_with_bar = (((height - bar + space) / (item + space)).floor() as usize).max(1);
         list_keys::flow_layout(self.panes[index].entries.len(), fits, configured, rows_full, rows_with_bar, auto)
     }
@@ -461,7 +461,7 @@ impl App {
             Some(s) => self.skin_scrollbar_width(&ctx, s),
             None => None,
         };
-        let bar_width_id = egui::Id::new(("ndir-skin-hbar-width", index));
+        let bar_width_id = egui::Id::new(("ndr-skin-hbar-width", index));
         match skin_bar {
             Some(w) => ui.data_mut(|d| d.insert_temp(bar_width_id, w)),
             None => ui.data_mut(|d| d.remove::<f32>(bar_width_id)),
@@ -605,7 +605,7 @@ impl App {
                         }
                         // 줄 어디를 눌러도 그 항목(원본 GetItemAt = 항목 칸 전체).
                         let _ = response;
-                        let response = ui.interact(cell, ui.id().with(("ndir-flow-row", index, row)), egui::Sense::click_and_drag());
+                        let response = ui.interact(cell, ui.id().with(("ndr-flow-row", index, row)), egui::Sense::click_and_drag());
                         // 원본 MouseDown: 스킨 테마는 누르는 순간 처리(항목 칸 왼쪽 12화소는 표시 칸, Shift는 범위 끌기).
                         let in_area = original_click && super::panes::original_press_input(&mut self.panes[index], row, response.rect, ui);
                         let area_hit = original_click && super::panes::pointer_in_selection_area(response.rect, ui);
@@ -653,7 +653,7 @@ impl App {
                 let bar = egui::Rect::from_min_max(egui::pos2(inner.left(), inner.bottom() - bar_height), inner.max);
                 let line = if by_page { columns as f32 * column_width } else { column_width };
                 let page = columns as f32 * column_width;
-                if let Some(next) = self.skin_horizontal_scrollbar(ui, &ctx, skin, egui::Id::new(("ndir-skin-hbar", index)), bar, first as f32 * column_width, output.content_size.x, page, line) {
+                if let Some(next) = self.skin_horizontal_scrollbar(ui, &ctx, skin, egui::Id::new(("ndr-skin-hbar", index)), bar, first as f32 * column_width, output.content_size.x, page, line) {
                     first = snap(((next / column_width).round() as usize).min(last_first));
                     ui.ctx().request_repaint();
                 }

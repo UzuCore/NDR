@@ -1,8 +1,8 @@
 [package]
-name = "ndir"
+name = "ndr"
 version = "2.0.0"
 edition = "2024"
-description = "NDIR native Rust dual-pane file manager"
+description = "NDR native Rust dual-pane file manager"
 
 [dependencies]
 eframe = { version = "=0.33.3", default-features = false, features = ["glow", "default_fonts", "accesskit"] }

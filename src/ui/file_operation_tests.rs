@@ -3,7 +3,7 @@
 //! 가짜 실행 함수(program_runner)로 바꾼다. 휴지통은 쓰지 않는다.
 use super::original_dialogs::{DeleteWarningChoice, DialogKind, DialogResult};
 use super::*;
-use ndir::msgbox::IDYES;
+use ndr::msgbox::IDYES;
 use std::fs;
 use std::sync::Mutex;
 
@@ -24,7 +24,7 @@ fn fake_runner(program: &Path, args: &[String], _: &Path) -> Result<i32, String>
 }
 
 fn fixture(label: &str) -> (PathBuf, egui::Context, App) {
-    let root = std::env::temp_dir().join(format!("ndir-fileop-{}-{}-{label}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    let root = std::env::temp_dir().join(format!("ndr-fileop-{}-{}-{label}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
     let (left, right) = (root.join("left"), root.join("right"));
     fs::create_dir_all(left.join("folder")).unwrap();
     fs::create_dir_all(right.join("folder")).unwrap();
@@ -89,7 +89,7 @@ fn progress_target_line_uses_the_reported_destination_like_the_original() {
     assert_eq!(progress_target_line(Some("C:\\src"), Some("D:\\dst"), "C:\\src\\b.txt", None).as_deref(), Some("D:\\dst"));
     assert_eq!(progress_target_line(None, Some("D:\\dst"), "x", None).as_deref(), Some("D:\\dst"));
     // fsops: 대상에 같은 이름이 있어 "이름 (2)"로 바꾸면 그 대상을 알린다.
-    let root = std::env::temp_dir().join(format!("ndir-progress-target-{}", std::process::id()));
+    let root = std::env::temp_dir().join(format!("ndr-progress-target-{}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(root.join("src")).unwrap();
     fs::create_dir_all(root.join("dst")).unwrap();
@@ -97,13 +97,13 @@ fn progress_target_line_uses_the_reported_destination_like_the_original() {
     fs::write(root.join("dst").join("a.txt"), b"old").unwrap();
     let (tx, rx) = std::sync::mpsc::channel();
     let cancel = Arc::new(AtomicBool::new(false));
-    let operation = ndir::fsops::Operation::Copy { sources: vec![root.join("src").join("a.txt")], destination: root.join("dst"), move_files: false };
-    let worker = std::thread::spawn(move || ndir::fsops::run(operation, tx, cancel));
+    let operation = ndr::fsops::Operation::Copy { sources: vec![root.join("src").join("a.txt")], destination: root.join("dst"), move_files: false };
+    let worker = std::thread::spawn(move || ndr::fsops::run(operation, tx, cancel));
     let mut reported = None;
     for event in rx {
         match event {
-            ndir::fsops::Event::Conflict { reply, .. } => reply.send(ndir::fsops::ConflictChoice::Rename).unwrap(),
-            ndir::fsops::Event::Target { source, destination } => reported = Some((source, destination)),
+            ndr::fsops::Event::Conflict { reply, .. } => reply.send(ndr::fsops::ConflictChoice::Rename).unwrap(),
+            ndr::fsops::Event::Target { source, destination } => reported = Some((source, destination)),
             _ => {}
         }
     }
@@ -135,12 +135,12 @@ fn path_ellipsis_keeps_the_last_name_like_the_original() {
 fn conflict_file_info_follows_the_original_tffileexists() {
     use super::file_operation::conflict_file_info;
     let time = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
-    let (date, clock) = ndir::listing::long_date_and_time(time);
+    let (date, clock) = ndr::listing::long_date_and_time(time);
     assert!(!date.is_empty() && !clock.is_empty());
     assert_eq!(conflict_file_info(Some(1_234_567), Some(time), false, true), format!("<b>1,234,567</b> bytes ( {date}, {clock} )"));
     assert_eq!(conflict_file_info(Some(5), Some(time), true, false), format!("<c0000FF><b>5</b> bytes ( {date}, {clock} )</c>"));
     assert_eq!(conflict_file_info(Some(5), None, false, false), "<b>5</b> bytes");
-    assert_eq!(ndir::markup::plain_text(&conflict_file_info(Some(5), None, true, false)), "5 bytes");
+    assert_eq!(ndr::markup::plain_text(&conflict_file_info(Some(5), None, true, false)), "5 bytes");
 }
 
 /// 원본 FUN_004116dc·FUN_00422870의 TfFileExists 단추 규칙과 DFM 자리.
@@ -327,7 +327,7 @@ fn external_copy_handler_follows_csharp() {
     let (_, args, list) = &runs[0];
     assert_eq!((args.len(), args[1].as_str(), args[2].as_str()), (3, &*right.to_string_lossy(), "-m"));
     assert_eq!(list, &format!("{}\r\n", left.join("b.txt").display()));
-    // 꺼져 있으면 NDIR이 직접 복사한다.
+    // 꺼져 있으면 NDR이 직접 복사한다.
     app.settings.values.insert("UseCopyHandler".into(), serde_json::json!(false));
     copy_to_other(&mut app, &ctx, &["locked.txt"]);
     assert!(app.job.is_some());
@@ -351,8 +351,8 @@ fn adding_to_a_multivolume_archive_rebuilds_it_like_csharp() {
     let mut state = 0x1234_5678u32;
     let noise: Vec<u8> = (0..1_572_864).map(|_| { state ^= state << 13; state ^= state >> 17; state ^= state << 5; (state >> 24) as u8 }).collect();
     fs::write(left.join("noise.bin"), &noise).unwrap();
-    let options = ndir::commands::ArchiveOptions { extension: "7z".into(), level: 1, password: String::new(), volume_bytes: Some(1024 * 1024), recursive: true, append: false };
-    ndir::archive::create_with_program(&[left.join("noise.bin")], &root.join("right").join("set.7z"), &options, None, &AtomicBool::new(false)).unwrap();
+    let options = ndr::commands::ArchiveOptions { extension: "7z".into(), level: 1, password: String::new(), volume_bytes: Some(1024 * 1024), recursive: true, append: false };
+    ndr::archive::create_with_program(&[left.join("noise.bin")], &root.join("right").join("set.7z"), &options, None, &AtomicBool::new(false)).unwrap();
     let first = root.join("right").join("set.7z.001");
     assert!(first.exists() && root.join("right").join("set.7z.002").exists());
     // 더하기: 7z를 고르고 첫 볼륨을 대상으로.
@@ -372,10 +372,10 @@ fn adding_to_a_multivolume_archive_rebuilds_it_like_csharp() {
     app.submit_archive_create(0, &ctx);
     wait(&mut app, &ctx, finished);
     assert!(app.job.as_ref().is_some_and(|j| j.errors.is_empty() && j.fatal.is_none()), "{:?}", app.job.as_ref().map(|j| (&j.errors, &j.fatal)));
-    let names: Vec<String> = ndir::archive::list(&first, None).unwrap().into_iter().map(|e| e.key).collect();
+    let names: Vec<String> = ndr::archive::list(&first, None).unwrap().into_iter().map(|e| e.key).collect();
     assert!(names.iter().any(|n| n == "noise.bin") && names.iter().any(|n| n == "b.txt"), "{names:?}");
     assert!(root.join("right").join("set.7z.002").exists(), "still split at the inferred 1 MiB");
-    assert!(!fs::read_dir(root.join("right")).unwrap().any(|e| e.unwrap().file_name().to_string_lossy().starts_with(".ndir-multivolume-update-")), "the staging folder is removed");
+    assert!(!fs::read_dir(root.join("right")).unwrap().any(|e| e.unwrap().file_name().to_string_lossy().starts_with(".ndr-multivolume-update-")), "the staging folder is removed");
     fs::remove_dir_all(root).unwrap();
 }
 

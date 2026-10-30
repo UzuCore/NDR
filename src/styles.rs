@@ -322,7 +322,7 @@ mod tests {
     }
     #[test]
     fn skin_assets_reject_escape_and_integer_limits() {
-        let root = std::env::temp_dir().join(format!("ndir-style-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("ndr-style-{}", std::process::id()));
         let black = root.join("black");
         std::fs::create_dir_all(&black).unwrap();
         std::fs::write(root.join("outside.bin"), "owned outside fixture").unwrap();

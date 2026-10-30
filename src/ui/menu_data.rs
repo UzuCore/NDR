@@ -1,5 +1,5 @@
 // Menu inventory generated from r69; behavior is implemented in commands.rs.
-/// 원본 DFM에서 Visible=False인 메뉴 항목(NDIR 명령 이름). 스킨 테마(원본 모양)에서는 숨긴다.
+/// 원본 DFM에서 Visible=False인 메뉴 항목(NDR 명령 이름). 스킨 테마(원본 모양)에서는 숨긴다.
 pub const ORIGINAL_HIDDEN: &[&str] = &[
     "archiveMove",       // miArcMove
     "extractNewFolder",  // miArcExtractToFolder
@@ -12,7 +12,7 @@ pub const ORIGINAL_HIDDEN: &[&str] = &[
 /// 원본 TfMain 메뉴 단추(tbFile … tbHelp, DropdownMenu = pmFile … pmHelp)의 차례와 항목(docs/original-menus.txt).
 /// (제목 언어 키, 한국어, 영어, 항목). 항목 "-"은 구분선, "@…"은 하위 메뉴(checksum, workFolders, listStyle, columns, sort, filter).
 /// C# 판에만 있는 명령(deletePermanent, toggleExtensionInfoBar, createArchive, createZip, merge, remote, remoteCommand,
-/// ndirShortcuts, importLegacy, shellIntegration)은 가까운 원본 항목 뒤에 두고, 스킨 테마(원본 모양)에서는 숨긴다.
+/// ndrShortcuts, importLegacy, shellIntegration)은 가까운 원본 항목 뒤에 두고, 스킨 테마(원본 모양)에서는 숨긴다.
 pub const MENUS: &[(&str,&str,&str,&[(&str,&str,&str)])] = &[
 ("ToolButton.tbFile","파일","File",&[
 ("open","열기 / 실행","Open/Execute"),
@@ -184,7 +184,7 @@ pub const MENUS: &[(&str,&str,&str,&[(&str,&str,&str)])] = &[
 ("search","검색…","Search..."),
 ("-","",""),
 ("options","환경 설정…","Options..."),
-("ndirShortcuts","NDIR 단축키 설정…","Ndir shortcuts"),
+("ndrShortcuts","NDR 단축키 설정…","Ndr shortcuts"),
 ("importLegacy","레거시 INI 설정 가져오기…","Import legacy"),
 ("shellIntegration","탐색기 메뉴 통합…","Shell integration"),
 ]),

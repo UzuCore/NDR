@@ -1,7 +1,7 @@
 //! C# MainWindow.Toolbar: BuildMainToolbar(왼쪽 묶음 + 오른쪽 묶음, 구분선, 빠른 찾기 칸, 명령 단추), GetToolbarLabel,
 //! RefreshMainToolbarIcons(스킨 그림 18×18, 없으면 글), ApplyMainToolbarButtonVisibility, ExecuteToolbarCommandAsync.
 use super::*;
-use ndir::commands::{ToolbarItem, ToolbarKind};
+use ndr::commands::{ToolbarItem, ToolbarKind};
 
 /// C# LanguageService.MenuKeys 가운데 도구 모음 명령이 쓰는 것(createZip은 C# 표에 없다).
 fn menu_key(action: &str) -> Option<&'static str> {
@@ -174,7 +174,7 @@ impl App {
         if let Some(cached) = self.toolbar_icons.get(&key) {
             return cached.clone();
         }
-        let texture = ndir::styles::Skin::load(&self.resources.join("Skins"), &theme)
+        let texture = ndr::styles::Skin::load(&self.resources.join("Skins"), &theme)
             .ok()
             .and_then(|skin| skin.image_path(icon))
             .and_then(|path| decode_png(&path).ok())
@@ -190,10 +190,10 @@ impl App {
     }
 
     /// 지금 테마의 원본 스킨(검정·클래식·회색). 테마가 바뀔 때만 conf.ini를 다시 읽는다. C# 판 테마면 None.
-    pub(super) fn current_skin(&mut self) -> Option<ndir::styles::Skin> {
+    pub(super) fn current_skin(&mut self) -> Option<ndr::styles::Skin> {
         let theme = self.settings.text("Theme", "Black");
         if self.skin_cache.as_ref().map(|(name, _)| name.as_str()) != Some(theme.as_str()) {
-            let skin = ndir::styles::Skin::load(&self.resources.join("Skins"), &theme).ok();
+            let skin = ndr::styles::Skin::load(&self.resources.join("Skins"), &theme).ok();
             self.skin_cache = Some((theme, skin));
         }
         self.skin_cache.as_ref().and_then(|(_, skin)| skin.clone())
@@ -210,7 +210,7 @@ impl App {
             .current_skin()
             .and_then(|skin| skin.image_path(file))
             .and_then(|path| std::fs::read(path).ok())
-            .and_then(|bytes| ndir::styles::decode_bmp(&bytes).ok())
+            .and_then(|bytes| ndr::styles::decode_bmp(&bytes).ok())
             .map(|(width, height, rgba)| ctx.load_texture(format!("skin:{key}"), egui::ColorImage::from_rgba_unmultiplied([width, height], &rgba), egui::TextureOptions::NEAREST));
         self.toolbar_icons.insert(key, texture.clone());
         texture
@@ -218,7 +218,7 @@ impl App {
 
     /// 원본 pToolbar(스킨 테마, FUN_00444710): 배경 tbbackimg를 가로로 이어 그리고, 단추(TNXImageButton, Stretch)는
     /// tbbtnwidth × tbbtnheight로 위 tbtopoffset(처음 값 4)에 놓는다. 구분선 칸은 15. 그림이 없는 항목은 스킨 tb_noimage.png.
-    pub(super) fn skin_toolbar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, skin: &ndir::styles::Skin) {
+    pub(super) fn skin_toolbar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, skin: &ndr::styles::Skin) {
         let rect = ui.max_rect();
         if let Some(back) = skin.values.get("toolbar.tbbackimg").cloned().and_then(|file| self.skin_bitmap(ctx, &file)) {
             let tile_width = back.size_vec2().x.max(1.0);
@@ -277,7 +277,7 @@ impl App {
             ToolbarKind::Separator => {}
             ToolbarKind::QuickSearch => {
                 let field = egui::Rect::from_center_size(slot.center(), egui::vec2(slot.width(), 21.0));
-                let response = ui.put(field, egui::TextEdit::singleline(&mut self.toolbar_query).id(egui::Id::new("ndir-toolbar-query")).char_limit(1024));
+                let response = ui.put(field, egui::TextEdit::singleline(&mut self.toolbar_query).id(egui::Id::new("ndr-toolbar-query")).char_limit(1024));
                 if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                     let text = self.toolbar_query.clone();
                     self.quick_filter(self.active, &text);
@@ -294,7 +294,7 @@ impl App {
                     _ => true,
                 };
                 let sense = if enabled { egui::Sense::click() } else { egui::Sense::hover() };
-                let response = ui.interact(slot, egui::Id::new(("ndir-skin-toolbar", item.action.as_str(), slot.left() as i32)), sense);
+                let response = ui.interact(slot, egui::Id::new(("ndr-skin-toolbar", item.action.as_str(), slot.left() as i32)), sense);
                 match icon {
                     Some(texture) => {
                         // 원본 TNXImageButton.Paint(0x7c3adc): 그림 칸이 하나(도구 모음 그림)면 포인터를 올려도 그대로이고,
@@ -329,7 +329,7 @@ impl App {
         let fits = left_width + right_width + 16.0 <= available;
         let mut clicked = None;
         let mut measured = (0.0, 0.0);
-        egui::ScrollArea::horizontal().id_salt("ndir-toolbar").auto_shrink([false, true]).show(ui, |ui| {
+        egui::ScrollArea::horizontal().id_salt("ndr-toolbar").auto_shrink([false, true]).show(ui, |ui| {
             ui.horizontal(|ui| {
                 let start = ui.cursor().min.x;
                 for item in &left {
@@ -366,7 +366,7 @@ impl App {
             }
             ToolbarKind::QuickSearch => {
                 // C# 도구 모음 빠른 찾기 칸: 최대 1024자, Enter에서 활성 패널에 빠른 필터(QuickFilterAsync).
-                let response = ui.add(egui::TextEdit::singleline(&mut self.toolbar_query).id(egui::Id::new("ndir-toolbar-query")).char_limit(1024).desired_width(item.width as f32));
+                let response = ui.add(egui::TextEdit::singleline(&mut self.toolbar_query).id(egui::Id::new("ndr-toolbar-query")).char_limit(1024).desired_width(item.width as f32));
                 if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                     let text = self.toolbar_query.clone();
                     self.quick_filter(self.active, &text);
@@ -416,7 +416,7 @@ impl App {
         }
         if let Some(command) = action.strip_prefix("user:") {
             // 원본 FUN_0044381c(폼, 명령, 내부 명령 아님): 기능키의 사용자 명령("[이름]프로그램 인수", 매크로)과 같은 실행.
-            let binding = ndir::commands::FunctionBinding { name: String::new(), command: command.to_owned(), parameters: String::new(), internal: false, legacy: true };
+            let binding = ndr::commands::FunctionBinding { name: String::new(), command: command.to_owned(), parameters: String::new(), internal: false, legacy: true };
             self.run_binding(&binding, ctx);
             return;
         }
@@ -501,7 +501,7 @@ mod tests {
     #[test]
     fn toolbar_icons_from_the_shipped_skins_decode() {
         let skins = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Resources").join("Skins");
-        let skin = ndir::styles::Skin::load(&skins, "Black").expect("the Black skin ships");
+        let skin = ndr::styles::Skin::load(&skins, "Black").expect("the Black skin ships");
         let path = skin.image_path("tb_back.png").expect("tb_back.png ships in the skin");
         let (width, height, rgba) = decode_png(&path).unwrap();
         assert!(width > 0 && height > 0 && rgba.len() == width * height * 4);

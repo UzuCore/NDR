@@ -17,7 +17,7 @@ pub struct RemovableDrive {
     pub label: String,
     pub bytes: u64,
 }
-/// C# PhysicalDiskChoice(Number, Bytes): 이동식·핫플러그이고 Windows·NDIR이 없는 물리 디스크.
+/// C# PhysicalDiskChoice(Number, Bytes): 이동식·핫플러그이고 Windows·NDR이 없는 물리 디스크.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PhysicalDisk {
     pub number: u32,
@@ -373,7 +373,7 @@ mod win {
         let protected = protected_disks()?;
         if ids.iter().any(|n| protected.contains(n)) {
             return Err(
-                "The selected device contains Windows or the running NDIR application".into(),
+                "The selected device contains Windows or the running NDR application".into(),
             );
         }
         let bytes = length(&file)?;
@@ -489,7 +489,7 @@ mod win {
         result
     }
     /// C# DiskImageService.GetReadyRemovablePhysicalDisks: 0..63 중 열리고, 이동식·핫플러그이고,
-    /// 보호 디스크(Windows·NDIR)가 아니고, 길이가 양수인 디스크. 보호 디스크를 못 구하면 빈 목록.
+    /// 보호 디스크(Windows·NDR)가 아니고, 길이가 양수인 디스크. 보호 디스크를 못 구하면 빈 목록.
     pub(super) fn ready_physical() -> Vec<PhysicalDisk> {
         let Ok(protected) = protected_disks() else {
             return Vec::new();

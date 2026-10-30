@@ -82,7 +82,7 @@ fn validate_owner_identity(
     current_thread: u32,
 ) -> Result<(), String> {
     if owner_pid == 0 || owner_pid != current_pid {
-        return Err("The foreground window does not belong to this NDIR process".into());
+        return Err("The foreground window does not belong to this NDR process".into());
     }
     if owner_thread == 0 || owner_thread != current_thread {
         return Err("The Explorer menu must run on the foreground window's UI thread".into());
@@ -357,7 +357,7 @@ impl ShellSelection {
     }
 }
 
-/// Show an Explorer menu on the current NDIR foreground/UI thread; cancellation is success.
+/// Show an Explorer menu on the current NDR foreground/UI thread; cancellation is success.
 /// A selected shell command is invoked only after the native menu returns its command identifier.
 pub fn show(paths: &[PathBuf]) -> Result<(), String> {
     let paths = prepare_paths(paths)?;
@@ -481,7 +481,7 @@ pub fn take_numpad_keys() -> Vec<(u16, bool, bool, bool)> {
 mod tests {
     use super::*;
     fn sandbox() -> PathBuf {
-        let path = std::env::temp_dir().join(format!("ndir-shell-menu-{}", std::process::id()));
+        let path = std::env::temp_dir().join(format!("ndr-shell-menu-{}", std::process::id()));
         std::fs::create_dir_all(&path).unwrap();
         path
     }
@@ -531,7 +531,7 @@ mod tests {
                 CreateWindowExW(
                     WINDOW_EX_STYLE::default(),
                     windows::core::w!("STATIC"),
-                    windows::core::w!("NDIR owned shell-menu fixture"),
+                    windows::core::w!("NDR owned shell-menu fixture"),
                     WS_POPUP,
                     0,
                     0,

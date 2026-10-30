@@ -1,6 +1,6 @@
-//! C# NDIR 패널 명령(선택, 이동, 보기, 숨김, 폴더 크기)을 옮긴 것.
+//! C# NDR 패널 명령(선택, 이동, 보기, 숨김, 폴더 크기)을 옮긴 것.
 use super::*;
-use ndir::msgbox::{MB_ICONASTERISK, MB_ICONEXCLAMATION, MB_OK};
+use ndr::msgbox::{MB_ICONASTERISK, MB_ICONEXCLAMATION, MB_OK};
 
 /// C# ChangeAttributesAsync 진행 상태.
 pub(super) struct AttributeRun {
@@ -28,10 +28,10 @@ impl App {
         }
         let Some(anchor) = pane.entries.get(pane.cursor).map(|e| e.name.clone()) else { return };
         self.last_selection[i] = pane.targets();
-        let key = |name: &str| if same_extension { ndir::parity::dotnet_extension(name).to_owned() } else { ndir::parity::dotnet_stem(name).to_owned() };
+        let key = |name: &str| if same_extension { ndr::parity::dotnet_extension(name).to_owned() } else { ndr::parity::dotnet_stem(name).to_owned() };
         let wanted = key(&anchor);
         let pane = &mut self.panes[i];
-        pane.selected = pane.entries.iter().enumerate().filter(|(_, e)| ndir::names::equals_ignore_case(&key(&e.name), &wanted)).map(|(j, _)| j).collect();
+        pane.selected = pane.entries.iter().enumerate().filter(|(_, e)| ndr::names::equals_ignore_case(&key(&e.name), &wanted)).map(|(j, _)| j).collect();
     }
 
     /// 원본 bSelectAllClick(0x431450, 수직 막대 "모두 선택" 단추, 스킨 테마). 폴더도 고를지 = 설정(selectfolder) XOR Shift.
@@ -86,9 +86,9 @@ impl App {
         }
         let Some(focused) = pane.entries.get(pane.cursor).filter(|e| !e.drive && !e.is_parent()) else { return };
         let rows: Vec<usize> = if !focused.is_dir {
-            let key = |name: &str| if same_extension { ndir::parity::dotnet_extension(name).to_owned() } else { ndir::parity::dotnet_stem(name).to_owned() };
+            let key = |name: &str| if same_extension { ndr::parity::dotnet_extension(name).to_owned() } else { ndr::parity::dotnet_stem(name).to_owned() };
             let wanted = key(&focused.name);
-            (0..pane.entries.len()).filter(|&i| !pane.entries[i].is_dir && !pane.entries[i].drive && ndir::names::equals_ignore_case(&key(&pane.entries[i].name), &wanted)).collect()
+            (0..pane.entries.len()).filter(|&i| !pane.entries[i].is_dir && !pane.entries[i].drive && ndr::names::equals_ignore_case(&key(&pane.entries[i].name), &wanted)).collect()
         } else if same_extension {
             (0..pane.entries.len()).filter(|&i| pane.entries[i].is_dir && !pane.entries[i].drive && !pane.entries[i].is_parent()).collect()
         } else {
@@ -127,7 +127,7 @@ impl App {
         }
         let path = std::path::absolute(&self.panes[i].path).unwrap_or_else(|_| self.panes[i].path.clone());
         let Some(root) = path.ancestors().last().map(Path::to_path_buf) else { return };
-        if !ndir::names::equals_ignore_case(&root.to_string_lossy(), &self.panes[i].path.to_string_lossy()) {
+        if !ndr::names::equals_ignore_case(&root.to_string_lossy(), &self.panes[i].path.to_string_lossy()) {
             self.navigate(i, root, true);
         }
     }
@@ -137,7 +137,7 @@ impl App {
         let destination = self.settings.text("LastDestination", "");
         if destination.trim().is_empty() || !Path::new(&destination).is_dir() {
             let text = self.tr("아직 사용할 수 있는 마지막 대상 폴더가 없습니다.", "There is no last destination folder to use yet.").into_owned();
-            return self.system_box("NDIR", &text, MB_OK | MB_ICONASTERISK, |_, _, _| {});
+            return self.system_box("NDR", &text, MB_OK | MB_ICONASTERISK, |_, _, _| {});
         }
         self.navigate(self.active, destination.into(), true);
     }
@@ -201,7 +201,7 @@ impl App {
         let mut selected: Vec<PathBuf> = Vec::new();
         for path in self.panes[i].targets() {
             let full = std::path::absolute(&path).unwrap_or(path);
-            if !selected.iter().any(|known| ndir::names::equals_ignore_case(&known.to_string_lossy(), &full.to_string_lossy())) {
+            if !selected.iter().any(|known| ndr::names::equals_ignore_case(&known.to_string_lossy(), &full.to_string_lossy())) {
                 selected.push(full);
             }
         }
@@ -212,12 +212,12 @@ impl App {
         let within = |path: &Path, directory: &Path| {
             let root = format!("{}\\", directory.to_string_lossy().trim_end_matches(['\\', '/']));
             let path = path.to_string_lossy();
-            path.len() > root.len() && ndir::names::starts_with_ignore_case(&path, &root)
+            path.len() > root.len() && ndr::names::starts_with_ignore_case(&path, &root)
         };
         let roots: Vec<PathBuf> = selected.into_iter().filter(|path| !directories.iter().any(|d| within(path, d))).collect();
         let tx = self.async_tx.clone();
         self.start_task("Folder size".into(), move |_, cancel| {
-            if let Some(summary) = ndir::tools::folder_size_summary(&roots, &cancel) {
+            if let Some(summary) = ndr::tools::folder_size_summary(&roots, &cancel) {
                 let _ = tx.send(AsyncResult::FolderSize(summary));
             }
             Ok(())
@@ -257,7 +257,7 @@ impl App {
                 let targets: Vec<PathBuf> = if all { run.paths[run.index..].to_vec() } else { vec![run.paths[run.index].clone()] };
                 let tx = app.async_tx.clone();
                 thread::spawn(move || {
-                    let errors = ndir::tools::change_attributes_and_time(&targets, &changes);
+                    let errors = ndr::tools::change_attributes_and_time(&targets, &changes);
                     run.errors.extend(errors);
                     run.completed += targets.len();
                     run.index = if all { run.paths.len() } else { run.index + 1 };
@@ -270,7 +270,7 @@ impl App {
     pub(super) fn finish_attributes(&mut self, run: AttributeRun) {
         self.refresh(run.pane);
         let ko = self.language == "ko";
-        let n = |value: usize| ndir::parity::format_size(value as u64, "B", true).trim_end_matches(" B").to_owned();
+        let n = |value: usize| ndr::parity::format_size(value as u64, "B", true).trim_end_matches(" B").to_owned();
         if !run.errors.is_empty() {
             let title = self.tr("일부 항목의 속성을 변경하지 못했습니다.", "Some attributes could not be changed.").into_owned();
             let text = run.errors.iter().take(80).cloned().collect::<Vec<_>>().join("\r\n");
@@ -285,10 +285,10 @@ impl App {
     }
 
     /// C# 요약 상자: "폴더/파일/전체 크기", 읽지 못한 항목이 있으면 20개까지와 나머지 수, 경고 아이콘.
-    pub(super) fn show_folder_size(&mut self, summary: ndir::tools::FolderSizeSummary) {
+    pub(super) fn show_folder_size(&mut self, summary: ndr::tools::FolderSizeSummary) {
         let unit = self.settings.text("SizeUnit", "Auto");
-        let display = ndir::parity::format_size(summary.total_bytes, &unit, self.settings.flag("UseThousandsSeparator", true));
-        let n = |value: u64| ndir::parity::format_size(value, "B", true).trim_end_matches(" B").to_owned();
+        let display = ndr::parity::format_size(summary.total_bytes, &unit, self.settings.flag("UseThousandsSeparator", true));
+        let n = |value: u64| ndr::parity::format_size(value, "B", true).trim_end_matches(" B").to_owned();
         let ko = self.language == "ko";
         let mut details = if ko {
             format!("폴더: {}개\n파일: {}개\n전체 크기: {} bytes ({display})", n(summary.folders), n(summary.files), n(summary.total_bytes))

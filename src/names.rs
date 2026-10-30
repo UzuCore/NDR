@@ -97,7 +97,7 @@ pub fn create_empty_file(path: &str) -> u32 {
 }
 
 /// 원본 PathCombineW(현재 폴더, 입력한 이름): '\'로 시작하면 현재 드라이브의 루트, "x:..."는 그대로, "."/".."는 정리.
-/// MAX_PATH를 넘으면 단순 결합으로 대신한다(C# NDIR과 같은 승인된 수정).
+/// MAX_PATH를 넘으면 단순 결합으로 대신한다(C# NDR과 같은 승인된 수정).
 pub fn combine_typed_name(directory: &str, name: &str) -> String {
     let (directory_wide, name_wide) = (wide(directory), wide(name));
     let mut buffer = vec![0u16; 260];
@@ -186,7 +186,7 @@ mod tests {
 
     #[test]
     fn native_name_operations_follow_the_original() {
-        let root = std::env::temp_dir().join(format!("ndir-names-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let root = std::env::temp_dir().join(format!("ndr-names-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
         std::fs::create_dir(&root).unwrap();
         let folder = root.join("새 폴더");
         assert_eq!(create_directory(&folder.to_string_lossy()), 0);

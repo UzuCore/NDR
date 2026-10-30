@@ -1,10 +1,10 @@
-//! C# SelectDestinationFolder + DestinationPickerWindow([formNDIRDestination]): 자주 쓴 대상(MostUsedDestinations, 많이·최근 순,
+//! C# SelectDestinationFolder + DestinationPickerWindow([formNDRDestination]): 자주 쓴 대상(MostUsedDestinations, 많이·최근 순,
 //! 있는 폴더만, MaxRecentFileCount개, 오른쪽 단추 메뉴로 지우기), 작업 폴더 1~5(숫자 글쇠), 다른 폴더 찾아보기.
 //! RememberDestination(LastDestination + 사용 횟수·마지막 사용 시각)과 CopyMoveToFolderAsync.
 //! 차이(HANDOFF): 압축 파일 안에서 다른 폴더로 복사는 압축 흐름 이식 전까지 예전처럼 압축 풀기 창을 거친다.
 use super::original_dialogs::{DialogKind, DialogResult};
 use super::*;
-use ndir::msgbox::{IDYES, MB_ICONASTERISK, MB_ICONQUESTION, MB_OK, MB_YESNO};
+use ndr::msgbox::{IDYES, MB_ICONASTERISK, MB_ICONQUESTION, MB_OK, MB_YESNO};
 
 /// 복사·이동·압축 풀기(제목 글쇠).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -66,7 +66,7 @@ pub(super) fn original_items(form: &DestinationForm) -> Vec<(DestinationItem, bo
     }
     let mut first = true;
     for (path, _) in &form.most_used {
-        if ndir::names::equals_ignore_case(path, &initial) {
+        if ndr::names::equals_ignore_case(path, &initial) {
             continue;
         }
         items.push((DestinationItem::Recent(path.clone()), first));
@@ -105,7 +105,7 @@ pub(super) fn destination_ui(ui: &mut egui::Ui, form: &mut DestinationForm, ente
     ui.add(egui::Label::new(RichText::new(&form.hint).weak()).wrap());
     ui.add_space(6.0);
     // 원본 TfSelectDest cbPath: 대상 경로를 직접 고친다(같은 패널 안 하위 폴더 등). 창이 열리면 글쇠 초점.
-    let path_id = egui::Id::new("ndir-destination-path");
+    let path_id = egui::Id::new("ndr-destination-path");
     let edit = ui.add(egui::TextEdit::singleline(&mut form.path).id(path_id).desired_width(628.0));
     if !ui.memory(|m| m.had_focus_last_frame(path_id)) && ui.memory(|m| m.focused().is_none()) {
         edit.request_focus();
@@ -116,7 +116,7 @@ pub(super) fn destination_ui(ui: &mut egui::Ui, form: &mut DestinationForm, ente
         if !form.most_used.is_empty() {
             ui.label(RichText::new(&form.most_used_title).strong().family(egui::FontFamily::Name(super::BOLD_FONT_FAMILY.into())));
             for (path, count) in &form.most_used {
-                let count = ndir::parity::format_size(*count, "B", true).trim_end_matches(" B").to_owned();
+                let count = ndr::parity::format_size(*count, "B", true).trim_end_matches(" B").to_owned();
                 let button = egui::Button::new(format!("{path}  ({count})")).min_size(egui::vec2(612.0, 32.0));
                 let response = ui.add(button).on_hover_text(path.as_str());
                 if response.clicked() {
@@ -206,7 +206,7 @@ fn list_keys(ui: &egui::Ui, form: &DestinationForm, typing: bool) -> Option<Dest
             .most_used
             .iter()
             .map(|(p, _)| p)
-            .filter(|p| !form.original || !ndir::names::equals_ignore_case(p, &initial))
+            .filter(|p| !form.original || !ndr::names::equals_ignore_case(p, &initial))
             .nth(index)
             .map(|p| DestinationAction::MostUsed(p.clone())),
         Pick::Initial if form.initial.is_dir() => Some(DestinationAction::MostUsed(initial.into_owned())),
@@ -238,8 +238,8 @@ pub(super) fn destination_ui_original(ui: &mut egui::Ui, form: &mut DestinationF
     let (area, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
     let list_rect = egui::Rect::from_min_size(area.min, egui::vec2(width, height - 70.0));
     let at = |x: f32, y: f32, w: f32, h: f32| egui::Rect::from_min_size(area.min + egui::vec2(x, height - 70.0 + y), egui::vec2(w, h));
-    let list_id = egui::Id::new("ndir-destination-list");
-    let path_id = egui::Id::new("ndir-destination-path");
+    let list_id = egui::Id::new("ndr-destination-list");
+    let path_id = egui::Id::new("ndr-destination-path");
     ui.painter().rect_filled(list_rect, 0.0, Color32::WHITE);
     // 목록 자체(빈 자리 포함)가 글쇠 초점을 받는 위젯이다. 줄보다 먼저 두어 줄 누르기를 가리지 않게 한다.
     if ui.interact(list_rect, list_id, egui::Sense::click()).clicked() {
@@ -425,13 +425,13 @@ impl App {
         };
         let work = self.settings.strings("WorkingFolders");
         let form = DestinationForm {
-            hint: text(self, "formNDIRDestination", "Hint.WorkFolders", "Click a saved destination or choose another folder."),
+            hint: text(self, "formNDRDestination", "Hint.WorkFolders", "Click a saved destination or choose another folder."),
             most_used_title: text(self, "formPreferences", "Caption.lMostUsedFolder", "Most used destination folders:"),
             most_used: self.most_used_destinations(),
             work_folders: std::array::from_fn(|i| work.get(i).map(|w| w.trim().to_owned()).unwrap_or_default()),
-            empty_text: text(self, "formNDIRDestination", "Slot.Empty", "Not set"),
-            browse_label: text(self, "formNDIRDestination", "Button.Browse", if ko { "다른 폴더 찾아보기…" } else { "Browse for another folder…" }),
-            cancel_label: text(self, "formNDIRDestination", "Button.Cancel", "Cancel"),
+            empty_text: text(self, "formNDRDestination", "Slot.Empty", "Not set"),
+            browse_label: text(self, "formNDRDestination", "Button.Browse", if ko { "다른 폴더 찾아보기…" } else { "Browse for another folder…" }),
+            cancel_label: text(self, "formNDRDestination", "Button.Cancel", "Cancel"),
             remove_label: text(self, "formSelectDest", "Menu.pmiMUFDelete", if ko { "기록에서 삭제" } else { "Remove from history" }),
             clear_label: text(self, "formSelectDest", "Menu.pmiClearMUFHistory", if ko { "기록 지우기" } else { "Clear history" }),
             path: initial.to_string_lossy().into_owned(),
@@ -452,7 +452,7 @@ impl App {
     pub(super) fn destination_action(&mut self, action: DestinationAction, ctx: &egui::Context) {
         let title = self.original_dialogs.last().map(|d| d.title.clone()).unwrap_or_default();
         let folder_picker = self.folder_picker;
-        let browse_title = self.language_pack.text("formNDIRDestination.Browse.Title", "Choose destination folder");
+        let browse_title = self.language_pack.text("formNDRDestination.Browse.Title", "Choose destination folder");
         let Some(form) = self.destination_form() else { return };
         match action {
             DestinationAction::Cancel => self.answer_dialog(DialogResult::Destination(None), ctx),
@@ -463,7 +463,7 @@ impl App {
                 }
                 // 상대 경로는 지금 패널 폴더 기준(원본 PathCombine).
                 let base = self.panes[self.active].path.to_string_lossy().into_owned();
-                let full = PathBuf::from(ndir::names::combine_typed_name(&base, &typed));
+                let full = PathBuf::from(ndr::names::combine_typed_name(&base, &typed));
                 if full.is_dir() {
                     self.answer_dialog(DialogResult::Destination(Some(full)), ctx);
                 } else {
@@ -479,7 +479,7 @@ impl App {
             DestinationAction::Work(index) => {
                 let path = form.work_folders[index].clone();
                 if !Path::new(&path).is_dir() {
-                    let message = self.language_pack.text("formNDIRDestination.Message.InvalidWorkFolder", "Work folder {0} is not set or is unavailable.").replace("{0}", &(index + 1).to_string());
+                    let message = self.language_pack.text("formNDRDestination.Message.InvalidWorkFolder", "Work folder {0} is not set or is unavailable.").replace("{0}", &(index + 1).to_string());
                     return self.system_box(&title, &message, MB_OK | MB_ICONASTERISK, |_, _, _| {});
                 }
                 let full = std::path::absolute(&path).unwrap_or_else(|_| PathBuf::from(&path));
@@ -500,7 +500,7 @@ impl App {
                     }
                     if let Some(items) = app.settings.values.get_mut("MostUsedDestinations").and_then(|v| v.as_array_mut()) {
                         let before = items.len();
-                        items.retain(|item| !item.get("Path").and_then(|p| p.as_str()).is_some_and(|p| ndir::names::equals_ignore_case(p, &path)));
+                        items.retain(|item| !item.get("Path").and_then(|p| p.as_str()).is_some_and(|p| ndr::names::equals_ignore_case(p, &path)));
                         if items.len() == before {
                             return;
                         }
@@ -548,7 +548,7 @@ impl App {
             *list = serde_json::json!([]);
         }
         let items = list.as_array_mut().expect("an array");
-        let index = match items.iter().position(|item| item.get("Path").and_then(|p| p.as_str()).is_some_and(|p| ndir::names::equals_ignore_case(p, &full))) {
+        let index = match items.iter().position(|item| item.get("Path").and_then(|p| p.as_str()).is_some_and(|p| ndr::names::equals_ignore_case(p, &full))) {
             Some(index) => index,
             None => {
                 items.push(serde_json::json!({"Path": full, "UseCount": 0, "LastUsedUtc": now}));
@@ -570,7 +570,7 @@ impl App {
         }
         if moving && self.panes[i].archive.is_some() {
             let text = self.tr("압축 파일 안의 항목은 이동할 수 없습니다. 복사로 압축을 풀어 저장하세요.", "Items inside an archive cannot be moved. Copy them to extract and save them.").into_owned();
-            return self.system_box("NDIR", &text, MB_OK | MB_ICONASTERISK, |_, _, _| {});
+            return self.system_box("NDR", &text, MB_OK | MB_ICONASTERISK, |_, _, _| {});
         }
         let other = &self.panes[1 - i];
         // 원본 FUN_0043cb24: 두 패널이 보이고 다른 패널이 로컬이면 그 폴더, 아니면 지금 패널 폴더.

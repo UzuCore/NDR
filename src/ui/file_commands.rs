@@ -1,10 +1,10 @@
-//! C# NDIR의 이름·설명·열기·삭제 흐름을 옮긴 것. 각 함수는 원본 주소와 C# 이름을 적는다.
+//! C# NDR의 이름·설명·열기·삭제 흐름을 옮긴 것. 각 함수는 원본 주소와 C# 이름을 적는다.
 //! 대화 상자는 콜백으로 결과를 돌려주므로, 항목마다 대화 상자를 띄우는 반복은 상태를 다음 단계로 넘기는 식으로 만든다.
 use super::original_dialogs::{DeleteConfirmChoice, DeleteWarningChoice, DeleteWarningMode};
 use super::*;
 use super::file_operation::JobReport;
-use ndir::msgbox::{IDYES, MB_ICONHAND, MB_OK, MB_YESNO};
-use ndir::names;
+use ndr::msgbox::{IDYES, MB_ICONHAND, MB_OK, MB_YESNO};
+use ndr::names;
 
 const FILE_ATTRIBUTE_READONLY: u32 = 0x1;
 const FILE_ATTRIBUTE_HIDDEN: u32 = 0x2;
@@ -44,16 +44,16 @@ impl App {
         self.language_pack.text(&format!("RES.{key}"), fallback)
     }
 
-    /// C#이 MessageBox.Show(this, text)로 알리는 NDIR 자체 안내(원본에 없는 경우).
+    /// C#이 MessageBox.Show(this, text)로 알리는 NDR 자체 안내(원본에 없는 경우).
     pub(super) fn notice(&mut self, korean: &str, english: &str) {
         let text = self.tr(korean, english).into_owned();
         self.system_box("", &text, MB_OK, |_, _, _| {});
     }
 
-    /// C# RunSafely가 예외를 보이는 모양: MessageBox(메시지, "NDIR", OK, Warning).
+    /// C# RunSafely가 예외를 보이는 모양: MessageBox(메시지, "NDR", OK, Warning).
     pub(super) fn warn(&mut self, korean: &str, english: &str) {
         let text = self.tr(korean, english).into_owned();
-        self.system_box("NDIR", &text, MB_OK | ndir::msgbox::MB_ICONEXCLAMATION, |_, _, _| {});
+        self.system_box("NDR", &text, MB_OK | ndr::msgbox::MB_ICONEXCLAMATION, |_, _, _| {});
     }
 
     /// 표시 순서의 대상 항목(원본 FUN_00485bbc: 표시한 항목, 없으면 커서 항목).
@@ -62,7 +62,7 @@ impl App {
         if p.loading {
             return vec![];
         }
-        ndir::parity::collect_items(p.entries.len(), &p.selected, Some(p.cursor)).into_iter().filter_map(|i| p.entries.get(i).filter(|e| !e.drive && !e.is_parent()).cloned()).collect()
+        ndr::parity::collect_items(p.entries.len(), &p.selected, Some(p.cursor)).into_iter().filter_map(|i| p.entries.get(i).filter(|e| !e.drive && !e.is_parent()).cloned()).collect()
     }
 
     fn focused_name(&self, pane: usize) -> Option<String> {
@@ -122,7 +122,7 @@ impl App {
     }
 
     /// 원본 FUN_00434630(C# CreateEmptyFileAsync): 빈 기본값, CreateFileW(CREATE_NEW)라 있는 항목은 비우지 않는다.
-    /// 승인된 수정: 원본은 실패를 조용히 넘기지만 NDIR은 알린다. 그 뒤 새로 고치고 입력한 이름에 커서.
+    /// 승인된 수정: 원본은 실패를 조용히 넘기지만 NDR은 알린다. 그 뒤 새로 고치고 입력한 이름에 커서.
     pub(super) fn create_empty_file(&mut self) {
         let pane = self.active;
         if self.panes[pane].archive.is_some() {
@@ -211,7 +211,7 @@ impl App {
         let Some(label) = (self.system.volume_label)(&entry.path) else { return };
         let message = self.language_pack.text("RES.MSG_DRIVELABEL", "Rename Drive. Type a new drive name.");
         let root = entry.path;
-        self.prompt("NDIR", &message, &label, None, false, move |app, value, _| {
+        self.prompt("NDR", &message, &label, None, false, move |app, value, _| {
             let Some(value) = value.filter(|v| !v.is_empty()) else { return };
             match (app.system.set_volume_label)(&root, &value) {
                 Ok(()) => {
@@ -298,7 +298,7 @@ impl App {
     /// 원본 FUN_00431dd4(C# OpenWithParametersAsync, Ctrl+Enter): 커서 항목에만 작용한다.
     /// 폴더: 들어가고, 다른 패널에 같은 이름의 폴더가 있으면 거기도 들어간다(승인된 수정: 같은 이름의 파일은 무시).
     /// 압축·원격 패널의 파일: 보통 열기. 그 밖: TfGetText(OPEN_WITH_PARAM, MSG_OPEN_WITH_PARAM의 %s = 이름, 빈 기본값),
-    /// $(...) 매크로를 펼치고 ShellExecuteExW(파일, 인수, 현재 폴더). 실패는 셸이 알리고 NDIR은 따로 보이지 않는다.
+    /// $(...) 매크로를 펼치고 ShellExecuteExW(파일, 인수, 현재 폴더). 실패는 셸이 알리고 NDR은 따로 보이지 않는다.
     pub(super) fn open_with_parameters(&mut self) {
         let pane = self.active;
         if self.panes[pane].loading {

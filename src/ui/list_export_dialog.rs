@@ -1,8 +1,8 @@
-//! C# ListExportWindow + SaveListAsync(파일 목록 저장하기). 규칙은 ndir::list_export.
+//! C# ListExportWindow + SaveListAsync(파일 목록 저장하기). 규칙은 ndr::list_export.
 use super::original_dialogs::{DialogKind, DialogResult};
 use super::*;
-use ndir::list_export::{self as export, ExportRow};
-use ndir::msgbox::{MB_ICONASTERISK, MB_ICONEXCLAMATION, MB_OK};
+use ndr::list_export::{self as export, ExportRow};
+use ndr::msgbox::{MB_ICONASTERISK, MB_ICONEXCLAMATION, MB_OK};
 use std::fs;
 
 #[derive(Clone, Debug)]
@@ -160,7 +160,7 @@ impl App {
                 is_dir: e.is_dir,
                 size: e.size,
                 modified: e.modified,
-                attributes: pane.view.cells.get(row).map(|c| c[DetailColumn::Attributes.index()].clone()).unwrap_or_else(|| ndir::listing::attribute_text(e.attributes)),
+                attributes: pane.view.cells.get(row).map(|c| c[DetailColumn::Attributes.index()].clone()).unwrap_or_else(|| ndr::listing::attribute_text(e.attributes)),
                 description: pane.descriptions.get(&e.name.to_lowercase()).cloned().unwrap_or_default(),
             })
             .collect();
@@ -178,7 +178,7 @@ impl App {
             let bytes = [&[0xEF, 0xBB, 0xBF][..], options.text.as_bytes()].concat();
             match fs::write(&path, bytes) {
                 Ok(()) => {
-                    let count = ndir::parity::format_size(options.count as u64, "B", true).trim_end_matches(" B").to_owned();
+                    let count = ndr::parity::format_size(options.count as u64, "B", true).trim_end_matches(" B").to_owned();
                     app.status = if app.language == "ko" { format!("목록 {count}개 항목을 저장했습니다.") } else { format!("Saved {count} items.") };
                 }
                 Err(error) => app.system_box(&title, &error.to_string(), MB_OK | MB_ICONEXCLAMATION, |_, _, _| {}),

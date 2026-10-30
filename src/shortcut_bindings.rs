@@ -1,4 +1,4 @@
-//! C# ShortcutBindingService: NDIR 단축키 정의(Id, 이름, 범위, 기본 글쇠, 동작), KeyboardShortcuts 설정이 덮는 글쇠,
+//! C# ShortcutBindingService: NDR 단축키 정의(Id, 이름, 범위, 기본 글쇠, 동작), KeyboardShortcuts 설정이 덮는 글쇠,
 //! 글쇠 글("Ctrl+Shift+F1") 읽기와 비교. 글쇠 이름은 WPF Key 이름(D0~D9, Back, OemMinus, Left, F1 …)으로 다룬다.
 use crate::settings::Settings;
 

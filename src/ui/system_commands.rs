@@ -3,7 +3,7 @@
 //! PasteShortcutAsync(원본 0x4340d4), GoToSystemFolderAsync/GoToDownloadsAsync, ShowProperties, ShowFileInformation
 //! (FileInformationService), SelectThemeAsync/ApplyTheme, SelectLanguageAsync, ShowAbout, OpenNexusFileHelp, OpenProgramHomepage.
 use super::*;
-use ndir::msgbox::{MB_ICONASTERISK, MB_ICONEXCLAMATION, MB_OK};
+use ndr::msgbox::{MB_ICONASTERISK, MB_ICONEXCLAMATION, MB_OK};
 use std::fs;
 
 /// C# SelectThemeAsync의 선택지.
@@ -119,7 +119,7 @@ pub(super) fn file_information_rows(entry: Option<&Entry>, name: &str, physical:
             attributes = native::attributes(path).ok().map(native::dotnet_attributes_text);
         }
     }
-    let extension = ndir::parity::dotnet_extension(name).to_owned();
+    let extension = ndr::parity::dotnet_extension(name).to_owned();
     let mut kind = type_name(&extension, is_dir);
     if kind.is_empty() {
         kind = if is_dir { "폴더".into() } else { "파일".into() };
@@ -129,8 +129,8 @@ pub(super) fn file_information_rows(entry: Option<&Entry>, name: &str, physical:
         ("File", kind),
         ("Ext", if extension.is_empty() { "—".into() } else { extension }),
         ("Location", display.to_owned()),
-        ("Size", match size { Some(bytes) if !is_dir => ndir::parity::format_size(bytes, unit, thousands), _ => "—".into() }),
-        ("Date modified", modified.map(ndir::listing::general_date_text).unwrap_or_else(|| "—".into())),
+        ("Size", match size { Some(bytes) if !is_dir => ndr::parity::format_size(bytes, unit, thousands), _ => "—".into() }),
+        ("Date modified", modified.map(ndr::listing::general_date_text).unwrap_or_else(|| "—".into())),
     ];
     if let Some(attributes) = attributes.filter(|a| !a.trim().is_empty()) {
         rows.push(("Attr", attributes));
@@ -146,9 +146,9 @@ impl App {
     /// hasCurrentArchive = 지금 압축 파일 안이고 그 파일이 있음.
     pub(super) fn archive_menu_state(&self) -> ArchiveMenuState {
         let i = self.active;
-        let selected = self.panes[i].archive.is_none() && self.target_entries(i).iter().any(|e| !e.is_dir && ndir::archive::archive_format(&e.path).is_some());
+        let selected = self.panes[i].archive.is_none() && self.target_entries(i).iter().any(|e| !e.is_dir && ndr::archive::archive_format(&e.path).is_some());
         let current = self.panes[i].archive.as_ref().is_some_and(|l| l.file.is_file());
-        // Rust는 압축 안 항목을 NDIR 내부 클립보드로도 붙여넣으므로 그것도 붙여넣을 것으로 센다.
+        // Rust는 압축 안 항목을 NDR 내부 클립보드로도 붙여넣으므로 그것도 붙여넣을 것으로 센다.
         let paste = self.clipboard.is_some() || native::clipboard_has_files();
         let restore = !self.last_selection[i].is_empty();
         let last_destination = !self.settings.text("LastDestination", "").trim().is_empty();
@@ -178,7 +178,7 @@ impl App {
     }
 
     /// C# ApplySingleInstanceModeAsync(enabled): 이미 그 상태면 성공. 켤 때는 사용자·프로필 뮤텍스를 잡고 이동 요청을 받기 시작한다
-    /// (다른 NDIR이 이미 잡았으면 실패, 그쪽에 아무것도 보내지 않음). 끌 때는 놓는다.
+    /// (다른 NDR이 이미 잡았으면 실패, 그쪽에 아무것도 보내지 않음). 끌 때는 놓는다.
     pub(super) fn apply_single_instance(&mut self, enabled: bool) -> bool {
         if enabled == self.instance_guard.is_some() {
             return true;
@@ -188,7 +188,7 @@ impl App {
             self.navigation = None;
             return true;
         }
-        match ndir::lifecycle::InstanceGuard::try_acquire(&self.profile) {
+        match ndr::lifecycle::InstanceGuard::try_acquire(&self.profile) {
             Ok(Some((guard, requests))) => {
                 self.instance_guard = Some(guard);
                 self.navigation = Some(requests);
@@ -213,13 +213,13 @@ impl App {
         let directory = self.panes[i].path.clone();
         let mut rows = self.settings.strings("ExecutableHistory");
         for item in &items {
-            ndir::command_line::remember_opened_executable(&mut rows, &item.path.to_string_lossy());
+            ndr::command_line::remember_opened_executable(&mut rows, &item.path.to_string_lossy());
             let _ = (self.shell_runner)(&item.path, "", &directory);
         }
         self.settings.set_strings("ExecutableHistory", rows);
     }
 
-    /// C# OpenItemAsync의 압축 패널 분기: 항목을 %TEMP%\NDIR\…에 풀고, 풀린 것이 읽을 수 있는 압축 파일이면 그 안으로,
+    /// C# OpenItemAsync의 압축 패널 분기: 항목을 %TEMP%\NDR\…에 풀고, 풀린 것이 읽을 수 있는 압축 파일이면 그 안으로,
     /// 아니면 셸로 연다.
     pub(super) fn open_archive_entry(&mut self, pane: usize, entry: &Entry) {
         let Some(location) = self.panes[pane].archive.clone() else { return };
@@ -245,7 +245,7 @@ impl App {
                 answer.recv().ok().flatten()
             };
             for (name, key) in keys {
-                match ndir::archive::extract_entry_to_temp_with_passwords(&location.file, password.as_deref(), &key, &cancel, &mut passwords) {
+                match ndr::archive::extract_entry_to_temp_with_passwords(&location.file, password.as_deref(), &key, &cancel, &mut passwords) {
                     Ok((path, used)) => {
                         password = used;
                         opened.push(path);
@@ -267,10 +267,10 @@ impl App {
         }
         for path in opened {
             // C# OpenItemAsync: CanReadArchiveInternally이거나 동봉 7-Zip(GetExternalArchiveListingProgram, BundledSevenZipExtractFormats)이
-            // 읽는 형식이면 그 안으로. NDIR은 동봉 7-Zip(UzuCore 7zip+α, ALZ·EGG 포함)으로 읽으므로 7-Zip이 못 읽는 ACE만 뺀다.
+            // 읽는 형식이면 그 안으로. NDR은 동봉 7-Zip(UzuCore 7zip+α, ALZ·EGG 포함)으로 읽으므로 7-Zip이 못 읽는 ACE만 뺀다.
             // ACE는 C# TryGetExternalArchiveProgram처럼 외부 압축 프로그램으로 임시 폴더 옆에 풀고 그 폴더로(프로그램이 없으면 C# 오류 글).
-            let is_archive = ndir::archive::archive_format(&path).is_some();
-            if navigate_archives && is_archive && !ndir::archive::bundled_can_browse(&path) {
+            let is_archive = ndr::archive::archive_format(&path).is_some();
+            if navigate_archives && is_archive && !ndr::archive::bundled_can_browse(&path) {
                 self.open_with_external_archive_program(pane, path, false);
                 continue;
             }
@@ -343,7 +343,7 @@ impl App {
             .then(|| self.settings.values.get("SpecialFolderPaths").and_then(|v| v.get(key)).and_then(|v| v.as_str()).map(str::to_owned))
             .flatten();
         let path = match (configured, id) {
-            (Some(value), _) => PathBuf::from(ndir::command_line::expand_setting(&value)),
+            (Some(value), _) => PathBuf::from(ndr::command_line::expand_setting(&value)),
             // 원본 miToTempClick(0x4330b0): GetTempPathW → GetLongPathNameW, 둘 중 하나라도 실패하면 그만(스킨 테마).
             (None, "temp") if self.skin_active() => match (self.system.temp_folder)() {
                 Some(path) => path,
@@ -417,7 +417,7 @@ impl App {
                 Some(location) => location.prefix.trim_end_matches(['/', '\\']).to_owned(),
                 None => pane.path.to_string_lossy().into_owned(),
             };
-            name = ndir::names::find_file_name(current.trim_end_matches(['/', '\\']));
+            name = ndr::names::find_file_name(current.trim_end_matches(['/', '\\']));
             if name.is_empty() {
                 name = match &archive {
                     Some(location) => location.file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
@@ -441,11 +441,11 @@ impl App {
         self.text = Some(TextDocument { path: None, title, text: report, editable: false, dirty: false });
     }
 
-    /// C# SelectThemeAsync: "테마 선택"/"NDIR 화면 테마" 고르기 → Theme 저장, 바로 적용.
+    /// C# SelectThemeAsync: "테마 선택"/"NDR 화면 테마" 고르기 → Theme 저장, 바로 적용.
     pub(super) fn theme_command(&mut self) {
         let current = self.settings.text("Theme", "Black");
         let selected = THEMES.iter().position(|t| *t == current).unwrap_or(0);
-        let (title, message) = (self.tr("테마 선택", "Select theme").into_owned(), self.tr("NDIR 화면 테마", "NDIR screen theme").into_owned());
+        let (title, message) = (self.tr("테마 선택", "Select theme").into_owned(), self.tr("NDR 화면 테마", "NDR screen theme").into_owned());
         self.choice_dialog(&title, &message, THEMES.iter().map(|t| (*t).to_owned()).collect(), selected, |app, choice, _| {
             let Some(index) = choice else { return };
             app.apply_theme(THEMES[index]);
@@ -460,7 +460,7 @@ impl App {
         self.save();
     }
 
-    /// 원본 스킨 메뉴(FUN_0043e580): skin\ 아래 폴더(".", ".." 빼고) 차례. NDIR가 아는 테마 이름(대소문자 무시)만.
+    /// 원본 스킨 메뉴(FUN_0043e580): skin\ 아래 폴더(".", ".." 빼고) 차례. NDR가 아는 테마 이름(대소문자 무시)만.
     pub(super) fn skin_names(&self) -> Vec<&'static str> {
         let mut names: Vec<String> = std::fs::read_dir(self.resources.join("Skins"))
             .map(|dir| dir.filter_map(Result::ok).filter(|e| e.path().is_dir()).map(|e| e.file_name().to_string_lossy().into_owned()).collect())
@@ -489,7 +489,7 @@ impl App {
             .position(|(code, _)| code.eq_ignore_ascii_case(&current))
             .or_else(|| languages.iter().position(|(code, _)| code.eq_ignore_ascii_case("ko")))
             .unwrap_or(0);
-        let (title, message) = (self.tr("언어 선택", "Select language").into_owned(), self.tr("NDIR 메뉴에서 사용할 언어를 선택하세요.", "Select the language for the NDIR menus.").into_owned());
+        let (title, message) = (self.tr("언어 선택", "Select language").into_owned(), self.tr("NDR 메뉴에서 사용할 언어를 선택하세요.", "Select the language for the NDR menus.").into_owned());
         self.choice_dialog(&title, &message, choices, selected, move |app, choice, _| {
             let Some(index) = choice else { return };
             let code = languages[index].0.clone();
@@ -499,7 +499,7 @@ impl App {
 
     /// C# ViewTextAsync: 고른 첫 파일(폴더 제외)이 없으면 "텍스트 파일 하나를 선택하세요." 경고. 압축 안이면 임시로 푼다.
     /// TextViewerPath/TextEditorPath(ExpandSetting)가 있으면 그 프로그램에 파일 경로를 넘겨(작업 폴더 = 파일 폴더) 끝,
-    /// 없으면 NDIR 글 창.
+    /// 없으면 NDR 글 창.
     pub(super) fn text_command(&mut self, edit: bool) {
         let i = self.active;
         // 원본 miTextViewerClick/miTextEditorClick → FUN_00430304: 커서 항목이 파일(종류 3)일 때만, 로컬·압축 패널에서(스킨 테마).
@@ -524,7 +524,7 @@ impl App {
                 let key = entry.path.to_string_lossy().into_owned();
                 thread::spawn(move || {
                     let password = (!location.password.is_empty()).then_some(location.password.as_str());
-                    let path = ndir::archive::extract_entry_to_temp(&location.file, password, &key, &AtomicBool::new(false));
+                    let path = ndr::archive::extract_entry_to_temp(&location.file, password, &key, &AtomicBool::new(false));
                     let _ = tx.send(AsyncResult::TextSource { path, edit });
                 });
             }
@@ -534,10 +534,10 @@ impl App {
     pub(super) fn text_source_ready(&mut self, path: Result<PathBuf, String>, edit: bool) {
         let path = match path {
             Ok(path) => path,
-            Err(error) => return self.system_box("NDIR", &error, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {}),
+            Err(error) => return self.system_box("NDR", &error, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {}),
         };
-        let mut program = ndir::command_line::expand_setting(&self.settings.text(if edit { "TextEditorPath" } else { "TextViewerPath" }, ""));
-        // 원본 FUN_00430304: 설정이 비면 "notepad.exe"에 "\"경로\""(스킨 테마). C# 테마는 NDIR 글 창.
+        let mut program = ndr::command_line::expand_setting(&self.settings.text(if edit { "TextEditorPath" } else { "TextViewerPath" }, ""));
+        // 원본 FUN_00430304: 설정이 비면 "notepad.exe"에 "\"경로\""(스킨 테마). C# 테마는 NDR 글 창.
         if program.trim().is_empty() && self.skin_active() {
             program = "notepad.exe".into();
         }
@@ -555,15 +555,15 @@ impl App {
         });
     }
 
-    /// C# ShowAbout: "NDIR {버전}\nWindows 10/11 · 64-bit\n사용자 설정: {프로필}", 캡션 "NDIR 정보", 정보 아이콘.
+    /// C# ShowAbout: "NDR {버전}\nWindows 10/11 · 64-bit\n사용자 설정: {프로필}", 캡션 "NDR 정보", 정보 아이콘.
     pub(super) fn about_command(&mut self) {
         let text = format!(
-            "NDIR {}\nWindows 10/11 · 64-bit\n{}: {}",
+            "NDR {}\nWindows 10/11 · 64-bit\n{}: {}",
             env!("CARGO_PKG_VERSION"),
             self.tr("사용자 설정", "User settings"),
             self.profile.display()
         );
-        let caption = self.tr("NDIR 정보", "About NDIR").into_owned();
+        let caption = self.tr("NDR 정보", "About NDR").into_owned();
         self.system_box(&caption, &text, MB_OK | MB_ICONASTERISK, |_, _, _| {});
     }
 }
@@ -621,7 +621,7 @@ mod tests {
 
     #[test]
     fn file_information_rows_follow_csharp_service() {
-        let root = std::env::temp_dir().join(format!("ndir-fileinfo-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("ndr-fileinfo-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
         let file = root.join("report.txt");
@@ -632,7 +632,7 @@ mod tests {
         assert_eq!(labels, ["Name", "File", "Ext", "Location", "Size", "Date modified", "Attr", "Description"]);
         assert_eq!(rows[1].1, "T.txtfalse");
         assert_eq!(rows[2].1, ".txt");
-        assert_eq!(rows[4].1, ndir::parity::format_size(5, "B", true));
+        assert_eq!(rows[4].1, ndr::parity::format_size(5, "B", true));
         assert_ne!(rows[5].1, "—");
         assert_eq!(rows[7].1, "note");
         // Folder: size is "—", empty shell type falls back to "폴더", no extension shows "—".

@@ -1,4 +1,4 @@
-//! C# NDIR(r66 경로 복사, r69 찾기, r70 원본 메시지 상자) 동작을 Rust UI에서 확인한다. 한국어와 영어만 검수한다.
+//! C# NDR(r66 경로 복사, r69 찾기, r70 원본 메시지 상자) 동작을 Rust UI에서 확인한다. 한국어와 영어만 검수한다.
 //! 실제 클립보드는 건드리지 않는다(clipboard_writer 교체).
 use super::*;
 use std::{cell::RefCell, fs, rc::Rc};
@@ -16,7 +16,7 @@ fn clipboard() -> Vec<String> {
 
 fn fixture(label: &str, language: &str) -> (PathBuf, egui::Context, App) {
     let root = std::env::temp_dir().join(format!(
-        "ndir-parity-{}-{}-{label}",
+        "ndr-parity-{}-{}-{label}",
         std::process::id(),
         std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
     ));
@@ -85,7 +85,7 @@ fn index_of(app: &App, name: &str) -> usize {
 #[test]
 fn msgbox_layout_focus_and_keyboard() {
     let (root, ctx, mut app) = fixture("msgbox", "ko");
-    let ok = show(&mut app, "Title", "A message that is long enough for every button row.", ndir::msgbox::MB_OK | ndir::msgbox::MB_ICONASTERISK);
+    let ok = show(&mut app, "Title", "A message that is long enough for every button row.", ndr::msgbox::MB_OK | ndr::msgbox::MB_ICONASTERISK);
     frame(&mut app, &ctx, vec![]);
     frame(&mut app, &ctx, vec![]);
     let layout = app.msgboxes[0].layout.clone().unwrap();
@@ -100,26 +100,26 @@ fn msgbox_layout_focus_and_keyboard() {
     assert!((button.min.y - layout.origin.y - (layout.client.y - 33.0)).abs() < 0.01, "btn1 anchored 8 from the bottom");
     assert!(ctx.memory(|m| m.has_focus(layout.slot_ids[2].unwrap())), "first visible button has the focus");
     frame(&mut app, &ctx, vec![key(egui::Key::Escape)]);
-    assert_eq!(ok.get(), ndir::msgbox::IDOK, "Esc presses the Cancel button (OK on an OK-only box)");
+    assert_eq!(ok.get(), ndr::msgbox::IDOK, "Esc presses the Cancel button (OK on an OK-only box)");
     assert!(app.msgboxes.is_empty());
 
-    let yes_no = show(&mut app, "T", "Pressing N picks the No button directly.", ndir::msgbox::MB_YESNO | ndir::msgbox::MB_ICONQUESTION);
+    let yes_no = show(&mut app, "T", "Pressing N picks the No button directly.", ndr::msgbox::MB_YESNO | ndr::msgbox::MB_ICONQUESTION);
     frame(&mut app, &ctx, vec![]);
     frame(&mut app, &ctx, vec![key(egui::Key::N)]);
-    assert_eq!(yes_no.get(), ndir::msgbox::IDNO, "accelerator without Alt");
+    assert_eq!(yes_no.get(), ndr::msgbox::IDNO, "accelerator without Alt");
 
-    let enter = show(&mut app, "T", "Enter presses the focused Yes button.", ndir::msgbox::MB_YESNO);
+    let enter = show(&mut app, "T", "Enter presses the focused Yes button.", ndr::msgbox::MB_YESNO);
     frame(&mut app, &ctx, vec![]);
     frame(&mut app, &ctx, vec![]);
     frame(&mut app, &ctx, vec![key(egui::Key::Enter)]);
-    assert_eq!(enter.get(), ndir::msgbox::IDYES);
+    assert_eq!(enter.get(), ndr::msgbox::IDYES);
 
-    let ari = show(&mut app, "T", "Abort, retry or ignore without a cancel button.", ndir::msgbox::MB_ABORTRETRYIGNORE);
+    let ari = show(&mut app, "T", "Abort, retry or ignore without a cancel button.", ndr::msgbox::MB_ABORTRETRYIGNORE);
     frame(&mut app, &ctx, vec![]);
     frame(&mut app, &ctx, vec![key(egui::Key::Escape)]);
     assert_eq!(ari.get(), -1, "Esc without a Cancel button does nothing");
     app.answer_message_box(5, &ctx);
-    assert_eq!(ari.get(), ndir::msgbox::IDIGNORE);
+    assert_eq!(ari.get(), ndr::msgbox::IDIGNORE);
 
     let blank = show(&mut app, "T", "Type 7 keeps the DFM buttons.", 0x07);
     frame(&mut app, &ctx, vec![]);
@@ -128,18 +128,18 @@ fn msgbox_layout_focus_and_keyboard() {
     app.answer_message_box(0, &ctx);
     assert_eq!(blank.get(), -1, "ModalResult 0 does not close");
     app.answer_message_box(2, &ctx);
-    assert_eq!(blank.get(), ndir::msgbox::IDCANCEL, "the close box returns IDCANCEL");
+    assert_eq!(blank.get(), ndr::msgbox::IDCANCEL, "the close box returns IDCANCEL");
 
-    let two = show(&mut app, "", "Two\nlines", ndir::msgbox::MB_YESNOCANCEL | ndir::msgbox::MB_ICONQUESTION);
+    let two = show(&mut app, "", "Two\nlines", ndr::msgbox::MB_YESNOCANCEL | ndr::msgbox::MB_ICONQUESTION);
     frame(&mut app, &ctx, vec![]);
     let layout = app.msgboxes[0].layout.clone().unwrap();
-    assert_eq!(app.msgboxes[0].title, ndir::msgbox::DEFAULT_TITLE, "empty title becomes the product name");
+    assert_eq!(app.msgboxes[0].title, ndr::msgbox::DEFAULT_TITLE, "empty title becomes the product name");
     assert_eq!(layout.line_count, 2);
     assert!((layout.client.y - (119.0 - 20.0 + 2.0 * line_height + 4.0)).abs() < 0.01, "LineSpace 4");
-    assert_eq!(layout.client.x, ndir::msgbox::minimum_client_width(3), "short text: widened for three buttons");
+    assert_eq!(layout.client.x, ndr::msgbox::minimum_client_width(3), "short text: widened for three buttons");
     assert_eq!(layout.captions[0], ko_raw(&app, "YES"));
     app.answer_message_box(6, &ctx);
-    assert_eq!(two.get(), ndir::msgbox::IDYES);
+    assert_eq!(two.get(), ndr::msgbox::IDYES);
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -185,7 +185,7 @@ fn copy_to_other_asks_the_original_direction_box() {
     let expected = app.language_pack.text("RES.MSG_TORIGHT", "?").replace("%s", &app.language_pack.text("RES.COPY", "?"));
     assert_eq!(app.msgboxes[0].text, expected);
     assert_eq!(app.msgboxes[0].title, app.language_pack.text("RES.TITLE_FILEOPERATION", "?"));
-    assert_eq!(app.msgboxes[0].flags, ndir::msgbox::MB_YESNO | ndir::msgbox::MB_ICONQUESTION);
+    assert_eq!(app.msgboxes[0].flags, ndr::msgbox::MB_YESNO | ndr::msgbox::MB_ICONQUESTION);
     app.answer_message_box(7, &ctx);
     assert!(app.job.is_none(), "No declines");
     app.copy_to_other(0, false, &ctx);
@@ -256,9 +256,9 @@ fn clear_descriptions_and_email_use_the_original_box() {
 
     app.dispatch("email", &ctx);
     assert_eq!(clipboard(), vec!["xiles@xiles.net".to_string()]);
-    assert_eq!(app.msgboxes[0].flags, ndir::msgbox::MB_OK | ndir::msgbox::MB_ICONASTERISK);
+    assert_eq!(app.msgboxes[0].flags, ndr::msgbox::MB_OK | ndr::msgbox::MB_ICONASTERISK);
     assert_eq!(app.msgboxes[0].text, app.language_pack.text("RES.EMAILCOPIED", "?"));
-    assert_eq!(ndir::msgbox::lines(&app.msgboxes[0].text).len(), 2);
+    assert_eq!(ndr::msgbox::lines(&app.msgboxes[0].text).len(), 2);
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -270,7 +270,7 @@ fn copy_paths_follow_copypathtoclipboard() {
     app.dispatch("copyFullPath", &ctx);
     app.dispatch("copyName", &ctx);
     app.dispatch("copyPathOnly", &ctx);
-    app.copy_item_paths(ndir::parity::PathPart::Full, true);
+    app.copy_item_paths(ndr::parity::PathPart::Full, true);
     app.panes[0].selected.clear();
     app.panes[0].cursor = index_of(&app, "beta.txt");
     app.dispatch("copyName", &ctx);
@@ -441,7 +441,7 @@ fn destination_list_keys_follow_the_original() {
     };
     let mut run = |key: egui::Key, modifiers: egui::Modifiers| {
         // 목록에 글쇠 초점(경로 칸이 아님).
-        ctx.memory_mut(|m| m.request_focus(egui::Id::new("ndir-test-elsewhere")));
+        ctx.memory_mut(|m| m.request_focus(egui::Id::new("ndr-test-elsewhere")));
         let raw = egui::RawInput { modifiers, events: vec![egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }], ..Default::default() };
         let mut got = None;
         let _ = ctx.run(raw, |ctx| {
@@ -514,7 +514,7 @@ fn original_destination_list_follows_tfselectdest() {
     let _ = ctx.run(raw, |ctx| {
         egui::Area::new(egui::Id::new("dest-test")).fixed_pos(egui::Pos2::ZERO).show(ctx, |ui| destination_ui_original(ui, &mut form, false, None, 850.0));
     });
-    assert!(ctx.memory(|m| m.has_focus(egui::Id::new("ndir-destination-path"))), "Alt+D focuses the path box");
+    assert!(ctx.memory(|m| m.has_focus(egui::Id::new("ndr-destination-path"))), "Alt+D focuses the path box");
     // 첫 줄을 두 번 누르면 확인(앞 누르기와 두 번 누르기로 묶이지 않게 쉬었다가).
     for _ in 0..10 {
         run(&mut form, vec![]);
@@ -1154,7 +1154,7 @@ fn pane_commands_follow_the_csharp_handlers() {
     // Last destination missing: an information box, no navigation.
     app.dispatch("goLastDestination", &ctx);
     assert_eq!(app.msgboxes[0].text, "아직 사용할 수 있는 마지막 대상 폴더가 없습니다.");
-    assert_eq!((app.msgboxes[0].title.as_str(), app.msgboxes[0].flags), ("NDIR", ndir::msgbox::MB_OK | ndir::msgbox::MB_ICONASTERISK));
+    assert_eq!((app.msgboxes[0].title.as_str(), app.msgboxes[0].flags), ("NDR", ndr::msgbox::MB_OK | ndr::msgbox::MB_ICONASTERISK));
     app.answer_message_box(1, &ctx);
     // Folder size: one summary box, nested roots counted once.
     fs::write(left.join("folder1/inner.bin"), [0u8; 10]).unwrap();
@@ -1168,7 +1168,7 @@ fn pane_commands_follow_the_csharp_handlers() {
     }
     assert_eq!(app.msgboxes[0].title, "선택 항목 크기");
     assert_eq!(app.msgboxes[0].text, "폴더: 1개\n파일: 2개\n전체 크기: 19 bytes (19 B)");
-    assert_eq!(app.msgboxes[0].flags, ndir::msgbox::MB_OK | ndir::msgbox::MB_ICONASTERISK);
+    assert_eq!(app.msgboxes[0].flags, ndr::msgbox::MB_OK | ndr::msgbox::MB_ICONASTERISK);
     wait_job(&mut app, &ctx);
     // Go to root: the drive root of the listed folder.
     app.dispatch("goRoot", &ctx);
@@ -1196,7 +1196,7 @@ fn details_list_follows_the_csharp_grid() {
     assert_eq!(cells[DetailColumn::Extension.index()], ".txt");
     assert_eq!(cells[DetailColumn::Kind.index()], "TXT 파일");
     assert_eq!(cells[DetailColumn::Size.index()], "8 B");
-    assert_eq!(cells[DetailColumn::Attributes.index()], ndir::listing::attribute_text(ndir::native::attributes(&left.join("beta.txt")).unwrap()));
+    assert_eq!(cells[DetailColumn::Attributes.index()], ndr::listing::attribute_text(ndr::native::attributes(&left.join("beta.txt")).unwrap()));
     assert_eq!(cells[DetailColumn::Description.index()], "베타 설명");
     let folder = app.panes[0].view.cells[index_of(&app, "folder1")].clone();
     assert_eq!((folder[DetailColumn::Size.index()].as_str(), folder[DetailColumn::Kind.index()].as_str()), ("", "폴더"));

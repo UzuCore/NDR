@@ -265,7 +265,7 @@ mod tests {
 
     #[test]
     fn advrename_save_round_trip() {
-        let root = std::env::temp_dir().join(format!("ndir-macros-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let root = std::env::temp_dir().join(format!("ndr-macros-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
         fs::create_dir_all(&root).unwrap();
         let text = "[사진 정리]\r\nins;IMG_;first;name\r\nrep;a;b;all;name\r\ndel;\"(\";);0;forward;name\r\ncas;upperword;name\r\nnum;1;2;3;last;name\r\next;jpg\r\nweird row\r\n\r\n[]\r\nins;x;first;name\r\n";
         let path = root.join(FILE_NAME);

@@ -1,4 +1,4 @@
-//! Rust implementation of NDIR's services and compatibility behavior.
+//! Rust implementation of NDR's services and compatibility behavior.
 pub mod settings;
 pub mod compat;
 pub mod fsops;

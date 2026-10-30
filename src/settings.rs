@@ -437,7 +437,7 @@ pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let mut file;
     loop {
         temporary = parent.join(format!(
-            ".ndir-save-{}-{}.tmp",
+            ".ndr-save-{}-{}.tmp",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));
@@ -501,7 +501,7 @@ mod tests {
     use super::*;
     #[test]
     fn unknown_fields_survive_save_and_malformed_input_is_reported() {
-        let root = std::env::temp_dir().join(format!("ndir-settings-test-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("ndr-settings-test-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join("settings.json");
         std::fs::write(
@@ -529,7 +529,7 @@ mod tests {
     fn failed_atomic_save_preserves_old_data_and_removes_temporary_file() {
         use std::os::windows::fs::OpenOptionsExt;
         let root =
-            std::env::temp_dir().join(format!("ndir-settings-locked-{}", std::process::id()));
+            std::env::temp_dir().join(format!("ndr-settings-locked-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
         let path = root.join("settings.json");
         std::fs::write(&path, b"{\"Keep\":true}").unwrap();

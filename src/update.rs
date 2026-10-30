@@ -104,8 +104,8 @@ mod tests {
         assert_eq!(parse_version("1.2.3.4.5"), None);
         assert_eq!(compare_versions(&[2, 0], &[2, 0, 0]), std::cmp::Ordering::Less);
         let current = [2, 0, 0];
-        assert_eq!(evaluate(br#"{"version":"2.1","url":"https://example.invalid/ndir"}"#, &current), Ok(Manifest::Newer("2.1".into(), "https://example.invalid/ndir".into())));
-        assert_eq!(evaluate(br#"{"version":"2.1","url":"http://example.invalid/ndir"}"#, &current), Ok(Manifest::Invalid("InvalidDownloadUrl")));
+        assert_eq!(evaluate(br#"{"version":"2.1","url":"https://example.invalid/ndr"}"#, &current), Ok(Manifest::Newer("2.1".into(), "https://example.invalid/ndr".into())));
+        assert_eq!(evaluate(br#"{"version":"2.1","url":"http://example.invalid/ndr"}"#, &current), Ok(Manifest::Invalid("InvalidDownloadUrl")));
         assert_eq!(evaluate(br#"{"version":"2.0.0"}"#, &current), Ok(Manifest::UpToDate));
         assert_eq!(evaluate(br#"{"version":3}"#, &current), Ok(Manifest::Invalid("InvalidVersion")));
         assert_eq!(evaluate(b"\xef\xbb\xbfNXUPDATEINFO1\r\n202610270000\r\n5.4.1.5623\r\n", &current), Ok(Manifest::Legacy("5.4.1.5623".into())));

@@ -1,4 +1,4 @@
-//! C# RemoteWindow(NDIR 원격 연결, 1060×720) + RemoteTransferProgressWindow + RemotePermissionsWindow + NexusFileFtpHostService.
+//! C# RemoteWindow(NDR 원격 연결, 1060×720) + RemoteTransferProgressWindow + RemotePermissionsWindow + NexusFileFtpHostService.
 //! 연결 줄(프로토콜 FTP/FTPS(처음)/SFTP, 호스트(최근 호스트 목록), 포트, 사용자, 비밀번호, 연결/연결 끊기, 빠른 연결이면 "FTP 사이트 목록에 추가"·
 //! 수동 모드), 로컬(뒤로/앞으로/위/경로/이동/새로 고침, "Computer" = 드라이브 목록)과 원격(뒤로/위/경로/이동/새로 고침) 목록, 가운데 ▲▼(ShowVerticalBar),
 //! 아래 상태 글과 내려받기/올리기/폴더 선택 업로드…/닫기. 원격 목록 오른쪽 단추 메뉴 = 새 원격 폴더, 이름 바꾸기, 삭제, 권한 바꾸기.
@@ -8,10 +8,10 @@
 use super::grid::{self, Column, GridState, GridView};
 use super::original_dialogs::{DialogKind, DialogResult};
 use super::*;
-use ndir::fsops::ConflictChoice;
-use ndir::msgbox::{IDCANCEL, IDYES, MB_ICONEXCLAMATION, MB_OK, MB_YESNO, MB_YESNOCANCEL};
-use ndir::remote::{Client, Config, RemoteEntry};
-use ndir::shortcut_bindings::{self as bindings, Modifiers as KeyMods};
+use ndr::fsops::ConflictChoice;
+use ndr::msgbox::{IDCANCEL, IDYES, MB_ICONEXCLAMATION, MB_OK, MB_YESNO, MB_YESNOCANCEL};
+use ndr::remote::{Client, Config, RemoteEntry};
+use ndr::shortcut_bindings::{self as bindings, Modifiers as KeyMods};
 use serde_json::{Value, json};
 use std::collections::VecDeque;
 
@@ -103,11 +103,11 @@ impl SiteProfile {
     }
 }
 
-pub(super) fn load_sites(settings: &ndir::settings::Settings) -> Vec<SiteProfile> {
+pub(super) fn load_sites(settings: &ndr::settings::Settings) -> Vec<SiteProfile> {
     settings.values.get("RemoteSites").and_then(Value::as_array).map(|a| a.iter().map(SiteProfile::from_json).collect()).unwrap_or_default()
 }
 
-pub(super) fn store_sites(settings: &mut ndir::settings::Settings, sites: &[SiteProfile]) {
+pub(super) fn store_sites(settings: &mut ndr::settings::Settings, sites: &[SiteProfile]) {
     settings.values.insert("RemoteSites".into(), Value::Array(sites.iter().map(SiteProfile::to_json).collect()));
 }
 
@@ -170,7 +170,7 @@ pub(super) fn wpf_key(key: egui::Key) -> Option<String> {
 }
 
 /// 이번 장면에 눌린 글쇠 가운데 정의(id)에 맞는 것이 있는가.
-pub(super) fn pressed(ctx: &egui::Context, settings: &ndir::settings::Settings, id: &str) -> bool {
+pub(super) fn pressed(ctx: &egui::Context, settings: &ndr::settings::Settings, id: &str) -> bool {
     ctx.input(|i| {
         i.events.iter().any(|event| match event {
             egui::Event::Key { key, pressed: true, repeat: false, modifiers, .. } => {
@@ -245,12 +245,12 @@ pub(super) fn list_local(path: &str, show_hidden: bool, ko: bool) -> Result<Vec<
         });
     }
     let now = std::time::SystemTime::now();
-    let entries = ndir::fsops::list_dir(&full, show_hidden)?;
+    let entries = ndr::fsops::list_dir(&full, show_hidden)?;
     let row = |e: &Entry| LocalRow {
         name: e.name.clone(),
-        kind: ndir::listing::type_name(&e.name, e.is_dir, ko),
-        size_text: if e.is_dir { String::new() } else { ndir::parity::format_size(e.size, "Auto", true) },
-        modified_text: ndir::listing::date_text(e.modified, "yyyy-MM-dd", "HH:mm", false, ko, now),
+        kind: ndr::listing::type_name(&e.name, e.is_dir, ko),
+        size_text: if e.is_dir { String::new() } else { ndr::parity::format_size(e.size, "Auto", true) },
+        modified_text: ndr::listing::date_text(e.modified, "yyyy-MM-dd", "HH:mm", false, ko, now),
         path: e.path.clone(),
         is_dir: e.is_dir,
         is_parent: false,
@@ -269,10 +269,10 @@ pub(super) fn remote_rows(directory: &str, entries: &[RemoteEntry], ko: bool) ->
         .map(|e| RemoteRow {
             name: e.name.clone(),
             kind: if e.is_dir { t(ko, "폴더", "Folder") } else { t(ko, "파일", "File") }.into(),
-            size_text: if e.is_dir { String::new() } else { ndir::parity::format_size(e.size, "Auto", true) },
+            size_text: if e.is_dir { String::new() } else { ndr::parity::format_size(e.size, "Auto", true) },
             modified_text: e
                 .modified
-                .map(|s| ndir::listing::date_text(Some(std::time::UNIX_EPOCH + Duration::from_secs(s.max(0) as u64)), "yyyy-MM-dd", "HH:mm", false, ko, now))
+                .map(|s| ndr::listing::date_text(Some(std::time::UNIX_EPOCH + Duration::from_secs(s.max(0) as u64)), "yyyy-MM-dd", "HH:mm", false, ko, now))
                 .unwrap_or_default(),
             remote_path: format!("{}/{}", directory.trim_end_matches('/'), e.name),
             mode: e.mode,
@@ -310,7 +310,7 @@ pub(super) struct RemoteHooks {
 
 impl Default for RemoteHooks {
     fn default() -> Self {
-        Self { connect: Client::connect, open_files: ndir::file_dialogs::open_files, pane_connect: super::ftp_pane::connect_client }
+        Self { connect: Client::connect, open_files: ndr::file_dialogs::open_files, pane_connect: super::ftp_pane::connect_client }
     }
 }
 
@@ -480,7 +480,7 @@ pub(super) struct RemoteLabels {
     pub transfer_icons: [Option<egui::TextureHandle>; 2],
 }
 
-pub(super) fn remote_ui(ui: &mut egui::Ui, form: &mut RemoteForm, labels: &RemoteLabels, settings: &ndir::settings::Settings) -> Option<RemoteAction> {
+pub(super) fn remote_ui(ui: &mut egui::Ui, form: &mut RemoteForm, labels: &RemoteLabels, settings: &ndr::settings::Settings) -> Option<RemoteAction> {
     let ko = form.ko;
     let mut action = None;
     if form.busy.is_some() || form.local_loading {
@@ -1030,7 +1030,7 @@ impl App {
             upload: menu("miFTPPut", "Upload"),
             add_to_sites: text("formFTPQuickConnect.Caption.chkAddToSites", "Add to the FTP site list"),
             passive: text("formFTPQuickConnect.Caption.chkPassive", "Passive Mode"),
-            password_notice: text("NDIRRemoteSites.PasswordStoredWhenSaved", "Password saved when adding a site"),
+            password_notice: text("NDRRemoteSites.PasswordStoredWhenSaved", "Password saved when adding a site"),
             back: menu("miHistoryBack", "Back"),
             forward: menu("miHistoryForward", "Forward"),
             menu: [
@@ -1130,7 +1130,7 @@ impl App {
         }
         let connect_now = profile.is_some();
         form.profile = profile;
-        let title = t(ko, "NDIR 원격 연결", "NDIR Remote Connection").to_owned();
+        let title = t(ko, "NDR 원격 연결", "NDR Remote Connection").to_owned();
         self.push_original_dialog(title, DialogKind::Remote(Box::new(form)), |_, _, _| {});
         let path = self.remote_form().map(|f| f.local_path.clone()).unwrap_or_default();
         self.remote_read_local(path, None);
@@ -1413,10 +1413,10 @@ impl App {
         store_sites(&mut self.settings, &sites);
         // C# SaveQuickConnectSite: 저장에 실패하면 경고 상자(제목 SaveFailedTitle, 내용 = 오류), 성공하면 상태 줄.
         match self.try_save() {
-            Ok(()) => self.status = self.language_pack.text("NDIRRemoteSites.QuickConnectSaved", "Saved FTP site: {0}").replace("{0}", &name),
+            Ok(()) => self.status = self.language_pack.text("NDRRemoteSites.QuickConnectSaved", "Saved FTP site: {0}").replace("{0}", &name),
             Err(error) => {
-                let title = self.language_pack.text("NDIRRemoteSites.SaveFailedTitle", "FTP site save failed");
-                self.system_box(&title, &error, ndir::msgbox::MB_OK | ndir::msgbox::MB_ICONEXCLAMATION, |_, _, _| {});
+                let title = self.language_pack.text("NDRRemoteSites.SaveFailedTitle", "FTP site save failed");
+                self.system_box(&title, &error, ndr::msgbox::MB_OK | ndr::msgbox::MB_ICONEXCLAMATION, |_, _, _| {});
             }
         }
     }
@@ -1434,7 +1434,7 @@ impl App {
         self.settings.set_strings("RecentRemoteHosts", hosts);
         // C# RecordRemoteHost: 저장에 실패하면 상태 줄에 HostHistorySaveFailed.
         if let Err(error) = self.try_save() {
-            self.status = self.language_pack.text("NDIRRemoteSites.HostHistorySaveFailed", "Could not save recent remote host history: {0}").replace("{0}", &error);
+            self.status = self.language_pack.text("NDRRemoteSites.HostHistorySaveFailed", "Could not save recent remote host history: {0}").replace("{0}", &error);
         }
     }
 
@@ -1547,10 +1547,10 @@ impl App {
                 if let Some(challenge) = challenge {
                     let changed = challenge["kind"] == "host_key_mismatch";
                     let candidate = challenge["candidate"].as_str().unwrap_or_default().to_owned();
-                    let title = self.language_pack.text(if changed { "NDIRSFTPHostKey.ChangedTitle" } else { "NDIRSFTPHostKey.FirstUseTitle" }, if changed { "SFTP server key changed" } else { "SFTP server verification" });
-                    let host_label = self.language_pack.text("NDIRSFTPHostKey.HostLabel", "Host");
-                    let fingerprint_label = self.language_pack.text("NDIRSFTPHostKey.FingerprintLabel", "SHA-256");
-                    let question = self.language_pack.text("NDIRSFTPHostKey.TrustQuestion", "Trust this key and continue?");
+                    let title = self.language_pack.text(if changed { "NDRSFTPHostKey.ChangedTitle" } else { "NDRSFTPHostKey.FirstUseTitle" }, if changed { "SFTP server key changed" } else { "SFTP server verification" });
+                    let host_label = self.language_pack.text("NDRSFTPHostKey.HostLabel", "Host");
+                    let fingerprint_label = self.language_pack.text("NDRSFTPHostKey.FingerprintLabel", "SHA-256");
+                    let question = self.language_pack.text("NDRSFTPHostKey.TrustQuestion", "Trust this key and continue?");
                     let prompt = format!("{host_label}: {}:{}\r\n{fingerprint_label}: {candidate}\r\n\r\n{question}", config.host, config.port);
                     self.system_box(&title, &prompt, MB_YESNO | MB_ICONEXCLAMATION, move |app, answer, _| app.remote_host_key_answered(answer == IDYES, candidate));
                     return;

@@ -1,5 +1,5 @@
 //! 원본 대화 상자: TfGetText(입력), TfRename(이름 바꾸기), TfDelWarning(삭제 경고), TfDelConfirm(보호 항목 삭제 확인).
-//! C# NDIR의 InputDialog, RenameWindow, DeleteWarningWindow, DeleteConfirmationWindow와 같은 규칙.
+//! C# NDR의 InputDialog, RenameWindow, DeleteWarningWindow, DeleteConfirmationWindow와 같은 규칙.
 //! egui 모달로 그리고 결과는 콜백으로 돌려준다. 한 번에 가장 나중에 연(맨 위) 대화 상자 하나만 보인다(창 위의 입력 상자처럼 겹쳐 열 수 있다).
 use super::*;
 use eframe::egui::{FontId, text::LayoutJob};
@@ -68,8 +68,8 @@ pub(super) enum DialogKind {
     Settings(Box<super::settings_window::SettingsForm>),
     /// C# FunctionKeyEditWindow.
     FunctionKeyEdit(Box<super::function_key_editor::FunctionKeyEditForm>),
-    /// C# ShortcutWindow(NDIR 단축키 설정).
-    NdirShortcuts(Box<super::ndir_shortcuts::NdirShortcutsForm>),
+    /// C# ShortcutWindow(NDR 단축키 설정).
+    NdrShortcuts(Box<super::ndr_shortcuts::NdrShortcutsForm>),
     /// C# ShortcutCaptureWindow.
     ShortcutCapture { display: String },
     /// C# FileConflictWindow.
@@ -91,19 +91,19 @@ pub(super) enum DialogResult {
     Rename(Option<(String, String)>),
     DeleteWarning(DeleteWarningChoice),
     DeleteConfirm(DeleteConfirmChoice),
-    Attributes(AttributeAction, Option<ndir::tools::AttributeChanges>),
+    Attributes(AttributeAction, Option<ndr::tools::AttributeChanges>),
     Split(Option<(PathBuf, u64, u64)>),
     Join(Option<super::split_dialogs::JoinOptions>),
     ListExport(Option<super::list_export_dialog::ListExportOptions>),
     EditShortcut(Option<String>),
     AdvancedRename(bool),
-    Search(Option<ndir::tools::SearchCriteria>),
+    Search(Option<ndr::tools::SearchCriteria>),
     /// 고른 항목의 번호(취소면 None).
     Choice(Option<usize>),
     /// (하위 폴더 포함, 파일 내용 비교).
     FolderCompare,
     /// 동기화 미리보기에서 "복사"를 켠 차이(원래 순서). 비교 결과 창을 닫으면 None.
-    Comparison(Option<Vec<ndir::folder_compare::Difference>>),
+    Comparison(Option<Vec<ndr::folder_compare::Difference>>),
     CleanupOptions(Option<super::cleanup_dialog::CleanupOptions>),
     /// (지울 파일, 휴지통도 비울지). 취소면 None.
     CleanupResults(Option<(Vec<PathBuf>, bool)>),
@@ -126,14 +126,14 @@ pub(super) enum DialogResult {
     /// 연결할 입력값. 취소면 None.
     FtpQuickConnect(Option<super::ftp_pane::FtpQuickForm>),
     /// 확인한 설정 사본. 취소면 None.
-    Settings(Option<ndir::settings::Settings>),
+    Settings(Option<ndr::settings::Settings>),
     FunctionKeyEdit(Option<super::function_key_editor::Binding>),
     /// 새 KeyboardShortcuts. 취소면 None.
-    NdirShortcuts(Option<serde_json::Map<String, serde_json::Value>>),
+    NdrShortcuts(Option<serde_json::Map<String, serde_json::Value>>),
     /// 누른 글쇠 글. 취소면 None.
     ShortcutCapture(Option<String>),
     /// (고른 답, 모두 적용). 창을 닫으면 None(= 취소).
-    FileConflict(Option<(ndir::fsops::ConflictChoice, bool)>),
+    FileConflict(Option<(ndr::fsops::ConflictChoice, bool)>),
     /// 체크섬 창이 닫힘.
     Checksum,
 }
@@ -180,7 +180,7 @@ impl AttributeForm {
     }
 
     /// C# Complete: 시각을 바꿀 때만 날짜와 시간을 읽는다(시간은 0 이상 하루 미만). 틀리면 Err.
-    pub(super) fn changes(&self) -> Result<ndir::tools::AttributeChanges, ()> {
+    pub(super) fn changes(&self) -> Result<ndr::tools::AttributeChanges, ()> {
         let modified = if self.change_time {
             let date = ["%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d"].iter().find_map(|f| chrono::NaiveDate::parse_from_str(self.date.trim(), f).ok()).ok_or(())?;
             let time = ["%H:%M:%S%.f", "%H:%M:%S", "%H:%M"].iter().find_map(|f| chrono::NaiveTime::parse_from_str(self.time.trim(), f).ok()).ok_or(())?;
@@ -189,7 +189,7 @@ impl AttributeForm {
         } else {
             None
         };
-        Ok(ndir::tools::AttributeChanges {
+        Ok(ndr::tools::AttributeChanges {
             archive: self.archive,
             hidden: self.hidden,
             system: self.system,
@@ -235,7 +235,7 @@ pub(super) fn program_filter(language: &compat::Language) -> Vec<(String, String
 pub(super) fn markup_job(text: &str, size: f32, color: Color32, wrap: f32) -> LayoutJob {
     let mut job = LayoutJob::default();
     job.wrap.max_width = wrap;
-    for span in ndir::markup::render(text) {
+    for span in ndr::markup::render(text) {
         let mut format = egui::TextFormat { font_id: FontId::proportional(size), color: span.color.map_or(color, |(r, g, b)| Color32::from_rgb(r, g, b)), ..Default::default() };
         if span.bold {
             // 굵은 꼴(Segoe UI Bold·맑은 고딕 Bold, set_app_fonts의 "bold" 묶음). 색 태그가 없으면 C# 판처럼 강조색.
@@ -293,7 +293,7 @@ impl App {
             "RES.MSG_RENAME",
             "Type a new file name.(\\/:*?\"<>| characters cannot be used.)\n\n<b><c0000FF>%s</c></b> <c666666>(%d / %d)</c>",
         );
-        let message = ndir::markup::substitute(&template, &[file_name, &index.to_string(), &count.to_string()]);
+        let message = ndr::markup::substitute(&template, &[file_name, &index.to_string(), &count.to_string()]);
         let title = self.language_pack.text("RES.RENAME", "Rename");
         self.push_dialog(
             title,
@@ -315,10 +315,10 @@ impl App {
         };
         if count == 1 {
             let template = self.language_pack.text("RES.MSG_DELWARNING1", "Do you really want to %s<b><c0000FF>%s</c></b>");
-            ndir::markup::substitute(&template, &[&mode_text, first_name])
+            ndr::markup::substitute(&template, &[&mode_text, first_name])
         } else {
             let template = self.language_pack.text("RES.MSG_DELWARNING2", "Do you really want to %s<b><c0000FF>%d selected files/folders</c></b>");
-            ndir::markup::substitute(&template, &[&mode_text, &count.to_string()])
+            ndr::markup::substitute(&template, &[&mode_text, &count.to_string()])
         }
     }
 
@@ -400,7 +400,7 @@ impl App {
     }
 
     /// C# AttributeTimeWindow(항목 하나): 모두 적용 / 건너뛰기 / 확인 / 취소.
-    pub(super) fn attribute_dialog(&mut self, path: &str, on_result: impl FnOnce(&mut App, AttributeAction, Option<ndir::tools::AttributeChanges>, &egui::Context) + 'static) {
+    pub(super) fn attribute_dialog(&mut self, path: &str, on_result: impl FnOnce(&mut App, AttributeAction, Option<ndr::tools::AttributeChanges>, &egui::Context) + 'static) {
         let title = self.language_pack.text("formChangeAttr.Form.Caption", "Change Attributes");
         self.push_dialog(
             title,
@@ -423,7 +423,7 @@ impl App {
                 Err(()) => {
                     let title = self.original_dialogs[self.original_dialogs.len() - 1].title.clone();
                     let text = self.tr("날짜 또는 시간이 올바르지 않습니다.", "The date or time is invalid.").into_owned();
-                    return self.system_box(&title, &text, ndir::msgbox::MB_OK | ndir::msgbox::MB_ICONEXCLAMATION, |_, _, _| {});
+                    return self.system_box(&title, &text, ndr::msgbox::MB_OK | ndr::msgbox::MB_ICONEXCLAMATION, |_, _, _| {});
                 }
             },
         };
@@ -470,7 +470,7 @@ impl App {
             self.answer_dialog(DialogResult::Rename(Some((name, extension))), ctx);
         } else {
             let text = self.language_pack.text("RES.MSG_INVALID_FILENAME", "A file name can't contain any of the following characters:\n  \\ / : * ? \" < > | ");
-            self.system_box("", &text, ndir::msgbox::MB_OK, |_, _, _| {});
+            self.system_box("", &text, ndr::msgbox::MB_OK, |_, _, _| {});
         }
     }
 
@@ -546,7 +546,7 @@ impl App {
         }
         let warning_icon = if matches!(dialog.kind, DialogKind::DeleteWarning { .. } | DialogKind::DeleteConfirm { .. }) { self.msgbox_icon(ctx, 0x7f02) } else { None };
         let (enter, escape) = if waiting { (false, false) } else { ctx.input(|i| (i.key_pressed(egui::Key::Enter), i.key_pressed(egui::Key::Escape))) };
-        let modal_id = egui::Id::new(("ndir-original-dialog", serial));
+        let modal_id = egui::Id::new(("ndr-original-dialog", serial));
         super::keep_opaque(ctx, modal_id);
         egui::Modal::new(modal_id).show(ctx, |ui| {
             ui.horizontal(|ui| {
@@ -675,7 +675,7 @@ impl App {
                     ui.add(egui::Label::new(RichText::new(form.message.as_str()).size(14.0).color(text_color)).wrap());
                     ui.add_space(12.0);
                     let current = form.options.get(form.selected).cloned().unwrap_or_default();
-                    egui::ComboBox::from_id_salt(("ndir-choice", serial)).width(404.0).selected_text(current).show_opaque(ui, |ui| {
+                    egui::ComboBox::from_id_salt(("ndr-choice", serial)).width(404.0).selected_text(current).show_opaque(ui, |ui| {
                         for (index, option) in form.options.iter().enumerate() {
                             ui.selectable_value(&mut form.selected, index, option.as_str());
                         }
@@ -742,15 +742,15 @@ impl App {
                 DialogKind::FunctionKeyEdit(form) => {
                     function_key_edit = super::function_key_editor::function_key_edit_ui(ui, form, &self.language_pack, enter);
                 }
-                DialogKind::NdirShortcuts(form) => {
-                    shortcuts_action = super::ndir_shortcuts::shortcuts_ui(ui, form, &self.language_pack, enter, first_frame);
+                DialogKind::NdrShortcuts(form) => {
+                    shortcuts_action = super::ndr_shortcuts::shortcuts_ui(ui, form, &self.language_pack, enter, first_frame);
                 }
                 DialogKind::FileConflict(form) => {
                     conflict_choice = super::file_operation::conflict_ui(ui, form, &self.language_pack, ko, enter).map(|c| (c, form.apply_all));
                 }
                 DialogKind::ShortcutCapture { display } => {
                     if !escape {
-                        captured = super::ndir_shortcuts::capture_ui(ui, display, ko);
+                        captured = super::ndr_shortcuts::capture_ui(ui, display, ko);
                     }
                 }
                 DialogKind::Credentials { user, password } => {
@@ -933,7 +933,7 @@ impl App {
             return self.answer_dialog(DialogResult::FtpQuickConnect(form), ctx);
         }
         if let Some(action) = shortcuts_action {
-            return self.ndir_shortcuts_action(action, ctx);
+            return self.ndr_shortcuts_action(action, ctx);
         }
         if let Some(gesture) = captured {
             return self.answer_dialog(DialogResult::ShortcutCapture(Some(gesture)), ctx);
@@ -1000,7 +1000,7 @@ impl App {
             (_, DialogKind::FtpQuickConnect(_)) => DialogResult::FtpQuickConnect(None),
             (_, DialogKind::Settings(_)) => DialogResult::Settings(None),
             (_, DialogKind::FunctionKeyEdit(_)) => DialogResult::FunctionKeyEdit(None),
-            (_, DialogKind::NdirShortcuts(_)) => DialogResult::NdirShortcuts(None),
+            (_, DialogKind::NdrShortcuts(_)) => DialogResult::NdrShortcuts(None),
             (_, DialogKind::ShortcutCapture { .. }) => DialogResult::ShortcutCapture(None),
             (_, DialogKind::FileConflict(_)) => DialogResult::FileConflict(None),
             // 원본 btnCopyClick: 결과 글을 클립보드로(창은 그대로).

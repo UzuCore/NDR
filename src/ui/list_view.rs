@@ -78,12 +78,12 @@ impl App {
         columns
     }
 
-    /// C# GroupHeaderNameConverter. 차이(승인된 수정): C#은 Get("Caption", 키)가 언어 파일의 [formNDIRSearch] 절을 찾지 못해
+    /// C# GroupHeaderNameConverter. 차이(승인된 수정): C#은 Get("Caption", 키)가 언어 파일의 [formNDRSearch] 절을 찾지 못해
     /// 영어 이름을 보이지만, Rust는 그 절의 번역을 쓴다.
     pub(super) fn group_caption(&self, key: &str) -> String {
-        match ndir::listing::group_caption_key(key) {
+        match ndr::listing::group_caption_key(key) {
             (label, Some("RES.FOLDERS")) => self.language_pack.text("RES.FOLDERS", label),
-            (label, Some(caption)) => self.language_pack.text(&format!("formNDIRSearch.Caption.{caption}"), label),
+            (label, Some(caption)) => self.language_pack.text(&format!("formNDRSearch.Caption.{caption}"), label),
             (label, None) => label.to_owned(),
         }
     }
@@ -133,10 +133,10 @@ impl App {
                 let label = pane.drive_infos.get(&entry.path).map(|(name, _, _)| name.as_str()).unwrap_or("");
                 let name = if label.is_empty() { entry.name.clone() } else { format!("{} {label}", entry.name) };
                 view.cells.push([name, String::new(), String::new(), String::new(), String::new(), String::new(), String::new()]);
-                view.colors.push(skin.then(|| ndir::listing::original_item_color(entry, extension_colors, basic)));
+                view.colors.push(skin.then(|| ndr::listing::original_item_color(entry, extension_colors, basic)));
                 continue;
             }
-            let extension = if entry.is_dir || attach { "" } else { ndir::parity::dotnet_extension(&entry.name) };
+            let extension = if entry.is_dir || attach { "" } else { ndr::parity::dotnet_extension(&entry.name) };
             let stem = &entry.name[..entry.name.len() - extension.len()];
             let description = pane.descriptions.get(&entry.name.to_lowercase()).cloned().unwrap_or_default();
             // 원본 DrawListItem 설명 칸(필드 6, 0x7da043): 설명(+0x10)이 비고 showfiletype(+0x384)이면 파일 종류 글(+0xc).
@@ -145,11 +145,11 @@ impl App {
             let kind = if !skin && entry.is_parent() {
                 (if korean { "상위 폴더" } else { "Parent folder" }).to_owned()
             } else if !skin {
-                ndir::listing::type_name(&entry.name, entry.is_dir, korean)
+                ndr::listing::type_name(&entry.name, entry.is_dir, korean)
             } else if pane.archive.is_some() || pane.remote.is_some() || entry.name == ".." {
                 String::new()
             } else {
-                let key = if entry.is_dir { None } else { Some(ndir::parity::dotnet_extension(&entry.name).to_lowercase()) };
+                let key = if entry.is_dir { None } else { Some(ndr::parity::dotnet_extension(&entry.name).to_lowercase()) };
                 shell_types.entry(key).or_insert_with_key(|key| native::shell_type_name(key.as_deref().unwrap_or(""), key.is_none())).clone()
             };
             let description = if description.is_empty() && skin && show_file_type { kind.clone() } else { description };
@@ -159,30 +159,30 @@ impl App {
                 if entry.is_dir {
                     String::new()
                 } else if skin {
-                    character_case(ndir::parity::dotnet_extension(&entry.name).trim_start_matches('.'), case)
+                    character_case(ndr::parity::dotnet_extension(&entry.name).trim_start_matches('.'), case)
                 } else {
-                    ndir::parity::dotnet_extension(&entry.name).to_owned()
+                    ndr::parity::dotnet_extension(&entry.name).to_owned()
                 },
                 kind,
-                if entry.is_dir { String::new() } else { ndir::parity::format_size(entry.size, &unit, thousands) },
+                if entry.is_dir { String::new() } else { ndr::parity::format_size(entry.size, &unit, thousands) },
                 if use_age {
-                    ndir::listing::age_date_text(entry.modified, &date_format, &time_format, [&age_labels[0], &age_labels[1], &age_labels[2]], now)
+                    ndr::listing::age_date_text(entry.modified, &date_format, &time_format, [&age_labels[0], &age_labels[1], &age_labels[2]], now)
                 } else {
-                    ndir::listing::date_text(entry.modified, &date_format, &time_format, false, korean, now)
+                    ndr::listing::date_text(entry.modified, &date_format, &time_format, false, korean, now)
                 },
-                ndir::listing::attribute_text(entry.attributes),
+                ndr::listing::attribute_text(entry.attributes),
                 description,
             ]);
             view.colors.push(if skin {
-                Some(ndir::listing::original_item_color(entry, extension_colors, basic))
+                Some(ndr::listing::original_item_color(entry, extension_colors, basic))
             } else {
-                ndir::listing::entry_color(entry, extension_colors, nexus_colors)
+                ndr::listing::entry_color(entry, extension_colors, nexus_colors)
             });
         }
         let mut previous: Option<String> = None;
         for (row, entry) in pane.entries.iter().enumerate() {
             if group_mode != "None" && show_group_name && !entry.drive {
-                let key = ndir::listing::group_key(entry, &group_mode, &category_mode);
+                let key = ndr::listing::group_key(entry, &group_mode, &category_mode);
                 if previous.as_deref() != Some(key.as_str()) {
                     view.rows.push(DetailRow::Header(self.group_caption(&key)));
                     previous = Some(key);

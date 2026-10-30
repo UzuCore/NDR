@@ -160,7 +160,7 @@ impl App {
             return cached.clone();
         }
         let texture = (self.system.file_icon)(path, directory)
-            .map(|(width, height, rgba)| self.icon_texture(ctx, format!("ndir-file-icon{key}"), width, height, &rgba));
+            .map(|(width, height, rgba)| self.icon_texture(ctx, format!("ndr-file-icon{key}"), width, height, &rgba));
         self.file_icons.insert(key, texture.clone());
         texture
     }
@@ -234,7 +234,7 @@ impl App {
             Some(s) => self.skin_scrollbar_width(&ctx, s),
             None => None,
         };
-        let bar_flag = egui::Id::new(("ndir-skin-tile-vbar", index));
+        let bar_flag = egui::Id::new(("ndr-skin-tile-vbar", index));
         let bar_reserve = match skin_bar {
             Some(w) if ui.data(|d| d.get_temp::<bool>(bar_flag)).unwrap_or(false) => w,
             _ => 0.0,
@@ -484,7 +484,7 @@ impl App {
                                     (shortened, galleys)
                                 });
                                 if shortened {
-                                    // NDIR 칸: 바깥 5, 그림 thumb, 글 첫 줄은 그 밑 2.
+                                    // NDR 칸: 바깥 5, 그림 thumb, 글 첫 줄은 그 밑 2.
                                     let text_top = response.rect.top() + 5.0 + thumb + 2.0;
                                     *self.thumb_tip.borrow_mut() = Some((index, row, response.rect, text_top, thumb, galleys));
                                 }

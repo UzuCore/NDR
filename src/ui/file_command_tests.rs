@@ -1,9 +1,9 @@
-//! C# NDIR 이름·설명·열기·삭제·완전 삭제 흐름(원본 FUN_00432378, FUN_00434630, FUN_004351cc, FUN_0040c31c, FUN_00432958,
+//! C# NDR 이름·설명·열기·삭제·완전 삭제 흐름(원본 FUN_00432378, FUN_00434630, FUN_004351cc, FUN_0040c31c, FUN_00432958,
 //! FUN_00431dd4, FUN_0042c734)을 Rust UI에서 확인한다. 한국어와 영어만 검수한다.
 //! 격리된 임시 폴더만 쓴다. 휴지통으로 보내는 답(휴지통 방식의 예)은 고르지 않는다. 실제 프로그램도 띄우지 않는다(shell_runner 교체).
 use super::original_dialogs::{DeleteConfirmChoice, DeleteWarningChoice, DeleteWarningMode, DialogKind, DialogResult};
 use super::*;
-use ndir::msgbox::{MB_ICONHAND, MB_OK, MB_YESNO};
+use ndr::msgbox::{MB_ICONHAND, MB_OK, MB_YESNO};
 use std::{cell::RefCell, fs};
 
 thread_local! {
@@ -16,7 +16,7 @@ fn capture_launch(path: &Path, parameters: &str, directory: &Path) -> Result<(),
 
 fn fixture(label: &str, language: &str) -> (PathBuf, egui::Context, App) {
     let root = std::env::temp_dir().join(format!(
-        "ndir-files-{}-{}-{label}",
+        "ndr-files-{}-{}-{label}",
         std::process::id(),
         std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
     ));
@@ -99,7 +99,7 @@ fn answer_warning(app: &mut App, ctx: &egui::Context, choice: DeleteWarningChoic
     app.answer_dialog(DialogResult::DeleteWarning(choice), ctx);
 }
 fn system_error_text(error: u32) -> String {
-    ndir::names::system_message(error).unwrap()
+    ndr::names::system_message(error).unwrap()
 }
 
 #[test]
@@ -109,7 +109,7 @@ fn new_folder_and_empty_file_follow_the_original() {
     app.dispatch("newFolder", &ctx);
     let (title, message, value) = prompt_of(&app);
     assert_eq!((title, message), (root_text(&app, "TITLE_NEWFOLDER"), root_text(&app, "MSG_NEWFOLDER")));
-    assert_eq!(value, ndir::names::new_folder_default_name(), "short date with '-' for '\\' and '/'");
+    assert_eq!(value, ndr::names::new_folder_default_name(), "short date with '-' for '\\' and '/'");
     answer_text(&mut app, &ctx, Some(""));
     assert!(app.original_dialogs.is_empty() && app.msgboxes.is_empty() && !app.panes[0].loading, "empty input does nothing");
     app.dispatch("newFolder", &ctx);
@@ -168,7 +168,7 @@ fn rename_asks_once_per_item_and_moves_comments() {
     match &dialog.kind {
         DialogKind::Rename { message, name, extension } => {
             assert_eq!((name.as_str(), extension.as_str()), ("alpha", "txt"));
-            assert_eq!(message, &ndir::markup::substitute(&template, &["alpha.txt", "1", "2"]), "list order, index / count");
+            assert_eq!(message, &ndr::markup::substitute(&template, &["alpha.txt", "1", "2"]), "list order, index / count");
         }
         _ => panic!("TfRename expected"),
     }
@@ -177,7 +177,7 @@ fn rename_asks_once_per_item_and_moves_comments() {
     match &app.original_dialogs[0].kind {
         DialogKind::Rename { message, name, .. } => {
             assert_eq!(name, "beta");
-            assert_eq!(message, &ndir::markup::substitute(&template, &["beta.txt", "2", "2"]));
+            assert_eq!(message, &ndr::markup::substitute(&template, &["beta.txt", "2", "2"]));
         }
         _ => panic!("second TfRename expected"),
     }
@@ -436,7 +436,7 @@ fn shred_always_warns_without_the_delete_button() {
     answer_warning(&mut app, &ctx, DeleteWarningChoice::Yes);
     wait_job(&mut app, &ctx);
     assert!(!left.join("beta.txt").exists());
-    assert!(fs::read_dir(&left).unwrap().flatten().all(|e| !e.file_name().to_string_lossy().starts_with(".ndir-shred-")), "no leftover temporary name");
+    assert!(fs::read_dir(&left).unwrap().flatten().all(|e| !e.file_name().to_string_lossy().starts_with(".ndr-shred-")), "no leftover temporary name");
     // The empty right pane has nothing to shred.
     fs::remove_dir(root.join("right/FOLDER1")).unwrap();
     app.refresh(1);
@@ -556,7 +556,7 @@ fn split_and_join_windows_follow_the_csharp_flows() {
     app.panes[0].cursor = row(&app, 0, "folder1");
     app.dispatch("split", &ctx);
     assert_eq!(app.msgboxes[0].text, "분할할 일반 파일 하나를 선택하세요.");
-    assert_eq!(app.msgboxes[0].flags, MB_OK | ndir::msgbox::MB_ICONASTERISK);
+    assert_eq!(app.msgboxes[0].flags, MB_OK | ndr::msgbox::MB_ICONASTERISK);
     app.answer_message_box(1, &ctx);
     app.panes[0].cursor = row(&app, 0, "big.bin");
     app.dispatch("split", &ctx);
@@ -783,20 +783,20 @@ fn advanced_rename_window_builds_rules_macros_and_renames() {
         _ => panic!("rename window"),
     };
     assert_eq!(lines, [format!("{} (new_, First) - name", actions[0]), format!("{} (Start: 1, Step: 1, Digit: 2, Last) - name", actions[4])]);
-    let mut rule = ndir::compat::RenameRule { action: "Delete".into(), delete_from_mode: "Delimiter".into(), find: "-".into(), count: 3, delete_direction: "RightToLeft".into(), target: "Extension".into(), ..Default::default() };
+    let mut rule = ndr::compat::RenameRule { action: "Delete".into(), delete_from_mode: "Delimiter".into(), find: "-".into(), count: 3, delete_direction: "RightToLeft".into(), target: "Extension".into(), ..Default::default() };
     assert_eq!(super::rename_dialog::rule_display(&rule, &app.language_pack), format!("{} (From: \"-\", Count: 3, Backward) - extension", actions[2]));
-    rule = ndir::compat::RenameRule { action: "Replace".into(), find: "a".repeat(101), replace: "b".into(), position: "Last".into(), ..Default::default() };
+    rule = ndr::compat::RenameRule { action: "Replace".into(), find: "a".repeat(101), replace: "b".into(), position: "Last".into(), ..Default::default() };
     assert_eq!(super::rename_dialog::rule_display(&rule, &app.language_pack), format!("{} ({}... -> b, Last) - name", actions[1], "a".repeat(95)));
     frame(&mut app, &ctx, vec![]);
     // Save the rules as a macro, then refuse to replace it.
     app.save_rename_macro();
     app.answer_dialog(DialogResult::Text(Some("사진 정리".into())), &ctx);
-    let saved = fs::read(root.join("profile").join(ndir::rename_macros::FILE_NAME)).unwrap();
-    assert_eq!(ndir::rename_macros::read(&root.join("profile").join(ndir::rename_macros::FILE_NAME)).unwrap()[0].rules.len(), 2, "{saved:?}");
+    let saved = fs::read(root.join("profile").join(ndr::rename_macros::FILE_NAME)).unwrap();
+    assert_eq!(ndr::rename_macros::read(&root.join("profile").join(ndr::rename_macros::FILE_NAME)).unwrap()[0].rules.len(), 2, "{saved:?}");
     app.save_rename_macro();
     app.answer_dialog(DialogResult::Text(Some("사진 정리".into())), &ctx);
     assert_eq!(app.msgboxes[0].text, app.language_pack.text("RES.MSG_SAMENAME", "?"), "same name: the original TfMsgBox");
-    assert_eq!(app.msgboxes[0].flags, MB_YESNO | ndir::msgbox::MB_ICONQUESTION);
+    assert_eq!(app.msgboxes[0].flags, MB_YESNO | ndr::msgbox::MB_ICONQUESTION);
     app.answer_message_box(7, &ctx);
     // C# SaveSelectedMacro: 원본 형식에 쓸 수 없는 값(';')이면 macroFormatUnsupported(값) 경고, 파일은 그대로.
     edit(&mut app, &|form| { let mut semicolon = form.rules[0].clone(); semicolon.text = "a;b".into(); form.rules.push(semicolon); });
@@ -804,13 +804,13 @@ fn advanced_rename_window_builds_rules_macros_and_renames() {
     app.answer_dialog(DialogResult::Text(Some("세미콜론".into())), &ctx);
     let expected = app.language_pack.text("formAdvRename.Caption.macroFormatUnsupported", "?").replace("{0}", "a;b");
     assert_eq!((app.msgboxes[0].title.clone(), app.msgboxes[0].text.clone()), (app.language_pack.text("formAdvRename.Caption.macroSaveTitle", "?"), expected));
-    assert_eq!(fs::read(root.join("profile").join(ndir::rename_macros::FILE_NAME)).unwrap(), saved, "advrename.save unchanged");
+    assert_eq!(fs::read(root.join("profile").join(ndr::rename_macros::FILE_NAME)).unwrap(), saved, "advrename.save unchanged");
     app.answer_message_box(1, &ctx);
     edit(&mut app, &|form| { form.rules.pop(); });
     // 원본 FUN_0046d000: 쓸 수 없는 새 이름이 있으면 REN_INVALIDNAMES(REN_TITLE, 정보 아이콘)만 보이고 바꾸지 않는다.
     edit(&mut app, &|form| { let mut bad = form.rules[0].clone(); bad.text = "x?".into(); form.rules.push(bad); });
     app.commit_advanced_rename();
-    assert_eq!((app.msgboxes[0].title.clone(), app.msgboxes[0].text.clone(), app.msgboxes[0].flags), (app.language_pack.text("RES.REN_TITLE", "?"), app.language_pack.text("RES.REN_INVALIDNAMES", "?"), MB_OK | ndir::msgbox::MB_ICONASTERISK));
+    assert_eq!((app.msgboxes[0].title.clone(), app.msgboxes[0].text.clone(), app.msgboxes[0].flags), (app.language_pack.text("RES.REN_TITLE", "?"), app.language_pack.text("RES.REN_INVALIDNAMES", "?"), MB_OK | ndr::msgbox::MB_ICONASTERISK));
     app.answer_message_box(1, &ctx);
     assert!(left.join("alpha.txt").exists());
     edit(&mut app, &|form| { form.rules.pop(); });
@@ -992,7 +992,7 @@ fn folder_compare_follows_original_tfcomparefolder() {
     });
     app.folder_compare_action(FolderCompareAction::Start, &ctx);
     wait_compare(&mut app, &ctx);
-    assert!(folder_compare(&app).rows.iter().any(|r| r.relative == "folder1\\inner.txt" && r.kind == ndir::folder_compare::DifferenceKind::LeftOnly));
+    assert!(folder_compare(&app).rows.iter().any(|r| r.relative == "folder1\\inner.txt" && r.kind == ndr::folder_compare::DifferenceKind::LeftOnly));
     // 중단(btnStopClick)과 닫기. 닫으면 비교 중이어도 멈춘다.
     app.folder_compare_action(FolderCompareAction::Start, &ctx);
     app.folder_compare_action(FolderCompareAction::Stop, &ctx);
@@ -1016,7 +1016,7 @@ fn folder_compare_follows_original_tfcomparefolder() {
     });
     app.folder_compare_action(FolderCompareAction::Start, &ctx);
     wait_compare(&mut app, &ctx);
-    assert_eq!((app.msgboxes[0].title.as_str(), app.msgboxes[0].flags), ("NDIR", MB_OK | ndir::msgbox::MB_ICONEXCLAMATION), "RunSafely");
+    assert_eq!((app.msgboxes[0].title.as_str(), app.msgboxes[0].flags), ("NDR", MB_OK | ndr::msgbox::MB_ICONEXCLAMATION), "RunSafely");
     assert!(app.msgboxes[0].text.starts_with("폴더를 찾을 수 없습니다: "));
     app.answer_message_box(1, &ctx);
     app.folder_compare_action(FolderCompareAction::Close, &ctx);
@@ -1072,7 +1072,7 @@ fn folder_sync_follows_synchronizefoldersasync() {
     app.answer_dialog(DialogResult::Choice(Some(1)), &ctx);
     assert_eq!(app.msgboxes[0].title, "Run synchronization");
     assert_eq!(app.msgboxes[0].text, format!("Synchronize the 3 selected files from\n{}\nto\n{}\n? Extra files in the destination are not deleted.", left.display(), right.display()));
-    assert_eq!(app.msgboxes[0].flags, MB_YESNO | ndir::msgbox::MB_ICONQUESTION);
+    assert_eq!(app.msgboxes[0].flags, MB_YESNO | ndr::msgbox::MB_ICONQUESTION);
     app.answer_message_box(6, &ctx);
     assert!(app.job.as_ref().is_some_and(|j| j.title == "Synchronize folders" && j.modal.is_none() && j.progress.as_ref().is_some_and(|p| p.allow_pause && p.total_files == Some(3))), "FileOperationProgressWindow with pause");
     frame_with_progress(&mut app, &ctx);
@@ -1118,7 +1118,7 @@ fn folder_sync_follows_synchronizefoldersasync() {
     assert!(app.text.as_ref().unwrap().text.ends_with("\n\nX: denied"));
     assert_eq!(app.status, "Synchronization stopped · 1 unreadable items");
     app.text = None;
-    let failed = ndir::folder_compare::SyncResult { copied: 1, created_directories: 0, skipped_existing: 2, errors: vec!["a: denied".into()] };
+    let failed = ndr::folder_compare::SyncResult { copied: 1, created_directories: 0, skipped_existing: 2, errors: vec!["a: denied".into()] };
     app.sync_done(Ok(failed), false);
     assert_eq!(app.status, "Synchronization complete · 1 files copied · 0 folders created · 2 skipped · 1 errors");
     assert_eq!(app.text.as_ref().map(|t| (t.title.as_str(), t.text.as_str())), Some(("Synchronization errors", "a: denied")));
@@ -1126,7 +1126,7 @@ fn folder_sync_follows_synchronizefoldersasync() {
     assert_eq!((app.msgboxes[0].title.as_str(), app.msgboxes[0].text.as_str()), ("Synchronization error", "disk gone"));
     assert_eq!(app.status, "The synchronization could not be completed.");
     app.answer_message_box(1, &ctx);
-    app.sync_done(Ok(ndir::folder_compare::SyncResult::default()), true);
+    app.sync_done(Ok(ndr::folder_compare::SyncResult::default()), true);
     assert_eq!(app.status, "Synchronization canceled. Items already completed are kept.");
     wait_listing(&mut app, &ctx);
     fs::remove_dir_all(root).unwrap();
@@ -1208,7 +1208,7 @@ fn computer_cleanup_follows_rundiskcleanupasync() {
     assert_eq!(app.original_dialogs[0].title, "컴퓨터 청소", "[formCleanup] Form.Caption");
     let form = cleanup_options(&app);
     assert!(form.system_temp && form.internet_temp && !form.cookies && form.recycle && !form.user_defined, "CleanupOptionsWindow defaults");
-    assert_eq!(form.extensions, ndir::cleanup::DEFAULT_EXTENSIONS);
+    assert_eq!(form.extensions, ndr::cleanup::DEFAULT_EXTENSIONS);
     frame(&mut app, &ctx, vec![]);
     let accept = |app: &mut App, ctx: &egui::Context| app.cleanup_action(super::cleanup_dialog::CleanupAction::Accept, ctx);
     app.edit_dialog_kind(|kind| if let DialogKind::CleanupOptions(form) = kind { form.system_temp = false; form.internet_temp = false; form.recycle = false; });
@@ -1271,13 +1271,13 @@ fn computer_cleanup_follows_rundiskcleanupasync() {
     wait_job(&mut app, &ctx);
     assert_eq!(app.status, "2개 파일을 정리했습니다. 휴지통 비우기 안 함. 실패 0개, 건너뜀 1개");
     // 원본 FUN_0041c77c: MSG_CLEANUP_DONE(정리 창 제목, 정보 아이콘).
-    assert_eq!((app.msgboxes[0].title.clone(), app.msgboxes[0].text.clone(), app.msgboxes[0].flags), (app.language_pack.text("formCleanup.Form.Caption", "?"), app.language_pack.text("RES.MSG_CLEANUP_DONE", "?"), MB_OK | ndir::msgbox::MB_ICONASTERISK));
+    assert_eq!((app.msgboxes[0].title.clone(), app.msgboxes[0].text.clone(), app.msgboxes[0].flags), (app.language_pack.text("formCleanup.Form.Caption", "?"), app.language_pack.text("RES.MSG_CLEANUP_DONE", "?"), MB_OK | ndr::msgbox::MB_ICONASTERISK));
     app.answer_message_box(1, &ctx);
     assert!(!junk.join("a.tmp").exists() && !junk.join("sub/d.tmp").exists());
     assert!(junk.join("c.tmp").exists() && junk.join("b.bak").exists() && junk.join("keep.txt").exists());
     assert_eq!(KO_EMPTIED.load(Ordering::SeqCst), 0, "the Recycle Bin was not selected");
     // 휴지통 비우기 명령(가짜 비우기).
-    // 원본 miEmptyRecycleBinClick(스킨 테마): NDIR 상자 없이 SHEmptyRecycleBinW(flags 0, 셸 확인 창).
+    // 원본 miEmptyRecycleBinClick(스킨 테마): NDR 상자 없이 SHEmptyRecycleBinW(flags 0, 셸 확인 창).
     app.shell_recycle_emptier = fake_shell_empty;
     app.dispatch("emptyRecycle", &ctx);
     assert!(app.msgboxes.is_empty());
@@ -1289,7 +1289,7 @@ fn computer_cleanup_follows_rundiskcleanupasync() {
     assert_eq!(KO_EMPTIED.load(Ordering::SeqCst), 0);
     app.settings.set_text("Theme", "Light");
     app.dispatch("emptyRecycle", &ctx);
-    assert_eq!((app.msgboxes[0].title.as_str(), app.msgboxes[0].text.as_str(), app.msgboxes[0].flags), ("휴지통 비우기", "휴지통의 모든 항목을 영구적으로 지울까요?", MB_YESNO | ndir::msgbox::MB_ICONEXCLAMATION));
+    assert_eq!((app.msgboxes[0].title.as_str(), app.msgboxes[0].text.as_str(), app.msgboxes[0].flags), ("휴지통 비우기", "휴지통의 모든 항목을 영구적으로 지울까요?", MB_YESNO | ndr::msgbox::MB_ICONEXCLAMATION));
     app.answer_message_box(6, &ctx);
     let end = Instant::now() + Duration::from_secs(10);
     while app.status != "휴지통을 비웠습니다." {
@@ -1306,7 +1306,7 @@ fn computer_cleanup_follows_rundiskcleanupasync() {
         app.poll(&ctx);
         thread::sleep(Duration::from_millis(5));
     }
-    assert_eq!((app.msgboxes[0].title.as_str(), app.msgboxes[0].text.as_str()), ("NDIR", "휴지통을 비우지 못했습니다."));
+    assert_eq!((app.msgboxes[0].title.as_str(), app.msgboxes[0].text.as_str()), ("NDR", "휴지통을 비우지 못했습니다."));
     app.answer_message_box(1, &ctx);
     wait_listing(&mut app, &ctx);
     fs::remove_dir_all(root).unwrap();
@@ -1318,9 +1318,9 @@ fn cleanup_results_and_recycle_bin_follow_cleanupresultswindow() {
     app.recycle_emptier = fake_empty_en;
     let junk = junk_folder(&root);
     let cancel = AtomicBool::new(false);
-    let found = ndir::cleanup::scan(&[(junk.clone(), ndir::cleanup::parse_patterns("bak"))], &cancel, &mut |_, _, _| {}).unwrap();
+    let found = ndr::cleanup::scan(&[(junk.clone(), ndr::cleanup::parse_patterns("bak"))], &cancel, &mut |_, _, _| {}).unwrap();
     let mut extra = found.clone();
-    extra.push(ndir::cleanup::Candidate { name: "keep.txt".into(), full_path: junk.join("keep.txt"), size: 5 });
+    extra.push(ndr::cleanup::Candidate { name: "keep.txt".into(), full_path: junk.join("keep.txt"), size: 5 });
     let options = super::cleanup_dialog::CleanupOptions { recycle: true, user_defined: true, user_results: extra, ..Default::default() };
     app.run_cleanup(options.clone());
     assert_eq!(app.original_dialogs.last().unwrap().title, "Search Result(V)");
@@ -1355,7 +1355,7 @@ fn cleanup_results_and_recycle_bin_follow_cleanupresultswindow() {
     wait_listing(&mut app, &ctx);
     // 휴지통 비우기가 실패하면 파일 정리도 하지 않는다.
     app.recycle_emptier = failing_empty;
-    let only = vec![ndir::cleanup::Candidate { name: "a.tmp".into(), full_path: junk.join("a.tmp"), size: 5 }];
+    let only = vec![ndr::cleanup::Candidate { name: "a.tmp".into(), full_path: junk.join("a.tmp"), size: 5 }];
     app.run_cleanup(super::cleanup_dialog::CleanupOptions { user_results: only, ..options.clone() });
     app.cleanup_action(super::cleanup_dialog::CleanupAction::Accept, &ctx);
     app.answer_message_box(6, &ctx);
@@ -1384,7 +1384,7 @@ fn cleanup_results_and_recycle_bin_follow_cleanupresultswindow() {
     app.cleanup_scanned(super::cleanup_dialog::ScanPurpose::Cleanup(plain), Err("Cancelled".into()), true);
     assert_eq!(app.status, "Cleanup scan canceled.");
     let done = super::cleanup_dialog::CleanupDone { requested: 1, to_delete: 1, skipped: 0, recycle: false };
-    app.cleanup_finished(done, ndir::cleanup::DeleteResult { errors: vec!["x: denied".into()], successful: 0, cancelled: false }, false);
+    app.cleanup_finished(done, ndr::cleanup::DeleteResult { errors: vec!["x: denied".into()], successful: 0, cancelled: false }, false);
     assert_eq!(app.status, "Cleaned up 0 files. Recycle Bin emptying: not selected. Failed: 1, skipped: 0");
     assert_eq!(app.text.as_ref().map(|t| (t.title.as_str(), t.text.as_str())), Some(("Files that could not be cleaned up", "x: denied")));
     wait_listing(&mut app, &ctx);

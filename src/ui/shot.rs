@@ -17,16 +17,16 @@ impl super::ftp_pane::PaneFs for ShotFtp {
     fn change_directory(&mut self, _current: &str, path: &str) -> Result<(String, Option<String>), String> {
         Ok((path.to_owned(), None))
     }
-    fn list(&mut self, _path: &str) -> Result<Vec<ndir::remote::RemoteEntry>, String> {
+    fn list(&mut self, _path: &str) -> Result<Vec<ndr::remote::RemoteEntry>, String> {
         Ok(vec![
-            ndir::remote::RemoteEntry { name: "incoming".into(), is_dir: true, mode: Some(0o755), ..Default::default() },
-            ndir::remote::RemoteEntry { name: "readme.txt".into(), size: 1234, mode: Some(0o644), ..Default::default() },
+            ndr::remote::RemoteEntry { name: "incoming".into(), is_dir: true, mode: Some(0o755), ..Default::default() },
+            ndr::remote::RemoteEntry { name: "readme.txt".into(), size: 1234, mode: Some(0o644), ..Default::default() },
         ])
     }
-    fn download(&mut self, _: &str, _: &Path, _: &AtomicBool, _: &mut dyn FnMut(&str, &str) -> ConflictChoice, _: &mut dyn FnMut(ndir::remote::TransferProgress)) -> Result<(), String> {
+    fn download(&mut self, _: &str, _: &Path, _: &AtomicBool, _: &mut dyn FnMut(&str, &str) -> ConflictChoice, _: &mut dyn FnMut(ndr::remote::TransferProgress)) -> Result<(), String> {
         Err("sample".into())
     }
-    fn upload(&mut self, _: &Path, _: &str, _: &AtomicBool, _: &mut dyn FnMut(&str, &str) -> ConflictChoice, _: &mut dyn FnMut(ndir::remote::TransferProgress)) -> Result<(), String> {
+    fn upload(&mut self, _: &Path, _: &str, _: &AtomicBool, _: &mut dyn FnMut(&str, &str) -> ConflictChoice, _: &mut dyn FnMut(ndr::remote::TransferProgress)) -> Result<(), String> {
         Err("sample".into())
     }
     fn mkdir(&mut self, _: &str) -> Result<(), String> {
@@ -67,7 +67,7 @@ impl App {
                 painter.galley((rect.center() - galley.size() / 2.0).round(), galley.clone(), egui::Color32::BLACK);
             };
             if super::panes::show_tip_window(ctx, 0, rect, &paint) {
-                let id = egui::ViewportId::from_hash_of(("ndir-name-tip-window", 0usize));
+                let id = egui::ViewportId::from_hash_of(("ndr-name-tip-window", 0usize));
                 if let Some(r) = ctx.input_for(id, |i| i.viewport().inner_rect) {
                     self.smoke_tip_window = Some([r.left(), r.top(), r.width(), r.height()]);
                 }
@@ -126,7 +126,7 @@ impl App {
             }
             // 패널 FTP 모드의 기록 칸(원본 FUN_0048d7ac) 눈 확인용: 오른쪽 패널을 가짜 FTP 연결로.
             "ftplog" => {
-                let log = std::sync::Arc::new(std::sync::Mutex::new(ndir::remote::ProtocolLog::default()));
+                let log = std::sync::Arc::new(std::sync::Mutex::new(ndr::remote::ProtocolLog::default()));
                 if let Ok(mut log) = log.lock() {
                     log.received("220 ProFTPD Server (example) ready.");
                     log.sent("USER anonymous");
@@ -167,7 +167,7 @@ impl App {
                 self.push_original_dialog(text(self, "formEditShortCut.Form.Caption"), DialogKind::EditShortcut(form), |_, _, _| {});
             }
             "savelist" => {
-                let rows = (0..3).map(|i| ndir::list_export::ExportRow { name: format!("file{i}.txt"), is_dir: false, size: 1234 * (i + 1), modified: Some(std::time::SystemTime::now()), attributes: "A".into(), description: String::new() }).collect();
+                let rows = (0..3).map(|i| ndr::list_export::ExportRow { name: format!("file{i}.txt"), is_dir: false, size: 1234 * (i + 1), modified: Some(std::time::SystemTime::now()), attributes: "A".into(), description: String::new() }).collect();
                 let form = super::list_export_dialog::ListExportForm::new(rows);
                 self.push_original_dialog(text(self, "formSaveList.Form.Caption"), DialogKind::ListExport(Box::new(form)), |_, _, _| {});
             }
@@ -196,7 +196,7 @@ impl App {
                 let info = super::file_operation::ProgressInfo { from: Some(source.to_string_lossy().into_owned()), to: Some(target.to_string_lossy().into_owned()), total_files: Some(12), total_bytes: Some(48 * 1024 * 1024), prefer_bytes: true, ..Default::default() };
                 let file = source.join("document.txt");
                 self.start_pausable_task("Copy".into(), info, move |events, cancel, _| {
-                    let _ = events.send(ndir::fsops::Event::Progress { path: file, bytes: 20 * 1024 * 1024, files: 4 });
+                    let _ = events.send(ndr::fsops::Event::Progress { path: file, bytes: 20 * 1024 * 1024, files: 4 });
                     let started = std::time::Instant::now();
                     while !cancel.load(std::sync::atomic::Ordering::Relaxed) && started.elapsed() < std::time::Duration::from_secs(4) {
                         std::thread::sleep(std::time::Duration::from_millis(20));
@@ -229,11 +229,11 @@ impl App {
             "credentials" => self.credentials_dialog("Network drive credentials", |_, _| {}),
             // C# 원격 창(연결하지 않음): 가운데 올리기·내려받기 단추의 스킨 그림 확인용.
             "remote" => self.open_remote_window(None, None),
-            "ndirshortcuts" => self.open_ndir_shortcuts(),
+            "ndirshortcuts" => self.open_ndr_shortcuts(),
             "search" => self.search_command(),
             "advselect" => self.advanced_select(false),
             "compareopts" | "compareresult" => {
-                use ndir::folder_compare::{Difference, DifferenceKind};
+                use ndr::folder_compare::{Difference, DifferenceKind};
                 let mut form = super::compare_dialog::FolderCompareForm::new(folder.join("a"), folder.join("b"), true);
                 if kind == "compareresult" {
                     let now = Some(std::time::SystemTime::now());

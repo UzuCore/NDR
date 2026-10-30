@@ -259,7 +259,7 @@ mod tests {
         let mut long: Vec<String> = (0..21).map(|i| format!("c{i}")).collect();
         remember_local_command(&mut long, "new", true);
         assert_eq!((long.len(), long[0].as_str(), long.last().unwrap().as_str()), (21, "new", "c19"), "only one oldest row goes");
-        let root = std::env::temp_dir().join(format!("ndir-cmd-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("ndr-cmd-{}", std::process::id()));
         std::fs::create_dir_all(root.join("sub")).unwrap();
         std::fs::write(root.join("tool.exe"), b"").unwrap();
         assert_eq!(resolve_directory("sub", &root), Some(root.join("sub")));

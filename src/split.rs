@@ -468,7 +468,7 @@ mod tests {
     use super::*;
 
     fn fixture(label: &str) -> PathBuf {
-        let root = std::env::temp_dir().join(format!("ndir-split-{}-{}-{label}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let root = std::env::temp_dir().join(format!("ndr-split-{}-{}-{label}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
         fs::create_dir_all(&root).unwrap();
         root
     }

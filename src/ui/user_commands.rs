@@ -111,7 +111,7 @@ impl App {
             let mut clicked = None;
             for number in (1..=12).rev() {
                 let key = format!("F{number}");
-                let binding = ndir::commands::resolve_function_key(&self.settings, &key);
+                let binding = ndr::commands::resolve_function_key(&self.settings, &key);
                 let (ko, en) = default_function_key_name(&key);
                 let name = binding.as_ref().map(|b| b.name.clone()).filter(|n| !n.trim().is_empty()).unwrap_or_else(|| self.tr(ko, en).into_owned());
                 let tooltip = match &binding {
@@ -143,7 +143,7 @@ impl App {
     /// 원본 bbFunctions(TNXButtonBar, 스킨 테마): FUN_00430714의 F2~F8 일곱 칸("F%d %s"), Alt·Ctrl을 누르면 ALTFUNCTIONS·CTRLFUNCTIONS 칸.
     /// Paint(0x7c1568): 칸 너비 = 줄 너비 / 칸 수, 배경 bbbackimg 가로 반복. DrawItem(0x7c0ec0): 왼쪽 + 5에 글쇠 글(bbkeytext),
     /// 그 너비 + 8 뒤에 이름(bbtext, 포인터가 있으면 bbover), 누른 칸은 (1, 1) 밀림, 칸 오른쪽 끝 − 2에 bbdividerimg(세로 가운데).
-    pub(super) fn skin_function_key_bar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, skin: &ndir::styles::Skin) {
+    pub(super) fn skin_function_key_bar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, skin: &ndr::styles::Skin) {
         let rect = ui.max_rect();
         if let Some(back) = skin.values.get("buttonbar.bbbackimg").cloned().and_then(|file| self.skin_bitmap(ctx, &file)) {
             let size = back.size_vec2();
@@ -161,7 +161,7 @@ impl App {
                     let key = format!("F{number}");
                     // 원본 FUN_00479970: [FuncKey] 값으로 이름을 정한다. C# 판 지정에 이름이 있으면 그 이름, 지정이 없으면 원본 기본 값.
                     let resource = |name: &str| self.language_pack.raw(&format!("RES.{name}"));
-                    let name = match ndir::commands::resolve_function_key(&self.settings, &key) {
+                    let name = match ndr::commands::resolve_function_key(&self.settings, &key) {
                         Some(b) if !b.legacy && !b.name.trim().is_empty() => b.name,
                         Some(b) => original_function_key_caption(&b.command, &resource),
                         None => original_function_key_caption(original_default_function_key(&key), &resource),
@@ -178,7 +178,7 @@ impl App {
         let mut clicked = None;
         for (index, (key, name)) in cells.iter().enumerate() {
             let cell = egui::Rect::from_min_size(egui::pos2(rect.left() + width * index as f32, rect.top()), egui::vec2(width, rect.height()));
-            let response = ui.interact(cell, egui::Id::new(("ndir-skin-fkey", index)), egui::Sense::click());
+            let response = ui.interact(cell, egui::Id::new(("ndr-skin-fkey", index)), egui::Sense::click());
             let shift = if response.is_pointer_button_down_on() { egui::vec2(1.0, 1.0) } else { egui::Vec2::ZERO };
             let painter = ui.painter().with_clip_rect(cell);
             let drawn = painter.text(egui::pos2(cell.left() + 5.0, cell.center().y) + shift, egui::Align2::LEFT_CENTER, key, font.clone(), key_color);
@@ -228,7 +228,7 @@ impl App {
     }
 
     pub(super) fn invoke_function_key(&mut self, key: &str, ctx: &egui::Context) -> bool {
-        let Some(binding) = ndir::commands::resolve_function_key(&self.settings, key) else {
+        let Some(binding) = ndr::commands::resolve_function_key(&self.settings, key) else {
             return false;
         };
         self.run_binding(&binding, ctx);
@@ -236,7 +236,7 @@ impl App {
     }
 
     /// 기능키·도구 모음 UserCommand의 지정 하나를 실행한다(C# ExecuteFunctionKeyMacroAsync, 원본 FUN_0044381c).
-    pub(super) fn run_binding(&mut self, binding: &ndir::commands::FunctionBinding, ctx: &egui::Context) {
+    pub(super) fn run_binding(&mut self, binding: &ndr::commands::FunctionBinding, ctx: &egui::Context) {
         let panes = self.panes.each_ref().map(|p| compat::MacroPane {
             path: p.path.clone(),
             focused: p.entries.get(p.cursor).map(|e| e.name.clone()),
@@ -248,20 +248,20 @@ impl App {
         });
         let executable = std::env::current_exe().unwrap_or_default();
         let program_dir = executable.parent().unwrap_or(Path::new("."));
-        match ndir::commands::prepare_function_key(
+        match ndr::commands::prepare_function_key(
             binding,
             &panes[self.active],
             &panes[0],
             &panes[1],
             program_dir,
         ) {
-            ndir::commands::PreparedCommand::Disabled => {}
-            ndir::commands::PreparedCommand::Internal(command) => {
+            ndr::commands::PreparedCommand::Disabled => {}
+            ndr::commands::PreparedCommand::Internal(command) => {
                 if !self.original_internal(&command, ctx) {
                     self.dispatch(&command, ctx);
                 }
             }
-            ndir::commands::PreparedCommand::External { program, arguments, prompt } => {
+            ndr::commands::PreparedCommand::External { program, arguments, prompt } => {
                 if prompt {
                     // C# ExecuteFunctionKeyMacroAsync: TakeParameterPrompt면 InputDialog(TITLE_EDITPARAM, MSG_EDITPARAM, 인수), 취소면 실행 안 함.
                     let title = self.language_pack.text("TITLE_EDITPARAM", "Edit Parameters");
@@ -300,7 +300,7 @@ impl App {
         let palette = super::system_commands::theme_palette(&theme, windows_light);
         self.dark = palette.dark();
         let mut visuals = super::system_commands::palette_visuals(&palette);
-        if let Ok(skin) = ndir::styles::Skin::load(&self.resources.join("Skins"), &theme) {
+        if let Ok(skin) = ndr::styles::Skin::load(&self.resources.join("Skins"), &theme) {
             if let Some(color) = skin
                 .color("List", "lback")
                 .or_else(|| skin.color("List", "lfileback"))
@@ -325,7 +325,7 @@ impl App {
                 if let Some(color) = map
                     .get("NXBACK")
                     .and_then(|v| v.as_str())
-                    .and_then(ndir::styles::parse_color)
+                    .and_then(ndr::styles::parse_color)
                 {
                     visuals.panel_fill = rgba(color);
                     visuals.extreme_bg_color = rgba(color);
@@ -333,7 +333,7 @@ impl App {
                 if let Some(color) = map
                     .get("NXFORE")
                     .and_then(|v| v.as_str())
-                    .and_then(ndir::styles::parse_color)
+                    .and_then(ndr::styles::parse_color)
                 {
                     visuals.override_text_color = Some(rgba(color));
                 }

@@ -245,9 +245,9 @@ pub fn create_with_program(
             cmd.args(args);
         } else if let Some(outer) = wrapped {
             // 1) TAR(더하기면 있는 압축을 풀어 나온 TAR에), 2) 감싸기.
-            let tar = snapshot_abs.join(".ndir-inner.tar");
+            let tar = snapshot_abs.join(".ndr-inner.tar");
             if options.append && output.is_file() {
-                let unpack = snapshot_abs.join(".ndir-inner");
+                let unpack = snapshot_abs.join(".ndr-inner");
                 fs::create_dir(&unpack).map_err(|e| e.to_string())?;
                 let mut x = command()?;
                 x.args(["e", "-y", "-sccUTF-8", "-snl-"]).arg(format!("-o{}", unpack.display())).arg("--").arg(fs::canonicalize(output).map_err(|e| e.to_string())?);
@@ -337,7 +337,7 @@ pub fn create_with_program(
 /// Locate configured/bundled resources, or the Rust project's debug resources.
 pub fn seven_zip_path() -> Result<PathBuf, String> {
     let mut roots = Vec::new();
-    if let Some(root) = std::env::var_os("NDIR_RESOURCE_DIR") {
+    if let Some(root) = std::env::var_os("NDR_RESOURCE_DIR") {
         roots.push(PathBuf::from(root));
     }
     if let Ok(exe) = std::env::current_exe() {
@@ -356,7 +356,7 @@ pub fn seven_zip_path() -> Result<PathBuf, String> {
             }
         }
     }
-    Err("Bundled 7-Zip not found; set NDIR_RESOURCE_DIR to the resource directory".into())
+    Err("Bundled 7-Zip not found; set NDR_RESOURCE_DIR to the resource directory".into())
 }
 fn command() -> Result<Command, String> {
     program_command(None)
@@ -1066,7 +1066,7 @@ pub fn archive_format(path: &Path) -> Option<String> {
     }
     None
 }
-/// C# BuiltInArchiveExtensions(+ 분할 조각 규칙): NDIR이 직접 읽는 형식. 아니면 외부 프로그램 쪽.
+/// C# BuiltInArchiveExtensions(+ 분할 조각 규칙): NDR이 직접 읽는 형식. 아니면 외부 프로그램 쪽.
 /// ALZ·EGG는 동봉 7-Zip(UzuCore 7zip+α)이 읽으므로 여기에 더한다. ACE는 C# 판(SharpCompress 순차 읽기)은 읽지만 동봉 7-Zip은
 /// 형식 목록에 없어 못 읽으므로 뺀다(외부 압축 프로그램으로 통째로 푼다, `extract_whole_with_program`).
 pub fn can_read_internally(path: &Path) -> bool {
@@ -1088,7 +1088,7 @@ pub fn can_read_internally(path: &Path) -> bool {
     true
 }
 
-/// C# CanReadArchiveInternally || GetExternalArchiveListingProgram(동봉 7-Zip): NDIR이 그 안으로 들어가 목록을 볼 수 있는 압축 형식인가.
+/// C# CanReadArchiveInternally || GetExternalArchiveListingProgram(동봉 7-Zip): NDR이 그 안으로 들어가 목록을 볼 수 있는 압축 형식인가.
 /// 동봉 7-Zip은 ACE만 못 읽는다.
 pub fn bundled_can_browse(path: &Path) -> bool {
     archive_format(path).is_some_and(|format| format != "ace")
@@ -1256,7 +1256,7 @@ pub fn summary(entries: &[ArchiveEntry]) -> (usize, usize, u64) {
     }
     (files, folders.len(), bytes)
 }
-/// C# ExtractEntryToTempAsync: %TEMP%\NDIR\<새 이름>에 항목 하나만 풀고(와일드카드 없이) 그 파일 경로를 돌려준다.
+/// C# ExtractEntryToTempAsync: %TEMP%\NDR\<새 이름>에 항목 하나만 풀고(와일드카드 없이) 그 파일 경로를 돌려준다.
 pub fn extract_entry_to_temp(archive: &Path, password: Option<&str>, key: &str, cancel: &AtomicBool) -> Result<PathBuf, String> {
     check_cancel(cancel)?;
     ensure_plain_path(archive)?;
@@ -1288,14 +1288,14 @@ pub fn extract_entry_to_temp(archive: &Path, password: Option<&str>, key: &str, 
     result
 }
 
-/// 압축 안 항목을 하나씩 푸는 임시 폴더(%TEMP%\NDIR).
+/// 압축 안 항목을 하나씩 푸는 임시 폴더(%TEMP%\NDR).
 pub fn temp_entry_root() -> PathBuf {
-    std::env::temp_dir().join("NDIR")
+    std::env::temp_dir().join("NDR")
 }
 
-/// 고친 것(C# 판·예전 Rust 판은 지우지 않아 쌓였다): `root` 아래 ".ndir-entry-*" 폴더 가운데 안의 모든 항목이
-/// `max_age`보다 오래된 것을 지운다. 먼저 ".ndir-trash-*"로 이름을 바꿔 보고(열린 파일이 있으면 실패하므로 건너뜀),
-/// 바뀐 것만 지운다. 지난번에 지우다 만 ".ndir-trash-*"도 지운다. 지운 폴더 수를 돌려준다.
+/// 고친 것(C# 판·예전 Rust 판은 지우지 않아 쌓였다): `root` 아래 ".ndr-entry-*" 폴더 가운데 안의 모든 항목이
+/// `max_age`보다 오래된 것을 지운다. 먼저 ".ndr-trash-*"로 이름을 바꿔 보고(열린 파일이 있으면 실패하므로 건너뜀),
+/// 바뀐 것만 지운다. 지난번에 지우다 만 ".ndr-trash-*"도 지운다. 지운 폴더 수를 돌려준다.
 pub fn clean_stale_temp_entries(root: &Path, max_age: std::time::Duration, now: std::time::SystemTime) -> usize {
     fn newest(path: &Path) -> Option<std::time::SystemTime> {
         let meta = fs::symlink_metadata(path).ok()?;
@@ -1316,13 +1316,13 @@ pub fn clean_stale_temp_entries(root: &Path, max_age: std::time::Duration, now: 
         if !item.file_type().is_ok_and(|t| t.is_dir()) {
             continue;
         }
-        if name.starts_with(".ndir-trash-") {
+        if name.starts_with(".ndr-trash-") {
             if fs::remove_dir_all(&path).is_ok() {
                 removed += 1;
             }
             continue;
         }
-        if !name.starts_with(".ndir-entry-") {
+        if !name.starts_with(".ndr-entry-") {
             continue;
         }
         // 읽지 못한 항목이 있으면 나이를 모르므로 남긴다.
@@ -1330,7 +1330,7 @@ pub fn clean_stale_temp_entries(root: &Path, max_age: std::time::Duration, now: 
         if now.duration_since(latest).map_or(true, |age| age < max_age) {
             continue;
         }
-        let trash = root.join(format!(".ndir-trash-{}", &name[".ndir-entry-".len()..]));
+        let trash = root.join(format!(".ndr-trash-{}", &name[".ndr-entry-".len()..]));
         if fs::rename(&path, &trash).is_ok() && fs::remove_dir_all(&trash).is_ok() {
             removed += 1;
         }
@@ -1734,7 +1734,7 @@ mod interactive_tests {
         assert_eq!(original_error_key("ERROR: Missing volume : x.7z.002"), Some("CANNOT_FIND_NEXTVOLUME"));
         assert_eq!(original_error_key("ERROR: Data Error : a.txt"), Some("RAR_INVALIDFILE_OR_CORRUPTED"));
         assert_eq!(original_error_key("ERROR: Can not open output file : Access is denied. : C:\\o\\a.txt"), Some("CANNOT_CREATEFILE"));
-        assert_eq!(original_error_key("Bundled 7-Zip not found; set NDIR_RESOURCE_DIR to the resource directory"), Some("7ZDLL_LOAD_FAILED"));
+        assert_eq!(original_error_key("Bundled 7-Zip not found; set NDR_RESOURCE_DIR to the resource directory"), Some("7ZDLL_LOAD_FAILED"));
         assert_eq!(original_error_key("Cancelled"), None);
         assert_eq!(missing_volume("7-Zip failed (exit code: 2): Open ERROR\nERROR: Missing volume : C:\\a\\x.7z.002\n"), Some("C:\\a\\x.7z.002".into()));
         assert_eq!(missing_volume("ERROR: Data Error : a.txt"), None);
@@ -1924,7 +1924,7 @@ mod tests {
     use std::{fs, time::SystemTime};
     pub(super) fn fixture() -> PathBuf {
         let p = std::env::temp_dir().join(format!(
-            "ndir-archive-{}-{}",
+            "ndr-archive-{}-{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(SystemTime::UNIX_EPOCH)
@@ -2086,7 +2086,7 @@ mod safety_tests {
                 .iter()
                 .any(|e| e.key.replace('\\', "/") == "source/Upper.TXT")
         );
-        assert!(!found.iter().any(|e| e.key.contains(".ndir-")));
+        assert!(!found.iter().any(|e| e.key.contains(".ndr-")));
         fs::remove_dir_all(p).unwrap();
     }
     #[test]
@@ -2229,7 +2229,7 @@ mod entry_tests {
         for (name, format) in [("a.ZIP", Some("zip")), ("a.tar.gz", Some("tar.gz")), ("a.7z.001", Some("7z")), ("a.part2.rar", Some("rar")), ("a.r01", Some("rar")), ("a.z02", Some("zip")), ("a.a01", Some("arj")), ("a.zip.123", Some("zip")), ("a.txt", None), ("a.001", None)] {
             assert_eq!(archive_format(Path::new(name)).as_deref(), format, "{name}");
         }
-        let root = std::env::temp_dir().join(format!("ndir-entry-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let root = std::env::temp_dir().join(format!("ndr-entry-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
         fs::create_dir_all(root.join("src/inner")).unwrap();
         fs::write(root.join("src/inner/b.txt"), b"inside").unwrap();
         fs::write(root.join("src/a[1].txt"), b"wild").unwrap();
@@ -2240,8 +2240,8 @@ mod entry_tests {
         let inner = keys.iter().find(|k| k.ends_with("b.txt")).unwrap().clone();
         let extracted = extract_entry_to_temp(&output, None, &inner, &cancel).unwrap();
         assert_eq!(fs::read(&extracted).unwrap(), b"inside");
-        let folder = extracted.ancestors().find(|p| p.parent() == Some(&std::env::temp_dir().join("NDIR"))).unwrap().to_path_buf();
-        assert!(folder.file_name().unwrap().to_string_lossy().starts_with(".ndir-entry-"), "a new folder under %TEMP%\\NDIR");
+        let folder = extracted.ancestors().find(|p| p.parent() == Some(&std::env::temp_dir().join("NDR"))).unwrap().to_path_buf();
+        assert!(folder.file_name().unwrap().to_string_lossy().starts_with(".ndr-entry-"), "a new folder under %TEMP%\\NDR");
         fs::remove_dir_all(&folder).unwrap();
         let wild = extract_entry_to_temp(&output, None, "a[1].txt", &cancel).unwrap();
         assert_eq!(fs::read(&wild).unwrap(), b"wild", "-spd: brackets are not wildcards");
@@ -2251,31 +2251,31 @@ mod entry_tests {
         let before: Vec<_> = fs::read_dir(temp_entry_root()).unwrap().flatten().map(|e| e.file_name()).collect();
         assert!(extract_entry_to_temp(&output, None, "missing.txt", &cancel).is_err());
         let after: Vec<_> = fs::read_dir(temp_entry_root()).unwrap().flatten().map(|e| e.file_name()).filter(|n| !before.contains(n)).collect();
-        assert!(after.iter().all(|n| !n.to_string_lossy().starts_with(&format!(".ndir-entry-{}-", std::process::id()))), "{after:?}");
+        assert!(after.iter().all(|n| !n.to_string_lossy().starts_with(&format!(".ndr-entry-{}-", std::process::id()))), "{after:?}");
         fs::remove_dir_all(root).unwrap();
     }
 
-    /// 고친 것: 오래된 ".ndir-entry-*"만 지우고, 최근 것·다른 이름·열려 있어 이름을 못 바꾸는 것은 남긴다.
+    /// 고친 것: 오래된 ".ndr-entry-*"만 지우고, 최근 것·다른 이름·열려 있어 이름을 못 바꾸는 것은 남긴다.
     #[test]
     fn stale_temp_entry_folders_are_removed() {
         use std::os::windows::fs::OpenOptionsExt;
         use std::time::{Duration, SystemTime};
-        let root = std::env::temp_dir().join(format!("ndir-clean-{}-{}", std::process::id(), SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
-        for name in [".ndir-entry-1-0", ".ndir-entry-2-0", ".ndir-entry-3-0", "other"] {
+        let root = std::env::temp_dir().join(format!("ndr-clean-{}-{}", std::process::id(), SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        for name in [".ndr-entry-1-0", ".ndr-entry-2-0", ".ndr-entry-3-0", "other"] {
             fs::create_dir_all(root.join(name).join("sub")).unwrap();
             fs::write(root.join(name).join("sub").join("a.txt"), b"x").unwrap();
         }
-        fs::create_dir_all(root.join(".ndir-trash-9-0")).unwrap();
+        fs::create_dir_all(root.join(".ndr-trash-9-0")).unwrap();
         let week = Duration::from_secs(7 * 24 * 3600);
         // 지금 기준으로는 모두 최근 것: 남은 휴지 폴더만 지운다.
         assert_eq!(clean_stale_temp_entries(&root, week, SystemTime::now()), 1);
-        assert!(root.join(".ndir-entry-1-0").is_dir() && !root.join(".ndir-trash-9-0").exists());
+        assert!(root.join(".ndr-entry-1-0").is_dir() && !root.join(".ndr-trash-9-0").exists());
         // 8일 뒤: 열린 파일(삭제 공유 없음)이 있는 폴더와 다른 이름의 폴더는 남는다.
-        let locked = fs::OpenOptions::new().read(true).share_mode(1).open(root.join(".ndir-entry-3-0").join("sub").join("a.txt")).unwrap();
+        let locked = fs::OpenOptions::new().read(true).share_mode(1).open(root.join(".ndr-entry-3-0").join("sub").join("a.txt")).unwrap();
         let later = SystemTime::now() + Duration::from_secs(8 * 24 * 3600);
         assert_eq!(clean_stale_temp_entries(&root, week, later), 2);
-        assert!(!root.join(".ndir-entry-1-0").exists() && !root.join(".ndir-entry-2-0").exists());
-        assert!(root.join(".ndir-entry-3-0").join("sub").join("a.txt").is_file(), "in use: kept whole");
+        assert!(!root.join(".ndr-entry-1-0").exists() && !root.join(".ndr-entry-2-0").exists());
+        assert!(root.join(".ndr-entry-3-0").join("sub").join("a.txt").is_file(), "in use: kept whole");
         assert!(root.join("other").is_dir());
         drop(locked);
         assert_eq!(clean_stale_temp_entries(&root, week, later), 1);
@@ -2285,7 +2285,7 @@ mod entry_tests {
     /// 동봉 7-Zip(UzuCore 7zip+α 26.05): ALZ·EGG 만들기·목록·풀기(한글 이름 포함). 더하기는 7-Zip이 거절하고 원본은 그대로.
     #[test]
     fn bundled_seven_zip_creates_lists_and_extracts_alz_and_egg() {
-        let root = std::env::temp_dir().join(format!("ndir-alzegg-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let root = std::env::temp_dir().join(format!("ndr-alzegg-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
         fs::create_dir_all(root.join("src/폴더")).unwrap();
         fs::write(root.join("src/a.txt"), b"alpha").unwrap();
         fs::write(root.join("src/폴더/한글.txt"), "한글 내용".as_bytes()).unwrap();
@@ -2310,7 +2310,7 @@ mod entry_tests {
 
     #[test]
     fn archive_add_extract_keys_and_names_follow_the_csharp_flows() {
-        let root = std::env::temp_dir().join(format!("ndir-arcflow-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let root = std::env::temp_dir().join(format!("ndr-arcflow-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
         fs::create_dir_all(root.join("src/dir/deep")).unwrap();
         fs::write(root.join("src/a.txt"), b"a").unwrap();
         fs::write(root.join("src/b.txt"), b"bb").unwrap();
@@ -2387,7 +2387,7 @@ mod entry_tests {
         assert_eq!(fs::read(destination.join("a.txt")).unwrap(), b"top");
         assert_eq!(fs::read(destination.join("inner/b.txt")).unwrap(), b"inside");
         // 단계 폴더는 남지 않는다.
-        assert!(!fs::read_dir(&root).unwrap().any(|e| e.unwrap().file_name().to_string_lossy().starts_with(".ndir-whole-")));
+        assert!(!fs::read_dir(&root).unwrap().any(|e| e.unwrap().file_name().to_string_lossy().starts_with(".ndr-whole-")));
         // 같은 이름이 이미 있으면 덮어쓰지 않고 오류.
         assert!(extract_whole_with_program(&archive, &destination, None, &program, &cancel).is_err());
         assert_eq!(fs::read(destination.join("a.txt")).unwrap(), b"top");

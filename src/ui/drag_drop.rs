@@ -2,7 +2,7 @@
 //! 탐색기에서 끌어 온 파일 포함), FilterDropPaths, GetModifierDropEffect(Ctrl = 복사, Shift = 이동, 둘 다 = 바로 가기),
 //! ChooseDropEffect(ConfirmDragDrop이면 "드래그 작업" 고르기), GetDefaultDropEffect(같은 드라이브면 이동, 아니면 복사),
 //! 바로 가기 만들기(OriginalShortcutService.Create, 오류는 무시).
-//! NDIR 밖으로는 끌던 포인터가 창을 벗어나면 셸 끌기(DoDragDrop, 복사·이동·바로 가기)로 넘긴다. 셸에서 놓인 파일(탐색기, 되돌아온 셸 끌기)은
+//! NDR 밖으로는 끌던 포인터가 창을 벗어나면 셸 끌기(DoDragDrop, 복사·이동·바로 가기)로 넘긴다. 셸에서 놓인 파일(탐색기, 되돌아온 셸 끌기)은
 //! 화면 마우스 위치(GetCursorPos)와 그때의 Ctrl/Shift(GetKeyState)로 놓을 곳과 효과를 정한다.
 use super::file_operation::TransferKind;
 use super::*;
@@ -148,9 +148,9 @@ impl App {
                 let count = drag.paths.len();
                 let shown: Vec<PathBuf> = drag.paths.iter().take(15).cloned().collect();
                 let icons: Vec<Option<egui::TextureHandle>> = shown.iter().map(|p| self.path_icon(ctx, p, p.is_dir())).collect();
-                let header = ndir::markup::substitute(&self.language_pack.text("RES.DRAGFILES_INFO", "Dragging %d object(s)"), &[&count.to_string()]);
+                let header = ndr::markup::substitute(&self.language_pack.text("RES.DRAGFILES_INFO", "Dragging %d object(s)"), &[&count.to_string()]);
                 let names: Vec<String> = shown.iter().map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| p.display().to_string())).collect();
-                let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("ndir-drag")));
+                let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("ndr-drag")));
                 let text = Color32::from_rgb(0xF0, 0xF0, 0xF0);
                 let header = painter.layout_no_wrap(header, egui::FontId::proportional(12.5), Color32::WHITE);
                 let names: Vec<_> = names.into_iter().map(|name| painter.layout_no_wrap(name, egui::FontId::proportional(12.0), text)).collect();
@@ -175,7 +175,7 @@ impl App {
         let drag = self.file_drag.take().expect("checked above");
         let Some((pane, destination)) = self.drop_target(pointer, &drag.paths) else { return };
         // 원본은 놓기가 끝난 뒤(DoDragDrop가 복사·이동·바로 가기로 끝나면) 끈 패널의 표시를 마지막 선택에 남기고 지운다.
-        // NDIR은 확인 상자·놓기 메뉴에서 실제로 옮길 때(apply_drop) 한다(고친 것: 원본은 "아니요"·취소에도 지운다).
+        // NDR은 확인 상자·놓기 메뉴에서 실제로 옮길 때(apply_drop) 한다(고친 것: 원본은 "아니요"·취소에도 지운다).
         self.pending_drag_marks = Some((drag.source, drag.paths.clone()));
         if drag.secondary {
             return self.show_drop_menu(pane, drag.paths, destination, pointer.unwrap_or_default());
@@ -236,8 +236,8 @@ impl App {
         let (key, fallback) = if effect == DropEffect::Move { ("RES.DROPMOVE_CONFIRM", "You want to move %d obejct(s)?") } else { ("RES.DROPCOPY_CONFIRM", "You want to copy %d object(s)?") };
         let text = self.language_pack.text(key, fallback).replace("%d", &paths.len().to_string());
         let title = self.language_pack.text("RES.DRAGDROP", "Drag and Drop");
-        self.message_box(&title, "", &text, ndir::msgbox::MB_YESNO | ndir::msgbox::MB_ICONQUESTION, move |app, answer, _| {
-            if answer == ndir::msgbox::IDYES {
+        self.message_box(&title, "", &text, ndr::msgbox::MB_YESNO | ndr::msgbox::MB_ICONQUESTION, move |app, answer, _| {
+            if answer == ndr::msgbox::IDYES {
                 app.apply_drop(effect, paths, destination);
             }
         });
@@ -275,8 +275,8 @@ impl App {
             let (key, fallback) = if effect == DropEffect::Move { ("RES.DROPMOVE_CONFIRM", "You want to move %d obejct(s)?") } else { ("RES.DROPCOPY_CONFIRM", "You want to copy %d object(s)?") };
             let text = self.language_pack.text(key, fallback).replace("%d", &paths.len().to_string());
             let title = self.language_pack.text("RES.DRAGDROP", "Drag and Drop");
-            self.message_box(&title, "", &text, ndir::msgbox::MB_YESNO | ndir::msgbox::MB_ICONQUESTION, move |app, answer, _| {
-                if answer == ndir::msgbox::IDYES {
+            self.message_box(&title, "", &text, ndr::msgbox::MB_YESNO | ndr::msgbox::MB_ICONQUESTION, move |app, answer, _| {
+                if answer == ndr::msgbox::IDYES {
                     app.apply_drop(effect, paths, destination);
                 }
             });
@@ -394,7 +394,7 @@ mod tests {
 
     #[test]
     fn drop_paths_and_default_effect_follow_csharp() {
-        let root = std::env::temp_dir().join(format!("ndir-drop-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("ndr-drop-{}", std::process::id()));
         std::fs::create_dir_all(root.join("a").join("inner")).unwrap();
         std::fs::create_dir_all(root.join("b")).unwrap();
         let candidates = vec![root.join("a"), root.join("b").join("x.txt"), root.join("a")];

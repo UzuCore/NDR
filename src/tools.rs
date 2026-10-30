@@ -1052,7 +1052,7 @@ mod tests {
     use std::time::SystemTime;
     pub(super) fn fixture() -> PathBuf {
         let p = std::env::temp_dir().join(format!(
-            "ndir-tools-{}-{}",
+            "ndr-tools-{}-{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(SystemTime::UNIX_EPOCH)

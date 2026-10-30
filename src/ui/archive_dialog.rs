@@ -4,8 +4,8 @@
 //! 더하기(볼륨 다시 만들기)는 아직 안 된다. 진행 창은 일반 작업 창이고 일시 정지가 없다.
 use super::original_dialogs::{DialogKind, DialogResult};
 use super::*;
-use ndir::archive::{self, ExternalProgram};
-use ndir::msgbox::{IDYES, MB_ICONEXCLAMATION, MB_OK, MB_YESNO};
+use ndr::archive::{self, ExternalProgram};
+use ndr::msgbox::{IDYES, MB_ICONEXCLAMATION, MB_OK, MB_YESNO};
 
 /// C# ArchiveFormatOption(확장자, 표시 이름, 외부 프로그램, 내장, 최고 압축 수준).
 #[derive(Clone, Debug, PartialEq)]
@@ -186,7 +186,7 @@ pub(super) fn output_conflict(sources: &[PathBuf], output: &Path, ko: bool) -> O
     let output = full(output);
     for source in sources {
         let source_full = full(source);
-        if source.is_file() && ndir::names::equals_ignore_case(&source_full, &output) {
+        if source.is_file() && ndr::names::equals_ignore_case(&source_full, &output) {
             return Some(if ko { "압축 결과물 경로와 원본 파일 경로가 같습니다." } else { "The archive path is the same as a source file." }.into());
         }
         if source.is_dir() {
@@ -314,7 +314,7 @@ pub(super) fn archive_create_ui(ui: &mut egui::Ui, form: &mut ArchiveCreateForm,
     choice
 }
 fn n0(value: usize) -> String {
-    ndir::parity::format_size(value as u64, "B", true).trim_end_matches(" B").to_owned()
+    ndr::parity::format_size(value as u64, "B", true).trim_end_matches(" B").to_owned()
 }
 
 impl App {
@@ -324,7 +324,7 @@ impl App {
         if !(raw.contains("7-Zip failed") || raw.contains("Bundled 7-Zip")) {
             return raw.to_owned();
         }
-        let Some(key) = ndir::archive::original_error_key(raw) else { return raw.to_owned() };
+        let Some(key) = ndr::archive::original_error_key(raw) else { return raw.to_owned() };
         let fallback = match key {
             "INVALID_PASSWORD" => "Invalid Password",
             "DISKISFULL" => "Disk is full.",
@@ -342,7 +342,7 @@ impl App {
     /// ExternalPrograms[key]를 ExpandSetting한 경로가 있는 파일이면.
     fn configured_program(&self, key: &str) -> Option<PathBuf> {
         let value = self.settings.values.get("ExternalPrograms")?.as_object()?.iter().find(|(k, _)| k.eq_ignore_ascii_case(key))?.1.as_str()?.to_owned();
-        let path = PathBuf::from(ndir::command_line::expand_setting(&value));
+        let path = PathBuf::from(ndr::command_line::expand_setting(&value));
         path.is_file().then_some(path)
     }
 
@@ -440,7 +440,7 @@ impl App {
         let name = default_archive_name(&paths, &current, &formats[format].extension);
         let mut file_names = vec![name.clone()];
         let other = &self.panes[1 - self.active];
-        if self.dual && other.archive.is_none() && other.remote.is_none() && !super::panes::is_drives(&other.path) && !ndir::names::equals_ignore_case(&other.path.to_string_lossy(), &current.to_string_lossy()) {
+        if self.dual && other.archive.is_none() && other.remote.is_none() && !super::panes::is_drives(&other.path) && !ndr::names::equals_ignore_case(&other.path.to_string_lossy(), &current.to_string_lossy()) {
             file_names.push(other.path.join(&name).to_string_lossy().into_owned());
         }
         let form = ArchiveCreateForm {
@@ -527,7 +527,7 @@ impl App {
                     output: archive_output_path(&form.file_name, &current),
                 };
                 // 원본 btnOkClick(0x417074): ZIP이 아니면 외부 프로그램 칸의 파일이 있어야(PathFileExistsW) 창을 닫고,
-                // 없으면 창을 그대로 두고 그 칸에 초점을 준다. NDIR은 C# 판처럼 동봉 7-Zip이 만들 수 있으면 빈 칸도 받는다.
+                // 없으면 창을 그대로 두고 그 칸에 초점을 준다. NDR은 C# 판처럼 동봉 7-Zip이 만들 수 있으면 빈 칸도 받는다.
                 let zip = choice.format.extension.trim_start_matches('.').eq_ignore_ascii_case("zip");
                 let missing = !zip
                     && match &choice.external {
@@ -568,7 +568,7 @@ impl App {
         let ko = self.language == "ko";
         let program = match self.archive_program(&choice) {
             Ok(program) => program,
-            Err(error) => return self.system_box("NDIR", &error, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {}),
+            Err(error) => return self.system_box("NDR", &error, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {}),
         };
         let extension = choice.format.extension.clone();
         let folder = self.panes[self.active].path.clone();
@@ -615,7 +615,7 @@ impl App {
         };
         let output = if matches!(kind, ArchiveKind::Add | ArchiveKind::Move) { archive::first_volume_path(&chosen) } else { std::path::absolute(&chosen).unwrap_or(chosen) };
         if let Some(error) = output_conflict(&paths, &output, ko) {
-            return self.system_box("NDIR", &error, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
+            return self.system_box("NDR", &error, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
         }
         let family = archive::output_family(&output);
         if matches!(kind, ArchiveKind::Create | ArchiveKind::Zip) {
@@ -686,7 +686,7 @@ impl App {
     /// 압축 작업(일반 작업 창). 끝나면 상태 줄은 결과 글(ArchiveStatus).
     fn run_archive_task(&mut self, kind: ArchiveKind, paths: Vec<PathBuf>, output: PathBuf, choice: ArchiveChoice, program: Option<ExternalProgram>) {
         let ko = self.language == "ko";
-        let options = ndir::commands::ArchiveOptions {
+        let options = ndr::commands::ArchiveOptions {
             extension: choice.format.extension.clone(),
             level: choice.level,
             password: choice.password.clone(),
@@ -754,7 +754,7 @@ impl App {
         }
     }
 
-    /// TryGetExternalArchiveProgram: UseExternalArchivePrograms이거나 NDIR이 직접 못 읽는 형식이면 ExternalPrograms[형식] 또는 [7z].
+    /// TryGetExternalArchiveProgram: UseExternalArchivePrograms이거나 NDR이 직접 못 읽는 형식이면 ExternalPrograms[형식] 또는 [7z].
     /// 고른 항목만 풀 때 풀기 인자 형식이 없고 직접 읽을 수 있으면 동봉 7-Zip.
     fn extract_program(&self, archive: &Path, selected_keys: bool) -> Option<ExternalProgram> {
         let format = archive::archive_format(archive)?;
@@ -825,7 +825,7 @@ impl App {
                 let mut list: Vec<PathBuf> = vec![];
                 for entry in selected.iter().filter(|e| !e.is_dir && archive::archive_format(&e.path).is_some()) {
                     let first = archive::first_volume_path(&entry.path);
-                    if !list.iter().any(|p| ndir::names::equals_ignore_case(&p.to_string_lossy(), &first.to_string_lossy())) {
+                    if !list.iter().any(|p| ndr::names::equals_ignore_case(&p.to_string_lossy(), &first.to_string_lossy())) {
                         list.push(first);
                     }
                 }
@@ -954,9 +954,9 @@ impl App {
                 let entries = archive::list(&archive_path, password.as_deref())?;
                 let (files, folders, bytes) = archive::summary(&entries);
                 let format = archive::archive_format(&archive_path).map(|f| f.to_uppercase()).unwrap_or_else(|| if ko { "알 수 없음".into() } else { "unknown".into() });
-                let modified = ndir::listing::date_text(metadata.modified().ok(), &date_format, &time_format, false, ko, std::time::SystemTime::now());
+                let modified = ndr::listing::date_text(metadata.modified().ok(), &date_format, &time_format, false, ko, std::time::SystemTime::now());
                 let name = archive_path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                let size = |b: u64| ndir::parity::format_size(b, &unit, thousands);
+                let size = |b: u64| ndr::parity::format_size(b, &unit, thousands);
                 let lines = if ko {
                     [format!("파일: {name}"), format!("형식: {format}"), format!("크기: {}", size(metadata.len())), format!("수정한 날짜: {modified}"), format!("파일 항목: {}", n0(files)), format!("폴더 항목: {}", n0(folders)), format!("압축 해제 크기: {}", size(bytes))]
                 } else {
@@ -998,18 +998,18 @@ mod tests {
     }
 }
 
-/// 다중 볼륨 압축 파일 다시 만들기(C# UpdateMultiVolumeArchiveAsync): `<폴더>\.ndir-multivolume-update-…\existing`에 기존 항목을 모두 풀고
+/// 다중 볼륨 압축 파일 다시 만들기(C# UpdateMultiVolumeArchiveAsync): `<폴더>\.ndr-multivolume-update-…\existing`에 기존 항목을 모두 풀고
 /// 고른 항목을 덮어 합친 뒤 볼륨 이름의 묶음 이름("x.7z")으로 같은 분할 크기의 새 묶음을 만든다(남는 옛 볼륨은 지운다). 작업 폴더는 끝나면 지운다.
-fn rebuild_multivolume(paths: &[PathBuf], first_volume: &Path, options: &ndir::commands::ArchiveOptions, events: &Sender<Event>, cancel: &Arc<AtomicBool>) -> Result<(), String> {
+fn rebuild_multivolume(paths: &[PathBuf], first_volume: &Path, options: &ndr::commands::ArchiveOptions, events: &Sender<Event>, cancel: &Arc<AtomicBool>) -> Result<(), String> {
     let parent = first_volume.parent().ok_or("Invalid archive path")?;
     let mut random = [0u8; 16];
     native::random_bytes(&mut random)?;
-    let stage = parent.join(format!(".ndir-multivolume-update-{}", random.iter().map(|b| format!("{b:02x}")).collect::<String>()));
+    let stage = parent.join(format!(".ndr-multivolume-update-{}", random.iter().map(|b| format!("{b:02x}")).collect::<String>()));
     let existing = stage.join("existing");
     let result = (|| {
         std::fs::create_dir_all(&existing).map_err(|e| e.to_string())?;
         let _ = native::set_attributes(&stage, false, true);
-        let mut overwrite = |_: &Path, _: &Path| ndir::fsops::ConflictChoice::Overwrite;
+        let mut overwrite = |_: &Path, _: &Path| ndr::fsops::ConflictChoice::Overwrite;
         let mut passwords = |archive: &Path, _: Option<&str>| super::commands::ask_password(events, cancel, archive);
         let initial = (!options.password.is_empty()).then_some(options.password.as_str());
         archive::extract_entries_with_program(first_volume, &existing, &[], initial, cancel, &mut overwrite, &mut passwords, None, &mut |done, _, _| {
@@ -1040,7 +1040,7 @@ fn rebuild_multivolume(paths: &[PathBuf], first_volume: &Path, options: &ndir::c
             Some((stem, tail)) if tail.len() >= 3 && tail.bytes().all(|b| b.is_ascii_digit()) => parent.join(stem),
             _ => first_volume.to_path_buf(),
         };
-        let rebuilt = ndir::commands::ArchiveOptions { append: false, recursive: true, ..options.clone() };
+        let rebuilt = ndr::commands::ArchiveOptions { append: false, recursive: true, ..options.clone() };
         archive::create_with_program(&roots, &base, &rebuilt, None, cancel)
     })();
     if stage.exists() {
@@ -1054,7 +1054,7 @@ fn rebuild_multivolume(paths: &[PathBuf], first_volume: &Path, options: &ndir::c
 /// 고른 항목을 작업 폴더에 덮어 합친다(C# MergeArchiveInputSnapshot: 같은 이름 파일은 바꾸고 폴더는 합친다).
 fn merge_tree(source: &Path, target: &Path) -> Result<(), String> {
     let metadata = std::fs::symlink_metadata(source).map_err(|e| e.to_string())?;
-    if ndir::fsops::is_reparse(&metadata) {
+    if ndr::fsops::is_reparse(&metadata) {
         return Err(format!("Links are not archived: {}", source.display()));
     }
     if metadata.is_dir() {

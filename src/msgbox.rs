@@ -25,10 +25,10 @@ pub const IDYES: i32 = 6;
 pub const IDNO: i32 = 7;
 pub const IDCONTINUE: i32 = 11;
 
-/// FUN_0040bb38은 빈 제목을 L"nexusfile"(0x8d58f8)로 바꾼다. NDIR은 자기 제품 이름을 쓴다(문서화된 차이).
-pub const DEFAULT_TITLE: &str = "NDIR";
-/// fMsgBox DFM Caption("NexusFile", 언어 항목 없음). NDIR은 자기 제품 이름을 쓴다(문서화된 차이).
-pub const FORM_CAPTION: &str = "NDIR";
+/// FUN_0040bb38은 빈 제목을 L"nexusfile"(0x8d58f8)로 바꾼다. NDR은 자기 제품 이름을 쓴다(문서화된 차이).
+pub const DEFAULT_TITLE: &str = "NDR";
+/// fMsgBox DFM Caption("NexusFile", 언어 항목 없음). NDR은 자기 제품 이름을 쓴다(문서화된 차이).
+pub const FORM_CAPTION: &str = "NDR";
 /// 원본은 바깥 Width를 계산한다(Delphi TControl). Windows 10/11의 bsDialog 테두리 두께
 /// 2 x (SM_CXFIXEDFRAME 3 + SM_CXPADDEDBORDER 4) = 14를 빼서 클라이언트 폭으로 바꾼다. egui 창에는 OS 테두리가 없다.
 pub const FRAME_WIDTH: f32 = 14.0;
@@ -117,7 +117,7 @@ pub fn layout(has_title: bool, has_summary: bool, title_width: f32, summary_widt
 }
 
 /// 승인된 수정: 원본은 버튼 때문에 폼을 넓히지 않아서 글이 짧으면 오른쪽에 붙은 버튼이 왼쪽 끝 밖으로 밀린다.
-/// NDIR은 가장 왼쪽 버튼 앞에 그림 여백(8)을 남긴다.
+/// NDR은 가장 왼쪽 버튼 앞에 그림 여백(8)을 남긴다.
 pub fn minimum_client_width(visible_buttons: usize) -> f32 {
     if visible_buttons == 0 { 0.0 } else { 8.0 + visible_buttons as f32 * 81.0 - 3.0 + 15.0 }
 }

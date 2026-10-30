@@ -1,13 +1,13 @@
-//! C# ShortcutWindow(NDIR 단축키 설정, 760×560: 검색 칸, 명령/범위/단축키 표(머리글 정렬, 두 번 누르기 = 변경), 변경…/사용 안 함/기본값, 안내 글,
-//! 확인·취소)와 ShortcutCaptureWindow(새 단축키 누르기, Esc 취소) + ShowNdirShortcutSettings(KeyboardShortcuts 저장, 상태 줄).
+//! C# ShortcutWindow(NDR 단축키 설정, 760×560: 검색 칸, 명령/범위/단축키 표(머리글 정렬, 두 번 누르기 = 변경), 변경…/사용 안 함/기본값, 안내 글,
+//! 확인·취소)와 ShortcutCaptureWindow(새 단축키 누르기, Esc 취소) + ShowNdrShortcutSettings(KeyboardShortcuts 저장, 상태 줄).
 //! 같은 범위(보이는 범위 글)에서 같은 글쇠면 충돌. 저장할 때 기본값과 같으면 KeyboardShortcuts에서 빼고, 사용 안 함은 빈 글.
 //! 차이(HANDOFF): 명령 이름은 C# LocalizeCommand의 메뉴 글·영어 대체 글을 따르되 TranslateText(언어 파일 역검색)는 쓰지 않는다.
 use super::grid::{self, Column, GridState, GridView};
 use super::original_dialogs::{DialogKind, DialogResult};
 use super::remote_window::wpf_key;
 use super::*;
-use ndir::msgbox::{MB_ICONEXCLAMATION, MB_OK};
-use ndir::shortcut_bindings::{self as bindings, Definition, Modifiers as KeyMods};
+use ndr::msgbox::{MB_ICONEXCLAMATION, MB_OK};
+use ndr::shortcut_bindings::{self as bindings, Definition, Modifiers as KeyMods};
 use serde_json::{Map, Value};
 
 pub(super) struct ShortcutRow {
@@ -18,7 +18,7 @@ pub(super) struct ShortcutRow {
     pub raw: String,
 }
 
-pub(super) struct NdirShortcutsForm {
+pub(super) struct NdrShortcutsForm {
     ko: bool,
     pub rows: Vec<ShortcutRow>,
     pub search: String,
@@ -28,7 +28,7 @@ pub(super) struct NdirShortcutsForm {
     visible: Vec<usize>,
 }
 
-impl NdirShortcutsForm {
+impl NdrShortcutsForm {
     pub(super) fn gesture_text(&self, row: &ShortcutRow) -> String {
         if row.raw.is_empty() { self.disabled_label.clone() } else { row.raw.clone() }
     }
@@ -209,7 +209,7 @@ pub(super) enum ShortcutsAction {
     Cancel,
 }
 
-pub(super) fn shortcuts_ui(ui: &mut egui::Ui, form: &mut NdirShortcutsForm, language: &compat::Language, enter: bool, first_frame: bool) -> Option<ShortcutsAction> {
+pub(super) fn shortcuts_ui(ui: &mut egui::Ui, form: &mut NdrShortcutsForm, language: &compat::Language, enter: bool, first_frame: bool) -> Option<ShortcutsAction> {
     let ko = form.ko;
     let mut action = None;
     ui.set_width(724.0);
@@ -237,7 +237,7 @@ pub(super) fn shortcuts_ui(ui: &mut egui::Ui, form: &mut NdirShortcutsForm, lang
         let row = &form.rows[i];
         [row.command.clone(), row.scope.clone(), form.gesture_text(row)]
     }).collect();
-    let view = GridView { id: "ndir-shortcuts", columns: &columns, height: 330.0, enabled: true, sortable: true, multi_select: false, keyboard: !ui.ctx().wants_keyboard_input(), context_menu: None, row_color: None, background: None };
+    let view = GridView { id: "ndr-shortcuts", columns: &columns, height: 330.0, enabled: true, sortable: true, multi_select: false, keyboard: !ui.ctx().wants_keyboard_input(), context_menu: None, row_color: None, background: None };
     let events = grid::show(ui, &view, &mut form.grid, &|row, column| texts[row][column].clone(), &|_| false);
     if let Some(column) = events.sort {
         form.grid.toggle_sort(column, |a, b| texts[a][column].to_lowercase().cmp(&texts[b][column].to_lowercase()));
@@ -299,15 +299,15 @@ pub(super) fn capture_ui(ui: &mut egui::Ui, display: &mut String, ko: bool) -> O
 }
 
 impl App {
-    pub(super) fn ndir_shortcuts_form(&mut self) -> Option<&mut NdirShortcutsForm> {
+    pub(super) fn ndr_shortcuts_form(&mut self) -> Option<&mut NdrShortcutsForm> {
         self.original_dialogs.iter_mut().rev().find_map(|d| match &mut d.kind {
-            DialogKind::NdirShortcuts(form) => Some(form.as_mut()),
+            DialogKind::NdrShortcuts(form) => Some(form.as_mut()),
             _ => None,
         })
     }
 
-    /// C# ShowNdirShortcutSettings.
-    pub(super) fn open_ndir_shortcuts(&mut self) {
+    /// C# ShowNdrShortcutSettings.
+    pub(super) fn open_ndr_shortcuts(&mut self) {
         let ko = self.language == "ko";
         let disabled_label = self.language_pack.text("formEditShortCut.Caption.btnRemove", if ko { "사용 안 함" } else { "Disabled" });
         let rows: Vec<ShortcutRow> = bindings::definitions()
@@ -319,11 +319,11 @@ impl App {
                 definition,
             })
             .collect();
-        let mut form = NdirShortcutsForm { ko, rows, search: String::new(), grid: GridState::new(0), disabled_label, visible: Vec::new() };
+        let mut form = NdrShortcutsForm { ko, rows, search: String::new(), grid: GridState::new(0), disabled_label, visible: Vec::new() };
         form.refresh_view();
-        let title = self.language_pack.text("formShortcut.Form.Caption", "NDIR Shortcut Keys");
-        self.push_original_dialog(title, DialogKind::NdirShortcuts(Box::new(form)), |app, result, _| {
-            let DialogResult::NdirShortcuts(Some(map)) = result else { return };
+        let title = self.language_pack.text("formShortcut.Form.Caption", "NDR Shortcut Keys");
+        self.push_original_dialog(title, DialogKind::NdrShortcuts(Box::new(form)), |app, result, _| {
+            let DialogResult::NdrShortcuts(Some(map)) = result else { return };
             app.settings.values.insert("KeyboardShortcuts".into(), Value::Object(map));
             app.save();
             app.status = app.tr("단축키 설정을 저장했습니다.", "Shortcut settings saved.").into_owned();
@@ -336,11 +336,11 @@ impl App {
         self.system_box(caption, if ko { &korean } else { &english }, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
     }
 
-    pub(super) fn ndir_shortcuts_action(&mut self, action: ShortcutsAction, ctx: &egui::Context) {
+    pub(super) fn ndr_shortcuts_action(&mut self, action: ShortcutsAction, ctx: &egui::Context) {
         let ko = self.language == "ko";
-        let Some(form) = self.ndir_shortcuts_form() else { return };
+        let Some(form) = self.ndr_shortcuts_form() else { return };
         match action {
-            ShortcutsAction::Cancel => self.answer_dialog(DialogResult::NdirShortcuts(None), ctx),
+            ShortcutsAction::Cancel => self.answer_dialog(DialogResult::NdrShortcuts(None), ctx),
             ShortcutsAction::Disable => {
                 if let Some(index) = form.selected() {
                     form.rows[index].raw.clear();
@@ -361,7 +361,7 @@ impl App {
                 let title = self.language_pack.text("formEditShortCut.Form.Caption", "Edit Shortcut Key");
                 self.push_original_dialog(title, DialogKind::ShortcutCapture { display }, move |app, result, _| {
                     let DialogResult::ShortcutCapture(Some(gesture)) = result else { return };
-                    let Some(form) = app.ndir_shortcuts_form() else { return };
+                    let Some(form) = app.ndr_shortcuts_form() else { return };
                     if let Some(other) = form.conflict(index, &gesture) {
                         return app.shortcut_conflict_box(format!("같은 범위에서 이미 사용 중인 단축키입니다: {other}"), format!("That shortcut is already in use in this scope: {other}"));
                     }
@@ -384,7 +384,7 @@ impl App {
                 for (key, value) in existing {
                     map.insert(key, value);
                 }
-                let Some(form) = self.ndir_shortcuts_form() else { return };
+                let Some(form) = self.ndr_shortcuts_form() else { return };
                 for row in &form.rows {
                     let id = &row.definition.id;
                     map.retain(|key, _| !key.eq_ignore_ascii_case(id));
@@ -392,7 +392,7 @@ impl App {
                         map.insert(id.clone(), Value::String(row.raw.clone()));
                     }
                 }
-                self.answer_dialog(DialogResult::NdirShortcuts(Some(map)), ctx);
+                self.answer_dialog(DialogResult::NdrShortcuts(Some(map)), ctx);
             }
         }
     }

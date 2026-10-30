@@ -230,7 +230,7 @@ pub fn replace_key_part(text: &str, item: &str) -> String {
     }
 }
 
-/// FUN_0047d288은 같은 이름의 첫 줄을 고치지만 NDIR은 두 번 누른 줄을 고친다(승인된 수정: Delete처럼 이름이 겹치는 경우).
+/// FUN_0047d288은 같은 이름의 첫 줄을 고치지만 NDR은 두 번 누른 줄을 고친다(승인된 수정: Delete처럼 이름이 겹치는 경우).
 pub fn set_line(lines: &[String], index: usize, text: &str) -> Vec<String> {
     let mut result = lines.to_vec();
     if let Some(line) = result.get_mut(index) {
@@ -239,7 +239,7 @@ pub fn set_line(lines: &[String], index: usize, text: &str) -> Vec<String> {
     result
 }
 
-/// 저장 글. FUN_0047cb40은 머리 없이 저장해 다음 시작에 기본값과 섞이지만, NDIR은 머리를 넣어 고친 줄이 그대로 읽힌다(승인된 수정).
+/// 저장 글. FUN_0047cb40은 머리 없이 저장해 다음 시작에 기본값과 섞이지만, NDR은 머리를 넣어 고친 줄이 그대로 읽힌다(승인된 수정).
 pub fn to_file_text(lines: &[String]) -> String {
     format!("NEXUSFILESHORTCUT1.0\r\n{}\r\n", lines.join("\r\n"))
 }

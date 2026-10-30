@@ -2,7 +2,7 @@ use super::*;
 use std::fs;
 
 fn fixture(label:&str)->(PathBuf,egui::Context,App){
-    let root=std::env::temp_dir().join(format!("ndir-ui-{}-{}-{label}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    let root=std::env::temp_dir().join(format!("ndr-ui-{}-{}-{label}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
     let left=root.join("left");let right=root.join("right");fs::create_dir_all(&left).unwrap();fs::create_dir(&right).unwrap();
     fs::write(left.join("한글 문서.txt"),b"owned original payload").unwrap();
     let ctx=egui::Context::default();let options=Options{profile:Some(root.join("profile")),left:Some(left),right:Some(right),language:Some(if label=="password"{"en"}else{"ko"}.into()),..Default::default()};

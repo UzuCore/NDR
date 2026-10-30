@@ -4,7 +4,7 @@
 use super::grid::GridState;
 use super::original_dialogs::{DialogKind, DialogResult};
 use super::*;
-use ndir::msgbox::{MB_ICONASTERISK, MB_OK};
+use ndr::msgbox::{MB_ICONASTERISK, MB_OK};
 use serde_json::{Map, Value, json};
 
 /// FunctionKeyBindingService.InternalCommands(Id, 이름).
@@ -44,7 +44,7 @@ impl Binding {
 }
 
 /// FunctionKeyBindingService.Get: FunctionKeyBindings[키](정리), 없으면 옛 FunctionKeys[키](# 시작이면 내부 명령).
-pub(super) fn binding_for(settings: &ndir::settings::Settings, key: &str) -> Option<Binding> {
+pub(super) fn binding_for(settings: &ndr::settings::Settings, key: &str) -> Option<Binding> {
     let find = |name: &str| settings.values.get(name).and_then(Value::as_object).and_then(|m| m.iter().find(|(k, _)| k.eq_ignore_ascii_case(key)).map(|(_, v)| v.clone()));
     if let Some(value) = find("FunctionKeyBindings") {
         let text = |field: &str| value.get(field).and_then(Value::as_str).unwrap_or("").to_owned();
@@ -63,7 +63,7 @@ pub(super) struct FunctionKeyEditorForm {
 }
 
 impl FunctionKeyEditorForm {
-    pub(super) fn new(settings: &ndir::settings::Settings, ko: bool) -> Self {
+    pub(super) fn new(settings: &ndr::settings::Settings, ko: bool) -> Self {
         // C# F1~F12, 그 뒤에 원본 TfPreferences 목록의 ^F1~^F11(Ctrl+F1~F11, [FuncKey] "^F%d").
         let keys = (1..=12).map(|n| format!("F{n}")).chain((1..=11).map(|n| format!("^F{n}")));
         let bindings: Vec<(String, Option<Binding>)> = keys.map(|key| { let b = binding_for(settings, &key); (key, b) }).collect();
@@ -206,7 +206,7 @@ pub(super) fn function_key_edit_ui(ui: &mut egui::Ui, form: &mut FunctionKeyEdit
     if browse.clicked() {
         let title = text("Form.Caption", "Edit Function Key");
         let initial = Path::new(form.command.trim()).parent().filter(|p| p.is_dir()).map(Path::to_path_buf);
-        if let Some(path) = ndir::file_dialogs::open_file(&title, initial.as_deref(), "", &[("*.*", "*.*")]) {
+        if let Some(path) = ndr::file_dialogs::open_file(&title, initial.as_deref(), "", &[("*.*", "*.*")]) {
             form.command = path.to_string_lossy().into_owned();
         }
     }

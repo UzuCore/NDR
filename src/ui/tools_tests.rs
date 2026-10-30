@@ -93,7 +93,7 @@ fn picked(_: &str, _: Option<&Path>) -> Option<PathBuf> {
 }
 
 fn fixture(label: &str, language: &str) -> (PathBuf, egui::Context, App) {
-    let root = std::env::temp_dir().join(format!("ndir-tools-{}-{}-{label}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    let root = std::env::temp_dir().join(format!("ndr-tools-{}-{}-{label}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
     let (left, right) = (root.join("left"), root.join("right"));
     fs::create_dir_all(left.join("folder1")).unwrap();
     fs::create_dir_all(&right).unwrap();
@@ -241,7 +241,7 @@ fn command_line_find_and_open_with_follow_the_csharp_flows() {
     app.panes[0].selected.clear();
     app.panes[0].cursor = row(&app, "folder1");
     app.dispatch("openWith", &ctx);
-    assert_eq!(boxed(&app), ("NDIR".to_owned(), "다른 프로그램으로 열 파일을 선택하세요.".to_owned()));
+    assert_eq!(boxed(&app), ("NDR".to_owned(), "다른 프로그램으로 열 파일을 선택하세요.".to_owned()));
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -267,7 +267,7 @@ fn checksum_merge_and_destination_follow_the_csharp_flows() {
     assert!(matches!(&app.original_dialogs[0].kind, DialogKind::Checksum { value, ready: false } if *value == calculating));
     frame(&mut app, &ctx, vec![]);
     wait_until(&mut app, &ctx, |app| matches!(&app.original_dialogs[0].kind, DialogKind::Checksum { ready: true, .. }));
-    let md5 = ndir::tools::checksum(&left.join("alpha.txt"), "md5").unwrap().to_ascii_lowercase();
+    let md5 = ndr::tools::checksum(&left.join("alpha.txt"), "md5").unwrap().to_ascii_lowercase();
     assert!(matches!(&app.original_dialogs[0].kind, DialogKind::Checksum { value, .. } if *value == md5));
     app.clipboard_writer = copied_checksum;
     frame(&mut app, &ctx, vec![]);
@@ -284,7 +284,7 @@ fn checksum_merge_and_destination_follow_the_csharp_flows() {
     // CRC는 IntToHex(8자, 대문자). 폴더에 초점이 있으면 아무 일도 없다.
     app.dispatch("checksum:Crc32", &ctx);
     wait_until(&mut app, &ctx, |app| matches!(&app.original_dialogs[0].kind, DialogKind::Checksum { ready: true, .. }));
-    let crc32 = ndir::tools::checksum(&left.join("alpha.txt"), "crc32").unwrap();
+    let crc32 = ndr::tools::checksum(&left.join("alpha.txt"), "crc32").unwrap();
     assert!(matches!(&app.original_dialogs[0].kind, DialogKind::Checksum { value, .. } if *value == crc32 && value.len() == 8));
     app.answer_dialog(DialogResult::Checksum, &ctx);
     app.panes[0].cursor = row(&app, "folder1");
@@ -294,7 +294,7 @@ fn checksum_merge_and_destination_follow_the_csharp_flows() {
     app.panes[0].cursor = row(&app, "alpha.txt");
     app.dispatch("checksum:Sha256", &ctx);
     wait_until(&mut app, &ctx, |app| app.text.is_some());
-    let sha256 = ndir::tools::checksum(&left.join("alpha.txt"), "sha256").unwrap();
+    let sha256 = ndr::tools::checksum(&left.join("alpha.txt"), "sha256").unwrap();
     assert_eq!(app.text.as_ref().map(|t| (t.title.clone(), t.text.clone())), Some(("SHA-256 Checksum".to_owned(), format!("alpha.txt\r\nSHA-256 {sha256}"))));
     app.text = None;
     app.panes[0].selected = [row(&app, "alpha.txt"), row(&app, "folder1"), row(&app, "beta.txt")].into_iter().collect();
@@ -302,7 +302,7 @@ fn checksum_merge_and_destination_follow_the_csharp_flows() {
     wait_until(&mut app, &ctx, |app| app.text.is_some());
     let text = app.text.take().unwrap();
     assert_eq!(text.title, "Checksum");
-    let crc = ndir::tools::checksum(&left.join("beta.txt"), "crc32").unwrap();
+    let crc = ndr::tools::checksum(&left.join("beta.txt"), "crc32").unwrap();
     assert!(text.text.starts_with("alpha.txt\r\nCRC32   ") && text.text.contains(&format!("\r\n\r\nbeta.txt\r\nCRC32   {crc}\r\nMD5     ")), "{}", text.text);
     assert!(!text.text.contains("folder1"), "folders are left out");
     app.panes[0].selected.clear();
@@ -313,7 +313,7 @@ fn checksum_merge_and_destination_follow_the_csharp_flows() {
     // 텍스트 파일 합치기: 둘 이상, 저장 경로, 같은 경로 검사, 구분 고르기.
     app.panes[0].selected = [row(&app, "alpha.txt")].into_iter().collect();
     app.dispatch("merge", &ctx);
-    assert_eq!(boxed(&app), ("NDIR".to_owned(), "Select at least two text files to merge.".to_owned()));
+    assert_eq!(boxed(&app), ("NDR".to_owned(), "Select at least two text files to merge.".to_owned()));
     app.answer_message_box(1, &ctx);
     app.panes[0].selected = [row(&app, "alpha.txt"), row(&app, "beta.txt")].into_iter().collect();
     SAVE_TARGET.with(|t| *t.borrow_mut() = Some(left.join("ALPHA.TXT")));
@@ -341,7 +341,7 @@ fn checksum_merge_and_destination_follow_the_csharp_flows() {
     // 상자가 위에 있어도 대상 선택 창은 그 뒤에 그대로 그려진다(예전에는 사라졌다).
     let serial = app.original_dialogs.last().unwrap().serial;
     frame(&mut app, &ctx, vec![]);
-    let dialog_layer = egui::Id::new(("ndir-original-dialog", serial));
+    let dialog_layer = egui::Id::new(("ndr-original-dialog", serial));
     assert!(ctx.memory(|m| m.areas().visible_layer_ids().iter().any(|layer| layer.id == dialog_layer)), "the dialog is drawn under the box");
     assert_eq!(app.original_dialogs.len(), 1);
     app.answer_message_box(1, &ctx);
@@ -397,7 +397,7 @@ fn network_drives_explorer_import_and_install_follow_the_csharp_flows() {
     app.dispatch("mapDrive", &ctx);
     assert_eq!(prompt(&app).0, "네트워크 드라이브 연결");
     app.answer_dialog(DialogResult::Text(Some("12".into())), &ctx);
-    assert_eq!(boxed(&app), ("NDIR".to_owned(), "드라이브 문자는 Z: 형식으로 입력하세요.".to_owned()));
+    assert_eq!(boxed(&app), ("NDR".to_owned(), "드라이브 문자는 Z: 형식으로 입력하세요.".to_owned()));
     app.answer_message_box(1, &ctx);
     app.dispatch("mapDrive", &ctx);
     app.answer_dialog(DialogResult::Text(Some(letter.to_string())), &ctx);
@@ -449,12 +449,12 @@ fn network_drives_explorer_import_and_install_follow_the_csharp_flows() {
     wait_until(&mut app, &ctx, |app| !app.panes[0].loading);
     // 탐색기 메뉴: 없으면 추가를, 있으면 제거를 묻는다.
     app.dispatch("shellIntegration", &ctx);
-    assert_eq!(boxed(&app), ("탐색기 통합".to_owned(), "현재 계정의 Windows 탐색기 폴더 메뉴에 NDIR을 추가할까요?".to_owned()));
+    assert_eq!(boxed(&app), ("탐색기 통합".to_owned(), "현재 계정의 Windows 탐색기 폴더 메뉴에 NDR을 추가할까요?".to_owned()));
     app.answer_message_box(6, &ctx);
-    assert_eq!(app.status, "탐색기 메뉴에 NDIR을 추가했습니다.");
+    assert_eq!(app.status, "탐색기 메뉴에 NDR을 추가했습니다.");
     app.system.explorer_enabled = explorer_on;
     app.dispatch("shellIntegration", &ctx);
-    assert_eq!(boxed(&app).1, "NDIR의 탐색기 폴더 메뉴 등록을 제거할까요?");
+    assert_eq!(boxed(&app).1, "NDR의 탐색기 폴더 메뉴 등록을 제거할까요?");
     app.answer_message_box(7, &ctx);
     assert_eq!(EXPLORER.with(|e| e.borrow().clone()), [true], "No changes nothing");
     // 압축 파일 설치(셸 동사 install).
@@ -489,7 +489,7 @@ fn network_drives_explorer_import_and_install_follow_the_csharp_flows() {
 }
 
 fn archive_keys(path: &Path) -> Vec<String> {
-    let mut keys: Vec<String> = ndir::archive::list(path, None).unwrap().into_iter().filter(|e| !e.is_dir).map(|e| e.key.replace('\\', "/")).collect();
+    let mut keys: Vec<String> = ndr::archive::list(path, None).unwrap().into_iter().filter(|e| !e.is_dir).map(|e| e.key.replace('\\', "/")).collect();
     keys.sort();
     keys
 }
@@ -598,7 +598,7 @@ fn archive_create_add_move_and_extract_follow_the_csharp_flows() {
     app.dispatch("archiveAdd", &ctx);
     name_archive(&mut app, &left.join("other.7z").to_string_lossy());
     app.submit_archive_create(0, &ctx);
-    assert_eq!(boxed(&app), ("NDIR".to_owned(), "대상 파일의 형식(7z)과 선택한 형식(.zip)이 다릅니다.".to_owned()));
+    assert_eq!(boxed(&app), ("NDR".to_owned(), "대상 파일의 형식(7z)과 선택한 형식(.zip)이 다릅니다.".to_owned()));
     app.answer_message_box(1, &ctx);
     // 압축 파일로 이동: 확인 뒤 원본을 지운다(이 시험은 휴지통을 쓰지 않는다).
     app.panes[0].selected = [row(&app, "gamma.log")].into_iter().collect();
@@ -625,7 +625,7 @@ fn archive_create_add_move_and_extract_follow_the_csharp_flows() {
     fs::create_dir_all(left.join("solo")).unwrap();
     fs::write(left.join("solo").join("x.txt"), b"x").unwrap();
     let cancel = AtomicBool::new(false);
-    ndir::archive::create(&[left.join("solo")], &left.join("solo.zip"), None, &cancel).unwrap();
+    ndr::archive::create(&[left.join("solo")], &left.join("solo.zip"), None, &cancel).unwrap();
     fs::remove_dir_all(left.join("solo")).unwrap();
     app.refresh(0);
     wait_until(&mut app, &ctx, |app| !app.panes[0].loading);
@@ -667,7 +667,7 @@ fn archive_create_add_move_and_extract_follow_the_csharp_flows() {
 
 // ---- 디스크 복사(C# DiskCopyWindow). 장치 함수는 모두 가짜이고, 이미지 파일은 격리 폴더에만 쓴다. ----
 use super::disk_copy_dialog::{DiskAction, DiskHooks, DiskMode, DiskStage, physical_text};
-use ndir::disk::{PhysicalDisk, RemovableDrive};
+use ndr::disk::{PhysicalDisk, RemovableDrive};
 
 /// 가짜 장치 함수는 일꾼 스레드에서 불리므로 기록은 전역이다. 디스크 테스트끼리는 이 잠금으로 차례를 지킨다.
 static DISK_LOCK: Mutex<()> = Mutex::new(());
@@ -793,8 +793,8 @@ fn disk_copy_window_follows_the_csharp_flows() {
     }
     // 직접 복사: 경고 확인(아니요면 아무것도 하지 않음, 예면 복사 → 창이 닫힘).
     app.disk_copy_action(DiskAction::Start, &ctx);
-    assert_eq!(boxed(&app), ("이동식 드라이브 직접 복사".to_owned(), "F:\\ (이동식 디스크)의 기존 볼륨 데이터가 E:\\ (USB-A) 내용으로 덮어씁니다.\n\n작업 중에는 드라이브를 분리하거나 NDIR을 종료하지 마세요. 계속할까요?".to_owned()));
-    assert_eq!(app.msgboxes[0].flags, ndir::msgbox::MB_YESNO | ndir::msgbox::MB_ICONEXCLAMATION);
+    assert_eq!(boxed(&app), ("이동식 드라이브 직접 복사".to_owned(), "F:\\ (이동식 디스크)의 기존 볼륨 데이터가 E:\\ (USB-A) 내용으로 덮어씁니다.\n\n작업 중에는 드라이브를 분리하거나 NDR을 종료하지 마세요. 계속할까요?".to_owned()));
+    assert_eq!(app.msgboxes[0].flags, ndr::msgbox::MB_YESNO | ndr::msgbox::MB_ICONEXCLAMATION);
     app.answer_message_box(7, &ctx);
     assert!(app.disk_copy_form().unwrap().run.is_none() && disk_calls().is_empty(), "No starts nothing");
     app.disk_copy_action(DiskAction::Start, &ctx);
@@ -874,7 +874,7 @@ fn disk_copy_window_follows_the_csharp_flows() {
     assert_eq!(disk3, "PhysicalDrive3 · 4,096 bytes");
     for (attempt, swap) in [(0, 7), (1, 6)] {
         app.disk_copy_action(DiskAction::Start, &ctx);
-        assert_eq!(boxed(&app), ("한 드라이브 디스크 복사".to_owned(), format!("{disk3} (미디어 교체 후)의 파티션 테이블과 모든 파티션을 포함한 물리 디스크 전체가 {disk3} 내용으로 덮어써집니다.\n\n작업 중에는 디스크를 분리하거나 NDIR을 종료하지 마세요. 계속할까요?")));
+        assert_eq!(boxed(&app), ("한 드라이브 디스크 복사".to_owned(), format!("{disk3} (미디어 교체 후)의 파티션 테이블과 모든 파티션을 포함한 물리 디스크 전체가 {disk3} 내용으로 덮어써집니다.\n\n작업 중에는 디스크를 분리하거나 NDR을 종료하지 마세요. 계속할까요?")));
         app.answer_message_box(6, &ctx);
         assert_eq!(app.disk_copy_form().unwrap().status, "원본 디스크를 임시 이미지로 저장하고 있습니다…");
         wait_until(&mut app, &ctx, |app| !app.msgboxes.is_empty());
@@ -882,7 +882,7 @@ fn disk_copy_window_follows_the_csharp_flows() {
         assert_eq!(calls.len(), 1);
         let temp = PathBuf::from(calls[0].strip_prefix("read \\\\.\\PhysicalDrive3 ").expect("reads the source disk"));
         let name = temp.file_name().unwrap().to_string_lossy().into_owned();
-        assert!(temp.starts_with(&root) && name.starts_with("NDIR-DiskCopy-") && name.ends_with(".img") && name.len() == "NDIR-DiskCopy-.img".len() + 32, "{name}");
+        assert!(temp.starts_with(&root) && name.starts_with("NDR-DiskCopy-") && name.ends_with(".img") && name.len() == "NDR-DiskCopy-.img".len() + 32, "{name}");
         assert!(temp.is_file());
         assert_eq!(boxed(&app), ("디스크 복사".to_owned(), "원본을 읽었습니다. 원본 미디어를 꺼내고 같은 용량의 대상 미디어를 넣은 뒤 계속을 누르세요.\n\n대상 미디어의 모든 데이터를 덮어씁니다.".to_owned()));
         let form = app.disk_copy_form().unwrap();
@@ -902,7 +902,7 @@ fn disk_copy_window_follows_the_csharp_flows() {
         DISK_FAIL_WRITE.store(false, Ordering::SeqCst);
         assert_eq!(disk_calls(), [format!("write {} \\\\.\\PhysicalDrive3 true", temp.display())]);
         assert_eq!(boxed(&app), ("디스크 복사".to_owned(), format!("복원 또는 드라이브 복사 중 오류가 발생했습니다. 대상 디스크의 데이터가 일부 변경되었을 수 있습니다.\n\nDevice write failed\n\n복구용 이미지 파일을 보존했습니다: {}", temp.display())));
-        assert_eq!(app.msgboxes[0].flags, ndir::msgbox::MB_OK | ndir::msgbox::MB_ICONEXCLAMATION);
+        assert_eq!(app.msgboxes[0].flags, ndr::msgbox::MB_OK | ndr::msgbox::MB_ICONEXCLAMATION);
         app.answer_message_box(1, &ctx);
         let form = app.disk_copy_form().unwrap();
         assert!(temp.is_file(), "the recovery image is kept");
@@ -910,7 +910,7 @@ fn disk_copy_window_follows_the_csharp_flows() {
         assert_eq!((form.path_label(), form.start_label()), ("원본 전체 디스크 이미지", "전체 디스크 복원"));
         // 남은 이미지로 전체 디스크 복원: 확인 → 검증 없이 쓰기 → 창이 닫힘.
         app.disk_copy_action(DiskAction::Start, &ctx);
-        assert_eq!(boxed(&app), ("전체 물리 디스크 복원".to_owned(), format!("{disk3}의 파티션 테이블과 모든 파티션을 포함한 물리 디스크 전체가 {name} 내용으로 덮어써집니다.\n\n작업 중에는 디스크를 분리하거나 NDIR을 종료하지 마세요. 계속할까요?")));
+        assert_eq!(boxed(&app), ("전체 물리 디스크 복원".to_owned(), format!("{disk3}의 파티션 테이블과 모든 파티션을 포함한 물리 디스크 전체가 {name} 내용으로 덮어써집니다.\n\n작업 중에는 디스크를 분리하거나 NDR을 종료하지 마세요. 계속할까요?")));
         app.answer_message_box(6, &ctx);
         assert_eq!(app.disk_copy_form().unwrap().status, "물리 디스크 볼륨을 잠그고 있습니다…");
         wait_until(&mut app, &ctx, |app| app.original_dialogs.is_empty());
@@ -956,7 +956,7 @@ fn disk_copy_window_in_english_reports_errors_like_csharp() {
     assert_eq!(filters[1], ("All files (*.*)".to_owned(), "*.*".to_owned()));
     DISK_FAIL_WRITE.store(true, Ordering::SeqCst);
     app.disk_copy_action(DiskAction::Start, &ctx);
-    assert_eq!(boxed(&app), ("Restore full physical disk".to_owned(), "The entire physical disk, including its partition table and every partition, PhysicalDrive3 · 4,096 bytes will be overwritten with backup.img.\n\nDo not disconnect the disk or close NDIR during the operation. Continue?".to_owned()));
+    assert_eq!(boxed(&app), ("Restore full physical disk".to_owned(), "The entire physical disk, including its partition table and every partition, PhysicalDrive3 · 4,096 bytes will be overwritten with backup.img.\n\nDo not disconnect the disk or close NDR during the operation. Continue?".to_owned()));
     app.answer_message_box(6, &ctx);
     assert!(app.disk_copy_blocks_close(), "the main window cannot close while restoring");
     assert!(app.disk_copy_form().unwrap().run.as_ref().is_some_and(|r| !r.cancellable()), "restoring cannot be cancelled");
@@ -974,7 +974,7 @@ fn disk_copy_window_in_english_reports_errors_like_csharp() {
         assert_eq!(form.start_label(), "Restore drive");
     }
     app.disk_copy_action(DiskAction::Start, &ctx);
-    assert_eq!(boxed(&app), ("Restore removable drive".to_owned(), "The existing volume data on F:\\ (Removable Disk) will be overwritten with backup.img.\n\nDo not disconnect the drive or close NDIR during the operation. Continue?".to_owned()));
+    assert_eq!(boxed(&app), ("Restore removable drive".to_owned(), "The existing volume data on F:\\ (Removable Disk) will be overwritten with backup.img.\n\nDo not disconnect the drive or close NDR during the operation. Continue?".to_owned()));
     app.answer_message_box(7, &ctx);
     {
         let form = app.disk_copy_form().unwrap();
@@ -1120,7 +1120,7 @@ fn system_commands_follow_csharp() {
     assert!(lines[0].ends_with(": alpha.txt"), "{lines:?}");
     assert!(lines[3].ends_with(&format!(": {}", left.join("alpha.txt").display())), "{lines:?}");
     assert_eq!(lines.len(), 7, "name, type, extension, location, size, date, attributes: {lines:?}");
-    // ViewTextAsync: the configured viewer gets the quoted file path in the file's folder; with none, the NDIR text window.
+    // ViewTextAsync: the configured viewer gets the quoted file path in the file's folder; with none, the NDR text window.
     app.settings.set_text("TextViewerPath", "viewer.exe");
     app.dispatch("textView", &ctx);
     assert_eq!(launched(), vec![("viewer.exe".to_owned(), format!("\"{}\"", left.join("alpha.txt").display()), left.clone())]);
@@ -1163,7 +1163,7 @@ fn system_commands_follow_csharp() {
     // ShowAbout: information box with the profile folder.
     app.dispatch("about", &ctx);
     let (_, about) = boxed(&app);
-    assert!(about.starts_with(&format!("NDIR {}", env!("CARGO_PKG_VERSION"))) && about.contains(&app.profile.display().to_string()), "{about}");
+    assert!(about.starts_with(&format!("NDR {}", env!("CARGO_PKG_VERSION"))) && about.contains(&app.profile.display().to_string()), "{about}");
     let _ = fs::remove_dir_all(&root);
 }
 
@@ -1173,7 +1173,7 @@ fn archive_entry_opening_asks_for_the_password_like_csharp() {
     let (root, ctx, mut app) = fixture("entry-open", "en");
     let left = root.join("left");
     let secret = left.join("secret.zip");
-    ndir::archive::create(&[left.join("alpha.txt")], &secret, Some("s3cret"), &AtomicBool::new(false)).unwrap();
+    ndr::archive::create(&[left.join("alpha.txt")], &secret, Some("s3cret"), &AtomicBool::new(false)).unwrap();
     app.panes[0].archive = Some(ArchiveLocation { file: secret.clone(), prefix: String::new(), password: "s3cret".into() });
     app.refresh(0);
     wait_until(&mut app, &ctx, |app| !app.panes[0].loading);
@@ -1194,7 +1194,7 @@ fn archive_entry_opening_asks_for_the_password_like_csharp() {
     let opened = launched();
     assert_eq!(opened.len(), 1, "{opened:?}");
     let path = PathBuf::from(&opened[0].0);
-    assert!(path.starts_with(std::env::temp_dir().join("NDIR")) && path.ends_with("alpha.txt"), "{path:?}");
+    assert!(path.starts_with(std::env::temp_dir().join("NDR")) && path.ends_with("alpha.txt"), "{path:?}");
     assert_eq!(fs::read_to_string(&path).unwrap(), "alpha.txt");
     // cancelling the prompt opens nothing and shows nothing
     app.panes[0].archive.as_mut().unwrap().password = "wrong".into();
@@ -1233,7 +1233,7 @@ fn built_in_alz_and_egg_split_with_the_bundled_seven_zip_but_need_a_program_for_
 /// 원본 0x483c79: playwav(처음 값 켜짐)면 .wav를 셸로 열지 않고 PlaySoundW(NULL) 뒤 PlaySoundW(파일)로 재생한다.
 /// 원본 0x43d9fc: 완료 소리는 프로그램 폴더의 complete.wav.
 #[test]
-fn wave_files_play_inside_ndir_and_the_completion_sound_is_complete_wav() {
+fn wave_files_play_inside_ndr_and_the_completion_sound_is_complete_wav() {
     let (root, ctx, mut app) = fixture("playwav", "en");
     let wave = root.join("left").join("Ding.WAV");
     fs::write(&wave, b"RIFF").unwrap();
@@ -1296,7 +1296,7 @@ fn nested_archives_of_any_known_format_open_as_panes_like_csharp() {
         app.panes[1].archive = None;
     }
     assert!(launched().is_empty(), "ALZ/EGG not handed to the shell");
-    // 동봉 7-Zip이 못 읽는 ACE: C# TryGetExternalArchiveProgram 길. 외부 프로그램이 없으면 셸로 열지 않고 C# 오류 글(NDIR 경고 상자).
+    // 동봉 7-Zip이 못 읽는 ACE: C# TryGetExternalArchiveProgram 길. 외부 프로그램이 없으면 셸로 열지 않고 C# 오류 글(NDR 경고 상자).
     let ace = root.join("left").join("old.ace");
     fs::write(&ace, b"x").unwrap();
     app.archive_entries_opened(1, root.join("outer.zip"), None, vec![ace.clone()], vec![], true);
@@ -1314,11 +1314,11 @@ fn ace_archives_open_through_the_external_program_like_csharp() {
     fs::write(left.join("inside.txt"), b"ace payload").unwrap();
     // 동봉 7-Zip이 못 읽는 ACE 자리: 7-Zip은 내용(ZIP 머리)으로 형식을 알아보므로 ZIP을 .ace 이름으로 둔다.
     let zip = left.join("old.zip");
-    ndir::archive::create(&[left.join("inside.txt")], &zip, None, &AtomicBool::new(false)).unwrap();
+    ndr::archive::create(&[left.join("inside.txt")], &zip, None, &AtomicBool::new(false)).unwrap();
     let ace = left.join("old.ace");
     fs::rename(&zip, &ace).unwrap();
     // C# ExternalPrograms["ace"] + ExternalArchiveExtractArgumentTemplates["ace"].
-    let seven = ndir::archive::seven_zip_path().unwrap();
+    let seven = ndr::archive::seven_zip_path().unwrap();
     app.settings.values.insert("ExternalPrograms".into(), serde_json::json!({ "ace": seven.to_string_lossy() }));
     app.settings.values.insert("ExternalArchiveExtractArgumentTemplates".into(), serde_json::json!({ "ace": "x {archive} -o{destination} -y {keys}" }));
     app.open_with_external_archive_program(0, ace.clone(), true);
@@ -1328,7 +1328,7 @@ fn ace_archives_open_through_the_external_program_like_csharp() {
     assert!(app.panes[0].archive.is_none());
     // 대상 폴더가 비어 있지 않으면 C# 판처럼 "여기에 추가할까요?"(예/아니요, 경고)를 묻는다.
     app.open_with_external_archive_program(0, ace, true);
-    assert!(app.msgboxes.last().is_some_and(|m| m.flags == (ndir::msgbox::MB_YESNO | ndir::msgbox::MB_ICONEXCLAMATION)));
+    assert!(app.msgboxes.last().is_some_and(|m| m.flags == (ndr::msgbox::MB_YESNO | ndr::msgbox::MB_ICONEXCLAMATION)));
     let _ = fs::remove_dir_all(root);
 }
 
@@ -1346,7 +1346,7 @@ fn missing_next_volume_asks_arc_changevol_like_the_original() {
     }));
     wait_until(&mut app, &ctx, |app| !app.msgboxes.is_empty());
     let expected = app.language_pack.text("RES.ARC_CHANGEVOL", "?").replacen("%s", "C:\\a\\x.7z.002", 1);
-    assert_eq!(app.msgboxes.first().map(|m| (m.title.clone(), m.text.clone(), m.flags)), Some((app.language_pack.text("RES.TITLE_ERROR", "?"), expected, ndir::msgbox::MB_OKCANCEL | ndir::msgbox::MB_ICONEXCLAMATION)));
+    assert_eq!(app.msgboxes.first().map(|m| (m.title.clone(), m.text.clone(), m.flags)), Some((app.language_pack.text("RES.TITLE_ERROR", "?"), expected, ndr::msgbox::MB_OKCANCEL | ndr::msgbox::MB_ICONEXCLAMATION)));
     app.answer_message_box(1, &ctx);
     wait_until(&mut app, &ctx, |app| !app.msgboxes.is_empty());
     app.answer_message_box(2, &ctx);
@@ -1355,7 +1355,7 @@ fn missing_next_volume_asks_arc_changevol_like_the_original() {
     fs::remove_dir_all(root).unwrap();
 }
 
-/// C# ApplySingleInstanceModeAsync: 환경 설정의 "한 번에 하나만 실행"은 바로 적용된다. 다른 NDIR이 이미 잡고 있으면 이전 값으로 되돌리고 알린다.
+/// C# ApplySingleInstanceModeAsync: 환경 설정의 "한 번에 하나만 실행"은 바로 적용된다. 다른 NDR이 이미 잡고 있으면 이전 값으로 되돌리고 알린다.
 #[test]
 fn single_instance_mode_applies_without_restart_like_csharp() {
     let (root, ctx, mut app) = fixture("single", "en");
@@ -1364,21 +1364,21 @@ fn single_instance_mode_applies_without_restart_like_csharp() {
     app.apply_settings(settings);
     assert!(app.instance_guard.is_some() && app.navigation.is_some());
     assert!(app.settings.flag("UseSingleInstance", false));
-    // another NDIR on the same profile cannot take it now (and nothing is forwarded to us)
+    // another NDR on the same profile cannot take it now (and nothing is forwarded to us)
     let profile = app.profile.clone();
-    let other = std::thread::spawn(move || ndir::lifecycle::InstanceGuard::try_acquire(&profile).map(|g| g.is_some()));
+    let other = std::thread::spawn(move || ndr::lifecycle::InstanceGuard::try_acquire(&profile).map(|g| g.is_some()));
     assert_eq!(other.join().unwrap(), Ok(false));
     // turning it off releases the guard
     let mut settings = app.settings.clone();
     settings.set_flag("UseSingleInstance", false);
     app.apply_settings(settings);
     assert!(app.instance_guard.is_none());
-    // a guard held by another NDIR: enabling fails, the setting goes back and a message box explains it
+    // a guard held by another NDR: enabling fails, the setting goes back and a message box explains it
     let profile = app.profile.clone();
     let (held_tx, held_rx) = std::sync::mpsc::channel();
     let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
     let holder = std::thread::spawn(move || {
-        let guard = ndir::lifecycle::InstanceGuard::try_acquire(&profile).unwrap();
+        let guard = ndr::lifecycle::InstanceGuard::try_acquire(&profile).unwrap();
         held_tx.send(guard.is_some()).unwrap();
         let _ = release_rx.recv();
         drop(guard);
@@ -1389,7 +1389,7 @@ fn single_instance_mode_applies_without_restart_like_csharp() {
     app.apply_settings(settings);
     assert!(app.instance_guard.is_none());
     assert!(!app.settings.flag("UseSingleInstance", true), "the previous value is kept");
-    assert_eq!(boxed(&app).0, "NDIR");
+    assert_eq!(boxed(&app).0, "NDR");
     release_tx.send(()).unwrap();
     holder.join().unwrap();
     let _ = ctx;
@@ -1775,10 +1775,10 @@ fn skin_toolbar_follows_the_original_layout() {
         egui::TopBottomPanel::top("toolbar").exact_height(51.0).frame(egui::Frame::NONE).show(ctx, |ui| app.skin_toolbar(ui, ctx, &skin));
     });
     let bounds = |id: egui::TextureId| output.shapes.iter().filter_map(|c| match &c.shape { egui::Shape::Mesh(m) if m.texture_id == id => Some(m.calc_bounds()), _ => None }).collect::<Vec<_>>();
-    let first = app.toolbar.items.iter().position(|i| i.kind == ndir::commands::ToolbarKind::Command && i.icon.ends_with("tb_back.png")).expect("a Back item");
+    let first = app.toolbar.items.iter().position(|i| i.kind == ndr::commands::ToolbarKind::Command && i.icon.ends_with("tb_back.png")).expect("a Back item");
     assert_eq!(first, 0, "Back comes first in the shipped toolbar.xml");
     // 원본 default\toolbar.xml: 뒤로·앞으로 | 바탕 화면·문서·사진·음악·동영상·즐겨찾기 | 휴지통(오른쪽).
-    let commands: Vec<(&str, bool)> = app.toolbar.items.iter().filter(|i| i.kind == ndir::commands::ToolbarKind::Command).map(|i| (i.icon.rsplit('\\').next().unwrap_or(""), i.align_right)).collect();
+    let commands: Vec<(&str, bool)> = app.toolbar.items.iter().filter(|i| i.kind == ndr::commands::ToolbarKind::Command).map(|i| (i.icon.rsplit('\\').next().unwrap_or(""), i.align_right)).collect();
     assert_eq!(commands, [("tb_back.png", false), ("tb_forward.png", false), ("tb_desktop.png", false), ("tb_documents.png", false), ("tb_pictures.png", false), ("tb_music.png", false), ("tb_videos.png", false), ("tb_favorites.png", false), ("tb_recyclebin.png", true)]);
     assert_eq!(bounds(back.id()).first().copied(), Some(egui::Rect::from_min_size(egui::pos2(4.0, 7.0), egui::vec2(35.0, 35.0))));
     let tiles = bounds(tile.id());
@@ -1936,7 +1936,7 @@ fn skin_list_menu_has_only_the_original_items() {
 fn toolbar_user_command_and_container_follow_the_original() {
     let (root, ctx, mut app) = fixture("toolbar-container", "en");
     let xml = br#"<toolbar><item type="Container"><name>More</name><subitems><item type="InternalCommand"><name>Up</name><command>GoToParent</command></item><item type="Separator"/><item type="UserCommand"><command>[Calc]calc.exe</command></item></subitems></item></toolbar>"#;
-    app.toolbar = ndir::commands::parse_toolbar(xml).unwrap();
+    app.toolbar = ndr::commands::parse_toolbar(xml).unwrap();
     app.show_toolbar_container(0, Some(egui::pos2(10.0, 40.0)));
     let popup = app.popup.as_ref().expect("the container menu");
     assert_eq!(popup.position, Some(egui::pos2(10.0, 40.0)));
@@ -1961,7 +1961,7 @@ fn toolbar_user_command_and_container_follow_the_original() {
 #[test]
 fn toolbar_follows_csharp() {
     let (root, ctx, mut app) = fixture("toolbar", "en");
-    let item = |action: &str| ndir::commands::ToolbarItem { kind: ndir::commands::ToolbarKind::Command, action: action.into(), icon: String::new(), caption: String::new(), align_right: false, width: 0.0, children: vec![] };
+    let item = |action: &str| ndr::commands::ToolbarItem { kind: ndr::commands::ToolbarKind::Command, action: action.into(), icon: String::new(), caption: String::new(), align_right: false, width: 0.0, children: vec![] };
     // menu-key labels: the language value through ToAccessText, the "X. " prefix kept when it carries the access marker
     let copy_raw = app.language_pack.raw("Menu.miCopyTo").unwrap();
     let mut expected = super::toolbar::to_access_text(&copy_raw).replace('&', "");
@@ -1987,7 +1987,7 @@ fn toolbar_follows_csharp() {
     app.toolbar_command("function:SelectAll", &ctx);
     assert_eq!(app.panes[0].selected.len(), 3, "the three files are selected (folders follow SelectFolders)");
     app.toolbar_command("function:NoSuchCommand", &ctx);
-    assert_eq!(boxed(&app), ("NDIR".to_owned(), "toolbar.xml refers to an unavailable internal command.".to_owned()));
+    assert_eq!(boxed(&app), ("NDR".to_owned(), "toolbar.xml refers to an unavailable internal command.".to_owned()));
     app.msgboxes.clear();
     // the shipped toolbar draws (left group, right group with skin icons) without errors
     // (the right group of the original toolbar.xml is the RecycleBin delete button, so it must be visible)
@@ -2045,16 +2045,16 @@ fn empty_temp_asks_with_counts_and_empties_only_the_contents_like_the_original()
     wait_until(&mut app, &ctx, |app| !app.msgboxes.is_empty());
     let (title, text) = app.msgboxes.first().map(|m| (m.title.clone(), m.text.clone())).expect("the MSG_EMPTYTEMP question");
     assert_eq!(title, app.language_pack.text("RES.TITLE_EMPTYTEMP", "?"));
-    let expected = app.language_pack.text("RES.MSG_EMPTYTEMP", "?").replacen("%d", "3", 1).replacen("%s", &ndir::native::format_byte_size(9), 1);
+    let expected = app.language_pack.text("RES.MSG_EMPTYTEMP", "?").replacen("%d", "3", 1).replacen("%s", &ndr::native::format_byte_size(9), 1);
     assert_eq!(text, expected);
     assert!(app.original_dialogs.is_empty(), "no cleanup scan window (C# flow) any more");
     // 아니요: 그대로.
-    app.answer_message_box(ndir::msgbox::IDNO, &ctx);
+    app.answer_message_box(ndr::msgbox::IDNO, &ctx);
     assert!(temp.join("a.txt").exists());
     // 예: 안의 항목만 지우고(읽기 전용도 묻지 않고) 폴더는 남긴다.
     app.dispatch("emptyTemp", &ctx);
     wait_until(&mut app, &ctx, |app| !app.msgboxes.is_empty());
-    app.answer_message_box(ndir::msgbox::IDYES, &ctx);
+    app.answer_message_box(ndr::msgbox::IDYES, &ctx);
     wait_job(&mut app, &ctx);
     assert!(temp.is_dir(), "the temporary folder itself stays (flag 0x10)");
     assert_eq!(fs::read_dir(&temp).unwrap().count(), 0, "every item inside is gone");
@@ -2109,7 +2109,7 @@ fn drive_root_goes_up_to_this_pc_and_drive_items_rename_their_volume_label() {
     app.panes[0].cursor = 0;
     app.dispatch("rename", &ctx);
     let (title, message, value, _) = prompt(&app);
-    assert_eq!((title.as_str(), message, value.as_str()), ("NDIR", app.language_pack.text("RES.MSG_DRIVELABEL", "?"), "OLD"));
+    assert_eq!((title.as_str(), message, value.as_str()), ("NDR", app.language_pack.text("RES.MSG_DRIVELABEL", "?"), "OLD"));
     app.answer_dialog(DialogResult::Text(Some("NEW".into())), &ctx);
     assert_eq!(fake_volume_label(&left).as_deref(), Some("NEW"));
     // ERROR_ACCESS_DENIED는 원본 TfMessage(목록 가운데 잠깐 뜨는 알림, 3초), 다른 실패와 빈 이름은 조용히.
@@ -2157,7 +2157,7 @@ fn closing_while_working_asks_the_original_question_and_columns_use_field_names(
     assert_eq!(cells[DetailColumn::Description.index()], cells[DetailColumn::Kind.index()]);
     // 원본 GetList: 종류 글은 셸 이름(SHGetFileInfoW SHGFI_TYPENAME).
     let entry = &app.panes[0].entries[file];
-    assert_eq!(cells[DetailColumn::Kind.index()], native::shell_type_name(ndir::parity::dotnet_extension(&entry.name), false));
+    assert_eq!(cells[DetailColumn::Kind.index()], native::shell_type_name(ndr::parity::dotnet_extension(&entry.name), false));
     app.settings.set_text("Theme", "Light");
     assert!(app.current_skin().is_none());
     let titles: Vec<String> = app.detail_columns(true).into_iter().map(|(_, title, _)| title).collect();
@@ -2177,10 +2177,10 @@ fn closing_while_working_asks_the_original_question_and_columns_use_field_names(
     assert_eq!(question, (app.language_pack.text("RES.TITLE_INFO", "?"), app.language_pack.text("RES.STILL_HAVE_OPERATION", "?"), 0x2124));
     app.confirm_close_while_working();
     assert_eq!(app.msgboxes.len(), 1, "asked once");
-    app.answer_message_box(ndir::msgbox::IDNO, &ctx);
+    app.answer_message_box(ndr::msgbox::IDNO, &ctx);
     assert!(app.job.as_ref().is_some_and(|j| !j.cancel.load(std::sync::atomic::Ordering::Relaxed)), "No keeps working");
     app.confirm_close_while_working();
-    app.answer_message_box(ndir::msgbox::IDYES, &ctx);
+    app.answer_message_box(ndr::msgbox::IDYES, &ctx);
     assert!(app.job.as_ref().is_some_and(|j| j.cancel.load(std::sync::atomic::Ordering::Relaxed)), "Yes stops the operation");
     wait_job(&mut app, &ctx);
     // 원본 BACKHINT/FORWARDHINT: 단추가 열 경로를 넣은 도움말. 기록이 없으면 단추 글.

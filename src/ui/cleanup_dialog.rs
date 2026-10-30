@@ -1,21 +1,21 @@
 //! C# 컴퓨터 청소(RunDiskCleanupAsync), 임시 폴더 비우기(EmptyTemporaryFolderAsync), 휴지통 비우기(EmptyRecycleBin)와
-//! CleanupOptionsWindow, CleanupScanProgressWindow, CleanupResultsWindow. 규칙은 ndir::cleanup.
+//! CleanupOptionsWindow, CleanupScanProgressWindow, CleanupResultsWindow. 규칙은 ndr::cleanup.
 //! 휴지통 비우기는 `App::recycle_emptier`를 거친다(테스트는 실제 휴지통을 건드리지 않는다).
 //! 차이(HANDOFF): 위치 목록의 Insert/Delete 글쇠는 목록에 초점이 없어도 글 칸이 초점을 갖지 않으면 듣는다.
 use super::grid::{self, Column, GridState, GridView};
 use super::original_dialogs::{DialogKind, DialogResult};
 use super::*;
-use ndir::cleanup::{self, Candidate};
-use ndir::msgbox::{IDYES, MB_ICONASTERISK, MB_ICONEXCLAMATION, MB_ICONQUESTION, MB_OK, MB_YESNO};
+use ndr::cleanup::{self, Candidate};
+use ndr::msgbox::{IDYES, MB_ICONASTERISK, MB_ICONEXCLAMATION, MB_ICONQUESTION, MB_OK, MB_YESNO};
 
 const ERROR_LINES: usize = 500;
 
 fn n0(value: usize) -> String {
-    ndir::parity::format_size(value as u64, "B", true).trim_end_matches(" B").to_owned()
+    ndr::parity::format_size(value as u64, "B", true).trim_end_matches(" B").to_owned()
 }
 
 fn same_path(a: &str, b: &str) -> bool {
-    ndir::names::equals_ignore_case(a, b)
+    ndr::names::equals_ignore_case(a, b)
 }
 
 /// C# CleanupOptions(+ UserDefinedResults).
@@ -138,7 +138,7 @@ impl CleanupResultsForm {
     pub(super) fn status(&self, ko: bool) -> String {
         let selected = self.grid.selected_in_order();
         let bytes: u64 = selected.iter().map(|&i| self.candidates[i].size).sum();
-        let size = ndir::parity::format_size(bytes, "Auto", true);
+        let size = ndr::parity::format_size(bytes, "Auto", true);
         let (count, total) = (n0(selected.len()), n0(self.candidates.len()));
         if ko {
             format!("선택한 파일 {count} / {total}개 · {size}{}", if self.recycle { " · 휴지통 비우기도 선택됨" } else { "" })
@@ -261,7 +261,7 @@ pub(super) fn options_ui(ui: &mut egui::Ui, form: &mut CleanupOptionsForm, langu
             action = Some(CleanupAction::Remove);
         }
         // 원본 lbLocationKeyDown(0x41cac0): 목록에서 Delete = btnDeleteClick, Insert = btnAddClick(0x41bd68).
-        // NDIR은 목록에서 줄을 고른 뒤 글 칸에 초점이 없을 때 받는다.
+        // NDR은 목록에서 줄을 고른 뒤 글 칸에 초점이 없을 때 받는다.
         if action.is_none() && form.selected_location.is_some() && ui.memory(|m| m.focused().is_none()) {
             if ui.input(|i| i.key_pressed(egui::Key::Delete)) {
                 action = Some(CleanupAction::Remove);
@@ -368,7 +368,7 @@ pub(super) fn results_ui(ui: &mut egui::Ui, form: &mut CleanupResultsForm, langu
             1 => candidates[row].directory(),
             _ => candidates[row].size_text(),
         };
-        state.toggle_sort(column, |a, b| ndir::listing::compare_text(&key(a), &key(b), false));
+        state.toggle_sort(column, |a, b| ndr::listing::compare_text(&key(a), &key(b), false));
     }
     if events.copy {
         action = Some(CleanupAction::Copy(form.grid.copy_text(&columns, &|row, column| form.cell(row, column), &|_| false)));
@@ -441,7 +441,7 @@ impl App {
         self.status = self.tr("임시 폴더 크기를 세고 있습니다…", "Counting the temporary folder…").into_owned();
         let tx = self.async_tx.clone();
         thread::spawn(move || {
-            let summary = ndir::tools::folder_size_summary(std::slice::from_ref(&folder), &std::sync::atomic::AtomicBool::new(false)).unwrap_or_default();
+            let summary = ndr::tools::folder_size_summary(std::slice::from_ref(&folder), &std::sync::atomic::AtomicBool::new(false)).unwrap_or_default();
             let _ = tx.send(AsyncResult::TempCounted { folder, files: summary.files, bytes: summary.total_bytes });
         });
     }
@@ -453,12 +453,12 @@ impl App {
             .language_pack
             .text("RES.MSG_EMPTYTEMP", "Are you sure you want to empty a temporary folder?\n%d files, %s")
             .replacen("%d", &files.to_string(), 1)
-            .replacen("%s", &ndir::native::format_byte_size(bytes), 1);
+            .replacen("%s", &ndr::native::format_byte_size(bytes), 1);
         self.message_box(&title, "", &text, MB_YESNO | MB_ICONQUESTION, move |app, answer, _| {
             if answer != IDYES {
                 return;
             }
-            app.start_job("Delete".into(), ndir::fsops::Operation::EmptyFolder { folder }, super::file_operation::JobReport::Delete { recycle: false, skipped: 0 }, None);
+            app.start_job("Delete".into(), ndr::fsops::Operation::EmptyFolder { folder }, super::file_operation::JobReport::Delete { recycle: false, skipped: 0 }, None);
             for pane in 0..2 {
                 app.refresh(pane);
             }
@@ -467,7 +467,7 @@ impl App {
 
     /// C# EmptyRecycleBin: 예/아니요(경고) → 비우기 → "휴지통을 비웠습니다.". 실패는 RunSafely 경고 상자.
     pub(super) fn empty_recycle_command(&mut self) {
-        // 원본 miEmptyRecycleBinClick(0x433094): SHEmptyRecycleBinW(창, NULL, 0) — 확인·진행은 셸 창, NDIR 글 없음(스킨 테마).
+        // 원본 miEmptyRecycleBinClick(0x433094): SHEmptyRecycleBinW(창, NULL, 0) — 확인·진행은 셸 창, NDR 글 없음(스킨 테마).
         if self.skin_active() {
             let emptier = self.shell_recycle_emptier;
             thread::spawn(move || {

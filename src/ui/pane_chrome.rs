@@ -193,7 +193,7 @@ impl App {
         }
         let close_tip = self.language_pack.text("formMain.Menu.pmiCloseTab", if self.language == "ko" { "탭 닫기" } else { "Close Tab" });
         let mut command = None;
-        egui::ScrollArea::horizontal().id_salt(("ndir-tabs", index)).show(ui, |ui| {
+        egui::ScrollArea::horizontal().id_salt(("ndr-tabs", index)).show(ui, |ui| {
             ui.horizontal(|ui| {
                 let several = self.panes[index].tabs.len() > 1;
                 for t in 0..self.panes[index].tabs.len() {
@@ -230,11 +230,11 @@ impl App {
         let mode = self.settings.values.get("PathClickMode").and_then(|v| v.as_i64()).unwrap_or(0);
         ui.add_space(5.0);
         let rect = egui::Rect::from_min_size(ui.cursor().min, egui::vec2(ui.available_width(), 26.0));
-        let background = ui.interact(rect, egui::Id::new(("ndir-address-bar", index)), egui::Sense::click());
+        let background = ui.interact(rect, egui::Id::new(("ndr-address-bar", index)), egui::Sense::click());
         let mut action: Option<AddressAction> = None;
         ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
             if self.panes[index].address_editing {
-                let id = egui::Id::new(("ndir-address", index));
+                let id = egui::Id::new(("ndr-address", index));
                 let response = ui.add(egui::TextEdit::singleline(&mut self.panes[index].address).id(id).font(egui::FontId::proportional(11.0)).desired_width(f32::INFINITY));
                 if response.lost_focus() {
                     action = Some(if ui.input(|i| i.key_pressed(egui::Key::Enter)) { AddressAction::Go } else { AddressAction::EndEdit });
@@ -259,7 +259,7 @@ impl App {
                             action = Some(AddressAction::BeginEdit);
                         }
                         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                            egui::ScrollArea::horizontal().id_salt(("ndir-crumbs", index)).show(ui, |ui| {
+                            egui::ScrollArea::horizontal().id_salt(("ndr-crumbs", index)).show(ui, |ui| {
                                 ui.horizontal(|ui| {
                                     ui.spacing_mut().item_spacing.x = 1.0;
                                     if let Some(chosen) = self.crumbs(ui, index) {
@@ -517,13 +517,13 @@ impl App {
                 if connection != 0 {
                     let message = native::win32_message(connection);
                     let text = if ko { format!("네트워크 공유 인증에 실패했습니다. Windows 오류 {connection}: {message}") } else { format!("Network share authentication failed. Windows error {connection}: {message}") };
-                    return self.system_box(if ko { "폴더 이동" } else { "Go to folder" }, &text, ndir::msgbox::MB_OK | ndir::msgbox::MB_ICONEXCLAMATION, |_, _, _| {});
+                    return self.system_box(if ko { "폴더 이동" } else { "Go to folder" }, &text, ndr::msgbox::MB_OK | ndr::msgbox::MB_ICONEXCLAMATION, |_, _, _| {});
                 }
             }
         }
         if !path.is_dir() {
             let (title, text) = if ko { ("폴더 이동", format!("폴더를 찾을 수 없습니다: {}", path.display())) } else { ("Go to folder", format!("The folder was not found: {}", path.display())) };
-            return self.system_box(title, &text, ndir::msgbox::MB_OK | ndir::msgbox::MB_ICONEXCLAMATION, |_, _, _| {});
+            return self.system_box(title, &text, ndr::msgbox::MB_OK | ndr::msgbox::MB_ICONEXCLAMATION, |_, _, _| {});
         }
         self.panes[index].archive = None;
         self.active = index;
@@ -745,8 +745,8 @@ fn folder_size_worker(shared: FolderSizeQueue, tx: Sender<AsyncResult>) {
         if job.cancel.load(Ordering::Relaxed) {
             continue;
         }
-        let Some(summary) = ndir::tools::folder_size_summary(std::slice::from_ref(&job.path), &job.cancel) else { continue };
-        let size = ndir::parity::format_size(summary.total_bytes, &job.unit, job.thousands);
+        let Some(summary) = ndr::tools::folder_size_summary(std::slice::from_ref(&job.path), &job.cancel) else { continue };
+        let size = ndr::parity::format_size(summary.total_bytes, &job.unit, job.thousands);
         let text = if summary.errors.is_empty() { size } else { format!("≥ {size}") };
         if tx.send(AsyncResult::FolderSizeRow { pane: job.pane, generation: job.generation, path: job.path, text, bytes: summary.total_bytes }).is_err() {
             return;

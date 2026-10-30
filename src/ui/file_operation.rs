@@ -4,7 +4,7 @@
 //! 압축·분할·합치기·폴더 크기 작업의 진행 창에는 일시 정지 단추가 없다(그 작업들은 멈춤 지점이 없다).
 use super::original_dialogs::{DialogKind, DialogResult};
 use super::*;
-use ndir::msgbox::{IDYES, MB_ICONEXCLAMATION, MB_ICONHAND, MB_ICONQUESTION, MB_OK, MB_YESNO};
+use ndr::msgbox::{IDYES, MB_ICONEXCLAMATION, MB_ICONHAND, MB_ICONQUESTION, MB_OK, MB_YESNO};
 use std::fs;
 use std::os::windows::fs::MetadataExt;
 use std::time::SystemTime;
@@ -65,7 +65,7 @@ impl ConflictForm {
 /// highlight면 FUN_00422314처럼 <c0000FF>…</c>(빨강, 더 새로운 쪽).
 pub(super) fn conflict_file_info(size: Option<u64>, modified: Option<SystemTime>, highlight: bool, ko: bool) -> String {
     let bytes = size.map(|s| format!("<b>{}</b> bytes", n0(s as usize))).unwrap_or_else(|| (if ko { "크기 확인 불가" } else { "Size unavailable" }).to_owned());
-    let info = match modified.map(ndir::listing::long_date_and_time) {
+    let info = match modified.map(ndr::listing::long_date_and_time) {
         Some((date, time)) => format!("{bytes} ( {date}, {time} )"),
         None => bytes,
     };
@@ -336,7 +336,7 @@ impl App {
         let order = [self.active, 1 - self.active];
         let Some(i) = order.into_iter().find(|&i| {
             let pane = &self.panes[i];
-            pane.archive.is_none() && pane.remote.is_none() && ndir::names::equals_ignore_case(&pane.path.to_string_lossy(), &parent.to_string_lossy())
+            pane.archive.is_none() && pane.remote.is_none() && ndr::names::equals_ignore_case(&pane.path.to_string_lossy(), &parent.to_string_lossy())
         }) else {
             return;
         };
@@ -473,7 +473,7 @@ impl App {
         };
         // lRemaining: 원본은 남은 바이트(StrFormatByteSizeW). 바이트 합계가 없으면 C# 판의 남은 시간.
         let remaining = match info.total_bytes.filter(|t| *t > 0) {
-            Some(total) if info.prefer_bytes => ndir::native::format_byte_size(total.saturating_sub(job.bytes)),
+            Some(total) if info.prefer_bytes => ndr::native::format_byte_size(total.saturating_sub(job.bytes)),
             _ => match fraction {
                 Some(f) if f > 0.0 && f < 1.0 => format!("{remaining_label} {}", format_duration(job.started.elapsed().as_secs_f64() * (1.0 - f) / f)),
                 _ => String::new(),
@@ -513,8 +513,8 @@ impl App {
             JobReport::Delete { .. } | JobReport::Shred => self.language_pack.text("RES.DELETING", "Deleting..."),
             _ => job.title.clone(),
         };
-        super::keep_opaque(ctx, egui::Id::new("ndir-file-progress"));
-        egui::Modal::new(egui::Id::new("ndir-file-progress")).show(ctx, |ui| {
+        super::keep_opaque(ctx, egui::Id::new("ndr-file-progress"));
+        egui::Modal::new(egui::Id::new("ndr-file-progress")).show(ctx, |ui| {
             ui.set_width(441.0);
             ui.horizontal(|ui| {
                 ui.label(RichText::new(&caption).strong().family(egui::FontFamily::Name(super::BOLD_FONT_FAMILY.into())));
@@ -597,7 +597,7 @@ impl App {
                 }
                 if let Some(message) = &fatal {
                     let shown = self.archive_error_text(message);
-                    self.system_box("NDIR", &shown, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
+                    self.system_box("NDR", &shown, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
                 }
                 if custom_status {
                     return;
@@ -771,7 +771,7 @@ impl App {
                     self.status = status;
                 }
             }
-            Err(message) => self.system_box("NDIR", &message, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {}),
+            Err(message) => self.system_box("NDR", &message, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {}),
         }
     }
 }
@@ -781,11 +781,11 @@ fn capitalize(text: &str) -> String {
     chars.next().map(|c| c.to_uppercase().collect::<String>() + chars.as_str()).unwrap_or_default()
 }
 
-/// 임시 목록 파일 이름(C# ndir-copy-{Guid:N}).
+/// 임시 목록 파일 이름(C# ndr-copy-{Guid:N}).
 fn list_path(extension: &str) -> PathBuf {
     let mut bytes = [0u8; 16];
     let _ = native::random_bytes(&mut bytes);
-    std::env::temp_dir().join(format!("ndir-copy-{}.{extension}", bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()))
+    std::env::temp_dir().join(format!("ndr-copy-{}.{extension}", bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -798,7 +798,7 @@ fn run_external_copy(runner: fn(&Path, &[String], &Path) -> Result<i32, String>,
             // KillCopy는 현재 ANSI 코드 페이지로 목록을 읽는다.
             let mut bytes = Vec::new();
             for path in paths {
-                bytes.extend(ndir::split::ansi_bytes(path).ok_or("KillCopy reads file lists using the current Windows ANSI code page, which cannot represent one or more selected paths. Use a Unicode-capable handler such as TeraCopy for these paths.")?);
+                bytes.extend(ndr::split::ansi_bytes(path).ok_or("KillCopy reads file lists using the current Windows ANSI code page, which cannot represent one or more selected paths. Use a Unicode-capable handler such as TeraCopy for these paths.")?);
                 bytes.extend(b"\r\n");
             }
             let file = list_path("lst");

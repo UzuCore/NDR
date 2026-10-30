@@ -4,6 +4,21 @@ mod ui;
 
 use std::path::PathBuf;
 
+/// 폴더를 통째로 복사한다(예전 설정 폴더 옮겨 오기). 이미 있는 파일은 건드리지 않는다.
+fn copy_tree(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let target = to.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_tree(&entry.path(), &target)?;
+        } else if !target.exists() {
+            std::fs::copy(entry.path(), &target)?;
+        }
+    }
+    Ok(())
+}
+
 #[derive(Default, Clone)]
 pub struct Options {
     profile: Option<PathBuf>,
@@ -22,8 +37,14 @@ pub struct Options {
 impl Options {
     fn profile_directory(&self) -> PathBuf {
         self.profile.clone().unwrap_or_else(|| {
-            PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_else(|| ".".into()))
-                .join("NDIR-Rust")
+            let local = PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_else(|| ".".into()));
+            let profile = local.join("NDR");
+            // 프로그램 이름을 NDIR에서 NDR로 바꿨다. 새 폴더가 아직 없으면 예전 설정 폴더(NDIR-Rust)를 복사해 온다(예전 폴더는 그대로 둔다).
+            let old = local.join("NDIR-Rust");
+            if !profile.exists() && old.is_dir() {
+                let _ = copy_tree(&old, &profile);
+            }
+            profile
         })
     }
     fn parse() -> Result<Self, String> {
@@ -105,9 +126,9 @@ fn user_directory(value: &str) -> Result<PathBuf, String> {
     if path.exists() {
         return Ok(path);
     }
-    let message = format!("\"{}\"\n{}", path.display(), ndir::names::system_message(3).unwrap_or_default().trim_end());
+    let message = format!("\"{}\"\n{}", path.display(), ndr::names::system_message(3).unwrap_or_default().trim_end());
     let wide = |text: &str| text.encode_utf16().chain(std::iter::once(0)).collect::<Vec<u16>>();
-    let (text, caption) = (wide(&message), wide("NDIR"));
+    let (text, caption) = (wide(&message), wide("NDR"));
     // SAFETY: both strings are NUL-terminated UTF-16 and outlive the call; no owner window.
     unsafe {
         windows_sys::Win32::UI::WindowsAndMessaging::MessageBoxW(std::ptr::null_mut(), text.as_ptr(), caption.as_ptr(), windows_sys::Win32::UI::WindowsAndMessaging::MB_ICONHAND);
@@ -119,26 +140,26 @@ fn main() {
     let result = (|| -> Result<(), String> {
         let options = Options::parse()?;
         let settings =
-            ndir::settings::Settings::load(&options.profile_directory().join("settings.json"))
+            ndr::settings::Settings::load(&options.profile_directory().join("settings.json"))
                 .unwrap_or_default();
-        let (mut instance_guard, mut navigation) = (None::<ndir::lifecycle::InstanceGuard>, None);
+        let (mut instance_guard, mut navigation) = (None::<ndr::lifecycle::InstanceGuard>, None);
         if settings.flag("UseSingleInstance", false) && options.smoke_seconds.is_none() {
-            match ndir::lifecycle::InstanceGuard::acquire(
+            match ndr::lifecycle::InstanceGuard::acquire(
                 &options.profile_directory(),
-                ndir::lifecycle::NavigationRequest {
+                ndr::lifecycle::NavigationRequest {
                     left: options.left.clone(),
                     right: options.right.clone().or_else(|| options.dir2.clone()),
                 },
             )? {
-                ndir::lifecycle::InstanceOutcome::Primary { guard, requests } => {
+                ndr::lifecycle::InstanceOutcome::Primary { guard, requests } => {
                     instance_guard = Some(guard);
                     navigation = Some(requests);
                 }
-                ndir::lifecycle::InstanceOutcome::Forwarded => return Ok(()),
+                ndr::lifecycle::InstanceOutcome::Forwarded => return Ok(()),
             }
         }
         let mut viewport = eframe::egui::ViewportBuilder::default()
-            .with_title("NDIR")
+            .with_title("NDR")
             .with_inner_size([1400.0, 850.0])
             .with_min_inner_size([800.0, 480.0]);
         // C# ApplyWindowBoundsFromSettings: 저장한 창이 있으면(HasWindowBounds) 그 크기·위치(화면 안으로)·최대화.
@@ -146,11 +167,11 @@ fn main() {
             let number = |key: &str, default: f64| settings.values.get(key).and_then(|v| v.as_f64()).unwrap_or(default) as f32;
             let (width, height) = (number("WindowWidth", 1450.0), number("WindowHeight", 900.0));
             let (mut left, mut top) = (number("WindowLeft", 10.0), number("WindowTop", 10.0));
-            if let Some(screen) = ndir::native::virtual_screen_points() {
-                (left, top) = ndir::native::clamp_window_position(left, top, width, height, screen);
+            if let Some(screen) = ndr::native::virtual_screen_points() {
+                (left, top) = ndr::native::clamp_window_position(left, top, width, height, screen);
             }
             // 저장 값은 원본·C# 판처럼 테두리를 포함한 바깥 크기이므로, 테두리·제목 줄 크기를 빼서 안쪽 크기로 연다.
-            let (frame_width, frame_height) = ndir::native::window_frame_points().unwrap_or((16.0, 39.0));
+            let (frame_width, frame_height) = ndr::native::window_frame_points().unwrap_or((16.0, 39.0));
             viewport = viewport
                 .with_inner_size([(width - frame_width).max(800.0), (height - frame_height).max(480.0)])
                 .with_position([left, top])
@@ -160,9 +181,9 @@ fn main() {
             // 시작 확인은 화면 밖에서, 초점을 뺏지 않고, 작업 표시줄에도 안 보이게 띄운다(사용자 화면을 가리지 않는다).
             viewport = viewport.with_position([-30000.0, -30000.0]).with_active(false).with_taskbar(false);
         } else {
-            // 고친 것: 압축 안 항목을 열 때 %TEMP%\NDIR에 푼 폴더가 쌓이지 않게, 7일 넘게 바뀌지 않았고 쓰는 중이 아닌 것을 지운다.
+            // 고친 것: 압축 안 항목을 열 때 %TEMP%\NDR에 푼 폴더가 쌓이지 않게, 7일 넘게 바뀌지 않았고 쓰는 중이 아닌 것을 지운다.
             std::thread::spawn(|| {
-                ndir::archive::clean_stale_temp_entries(&ndir::archive::temp_entry_root(), std::time::Duration::from_secs(7 * 24 * 3600), std::time::SystemTime::now());
+                ndr::archive::clean_stale_temp_entries(&ndr::archive::temp_entry_root(), std::time::Duration::from_secs(7 * 24 * 3600), std::time::SystemTime::now());
             });
         }
         let native = eframe::NativeOptions {
@@ -171,7 +192,7 @@ fn main() {
             ..Default::default()
         };
         eframe::run_native(
-            "NDIR",
+            "NDR",
             native,
             Box::new(move |cc| Ok(Box::new(ui::App::new(cc, options, navigation, instance_guard)))),
         )
@@ -181,7 +202,7 @@ fn main() {
     if let Err(message) = result {
         eprintln!("{message}");
         let _ = std::fs::write(
-            std::env::temp_dir().join("ndir-rust-startup-error.txt"),
+            std::env::temp_dir().join("ndr-rust-startup-error.txt"),
             message,
         );
         std::process::exit(1);
@@ -196,7 +217,7 @@ mod options_tests {
     /// 원본 FUN_004295b0 명령줄: /dir·/dir1 = 왼쪽, /dir2(따로 둠), 있는 경로만, 따옴표 뗌, /pane, 모르는 인자 무시.
     #[test]
     fn original_command_line_switches() {
-        let root = std::env::temp_dir().join(format!("ndir-options-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("ndr-options-{}", std::process::id()));
         let (a, b) = (root.join("a"), root.join("b"));
         std::fs::create_dir_all(&a).unwrap();
         std::fs::create_dir_all(&b).unwrap();

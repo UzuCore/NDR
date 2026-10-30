@@ -1,11 +1,11 @@
 //! 원본 TfPreferences("옵션") 쪽 차례(파일목록·폴더트리·색·옵션·프로그램·경로·기능키·기타)와 [formPreferences] 글로 C# SettingsWindow의 줄을 옮기고,
-//! C# 판에만 있는 줄은 마지막 "NDIR" 쪽에 둔다. 각 줄은 C#과 같은 키·처음 값,
+//! C# 판에만 있는 줄은 마지막 "NDR" 쪽에 둔다. 각 줄은 C#과 같은 키·처음 값,
 //! 확인 = Commit(키마다 같은 변환·범위, 틀리면 "환경 설정" 경고 상자), 취소. 확장자 색 가져오기/내보내기(.col/.json), 기능키 편집 단추.
 //! 확인한 뒤의 적용은 C# ShowOptionsAsync(언어·메뉴·테마·두 패널·보기·새로 고침, 저장).
 //! 차이(HANDOFF): 영어 화면은 줄 이름이 모두 영어(C#은 언어 파일에 있는 것만), 한 번에 하나만 실행·활성화 단축키·창 투명도 바꾸기는 다음 시작부터.
 use super::original_dialogs::{DialogKind, DialogResult};
 use super::*;
-use ndir::msgbox::{IDYES, MB_ICONEXCLAMATION, MB_ICONQUESTION, MB_OK, MB_YESNO};
+use ndr::msgbox::{IDYES, MB_ICONEXCLAMATION, MB_ICONQUESTION, MB_OK, MB_YESNO};
 use serde_json::{Map, Value, json};
 
 fn t(ko: bool, korean: &str, english: &str) -> String {
@@ -34,10 +34,10 @@ pub(super) struct SettingsForm {
     ko: bool,
     pub tab: usize,
     pub tabs: Vec<Vec<Row>>,
-    /// 쪽 이름(원본 TabSheet.ts* 8개 + "NDIR").
+    /// 쪽 이름(원본 TabSheet.ts* 8개 + "NDR").
     pub tab_titles: Vec<String>,
     /// C# _draft(원래 설정의 사본). 기능키 편집·색상표 가져오기가 바로 고친다.
-    pub draft: ndir::settings::Settings,
+    pub draft: ndr::settings::Settings,
     /// 원본 lbExtColor에서 고른 색 묶음(색이 같은 확장자들).
     pub color_selected: Option<usize>,
     /// 원본 TColorDialog.Color(마지막으로 고른 색, COLORREF). 추가할 때 처음 색.
@@ -64,8 +64,8 @@ pub(super) fn basic_color_index(row: usize) -> Option<usize> {
 }
 
 /// 설정의 기본 색(NexusFileColorMapValues, 없으면 .col 기본값). "RRGGBB".
-pub(super) fn basic_color(draft: &ndir::settings::Settings, index: usize) -> Option<String> {
-    let (key, default) = ndir::styles::DEFAULT_ELEMENTS.get(index)?;
+pub(super) fn basic_color(draft: &ndr::settings::Settings, index: usize) -> Option<String> {
+    let (key, default) = ndr::styles::DEFAULT_ELEMENTS.get(index)?;
     let stored = object(draft, "NexusFileColorMapValues").get(*key).and_then(|v| v.as_str()).map(|v| v.trim_start_matches('#').to_owned());
     Some(stored.filter(|v| v.len() == 6).unwrap_or_else(|| (*default).to_owned()))
 }
@@ -191,7 +191,7 @@ fn relabel(mut row: Row, text: String) -> Row {
 }
 
 /// 원본 TfPreferences(DFM -Tree) 쪽 차례: tsDisplay, tsTree, tsColor, tsOption, tsExtProgram, tsPath, tsFunctionKey, tsEtc.
-/// 원본에 같은 설정이 있는 줄은 그 쪽·차례·글([formPreferences] Caption.*, ComboBox.*)로 옮기고, C# 판에만 있는 줄은 마지막 "NDIR" 쪽에
+/// 원본에 같은 설정이 있는 줄은 그 쪽·차례·글([formPreferences] Caption.*, ComboBox.*)로 옮기고, C# 판에만 있는 줄은 마지막 "NDR" 쪽에
 /// 원래 차례로 남긴다(그 줄이 하나도 남지 않은 머리·안내 글은 뺀다).
 fn original_pages(built: Vec<Vec<Row>>, language: &compat::Language, ko: bool) -> (Vec<String>, Vec<Vec<Row>>) {
     let lang = |key: &str, fallback: &str| language.text(&format!("formPreferences.{key}"), fallback);
@@ -245,7 +245,7 @@ fn original_pages(built: Vec<Vec<Row>>, language: &compat::Language, ko: bool) -
         file_list.push(combo_texts(sort, &format!("ComboBox.cbSort{n}")));
         file_list.push(take(&format!("{side}SortDescending"), l(&format!("Caption.chkSortDesc{n}"), "Descend")));
         file_list.push(take(&format!("{side}ShowHiddenFiles"), l(&format!("Caption.chkShowHidden{n}"), "Show Hidden Files")));
-        // 원본 cbColumn1/2("자동;1열;…;6열"): 앞 7칸은 원본 글, NDIR만의 7~19열은 같은 꼴("6열"의 6을 바꾼 글).
+        // 원본 cbColumn1/2("자동;1열;…;6열"): 앞 7칸은 원본 글, NDR만의 7~19열은 같은 꼴("6열"의 6을 바꾼 글).
         let mut columns = take(&format!("{side}ColumnCount"), l(&format!("Caption.lColumn{n}"), "Column"));
         if let Some(Row::Combo { choices, .. }) = columns.as_mut() {
             let texts: Vec<String> = lang(&format!("ComboBox.cbColumn{n}"), "").split(';').map(str::to_owned).collect();
@@ -325,7 +325,7 @@ fn original_pages(built: Vec<Vec<Row>>, language: &compat::Language, ko: bool) -
         Some(Row::Note(format!(
             "{} {}",
             lang("Caption.lApplyAfterRestart", "(Restart required)"),
-            t(ko, "Win+문자 조합을 사용할 수 없으면 Win+Shift+문자 조합으로 등록을 시도합니다.", "If Win+letter is unavailable, NDIR tries Win+Shift+letter.")
+            t(ko, "Win+문자 조합을 사용할 수 없으면 Win+Shift+문자 조합으로 등록을 시도합니다.", "If Win+letter is unavailable, NDR tries Win+Shift+letter.")
         ))),
         take("CheckForUpdatesOnStartup", l("Caption.chkCheckUpdate", "Check update when program starts")),
         take("UseDescriptionFile", l("Caption.chkUseION", "Read comment file \"descript.ion\" ")),
@@ -374,28 +374,28 @@ fn original_pages(built: Vec<Vec<Row>>, language: &compat::Language, ko: bool) -
     ]
     .iter()
     .map(|(key, fallback)| lang(key, fallback))
-    .chain(std::iter::once("NDIR".to_owned()))
+    .chain(std::iter::once("NDR".to_owned()))
     .collect();
     let pages = [file_list, tree, color, option, programs, path, function_keys, etc].into_iter().map(|page| page.into_iter().flatten().collect()).chain(std::iter::once(rest)).collect();
     (titles, pages)
 }
 
-fn object(settings: &ndir::settings::Settings, key: &str) -> Map<String, Value> {
+fn object(settings: &ndr::settings::Settings, key: &str) -> Map<String, Value> {
     settings.values.get(key).and_then(Value::as_object).cloned().unwrap_or_default()
 }
-fn text_of(settings: &ndir::settings::Settings, key: &str) -> String {
+fn text_of(settings: &ndr::settings::Settings, key: &str) -> String {
     match settings.values.get(key) {
         Some(Value::String(s)) => s.clone(),
         Some(Value::Number(n)) => n.to_string(),
         _ => String::new(),
     }
 }
-fn number_text(settings: &ndir::settings::Settings, key: &str) -> String {
+fn number_text(settings: &ndr::settings::Settings, key: &str) -> String {
     settings.values.get(key).and_then(Value::as_f64).map(|v| if v.fract() == 0.0 { format!("{}", v as i64) } else { v.to_string() }).unwrap_or_default()
 }
 
 impl SettingsForm {
-    pub(super) fn new(source: &ndir::settings::Settings, language: &compat::Language, resources: &Path) -> Self {
+    pub(super) fn new(source: &ndr::settings::Settings, language: &compat::Language, resources: &Path) -> Self {
         let draft = source.clone();
         let ko = draft.text("Language", "ko").eq_ignore_ascii_case("ko");
         let lang = |key: &str, fallback: &str| language.text(&format!("formPreferences.{key}"), fallback);
@@ -426,7 +426,7 @@ impl SettingsForm {
             check("ConfirmDragDrop", t(ko, "드래그 작업 확인", "Confirm drag operations"), true),
             check("SelectFolders", lang("Caption.chkSelectAllFolder", "Select folders when execute select all function"), false),
             check("ShowDeleteButton", lang("Caption.chkShowDeleteButton", "Show 'Delete' button on delete confirmation dialog"), true),
-            Row::Check { key: "ShowDeleteToolbarButton".into(), label: t(ko, "NDIR 삭제 도구 버튼 표시", "Show the NDIR delete toolbar button"), value: draft.values.get("ShowDeleteToolbarButton").and_then(Value::as_bool).unwrap_or(true) },
+            Row::Check { key: "ShowDeleteToolbarButton".into(), label: t(ko, "NDR 삭제 도구 버튼 표시", "Show the NDR delete toolbar button"), value: draft.values.get("ShowDeleteToolbarButton").and_then(Value::as_bool).unwrap_or(true) },
         ];
         let mut delete_labels: Vec<String> = lang("ComboBox.cbDefDelBtn", "Delete;Yes;No").split(';').map(|s| s.trim().to_owned()).collect();
         if delete_labels.len() != 3 {
@@ -442,19 +442,19 @@ impl SettingsForm {
             check("ShowFolderTreeIcons", t(ko, "폴더 트리 아이콘 표시", "Show folder tree icons"), true),
             check("PlayCompletionSound", t(ko, "작업 완료 소리", "Play a sound when an operation completes"), false),
             check("PlayWaveInProgram", lang("Caption.chkPlayWave", "Play .wav(Wave Sound) file in this program."), true),
-            check("UseSingleInstance", t(ko, "한 번에 NDIR 하나만 실행", "Run only one NDIR at a time"), false),
+            check("UseSingleInstance", t(ko, "한 번에 NDR 하나만 실행", "Run only one NDR at a time"), false),
         ]);
         let activation = format!("{} {}", lang("Caption.lActivateKey", "Program activation shortcut:").trim(), lang("Caption.lWinKey", "Windows key +").trim());
         general.push(Row::Text { key: "ExplorerShortcutKey".into(), label: activation, value: text_of(&draft, "ExplorerShortcutKey"), read_only: false, max: 1, upper: true });
         general.push(Row::Note(t(ko, "Win+문자 조합을 사용할 수 없으면 Win+Shift+문자 조합으로 등록을 시도합니다. 두 조합 모두 사용할 수 없으면 설정이 유지되고 안내합니다.",
-            "If Win+letter is unavailable, NDIR tries Win+Shift+letter. If both are unavailable, the previous setting is kept and a message is shown.")));
+            "If Win+letter is unavailable, NDR tries Win+Shift+letter. If both are unavailable, the previous setting is kept and a message is shown.")));
         general.extend([
             check("CheckForUpdatesOnStartup", t(ko, "설정된 피드에서 시작 시 업데이트 확인", "Check the configured feed for updates at startup"), true),
             check("HideWhenMinimized", t(ko, "최소화할 때 알림 영역으로 숨기기", "Hide in the notification area when minimized"), false),
             check("UseLogicalSort", t(ko, "숫자를 고려한 자연 정렬", "Natural sort that considers numbers"), true),
             check("UseAlternateDriveHandling", lang("Caption.chkHanShiftDrive", "Use Shift+Drive Letter when the input language is not English"), false),
             check("SaveDriveFolders", lang("Caption.chkDriveFolders", "Save each drive's last folder at exit"), true),
-            check("SaveFolderTreeState", t(ko, "폴더 트리 펼침 상태 저장 (NDIR 사용자 설정에 보관)", "Save the folder tree expansion state (in NDIR user settings)"), false),
+            check("SaveFolderTreeState", t(ko, "폴더 트리 펼침 상태 저장 (NDR 사용자 설정에 보관)", "Save the folder tree expansion state (in NDR user settings)"), false),
             check("RemoveReadOnlyWhenCopying", t(ko, "복사할 때 읽기 전용 속성 해제", "Clear the read-only attribute when copying"), true),
             combo("Theme", t(ko, "테마", "Theme"), &["Dark", "Light", "System", "Black", "Classic", "Gray"], &draft.text("Theme", "Black")),
         ]);
@@ -617,7 +617,7 @@ impl SettingsForm {
             check("UseCopyHandler", t(ko, "등록한 외부 복사 프로그램 사용", "Use the registered external copy program"), false),
             Row::Program { key: "TextViewerPath".into(), label: t(ko, "텍스트 보기 프로그램", "Text viewer program"), value: text_of(&draft, "TextViewerPath") },
             Row::Program { key: "TextEditorPath".into(), label: t(ko, "텍스트 편집 프로그램", "Text editor program"), value: text_of(&draft, "TextEditorPath") },
-            Row::Program { key: "CopyHandlerPath".into(), label: language.text("NDIRCopyHandler.Path", "External copy/move handler path (TeraCopy or KillCopy)"), value: text_of(&draft, "CopyHandlerPath") },
+            Row::Program { key: "CopyHandlerPath".into(), label: language.text("NDRCopyHandler.Path", "External copy/move handler path (TeraCopy or KillCopy)"), value: text_of(&draft, "CopyHandlerPath") },
             text("UpdateManifestUrl", t(ko, "업데이트 JSON 피드 (HTTPS)", "Update JSON feed (HTTPS)"), text_of(&draft, "UpdateManifestUrl")),
         ];
         for extension in ["zip", "7z", "rar", "arj", "ace", "alz", "cab", "iso", "egg", "tar", "tar.gz", "tar.bz2", "gz", "bz2", "bzip2", "z", "xz"] {
@@ -715,7 +715,7 @@ impl SettingsForm {
     }
 
     /// C# Commit: 키마다 같은 변환을 해 사본을 돌려준다. 틀린 값이면 그 글(경고 상자).
-    pub(super) fn commit(&self) -> Result<ndir::settings::Settings, String> {
+    pub(super) fn commit(&self) -> Result<ndr::settings::Settings, String> {
         let mut draft = self.draft.clone();
         let values = &mut draft.values;
         let map_set = |values: &mut Map<String, Value>, name: &str, key: &str, value: &str, remove_empty: bool| {
@@ -1098,7 +1098,7 @@ fn original_page(ui: &mut egui::Ui, form: &mut SettingsForm, tab: usize, origin:
                                     action = Some(SettingsAction::ChangeBasicColor(index));
                                 }
                             }
-                            // 원본: 줄 0·16(머리)은 파란 글(0xFF0000 BGR), 15는 빈 줄. 어두운 바탕에서도 읽히게 NDIR 파랑으로.
+                            // 원본: 줄 0·16(머리)은 파란 글(0xFF0000 BGR), 15는 빈 줄. 어두운 바탕에서도 읽히게 NDR 파랑으로.
                             None => {
                                 ui.label(RichText::new(text.as_str()).color(blue));
                             }
@@ -1284,7 +1284,7 @@ fn original_page(ui: &mut egui::Ui, form: &mut SettingsForm, tab: usize, origin:
     action
 }
 
-/// C# 판에만 있는 줄의 "NDIR" 쪽: 위에서 아래로 늘어놓는다(C# OptionsWindow).
+/// C# 판에만 있는 줄의 "NDR" 쪽: 위에서 아래로 늘어놓는다(C# OptionsWindow).
 fn list_page(ui: &mut egui::Ui, form: &mut SettingsForm) -> Option<SettingsAction> {
     let ko = form.ko;
     let mut action = None;
@@ -1363,7 +1363,7 @@ fn list_page(ui: &mut egui::Ui, form: &mut SettingsForm) -> Option<SettingsActio
     action
 }
 
-/// 원본 TfPreferences(ClientWidth 577 × ClientHeight 512): TntPageControl(7,8 561×465, 쪽 8개 + C# 판에만 있는 줄의 "NDIR" 쪽),
+/// 원본 TfPreferences(ClientWidth 577 × ClientHeight 512): TntPageControl(7,8 561×465, 쪽 8개 + C# 판에만 있는 줄의 "NDR" 쪽),
 /// btnApply(321,480)·btnOk(405,480)·btnCancel(488,480) 79×25. 쪽 바탕은 PageControl 안쪽(4,24)이고 쪽 안 자리는 DFM 그대로.
 pub(super) fn settings_ui(ui: &mut egui::Ui, form: &mut SettingsForm, enter: bool, delete: bool) -> Option<SettingsAction> {
     let mut action = None;
@@ -1419,7 +1419,7 @@ impl App {
     }
 
     /// 확인한 뒤(C# ShowOptionsAsync의 나머지): 정규화, 언어·테마·두 패널·숨김 표시·보기, 저장, 두 패널 새로 고침.
-    pub(super) fn apply_settings(&mut self, settings: ndir::settings::Settings) {
+    pub(super) fn apply_settings(&mut self, settings: ndr::settings::Settings) {
         let previous_single = self.settings.flag("UseSingleInstance", false);
         self.settings = settings;
         self.settings.normalize();
@@ -1428,10 +1428,10 @@ impl App {
         if wanted_single != previous_single && !self.apply_single_instance(wanted_single) {
             self.settings.set_flag("UseSingleInstance", previous_single);
             let text = self.language_pack.text(
-                "NDIRCompatibility.SingleInstanceConflict",
-                "Another NDIR instance already uses this user data directory, or single-instance mode could not be enabled. The previous setting was kept.",
+                "NDRCompatibility.SingleInstanceConflict",
+                "Another NDR instance already uses this user data directory, or single-instance mode could not be enabled. The previous setting was kept.",
             );
-            self.system_box("NDIR", &text, ndir::msgbox::MB_OK | ndir::msgbox::MB_ICONASTERISK, |_, _, _| {});
+            self.system_box("NDR", &text, ndr::msgbox::MB_OK | ndr::msgbox::MB_ICONASTERISK, |_, _, _| {});
         }
         self.language = self.settings.text("Language", &self.language);
         self.dark = self.settings.text("Theme", "Black") != "Light";
@@ -1671,10 +1671,10 @@ impl App {
         });
     }
 
-    /// 원본 lbBasicColorDblClick(0x44ed5c): 그 기본 색으로 색 고르기를 열고, 확인이면 SetBasic. NDIR은 NexusFileColorMapValues에 넣고
+    /// 원본 lbBasicColorDblClick(0x44ed5c): 그 기본 색으로 색 고르기를 열고, 확인이면 SetBasic. NDR은 NexusFileColorMapValues에 넣고
     /// 색상표 적용(UseNexusFileColorMap)을 켠다(원본은 기본 색을 늘 쓴다).
     fn change_basic_color(&mut self, index: usize) {
-        let Some((key, _)) = ndir::styles::DEFAULT_ELEMENTS.get(index) else { return };
+        let Some((key, _)) = ndr::styles::DEFAULT_ELEMENTS.get(index) else { return };
         let Some(current) = self.settings_form().and_then(|f| basic_color(&f.draft, index)) else { return };
         let rgb = u32::from_str_radix(&current, 16).unwrap_or(0);
         let colorref = ((rgb & 0xFF) << 16) | (rgb & 0xFF00) | ((rgb >> 16) & 0xFF);
@@ -1716,15 +1716,15 @@ impl App {
     fn import_extension_colors(&mut self) {
         let ko = self.language == "ko";
         let filters = if ko {
-            [("NexusFile 색상표 (*.col)", "*.col"), ("NDIR 색상표 (*.json)", "*.json"), ("모든 파일 (*.*)", "*.*")]
+            [("NexusFile 색상표 (*.col)", "*.col"), ("NDR 색상표 (*.json)", "*.json"), ("모든 파일 (*.*)", "*.*")]
         } else {
-            [("NexusFile color map (*.col)", "*.col"), ("NDIR color map (*.json)", "*.json"), ("All files (*.*)", "*.*")]
+            [("NexusFile color map (*.col)", "*.col"), ("NDR color map (*.json)", "*.json"), ("All files (*.*)", "*.*")]
         };
         let Some(path) = (self.open_dialog)("", None, "", &filters) else { return };
         let result: Result<(), String> = (|| {
             let Some(form) = self.settings_form() else { return Ok(()) };
             let colors: Vec<(String, String)> = if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("col")) {
-                let map = ndir::styles::ColorMap::load(&path)?;
+                let map = ndr::styles::ColorMap::load(&path)?;
                 let hex = |c: &[u8; 4]| format!("{:02X}{:02X}{:02X}", c[0], c[1], c[2]);
                 let elements: Map<String, Value> = map.elements.iter().map(|(k, c)| (k.clone(), Value::String(hex(c)))).collect();
                 let used = !elements.is_empty();
@@ -1752,7 +1752,7 @@ impl App {
             Ok(())
         })();
         if let Err(error) = result {
-            let title = self.tr("NDIR 환경 설정", "NDIR Settings").into_owned();
+            let title = self.tr("NDR 환경 설정", "NDR Settings").into_owned();
             let text = if ko { format!("색상표를 읽을 수 없습니다: {error}") } else { format!("The color map could not be read: {error}") };
             self.system_box(&title, &text, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
         }
@@ -1761,7 +1761,7 @@ impl App {
     /// C# ExportExtensionColors.
     fn export_extension_colors(&mut self) {
         let ko = self.language == "ko";
-        let title = self.tr("NDIR 환경 설정", "NDIR Settings").into_owned();
+        let title = self.tr("NDR 환경 설정", "NDR Settings").into_owned();
         let fail = |app: &mut App, error: String| {
             let text = if ko { format!("색상표를 내보낼 수 없습니다: {error}") } else { format!("The color map could not be exported: {error}") };
             app.system_box(&title, &text, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
@@ -1779,17 +1779,17 @@ impl App {
             Err(error) => return fail(self, error),
         };
         let elements = object(&form.draft, "NexusFileColorMapValues");
-        let filters = if ko { [("NexusFile 색상표 (*.col)", "*.col"), ("NDIR 색상표 (*.json)", "*.json")] } else { [("NexusFile color map (*.col)", "*.col"), ("NDIR color map (*.json)", "*.json")] };
-        let Some(path) = (self.save_dialog)("", None, "NDIR-extension-colors.col", &filters, "col", true) else { return };
+        let filters = if ko { [("NexusFile 색상표 (*.col)", "*.col"), ("NDR 색상표 (*.json)", "*.json")] } else { [("NexusFile color map (*.col)", "*.col"), ("NDR color map (*.json)", "*.json")] };
+        let Some(path) = (self.save_dialog)("", None, "NDR-extension-colors.col", &filters, "col", true) else { return };
         let body = if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("col")) {
-            let mut map = ndir::styles::ColorMap::default();
+            let mut map = ndr::styles::ColorMap::default();
             for (key, value) in &elements {
-                if let Some(color) = value.as_str().and_then(ndir::styles::parse_color) {
+                if let Some(color) = value.as_str().and_then(ndr::styles::parse_color) {
                     map.elements.insert(key.to_ascii_uppercase(), color);
                 }
             }
             for (extension, color) in &colors {
-                if let Some(color) = ndir::styles::parse_color(color) {
+                if let Some(color) = ndr::styles::parse_color(color) {
                     map.extensions.insert(extension.clone(), color);
                 }
             }

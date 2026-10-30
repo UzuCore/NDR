@@ -3,7 +3,7 @@
 //! 수식 키만 누를 때는 글을 바꾸지 않고 남은 키 목록만 새로 고친다(원본은 수식 키 자체도 키로 받는다).
 use super::original_dialogs::{DialogKind, DialogResult};
 use super::*;
-use ndir::shortcut_editor as editor;
+use ndr::shortcut_editor as editor;
 
 /// F12 창 상태(하나만 열린다).
 #[derive(Default)]
@@ -118,7 +118,7 @@ impl App {
         let mut close = false;
         let screen = ctx.content_rect();
         egui::Window::new(title)
-            .id(egui::Id::new("ndir-shortcut-window"))
+            .id(egui::Id::new("ndr-shortcut-window"))
             .open(&mut open)
             .collapsible(false)
             .resizable([false, true])

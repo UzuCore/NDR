@@ -1,4 +1,4 @@
-//! C# MainWindow.xaml 바깥 틀. 원본 NexusFile에 없는 제목 배너(N 로고·NDIR·설명 줄)는 두지 않는다. 비교/체크섬/원격은 메뉴로 닿는다.
+//! C# MainWindow.xaml 바깥 틀. 원본 NexusFile에 없는 제목 배너(N 로고·NDR·설명 줄)는 두지 않는다. 비교/체크섬/원격은 메뉴로 닿는다.
 //! 즐겨찾기 줄(BuildFavorites, 현재 위치 추가 +, 드라이브 단추), 패널 아래 정보 표시줄(UpdatePaneInfoBars, 폴더/디스크·파일·확장자),
 //! AddInfoBarMenu/ToggleInfoBar, UpdateDiskCapacityAsync, 아래 줄(상태 글 + 기능키 표시줄).
 //! 차이(HANDOFF): 영어 화면은 C#이 한국어로 고정한 글도 영어로 보인다.
@@ -28,7 +28,7 @@ pub(super) fn summarize(entries: &[Entry], ko: bool) -> PaneSummary {
         }
         summary.files += 1;
         summary.bytes = summary.bytes.saturating_add(entry.size);
-        let extension = match ndir::parity::dotnet_extension(&entry.name) {
+        let extension = match ndr::parity::dotnet_extension(&entry.name) {
             "" => (if ko { "(확장자 없음)" } else { "(no extension)" }).to_owned(),
             e => e.to_owned(),
         };
@@ -43,7 +43,7 @@ pub(super) fn summarize(entries: &[Entry], ko: bool) -> PaneSummary {
 }
 
 impl App {
-    /// 스킨 테마의 NDIR 상태 글(원본에는 상태 줄이 없다): 목록 자리를 줄이지 않고 창 아래(기능키 줄 바로 위, `bottom_inset`) 왼쪽에
+    /// 스킨 테마의 NDR 상태 글(원본에는 상태 줄이 없다): 목록 자리를 줄이지 않고 창 아래(기능키 줄 바로 위, `bottom_inset`) 왼쪽에
     /// 4초 동안 겹쳐 보인다. 글이 바뀌면 다시 센다. 글 자체(self.status)는 그대로 둔다.
     pub(super) fn skin_status_overlay(&mut self, ctx: &egui::Context, bottom_inset: f32) -> Option<egui::Rect> {
         if self.status.is_empty() {
@@ -70,7 +70,7 @@ impl App {
         let screen = ctx.content_rect();
         let size = galley.size() + egui::vec2(12.0, 6.0);
         let rect = egui::Rect::from_min_size(egui::pos2(screen.left() + 6.0, (screen.bottom() - bottom_inset - size.y - 4.0).round()), egui::vec2(size.x.ceil(), size.y.ceil()));
-        let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("ndir-skin-status")));
+        let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("ndr-skin-status")));
         painter.rect(rect, 2.0, visuals.window_fill(), visuals.window_stroke(), egui::StrokeKind::Inside);
         painter.galley(rect.min + egui::vec2(6.0, 3.0), galley, visuals.text_color());
         Some(rect)
@@ -104,7 +104,7 @@ impl App {
                     }
                     if favorites {
                         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                            egui::ScrollArea::horizontal().id_salt("ndir-favorites-bar").show(ui, |ui| {
+                            egui::ScrollArea::horizontal().id_salt("ndr-favorites-bar").show(ui, |ui| {
                                 ui.horizontal(|ui| {
                                     for (label, path) in self.favorite_buttons() {
                                         if ui.button(RichText::new(label).size(11.0)).on_hover_text(&path).clicked() {
@@ -250,7 +250,7 @@ impl App {
             match texture {
                 Some(texture) => {
                     let uv = egui::Rect::from_min_max(egui::pos2(index as f32 / count as f32, 0.0), egui::pos2((index + 1) as f32 / count as f32, 1.0));
-                    let response = ui.interact(rect, ui.id().with(("ndir-vertbar-button", index, count, rect.top() as i32)), egui::Sense::click());
+                    let response = ui.interact(rect, ui.id().with(("ndr-vertbar-button", index, count, rect.top() as i32)), egui::Sense::click());
                     ui.painter().image(texture.id(), rect, uv, Color32::WHITE);
                     response
                 }
@@ -373,7 +373,7 @@ impl App {
         let pane = &self.panes[index];
         let summary = pane.summary.clone().unwrap_or_default();
         let res = |key: &str, fallback: &str| self.language_pack.text(&format!("RES.{key}"), fallback);
-        let counts = ndir::markup::substitute(
+        let counts = ndr::markup::substitute(
             &res("FOLDERINFO", "<c000000><b>%d</b></c> Folder, <c000000><b>%d</b></c> File (<b>%s</b>)"),
             &[&summary.folders.to_string(), &summary.files.to_string(), &native::format_byte_size(summary.bytes)],
         );
@@ -381,15 +381,15 @@ impl App {
         if !marked.is_empty() {
             let bytes = marked.iter().filter(|e| !e.is_dir).fold(0u64, |total, e| total.saturating_add(e.size));
             let plus = if marked.iter().any(|e| e.is_dir) { "+" } else { "" };
-            let selected = ndir::markup::substitute(&res("SELECTED_INFO", "Selected: <b>%d</b> objects (<b>%s</b> bytes)"), &[&marked.len().to_string(), &format!("{}{plus}", n0(bytes as usize))]);
+            let selected = ndr::markup::substitute(&res("SELECTED_INFO", "Selected: <b>%d</b> objects (<b>%s</b> bytes)"), &[&marked.len().to_string(), &format!("{}{plus}", n0(bytes as usize))]);
             return (counts, String::new(), selected, String::new());
         }
         match &pane.disk {
             Some((drive, free, total)) if pane.archive.is_none() => {
                 let (free, total) = (native::format_byte_size(*free), native::format_byte_size(*total));
-                let short = ndir::markup::substitute(&res("DISKINFO_SHORT", "<c000000><b>%s</b></c> Free"), &[&free]);
-                let long = ndir::markup::substitute(&res("DISKINFO_LONG", "<c000000><b>%s</b></c> Free (Total <b>%s</b>)"), &[&free, &total]);
-                (counts, drive.clone(), short, ndir::markup::plain_text(&long))
+                let short = ndr::markup::substitute(&res("DISKINFO_SHORT", "<c000000><b>%s</b></c> Free"), &[&free]);
+                let long = ndr::markup::substitute(&res("DISKINFO_LONG", "<c000000><b>%s</b></c> Free (Total <b>%s</b>)"), &[&free, &total]);
+                (counts, drive.clone(), short, ndr::markup::plain_text(&long))
             }
             _ => (counts, String::new(), String::new(), String::new()),
         }
@@ -410,7 +410,7 @@ impl App {
         ctx.request_repaint_after(Duration::from_millis(3000).saturating_sub(shown.elapsed()));
         let pane = self.pane_rects[index];
         let center = if pane.is_positive() { pane.center() } else { ctx.content_rect().center() };
-        let response = egui::Area::new(egui::Id::new("ndir-pane-message"))
+        let response = egui::Area::new(egui::Id::new("ndr-pane-message"))
             .order(egui::Order::Foreground)
             .fixed_pos(center)
             .pivot(egui::Align2::CENTER_CENTER)
@@ -431,7 +431,7 @@ impl App {
         let ko = self.language == "ko";
         let unit = self.settings.text("SizeUnit", "Auto");
         let thousands = self.settings.flag("UseThousandsSeparator", true);
-        let size = |bytes: u64| ndir::parity::format_size(bytes, &unit, thousands);
+        let size = |bytes: u64| ndr::parity::format_size(bytes, &unit, thousands);
         if self.panes[index].summary.is_none() {
             let summary = summarize(&self.panes[index].entries, ko);
             self.panes[index].summary = Some(summary);
@@ -497,7 +497,7 @@ impl App {
             // C# GroupBy(선택 순서대로 처음 나온 확장자 순) → 앞 4개.
             let mut groups: Vec<(String, usize)> = Vec::new();
             for entry in selected_files {
-                let key = match ndir::parity::dotnet_extension(&entry.name) {
+                let key = match ndr::parity::dotnet_extension(&entry.name) {
                     "" => (if ko { "(확장자 없음)" } else { "(no extension)" }).to_owned(),
                     e => e.to_owned(),
                 };
@@ -537,7 +537,7 @@ impl App {
                     let mut job = super::original_dialogs::markup_job(text, 10.0, ui.visuals().weak_text_color(), cell);
                     job.wrap.max_rows = 1;
                     job.wrap.break_anywhere = true;
-                    ui.add_sized([cell, 14.0], egui::Label::new(job)).on_hover_text(ndir::markup::plain_text(text));
+                    ui.add_sized([cell, 14.0], egui::Label::new(job)).on_hover_text(ndr::markup::plain_text(text));
                 } else if shown[column] {
                     ui.add_sized([cell, 14.0], egui::Label::new(RichText::new(text).size(10.0).weak()).truncate()).on_hover_text(text);
                 } else {
@@ -614,14 +614,14 @@ impl App {
         let right_x = rect.right() - right.size().x;
         painter.galley(egui::pos2(right_x - drive.size().x, top), drive, color);
         painter.galley(egui::pos2(right_x, top), right, color);
-        let tip = if hint.is_empty() { ndir::markup::plain_text(&counts) } else { hint };
+        let tip = if hint.is_empty() { ndr::markup::plain_text(&counts) } else { hint };
         response.on_hover_text(tip);
     }
 }
 
 impl App {
     fn update_text(&self, key: &str, fallback: &str) -> String {
-        self.language_pack.text(&format!("NDIRUpdate.{key}"), fallback)
+        self.language_pack.text(&format!("NDRUpdate.{key}"), fallback)
     }
 
     /// C# CheckForUpdatesAsync(앞부분): 피드가 없으면 안내, HTTPS가 아니면 오류, 아니면 따로 받아 온다.
@@ -631,14 +631,14 @@ impl App {
 
     /// silent = 원본의 조용한 확인([+0x54] == 1, 시작할 때): 안내·오류 상자 없이 결과만 본다.
     pub(super) fn start_update_check(&mut self, silent: bool) {
-        let title = self.update_text("Title", "NDIR Update");
+        let title = self.update_text("Title", "NDR Update");
         let feed = self.settings.text("UpdateManifestUrl", "").trim().to_owned();
         if feed.is_empty() {
             if silent {
                 return;
             }
             let message = self.update_text("FeedMissing", "The update manifest URL is not configured. Add an HTTPS JSON feed in Settings.");
-            return self.system_box(&title, &message, ndir::msgbox::MB_OK | ndir::msgbox::MB_ICONASTERISK, |_, _, _| {});
+            return self.system_box(&title, &message, ndr::msgbox::MB_OK | ndr::msgbox::MB_ICONASTERISK, |_, _, _| {});
         }
         let https = feed.len() > 8 && feed[..8].eq_ignore_ascii_case("https://") && !feed[8..].trim_start_matches('/').is_empty();
         if !https {
@@ -646,30 +646,30 @@ impl App {
                 return;
             }
             let message = self.update_text("FeedHttpsRequired", "The update feed must use HTTPS.");
-            return self.system_box("NDIR", &message, ndir::msgbox::MB_OK | ndir::msgbox::MB_ICONEXCLAMATION, |_, _, _| {});
+            return self.system_box("NDR", &message, ndr::msgbox::MB_OK | ndr::msgbox::MB_ICONEXCLAMATION, |_, _, _| {});
         }
         let (get, tx) = (self.http_get, self.async_tx.clone());
         thread::spawn(move || {
-            let _ = tx.send(AsyncResult::Update(get(&feed, ndir::update::MAX_MANIFEST_BYTES), silent));
+            let _ = tx.send(AsyncResult::Update(get(&feed, ndr::update::MAX_MANIFEST_BYTES), silent));
         });
     }
 
-    /// C# CheckForUpdatesAsync(뒷부분). 오류는 RunSafely처럼 "NDIR" 경고 상자, 안내는 정보 상자.
+    /// C# CheckForUpdatesAsync(뒷부분). 오류는 RunSafely처럼 "NDR" 경고 상자, 안내는 정보 상자.
     /// 조용한 확인이면(원본 FUN_00441dd8 0x441e3d) 새 버전일 때 메뉴 줄 단추(tbNewUpdateAvailable)만 보이고 나머지는 아무것도 하지 않는다.
-    pub(super) fn update_done(&mut self, result: Result<ndir::update::HttpResponse, ndir::update::HttpError>, silent: bool) {
-        use ndir::msgbox::{IDYES, MB_ICONASTERISK, MB_ICONEXCLAMATION, MB_OK, MB_YESNO};
-        use ndir::update::{HttpError, Manifest};
+    pub(super) fn update_done(&mut self, result: Result<ndr::update::HttpResponse, ndr::update::HttpError>, silent: bool) {
+        use ndr::msgbox::{IDYES, MB_ICONASTERISK, MB_ICONEXCLAMATION, MB_OK, MB_YESNO};
+        use ndr::update::{HttpError, Manifest};
         if silent {
             if let Some(response) = result.as_ref().ok().filter(|r| (200..300).contains(&r.status) && r.secure) {
-                let current = ndir::update::parse_version(env!("CARGO_PKG_VERSION")).unwrap_or_else(|| vec![0, 0]);
-                if let Ok(Manifest::Newer(_, url)) = ndir::update::evaluate(&response.body, &current) {
+                let current = ndr::update::parse_version(env!("CARGO_PKG_VERSION")).unwrap_or_else(|| vec![0, 0]);
+                if let Ok(Manifest::Newer(_, url)) = ndr::update::evaluate(&response.body, &current) {
                     self.update_available = Some(url);
                 }
             }
             return;
         }
-        let title = self.update_text("Title", "NDIR Update");
-        let warn = |app: &mut App, text: String| app.system_box("NDIR", &text, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
+        let title = self.update_text("Title", "NDR Update");
+        let warn = |app: &mut App, text: String| app.system_box("NDR", &text, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
         let response = match result {
             Ok(response) => response,
             Err(HttpError::Timeout) => return warn(self, self.update_text("RequestTimedOut", "The update server did not respond within 15 seconds.")),
@@ -683,21 +683,21 @@ impl App {
         if !response.secure {
             return warn(self, self.update_text("RedirectHttpsRequired", "The update feed did not remain on HTTPS."));
         }
-        let current = ndir::update::parse_version(env!("CARGO_PKG_VERSION")).unwrap_or_else(|| vec![0, 0]);
-        match ndir::update::evaluate(&response.body, &current) {
+        let current = ndr::update::parse_version(env!("CARGO_PKG_VERSION")).unwrap_or_else(|| vec![0, 0]);
+        match ndr::update::evaluate(&response.body, &current) {
             Err(message) => warn(self, message),
             Ok(Manifest::Invalid(key)) => {
                 let fallback = if key == "InvalidVersion" { "The update feed does not contain a valid version value." } else { "The update feed does not contain a valid HTTPS download URL." };
                 warn(self, self.update_text(key, fallback))
             }
             Ok(Manifest::Legacy(version)) => {
-                let text = self.update_text("LegacyFeed", "The configured feed belongs to NexusFile (version {0}). Set an NDIR HTTPS JSON feed to check for NDIR updates.").replace("{0}", &version);
+                let text = self.update_text("LegacyFeed", "The configured feed belongs to NexusFile (version {0}). Set an NDR HTTPS JSON feed to check for NDR updates.").replace("{0}", &version);
                 self.system_box(&title, &text, MB_OK | MB_ICONASTERISK, |_, _, _| {});
             }
             Ok(Manifest::UpToDate) => {
                 // 원본 FUN_00441dd8: 최신이면 ShowMessage(UPDATE_NOUPDATE) — 아이콘 없는 프로그램 제목 상자.
                 let text = self.language_pack.text("RES.UPDATE_NOUPDATE", "This application is up-to-date.");
-                self.system_box("NDIR", &text, MB_OK, |_, _, _| {});
+                self.system_box("NDR", &text, MB_OK, |_, _, _| {});
             }
             Ok(Manifest::Newer(_, url)) => {
                 // 원본: MessageBoxW(UPDATE_NEWUPDATE, 제목 UPDATE, 0x44 = 예/아니요 + 정보), 예면 내려받기 쪽을 연다.

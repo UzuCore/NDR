@@ -6,8 +6,8 @@
 use super::original_dialogs::{DialogKind, DialogResult};
 use super::remote_window::{SiteProfile, load_sites, parse_port, prepare_host, store_sites, t};
 use super::*;
-use ndir::msgbox::{IDYES, MB_ICONASTERISK, MB_ICONEXCLAMATION, MB_ICONQUESTION, MB_OK, MB_YESNO};
-use ndir::remote::Config;
+use ndr::msgbox::{IDYES, MB_ICONASTERISK, MB_ICONEXCLAMATION, MB_ICONQUESTION, MB_OK, MB_YESNO};
+use ndr::remote::Config;
 use serde_json::Value;
 
 /// lstrcmpiW(NexusFileFtpSitesService.NamesEqual).
@@ -152,7 +152,7 @@ pub(super) fn sites_ui(ui: &mut egui::Ui, form: &mut SitesForm, language: &compa
         (16.0, 264.0, text("Caption.btnAdd", "&Add"), SitesAction::Add),
         (94.0, 264.0, text("Caption.btnDelete", "&Delete"), SitesAction::Delete),
         (215.0, 264.0, language.text("formFTPQuickConnect.Caption.btnOk", "&Connect").replace('&', ""), SitesAction::Connect),
-        (382.0, 226.0, language.text("NDIRRemoteSites.Advanced", "Additional settings"), SitesAction::Advanced),
+        (382.0, 226.0, language.text("NDRRemoteSites.Advanced", "Additional settings"), SitesAction::Advanced),
         (298.0, 264.0, text("Caption.btnOk", "OK"), SitesAction::Save),
         (382.0, 264.0, text("Caption.btnCancel", "Cancel"), SitesAction::Cancel),
     ];
@@ -295,10 +295,10 @@ pub(super) fn site_editor_ui(ui: &mut egui::Ui, form: &mut SiteEditorForm, langu
         label(ui, t(ko, "개인 키 암호", "Private key passphrase"));
         ui.add(egui::TextEdit::singleline(&mut form.key_passphrase).password(true).desired_width(f32::INFINITY));
         if form.protocol.eq_ignore_ascii_case("SFTP") {
-            label(ui, &language.text("NDIRSFTPHostKey.StoredHostFingerprint", "Stored SFTP host fingerprint (SHA-256)"));
+            label(ui, &language.text("NDRSFTPHostKey.StoredHostFingerprint", "Stored SFTP host fingerprint (SHA-256)"));
             ui.horizontal(|ui| {
                 ui.add(egui::TextEdit::multiline(&mut form.fingerprint.as_str()).desired_rows(2).desired_width(400.0));
-                if ui.button(language.text("NDIRSFTPHostKey.ForgetHostKey", "Forget SFTP host key")).clicked() {
+                if ui.button(language.text("NDRSFTPHostKey.ForgetHostKey", "Forget SFTP host key")).clicked() {
                     form.fingerprint.clear();
                 }
             });
@@ -533,20 +533,20 @@ impl App {
             Err(error) => {
                 let challenge = serde_json::from_str::<Value>(&error).ok().filter(|v| matches!(v.get("kind").and_then(Value::as_str), Some("unknown_host_key" | "host_key_mismatch")));
                 let Some(challenge) = challenge else {
-                    return self.system_box("NDIR", &error, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
+                    return self.system_box("NDR", &error, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
                 };
                 let changed = challenge["kind"] == "host_key_mismatch";
                 let candidate = challenge["candidate"].as_str().unwrap_or_default().to_owned();
-                let title = self.language_pack.text(if changed { "NDIRSFTPHostKey.ChangedTitle" } else { "NDIRSFTPHostKey.FirstUseTitle" }, if changed { "SFTP server key changed" } else { "SFTP server verification" });
+                let title = self.language_pack.text(if changed { "NDRSFTPHostKey.ChangedTitle" } else { "NDRSFTPHostKey.FirstUseTitle" }, if changed { "SFTP server key changed" } else { "SFTP server verification" });
                 let prompt = format!(
                     "{}: {host}\r\n{}: {candidate}\r\n\r\n{}",
-                    self.language_pack.text("NDIRSFTPHostKey.HostLabel", "Host"),
-                    self.language_pack.text("NDIRSFTPHostKey.FingerprintLabel", "SHA-256"),
-                    self.language_pack.text("NDIRSFTPHostKey.TrustQuestion", "Trust this key and continue?")
+                    self.language_pack.text("NDRSFTPHostKey.HostLabel", "Host"),
+                    self.language_pack.text("NDRSFTPHostKey.FingerprintLabel", "SHA-256"),
+                    self.language_pack.text("NDRSFTPHostKey.TrustQuestion", "Trust this key and continue?")
                 );
                 self.system_box(&title, &prompt, MB_YESNO | MB_ICONEXCLAMATION, move |app, answer, _| {
                     if answer != IDYES {
-                        return app.system_box("NDIR", "Key exchange negotiation failed.", MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
+                        return app.system_box("NDR", "Key exchange negotiation failed.", MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
                     }
                     // C#: 사이트의 KnownHostFingerprint가 바뀌면 저장한다.
                     let mut sites = load_sites(&app.settings);

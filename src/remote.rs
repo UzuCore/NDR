@@ -835,7 +835,7 @@ fn copy_cancel(
 
 fn temp_name() -> String {
     format!(
-        ".ndir-transfer-{}-{:x}-{:x}.tmp",
+        ".ndr-transfer-{}-{:x}-{:x}.tmp",
         std::process::id(),
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -2121,7 +2121,7 @@ impl Client {
             Some(Backend::Ftp(mut ftp)) => ftp.stream.quit().map_err(err),
             Some(Backend::Sftp { mut sftp, session }) => {
                 sftp.shutdown().map_err(err)?;
-                session.disconnect(None, "NDIR closed", None).map_err(err)
+                session.disconnect(None, "NDR closed", None).map_err(err)
             }
             None => Ok(()),
         }
@@ -2609,7 +2609,7 @@ if protocol in ('ftp', 'ftps', 'ftp-euc-kr', 'ftps-euc-kr'):
     from pyftpdlib.authorizers import DummyAuthorizer
     from pyftpdlib.handlers import FTPHandler, TLS_FTPHandler
     from pyftpdlib.servers import FTPServer
-    if os.environ.get('NDIR_FIXTURE_TRACE'):
+    if os.environ.get('NDR_FIXTURE_TRACE'):
         from pyftpdlib.log import config_logging
         logging.disable(logging.NOTSET); config_logging(level=logging.DEBUG)
     handler = FTPHandler
@@ -3243,7 +3243,7 @@ else:
                         .list("/")
                         .unwrap()
                         .iter()
-                        .any(|e| e.name.starts_with(".ndir-transfer-"))
+                        .any(|e| e.name.starts_with(".ndr-transfer-"))
                 );
                 client.close().unwrap();
             }
@@ -3301,7 +3301,7 @@ else:
                         .list("/")
                         .unwrap()
                         .iter()
-                        .any(|e| e.name.starts_with(".ndir-transfer-"))
+                        .any(|e| e.name.starts_with(".ndr-transfer-"))
                 );
                 client.close().unwrap();
             }

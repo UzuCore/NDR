@@ -3,8 +3,8 @@
 use super::original_dialogs::{DialogKind, DialogResult};
 use super::*;
 use compat::RenameRule;
-use ndir::msgbox::{IDYES, MB_ICONEXCLAMATION, MB_ICONQUESTION, MB_OK, MB_YESNO};
-use ndir::rename_macros::{self as macros, RenameMacro};
+use ndr::msgbox::{IDYES, MB_ICONEXCLAMATION, MB_ICONQUESTION, MB_OK, MB_YESNO};
+use ndr::rename_macros::{self as macros, RenameMacro};
 
 #[derive(Clone, Debug)]
 pub(super) struct RenameForm {
@@ -488,10 +488,10 @@ impl App {
         let parsed: Vec<Option<i64>> = form.numbers.iter().map(|v| v.trim().parse::<i32>().ok().map(i64::from)).collect();
         let [Some(index), Some(count), Some(start), Some(step), Some(digits)] = parsed[..] else {
             let message = if ko { "위치와 번호 값은 정수로 입력하세요." } else { "Enter whole numbers for positions and numbering." };
-            return self.system_box(&title, message, MB_OK | ndir::msgbox::MB_ICONASTERISK, |_, _, _| {});
+            return self.system_box(&title, message, MB_OK | ndr::msgbox::MB_ICONASTERISK, |_, _, _| {});
         };
         if !(1..=255).contains(&index) || !(0..=255).contains(&count) || start > 999_999 || !(-999_999..=999_999).contains(&step) || !(1..=250).contains(&digits) {
-            return self.system_box(&title, &range, MB_OK | ndir::msgbox::MB_ICONASTERISK, |_, _, _| {});
+            return self.system_box(&title, &range, MB_OK | ndr::msgbox::MB_ICONASTERISK, |_, _, _| {});
         }
         let mut rule = form.editor.clone();
         (rule.index, rule.count, rule.start, rule.step, rule.digits) = (index, count, start, step, digits as usize);
@@ -504,7 +504,7 @@ impl App {
         let Some(form) = self.rename_form() else { return };
         if form.rules.is_empty() {
             let text = self.language_pack.text("formAdvRename.Caption.macroRulesRequired", "Add one or more actions before saving.");
-            return self.system_box(&title, &text, MB_OK | ndir::msgbox::MB_ICONASTERISK, |_, _, _| {});
+            return self.system_box(&title, &text, MB_OK | ndr::msgbox::MB_ICONASTERISK, |_, _, _| {});
         }
         let initial = form.macro_name.clone().unwrap_or_default();
         let prompt_title = self.language_pack.text("formAdvRename.Caption.macroSaveTitle", "Save Rename Macro");
@@ -514,7 +514,7 @@ impl App {
             if name.is_empty() || name.chars().count() > 64 {
                 let text = app.language_pack.text("formAdvRename.Caption.macroNameRequired", "Enter a macro name from 1 to 64 characters.");
                 let title = app.rename_title();
-                return app.system_box(&title, &text, MB_OK | ndir::msgbox::MB_ICONASTERISK, |_, _, _| {});
+                return app.system_box(&title, &text, MB_OK | ndr::msgbox::MB_ICONASTERISK, |_, _, _| {});
             }
             let exists = app.rename_form().is_some_and(|f| f.macros.iter().any(|m| m.name.eq_ignore_ascii_case(&name)));
             if exists {
@@ -622,7 +622,7 @@ impl App {
         if invalid {
             let caption = self.language_pack.text("RES.REN_TITLE", "NexusFile Rename");
             let text = self.language_pack.text("RES.REN_INVALIDNAMES", "There are invalid file names.\nFile names with red color are invalid names. Please, correct names then try again.");
-            return self.system_box(&caption, &text, MB_OK | ndir::msgbox::MB_ICONASTERISK, |_, _, _| {});
+            return self.system_box(&caption, &text, MB_OK | ndr::msgbox::MB_ICONASTERISK, |_, _, _| {});
         }
         let plan = match build_plan(form, ko) {
             Ok(plan) => plan,

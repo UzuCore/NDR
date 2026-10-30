@@ -1,12 +1,12 @@
 //! C# ChecksumAsync(+ 체크섬 하위 메뉴), MergeTextFilesAsync, OpenWithAsync, RunCommandAsync(실행 파일 기록), OriginalFindAsync,
 //! MapNetworkDriveAsync/UnmapNetworkDriveAsync(+ CredentialsWindow), ToggleExplorerIntegrationAsync, ImportLegacySettingsAsync,
-//! InstallSelectedArchive. C#이 RunSafely로 보이는 예외는 `warn`(MessageBox(글, "NDIR", 경고))이다.
+//! InstallSelectedArchive. C#이 RunSafely로 보이는 예외는 `warn`(MessageBox(글, "NDR", 경고))이다.
 //! 차이(HANDOFF): 원격 패널에서는 체크섬·합치기·다른 프로그램으로 열기 대상이 없다(C#에는 원격 패널이 없다).
 //! ftp:// 명령은 원격 창 이식 전까지 옛 원격 연결 창을 연다.
 use super::original_dialogs::{DialogKind, DialogResult};
 use super::*;
-use ndir::command_line::{self as cmdline, CommandKind};
-use ndir::msgbox::{IDNO, IDYES, MB_ICONQUESTION, MB_OK, MB_YESNO, MB_YESNOCANCEL};
+use ndr::command_line::{self as cmdline, CommandKind};
+use ndr::msgbox::{IDNO, IDYES, MB_ICONQUESTION, MB_OK, MB_YESNO, MB_YESNOCANCEL};
 
 /// 바깥 시스템을 건드리는 함수들(테스트에서 바꿔 끼운다): 네트워크 드라이브, 탐색기 메뉴 등록, 동사 실행.
 #[derive(Clone, Copy)]
@@ -148,7 +148,7 @@ impl Default for SystemHooks {
             set_explorer: native::set_explorer_integration,
             run_verb: shell_verb,
             #[cfg(not(test))]
-            properties: ndir::shell_menu::properties,
+            properties: ndr::shell_menu::properties,
             #[cfg(test)]
             properties: |_| Err("not in tests".into()),
             network_path_error: native::network_path_error,
@@ -250,7 +250,7 @@ impl ChecksumAlgorithm {
 }
 
 /// 체크섬 창 글: "이름\r\n결과"를 빈 줄로 잇는다.
-pub(super) fn checksum_text(items: &[(String, ndir::tools::Checksums)], algorithm: Option<ChecksumAlgorithm>) -> String {
+pub(super) fn checksum_text(items: &[(String, ndr::tools::Checksums)], algorithm: Option<ChecksumAlgorithm>) -> String {
     items
         .iter()
         .map(|(name, hash)| {
@@ -280,14 +280,14 @@ impl SourceFiles {
             None => Ok(self.files.iter().map(|(_, p)| p.clone()).collect()),
             Some(location) => {
                 let password = (!location.password.is_empty()).then_some(location.password.as_str());
-                self.files.iter().map(|(_, key)| ndir::archive::extract_entry_to_temp(&location.file, password, &key.to_string_lossy(), cancel)).collect()
+                self.files.iter().map(|(_, key)| ndr::archive::extract_entry_to_temp(&location.file, password, &key.to_string_lossy(), cancel)).collect()
             }
         }
     }
 }
 
 /// 원본 TfPassword("인증", ClientWidth 249 × ClientHeight 142): lUser(12,24) eUser(82,21 145×21), lPassword(12,64) ePassword(82,61 145×21, '*'),
-/// btnOk(46,105)·btnCancel(135,105) 75×25. NDIR은 C# CredentialsWindow(네트워크 드라이브 다른 계정) 자리에 쓴다. 확인은 사용자 이름이 있을 때만.
+/// btnOk(46,105)·btnCancel(135,105) 75×25. NDR은 C# CredentialsWindow(네트워크 드라이브 다른 계정) 자리에 쓴다. 확인은 사용자 이름이 있을 때만.
 pub(super) fn credentials_ui(ui: &mut egui::Ui, user: &mut String, password: &mut String, language: &compat::Language, enter: bool, first_frame: bool) -> Option<bool> {
     use super::original_dialogs::put_left;
     let text = |key: &str, fallback: &str| language.text(&format!("formPassword.{key}"), fallback).replace('&', "");
@@ -340,7 +340,7 @@ impl App {
         thread::spawn(move || {
             let cancel = AtomicBool::new(false);
             let outcome = sources.resolve(&cancel).and_then(|paths| {
-                sources.files.iter().zip(paths).map(|((name, _), path)| ndir::tools::checksums(&path, &cancel).map(|hash| (name.clone(), hash))).collect::<Result<Vec<_>, _>>()
+                sources.files.iter().zip(paths).map(|((name, _), path)| ndr::tools::checksums(&path, &cancel).map(|hash| (name.clone(), hash))).collect::<Result<Vec<_>, _>>()
             });
             let _ = tx.send(match outcome {
                 Ok(items) => AsyncResult::Text { title, text: checksum_text(&items, algorithm) },
@@ -371,7 +371,7 @@ impl App {
         thread::spawn(move || {
             let cancel = AtomicBool::new(false);
             let path = sources.resolve(&cancel).ok().and_then(|paths| paths.into_iter().next());
-            let value = path.and_then(|path| ndir::tools::checksum(&path, name).ok()).map(|hash| if name == "crc32" { hash } else { hash.to_ascii_lowercase() });
+            let value = path.and_then(|path| ndr::tools::checksum(&path, name).ok()).map(|hash| if name == "crc32" { hash } else { hash.to_ascii_lowercase() });
             let _ = tx.send(AsyncResult::ChecksumDone { serial, value });
         });
     }
@@ -420,10 +420,10 @@ impl App {
     pub(super) fn merge_sources_ready(&mut self, output: PathBuf, sources: Result<Vec<PathBuf>, String>) {
         let sources = match sources {
             Ok(sources) => sources,
-            Err(error) => return self.system_box("NDIR", &error, MB_OK | ndir::msgbox::MB_ICONEXCLAMATION, |_, _, _| {}),
+            Err(error) => return self.system_box("NDR", &error, MB_OK | ndr::msgbox::MB_ICONEXCLAMATION, |_, _, _| {}),
         };
         let full = |p: &Path| std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf()).to_string_lossy().into_owned();
-        if sources.iter().any(|p| ndir::names::equals_ignore_case(&full(p), &full(&output))) {
+        if sources.iter().any(|p| ndr::names::equals_ignore_case(&full(p), &full(&output))) {
             return self.warn("결과 파일을 입력 파일과 같은 경로에 저장할 수 없습니다.", "The result cannot be saved over one of the input files.");
         }
         let ko = self.language == "ko";
@@ -454,11 +454,11 @@ impl App {
     pub(super) fn merge_done(&mut self, count: usize, outcome: Result<(), String>) {
         match outcome {
             Ok(()) => {
-                let n = ndir::parity::format_size(count as u64, "B", true).trim_end_matches(" B").to_owned();
+                let n = ndr::parity::format_size(count as u64, "B", true).trim_end_matches(" B").to_owned();
                 self.status = if self.language == "ko" { format!("{n}개 텍스트 파일을 합쳤습니다.") } else { format!("Merged {n} text files.") };
                 self.refresh(self.active);
             }
-            Err(error) => self.system_box("NDIR", &error, MB_OK | ndir::msgbox::MB_ICONEXCLAMATION, |_, _, _| {}),
+            Err(error) => self.system_box("NDR", &error, MB_OK | ndr::msgbox::MB_ICONEXCLAMATION, |_, _, _| {}),
         }
     }
 
@@ -507,14 +507,14 @@ impl App {
     pub(super) fn launch_open_with(&mut self, program: &str, template: &str, paths: Result<Vec<String>, String>) {
         let paths = match paths {
             Ok(paths) => paths,
-            Err(error) => return self.system_box("NDIR", &error, MB_OK | ndir::msgbox::MB_ICONEXCLAMATION, |_, _, _| {}),
+            Err(error) => return self.system_box("NDR", &error, MB_OK | ndr::msgbox::MB_ICONEXCLAMATION, |_, _, _| {}),
         };
         let groups: Vec<Vec<String>> = if template.to_ascii_lowercase().contains("{files}") { vec![paths] } else { paths.into_iter().map(|p| vec![p]).collect() };
         for group in groups {
             let arguments = cmdline::expand_open_template(template, &group);
             let directory = Path::new(&group[0]).parent().map(Path::to_path_buf).unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
             if let Err(error) = (self.shell_runner)(Path::new(program), &arguments, &directory) {
-                return self.system_box("NDIR", &error, MB_OK | ndir::msgbox::MB_ICONEXCLAMATION, |_, _, _| {});
+                return self.system_box("NDR", &error, MB_OK | ndr::msgbox::MB_ICONEXCLAMATION, |_, _, _| {});
             }
         }
     }
@@ -728,9 +728,9 @@ impl App {
         let caption = self.tr("탐색기 통합", "Explorer integration").into_owned();
         let enabled = (self.system.explorer_enabled)();
         let question = if enabled {
-            self.tr("NDIR의 탐색기 폴더 메뉴 등록을 제거할까요?", "Remove NDIR from the Explorer folder menu?")
+            self.tr("NDR의 탐색기 폴더 메뉴 등록을 제거할까요?", "Remove NDR from the Explorer folder menu?")
         } else {
-            self.tr("현재 계정의 Windows 탐색기 폴더 메뉴에 NDIR을 추가할까요?", "Add NDIR to the Windows Explorer folder menu for the current account?")
+            self.tr("현재 계정의 Windows 탐색기 폴더 메뉴에 NDR을 추가할까요?", "Add NDR to the Windows Explorer folder menu for the current account?")
         }
         .into_owned();
         self.system_box(&caption, &question, MB_YESNO | MB_ICONQUESTION, move |app, answer, _| {
@@ -739,9 +739,9 @@ impl App {
             }
             match (app.system.set_explorer)(!enabled) {
                 Ok(()) => {
-                    app.status = if enabled { app.tr("탐색기 메뉴 등록을 제거했습니다.", "Removed NDIR from the Explorer menu.") } else { app.tr("탐색기 메뉴에 NDIR을 추가했습니다.", "Added NDIR to the Explorer menu.") }.into_owned();
+                    app.status = if enabled { app.tr("탐색기 메뉴 등록을 제거했습니다.", "Removed NDR from the Explorer menu.") } else { app.tr("탐색기 메뉴에 NDR을 추가했습니다.", "Added NDR to the Explorer menu.") }.into_owned();
                 }
-                Err(error) => app.system_box("NDIR", &error, MB_OK | ndir::msgbox::MB_ICONEXCLAMATION, |_, _, _| {}),
+                Err(error) => app.system_box("NDR", &error, MB_OK | ndr::msgbox::MB_ICONEXCLAMATION, |_, _, _| {}),
             }
         });
     }
@@ -758,7 +758,7 @@ impl App {
         let Some(path) = (self.open_dialog)(title, Some(&initial), "nexusfile.ini", &filters) else { return };
         let imported = match compat::import_ini(&path) {
             Ok(settings) => settings,
-            Err(error) => return self.system_box("NDIR", &error, MB_OK | ndir::msgbox::MB_ICONEXCLAMATION, |_, _, _| {}),
+            Err(error) => return self.system_box("NDR", &error, MB_OK | ndr::msgbox::MB_ICONEXCLAMATION, |_, _, _| {}),
         };
         import_toolbar_beside(&path, &self.profile);
         self.settings = imported;
@@ -769,7 +769,7 @@ impl App {
         self.dual = self.settings.flag("DualPaneMode", true);
         self.active = usize::from(self.dual && self.settings.flag("StartWithRightPaneActive", false));
         self.preferences_dirty = true;
-        self.toolbar = ndir::commands::load_toolbar(&self.profile, include_bytes!("../../Resources/toolbar.xml")).unwrap_or(ndir::commands::ToolbarConfig { items: vec![], warning: None });
+        self.toolbar = ndr::commands::load_toolbar(&self.profile, include_bytes!("../../Resources/toolbar.xml")).unwrap_or(ndr::commands::ToolbarConfig { items: vec![], warning: None });
         for (index, side) in ["Left", "Right"].into_iter().enumerate() {
             self.panes[index].show_hidden = self.settings.flag(&format!("{side}ShowHiddenFiles"), false);
             let start = self.settings.text(&format!("{side}StartPath"), "");
@@ -790,12 +790,12 @@ impl App {
         if self.panes[i].archive.is_some() {
             return self.warn("압축 파일 안의 항목을 설치할 수 없습니다.", "Items inside an archive cannot be installed.");
         }
-        let item = self.target_entries(i).into_iter().find(|e| !e.is_dir && ndir::archive::archive_format(&e.path).is_some());
+        let item = self.target_entries(i).into_iter().find(|e| !e.is_dir && ndr::archive::archive_format(&e.path).is_some());
         let Some(item) = item else {
             return self.warn("설치할 압축 파일을 선택하세요.", "Select an archive to install.");
         };
         if let Err(error) = (self.system.run_verb)(&item.path, "install") {
-            self.system_box("NDIR", &error, MB_OK | ndir::msgbox::MB_ICONEXCLAMATION, |_, _, _| {});
+            self.system_box("NDR", &error, MB_OK | ndr::msgbox::MB_ICONEXCLAMATION, |_, _, _| {});
         }
     }
 }
@@ -808,7 +808,7 @@ pub(super) fn import_toolbar_beside(ini: &Path, profile: &Path) -> Option<Result
     }
     Some((|| {
         let bytes = std::fs::read(&source).map_err(|e| e.to_string())?;
-        ndir::commands::parse_toolbar(&bytes)?;
+        ndr::commands::parse_toolbar(&bytes)?;
         std::fs::create_dir_all(profile).map_err(|e| e.to_string())?;
         let destination = profile.join("toolbar.xml");
         if destination.is_file() {

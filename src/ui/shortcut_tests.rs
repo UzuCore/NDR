@@ -1,10 +1,10 @@
-//! C# HandleKeyboardAsync 순서(원본 단축키 표 → NDIR 단축키 → 동작 정의), 사용자 단축키 우선, CycleFileSelection, 작업 폴더,
+//! C# HandleKeyboardAsync 순서(원본 단축키 표 → NDR 단축키 → 동작 정의), 사용자 단축키 우선, CycleFileSelection, 작업 폴더,
 //! 즐겨찾기 글쇠, Esc 동작, 열 개수, 드라이브 마지막 폴더를 Rust UI에서 확인한다. 한국어와 영어만, 격리 폴더만 쓴다.
 use super::*;
 use std::fs;
 
 fn fixture(label: &str, language: &str) -> (PathBuf, egui::Context, App) {
-    let root = std::env::temp_dir().join(format!("ndir-keys-{}-{}-{label}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    let root = std::env::temp_dir().join(format!("ndr-keys-{}-{}-{label}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
     let (left, right) = (root.join("left"), root.join("right"));
     fs::create_dir_all(left.join("folder1")).unwrap();
     fs::create_dir_all(&right).unwrap();
@@ -153,7 +153,7 @@ fn narrow_auto_view_flows_one_column_at_a_time() {
 }
 /// 가짜 드라이브 루트(격리 임시 폴더 둘).
 fn fake_drive_roots() -> Vec<PathBuf> {
-    ["A", "B"].iter().map(|l| std::env::temp_dir().join(format!("ndir-keys-fake-drive-{l}"))).collect()
+    ["A", "B"].iter().map(|l| std::env::temp_dir().join(format!("ndr-keys-fake-drive-{l}"))).collect()
 }
 fn fake_drive_info(_: &std::path::Path) -> Option<(String, u32, Option<(u64, u64)>)> {
     Some(("Disk".into(), 3, Some((25, 100))))
@@ -248,10 +248,10 @@ fn keyboard_follows_the_csharp_shortcut_engine() {
     let question = app.msgboxes.first().map(|m| (m.title.clone(), m.text.clone())).expect("the replace question");
     assert_eq!(question.0, app.language_pack.text("RES.WORKFOLDER", "?"));
     assert_eq!(question.1, app.language_pack.text("RES.MSG_UNSETWORKFOLDER", "?").replace("%s", &left.to_string_lossy()));
-    app.answer_message_box(ndir::msgbox::IDNO, &ctx);
+    app.answer_message_box(ndr::msgbox::IDNO, &ctx);
     assert_eq!(app.settings.strings("WorkingFolders")[0], left.to_string_lossy());
     press(&mut app, &ctx, egui::Key::Num1, CTRL);
-    app.answer_message_box(ndir::msgbox::IDYES, &ctx);
+    app.answer_message_box(ndr::msgbox::IDYES, &ctx);
     assert_eq!(app.settings.strings("WorkingFolders")[0], left.join("folder1").to_string_lossy());
     let mut folders = app.settings.strings("WorkingFolders");
     folders[0] = left.to_string_lossy().into_owned();
@@ -261,7 +261,7 @@ fn keyboard_follows_the_csharp_shortcut_engine() {
     press(&mut app, &ctx, egui::Key::Num1, ALT);
     assert_eq!(app.panes[0].path, left);
     press(&mut app, &ctx, egui::Key::Num2, ALT);
-    assert_eq!(app.msgboxes.first().map(|m| (m.title.clone(), m.text.clone())), Some(("NDIR".to_owned(), "작업 폴더 2이 설정되지 않았습니다.".to_owned())));
+    assert_eq!(app.msgboxes.first().map(|m| (m.title.clone(), m.text.clone())), Some(("NDR".to_owned(), "작업 폴더 2이 설정되지 않았습니다.".to_owned())));
     app.answer_message_box(1, &ctx);
     // 즐겨찾기 글쇠 Shift+F1(favoriteOpen1): 이름과 경로가 모두 있을 때만.
     app.settings.set_strings("Favorites", vec![left.join("folder1").to_string_lossy().into_owned()]);
@@ -274,10 +274,10 @@ fn keyboard_follows_the_csharp_shortcut_engine() {
     // Alt+Left = 뒤로(원본 miHistoryBack).
     press(&mut app, &ctx, egui::Key::ArrowLeft, ALT);
     assert_eq!(app.panes[0].path, left);
-    // 사용자가 바꾼 NDIR 단축키는 원본 표보다 먼저: Ctrl+B는 원본 miRecycleBin이지만 historyForward로 바꾸면 앞으로.
+    // 사용자가 바꾼 NDR 단축키는 원본 표보다 먼저: Ctrl+B는 원본 miRecycleBin이지만 historyForward로 바꾸면 앞으로.
     app.settings.values.insert("KeyboardShortcuts".into(), serde_json::json!({"historyForward": "Ctrl+B"}));
     press(&mut app, &ctx, egui::Key::B, CTRL);
-    assert_eq!(app.panes[0].path, left.join("folder1"), "the user's NDIR binding wins over the original map");
+    assert_eq!(app.panes[0].path, left.join("folder1"), "the user's NDR binding wins over the original map");
     // 마지막 드라이브 폴더(SaveDriveFolders): 이동하면 기억하고, 드라이브 루트로 가면 되살린다.
     let drive_root = PathBuf::from(left.to_string_lossy()[..3].to_owned());
     assert_eq!(app.restore_drive_folder(drive_root.clone()), left.join("folder1"));
@@ -356,12 +356,12 @@ fn held_keys_repeat_commands_like_csharp() {
     let _ = fs::remove_dir_all(&root);
 }
 
-/// 원본 단축키 표(shortcut.ini 기본 114줄)의 모든 대상이 NDIR 동작으로 이어지는가: 메뉴 항목은 ORIGINAL_ACTIONS(또는 C# 특수 항목),
+/// 원본 단축키 표(shortcut.ini 기본 114줄)의 모든 대상이 NDR 동작으로 이어지는가: 메뉴 항목은 ORIGINAL_ACTIONS(또는 C# 특수 항목),
 /// 내부 명령은 parity::internal_command 표.
 #[test]
-fn every_original_shortcut_target_has_an_ndir_action() {
+fn every_original_shortcut_target_has_an_ndr_action() {
     let shortcuts = compat::ShortcutMap::parse(None);
-    // C# 특수 항목, miFind(original_shortcut이 찾기 상자 또는 C# 빠른 찾기 칸), miSelect(Space: NDIR 표시 전환 = 원본 miSelectClick).
+    // C# 특수 항목, miFind(original_shortcut이 찾기 상자 또는 C# 빠른 찾기 칸), miSelect(Space: NDR 표시 전환 = 원본 miSelectClick).
     let special = ["miSelectAll", "miSearchFile", "miArcMove", "miArcInstall", "miFind", "miSelect"];
     let missing_menus: Vec<(&String, String)> = shortcuts
         .menu_shortcuts
@@ -375,7 +375,7 @@ fn every_original_shortcut_target_has_an_ndir_action() {
         .iter()
         .filter_map(|l| l.split_once('=').map(|(n, _)| n.trim().to_owned()))
         .filter(|n| !shortcuts.menu_shortcuts.keys().any(|k| k.eq_ignore_ascii_case(n)))
-        .filter(|n| matches!(ndir::parity::internal_command(n), ndir::parity::InternalCommand::Unknown))
+        .filter(|n| matches!(ndr::parity::internal_command(n), ndr::parity::InternalCommand::Unknown))
         .collect();
     assert!(missing_internal.is_empty(), "internal commands without an action: {missing_internal:?}");
 }
@@ -384,7 +384,7 @@ fn every_original_shortcut_target_has_an_ndir_action() {
 #[test]
 fn ctrl_f_and_ctrl_alt_0_follow_the_original_menu() {
     let (root, ctx, mut app) = fixture("find-keys", "ko");
-    assert!(!app.toolbar.items.iter().any(|i| i.kind == ndir::commands::ToolbarKind::QuickSearch), "the original toolbar has no quick search box");
+    assert!(!app.toolbar.items.iter().any(|i| i.kind == ndr::commands::ToolbarKind::QuickSearch), "the original toolbar has no quick search box");
     press(&mut app, &ctx, egui::Key::F, CTRL);
     assert_eq!(app.original_dialogs.last().map(|d| d.title.clone()), Some(app.language_pack.text("RES.TITLE_FIND", "?")));
     app.answer_dialog(original_dialogs::DialogResult::Text(None), &ctx);
@@ -402,10 +402,10 @@ fn skin_menu_hides_only_the_csharp_only_commands() {
     let mut hidden: Vec<&str> = menu_data::MENUS.iter().flat_map(|(_, _, _, items)| items.iter().map(|(id, _, _)| *id)).filter(|id| *id != "-" && App::csharp_only_menu_item(id)).collect();
     hidden.sort_unstable();
     hidden.dedup();
-    let mut expected = vec!["deletePermanent", "toggleExtensionInfoBar", "createArchive", "createZip", "merge", "remote", "remoteCommand", "ndirShortcuts", "importLegacy", "shellIntegration"];
+    let mut expected = vec!["deletePermanent", "toggleExtensionInfoBar", "createArchive", "createZip", "merge", "remote", "remoteCommand", "ndrShortcuts", "importLegacy", "shellIntegration"];
     expected.sort_unstable();
     assert_eq!(hidden, expected);
-    // ORIGINAL_HIDDEN = 원본 DFM에서 Visible=False인 항목 가운데 NDIR 메뉴에 있는 것, 빠짐없이.
+    // ORIGINAL_HIDDEN = 원본 DFM에서 Visible=False인 항목 가운데 NDR 메뉴에 있는 것, 빠짐없이.
     let dfm = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/original-menus.txt")).unwrap();
     let invisible: Vec<&str> = dfm.lines().filter(|l| l.contains("Visible=False")).filter_map(|l| l.trim().strip_prefix("TMenuItem ")?.split(' ').next()).collect();
     let menu_ids: Vec<&str> = menu_data::MENUS.iter().flat_map(|(_, _, _, items)| items.iter().map(|(id, _, _)| *id)).collect();

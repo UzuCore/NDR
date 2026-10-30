@@ -74,7 +74,7 @@ impl App {
 fn atomic_text_save(path: &Path, text: &str) -> Result<(), String> {
     fsops::ensure_plain_path(path)?;
     let temp = path.with_file_name(format!(
-        ".ndir-edit-{}-{}",
+        ".ndr-edit-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

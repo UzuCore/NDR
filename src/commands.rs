@@ -17,7 +17,7 @@ mod tests {
             focused: Some("a b.txt".into()),
             selected: vec![],
         };
-        let result = prepare_function_key(&binding, &pane, &pane, &pane, Path::new(r"C:\NDIR"));
+        let result = prepare_function_key(&binding, &pane, &pane, &pane, Path::new(r"C:\NDR"));
         assert_eq!(
             result,
             PreparedCommand::External {
@@ -463,7 +463,7 @@ fn toolbar_action(command: &str) -> Option<String> {
         ("GoToVideos", "videos"),
         ("Favorites", "favorites"),
         // 원본 FUN_00444710: command가 RecycleBin인 단추는 클릭 처리기를 FUN_0042f13c로 바꾼다(삭제 단추):
-        // 수식 키 없음 = 휴지통으로, Shift = 영구 삭제, Shift+Ctrl = 완전 삭제, Ctrl+Alt = 휴지통 열기. NDIR deleteToolbar와 같다.
+        // 수식 키 없음 = 휴지통으로, Shift = 영구 삭제, Shift+Ctrl = 완전 삭제, Ctrl+Alt = 휴지통 열기. NDR deleteToolbar와 같다.
         // C# 판은 휴지통을 열었다.
         ("RecycleBin", "deleteToolbar"),
         ("Search", "search"),

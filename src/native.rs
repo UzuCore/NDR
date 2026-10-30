@@ -442,10 +442,10 @@ pub fn network_drives() -> Vec<String> {
     drives().into_iter().filter(|d| is_network_drive(d)).map(|d| d.to_string_lossy().trim_end_matches('\\').to_owned()).collect()
 }
 
-const EXPLORER_FOLDER_KEY: &str = "Software\\Classes\\Directory\\shell\\NDIR";
-const EXPLORER_BACKGROUND_KEY: &str = "Software\\Classes\\Directory\\Background\\shell\\NDIR";
+const EXPLORER_FOLDER_KEY: &str = "Software\\Classes\\Directory\\shell\\NDR";
+const EXPLORER_BACKGROUND_KEY: &str = "Software\\Classes\\Directory\\Background\\shell\\NDR";
 /// 예전 Rust 판이 쓰던 키(지울 때 같이 지운다).
-const LEGACY_EXPLORER_KEYS: [&str; 2] = ["Software\\Classes\\Directory\\shell\\NDIR.Rust", "Software\\Classes\\Directory\\Background\\shell\\NDIR.Rust"];
+const LEGACY_EXPLORER_KEYS: [&str; 2] = ["Software\\Classes\\Directory\\shell\\NDR.Rust", "Software\\Classes\\Directory\\Background\\shell\\NDR.Rust"];
 
 fn registry_default_value(key: &str) -> Option<String> {
     use windows_sys::Win32::System::Registry::*;
@@ -537,14 +537,14 @@ fn set_registry_string(key: &str, name: Option<&str>, value: &str) -> Result<(),
     if status != 0 { Err(std::io::Error::from_raw_os_error(status as i32).to_string()) } else { Ok(()) }
 }
 
-/// ExplorerIntegrationService.Enable/Disable(HKCU): 폴더 "Browse with NDIR" → "\"exe\" \"/dir:%1\"", 폴더 배경 "Open folder in NDIR" →
+/// ExplorerIntegrationService.Enable/Disable(HKCU): 폴더 "Browse with NDR" → "\"exe\" \"/dir:%1\"", 폴더 배경 "Open folder in NDR" →
 /// "\"exe\" \"/dir:%V\"", 아이콘은 실행 파일. 끄면 두 키(와 예전 Rust 판 키)를 지운다.
 pub fn set_explorer_integration(enable: bool) -> Result<(), String> {
     use windows_sys::Win32::System::Registry::*;
     if enable {
         let executable = std::env::current_exe().map_err(|e| e.to_string())?.to_string_lossy().into_owned();
         let quoted = format!("\"{}\"", executable.replace('"', "\\\""));
-        for (key, verb, argument) in [(EXPLORER_FOLDER_KEY, "Browse with NDIR", "%1"), (EXPLORER_BACKGROUND_KEY, "Open folder in NDIR", "%V")] {
+        for (key, verb, argument) in [(EXPLORER_FOLDER_KEY, "Browse with NDR", "%1"), (EXPLORER_BACKGROUND_KEY, "Open folder in NDR", "%V")] {
             set_registry_string(key, Some("MUIVerb"), verb)?;
             set_registry_string(key, Some("Icon"), &executable)?;
             set_registry_string(&format!("{key}\\command"), None, &format!("{quoted} \"/dir:{argument}\""))?;
@@ -1176,7 +1176,7 @@ pub fn https_get(url: &str, max_bytes: usize) -> Result<crate::update::HttpRespo
             target.push('/');
         }
         let target = wide(target);
-        let agent = wide("NDIR");
+        let agent = wide("NDR");
         let session = Handle(WinHttpOpen(agent.as_ptr(), WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, ptr::null(), ptr::null(), 0));
         if session.0.is_null() {
             return Err(fail());
@@ -1461,7 +1461,7 @@ impl windows::Win32::System::Ole::IDropSource_Impl for FileDropSource_Impl {
     }
 }
 
-/// C# FileList_PreviewMouseMove의 DoDragDrop(FileDrop, Copy | Move | Link): 셸 데이터 개체로 NDIR 밖(탐색기 등)에 끌어 놓는다.
+/// C# FileList_PreviewMouseMove의 DoDragDrop(FileDrop, Copy | Move | Link): 셸 데이터 개체로 NDR 밖(탐색기 등)에 끌어 놓는다.
 /// 놓은 쪽이 복사·이동·바로 가기를 한다. 결과 효과(DROPEFFECT 비트, 0 = 취소).
 pub fn drag_files_out(paths: &[PathBuf]) -> Result<u32, String> {
     use windows::Win32::System::Com::IDataObject;
