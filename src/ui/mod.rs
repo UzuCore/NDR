@@ -1190,6 +1190,16 @@ impl App {
                     self.ask_file_failure(path, message, can_continue, reply);
                 }
                 Event::Skipped { .. } => job.skipped += 1,
+                Event::Totals { files, bytes } => {
+                    if let Some(progress) = job.progress.as_mut() {
+                        if files.is_some() {
+                            progress.total_files = files;
+                        }
+                        if bytes.is_some() {
+                            progress.total_bytes = bytes;
+                        }
+                    }
+                }
                 Event::RenameTarget { name, reply } => self.ask_rename_target(name, reply),
                 Event::Fatal(message) => job.fatal = Some(message),
                 Event::Password { archive, reply } => {

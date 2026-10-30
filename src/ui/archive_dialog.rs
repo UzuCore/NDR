@@ -723,11 +723,17 @@ impl App {
                     }
                     _ => std::fs::create_dir_all(&base).map_err(|e| e.to_string())?,
                 }
-                let shown = archive_path.clone();
+                // 진행 창: 막대 = 푼 항목 / 전체(목록을 읽은 뒤 안다), lFileName = 지금 푼 항목, lTo = 그 폴더.
+                // 고친 것: 전에는 압축 파일 이름만 보이고 막대가 움직이지 않았다.
+                let mut announced = None;
                 // 원본 0x439593: 다음 볼륨이 없으면 ARC_CHANGEVOL로 묻고, 확인이면 다시 시도한다(취소면 그 오류로 끝).
                 loop {
-                    let outcome = archive::extract_entries_with_program(archive_path, &destination, &keys, known.as_deref(), &cancel, &mut conflicts, &mut passwords, program.as_ref(), &mut |done, _, _| {
-                        let _ = events.send(Event::Progress { path: shown.clone(), bytes: 0, files: done as u64 });
+                    let outcome = archive::extract_entries_with_program(archive_path, &destination, &keys, known.as_deref(), &cancel, &mut conflicts, &mut passwords, program.as_ref(), &mut |done, total, key| {
+                        if announced != Some(total) {
+                            announced = Some(total);
+                            let _ = events.send(Event::Totals { files: Some(total as u64), bytes: None });
+                        }
+                        let _ = events.send(Event::Progress { path: destination.join(key.replace('/', "\\")), bytes: 0, files: done as u64 });
                     });
                     match outcome {
                         Err(error) if !cancel.load(Ordering::Relaxed) => {

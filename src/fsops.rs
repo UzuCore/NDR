@@ -154,6 +154,11 @@ pub enum Event {
     Skipped {
         path: PathBuf,
     },
+    /// 작업 중에 알게 된 전체 수·바이트(압축 풀기는 목록을 읽은 뒤 안다). 진행 창 막대와 lCount에 쓴다.
+    Totals {
+        files: Option<u64>,
+        bytes: Option<u64>,
+    },
     /// 원본 FUN_00411bb4(충돌에서 "이름 바꾸기"): 새 이름을 묻는다(TITLE_RENAME_AND_COPY). None = 취소.
     RenameTarget {
         name: String,

@@ -601,6 +601,8 @@ fn archive_create_add_move_and_extract_follow_the_csharp_flows() {
     app.dispatch("extractNewFolder", &ctx);
     wait_job(&mut app, &ctx);
     assert_eq!(app.status, format!("압축을 풀었습니다: {}", left.display()));
+    // 진행 창 막대: 목록을 읽은 뒤 전체 항목 수를 알린다(Event::Totals).
+    assert!(app.job.as_ref().and_then(|j| j.progress.as_ref()).and_then(|p| p.total_files).is_some_and(|n| n >= 4), "extraction reports its total");
     assert!(left.join("pack").join("folder1").join("inner.txt").is_file());
     app.panes[0].cursor = row(&app, "pack.zip");
     app.dispatch("extractNewFolder", &ctx);
