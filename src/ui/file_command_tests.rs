@@ -1468,6 +1468,10 @@ fn favorites_window_follows_the_original_orgfavorites() {
     // 취소(Esc, btnCancel Cancel)는 바꾸지 않는다.
     app.dispatch("favorites", &ctx);
     app.edit_dialog_kind(|kind| if let DialogKind::Favorites(form) = kind { form.selected = Some(0) });
+    // 단축 문자: 아래로(&W)는 W만 쳐도 눌린다(VCL CM_DIALOGCHAR).
+    frame(&mut app, &ctx, vec![]);
+    frame(&mut app, &ctx, vec![key(egui::Key::W)]);
+    assert_eq!(favorites(&app).selected, Some(1), "W = Down");
     act(&mut app, A::Delete, &ctx);
     frame(&mut app, &ctx, vec![key(egui::Key::Escape)]);
     assert!(app.original_dialogs.is_empty());

@@ -1923,13 +1923,16 @@ mod tests {
     use super::*;
     use std::{fs, time::SystemTime};
     pub(super) fn fixture() -> PathBuf {
+        // 병렬 시험이 같은 시각 값을 받아 한 폴더를 함께 쓰지 않게 차례 번호를 붙인다.
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let p = std::env::temp_dir().join(format!(
-            "ndr-archive-{}-{}",
+            "ndr-archive-{}-{}-{}",
             std::process::id(),
             SystemTime::now()
                 .duration_since(SystemTime::UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
+                .as_nanos(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
         fs::create_dir_all(&p).unwrap();
         p

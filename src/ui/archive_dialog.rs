@@ -246,7 +246,7 @@ pub(super) fn archive_create_ui(ui: &mut egui::Ui, form: &mut ArchiveCreateForm,
             }
         });
     });
-    put_left(ui, at(276.0, 208.0, 156.0, 17.0), egui::Checkbox::new(&mut form.recursive, text("Caption.chkRecursive", "Includ&e Subfolders")));
+    super::original_dialogs::access_checkbox(ui, at(276.0, 208.0, 156.0, 17.0), &mut form.recursive, &language.raw("formAddToArchive.Caption.chkRecursive").unwrap_or_else(|| "Includ&e Subfolders".into()));
     put_left(ui, at(44.0, 243.0, 97.0, 15.0), egui::Label::new(text("Caption.lVolume", "Volume(&S):")).truncate());
     ui.put(at(143.0, 240.0, 99.0, 21.0), egui::TextEdit::singleline(&mut form.volume));
     ui.scope_builder(egui::UiBuilder::new().max_rect(at(242.0, 240.0, 22.0, 21.0)), |ui| {

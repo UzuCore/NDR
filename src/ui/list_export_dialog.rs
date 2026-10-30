@@ -46,20 +46,22 @@ pub(super) fn list_export_ui(ui: &mut egui::Ui, form: &mut ListExportForm, langu
     use super::original_dialogs::put_left;
     super::original_dialogs::group_box(ui, at(16.0, 8.0, 305.0, 121.0), &text(language, "GroupBox.gbColumns", "Columns to Save"));
     let inside = |x: f32, y: f32, w: f32| at(16.0 + x, 8.0 + y, w, 17.0);
+    let raw = |key: &str, fallback: &str| language.raw(&format!("formSaveList.{key}")).unwrap_or_else(|| fallback.to_owned());
     ui.scope_builder(egui::UiBuilder::new().max_rect(inside(20.0, 28.0, 120.0)), |ui| {
         ui.add_enabled(false, egui::Checkbox::new(&mut true, text(language, "Caption.chkFileName", "Filename")));
     });
     let columns = &mut form.columns;
     for (value, x, y, w, key, fallback) in [
-        (&mut columns.extension, 141.0, 28.0, 140.0, "Caption.chkExtension", "Extension"),
-        (&mut columns.size, 20.0, 48.0, 120.0, "Caption.chkFileSize", "Size"),
-        (&mut columns.size_comma, 141.0, 48.0, 161.0, "Caption.chkSizeComma", "Comma in Size"),
-        (&mut columns.date, 20.0, 69.0, 120.0, "Caption.chkDate", "Date"),
-        (&mut columns.time, 141.0, 69.0, 120.0, "Caption.chkTime", "Time"),
-        (&mut columns.attributes, 20.0, 92.0, 120.0, "Caption.chkAttributes", "Attributes"),
-        (&mut columns.description, 141.0, 92.0, 120.0, "Caption.chkDescription", "Comment"),
+        (&mut columns.extension, 141.0, 28.0, 140.0, "Caption.chkExtension", "&Extension"),
+        (&mut columns.size, 20.0, 48.0, 120.0, "Caption.chkFileSize", "&Size"),
+        (&mut columns.size_comma, 141.0, 48.0, 161.0, "Caption.chkSizeComma", "&Comma in Size"),
+        (&mut columns.date, 20.0, 69.0, 120.0, "Caption.chkDate", "&Date"),
+        (&mut columns.time, 141.0, 69.0, 120.0, "Caption.chkTime", "&Time"),
+        (&mut columns.attributes, 20.0, 92.0, 120.0, "Caption.chkAttributes", "&Attributes"),
+        (&mut columns.description, 141.0, 92.0, 120.0, "Caption.chkDescription", "Comme&nt"),
     ] {
-        changed |= put_left(ui, inside(x, y, w), egui::Checkbox::new(value, text(language, key, fallback))).changed();
+        // 미리보기 메모에 초점이 있으면 글자는 메모 글이고, Alt+글자만 단축 문자다.
+        changed |= super::original_dialogs::access_checkbox(ui, inside(x, y, w), value, &raw(key, fallback));
     }
     super::original_dialogs::group_box(ui, at(331.0, 8.0, 201.0, 121.0), &text(language, "RadioGroup.rgDelimiter", "Delimiter"));
     let labels = text(language, "RadioGroupItems.rgDelimiter", "Tab;Comma;Other:");

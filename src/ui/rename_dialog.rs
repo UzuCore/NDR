@@ -150,6 +150,8 @@ pub(super) fn rename_ui(ui: &mut egui::Ui, form: &mut RenameForm, language: &com
     let stroke = ui.visuals().widgets.noninteractive.bg_stroke;
     let blue = Color32::from_rgb(0x3a, 0x8a, 0xde);
     let t = |key: &str, fallback: &str| text(language, key, fallback).replace('&', "");
+    // VCL Caption 洹몃?濡?'&' ?⑥텞 臾몄옄).
+    let r = |key: &str, fallback: &str| language.raw(&format!("formAdvRename.{key}")).unwrap_or_else(|| fallback.to_owned());
     for (x, y, key, fallback) in [(16.0, 17.0, "Caption.lAction", "1. Choose Action"), (371.0, 17.0, "Caption.lApplyDest", "2. Apply Action"), (12.0, 277.0, "Caption.lPreview", "3. Preview")] {
         put_left(ui, at(x, y, 260.0, 16.0), egui::Label::new(RichText::new(t(key, fallback)).strong().family(egui::FontFamily::Name(super::BOLD_FONT_FAMILY.into())).color(blue)));
     }
@@ -184,7 +186,7 @@ pub(super) fn rename_ui(ui: &mut egui::Ui, form: &mut RenameForm, language: &com
     let editor = &mut form.editor;
     let numbers = &mut form.numbers;
     let radio = |ui: &mut egui::Ui, rect: egui::Rect, value: &mut String, option: &str, label: String| {
-        if put_left(ui, rect, egui::RadioButton::new(value.as_str() == option, label)).clicked() {
+        if super::original_dialogs::access_radio(ui, rect, value.as_str() == option, &label) {
             *value = option.to_owned();
         }
     };
@@ -193,19 +195,19 @@ pub(super) fn rename_ui(ui: &mut egui::Ui, form: &mut RenameForm, language: &com
             put_left(ui, page(16.0, 51.0, 300.0, 15.0), egui::Label::new(t("Caption.lInsText", "A. Text:")));
             ui.put(page(48.0, 70.0, 241.0, 21.0), egui::TextEdit::singleline(&mut editor.text));
             put_left(ui, page(18.0, 105.0, 300.0, 15.0), egui::Label::new(t("Caption.lInsLoc", "B. Insert Location:")));
-            radio(ui, page(48.0, 126.0, 137.0, 17.0), &mut editor.position, "Position", t("Caption.rbInsertLocPos", "Position"));
+            radio(ui, page(48.0, 126.0, 137.0, 17.0), &mut editor.position, "Position", r("Caption.rbInsertLocPos", "Position"));
             ui.put(page(191.0, 124.0, 64.0, 22.0), egui::TextEdit::singleline(&mut numbers[0]));
-            radio(ui, page(48.0, 147.0, 137.0, 17.0), &mut editor.position, "Prefix", t("Caption.rbInsertLocFirst", "Prefix"));
-            radio(ui, page(48.0, 168.0, 137.0, 17.0), &mut editor.position, "Suffix", t("Caption.rbInsertLocLast", "Suffix"));
+            radio(ui, page(48.0, 147.0, 137.0, 17.0), &mut editor.position, "Prefix", r("Caption.rbInsertLocFirst", "Prefix"));
+            radio(ui, page(48.0, 168.0, 137.0, 17.0), &mut editor.position, "Suffix", r("Caption.rbInsertLocLast", "Suffix"));
         }
         "Replace" => {
             put_left(ui, page(16.0, 73.0, 118.0, 15.0), egui::Label::new(t("Caption.lRepFind", "Find:")));
             ui.put(page(136.0, 70.0, 183.0, 21.0), egui::TextEdit::singleline(&mut editor.find));
             put_left(ui, page(16.0, 104.0, 118.0, 15.0), egui::Label::new(t("Caption.lRepReplace", "Replace with:")));
             ui.put(page(136.0, 101.0, 183.0, 21.0), egui::TextEdit::singleline(&mut editor.replace));
-            radio(ui, page(23.0, 149.0, 85.0, 17.0), &mut editor.position, "All", t("Caption.rbReplaceAll", "All occurrences"));
-            radio(ui, page(110.0, 149.0, 111.0, 17.0), &mut editor.position, "First", t("Caption.rbReplaceFirst", "First occurrence"));
-            radio(ui, page(223.0, 149.0, 111.0, 17.0), &mut editor.position, "Last", t("Caption.rbReplaceLast", "Last occurrence"));
+            radio(ui, page(23.0, 149.0, 85.0, 17.0), &mut editor.position, "All", r("Caption.rbReplaceAll", "All occurrences"));
+            radio(ui, page(110.0, 149.0, 111.0, 17.0), &mut editor.position, "First", r("Caption.rbReplaceFirst", "First occurrence"));
+            radio(ui, page(223.0, 149.0, 111.0, 17.0), &mut editor.position, "Last", r("Caption.rbReplaceLast", "Last occurrence"));
         }
         "Delete" => {
             put_left(ui, page(16.0, 55.0, 190.0, 15.0), egui::Label::new(t("Caption.lDelFrom", "A. From")));
@@ -235,10 +237,10 @@ pub(super) fn rename_ui(ui: &mut egui::Ui, form: &mut RenameForm, language: &com
                 combo(ui, "rename-delete-direction", &mut editor.delete_direction, &choices(language, "ComboBox.cbDelDirection", "right-to-left;left-to-right", &["RightToLeft", "LeftToRight"]), 97.0);
             });
             put_left(ui, page(16.0, 110.0, 190.0, 15.0), egui::Label::new(t("Caption.lDelTo", "C. To")));
-            radio(ui, page(28.0, 133.0, 120.0, 17.0), &mut editor.delete_to_mode, "Count", t("Caption.rbDelCount", "Count:"));
+            radio(ui, page(28.0, 133.0, 120.0, 17.0), &mut editor.delete_to_mode, "Count", r("Caption.rbDelCount", "Count:"));
             ui.put(page(151.0, 130.0, 57.0, 21.0), egui::TextEdit::singleline(&mut numbers[1]));
             put_left(ui, page(214.0, 133.0, 120.0, 15.0), egui::Label::new(t("Caption.lUnit", "character(s)")));
-            radio(ui, page(28.0, 160.0, 120.0, 17.0), &mut editor.delete_to_mode, "Delimiter", t("Caption.rbToDelimiter", "Delimiter:"));
+            radio(ui, page(28.0, 160.0, 120.0, 17.0), &mut editor.delete_to_mode, "Delimiter", r("Caption.rbToDelimiter", "Delimiter:"));
             ui.put(page(151.0, 158.0, 90.0, 21.0), egui::TextEdit::singleline(&mut editor.delete_to_delimiter));
         }
         "Case" => {
@@ -260,10 +262,10 @@ pub(super) fn rename_ui(ui: &mut egui::Ui, form: &mut RenameForm, language: &com
             put_left(ui, page(90.0, 88.0, 74.0, 15.0), egui::Label::new(t("Caption.lNumDigit", "Digits:")).truncate());
             ui.put(page(166.0, 85.0, 51.0, 21.0), egui::TextEdit::singleline(&mut numbers[4]));
             put_left(ui, page(12.0, 124.0, 90.0, 15.0), egui::Label::new(t("Caption.lNumLoc", "B. Location")));
-            radio(ui, page(104.0, 123.0, 149.0, 17.0), &mut editor.position, "Position", t("Caption.rbNumLocPos", "Position"));
+            radio(ui, page(104.0, 123.0, 149.0, 17.0), &mut editor.position, "Position", r("Caption.rbNumLocPos", "Position"));
             ui.put(page(259.0, 121.0, 64.0, 21.0), egui::TextEdit::singleline(&mut numbers[0]));
-            radio(ui, page(104.0, 144.0, 149.0, 17.0), &mut editor.position, "Prefix", t("Caption.rbNumLocFirst", "Prefix"));
-            radio(ui, page(104.0, 164.0, 149.0, 17.0), &mut editor.position, "Suffix", t("Caption.rbNumLocLast", "Suffix"));
+            radio(ui, page(104.0, 144.0, 149.0, 17.0), &mut editor.position, "Prefix", r("Caption.rbNumLocFirst", "Prefix"));
+            radio(ui, page(104.0, 164.0, 149.0, 17.0), &mut editor.position, "Suffix", r("Caption.rbNumLocLast", "Suffix"));
         }
         _ => {
             put_left(ui, page(16.0, 77.0, 300.0, 15.0), egui::Label::new(t("Caption.lExtText", "New Extension:")));
@@ -272,14 +274,14 @@ pub(super) fn rename_ui(ui: &mut egui::Ui, form: &mut RenameForm, language: &com
     }
     // 2. 동작 적용(확장자 바꾸기에는 쓰지 않는다).
     ui.add_enabled_ui(action != "Extension", |ui| {
-        radio(ui, at(371.0, 69.0, 75.0, 17.0), &mut editor.target, "Name", t("Caption.rbApplyToName", "Name"));
-        radio(ui, at(371.0, 97.0, 75.0, 17.0), &mut editor.target, "Extension", t("Caption.rbApplyToExt", "Extension"));
+        radio(ui, at(371.0, 69.0, 75.0, 17.0), &mut editor.target, "Name", r("Caption.rbApplyToName", "Name"));
+        radio(ui, at(371.0, 97.0, 75.0, 17.0), &mut editor.target, "Extension", r("Caption.rbApplyToExt", "Extension"));
     });
-    if ui.put(at(371.0, 129.0, 67.0, 25.0), egui::Button::new(t("Caption.btnAddAction", "Add >"))).clicked() {
+    if super::original_dialogs::access_button(ui, at(371.0, 129.0, 67.0, 25.0), &r("Caption.btnAddAction", "&Add >")) {
         choice = Some(2);
     }
     let selected = form.selected_rule.filter(|i| *i < form.rules.len());
-    if put_enabled(ui, at(371.0, 168.0, 67.0, 25.0), selected.is_some(), egui::Button::new(t("Caption.btnDeleteAction", "< Delete"))).clicked() {
+    if super::original_dialogs::vcl_button(ui, at(371.0, 168.0, 67.0, 25.0), selected.is_some(), &r("Caption.btnDeleteAction", "< &Delete")).1 {
         if let Some(index) = selected {
             form.rules.remove(index);
             form.selected_rule = None;
@@ -299,7 +301,7 @@ pub(super) fn rename_ui(ui: &mut egui::Ui, form: &mut RenameForm, language: &com
     });
     for (left, offset, key, fallback) in [(448.0, -1isize, "Caption.btnUp", "Up"), (549.0, 1, "Caption.btnDown", "Down")] {
         let movable = selected.is_some_and(|i| { let next = i as isize + offset; next >= 0 && (next as usize) < form.rules.len() });
-        if put_enabled(ui, at(left, 215.0, 93.0, 25.0), movable, egui::Button::new(t(key, fallback))).clicked() {
+        if super::original_dialogs::vcl_button(ui, at(left, 215.0, 93.0, 25.0), movable, &r(key, fallback)).1 {
             if let Some(index) = selected {
                 let next = (index as isize + offset) as usize;
                 form.rules.swap(index, next);
@@ -396,7 +398,7 @@ pub(super) fn rename_ui(ui: &mut egui::Ui, form: &mut RenameForm, language: &com
     if clicked_row.is_some() {
         form.preview_selected = clicked_row;
     }
-    if ui.put(at(409.0, 522.0, 114.0, 25.0), egui::Button::new(t("Caption.btnRun", "Rename"))).clicked() {
+    if super::original_dialogs::access_button(ui, at(409.0, 522.0, 114.0, 25.0), &r("Caption.btnRun", "&Rename")) {
         choice = Some(0);
     }
     if ui.put(at(529.0, 522.0, 114.0, 25.0), egui::Button::new(t("Caption.btnCancel", "Cancel"))).clicked() {

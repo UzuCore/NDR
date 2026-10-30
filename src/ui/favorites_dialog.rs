@@ -99,7 +99,7 @@ pub(super) enum FavoritesAction {
 /// btnDown(251,428) 79×25, btnDelete(402,428 75×25), Bevel1(8,464 469, 윗줄), btnSave(319,479) btnCancel(403,479, Cancel) 75×25.
 /// Default 단추는 없다(Enter는 아무것도 하지 않는다).
 pub(super) fn favorites_ui(ui: &mut egui::Ui, form: &mut FavoritesForm, language: &compat::Language) -> Option<FavoritesAction> {
-    let caption = |key: &str, fallback: &str| language.text(&format!("formOrgFavorites.Caption.{key}"), fallback);
+    let caption = |key: &str, fallback: &str| language.raw(&format!("formOrgFavorites.Caption.{key}")).unwrap_or_else(|| fallback.to_owned());
     let mut action = None;
     let (area, _) = ui.allocate_exact_size(egui::vec2(487.0, 512.0), egui::Sense::hover());
     let at = |x: f32, y: f32, w: f32, h: f32| egui::Rect::from_min_size(area.min + egui::vec2(x, y), egui::vec2(w, h));
@@ -112,8 +112,9 @@ pub(super) fn favorites_ui(ui: &mut egui::Ui, form: &mut FavoritesForm, language
         (at(319.0, 479.0, 75.0, 25.0), caption("btnSave", "&Save"), FavoritesAction::Save),
         (at(403.0, 479.0, 75.0, 25.0), caption("btnCancel", "&Cancel"), FavoritesAction::Cancel),
     ];
+    // 원본 창은 ListView·단추뿐이라 글자만 쳐도 단축 문자가 먹는다(VCL CM_DIALOGCHAR).
     for (rect, label, value) in buttons {
-        if ui.put(rect, egui::Button::new(label)).clicked() {
+        if super::original_dialogs::access_button(ui, rect, &label) && action.is_none() {
             action = Some(value);
         }
     }

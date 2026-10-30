@@ -176,8 +176,9 @@ pub(super) fn join_ui(ui: &mut egui::Ui, form: &mut JoinForm, language: &compat:
         });
     });
     let selected = form.selected;
-    let button = |ui: &mut egui::Ui, x: f32, enabled: bool, label: String| super::original_dialogs::put_enabled(ui, at(x, 262.0, 64.0, 25.0), enabled, egui::Button::new(label)).clicked();
-    if button(ui, 16.0, true, join_text(language, "Caption.btnAdd", "Add")) {
+    let raw = |key: &str, fallback: &str| language.raw(&format!("formFileJoin.{key}")).unwrap_or_else(|| fallback.to_owned());
+    let button = |ui: &mut egui::Ui, x: f32, enabled: bool, label: String| super::original_dialogs::vcl_button(ui, at(x, 262.0, 64.0, 25.0), enabled, &label).1;
+    if button(ui, 16.0, true, raw("Caption.btnAdd", "&Add")) {
         let title = join_text(language, "Form.Caption", "Join Files");
         let initial = form.files.first().and_then(|(p, _)| p.parent().map(Path::to_path_buf));
         for path in ndr::file_dialogs::open_files(&title, initial.as_deref()) {
@@ -187,20 +188,19 @@ pub(super) fn join_ui(ui: &mut egui::Ui, form: &mut JoinForm, language: &compat:
             form.selected = Some(0);
         }
     }
-    if button(ui, 86.0, selected.is_some(), join_text(language, "Caption.btnDelete", "Delete")) {
+    if button(ui, 86.0, selected.is_some(), raw("Caption.btnDelete", "&Delete")) {
         form.remove_selected();
     }
-    if button(ui, 172.0, selected.is_some_and(|i| i > 0), join_text(language, "Caption.btnUp", "Up")) {
+    if button(ui, 172.0, selected.is_some_and(|i| i > 0), raw("Caption.btnUp", "&Up")) {
         form.move_selected(-1);
     }
-    if button(ui, 242.0, selected.is_some_and(|i| i + 1 < form.files.len()), join_text(language, "Caption.btnDown", "Down")) {
+    if button(ui, 242.0, selected.is_some_and(|i| i + 1 < form.files.len()), raw("Caption.btnDown", "Do&wn")) {
         form.move_selected(1);
     }
     ui.scope_builder(egui::UiBuilder::new().max_rect(at(312.0, 267.0, 174.0, 15.0)).layout(egui::Layout::right_to_left(egui::Align::Min)), |ui| {
         ui.add(egui::Label::new(form.size_info(ko)).truncate());
     });
-    super::original_dialogs::put_left(ui, at(16.0, 317.0, 300.0, 17.0), egui::Checkbox::new(&mut form.join_text, join_text(language, "Caption.chkIsText", "Join text files")))
-        .on_hover_text("Insert CRLF only between text files that meet without an existing line break. Text encodings must match.");
+    super::original_dialogs::access_checkbox(ui, at(16.0, 317.0, 300.0, 17.0), &mut form.join_text, &raw("Caption.chkIsText", "Join &text files"));
     if ui.put(at(330.0, 313.0, 75.0, 25.0), egui::Button::new(join_text(language, "Caption.btnOk", "OK"))).clicked() {
         choice = Some(0);
     }

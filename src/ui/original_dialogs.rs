@@ -626,17 +626,18 @@ impl App {
                     });
                     // 탭 순서 btnYes, btnNo, btnDelete.
                     let focus_slot = if *show_delete { *default_button } else if *default_button == 2 { 2 } else { 1 };
+                    let raw = |key: &str, fallback: &str| self.language_pack.raw(&format!("formDelWarning.{key}")).unwrap_or_else(|| fallback.to_owned());
                     if *show_delete {
-                        let delete = ui.put(at(64.0, 86.0 + extra, 75.0, 25.0), egui::Button::new(self.language_pack.text("formDelWarning.Caption.btnDelete", "Delete")));
+                        let (delete, pressed) = vcl_button(ui, at(64.0, 86.0 + extra, 75.0, 25.0), true, &raw("Caption.btnDelete", "&Delete"));
                         if first_frame && focus_slot == 0 {
                             delete.request_focus();
                         }
-                        if delete.clicked() {
+                        if pressed {
                             outcome = Outcome::Choice(0);
                         }
                     }
-                    let yes = ui.put(at(272.0, 86.0 + extra, 75.0, 25.0), egui::Button::new(self.language_pack.text("formDelWarning.Caption.btnYes", "Yes")));
-                    let no = ui.put(at(353.0, 86.0 + extra, 75.0, 25.0), egui::Button::new(self.language_pack.text("formDelWarning.Caption.btnNo", "No")));
+                    let (yes, yes_pressed) = vcl_button(ui, at(272.0, 86.0 + extra, 75.0, 25.0), true, &raw("Caption.btnYes", "&Yes"));
+                    let (no, no_pressed) = vcl_button(ui, at(353.0, 86.0 + extra, 75.0, 25.0), true, &raw("Caption.btnNo", "&No"));
                     if first_frame {
                         match focus_slot {
                             1 => yes.request_focus(),
@@ -644,10 +645,10 @@ impl App {
                             _ => {}
                         }
                     }
-                    if yes.clicked() {
+                    if yes_pressed && matches!(outcome, Outcome::None) {
                         outcome = Outcome::Choice(1);
                     }
-                    if no.clicked() {
+                    if no_pressed && matches!(outcome, Outcome::None) {
                         outcome = Outcome::Choice(2);
                     }
                 }
@@ -800,28 +801,27 @@ impl App {
                     // dtpDate(16,76 145×21), lTime(16,103) dtpTime(16,122)), chkRecursive(16,219), chkApplyToFolder(212,219),
                     // btnAll(95,255) btnSkip(176,255) btnOk(264,255) btnCancel(345,255) 75×25.
                     let text = |key: &str, fallback: &str| self.language_pack.text(&format!("formChangeAttr.{key}"), fallback).replace('_', "");
+                    let raw = |key: &str, fallback: &str| self.language_pack.raw(&format!("formChangeAttr.{key}")).unwrap_or_else(|| fallback.to_owned()).replace('_', "");
                     let (area, _) = ui.allocate_exact_size(egui::vec2(437.0, 288.0), egui::Sense::hover());
                     let at = |x: f32, y: f32, w: f32, h: f32| egui::Rect::from_min_size(area.min + egui::vec2(x, y), egui::vec2(w, h));
                     put_left(ui, at(16.0, 16.0, 405.0, 22.0), egui::Label::new(form.path.as_str()).truncate()).on_hover_text(form.path.as_str());
                     group_box(ui, at(16.0, 44.0, 177.0, 161.0), &text("GroupBox.gbAttributes", "Attributes"));
                     let red = Color32::from_rgb(0xff, 0x40, 0x40);
                     for (top, state, key, fallback, color) in [
-                        (34.0, &mut form.archive, "Caption.chkArchive", "Archive", Some(red)),
-                        (59.0, &mut form.read_only, "Caption.chkReadOnly", "Read Only", None),
-                        (85.0, &mut form.hidden, "Caption.chkHidden", "Hidden", None),
-                        (111.0, &mut form.system, "Caption.chkSystem", "System", None),
+                        (34.0, &mut form.archive, "Caption.chkArchive", "&Archive", Some(red)),
+                        (59.0, &mut form.read_only, "Caption.chkReadOnly", "&Read Only", None),
+                        (85.0, &mut form.hidden, "Caption.chkHidden", "&Hidden", None),
+                        (111.0, &mut form.system, "Caption.chkSystem", "&System", None),
                     ] {
                         let mut checked = *state == Some(true);
-                        let mut label = RichText::new(text(key, fallback));
-                        if let Some(color) = color {
-                            label = label.color(color);
-                        }
-                        if put_left(ui, at(40.0, 44.0 + top, 130.0, 17.0), egui::Checkbox::new(&mut checked, label).indeterminate(state.is_none())).clicked() {
+                        let (label, access) = access_job_colored(ui, &raw(key, fallback), color);
+                        let clicked = put_left(ui, at(40.0, 44.0 + top, 130.0, 17.0), egui::Checkbox::new(&mut checked, label).indeterminate(state.is_none())).clicked();
+                        if clicked || take_dialog_char(ui.ctx(), access) {
                             cycle(state);
                         }
                     }
                     group_box(ui, at(212.0, 44.0, 209.0, 161.0), &text("GroupBox.gbTime", "Time"));
-                    put_left(ui, at(228.0, 70.0, 169.0, 17.0), egui::Checkbox::new(&mut form.change_time, text("Caption.chkChangeTime", "Modify Date/Time (G)")));
+                    access_checkbox(ui, at(228.0, 70.0, 169.0, 17.0), &mut form.change_time, &raw("Caption.chkChangeTime", "Modify Date/Time (&G)"));
                     let enabled = form.change_time;
                     put_left(ui, at(228.0, 101.0, 145.0, 15.0), egui::Label::new(text("Caption.lDate", "Date")));
                     ui.scope_builder(egui::UiBuilder::new().max_rect(at(228.0, 120.0, 145.0, 21.0)), |ui| {
@@ -831,10 +831,10 @@ impl App {
                     ui.scope_builder(egui::UiBuilder::new().max_rect(at(228.0, 166.0, 145.0, 21.0)), |ui| {
                         ui.add_enabled(enabled, egui::TextEdit::singleline(&mut form.time).desired_width(145.0));
                     });
-                    put_left(ui, at(16.0, 219.0, 177.0, 17.0), egui::Checkbox::new(&mut form.recursive, text("Caption.chkRecursive", "Include Subfolders")));
-                    put_left(ui, at(212.0, 219.0, 177.0, 17.0), egui::Checkbox::new(&mut form.apply_to_folders, text("Caption.chkApplyToFolder", "Apply to Folders")));
-                    for (left, slot, key, fallback) in [(95.0, 0, "Caption.btnAll", "All"), (176.0, 1, "Caption.btnSkip", "Skip"), (264.0, 2, "Caption.btnOk", "OK"), (345.0, 3, "Caption.btnCancel", "Cancel")] {
-                        if ui.put(at(left, 255.0, 75.0, 25.0), egui::Button::new(text(key, fallback))).clicked() {
+                    access_checkbox(ui, at(16.0, 219.0, 177.0, 17.0), &mut form.recursive, &raw("Caption.chkRecursive", "Include Sub&folders"));
+                    access_checkbox(ui, at(212.0, 219.0, 177.0, 17.0), &mut form.apply_to_folders, &raw("Caption.chkApplyToFolder", "Apply to &Folders"));
+                    for (left, slot, key, fallback) in [(95.0, 0, "Caption.btnAll", "A&ll"), (176.0, 1, "Caption.btnSkip", "S&kip"), (264.0, 2, "Caption.btnOk", "OK"), (345.0, 3, "Caption.btnCancel", "Cancel")] {
+                        if access_button(ui, at(left, 255.0, 75.0, 25.0), &raw(key, fallback)) && matches!(outcome, Outcome::None) {
                             outcome = Outcome::Choice(slot);
                         }
                     }
@@ -856,14 +856,11 @@ impl App {
                     }
                     super::original_dialogs::put_left(ui, at(80.0, 13.0, 337.0, 58.0), egui::Label::new(message.as_str()).wrap());
                     super::original_dialogs::put_left(ui, at(80.0, 80.0, 337.0, 15.0), egui::Label::new(attributes.as_str()).truncate());
-                    if ui.put(at(172.0, 101.0, 75.0, 25.0), egui::Button::new(self.language_pack.text("formDelConfirm.Caption.btnAll", "Yes to All"))).clicked() {
-                        outcome = Outcome::Choice(0);
-                    }
-                    if ui.put(at(256.0, 101.0, 75.0, 25.0), egui::Button::new(self.language_pack.text("formDelConfirm.Caption.btnYes", "Yes"))).clicked() {
-                        outcome = Outcome::Choice(1);
-                    }
-                    if ui.put(at(342.0, 101.0, 75.0, 25.0), egui::Button::new(self.language_pack.text("formDelConfirm.Caption.btnNo", "No"))).clicked() {
-                        outcome = Outcome::Choice(2);
+                    let raw = |key: &str, fallback: &str| self.language_pack.raw(&format!("formDelConfirm.{key}")).unwrap_or_else(|| fallback.to_owned());
+                    for (left, slot, key, fallback) in [(172.0, 0, "Caption.btnAll", "Yes to &All"), (256.0, 1, "Caption.btnYes", "&Yes"), (342.0, 2, "Caption.btnNo", "&No")] {
+                        if access_button(ui, at(left, 101.0, 75.0, 25.0), &raw(key, fallback)) && matches!(outcome, Outcome::None) {
+                            outcome = Outcome::Choice(slot);
+                        }
                     }
                 }
             }
@@ -1028,7 +1025,7 @@ pub(super) fn set_dialog_char(ctx: &egui::Context, enabled: bool) {
 }
 
 /// 단축 문자가 `access`이면 그것을 가져간다(같은 글자 단추 둘이 함께 눌리지 않게).
-fn take_dialog_char(ctx: &egui::Context, access: Option<char>) -> bool {
+pub(super) fn take_dialog_char(ctx: &egui::Context, access: Option<char>) -> bool {
     let Some(access) = access else { return false };
     ctx.data_mut(|d| {
         let slot = d.get_temp_mut_or_default::<Option<char>>(egui::Id::new(DIALOG_CHAR));
@@ -1040,15 +1037,15 @@ fn take_dialog_char(ctx: &egui::Context, access: Option<char>) -> bool {
     })
 }
 
-/// VCL Caption 글: '&' 다음 글자에 밑줄. (글, 단축 문자).
-fn access_job(ui: &egui::Ui, caption: &str) -> (LayoutJob, Option<char>) {
+/// VCL Caption 글: '&' 다음 글자에 밑줄. (글, 단축 문자). `color`가 없으면 위젯 글 색.
+pub(super) fn access_job_colored(ui: &egui::Ui, caption: &str, color: Option<Color32>) -> (LayoutJob, Option<char>) {
     let (display, underline) = ndr::msgbox::display_caption(caption);
     let font = egui::TextStyle::Button.resolve(ui.style());
-    let line = ui.visuals().text_color();
+    let line = color.unwrap_or(ui.visuals().text_color());
     let mut job = LayoutJob::default();
     let mut access = None;
     for (index, character) in display.chars().enumerate() {
-        let mut format = egui::TextFormat { font_id: font.clone(), color: Color32::PLACEHOLDER, ..Default::default() };
+        let mut format = egui::TextFormat { font_id: font.clone(), color: color.unwrap_or(Color32::PLACEHOLDER), ..Default::default() };
         if underline == Some(index) {
             format.underline = egui::Stroke::new(1.0, line);
             access = Some(character);
@@ -1058,10 +1055,27 @@ fn access_job(ui: &egui::Ui, caption: &str) -> (LayoutJob, Option<char>) {
     (job, access)
 }
 
+fn access_job(ui: &egui::Ui, caption: &str) -> (LayoutJob, Option<char>) {
+    access_job_colored(ui, caption, None)
+}
+
+/// VCL TButton(Caption의 '&' 단축 문자, Enabled). (응답, 눌렸는가: 누르거나 단축 문자).
+pub(super) fn vcl_button(ui: &mut egui::Ui, rect: egui::Rect, enabled: bool, caption: &str) -> (egui::Response, bool) {
+    let (job, access) = access_job(ui, caption);
+    let response = put_enabled(ui, rect, enabled, egui::Button::new(job));
+    let pressed = response.clicked() || (enabled && ui.is_enabled() && take_dialog_char(ui.ctx(), access));
+    (response, pressed)
+}
+
 /// VCL TButton(Caption의 '&' 단축 문자). 누르거나 단축 문자를 치면 true.
 pub(super) fn access_button(ui: &mut egui::Ui, rect: egui::Rect, caption: &str) -> bool {
+    vcl_button(ui, rect, true, caption).1
+}
+
+/// VCL TRadioButton(Caption의 '&' 단축 문자). 누르거나 단축 문자를 치면 true.
+pub(super) fn access_radio(ui: &mut egui::Ui, rect: egui::Rect, selected: bool, caption: &str) -> bool {
     let (job, access) = access_job(ui, caption);
-    let clicked = ui.put(rect, egui::Button::new(job)).clicked();
+    let clicked = put_left(ui, rect, egui::RadioButton::new(selected, job)).clicked();
     clicked || (ui.is_enabled() && take_dialog_char(ui.ctx(), access))
 }
 
