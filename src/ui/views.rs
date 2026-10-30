@@ -617,6 +617,7 @@ impl App {
         child.set_clip_rect(rect.intersect(ui.clip_rect()));
         let mut picked = None;
         let mut toggled = None;
+        let mut shell_menu: Option<PathBuf> = None;
         // 하위 폴더를 아직 읽는 중이면 고른 줄이 없으므로, 그 줄이 나올 때까지 넘기기를 미룬다.
         let reveal_id = egui::Id::new(("ndr-pane-tree-reveal", index));
         let reveal = reveal || ui.ctx().data(|d| d.get_temp::<bool>(reveal_id)).unwrap_or(false);
@@ -665,8 +666,25 @@ impl App {
                 if response.double_clicked() && !empty {
                     toggled = Some(path.clone());
                 }
+                // 원본 FUN_0048e69c(트리 OnContextPopup): 고른 폴더의 셸 메뉴(FUN_00459128).
+                if response.secondary_clicked() {
+                    shell_menu = Some(path.clone());
+                }
             }
         });
+        // 원본 FUN_0048e2e0(트리 패널 그리기): 오른쪽 끝(너비 − 1)에 스킨 틀 색 세로선.
+        if let Some(skin) = self.current_skin() {
+            let stroke = self.skin_frame_stroke(&skin, index);
+            if stroke.width > 0.0 {
+                ui.painter().vline(rect.right() - 0.5, rect.y_range(), egui::Stroke::new(1.0, stroke.color));
+            }
+        }
+        if let Some(path) = shell_menu {
+            self.active = index;
+            if let Err(error) = ndr::shell_menu::show(&[path]) {
+                self.status = error;
+            }
+        }
         if let Some(path) = toggled {
             let open = &mut self.panes[index].tree_open;
             if !open.remove(&path) {
