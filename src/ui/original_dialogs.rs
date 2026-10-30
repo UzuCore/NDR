@@ -695,12 +695,8 @@ impl App {
                     }
                 }
                 DialogKind::Destination(form) => {
-                    destination_action = if form.original {
-                        let icon = self.path_icon(ctx, Path::new("A"), true);
-                        super::destination_dialog::destination_ui_original(ui, form, enter, icon.as_ref(), screen.height())
-                    } else {
-                        super::destination_dialog::destination_ui(ui, form, enter)
-                    };
+                    let icon = self.path_icon(ctx, Path::new("A"), true);
+                    destination_action = super::destination_dialog::destination_ui_original(ui, form, enter, icon.as_ref(), screen.height());
                 }
                 DialogKind::DiskCopy(form) => {
                     disk_action = super::disk_copy_dialog::disk_copy_ui(ui, form);

@@ -21,11 +21,8 @@ pub(super) enum DestinationPurpose {
 /// 창의 글과 목록.
 #[derive(Clone, Debug)]
 pub(super) struct DestinationForm {
-    pub hint: String,
-    pub most_used_title: String,
     pub most_used: Vec<(String, u64)>,
     pub work_folders: [String; 5],
-    pub empty_text: String,
     pub browse_label: String,
     pub cancel_label: String,
     pub remove_label: String,
@@ -96,75 +93,6 @@ pub(super) enum DestinationAction {
 
 fn documents() -> PathBuf {
     PathBuf::from(std::env::var_os("USERPROFILE").unwrap_or_default()).join("Documents")
-}
-
-/// 창 그리기(660×455).
-pub(super) fn destination_ui(ui: &mut egui::Ui, form: &mut DestinationForm, enter: bool) -> Option<DestinationAction> {
-    let mut action = None;
-    ui.set_width(628.0);
-    ui.add(egui::Label::new(RichText::new(&form.hint).weak()).wrap());
-    ui.add_space(6.0);
-    // 원본 TfSelectDest cbPath: 대상 경로를 직접 고친다(같은 패널 안 하위 폴더 등). 창이 열리면 글쇠 초점.
-    let path_id = egui::Id::new("ndr-destination-path");
-    let edit = ui.add(egui::TextEdit::singleline(&mut form.path).id(path_id).desired_width(628.0));
-    if !ui.memory(|m| m.had_focus_last_frame(path_id)) && ui.memory(|m| m.focused().is_none()) {
-        edit.request_focus();
-    }
-    ui.add_space(8.0);
-    egui::ScrollArea::vertical().id_salt("destination-list").max_height(300.0).show(ui, |ui| {
-        ui.set_width(612.0);
-        if !form.most_used.is_empty() {
-            ui.label(RichText::new(&form.most_used_title).strong().family(egui::FontFamily::Name(super::BOLD_FONT_FAMILY.into())));
-            for (path, count) in &form.most_used {
-                let count = ndr::parity::format_size(*count, "B", true).trim_end_matches(" B").to_owned();
-                let button = egui::Button::new(format!("{path}  ({count})")).min_size(egui::vec2(612.0, 32.0));
-                let response = ui.add(button).on_hover_text(path.as_str());
-                if response.clicked() {
-                    action = Some(DestinationAction::MostUsed(path.clone()));
-                }
-                super::skin_pane::context_menu(&response, |ui| {
-                    if ui.button(&form.remove_label).clicked() {
-                        action = Some(DestinationAction::Remove(path.clone()));
-                        ui.close();
-                    }
-                    ui.separator();
-                    if ui.button(&form.clear_label).clicked() {
-                        action = Some(DestinationAction::Clear);
-                        ui.close();
-                    }
-                });
-            }
-            ui.add_space(8.0);
-        }
-        for (index, path) in form.work_folders.iter().enumerate() {
-            let label = if path.is_empty() { format!("{}. {}", index + 1, form.empty_text) } else { format!("{}.  {path}", index + 1) };
-            let button = egui::Button::new(label).min_size(egui::vec2(612.0, 36.0));
-            if ui.add_enabled(!path.is_empty(), button).clicked() {
-                action = Some(DestinationAction::Work(index));
-            }
-        }
-    });
-    let typing = ui.memory(|m| m.has_focus(path_id));
-    if let Some(picked) = list_keys(ui, form, typing) {
-        action = Some(picked);
-    }
-    ui.add_space(12.0);
-    ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-        if ui.add_sized([88.0, 34.0], egui::Button::new(&form.cancel_label)).clicked() {
-            action = Some(DestinationAction::Cancel);
-        }
-        if ui.add_sized([150.0, 34.0], egui::Button::new(&form.browse_label)).clicked() {
-            action = Some(DestinationAction::Browse);
-        }
-        if ui.add_sized([88.0, 34.0], egui::Button::new(&form.ok_label)).clicked() {
-            action = Some(DestinationAction::Accept);
-        }
-    });
-    // 원본: 기본 단추는 btnOk(Enter = 경로 칸의 폴더).
-    if enter && action.is_none() {
-        action = Some(DestinationAction::Accept);
-    }
-    action
 }
 
 /// 원본 lbListKeyDown(0x454130, 목록에 글쇠 초점): 1~9(또는 Alt+1~9) = 작업 폴더, Ctrl+1~9 = 최근 폴더 N번째(원본 +0x434는 처음 폴더를
@@ -425,11 +353,8 @@ impl App {
         };
         let work = self.settings.strings("WorkingFolders");
         let form = DestinationForm {
-            hint: text(self, "formNDRDestination", "Hint.WorkFolders", "Click a saved destination or choose another folder."),
-            most_used_title: text(self, "formPreferences", "Caption.lMostUsedFolder", "Most used destination folders:"),
             most_used: self.most_used_destinations(),
             work_folders: std::array::from_fn(|i| work.get(i).map(|w| w.trim().to_owned()).unwrap_or_default()),
-            empty_text: text(self, "formNDRDestination", "Slot.Empty", "Not set"),
             browse_label: text(self, "formNDRDestination", "Button.Browse", if ko { "다른 폴더 찾아보기…" } else { "Browse for another folder…" }),
             cancel_label: text(self, "formNDRDestination", "Button.Cancel", "Cancel"),
             remove_label: text(self, "formSelectDest", "Menu.pmiMUFDelete", if ko { "기록에서 삭제" } else { "Remove from history" }),

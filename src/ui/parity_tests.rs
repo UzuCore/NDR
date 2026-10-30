@@ -420,15 +420,12 @@ fn original_selection_area_toggles_and_drags() {
 /// 원본 TfSelectDest lbListKeyDown(0x454130): 1~9·Alt+1~9 = 작업 폴더, Ctrl+1~9 = 자주 쓴 폴더, 0 = 처음 폴더, Shift+Delete = 기록 지우기.
 #[test]
 fn destination_list_keys_follow_the_original() {
-    use super::destination_dialog::{destination_ui, DestinationAction, DestinationForm};
+    use super::destination_dialog::{destination_ui_original, DestinationAction, DestinationForm};
     let (root, ctx, _app) = fixture("destkeys", "ko");
     let initial = std::env::temp_dir();
     let mut form = DestinationForm {
-        hint: String::new(),
-        most_used_title: String::new(),
         most_used: vec![("C:\\a".into(), 3), ("C:\\b".into(), 1)],
         work_folders: ["W1".into(), "W2".into(), String::new(), String::new(), String::new()],
-        empty_text: String::new(),
         browse_label: "Browse".into(),
         cancel_label: "Cancel".into(),
         remove_label: "Remove".into(),
@@ -436,7 +433,7 @@ fn destination_list_keys_follow_the_original() {
         initial: initial.clone(),
         path: initial.to_string_lossy().into_owned(),
         ok_label: "OK".into(),
-        original: false,
+        original: true,
         selected: 0,
     };
     let mut run = |key: egui::Key, modifiers: egui::Modifiers| {
@@ -445,7 +442,7 @@ fn destination_list_keys_follow_the_original() {
         let raw = egui::RawInput { modifiers, events: vec![egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }], ..Default::default() };
         let mut got = None;
         let _ = ctx.run(raw, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| got = destination_ui(ui, &mut form, false));
+            egui::CentralPanel::default().show(ctx, |ui| got = destination_ui_original(ui, &mut form, false, None, 850.0));
         });
         got
     };
@@ -470,11 +467,8 @@ fn original_destination_list_follows_tfselectdest() {
     fs::create_dir_all(&work).unwrap();
     let s = |p: &std::path::Path| p.to_string_lossy().into_owned();
     let mut form = DestinationForm {
-        hint: String::new(),
-        most_used_title: String::new(),
         most_used: vec![(s(&initial), 3), (s(&recent), 1)],
         work_folders: [s(&work), String::new(), s(&root.join("missing")), String::new(), String::new()],
-        empty_text: String::new(),
         browse_label: "Browse".into(),
         cancel_label: "Cancel".into(),
         remove_label: "Remove".into(),
