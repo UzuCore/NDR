@@ -539,7 +539,7 @@ fn archive_create_add_move_and_extract_follow_the_csharp_flows() {
     assert_eq!(app.original_dialogs.last().unwrap().title, "압축하기");
     let form = archive_form(&app);
     assert!(form.recursive);
-    assert_eq!(form.formats[0].label, "ZIP (내장)");
+    assert_eq!(form.formats.iter().map(|f| f.label.as_str()).collect::<Vec<_>>(), ["zip", "7z", "tar", "tar.gz", "tar.bz2", "alz"], "plain names, no WIM");
     assert_eq!(form.preset_labels, ["최고", "보통", "빠르게"]);
     assert_eq!(form.volume, "분할 안함");
     frame(&mut app, &ctx, vec![]);
@@ -1163,7 +1163,7 @@ fn built_in_alz_splits_with_the_bundled_seven_zip_but_cannot_be_encrypted() {
     let (root, _ctx, app) = fixture("alzegg-formats", "ko");
     let formats = app.archive_formats(true);
     assert!(!formats.iter().any(|f| f.extension == "egg"), "no EGG creation");
-    for (extension, label) in [("alz", "ALZ (내장)")] {
+    for (extension, label) in [("alz", "alz")] {
         let format = formats.iter().find(|f| f.extension == extension && f.builtin).cloned().unwrap_or_else(|| panic!("{extension} built in"));
         assert_eq!(format.label, label);
         let choice = |password: &str, volume: Option<u64>| super::archive_dialog::ArchiveChoice { format: format.clone(), format_index: 0, preset: 0, level: 5, password: password.into(), volume, recursive: true, output: None };

@@ -196,7 +196,7 @@ pub(super) fn output_conflict(sources: &[PathBuf], output: &Path, ko: bool) -> O
 /// lSecFormat(20,76), rbZIP(44,104 굵게)·rb7z(173)·rbALZ(238), lSecOptions(20,179), lLevel(44,209) cbCompLevel(143,206 121×21)
 /// chkRecursive(276,208), lVolume(44,243) cbVolume(143,240), lPassword(44,276) ePassword(143,273), Bevel1(20,310 404),
 /// btnOk(253,320) btnCancel(341,320) 83×25. 외부 프로그램 줄(lExtProg·eExternalProg·btnBrowseExtProg)·lHelp·rbRAR·rbARJ는 두지 않는다.
-/// 원본 다섯 형식 밖의 동봉 7-Zip 형식(TAR 등)은 라디오 줄 오른쪽 작은 목록에서 고른다. 0 = 압축, 1 = 취소.
+/// 압축 종류는 사용자 요청대로 zip·7z·tar·tar.gz·tar.bz2·alz 여섯 선택 단추를 한 줄(104)에 둔다(괄호 설명 없음). 0 = 압축, 1 = 취소.
 pub(super) fn archive_create_ui(ui: &mut egui::Ui, form: &mut ArchiveCreateForm, language: &compat::Language, enter: bool) -> Option<usize> {
     use super::original_dialogs::put_left;
     let text = |key: &str, fallback: &str| language.text(&format!("formAddToArchive.{key}"), fallback);
@@ -211,30 +211,23 @@ pub(super) fn archive_create_ui(ui: &mut egui::Ui, form: &mut ArchiveCreateForm,
     let name_id = egui::Id::new("archive-file-name");
     super::original_dialogs::access_label(ui, at(44.0, 43.0, 60.0, 15.0), &raw("Caption.lFileName", "&Filename:"), name_id);
     ui.put(at(106.0, 40.0, 275.0, 21.0), egui::TextEdit::singleline(&mut form.file_name).id(name_id));
-    // 원본 rbZIP·rbRAR·rb7z·rbALZ·rbARJ(Tag 1~5).
-    let original = [("zip", 44.0, "Caption.rbZIP", "&ZIP"), ("rar", 108.0, "Caption.rbRAR", "&RAR"), ("7z", 173.0, "Caption.rb7z", "&7z"), ("alz", 238.0, "Caption.rbALZ", "&ALZ"), ("arj", 303.0, "Caption.rbARJ", "AR&J")];
+    // 형식마다 (확장자, 왼쪽, 단축 문자를 넣은 글). 원본 rbZIP처럼 zip은 굵게.
+    let layout = [("zip", 44.0, "&zip"), ("7z", 101.0, "&7z"), ("tar", 152.0, "&tar"), ("tar.gz", 207.0, "tar.&gz"), ("tar.bz2", 280.0, "tar.&bz2"), ("alz", 360.0, "&alz")];
     let index_of = |extension: &str| form.formats.iter().position(|f| f.extension.trim_start_matches('.').eq_ignore_ascii_case(extension));
     let mut picked = form.format;
-    for (extension, left, key, fallback) in original {
+    for (extension, left, caption) in layout {
         let Some(index) = index_of(extension) else { continue };
-        let mut label = RichText::new(text(key, fallback));
+        let width = if extension.contains('.') { 76.0 } else { 54.0 };
+        let (mut job, access) = super::original_dialogs::access_job_colored(ui, caption, None);
         if extension == "zip" {
-            label = label.strong().family(egui::FontFamily::Name(super::BOLD_FONT_FAMILY.into()));
+            for section in &mut job.sections {
+                section.format.font_id = egui::FontId::new(section.format.font_id.size, egui::FontFamily::Name(super::BOLD_FONT_FAMILY.into()));
+            }
         }
-        if put_left(ui, at(left, 104.0, 59.0, 17.0), egui::RadioButton::new(form.format == index, label)).clicked() {
+        let clicked = put_left(ui, at(left, 104.0, width, 17.0), egui::RadioButton::new(form.format == index, job)).clicked();
+        if clicked || super::original_dialogs::take_dialog_char(ui.ctx(), access) {
             picked = index;
         }
-    }
-    let others: Vec<usize> = (0..form.formats.len()).filter(|i| !original.iter().any(|(e, ..)| form.formats[*i].extension.trim_start_matches('.').eq_ignore_ascii_case(e))).collect();
-    if !others.is_empty() {
-        let current = if others.contains(&form.format) { form.formats[form.format].label.clone() } else { "…".into() };
-        ui.scope_builder(egui::UiBuilder::new().max_rect(at(364.0, 101.0, 60.0, 21.0)), |ui| {
-            egui::ComboBox::from_id_salt("archive-format").width(56.0).selected_text(current).show_opaque(ui, |ui| {
-                for index in &others {
-                    ui.selectable_value(&mut picked, *index, form.formats[*index].label.as_str());
-                }
-            });
-        });
     }
     if picked != form.format {
         form.set_format(picked);
@@ -303,22 +296,11 @@ impl App {
         };
         self.language_pack.text(&format!("RES.{key}"), fallback)
     }
-    /// 동봉 7-Zip이 만들 수 있는 형식(원본 rbZIP·rb7z·rbALZ, 그 밖의 TAR 등).
-    pub(super) fn archive_formats(&self, include_wim: bool) -> Vec<ArchiveFormat> {
-        let ko = self.language == "ko";
-        let format = |extension: &str, label: String, program: Option<PathBuf>, builtin: bool, max_level: i32| ArchiveFormat { extension: extension.into(), label, program, builtin, max_level };
-        let mut formats = vec![format("zip", if ko { "ZIP (내장)" } else { "ZIP (built-in)" }.into(), None, true, 9)];
-        formats.push(format("7z", if ko { "7Z (내장 LZMA2)" } else { "7Z (built-in LZMA2)" }.into(), None, true, 9));
-        formats.push(format("tar", if ko { "TAR (내장)" } else { "TAR (built-in)" }.into(), None, true, 0));
-        formats.push(format("tar.gz", if ko { "TAR.GZ (내장 GZip)" } else { "TAR.GZ (built-in GZip)" }.into(), None, true, 9));
-        formats.push(format("tar.bz2", if ko { "TAR.BZ2 (내장 BZip2)" } else { "TAR.BZ2 (built-in BZip2)" }.into(), None, true, 9));
-        // 원본 arcformat 4 = ALZ(외부 alzprog). 동봉 7-Zip(UzuCore 7zip+α)이 ALZ를 만들므로 내장으로 둔다.
-        // 동봉 7zip+α의 EGG 만들기(원본·C# 판에 없음)는 사용자 요청으로 넣지 않는다(.egg 읽기·풀기는 그대로).
-        formats.push(format("alz", if ko { "ALZ (내장)" } else { "ALZ (built-in)" }.into(), None, true, 9));
-        if include_wim && !formats.iter().any(|f| f.extension == "wim") && archive::seven_zip_path().is_ok_and(|p| p.ends_with("Full\\7z.exe") || p.ends_with("Full/7z.exe")) {
-            formats.push(format("wim", "WIM (7-Zip 26.05)".into(), None, true, 9));
-        }
-        formats
+    /// 동봉 7-Zip으로 만드는 압축 종류(사용자 요청): zip, 7z, tar, tar.gz, tar.bz2, alz. 이름은 확장자 그대로(괄호 설명 없음).
+    /// 원본 arcformat 4 = ALZ(외부 alzprog)는 동봉 7-Zip(UzuCore 7zip+α)이 만든다. EGG 만들기와 WIM은 넣지 않는다.
+    pub(super) fn archive_formats(&self, _include_wim: bool) -> Vec<ArchiveFormat> {
+        let format = |extension: &str, max_level: i32| ArchiveFormat { extension: extension.into(), label: extension.into(), program: None, builtin: true, max_level };
+        vec![format("zip", 9), format("7z", 9), format("tar", 0), format("tar.gz", 9), format("tar.bz2", 9), format("alz", 9)]
     }
 
     fn archive_form(&mut self) -> Option<&mut ArchiveCreateForm> {
@@ -387,9 +369,6 @@ impl App {
             app.settings.set_text("DefaultArchiveFormatExtension", &choice.format.extension);
             app.settings.values.insert("DefaultArchiveCompressionPresetIndex".into(), serde_json::json!(choice.preset));
             app.save();
-            if choice.format.extension == "wim" && (!choice.password.is_empty() || choice.volume.is_some()) {
-                return app.warn("WIM은 이 흐름에서 비밀번호나 분할 크기를 지원하지 않습니다.", "WIM does not support password encryption or split volumes in this workflow.");
-            }
             app.archive_save_step(kind, paths, choice, None);
         });
     }
