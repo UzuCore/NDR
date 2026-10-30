@@ -137,7 +137,7 @@ impl App {
 
         let modal_id = egui::Id::new(("ndr-msgbox", serial));
         super::keep_opaque(ctx, modal_id);
-        egui::Modal::new(modal_id).show(ctx, |ui| {
+        super::movable_modal(ctx, modal_id).show(ctx, |ui| {
             let font = FontId::proportional(FONT);
             let (title_galley, summary_galley, line_galleys, line_height) = ui.fonts_mut(|fonts| {
                 let line_height = fonts.row_height(&font);
@@ -156,16 +156,10 @@ impl App {
             let visible = specs.iter().filter(|s| s.is_some()).count();
             let client = vec2(mb::client_width(&geometry, visible), geometry.client_height);
 
-            // 창 제목 줄(폼 Caption과 닫기 단추: 닫으면 mrCancel).
-            ui.horizontal(|ui| {
-                ui.set_width(client.x);
-                ui.label(RichText::new(&caption).strong().family(egui::FontFamily::Name(super::BOLD_FONT_FAMILY.into())));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.small_button("×").on_hover_text("Close").clicked() {
-                        pressed = Some(2);
-                    }
-                });
-            });
+            // 창 제목 줄(폼 Caption과 닫기 단추: 닫으면 mrCancel). 줄을 끌면 창이 움직인다.
+            if super::modal_title_bar(ui, modal_id, &caption, Some(client.x)) {
+                pressed = Some(2);
+            }
             let (rect, _) = ui.allocate_exact_size(client, Sense::hover());
             let painter = ui.painter_at(rect);
             let origin = rect.min;

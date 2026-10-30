@@ -878,9 +878,11 @@ impl App {
         };
         let status = if stopping { modal.stopping_text.clone() } else { status };
         super::keep_opaque(ctx, egui::Id::new("ndr-modal-progress"));
-        egui::Modal::new(egui::Id::new("ndr-modal-progress")).show(ctx, |ui| {
+        let progress_id = egui::Id::new("ndr-modal-progress");
+        super::movable_modal(ctx, progress_id).show(ctx, |ui| {
             ui.set_width(424.0);
-            ui.label(RichText::new(&job.title).strong().family(egui::FontFamily::Name(super::BOLD_FONT_FAMILY.into())));
+            let title = ui.label(RichText::new(&job.title).strong().family(egui::FontFamily::Name(super::BOLD_FONT_FAMILY.into())));
+            super::drag_title(ui, progress_id, title.rect.with_max_x(title.rect.left() + 424.0));
             ui.separator();
             ui.add(egui::Label::new(status).wrap());
             if let Some(detail) = detail {

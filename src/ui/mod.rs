@@ -1371,6 +1371,54 @@ pub(super) fn keep_opaque(ctx: &egui::Context, id: egui::Id) {
     ctx.data_mut(|d| d.get_temp_mut_or_default::<Vec<egui::Id>>(egui::Id::new(OPAQUE_LAYERS)).push(id));
 }
 
+/// 원본 창(VCL TForm)은 제목 줄을 끌어 옮길 수 있다. egui::Modal은 가운데에 고정되므로, 가운데에서 끈 만큼(ctx 임시 자료) 옮긴 자리에 둔다.
+/// 새 창(새 id)은 원본 poOwnerFormCenter·poMainFormCenter처럼 가운데에서 시작한다.
+pub(super) fn movable_modal(ctx: &egui::Context, id: egui::Id) -> egui::Modal {
+    let offset = ctx.data(|d| d.get_temp::<egui::Vec2>(id.with("ndr-drag-offset"))).unwrap_or_default();
+    egui::Modal::new(id).area(egui::Modal::default_area(id).anchor(egui::Align2::CENTER_CENTER, offset))
+}
+
+/// 제목 줄 칸(`rect`, 닫기 단추는 빼고 넘긴다)을 끌면 그 창(`movable_modal`의 id)을 옮긴다.
+pub(super) fn drag_title(ui: &egui::Ui, id: egui::Id, rect: egui::Rect) {
+    let response = ui.interact(rect, id.with("ndr-title-drag"), egui::Sense::drag());
+    if response.dragged() {
+        let delta = response.drag_delta();
+        let ctx = ui.ctx();
+        // 창이 화면 밖으로 다 나가지 않게: 제목 줄 가운데가 화면 안에 남을 만큼만 옮긴다.
+        let screen = ctx.content_rect();
+        let center = rect.center() + delta;
+        let delta = egui::vec2(
+            if (screen.left()..=screen.right()).contains(&center.x) { delta.x } else { 0.0 },
+            if (screen.top()..=screen.bottom()).contains(&center.y) { delta.y } else { 0.0 },
+        );
+        ctx.data_mut(|d| *d.get_temp_mut_or_default::<egui::Vec2>(id.with("ndr-drag-offset")) += delta);
+        ctx.request_repaint();
+    }
+}
+
+/// 제목 줄 한 줄(굵은 제목 + 오른쪽 닫기 단추). 줄을 끌면 창이 움직인다. 닫기 단추를 누르면 true.
+pub(super) fn modal_title_bar(ui: &mut egui::Ui, id: egui::Id, title: &str, width: Option<f32>) -> bool {
+    let mut close = false;
+    let mut button_left = None;
+    let row = ui.horizontal(|ui| {
+        if let Some(width) = width {
+            ui.set_width(width);
+        }
+        ui.label(RichText::new(title).strong().family(egui::FontFamily::Name(BOLD_FONT_FAMILY.into())));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let response = ui.small_button("×");
+            button_left = Some(response.rect.left());
+            close = response.clicked();
+        });
+    });
+    let mut rect = row.response.rect;
+    if let Some(left) = button_left {
+        rect.max.x = (left - 2.0).max(rect.min.x);
+    }
+    drag_title(ui, id, rect);
+    close
+}
+
 /// 펼침 목록(egui ComboBox)의 목록도 앞쪽 층의 Popup이지만 메뉴가 아니다. 원본·C# 판은 메뉴만 투명하므로
 /// 목록 층(egui: 단추 id.with("popup"))을 이 프레임의 투명 메뉴 처리에서 뺀다. ComboBox는 show_ui 대신 이것으로 띄운다.
 pub(super) trait ComboOpaque {

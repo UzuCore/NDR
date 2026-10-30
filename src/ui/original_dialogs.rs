@@ -540,17 +540,13 @@ impl App {
         }
         let warning_icon = if matches!(dialog.kind, DialogKind::DeleteWarning { .. } | DialogKind::DeleteConfirm { .. }) { self.msgbox_icon(ctx, 0x7f02) } else { None };
         let (enter, escape) = if waiting { (false, false) } else { ctx.input(|i| (i.key_pressed(egui::Key::Enter), i.key_pressed(egui::Key::Escape))) };
+        set_dialog_char(ctx, !waiting);
         let modal_id = egui::Id::new(("ndr-original-dialog", serial));
         super::keep_opaque(ctx, modal_id);
-        egui::Modal::new(modal_id).show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(&title).strong().family(egui::FontFamily::Name(super::BOLD_FONT_FAMILY.into())));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.small_button("×").clicked() {
-                        outcome = Outcome::Cancel;
-                    }
-                });
-            });
+        super::movable_modal(ctx, modal_id).show(ctx, |ui| {
+            if super::modal_title_bar(ui, modal_id, &title, None) {
+                outcome = Outcome::Cancel;
+            }
             ui.separator();
             match &mut dialog.kind {
                 DialogKind::Prompt { message, value, history, password } => {
@@ -1003,6 +999,81 @@ impl App {
 /// ui.put처럼 칸에 꽉 채워 가운데 맞춤으로 놓되, 끌 수 있게(원본 Enabled = False 단추).
 pub(super) fn put_enabled(ui: &mut egui::Ui, rect: egui::Rect, enabled: bool, widget: impl egui::Widget) -> egui::Response {
     ui.scope_builder(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::centered_and_justified(egui::Direction::LeftToRight)), |ui| ui.add_enabled(enabled, widget)).inner
+}
+
+/// VCL CM_DIALOGCHAR: 이 프레임에 친 단축 문자. 단추 하나가 받으면 지운다.
+const DIALOG_CHAR: &str = "ndr-dialog-char";
+
+/// 이 프레임의 단축 문자를 정한다: Alt+글자는 늘, 글자만은 글 입력 칸에 초점이 없을 때(단추·확인란에 초점이 있는 VCL 창처럼).
+pub(super) fn set_dialog_char(ctx: &egui::Context, enabled: bool) {
+    let typed = if enabled {
+        ctx.input(|i| {
+            i.events.iter().find_map(|e| match e {
+                egui::Event::Key { key, pressed: true, repeat: false, modifiers, .. } if !modifiers.ctrl && !modifiers.command => {
+                    let name = key.name();
+                    let mut chars = name.chars();
+                    match (chars.next(), chars.next()) {
+                        (Some(c), None) if c.is_ascii_alphanumeric() => Some((c.to_ascii_uppercase(), modifiers.alt)),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            })
+        })
+    } else {
+        None
+    };
+    let typed = typed.filter(|(_, alt)| *alt || !ctx.wants_keyboard_input()).map(|(c, _)| c);
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new(DIALOG_CHAR), typed));
+}
+
+/// 단축 문자가 `access`이면 그것을 가져간다(같은 글자 단추 둘이 함께 눌리지 않게).
+fn take_dialog_char(ctx: &egui::Context, access: Option<char>) -> bool {
+    let Some(access) = access else { return false };
+    ctx.data_mut(|d| {
+        let slot = d.get_temp_mut_or_default::<Option<char>>(egui::Id::new(DIALOG_CHAR));
+        let hit = slot.is_some_and(|c| c.eq_ignore_ascii_case(&access));
+        if hit {
+            *slot = None;
+        }
+        hit
+    })
+}
+
+/// VCL Caption 글: '&' 다음 글자에 밑줄. (글, 단축 문자).
+fn access_job(ui: &egui::Ui, caption: &str) -> (LayoutJob, Option<char>) {
+    let (display, underline) = ndr::msgbox::display_caption(caption);
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    let line = ui.visuals().text_color();
+    let mut job = LayoutJob::default();
+    let mut access = None;
+    for (index, character) in display.chars().enumerate() {
+        let mut format = egui::TextFormat { font_id: font.clone(), color: Color32::PLACEHOLDER, ..Default::default() };
+        if underline == Some(index) {
+            format.underline = egui::Stroke::new(1.0, line);
+            access = Some(character);
+        }
+        job.append(&character.to_string(), 0.0, format);
+    }
+    (job, access)
+}
+
+/// VCL TButton(Caption의 '&' 단축 문자). 누르거나 단축 문자를 치면 true.
+pub(super) fn access_button(ui: &mut egui::Ui, rect: egui::Rect, caption: &str) -> bool {
+    let (job, access) = access_job(ui, caption);
+    let clicked = ui.put(rect, egui::Button::new(job)).clicked();
+    clicked || (ui.is_enabled() && take_dialog_char(ui.ctx(), access))
+}
+
+/// VCL TCheckBox(Caption의 '&' 단축 문자): 단축 문자를 치면 값을 뒤집는다. 바뀌었으면 true.
+pub(super) fn access_checkbox(ui: &mut egui::Ui, rect: egui::Rect, value: &mut bool, caption: &str) -> bool {
+    let (job, access) = access_job(ui, caption);
+    let mut changed = put_left(ui, rect, egui::Checkbox::new(value, job)).changed();
+    if ui.is_enabled() && take_dialog_char(ui.ctx(), access) {
+        *value = !*value;
+        changed = true;
+    }
+    changed
 }
 
 /// 원본 TLabel·TCheckBox 자리(왼쪽 위 맞춤). ui.put은 칸 가운데에 늘려 놓으므로 글과 확인란은 이것으로 놓는다.

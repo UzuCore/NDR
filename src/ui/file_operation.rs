@@ -170,7 +170,6 @@ pub(super) fn conflict_buttons(form: &ConflictForm) -> Vec<ConflictButton> {
 /// 오른쪽 단추 열(conflict_buttons). Enter = 건너뛰기(C# 판), Esc = 취소(창 닫기).
 pub(super) fn conflict_ui(ui: &mut egui::Ui, form: &mut ConflictForm, language: &compat::Language, ko: bool, enter: bool) -> Option<ConflictChoice> {
     let text = |key: &str, fallback: &str| language.text(&format!("formFileExists.{key}"), fallback);
-    let caption = |key: &str, fallback: &str| super::favorites_dialog::access_key(&text(key, fallback)).0;
     let (area, _) = ui.allocate_exact_size(egui::vec2(545.0, 253.0), egui::Sense::hover());
     let at = |x: f32, y: f32, w: f32, h: f32| egui::Rect::from_min_size(area.min + egui::vec2(x, y), egui::vec2(w, h));
     let text_color = ui.visuals().text_color();
@@ -219,21 +218,23 @@ pub(super) fn conflict_ui(ui: &mut egui::Ui, form: &mut ConflictForm, language: 
         };
         super::original_dialogs::put_left(ui, local(62.0, if slot == 0 { 50.0 } else { 49.0 }, 324.0, 18.0), egui::Label::new(super::original_dialogs::markup_job(&info, 13.0, text_color, 324.0)).truncate());
     }
-    super::original_dialogs::put_left(ui, at(20.0, 221.0, 390.0, 17.0), egui::Checkbox::new(&mut form.apply_all, caption("Caption.chkApplyAll", "&Apply to all")));
+    // 원본 TfFileExists는 단추·확인란만 있어 글자만 쳐도 단축 문자가 먹는다(VCL CM_DIALOGCHAR).
+    let raw = |key: &str, fallback: &str| language.raw(&format!("formFileExists.{key}")).unwrap_or_else(|| fallback.to_owned());
+    super::original_dialogs::access_checkbox(ui, at(20.0, 221.0, 390.0, 17.0), &mut form.apply_all, &raw("Caption.chkApplyAll", "&Apply to all"));
     let mut chosen = None;
     for button in conflict_buttons(form) {
         // 원본 FUN_00422314: 폴더 충돌이면 덮어쓰기 단추 글이 MERGE_FOLDER("폴더 합치기(&G)")다.
         let label = match button {
-            ConflictButton::Overwrite if form.source_dir && form.destination_dir => super::favorites_dialog::access_key(&language.text("RES.MERGE_FOLDER", "Mer&ge")).0,
-            ConflictButton::Overwrite => caption("Caption.btnOverwrite", "Over&write"),
-            ConflictButton::Resume => caption("Caption.btnResume", "Res&ume"),
-            ConflictButton::Skip => caption("Caption.btnSkip", "&Skip"),
-            ConflictButton::OverwriteNewer => caption("Caption.btnOverNewer", "Overwrite N&ewer"),
-            ConflictButton::ReplaceFolder => caption("Caption.btnReplace", "Replac&e Folder"),
-            ConflictButton::Rename => caption("Caption.btnRename", "&Rename"),
-            ConflictButton::Cancel => caption("Caption.btnAbort", "&Cancel"),
+            ConflictButton::Overwrite if form.source_dir && form.destination_dir => language.raw("RES.MERGE_FOLDER").unwrap_or_else(|| "Mer&ge".into()),
+            ConflictButton::Overwrite => raw("Caption.btnOverwrite", "Over&write"),
+            ConflictButton::Resume => raw("Caption.btnResume", "Res&ume"),
+            ConflictButton::Skip => raw("Caption.btnSkip", "&Skip"),
+            ConflictButton::OverwriteNewer => raw("Caption.btnOverNewer", "Overwrite N&ewer"),
+            ConflictButton::ReplaceFolder => raw("Caption.btnReplace", "Replac&e Folder"),
+            ConflictButton::Rename => raw("Caption.btnRename", "&Rename"),
+            ConflictButton::Cancel => raw("Caption.btnAbort", "&Cancel"),
         };
-        if ui.put(at(425.0, button.top(), 112.0, 25.0), egui::Button::new(label)).clicked() {
+        if super::original_dialogs::access_button(ui, at(425.0, button.top(), 112.0, 25.0), &label) && chosen.is_none() {
             chosen = Some(button.choice());
         }
     }
@@ -511,16 +512,12 @@ impl App {
             _ => job.title.clone(),
         };
         super::keep_opaque(ctx, egui::Id::new("ndr-file-progress"));
-        egui::Modal::new(egui::Id::new("ndr-file-progress")).show(ctx, |ui| {
+        let progress_id = egui::Id::new("ndr-file-progress");
+        super::movable_modal(ctx, progress_id).show(ctx, |ui| {
             ui.set_width(441.0);
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(&caption).strong().family(egui::FontFamily::Name(super::BOLD_FONT_FAMILY.into())));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.small_button("×").clicked() {
-                        cancel = true;
-                    }
-                });
-            });
+            if super::modal_title_bar(ui, progress_id, &caption, None) {
+                cancel = true;
+            }
             ui.separator();
             let (area, _) = ui.allocate_exact_size(egui::vec2(441.0, 143.0), egui::Sense::hover());
             let at = |x: f32, y: f32, w: f32, h: f32| egui::Rect::from_min_size(area.min + egui::vec2(x, y), egui::vec2(w, h));

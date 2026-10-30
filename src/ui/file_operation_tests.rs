@@ -78,6 +78,62 @@ fn draw(app: &mut App, ctx: &egui::Context) {
         app.msgbox_ui(ctx);
     });
 }
+fn draw_with(app: &mut App, ctx: &egui::Context, events: Vec<egui::Event>) {
+    let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 850.0))), events, ..Default::default() };
+    let _ = ctx.run(raw, |ctx| {
+        app.file_progress_ui(ctx);
+        app.original_dialog_ui(ctx);
+        app.msgbox_ui(ctx);
+    });
+}
+fn press(key: egui::Key, modifiers: egui::Modifiers) -> Vec<egui::Event> {
+    vec![egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }, egui::Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers }]
+}
+
+/// VCL CM_DIALOGCHAR: TfFileExists의 "덮어쓰기(&W)"는 W만 쳐도, "건너뛰기(&S)"는 Alt+S로도 눌린다.
+#[test]
+fn file_exists_buttons_answer_their_access_keys() {
+    let (root, ctx, mut app) = fixture("accesskeys");
+    let right = root.join("right");
+    fs::write(right.join("b.txt"), b"old").unwrap();
+    copy_to_other(&mut app, &ctx, &["b.txt"]);
+    wait(&mut app, &ctx, |app| conflict(app).is_some());
+    draw(&mut app, &ctx);
+    draw_with(&mut app, &ctx, press(egui::Key::W, egui::Modifiers::NONE));
+    wait(&mut app, &ctx, finished);
+    assert_eq!(fs::read(right.join("b.txt")).unwrap(), b"bee", "W = Overwrite");
+    fs::write(right.join("b.txt"), b"old").unwrap();
+    copy_to_other(&mut app, &ctx, &["b.txt"]);
+    wait(&mut app, &ctx, |app| conflict(app).is_some());
+    draw(&mut app, &ctx);
+    draw_with(&mut app, &ctx, press(egui::Key::S, egui::Modifiers::ALT));
+    wait(&mut app, &ctx, finished);
+    assert_eq!(fs::read(right.join("b.txt")).unwrap(), b"old", "Alt+S = Skip");
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// 원본 창은 제목 줄을 끌어 옮긴다: 창 안 대화 상자·메시지 상자도 제목 줄을 끌면 그만큼 움직인다.
+#[test]
+fn in_app_windows_move_by_their_title_bar() {
+    let (root, ctx, mut app) = fixture("dragtitle");
+    app.system_box("Title", "Text", ndr::msgbox::MB_OK, |_, _, _| {});
+    draw(&mut app, &ctx);
+    draw(&mut app, &ctx);
+    let before = app.msgboxes[0].layout.as_ref().unwrap().origin;
+    // 제목 줄은 몸통(origin) 바로 위에 있다.
+    let grab = before + egui::vec2(40.0, -12.0);
+    let moved = grab + egui::vec2(-150.0, 90.0);
+    let pointer = |pos: egui::Pos2, pressed: bool| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    draw_with(&mut app, &ctx, vec![egui::Event::PointerMoved(grab), pointer(grab, true)]);
+    draw_with(&mut app, &ctx, vec![egui::Event::PointerMoved(grab + egui::vec2(-50.0, 30.0))]);
+    draw_with(&mut app, &ctx, vec![egui::Event::PointerMoved(moved)]);
+    draw_with(&mut app, &ctx, vec![pointer(moved, false)]);
+    draw(&mut app, &ctx);
+    let after = app.msgboxes[0].layout.as_ref().unwrap().origin;
+    assert!((after - before - egui::vec2(-150.0, 90.0)).length() < 2.0, "moved by the drag: {before:?} -> {after:?}");
+    assert_eq!(app.msgboxes.len(), 1, "dragging does not close the box");
+    fs::remove_dir_all(root).unwrap();
+}
 
 /// 원본 0x412308 lTo = 지금 대상 파일의 폴더: 파일 작업이 알려 준 실제 대상(충돌로 바뀐 이름)이 먼저, 없으면 상대 경로로 셈한다.
 #[test]
