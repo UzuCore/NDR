@@ -1,7 +1,7 @@
 //! C# ManageFavoritesAsync + FavoritesWindow(즐겨찾기 구성), ShowFavoritesMenu(F11·#FAVORITES·기능키 줄의 즐겨찾기 드롭다운),
 //! OpenFavoriteAsync, ShowNavigationHistoryMenu/NavigateHistoryEntryAsync(#SHOWPATHHISTORY). 드롭다운은 `App::popup` 하나.
-//! 차이(HANDOFF): 경로변경은 보류 중인 공용 폴더 트리 선택창 대신 Windows 폴더 선택 대화 상자. 단축키 열은 C# 기본값
-//! (Shift+F1~F10, Ctrl+Shift+F1~F10)과 KeyboardShortcuts 설정을 보여 준다. 그 글쇠로 여는 것은 keyboard.rs(favoriteOpen:N).
+//! 차이(HANDOFF): 경로변경은 보류 중인 공용 폴더 트리 선택창 대신 Windows 폴더 선택 대화 상자. 단축키 열은 원본 즐겨찾기 메뉴
+//! 단축키(FUN_0042eedc: Shift+F1~F10, Shift+Ctrl+F1~F10)이고, 그 글쇠는 keyboard.rs shortcut_key가 받는다(favoriteOpen:N).
 use super::original_dialogs::{DialogKind, DialogResult};
 use super::*;
 
@@ -17,13 +17,13 @@ pub(super) struct FavoritesForm {
     pub gestures: Vec<String>,
 }
 
-/// ShortcutBindingService.GetFavoriteGesture: KeyboardShortcuts["favoriteOpenN"], 없으면 Shift+F1~F10, Ctrl+Shift+F1~F10.
-pub(super) fn favorite_gesture(settings: &ndr::settings::Settings, index: usize) -> String {
-    if index >= SLOTS {
-        return String::new();
+/// 원본 즐겨찾기 메뉴(FUN_0042eedc): 0~9번 항목은 "Shift+F%d"(번호 + 1), 10~19번은 "Shift+Ctrl+F%d"(번호 − 9) 단축키.
+pub(super) fn favorite_gesture(_settings: &ndr::settings::Settings, index: usize) -> String {
+    match index {
+        0..=9 => format!("Shift+F{}", index + 1),
+        10..=19 => format!("Shift+Ctrl+F{}", index - 9),
+        _ => String::new(),
     }
-    let configured = settings.values.get("KeyboardShortcuts").and_then(|v| v.get(format!("favoriteOpen{}", index + 1))).and_then(|v| v.as_str());
-    configured.map(str::to_owned).unwrap_or_else(|| if index < 10 { format!("Shift+F{}", index + 1) } else { format!("Ctrl+Shift+F{}", index - 9) })
 }
 
 fn trimmed_name(path: &str) -> String {

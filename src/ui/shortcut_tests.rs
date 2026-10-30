@@ -279,6 +279,28 @@ fn keyboard_follows_the_csharp_shortcut_engine() {
     fs::remove_dir_all(root).unwrap();
 }
 
+/// 원본 즐겨찾기 메뉴(FUN_0042eedc): 0~9번 Shift+F1~F10, 10~19번 Shift+Ctrl+F1~F10. 빈 칸의 글쇠는 아무것도 하지 않는다.
+#[test]
+fn favorites_menu_shortcuts_follow_the_original() {
+    let (root, ctx, mut app) = fixture("favkeys", "ko");
+    let (left, right) = (root.join("left"), root.join("right"));
+    let mut paths = vec![String::new(); 20];
+    let mut names = vec![String::new(); 20];
+    (paths[0], names[0]) = (right.to_string_lossy().into_owned(), "Right".into());
+    (paths[10], names[10]) = (left.join("folder1").to_string_lossy().into_owned(), "Folder".into());
+    app.settings.set_strings("Favorites", paths);
+    app.settings.set_strings("FavoriteNames", names);
+    let shift = egui::Modifiers::SHIFT;
+    press(&mut app, &ctx, egui::Key::F1, shift);
+    assert_eq!(app.panes[0].path, right);
+    press(&mut app, &ctx, egui::Key::F1, shift | egui::Modifiers::CTRL);
+    assert_eq!(app.panes[0].path, left.join("folder1"));
+    press(&mut app, &ctx, egui::Key::F2, shift);
+    assert_eq!(app.panes[0].path, left.join("folder1"), "an empty slot has no menu item");
+    assert_eq!((super::favorites_dialog::favorite_gesture(&app.settings, 0), super::favorites_dialog::favorite_gesture(&app.settings, 10)), ("Shift+F1".to_owned(), "Shift+Ctrl+F1".to_owned()));
+    fs::remove_dir_all(root).unwrap();
+}
+
 #[test]
 fn work_folder_messages_in_english() {
     let (root, ctx, mut app) = fixture("en", "en");

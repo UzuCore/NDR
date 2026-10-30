@@ -201,6 +201,18 @@ impl App {
         if self.original_shortcut(key, modifiers, ctx) {
             return true;
         }
+        // 원본 즐겨찾기 메뉴 항목의 단축키(FUN_0042eedc, 메뉴 IsShortCut): 0~9번 Shift+F1~F10, 10~19번 Shift+Ctrl+F1~F10.
+        // 항목은 이름이 있는 즐겨찾기만 만들어지므로 빈 칸의 글쇠는 넘긴다.
+        if modifiers.shift && !modifiers.alt && name.starts_with('F') {
+            if let Some(n) = name[1..].parse::<usize>().ok().filter(|n| (1..=10).contains(n)) {
+                let index = if modifiers.ctrl { n + 9 } else { n - 1 };
+                let (paths, names) = (self.settings.strings("Favorites"), self.settings.strings("FavoriteNames"));
+                if paths.get(index).is_some_and(|p| !p.is_empty()) && names.get(index).is_some_and(|n| !n.is_empty()) {
+                    self.prefixed_command(&format!("favoriteOpen:{index}"));
+                    return true;
+                }
+            }
+        }
         // 그다음 기능키 표([FuncKey]: F1~F12와 TfPreferences 기능키 목록의 Ctrl+F1~F11 "^F1"~"^F11", FUN_0047cc18 → FUN_0044381c).
         if !(modifiers.ctrl || modifiers.alt || modifiers.shift) && name.starts_with('F') && name[1..].parse::<u8>().is_ok_and(|n| (1..=12).contains(&n)) && self.invoke_function_key(&name, ctx) {
             return true;

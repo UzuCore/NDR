@@ -1403,7 +1403,7 @@ fn favorites_window_follows_managefavoritesasync() {
     assert_eq!(form.items.len(), 20, "20 slots");
     assert_eq!(form.items[0], ("오른쪽".to_owned(), right.to_string_lossy().into_owned()));
     assert_eq!(form.items[1], (String::new(), String::new()), "an entry without a name is an empty slot");
-    assert_eq!((form.gestures[0].as_str(), form.gestures[10].as_str()), ("Shift+F1", "Ctrl+Shift+F1"), "GetFavoriteGesture defaults");
+    assert_eq!((form.gestures[0].as_str(), form.gestures[10].as_str()), ("Shift+F1", "Shift+Ctrl+F1"), "the original favorites menu shortcuts (FUN_0042eedc)");
     frame(&mut app, &ctx, vec![]);
     let act = |app: &mut App, action, ctx: &egui::Context| app.favorites_action(action, ctx);
     // 현재 폴더 추가: 첫 빈 칸, 이름은 폴더 이름. 같은 경로는 한 번.
@@ -1456,7 +1456,6 @@ fn favorites_menu_and_path_history_follow_the_context_menus() {
     let (left, right) = (root.join("left"), root.join("right"));
     app.settings.set_strings("Favorites", vec![right.to_string_lossy().into_owned(), String::new(), "folder1".into()]);
     app.settings.set_strings("FavoriteNames", vec!["R&ight".into(), String::new(), "Sub".into()]);
-    app.settings.values.insert("KeyboardShortcuts".into(), serde_json::json!({"favoriteOpen3": "Ctrl+Alt+3"}));
     // F11 = 즐겨찾기 드롭다운(관리 창이 아니다).
     frame_keys(&mut app, &ctx, vec![key(egui::Key::F11)]);
     let popup = app.popup.as_ref().expect("F11 opens the favorites menu");
@@ -1467,7 +1466,7 @@ fn favorites_menu_and_path_history_follow_the_context_menus() {
     // 원본 pmFavorites: 즐겨찾기 줄, 구분선, miAddToFavorites, miOrgFavorites.
     let add = app.language_pack.text("Menu.miAddToFavorites", "?");
     let organize = app.language_pack.text("Menu.miOrgFavorites", "?");
-    assert_eq!(labels, [("Right".to_owned(), Some('i'), "Shift+F1".to_owned()), ("3. Sub".to_owned(), Some('3'), "Ctrl+Alt+3".to_owned()), (add, None, String::new()), (organize, None, String::new())], "a name with & keeps its own access key");
+    assert_eq!(labels, [("Right".to_owned(), Some('i'), "Shift+F1".to_owned()), ("3. Sub".to_owned(), Some('3'), "Shift+F3".to_owned()), (add, None, String::new()), (organize, None, String::new())], "a name with & keeps its own access key");
     // 원본 miAddToFavoritesClick: TfGetText(TITLE_ADDFAV, MSG_ADDFAV(%s = 폴더), 처음 값 = 폴더 이름) → 확인이면 끝(빈 칸)에 더한다.
     let saved_popup = app.popup.take();
     app.dispatch("addToFavorites", &ctx);
