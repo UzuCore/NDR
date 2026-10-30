@@ -136,6 +136,15 @@ pub(super) fn preview_name(form: &RenameForm, index: usize) -> String {
     compat::rename_with_rules(&name, &form.rules, index, form.dirs[index]).unwrap_or(name)
 }
 
+/// 원본 FUN_00469b64: 새 이름이 0x105(261)자보다 짧고 금지 문자가 없어야 한다. 규칙을 적용하지 못하면 틀린 이름으로 본다.
+pub(super) fn valid_new_name(form: &RenameForm, index: usize) -> bool {
+    let name = form.paths[index].file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    match compat::rename_with_rules(&name, &form.rules, index, form.dirs[index]) {
+        Ok(new_name) => new_name.encode_utf16().count() < 0x105 && !new_name.contains(|c| super::original_dialogs::INVALID_NAME_CHARACTERS.contains(c)),
+        Err(_) => false,
+    }
+}
+
 /// 원본 TfAdvRename(ClientWidth 650 × ClientHeight 555): lAction "1. 동작 선택"(16,17), pcAction(12,45 353×220: tsInsert·tsReplace·
 /// tsDelete·tsCase·tsNumbering·tsExtension), lApplyDest "2. 동작 적용"(371,17) rbApplyToName(371,69)·rbApplyToExt(371,97),
 /// btnAddAction(371,129 67×25) btnDeleteAction(371,168), lAppliedList(448,45) lbActions(448,64 194×145) btnUp(448,215)·btnDown(549,215) 93×25,
@@ -389,8 +398,12 @@ pub(super) fn rename_ui(ui: &mut egui::Ui, form: &mut RenameForm, language: &com
                     [String::new(), if ko { format!("외 {more}개") } else { format!("{more} more items") }, "…".into()]
                 };
                 let mut x = rect.left();
+                // 원본 lvPreviewAdvancedCustomDrawSubItem(FUN_00418b04): 새 이름 칸(SubItem 2)이 FUN_00469b64(길이 < 0x105이고 금지 문자
+                // "\/:*?\"<>|" 없음)를 못 넘으면 글을 빨강(clRed)으로. 고친 것: 전에는 모두 같은 색이라 REN_INVALIDNAMES 안내가 가리키는 줄이 없었다.
+                let invalid = row < shown && !valid_new_name(form, row);
                 for (index, cell_text) in cells.iter().enumerate() {
                     let cell = egui::Rect::from_min_size(egui::pos2(x, rect.top()), egui::vec2(widths[index], 18.0));
+                    let text_color = if index == 2 && invalid { Color32::from_rgb(0xFF, 0, 0) } else { text_color };
                     ui.painter().with_clip_rect(cell.shrink2(egui::vec2(4.0, 0.0))).text(cell.left_center() + egui::vec2(6.0, 0.0), egui::Align2::LEFT_CENTER, cell_text, font.clone(), text_color);
                     ui.painter().vline(cell.right(), cell.y_range(), stroke);
                     x += widths[index];

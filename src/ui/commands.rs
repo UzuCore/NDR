@@ -590,7 +590,8 @@ impl App {
                 // 원본 0x433dd8: 로컬 위치에서 잘라내면 그 항목들(+100)을 흐린 아이콘으로 다시 그린다. 복사는 표시를 건드리지 않는다.
                 if id=="cut"&&self.panes[i].archive.is_none()&&self.panes[i].remote.is_none(){self.panes[i].cut_marks.extend(targets.iter().cloned());}}},
             "paste"=>{let copied=native::read_clipboard_files().ok().filter(|(p,_)|!p.is_empty()).or_else(||self.clipboard.clone());if let Some((sources,moving))=copied{self.transfer_from(i,sources,path,moving,super::file_operation::TransferKind::Paste);}},
-            "deleteRecycle"|"deletePermanent"=>self.delete_items(id=="deleteRecycle"),
+            // 원본 miDeleteClick(0x431c04): 고를 때 Shift(GetKeyState 0x10)가 눌려 있으면 FUN_0042c734의 마지막 인자 1 = 영구 삭제.
+            "deleteRecycle"|"deletePermanent"=>self.delete_items(id=="deleteRecycle"&&!ctx.input(|i|i.modifiers.shift)),
             "shred"=>self.shred_items(),
             "copyFullPath"|"copyPathOnly"|"copyName"=>{let escape=ctx.input(|input|input.modifiers.shift);self.copy_item_paths(match id{"copyName"=>ndr::parity::PathPart::Name,"copyPathOnly"=>ndr::parity::PathPart::Folder,_=>ndr::parity::PathPart::Full},escape);},
             "copyFolder"=>{result=(self.clipboard_writer)(&path.to_string_lossy());},

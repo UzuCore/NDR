@@ -108,7 +108,7 @@ impl App {
         let directory = self.panes[pane].path.to_string_lossy().into_owned();
         let title = self.root_text("TITLE_NEWFOLDER", "New Folder");
         let message = self.root_text("MSG_NEWFOLDER", "Type a folder name to be created.");
-        self.prompt(&title, &message, &names::new_folder_default_name(), None, false, move |app, value, _| {
+        self.prompt_file_name(&title, &message, &names::new_folder_default_name(), move |app, value, _| {
             let Some(name) = value.filter(|v| !v.is_empty()) else { return };
             let path = names::combine_typed_name(&directory, &name);
             let error = names::create_directory(&path);
@@ -129,7 +129,7 @@ impl App {
         let directory = self.panes[pane].path.to_string_lossy().into_owned();
         let title = self.root_text("TITLE_CREATEEMPTYFILE", "Create an empty file");
         let message = self.root_text("MSG_CREATEEMPTYFILE", "0 byte file will be created.\nType a new file name to be created.");
-        self.prompt(&title, &message, "", None, false, move |app, value, _| {
+        self.prompt_file_name(&title, &message, "", move |app, value, _| {
             let Some(name) = value.filter(|v| !v.is_empty()) else { return };
             let path = names::combine_typed_name(&directory, &name);
             let error = names::create_empty_file(&path);
@@ -412,6 +412,10 @@ impl App {
     /// C# ShredAsync(원본 FUN_0042c734 방식 2): MSG_DELWARN_SHRED 경고는 늘 보이고 Delete 단추는 없다. 예만 진행한다.
     pub(super) fn shred_items(&mut self) {
         let pane = self.active;
+        // 원본 miShredClick(0x431c60)도 FUN_0042c734(방식 2)로 가고, 그 함수의 FTP 모드 갈래는 방식과 상관없이 원격 삭제를 한다.
+        if self.panes[pane].remote.is_some() {
+            return self.ftp_delete(pane);
+        }
         if self.panes[pane].archive.is_some() {
             return self.warn("압축 파일 안의 항목은 삭제할 수 없습니다.", "Items inside an archive cannot be deleted.");
         }

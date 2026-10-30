@@ -542,6 +542,7 @@ fn ftp_pane_mode_connects_lists_transfers_and_disconnects_like_the_original() {
         store.insert("/pub".into(), (true, Vec::new()));
         store.insert("/pub/a.txt".into(), (false, b"hello".to_vec()));
         store.insert("/readme.txt".into(), (false, b"r".to_vec()));
+        store.insert("/.profile".into(), (false, b"p".to_vec()));
     }
     let site = rw::SiteProfile { name: "home".into(), host: "ftp.example".into(), user: "u".into(), encrypted_password: native::protect_secret("pw").unwrap_or_default(), remote_directory: String::new(), ..Default::default() };
     rw::store_sites(&mut app.settings, &[site]);
@@ -555,6 +556,17 @@ fn ftp_pane_mode_connects_lists_transfers_and_disconnects_like_the_original() {
     let config = FAKE_FTP_CONFIGS.lock().unwrap().pop().expect("connected");
     assert_eq!((config.host.as_str(), config.user.as_str(), config.password.as_str()), ("ftp.example", "u", "pw"));
     let names = |app: &App, i: usize| app.panes[i].entries.iter().map(|e| e.name.clone()).collect::<Vec<_>>();
+    assert_eq!(names(&app, 0), ["pub", "readme.txt"]);
+    // 원본 FUN_0045bb0c: 숨김 보기가 아니면 '.'으로 시작하는 원격 이름을 넣지 않고, 숨김 보기면 숨김 속성으로 넣는다.
+    app.panes[0].show_hidden = true;
+    app.refresh(0);
+    wait_until(&mut app, &ctx, |app| !app.panes[0].loading);
+    assert_eq!(names(&app, 0), ["pub", ".profile", "readme.txt"]);
+    let profile = app.panes[0].entries.iter().find(|e| e.name == ".profile").unwrap();
+    assert!(profile.hidden && profile.attributes & 0x2 != 0);
+    app.panes[0].show_hidden = false;
+    app.refresh(0);
+    wait_until(&mut app, &ctx, |app| !app.panes[0].loading);
     assert_eq!(names(&app, 0), ["pub", "readme.txt"]);
     assert_eq!(app.address_text(0), "ftp://ftp.example/");
     assert!(app.panes[0].disk.is_none(), "the original hides the disk info in FTP mode");
@@ -571,8 +583,14 @@ fn ftp_pane_mode_connects_lists_transfers_and_disconnects_like_the_original() {
     assert_eq!(names(&app, 0), ["..", "a.txt"], "a remote subfolder starts with \"..\"");
     assert_eq!(app.address_text(0), "ftp://ftp.example/pub");
     assert_eq!(log_lines(&app).last().map(String::as_str), Some("/pub > LIST"), "sent lines start with the current remote folder");
-    // FTP 패널에서 로컬 파일만 다루는 명령은 막는다(완전 삭제 = shred).
+    // 원본 miShredClick(0x431c60) → FUN_0042c734: FTP 모드 갈래는 방식과 상관없이 FTP 삭제 확인(휴지통 단추 없음)을 띄운다.
+    app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == "a.txt").unwrap();
     app.dispatch("shred", &ctx);
+    assert!(matches!(app.original_dialogs.last().map(|d| &d.kind), Some(DialogKind::DeleteWarning { show_delete: false, .. })), "shred goes to the FTP delete");
+    app.answer_dialog(DialogResult::DeleteWarning(super::original_dialogs::DeleteWarningChoice::No), &ctx);
+    assert!(app.job.is_none() && app.original_dialogs.is_empty() && app.msgboxes.is_empty());
+    // 로컬 파일만 다루는 명령은 여전히 막는다.
+    app.dispatch("compare", &ctx);
     assert!(app.job.is_none() && app.original_dialogs.is_empty() && app.msgboxes.is_empty());
     // 원본 miNewFolderClick의 FTP 갈래: TfGetText(TITLE_NEWFOLDER) → FTP 새 폴더 → 새로 읽고 그 이름에 커서.
     app.dispatch("newFolder", &ctx);

@@ -65,6 +65,11 @@ pub(super) struct ArchiveMenuState {
     pub restore: bool,
     /// 원본 pmFolderPopup: miToLastDest.Enabled = 마지막 대상이 있음.
     pub last_destination: bool,
+    /// 원본 pmFolderPopup(0x437210): miHistoryBack(+0x4ac)·miHistoryForward(+0x4a8).Enabled = 기록에 뒤·앞이 있음.
+    pub history_back: bool,
+    pub history_forward: bool,
+    /// 원본 pmEditPopup(0x43727c): miFindNext(+0x4cc).Enabled = 마지막 찾기 글(+0xd0c) 길이 > 0.
+    pub find_next: bool,
     /// 원본 pmConnectPopup(0x43ee78): 지금 패널이 FTP 모드(연결됨).
     pub ftp_active: bool,
     /// 두 패널 가운데 하나가 FTP 모드.
@@ -93,6 +98,9 @@ impl ArchiveMenuState {
             "paste" => (true, self.paste),
             "restoreSelection" => (true, self.restore),
             "goLastDestination" => (true, self.last_destination),
+            "historyBack" => (true, self.history_back),
+            "historyForward" => (true, self.history_forward),
+            "findNext" => (true, self.find_next),
             "ftpDisconnect" | "ftpDownload" => (true, self.ftp_active),
             "ftpUpload" => (true, self.ftp_any),
             _ => (true, true),
@@ -113,7 +121,9 @@ impl App {
         let last_destination = !self.settings.text("LastDestination", "").trim().is_empty();
         let ftp_active = self.panes[i].remote.is_some();
         let ftp_any = self.panes.iter().any(|p| p.remote.is_some());
-        ArchiveMenuState { selected, current, paste, restore, last_destination, ftp_active, ftp_any, in_archive: self.panes[i].archive.is_some(), original: false }
+        let (history_back, history_forward) = (!self.panes[i].back.is_empty(), !self.panes[i].forward.is_empty());
+        let find_next = !self.last_find.is_empty();
+        ArchiveMenuState { selected, current, paste, restore, last_destination, history_back, history_forward, find_next, ftp_active, ftp_any, in_archive: self.panes[i].archive.is_some(), original: false }
     }
 
     /// 보기 메뉴의 체크 표시(원본 pmViewPopup 0x436fb8의 Checked, C# AddToggleMenuItem): None이면 일반 항목.
@@ -437,6 +447,10 @@ mod tests {
         assert_eq!(none.item("goLastDestination"), (true, false));
         let ready = ArchiveMenuState { paste: true, restore: true, last_destination: true, ..Default::default() };
         assert_eq!((ready.item("paste"), ready.item("restoreSelection"), ready.item("goLastDestination")), ((true, true), (true, true), (true, true)));
+        // 원본 pmFolderPopup(0x437210)·pmEditPopup(0x43727c): 기록이 없으면 뒤로·앞으로, 찾은 글이 없으면 다음 찾기가 회색.
+        assert_eq!((none.item("historyBack"), none.item("historyForward"), none.item("findNext")), ((true, false), (true, false), (true, false)));
+        let history = ArchiveMenuState { history_back: true, history_forward: true, find_next: true, ..Default::default() };
+        assert_eq!((history.item("historyBack"), history.item("historyForward"), history.item("findNext")), ((true, true), (true, true), (true, true)));
         let inside = ArchiveMenuState { current: true, ..Default::default() };
         assert_eq!(inside.item("archiveProperties"), (true, true));
         assert_eq!(inside.item("archiveInstall"), (false, false));

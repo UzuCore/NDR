@@ -341,7 +341,7 @@ pub(super) fn ftp_allows(id: &str) -> bool {
         "remote", "sites", "remoteCommand", "exit", "options", "language", "theme", "about", "help", "homepage", "checkUpdates",
         "filter", "newTab", "closeTab", "historyBack", "historyForward", "back", "forward", "favoritesMenu", "switchPane",
         // 원본 miNewFolderClick(0x432378)·miRenameClick(0x4351cc)·miDeleteClick(0x431c04 → FUN_0042c734)의 FTP 모드(2) 갈래.
-        "newFolder", "rename", "deleteRecycle", "deletePermanent", "deleteToolbar", "attributes",
+        "newFolder", "rename", "deleteRecycle", "deletePermanent", "deleteToolbar", "shred", "attributes",
         // 원본 miCommandLineClick(0x438598): FTP 모드면 입력을 FTP 제어 명령으로 보낸다.
         "command",
         // 원본 miMapNetworkDriveClick(0x435144)·miUnmapNetworkDriveClick(0x4350bc): 모드와 상관없이 연다(새로 읽기는 로컬일 때만).
@@ -351,22 +351,25 @@ pub(super) fn ftp_allows(id: &str) -> bool {
 }
 
 fn to_entry(remote: &PaneRemote, item: &RemoteEntry) -> Entry {
+    // 원본 FUN_0045bb0c: 이름이 '.'으로 시작하면 숨김 속성(폴더 0x12, 파일 0x02)으로 넣는다.
+    let dot = item.name.starts_with('.');
     Entry {
         name: item.name.clone(),
         path: remote.item_path(&item.name),
         is_dir: item.is_dir,
         size: if item.is_dir { 0 } else { item.size },
         modified: item.modified.filter(|s| *s >= 0).map(|s| std::time::UNIX_EPOCH + Duration::from_secs(s as u64)),
-        hidden: false,
-        attributes: if item.is_dir { 0x10 } else { 0 },
+        hidden: dot,
+        attributes: if item.is_dir { 0x10 } else { 0 } | if dot { 0x2 } else { 0 },
         drive: false,
     }
 }
 
-/// 원격 목록 읽기(refresh의 FTP 쪽). "."·".."은 뺀다.
-pub(super) fn list_remote(remote: &PaneRemote) -> Result<Vec<Entry>, String> {
+/// 원격 목록 읽기(refresh의 FTP 쪽). "."·".."은 뺀다. 원본 FUN_0045bb0c처럼 숨김 보기가 아니면 '.'으로 시작하는 이름도 뺀다.
+/// 고친 것: 전에는 Alt+Z와 상관없이 점 파일이 늘 보였다.
+pub(super) fn list_remote(remote: &PaneRemote, show_hidden: bool) -> Result<Vec<Entry>, String> {
     let items = remote.fs.lock().map_err(|_| "FTP connection is unavailable".to_owned())?.list(&remote.path)?;
-    let items: Vec<&RemoteEntry> = items.iter().filter(|e| e.name != "." && e.name != "..").collect();
+    let items: Vec<&RemoteEntry> = items.iter().filter(|e| e.name != "." && e.name != ".." && (show_hidden || !e.name.starts_with('.'))).collect();
     if let Ok(mut modes) = remote.modes.lock() {
         modes.clear();
         modes.extend(items.iter().filter_map(|e| Some((join_remote(&remote.path, &e.name), e.mode?))));
@@ -950,7 +953,8 @@ impl App {
         }
         let title = self.language_pack.text("RES.TITLE_NEWFOLDER", "New Folder");
         let message = self.language_pack.text("RES.MSG_NEWFOLDER", "Type a folder name to be created.");
-        self.prompt(&title, &message, &ndr::names::new_folder_default_name(), None, false, move |app, value, _| {
+        // 원본 FUN_00432378(패널 모드 2 갈래)도 같은 TfGetText(flags 1)를 쓴다.
+        self.prompt_file_name(&title, &message, &ndr::names::new_folder_default_name(), move |app, value, _| {
             let Some(name) = value.filter(|v| !v.trim().is_empty()) else { return };
             let path = join_remote(&remote.path, &name);
             app.ftp_edit(index, remote, Some(name), move |fs| fs.mkdir(&path));

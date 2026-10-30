@@ -213,18 +213,27 @@ pub(super) fn function_key_edit_ui(ui: &mut egui::Ui, form: &mut FunctionKeyEdit
             });
         });
     } else {
-        ui.put(at(113.0, 85.0, 294.0, 21.0), egui::TextEdit::singleline(&mut form.command));
+        // 원본 cbCommandChange(0x41fc30): 사용자 명령(+0x3e4)이 골라져 있으면 cbCommand 글을 그대로 eName(+0x3f8)에.
+        if ui.put(at(113.0, 85.0, 294.0, 21.0), egui::TextEdit::singleline(&mut form.command).id(egui::Id::new("ndr-function-key-command"))).changed() {
+            form.name = form.command.clone();
+        }
     }
     // 원본 rbCommandTypeClick(0x41f5bc): 내부 명령이면 lParams(+0x3f4)·eParams(+0x400)·btnBrowse(+0x40c)·btnParam(+0x460)·
     // lParamTip(+0x464)을 숨긴다(Visible, 끄기가 아님).
     let user = !form.internal;
     if user {
-        // 원본 btnBrowse(OpenDialog): 사용자 명령이면 실행할 파일을 고른다.
+        // 원본 btnBrowseClick(0x41fca4): Filter = OD_PROGRAMFILTER, 처음 이름 = 앞뒤 따옴표를 뗀 명령 글. 고르면 cbCommand에 넣고
+        // 그 OnChange(cbCommandChange)가 이름 칸도 채운다.
         if ui.put(at(412.0, 85.0, 29.0, 21.0), egui::Button::new("...")).clicked() {
             let title = text("Form.Caption", "Edit Function Key");
-            let initial = Path::new(form.command.trim()).parent().filter(|p| p.is_dir()).map(Path::to_path_buf);
-            if let Some(path) = ndr::file_dialogs::open_file(&title, initial.as_deref(), "", &[("*.*", "*.*")]) {
+            let current = form.command.trim().trim_matches('"');
+            let initial = Path::new(current).parent().filter(|p| p.is_dir()).map(Path::to_path_buf);
+            let file_name = Path::new(current).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            let filters = super::original_dialogs::program_filter(language);
+            let filters: Vec<(&str, &str)> = filters.iter().map(|(n, p)| (n.as_str(), p.as_str())).collect();
+            if let Some(path) = ndr::file_dialogs::open_file(&title, initial.as_deref(), &file_name, &filters) {
                 form.command = path.to_string_lossy().into_owned();
+                form.name = form.command.clone();
             }
         }
         put_left(ui, at(20.0, 115.0, 92.0, 15.0), egui::Label::new(text("Caption.lParams", "Parameter(s):")).truncate());

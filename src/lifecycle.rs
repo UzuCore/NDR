@@ -691,12 +691,11 @@ mod win {
                 } else {
                     0x4e44
                 };
-                let mut fallback = false;
-                if unsafe { RegisterHotKey(hwnd, next, 8 | 0x4000, key) } == 0 {
-                    if unsafe { RegisterHotKey(hwnd, next, 8 | 4 | 0x4000, key) } == 0 {
-                        return Err(error("Activation hotkey is already in use"));
-                    }
-                    fallback = true
+                // 원본 FormShow(0x42a5cc): RegisterHotKey(hWnd, atom, MOD_WIN(8), vk) 한 번. 실패해도 다른 조합으로 다시 하지 않고
+                // MOD_NOREPEAT도 없다. 고친 것: 전에는 Win+Ctrl로 바꿔 등록해 조합이 몰래 달라졌다.
+                let fallback = false;
+                if unsafe { RegisterHotKey(hwnd, next, 8, key) } == 0 {
+                    return Err(error("Activation hotkey is already in use"));
                 }
                 if self.key_id != 0 {
                     unsafe {

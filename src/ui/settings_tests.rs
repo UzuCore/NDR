@@ -268,6 +268,23 @@ fn function_key_editor_follows_csharp_in_english() {
         assert_eq!(edit.result().unwrap().name, "Notes");
     }
     assert!(app.msgboxes.is_empty());
+    // 원본 cbCommandChange(0x41fc30): 사용자 명령이면 명령 칸에 친 글이 그대로 이름 칸에 들어간다.
+    {
+        let mut form = super::function_key_editor::FunctionKeyEditForm::new("F9", &Default::default(), false);
+        form.internal = false;
+        let id = egui::Id::new("ndr-function-key-command");
+        let run = |events: Vec<egui::Event>, form: &mut super::function_key_editor::FunctionKeyEditForm| {
+            let input = egui::RawInput { events, screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))), ..Default::default() };
+            let _ = ctx.run(input, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| super::function_key_editor::function_key_edit_ui(ui, form, &app.language_pack, false));
+            });
+        };
+        run(vec![], &mut form);
+        ctx.memory_mut(|m| m.request_focus(id));
+        run(vec![], &mut form);
+        run(vec![egui::Event::Text("calc.exe".into())], &mut form);
+        assert_eq!((form.command.as_str(), form.name.as_str()), ("calc.exe", "calc.exe"));
+    }
     if let Some(DialogKind::FunctionKeyEdit(edit)) = app.original_dialogs.last_mut().map(|d| &mut d.kind) {
         (edit.name, edit.internal, edit.command, edit.parameters) = (" Notes ".into(), false, " notepad.exe ".into(), " %P ".into());
     }

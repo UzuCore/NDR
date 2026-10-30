@@ -28,7 +28,8 @@ pub(super) enum DeleteConfirmChoice {
 }
 
 pub(super) enum DialogKind {
-    Prompt { message: String, value: String, history: Option<Vec<String>>, password: bool },
+    /// `file_name`: 원본 TfGetText 표시 FUN_0040bea0의 flags 비트 0(+0x400). 참이면 btnOKClick(0x428c64)이 금지 문자를 막는다.
+    Prompt { message: String, value: String, history: Option<Vec<String>>, password: bool, file_name: bool },
     Rename { message: String, name: String, extension: String },
     DeleteWarning { message: String, show_delete: bool, default_button: usize },
     DeleteConfirm { message: String, attributes: String },
@@ -268,7 +269,21 @@ impl App {
     ) {
         self.push_dialog(
             title.into(),
-            DialogKind::Prompt { message: message.into(), value: initial.into(), history, password },
+            DialogKind::Prompt { message: message.into(), value: initial.into(), history, password, file_name: false },
+            Box::new(move |app, result, ctx| {
+                if let DialogResult::Text(value) = result {
+                    on_result(app, value, ctx)
+                }
+            }),
+        );
+    }
+
+    /// TfGetText를 flags 1(파일 이름)로: 새 폴더(FUN_00432378)·빈 파일(FUN_00434630). 확인 때 금지 문자가 있으면
+    /// MSG_INVALID_FILENAME을 보이고 창을 남긴다(btnOKClick 0x428c64, StrCSpnIW "\/:*?\"<>|").
+    pub(super) fn prompt_file_name(&mut self, title: &str, message: &str, initial: &str, on_result: impl FnOnce(&mut App, Option<String>, &egui::Context) + 'static) {
+        self.push_dialog(
+            title.into(),
+            DialogKind::Prompt { message: message.into(), value: initial.into(), history: None, password: false, file_name: true },
             Box::new(move |app, result, ctx| {
                 if let DialogResult::Text(value) = result {
                     on_result(app, value, ctx)
@@ -566,7 +581,7 @@ impl App {
             }
             ui.separator();
             match &mut dialog.kind {
-                DialogKind::Prompt { message, value, history, password } => {
+                DialogKind::Prompt { message, value, history, password, .. } => {
                     // 원본 TfGetText(ClientWidth 444 × ClientHeight 127): lMessage(18,8 411×53, 아래 맞춤), cbText(16,67 413×21),
                     // btnOK(265,95 79×25, 기본), btnCancel(351,95 79×25, 취소).
                     let (area, _) = ui.allocate_exact_size(egui::vec2(444.0, 127.0), egui::Sense::hover());
@@ -629,16 +644,23 @@ impl App {
                 DialogKind::DeleteWarning { message, show_delete, default_button } => {
                     // 원본 TfDelWarning(443 × 119): Image1(13,16), lMsg(64,16 364×62), btnDelete(64,86 75×25, 숨김이 처음),
                     // btnYes(272,86), btnNo(353,86). 글이 lMsg보다 길면 그만큼 창을 늘린다(넘치는 긴 목록은 스크롤).
-                    let galley = ui.painter().layout_job(markup_job(message, 13.0, text_color, 364.0));
+                    // 원본 TntFormShow(0x41f018): 창 너비 = lMsg 글 너비(CaptionWidth) + lMsg.Left(64) + 20, 화면보다 넓으면 화면 − 50,
+                    // 350보다 좁으면 350(테두리 포함 바깥 너비). lMsg는 왼·위·오른쪽, 예·아니요는 위·오른쪽에 붙는다. 높이는 그대로(NDR은
+                    // 줄이 많으면 늘리고 넘치면 스크롤한다). 고친 것: 전에는 너비가 443으로 고정이라 긴 이름이 줄바꿈됐다.
+                    let natural = ui.painter().layout_job(markup_job(message, 13.0, text_color, f32::INFINITY)).size().x;
+                    // 바깥 너비에서 bsDialog 테두리(2 × SM_CXDLGFRAME 3)를 빼면 안쪽 너비. (+0x50은 SetBounds 0x662c80로 본 Left.)
+                    let width = (natural + 64.0 + 20.0).min(screen.width() - 50.0).max(350.0) - 6.0;
+                    let message_width = width - 79.0;
+                    let galley = ui.painter().layout_job(markup_job(message, 13.0, text_color, message_width));
                     let extra = (galley.size().y.min(560.0) - 62.0).max(0.0);
-                    let (area, _) = ui.allocate_exact_size(egui::vec2(443.0, 119.0 + extra), egui::Sense::hover());
+                    let (area, _) = ui.allocate_exact_size(egui::vec2(width, 119.0 + extra), egui::Sense::hover());
                     let at = |x: f32, y: f32, w: f32, h: f32| egui::Rect::from_min_size(area.min + egui::vec2(x, y), egui::vec2(w, h));
                     if let Some(icon) = warning_icon.clone() {
                         ui.painter().image(icon.id(), at(13.0, 16.0, 32.0, 32.0), egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
                     }
-                    ui.scope_builder(egui::UiBuilder::new().max_rect(at(64.0, 16.0, 364.0, 62.0 + extra)), |ui| {
+                    ui.scope_builder(egui::UiBuilder::new().max_rect(at(64.0, 16.0, message_width, 62.0 + extra)), |ui| {
                         egui::ScrollArea::vertical().max_height(62.0 + extra).show(ui, |ui| {
-                            ui.label(markup_job(message, 13.0, text_color, 364.0));
+                            ui.label(markup_job(message, 13.0, text_color, message_width));
                         });
                     });
                     // 탭 순서 btnYes, btnNo, btnDelete.
@@ -653,8 +675,8 @@ impl App {
                             outcome = Outcome::Choice(0);
                         }
                     }
-                    let (yes, yes_pressed) = vcl_button(ui, at(272.0, 86.0 + extra, 75.0, 25.0), true, &raw("Caption.btnYes", "&Yes"));
-                    let (no, no_pressed) = vcl_button(ui, at(353.0, 86.0 + extra, 75.0, 25.0), true, &raw("Caption.btnNo", "&No"));
+                    let (yes, yes_pressed) = vcl_button(ui, at(width - 171.0, 86.0 + extra, 75.0, 25.0), true, &raw("Caption.btnYes", "&Yes"));
+                    let (no, no_pressed) = vcl_button(ui, at(width - 90.0, 86.0 + extra, 75.0, 25.0), true, &raw("Caption.btnNo", "&No"));
                     if first_frame {
                         match focus_slot {
                             1 => yes.request_focus(),
@@ -882,8 +904,14 @@ impl App {
                     super::original_dialogs::put_left(ui, at(80.0, 13.0, 337.0, 58.0), egui::Label::new(message.as_str()).wrap());
                     super::original_dialogs::put_left(ui, at(80.0, 80.0, 337.0, 15.0), egui::Label::new(attributes.as_str()).truncate());
                     let raw = |key: &str, fallback: &str| self.language_pack.raw(&format!("formDelConfirm.{key}")).unwrap_or_else(|| fallback.to_owned());
+                    // 원본: 탭 순서 0인 btnAll이 처음 초점(TntFormShow 0x41ea78는 SetFocus를 하지 않는다)이라 Enter = 모두 예.
+                    // 고친 것: 전에는 초점이 없어 Enter가 아무 일도 하지 않았다.
                     for (left, slot, key, fallback) in [(172.0, 0, "Caption.btnAll", "Yes to &All"), (256.0, 1, "Caption.btnYes", "&Yes"), (342.0, 2, "Caption.btnNo", "&No")] {
-                        if access_button(ui, at(left, 101.0, 75.0, 25.0), &raw(key, fallback)) && matches!(outcome, Outcome::None) {
+                        let (button, pressed) = vcl_button(ui, at(left, 101.0, 75.0, 25.0), true, &raw(key, fallback));
+                        if first_frame && slot == 0 {
+                            button.request_focus();
+                        }
+                        if pressed && matches!(outcome, Outcome::None) {
                             outcome = Outcome::Choice(slot);
                         }
                     }
@@ -960,6 +988,11 @@ impl App {
         let result = match (outcome, kind) {
             (Outcome::None, _) => return,
             (Outcome::Ok, DialogKind::Rename { .. }) => return self.submit_rename(ctx),
+            (Outcome::Ok, DialogKind::Prompt { value, file_name: true, .. }) if value.contains(|c| INVALID_NAME_CHARACTERS.contains(c)) => {
+                let text = self.language_pack.text("RES.MSG_INVALID_FILENAME", "A file name can't contain any of the following characters:\n  \\ / : * ? \" < > | ");
+                self.system_box("", &text, ndr::msgbox::MB_OK, |_, _, _| {});
+                return;
+            }
             (Outcome::Choice(slot), DialogKind::Attributes(_)) => {
                 let action = [AttributeAction::ApplyToAll, AttributeAction::Skip, AttributeAction::Apply, AttributeAction::Cancel][slot.min(3)];
                 return self.submit_attributes(action, ctx);

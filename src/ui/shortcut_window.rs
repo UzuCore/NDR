@@ -11,6 +11,8 @@ pub(super) struct ShortcutWindow {
     pub filter: String,
     pub selected: Option<usize>,
     pub focus_search: bool,
+    /// 이 창이 활성인가(마지막 누르기가 창 안이었는가). 원본 TfShortcut은 따로 된 폼이라 활성일 때만 FormShortCut이 Esc를 받는다.
+    pub active: bool,
 }
 
 /// fEditShortCut 입력.
@@ -129,8 +131,14 @@ impl App {
                 if state.focus_search {
                     search.request_focus();
                     state.focus_search = false;
+                    state.active = true;
                 }
-                if (search.has_focus() || search.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                // 원본 TntFormShortCut(0x455a54): Esc(0x1b)면 초점과 상관없이 닫는다(Handled). NDR은 창이 메인 창 안에 붙어 있으므로
+                // 마지막 누르기가 이 창 안이었을 때(= 원본에서 이 폼이 활성일 때)만 받는다. 고친 것: 전에는 검색 칸에 초점이 있어야 했다.
+                if ui.input(|i| i.pointer.any_pressed()) {
+                    state.active = ui.ctx().pointer_interact_pos().is_some_and(|p| ui.ctx().layer_id_at(p) == Some(ui.layer_id()));
+                }
+                if (state.active || search.has_focus() || search.lost_focus()) && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
                     close = true;
                 }
                 ui.label(tip);

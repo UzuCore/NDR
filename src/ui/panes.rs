@@ -770,7 +770,7 @@ impl App {
             // 원본 내 PC 드라이브 항목의 TNXDriveInfo(이름, 종류, 고정 디스크면 크기).
             let drive_infos = listed.into_iter().filter_map(|(root, info)| info.map(|info| (root, info))).collect();
             let result = if let Some(remote) = remote {
-                super::ftp_pane::list_remote(&remote)
+                super::ftp_pane::list_remote(&remote, show_hidden)
             } else if let Some(drives) = drives {
                 Ok(drives
                     .into_iter()

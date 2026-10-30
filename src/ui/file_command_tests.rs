@@ -134,6 +134,19 @@ fn new_folder_and_empty_file_follow_the_original() {
     answer_text(&mut app, &ctx, Some("a\\b\\c"));
     assert_eq!(app.msgboxes[0].text, system_error_text(3), "no intermediate folders (ERROR_PATH_NOT_FOUND)");
     app.answer_message_box(1, &ctx);
+    // 원본 TfGetText flags 1(FUN_00432378) → btnOKClick(0x428c64): 확인 때 금지 문자면 MSG_INVALID_FILENAME, 창은 남는다.
+    app.dispatch("newFolder", &ctx);
+    if let Some(DialogKind::Prompt { value, .. }) = app.original_dialogs.last_mut().map(|d| &mut d.kind) {
+        *value = "a:b".into();
+    }
+    frame(&mut app, &ctx, vec![]);
+    frame(&mut app, &ctx, vec![key(egui::Key::Enter)]);
+    assert_eq!(app.msgboxes.len(), 1);
+    assert_eq!(app.msgboxes[0].text, app.language_pack.text("RES.MSG_INVALID_FILENAME", "?"));
+    assert!(matches!(app.original_dialogs.last().map(|d| &d.kind), Some(DialogKind::Prompt { file_name: true, .. })), "the input box stays open");
+    assert!(!left.join("a:b").exists());
+    app.answer_message_box(1, &ctx);
+    app.answer_dialog(DialogResult::Text(None), &ctx);
 
     app.dispatch("newEmpty", &ctx);
     let (title, message, value) = prompt_of(&app);
@@ -360,6 +373,17 @@ fn delete_warning_and_protected_item_confirmation() {
     app.dispatch("deleteRecycle", &ctx);
     assert!(matches!(&app.original_dialogs[0].kind, DialogKind::DeleteWarning { show_delete: false, .. }));
     answer_warning(&mut app, &ctx, DeleteWarningChoice::No);
+    // 원본 miDeleteClick(0x431c04): 메뉴를 고를 때 Shift가 눌려 있으면 영구 삭제(경고는 늘, ConfirmDelete를 꺼도).
+    app.settings.set_flag("ConfirmDelete", false);
+    let _ = ctx.run(egui::RawInput { modifiers: egui::Modifiers::SHIFT, ..Default::default() }, |_| {});
+    app.dispatch("deleteRecycle", &ctx);
+    match app.original_dialogs.first().map(|d| &d.kind) {
+        Some(DialogKind::DeleteWarning { message, show_delete: false, .. }) => assert_eq!(message, &app.delete_warning_message(DeleteWarningMode::Delete, 1, "beta.txt")),
+        other => panic!("permanent delete warning expected, got {:?}", other.is_some()),
+    }
+    answer_warning(&mut app, &ctx, DeleteWarningChoice::No);
+    let _ = ctx.run(egui::RawInput::default(), |_| {});
+    app.settings.set_flag("ConfirmDelete", true);
 
     // Permanent delete: always warns (even with delconfirm off), no Delete button, then one TfDelConfirm per protected item.
     app.settings.set_flag("ConfirmDelete", false);
@@ -420,7 +444,11 @@ fn delete_warning_and_protected_item_confirmation() {
     app.dispatch("deletePermanent", &ctx);
     answer_warning(&mut app, &ctx, DeleteWarningChoice::Yes);
     wait_dialog_or_job(&mut app, &ctx);
-    app.answer_dialog(DialogResult::DeleteConfirm(DeleteConfirmChoice::All), &ctx);
+    // 원본 TfDelConfirm: 탭 순서 0인 btnAll이 처음 초점이라 Enter = 모두 예.
+    assert!(matches!(app.original_dialogs.first().map(|d| &d.kind), Some(DialogKind::DeleteConfirm { .. })));
+    frame(&mut app, &ctx, vec![]);
+    frame(&mut app, &ctx, vec![key(egui::Key::Enter)]);
+    frame(&mut app, &ctx, vec![]);
     assert!(app.original_dialogs.is_empty(), "no second question after Yes to All");
     wait_job(&mut app, &ctx);
     assert!(!left.join("a.txt").exists() && !left.join("b.txt").exists());
@@ -675,6 +703,30 @@ fn list_export_window_follows_the_original_savelist() {
 }
 
 #[test]
+fn f12_shortcut_window_closes_on_escape_without_search_focus() {
+    // 원본 TntFormShortCut(0x455a54): 폼이 활성이면 초점과 상관없이 Esc(0x1b)로 닫는다.
+    let (root, ctx, mut app) = fixture("shortcuts-esc", "en");
+    app.dispatch("shortcuts", &ctx);
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 850.0));
+    let run = |app: &mut App, events: Vec<egui::Event>| {
+        let _ = ctx.run(egui::RawInput { events, screen_rect: Some(screen), ..Default::default() }, |ctx| app.shortcut_window_ui(ctx));
+    };
+    run(&mut app, vec![]);
+    run(&mut app, vec![]);
+    let area = ctx.memory(|m| m.area_rect(egui::Id::new("ndr-shortcut-window"))).expect("window area");
+    // 검색 칸이 아닌 목록 아래쪽을 눌러 검색 칸 초점을 없앤다.
+    let point = egui::pos2(area.center().x, area.bottom() - 30.0);
+    let click = |pressed| egui::Event::PointerButton { pos: point, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    run(&mut app, vec![egui::Event::PointerMoved(point), click(true)]);
+    run(&mut app, vec![click(false)]);
+    assert!(app.shortcut_window.is_some());
+    assert!(ctx.memory(|m| m.focused()).is_none(), "the search box lost focus");
+    run(&mut app, vec![key(egui::Key::Escape)]);
+    assert!(app.shortcut_window.is_none(), "Esc closes the active F12 window");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn f12_shortcut_window_edits_the_double_clicked_line() {
     let (root, ctx, mut app) = fixture("shortcuts", "en");
     app.dispatch("shortcuts", &ctx);
@@ -799,6 +851,17 @@ fn advanced_rename_window_builds_rules_macros_and_renames() {
         _ => panic!("rename window"),
     };
     assert_eq!(preview(&app), ["new_alpha01.txt", "new_beta02.txt"]);
+    // 원본 FUN_00418b04 + FUN_00469b64: 금지 문자가 들어간 새 이름은 미리 보기에서 빨강(틀린 이름).
+    let valid = |app: &App| match &app.original_dialogs[0].kind {
+        DialogKind::AdvancedRename(form) => (0..form.paths.len()).map(|i| super::rename_dialog::valid_new_name(form, i)).collect::<Vec<_>>(),
+        _ => panic!("rename window"),
+    };
+    assert_eq!(valid(&app), [true, true]);
+    edit(&mut app, &|form| form.rules[0].text = "a:".into());
+    assert_eq!(valid(&app), [false, false], "':' is one of \\/:*?\"<>|");
+    edit(&mut app, &|form| form.rules[0].text = "x".repeat(255));
+    assert_eq!(valid(&app), [false, false], "0x105 characters or more");
+    edit(&mut app, &|form| form.rules[0].text = "new_".into());
     // 원본 FUN_0041830c 목록 줄: ADVRENAME_ACTIONS 이름 (영어 설명) - name/extension.
     let actions = app.language_pack.text("RES.ADVRENAME_ACTIONS", "?");
     let actions: Vec<&str> = actions.split(';').collect();
