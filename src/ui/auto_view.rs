@@ -80,7 +80,9 @@ impl App {
             }
             self.original_fit_name_fields(ui, &fm, room, attach)
         } else {
-            let attr = self.list_text_width(ui, if sftp { "drwxrwxrwx" } else { "ARHS" }) + 10.0;
+            // 원본 OnGetFieldMaxWidth(FUN_00485ae8): 속성 칸(종류 5)의 최대 너비 글은 FTP 패널이면 "drwxrwxrwx", 아니면 "AHRS"
+            // (설명 칸 6은 항목 +0x10 글).
+            let attr = self.list_text_width(ui, if sftp { "drwxrwxrwx" } else { "AHRS" }) + 10.0;
             // 원본 필드 차례(ResetFields 0x7db770): NAME, EXT, LOCATION, SIZE, DATEMODIFIED, ATTR, DESC. FitVisibleFields는 차례대로
             // 돌며 보이기 표시(+0x21)를 보지 않으므로 숨은 LOCATION(+0x21 = 0, 목록 항목의 위치 글은 비어 최대 너비 0)도 10을 쓴다.
             let fields = [(None, 10.0), (Some(2usize), size), (Some(3), max[4] + 10.0), (Some(4), attr), (Some(5), max[6] + 10.0)];

@@ -18,6 +18,41 @@ use windows_sys::Win32::{
 fn wide(value: impl AsRef<OsStr>) -> Vec<u16> {
     value.as_ref().encode_wide().chain(Some(0)).collect()
 }
+
+/// 원본 TNXShellChangeNotify 스레드(ResetThread 0x7b37b8 → FUN_007b3060): 폴더 하나(하위 폴더 아님, SetSubFolder 처음 값 0)를
+/// 거르개 0x0B(파일 이름·폴더 이름·크기 바뀜, 생성자 0x7b3304)로 지켜보다가 바뀌면 `on_change`를 부른다. `stop`이 켜지면 끝낸다.
+/// 감시를 시작하지 못하면(없는 폴더 등) 아무것도 하지 않는다.
+pub fn spawn_folder_watch(path: PathBuf, stop: std::sync::Arc<std::sync::atomic::AtomicBool>, on_change: impl Fn() + Send + 'static) {
+    use std::sync::atomic::Ordering;
+    use windows_sys::Win32::System::Threading::WaitForSingleObject;
+    std::thread::spawn(move || {
+        let path = wide(path.as_os_str());
+        // SAFETY: the path buffer lives through the call; the returned change handle is only used on this thread and closed below.
+        let handle = unsafe { FindFirstChangeNotificationW(path.as_ptr(), 0, FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME | FILE_NOTIFY_CHANGE_SIZE) };
+        if handle == INVALID_HANDLE_VALUE || handle.is_null() {
+            return;
+        }
+        while !stop.load(Ordering::Relaxed) {
+            // SAFETY: handle is a live change-notification handle.
+            match unsafe { WaitForSingleObject(handle, 250) } {
+                WAIT_OBJECT_0 => {
+                    if stop.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    on_change();
+                    // SAFETY: as above.
+                    if unsafe { FindNextChangeNotification(handle) } == 0 {
+                        break;
+                    }
+                }
+                WAIT_TIMEOUT => {}
+                _ => break,
+            }
+        }
+        // SAFETY: handle came from FindFirstChangeNotificationW and is closed once.
+        unsafe { FindCloseChangeNotification(handle) };
+    });
+}
 pub fn reject_nul(text: &str) -> Result<(), String> {
     if text.contains('\0') {
         Err("Embedded NUL is not allowed".into())

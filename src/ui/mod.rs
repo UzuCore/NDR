@@ -82,6 +82,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// 원본 TNXShellChangeNotify 생성자(0x7b3304): Delay(+0x40) = 0x5dc = 1500ms.
+const FOLDER_CHANGE_DELAY: Duration = Duration::from_millis(1500);
+
 pub(super) fn resource_dir() -> PathBuf {
     if let Some(p) = std::env::var_os("NDR_RESOURCE_DIR") {
         return p.into();
@@ -155,6 +158,10 @@ struct Pane {
     /// 원본 패널 폴더 트리(TNXShellTreeView, miShowFoldersClick): 펼친 폴더와, 펼침을 맞춘 마지막 패널 위치(SetPath).
     tree_open: HashSet<PathBuf>,
     tree_synced: Option<PathBuf>,
+    /// 원본 TNXShellChangeNotify(+0x374): 지켜보는 로컬 폴더와 그 감시 스레드를 멈출 표시.
+    watch: Option<(PathBuf, Arc<AtomicBool>)>,
+    /// 바뀜 알림 뒤 새로 읽을 때와 그동안 늦춘 횟수(원본 Delay 1500ms, 20번까지 다시 늦춘다).
+    change_due: Option<(Instant, u32)>,
     /// 다음 그림에서 커서가 보이게 넘긴다(원본 SetItemIndex).
     reveal: bool,
     /// 원본 AdjustPage(0x7daf24): 다음 그림에서 이 항목 번호에 맞춰 위치를 다시 잡는다. 목록 크기가 바뀔 때(WMSize 0x7d5814),
@@ -212,6 +219,8 @@ impl Pane {
             thumb_rows: None,
             tree_open: HashSet::new(),
             tree_synced: None,
+            watch: None,
+            change_due: None,
             reveal: false,
             adjust: None,
             list_shape: None,
@@ -436,6 +445,8 @@ enum AsyncResult {
         path: PathBuf,
         directories: Vec<PathBuf>,
     },
+    /// 원본 TNXShellChangeNotify 스레드 알림(ThreadNotification 0x7b3830): 그 패널이 지켜보던 폴더가 바뀌었다.
+    FolderChanged { pane: usize, path: PathBuf },
     ProtectedItems(file_commands::DeleteRun),
     AttributesApplied(pane_commands::AttributeRun),
     SplitDone { source: PathBuf, outcome: Result<ndr::split::SplitResult, String>, cancelled: bool },
@@ -515,6 +526,8 @@ pub struct App {
     list_font_size: f32,
     /// 원본 btnFTPShowDetail(">>"): pBottom 높이가 30을 넘으면 22(단추 줄만), 아니면 100.
     results_collapsed: bool,
+    /// 패널 폴더 바뀜 감시(원본 TNXShellChangeNotify). 시험에서는 끈다(시험이 만든 파일 때문에 늦게 새로 읽지 않게).
+    watch_folders: bool,
     /// 전송을 시작한 때(lFTPTransferred의 KB/s).
     ftp_started: Option<std::time::Instant>,
     ftp_results: Arc<Mutex<Vec<ftp_pane::FtpResultRow>>>,
@@ -817,6 +830,7 @@ impl App {
             window_maximized: None,
             list_font_size: ndr::settings::DEFAULT_LIST_FONT_PIXELS as f32,
             results_collapsed: false,
+            watch_folders: !cfg!(test),
             ftp_started: None,
             ftp_results: Arc::new(Mutex::new(Vec::new())),
             ftp_pause: Arc::new(AtomicBool::new(false)),
@@ -1060,6 +1074,59 @@ impl App {
             self.apply_listing(listing, &mut auth_panes);
         }
         self.after_listings(auth_panes, ctx);
+        self.update_folder_watches(ctx);
+    }
+
+    /// 원본 FUN_00486694(위치 바뀜): 로컬 폴더면 TNXShellChangeNotify.SetFolder(그 폴더)·SetActive(1), 압축·FTP·내 PC면 SetActive(0).
+    /// 바뀜 알림을 받은 뒤 Delay(1500ms)가 지나면 OnChange = FUN_00487c8c → FUN_00487ce8(패널, 1, 1, "")(같은 폴더 다시 읽기).
+    fn update_folder_watches(&mut self, ctx: &egui::Context) {
+        let now = Instant::now();
+        for index in 0..self.panes.len() {
+            let pane = &self.panes[index];
+            let wanted = (self.watch_folders && pane.archive.is_none() && pane.remote.is_none() && !panes::is_drives(&pane.path)).then(|| pane.path.clone());
+            if pane.watch.as_ref().map(|(p, _)| p) != wanted.as_ref() {
+                let pane = &mut self.panes[index];
+                if let Some((_, stop)) = pane.watch.take() {
+                    stop.store(true, Ordering::Relaxed);
+                }
+                pane.change_due = None;
+                if let Some(path) = wanted {
+                    let stop = Arc::new(AtomicBool::new(false));
+                    let (tx, watched, repaint) = (self.async_tx.clone(), path.clone(), ctx.clone());
+                    native::spawn_folder_watch(path.clone(), stop.clone(), move || {
+                        let _ = tx.send(AsyncResult::FolderChanged { pane: index, path: watched.clone() });
+                        repaint.request_repaint();
+                    });
+                    pane.watch = Some((path, stop));
+                }
+            }
+            if let Some((due, _)) = self.panes[index].change_due {
+                if due <= now {
+                    if self.panes[index].loading {
+                        self.panes[index].change_due = Some((now + FOLDER_CHANGE_DELAY, 0));
+                    } else {
+                        self.panes[index].change_due = None;
+                        self.refresh(index);
+                    }
+                } else {
+                    ctx.request_repaint_after(due - now);
+                }
+            }
+        }
+    }
+
+    /// 원본 ThreadNotification(0x7b3830): 처음 알림이면 Delay(1500ms) 타이머를 켜고, 타이머가 도는 동안 또 오면 20번까지 다시 늦춘다.
+    pub(super) fn folder_changed(&mut self, index: usize, path: &Path) {
+        let Some(pane) = self.panes.get_mut(index) else { return };
+        if pane.watch.as_ref().is_none_or(|(watched, _)| watched != path) {
+            return;
+        }
+        let now = Instant::now();
+        pane.change_due = match pane.change_due {
+            None => Some((now + FOLDER_CHANGE_DELAY, 0)),
+            Some((_, restarts)) if restarts < 20 => Some((now + FOLDER_CHANGE_DELAY, restarts + 1)),
+            kept => kept,
+        };
     }
     /// 목록 스레드의 결과 하나를 패널에 넣는다(poll과 원본처럼 기다리는 refresh가 함께 쓴다).
     fn apply_listing(&mut self, listing: Listing, auth_panes: &mut Vec<usize>) {
@@ -1285,6 +1352,7 @@ impl App {
                 AsyncResult::Tree { path, directories } => {
                     self.tree_cache.insert(path, directories);
                 }
+                AsyncResult::FolderChanged { pane, path } => self.folder_changed(pane, &path),
                 AsyncResult::ProtectedItems(run) => self.protected_step(run),
                 AsyncResult::AttributesApplied(run) => self.attribute_step(run),
                 AsyncResult::SplitDone { source, outcome, cancelled } => self.split_done(source, outcome, cancelled),

@@ -1470,6 +1470,30 @@ fn middle_click_moves_the_cursor_like_the_original() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// 원본 TNXShellChangeNotify(패널 +0x374): 다른 프로그램이 지금 폴더에 파일을 만들면 Delay(1500ms) 뒤 그 폴더를 다시 읽는다.
+#[test]
+fn panes_refresh_after_outside_changes_like_tnxshellchangenotify() {
+    let (root, ctx, mut app) = fixture("change-notify");
+    let left = app.panes[0].path.clone();
+    app.watch_folders = true;
+    app.poll(&ctx);
+    assert!(app.panes[0].watch.as_ref().is_some_and(|(p, _)| *p == left), "the local pane folder is watched");
+    std::thread::sleep(std::time::Duration::from_millis(400));
+    let started = std::time::Instant::now();
+    fs::write(left.join("made-outside.txt"), b"x").unwrap();
+    let end = started + std::time::Duration::from_secs(8);
+    while !app.panes[0].entries.iter().any(|e| e.name == "made-outside.txt") {
+        assert!(std::time::Instant::now() < end, "no refresh after the outside change");
+        app.poll(&ctx);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(started.elapsed() >= std::time::Duration::from_millis(1400), "refreshed after the 1500 ms delay, not at once");
+    app.watch_folders = false;
+    app.poll(&ctx);
+    assert!(app.panes[0].watch.is_none(), "watching stops when disabled");
+    let _ = fs::remove_dir_all(root);
+}
+
 /// 원본 TfMain DFM(pmFile … pmHelp, Visible=False 항목 뺌, 겹친·끝 구분선은 하나로/없이): 주 메뉴에 보이는 항목과 차례.
 #[test]
 fn main_menu_items_follow_the_tfmain_dfm() {

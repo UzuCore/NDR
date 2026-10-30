@@ -44,7 +44,8 @@ pub(super) struct PaneView {
 }
 
 /// C# FileNameDisplayConverter의 CharacterCase: 0 그대로, 1 소문자, 2 대문자, 3 첫 글자만 대문자.
-/// SFTP 권한 비트를 목록 글로("drwxr-xr-x"): 원본은 SFTP 목록 줄의 권한 글(+0x74)을 그대로 보인다(너비는 "drwxrwxrwx").
+/// SFTP 권한 비트를 목록 글로("drwxr-xr-x"): 원본 OnGetAttrString(FUN_00485aa0)은 FTP 패널이면 목록 줄의 권한 글(+0x74)을 그대로,
+/// 아니면 GetAttrString을 보인다(너비는 "drwxrwxrwx").
 pub(super) fn permission_text(is_dir: bool, mode: u32) -> String {
     let mut text = String::from(if is_dir { 'd' } else { '-' });
     for shift in [6, 3, 0] {
