@@ -188,6 +188,54 @@ fn narrow_auto_view_flows_one_column_at_a_time() {
     assert_eq!(app.panes[0].cursor, page.rows, "Right moves one column");
     fs::remove_dir_all(root).unwrap();
 }
+/// 원본 목록 OnContextPopup(FUN_00484e8c): 로컬 항목은 pmMain, 표시가 없고 커서가 드라이브 항목이면 그 드라이브의 탐색기 메뉴,
+/// "오른쪽버튼 클릭: 탐색기 메뉴 사용하기"면 표시한 항목(없으면 커서 항목)의 탐색기 메뉴. pmMain에는 탐색기 메뉴 항목이 늘 있다.
+#[test]
+fn list_right_click_menu_follows_the_original_context_popup() {
+    use super::panes::ListMenu;
+    let (root, ctx, mut app) = fixture("ctxmenu", "ko");
+    for drive in fake_drive_roots() {
+        fs::create_dir_all(&drive).unwrap();
+    }
+    app.system.ready_drives = fake_drive_roots;
+    app.system.drive_item = fake_drive_info;
+    app.refresh(0);
+    wait(&mut app, &ctx);
+    let entries = &app.panes[0].entries;
+    let file = entries.iter().position(|e| e.name == "a.txt").unwrap();
+    let drive = entries.iter().position(|e| e.drive).unwrap();
+    let drive_path = entries[drive].path.clone();
+    app.panes[0].cursor = file;
+    assert!(matches!(app.list_menu_kind(0), ListMenu::Main), "a file: pmMain");
+    app.panes[0].cursor = drive;
+    assert!(matches!(app.list_menu_kind(0), ListMenu::Shell(ref p) if *p == [drive_path.clone()]), "an unmarked drive item: its shell menu");
+    app.panes[0].selected.insert(file);
+    assert!(matches!(app.list_menu_kind(0), ListMenu::Main), "with marks the drive cursor gets pmMain");
+    app.settings.set_flag("UseExplorerMenu", true);
+    let a = app.panes[0].entries[file].path.clone();
+    assert!(matches!(app.list_menu_kind(0), ListMenu::Shell(ref p) if *p == [a.clone()]), "explorer menu setting: the marked items");
+    app.settings.set_flag("UseExplorerMenu", false);
+    // pmMain: 탐색기 메뉴가 맨 위에 늘 있고, 붙여넣기 밖의 항목은 켜져 있다(여기 클립보드 파일은 없다고 보지 않는다).
+    app.panes[0].selected.clear();
+    app.panes[0].cursor = file;
+    let items = app.list_menu_items(0);
+    let commands: Vec<(&str, bool)> = items.iter().flatten().map(|(_, command, enabled)| (*command, *enabled)).collect();
+    assert_eq!(commands.first().map(|c| c.0), Some("explorerMenu"), "{commands:?}");
+    for (command, enabled) in &commands {
+        if *command != "paste" {
+            assert!(enabled, "{command} is enabled like the original pmMain");
+        }
+    }
+    assert!(commands.iter().any(|c| c.0 == "openWith"), "a focused file shows open with / view / edit");
+    app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == "folder1").unwrap();
+    let commands: Vec<&str> = app.list_menu_items(0).iter().flatten().map(|(_, c, _)| *c).collect();
+    assert!(!commands.contains(&"openWith") && commands.contains(&"openInNewTab"), "a folder: open in new tab, no open with: {commands:?}");
+    fs::remove_dir_all(root).unwrap();
+    for drive in fake_drive_roots() {
+        let _ = fs::remove_dir_all(drive);
+    }
+}
+
 /// 가짜 드라이브 루트(격리 임시 폴더 둘).
 fn fake_drive_roots() -> Vec<PathBuf> {
     ["A", "B"].iter().map(|l| std::env::temp_dir().join(format!("ndr-keys-fake-drive-{l}"))).collect()

@@ -470,6 +470,12 @@ enum AddressAction {
 impl App {
     /// C# BuildContextMenu(목록 오른쪽 단추 메뉴): 메뉴 글은 [formMain] Menu.mip…/mi… 키, 열릴 때 C#과 같은 조건으로 켜고 끈다.
     pub(super) fn list_context_menu(&self, ui: &mut egui::Ui, index: usize) -> Option<&'static str> {
+        let items = self.list_menu_items(index);
+        self.draw_list_menu(ui, items)
+    }
+
+    /// pmMain 항목(글, 명령, 켜짐). None은 구분선(맨 앞·맨 뒤·겹친 구분선은 뺐다).
+    pub(super) fn list_menu_items(&self, index: usize) -> Vec<Option<(String, &'static str, bool)>> {
         let pane = &self.panes[index];
         let rows: Vec<usize> = if pane.loading {
             vec![]
@@ -478,18 +484,19 @@ impl App {
         } else {
             pane.selected.iter().copied().filter(|i| *i < pane.entries.len()).collect()
         };
-        let files = rows.iter().filter(|r| !pane.entries[**r].is_dir).count();
         let local = pane.archive.is_none();
         let has = !rows.is_empty();
-        let single = rows.len() == 1;
         // 원본 pmMainPopup(0x437f54): 초점 항목이 파일(+0x3c == 3)이면 mipOpenWith·mipView·mipEdit를 보이고, 로컬 패널(종류 0)에서
         // 초점 항목이 폴더(1)일 때만 mipOpenInNewTab을 보인다. mipArcExtractAuto는 로컬 패널이면 켠다.
         let focused = (!pane.loading).then(|| pane.entries.get(pane.cursor)).flatten();
         let focused_file = focused.is_some_and(|e| !e.is_dir);
         let new_tab = local && focused.is_some_and(|e| e.is_dir) && !super::panes::is_drives(&pane.path);
+        // 원본 pmMainPopup(0x437f54): mipEditPaste.Enabled = IsClipboardFormatAvailable(CF_HDROP), mipArcExtractAuto.Enabled =
+        // 로컬 패널. 다른 항목은 늘 켜져 있다(메뉴는 로컬 패널에서 항목을 눌렀을 때만 뜬다, `list_menu_kind`).
         let paste = local && (self.clipboard.is_some() || native::read_clipboard_files().is_ok_and(|(p, _)| !p.is_empty()));
         let auto_extract = local;
-        let explorer = self.settings.flag("UseExplorerMenu", false) && local && has;
+        // 원본 mipExplorerMenu(+0x770)는 pmMainPopup이 건드리지 않아 늘 보인다.
+        let explorer = local && has;
         // 원래 글(& 포함): 그리기 때 &를 빼고, 메뉴가 열린 동안 친 글자(menu_letter)와 같은 접근 글자의 항목을 고른다.
         let text = |key: &str, fallback: &str| self.language_pack.raw(&format!("formMain.Menu.{key}")).unwrap_or_else(|| fallback.to_owned());
         type Item<'a> = Option<(String, &'static str, bool)>;
@@ -507,9 +514,9 @@ impl App {
         items.extend([None]);
         if focused_file {
             items.extend([
-                Some((text("mipOpenWith", "다른 프로그램으로 열기…"), "openWith", files > 0)),
-                Some((text("mipView", "파일 보기"), "textView", files == 1)),
-                Some((text("mipEdit", "파일 편집"), "textEdit", files == 1)),
+                Some((text("mipOpenWith", "다른 프로그램으로 열기…"), "openWith", true)),
+                Some((text("mipView", "파일 보기"), "textView", true)),
+                Some((text("mipEdit", "파일 편집"), "textEdit", true)),
                 None,
             ]);
         }
@@ -525,14 +532,14 @@ impl App {
         items.extend([
             None,
             Some((text("mipDelete", "삭제"), "deleteRecycle", local && has)),
-            Some((text("mipRename", "이름 변경…"), "rename", local && single)),
+            Some((text("mipRename", "이름 변경…"), "rename", local && has)),
             Some((text("mipChangeAttr", "속성/시간 변경…"), "attributes", local && has)),
-            Some((text("mipDescription", "설명 추가/편집…"), "description", local && single)),
+            Some((text("mipDescription", "설명 추가/편집…"), "description", local && has)),
             None,
             Some((text("mipAddToArchive", "압축 파일에 추가…"), "archiveAdd", local && has)),
             Some((text("mipArcExtractAuto", "자동 압축 풀기"), "extractAuto", auto_extract)),
             None,
-            Some((text("mipProperties", "속성"), "properties", local && single)),
+            Some((text("mipProperties", "속성"), "properties", local && has)),
         ]);
 
         // VCL 메뉴(AutoLineReduction = maAutomatic)처럼 맨 앞·맨 뒤·겹친 구분선은 그리지 않는다.
@@ -546,7 +553,10 @@ impl App {
         while reduced.last().is_some_and(Option::is_none) {
             reduced.pop();
         }
-        let items = reduced;
+        reduced
+    }
+
+    fn draw_list_menu(&self, ui: &mut egui::Ui, items: Vec<Option<(String, &'static str, bool)>>) -> Option<&'static str> {
         let mut chosen = None;
         for item in items {
             match item {

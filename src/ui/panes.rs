@@ -624,6 +624,37 @@ fn original_press(pane: &mut Pane, row: usize, rect: egui::Rect, ui: &egui::Ui, 
 /// 스킨 테마는 원본 TNXCustomFileListView.MouseDown(0x7d63c8): 그냥 누르기와 오른쪽 단추는 커서만 옮기고 표시는 그대로,
 /// Shift(+Ctrl)는 지금 커서부터 누른 줄까지 더해 고르고, Ctrl은 누른 줄을 뒤집는다(고른 줄이 없으면 전 커서 줄도 고른다).
 /// C# 테마는 C# 판(WPF 목록): 그냥 누르기는 표시를 지우고, Shift는 기준 줄부터, 오른쪽 단추는 고르지 않은 줄이면 표시를 지운다.
+/// 목록 줄을 오른쪽 단추로 눌렀을 때 띄울 것(원본 FUN_00484e8c).
+pub(super) enum ListMenu {
+    /// 띄우지 않는다(압축·FTP 패널, 커서 항목 없음).
+    None,
+    /// 원본 pmMain(`list_context_menu`).
+    Main,
+    /// 원본 FUN_00486104: 탐색기(셸) 메뉴.
+    Shell(Vec<PathBuf>),
+}
+
+impl App {
+    /// 원본 목록 OnContextPopup(FUN_00484e8c): 로컬 패널(FUN_00481948 = 0)에서만 띄운다. "오른쪽버튼 클릭: 탐색기 메뉴 사용하기"
+    /// (chkExplorerMenu, 설정 +0xd1)가 켜져 있거나, 표시가 없고 커서 항목이 드라이브(종류 4)면 탐색기 메뉴(FUN_00486104:
+    /// 드라이브면 그 드라이브, 아니면 표시한 항목 또는 커서 항목), 그 밖은 pmMain이다.
+    pub(super) fn list_menu_kind(&self, index: usize) -> ListMenu {
+        let pane = &self.panes[index];
+        if pane.archive.is_some() || pane.remote.is_some() || pane.loading {
+            return ListMenu::None;
+        }
+        let Some(focused) = pane.entries.get(pane.cursor) else { return ListMenu::None };
+        if pane.selected.is_empty() && focused.drive {
+            return ListMenu::Shell(vec![focused.path.clone()]);
+        }
+        if self.settings.flag("UseExplorerMenu", false) {
+            let targets = pane.targets();
+            return if targets.is_empty() { ListMenu::None } else { ListMenu::Shell(targets) };
+        }
+        ListMenu::Main
+    }
+}
+
 pub(super) fn row_pressed(pane: &mut Pane, row: usize, modifiers: egui::Modifiers, secondary: bool, original: bool) {
     if original {
         if !secondary {
@@ -1457,8 +1488,18 @@ impl App {
                 ui.spacing_mut().item_spacing.y = saved_spacing;
                 }
                 ui.style_mut().text_styles = saved_text_styles;
-                // 목록 오른쪽 단추 메뉴(줄을 그렸는지와 상관없이 그림마다).
-                super::skin_pane::pane_menu(ui, index, |ui| {
+                // 목록 오른쪽 단추 메뉴(줄을 그렸는지와 상관없이 그림마다). 원본 OnContextPopup(FUN_00484e8c)이 무엇을 띄울지 고른다.
+                let open_menu = super::skin_pane::take_pane_menu_request(ctx, index) && match self.list_menu_kind(index) {
+                    ListMenu::Main => true,
+                    ListMenu::Shell(paths) => {
+                        if let Err(error) = ndr::shell_menu::show(&paths) {
+                            self.status = error;
+                        }
+                        false
+                    }
+                    ListMenu::None => false,
+                };
+                super::skin_pane::pane_menu(ui, index, open_menu, |ui| {
                     if let Some(chosen) = self.list_context_menu(ui, index) {
                         command = Some(chosen);
                     }
