@@ -1,7 +1,7 @@
 //! C# SplitFileWindow / JoinFilesWindow와 SplitFileAsync / JoinPartsAsync 흐름. 규칙은 ndr::split.
 use super::original_dialogs::{DialogKind, DialogResult};
 use super::*;
-use ndr::msgbox::{MB_ICONASTERISK, MB_ICONEXCLAMATION, MB_OK};
+use ndr::msgbox::{MB_ICONEXCLAMATION, MB_OK};
 use std::fs;
 
 /// SplitFileWindow 입력.
@@ -94,8 +94,14 @@ pub(super) fn split_ui(ui: &mut egui::Ui, form: &mut SplitForm, language: &compa
     // lSplitSize(16,99) cbSplitSize(103,96 138×21, 목록 1440 KB…100 MB) lSplitCount(260,99), btnOk(303,151) btnCancel(384,151) 75×25.
     let (area, _) = ui.allocate_exact_size(egui::vec2(469.0, 187.0), egui::Sense::hover());
     let at = |x: f32, y: f32, w: f32, h: f32| egui::Rect::from_min_size(area.min + egui::vec2(x, y), egui::vec2(w, h));
+    // 원본 TntFormShow(0x4236e4): lFileName = "<b>이름</b> (크기 bytes)"(크기는 자리 나눔 쉼표, FloatToStrF ffNumber 0).
     let name = form.source.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    super::original_dialogs::put_left(ui, at(16.0, 16.0, 440.0, 15.0), egui::Label::new(RichText::new(name).strong().family(egui::FontFamily::Name(super::BOLD_FONT_FAMILY.into()))).truncate()).on_hover_text(form.source.to_string_lossy());
+    let bytes = ndr::parity::format_size(form.length, "B", true).trim_end_matches(" B").to_owned();
+    let mut job = egui::text::LayoutJob::default();
+    let color = ui.visuals().text_color();
+    job.append(&name, 0.0, egui::TextFormat { font_id: egui::FontId::new(13.0, egui::FontFamily::Name(super::BOLD_FONT_FAMILY.into())), color, ..Default::default() });
+    job.append(&format!(" ({bytes} bytes)"), 0.0, egui::TextFormat { font_id: egui::FontId::proportional(13.0), color, ..Default::default() });
+    super::original_dialogs::put_left(ui, at(16.0, 16.0, 440.0, 15.0), egui::Label::new(job).truncate()).on_hover_text(form.source.to_string_lossy());
     super::original_dialogs::put_left(ui, at(16.0, 59.0, 85.0, 15.0), egui::Label::new(split_text(language, "Caption.lPath", "Path to Save:")).truncate());
     ui.put(at(103.0, 56.0, 311.0, 21.0), egui::TextEdit::singleline(&mut form.path));
     if ui.put(at(420.0, 54.0, 41.0, 25.0), egui::Button::new("...")).clicked() {
@@ -247,15 +253,16 @@ impl App {
         }
     }
 
-    /// C# SplitFileAsync: 일반 파일 하나(첫 선택 파일). 창에서 확인하면 진행 창으로 나누고 첫 조각 옆에 .crc를 쓴다.
+    /// 원본 miSplitFileClick(0x43b8b8): 활성 패널이 로컬 모드이고 커서 항목이 파일(종류 3)일 때만 TfFileSplit을 연다(아니면 아무것도
+    /// 하지 않는다). 확인하면 진행 창으로 나누고 첫 조각 옆에 .crc를 쓴다.
     pub(super) fn split_command(&mut self) {
         let i = self.active;
         let title = self.language_pack.text("formFileSplit.Form.Caption", "Split File");
-        let file = if self.panes[i].archive.is_some() { None } else { self.panes[i].targets().into_iter().find(|p| p.is_file()) };
-        let Some(file) = file else {
-            let text = self.tr("분할할 일반 파일 하나를 선택하세요.", "Select one regular file to split.").into_owned();
-            return self.system_box(&title, &text, MB_OK | MB_ICONASTERISK, |_, _, _| {});
-        };
+        let pane = &self.panes[i];
+        if pane.archive.is_some() || pane.remote.is_some() {
+            return;
+        }
+        let Some(file) = pane.entries.get(pane.cursor).filter(|e| !e.is_dir && !e.drive && !e.is_parent()).map(|e| e.path.clone()) else { return };
         let length = fs::metadata(&file).map(|m| m.len()).unwrap_or(0);
         let form = SplitForm {
             path: file.parent().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default(),

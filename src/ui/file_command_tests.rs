@@ -552,12 +552,10 @@ fn split_and_join_windows_follow_the_csharp_flows() {
     fs::write(left.join("big.bin"), &payload).unwrap();
     app.refresh(0);
     wait_listing(&mut app, &ctx);
-    // A folder is not a file to split.
+    // 원본 miSplitFileClick: 커서 항목이 파일이 아니면 아무것도 하지 않는다(알림 없음).
     app.panes[0].cursor = row(&app, 0, "folder1");
     app.dispatch("split", &ctx);
-    assert_eq!(app.msgboxes[0].text, "분할할 일반 파일 하나를 선택하세요.");
-    assert_eq!(app.msgboxes[0].flags, MB_OK | ndr::msgbox::MB_ICONASTERISK);
-    app.answer_message_box(1, &ctx);
+    assert!(app.msgboxes.is_empty() && app.original_dialogs.is_empty());
     app.panes[0].cursor = row(&app, 0, "big.bin");
     app.dispatch("split", &ctx);
     assert_eq!(app.original_dialogs[0].title, app.language_pack.text("formFileSplit.Form.Caption", "?"));
