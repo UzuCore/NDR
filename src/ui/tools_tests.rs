@@ -554,7 +554,10 @@ fn archive_create_add_move_and_extract_follow_the_csharp_flows() {
     SAVE_TARGET.with(|t| *t.borrow_mut() = None);
     let named = pack.to_string_lossy().into_owned();
     app.edit_dialog_kind(|kind| if let DialogKind::ArchiveCreate(form) = kind { form.volume = "분할 안함".into(); form.set_format(0); form.file_name = "pack.zip".into(); });
+    // 창이 떠 있는 동안 다른 패널이 지금 패널이 되어도 압축 파일은 창을 연 패널 폴더에 생긴다.
+    app.active = 1;
     app.submit_archive_create(0, &ctx);
+    app.active = 0;
     wait_job(&mut app, &ctx);
     assert_eq!(app.status, "ZIP 압축 파일을 만들었습니다.");
     assert_eq!(archive_keys(&pack), ["alpha.txt", "folder1/inner.txt"]);

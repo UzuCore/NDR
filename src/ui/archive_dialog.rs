@@ -51,6 +51,8 @@ pub(super) struct ArchiveCreateForm {
     pub default_level: i32,
     /// 원본 TfAddToArc cbFileName: 압축 파일 이름(지금 패널 폴더에 만든다).
     pub file_name: String,
+    /// 창을 열 때의 지금 패널 폴더(이름이 상대 경로면 여기에 만든다). 창이 떠 있는 동안 패널이 바뀌어도 그대로다.
+    pub folder: PathBuf,
 }
 
 /// 원본 rbFormatClick(0x4169d4)의 PathRenameExtensionW: 이름 끝 확장자(.tar.gz·.tar.bz2는 둘 다)를 새 확장자로.
@@ -360,6 +362,7 @@ impl App {
             volume_labels,
             default_level,
             file_name: name,
+            folder: current,
         };
         let title = self.language_pack.text("formAddToArchive.Form.Caption", "Add to Archive");
         self.push_original_dialog(title, DialogKind::ArchiveCreate(Box::new(form)), move |app, result, _| {
@@ -375,7 +378,6 @@ impl App {
 
     /// 창 단추: 압축(분할 크기 검사), 취소.
     pub(super) fn submit_archive_create(&mut self, choice: usize, ctx: &egui::Context) {
-        let current = self.panes[self.active].path.clone();
         let Some(form) = self.archive_form() else { return };
         match choice {
             1 => self.answer_dialog(DialogResult::ArchiveCreate(None), ctx),
@@ -395,7 +397,7 @@ impl App {
                     password: form.password.clone(),
                     volume,
                     recursive: form.recursive,
-                    output: archive_output_path(&form.file_name, &current),
+                    output: archive_output_path(&form.file_name, &form.folder),
                 };
                 self.answer_dialog(DialogResult::ArchiveCreate(Some(choice)), ctx);
             }
@@ -629,8 +631,12 @@ impl App {
                 job.custom_status = true;
                 job.chime = kind == ArchiveKind::Create;
             }
-            // 압축이 끝나면 만든 압축 파일에 커서를 둔다(사용자 요청).
-            self.archive_focus = Some((self.active, focus_output));
+            // 압축이 끝나면 만든 압축 파일에 커서를 둔다(사용자 요청). 그 폴더를 보이는 패널(지금 패널이 먼저).
+            let key = |p: &Path| p.to_string_lossy().trim_end_matches(['\\', '/']).to_lowercase();
+            let folder = focus_output.parent().map(key);
+            let shows = |i: usize| folder.as_ref().is_some_and(|f| key(&self.panes[i].path) == *f);
+            let pane = if shows(self.active) { self.active } else { (0..2).find(|&i| shows(i)).unwrap_or(self.active) };
+            self.archive_focus = Some((pane, focus_output));
         }
     }
 
