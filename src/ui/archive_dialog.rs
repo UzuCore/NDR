@@ -193,10 +193,10 @@ pub(super) fn output_conflict(sources: &[PathBuf], output: &Path, ko: bool) -> O
 }
 
 /// 원본 TfAddToArc(ClientWidth 443 × ClientHeight 354): lSecName(20,16 굵게 파랑), lFileName(44,43) cbFileName(106,40 275×21),
-/// lSecFormat(20,76), rbZIP(44,104 굵게)·rb7z(173)·rbALZ(238), lSecOptions(20,179), lLevel(44,209) cbCompLevel(143,206 121×21)
+/// lSecFormat(20,76), 압축 종류 줄(104), lSecOptions(20,179), lLevel(44,209) cbCompLevel(143,206 121×21)
 /// chkRecursive(276,208), lVolume(44,243) cbVolume(143,240), lPassword(44,276) ePassword(143,273), Bevel1(20,310 404),
 /// btnOk(253,320) btnCancel(341,320) 83×25. 외부 프로그램 줄(lExtProg·eExternalProg·btnBrowseExtProg)·lHelp·rbRAR·rbARJ는 두지 않는다.
-/// 압축 종류는 사용자 요청대로 zip·7z·tar·tar.gz·tar.bz2·alz 여섯 선택 단추를 한 줄(104)에 둔다(괄호 설명 없음). 0 = 압축, 1 = 취소.
+/// 압축 종류는 사용자 요청대로 zip·7z·tar·tar.gz·tar.bz2 다섯 선택 단추를 한 줄(104)에 둔다(괄호 설명 없음). 0 = 압축, 1 = 취소.
 pub(super) fn archive_create_ui(ui: &mut egui::Ui, form: &mut ArchiveCreateForm, language: &compat::Language, enter: bool) -> Option<usize> {
     use super::original_dialogs::put_left;
     let text = |key: &str, fallback: &str| language.text(&format!("formAddToArchive.{key}"), fallback);
@@ -212,7 +212,7 @@ pub(super) fn archive_create_ui(ui: &mut egui::Ui, form: &mut ArchiveCreateForm,
     super::original_dialogs::access_label(ui, at(44.0, 43.0, 60.0, 15.0), &raw("Caption.lFileName", "&Filename:"), name_id);
     ui.put(at(106.0, 40.0, 275.0, 21.0), egui::TextEdit::singleline(&mut form.file_name).id(name_id));
     // 형식마다 (확장자, 왼쪽, 단축 문자를 넣은 글). 원본 rbZIP처럼 zip은 굵게.
-    let layout = [("zip", 44.0, "&zip"), ("7z", 101.0, "&7z"), ("tar", 152.0, "&tar"), ("tar.gz", 207.0, "tar.&gz"), ("tar.bz2", 280.0, "tar.&bz2"), ("alz", 360.0, "&alz")];
+    let layout = [("zip", 44.0, "&zip"), ("7z", 101.0, "&7z"), ("tar", 152.0, "&tar"), ("tar.gz", 207.0, "tar.&gz"), ("tar.bz2", 280.0, "tar.&bz2")];
     let index_of = |extension: &str| form.formats.iter().position(|f| f.extension.trim_start_matches('.').eq_ignore_ascii_case(extension));
     let mut picked = form.format;
     for (extension, left, caption) in layout {
@@ -296,11 +296,11 @@ impl App {
         };
         self.language_pack.text(&format!("RES.{key}"), fallback)
     }
-    /// 동봉 7-Zip으로 만드는 압축 종류(사용자 요청): zip, 7z, tar, tar.gz, tar.bz2, alz. 이름은 확장자 그대로(괄호 설명 없음).
-    /// 원본 arcformat 4 = ALZ(외부 alzprog)는 동봉 7-Zip(UzuCore 7zip+α)이 만든다. EGG 만들기와 WIM은 넣지 않는다.
+    /// 동봉 7-Zip으로 만드는 압축 종류(사용자 요청): zip, 7z, tar, tar.gz, tar.bz2. 이름은 확장자 그대로(괄호 설명 없음).
+    /// ALZ(원본 arcformat 4)·EGG 만들기와 WIM은 넣지 않는다(사용자 요청). .alz·.egg 풀기는 그대로 된다.
     pub(super) fn archive_formats(&self, _include_wim: bool) -> Vec<ArchiveFormat> {
         let format = |extension: &str, max_level: i32| ArchiveFormat { extension: extension.into(), label: extension.into(), program: None, builtin: true, max_level };
-        vec![format("zip", 9), format("7z", 9), format("tar", 0), format("tar.gz", 9), format("tar.bz2", 9), format("alz", 9)]
+        vec![format("zip", 9), format("7z", 9), format("tar", 0), format("tar.gz", 9), format("tar.bz2", 9)]
     }
 
     fn archive_form(&mut self) -> Option<&mut ArchiveCreateForm> {

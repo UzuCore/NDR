@@ -539,7 +539,7 @@ fn archive_create_add_move_and_extract_follow_the_csharp_flows() {
     assert_eq!(app.original_dialogs.last().unwrap().title, "압축하기");
     let form = archive_form(&app);
     assert!(form.recursive);
-    assert_eq!(form.formats.iter().map(|f| f.label.as_str()).collect::<Vec<_>>(), ["zip", "7z", "tar", "tar.gz", "tar.bz2", "alz"], "plain names, no WIM");
+    assert_eq!(form.formats.iter().map(|f| f.label.as_str()).collect::<Vec<_>>(), ["zip", "7z", "tar", "tar.gz", "tar.bz2"], "plain names, no ALZ/WIM");
     assert_eq!(form.preset_labels, ["최고", "보통", "빠르게"]);
     assert_eq!(form.volume, "분할 안함");
     frame(&mut app, &ctx, vec![]);
@@ -1156,20 +1156,16 @@ fn archive_entry_opening_asks_for_the_password_like_csharp() {
 }
 
 
-/// 동봉 7zip+α: 압축 추가 형식에 ALZ(내장). 분할은 동봉 7-Zip으로 하고, 암호는 넣을 수 없다(7zip+α가 ALZ에 암호를 넣지 않음).
-/// EGG 만들기(원본·C# 판에 없음)는 사용자 요청으로 뺐다.
+/// 압축하기 형식에 ALZ·EGG는 없다(사용자 요청, 풀기만 된다). zip·7z 밖의 형식은 암호를 넣을 수 없다.
 #[test]
-fn built_in_alz_splits_with_the_bundled_seven_zip_but_cannot_be_encrypted() {
+fn alz_and_egg_are_not_creation_formats() {
     let (root, _ctx, app) = fixture("alzegg-formats", "ko");
     let formats = app.archive_formats(true);
-    assert!(!formats.iter().any(|f| f.extension == "egg"), "no EGG creation");
-    for (extension, label) in [("alz", "alz")] {
-        let format = formats.iter().find(|f| f.extension == extension && f.builtin).cloned().unwrap_or_else(|| panic!("{extension} built in"));
-        assert_eq!(format.label, label);
-        let choice = |password: &str, volume: Option<u64>| super::archive_dialog::ArchiveChoice { format: format.clone(), format_index: 0, preset: 0, level: 5, password: password.into(), volume, recursive: true, output: None };
-        assert!(matches!(app.archive_program(&choice("", Some(1024))), Ok(None)), "{extension} splits with the bundled 7-Zip");
-        assert_eq!(app.archive_program(&choice("secret", None)).unwrap_err(), ".alz 형식은 암호를 넣을 수 없습니다.");
-    }
+    assert!(!formats.iter().any(|f| f.extension == "egg" || f.extension == "alz"), "no ALZ/EGG creation");
+    let tar = formats.iter().find(|f| f.extension == "tar").cloned().expect("tar");
+    let choice = |password: &str| super::archive_dialog::ArchiveChoice { format: tar.clone(), format_index: 2, preset: 0, level: 0, password: password.into(), volume: None, recursive: true, output: None };
+    assert!(matches!(app.archive_program(&choice("")), Ok(None)));
+    assert_eq!(app.archive_program(&choice("secret")).unwrap_err(), ".tar 형식은 암호를 넣을 수 없습니다.");
     let _ = fs::remove_dir_all(root);
 }
 
