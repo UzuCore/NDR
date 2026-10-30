@@ -149,6 +149,8 @@ impl App {
             }
             // 메뉴 줄 펼침(Alt+F와 같은 길): 스킨 메뉴 색·단추 칸 눈 확인용.
             "mainmenu" => self.menu_access = Some('f'),
+            "editmenu" => self.menu_access = Some('e'),
+            "foldermenu" => self.menu_access = Some('o'),
             "viewmenu" => self.menu_access = Some('w'),
             "popupmenu" => {
                 // 스킨 메뉴 색(skin_menu_style) 눈 확인용: 즐겨찾기 메뉴(머리·구분선·꺼진 줄 포함)를 왼쪽 위에 연다.

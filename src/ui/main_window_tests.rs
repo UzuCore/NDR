@@ -1470,6 +1470,61 @@ fn middle_click_moves_the_cursor_like_the_original() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// 원본 TfMain DFM(pmFile … pmHelp, Visible=False 항목 뺌, 겹친·끝 구분선은 하나로/없이): 주 메뉴에 보이는 항목과 차례.
+#[test]
+fn main_menu_items_follow_the_tfmain_dfm() {
+    let submenu = |id: &str| match id {
+        "@checksum" => "miChecksum",
+        "@workFolders" => "miSetWorkFolder+miGoToWorkFolder",
+        "@listStyle" => "miListStyle",
+        "@columns" => "miColumn",
+        "@sort" => "miSortBy",
+        "@filter" => "miFilter",
+        "@ftpSites" => "miFTPConnect",
+        _ => "?",
+    };
+    let shown = |items: &[(&str, &str, &str)]| {
+        let mut out: Vec<String> = Vec::new();
+        let (mut any, mut pending) = (false, false);
+        for (id, _, _) in items {
+            if *id == "-" {
+                pending = any;
+                continue;
+            }
+            let name = match *id {
+                "language" => Some("miLanguage".to_owned()),
+                "theme" => Some("miSkin".to_owned()),
+                _ if id.starts_with('@') => Some(submenu(id).to_owned()),
+                _ if App::csharp_only_menu_item(id) || super::menu_data::ORIGINAL_HIDDEN.contains(id) => None,
+                _ => App::original_menu_name(id).map(str::to_owned),
+            };
+            let Some(name) = name else { continue };
+            if pending {
+                out.push("-".into());
+                pending = false;
+            }
+            any = true;
+            out.push(name);
+        }
+        out.join(" ")
+    };
+    let expected = [
+        "miOpen miParameterOpen miOpenAllSelectedFiles - miCopyTo miMoveTo - miDelete miShred - miRename miAdvRename miChangeAttributes - miCalculateSelectedFolderSize - miProperties miDescription miFileInfo - miCreateEmptyFile miShortcutOnDesktop miShortcutOnQuickLaunch - miChecksum - miExit",
+        "miFolderTree miFavorites - miNewFolder - miHistoryBack miHistoryForward - miToParent miToRoot miToLastDest - miNetwork - miSetWorkFolder+miGoToWorkFolder - miRefresh",
+        "miEditCopy miEditCut miEditPaste miPasteAsShortcut - miCopyFullPath miCopyFileName miCopyPath - miSelect miSelectAll miInvertSelection miAdvSelect miAdvDeselect - miRestoreLastSel miSelectSameExt miSelectSameName - miFind miFindNext",
+        "miLanguage miSkin - miDualView miShowFolders - miViewToolbar miViewFindResult miViewVertBar miViewButtonBar - miShowDriveButtons miViewFolderInfoBar miViewFileInfoBar - miNewTab - miListStyle miColumn - miSortBy miFilter - miShowHidden",
+        "miToDesktop miToDocuments miToPictures miToMusic miToVideos miToDownloads - miControlPanel miAddRemoveProg - miRecycleBin miEmptyRecycleBin - miToTemp miEmptyTemp - miCommandLine",
+        "miArcAdd - miArcExtract miArcExtractToCurr miArcExtractAuto",
+        "miFTPQuickConnect - miFTPConnect miFTPDisconnect - miFTPGet miFTPPut - miMapNetworkDrive miUnmapNetworkDrive",
+        "miTextViewer miTextEditor - miClearDescriptions - miSaveList - miSplitFile miJoinFile - miCleanupDisk - miCompareFolder - miOptions",
+        "miHelp miShortcut - miHomepage miEmail - miCheckUpdate - miAbout",
+    ];
+    let menus: Vec<String> = super::menu_data::MENUS.iter().map(|(_, _, _, items)| shown(items)).collect();
+    assert_eq!(menus.len(), expected.len());
+    let wrong: Vec<String> = menus.iter().zip(expected).filter(|(got, want)| got.as_str() != *want).map(|(got, want)| format!("\n got: {got}\nwant: {want}")).collect();
+    assert!(wrong.is_empty(), "{}", wrong.concat());
+}
+
 /// 원본 GetItemAt(0x7dac1c): 자세히(형식 2) 줄 간격 = 항목 높이 + LineSpace이고 줄 위의 틈은 그 항목, 열로 흐르는 목록(형식 0·1)은
 /// 항목 아래 틈이 그 항목이다.
 #[test]
