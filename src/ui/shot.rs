@@ -204,6 +204,11 @@ impl App {
                 self.settings.values.insert("LeftPaneWidth".into(), serde_json::json!(20));
                 self.settings.values.insert("RightPaneWidth".into(), serde_json::json!(80));
             }
+            "crumbmenu" => {
+                // 원본 TNXPathLabel.DropDownMenu: 왼쪽 패널 폴더의 하위 폴더 목록.
+                let folder = self.panes[0].path.clone();
+                self.skin_crumb_menu = Some((0, folder, false, egui::pos2(120.0, 104.0)));
+            }
             "narrowdetails" => {
                 // 원본 UpdateScrollBar(형식 2): 칸 너비 합이 목록보다 넓으면 가로 막대. 왼쪽 패널을 좁히고 자세히 보기, 가로 위치 40.
                 self.settings.values.insert("LeftPaneWidth".into(), serde_json::json!(25));

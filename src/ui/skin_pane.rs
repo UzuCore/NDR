@@ -774,6 +774,15 @@ impl App {
             let hot = pointer.is_some_and(|p| cell.contains(p));
             if hot {
                 painter.rect_filled(cell, 0.0, focus);
+                // 원본 MouseMove(0x7c9e30): 조각 위에 오면 Hint = PathOfLevel(그 조각까지 구분자로 이은 경로)로 도움말을 띄운다.
+                let path_of_level = match &segment.target {
+                    CrumbTarget::Local(path) => {
+                        let text = path.to_string_lossy().into_owned();
+                        if text.len() == 3 && text.ends_with('\\') { text.trim_end_matches('\\').to_owned() } else { text }
+                    }
+                    CrumbTarget::Archive(inner) | CrumbTarget::Remote(inner) => inner.clone(),
+                };
+                ui.interact(cell, egui::Id::new(("ndr-skin-crumb-tip", index, i)), egui::Sense::hover()).on_hover_text(path_of_level);
             }
             let color = if i + 1 == count { current } else if hot { over } else { text };
             let pressed = hot && ui.input(|i| i.pointer.primary_down());
@@ -1004,7 +1013,8 @@ impl App {
         if !self.settings.flag("ShowFolderDiskInfoBar", true) {
             return;
         }
-        let texts = self.info_texts(index);
+        // info_texts가 요약(폴더·파일 수)을 채운다.
+        let _ = self.info_texts(index);
         let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), FOLDER_INFO_HEIGHT), egui::Sense::hover());
         let painter = ui.painter().with_clip_rect(rect);
         painter.rect_filled(rect, 0.0, skin_color(skin, "lfolderback", Color32::BLACK));
@@ -1012,7 +1022,9 @@ impl App {
         let base = skin_color(skin, "lfoldertext", Color32::from_gray(0xC0));
         let hex = |key: &str| skin.color("List", key).map(|c| format!("<c{:02X}{:02X}{:02X}>", c[0], c[1], c[2])).unwrap_or_else(|| "<c000000>".into());
         let drives = super::panes::is_drives(&self.panes[index].path);
-        let (counts, drive, right, hint) = if drives { (texts[0].clone(), String::new(), String::new(), String::new()) } else { self.folder_info(index) };
+        // 원본 FUN_0048aa30: 내 PC도 FOLDERINFO(폴더 = 종류 1, 파일 = 종류 3 개수와 크기 합)이고, 드라이브 항목(종류 4)은 세지 않으며
+        // FUN_0048b500은 루트를 못 구해 디스크 글을 비운다. 고친 것: 전에는 C# 판 글 "::drives:: · 드라이브 N개"가 보였다.
+        let (counts, drive, right, hint) = if drives { (self.folder_info(index).0, String::new(), String::new(), String::new()) } else { self.folder_info(index) };
         let selected = !self.panes[index].selected.is_empty();
         let counts = counts.replace("<c000000>", &hex("lfoldersubtext1"));
         let (right, right_color) = if selected { (right, skin_color(skin, "lselinfotext", base)) } else { (right.replace("<c000000>", &hex("ldisksubtext1")), base) };
@@ -1137,23 +1149,26 @@ impl App {
             }
             return None;
         }
-        // 단추·바탕: 누르는 순간 한 번, 누르고 있으면 80ms마다.
+        // 단추·바탕: 누르는 순간 한 번, 누르고 있으면 300ms 뒤부터 80ms마다. 고친 것: 전에는 처음부터 80ms마다라 너무 빨리 넘어갔다.
         let repeat_id = id.with("repeat");
         let held = [(&up, -line), (&down, line)].into_iter().find(|(r, _)| r.is_pointer_button_down_on()).map(|(_, step)| step).or_else(|| {
             let p = pointer?;
             (track.is_pointer_button_down_on() && !grip.is_pointer_button_down_on()).then(|| if p.y < thumb_rect.top() { -viewport } else if p.y > thumb_rect.bottom() { viewport } else { 0.0 }).filter(|s| *s != 0.0)
         });
         let Some(step) = held else {
-            ui.data_mut(|d| d.remove::<f64>(repeat_id));
+            ui.data_mut(|d| d.remove::<(f64, bool)>(repeat_id));
             return None;
         };
+        // TNXScrollBar MouseDown(0x7ce8b8): one step at once, timer 300 ms; DoScrollTimer(0x7ce734) then 80 ms.
         let now = ui.input(|i| i.time);
-        let due = ui.data(|d| d.get_temp::<f64>(repeat_id)).is_none_or(|last| now - last >= 0.08);
-        ui.ctx().request_repaint_after(std::time::Duration::from_millis(80));
+        let state = ui.data(|d| d.get_temp::<(f64, bool)>(repeat_id));
+        let wait = if state.is_some_and(|(_, repeated)| repeated) { 0.08 } else { 0.3 };
+        let due = state.is_none_or(|(last, _)| now - last >= wait);
+        ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(wait));
         if !due {
             return None;
         }
-        ui.data_mut(|d| d.insert_temp(repeat_id, now));
+        ui.data_mut(|d| d.insert_temp(repeat_id, (now, state.is_some())));
         let next = (offset + step).clamp(0.0, max);
         (next != offset).then_some(next)
     }
@@ -1230,16 +1245,19 @@ impl App {
             (track.is_pointer_button_down_on() && !grip.is_pointer_button_down_on()).then(|| if p.x < thumb_rect.left() { -viewport } else if p.x > thumb_rect.right() { viewport } else { 0.0 }).filter(|s| *s != 0.0)
         });
         let Some(step) = held else {
-            ui.data_mut(|d| d.remove::<f64>(repeat_id));
+            ui.data_mut(|d| d.remove::<(f64, bool)>(repeat_id));
             return None;
         };
+        // TNXScrollBar MouseDown(0x7ce8b8): one step at once, timer 300 ms; DoScrollTimer(0x7ce734) then 80 ms.
         let now = ui.input(|i| i.time);
-        let due = ui.data(|d| d.get_temp::<f64>(repeat_id)).is_none_or(|last| now - last >= 0.08);
-        ui.ctx().request_repaint_after(std::time::Duration::from_millis(80));
+        let state = ui.data(|d| d.get_temp::<(f64, bool)>(repeat_id));
+        let wait = if state.is_some_and(|(_, repeated)| repeated) { 0.08 } else { 0.3 };
+        let due = state.is_none_or(|(last, _)| now - last >= wait);
+        ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(wait));
         if !due {
             return None;
         }
-        ui.data_mut(|d| d.insert_temp(repeat_id, now));
+        ui.data_mut(|d| d.insert_temp(repeat_id, (now, state.is_some())));
         let next = (offset + step).clamp(0.0, max);
         (next != offset).then_some(next)
     }
@@ -1430,16 +1448,38 @@ impl App {
             return;
         }
         let children = self.crumb_children(index, &folder, drives);
+        // 원본 DropDownMenu(0x7c91d8): 항목이 없으면 메뉴를 띄우지 않는다(빈 TPopupMenu). 고친 것: 전에는 "하위 폴더 없음"을 보였다.
+        if children.is_empty() {
+            self.skin_crumb_menu = None;
+            return;
+        }
+        let icons: Vec<Option<egui::TextureHandle>> = children.iter().map(|(child, _)| self.path_icon(ctx, child, true)).collect();
         let mut chosen = None;
+        // 원본 경로 라벨 메뉴는 TfMain 메뉴의 반투명(MenuDrawItem 0x42e518의 WS_EX_LAYERED)을 쓰지 않는다.
+        super::keep_opaque(ctx, egui::Id::new(("ndr-skin-crumb-menu", index)));
         let area = egui::Area::new(egui::Id::new(("ndr-skin-crumb-menu", index))).order(egui::Order::Foreground).fixed_pos(position).show(ctx, |ui| {
-            apply_menu_style(ui);
-            egui::Frame::menu(ui.style()).show(ui, |ui| {
-                if children.is_empty() {
-                    ui.add_enabled(false, egui::Button::new(self.tr("하위 폴더 없음", "No subfolders")));
-                }
+            // 원본 MenuMeasureItem(0x7ca4dc)·MenuDrawItem(0x7ca540): 스킨과 상관없이 흰 바탕(0xFFFFFF)에 글 0x0A0A0A, 고른 줄은
+            // 회색(0x808080) 바탕에 흰 글. 아이콘(작은 셸 아이콘)은 왼쪽 + 4, 글은 왼쪽 + 4 + 0x14(DT_SINGLELINE | DT_VCENTER),
+            // 너비 = 글 너비 + 0x1C. 테두리는 Windows 메뉴 테두리.
+            let font = egui::TextStyle::Button.resolve(ui.style());
+            let widest = ui.fonts_mut(|f| children.iter().map(|(_, h)| f.layout_no_wrap(h.clone(), font.clone(), Color32::BLACK).size().x).fold(0.0f32, f32::max));
+            let item_width = (widest + 28.0).ceil();
+            let item_height = (ui.fonts_mut(|f| f.row_height(&font)) + 6.0).ceil().max(20.0);
+            egui::Frame::new().fill(Color32::WHITE).stroke(egui::Stroke::new(1.0, Color32::from_gray(0xA0))).inner_margin(egui::Margin::same(2)).show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
                 egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
-                    for (child, header) in &children {
-                        if ui.button(header).clicked() {
+                    for ((child, header), icon) in children.iter().zip(&icons) {
+                        let (rect, response) = ui.allocate_exact_size(egui::vec2(item_width, item_height), egui::Sense::click());
+                        let selected = response.hovered();
+                        let (back, fore) = if selected { (Color32::from_gray(0x80), Color32::WHITE) } else { (Color32::WHITE, Color32::from_gray(0x0A)) };
+                        ui.painter().rect_filled(rect, 0.0, back);
+                        if let Some(icon) = icon {
+                            let top = rect.top() + ((rect.height() - 16.0) / 2.0).floor();
+                            egui::Image::new((icon.id(), egui::vec2(16.0, 16.0))).paint_at(ui, egui::Rect::from_min_size(egui::pos2(rect.left() + 4.0, top), egui::vec2(16.0, 16.0)));
+                        }
+                        let galley = ui.fonts_mut(|f| f.layout_no_wrap(header.clone(), font.clone(), fore));
+                        ui.painter().galley(egui::pos2(rect.left() + 24.0, rect.center().y - galley.size().y / 2.0), galley, fore);
+                        if response.clicked() {
                             chosen = Some(child.clone());
                         }
                     }

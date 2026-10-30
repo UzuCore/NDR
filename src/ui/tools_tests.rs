@@ -1865,6 +1865,40 @@ fn checked_menu_items_draw_the_original_check_bitmaps() {
     assert_eq!(counts, vec![21, 12, 0]);
 }
 
+/// 원본 FUN_0048aa30: 내 PC의 폴더 정보줄도 FOLDERINFO(드라이브는 세지 않는다). 내부 경로 "::drives::"는 보이지 않는다.
+/// 원본 FUN_0048c548: 주소 줄 ">" 메뉴의 하위 폴더는 FindFirstFileW 차례(NTFS 이름 순).
+#[test]
+fn my_computer_info_bar_and_crumb_children_follow_the_original() {
+    let (root, ctx, mut app) = fixture("drives-info", "en");
+    fn texts(shape: &egui::Shape, out: &mut Vec<String>) {
+        match shape {
+            egui::Shape::Text(t) => out.push(t.galley.text().to_owned()),
+            egui::Shape::Vec(v) => v.iter().for_each(|s| texts(s, out)),
+            _ => {}
+        }
+    }
+    let skin = app.current_skin().expect("the skin");
+    app.panes[0].path = PathBuf::from(super::remote_window::DRIVES);
+    app.panes[0].entries = vec![Entry { name: "C:".into(), path: PathBuf::from("C:\\"), is_dir: true, size: 0, modified: None, hidden: false, attributes: 0x10, drive: true }];
+    app.panes[0].summary = None;
+    let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 200.0))), ..Default::default() };
+    let output = ctx.run(raw, |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| app.skin_folder_info_bar(ui, 0, &skin));
+    });
+    let mut out = vec![];
+    output.shapes.iter().for_each(|c| texts(&c.shape, &mut out));
+    let all = out.join(" ");
+    assert!(!all.contains("::drives::") && all.contains('0'), "{all}");
+    // 하위 폴더 순서.
+    let folder = root.join("crumbs");
+    for name in ["beta", "Alpha", "gamma"] {
+        fs::create_dir_all(folder.join(name)).unwrap();
+    }
+    let names: Vec<String> = app.crumb_children(0, &folder, false).into_iter().map(|(_, n)| n).collect();
+    assert_eq!(names, vec!["Alpha", "beta", "gamma"]);
+    let _ = fs::remove_dir_all(root);
+}
+
 #[test]
 fn skin_list_menu_has_only_the_original_items() {
     let (root, ctx, mut app) = fixture("skin-list-menu", "en");

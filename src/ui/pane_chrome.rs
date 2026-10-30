@@ -352,7 +352,13 @@ impl App {
                             hidden || item.metadata().map(|m| m.file_attributes() & 0x2 == 0).unwrap_or(true)
                         })
                         .map(|item| (item.path(), item.file_name().to_string_lossy().into_owned()))
-                        .collect()
+                        .collect::<Vec<_>>()
+                })
+                .map(|mut children| {
+                    // 원본 FUN_0048c548은 FindFirstFileW/FindNextFileW 차례(NTFS = 이름의 대문자 순). 고친 것: read_dir 차례는
+                    // 정해져 있지 않아 이름 순이 아닐 수 있었다.
+                    children.sort_by(|a, b| a.1.to_uppercase().cmp(&b.1.to_uppercase()));
+                    children
                 })
                 .unwrap_or_default()
         };
