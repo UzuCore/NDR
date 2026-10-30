@@ -510,6 +510,11 @@ impl App {
         let mut favorites_action = None;
         let mut folder_tree_action = None;
         let tree_colors = matches!(dialog.kind, DialogKind::FolderTree(_)).then(|| super::folder_tree_dialog::TreeColors::read(&self.settings));
+        let tree_icons: Vec<Option<egui::TextureHandle>> = if tree_colors.is_some() {
+            ["tb_desktop.png", "tb_documents.png", "tb_pictures.png", "tb_music.png", "tb_videos.png"].iter().map(|name| self.toolbar_icon(ctx, name)).collect()
+        } else {
+            vec![]
+        };
         let mut destination_action = None;
         let mut disk_action = None;
         let mut remote_action = None;
@@ -772,7 +777,7 @@ impl App {
                         egui::vec2(657.0, 627.0)
                     };
                     let colors = tree_colors.unwrap_or_else(|| super::folder_tree_dialog::TreeColors::read(&self.settings));
-                    folder_tree_action = super::folder_tree_dialog::folder_tree_ui(ui, form, &self.language_pack, &colors, size, !waiting);
+                    folder_tree_action = super::folder_tree_dialog::folder_tree_ui(ui, form, &self.language_pack, &colors, size, !waiting, &tree_icons);
                 }
                 DialogKind::CleanupOptions(form) => {
                     cleanup_action = super::cleanup_dialog::options_ui(ui, form, &self.language_pack, ko, enter);

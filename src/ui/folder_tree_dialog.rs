@@ -75,6 +75,14 @@ pub(super) enum FolderTreeAction {
     Cancel,
     /// miPropertiesClick 0x4253ac: ShowFileProperties(고른 폴더).
     Properties(String),
+    /// miRenameClick 0x425e6c(F2, Alt+R).
+    Rename,
+    /// miCreateNewFolderClick 0x425b68(F7, Insert, Alt+K).
+    NewFolder,
+    /// FUN_004266ac: Del = 바로 삭제(FOF_ALLOWUNDO 없음), miDeleteClick(Alt+D) = Shift가 없으면 휴지통.
+    Delete { recycle: bool },
+    /// SpecialFolderClick·FUN_00425904(Ctrl+D/G/Q/S/O): 바탕 화면, 문서, 그림, 음악, 비디오.
+    Special(&'static str),
 }
 
 fn color_of(settings: &ndr::settings::Settings, key: &str) -> Color32 {
@@ -785,7 +793,7 @@ fn function_bar(ui: &mut egui::Ui, rect: egui::Rect, items: &[(String, String)])
 }
 
 /// 원본 TfFolderTree 창. 돌려준 일은 App이 처리한다. 창 안의 트리 움직임은 여기서 끝낸다.
-pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, language: &compat::Language, colors: &TreeColors, size: egui::Vec2, input: bool) -> Option<FolderTreeAction> {
+pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, language: &compat::Language, colors: &TreeColors, size: egui::Vec2, input: bool, icons: &[Option<egui::TextureHandle>]) -> Option<FolderTreeAction> {
     let text = |key: &str, fallback: &str| language.raw(&format!("formFolderTree.{key}")).unwrap_or_else(|| fallback.to_owned());
     let plain = |key: &str, fallback: &str| super::favorites_dialog::access_key(&text(key, fallback)).0;
     let mut action = None;
@@ -811,7 +819,15 @@ pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, langu
             ui.add_enabled_ui(!scanning, |ui| {
                 ui.menu_button(caption.as_str(), |ui| {
                     let items: &[(&str, &str, &str)] = if id == "folder" {
-                        &[("Menu.miProperties", "&E. Properties", "properties"), ("-", "", ""), ("Menu.miClose", "&C. Close", "close")]
+                        &[
+                            ("Menu.miDelete", "&D. Delete", "delete"),
+                            ("Menu.miRename", "&R. Rename", "rename"),
+                            ("Menu.miCreateNewFolder", "&F. New Folder", "newFolder"),
+                            ("-", "", ""),
+                            ("Menu.miProperties", "&E. Properties", "properties"),
+                            ("-", "", ""),
+                            ("Menu.miClose", "&C. Close", "close"),
+                        ]
                     } else {
                         &[
                             ("Menu.miExpand", "&E. Expand", "expand"),
@@ -849,6 +865,27 @@ pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, langu
             });
         });
         x += width + 2.0;
+    }
+    // tbDesktop·tbMyDoc·tbMyPic·tbMyMusic·tbMyVideo(Left 166~302, 34 간격): SpecialFolderClick.
+    let special = [("Hint.tbDesktop", "Desktop (Ctrl+D)", "desktop"), ("Hint.tbMyDoc", "Documents (Ctrl+G)", "documents"), ("Hint.tbMyPic", "Pictures (Ctrl+Q)", "pictures"), ("Hint.tbMyMusic", "Music (Ctrl+S)", "music"), ("Hint.tbMyVideo", "Videos (Ctrl+O)", "videos")];
+    let mut special_click = None;
+    for (n, (key, fallback, id)) in special.iter().enumerate() {
+        let button = at(166.0 + 34.0 * n as f32, 0.0, 30.0, 22.0);
+        let response = ui.interact(button, egui::Id::new(("ndr-tree-special", n)), egui::Sense::click()).on_hover_text(text(key, fallback));
+        if response.hovered() {
+            ui.painter().rect_filled(button, 2.0, visuals.widgets.hovered.weak_bg_fill);
+        }
+        match icons.get(n).cloned().flatten() {
+            Some(texture) => {
+                ui.painter().image(texture.id(), egui::Rect::from_center_size(button.center(), egui::vec2(18.0, 18.0)), egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
+            }
+            None => {
+                ui.painter().text(button.center(), egui::Align2::CENTER_CENTER, &text(key, fallback)[..1], egui::FontId::proportional(12.0), visuals.text_color());
+            }
+        }
+        if response.clicked() && !scanning && input {
+            special_click = Some(*id);
+        }
     }
     ui.painter().hline(area.min.x..=area.max.x, area.min.y + 22.0, visuals.widgets.noninteractive.bg_stroke);
     // pTop: 경로 칸과 단추.
@@ -980,6 +1017,12 @@ pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, langu
             egui::Key::Escape => action = Some(FolderTreeAction::Cancel),
             egui::Key::Enter if !m.alt => action = Some(FolderTreeAction::Accept(form.address.clone())),
             egui::Key::Enter if m.alt => menu_action = Some("properties"),
+            egui::Key::D if m.alt && !m.ctrl => menu_action = Some(if m.shift { "deletePermanent" } else { "delete" }),
+            egui::Key::R if m.alt && !m.ctrl => menu_action = Some("rename"),
+            egui::Key::K if m.alt && !m.ctrl => menu_action = Some("newFolder"),
+            egui::Key::D | egui::Key::G | egui::Key::Q | egui::Key::S | egui::Key::O if m.ctrl && !m.alt => {
+                special_click = Some(match key { egui::Key::D => "desktop", egui::Key::G => "documents", egui::Key::Q => "pictures", egui::Key::S => "music", _ => "videos" });
+            }
             egui::Key::F9 => menu_action = Some("properties"),
             egui::Key::F3 if plain_key => menu_action = Some("findNext"),
             egui::Key::L if m.ctrl && !m.alt => menu_action = Some("findNext"),
@@ -1004,6 +1047,9 @@ pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, langu
             egui::Key::ArrowLeft | egui::Key::ArrowRight | egui::Key::ArrowUp | egui::Key::ArrowDown | egui::Key::PageUp | egui::Key::PageDown | egui::Key::Home | egui::Key::End | egui::Key::Backslash if !m.alt => {
                 form.arrow_key(key, m.shift, m.ctrl)
             }
+            egui::Key::F2 if plain_key && !m.shift => menu_action = Some("rename"),
+            egui::Key::F7 | egui::Key::Insert if plain_key && !m.shift => menu_action = Some("newFolder"),
+            egui::Key::Delete if plain_key => menu_action = Some("deletePermanent"),
             egui::Key::Plus if plain_key => menu_action = Some("expand"),
             egui::Key::Minus if plain_key => menu_action = Some("collapse"),
             // Shift+글자: 그 드라이브(SetDrive("%C:\")).
@@ -1035,7 +1081,10 @@ pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, langu
     }
     if let Some(n) = bar_click {
         // bbFunctionsClick 0x4258a0: 0 이름 바꾸기, 1 다음 찾기, 2 전체 최신, 3 하위만, 4 새 폴더, 5 등록정보.
-        menu_action = match n { 1 => Some("findNext"), 2 => Some("treeRefresh"), 3 => Some("subRefresh"), 5 => Some("properties"), _ => None };
+        menu_action = match n { 0 => Some("rename"), 1 => Some("findNext"), 2 => Some("treeRefresh"), 3 => Some("subRefresh"), 4 => Some("newFolder"), 5 => Some("properties"), _ => None };
+    }
+    if let Some(id) = special_click {
+        action = Some(FolderTreeAction::Special(id));
     }
     if let Some(command) = menu_action {
         let focused = form.focused;
@@ -1046,6 +1095,10 @@ pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, langu
                 }
             }
             "close" => action = Some(FolderTreeAction::Cancel),
+            "rename" => action = Some(FolderTreeAction::Rename),
+            "newFolder" => action = Some(FolderTreeAction::NewFolder),
+            "delete" => action = Some(FolderTreeAction::Delete { recycle: true }),
+            "deletePermanent" => action = Some(FolderTreeAction::Delete { recycle: false }),
             "expand" | "collapse" | "expandRecursive" | "collapseRecursive" => {
                 if let Some(item) = focused {
                     form.expand(item, command.starts_with("expand"), command.ends_with("Recursive"));
@@ -1105,6 +1158,82 @@ impl App {
         });
     }
 
+    /// 맨 위(또는 입력 상자 아래) 폴더 트리 창.
+    fn folder_tree_form(&mut self) -> Option<&mut FolderTreeForm> {
+        self.original_dialogs.iter_mut().rev().find_map(|d| match &mut d.kind {
+            DialogKind::FolderTree(form) => Some(&mut **form),
+            _ => None,
+        })
+    }
+
+    /// miCreateNewFolderClick 0x425b68: 고른 폴더가 있으면 TfGetText(TITLE_NEWFOLDER, MSG_NEWFOLDER, 오늘 짧은 날짜) → 확인이고 비지 않으면
+    /// CreateDirectoryW(고른 폴더\이름). 실패는 오류 상자(FUN_0040c31c), 성공은 트리에 넣고(FUN_007e4904) 그 항목을 고른다.
+    fn folder_tree_new_folder(&mut self) {
+        let Some(form) = self.folder_tree_form() else { return };
+        let Some(item) = form.focused else { return };
+        let directory = form.tree.full_path(item);
+        let title = self.language_pack.text("RES.TITLE_NEWFOLDER", "Create a new folder");
+        let message = self.language_pack.text("RES.MSG_NEWFOLDER", "Create a new folder. Type a folder name to be created.");
+        self.prompt(&title, &message, &ndr::names::new_folder_default_name(), None, false, move |app, value, _| {
+            let Some(name) = value.filter(|v| !v.is_empty()) else { return };
+            let path = ndr::names::combine_typed_name(&directory, &name);
+            let error = ndr::names::create_directory(&path);
+            if error != 0 {
+                return app.show_name_operation_error(error, false, |_, _, _| {});
+            }
+            if let Some(form) = app.folder_tree_form() {
+                if let Some(added) = form.tree.add_child(item, &ndr::names::find_file_name(&path)) {
+                    form.tree.assign_rows();
+                    form.dirty = true;
+                    form.focus(Some(added), 1);
+                }
+            }
+        });
+    }
+
+    /// miRenameClick 0x425e6c: 뿌리가 아니면 TfGetText(RENAME, MSG_RENAME(이름, 1, 1), 이름) → 확인이고 비지 않으면 MoveFileW(경로, 부모\새 이름).
+    /// 실패는 오류 상자, 성공은 이름을 바꾸고(SetName) 트리를 저장하고 경로 칸을 고친다.
+    fn folder_tree_rename(&mut self) {
+        let Some(form) = self.folder_tree_form() else { return };
+        let Some(item) = form.focused.filter(|i| form.tree.items[*i].level != 0) else { return };
+        let (name, old) = (form.tree.items[item].name.clone(), form.tree.full_path(item));
+        let title = self.language_pack.text("RES.RENAME", "Rename");
+        let message = self.language_pack.text("RES.MSG_RENAME", "Type a new file name.(\\/:*?\"<>| characters cannot be used.)\n\n<b><c0000FF>%s</c></b> <c666666>(%d / %d)</c>").replacen("%s", &name, 1).replacen("%d", "1", 2);
+        self.prompt(&title, &message, &name, None, false, move |app, value, _| {
+            let Some(new) = value.filter(|v| !v.is_empty()) else { return };
+            let parent = Path::new(&old).parent().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
+            let target = ndr::names::combine_typed_name(&parent, &new);
+            let error = ndr::names::move_file(&old, &target);
+            if error != 0 {
+                return app.show_name_operation_error(error, false, |_, _, _| {});
+            }
+            if let Some(form) = app.folder_tree_form() {
+                form.tree.items[item].name = new;
+                form.dirty = true;
+                form.save();
+                form.address = form.tree.full_path(item);
+            }
+        });
+    }
+
+    /// FUN_004266ac: 고른 폴더가 드라이브 뿌리가 아니면 SHFileOperationW(FO_DELETE, 휴지통이면 FOF_ALLOWUNDO). 성공하고 폴더가 없어졌으면
+    /// 트리에서 지운다(FUN_007e4a24: 고른 항목이 지운 폴더 안이면 다음 형제, 없으면 부모를 고른다).
+    fn folder_tree_delete(&mut self, recycle: bool) {
+        let shell_delete = self.system.shell_delete;
+        let Some(form) = self.folder_tree_form() else { return };
+        let Some(item) = form.focused else { return };
+        let path = form.tree.full_path(item);
+        if Some(item) == form.tree.root || Path::new(&path).parent().is_none() {
+            return;
+        }
+        if shell_delete(Path::new(&path), recycle) == 0 && !Path::new(&path).exists() {
+            let next = form.tree.items[item].next.or(form.tree.items[item].parent);
+            form.tree.remove(item);
+            form.dirty = true;
+            form.focus(next.or(form.tree.root), 1);
+        }
+    }
+
     /// 창이 돌려준 일.
     pub(super) fn folder_tree_action(&mut self, action: FolderTreeAction, ctx: &egui::Context) {
         match action {
@@ -1118,6 +1247,17 @@ impl App {
             FolderTreeAction::Properties(path) => {
                 let _ = (self.system.run_verb)(Path::new(&path), "properties");
             }
+            FolderTreeAction::Special(id) => {
+                // FUN_00425904: FUN_0040db88(번호)의 폴더로 SetPath.
+                if let Some(path) = self.special_folder_path(id) {
+                    if let Some(form) = self.folder_tree_form() {
+                        form.set_path(&path.to_string_lossy());
+                    }
+                }
+            }
+            FolderTreeAction::NewFolder => self.folder_tree_new_folder(),
+            FolderTreeAction::Rename => self.folder_tree_rename(),
+            FolderTreeAction::Delete { recycle } => self.folder_tree_delete(recycle),
             FolderTreeAction::Accept(path) => {
                 // FUN_00424a68: PathFileExistsW면 그 경로로 닫고, 아니면 NXSTR_TREE_INVALIDPATH를 알리고 고른 항목을 트리에서 지운다.
                 if !path.is_empty() && Path::new(&path).exists() {

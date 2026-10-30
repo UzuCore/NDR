@@ -1554,6 +1554,27 @@ fn folder_tree_window_follows_the_original_tffoldertree() {
     assert_eq!(form(&app).1.as_deref(), Some("x"), "← = parent");
     frame(&mut app, &ctx, vec![key(egui::Key::ArrowRight)]);
     assert_eq!(form(&app).1.as_deref(), Some("a"), "→ = next visible (first child, same row)");
+    // miCreateNewFolderClick 0x425b68(F7): TfGetText(TITLE_NEWFOLDER, MSG_NEWFOLDER, 오늘 날짜) → 만들고 트리에 넣어 고른다.
+    frame(&mut app, &ctx, vec![key(egui::Key::F7)]);
+    let (title, message, value) = top_prompt(&app);
+    assert_eq!((title, message, value), (root_text(&app, "TITLE_NEWFOLDER"), root_text(&app, "MSG_NEWFOLDER"), ndr::names::new_folder_default_name()));
+    answer_text(&mut app, &ctx, Some("new"));
+    assert!(start.join("new").is_dir());
+    assert_eq!(form(&app), (start.join("new").to_string_lossy().into_owned(), Some("new".to_owned())));
+    // miRenameClick 0x425e6c(F2): TfGetText(RENAME, MSG_RENAME(이름, 1, 1), 이름) → MoveFileW.
+    frame(&mut app, &ctx, vec![key(egui::Key::F2)]);
+    let (title, message, value) = top_prompt(&app);
+    assert_eq!((title, value), (root_text(&app, "RENAME"), "new".to_owned()));
+    assert_eq!(message, root_text(&app, "MSG_RENAME").replacen("%s", "new", 1).replacen("%d", "1", 2));
+    answer_text(&mut app, &ctx, Some("renamed"));
+    assert!(start.join("renamed").is_dir() && !start.join("new").exists());
+    assert_eq!(form(&app), (start.join("renamed").to_string_lossy().into_owned(), Some("renamed".to_owned())));
+    // FUN_004266ac(Del): 지우고 트리에서 뺀 뒤 부모를 고른다.
+    frame(&mut app, &ctx, vec![key(egui::Key::Delete)]);
+    assert!(!start.join("renamed").exists());
+    assert_eq!(form(&app).1.as_deref(), Some("a"));
+    frame(&mut app, &ctx, vec![key(egui::Key::ArrowRight), key(egui::Key::ArrowLeft)]);
+    assert_eq!(form(&app).1.as_deref(), Some("a"));
     frame(&mut app, &ctx, vec![key(egui::Key::ArrowDown), key(egui::Key::Enter)]);
     assert!(app.original_dialogs.is_empty(), "Enter = btnOk(Default)");
     wait_listing(&mut app, &ctx);

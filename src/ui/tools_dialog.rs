@@ -60,6 +60,8 @@ pub(super) struct SystemHooks {
     pub play_wave: fn(Option<&Path>) -> bool,
     /// 폴더 트리 창의 뿌리(드라이브 뿌리 "C:\"). 시험에서는 빈 글(실제 드라이브를 훑지 않는다)이고, 트리 시험은 가짜 뿌리를 끼운다.
     pub tree_root: fn(&str) -> String,
+    /// 원본 폴더 트리 삭제 FUN_004266ac의 SHFileOperationW(FO_DELETE)(native::shell_delete). 0 = 성공. 시험에서는 셸 창 없이 지운다.
+    pub shell_delete: fn(&Path, bool) -> i32,
 }
 
 #[cfg(test)]
@@ -238,6 +240,10 @@ impl Default for SystemHooks {
             tree_root: super::folder_tree_dialog::drive_root,
             #[cfg(test)]
             tree_root: |_| String::new(),
+            #[cfg(not(test))]
+            shell_delete: native::shell_delete,
+            #[cfg(test)]
+            shell_delete: |path, _| if std::fs::remove_dir_all(path).is_ok() { 0 } else { 2 },
         }
     }
 }

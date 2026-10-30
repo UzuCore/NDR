@@ -914,6 +914,19 @@ pub fn volume_label(root: &Path) -> Option<String> {
     ok.then(|| String::from_utf16_lossy(&name[..name.iter().position(|c| *c == 0).unwrap_or(name.len())]))
 }
 
+/// 원본 FUN_004266ac: SHFileOperationW(FO_DELETE, pFrom = 경로, 휴지통이면 FOF_ALLOWUNDO 0x40, 아니면 0) — 확인·진행은 셸 창. 0 = 성공.
+pub fn shell_delete(path: &Path, allow_undo: bool) -> i32 {
+    use windows_sys::Win32::UI::Shell::{SHFILEOPSTRUCTW, SHFileOperationW};
+    let from: Vec<u16> = path.as_os_str().encode_wide().chain([0, 0]).collect();
+    let mut op: SHFILEOPSTRUCTW = unsafe { std::mem::zeroed() };
+    op.wFunc = 3;
+    op.pFrom = from.as_ptr();
+    op.fFlags = if allow_undo { 0x40 } else { 0 };
+    // SAFETY: pFrom is double-NUL terminated and outlives the call; the other fields are zeroed.
+    let result = unsafe { SHFileOperationW(&mut op) };
+    if op.fAnyOperationsAborted != 0 && result == 0 { 1223 } else { result }
+}
+
 /// 원본 xilesShell GetVolumeSerial: GetVolumeInformationW의 볼륨 일련번호(트리 파일 이름 FUN_007e3e7c에 쓴다). 읽을 수 없으면 None.
 pub fn volume_serial(root: &Path) -> Option<u32> {
     let mut serial = 0u32;

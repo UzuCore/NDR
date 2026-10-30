@@ -290,6 +290,13 @@ impl App {
     /// C# GoToSystemFolderAsync/GoToDownloadsAsync: 문서·사진·음악·동영상·다운로드는 SpecialFolderPaths 설정(ExpandSetting)을
     /// 먼저, 아니면 Windows 폴더. 폴더가 있을 때만 이동한다. temp = Path.GetTempPath().
     pub(super) fn special_folder_command(&mut self, id: &str) {
+        if let Some(path) = self.special_folder_path(id) {
+            self.navigate(self.active, path, true);
+        }
+    }
+
+    /// special_folder_command와 폴더 트리 창(FUN_0040db88)의 특수 폴더 경로. 있는 폴더일 때만.
+    pub(super) fn special_folder_path(&mut self, id: &str) -> Option<PathBuf> {
         let key = match id {
             "documents" => "Documents",
             "pictures" => "Pictures",
@@ -304,16 +311,11 @@ impl App {
         let path = match (configured, id) {
             (Some(value), _) => PathBuf::from(ndr::command_line::expand_setting(&value)),
             // 원본 miToTempClick(0x4330b0): GetTempPathW → GetLongPathNameW, 둘 중 하나라도 실패하면 그만.
-            (None, "temp") => match (self.system.temp_folder)() {
-                Some(path) => path,
-                None => return,
-            },
+            (None, "temp") => (self.system.temp_folder)()?,
             (None, "downloads") => PathBuf::from(std::env::var_os("USERPROFILE").unwrap_or_default()).join("Downloads"),
             (None, other) => native::special_folder(other).unwrap_or_default(),
         };
-        if !path.as_os_str().is_empty() && path.is_dir() {
-            self.navigate(self.active, path, true);
-        }
+        (!path.as_os_str().is_empty() && path.is_dir()).then_some(path)
     }
 
     /// C# ShowProperties: 고른 첫 항목, 없으면 지금 폴더의 셸 속성 창.
