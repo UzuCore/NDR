@@ -39,6 +39,9 @@ pub(super) struct DestinationForm {
     pub drives: Vec<DestinationDrive>,
     /// 드라이브 줄의 남은 공간 글(원본 "%10s %s"의 둘째 글, RES.DISKFREE).
     pub free_label: String,
+    /// 원본 FormKeyDown(0x454b8c) Ctrl+D·G·Q·S·O = FUN_0040db88(0~4): 바탕 화면(CSIDL 0x10)·문서(5)·사진(0x27)·음악(0xd)·
+    /// 동영상(0xe), 1~4는 설정의 특수 폴더가 먼저. 창을 열 때 구한 경로(없으면 None).
+    pub special_folders: [Option<String>; 5],
 }
 
 /// 원본 TfSelectDest 목록 줄(FUN_004532d4): 종류 1 = 처음 폴더(+0x420, 다른 패널), 2 = 최근(자주 쓴 폴더 +0x434), 4 = 작업 폴더(+0x438),
@@ -376,6 +379,18 @@ pub(super) fn destination_ui_original(ui: &mut egui::Ui, form: &mut DestinationF
     if alt_d || (!ui.memory(|m| m.had_focus_last_frame(path_id)) && ui.memory(|m| m.focused().is_none())) {
         edit.request_focus();
     }
+    // 원본 FormKeyDown(0x454b8c, KeyPreview): Ctrl과 D·G·Q·S·O면 바탕 화면·문서·사진·음악·동영상 경로를 cbPath에 넣고 초점·모두 고르기.
+    let special = [egui::Key::D, egui::Key::G, egui::Key::Q, egui::Key::S, egui::Key::O];
+    if let Some(index) = ui.input(|i| if i.modifiers.ctrl { special.iter().position(|k| i.key_pressed(*k)) } else { None }) {
+        if let Some(path) = form.special_folders[index].clone().filter(|p| !p.is_empty()) {
+            let length = path.chars().count();
+            form.path = path;
+            edit.request_focus();
+            let mut state = egui::TextEdit::load_state(ui.ctx(), path_id).unwrap_or_default();
+            state.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(length))));
+            state.store(ui.ctx(), path_id);
+        }
+    }
     // 원본 btnTree(4,37 138×25, "&Folder Tree") → btnTreeClick(FUN_00453de4).
     if super::original_dialogs::access_button(ui, at(4.0, 37.0, 138.0, 25.0), &form.browse_label) {
         action = Some(DestinationAction::Browse);
@@ -449,6 +464,7 @@ impl App {
                 Some(DestinationDrive { root: root.to_string_lossy().into_owned(), name, kind, sizes })
             })
             .collect();
+        let special_folders = ["desktop", "documents", "pictures", "music", "videos"].map(|id| self.special_folder_path(id).map(|p| p.to_string_lossy().into_owned()));
         let form = DestinationForm {
             most_used: self.most_used_destinations(),
             work_folders: std::array::from_fn(|i| work.get(i).map(|w| w.trim().to_owned()).unwrap_or_default()),
@@ -462,6 +478,7 @@ impl App {
             selected: 0,
             drives,
             free_label: self.language_pack.text("RES.DISKFREE", "Free"),
+            special_folders,
             initial,
         };
         let title = format!("{}{}", self.language_pack.text(title_key, title_fallback), self.language_pack.text("RES.SELECTDEST", " - Select a destination"));

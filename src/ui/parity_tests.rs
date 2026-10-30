@@ -473,6 +473,7 @@ fn destination_list_keys_follow_the_original() {
         selected: 0,
         drives: Vec::new(),
         free_label: String::new(),
+        special_folders: Default::default(),
     };
     let mut run = |key: egui::Key, modifiers: egui::Modifiers| {
         // 목록에 글쇠 초점(경로 칸이 아님).
@@ -518,9 +519,21 @@ fn original_destination_list_follows_tfselectdest() {
         selected: 0,
         drives: Vec::new(),
         free_label: String::new(),
+        special_folders: [None, None, Some(s(&root.join("pictures"))), None, None],
     };
     let items: Vec<_> = original_items(&form).into_iter().map(|(item, _)| item).collect();
     assert_eq!(items, vec![DestinationItem::Initial(s(&initial)), DestinationItem::Recent(s(&recent)), DestinationItem::Work(0, s(&work))], "the default folder is not repeated among the recents; only existing work folders");
+    // 원본 FormKeyDown(0x454b8c): Ctrl+Q = 사진 폴더(FUN_0040db88(2))를 경로 칸에. 빈 특수 폴더(Ctrl+D)는 그대로.
+    let ctrl = egui::Modifiers::CTRL;
+    for key in [egui::Key::D, egui::Key::Q] {
+        let raw = egui::RawInput { time: Some(1.0), modifiers: ctrl, events: vec![egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: ctrl }], ..Default::default() };
+        let before = form.path.clone();
+        let _ = ctx.run(raw, |ctx| {
+            egui::Area::new(egui::Id::new("dest-test")).fixed_pos(egui::Pos2::ZERO).show(ctx, |ui| destination_ui_original(ui, &mut form, false, None, &[], 850.0));
+        });
+        assert_eq!(form.path, if key == egui::Key::Q { s(&root.join("pictures")) } else { before });
+    }
+    form.path = s(&initial);
     let mut time = 100.0;
     let mut run = |form: &mut DestinationForm, events: Vec<egui::Event>| {
         time += 0.05;
