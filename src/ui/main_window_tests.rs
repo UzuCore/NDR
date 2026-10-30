@@ -260,6 +260,18 @@ fn main_window_frame_info_bars_tabs_and_address_follow_csharp() {
     app.navigate_address(0, "..\\missing");
     assert_eq!(app.msgboxes.first().map(|m| m.title.as_str()), Some("폴더 이동"));
     app.answer_message_box(1, &ctx);
+    // 원본 주소 칸 Enter(FUN_0048cb30): http(s)://는 기본 프로그램으로 열고, ftp://는 그 패널의 FTP 빠른 연결 창.
+    app.shell_runner = launched;
+    app.original_address_enter(0, "  HTTP://example.invalid/a  ");
+    assert_eq!(FEED.with(|f| f.borrow().clone()), b"HTTP://example.invalid/a");
+    app.original_address_enter(0, "https://example.invalid/b");
+    assert_eq!(FEED.with(|f| f.borrow().clone()), b"https://example.invalid/b");
+    assert!(app.msgboxes.is_empty() && app.original_dialogs.is_empty(), "no folder warning for a web address");
+    app.active = 1;
+    app.original_address_enter(0, "ftp://host.invalid/pub");
+    assert_eq!(app.active, 0);
+    assert!(matches!(&app.original_dialogs.last().map(|d| &d.kind), Some(super::original_dialogs::DialogKind::FtpQuickConnect(f)) if f.host == "ftp://host.invalid/pub" && f.pane == 0));
+    app.original_dialogs.clear();
     // 주소 편집: … 단추와 같은 시작(지금 경로, 편집 상태), Esc 끝.
     app.begin_address_edit(0, &ctx);
     assert!(app.panes[0].address_editing);

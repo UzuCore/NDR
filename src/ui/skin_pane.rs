@@ -653,8 +653,7 @@ impl App {
                 let text = self.panes[index].address.clone();
                 self.end_address_edit(index);
                 if go {
-                    self.active = index;
-                    self.navigate_address(index, &text);
+                    self.original_address_enter(index, &text);
                 }
             } else if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                 self.end_address_edit(index);

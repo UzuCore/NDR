@@ -386,6 +386,25 @@ impl App {
         }
     }
 
+    /// 원본 주소 칸 Enter(FUN_0048cb30): 글이 "http://"로 시작하면 기본 프로그램으로 열고(ShellExecute "open"), "ftp://"면 그 패널의
+    /// FTP 빠른 연결(FUN_0043e9f8 → TfFTPQuickConnect, 호스트 칸 = 글), 그 밖은 그 폴더로 간다(FUN_00459968). 대소문자는 가리지 않는다.
+    /// 고친 것: 원본은 "https://"를 폴더 이름으로 보아 갈 수 없다고 했다. 이제 "http://"처럼 연다.
+    pub(super) fn original_address_enter(&mut self, index: usize, text: &str) {
+        let value = text.trim();
+        let lower = value.to_lowercase();
+        self.active = index;
+        if lower.starts_with("http://") || lower.starts_with("https://") {
+            if let Err(error) = (self.shell_runner)(Path::new(value), "", Path::new("")) {
+                self.status = error;
+            }
+            return;
+        }
+        if lower.starts_with("ftp://") {
+            return self.ftp_quick_connect(value.to_owned());
+        }
+        self.navigate_address(index, value);
+    }
+
     /// C# NavigateAddressAsync + ResolveLocalNavigationPath: 환경 변수, "~", 상대 경로(지금 폴더 기준), "압축!/접두".
     /// 없는 폴더는 "폴더 이동" 경고.
     pub(super) fn navigate_address(&mut self, index: usize, address: &str) {
