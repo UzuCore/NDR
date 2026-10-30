@@ -228,8 +228,9 @@ impl Settings {
             ("RightFolderTreeWidth", 120., 50., 600.),
             ("LeftPaneWidth", 50., 20., 80.),
             ("RightPaneWidth", 50., 20., 80.),
-            ("WindowWidth", 1450., 1024., 8192.),
-            ("WindowHeight", 900., 650., 8192.),
+            // 원본 TfMain Constraints.MinWidth·MinHeight 250.
+            ("WindowWidth", 1450., 250., 8192.),
+            ("WindowHeight", 900., 250., 8192.),
             ("WindowLeft", 10., -16384., 16384.),
             ("WindowTop", 10., -16384., 16384.),
             ("TreeWindowLeft", 10., -16384., 16384.),
@@ -607,7 +608,7 @@ mod tests {
     fn normalization_handles_wrong_shapes_and_bounds_without_losing_unknown_objects() {
         let mut settings=Settings{values:serde_json::from_value(serde_json::json!({"SchemaVersion":3,"ShowDeleteToolbarButton":false,"WindowWidth":1,"WindowHeight":99999,"FolderTreeDepth":0,"LeftColumnCount":99,"ThumbnailSize":4,"Language":" ","WorkingFolders":[null,7,"C:\\docs"],"Favorites":["C:\\first",null],"FavoriteNames":null,"ExternalPrograms":{"future":{"args":["keep"]}},"CommandHistory":{"bad":true},"RemoteSites":null,"WindowTop":{},"FunctionKeys":[]})).unwrap()};
         settings.normalize();
-        assert_eq!(settings.values["WindowWidth"].as_f64(), Some(1024.));
+        assert_eq!(settings.values["WindowWidth"].as_f64(), Some(250.));
         assert_eq!(settings.values["WindowHeight"].as_f64(), Some(8192.));
         assert_eq!(settings.values["FolderTreeDepth"], 1);
         assert_eq!(settings.values["LeftColumnCount"], 19);

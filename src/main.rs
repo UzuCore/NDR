@@ -217,7 +217,8 @@ fn main() {
         let mut viewport = eframe::egui::ViewportBuilder::default()
             .with_title("NDR")
             .with_inner_size([1400.0, 850.0])
-            .with_min_inner_size([800.0, 480.0]);
+            // 원본 TfMain DFM Constraints.MinWidth·MinHeight = 250(바깥 크기). 고친 것: 전에는 800×480보다 작게 줄일 수 없었다.
+            .with_min_inner_size([250.0, 250.0]);
         // C# ApplyWindowBoundsFromSettings: 저장한 창이 있으면(HasWindowBounds) 그 크기·위치(화면 안으로)·최대화.
         if settings.flag("HasWindowBounds", false) && options.smoke_seconds.is_none() {
             let number = |key: &str, default: f64| settings.values.get(key).and_then(|v| v.as_f64()).unwrap_or(default) as f32;
