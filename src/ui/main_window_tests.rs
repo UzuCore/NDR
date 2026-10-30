@@ -1217,6 +1217,10 @@ fn back_wheel_and_dot_files_follow_the_user_requests() {
     let cells = |app: &App, name: &str| app.panes[0].view.cells[row(app, name)].clone();
     assert_eq!((cells(&app, ".gitconfig")[0].as_str(), cells(&app, ".gitconfig")[1].as_str()), (".gitconfig", ""));
     assert_eq!((cells(&app, ".config.json")[0].as_str(), cells(&app, ".config.json")[1].as_str()), (".config", "json"));
+    // 원본 GetAttrString: "____"에 A·H·R·S(폴더 dir000은 속성 없음).
+    assert_eq!(cells(&app, "dir000")[5], "____");
+    assert_eq!(super::list_view::permission_text(true, 0o755), "drwxr-xr-x");
+    assert_eq!(super::list_view::permission_text(false, 0o640), "-rw-r-----");
     let run = |app: &mut App, events: Vec<egui::Event>| {
         let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 850.0))), events, ..Default::default() };
         let _ = ctx.run(raw, |ctx| {

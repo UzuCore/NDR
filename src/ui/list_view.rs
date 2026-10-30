@@ -44,6 +44,18 @@ pub(super) struct PaneView {
 }
 
 /// C# FileNameDisplayConverter의 CharacterCase: 0 그대로, 1 소문자, 2 대문자, 3 첫 글자만 대문자.
+/// SFTP 권한 비트를 목록 글로("drwxr-xr-x"): 원본은 SFTP 목록 줄의 권한 글(+0x74)을 그대로 보인다(너비는 "drwxrwxrwx").
+pub(super) fn permission_text(is_dir: bool, mode: u32) -> String {
+    let mut text = String::from(if is_dir { 'd' } else { '-' });
+    for shift in [6, 3, 0] {
+        let bits = (mode >> shift) & 7;
+        text.push(if bits & 4 != 0 { 'r' } else { '-' });
+        text.push(if bits & 2 != 0 { 'w' } else { '-' });
+        text.push(if bits & 1 != 0 { 'x' } else { '-' });
+    }
+    text
+}
+
 fn character_case(text: &str, mode: i64) -> String {
     match mode {
         1 => text.to_lowercase(),
@@ -122,6 +134,7 @@ impl App {
         };
         let (extension_colors, nexus_colors) = self.color_maps();
         let pane = &self.panes[index];
+        let sftp_modes = pane.remote.as_ref().filter(|r| r.is_sftp()).and_then(|r| r.modes.lock().ok().map(|m| (r.path.clone(), m.clone())));
         let mut view = PaneView::default();
         let mut shell_types: HashMap<Option<String>, String> = HashMap::new();
         for entry in &pane.entries {
@@ -163,7 +176,12 @@ impl App {
                 kind,
                 if entry.is_dir { String::new() } else { ndr::parity::format_size(entry.size, &unit, thousands) },
                 ndr::listing::list_date_text(entry.modified, &date_format, &time_format, use_age.then(|| [age_labels[0].as_str(), age_labels[1].as_str(), age_labels[2].as_str()]), now),
-                ndr::listing::attribute_text(entry.attributes),
+                // 원본 DrawListItem 필드 5: SFTP 목록 항목(+0x78)은 권한 글(+0x74), 그 밖은 GetAttrString(0x7b50a4, "____"에 A·H·R·S).
+                // 고친 것: 전에는 C# 판 글("RHSA"·"-")이었다.
+                match &sftp_modes {
+                    Some((directory, modes)) => modes.get(&super::ftp_pane::join_remote(directory, &entry.name)).map(|mode| permission_text(entry.is_dir, *mode)).unwrap_or_default(),
+                    None => ndr::listing::attr_string(entry.attributes),
+                },
                 description,
             ]);
             view.colors.push(if skin {
