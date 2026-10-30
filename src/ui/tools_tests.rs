@@ -352,6 +352,20 @@ fn checksum_merge_and_destination_follow_the_csharp_flows() {
     app.answer_dialog(super::original_dialogs::DialogResult::FolderTree(Some(root.join("left").join("folder1"))), &ctx);
     wait_job(&mut app, &ctx);
     assert!(left.join("folder1").join("gamma.log").is_file());
+    // 원본 btnOkClick(0x453c4c): 드라이브 줄(종류 8)을 고르고 경로 칸이 그 루트이면 확인 = 폴더 트리(btnTreeClick).
+    DRIVES.with(|d| *d.borrow_mut() = vec![right.clone()]);
+    app.panes[0].cursor = row(&app, "gamma.log");
+    app.dispatch("copyToFolder", &ctx);
+    let drive_row = match &app.original_dialogs.last().unwrap().kind {
+        DialogKind::Destination(form) => super::destination_dialog::original_items(form).iter().position(|(item, _)| matches!(item, super::destination_dialog::DestinationItem::Drive(_))).expect("a drive row"),
+        _ => panic!("no destination window"),
+    };
+    app.edit_dialog_kind(|kind| if let DialogKind::Destination(form) = kind { form.selected = drive_row; form.path = right.to_string_lossy().into_owned() });
+    app.destination_action(super::destination_dialog::DestinationAction::Accept, &ctx);
+    assert!(matches!(app.original_dialogs.last().map(|d| &d.kind), Some(DialogKind::FolderTree(_))), "the drive row opens the folder tree");
+    app.answer_dialog(super::original_dialogs::DialogResult::FolderTree(None), &ctx);
+    assert!(matches!(app.original_dialogs.last().map(|d| &d.kind), Some(DialogKind::Destination(_))), "cancelling the tree keeps the destination window");
+    DRIVES.with(|d| d.borrow_mut().clear());
     fs::remove_dir_all(root).unwrap();
 }
 

@@ -443,8 +443,8 @@ impl SettingsForm {
         ]);
         let activation = format!("{} {}", lang("Caption.lActivateKey", "Program activation shortcut:").trim(), lang("Caption.lWinKey", "Windows key +").trim());
         general.push(Row::Text { key: "ExplorerShortcutKey".into(), label: activation, value: text_of(&draft, "ExplorerShortcutKey"), read_only: false, max: 1, upper: true });
-        general.push(Row::Note(t(ko, "Win+문자 조합을 사용할 수 없으면 Win+Shift+문자 조합으로 등록을 시도합니다. 두 조합 모두 사용할 수 없으면 설정이 유지되고 안내합니다.",
-            "If Win+letter is unavailable, NDR tries Win+Shift+letter. If both are unavailable, the previous setting is kept and a message is shown.")));
+        general.push(Row::Note(t(ko, "원본처럼 Win+문자로만 등록합니다. 다른 프로그램이 그 조합을 쓰고 있으면 등록하지 않고 안내합니다.",
+            "Like the original, only Win+letter is registered. If another program uses it, nothing is registered and a message is shown.")));
         general.extend([
             check("CheckForUpdatesOnStartup", t(ko, "설정된 피드에서 시작 시 업데이트 확인", "Check the configured feed for updates at startup"), true),
             check("HideWhenMinimized", t(ko, "최소화할 때 알림 영역으로 숨기기", "Hide in the notification area when minimized"), false),
@@ -874,6 +874,27 @@ fn combo_key(rows: &[Row], key: &str) -> Option<String> {
     }
 }
 
+/// (ShowDeleteButton 켬, DefaultDeleteButton 고른 번호).
+fn delete_button_state(rows: &[Row]) -> (bool, Option<usize>) {
+    let shown = matches!(index_of(rows, "ShowDeleteButton").map(|i| &rows[i]), Some(Row::Check { value: true, .. }));
+    let selected = match index_of(rows, "DefaultDeleteButton").map(|i| &rows[i]) {
+        Some(Row::Combo { selected, .. }) => *selected,
+        _ => None,
+    };
+    (shown, selected)
+}
+
+/// 원본 chkShowDeleteButtonClick(0x450b54)·cbDefDelBtnChange(0x450b14): 'Delete' 단추를 보이지 않는데(+0x660 꺼짐) 기본 단추가
+/// Delete(+0x668 ItemIndex 0)면 Yes(1)로 바꾼다(숨은 단추가 기본이 되지 않게).
+pub(super) fn delete_button_rule(rows: &mut [Row]) {
+    let shown = matches!(index_of(rows, "ShowDeleteButton").map(|i| &rows[i]), Some(Row::Check { value: true, .. }));
+    if let (false, Some(Row::Combo { selected, .. })) = (shown, index_of(rows, "DefaultDeleteButton").map(|i| &mut rows[i])) {
+        if *selected == Some(0) {
+            *selected = Some(1);
+        }
+    }
+}
+
 fn put_label(ui: &mut egui::Ui, rect: egui::Rect, text: &str) {
     super::original_dialogs::put_left(ui, rect, egui::Label::new(text.replace('&', "")).truncate());
 }
@@ -1133,6 +1154,7 @@ fn original_page(ui: &mut egui::Ui, form: &mut SettingsForm, tab: usize, origin:
         // tsOption: 확인란(24, 16/38/61/84/107/129/152/175, 198/224), lDefDelBtn(46,253) cbDefDelBtn(46,270 101), lESC(24,310) cbESC(24,327 145).
         3 => {
             let rows = &mut form.tabs[tab];
+            let before_delete = delete_button_state(rows);
             for (top, key) in [
                 (16.0, "SelectFolders"),
                 (38.0, "UseExplorerMenu"),
@@ -1149,6 +1171,11 @@ fn original_page(ui: &mut egui::Ui, form: &mut SettingsForm, tab: usize, origin:
             }
             put_label(ui, at(46.0, 253.0, 300.0, 15.0), &label_of(rows, "DefaultDeleteButton"));
             put_combo(ui, rows, "DefaultDeleteButton", at(46.0, 270.0, 101.0, 21.0));
+            // 원본은 두 컨트롤의 OnClick·OnChange에서만 고친다.
+            let after = delete_button_state(rows);
+            if after != before_delete {
+                delete_button_rule(rows);
+            }
             put_label(ui, at(24.0, 310.0, 300.0, 15.0), &label_of(rows, "EscapeKeyAction"));
             put_combo(ui, rows, "EscapeKeyAction", at(24.0, 327.0, 145.0, 21.0));
         }
@@ -1773,6 +1800,27 @@ impl App {
         };
         if let Err(error) = std::fs::write(&path, body) {
             fail(self, error.to_string());
+        }
+    }
+}
+
+
+#[cfg(test)]
+mod delete_button_tests {
+    use super::*;
+
+    /// 원본 chkShowDeleteButtonClick(0x450b54)·cbDefDelBtnChange(0x450b14).
+    #[test]
+    fn hiding_the_delete_button_moves_the_default_to_yes() {
+        let choices: Vec<(String, String)> = ["0", "1", "2"].iter().map(|v| (v.to_string(), v.to_string())).collect();
+        let rows = |shown: bool, selected: usize| vec![
+            Row::Check { key: "ShowDeleteButton".into(), label: String::new(), value: shown },
+            Row::Combo { key: "DefaultDeleteButton".into(), label: String::new(), choices: choices.clone(), selected: Some(selected) },
+        ];
+        for (shown, selected, expected) in [(false, 0, 1), (false, 2, 2), (true, 0, 0)] {
+            let mut rows = rows(shown, selected);
+            delete_button_rule(&mut rows);
+            assert_eq!(delete_button_state(&rows), (shown, Some(expected)), "shown {shown}, selected {selected}");
         }
     }
 }

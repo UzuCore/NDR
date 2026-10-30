@@ -500,6 +500,12 @@ impl App {
                 if typed.is_empty() {
                     return;
                 }
+                // 원본 btnOkClick(0x453c4c): 고른 줄이 드라이브(종류 8)이고 cbPath가 그 드라이브 루트와 같으면(lstrcmpiW) 확인 대신
+                // btnTreeClick(FUN_00453de4) = 폴더 트리로 그 드라이브 안 폴더를 고른다.
+                let drive_row = original_items(form).get(form.selected).is_some_and(|(item, _)| matches!(item, DestinationItem::Drive(d) if ndr::names::equals_ignore_case(&d.root, form.path.trim())));
+                if drive_row {
+                    return self.destination_action(DestinationAction::Browse, ctx);
+                }
                 // 상대 경로는 지금 패널 폴더 기준(원본 PathCombine).
                 let base = self.panes[self.active].path.to_string_lossy().into_owned();
                 let full = PathBuf::from(ndr::names::combine_typed_name(&base, &typed));

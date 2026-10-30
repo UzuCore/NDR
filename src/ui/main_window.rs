@@ -243,6 +243,7 @@ impl App {
     }
 
     /// C# ToggleInfoBar. 메뉴는 원본 보기 메뉴의 miViewFolderInfoBar·miViewFileInfoBar 체크 항목(C# AddInfoBarMenu 하위 메뉴 대신).
+    /// 고친 것: 원본 miViewExtensionInfoClick(0x434c20)은 빈 함수라 확장자 정보 줄을 메뉴로 켜고 끌 수 없었다 → ShowExtensionInfoBar를 바꾼다.
     pub(super) fn toggle_info_bar(&mut self, key: &str) {
         let default = key != "ShowExtensionInfoBar";
         let value = !self.settings.flag(key, default);

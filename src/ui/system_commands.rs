@@ -70,6 +70,8 @@ pub(super) struct ArchiveMenuState {
     pub history_forward: bool,
     /// 원본 pmEditPopup(0x43727c): miFindNext(+0x4cc).Enabled = 마지막 찾기 글(+0xd0c) 길이 > 0.
     pub find_next: bool,
+    /// 원본 miViewFileInfoBarClick(0x434bc4): miViewExtensionInfo(+0x7e0).Enabled = 파일 정보 표시줄이 보임(+0x58).
+    pub file_info_bar: bool,
     /// 원본 pmConnectPopup(0x43ee78): 지금 패널이 FTP 모드(연결됨).
     pub ftp_active: bool,
     /// 두 패널 가운데 하나가 FTP 모드.
@@ -101,6 +103,7 @@ impl ArchiveMenuState {
             "historyBack" => (true, self.history_back),
             "historyForward" => (true, self.history_forward),
             "findNext" => (true, self.find_next),
+            "toggleExtensionInfoBar" => (true, self.file_info_bar),
             "ftpDisconnect" | "ftpDownload" => (true, self.ftp_active),
             "ftpUpload" => (true, self.ftp_any),
             _ => (true, true),
@@ -123,7 +126,8 @@ impl App {
         let ftp_any = self.panes.iter().any(|p| p.remote.is_some());
         let (history_back, history_forward) = (!self.panes[i].back.is_empty(), !self.panes[i].forward.is_empty());
         let find_next = !self.last_find.is_empty();
-        ArchiveMenuState { selected, current, paste, restore, last_destination, history_back, history_forward, find_next, ftp_active, ftp_any, in_archive: self.panes[i].archive.is_some(), original: false }
+        let file_info_bar = self.settings.flag("ShowFileInfoBar", true);
+        ArchiveMenuState { selected, current, paste, restore, last_destination, history_back, history_forward, find_next, file_info_bar, ftp_active, ftp_any, in_archive: self.panes[i].archive.is_some(), original: false }
     }
 
     /// 보기 메뉴의 체크 표시(원본 pmViewPopup 0x436fb8의 Checked, C# AddToggleMenuItem): None이면 일반 항목.
@@ -451,6 +455,9 @@ mod tests {
         assert_eq!((none.item("historyBack"), none.item("historyForward"), none.item("findNext")), ((true, false), (true, false), (true, false)));
         let history = ArchiveMenuState { history_back: true, history_forward: true, find_next: true, ..Default::default() };
         assert_eq!((history.item("historyBack"), history.item("historyForward"), history.item("findNext")), ((true, true), (true, true), (true, true)));
+        // 원본 miViewFileInfoBarClick(0x434bc4): 파일 정보 표시줄이 꺼지면 확장자 정보 항목도 회색.
+        assert_eq!(none.item("toggleExtensionInfoBar"), (true, false));
+        assert_eq!(ArchiveMenuState { file_info_bar: true, ..Default::default() }.item("toggleExtensionInfoBar"), (true, true));
         let inside = ArchiveMenuState { current: true, ..Default::default() };
         assert_eq!(inside.item("archiveProperties"), (true, true));
         assert_eq!(inside.item("archiveInstall"), (false, false));

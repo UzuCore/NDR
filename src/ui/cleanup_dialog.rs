@@ -32,6 +32,9 @@ pub(super) struct CleanupOptionsForm {
     /// 원본 btnSearchClick(0x41c338): 찾는 동안(btnSearch.Tag = 1, 글 = STOP) 멈춤 표시(+0x434)와 lResult에 보일 지금 폴더.
     pub search_stop: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     pub current: String,
+    /// 원본 TntFormShow(0x41ba80): chkTemp·chkInternetTemp·chkInternetCookie의 Hint(ShowHint 켬) = 임시 폴더(GetTempPathW →
+    /// GetLongPathNameW)·인터넷 캐시(CSIDL 0x20)·쿠키(CSIDL 0x21) 경로. 구하지 못하면 빈 글(도움말 없음).
+    pub hints: [String; 3],
 }
 
 impl Drop for CleanupOptionsForm {
@@ -61,6 +64,7 @@ impl CleanupOptionsForm {
             searched: false,
             search_stop: None,
             current: String::new(),
+            hints: Default::default(),
         };
         for drive in native::drives() {
             if native::is_fixed_drive(&drive) {
@@ -163,13 +167,17 @@ pub(super) fn options_ui(ui: &mut egui::Ui, form: &mut CleanupOptionsForm, langu
     let stroke = ui.visuals().widgets.noninteractive.bg_stroke;
     ui.painter().rect_stroke(at(16.0, 122.0, 521.0, 371.0), 2.0, stroke, egui::StrokeKind::Inside);
     ui.painter().rect_filled(at(18.0, 112.0, 167.0, 17.0), 0.0, ui.visuals().window_fill);
-    for (top, value, key, fallback) in [
-        (20.0, &mut form.system_temp, "Caption.chkTemp", "System &Temporary Files"),
-        (43.0, &mut form.internet_temp, "Caption.chkInternetTemp", "&Internet Explorer Temporary Files"),
-        (66.0, &mut form.cookies, "Caption.chkInternetCookie", "Internet Explorer &Cookies"),
-        (89.0, &mut form.recycle, "Caption.chkRecycleBin", "Empty &Recycle Bin"),
+    for (top, value, key, fallback, hint) in [
+        (20.0, &mut form.system_temp, "Caption.chkTemp", "System &Temporary Files", Some(0)),
+        (43.0, &mut form.internet_temp, "Caption.chkInternetTemp", "&Internet Explorer Temporary Files", Some(1)),
+        (66.0, &mut form.cookies, "Caption.chkInternetCookie", "Internet Explorer &Cookies", Some(2)),
+        (89.0, &mut form.recycle, "Caption.chkRecycleBin", "Empty &Recycle Bin", None),
     ] {
-        access_checkbox(ui, at(20.0, top, 338.0, 17.0), value, &r(key, fallback));
+        let rect = at(20.0, top, 338.0, 17.0);
+        access_checkbox(ui, rect, value, &r(key, fallback));
+        if let Some(text) = hint.map(|i| form.hints[i].as_str()).filter(|t| !t.is_empty()) {
+            ui.interact(rect, egui::Id::new(("ndr-cleanup-hint", top as i32)), egui::Sense::hover()).on_hover_text(text);
+        }
     }
     access_checkbox(ui, at(20.0, 112.0, 161.0, 17.0), &mut form.user_defined, &r("Caption.chkUserDefined", "&User Defined Files"));
     let enabled = form.user_defined;
@@ -296,7 +304,9 @@ impl App {
     /// 원본 컴퓨터 청소: TfCleanup을 띄운다. btnClose로 닫으면 사용자 지정 위치·확장자를 설정에 남긴다.
     pub(super) fn cleanup_command(&mut self) {
         let extensions = self.settings.text("UserDefinedCleanupExtensions", cleanup::DEFAULT_EXTENSIONS);
-        let form = CleanupOptionsForm::new(extensions, &self.settings.strings("UserDefinedCleanupLocations"));
+        let mut form = CleanupOptionsForm::new(extensions, &self.settings.strings("UserDefinedCleanupLocations"));
+        let path_text = |path: Option<PathBuf>| path.map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
+        form.hints = [path_text((self.system.temp_folder)()), path_text((self.system.special_folder)(0x20)), path_text((self.system.special_folder)(0x21))];
         let title = self.cleanup_title();
         self.push_original_dialog(title, DialogKind::CleanupOptions(Box::new(form)), |app, result, _| {
             let DialogResult::CleanupOptions(Some((locations, extensions))) = result else { return };

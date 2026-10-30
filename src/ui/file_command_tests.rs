@@ -1290,6 +1290,8 @@ fn computer_cleanup_follows_the_original_tfcleanup() {
     let form = cleanup_options(&app);
     assert!(form.system_temp && form.internet_temp && !form.cookies && form.recycle && !form.user_defined, "DFM defaults");
     assert_eq!(form.extensions, ndr::cleanup::DEFAULT_EXTENSIONS);
+    // 원본 TntFormShow(0x41ba80): chkTemp의 Hint = 임시 폴더 경로(캐시·쿠키는 시험에서 구하지 않는다).
+    assert_eq!(form.hints, [temp.to_string_lossy().into_owned(), String::new(), String::new()]);
     frame(&mut app, &ctx, vec![]);
     // 사용자 지정 검색: 격리 폴더만, tmp;bak.
     let junk_text = junk.to_string_lossy().into_owned();
