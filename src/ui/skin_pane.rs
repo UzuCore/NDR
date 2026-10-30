@@ -1276,7 +1276,7 @@ impl App {
     /// 원본 TNXFileListView.DrawListHeader(0x7e2274, 자세히 보기): 높이 = 목록 글꼴 높이 + 8(CMFontChanged), 바탕은 목록 색,
     /// 칸 이름은 왼쪽 + 5부터(한 줄, 넘치면 …) NXFORE × 0.4 + NXBACK × 0.6, 정렬 칸은 × 0.6에 맨 위 가운데 5×3 삼각형
     /// (내림차순 ▼, 오름차순 ▲, × 0.3). 칸 오른쪽 끝에 세로선 NXLINE × 0.3 + NXBACK × 0.7. 누른 칸의 정렬 방식을 돌려준다.
-    pub(super) fn skin_list_header(&self, ui: &mut egui::Ui, index: usize, columns: &[(super::list_view::DetailColumn, String, f32)], widths: &[Option<f32>], font: egui::FontId) -> Option<&'static str> {
+    pub(super) fn skin_list_header(&self, ui: &mut egui::Ui, index: usize, columns: &[(super::list_view::DetailColumn, String, f32)], widths: &[Option<f32>], font: egui::FontId, scroll_x: f32) -> Option<&'static str> {
         let (back, fore, line) = (self.basic_list_color("NXBACK"), self.basic_list_color("NXFORE"), self.basic_list_color("NXLINE"));
         let height = ui.fonts_mut(|f| f.row_height(&font)).ceil() + 8.0;
         let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), height), egui::Sense::hover());
@@ -1284,7 +1284,8 @@ impl App {
         painter.rect_filled(rect, 0.0, back);
         let current = self.side_text(index, "SortMode", "Name");
         let descending = self.side_flag(index, "SortDescending", false);
-        let mut x = rect.left();
+        // 원본 DrawListHeader(0x7e2274): 칸은 GetListHeaderWidth − 가로 위치(0x378)부터.
+        let mut x = rect.left() - scroll_x;
         let mut clicked = None;
         // 원본은 머리글을 GetListHeaderWidth부터 그린다. NDR 이름 칸은 그 머리를 담으므로 이름 칸 글은 머리 너비 뒤 + 5(이름 글과 같은 자리).
         let lead = Self::list_header_width(self.settings.flag("ShowIcons", true));
@@ -1310,7 +1311,8 @@ impl App {
             let galley = ui.fonts_mut(|f| f.layout_job(job));
             painter.galley(egui::pos2(text.left(), rect.top() + ((rect.height() - galley.size().y) / 2.0).floor()), galley, color);
             painter.vline(cell.right() - 0.5, rect.y_range(), egui::Stroke::new(1.0, mix_color(line, back, 0.3)));
-            if ui.interact(cell, egui::Id::new(("ndr-skin-header", index, i)), egui::Sense::click()).clicked() {
+            let hit = cell.intersect(rect);
+            if hit.width() > 0.0 && ui.interact(hit, egui::Id::new(("ndr-skin-header", index, i)), egui::Sense::click()).clicked() {
                 clicked = mode;
             }
             x = cell.right();

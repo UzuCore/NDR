@@ -60,6 +60,9 @@ impl App {
         if self.frames == SHOT_FRAME {
             ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
         }
+        if kind == "narrowdetails" && self.frames == SHOT_FRAME - 4 {
+            self.panes[0].detail_x = 40.0;
+        }
         // 따로 뜨는 툴팁 창(panes::show_tip_window) 확인: 메인 창 오른쪽 끝을 넘는 사각을 그리고, 만들어진 창의 화면 자리를 보고서에 남긴다.
         if kind == "tipwindow" && self.frames >= OPEN_FRAME {
             let screen = ctx.content_rect();
@@ -200,6 +203,13 @@ impl App {
             "narrowpane" => {
                 self.settings.values.insert("LeftPaneWidth".into(), serde_json::json!(20));
                 self.settings.values.insert("RightPaneWidth".into(), serde_json::json!(80));
+            }
+            "narrowdetails" => {
+                // 원본 UpdateScrollBar(형식 2): 칸 너비 합이 목록보다 넓으면 가로 막대. 왼쪽 패널을 좁히고 자세히 보기, 가로 위치 40.
+                self.settings.values.insert("LeftPaneWidth".into(), serde_json::json!(25));
+                self.settings.values.insert("RightPaneWidth".into(), serde_json::json!(75));
+                self.settings.set_text("LeftViewStyle", "Details");
+                self.refresh(0);
             }
             "favorites" => {
                 let items = vec![("Data".to_owned(), "D:\\data".to_owned()), ("Missing".to_owned(), "Z:\\nowhere".to_owned())];

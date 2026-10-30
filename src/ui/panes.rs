@@ -1307,10 +1307,25 @@ impl App {
                 } else {
                     self.original_detail_widths(ui, index, ui.available_width() - bar_reserve, &columns)
                 };
+                // 원본 UpdateScrollBar(형식 2, 0x7db270): 칸 너비 합(0x370)이 목록 너비(GetRealClientWidth, 세로 막대를 뺀 너비)보다 크면
+                // 가로 막대(0x334, 두께 12)를 보이고 가로 위치(0x378)는 0..합 − 너비, 아니면 가로 위치 = 0. AdjustPage(형식 2)도 0으로 둔다.
+                // 고친 것: 전에는 가로로 넘기지 못해 오른쪽 칸이 잘린 채 볼 수 없었다.
+                let detail_content: f32 = cell_widths.iter().flatten().sum();
+                let detail_avail = ui.available_width() - bar_reserve;
+                let detail_hbar = skin_bar.filter(|_| !cell_widths.is_empty() && detail_content > detail_avail + 0.5);
+                let detail_x = {
+                    let pane = &mut self.panes[index];
+                    if pane.adjust.is_some() {
+                        pane.detail_x = 0.0;
+                    }
+                    let max_x = if detail_hbar.is_some() { (detail_content - detail_avail).max(0.0) } else { 0.0 };
+                    pane.detail_x = pane.detail_x.clamp(0.0, max_x);
+                    pane.detail_x
+                };
                 if !tiles && !names && auto_columns == 1 && !auto_flow {
                     let current = self.side_text(index, "SortMode", "Name");
                     let font = egui::FontId::new(self.list_font_size, egui::FontFamily::Name(super::LIST_FONT_FAMILY.into()));
-                    let clicked = self.skin_list_header(ui, index, &columns, &cell_widths, font);
+                    let clicked = self.skin_list_header(ui, index, &columns, &cell_widths, font, detail_x);
                     if let Some(mode) = clicked {
                         // 원본 머리글(0x484d88): 같은 방식이면 내림차순 전환, 다른 방식이면 SetSortType만(내림차순 그대로).
                         let descending = Self::side_key(index, "SortDescending");
@@ -1383,6 +1398,14 @@ impl App {
                 let view_cache = std::mem::take(&mut self.panes[index].view);
                 let (rows, texts) = (&view_cache.rows, &view_cache);
                 let width = ui.available_width() - bar_reserve;
+                // 원본 GetItemRect(형식 2): 줄은 −가로 위치에서 시작하고 너비는 칸 너비 합(목록보다 좁으면 목록 너비). 가로 막대가 보이면
+                // 그 두께만큼 줄 자리가 낮아진다.
+                let view_width = width;
+                let width = width.max(detail_content);
+                let height = match detail_hbar {
+                    Some(bar) => (height - bar).max(row_height),
+                    None => height,
+                };
                 // 원본 UpdateDisplayDetails: 줄 간격 = 항목 높이 + LineSpace(+0x364). egui는 줄마다 item_spacing.y를 더하므로 거기에 더한다.
                 let line_space = self.list_line_space();
                 let saved_spacing = ui.spacing().item_spacing.y;
@@ -1396,7 +1419,7 @@ impl App {
                 let page_px = page_rows as f32 * stride;
                 // 원본 SetScrollTop(쪽 단위): 바퀴로 옮긴 위치는 쪽 경계(쪽 번호 × 한 쪽)다.
                 let wheel = Self::wheel_scroll(ui, egui::Id::new(("files", index)), height, stride, by_page, (self.system.wheel_lines)()).map(|o| if by_page { Self::page_snap(o, page_px, pages) } else { o });
-                let mut area = egui::ScrollArea::vertical()
+                let mut area = egui::ScrollArea::both()
                     .id_salt(("files", index))
                     .scroll_source(WHEEL_OFF)
                     .auto_shrink([false, false])
@@ -1410,10 +1433,14 @@ impl App {
                 // 쪽 정보(다 보이는 줄 수, 맨 위·끝까지 보이는 항목)는 ArrowKey의 PageUp·PageDown이 쓴다.
                 let current = egui::scroll_area::State::load(ui.ctx(), ui.make_persistent_id(egui::Id::new(("files", index)))).map_or(0.0, |s| s.offset.y);
                 let mut offset = wheel.unwrap_or(current);
-                // 원본 AdjustPage(형식 2): 쪽 단위면 그 항목이 든 쪽의 처음 줄을 맨 위로, 아니면 위로 벗어날 때 맨 위, 아래로 벗어날 때
-                // 맨 아래로. 다시 읽은 목록은 원본이 그 뒤 SetScrollTop(옛 위치)로 되돌리므로 하지 않는다.
-                if let Some((item, false)) = self.panes[index].adjust.take() {
-                    if let Some(line) = rows.iter().position(|r| matches!(r, DetailRow::Item(i) if *i == item)) {
+                // 원본 AdjustPage(형식 2): 가로 위치 = 0. 쪽 단위면 그 항목이 든 쪽의 처음 줄을 맨 위로, 아니면 위로 벗어날 때 맨 위,
+                // 아래로 벗어날 때 맨 아래로. 다시 읽은 목록은 원본이 그 뒤 SetScrollTop(옛 위치)로 되돌리므로 세로는 하지 않는다.
+                if let Some((item, reload)) = self.panes[index].adjust.take() {
+                    if self.panes[index].detail_x != 0.0 {
+                        self.panes[index].detail_x = 0.0;
+                        ui.ctx().request_repaint();
+                    }
+                    if let Some(line) = rows.iter().position(|r| matches!(r, DetailRow::Item(i) if *i == item)).filter(|_| !reload) {
                         let (top, bottom) = (line as f32 * stride, line as f32 * stride + row_height);
                         if by_page {
                             offset = (line / page_rows) as f32 * page_px;
@@ -1448,12 +1475,16 @@ impl App {
                 if (offset - current).abs() > 0.5 {
                     area = area.vertical_scroll_offset(offset);
                 }
+                area = area.horizontal_scroll_offset(self.panes[index].detail_x);
                 // 쪽 단위로 여러 쪽이면 마지막 쪽도 쪽 경계에서 시작하도록 빈 줄을 덧댄다(원본은 마지막 쪽 아래가 빈다).
                 let drawn = if by_page && pages > 1 { rows.len().max(pages * page_rows + 2) } else { rows.len() };
                 // 원본 스킨 테마: 커서·표시 막대(DrawFocus)와 칸 색(DrawListItem), 표시 ▶(InitSelMarkBitmap).
                 let original = Some(self.original_list_colors());
                 let output = area
                     .show_rows(ui, row_height, drawn, |ui, range| {
+                        // 가로로 넘길 수 있게 내용 너비 = 줄 너비(칸 너비 합 또는 목록 너비). egui 안쪽 너비는 세로 막대 자리를 담으므로
+                        // 그만큼 더해 마지막 칸이 세로 막대 앞까지 오게 한다.
+                        ui.set_min_width(width + bar_reserve);
                         for visible_index in range {
                             let Some(detail_row) = rows.get(visible_index) else { continue };
                             let row = match detail_row {
@@ -1602,6 +1633,16 @@ impl App {
                             state.store(ui.ctx(), output.id);
                             ui.ctx().request_repaint();
                         }
+                    }
+                }
+                // 원본 가로 TNXScrollBar(형식 2): 목록 아래, 너비 = GetRealClientWidth, 한 칸 10, 한 쪽 = 목록 너비.
+                self.panes[index].detail_x = output.state.offset.x.clamp(0.0, (detail_content - view_width).max(0.0));
+                if let (Some(bar), Some(skin)) = (detail_hbar, &skin) {
+                    let (strip, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), bar), egui::Sense::hover());
+                    let rect = egui::Rect::from_min_size(strip.min, egui::vec2(view_width, bar));
+                    if let Some(next) = self.skin_horizontal_scrollbar(ui, ctx, skin, egui::Id::new(("ndr-skin-detail-hbar", index)), rect, self.panes[index].detail_x, detail_content, view_width, 10.0) {
+                        self.panes[index].detail_x = next.clamp(0.0, (detail_content - view_width).max(0.0));
+                        ui.ctx().request_repaint();
                     }
                 }
                 self.panes[index].view = view_cache;

@@ -147,6 +147,8 @@ struct Pane {
     page: list_keys::ListPage,
     /// 열로 흐르는 목록(자동·이름)의 처음 보이는 열(원본 가로 위치 0x378 / 열 너비).
     first_column: usize,
+    /// 자세히 보기의 가로 위치(원본 0x378, 화소). 칸 너비 합이 목록보다 넓을 때만 0보다 크다.
+    detail_x: f32,
     /// 다음 그림에서 커서가 보이게 넘긴다(원본 SetItemIndex).
     reveal: bool,
     /// 원본 AdjustPage(0x7daf24): 다음 그림에서 이 항목 번호에 맞춰 위치를 다시 잡는다. 목록 크기가 바뀔 때(WMSize 0x7d5814),
@@ -200,6 +202,7 @@ impl Pane {
             auth_prompted: false,
             page: list_keys::ListPage::default(),
             first_column: 0,
+            detail_x: 0.0,
             reveal: false,
             adjust: None,
             list_shape: None,

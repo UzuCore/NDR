@@ -1505,7 +1505,7 @@ fn skin_list_header_follows_the_original_draw_list_header() {
     let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 300.0))), ..Default::default() };
     let output = ctx.run(raw, |ctx| {
         egui::CentralPanel::default().frame(egui::Frame::NONE).show(ctx, |ui| {
-            let _ = app.skin_list_header(ui, 0, &columns, &widths, egui::FontId::proportional(12.0));
+            let _ = app.skin_list_header(ui, 0, &columns, &widths, egui::FontId::proportional(12.0), 0.0);
         });
     });
     let titles: Vec<(String, f32, Color32)> = output.shapes.iter().filter_map(|c| match &c.shape { egui::Shape::Text(t) => Some((t.galley.text().to_owned(), t.pos.x, t.fallback_color)), _ => None }).collect();

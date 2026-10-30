@@ -503,6 +503,14 @@ impl App {
                 (egui::Key::End, ListKey::End),
             ];
             let mut cursor = old;
+            // 원본 ArrowKey(형식 2): 왼쪽·오른쪽은 커서를 옮기지 않고 가로 막대가 있으면 가로 위치를 20 줄이고(0 아래로는 안 감)
+            // 늘린다(막대 끝에서 멈춤, 다음 그림이 자른다). 고친 것: 전에는 아무 일도 없었다.
+            if pane.page.style == list_keys::ListStyle::Details {
+                let steps = input.num_presses(egui::Key::ArrowRight) as f32 - input.num_presses(egui::Key::ArrowLeft) as f32;
+                if steps != 0.0 {
+                    pane.detail_x = (pane.detail_x + steps * 20.0).max(0.0);
+                }
+            }
             for (key, list_key) in keys {
                 for _ in 0..input.num_presses(key) {
                     cursor = list_keys::arrow_target(&pane.page, cursor, length, list_key);

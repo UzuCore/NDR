@@ -1469,3 +1469,47 @@ fn middle_click_moves_the_cursor_like_the_original() {
     assert_eq!((pane.entries[pane.cursor].name.as_str(), pane.selected.len()), ("d005", 0));
     let _ = fs::remove_dir_all(root);
 }
+
+
+/// 원본 UpdateScrollBar·ArrowKey·AdjustPage(형식 2): 칸 너비 합이 목록보다 넓으면 가로로 넘길 수 있고, 오른쪽·왼쪽 글쇠는 20씩,
+/// 목록 크기가 바뀌면 가로 위치가 0이 된다.
+#[test]
+fn narrow_details_scroll_horizontally_like_the_original() {
+    let (root, ctx, mut app) = fixture("details-hscroll");
+    let left = app.panes[0].path.clone();
+    for i in 0..5 {
+        fs::write(left.join(format!("a-rather-long-file-name-{i}.txt")), b"x").unwrap();
+    }
+    app.settings.set_text("LeftViewStyle", "Details");
+    app.refresh(0);
+    wait(&mut app, &ctx);
+    let run = |app: &mut App, events: Vec<egui::Event>, height: f32| {
+        let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(500.0, height))), events, ..Default::default() };
+        let _ = ctx.run(raw, |ctx| {
+            app.keyboard(ctx);
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.columns(2, |columns| {
+                    app.pane_ui(&mut columns[0], 0, ctx);
+                    app.pane_ui(&mut columns[1], 1, ctx);
+                });
+            });
+        });
+    };
+    app.active = 0;
+    for _ in 0..3 {
+        run(&mut app, vec![], 700.0);
+    }
+    let key = |key| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() };
+    run(&mut app, vec![key(egui::Key::ArrowRight), key(egui::Key::ArrowRight)], 700.0);
+    run(&mut app, vec![], 700.0);
+    assert_eq!(app.panes[0].detail_x, 40.0, "two Right presses scroll 2 × 20 px");
+    let cursor = app.panes[0].cursor;
+    run(&mut app, vec![key(egui::Key::ArrowLeft)], 700.0);
+    run(&mut app, vec![], 700.0);
+    assert_eq!((app.panes[0].detail_x, app.panes[0].cursor), (20.0, cursor), "Left scrolls back and the cursor stays");
+    // 목록 크기가 바뀌면(AdjustPage) 0.
+    run(&mut app, vec![], 650.0);
+    run(&mut app, vec![], 650.0);
+    assert_eq!(app.panes[0].detail_x, 0.0);
+    let _ = fs::remove_dir_all(root);
+}
