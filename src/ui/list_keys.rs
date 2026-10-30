@@ -134,6 +134,64 @@ pub(super) fn arrow_target(page: &ListPage, cursor: usize, count: usize, key: Li
     target.clamp(0, n - 1) as usize
 }
 
+/// 원본 ArrowKey(0x7d69dc) 형식 3의 PageUp·PageDown(줄마다 높이가 다른 미리 보기). `tops`·`heights` = 줄마다 위·높이(내용 좌표,
+/// 항목 +0x6c·GetThumbnailRowHeight), `offset` = 맨 위 위치(0xdd), `view` = 목록 높이(GetRealClientHeight).
+/// - PageDown: 아래 줄(커서 + 열 수)이 다 보이면 다 보이는 동안 한 줄씩 내려간 마지막 줄, 아니면 위가 커서 줄 위에서 목록 높이 안인
+///   동안 내려간 마지막 줄. 마지막 항목을 넘으면 마지막 항목. 커서 + 열 수가 마지막 항목 − 1 이상이면 마지막 항목.
+/// - PageUp: 커서 − 열 수 < 1이면 0. 위 줄이 맨 위보다 위(가려짐)면 위가 커서 줄 위에서 목록 높이 안인 동안 올라간 줄, 아니면
+///   맨 위 아래에 다 보이는 동안 올라간 줄. 고친 것: 원본은 이 비교가 "맨 위보다 큼"이라 맨 위에 딱 붙은 줄(위 = 0xdd)로는 가지 않았다.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn thumbnail_page_target(tops: &[f32], heights: &[f32], columns: usize, offset: f32, view: f32, cursor: usize, count: usize, down: bool) -> usize {
+    let columns = columns.max(1);
+    if count == 0 {
+        return 0;
+    }
+    let last = count - 1;
+    let row_of = |i: usize| (i / columns).min(tops.len().saturating_sub(1));
+    let top = |i: usize| tops.get(row_of(i)).copied().unwrap_or(0.0);
+    let bottom = |i: usize| top(i) + heights.get(row_of(i)).copied().unwrap_or(0.0);
+    let cursor = cursor.min(last);
+    if down {
+        if cursor + columns >= last {
+            return last;
+        }
+        let next = cursor + columns;
+        let mut u = if bottom(next) - offset < view { next } else { cursor };
+        let fits = |v: usize, u0: usize| if u0 == next { bottom(v) - offset <= view } else { top(v) - top(cursor) <= view };
+        let start = u;
+        loop {
+            let v = (u + columns).min(last);
+            if !fits(v, start) {
+                break;
+            }
+            u = v;
+            if v >= last {
+                break;
+            }
+        }
+        u
+    } else {
+        if cursor < columns + 1 {
+            return 0;
+        }
+        let prev = cursor - columns;
+        let hidden = top(prev) - offset < 0.0;
+        let mut u = if hidden { cursor } else { prev };
+        loop {
+            let v = u.saturating_sub(columns);
+            let fits = if hidden { top(cursor) - top(v) <= view } else { top(v) - offset >= 0.0 };
+            if !fits {
+                break;
+            }
+            u = v;
+            if v == 0 {
+                break;
+            }
+        }
+        u
+    }
+}
+
 /// 원본 ArrowKey의 Ctrl(Shift 없이) 글쇠: 항목 종류(TNXFileItem +0x3c: 1 폴더, 3 파일, 4 드라이브, FUN_007d2c54) 수로 건너뛴다.
 /// Ctrl+PageUp = 첫 항목(폴더가 있을 때), Ctrl+PageDown = 마지막 폴더, Ctrl+Home = 첫 파일, Ctrl+End = 마지막 파일(파일이 있을 때).
 /// 그 밖의 글쇠나 해당 종류가 없으면 None(커서를 옮기지 않는다).
@@ -210,6 +268,21 @@ pub(super) fn flow_last_first(total_columns: usize, columns: usize, by_page: boo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 원본 ArrowKey 형식 3 PageUp·PageDown: 아래 줄이 다 보이면 마지막으로 다 보이는 줄까지, 아니면 한 화면(위끼리 목록 높이 안).
+    #[test]
+    fn thumbnail_pages_follow_the_row_pixels() {
+        // 3열, 줄 높이 100·150·100·100·100(위 0, 100, 250, 350, 450), 목록 높이 300, 맨 위 0. 항목 14개(마지막 줄 2개).
+        let tops = [0.0, 100.0, 250.0, 350.0, 450.0];
+        let heights = [100.0, 150.0, 100.0, 100.0, 100.0];
+        let page = |cursor, offset, down| thumbnail_page_target(&tops, &heights, 3, offset, 300.0, cursor, 14, down);
+        assert_eq!(page(1, 0.0, true), 4, "rows 0..1 fully visible: to the last fully visible row");
+        assert_eq!(page(4, 0.0, true), 10, "on the last visible row: tops within one view height (250, 350)");
+        assert_eq!(page(12, 0.0, true), 13, "near the end: the last item");
+        assert_eq!(page(10, 250.0, false), 7, "row above visible: to the first fully visible row (fixed: >=)");
+        assert_eq!(page(7, 250.0, false), 0, "row above hidden: tops within one view height, clamped to the first item");
+        assert_eq!(page(2, 0.0, false), 0);
+    }
 
     /// 쪽 단위는 마지막 쪽(빈 열이 남아도)의 처음 열까지, 줄 단위는 마지막 열이 오른쪽 끝에 오는 데까지.
     #[test]

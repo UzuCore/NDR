@@ -513,6 +513,11 @@ impl App {
             }
             for (key, list_key) in keys {
                 for _ in 0..input.num_presses(key) {
+                    // 원본 ArrowKey 형식 3 PageUp·PageDown은 줄 화소로 넘긴다(줄 높이가 줄마다 다르다).
+                    if let (list_keys::ListStyle::Thumbnails, ListKey::PageUp | ListKey::PageDown, Some((tops, heights, offset, view, columns))) = (pane.page.style, list_key, pane.thumb_rows.as_ref()) {
+                        cursor = list_keys::thumbnail_page_target(tops, heights, *columns, *offset, *view, cursor, length, list_key == ListKey::PageDown);
+                        continue;
+                    }
                     cursor = list_keys::arrow_target(&pane.page, cursor, length, list_key);
                 }
             }

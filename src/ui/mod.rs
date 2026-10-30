@@ -149,6 +149,8 @@ struct Pane {
     first_column: usize,
     /// 자세히 보기의 가로 위치(원본 0x378, 화소). 칸 너비 합이 목록보다 넓을 때만 0보다 크다.
     detail_x: f32,
+    /// 지난 그림의 미리 보기 줄 자리(줄마다 위·높이, 맨 위 위치, 목록 높이, 열 수). 원본 형식 3 PageUp·PageDown이 쓴다.
+    thumb_rows: Option<(Vec<f32>, Vec<f32>, f32, f32, usize)>,
     /// 다음 그림에서 커서가 보이게 넘긴다(원본 SetItemIndex).
     reveal: bool,
     /// 원본 AdjustPage(0x7daf24): 다음 그림에서 이 항목 번호에 맞춰 위치를 다시 잡는다. 목록 크기가 바뀔 때(WMSize 0x7d5814),
@@ -203,6 +205,7 @@ impl Pane {
             page: list_keys::ListPage::default(),
             first_column: 0,
             detail_x: 0.0,
+            thumb_rows: None,
             reveal: false,
             adjust: None,
             list_shape: None,

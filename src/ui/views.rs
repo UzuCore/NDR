@@ -359,6 +359,7 @@ impl App {
         let first = tops.partition_point(|&t| t < offset - 0.01);
         let fully = (first..rows).take_while(|&r| tops[r] + heights[r] <= offset + height + 0.01).count();
         self.panes[index].page = super::list_keys::ListPage { style: super::list_keys::ListStyle::Thumbnails, rows: fully.max(1), columns, top: first * columns, last: 0 };
+        self.panes[index].thumb_rows = thumbnails.then(|| (tops.clone(), heights.clone(), offset, height, columns));
         if (offset - current).abs() > 0.5 {
             area = area.vertical_scroll_offset(offset);
         }
