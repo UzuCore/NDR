@@ -1831,6 +1831,9 @@ fn skin_menus_use_the_original_menu_colours() {
     assert_eq!((v.widgets.hovered.weak_bg_fill, v.widgets.hovered.fg_stroke.color), (Color32::from_rgb(0xE6, 0xE6, 0xE6), Color32::BLACK));
     assert_eq!((v.widgets.noninteractive.bg_stroke.color, v.weak_text_color), (Color32::from_rgb(0x30, 0x30, 0x30), Some(Color32::from_rgb(0xC8, 0xC8, 0xC8))));
     assert_eq!(v.override_text_color, None);
+    // 원본 MenuDrawItem: 글은 줄 왼쪽 + 0x10(그 앞은 체크 그림 자리), MenuMeasureItem 너비는 글 + 0x20.
+    assert_eq!(style.spacing.button_padding.x, super::skin_pane::MENU_GUTTER);
+    assert_eq!(super::skin_pane::MENU_GUTTER, 16.0);
     let (bar_back, bar) = super::skin_pane::skin_menu_bar_style(&skin);
     let mut style = egui::Style::default();
     bar.apply(&mut style);
@@ -1839,6 +1842,27 @@ fn skin_menus_use_the_original_menu_colours() {
     // 단축키 칸: mrback 000000, mrtext C8C8C8, mrover 5577EE.
     assert_eq!(super::skin_pane::skin_menu_shortcut_colors(&skin), (Color32::BLACK, Color32::from_rgb(0xC8, 0xC8, 0xC8), Color32::from_rgb(0x55, 0x77, 0xEE)));
     let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn checked_menu_items_draw_the_original_check_bitmaps() {
+    // 원본 MenuDrawItem: 체크 항목은 CHECK(21점), 라디오 항목은 RCHECK(12점)를 줄 왼쪽에 그리고, 체크되지 않으면 그리지 않는다.
+    let ctx = egui::Context::default();
+    let mut counts = Vec::new();
+    for (checked, radio) in [(true, false), (true, true), (false, false)] {
+        let output = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                super::skin_pane::menu_check_button(ui, true, checked, radio, egui::Button::new("item"));
+            });
+        });
+        let quads: usize = output
+            .shapes
+            .iter()
+            .filter_map(|clipped| if let egui::Shape::Mesh(mesh) = &clipped.shape { Some(mesh.vertices.len() / 4) } else { None })
+            .sum();
+        counts.push(quads);
+    }
+    assert_eq!(counts, vec![21, 12, 0]);
 }
 
 #[test]

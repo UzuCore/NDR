@@ -17,7 +17,7 @@ impl App {
         ] {
             let key = menu_data::ORIGINAL_ACTIONS.iter().find(|(_, action)| *action == command).map(|(name, _)| format!("Menu.{name}"));
             let label = key.map(|key| self.language_pack.text(&key, fallback)).unwrap_or_else(|| fallback.into()).replace('&', "");
-            let response = ui.radio(mode == value, label);
+            let response = super::skin_pane::menu_check_button(ui, true, mode == value, true, egui::Button::new(label));
             if response.clicked() || self.take_item_letter(command, &response) {
                 chosen = Some(format!("sort:{value}"));
                 ui.close();
@@ -25,7 +25,8 @@ impl App {
         }
         ui.separator();
         let descend = self.raw_menu("miSortDescend", if ko { "&D. 내림차순" } else { "&D. Descend" });
-        let response = ui.checkbox(&mut self.settings.flag(&App::side_key(i, "SortDescending"), false), super::favorites_dialog::access_key(&descend).0);
+        let descending = self.settings.flag(&App::side_key(i, "SortDescending"), false);
+        let response = super::skin_pane::menu_check_button(ui, true, descending, false, egui::Button::new(super::favorites_dialog::access_key(&descend).0));
         if response.clicked() || self.take_menu_letter(&descend, &response) {
             chosen = Some("sortDescending".into());
             ui.close();
@@ -216,12 +217,15 @@ impl App {
                         let label = self.menu_label(id, if ko { ko_label } else { en_label });
                         // 원본 pmViewPopup: 표시 전환·보기 방식은 체크 표시가 있는 항목.
                         let shortcut = Self::menu_shortcut_text(id, &shortcuts);
-                        let checkbox = self.menu_checked(id).is_some();
+                        // 원본 MenuDrawItem: 체크 항목도 보통 항목처럼 그리고 체크되면 왼쪽에 CHECK 그림(보기 형식 등 라디오 항목은 RCHECK).
+                        let button = if shortcut_colors.is_some() {
+                            egui::Button::new(label).shortcut_text(RichText::new(reserve.clone()).color(Color32::TRANSPARENT))
+                        } else {
+                            egui::Button::new(label).shortcut_text(shortcut.clone())
+                        };
                         let response = match self.menu_checked(id) {
-                            Some(mut checked) => ui.add_enabled(enabled, egui::Checkbox::new(&mut checked, label)),
-                            // 스킨 테마: 단축키 자리는 투명 글로 잡아 두고 원본 단축키 칸(mrback·mrtext·mrover)을 위에 그린다.
-                            None if shortcut_colors.is_some() => ui.add_enabled(enabled, egui::Button::new(label).shortcut_text(RichText::new(reserve.clone()).color(Color32::TRANSPARENT))),
-                            None => ui.add_enabled(enabled, egui::Button::new(label).shortcut_text(shortcut.clone())),
+                            Some(checked) => super::skin_pane::menu_check_button(ui, enabled, checked, Self::radio_menu_item(id), button),
+                            None => ui.add_enabled(enabled, button),
                         };
                         if let Some(colors) = shortcut_colors {
                             // 고른 줄의 바탕(mhighlight)이 칸을 덮으므로 그 줄만 칸을 다시 칠한다(원본은 줄마다 칸을 칠한다).
@@ -229,9 +233,7 @@ impl App {
                                 let left = ui.min_rect().right() - (previous_width.max(8.0) + 14.0);
                                 ui.painter().rect_filled(egui::Rect::from_min_max(egui::pos2(left, response.rect.top()), egui::pos2(ui.min_rect().right(), response.rect.bottom())), 0.0, colors.0);
                             }
-                            if !checkbox {
-                                widest = widest.max(super::skin_pane::paint_menu_shortcut(ui, response.rect, &shortcut, colors, response.hovered()));
-                            }
+                            widest = widest.max(super::skin_pane::paint_menu_shortcut(ui, response.rect, &shortcut, colors, response.hovered()));
                         }
                         let letter_hit = !sub_open && enabled && {
                             let letter = self.menu_access_letter(id);
@@ -366,6 +368,11 @@ impl App {
         egui::containers::menu::MenuState::from_ui(ui, |state, _| state.open_item.is_some())
     }
 
+    /// 원본 TfMain DFM의 RadioItem = True 항목(miListStyleAuto·Names·Details·Thumbs). 체크되면 CHECK 대신 RCHECK.
+    pub(super) fn radio_menu_item(command: &str) -> bool {
+        matches!(command, "viewAuto" | "viewDetails" | "viewNames" | "viewThumbnails")
+    }
+
     /// 원본 메뉴 항목 오른쪽의 단축키 글(TMenuItem.ShortCut, shortcut.ini가 바꾼 값을 Delphi ShortCutToText로). 없으면 빈 글.
     pub(super) fn menu_shortcut_text(id: &str, shortcuts: &compat::ShortcutMap) -> String {
         Self::original_menu_name(id)
@@ -406,7 +413,7 @@ impl App {
                 let mut chosen = None;
                 self.access_submenu(ui, &raw, |_, ui| {
                     for name in &names {
-                        if ui.radio(name.eq_ignore_ascii_case(&current), *name).clicked() {
+                        if super::skin_pane::menu_check_button(ui, true, name.eq_ignore_ascii_case(&current), true, egui::Button::new(*name)).clicked() {
                             chosen = Some(*name);
                             ui.close();
                         }
@@ -426,7 +433,7 @@ impl App {
                 let mut open_more = false;
                 self.access_submenu(ui, &raw, |app, ui| {
                     for (code, name) in &languages {
-                        if ui.radio(code.eq_ignore_ascii_case(&current), name.as_str()).clicked() {
+                        if super::skin_pane::menu_check_button(ui, true, code.eq_ignore_ascii_case(&current), true, egui::Button::new(name.as_str())).clicked() {
                             chosen = Some(code.clone());
                             ui.close();
                         }

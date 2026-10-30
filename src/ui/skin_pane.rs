@@ -41,6 +41,9 @@ pub(super) fn skin_menu_style(skin: &Skin) -> egui::style::StyleModifier {
     let shortcut = menu_color(skin, "mrtext", Color32::from_gray(0xC8));
     egui::style::StyleModifier::new(move |style| {
         egui::containers::menu::menu_style(style);
+        // 원본 MenuDrawItem: 글은 줄 왼쪽 + 0x10에서 시작한다(그 앞 16화소는 체크 그림 자리). MenuMeasureItem의 너비도 글 + 0x20이라
+        // 오른쪽에도 16. 고친 것: 전에는 egui 메뉴 여백 2화소라 글이 왼쪽에 붙고 체크 항목만 네모 상자만큼 밀렸다.
+        style.spacing.button_padding.x = MENU_GUTTER;
         let v = &mut style.visuals;
         v.override_text_color = None;
         v.window_fill = back;
@@ -65,6 +68,40 @@ pub(super) fn skin_menu_style(skin: &Skin) -> egui::style::StyleModifier {
 }
 
 const MENU_STYLE_ID: &str = "ndr-skin-menu-style";
+
+/// 원본 펼침 메뉴 줄의 왼쪽 여백(MenuDrawItem: 글 = 줄 왼쪽 + 0x10).
+pub(super) const MENU_GUTTER: f32 = 16.0;
+
+/// 원본 비트맵 CHECK(16×16, 체크 항목)에서 흰 점(글 색으로 바뀌는 점)의 (x, y).
+const MENU_CHECK_DOTS: [(u8, u8); 21] = [
+    (10, 4), (9, 5), (10, 5), (4, 6), (8, 6), (9, 6), (10, 6), (4, 7), (5, 7), (7, 7), (8, 7), (9, 7),
+    (4, 8), (5, 8), (6, 8), (7, 8), (8, 8), (5, 9), (6, 9), (7, 9), (6, 10),
+];
+/// 원본 비트맵 RCHECK(16×16, 라디오 항목)의 흰 점.
+const MENU_RADIO_DOTS: [(u8, u8); 12] = [(7, 6), (8, 6), (6, 7), (7, 7), (8, 7), (9, 7), (6, 8), (7, 8), (8, 8), (9, 8), (7, 9), (8, 9)];
+
+/// 원본 MenuDrawItem(0x42e518): 체크된 항목(TMenuItem +0x44)은 줄 왼쪽, 줄 높이 가운데에 CHECK(라디오 항목 +0x49는 RCHECK)를 그린다.
+/// 흰 점은 글 색(고른 줄은 mover, 아니면 mtext; 꺼진 항목도 같은 색), 나머지는 투명. 체크되지 않은 줄은 그 자리를 비운다.
+pub(super) fn paint_menu_check(ui: &egui::Ui, item: egui::Rect, radio: bool, selected: bool) {
+    let color = if selected { ui.visuals().widgets.hovered.fg_stroke.color } else { ui.visuals().widgets.inactive.fg_stroke.color };
+    let origin = egui::pos2(item.left().round(), (item.top() + ((item.height() - 16.0) / 2.0).trunc()).round());
+    let dots: &[(u8, u8)] = if radio { &MENU_RADIO_DOTS } else { &MENU_CHECK_DOTS };
+    // 화소 하나씩: 다듬기(feathering) 없는 메시 사각형으로 그린다(1×1 rect_filled는 선으로 바뀌어 보이지 않았다).
+    let mut mesh = egui::Mesh::default();
+    for &(x, y) in dots {
+        mesh.add_colored_rect(egui::Rect::from_min_size(origin + egui::vec2(x as f32, y as f32), egui::vec2(1.0, 1.0)), color);
+    }
+    ui.painter().add(egui::Shape::mesh(mesh));
+}
+
+/// 체크·라디오 메뉴 항목(원본 TMenuItem Checked·RadioItem): 보통 항목과 같은 단추에 체크 그림만 더한다.
+pub(super) fn menu_check_button(ui: &mut egui::Ui, enabled: bool, checked: bool, radio: bool, button: egui::Button<'_>) -> egui::Response {
+    let response = ui.add_enabled(enabled, button);
+    if checked {
+        paint_menu_check(ui, response.rect, radio, response.hovered() || response.has_focus());
+    }
+    response
+}
 
 /// 원본 MenuDrawItem의 단축키 칸: 바탕 mrback(+0x48, 너비 = 단축키 글 너비), 글 mrtext(+0x4c), 고른 줄은 mrover(+0x50).
 pub(super) fn skin_menu_shortcut_colors(skin: &Skin) -> (Color32, Color32, Color32) {

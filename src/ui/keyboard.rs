@@ -534,18 +534,20 @@ impl App {
         let columns_title = self.language_pack.text("Menu.miColumn", "Columns").replace('&', "");
         let current = self.settings.values.get(if self.active == 0 { "LeftColumnCount" } else { "RightColumnCount" }).and_then(|v| v.as_i64()).unwrap_or(0);
         let mut chosen = None;
+        // 원본 miColAuto·miCol1~6은 RadioItem: 지금 값에 RCHECK.
+        let radio = |ui: &mut egui::Ui, on: bool, text: String| super::skin_pane::menu_check_button(ui, true, on, true, egui::Button::new(text));
         let auto = self.raw_menu("miColAuto", "&A. Auto");
-        let response = ui.selectable_label(current == 0, super::favorites_dialog::access_key(&auto).0);
+        let response = radio(ui, current == 0, super::favorites_dialog::access_key(&auto).0);
         if response.clicked() || self.take_menu_letter(&auto, &response) {
             chosen = Some("column:0".into());
         }
         ui.separator();
-        if (7..=19).contains(&current) && ui.selectable_label(true, format!("{current} {columns_title}")).clicked() {
+        if (7..=19).contains(&current) && radio(ui, true, format!("{current} {columns_title}")).clicked() {
             chosen = Some(format!("column:{current}"));
         }
         for count in 1..=6 {
             let raw = self.raw_menu(&format!("miCol{count}"), &format!("&{count}  Column"));
-            let response = ui.selectable_label(current == count, super::favorites_dialog::access_key(&raw).0);
+            let response = radio(ui, current == count, super::favorites_dialog::access_key(&raw).0);
             if response.clicked() || self.take_menu_letter(&raw, &response) {
                 chosen = Some(format!("column:{count}"));
             }
