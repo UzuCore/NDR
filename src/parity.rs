@@ -307,6 +307,54 @@ fn format_number(value: f64, decimals: usize, thousands: bool, trim: bool) -> St
     if fraction.is_empty() { integer } else { format!("{integer}.{fraction}") }
 }
 
+/// 원본 TNXCustomFileListView::SizeToStr(0x7df870): 목록 크기 칸 글. unit = SizeUnit(Auto·B·KB·MB·GB = 원본 +0x318의 0~4),
+/// comma = UseThousandsSeparator(+0x31c, 원본 [Display] usesizecomma).
+/// - Auto(FUN_007df5a4): 1000 GB 이상 TB((크기>>30)/1024), 1000 MB(0x3e800000) 이상 GB((크기>>20)/1024),
+///   1000 KB(0xfa000) 이상 MB((크기>>10)/1024), 1024 이상 KB, 그 밖은 "%d"(단위 없음). 값이 100 이상이면 Round(v),
+///   10 이상이면 Round(v×10)/10, 그 밖은 Round(v×100)/100(Delphi Round = 짝수 쪽 반올림) → FloatToStrF(ffFixed, 10, 자릿수) + " " + 단위.
+///   단위 표 0x92d414 = "b","KB","MB","GB","TB". 쉼표는 붙이지 않는다.
+/// - 단위를 고르면 FloatToText(ffFixed 또는 쉼표면 ffNumber, 20, 자릿수): B는 소수 없이 단위 글도 없이, KB·MB·GB는 소수 둘째 자리 + " KB" 들.
+pub fn size_to_str(size: u64, unit: &str, comma: bool) -> String {
+    const UNITS: [&str; 5] = ["b", "KB", "MB", "GB", "TB"];
+    // 정수 몫을 자릿수 digits의 고정 소수 글로(q는 값×10^digits).
+    let fixed = |q: u128, digits: u32, comma: bool| {
+        let factor = 10u128.pow(digits);
+        let integer = (q / factor).to_string();
+        let integer = if comma { group_thousands(&integer) } else { integer };
+        if digits == 0 { integer } else { format!("{integer}.{:0width$}", q % factor, width = digits as usize) }
+    };
+    let requested = ["auto", "b", "kb", "mb", "gb"].iter().position(|u| u.eq_ignore_ascii_case(unit)).unwrap_or(0);
+    if requested > 0 {
+        let power = (requested - 1) as u32;
+        if power == 0 {
+            return fixed(size as u128, 0, comma);
+        }
+        // FloatToText의 십진 반올림(반은 올림).
+        let divisor = 1024u128.pow(power);
+        let q = (size as u128 * 100 * 2 + divisor) / (2 * divisor);
+        return format!("{} {}", fixed(q, 2, comma), UNITS[requested - 1]);
+    }
+    let (index, mantissa) = if size >= 1_073_741_824_000 {
+        (4, size >> 30)
+    } else if size >= 0x3e80_0000 {
+        (3, size >> 20)
+    } else if size >= 0xfa000 {
+        (2, size >> 10)
+    } else if size >= 0x400 {
+        (1, size)
+    } else {
+        return size.to_string();
+    };
+    let digits = if mantissa >= 100 * 1024 { 0 } else if mantissa >= 10 * 1024 { 1 } else { 2 };
+    // Round(v × 10^digits), v = mantissa / 1024, 짝수 쪽 반올림.
+    let numerator = mantissa as u128 * 10u128.pow(digits);
+    let (mut q, rest) = (numerator / 1024, numerator % 1024);
+    if rest * 2 > 1024 || (rest * 2 == 1024 && q % 2 == 1) {
+        q += 1;
+    }
+    format!("{} {}", fixed(q, digits, false), UNITS[index])
+}
+
 /// C# FileSystemService.FormatSize(size, SizeUnit, UseThousandsSeparator): 단위를 고르면 그 단위(B는 정수, 나머지 소수 둘째 자리),
 /// "Auto"면 1024로 나누며 B는 정수, 나머지는 소수 첫째 자리.
 pub fn format_size(size: u64, unit: &str, thousands: bool) -> String {
@@ -485,6 +533,30 @@ mod tests {
         assert_eq!(quick_search_match(&names, Some(0), "ETA.T", false), Some(3));
         assert_eq!(quick_search_match(&names, None, "zz", false), None);
         assert_eq!(quick_search_match(&[], Some(0), "a", false), None);
+    }
+
+    #[test]
+    fn list_size_text_follows_the_original_sizetostr() {
+        // 자동: 1024 미만은 단위 없는 숫자, 유효 숫자 세 자리.
+        assert_eq!(size_to_str(0, "Auto", true), "0");
+        assert_eq!(size_to_str(1023, "Auto", true), "1023");
+        assert_eq!(size_to_str(1024, "Auto", true), "1.00 KB");
+        assert_eq!(size_to_str(1536, "Auto", false), "1.50 KB");
+        assert_eq!(size_to_str(1152, "Auto", false), "1.12 KB", "Round is round-half-even");
+        assert_eq!(size_to_str(10240, "Auto", true), "10.0 KB");
+        assert_eq!(size_to_str(102_400, "Auto", true), "100 KB");
+        assert_eq!(size_to_str(1_023_999, "Auto", true), "1000 KB");
+        assert_eq!(size_to_str(1_024_000, "Auto", true), "0.98 MB", "1000 KB and above is MB");
+        assert_eq!(size_to_str(1_234_567, "Auto", true), "1.18 MB");
+        assert_eq!(size_to_str(5 << 30, "Auto", true), "5.00 GB");
+        assert_eq!(size_to_str(2_000_000_000_000, "Auto", true), "1.82 TB");
+        // 단위 고름: B는 단위 글이 없다, 쉼표는 ffNumber.
+        assert_eq!(size_to_str(1_234_567, "B", true), "1,234,567");
+        assert_eq!(size_to_str(1_234_567, "B", false), "1234567");
+        assert_eq!(size_to_str(1_234_567, "KB", true), "1,205.63 KB");
+        assert_eq!(size_to_str(128, "KB", false), "0.13 KB", "FloatToText rounds half up");
+        assert_eq!(size_to_str(1_234_567, "MB", false), "1.18 MB");
+        assert_eq!(size_to_str(2_000_000_000_000, "GB", true), "1,862.65 GB");
     }
 
     #[test]

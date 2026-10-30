@@ -174,7 +174,8 @@ impl App {
                     ndr::parity::list_extension(&entry.name).to_owned()
                 },
                 kind,
-                if entry.is_dir { String::new() } else { ndr::parity::format_size(entry.size, &unit, thousands) },
+                // 원본 DrawListItem 필드 3 = SizeToStr(0x7df870). 고친 것: 전에는 C# FormatSize("999 B", "1.2 MB")였다.
+                if entry.is_dir { String::new() } else { ndr::parity::size_to_str(entry.size, &unit, thousands) },
                 ndr::listing::list_date_text(entry.modified, &date_format, &time_format, use_age.then(|| [age_labels[0].as_str(), age_labels[1].as_str(), age_labels[2].as_str()]), now),
                 // 원본 DrawListItem 필드 5: SFTP 목록 항목(+0x78)은 권한 글(+0x74), 그 밖은 GetAttrString(0x7b50a4, "____"에 A·H·R·S).
                 // 고친 것: 전에는 C# 판 글("RHSA"·"-")이었다.

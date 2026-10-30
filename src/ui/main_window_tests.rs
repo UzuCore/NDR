@@ -395,7 +395,7 @@ fn update_check_context_menu_and_folder_sizes_follow_csharp() {
         app.poll(&ctx);
         thread::sleep(Duration::from_millis(5));
     }
-    assert_eq!(app.panes[0].folder_sizes[&folder].as_deref(), Some("2.0 KB"));
+    assert_eq!(app.panes[0].folder_sizes[&folder].as_deref(), Some("2.00 KB"), "original SizeToStr");
     // 원본 FUN_0048a5cc: 파일 정보 표시줄은 센 폴더의 크기를 바이트(천 단위)로.
     app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.path == folder).unwrap();
     assert!(app.file_info(0).unwrap().starts_with("2,048  |  "), "{:?}", app.file_info(0));

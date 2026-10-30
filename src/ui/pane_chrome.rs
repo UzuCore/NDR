@@ -672,7 +672,8 @@ fn folder_size_worker(shared: FolderSizeQueue, tx: Sender<AsyncResult>) {
             continue;
         }
         let Some(summary) = ndr::tools::folder_size_summary(std::slice::from_ref(&job.path), &job.cancel) else { continue };
-        let size = ndr::parity::format_size(summary.total_bytes, &job.unit, job.thousands);
+        // 원본 DrawListItem: 폴더 크기(+0x60 != -1)도 SizeToStr로 그린다.
+        let size = ndr::parity::size_to_str(summary.total_bytes, &job.unit, job.thousands);
         let text = if summary.errors.is_empty() { size } else { format!("≥ {size}") };
         if tx.send(AsyncResult::FolderSizeRow { pane: job.pane, generation: job.generation, path: job.path, text, bytes: summary.total_bytes }).is_err() {
             return;
