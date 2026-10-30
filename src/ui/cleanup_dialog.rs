@@ -468,19 +468,9 @@ impl App {
     /// C# EmptyRecycleBin: 예/아니요(경고) → 비우기 → "휴지통을 비웠습니다.". 실패는 RunSafely 경고 상자.
     pub(super) fn empty_recycle_command(&mut self) {
         // 원본 miEmptyRecycleBinClick(0x433094): SHEmptyRecycleBinW(창, NULL, 0) — 확인·진행은 셸 창, NDR 글 없음(스킨 테마).
-        if self.skin_active() {
-            let emptier = self.shell_recycle_emptier;
-            thread::spawn(move || {
-                let _ = emptier();
-            });
-            return;
-        }
-        let title = self.tr("휴지통 비우기", "Empty Recycle Bin").into_owned();
-        let text = self.tr("휴지통의 모든 항목을 영구적으로 지울까요?", "Permanently delete every item in the Recycle Bin?").into_owned();
-        self.system_box(&title, &text, MB_YESNO | MB_ICONEXCLAMATION, |app, answer, _| {
-            if answer == IDYES {
-                app.start_recycle_empty(None);
-            }
+        let emptier = self.shell_recycle_emptier;
+        thread::spawn(move || {
+            let _ = emptier();
         });
     }
 

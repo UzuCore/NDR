@@ -428,7 +428,6 @@ enum AsyncResult {
     },
     Error(String),
     ProtectedItems(file_commands::DeleteRun),
-    FolderSize(ndr::tools::FolderSizeSummary),
     AttributesApplied(pane_commands::AttributeRun),
     SplitDone { source: PathBuf, outcome: Result<ndr::split::SplitResult, String>, cancelled: bool },
     JoinDone { count: usize, outcome: Result<(), String>, cancelled: bool },
@@ -443,7 +442,6 @@ enum AsyncResult {
     Warning(String),
     MergeSources(PathBuf, Result<Vec<PathBuf>, String>),
     MergeDone(usize, Result<(), String>),
-    OpenWithSources(String, String, Result<Vec<String>, String>),
     /// 작업이 끝난 뒤 보일 상태 줄 글.
     ArchiveStatus(String),
     /// 작업이 끝난 뒤 그 패널을 이 폴더로(외부 프로그램으로 푼 압축 열기).
@@ -1277,7 +1275,6 @@ impl App {
                 }
                 AsyncResult::Error(e) => self.status = e,
                 AsyncResult::ProtectedItems(run) => self.protected_step(run),
-                AsyncResult::FolderSize(summary) => self.show_folder_size(summary),
                 AsyncResult::AttributesApplied(run) => self.attribute_step(run),
                 AsyncResult::SplitDone { source, outcome, cancelled } => self.split_done(source, outcome, cancelled),
                 AsyncResult::JoinDone { count, outcome, cancelled } => self.join_done(count, outcome, cancelled),
@@ -1290,7 +1287,6 @@ impl App {
                 AsyncResult::Warning(text) => self.system_box("NDR", &text, ndr::msgbox::MB_OK | ndr::msgbox::MB_ICONEXCLAMATION, |_, _, _| {}),
                 AsyncResult::MergeSources(output, sources) => self.merge_sources_ready(output, sources),
                 AsyncResult::MergeDone(count, outcome) => self.merge_done(count, outcome),
-                AsyncResult::OpenWithSources(program, template, paths) => self.launch_open_with(&program, &template, paths),
                 AsyncResult::ArchiveStatus(text) => self.status = self.archive_error_text(&text),
                 AsyncResult::OpenFolder { pane, path } => {
                     if pane < self.panes.len() {

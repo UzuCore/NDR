@@ -4,7 +4,6 @@
 //! (FileInformationService), SelectThemeAsync/ApplyTheme, SelectLanguageAsync, ShowAbout, OpenNexusFileHelp, OpenProgramHomepage.
 use super::*;
 use ndr::msgbox::{MB_ICONASTERISK, MB_ICONEXCLAMATION, MB_OK};
-use std::fs;
 
 /// C# SelectThemeAsync의 선택지.
 pub(super) const THEMES: [&str; 6] = ["Dark", "Light", "System", "Black", "Classic", "Gray"];
@@ -103,42 +102,6 @@ impl ArchiveMenuState {
             _ => (true, true),
         }
     }
-}
-
-/// C# FileInformationService.Read의 줄(영어 이름표, 값). 이름표는 언어 파일 역검색(TranslateText)으로 바꿔 보인다.
-pub(super) fn file_information_rows(entry: Option<&Entry>, name: &str, physical: Option<&Path>, display: &str, description: Option<&str>, unit: &str, thousands: bool, type_name: impl Fn(&str, bool) -> String) -> Vec<(&'static str, String)> {
-    let mut is_dir = entry.is_none_or(|e| e.is_dir);
-    let mut size = entry.filter(|e| !e.is_dir).map(|e| e.size);
-    let mut modified = entry.and_then(|e| e.modified);
-    let mut attributes = None;
-    if let Some(path) = physical {
-        if let Ok(meta) = fs::metadata(path) {
-            is_dir = meta.is_dir();
-            size = (!is_dir).then_some(meta.len());
-            modified = meta.modified().ok().or(modified);
-            attributes = native::attributes(path).ok().map(native::dotnet_attributes_text);
-        }
-    }
-    let extension = ndr::parity::dotnet_extension(name).to_owned();
-    let mut kind = type_name(&extension, is_dir);
-    if kind.is_empty() {
-        kind = if is_dir { "폴더".into() } else { "파일".into() };
-    }
-    let mut rows = vec![
-        ("Name", name.to_owned()),
-        ("File", kind),
-        ("Ext", if extension.is_empty() { "—".into() } else { extension }),
-        ("Location", display.to_owned()),
-        ("Size", match size { Some(bytes) if !is_dir => ndr::parity::format_size(bytes, unit, thousands), _ => "—".into() }),
-        ("Date modified", modified.map(ndr::listing::general_date_text).unwrap_or_else(|| "—".into())),
-    ];
-    if let Some(attributes) = attributes.filter(|a| !a.trim().is_empty()) {
-        rows.push(("Attr", attributes));
-    }
-    if let Some(description) = description.filter(|d| !d.trim().is_empty()) {
-        rows.push(("Description", description.to_owned()));
-    }
-    rows
 }
 
 impl App {
@@ -344,12 +307,11 @@ impl App {
             .flatten();
         let path = match (configured, id) {
             (Some(value), _) => PathBuf::from(ndr::command_line::expand_setting(&value)),
-            // 원본 miToTempClick(0x4330b0): GetTempPathW → GetLongPathNameW, 둘 중 하나라도 실패하면 그만(스킨 테마).
-            (None, "temp") if self.skin_active() => match (self.system.temp_folder)() {
+            // 원본 miToTempClick(0x4330b0): GetTempPathW → GetLongPathNameW, 둘 중 하나라도 실패하면 그만.
+            (None, "temp") => match (self.system.temp_folder)() {
                 Some(path) => path,
                 None => return,
             },
-            (None, "temp") => std::env::temp_dir(),
             (None, "downloads") => PathBuf::from(std::env::var_os("USERPROFILE").unwrap_or_default()).join("Downloads"),
             (None, other) => native::special_folder(other).unwrap_or_default(),
         };
@@ -363,82 +325,23 @@ impl App {
         let i = self.active;
         // 원본 miPropertiesClick(0x432208): 커서 항목이 있고 FTP·압축 위치가 아닐 때. 표시가 없고 커서가 드라이브(종류 4)면
         // 그 드라이브의 속성, 아니면 모은 항목(표시, 없으면 커서) 전부의 여러 파일 속성 창(스킨 테마).
-        if self.skin_active() {
-            let pane = &self.panes[i];
-            if pane.archive.is_some() || pane.remote.is_some() {
-                return;
-            }
-            let Some(cursor) = pane.entries.get(pane.cursor).cloned() else { return };
-            if pane.selected.is_empty() && cursor.drive {
-                if let Err(error) = (self.system.run_verb)(&cursor.path, "properties") {
-                    self.status = error;
-                }
-                return;
-            }
-            let paths: Vec<PathBuf> = self.target_entries(i).into_iter().filter(|e| !e.drive).map(|e| e.path).collect();
-            if !paths.is_empty() {
-                if let Err(error) = (self.system.properties)(&paths) {
-                    self.status = error;
-                }
-            }
-            return;
-        }
-        let path = self.target_entries(i).first().map(|e| e.path.clone()).unwrap_or_else(|| self.panes[i].path.clone());
-        if path.as_os_str().is_empty() {
-            return;
-        }
-        if let Err(error) = (self.system.run_verb)(&path, "properties") {
-            self.status = error;
-        }
-    }
-
-    /// C# ShowFileInformation: FileInformationService 줄을 "이름표: 값"으로, 글 창 제목은 Menu("fileInfo").
-    /// 압축 안이면 위치는 "압축!항목".
-    pub(super) fn file_info_command(&mut self) {
-        let i = self.active;
         let pane = &self.panes[i];
-        let entry = self.target_entries(i).into_iter().next();
-        let archive = pane.archive.clone();
-        let (physical, display) = match &archive {
-            Some(location) => {
-                let key = entry.as_ref().map(|e| e.path.to_string_lossy().into_owned()).unwrap_or_else(|| location.prefix.clone());
-                let display = if key.is_empty() { location.file.to_string_lossy().into_owned() } else { format!("{}!{key}", location.file.display()) };
-                (None, display)
+        if pane.archive.is_some() || pane.remote.is_some() {
+            return;
+        }
+        let Some(cursor) = pane.entries.get(pane.cursor).cloned() else { return };
+        if pane.selected.is_empty() && cursor.drive {
+            if let Err(error) = (self.system.run_verb)(&cursor.path, "properties") {
+                self.status = error;
             }
-            None => {
-                let path = entry.as_ref().map(|e| e.path.clone()).unwrap_or_else(|| pane.path.clone());
-                let display = path.to_string_lossy().into_owned();
-                (Some(path), display)
-            }
-        };
-        let mut name = entry.as_ref().map(|e| e.name.clone()).unwrap_or_default();
-        if name.is_empty() {
-            let current = match &archive {
-                Some(location) => location.prefix.trim_end_matches(['/', '\\']).to_owned(),
-                None => pane.path.to_string_lossy().into_owned(),
-            };
-            name = ndr::names::find_file_name(current.trim_end_matches(['/', '\\']));
-            if name.is_empty() {
-                name = match &archive {
-                    Some(location) => location.file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
-                    None => current,
-                };
-            }
-            if name.is_empty() {
-                name = "—".into();
+            return;
+        }
+        let paths: Vec<PathBuf> = self.target_entries(i).into_iter().filter(|e| !e.drive).map(|e| e.path).collect();
+        if !paths.is_empty() {
+            if let Err(error) = (self.system.properties)(&paths) {
+                self.status = error;
             }
         }
-        let description = entry.as_ref().and_then(|e| pane.descriptions.get(&e.name.to_lowercase())).cloned();
-        let unit = self.settings.text("SizeUnit", "Auto");
-        let thousands = self.settings.flag("UseThousandsSeparator", true);
-        let rows = file_information_rows(entry.as_ref(), &name, physical.as_deref(), &display, description.as_deref(), &unit, thousands, native::shell_type_name);
-        let report = rows.iter().map(|(label, value)| format!("{}: {value}", self.language_pack.translate_pair(label, label))).collect::<Vec<_>>().join("\r\n");
-        let title = menu_data::ORIGINAL_ACTIONS
-            .iter()
-            .find(|(_, action)| *action == "fileInfo")
-            .map(|(name, _)| self.language_pack.text(&format!("Menu.{name}"), "What is this file?"))
-            .unwrap_or_else(|| "What is this file?".into());
-        self.text = Some(TextDocument { path: None, title, text: report, editable: false, dirty: false });
     }
 
     /// C# SelectThemeAsync: "테마 선택"/"NDR 화면 테마" 고르기 → Theme 저장, 바로 적용.
@@ -502,21 +405,12 @@ impl App {
     /// 없으면 NDR 글 창.
     pub(super) fn text_command(&mut self, edit: bool) {
         let i = self.active;
-        // 원본 miTextViewerClick/miTextEditorClick → FUN_00430304: 커서 항목이 파일(종류 3)일 때만, 로컬·압축 패널에서(스킨 테마).
-        let original = self.skin_active();
-        let entry = if original {
-            let pane = &self.panes[i];
-            if pane.remote.is_some() {
-                return;
-            }
-            let Some(entry) = pane.entries.get(pane.cursor).filter(|e| !e.is_dir && !e.drive).cloned() else { return };
-            entry
-        } else {
-            let Some(entry) = self.target_entries(i).into_iter().find(|e| !e.is_dir) else {
-                return self.warn("텍스트 파일 하나를 선택하세요.", "Select one text file.");
-            };
-            entry
-        };
+        // 원본 miTextViewerClick/miTextEditorClick → FUN_00430304: 커서 항목이 파일(종류 3)일 때만, 로컬·압축 패널에서.
+        let pane = &self.panes[i];
+        if pane.remote.is_some() {
+            return;
+        }
+        let Some(entry) = pane.entries.get(pane.cursor).filter(|e| !e.is_dir && !e.drive).cloned() else { return };
         match self.panes[i].archive.clone() {
             None => self.text_source_ready(Ok(entry.path), edit),
             Some(location) => {
@@ -537,8 +431,8 @@ impl App {
             Err(error) => return self.system_box("NDR", &error, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {}),
         };
         let mut program = ndr::command_line::expand_setting(&self.settings.text(if edit { "TextEditorPath" } else { "TextViewerPath" }, ""));
-        // 원본 FUN_00430304: 설정이 비면 "notepad.exe"에 "\"경로\""(스킨 테마). C# 테마는 NDR 글 창.
-        if program.trim().is_empty() && self.skin_active() {
+        // 원본 FUN_00430304: 설정이 비면 "notepad.exe"에 "\"경로\"".
+        if program.trim().is_empty() {
             program = "notepad.exe".into();
         }
         if !program.trim().is_empty() {
@@ -619,33 +513,4 @@ mod tests {
         assert_eq!(theme_palette("NexusFile", false), theme_palette("Dark", false));
     }
 
-    #[test]
-    fn file_information_rows_follow_csharp_service() {
-        let root = std::env::temp_dir().join(format!("ndr-fileinfo-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(&root).unwrap();
-        let file = root.join("report.txt");
-        fs::write(&file, b"12345").unwrap();
-        let entry = Entry { path: file.clone(), name: "report.txt".into(), is_dir: false, size: 5, modified: None, hidden: false, attributes: 0, drive: false };
-        let rows = file_information_rows(Some(&entry), "report.txt", Some(&file), &file.to_string_lossy(), Some("note"), "B", true, |ext, dir| format!("T{ext}{dir}"));
-        let labels: Vec<_> = rows.iter().map(|(l, _)| *l).collect();
-        assert_eq!(labels, ["Name", "File", "Ext", "Location", "Size", "Date modified", "Attr", "Description"]);
-        assert_eq!(rows[1].1, "T.txtfalse");
-        assert_eq!(rows[2].1, ".txt");
-        assert_eq!(rows[4].1, ndr::parity::format_size(5, "B", true));
-        assert_ne!(rows[5].1, "—");
-        assert_eq!(rows[7].1, "note");
-        // Folder: size is "—", empty shell type falls back to "폴더", no extension shows "—".
-        let rows = file_information_rows(None, "dir", Some(&root), &root.to_string_lossy(), None, "B", true, |_, _| String::new());
-        assert_eq!(rows[1].1, "폴더");
-        assert_eq!(rows[2].1, "—");
-        assert_eq!(rows[4].1, "—");
-        assert!(rows.iter().any(|(l, v)| *l == "Attr" && v.contains("Directory")));
-        // Archive entry: no physical path, values from the listing.
-        let rows = file_information_rows(Some(&entry), "report.txt", None, "a.zip!report.txt", None, "B", true, |_, _| String::new());
-        assert_eq!(rows[3].1, "a.zip!report.txt");
-        assert_eq!(rows[5].1, "—");
-        assert!(!rows.iter().any(|(l, _)| *l == "Attr"));
-        let _ = fs::remove_dir_all(&root);
-    }
 }

@@ -46,13 +46,6 @@ pub(super) fn filter_drop_paths(candidates: &[PathBuf], target: &Path) -> Vec<Pa
     result
 }
 
-/// C# GetDefaultDropEffect: 모든 항목이 대상과 같은 루트면 이동, 아니면 복사.
-fn default_effect(paths: &[PathBuf], destination: &Path) -> DropEffect {
-    let root = |p: &Path| p.components().next().map(|c| c.as_os_str().to_string_lossy().to_lowercase());
-    let target = root(destination);
-    if target.is_some() && paths.iter().all(|p| root(p) == target) { DropEffect::Move } else { DropEffect::Copy }
-}
-
 impl App {
     /// 항목 끌기 시작(왼쪽 또는 오른쪽 단추). 압축·원격 패널은 끌 수 없다. 끈 항목이 선택에 없으면 그 항목만.
     /// 스킨 테마(원본 FUN_004856d8·FUN_00485bbc): 표시가 있으면 누른 항목과 상관없이 표시한 항목을 모두 끌고, 없으면 누른(커서) 항목을
@@ -61,8 +54,7 @@ impl App {
         if self.file_drag.is_some() {
             return;
         }
-        let skin = self.skin_active();
-        let allowed = match (skin && !secondary, modifiers.ctrl, modifiers.shift) {
+        let allowed = match (!secondary, modifiers.ctrl, modifiers.shift) {
             (true, true, true) => 4,
             (true, true, false) => 1,
             (true, false, true) => 2,
@@ -72,9 +64,7 @@ impl App {
         if pane.archive.is_some() || pane.loading {
             return;
         }
-        let rows: Vec<usize> = if skin && !pane.selected.is_empty() {
-            pane.selected.iter().copied().collect()
-        } else if pane.selected.contains(&row) {
+        let rows: Vec<usize> = if !pane.selected.is_empty() {
             pane.selected.iter().copied().collect()
         } else {
             vec![row]
@@ -89,10 +79,8 @@ impl App {
         }
         if !paths.is_empty() {
             self.pending_drag_marks = None;
-            if skin {
-                // 원본 DoDragDrop가 시작되면 목록의 범위 끌기(Shift로 누른 뒤 움직이기)는 거기서 끝난다.
-                self.panes[index].range_drag = None;
-            }
+            // 원본 DoDragDrop가 시작되면 목록의 범위 끌기(Shift로 누른 뒤 움직이기)는 거기서 끝난다.
+            self.panes[index].range_drag = None;
             self.file_drag = Some(FileDrag { paths, secondary, source: index, allowed });
         }
     }
@@ -248,67 +236,7 @@ impl App {
         if self.panes[pane].archive.is_some() || !destination.is_dir() || candidates.is_empty() {
             return;
         }
-        if self.skin_active() {
-            return self.original_drop(pane, candidates, destination, modifiers, allowed);
-        }
-        self.active = pane;
-        let transfer = filter_drop_paths(&candidates, &destination);
-        let link_only = transfer.is_empty();
-        let paths = if link_only { candidates } else { transfer };
-        let allowed = |effect: DropEffect| effect == DropEffect::Link || !link_only;
-        let requested = match (modifiers.ctrl, modifiers.shift) {
-            (true, true) => Some(DropEffect::Link),
-            (true, false) => Some(DropEffect::Copy),
-            (false, true) => Some(DropEffect::Move),
-            _ => None,
-        };
-        if let Some(effect) = requested {
-            if allowed(effect) {
-                self.apply_drop(effect, paths, destination);
-            }
-            return;
-        }
-        if self.settings.flag("ConfirmDragDrop", true) && !link_only {
-            // 원본 FUN_00488b64: 기본 효과(같은 드라이브 이동, 아니면 복사)를 TfMsgBox(DRAGDROP, "", DROPMOVE_CONFIRM /
-            // DROPCOPY_CONFIRM의 %d = 개수, MB_YESNO | MB_ICONQUESTION)로 묻고 예면 옮긴다.
-            let effect = default_effect(&paths, &destination);
-            let (key, fallback) = if effect == DropEffect::Move { ("RES.DROPMOVE_CONFIRM", "You want to move %d obejct(s)?") } else { ("RES.DROPCOPY_CONFIRM", "You want to copy %d object(s)?") };
-            let text = self.language_pack.text(key, fallback).replace("%d", &paths.len().to_string());
-            let title = self.language_pack.text("RES.DRAGDROP", "Drag and Drop");
-            self.message_box(&title, "", &text, ndr::msgbox::MB_YESNO | ndr::msgbox::MB_ICONQUESTION, move |app, answer, _| {
-                if answer == ndr::msgbox::IDYES {
-                    app.apply_drop(effect, paths, destination);
-                }
-            });
-            return;
-        }
-        if self.settings.flag("ConfirmDragDrop", true) {
-            // 옮길 것이 없을 때(같은 폴더): C# ChooseDropEffect의 바로 가기/취소.
-            let ko = self.language == "ko";
-            let menu = |key: &str, fallback: &str| self.language_pack.text(&format!("formMain.Menu.{key}"), fallback);
-            let mut choices: Vec<(String, Option<DropEffect>)> = Vec::new();
-            if !link_only {
-                choices.push((menu("miDropCopy", if ko { "여기에 복사" } else { "Copy here" }), Some(DropEffect::Copy)));
-                choices.push((menu("miDropMove", if ko { "여기로 이동" } else { "Move here" }), Some(DropEffect::Move)));
-            }
-            choices.push((menu("miDropShortcut", if ko { "여기에 바로 가기 만들기" } else { "Create shortcut here" }), Some(DropEffect::Link)));
-            choices.push((menu("miDropCancel", if ko { "취소" } else { "Cancel" }), None));
-            let (title, message) = if ko {
-                ("드래그 작업".to_owned(), format!("선택한 {}개 항목을 대상 폴더로", super::file_operation::n0(paths.len())))
-            } else {
-                ("Drag operation".to_owned(), format!("{} selected item(s) to the destination folder", super::file_operation::n0(paths.len())))
-            };
-            let labels = choices.iter().map(|(l, _)| l.clone()).collect();
-            let effects: Vec<Option<DropEffect>> = choices.into_iter().map(|(_, e)| e).collect();
-            self.choice_dialog(&title, &message, labels, 0, move |app, chosen, _| {
-                if let Some(Some(effect)) = chosen.and_then(|i| effects.get(i).copied()) {
-                    app.apply_drop(effect, paths, destination);
-                }
-            });
-            return;
-        }
-        let effect = if link_only { DropEffect::Link } else { default_effect(&paths, &destination) };
-        self.apply_drop(effect, paths, destination);
+        return self.original_drop(pane, candidates, destination, modifiers, allowed);
     }
 
     /// 원본 오른쪽 단추 끌기(FUN_00488a.. `[+0x2f8] == 1`): 놓은 곳에 pmDrop(miDropCopy, miDropMove, miDropShortcut, N2 "-", miDropCancel)을 연다.
@@ -402,8 +330,6 @@ mod tests {
         assert_eq!(filter_drop_paths(&candidates, &root.join("a").join("inner")), vec![root.join("b").join("x.txt")]);
         assert!(filter_drop_paths(&[root.join("b").join("x.txt")], &root.join("b")).is_empty());
         assert_eq!(filter_drop_paths(&candidates, &root.join("b")), vec![root.join("a")]);
-        assert_eq!(default_effect(&[PathBuf::from(r"C:\x")], Path::new(r"c:\y")), DropEffect::Move);
-        assert_eq!(default_effect(&[PathBuf::from(r"D:\x")], Path::new(r"C:\y")), DropEffect::Copy);
         std::fs::remove_dir_all(root).unwrap();
     }
 }

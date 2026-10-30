@@ -329,9 +329,6 @@ impl App {
     /// 원본 FUN_0042bdc4(복사·이동)·FUN_0042c734(삭제): 표시에서 작업을 만들면(끌어 놓기·붙여넣기가 아니면) 그 패널의 표시를
     /// "마지막 선택"(+0xd08, CopySelection)에 남기고 표시를 지운다(ClearSelection). 표시가 없으면 마지막 선택도 빈다. 스킨 테마.
     pub(super) fn original_take_marks(&mut self, sources: &[PathBuf]) {
-        if !self.skin_active() {
-            return;
-        }
         let Some(parent) = sources.first().and_then(|p| p.parent()) else { return };
         let order = [self.active, 1 - self.active];
         let Some(i) = order.into_iter().find(|&i| {
@@ -345,7 +342,7 @@ impl App {
 
     /// original_take_marks의 패널을 아는 판(끌어 놓기: 원본 FUN_004856d8이 놓기 뒤 끈 목록에 CopySelection + ClearSelection). 스킨 테마.
     pub(super) fn original_take_pane_marks(&mut self, i: usize) {
-        if !self.skin_active() || i > 1 {
+        if i > 1 {
             return;
         }
         let pane = &mut self.panes[i];

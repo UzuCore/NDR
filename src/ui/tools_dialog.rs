@@ -466,56 +466,15 @@ impl App {
     /// 스킨 테마는 원본 mipOpenWithClick(0x43da54): 커서 항목(FUN_0042d3b8 = 지금 폴더 + 이름)을
     /// ExecuteFile("rundll32.exe", "shell32.dll,OpenAs_RunDLL 경로")로 Windows "연결 프로그램" 창에 넘긴다.
     pub(super) fn open_with_command(&mut self) {
-        if self.skin_active() {
-            let pane = &self.panes[self.active];
-            if pane.archive.is_some() || pane.remote.is_some() {
-                return;
-            }
-            let Some(entry) = pane.entries.get(pane.cursor).filter(|e| !e.is_dir && !e.drive) else { return };
-            let path = entry.path.clone();
-            let directory = path.parent().map(Path::to_path_buf).unwrap_or_default();
-            if let Err(error) = (self.shell_runner)(Path::new("rundll32.exe"), &format!("shell32.dll,OpenAs_RunDLL {}", path.display()), &directory) {
-                self.status = error;
-            }
+        let pane = &self.panes[self.active];
+        if pane.archive.is_some() || pane.remote.is_some() {
             return;
         }
-        let sources = self.selected_files();
-        if sources.files.is_empty() {
-            return self.warn("다른 프로그램으로 열 파일을 선택하세요.", "Select the files to open with another program.");
-        }
-        let initial = cmdline::expand_setting(&self.settings.text("TextViewerPath", "notepad.exe"));
-        let (title, message) = if self.language == "ko" { ("다른 프로그램으로 열기", "실행할 프로그램 경로") } else { ("Open with another program", "Program to run") };
-        self.prompt(title, message, &initial, None, false, move |app, program, _| {
-            let Some(program) = program.filter(|p| !p.trim().is_empty()) else { return };
-            let program = cmdline::expand_setting(&program);
-            let (title, message) = if app.language == "ko" { ("프로그램 인수", "인수 템플릿: {file}, {files}, {name}, {dir} 사용 가능") } else { ("Program arguments", "Argument template: {file}, {files}, {name}, {dir}") };
-            app.prompt(title, message, "{file}", None, false, move |app, template, _| {
-                let Some(template) = template else { return };
-                if sources.archive.is_none() {
-                    let paths = sources.files.iter().map(|(_, p)| p.to_string_lossy().into_owned()).collect();
-                    return app.launch_open_with(&program, &template, Ok(paths));
-                }
-                let tx = app.async_tx.clone();
-                thread::spawn(move || {
-                    let outcome = sources.resolve(&AtomicBool::new(false)).map(|paths| paths.into_iter().map(|p| p.to_string_lossy().into_owned()).collect());
-                    let _ = tx.send(AsyncResult::OpenWithSources(program, template, outcome));
-                });
-            });
-        });
-    }
-
-    pub(super) fn launch_open_with(&mut self, program: &str, template: &str, paths: Result<Vec<String>, String>) {
-        let paths = match paths {
-            Ok(paths) => paths,
-            Err(error) => return self.system_box("NDR", &error, MB_OK | ndr::msgbox::MB_ICONEXCLAMATION, |_, _, _| {}),
-        };
-        let groups: Vec<Vec<String>> = if template.to_ascii_lowercase().contains("{files}") { vec![paths] } else { paths.into_iter().map(|p| vec![p]).collect() };
-        for group in groups {
-            let arguments = cmdline::expand_open_template(template, &group);
-            let directory = Path::new(&group[0]).parent().map(Path::to_path_buf).unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-            if let Err(error) = (self.shell_runner)(Path::new(program), &arguments, &directory) {
-                return self.system_box("NDR", &error, MB_OK | ndr::msgbox::MB_ICONEXCLAMATION, |_, _, _| {});
-            }
+        let Some(entry) = pane.entries.get(pane.cursor).filter(|e| !e.is_dir && !e.drive) else { return };
+        let path = entry.path.clone();
+        let directory = path.parent().map(Path::to_path_buf).unwrap_or_default();
+        if let Err(error) = (self.shell_runner)(Path::new("rundll32.exe"), &format!("shell32.dll,OpenAs_RunDLL {}", path.display()), &directory) {
+            self.status = error;
         }
     }
 

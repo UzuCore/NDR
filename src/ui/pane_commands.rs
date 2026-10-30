@@ -1,6 +1,6 @@
 //! C# NDR 패널 명령(선택, 이동, 보기, 숨김, 폴더 크기)을 옮긴 것.
 use super::*;
-use ndr::msgbox::{MB_ICONASTERISK, MB_ICONEXCLAMATION, MB_OK};
+use ndr::msgbox::{MB_ICONASTERISK, MB_OK};
 
 /// C# ChangeAttributesAsync 진행 상태.
 pub(super) struct AttributeRun {
@@ -15,23 +15,6 @@ pub(super) struct AttributeRun {
 impl App {
     fn side_name(&self, pane: usize) -> std::borrow::Cow<'static, str> {
         if pane == 0 { self.tr("왼쪽", "Left") } else { self.tr("오른쪽", "Right") }
-    }
-
-    /// C# SelectByMetadata: 커서 항목을 기준으로 같은 확장자(Path.GetExtension) 또는 같은 이름을 대소문자 무시로 고른다.
-    /// 이전 선택은 "선택 복원"용으로 남긴다. 차이: C#은 이름 전체(확장자 포함)를 비교해 한 폴더에서는 자기 자신만 고르므로,
-    /// Rust는 메뉴 이름("같은 이름 선택")대로 확장자를 뺀 이름(Path.GetFileNameWithoutExtension)을 비교한다.
-    pub(super) fn select_by_metadata(&mut self, same_extension: bool) {
-        let i = self.active;
-        let pane = &self.panes[i];
-        if pane.loading {
-            return;
-        }
-        let Some(anchor) = pane.entries.get(pane.cursor).map(|e| e.name.clone()) else { return };
-        self.last_selection[i] = pane.targets();
-        let key = |name: &str| if same_extension { ndr::parity::dotnet_extension(name).to_owned() } else { ndr::parity::dotnet_stem(name).to_owned() };
-        let wanted = key(&anchor);
-        let pane = &mut self.panes[i];
-        pane.selected = pane.entries.iter().enumerate().filter(|(_, e)| ndr::names::equals_ignore_case(&key(&e.name), &wanted)).map(|(j, _)| j).collect();
     }
 
     /// 원본 bSelectAllClick(0x431450, 수직 막대 "모두 선택" 단추, 스킨 테마). 폴더도 고를지 = 설정(selectfolder) XOR Shift.
@@ -151,9 +134,7 @@ impl App {
         let any = self.panes[0].show_hidden || self.panes[1].show_hidden;
         self.settings.set_flag("ShowHiddenFiles", any);
         // 원본 miShowHiddenClick(0x4348e0): 새로 고침(FUN_00487ce8)을 (커서 지킴 1, 표시 지킴 0)으로 부른다.
-        if self.skin_active() {
-            self.panes[i].selected.clear();
-        }
+        self.panes[i].selected.clear();
         self.refresh(i);
         let side = self.side_name(i);
         self.status = if self.language == "ko" {
@@ -176,52 +157,22 @@ impl App {
     /// 있으면 표시를 지우고 패널의 폴더 크기 세기(FUN_0048efa8)에 넘긴다. 크기는 목록의 크기 칸에 나온다(요약 상자 없음).
     pub(super) fn calculate_folder_size(&mut self) {
         let i = self.active;
-        if self.skin_active() {
-            let pane = &self.panes[i];
-            if pane.archive.is_some() || pane.remote.is_some() {
-                return;
-            }
-            let mut rows: Vec<usize> = if pane.selected.is_empty() { vec![pane.cursor] } else { pane.selected.iter().copied().collect() };
-            rows.sort_unstable();
-            rows.retain(|&r| pane.entries.get(r).is_some_and(|e| e.is_dir && !e.drive && !e.is_parent()));
-            if rows.is_empty() {
-                return;
-            }
-            self.panes[i].selected.clear();
-            for row in rows {
-                let path = self.panes[i].entries[row].path.clone();
-                self.panes[i].folder_sizes.remove(&path);
-                self.enqueue_folder_size(i, row);
-            }
+        let pane = &self.panes[i];
+        if pane.archive.is_some() || pane.remote.is_some() {
             return;
         }
-        if self.panes[i].archive.is_some() {
-            return self.warn("압축 파일이나 원격 폴더 안의 항목은 폴더 크기를 계산할 수 없습니다.", "Folder sizes cannot be calculated inside an archive or a remote folder.");
+        let mut rows: Vec<usize> = if pane.selected.is_empty() { vec![pane.cursor] } else { pane.selected.iter().copied().collect() };
+        rows.sort_unstable();
+        rows.retain(|&r| pane.entries.get(r).is_some_and(|e| e.is_dir && !e.drive && !e.is_parent()));
+        if rows.is_empty() {
+            return;
         }
-        let mut selected: Vec<PathBuf> = Vec::new();
-        for path in self.panes[i].targets() {
-            let full = std::path::absolute(&path).unwrap_or(path);
-            if !selected.iter().any(|known| ndr::names::equals_ignore_case(&known.to_string_lossy(), &full.to_string_lossy())) {
-                selected.push(full);
-            }
+        self.panes[i].selected.clear();
+        for row in rows {
+            let path = self.panes[i].entries[row].path.clone();
+            self.panes[i].folder_sizes.remove(&path);
+            self.enqueue_folder_size(i, row);
         }
-        if selected.is_empty() {
-            return self.warn("크기를 계산할 파일이나 폴더를 선택하세요.", "Select the files or folders to measure.");
-        }
-        let directories: Vec<PathBuf> = selected.iter().filter(|p| p.is_dir()).cloned().collect();
-        let within = |path: &Path, directory: &Path| {
-            let root = format!("{}\\", directory.to_string_lossy().trim_end_matches(['\\', '/']));
-            let path = path.to_string_lossy();
-            path.len() > root.len() && ndr::names::starts_with_ignore_case(&path, &root)
-        };
-        let roots: Vec<PathBuf> = selected.into_iter().filter(|path| !directories.iter().any(|d| within(path, d))).collect();
-        let tx = self.async_tx.clone();
-        self.start_task("Folder size".into(), move |_, cancel| {
-            if let Some(summary) = ndr::tools::folder_size_summary(&roots, &cancel) {
-                let _ = tx.send(AsyncResult::FolderSize(summary));
-            }
-            Ok(())
-        });
     }
 
     /// C# ChangeAttributesAsync: 항목마다 속성 창. 취소는 멈추고, 건너뛰기는 다음 항목, 모두 적용은 남은 항목 전부(지금 항목 포함)에
@@ -284,27 +235,4 @@ impl App {
         }
     }
 
-    /// C# 요약 상자: "폴더/파일/전체 크기", 읽지 못한 항목이 있으면 20개까지와 나머지 수, 경고 아이콘.
-    pub(super) fn show_folder_size(&mut self, summary: ndr::tools::FolderSizeSummary) {
-        let unit = self.settings.text("SizeUnit", "Auto");
-        let display = ndr::parity::format_size(summary.total_bytes, &unit, self.settings.flag("UseThousandsSeparator", true));
-        let n = |value: u64| ndr::parity::format_size(value, "B", true).trim_end_matches(" B").to_owned();
-        let ko = self.language == "ko";
-        let mut details = if ko {
-            format!("폴더: {}개\n파일: {}개\n전체 크기: {} bytes ({display})", n(summary.folders), n(summary.files), n(summary.total_bytes))
-        } else {
-            format!("Folders: {}\nFiles: {}\nTotal size: {} bytes ({display})", n(summary.folders), n(summary.files), n(summary.total_bytes))
-        };
-        let errors = summary.errors.len() as u64;
-        if errors > 0 {
-            details += &if ko { format!("\n\n읽지 못한 항목: {}개\n", n(errors)) } else { format!("\n\nUnreadable items: {}\n", n(errors)) };
-            details += &summary.errors.iter().take(20).cloned().collect::<Vec<_>>().join("\r\n");
-            if errors > 20 {
-                details += &if ko { format!("\n외 {}건", n(errors - 20)) } else { format!("\nand {} more", n(errors - 20)) };
-            }
-        }
-        let title = self.tr("선택 항목 크기", "Selected item size").into_owned();
-        let icon = if errors > 0 { MB_ICONEXCLAMATION } else { MB_ICONASTERISK };
-        self.system_box(&title, &details, MB_OK | icon, |_, _, _| {});
-    }
 }

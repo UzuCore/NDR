@@ -44,59 +44,12 @@ impl App {
 
     /// C# AddSortMenu / AddFolderSortMenu / AddGroupMenu: 활성 패널 설정에 체크 표시가 붙는 메뉴.
     pub(super) fn sort_group_menus(&mut self, ui: &mut egui::Ui, ko: bool) {
-        let i = self.active;
-        let text = |app: &App, name: &str, default: &str| app.settings.text(&App::side_key(i, name), default);
-        let flag = |app: &App, name: &str, default: bool| app.settings.flag(&App::side_key(i, name), default);
         let mut chosen: Option<String> = None;
         // 원본 miSortBy("&A. 정렬"): 항목 miSortByNone … miSortByColor, miSortDescend.
         let raw = self.raw_menu("miSortBy", if ko { "&A. 정렬" } else { "&A. Sort by" });
         self.access_submenu(ui, &raw, |app, ui| {
             chosen = app.sort_items(ui, ko);
         });
-        // 원본 miGroupBy·miFolderCategory는 Visible=False이고 폴더 정렬은 원본에 없다: 스킨 테마는 정렬 하위 메뉴만.
-        if self.current_skin().is_none() {
-        ui.menu_button(if ko { "폴더 정렬" } else { "Folder sort" }, |ui| {
-            let mode = text(self, "FolderSortMode", "Name");
-            for (value, label) in [("Name", "이름순"), ("Extension", "확장자순"), ("Size", "크기순"), ("Modified", "수정한 날짜순"), ("Attributes", "속성순"), ("Color", "색상순")] {
-                if ui.radio(mode == value, if ko { label } else { value }).clicked() {
-                    chosen = Some(format!("folderSort:{value}"));
-                    ui.close();
-                }
-            }
-            ui.separator();
-            if ui.checkbox(&mut flag(self, "FolderSortDescending", false), if ko { "폴더 내림차순" } else { "Descending folders" }).clicked() {
-                chosen = Some("folderSortDescending".into());
-                ui.close();
-            }
-        });
-        ui.menu_button(if ko { "그룹" } else { "Group" }, |ui| {
-            let mode = text(self, "GroupMode", "None");
-            for (value, korean, english) in [("None", "그룹 해제", "Ungroup"), ("Extension", "종류별", "By type"), ("Size", "크기별", "By size"), ("Time", "시간별", "By modified time"), ("Category", "범주별", "By category")] {
-                if ui.radio(mode == value, if ko { korean } else { english }).clicked() {
-                    chosen = Some(format!("groupMode:{value}"));
-                    ui.close();
-                }
-            }
-            ui.separator();
-            if ui.checkbox(&mut flag(self, "GroupDescending", false), if ko { "그룹 역순" } else { "Reverse group order" }).clicked() {
-                chosen = Some("groupDescending".into());
-                ui.close();
-            }
-            if ui.checkbox(&mut flag(self, "ShowGroupName", true), if ko { "그룹 이름 표시" } else { "Show group names" }).clicked() {
-                chosen = Some("groupShowName".into());
-                ui.close();
-            }
-            ui.menu_button(if ko { "범주별 그룹의 폴더" } else { "Folders in category groups" }, |ui| {
-                let current = text(self, "FolderCategoryMode", "Auto");
-                for (value, korean, english) in [("Auto", "자동 분리", "Separate automatically"), ("Default", "기본값", "Default")] {
-                    if ui.radio(current == value, if ko { korean } else { english }).clicked() {
-                        chosen = Some(format!("folderCategory:{value}"));
-                        ui.close();
-                    }
-                }
-            });
-        });
-        }
         if let Some(command) = chosen {
             self.sort_command(&command);
         }
@@ -113,7 +66,7 @@ impl App {
             C::ExchangePath=>{/* 원본 FUN_0043d5ec(단축키 명령 0x23): 두 패널 모두 로컬 모드(0)일 때만 서로의 폴더로 간다. */ if self.panes.iter().all(|p|p.archive.is_none()&&p.remote.is_none()){let paths=self.panes.each_ref().map(|p|p.path.clone());self.navigate(0,paths[1].clone(),true);self.navigate(1,paths[0].clone(),true);}},
             C::ShowPathHistory=>self.show_history_menu(self.active,None),
             C::FocusAddressBar=>{/* C# BeginAddressEdit(side) = 원본 단축키 명령 0x25 FUN_0048d3c8(활성 패널). */ self.begin_address_edit(self.active,ctx)},
-            C::SelectAll{with_folders}=>{let i=self.active;if !self.skin_active(){self.last_selection[i]=self.panes[i].targets();}let folders=with_folders||self.settings.flag("SelectFolders",false);let pane=&mut self.panes[i];pane.selected=pane.entries.iter().enumerate().filter(|(_,e)|!e.drive&&!e.is_parent()&&(folders||!e.is_dir)).map(|(j,_)|j).collect();},
+            C::SelectAll{with_folders}=>{let i=self.active;let folders=with_folders||self.settings.flag("SelectFolders",false);let pane=&mut self.panes[i];pane.selected=pane.entries.iter().enumerate().filter(|(_,e)|!e.drive&&!e.is_parent()&&(folders||!e.is_dir)).map(|(j,_)|j).collect();},
             C::SelectCurrentAndMove=>{let p=&mut self.panes[self.active];if !p.entries.is_empty(){if !p.selected.insert(p.cursor){p.selected.remove(&p.cursor);}p.drop_drive_marks();p.cursor=(p.cursor+1).min(p.entries.len()-1);}},
             C::SelectCurrent=>{let p=&mut self.panes[self.active];if p.cursor<p.entries.len()&&!p.selected.insert(p.cursor){p.selected.remove(&p.cursor);}p.drop_drive_marks();},
             C::DeselectAll=>self.panes[self.active].selected.clear(),
@@ -130,9 +83,8 @@ impl App {
     /// (TITLE_FILEOPERATION, MSG_TORIGHT / MSG_TOLEFT, MB_YESNO | MB_ICONQUESTION) when both panes are local folders.
     /// 원본 FUN_0042d518(오른쪽으로)/FUN_0042d910(왼쪽으로) — 수직 막대 복사 단추와 단축키 명령(FUN_00443f14), 스킨 테마:
     /// 패널이 하나면 그만. 둘 다 로컬 폴더면 설정과 상관없이 TITLE_FILEOPERATION / MSG_TORIGHT·MSG_TOLEFT(%s = COPY 또는 MOVE)로 묻고,
-    /// 로컬↔FTP는 올리기/내려받기, 압축 위치가 끼면 아무것도 하지 않는다. C# 테마는 copy_to_other.
-    pub(super) fn original_copy_to_other(&mut self,source:usize,moving:bool,ctx:&egui::Context){
-        if !self.skin_active(){return self.copy_to_other(source,moving,ctx);}
+    /// 로컬↔FTP는 올리기/내려받기, 압축 위치가 끼면 아무것도 하지 않는다.
+    pub(super) fn original_copy_to_other(&mut self,source:usize,moving:bool,_ctx:&egui::Context){
         if !self.dual{return;}
         let target=1-source;
         if self.panes[source].archive.is_some()||self.panes[target].archive.is_some(){return;}
@@ -195,9 +147,8 @@ impl App {
         let ko = self.language == "ko";
         let ctx = ui.ctx().clone();
         let access = self.menu_access.take();
-        // 스킨 테마(원본 모양)의 메뉴에는 원본 항목만 둔다. C# 판에만 있는 명령은 C# 테마에서만 보인다.
+        // 메뉴에는 원본 항목만 둔다(원본이 숨긴 항목도 숨긴다).
         let skin = self.current_skin();
-        let original = skin.is_some();
         let shortcut_colors = skin.as_ref().map(super::skin_pane::skin_menu_shortcut_colors);
         let mut bar = egui::MenuBar::new();
         if let Some(skin) = &skin {
@@ -213,7 +164,7 @@ impl App {
                 let opened = ui.menu_button(title, |ui| {
                     // C# UpdateArchiveMenuItems(압축 메뉴를 열 때): 고른 압축 파일·지금 압축 파일에 따라 켜고/숨긴다.
                     let mut archive_state = self.archive_menu_state();
-                    archive_state.original = original;
+                    archive_state.original = true;
                     let shortcuts = compat::ShortcutMap::parse(self.settings.values.get("OriginalShortcutMapText").and_then(|v| v.as_str()));
                     // 구분선은 앞뒤에 보이는 항목이 있을 때만(숨긴 항목 때문에 겹치거나 끝에 남지 않게).
                     let (mut shown, mut pending) = (false, false);
@@ -230,7 +181,7 @@ impl App {
                             continue;
                         }
                         let (visible, enabled) = archive_state.item(id);
-                        if !visible || (original && (Self::csharp_only_menu_item(id) || menu_data::ORIGINAL_HIDDEN.contains(id))) {
+                        if !visible || Self::csharp_only_menu_item(id) || menu_data::ORIGINAL_HIDDEN.contains(id) {
                             continue;
                         }
                         if pending {
@@ -242,8 +193,8 @@ impl App {
                             self.original_submenu(submenu, ui, &ctx, ko);
                             continue;
                         }
-                        // 원본 miLanguage·miSkin은 하위 메뉴(FUN_00441830·FUN_0043e580). C# 테마는 C# 판처럼 고르기 창.
-                        if original && (*id == "language" || *id == "theme") {
+                        // 원본 miLanguage·miSkin은 하위 메뉴(FUN_00441830·FUN_0043e580).
+                        if *id == "language" || *id == "theme" {
                             self.original_submenu(if *id == "language" { "language" } else { "skin" }, ui, &ctx, ko);
                             continue;
                         }
@@ -405,15 +356,11 @@ impl App {
         match name {
             "checksum" => {
                 let raw = self.raw_menu("miChecksum", if ko { "&H. 체크섬" } else { "&H. Checksum" });
-                let original = self.current_skin().is_some();
                 let mut chosen = None;
                 self.access_submenu(ui, &raw, |app, ui| {
-                    // 원본 miCRC·miMD5·miSHA1(+ C# 판의 SHA-256, 접근 글자 없음, C# 테마에서만).
-                    for (key, fallback, algorithm) in [("miCRC", "&C. CRC", "Crc32"), ("miMD5", "&M. MD5", "Md5"), ("miSHA1", "&S. SHA1", "Sha1"), ("", "SHA-256", "Sha256")] {
-                        if original && key.is_empty() {
-                            continue;
-                        }
-                        let raw = if key.is_empty() { fallback.to_owned() } else { app.raw_menu(key, fallback) };
+                    // 원본 miCRC·miMD5·miSHA1.
+                    for (key, fallback, algorithm) in [("miCRC", "&C. CRC", "Crc32"), ("miMD5", "&M. MD5", "Md5"), ("miSHA1", "&S. SHA1", "Sha1")] {
+                        let raw = app.raw_menu(key, fallback);
                         let response = ui.button(super::favorites_dialog::access_key(&raw).0);
                 if response.clicked() || app.take_menu_letter(&raw, &response) {
                             chosen = Some(algorithm);
@@ -567,7 +514,7 @@ impl App {
             "description", "contextDescription", "advancedRename", "rename", "contextRename", "attributes", "contextAttributes", "saveList",
             "extractSelected", "extractCurrent", "extractNewFolder", "extractAuto", "contextAutoExtract", "archiveAdd", "join", "shortcut", "quickLaunchShortcut", "batchRename",
         ];
-        if REMEMBERS.contains(&id) && self.skin_active() {
+        if REMEMBERS.contains(&id) {
             self.remember_marks();
         }
         let targets = self.panes[i].targets();
@@ -606,28 +553,25 @@ impl App {
             "advancedRename"=>self.advanced_rename(),
             // 원본 miCopyToClick(0x432e68)·miMoveToClick(0x432f40): 로컬 위치면 FUN_0042bdc4(대상 없음) = TfSelectDest(경로 칸 처음 값 =
             // 다른 패널, 고쳐서 같은 패널 안 폴더로도). 스킨 테마. 압축·FTP 위치는 전처럼.
-            "copyToOther"|"moveToOther" if self.skin_active()&&self.panes[i].archive.is_none()&&self.panes[i].remote.is_none()&&self.panes[1-i].remote.is_none()=>self.copy_move_to_folder(id=="moveToOther"),
+            "copyToOther"|"moveToOther" if self.panes[i].archive.is_none()&&self.panes[i].remote.is_none()&&self.panes[1-i].remote.is_none()=>self.copy_move_to_folder(id=="moveToOther"),
             "copyToOther"|"moveToOther"=>self.copy_to_other(i,id=="moveToOther",ctx),
             "copyToFolder"|"moveToFolder"=>self.copy_move_to_folder(id=="moveToFolder"),
             "copy"|"cut"=>{if !targets.is_empty(){self.clipboard=Some((targets.clone(),id=="cut"));if self.panes[i].archive.is_none(){result=(self.file_clipboard)(&targets,id=="cut");}
                 // 원본 0x433dd8: 로컬 위치에서 잘라내면 그 항목들(+100)을 흐린 아이콘으로 다시 그린다. 복사는 표시를 건드리지 않는다.
-                if id=="cut"&&self.skin_active()&&self.panes[i].archive.is_none()&&self.panes[i].remote.is_none(){self.panes[i].cut_marks.extend(targets.iter().cloned());}}},
+                if id=="cut"&&self.panes[i].archive.is_none()&&self.panes[i].remote.is_none(){self.panes[i].cut_marks.extend(targets.iter().cloned());}}},
             "paste"=>{let copied=native::read_clipboard_files().ok().filter(|(p,_)|!p.is_empty()).or_else(||self.clipboard.clone());if let Some((sources,moving))=copied{self.transfer_from(i,sources,path,moving,super::file_operation::TransferKind::Paste);}},
             "deleteRecycle"|"deletePermanent"=>self.delete_items(id=="deleteRecycle"),
             "shred"=>self.shred_items(),
             "copyFullPath"|"copyPathOnly"|"copyName"=>{let escape=ctx.input(|input|input.modifiers.shift);self.copy_item_paths(match id{"copyName"=>ndr::parity::PathPart::Name,"copyPathOnly"=>ndr::parity::PathPart::Folder,_=>ndr::parity::PathPart::Full},escape);},
             "copyFolder"=>{result=(self.clipboard_writer)(&path.to_string_lossy());},
-            "selectAll" if self.skin_active() => {let shift=ctx.input(|i|i.modifiers.shift);self.cycle_selection(shift);},
-            "selectAll"=>{let folders=self.settings.flag("SelectFolders",false);let pane=&mut self.panes[i];pane.selected=pane.entries.iter().enumerate().filter(|(_,e)|!e.drive&&!e.is_parent()&&(folders||!e.is_dir)).map(|(j,_)|j).collect();},
-            "invertSelection" if self.skin_active() => self.original_invert_selection(),
-            "invertSelection"=>{self.last_selection[i]=targets;let pane=&mut self.panes[i];pane.selected=(0..pane.entries.len()).filter(|n|!pane.selected.contains(n)).collect();},
+            "selectAll" => {let shift=ctx.input(|i|i.modifiers.shift);self.cycle_selection(shift);},
+            "invertSelection" => self.original_invert_selection(),
             // 원본 편집 메뉴 miSelect("선택\tSpacebar"): Space와 같은 지금 항목 표시 전환.
             "select"=>self.toggle_focused_selection(),
             // 원본 miRestoreLastSelClick(0x43742c): 남긴 표시가 있을 때만 바꾼다(스킨 테마).
-            "restoreSelection" if self.skin_active() && self.last_selection[i].is_empty() => {},
+            "restoreSelection" if self.last_selection[i].is_empty() => {},
             "restoreSelection"=>{let last=&self.last_selection[i];self.panes[i].selected=self.panes[i].entries.iter().enumerate().filter(|(_,e)|last.contains(&e.path)).map(|(j,_)|j).collect();},
-            "selectSameName"|"selectSameExt" if self.skin_active() => self.original_select_same(id=="selectSameExt"),
-            "selectSameName"|"selectSameExt"=>self.select_by_metadata(id=="selectSameExt"),
+            "selectSameName"|"selectSameExt" => self.original_select_same(id=="selectSameExt"),
             "advancedSelect"|"advancedDeselect"=>self.advanced_select(id=="advancedDeselect"),
             "toggleFolderInfoBar"=>self.toggle_info_bar("ShowFolderDiskInfoBar"),"toggleFileInfoBar"=>self.toggle_info_bar("ShowFileInfoBar"),"toggleExtensionInfoBar"=>self.toggle_info_bar("ShowExtensionInfoBar"),
             "toggleHidden"=>self.toggle_hidden(),"toggleDual"=>self.dual=!self.dual,
@@ -643,9 +587,9 @@ impl App {
             "textView"|"textEdit"=>self.text_command(id=="textEdit"),
             "properties"=>self.properties_command(),
             "attributes"=>self.change_attributes(),
-            // 원본 miFileInfoClick(0x4452bc): 커서가 파일이면 https://ext.xiles.app/?ext=확장자 를 연다(스킨 테마). C# 테마는 C# 판 정보 창.
-            "fileInfo" if self.skin_active() => self.open_extension_info(i),
-            "archiveProperties"=>self.archive_properties_command(),"fileInfo"=>self.file_info_command(),
+            // 원본 miFileInfoClick(0x4452bc): 커서가 파일이면 https://ext.xiles.app/?ext=확장자 를 연다.
+            "fileInfo" => self.open_extension_info(i),
+            "archiveProperties"=>self.archive_properties_command(),
             "description"=>self.edit_descriptions(),
             "clearDescriptions"=>self.clear_descriptions_confirmed(i),
             "calculateFolderSize"=>self.calculate_folder_size(),
@@ -676,8 +620,8 @@ impl App {
             "controlPanel"=>result=(self.system.run_verb)(Path::new("control.exe"),"open"),"addRemovePrograms"=>result=(self.shell_runner)(Path::new("rundll32.exe"),"shell32.dll,Control_RunDLL appwiz.cpl",Path::new("")),
             "shellIntegration"=>self.explorer_integration_command(),
             "homepage"=>result=(self.shell_runner)(Path::new("https://www.xiles.app"),"",Path::new("")),"email"=>self.copy_support_email(),
-            // 원본 miHelpClick(0x445b60): "https://www.xiles.app/help/nexusfile/"(스킨 테마). C# 판은 …/help.html.
-            "help"=>result=(self.shell_runner)(Path::new(if self.skin_active(){"https://www.xiles.app/help/nexusfile/"}else{"https://www.xiles.app/help/nexusfile/help.html"}),"",Path::new("")),
+            // 원본 miHelpClick(0x445b60): "https://www.xiles.app/help/nexusfile/".
+            "help"=>result=(self.shell_runner)(Path::new("https://www.xiles.app/help/nexusfile/"),"",Path::new("")),
             // 원본 miMoreLanguagesClick(FUN_00445b88): ShellExecute "open" https://www.xiles.app/languages/#NexusFile (0x8ee3bc).
             "moreLanguages"=>result=(self.shell_runner)(Path::new("https://www.xiles.app/languages/#NexusFile"),"",Path::new("")),
             "about"=>self.about_command(),
