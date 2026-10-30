@@ -780,6 +780,8 @@ impl App {
         let shown = layout.visible.min(count - first);
         // 단추(나중에 등록해 탭 줄보다 먼저 포인터를 받는다).
         let buttons = skin.values.get("list.tabbtnimgs").cloned().and_then(|file| self.toolbar_icon(ctx, &file));
+        // 고친 것: 단추 그림은 탭 그림 뒤에 그린다(전에는 지금 탭 그림이 닫기 단추 ×를 덮어 보이지 않았다). 원본 단추는 탭 위의 자식 창이다.
+        let button_paints = std::cell::RefCell::new(Vec::<(egui::TextureId, egui::Rect, egui::Rect, Color32)>::new());
         let button = |ui: &mut egui::Ui, column: usize, slot: egui::Rect, enabled: bool, salt: &str| {
             let response = ui.interact(slot, egui::Id::new(("ndr-skin-tab-button", index, salt)), if enabled { egui::Sense::click() } else { egui::Sense::hover() });
             if let Some(texture) = &buttons {
@@ -787,7 +789,7 @@ impl App {
                 let uv = egui::Rect::from_min_max(egui::pos2(column as f32 / 4.0, row as f32 / 2.0), egui::pos2((column + 1) as f32 / 4.0, (row + 1) as f32 / 2.0));
                 // 원본 TNXPngButton.Paint(0x7cb700): 꺼진 단추는 그림 알파를 반으로(FUN_007cb3ec).
                 let tint = if enabled { Color32::WHITE } else { Color32::WHITE.gamma_multiply(0.5) };
-                painter.image(texture.id(), egui::Rect::from_center_size(slot.center(), egui::vec2(12.0, 12.0)), uv, tint);
+                button_paints.borrow_mut().push((texture.id(), egui::Rect::from_center_size(slot.center(), egui::vec2(12.0, 12.0)), uv, tint));
             }
             response
         };
@@ -875,6 +877,9 @@ impl App {
             let y = top + ((rect.bottom() - top - galley.size().y) / 2.0).floor();
             painter.galley(egui::pos2(x + 7.0, y), galley, color);
         }
+        for (texture, at, uv, tint) in button_paints.take() {
+            painter.image(texture, at, uv, tint);
+        }
         if response.hovered() && !over_button && ui.input(|i| i.pointer.primary_pressed()) {
             if let Some(t) = hot {
                 command = Some(format!("tab:{t}"));
@@ -939,7 +944,11 @@ impl App {
         let right_rect = egui::Rect::from_min_size(egui::pos2(inner.right() - 3.0 - right.size().x, middle(right.size().y)), right.size());
         let drive_rect = egui::Rect::from_min_size(egui::pos2(right_rect.left() - 6.0 - drive_galley.size().x, middle(drive_galley.size().y)), drive_galley.size());
         let left_rect = egui::Rect::from_min_size(egui::pos2(inner.left(), middle(left.size().y)), left.size());
-        painter.galley(left_rect.min, left, base);
+        // 고친 것: 패널이 좁으면 FOLDERINFO가 오른쪽 여유 글 위로 겹쳐 그려졌다. 오른쪽 글(드라이브 글이 있으면 그 앞) 앞에서 자른다.
+        let left_limit = if drive_galley.size().x > 0.0 { drive_rect.left() } else { right_rect.left() } - 6.0;
+        let left_clip = egui::Rect::from_min_max(rect.min, egui::pos2(left_limit.max(rect.left()), rect.bottom())).intersect(rect);
+        let left_rect = left_rect.intersect(left_clip);
+        painter.with_clip_rect(left_clip).galley(egui::pos2(inner.left(), middle(left.size().y)), left, base);
         // 원본 +0x344(FUN_00482700 빨강 굵게, FUN_00487588): 이 패널이 숨김 파일을 보이면(설정 +0x130 + 쪽) "H", 아니면 빈 글.
         // 자리 = FOLDERINFO 왼쪽 + 너비 + 1. 굵은 꼴("bold" 묶음, Segoe UI Bold).
         if self.panes[index].show_hidden {

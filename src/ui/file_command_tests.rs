@@ -338,6 +338,18 @@ fn delete_warning_and_protected_item_confirmation() {
     answer_warning(&mut app, &ctx, DeleteWarningChoice::No);
     assert!(app.job.is_none() && left.join("alpha.txt").exists(), "No stops");
     app.dispatch("deleteRecycle", &ctx);
+    // 처음 초점은 아니요(DefaultDeleteButton 2). 단추에 초점이 있어도 글자 D만으로 Delete(&D)가 눌린다(VCL CM_DIALOGCHAR).
+    frame(&mut app, &ctx, vec![]);
+    frame(&mut app, &ctx, vec![key(egui::Key::D)]);
+    assert!(app.original_dialogs.is_empty(), "plain D presses &Delete while a button has focus");
+    wait_dialog_or_job(&mut app, &ctx);
+    wait_job(&mut app, &ctx);
+    assert!(!left.join("alpha.txt").exists(), "the Delete button deletes permanently");
+    fs::write(left.join("alpha.txt"), "alpha.txt").unwrap();
+    app.refresh(0);
+    wait_listing(&mut app, &ctx);
+    app.panes[0].cursor = row(&app, 0, "alpha.txt");
+    app.dispatch("deleteRecycle", &ctx);
     answer_warning(&mut app, &ctx, DeleteWarningChoice::Delete);
     wait_dialog_or_job(&mut app, &ctx);
     wait_job(&mut app, &ctx);

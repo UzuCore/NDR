@@ -53,6 +53,9 @@ impl App {
         ctx.request_repaint();
         if self.frames == OPEN_FRAME {
             self.open_shot_sample(&kind);
+            if kind == "narrowpane" {
+                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(800.0, 480.0)));
+            }
         }
         if self.frames == SHOT_FRAME {
             ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
@@ -184,6 +187,18 @@ impl App {
                 let target = form.tree.find_path("C:\\Users\\byunj\\Pictures");
                 form.focus(target, 1);
                 self.push_original_dialog(text(self, "formFolderTree.Form.Caption"), DialogKind::FolderTree(Box::new(form)), |_, _, _| {});
+            }
+            "tabs" => {
+                let current = self.panes[0].path.clone();
+                self.panes[0].tabs = vec![current, folder.join("a"), folder.join("b")];
+                self.panes[0].tab = 0;
+            }
+            "columns2" => {
+                self.settings.values.insert("LeftColumnCount".into(), serde_json::json!(2));
+            }
+            "narrowpane" => {
+                self.settings.values.insert("LeftPaneWidth".into(), serde_json::json!(20));
+                self.settings.values.insert("RightPaneWidth".into(), serde_json::json!(80));
             }
             "favorites" => {
                 let items = vec![("Data".to_owned(), "D:\\data".to_owned()), ("Missing".to_owned(), "Z:\\nowhere".to_owned())];

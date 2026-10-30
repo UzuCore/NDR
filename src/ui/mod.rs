@@ -1686,11 +1686,21 @@ impl eframe::App for App {
                 if !show_bar {
                     ui.painter().rect_filled(middle.shrink2(egui::vec2(3.0, 0.0)), 2.0, ui.visuals().widgets.noninteractive.bg_stroke.color);
                 }
-                ui.scope_builder(egui::UiBuilder::new().max_rect(left), |ui| self.pane_ui(ui, 0, ctx));
+                // 고친 것: 패널마다 제 자리로 잘라 그린다(좁게 끌면 주소 줄·정보 줄·목록이 옆 패널·세로 막대 위로 넘쳐 겹쳤다).
+                ui.scope_builder(egui::UiBuilder::new().max_rect(left), |ui| {
+                    ui.set_clip_rect(left.intersect(ui.clip_rect()));
+                    self.pane_ui(ui, 0, ctx)
+                });
                 if show_bar {
-                    ui.scope_builder(egui::UiBuilder::new().max_rect(middle), |ui| self.vertical_bar(ui, ctx));
+                    ui.scope_builder(egui::UiBuilder::new().max_rect(middle), |ui| {
+                        ui.set_clip_rect(middle.intersect(ui.clip_rect()));
+                        self.vertical_bar(ui, ctx)
+                    });
                 }
-                ui.scope_builder(egui::UiBuilder::new().max_rect(right), |ui| self.pane_ui(ui, 1, ctx));
+                ui.scope_builder(egui::UiBuilder::new().max_rect(right), |ui| {
+                    ui.set_clip_rect(right.intersect(ui.clip_rect()));
+                    self.pane_ui(ui, 1, ctx)
+                });
             } else {
                 self.pane_ui(ui, self.active, ctx);
             }

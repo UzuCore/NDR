@@ -102,7 +102,8 @@ impl App {
             let cell = egui::Rect::from_min_size(egui::pos2(rect.left() + width * index as f32, rect.top()), egui::vec2(width, rect.height()));
             let response = ui.interact(cell, egui::Id::new(("ndr-skin-fkey", index)), egui::Sense::click());
             let shift = if response.is_pointer_button_down_on() { egui::vec2(1.0, 1.0) } else { egui::Vec2::ZERO };
-            let painter = ui.painter().with_clip_rect(cell);
+            // 칸 글은 오른쪽 끝 구분선(− 2) 앞까지.
+            let painter = ui.painter().with_clip_rect(cell.with_max_x(cell.right() - 3.0));
             let drawn = painter.text(egui::pos2(cell.left() + 5.0, cell.center().y) + shift, egui::Align2::LEFT_CENTER, key, font.clone(), key_color);
             painter.text(egui::pos2(drawn.right() + 8.0, cell.center().y) + shift, egui::Align2::LEFT_CENTER, name, font.clone(), if response.hovered() { over_color } else { text_color });
             if let Some(divider) = &divider {

@@ -1040,7 +1040,10 @@ pub(super) fn set_dialog_char(ctx: &egui::Context, enabled: bool) {
     } else {
         None
     };
-    let typed = typed.filter(|(_, alt)| *alt || !ctx.wants_keyboard_input()).map(|(c, _)| c);
+    // 고친 것: egui의 wants_keyboard_input은 초점 단추에도 참이라 글자만 친 단축 문자(삭제(&D) 등)가 먹지 않았다.
+    // VCL처럼 글 입력 칸(TextEdit 상태가 있는 초점)일 때만 Alt 없는 글자를 넘긴다.
+    let text_focus = ctx.memory(|m| m.focused()).is_some_and(|id| egui::TextEdit::load_state(ctx, id).is_some());
+    let typed = typed.filter(|(_, alt)| *alt || !text_focus).map(|(c, _)| c);
     ctx.data_mut(|d| d.insert_temp(egui::Id::new(DIALOG_CHAR), typed));
 }
 
