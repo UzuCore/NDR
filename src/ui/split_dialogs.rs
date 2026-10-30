@@ -13,15 +13,13 @@ pub(super) struct SplitForm {
     pub size: String,
 }
 
-/// JoinFilesWindow 입력. overwrite_confirmed: 찾아보기 대화 상자에서 덮어쓰기를 받아들인 경로.
+/// 원본 TfFileJoin 입력.
 #[derive(Clone, Debug)]
 pub(super) struct JoinForm {
     pub files: Vec<(PathBuf, Option<u64>)>,
     pub selected: Option<usize>,
     pub join_text: bool,
     pub name: String,
-    pub base: PathBuf,
-    pub overwrite_confirmed: Option<PathBuf>,
 }
 
 /// C# JoinFilesOptions.
@@ -155,14 +153,9 @@ pub(super) fn join_ui(ui: &mut egui::Ui, form: &mut JoinForm, language: &compat:
     super::original_dialogs::access_label(ui, at(16.0, 25.0, 108.0, 15.0), &caption, name_id);
     ui.put(at(127.0, 22.0, 323.0, 21.0), egui::TextEdit::singleline(&mut form.name).id(name_id));
     if ui.put(at(456.0, 20.0, 33.0, 25.0), egui::Button::new("...")).clicked() {
-        let title = join_text(language, "Form.Caption", "Join Files");
-        let typed = Path::new(&form.name);
-        let full = if typed.is_absolute() { typed.to_path_buf() } else { form.base.join(typed) };
-        let directory = full.parent().map(Path::to_path_buf).unwrap_or_else(|| form.base.clone());
-        let file_name = typed.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        // C# Filter "All files (*.*)|*.*", AddExtension false.
-        if let Some(chosen) = ndr::file_dialogs::save_file(&title, Some(&directory), &file_name, &[("All files (*.*)", "*.*")], "", true) {
-            form.overwrite_confirmed = chosen.is_file().then(|| chosen.clone());
+        // 원본 btnBrowseClick(0x423444): 창의 OpenDialog(Title·Filter·InitialDir 없음)에서 ofAllowMultiSelect·ofFileMustExist를 끄고
+        // FileName을 비운 뒤 Execute(열기 상자). 고르면 eFileName에 넣는다. 열기 상자라 덮어쓰기 확인은 없다(합칠 때 따로 묻는다).
+        if let Some(chosen) = ndr::file_dialogs::open_any_file("", None, "", &[]) {
             form.name = chosen.to_string_lossy().into_owned();
         }
     }
@@ -245,8 +238,7 @@ impl App {
                 } else if form.name.trim().is_empty() || form.name.chars().any(|c| c < ' ' || c == '|' || c == '"' || c == '<' || c == '>') || file_name.is_empty() || invalid_file_name(&file_name) {
                     Err(if ko { "올바른 결과 파일 이름을 입력하세요." } else { "Enter a valid output file name." })
                 } else {
-                    let confirmed = form.overwrite_confirmed.as_ref().is_some_and(|p| ndr::names::equals_ignore_case(&p.to_string_lossy(), &form.name));
-                    Ok(DialogResult::Join(Some(JoinOptions { files: form.files.iter().map(|(p, _)| p.clone()).collect(), join_text: form.join_text, name: form.name.clone(), overwrite_confirmed: confirmed })))
+                    Ok(DialogResult::Join(Some(JoinOptions { files: form.files.iter().map(|(p, _)| p.clone()).collect(), join_text: form.join_text, name: form.name.clone(), overwrite_confirmed: false })))
                 }
             }
             _ => return,
@@ -336,7 +328,7 @@ impl App {
             return;
         }
         let base = self.panes[i].path.clone();
-        let mut form = JoinForm { files: vec![], selected: None, join_text: false, name: ndr::split::suggest_joined_file_name(&inputs[0]), base: base.clone(), overwrite_confirmed: None };
+        let mut form = JoinForm { files: vec![], selected: None, join_text: false, name: ndr::split::suggest_joined_file_name(&inputs[0]) };
         for input in &inputs {
             form.add(input);
         }

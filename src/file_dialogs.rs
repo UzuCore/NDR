@@ -8,7 +8,7 @@ use windows::{
     Win32::{
         System::Com::{CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize},
         UI::Shell::{
-            Common::COMDLG_FILTERSPEC, FOS_ALLOWMULTISELECT, FOS_FORCEFILESYSTEM, FOS_OVERWRITEPROMPT, FOS_PICKFOLDERS, FileOpenDialog, FileSaveDialog, IFileDialog, IFileOpenDialog, IFileSaveDialog, IShellItem,
+            Common::COMDLG_FILTERSPEC, FOS_ALLOWMULTISELECT, FOS_FILEMUSTEXIST, FOS_FORCEFILESYSTEM, FOS_OVERWRITEPROMPT, FOS_PICKFOLDERS, FileOpenDialog, FileSaveDialog, IFileDialog, IFileOpenDialog, IFileSaveDialog, IShellItem,
             SHCreateItemFromParsingName, SIGDN_FILESYSPATH,
         },
     },
@@ -90,11 +90,21 @@ pub fn open_files(title: &str, initial: Option<&Path>) -> Vec<PathBuf> {
 
 /// C# OpenFileDialog(파일 하나, 형식 목록, 처음 이름).
 pub fn open_file(title: &str, initial: Option<&Path>, file_name: &str, filters: &[(&str, &str)]) -> Option<PathBuf> {
+    open_one(title, initial, file_name, filters, true)
+}
+
+/// VCL TOpenDialog에서 ofFileMustExist를 끈 것(원본 TfFileJoin btnBrowseClick 0x423444): 열기 상자지만 없는 이름도 입력할 수 있다.
+pub fn open_any_file(title: &str, initial: Option<&Path>, file_name: &str, filters: &[(&str, &str)]) -> Option<PathBuf> {
+    open_one(title, initial, file_name, filters, false)
+}
+
+fn open_one(title: &str, initial: Option<&Path>, file_name: &str, filters: &[(&str, &str)], must_exist: bool) -> Option<PathBuf> {
     let _com = Com::new();
     // SAFETY: as above; the filter strings outlive SetFileTypes.
     unsafe {
         let dialog: IFileOpenDialog = CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER).ok()?;
-        dialog.SetOptions(dialog.GetOptions().ok()? | FOS_FORCEFILESYSTEM).ok()?;
+        let options = dialog.GetOptions().ok()? | FOS_FORCEFILESYSTEM;
+        dialog.SetOptions(if must_exist { options } else { options & !FOS_FILEMUSTEXIST }).ok()?;
         prepare(&dialog.cast().ok()?, title, initial);
         let names: Vec<(HSTRING, HSTRING)> = filters.iter().map(|(name, spec)| (HSTRING::from(*name), HSTRING::from(*spec))).collect();
         let specs: Vec<COMDLG_FILTERSPEC> = names.iter().map(|(name, spec)| COMDLG_FILTERSPEC { pszName: PCWSTR(name.as_ptr()), pszSpec: PCWSTR(spec.as_ptr()) }).collect();

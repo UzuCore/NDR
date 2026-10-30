@@ -1,10 +1,14 @@
 //! C# AdvancedRenameWindow(고급 이름 바꾸기): 동작 고르기 → 적용 대상·값 → 추가, 적용 목록(지우기/위/아래), 매크로(advrename.save),
 //! 미리보기(처음 500개), 확인 상자 뒤 이름 바꾸기. 규칙은 compat::rename_with_rules(C# AdvancedRenameService.Preview).
-use super::original_dialogs::{DialogKind, DialogResult};
+use super::original_dialogs::{DialogKind, DialogResult, glyph_texture};
 use super::*;
 use compat::RenameRule;
 use ndr::msgbox::{IDYES, MB_ICONEXCLAMATION, MB_ICONQUESTION, MB_OK, MB_YESNO};
 use ndr::rename_macros::{self as macros, RenameMacro};
+
+/// 원본 TfAdvRename DFM sbtnSave·sbtnDelete의 Glyph.Data(TBitmap 스트림의 BMP 부분, 16×16 8비트).
+const SAVE_GLYPH: &[u8] = include_bytes!("glyphs/advrename-save.bmp");
+const DELETE_GLYPH: &[u8] = include_bytes!("glyphs/advrename-delete.bmp");
 
 #[derive(Clone, Debug)]
 pub(super) struct RenameForm {
@@ -345,11 +349,16 @@ pub(super) fn rename_ui(ui: &mut egui::Ui, form: &mut RenameForm, language: &com
         }
         form.macro_name = name;
     }
-    // 원본 sbtnSave·sbtnDelete(그림 단추).
-    if ui.put(at(593.0, 248.0, 23.0, 22.0), egui::Button::new("💾")).on_hover_text(text(language, "Button.btnSaveMacro", "Save Macro")).clicked() {
+    // 원본 sbtnSave·sbtnDelete(TSpeedButton 23×22, Glyph.Data 16×16 비트맵, Hint 없음). sbtnDeleteClick(0x419420)은 늘 켜져 있고
+    // 고른 매크로가 없으면(cbMacroList.ItemIndex < 1) 아무것도 하지 않는다.
+    let ctx = ui.ctx().clone();
+    let glyph = |name: &str, bmp: &'static [u8]| glyph_texture(&ctx, name, bmp).map(|t| egui::Image::new(&t).fit_to_exact_size(egui::vec2(16.0, 16.0)));
+    let save = glyph("advrename-save", SAVE_GLYPH).map_or_else(|| egui::Button::new("S"), egui::Button::image);
+    if ui.put(at(593.0, 248.0, 23.0, 22.0), save).clicked() {
         choice = Some(3);
     }
-    if put_enabled(ui, at(619.0, 248.0, 23.0, 22.0), form.macro_name.is_some(), egui::Button::new("🗑")).on_hover_text(text(language, "Button.btnDeleteMacro", "Delete Macro")).clicked() {
+    let delete = glyph("advrename-delete", DELETE_GLYPH).map_or_else(|| egui::Button::new("X"), egui::Button::image);
+    if ui.put(at(619.0, 248.0, 23.0, 22.0), delete).clicked() {
         choice = Some(4);
     }
     // lvPreview(번호·원래 이름·새 이름, 줄 선).
@@ -662,5 +671,25 @@ impl App {
                 Err(error) => app.system_box(&title, &error, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {}),
             }
         });
+    }
+}
+
+
+#[cfg(test)]
+mod glyph_tests {
+    use super::*;
+
+    /// 원본 sbtnSave·sbtnDelete Glyph.Data: 16×16, 왼쪽 아래 점의 색(clSilver)은 투명, 나머지는 그림.
+    #[test]
+    fn macro_buttons_use_the_original_glyph_bitmaps() {
+        for bmp in [SAVE_GLYPH, DELETE_GLYPH] {
+            let image = super::super::original_dialogs::decode_glyph(bmp).expect("an 8-bit BMP");
+            assert_eq!(image.size, [16, 16]);
+            assert_eq!(image.pixels[15 * 16], Color32::TRANSPARENT, "bottom-left is the transparent colour");
+            let drawn = image.pixels.iter().filter(|p| **p != Color32::TRANSPARENT).count();
+            assert!(drawn > 30 && drawn < 256, "{drawn} drawn pixels");
+        }
+        let delete = super::super::original_dialogs::decode_glyph(DELETE_GLYPH).unwrap();
+        assert!(delete.pixels.iter().any(|p| p.r() > 0xC0 && p.g() < 0x60 && p.b() < 0x80), "the red cross");
     }
 }

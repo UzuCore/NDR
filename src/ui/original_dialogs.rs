@@ -157,33 +157,38 @@ pub(super) struct AttributeForm {
     pub recursive: bool,
     pub apply_to_folders: bool,
     pub change_time: bool,
-    pub date: String,
-    pub time: String,
+    pub date: chrono::NaiveDate,
+    pub time: chrono::NaiveTime,
 }
 
 impl AttributeForm {
+    /// 원본 FUN_0043657c → FUN_0041a0e8: 항목마다 그 항목의 속성(GetFileAttributesW: 0x20 A·1 R·2 H·4 S)으로 확인란을 두 상태로
+    /// 켜고 끄며, 날짜·시각 칸은 그 항목의 수정 시각(파일 GetFileSystemTime, 폴더 GetDirSystemTime, 지역 시각)이다.
+    /// 고친 것: 원본은 파일을 열지 못하면 앞 항목의 시각(처음이면 1899-12-30)을 쓴다 → 지금 시각.
     pub(super) fn new(path: &str) -> Self {
-        let now = chrono::Local::now();
+        use std::os::windows::fs::MetadataExt;
+        let metadata = std::fs::metadata(path).ok();
+        let attributes = metadata.as_ref().map_or(0, |m| m.file_attributes());
+        let modified = metadata.and_then(|m| m.modified().ok()).map_or_else(chrono::Local::now, chrono::DateTime::<chrono::Local>::from);
+        let bit = |mask: u32| Some(attributes & mask != 0);
         Self {
             path: path.into(),
-            archive: None,
-            read_only: None,
-            hidden: None,
-            system: None,
+            archive: bit(0x20),
+            read_only: bit(0x1),
+            hidden: bit(0x2),
+            system: bit(0x4),
             recursive: false,
             apply_to_folders: true,
             change_time: false,
-            date: now.format("%Y-%m-%d").to_string(),
-            time: now.format("%H:%M:%S").to_string(),
+            date: modified.date_naive(),
+            time: chrono::Timelike::with_nanosecond(&modified.time(), 0).unwrap_or_else(|| modified.time()),
         }
     }
 
-    /// C# Complete: 시각을 바꿀 때만 날짜와 시간을 읽는다(시간은 0 이상 하루 미만). 틀리면 Err.
+    /// 원본 FUN_0041a200(확인란 → 속성)·FUN_0041a264(날짜·시각 칸 → 지역 시각 → FILETIME). 시각은 chkChangeTime일 때만 바꾼다.
     pub(super) fn changes(&self) -> Result<ndr::tools::AttributeChanges, ()> {
         let modified = if self.change_time {
-            let date = ["%Y-%m-%d", "%Y/%m/%d", "%Y.%m.%d"].iter().find_map(|f| chrono::NaiveDate::parse_from_str(self.date.trim(), f).ok()).ok_or(())?;
-            let time = ["%H:%M:%S%.f", "%H:%M:%S", "%H:%M"].iter().find_map(|f| chrono::NaiveTime::parse_from_str(self.time.trim(), f).ok()).ok_or(())?;
-            let local = date.and_time(time).and_local_timezone(chrono::Local).earliest().ok_or(())?;
+            let local = self.date.and_time(self.time).and_local_timezone(chrono::Local).earliest().ok_or(())?;
             Some(std::time::SystemTime::from(local))
         } else {
             None
@@ -200,13 +205,9 @@ impl AttributeForm {
     }
 }
 
-/// WPF 세 상태 확인란의 순환: 그대로(None) → 끔 → 켬 → 그대로.
+/// 원본 TCheckBox(AllowGrayed 없음): 두 상태로 켜고 끈다.
 fn cycle(state: &mut Option<bool>) {
-    *state = match *state {
-        None => Some(false),
-        Some(false) => Some(true),
-        Some(true) => None,
-    };
+    *state = Some(*state != Some(true));
 }
 
 pub(super) type DialogCallback = Box<dyn FnOnce(&mut App, DialogResult, &egui::Context)>;
@@ -220,6 +221,61 @@ pub(super) struct OriginalDialog {
 }
 
 /// Delphi TOpenDialog.Filter("이름|무늬|이름|무늬")를 (이름, 무늬) 쌍으로. 짝이 없는 끝 조각은 버린다.
+/// DFM Glyph.Data의 BMP(BI_RGB, 4·8·24비트, 아래에서 위로)를 읽는다. VCL TSpeedButton(TButtonGlyph)처럼 왼쪽 아래 점의 색을
+/// 투명으로 본다.
+pub(super) fn decode_glyph(bmp: &[u8]) -> Option<egui::ColorImage> {
+    let u16_at = |at: usize| Some(u16::from_le_bytes(bmp.get(at..at + 2)?.try_into().ok()?));
+    let u32_at = |at: usize| Some(u32::from_le_bytes(bmp.get(at..at + 4)?.try_into().ok()?));
+    if bmp.get(0..2)? != b"BM" || u32_at(30)? != 0 {
+        return None;
+    }
+    let (offset, header) = (u32_at(10)? as usize, u32_at(14)? as usize);
+    let (width, height) = (u32_at(18)? as i32, u32_at(22)? as i32);
+    let bits = u16_at(28)? as usize;
+    if width <= 0 || height == 0 || width > 256 || height.abs() > 256 || ![4, 8, 24].contains(&bits) {
+        return None;
+    }
+    let (width, rows) = (width as usize, height.unsigned_abs() as usize);
+    let colors = match u32_at(46)? as usize {
+        0 if bits <= 8 => 1 << bits,
+        n => n,
+    };
+    let palette: Vec<Color32> = (0..if bits <= 8 { colors } else { 0 })
+        .map(|i| bmp.get(14 + header + i * 4..14 + header + i * 4 + 3).map(|c| Color32::from_rgb(c[2], c[1], c[0])))
+        .collect::<Option<_>>()?;
+    let stride = (width * bits).div_ceil(32) * 4;
+    let mut pixels = vec![Color32::TRANSPARENT; width * rows];
+    for y in 0..rows {
+        let source = if height > 0 { rows - 1 - y } else { y };
+        let line = bmp.get(offset + source * stride..offset + source * stride + stride)?;
+        for x in 0..width {
+            pixels[y * width + x] = match bits {
+                24 => Color32::from_rgb(line[x * 3 + 2], line[x * 3 + 1], line[x * 3]),
+                8 => *palette.get(line[x] as usize)?,
+                _ => *palette.get(((line[x / 2] >> if x % 2 == 0 { 4 } else { 0 }) & 0x0f) as usize)?,
+            };
+        }
+    }
+    let transparent = pixels[(rows - 1) * width];
+    for pixel in &mut pixels {
+        if *pixel == transparent {
+            *pixel = Color32::TRANSPARENT;
+        }
+    }
+    Some(egui::ColorImage { size: [width, rows], pixels, source_size: egui::vec2(width as f32, rows as f32) })
+}
+
+/// 원본 그림 단추용 텍스처(이름마다 한 번 만든다).
+pub(super) fn glyph_texture(ctx: &egui::Context, name: &str, bmp: &'static [u8]) -> Option<egui::TextureHandle> {
+    let id = egui::Id::new(("ndr-glyph", name));
+    if let Some(texture) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
+        return Some(texture);
+    }
+    let texture = ctx.load_texture(name, decode_glyph(bmp)?, egui::TextureOptions::NEAREST);
+    ctx.data_mut(|d| d.insert_temp(id, texture.clone()));
+    Some(texture)
+}
+
 pub(super) fn delphi_filter(text: &str) -> Vec<(String, String)> {
     let parts: Vec<&str> = text.split('|').collect();
     parts.chunks_exact(2).map(|pair| (pair[0].to_owned(), pair[1].to_owned())).collect()
@@ -871,13 +927,10 @@ impl App {
                     access_checkbox(ui, at(228.0, 70.0, 169.0, 17.0), &mut form.change_time, &raw("Caption.chkChangeTime", "Modify Date/Time (&G)"));
                     let enabled = form.change_time;
                     put_left(ui, at(228.0, 101.0, 145.0, 15.0), egui::Label::new(text("Caption.lDate", "Date")));
-                    ui.scope_builder(egui::UiBuilder::new().max_rect(at(228.0, 120.0, 145.0, 21.0)), |ui| {
-                        ui.add_enabled(enabled, egui::TextEdit::singleline(&mut form.date).desired_width(145.0).hint_text("yyyy-MM-dd"));
-                    });
+                    // 원본 dtpDate(TDateTimePicker dtkDate)·dtpTime(dtkTime) 16,76·16,122 145×21, chkChangeTimeClick(0x41a1a4)이 켠다.
+                    super::date_time_picker::date_picker(ui, at(228.0, 120.0, 145.0, 21.0), enabled, "change-attr-date", &mut form.date);
                     put_left(ui, at(228.0, 147.0, 145.0, 15.0), egui::Label::new(text("Caption.lTime", "Time")));
-                    ui.scope_builder(egui::UiBuilder::new().max_rect(at(228.0, 166.0, 145.0, 21.0)), |ui| {
-                        ui.add_enabled(enabled, egui::TextEdit::singleline(&mut form.time).desired_width(145.0));
-                    });
+                    super::date_time_picker::time_picker(ui, at(228.0, 166.0, 145.0, 21.0), enabled, "change-attr-time", &mut form.time);
                     access_checkbox(ui, at(16.0, 219.0, 177.0, 17.0), &mut form.recursive, &raw("Caption.chkRecursive", "Include Sub&folders"));
                     access_checkbox(ui, at(212.0, 219.0, 177.0, 17.0), &mut form.apply_to_folders, &raw("Caption.chkApplyToFolder", "Apply to &Folders"));
                     for (left, slot, key, fallback) in [(95.0, 0, "Caption.btnAll", "A&ll"), (176.0, 1, "Caption.btnSkip", "S&kip"), (264.0, 2, "Caption.btnOk", "OK"), (345.0, 3, "Caption.btnCancel", "Cancel")] {

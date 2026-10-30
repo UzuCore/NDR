@@ -539,30 +539,26 @@ fn attribute_window_asks_per_item_like_changeattributesasync() {
             thread::sleep(Duration::from_millis(5));
         }
     };
+    native::set_attributes(&left.join("beta.txt"), true, false).unwrap();
     app.panes[0].selected = [row(&app, 0, "alpha.txt"), row(&app, 0, "beta.txt"), row(&app, 0, "gamma.log")].into_iter().collect();
     app.dispatch("attributes", &ctx);
     let dialog = &app.original_dialogs[0];
     assert_eq!(dialog.title, app.language_pack.text("formChangeAttr.Form.Caption", "?"));
-    assert!(matches!(&dialog.kind, DialogKind::Attributes(form) if form.path.ends_with("alpha.txt") && form.read_only.is_none() && form.apply_to_folders));
+    // 원본 FUN_0041a0e8: 확인란 = 그 항목의 속성(두 상태), 날짜·시각 = 그 항목의 수정 시각.
+    let alpha_time = chrono::DateTime::<chrono::Local>::from(fs::metadata(left.join("alpha.txt")).unwrap().modified().unwrap());
+    let archive = attributes("alpha.txt") & 0x20 != 0;
+    assert!(matches!(&dialog.kind, DialogKind::Attributes(form) if form.path.ends_with("alpha.txt") && form.read_only == Some(false) && form.archive == Some(archive) && form.hidden == Some(false) && form.apply_to_folders && form.date == alpha_time.date_naive()));
     frame(&mut app, &ctx, vec![]);
-    // Invalid time: a warning box with the window title, the window stays.
-    app.edit_attribute_form(|form| {
-        form.change_time = true;
-        form.time = "25:00".into();
-    });
-    app.submit_attributes(super::original_dialogs::AttributeAction::Apply, &ctx);
-    assert_eq!(app.msgboxes[0].text, "날짜 또는 시간이 올바르지 않습니다.");
-    assert_eq!(app.msgboxes[0].title, app.original_dialogs[0].title);
-    app.answer_message_box(1, &ctx);
     // OK on the first item: read-only on, time 2020-01-02 03:04:05.
     app.edit_attribute_form(|form| {
+        form.change_time = true;
         form.read_only = Some(true);
-        form.date = "2020-01-02".into();
-        form.time = "03:04:05".into();
+        form.date = chrono::NaiveDate::from_ymd_opt(2020, 1, 2).unwrap();
+        form.time = chrono::NaiveTime::from_hms_opt(3, 4, 5).unwrap();
     });
     app.submit_attributes(super::original_dialogs::AttributeAction::Apply, &ctx);
     wait_dialog(&mut app, &ctx);
-    assert!(matches!(&app.original_dialogs[0].kind, DialogKind::Attributes(form) if form.path.ends_with("beta.txt")), "next item");
+    assert!(matches!(&app.original_dialogs[0].kind, DialogKind::Attributes(form) if form.path.ends_with("beta.txt") && form.read_only == Some(true)), "next item shows its own attributes");
     assert_eq!(attributes("alpha.txt") & 1, 1);
     let expected = chrono::NaiveDate::from_ymd_opt(2020, 1, 2).unwrap().and_hms_opt(3, 4, 5).unwrap().and_local_timezone(chrono::Local).earliest().unwrap();
     assert_eq!(fs::metadata(left.join("alpha.txt")).unwrap().modified().unwrap(), std::time::SystemTime::from(expected));
@@ -576,7 +572,8 @@ fn attribute_window_asks_per_item_like_changeattributesasync() {
     wait_dialog(&mut app, &ctx);
     wait_listing(&mut app, &ctx);
     assert!(app.original_dialogs.is_empty());
-    assert_eq!(attributes("beta.txt") & 3, 0, "skipped");
+    assert_eq!(attributes("beta.txt") & 3, 1, "skipped: still read-only");
+    let _ = native::set_attributes(&left.join("beta.txt"), false, false);
     assert_eq!(attributes("gamma.log") & 2, 2);
     assert_eq!(app.status, "2개 항목의 속성을 변경하고 1개 항목을 건너뛰었습니다.");
     let _ = native::set_attributes(&left.join("alpha.txt"), false, false);

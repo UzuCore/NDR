@@ -4,6 +4,7 @@ mod skin_pane;
 mod cleanup_dialog;
 mod commands;
 mod compare_dialog;
+mod date_time_picker;
 mod destination_dialog;
 mod dialogs;
 mod disk_copy_dialog;
