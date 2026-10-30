@@ -1430,20 +1430,22 @@ fn favorites_menu_and_path_history_follow_the_context_menus() {
     assert_eq!(app.panes[0].path, right);
     assert_eq!(app.panes[0].back, [left.clone(), left.join("folder1")]);
     app.show_history_menu(0, None);
-    let entries: Vec<String> = app.popup.as_ref().unwrap().items.iter().filter_map(|item| match item {
-        super::favorites_dialog::PopupItem::Entry { label, .. } => Some(label.clone()),
-        super::favorites_dialog::PopupItem::Header(title) => Some(format!("[{title}]")),
+    // 원본 FUN_0048ced4: 기록 목록 전체(오래된 것부터), "&N. 경로", 지금 자리는 체크.
+    let entries: Vec<(String, Option<char>, bool)> = app.popup.as_ref().unwrap().items.iter().filter_map(|item| match item {
+        super::favorites_dialog::PopupItem::Entry { label, access, checked, .. } => Some((label.clone(), *access, *checked)),
         _ => None,
     }).collect();
-    assert_eq!(entries, ["[Back]".to_owned(), left.join("folder1").to_string_lossy().into_owned(), left.to_string_lossy().into_owned()], "nearest first");
+    let line = |n: char, path: &std::path::Path, checked: bool| (format!("{n}. {}", path.to_string_lossy()), Some(n), checked);
+    assert_eq!(entries, [line('0', &left, false), line('1', &left.join("folder1"), false), line('2', &right, true)], "oldest first, the current one checked");
     for _ in 0..2 {
         popup_frame(&mut app, &ctx, vec![key(egui::Key::ArrowDown)]);
     }
     popup_frame(&mut app, &ctx, vec![key(egui::Key::Enter)]);
     wait_listing(&mut app, &ctx);
-    assert_eq!(app.panes[0].path, left, "the second entry");
-    assert!(app.panes[0].back.is_empty());
-    assert_eq!(app.panes[0].forward, [right.clone(), left.join("folder1")], "skipped entries move to the other side");
+    assert_eq!(app.panes[0].path, left.join("folder1"), "the second entry");
+    // 원본 FUN_0048d05c → FUN_00458348: 기록 이동이 아니라 새로 간 것으로 더한다(지금 자리 뒤에 붙임).
+    assert_eq!(app.panes[0].back, [left.clone(), left.join("folder1"), right.clone()]);
+    assert!(app.panes[0].forward.is_empty());
     // 즐겨찾기가 없으면(원본) 안내 줄 없이 구분선과 고정 항목 둘만. Esc로 닫힌다.
     app.settings.set_strings("FavoriteNames", vec![]);
     app.dispatch("favoritesMenu", &ctx);

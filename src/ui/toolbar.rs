@@ -362,7 +362,7 @@ impl App {
                 continue;
             }
             let (label, access) = super::favorites_dialog::access_key(&self.toolbar_label(child));
-            items.push(super::favorites_dialog::PopupItem::Entry { label, access, gesture: String::new(), enabled: true, action: super::favorites_dialog::PopupAction::Toolbar(child.action.clone()) });
+            items.push(super::favorites_dialog::PopupItem::Entry { label, access, gesture: String::new(), enabled: true, checked: false, action: super::favorites_dialog::PopupAction::Toolbar(child.action.clone()) });
         }
         if items.is_empty() {
             return;

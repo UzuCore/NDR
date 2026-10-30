@@ -576,7 +576,7 @@ impl App {
             _ => {
                 let items = candidates
                     .into_iter()
-                    .map(|path| super::favorites_dialog::PopupItem::Entry { label: path.clone(), access: None, gesture: String::new(), enabled: true, action: super::favorites_dialog::PopupAction::RunExecutable { path, directory: directory.clone() } })
+                    .map(|path| super::favorites_dialog::PopupItem::Entry { label: path.clone(), access: None, gesture: String::new(), enabled: true, checked: false, action: super::favorites_dialog::PopupAction::RunExecutable { path, directory: directory.clone() } })
                     .collect();
                 // 원본 pmTemp(+0x870): OnPopup = pmTempPopup(0x442b78)이 아래 화살표 하나를 보내 첫 줄을 골라 둔다.
                 self.popup = Some(super::favorites_dialog::PopupMenu { items, position: Some(egui::pos2(4.0, 4.0)), highlight: Some(0), opened: true });

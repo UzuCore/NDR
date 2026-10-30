@@ -863,6 +863,12 @@ impl App {
         if pane.path == path && !pane.loading {
             return;
         }
+        // 원본 위치 바뀌기 전 사건(위치 +0x38 = FUN_0048631c): 그 패널의 알림 창(TfMessage, +0x30c)이 떠 있으면 닫고 표시를 지운다
+        // (표시는 새 목록에서 지운다).
+        if self.pane_message.as_ref().is_some_and(|(_, pane, _)| *pane == index) {
+            self.pane_message = None;
+        }
+        let pane = &mut self.panes[index];
         if remember {
             pane.back.push(pane.path.clone());
             pane.forward.clear();

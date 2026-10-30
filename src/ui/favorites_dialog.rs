@@ -179,7 +179,7 @@ pub(super) fn favorites_ui(ui: &mut egui::Ui, form: &mut FavoritesForm, language
 pub(super) enum PopupItem {
     Header(String),
     Separator,
-    Entry { label: String, access: Option<char>, gesture: String, enabled: bool, action: PopupAction },
+    Entry { label: String, access: Option<char>, gesture: String, enabled: bool, checked: bool, action: PopupAction },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -188,7 +188,8 @@ pub(super) enum PopupAction {
     ManageFavorites,
     /// 원본 miAddToFavorites(즐겨찾기 추가).
     AddFavorite,
-    History { pane: usize, forward: bool, index: usize },
+    /// 원본 주소 줄 기록 메뉴의 한 줄(FUN_0048d05c): 기록 목록(오래된 것부터) `index`번째 폴더로.
+    History { pane: usize, index: usize },
     /// 원본 mipAddressCopy(주소 복사): 그 패널의 주소를 클립보드로.
     CopyAddress(usize),
     /// 원본 mipAddressEdit(주소 편집): 그 패널의 주소 칸을 편집 상태로.
@@ -317,7 +318,7 @@ impl App {
                 continue;
             }
             let (label, access) = access_key(&name);
-            items.push(PopupItem::Entry { label, access, gesture: favorite_gesture(&self.settings, index), enabled: true, action: PopupAction::OpenFavorite(path) });
+            items.push(PopupItem::Entry { label, access, gesture: favorite_gesture(&self.settings, index), enabled: true, checked: false, action: PopupAction::OpenFavorite(path) });
         }
         // 원본 pmFavorites(DFM): 즐겨찾기 줄들 다음에 고정 항목 N22("-"), miAddToFavorites, miOrgFavorites.
         self.favorites_tail(&mut items);
@@ -329,10 +330,10 @@ impl App {
         items.push(PopupItem::Separator);
         let add = self.language_pack.raw("Menu.miAddToFavorites").unwrap_or_else(|| if ko { "즐겨찾기 추가".into() } else { "Add to Favorites".into() });
         let (label, access) = access_key(&add);
-        items.push(PopupItem::Entry { label, access, gesture: String::new(), enabled: self.panes[self.active].archive.is_none(), action: PopupAction::AddFavorite });
+        items.push(PopupItem::Entry { label, access, gesture: String::new(), enabled: self.panes[self.active].archive.is_none(), checked: false, action: PopupAction::AddFavorite });
         let organize = self.language_pack.raw("Menu.miOrgFavorites").unwrap_or_else(|| if ko { "즐겨찾기 편집".into() } else { "Organize Favorites".into() });
         let (label, access) = access_key(&organize);
-        items.push(PopupItem::Entry { label, access, gesture: String::new(), enabled: true, action: PopupAction::ManageFavorites });
+        items.push(PopupItem::Entry { label, access, gesture: String::new(), enabled: true, checked: false, action: PopupAction::ManageFavorites });
     }
 
     /// 주소 칸의 글(압축 안이면 "압축!/접두", 아니면 지금 폴더). 원본 TNXPathLabel.GetPath 자리.
@@ -356,10 +357,10 @@ impl App {
         let mut items = vec![];
         let copy = self.language_pack.raw("Menu.mipAddressCopy").unwrap_or_else(|| if ko { "주소 복사".into() } else { "Copy Address".into() });
         let (label, access) = access_key(&copy);
-        items.push(PopupItem::Entry { label, access, gesture: String::new(), enabled: true, action: PopupAction::CopyAddress(index) });
+        items.push(PopupItem::Entry { label, access, gesture: String::new(), enabled: true, checked: false, action: PopupAction::CopyAddress(index) });
         let edit = self.language_pack.raw("Menu.mipAddressEdit").unwrap_or_else(|| if ko { "주소 편집".into() } else { "Edit Address".into() });
         let (label, access) = access_key(&edit);
-        items.push(PopupItem::Entry { label, access, gesture: String::new(), enabled: true, action: PopupAction::EditAddress(index) });
+        items.push(PopupItem::Entry { label, access, gesture: String::new(), enabled: true, checked: false, action: PopupAction::EditAddress(index) });
         items.push(PopupItem::Separator);
         let names = self.settings.strings("FavoriteNames");
         for (slot, path) in self.settings.strings("Favorites").into_iter().enumerate().take(20) {
@@ -369,7 +370,7 @@ impl App {
                 continue;
             }
             let (label, access) = access_key(&name);
-            items.push(PopupItem::Entry { label, access, gesture: String::new(), enabled: true, action: PopupAction::OpenFavorite(path) });
+            items.push(PopupItem::Entry { label, access, gesture: String::new(), enabled: true, checked: false, action: PopupAction::OpenFavorite(path) });
         }
         self.favorites_tail(&mut items);
         self.popup = Some(PopupMenu { items, position: Some(position), highlight: None, opened: true });
@@ -412,27 +413,29 @@ impl App {
         });
     }
 
-    /// C# ShowNavigationHistoryMenu: "뒤로 이동"(가까운 것부터), 구분선, "앞으로 이동". 둘 다 비면 열지 않는다.
+    /// 원본 주소 줄 기록 단추의 메뉴(FUN_0048ced4): 패널 기록 목록(+0x37c, 오래된 것부터 마지막 번호까지) 한 줄씩,
+    /// 글 = "&%d. %s"(번호 10 미만) 또는 "&%c. %s"(번호 + 'A', 그래서 10번은 K), 지금 자리(+8)는 체크 표시. 원본 기록은 한 줄로
+    /// 늘어선 목록에 지금 자리가 있고(뒤로 = 자리 − 1, 앞으로 = + 1), NDR 기록(back·지금 폴더·forward)을 그 차례로 늘어놓는다.
     pub(super) fn show_history_menu(&mut self, pane: usize, position: Option<egui::Pos2>) {
-        let mut items = vec![];
-        let sections = [(self.tr("뒤로 이동", "Back").into_owned(), &self.panes[pane].back, false), (self.tr("앞으로 이동", "Forward").into_owned(), &self.panes[pane].forward, true)];
-        for (title, history, forward) in sections {
-            if history.is_empty() {
-                continue;
-            }
-            if forward && !self.panes[pane].back.is_empty() {
-                items.push(PopupItem::Separator);
-            }
-            items.push(PopupItem::Header(title));
-            for (index, path) in history.iter().rev().enumerate() {
-                items.push(PopupItem::Entry { label: path.to_string_lossy().into_owned(), access: None, gesture: String::new(), enabled: true, action: PopupAction::History { pane, forward, index } });
-            }
-        }
-        if items.is_empty() {
-            return;
-        }
+        let list = self.history_list(pane);
+        let current = self.panes[pane].back.len();
+        let items: Vec<PopupItem> = list
+            .iter()
+            .enumerate()
+            .map(|(index, path)| {
+                let access = if index < 10 { char::from_digit(index as u32, 10) } else { char::from_u32(index as u32 + 0x41) };
+                let label = format!("{}. {}", access.map(String::from).unwrap_or_default(), path.to_string_lossy());
+                PopupItem::Entry { label, access, gesture: String::new(), enabled: true, checked: index == current, action: PopupAction::History { pane, index } }
+            })
+            .collect();
         self.active = pane;
         self.popup = Some(PopupMenu { items, position, highlight: None, opened: true });
+    }
+
+    /// 원본 기록 목록 차례: 뒤로 갈 폴더들(오래된 것부터), 지금 폴더, 앞으로 갈 폴더들(가까운 것부터).
+    pub(super) fn history_list(&self, pane: usize) -> Vec<PathBuf> {
+        let p = &self.panes[pane];
+        p.back.iter().cloned().chain(std::iter::once(p.path.clone())).chain(p.forward.iter().rev().cloned()).collect()
     }
 
     /// 원본 FUN_0048d4b4(즐겨찾기 메뉴 FUN_0042f078에서): 그 칸의 경로가 있으면(PathFileExistsW) 활성 패널을 그 폴더로 옮긴다.
@@ -444,22 +447,12 @@ impl App {
         }
     }
 
-    /// C# NavigateHistoryEntryAsync: 현재 위치를 반대쪽에 넣고, 고른 것까지 건너뛴 것들도 반대쪽으로 옮긴 뒤 그 위치로.
-    pub(super) fn navigate_history_entry(&mut self, pane: usize, forward: bool, index: usize) {
-        let p = &mut self.panes[pane];
-        let (source, target) = if forward { (&mut p.forward, &mut p.back) } else { (&mut p.back, &mut p.forward) };
-        if index >= source.len() {
-            return;
-        }
-        target.push(p.path.clone());
-        for _ in 0..index {
-            if let Some(skipped) = source.pop() {
-                target.push(skipped);
-            }
-        }
-        let Some(location) = source.pop() else { return };
+    /// 원본 FUN_0048d05c: 고른 줄의 폴더로 간다(FUN_00459968). 기록 이동(뒤로·앞으로, +0x2e8)이 아니므로 목록 받기(FUN_00486694)가
+    /// FUN_00458348로 기록에 더한다: 지금 자리 뒤는 지우고 끝에 붙인다(지금 폴더와 같으면 그대로). NDR navigate(기억함)와 같다.
+    pub(super) fn navigate_history_entry(&mut self, pane: usize, index: usize) {
+        let Some(location) = self.history_list(pane).get(index).cloned() else { return };
         self.active = pane;
-        self.navigate(pane, location, false);
+        self.navigate(pane, location, true);
     }
 
     pub(super) fn run_popup_action(&mut self, action: PopupAction) {
@@ -467,7 +460,7 @@ impl App {
             PopupAction::OpenFavorite(path) => self.open_favorite(&path),
             PopupAction::ManageFavorites => self.manage_favorites(),
             PopupAction::AddFavorite => self.add_to_favorites_command(),
-            PopupAction::History { pane, forward, index } => self.navigate_history_entry(pane, forward, index),
+            PopupAction::History { pane, index } => self.navigate_history_entry(pane, index),
             PopupAction::CopyAddress(pane) => {
                 let _ = (self.clipboard_writer)(&self.address_text(pane));
             }
@@ -531,12 +524,20 @@ impl App {
                                 ui.separator();
                             }
                         }
-                        PopupItem::Entry { label, gesture, enabled, .. } => {
+                        PopupItem::Entry { label, gesture, enabled, checked, .. } => {
                             // 고른 줄 바탕(스킨이면 mhighlight): 테 없는 단추는 selected여도 바탕을 칠하지 않으므로 뒤에 깐다.
                             let backdrop = ui.painter().add(egui::Shape::Noop);
                             let highlighted = popup.highlight == Some(index);
-                            let button = egui::Button::new(label.as_str()).shortcut_text(gesture.as_str()).frame(false).selected(highlighted).min_size(egui::vec2(300.0, 22.0));
+                            // VCL TMenuItem.Checked: 글 앞 체크 표시 자리(글꼴에 없는 기호 대신 선 두 개로 그린다).
+                            let text = format!("     {label}");
+                            let button = egui::Button::new(text).shortcut_text(gesture.as_str()).frame(false).selected(highlighted).min_size(egui::vec2(300.0, 22.0));
                             let response = ui.add_enabled(*enabled, button);
+                            if *checked {
+                                let (x, y) = (response.rect.left() + 8.0, response.rect.center().y);
+                                let stroke = egui::Stroke::new(1.5, ui.visuals().text_color());
+                                ui.painter().line_segment([egui::pos2(x, y), egui::pos2(x + 3.0, y + 3.0)], stroke);
+                                ui.painter().line_segment([egui::pos2(x + 3.0, y + 3.0), egui::pos2(x + 9.0, y - 4.0)], stroke);
+                            }
                             if highlighted {
                                 ui.painter().set(backdrop, egui::Shape::rect_filled(response.rect, 0.0, ui.visuals().selection.bg_fill));
                             }

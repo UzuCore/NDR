@@ -282,7 +282,7 @@ impl App {
                 Some(effect) => PopupAction::Drop { pane, effect, paths: paths.clone(), destination: destination.clone() },
                 None => PopupAction::Close,
             };
-            items.push(PopupItem::Entry { label, access, gesture: String::new(), enabled: true, action });
+            items.push(PopupItem::Entry { label, access, gesture: String::new(), enabled: true, checked: false, action });
         }
         self.popup = Some(PopupMenu { items, position: Some(position), highlight: None, opened: true });
     }
