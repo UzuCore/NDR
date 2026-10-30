@@ -552,8 +552,8 @@ impl App {
             "rename"=>self.rename_items(),
             "advancedRename"=>self.advanced_rename(),
             // 원본 miCopyToClick(0x432e68)·miMoveToClick(0x432f40): 로컬 위치면 FUN_0042bdc4(대상 없음) = TfSelectDest(경로 칸 처음 값 =
-            // 다른 패널, 고쳐서 같은 패널 안 폴더로도). 스킨 테마. 압축·FTP 위치는 전처럼.
-            "copyToOther"|"moveToOther" if self.panes[i].archive.is_none()&&self.panes[i].remote.is_none()&&self.panes[1-i].remote.is_none()=>self.copy_move_to_folder(id=="moveToOther"),
+            // 다른 패널, 고쳐서 같은 패널 안 폴더로도), 압축 위치면 FUN_00439bac(압축 풀기 대상 선택). FTP 위치는 올리기·내려받기.
+            "copyToOther"|"moveToOther" if self.panes[i].remote.is_none()&&self.panes[1-i].remote.is_none()=>self.copy_move_to_folder(id=="moveToOther"),
             "copyToOther"|"moveToOther"=>self.copy_to_other(i,id=="moveToOther",ctx),
             "copyToFolder"|"moveToFolder"=>self.copy_move_to_folder(id=="moveToFolder"),
             "copy"|"cut"=>{if !targets.is_empty(){self.clipboard=Some((targets.clone(),id=="cut"));if self.panes[i].archive.is_none(){result=(self.file_clipboard)(&targets,id=="cut");}

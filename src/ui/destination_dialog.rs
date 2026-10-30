@@ -1,7 +1,7 @@
 //! C# SelectDestinationFolder + DestinationPickerWindow([formNDRDestination]): 자주 쓴 대상(MostUsedDestinations, 많이·최근 순,
 //! 있는 폴더만, MaxRecentFileCount개, 오른쪽 단추 메뉴로 지우기), 작업 폴더 1~5(숫자 글쇠), 다른 폴더 찾아보기.
 //! RememberDestination(LastDestination + 사용 횟수·마지막 사용 시각)과 CopyMoveToFolderAsync.
-//! 차이(HANDOFF): 압축 파일 안에서 다른 폴더로 복사는 압축 흐름 이식 전까지 예전처럼 압축 풀기 창을 거친다.
+//! 압축 파일 안에서 복사는 원본 FUN_00439bac처럼 압축 풀기 대상 선택(EXTRACT 제목)이고, 이동은 아무것도 하지 않는다.
 use super::original_dialogs::{DialogKind, DialogResult};
 use super::*;
 use ndr::msgbox::{IDYES, MB_ICONASTERISK, MB_ICONQUESTION, MB_OK, MB_YESNO};
@@ -486,16 +486,20 @@ impl App {
         self.save();
     }
 
-    /// C# CopyMoveToFolderAsync: 압축 안에서 이동은 안내, 처음 폴더는 다른 패널(압축 안이면 이 패널), 대상 선택 → 복사/이동.
+    /// 원본 miCopyToClick(0x432e68)·miMoveToClick(0x432f40): 로컬 위치면 FUN_0042bdc4 = TfSelectDest(경로 칸 처음 값은 FUN_0043cb24).
+    /// 압축 파일 안이면 복사는 FUN_00439bac(형식 0) = 고른 항목을 TfSelectDest(EXTRACT 제목)로 고른 폴더에 풀고,
+    /// 이동은 FUN_0042bdc4가 로컬이 아니면 그만이므로 아무것도 하지 않는다(C# 판의 "이동할 수 없습니다" 알림은 없다).
     pub(super) fn copy_move_to_folder(&mut self, moving: bool) {
         let i = self.active;
+        if self.panes[i].archive.is_some() {
+            if !moving {
+                self.extract_command(super::archive_dialog::ExtractMode::Selected);
+            }
+            return;
+        }
         let targets = self.panes[i].targets();
         if targets.is_empty() {
             return;
-        }
-        if moving && self.panes[i].archive.is_some() {
-            let text = self.tr("압축 파일 안의 항목은 이동할 수 없습니다. 복사로 압축을 풀어 저장하세요.", "Items inside an archive cannot be moved. Copy them to extract and save them.").into_owned();
-            return self.system_box("NDR", &text, MB_OK | MB_ICONASTERISK, |_, _, _| {});
         }
         let other = &self.panes[1 - i];
         // 원본 FUN_0043cb24: 두 패널이 보이고 다른 패널이 로컬이면 그 폴더, 아니면 지금 패널 폴더.

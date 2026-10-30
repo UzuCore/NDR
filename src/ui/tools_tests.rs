@@ -624,12 +624,16 @@ fn archive_create_add_move_and_extract_follow_the_csharp_flows() {
     app.dispatch("extractAuto", &ctx);
     wait_job(&mut app, &ctx);
     assert!(PathBuf::from(format!("{}\\pack(3)", left.display())).join("alpha.txt").is_file());
-    // 압축 파일 안: 다른 패널로 복사 = 그 항목 풀기, 이동은 안내, 속성.
+    // 압축 파일 안: 원본 miCopyToClick = FUN_00439bac(형식 0) — 압축 풀기 대상 선택 창(처음 값 다른 패널), 확인하면 그 항목 풀기.
+    // 이동(miMoveToClick → FUN_0042bdc4)은 로컬이 아니면 아무것도 하지 않는다.
     app.panes[0].archive = Some(ArchiveLocation { file: pack.clone(), prefix: String::new(), password: String::new() });
     app.refresh(0);
     wait_until(&mut app, &ctx, |app| !app.panes[0].loading);
     app.panes[0].cursor = row(&app, "folder1");
     app.dispatch("copyToOther", &ctx);
+    let title = app.original_dialogs.last().map(|d| d.title.clone()).unwrap_or_default();
+    assert!(title.starts_with(&app.language_pack.text("RES.EXTRACT", "?")), "{title}");
+    app.destination_action(super::destination_dialog::DestinationAction::Accept, &ctx);
     if !app.msgboxes.is_empty() {
         app.answer_message_box(6, &ctx);
     }
@@ -637,11 +641,7 @@ fn archive_create_add_move_and_extract_follow_the_csharp_flows() {
     assert!(right.join("folder1").join("inner.txt").is_file() && !right.join("alpha.txt").exists());
     app.panes[0].cursor = row(&app, "folder1");
     app.dispatch("moveToOther", &ctx);
-    if app.msgboxes.first().is_some_and(|m| m.text.contains("%s") || m.title == app.language_pack.text("RES.TITLE_FILEOPERATION", "?")) {
-        app.answer_message_box(6, &ctx);
-    }
-    assert_eq!(boxed(&app).1, "압축 파일 안의 항목은 이동할 수 없습니다. 복사를 사용하세요.");
-    app.answer_message_box(1, &ctx);
+    assert!(app.msgboxes.is_empty() && app.original_dialogs.is_empty() && app.job.as_ref().is_none_or(|j| j.finished), "move inside an archive does nothing");
     app.dispatch("archiveProperties", &ctx);
     wait_until(&mut app, &ctx, |app| app.text.is_some());
     let text = app.text.take().unwrap();
