@@ -470,7 +470,6 @@ enum AddressAction {
 impl App {
     /// C# BuildContextMenu(목록 오른쪽 단추 메뉴): 메뉴 글은 [formMain] Menu.mip…/mi… 키, 열릴 때 C#과 같은 조건으로 켜고 끈다.
     pub(super) fn list_context_menu(&self, ui: &mut egui::Ui, index: usize) -> Option<&'static str> {
-        let ko = self.language == "ko";
         let pane = &self.panes[index];
         let rows: Vec<usize> = if pane.loading {
             vec![]
@@ -495,17 +494,11 @@ impl App {
         let text = |key: &str, fallback: &str| self.language_pack.raw(&format!("formMain.Menu.{key}")).unwrap_or_else(|| fallback.to_owned());
         type Item<'a> = Option<(String, &'static str, bool)>;
         // 원본 pmMain(docs/original-menus.txt) 차례: 탐색기 메뉴 | 새 탭에서 열기 | 다른 프로그램으로 열기·보기·편집 | 복사·잘라내기·붙여넣기 |
-        // 복사 위치·이동 위치 | 삭제·이름 바꾸기·속성/시간·설명 | 압축 추가·자동 풀기 | 속성. C# 판의 열기·다른 패널로·경로 복사는 가까운 자리에 둔다.
+        // 복사 위치·이동 위치 | 삭제·이름 바꾸기·속성/시간·설명 | 압축 추가·자동 풀기 | 속성.
         let mut items: Vec<Item> = Vec::new();
-        // 스킨 테마(원본 모양)는 원본 pmMain 항목만 둔다. C# 판의 열기·다른 패널로·경로 복사 줄은 C# 테마에서만.
-        let theme = self.settings.text("Theme", "Black");
-        let original = self.skin_cache.as_ref().is_some_and(|(name, skin)| *name == theme && skin.is_some());
         if explorer {
             items.push(Some((text("mipExplorerMenu", "탐색기 메뉴"), "explorerMenu", true)));
             items.push(None);
-        }
-        if !original {
-            items.push(Some((text("miOpen", "열기"), "open", has)));
         }
         // 이 목록에서 None은 구분선이므로 새 탭 항목은 있을 때만 넣는다.
         if new_tab {
@@ -528,12 +521,7 @@ impl App {
             Some((text("mipCopyTo", "복사 위치…"), "copyToFolder", has)),
             Some((text("mipMoveTo", "이동 위치…"), "moveToFolder", local && has)),
         ]);
-        if !original {
-            items.extend([
-                Some(((if ko { "복사 → 다른 패널" } else { "Copy to other pane" }).to_owned(), "copyToOther", has)),
-                Some(((if ko { "이동 → 다른 패널" } else { "Move to other pane" }).to_owned(), "moveToOther", local && has)),
-            ]);
-        }
+
         items.extend([
             None,
             Some((text("mipDelete", "삭제"), "deleteRecycle", local && has)),
@@ -546,14 +534,7 @@ impl App {
             None,
             Some((text("mipProperties", "속성"), "properties", local && single)),
         ]);
-        if !original {
-            items.extend([
-                None,
-                Some((text("miCopyFullPath", "전체 경로 복사"), "copyFullPath", true)),
-                Some((text("miCopyFileName", "파일 이름만 복사"), "copyName", has)),
-                Some((text("miCopyPath", "경로만 복사"), "copyPathOnly", true)),
-            ]);
-        }
+
         // VCL 메뉴(AutoLineReduction = maAutomatic)처럼 맨 앞·맨 뒤·겹친 구분선은 그리지 않는다.
         let mut reduced: Vec<Item> = Vec::new();
         for item in items {

@@ -327,9 +327,6 @@ impl App {
         let tip = self.name_tip.borrow_mut().take_if(|(pane, ..)| *pane == index);
         let thumb_tip = self.thumb_tip.borrow_mut().take_if(|(pane, ..)| *pane == index);
         self.name_tip_shown[index] = None;
-        if !self.skin_active() {
-            return;
-        }
         let cursor = self.panes[index].cursor;
         let now = Instant::now();
         let since = match self.tip_since[index] {
@@ -660,14 +657,10 @@ impl App {
     pub(super) fn refresh(&mut self, index: usize) {
         // C# RefreshPaneAsync: 그 패널의 빠른 찾기 입력을 버린다.
         self.typed_search[index] = TypedSearch::default();
-        // 원본 새로 고침은 표시를 이름으로 되돌리므로(apply_listing) 스킨 테마는 새 목록이 올 때까지 표시를 둔다.
-        let keep_marks = self.skin_active();
+        // 원본 새로 고침은 표시를 이름으로 되돌리므로(apply_listing) 새 목록이 올 때까지 표시를 둔다.
         let pane = &mut self.panes[index];
         pane.generation += 1;
         pane.loading = true;
-        if !keep_marks {
-            pane.selected.clear();
-        }
         let generation = pane.generation;
         let path = pane.path.clone();
         let show_hidden = pane.show_hidden;
@@ -779,7 +772,7 @@ impl App {
         });
         // 원본 GetList(0x45a34c)는 목록을 그 자리에서 읽는다(읽는 동안 화면은 그대로, 다 읽으면 새 목록). 스킨 테마는 로컬·압축 목록을
         // 3초까지 기다려 "읽는 중" 그림 없이 바꾼다. 더 오래 걸리면(네트워크 등) 전처럼 따로 읽고 다 되면 바꾼다. FTP는 기다리지 않는다.
-        if self.skin_active() && self.panes[index].remote.is_none() {
+        if self.panes[index].remote.is_none() {
             let deadline = Instant::now() + Duration::from_secs(3);
             let mut auth = Vec::new();
             while self.panes[index].loading && self.panes[index].generation == generation {
@@ -851,21 +844,14 @@ impl App {
             return;
         }
         let current = self.panes[i].path.clone();
-        if self.skin_active() && current.parent().is_some() && !is_drives(&current) {
+        if current.parent().is_some() && !is_drives(&current) {
             self.pending_focus[i] = current.file_name().map(|n| n.to_string_lossy().into_owned());
         }
-        // 원본 FUN_00459ba8: 루트면(IsRoot) 아무것도 하지 않는다(스킨 테마).
-        if self.skin_active() && (current.parent().is_none() || is_drives(&current)) {
+        // 원본 FUN_00459ba8: 루트면(IsRoot) 아무것도 하지 않는다.
+        if current.parent().is_none() || is_drives(&current) {
             return;
         }
-        // C# GoUpAsync: 내 PC에서는 그대로, 드라이브 루트(상위 없음)에서는 내 PC로.
-        if is_drives(&current) {
-            return;
-        }
-        let parent = current.parent().map(Path::to_path_buf);
-        let Some(parent) = parent else {
-            return self.navigate(i, PathBuf::from(super::remote_window::DRIVES), true);
-        };
+        let Some(parent) = current.parent().map(Path::to_path_buf) else { return };
         {
             self.navigate(
                 i,
@@ -1087,7 +1073,7 @@ impl App {
                     };
                     // 원본 miSortByClick(0x431c88): 지금 정렬 종류를 다시 고르면(없음 제외) 내림차순을 뒤집는다(스킨 테마).
                     let current = self.side_text(i, "SortMode", "Name");
-                    if self.skin_active() && mode != "None" && current == mode {
+                    if mode != "None" && current == mode {
                         toggle(self, "SortDescending");
                     } else {
                         set(self, "SortMode", mode);

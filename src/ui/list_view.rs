@@ -59,16 +59,13 @@ fn character_case(text: &str, mode: i64) -> String {
 impl App {
     /// 보이는 열과 머리글, 너비 비율(C# star 너비 2.4, 0.55, 1.0, 0.8, 1.2, 0.55, 1.4).
     /// 열 제목 = 원본 FIELD_NAME/EXT/SIZE/DATEMODIFIED/ATTR/DESC(TNXCustomFileListView 머리글). "종류" 열은 C# 판에만 있다.
-    pub(super) fn detail_columns(&self, ko: bool) -> Vec<(DetailColumn, String, f32)> {
+    pub(super) fn detail_columns(&self, _ko: bool) -> Vec<(DetailColumn, String, f32)> {
         let field = |key: &str, fallback: &str| self.language_pack.text(&format!("RES.{key}"), fallback);
         let mut columns = vec![(DetailColumn::Name, field("FIELD_NAME", "Name"), 2.4)];
         if !self.settings.flag("AttachExtensionToName", false) {
             columns.push((DetailColumn::Extension, field("FIELD_EXT", "Ext"), 0.55));
         }
-        // "종류" 열은 C# 판에만 있다. 스킨 테마는 원본처럼 열을 두지 않고, ShowFileType(원본 showfiletype)이면 빈 설명 칸에 종류를 보인다.
-        if self.settings.flag("ShowFileType", true) && !self.skin_active() {
-            columns.push((DetailColumn::Kind, (if ko { "종류" } else { "Type" }).to_owned(), 1.0));
-        }
+        // 원본은 "종류" 열을 두지 않고, ShowFileType(원본 showfiletype)이면 빈 설명 칸에 종류를 보인다.
         columns.extend([
             (DetailColumn::Size, field("FIELD_SIZE", "Size"), 0.8),
             (DetailColumn::Modified, field("FIELD_DATEMODIFIED", "Date modified"), 1.2),
@@ -110,7 +107,7 @@ impl App {
         let show_group_name = self.settings.flag(&Self::side_key(index, "ShowGroupName"), true);
         let now = std::time::SystemTime::now();
         // 스킨 테마: 원본 항목 색(original_item_color). 기본 색 세 개는 한 번만 구한다.
-        let skin = self.current_skin().is_some();
+        let skin = true;
         // 원본 [Display] showfiletype(처음 값 1).
         let show_file_type = self.settings.flag("ShowFileType", true);
         let rgb = |key: &str| {

@@ -186,16 +186,11 @@ impl App {
                 // 원본 DropDownMenu pmSort / pmColCount: 단추 아래에 그 메뉴. 스킨 테마는 원본 pmSortPopup/pmColCountPopup처럼
                 // 정렬·열 항목을 하위 메뉴 없이 바로 보인다.
                 "bSort" | "bColCount" => {
-                    let skin = self.skin_active();
                     super::skin_pane::menu_popup(&response).show(|ui| {
-                        if name == "bSort" && skin {
+                        if name == "bSort" {
                             self.original_sort_popup(ui, self.language == "ko");
-                        } else if name == "bSort" {
-                            self.sort_group_menus(ui, self.language == "ko");
-                        } else if skin {
-                            self.original_column_popup(ui, ctx);
                         } else {
-                            self.work_and_column_menus(ui, ctx);
+                            self.original_column_popup(ui, ctx);
                         }
                     });
                 }
@@ -215,15 +210,14 @@ impl App {
     /// 원본 pVertBar 단추 OnClick: 모두 선택/해제, 왼쪽↔오른쪽 복사(MSG_TOLEFT/TORIGHT 확인), 경로 맞추기(bSyncAddressClick, Tag).
     pub(super) fn vertical_bar_click(&mut self, name: &str, ctx: &egui::Context) {
         match name {
-            "bSelectAll" if self.skin_active() => {
+            "bSelectAll" => {
                 let shift = ctx.input(|i| i.modifiers.shift);
                 self.original_button_select_all(shift);
             }
-            "bSelectAll" => self.dispatch("selectAll", ctx),
             "bClearSelection" => self.panes[self.active].selected.clear(),
             // 원본 bCopyToRightClick(0x42dd08)/bCopyToLeftClick(0x42dd30): Shift를 누르고 있으면 이동(스킨 테마).
             "bCopyToRight" | "bCopyToLeft" => {
-                let moving = self.skin_active() && ctx.input(|i| i.modifiers.shift);
+                let moving = ctx.input(|i| i.modifiers.shift);
                 self.original_copy_to_other(if name == "bCopyToRight" { 0 } else { 1 }, moving, ctx);
             }
             "bSyncPathToRight" | "bSyncPathToLeft" => {

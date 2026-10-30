@@ -187,9 +187,6 @@ impl App {
     }
 
     pub(super) fn row_ghosted(&self, index: usize, row: usize) -> bool {
-        if !self.skin_active() {
-            return false;
-        }
         let pane = &self.panes[index];
         let Some(entry) = pane.entries.get(row) else { return false };
         let sftp = pane.remote.as_ref().is_some_and(|r| r.is_sftp());
@@ -222,7 +219,7 @@ impl App {
         let mut open = false;
         let mut command = None;
         let list_style = self.list_font_style;
-        let original_click = self.skin_active();
+        let original_click = true;
         // 스킨 테마의 미리 보기: 원본 DrawThumbnailItem(0x7da1c4)·DrawFocus 형식 3. 이름 글색은 늘 NXFORE(Font.Color = GetBasic(1)).
         let skin = if thumbnails { self.current_skin() } else { None };
         let original = skin.as_ref().map(|_| self.original_list_colors());

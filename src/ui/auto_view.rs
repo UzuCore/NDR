@@ -6,14 +6,13 @@ use super::list_view::{DetailColumn, DetailRow};
 use super::*;
 
 const MINIMUM: [f32; 6] = [42.0, 52.0, 60.0, 94.0, 48.0, 72.0];
-const MAXIMUM: [f32; 6] = [110.0, 160.0, 130.0, 190.0, 100.0, 240.0];
 const METRICS: [DetailColumn; 6] = [DetailColumn::Extension, DetailColumn::Kind, DetailColumn::Size, DetailColumn::Modified, DetailColumn::Attributes, DetailColumn::Description];
 
 impl App {
     fn metric_shown(&self, metric: usize) -> bool {
         match metric {
             0 => !self.settings.flag("AttachExtensionToName", false),
-            1 => self.settings.flag("ShowFileType", true) && !self.skin_active(),
+            1 => false,
             _ => true,
         }
     }
@@ -36,36 +35,8 @@ impl App {
     }
 
     /// C# ApplyAutoDetailColumns: (이름 너비, 칸마다 Some(너비) 또는 숨김). 스킨 테마는 원본 FitVisibleFields.
-    fn auto_widths(&self, ui: &egui::Ui, index: usize, column_width: f32, headers: &[(DetailColumn, String, f32)]) -> (f32, [Option<f32>; 6]) {
-        if self.skin_active() {
-            return self.original_auto_fields(ui, index, column_width);
-        }
-        let available = (column_width - 26.0).max(0.0);
-        let minimum_name = 190.0f32.min((available * 0.42).max(96.0));
-        let mut remaining = (available - minimum_name - 8.0).max(0.0);
-        let font = egui::TextStyle::Body.resolve(ui.style());
-        let pane = &self.panes[index];
-        let content: Vec<f32> = ui.fonts_mut(|fonts| {
-            METRICS
-                .iter()
-                .map(|column| pane.view.cells.iter().map(|c| fonts.layout_no_wrap(c[column.index()].clone(), font.clone(), Color32::WHITE).size().x).fold(0.0f32, f32::max))
-                .collect()
-        });
-        let header_width = |column: DetailColumn| {
-            headers.iter().find(|(c, _, _)| *c == column).map(|(_, title, _)| ui.fonts_mut(|f| f.layout_no_wrap(title.clone(), font.clone(), Color32::WHITE).size().x)).unwrap_or(0.0)
-        };
-        let mut widths = [None; 6];
-        for metric in 0..6 {
-            if !self.metric_shown(metric) || remaining < MINIMUM[metric] {
-                continue;
-            }
-            let desired = MINIMUM[metric].max(header_width(METRICS[metric]) + 22.0).max(content[metric] + 22.0).clamp(MINIMUM[metric], MAXIMUM[metric]);
-            let fitted = desired.min(remaining);
-            widths[metric] = Some(fitted);
-            remaining -= fitted;
-        }
-        let used: f32 = widths.iter().flatten().sum();
-        ((column_width - used).max(40.0), widths)
+    fn auto_widths(&self, ui: &egui::Ui, index: usize, column_width: f32, _headers: &[(DetailColumn, String, f32)]) -> (f32, [Option<f32>; 6]) {
+        return self.original_auto_fields(ui, index, column_width);
     }
 
     /// 원본 UpdateDisplayAuto(0x7e0688)가 열 수를 셀 때의 한 항목 너비: GetListHeaderWidth + GetAdjustedNameWidth
@@ -225,7 +196,7 @@ impl App {
     /// 자동 보기의 여러 열(C# RebuildAutoColumns: 열마다 따로 스크롤하는 ListBox, 묶음이면 열마다 묶음 머리글). (활성화, 열기, 명령).
     pub(super) fn auto_rows(&mut self, ui: &mut egui::Ui, index: usize, columns: usize, height: f32) -> (bool, bool, Option<&'static str>) {
         let list_style = self.list_font_style;
-        let original_click = self.skin_active();
+        let original_click = true;
         let (mut activate, mut open, mut command) = (false, false, None);
         if self.panes[index].view.cells.len() != self.panes[index].entries.len() {
             self.compute_view(index);
@@ -406,19 +377,12 @@ impl App {
         let configured = self.configured_column_count(index);
         let fits = if configured > 0 {
             configured
-        } else if auto && self.skin_active() {
+        } else if auto {
             // 원본 UpdateDisplayAuto: 들어가는 열 수 = 목록 너비 / 한 항목 너비(원본 칸 너비 규칙).
             ((width.max(1.0) / self.original_auto_item_width(ui, index).max(1.0)) as usize).clamp(1, 19)
-        } else if self.skin_active() {
+        } else {
             // 원본 UpdateDisplayNames: 목록 너비 / (머리 + Adjusted 이름 + Adjusted 확장자).
             self.original_names_fits(ui, index, width).clamp(1, 19)
-        } else if auto {
-            self.auto_column_count(ui, index, width)
-        } else {
-            let font = egui::TextStyle::Body.resolve(ui.style());
-            let widest = ui.fonts_mut(|fonts| self.panes[index].entries.iter().map(|e| fonts.layout_no_wrap(e.name.clone(), font.clone(), Color32::WHITE).size().x).fold(0.0f32, f32::max));
-            let item = widest + 14.0 + if self.settings.flag("ShowIcons", true) { 16.0 } else { 0.0 };
-            ((width.max(1.0) / item.max(1.0)) as usize).clamp(1, 19)
         };
         // 원본 UpdateDisplayNames: 한 열의 줄 수 = (높이 + LineSpace) / (항목 높이 + LineSpace).
         let space = self.list_line_space();
@@ -436,7 +400,7 @@ impl App {
     /// 자동이면 열 안에 C# ApplyAutoDetailColumns처럼 들어가는 칸(확장자·종류·크기·날짜·속성·설명)을 함께 그린다. (활성화, 열기, 명령).
     pub(super) fn flow_rows(&mut self, ui: &mut egui::Ui, index: usize, height: f32, auto: bool) -> (bool, bool, Option<&'static str>) {
         let list_style = self.list_font_style;
-        let original_click = self.skin_active();
+        let original_click = true;
         let (mut activate, mut open, mut command) = (false, false, None);
         if self.panes[index].view.cells.len() != self.panes[index].entries.len() {
             self.compute_view(index);

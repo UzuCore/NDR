@@ -183,11 +183,6 @@ impl App {
         texture
     }
 
-    /// 지금 테마가 원본 스킨인가(이미 읽어 둔 skin_cache로, &self에서). 테마는 원본 스킨(검정·클래식·회색)뿐이므로 스킨을 읽었으면 늘 true.
-    pub(super) fn skin_active(&self) -> bool {
-        self.skin_cache.as_ref().is_some_and(|(_, skin)| skin.is_some())
-    }
-
     /// 지금 테마의 원본 스킨(검정·클래식·회색). 테마가 바뀔 때만 conf.ini를 다시 읽는다. 원본 스킨이 아닌 이름이나 읽지 못한 스킨이면
     /// 원본 처음 값 검정(Black)을 쓴다.
     pub(super) fn current_skin(&mut self) -> Option<ndr::styles::Skin> {

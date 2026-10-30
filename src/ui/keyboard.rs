@@ -474,12 +474,6 @@ impl App {
         });
     }
 
-    /// AddWorkingFoldersMenu + AddColumnMenu(메뉴 줄).
-    pub(super) fn work_and_column_menus(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        self.column_menu(ui, ctx);
-        self.work_folder_menus(ui, ctx);
-    }
-
     /// 원본 miColumn의 항목들(miColAuto, 구분선, miCol1~6). 지금 값에 표시. 그 밖의 지정 값(7~19)도 C#처럼 보인다. 고른 명령.
     pub(super) fn column_items(&mut self, ui: &mut egui::Ui) -> Option<String> {
         let columns_title = self.language_pack.text("Menu.miColumn", "Columns").replace('&', "");

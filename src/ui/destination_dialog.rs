@@ -436,7 +436,7 @@ impl App {
             clear_label: text(self, "formSelectDest", "Menu.pmiClearMUFHistory", if ko { "기록 지우기" } else { "Clear history" }),
             path: initial.to_string_lossy().into_owned(),
             ok_label: text(self, "formSelectDest", "Caption.btnOk", "OK"),
-            original: self.skin_active(),
+            original: true,
             selected: 0,
             initial,
         };

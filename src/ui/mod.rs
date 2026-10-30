@@ -1055,7 +1055,7 @@ impl App {
     }
     /// 목록 스레드의 결과 하나를 패널에 넣는다(poll과 원본처럼 기다리는 refresh가 함께 쓴다).
     fn apply_listing(&mut self, listing: Listing, auth_panes: &mut Vec<usize>) {
-        let skin = self.skin_active();
+        let skin = true;
         {
             let pane = &mut self.panes[listing.pane];
             if pane.generation != listing.generation {
