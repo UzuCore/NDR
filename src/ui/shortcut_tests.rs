@@ -15,7 +15,6 @@ fn fixture(label: &str, language: &str) -> (PathBuf, egui::Context, App) {
     let mut app = App::from_context(&ctx, options);
     app.clipboard_writer = |_| Ok(());
     app.shell_runner = |_, _, _| Ok(());
-    app.recycle_emptier = || Err("not in tests".into());
     wait(&mut app, &ctx);
     (root, ctx, app)
 }

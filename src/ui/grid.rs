@@ -92,10 +92,6 @@ impl GridState {
         self.selected = self.order.iter().copied().collect();
     }
 
-    pub(super) fn clear_selection(&mut self) {
-        self.selected.clear();
-    }
-
     /// 선택한 줄(보이는 순서).
     pub(super) fn selected_in_order(&self) -> Vec<usize> {
         self.order.iter().copied().filter(|i| self.selected.contains(i)).collect()

@@ -434,10 +434,7 @@ enum AsyncResult {
     SearchInPane { pane: usize, root: PathBuf, outcome: Result<Vec<Entry>, String>, cancelled: bool },
     CompareDone(compare_dialog::CompareRun, Result<(Vec<ndr::folder_compare::Difference>, Vec<String>), String>, bool),
     SyncDone(Result<ndr::folder_compare::SyncResult, String>, bool),
-    CleanupScanned(cleanup_dialog::ScanPurpose, Result<Vec<ndr::cleanup::Candidate>, String>, bool),
-    /// 휴지통 비우기 결과. Some(정리할 경로)면 컴퓨터 청소의 한 단계.
-    RecycleEmptied(Option<Vec<PathBuf>>, Result<(), String>),
-    CleanupDeleted(cleanup_dialog::CleanupDone, ndr::cleanup::DeleteResult, bool),
+    CleanupScanned(Result<Vec<ndr::cleanup::Candidate>, String>, bool),
     /// C# RunSafely 모양의 경고 상자(MessageBox(글, "NDR", 경고)).
     Warning(String),
     MergeSources(PathBuf, Result<Vec<PathBuf>, String>),
@@ -627,8 +624,6 @@ pub struct App {
     shortcut_window: Option<shortcut_window::ShortcutWindow>,
     /// Clipboard text writer (replaceable so tests never touch the user's real clipboard; C# `_setClipboardText`).
     clipboard_writer: fn(&str) -> Result<(), String>,
-    /// 휴지통 비우기(C# RecycleBinService.Empty). 테스트는 실제 휴지통을 건드리지 않도록 바꿔 끼운다.
-    recycle_emptier: fn() -> Result<(), String>,
     /// 원본 miEmptyRecycleBinClick: SHEmptyRecycleBinW(창, NULL, 0)(셸 확인 창). 시험은 가짜.
     shell_recycle_emptier: fn() -> Result<(), String>,
     /// 복사·잘라내기의 CF_HDROP 클립보드 쓰기(native::clipboard_files). 시험은 실제 클립보드를 건드리지 않는다.
@@ -889,7 +884,6 @@ impl App {
             save_dialog: ndr::file_dialogs::save_file,
             shortcut_window: None,
             clipboard_writer: native::clipboard_text,
-            recycle_emptier: native::empty_recycle_bin,
             shell_recycle_emptier: if cfg!(test) { || Err("not in tests".into()) } else { native::empty_recycle_bin_with_shell_ui },
             file_clipboard: if cfg!(test) { |_, _| Ok(()) } else { native::clipboard_files },
             auth_pending: Vec::new(),
@@ -1282,9 +1276,7 @@ impl App {
                 AsyncResult::SearchInPane { pane, root, outcome, cancelled } => self.search_done(pane, root, outcome, cancelled),
                 AsyncResult::CompareDone(run, outcome, cancelled) => self.compare_done(run, outcome, cancelled),
                 AsyncResult::SyncDone(outcome, cancelled) => self.sync_done(outcome, cancelled),
-                AsyncResult::CleanupScanned(purpose, outcome, cancelled) => self.cleanup_scanned(purpose, outcome, cancelled),
-                AsyncResult::RecycleEmptied(cleanup, outcome) => self.recycle_emptied(cleanup, outcome),
-                AsyncResult::CleanupDeleted(done, result, cancelled) => self.cleanup_finished(done, result, cancelled),
+                AsyncResult::CleanupScanned(outcome, cancelled) => self.cleanup_scanned(outcome, cancelled),
                 AsyncResult::Warning(text) => self.system_box("NDR", &text, ndr::msgbox::MB_OK | ndr::msgbox::MB_ICONEXCLAMATION, |_, _, _| {}),
                 AsyncResult::MergeSources(output, sources) => self.merge_sources_ready(output, sources),
                 AsyncResult::MergeDone(count, outcome) => self.merge_done(count, outcome),

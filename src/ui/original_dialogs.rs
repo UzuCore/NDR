@@ -44,7 +44,6 @@ pub(super) enum DialogKind {
     FolderCompare(Box<super::compare_dialog::FolderCompareForm>),
     Comparison(Box<super::compare_dialog::ComparisonForm>),
     CleanupOptions(Box<super::cleanup_dialog::CleanupOptionsForm>),
-    CleanupResults(Box<super::cleanup_dialog::CleanupResultsForm>),
     Favorites(Box<super::favorites_dialog::FavoritesForm>),
     /// C# CredentialsWindow.
     Credentials { user: String, password: String },
@@ -102,9 +101,9 @@ pub(super) enum DialogResult {
     FolderCompare,
     /// 동기화 미리보기에서 "복사"를 켠 차이(원래 순서). 비교 결과 창을 닫으면 None.
     Comparison(Option<Vec<ndr::folder_compare::Difference>>),
-    CleanupOptions(Option<super::cleanup_dialog::CleanupOptions>),
+    /// 而댄벂??泥?냼 李쎌쓣 ?レ쓬: Some((?ъ슜??吏???꾩튂, ?뺤옣??) = btnClose(?④릿??, None = Esc쨌?リ린 ?⑥텛.
+    CleanupOptions(Option<(Vec<String>, String)>),
     /// (지울 파일, 휴지통도 비울지). 취소면 None.
-    CleanupResults(Option<(Vec<PathBuf>, bool)>),
     /// 저장한 (이름, 경로) 칸들. 취소면 None.
     Favorites(Option<Vec<(String, String)>>),
     /// (사용자 이름(앞뒤 공백 뺌), 비밀번호). 취소면 None.
@@ -762,11 +761,6 @@ impl App {
                 DialogKind::CleanupOptions(form) => {
                     cleanup_action = super::cleanup_dialog::options_ui(ui, form, &self.language_pack, ko, enter);
                 }
-                DialogKind::CleanupResults(form) => {
-                    // CleanupResultsWindow: 1040×660(작은 화면이면 줄인다).
-                    let size = egui::vec2((screen.width() - 64.0).clamp(480.0, 1012.0), (screen.height() - 260.0).clamp(140.0, 520.0));
-                    cleanup_action = super::cleanup_dialog::results_ui(ui, form, &self.language_pack, ko, enter, size);
-                }
                 DialogKind::Comparison(form) => {
                     // FolderComparisonWindow: 1120×700(작은 화면이면 줄인다).
                     let size = egui::vec2((screen.width() - 64.0).clamp(480.0, 1096.0), (screen.height() - 300.0).clamp(140.0, 500.0));
@@ -954,7 +948,6 @@ impl App {
             (_, DialogKind::FolderCompare(_)) => return self.folder_compare_action(super::compare_dialog::FolderCompareAction::Close, ctx),
             (_, DialogKind::Comparison(_)) => DialogResult::Comparison(None),
             (_, DialogKind::CleanupOptions(_)) => DialogResult::CleanupOptions(None),
-            (_, DialogKind::CleanupResults(_)) => DialogResult::CleanupResults(None),
             (_, DialogKind::Favorites(_)) => DialogResult::Favorites(None),
             (Outcome::Ok, DialogKind::Credentials { user, password }) => DialogResult::Credentials(Some((user.trim().to_owned(), password.clone()))),
             (_, DialogKind::Credentials { .. }) => DialogResult::Credentials(None),

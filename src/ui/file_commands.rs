@@ -26,8 +26,6 @@ pub(super) struct DeleteRun {
     pub index: usize,
     pub approve_all: bool,
     pub skipped: Vec<PathBuf>,
-    /// 컴퓨터 청소에서 왔으면 Some(휴지통을 비웠는지): 끝나면 DeleteCleanupFiles로 지운다.
-    pub cleanup: Option<bool>,
 }
 
 /// C# DeleteWarningWindow.DisplayName: 끝 구분자를 뗀 마지막 이름, 없으면(드라이브 루트) 경로 그대로.
@@ -365,7 +363,7 @@ impl App {
         let tx = self.async_tx.clone();
         thread::spawn(move || {
             let items = fsops::find_protected_delete_items(&paths);
-            let _ = tx.send(AsyncResult::ProtectedItems(DeleteRun { paths, items, index: 0, approve_all: false, skipped: vec![], cleanup: None }));
+            let _ = tx.send(AsyncResult::ProtectedItems(DeleteRun { paths, items, index: 0, approve_all: false, skipped: vec![] }));
         });
     }
 
@@ -401,9 +399,6 @@ impl App {
                 app.protected_step(run);
             });
             return;
-        }
-        if let Some(recycle) = run.cleanup {
-            return self.cleanup_delete(run.paths, run.skipped, recycle);
         }
         let skipped = run.skipped.len();
         let operation = if run.skipped.is_empty() {

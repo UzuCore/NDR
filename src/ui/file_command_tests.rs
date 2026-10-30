@@ -1170,34 +1170,15 @@ fn frame_with_progress_events(app: &mut App, ctx: &egui::Context, events: Vec<eg
     let _ = ctx.run(raw, |ctx| app.modal_progress_ui(ctx));
 }
 
-static KO_EMPTIED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 static SHELL_EMPTIED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 fn fake_shell_empty() -> Result<(), String> {
     SHELL_EMPTIED.fetch_add(1, Ordering::SeqCst);
     Ok(())
 }
-static EN_EMPTIED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-fn fake_empty_ko() -> Result<(), String> {
-    KO_EMPTIED.fetch_add(1, Ordering::SeqCst);
-    Ok(())
-}
-fn fake_empty_en() -> Result<(), String> {
-    EN_EMPTIED.fetch_add(1, Ordering::SeqCst);
-    Ok(())
-}
-fn failing_empty() -> Result<(), String> {
-    Err("0x8000ffff".into())
-}
 fn cleanup_options(app: &App) -> &super::cleanup_dialog::CleanupOptionsForm {
     match &app.original_dialogs.last().expect("a dialog is open").kind {
         DialogKind::CleanupOptions(form) => form,
-        _ => panic!("the cleanup options window is not on top"),
-    }
-}
-fn cleanup_results(app: &App) -> &super::cleanup_dialog::CleanupResultsForm {
-    match &app.original_dialogs.last().expect("a dialog is open").kind {
-        DialogKind::CleanupResults(form) => form,
-        _ => panic!("the cleanup results window is not on top"),
+        _ => panic!("the cleanup window is not on top"),
     }
 }
 /// 정리 대상만 담은 격리 폴더: a.tmp, b.bak, c.tmp(숨김+읽기 전용), keep.txt, sub/d.tmp(각 5바이트).
@@ -1210,175 +1191,92 @@ fn junk_folder(root: &Path) -> PathBuf {
     native::set_attributes(&junk.join("c.tmp"), true, true).unwrap();
     junk
 }
+thread_local! {
+    static CLEANUP_TEMP: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
+}
+fn cleanup_temp() -> Option<PathBuf> {
+    CLEANUP_TEMP.with(|t| t.borrow().clone())
+}
 
+/// 원본 TfCleanup btnOkClick(0x41b5cc): MSG_CLEANUP 예/아니요 → 휴지통(셸 창) → 지우기 작업(임시 폴더는 안의 항목만,
+/// 확인 표시한 검색 결과 파일, desktop.ini·index.dat는 남김) → MSG_CLEANUP_DONE. 창은 열린 채로 남는다.
 #[test]
-fn computer_cleanup_follows_rundiskcleanupasync() {
+fn computer_cleanup_follows_the_original_tfcleanup() {
     let (root, ctx, mut app) = fixture("cleanup", "ko");
-    app.recycle_emptier = fake_empty_ko;
     let junk = junk_folder(&root);
+    let temp = root.join("temp");
+    fs::create_dir_all(temp.join("sub")).unwrap();
+    for name in ["x.log", "desktop.ini", "sub/y.dat", "sub/index.dat"] {
+        fs::write(temp.join(name), b"t").unwrap();
+    }
+    CLEANUP_TEMP.with(|t| *t.borrow_mut() = Some(temp.clone()));
+    app.system.temp_folder = cleanup_temp;
+    app.shell_recycle_emptier = fake_shell_empty;
     app.dispatch("cleanup", &ctx);
     assert_eq!(app.original_dialogs[0].title, "컴퓨터 청소", "[formCleanup] Form.Caption");
     let form = cleanup_options(&app);
-    assert!(form.system_temp && form.internet_temp && !form.cookies && form.recycle && !form.user_defined, "CleanupOptionsWindow defaults");
+    assert!(form.system_temp && form.internet_temp && !form.cookies && form.recycle && !form.user_defined, "DFM defaults");
     assert_eq!(form.extensions, ndr::cleanup::DEFAULT_EXTENSIONS);
     frame(&mut app, &ctx, vec![]);
-    let accept = |app: &mut App, ctx: &egui::Context| app.cleanup_action(super::cleanup_dialog::CleanupAction::Accept, ctx);
-    app.edit_dialog_kind(|kind| if let DialogKind::CleanupOptions(form) = kind { form.system_temp = false; form.internet_temp = false; form.recycle = false; });
-    accept(&mut app, &ctx);
-    assert_eq!((app.msgboxes[0].title.as_str(), app.msgboxes[0].text.as_str()), ("컴퓨터 청소", "정리할 항목을 하나 이상 선택하세요."));
-    app.answer_message_box(1, &ctx);
-    app.edit_dialog_kind(|kind| if let DialogKind::CleanupOptions(form) = kind { form.user_defined = true; });
-    accept(&mut app, &ctx);
-    assert_eq!(app.msgboxes[0].text, "사용자 지정 위치에서 먼저 검색하세요.");
-    app.answer_message_box(1, &ctx);
     // 사용자 지정 검색: 격리 폴더만, tmp;bak.
     let junk_text = junk.to_string_lossy().into_owned();
     app.edit_dialog_kind(|kind| if let DialogKind::CleanupOptions(form) = kind {
+        form.user_defined = true;
         form.locations = vec![junk_text.clone()];
         form.extensions = "tmp;bak".into();
     });
     app.cleanup_action(super::cleanup_dialog::CleanupAction::Search, &ctx);
-    assert!(app.job.as_ref().is_some_and(|j| j.title == "정리 위치 검색" && j.modal.is_some()), "CleanupScanProgressWindow");
     frame_with_progress(&mut app, &ctx);
     wait_job(&mut app, &ctx);
     let mut found: Vec<String> = cleanup_options(&app).results.iter().map(|(c, checked)| { assert!(checked); c.name.clone() }).collect();
     found.sort();
     assert_eq!(found, ["a.tmp", "b.bak", "c.tmp", "d.tmp"]);
-    assert!(cleanup_options(&app).searched);
-    frame(&mut app, &ctx, vec![]);
-    // 위치가 바뀌면 다시 검색해야 한다.
-    // 원본 btnAdd = 폴더 고르기 창(Browse). 취소하면 아무것도 바뀌지 않는다.
+    // 원본 btnAdd = 폴더 고르기 창. 취소하면 아무것도 바뀌지 않는다.
     app.folder_picker = |_, _| None;
     app.cleanup_action(super::cleanup_dialog::CleanupAction::Browse, &ctx);
-    assert!(app.msgboxes.is_empty());
     assert!(cleanup_options(&app).searched, "a cancelled picker changes nothing");
-    app.edit_dialog_kind(|kind| if let DialogKind::CleanupOptions(form) = kind { form.extensions = "tmp".into(); form.invalidate(); });
-    assert!(!cleanup_options(&app).searched && cleanup_options(&app).results.is_empty(), "InvalidateUserDefinedSearch");
-    app.edit_dialog_kind(|kind| if let DialogKind::CleanupOptions(form) = kind { form.extensions = "tmp;bak".into(); });
-    app.cleanup_action(super::cleanup_dialog::CleanupAction::Search, &ctx);
-    wait_job(&mut app, &ctx);
     app.edit_dialog_kind(|kind| if let DialogKind::CleanupOptions(form) = kind {
         for row in form.results.iter_mut() {
             row.1 = row.0.name != "b.bak";
         }
     });
+    // 시작: MSG_CLEANUP 예/아니요(창 제목). 아니요면 아무것도 하지 않는다.
+    let accept = |app: &mut App, ctx: &egui::Context| app.cleanup_action(super::cleanup_dialog::CleanupAction::Accept, ctx);
     accept(&mut app, &ctx);
-    assert_eq!(app.settings.strings("UserDefinedCleanupLocations"), [junk_text.clone()]);
-    assert_eq!(app.settings.text("UserDefinedCleanupExtensions", "?"), "tmp;bak");
-    // 결과 창: 고른 사용자 지정 파일 3개, 모두 선택.
-    assert_eq!(app.original_dialogs.last().unwrap().title, "검색 결과(V)");
-    assert_eq!(cleanup_results(&app).status(true), "선택한 파일 3 / 3개 · 15 B");
-    frame(&mut app, &ctx, vec![]);
-    app.cleanup_action(super::cleanup_dialog::CleanupAction::Accept, &ctx);
-    assert_eq!((app.msgboxes[0].title.as_str(), app.msgboxes[0].text.as_str()), ("검색 결과(V)", "정말로 선택된 항목들의 파일을 삭제하시겠습니까?"), "RES.MSG_CLEANUP");
+    assert_eq!((app.msgboxes[0].title.as_str(), app.msgboxes[0].text.as_str(), app.msgboxes[0].flags), ("컴퓨터 청소", "정말로 선택된 항목들의 파일을 삭제하시겠습니까?", MB_YESNO | ndr::msgbox::MB_ICONQUESTION), "RES.MSG_CLEANUP");
     app.answer_message_box(7, &ctx);
-    assert!(junk.join("a.tmp").exists() && app.original_dialogs.len() == 1, "No keeps the window");
-    app.cleanup_action(super::cleanup_dialog::CleanupAction::Accept, &ctx);
+    assert!(app.job.is_none() && temp.join("x.log").exists());
+    accept(&mut app, &ctx);
     app.answer_message_box(6, &ctx);
-    // 보호 속성 파일은 TfDelConfirm: 아니요면 남긴다.
-    wait_dialog_or_job(&mut app, &ctx);
-    assert!(matches!(app.original_dialogs.last().unwrap().kind, DialogKind::DeleteConfirm { .. }));
-    app.answer_dialog(DialogResult::DeleteConfirm(DeleteConfirmChoice::No), &ctx);
-    assert!(app.job.as_ref().is_some_and(|j| j.title == "선택 파일 정리"));
     wait_job(&mut app, &ctx);
-    assert_eq!(app.status, "2개 파일을 정리했습니다. 휴지통 비우기 안 함. 실패 0개, 건너뜀 1개");
-    // 원본 FUN_0041c77c: MSG_CLEANUP_DONE(정리 창 제목, 정보 아이콘).
-    assert_eq!((app.msgboxes[0].title.clone(), app.msgboxes[0].text.clone(), app.msgboxes[0].flags), (app.language_pack.text("formCleanup.Form.Caption", "?"), app.language_pack.text("RES.MSG_CLEANUP_DONE", "?"), MB_OK | ndr::msgbox::MB_ICONASTERISK));
+    // 원본 FUN_0041c77c: MSG_CLEANUP_DONE(정리 창 제목, 정보 아이콘). 창은 그대로 있다.
+    assert_eq!((app.msgboxes[0].title.clone(), app.msgboxes[0].text.clone(), app.msgboxes[0].flags), ("컴퓨터 청소".to_owned(), app.language_pack.text("RES.MSG_CLEANUP_DONE", "?"), MB_OK | ndr::msgbox::MB_ICONASTERISK));
     app.answer_message_box(1, &ctx);
-    assert!(!junk.join("a.tmp").exists() && !junk.join("sub/d.tmp").exists());
-    assert!(junk.join("c.tmp").exists() && junk.join("b.bak").exists() && junk.join("keep.txt").exists());
-    assert_eq!(KO_EMPTIED.load(Ordering::SeqCst), 0, "the Recycle Bin was not selected");
-    // 휴지통 비우기 명령(가짜 비우기).
-    // 원본 miEmptyRecycleBinClick(스킨 테마): NDR 상자 없이 SHEmptyRecycleBinW(flags 0, 셸 확인 창).
-    app.shell_recycle_emptier = fake_shell_empty;
-    app.dispatch("emptyRecycle", &ctx);
-    assert!(app.msgboxes.is_empty());
+    assert!(matches!(app.original_dialogs.last().map(|d| &d.kind), Some(DialogKind::CleanupOptions(_))), "the window stays open");
+    // 임시 폴더: 안의 항목만, desktop.ini·index.dat(그 위 폴더도)는 남긴다.
+    assert!(temp.is_dir() && !temp.join("x.log").exists() && !temp.join("sub/y.dat").exists());
+    assert!(temp.join("desktop.ini").exists() && temp.join("sub/index.dat").exists());
+    // 사용자 지정: 확인 표시한 파일만(숨김·읽기 전용도 묻지 않고).
+    assert!(!junk.join("a.tmp").exists() && !junk.join("c.tmp").exists() && !junk.join("sub/d.tmp").exists());
+    assert!(junk.join("b.bak").exists() && junk.join("keep.txt").exists());
     let end = Instant::now() + Duration::from_secs(10);
     while SHELL_EMPTIED.load(Ordering::SeqCst) == 0 {
         assert!(Instant::now() < end, "shell recycle timeout");
         thread::sleep(Duration::from_millis(5));
     }
-    assert_eq!(KO_EMPTIED.load(Ordering::SeqCst), 0);
-    app.answer_message_box(1, &ctx);
-    wait_listing(&mut app, &ctx);
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
-fn cleanup_results_and_recycle_bin_follow_cleanupresultswindow() {
-    let (root, ctx, mut app) = fixture("cleanup-en", "en");
-    app.recycle_emptier = fake_empty_en;
-    let junk = junk_folder(&root);
-    let cancel = AtomicBool::new(false);
-    let found = ndr::cleanup::scan(&[(junk.clone(), ndr::cleanup::parse_patterns("bak"))], &cancel, &mut |_, _, _| {}).unwrap();
-    let mut extra = found.clone();
-    extra.push(ndr::cleanup::Candidate { name: "keep.txt".into(), full_path: junk.join("keep.txt"), size: 5 });
-    let options = super::cleanup_dialog::CleanupOptions { recycle: true, user_defined: true, user_results: extra, ..Default::default() };
-    app.run_cleanup(options.clone());
-    assert_eq!(app.original_dialogs.last().unwrap().title, "Search Result(V)");
-    let form = cleanup_results(&app);
-    assert_eq!(form.status(false), "Selected files 2 / 2 · 10 B · Empty Recycle Bin is also selected");
-    frame(&mut app, &ctx, vec![]);
-    // 아무것도 고르지 않고 휴지통만: MSG_CLEANUP 없이 비우기 확인.
-    app.cleanup_action(super::cleanup_dialog::CleanupAction::SelectNone, &ctx);
-    app.cleanup_action(super::cleanup_dialog::CleanupAction::Accept, &ctx);
-    assert_eq!(app.msgboxes[0].title, "Confirm Empty Recycle Bin");
-    assert_eq!(app.msgboxes[0].text, "This empties all Recycle Bins on all drives.\n\n\nEmptying the Recycle Bin cannot be undone. Continue?");
-    app.answer_message_box(7, &ctx);
-    app.cleanup_action(super::cleanup_dialog::CleanupAction::SelectAll, &ctx);
-    app.cleanup_action(super::cleanup_dialog::CleanupAction::Accept, &ctx);
-    assert_eq!(app.msgboxes[0].text, "Are you sure you want to delete all selected files?");
-    app.answer_message_box(6, &ctx);
-    assert_eq!(app.msgboxes[0].text, "This empties all Recycle Bins on all drives.\n\nThen it will permanently delete 2 selected files.\n\nEmptying the Recycle Bin cannot be undone. Continue?");
-    app.answer_message_box(6, &ctx);
+    // 닫기: 사용자 지정 위치·확장자를 남긴다.
+    app.cleanup_action(super::cleanup_dialog::CleanupAction::Close, &ctx);
     assert!(app.original_dialogs.is_empty());
-    assert_eq!(app.status, "Emptying the Recycle Bin…");
-    let end = Instant::now() + Duration::from_secs(10);
-    while !app.status.starts_with("Cleaned up") {
-        assert!(Instant::now() < end, "cleanup timeout");
-        app.poll(&ctx);
+    assert_eq!(app.settings.strings("UserDefinedCleanupLocations"), [junk_text.clone()]);
+    assert_eq!(app.settings.text("UserDefinedCleanupExtensions", "?"), "tmp;bak");
+    // 휴지통 비우기 명령: NDR 상자 없이 SHEmptyRecycleBinW(셸 확인 창).
+    let before = SHELL_EMPTIED.load(Ordering::SeqCst);
+    app.dispatch("emptyRecycle", &ctx);
+    assert!(app.msgboxes.is_empty());
+    while SHELL_EMPTIED.load(Ordering::SeqCst) == before {
+        assert!(Instant::now() < end, "shell recycle timeout");
         thread::sleep(Duration::from_millis(5));
     }
-    assert_eq!(app.status, "Cleaned up 2 files. Recycle Bin emptying: complete. Failed: 0, skipped: 0");
-    assert_eq!(app.msgboxes[0].text, "Cleanup completed.", "original MSG_CLEANUP_DONE");
-    app.answer_message_box(1, &ctx);
-    assert_eq!(EN_EMPTIED.load(Ordering::SeqCst), 1);
-    assert!(!junk.join("b.bak").exists() && !junk.join("keep.txt").exists() && junk.join("a.tmp").exists());
-    wait_listing(&mut app, &ctx);
-    // 휴지통 비우기가 실패하면 파일 정리도 하지 않는다.
-    app.recycle_emptier = failing_empty;
-    let only = vec![ndr::cleanup::Candidate { name: "a.tmp".into(), full_path: junk.join("a.tmp"), size: 5 }];
-    app.run_cleanup(super::cleanup_dialog::CleanupOptions { user_results: only, ..options.clone() });
-    app.cleanup_action(super::cleanup_dialog::CleanupAction::Accept, &ctx);
-    app.answer_message_box(6, &ctx);
-    app.answer_message_box(6, &ctx);
-    while app.msgboxes.is_empty() {
-        assert!(Instant::now() < end, "recycle timeout");
-        app.poll(&ctx);
-        thread::sleep(Duration::from_millis(5));
-    }
-    assert_eq!((app.msgboxes[0].title.as_str(), app.msgboxes[0].text.as_str()), ("File cleanup", "Could not empty the Recycle Bin. File cleanup was canceled.\n\n0x8000ffff"));
-    app.answer_message_box(1, &ctx);
-    assert!(junk.join("a.tmp").exists());
-    // 후보 없이 휴지통만이면 단추 글이 바뀐다(창을 그려 본다).
-    app.run_cleanup(super::cleanup_dialog::CleanupOptions { user_results: vec![], ..options.clone() });
-    assert!(cleanup_results(&app).candidates.is_empty());
-    frame(&mut app, &ctx, vec![]);
-    app.answer_dialog(DialogResult::CleanupResults(None), &ctx);
-    // 위치·알림 글.
-    let temp = super::cleanup_dialog::cleanup_roots(&super::cleanup_dialog::CleanupOptions { system_temp: true, ..Default::default() });
-    assert_eq!(temp, [(std::env::temp_dir(), vec![])], "Empty Temporary Folder scans only Path.GetTempPath()");
-    app.run_cleanup(super::cleanup_dialog::CleanupOptions::default());
-    assert_eq!(app.status, "No cleanup folders are available to scan.");
-    let plain = super::cleanup_dialog::CleanupOptions { system_temp: true, ..Default::default() };
-    app.cleanup_scanned(super::cleanup_dialog::ScanPurpose::Cleanup(plain.clone()), Ok(vec![]), false);
-    assert_eq!(app.status, "No files matched the cleanup filters.");
-    app.cleanup_scanned(super::cleanup_dialog::ScanPurpose::Cleanup(plain), Err("Cancelled".into()), true);
-    assert_eq!(app.status, "Cleanup scan canceled.");
-    let done = super::cleanup_dialog::CleanupDone { requested: 1, to_delete: 1, skipped: 0, recycle: false };
-    app.cleanup_finished(done, ndr::cleanup::DeleteResult { errors: vec!["x: denied".into()], successful: 0, cancelled: false }, false);
-    assert_eq!(app.status, "Cleaned up 0 files. Recycle Bin emptying: not selected. Failed: 1, skipped: 0");
-    assert_eq!(app.text.as_ref().map(|t| (t.title.as_str(), t.text.as_str())), Some(("Files that could not be cleaned up", "x: denied")));
     wait_listing(&mut app, &ctx);
     fs::remove_dir_all(root).unwrap();
 }
