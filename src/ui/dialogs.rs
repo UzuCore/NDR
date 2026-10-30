@@ -1,6 +1,4 @@
-use super::commands::write_new;
 use super::*;
-use std::fs;
 
 impl App {
     /// 기다리는 작업에 답할 암호 상자. 확인 = 입력값, 취소 = None. 창이 답 없이 사라지면 보내는 쪽이 끊겨 작업은 취소로 본다.
@@ -20,71 +18,28 @@ impl App {
             self.open_password_prompt(request);
         }
         self.file_progress_ui(ctx);
+        // 결과 글 창(오류 목록·비교 결과·압축 파일 속성). 읽기 전용.
         if let Some(document) = &mut self.text {
             let mut close = false;
-            let mut save = false;
             egui::Window::new(&document.title)
                 .default_width(900.0)
                 .default_height(580.0)
                 .show(ctx, |ui| {
-                    if document.editable {
-                        ui.horizontal(|ui| {
-                            if ui.button(if ko { "저장" } else { "Save" }).clicked() {
-                                save = true;
-                            }
-                            ui.label(if document.dirty { "*" } else { "" });
-                        });
-                    }
                     egui::ScrollArea::both().show(ui, |ui| {
                         let edit = egui::TextEdit::multiline(&mut document.text)
                             .font(egui::TextStyle::Monospace)
                             .desired_width(f32::INFINITY)
                             .desired_rows(26)
-                            .interactive(document.editable);
-                        if ui.add(edit).changed() {
-                            document.dirty = true;
-                        }
+                            .interactive(false);
+                        ui.add(edit);
                     });
                     if ui.button(if ko { "닫기" } else { "Close" }).clicked() {
                         close = true;
                     }
                 });
-            if save {
-                if let Some(path) = &document.path {
-                    match atomic_text_save(path, &document.text) {
-                        Ok(()) => document.dirty = false,
-                        Err(e) => self.status = e,
-                    }
-                }
-            }
-            if close && !document.dirty {
+            if close {
                 self.text = None;
-            } else if close {
-                self.status = if ko {
-                    "변경 사항을 저장한 후 닫으세요."
-                } else {
-                    "Save your changes before closing."
-                }
-                .into();
             }
         }
     }
-}
-
-fn atomic_text_save(path: &Path, text: &str) -> Result<(), String> {
-    fsops::ensure_plain_path(path)?;
-    let temp = path.with_file_name(format!(
-        ".ndr-edit-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    write_new(&temp, text.as_bytes())?;
-    let result = fs::rename(&temp, path).map_err(|e| e.to_string());
-    if result.is_err() {
-        let _ = fs::remove_file(temp);
-    }
-    result
 }

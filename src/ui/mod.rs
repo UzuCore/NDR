@@ -406,11 +406,7 @@ enum AsyncResult {
         title: String,
         text: String,
     },
-    Document {
-        path: PathBuf,
-        text: String,
-        editable: bool,
-    },
+
     Image {
         path: PathBuf,
         image: Result<(usize, usize, Vec<u8>), String>,
@@ -419,7 +415,6 @@ enum AsyncResult {
         path: PathBuf,
         directories: Vec<PathBuf>,
     },
-    Error(String),
     ProtectedItems(file_commands::DeleteRun),
     AttributesApplied(pane_commands::AttributeRun),
     SplitDone { source: PathBuf, outcome: Result<ndr::split::SplitResult, String>, cancelled: bool },
@@ -469,11 +464,8 @@ enum AsyncResult {
     TextSource { path: Result<PathBuf, String>, edit: bool },
 }
 struct TextDocument {
-    path: Option<PathBuf>,
     title: String,
     text: String,
-    editable: bool,
-    dirty: bool,
 }
 
 pub struct App {
@@ -1232,26 +1224,7 @@ impl App {
         while let Ok(result) = self.async_rx.try_recv() {
             match result {
                 AsyncResult::Text { title, text } => {
-                    self.text = Some(TextDocument {
-                        path: None,
-                        title,
-                        text,
-                        editable: false,
-                        dirty: false,
-                    })
-                }
-                AsyncResult::Document {
-                    path,
-                    text,
-                    editable,
-                } => {
-                    self.text = Some(TextDocument {
-                        title: path.to_string_lossy().into_owned(),
-                        path: Some(path),
-                        text,
-                        editable,
-                        dirty: false,
-                    })
+                    self.text = Some(TextDocument { title, text })
                 }
                 AsyncResult::Image { path, image } => {
                     if let Ok((width, height, rgba)) = image {
@@ -1270,7 +1243,6 @@ impl App {
                 AsyncResult::Tree { path, directories } => {
                     self.tree_cache.insert(path, directories);
                 }
-                AsyncResult::Error(e) => self.status = e,
                 AsyncResult::ProtectedItems(run) => self.protected_step(run),
                 AsyncResult::AttributesApplied(run) => self.attribute_step(run),
                 AsyncResult::SplitDone { source, outcome, cancelled } => self.split_done(source, outcome, cancelled),
@@ -1609,17 +1581,6 @@ impl eframe::App for App {
             if self.settings.flag("HideWhenMinimized", false) {
                 let _ = lifecycle.hide_if_minimized();
             }
-        }
-        if ctx.input(|i| i.viewport().close_requested())
-            && self.text.as_ref().is_some_and(|t| t.dirty)
-        {
-            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            self.status = self
-                .tr(
-                    "편집 내용을 저장하거나 버린 후 종료하세요.",
-                    "Save or discard your text edits before closing.",
-                )
-                .into();
         }
         if self.language_pack.code != self.language {
             self.language_pack =

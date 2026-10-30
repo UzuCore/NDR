@@ -1,5 +1,4 @@
 use super::*;
-use std::{fs, io::Write};
 
 impl App {
     /// 원본 miSortBy의 항목들(miSortByNone … miSortByColor, 구분선, miSortDescend). 지금 정렬에 표시. 고른 명령.
@@ -762,23 +761,6 @@ pub(super) fn wait_while_paused(pause: &AtomicBool, cancel: &AtomicBool) {
     }
 }
 pub(super) fn run_nested(operation:Operation,events:&Sender<Event>,cancel:&Arc<AtomicBool>)->Result<(),String>{let(tx,rx)=mpsc::channel();let flag=cancel.clone();thread::spawn(move||fsops::run(operation,tx,flag));let mut failure=None;for event in rx{match event{Event::Finished{..}=>{},Event::Error{ref message,..}=>{failure=Some(message.clone());let _=events.send(event);},_=>{let _=events.send(event);}}}failure.map_or(Ok(()),Err)}
-pub(super) fn read_text(path: &Path) -> Result<String, String> {
-    let metadata = fs::metadata(path).map_err(|e| e.to_string())?;
-    if metadata.len() > 32 * 1024 * 1024 {
-        return Err("Text viewer limit: 32 MiB".into());
-    }
-    let bytes = fs::read(path).map_err(|e| e.to_string())?;
-    if bytes.starts_with(&[0xff, 0xfe]) {
-        return Ok(encoding_rs::UTF_16LE.decode(&bytes[2..]).0.into_owned());
-    }
-    if bytes.starts_with(&[0xfe, 0xff]) {
-        return Ok(encoding_rs::UTF_16BE.decode(&bytes[2..]).0.into_owned());
-    }
-    match String::from_utf8(bytes.clone()) {
-        Ok(s) => Ok(s.trim_start_matches('\u{feff}').into()),
-        Err(_) => Ok(encoding_rs::EUC_KR.decode(&bytes).0.into_owned()),
-    }
-}
 
 pub(super) fn ask_conflict(events:&Sender<Event>,cancel:&AtomicBool,source:&Path,destination:&Path)->ConflictChoice{
     let(tx,rx)=mpsc::channel();if events.send(Event::Conflict{source:source.to_path_buf(),destination:destination.to_path_buf(),allow_resume:false,reply:tx}).is_err(){return ConflictChoice::Cancel;}
@@ -804,14 +786,4 @@ pub(super) fn ask_change_volume(events: &Sender<Event>, cancel: &AtomicBool, vol
 pub(super) fn ask_password(events:&Sender<Event>,cancel:&AtomicBool,archive:&Path)->Option<String>{
     let(tx,rx)=mpsc::channel();if events.send(Event::Password{archive:archive.to_path_buf(),reply:tx}).is_err(){return None;}
     loop{if cancel.load(Ordering::Relaxed){return None;}match rx.recv_timeout(Duration::from_millis(100)){Ok(password)=>return password,Err(mpsc::RecvTimeoutError::Timeout)=>{},Err(_)=>return None}}
-}
-pub(super) fn write_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    fsops::ensure_plain_path(path)?;
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-        .map_err(|e| e.to_string())?;
-    file.write_all(bytes).map_err(|e| e.to_string())?;
-    file.sync_all().map_err(|e| e.to_string())
 }

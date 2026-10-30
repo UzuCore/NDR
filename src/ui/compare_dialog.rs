@@ -690,7 +690,7 @@ impl App {
                 text += &if ko { format!("\r\n… 나머지 {rest}개 오류") } else { format!("\r\n… {rest} more errors") };
             }
             let title = self.tr("폴더 동기화 중단", "Folder synchronization stopped").into_owned();
-            self.text = Some(TextDocument { path: None, title, text, editable: false, dirty: false });
+            self.text = Some(TextDocument { title, text });
             self.status = if ko { format!("동기화 중단 · 읽지 못한 항목 {}개", n0(issues.len())) } else { format!("Synchronization stopped · {} unreadable items", n0(issues.len())) };
             return;
         }
@@ -799,7 +799,7 @@ impl App {
                 text += &if ko { format!("\r\n나머지 {rest}개 오류") } else { format!("\r\n{rest} more errors") };
             }
             let title = self.tr("동기화 오류", "Synchronization errors").into_owned();
-            self.text = Some(TextDocument { path: None, title, text, editable: false, dirty: false });
+            self.text = Some(TextDocument { title, text });
         }
     }
 

@@ -225,7 +225,7 @@ impl App {
         if !run.errors.is_empty() {
             let title = self.tr("일부 항목의 속성을 변경하지 못했습니다.", "Some attributes could not be changed.").into_owned();
             let text = run.errors.iter().take(80).cloned().collect::<Vec<_>>().join("\r\n");
-            self.text = Some(TextDocument { path: None, title, text, editable: false, dirty: false });
+            self.text = Some(TextDocument { title, text });
         } else if run.completed > 0 && run.skipped > 0 {
             self.status = if ko { format!("{}개 항목의 속성을 변경하고 {}개 항목을 건너뛰었습니다.", n(run.completed), n(run.skipped)) } else { format!("Changed {} items and skipped {}.", n(run.completed), n(run.skipped)) };
         } else if run.completed > 0 {

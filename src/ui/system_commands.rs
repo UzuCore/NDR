@@ -364,9 +364,8 @@ impl App {
         self.save();
     }
 
-    /// C# ViewTextAsync: 고른 첫 파일(폴더 제외)이 없으면 "텍스트 파일 하나를 선택하세요." 경고. 압축 안이면 임시로 푼다.
-    /// TextViewerPath/TextEditorPath(ExpandSetting)가 있으면 그 프로그램에 파일 경로를 넘겨(작업 폴더 = 파일 폴더) 끝,
-    /// 없으면 NDR 글 창.
+    /// 원본 miTextViewerClick/miTextEditorClick → FUN_00430304: 커서 항목이 파일일 때만, 압축 안이면 임시 폴더에 풀어서,
+    /// TextViewerPath/TextEditorPath(비면 notepad.exe)에 "\"경로\""를 넘겨 xilesShell.ExecuteFile로 연다.
     pub(super) fn text_command(&mut self, edit: bool) {
         let i = self.active;
         // 원본 miTextViewerClick/miTextEditorClick → FUN_00430304: 커서 항목이 파일(종류 3)일 때만, 로컬·압축 패널에서.
@@ -399,18 +398,10 @@ impl App {
         if program.trim().is_empty() {
             program = "notepad.exe".into();
         }
-        if !program.trim().is_empty() {
-            let directory = path.parent().map(Path::to_path_buf).unwrap_or_default();
-            if let Err(error) = (self.shell_runner)(Path::new(&program), &native::quote_arg(&path.to_string_lossy()), &directory) {
-                self.status = error;
-            }
-            return;
+        let directory = path.parent().map(Path::to_path_buf).unwrap_or_default();
+        if let Err(error) = (self.shell_runner)(Path::new(&program), &native::quote_arg(&path.to_string_lossy()), &directory) {
+            self.status = error;
         }
-        let tx = self.async_tx.clone();
-        thread::spawn(move || {
-            let result = commands::read_text(&path).map(|text| AsyncResult::Document { path, text, editable: edit }).unwrap_or_else(AsyncResult::Error);
-            let _ = tx.send(result);
-        });
     }
 
     /// C# ShowAbout: "NDR {버전}\nWindows 10/11 · 64-bit\n사용자 설정: {프로필}", 캡션 "NDR 정보", 정보 아이콘.

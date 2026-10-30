@@ -532,7 +532,7 @@ impl App {
         let ko = self.language == "ko";
         match result {
             Ok(output) => {
-                self.text = Some(TextDocument { path: None, title: t(ko, "원격 명령 결과", "Remote command result").into(), text: output, editable: false, dirty: false });
+                self.text = Some(TextDocument { title: t(ko, "원격 명령 결과", "Remote command result").into(), text: output });
             }
             Err(error) => {
                 let challenge = serde_json::from_str::<Value>(&error).ok().filter(|v| matches!(v.get("kind").and_then(Value::as_str), Some("unknown_host_key" | "host_key_mismatch")));

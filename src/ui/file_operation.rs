@@ -654,7 +654,7 @@ impl App {
                     sound(self);
                 } else {
                     let title = self.tr("일부 항목을 완전히 삭제하지 못했습니다.", "Some items could not be shredded.").into_owned();
-                    self.text = Some(TextDocument { path: None, title, text: all.join("\r\n"), editable: false, dirty: false });
+                    self.text = Some(TextDocument { title, text: all.join("\r\n") });
                 }
             }
             JobReport::Cleanup => {
@@ -675,7 +675,7 @@ impl App {
         if errors.len() > 500 {
             text += &if self.language == "ko" { format!("\r\n… 나머지 {}개 오류", n0(errors.len() - 500)) } else { format!("\r\n… {} more errors", n0(errors.len() - 500)) };
         }
-        self.text = Some(TextDocument { path: None, title: title.into(), text, editable: false, dirty: false });
+        self.text = Some(TextDocument { title: title.into(), text });
     }
 
     /// C# TryExternalCopyAsync: UseCopyHandler이고 CopyHandlerPath(환경 변수 풀기)가 있는 파일이면 그 프로그램에 넘기고 true.
