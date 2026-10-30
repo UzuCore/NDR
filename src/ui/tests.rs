@@ -38,7 +38,7 @@ fn ui_archive_masked_password_channel_and_payload_roundtrip(){
     app.submit_archive_create(0,&ctx);wait_job(&mut app,&ctx,None,ConflictChoice::Overwrite);
     assert_eq!(app.status,"Created the ZIP archive.");assert!(output.is_file());
     let archive_row=app.panes[0].entries.iter().position(|e|e.path==output).unwrap();app.panes[0].cursor=archive_row;
-    app.dispatch("extractSelected",&ctx);app.destination_action(super::destination_dialog::DestinationAction::Browse,&ctx);
+    app.dispatch("extractSelected",&ctx);app.destination_action(super::destination_dialog::DestinationAction::Browse,&ctx);app.answer_dialog(super::original_dialogs::DialogResult::FolderTree(Some(root.join("right"))),&ctx);
     wait_job(&mut app,&ctx,Some("fixture-password"),ConflictChoice::Overwrite);
     assert_eq!(fs::read(root.join("right/한글 문서.txt")).unwrap(),b"owned original payload");assert!(output.exists());
     assert_eq!(app.status,format!("Extracted to {}",root.join("right").display()));fs::remove_dir_all(root).unwrap();

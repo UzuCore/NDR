@@ -348,8 +348,8 @@ fn checksum_merge_and_destination_follow_the_csharp_flows() {
     assert_eq!(boxed(&app).1, app.language_pack.text("RES.SELDEST_DELMUFOLDER", "?"));
     app.answer_message_box(6, &ctx);
     assert!(app.settings.values["MostUsedDestinations"].as_array().unwrap().is_empty());
-    PICKED.with(|p| *p.borrow_mut() = Some(root.join("left").join("folder1")));
     app.destination_action(super::destination_dialog::DestinationAction::Browse, &ctx);
+    app.answer_dialog(super::original_dialogs::DialogResult::FolderTree(Some(root.join("left").join("folder1"))), &ctx);
     wait_job(&mut app, &ctx);
     assert!(left.join("folder1").join("gamma.log").is_file());
     fs::remove_dir_all(root).unwrap();

@@ -293,7 +293,8 @@ pub(super) fn destination_ui_original(ui: &mut egui::Ui, form: &mut DestinationF
     if alt_d || (!ui.memory(|m| m.had_focus_last_frame(path_id)) && ui.memory(|m| m.focused().is_none())) {
         edit.request_focus();
     }
-    if ui.put(at(4.0, 37.0, 138.0, 25.0), egui::Button::new(&form.browse_label)).clicked() {
+    // 원본 btnTree(4,37 138×25, "&Folder Tree") → btnTreeClick(FUN_00453de4).
+    if super::original_dialogs::access_button(ui, at(4.0, 37.0, 138.0, 25.0), &form.browse_label) {
         action = Some(DestinationAction::Browse);
     }
     if ui.put(at(width - 188.0, 37.0, 89.0, 25.0), egui::Button::new(&form.ok_label)).clicked() {
@@ -355,7 +356,7 @@ impl App {
         let form = DestinationForm {
             most_used: self.most_used_destinations(),
             work_folders: std::array::from_fn(|i| work.get(i).map(|w| w.trim().to_owned()).unwrap_or_default()),
-            browse_label: text(self, "formNDRDestination", "Button.Browse", if ko { "다른 폴더 찾아보기…" } else { "Browse for another folder…" }),
+            browse_label: text(self, "formSelectDest", "Caption.btnTree", "&Folder Tree"),
             cancel_label: text(self, "formNDRDestination", "Button.Cancel", "Cancel"),
             remove_label: text(self, "formSelectDest", "Menu.pmiMUFDelete", if ko { "기록에서 삭제" } else { "Remove from history" }),
             clear_label: text(self, "formSelectDest", "Menu.pmiClearMUFHistory", if ko { "기록 지우기" } else { "Clear history" }),
@@ -376,8 +377,6 @@ impl App {
     /// 창 단추.
     pub(super) fn destination_action(&mut self, action: DestinationAction, ctx: &egui::Context) {
         let title = self.original_dialogs.last().map(|d| d.title.clone()).unwrap_or_default();
-        let folder_picker = self.folder_picker;
-        let browse_title = self.language_pack.text("formNDRDestination.Browse.Title", "Choose destination folder");
         let Some(form) = self.destination_form() else { return };
         match action {
             DestinationAction::Cancel => self.answer_dialog(DialogResult::Destination(None), ctx),
@@ -411,11 +410,14 @@ impl App {
                 self.answer_dialog(DialogResult::Destination(Some(full)), ctx);
             }
             DestinationAction::Browse => {
-                let initial = form.initial.clone();
-                if let Some(folder) = folder_picker(&browse_title, Some(&initial)) {
-                    let full = std::path::absolute(&folder).unwrap_or(folder);
-                    self.answer_dialog(DialogResult::Destination(Some(full)), ctx);
-                }
+                // FUN_00453de4: 경로 칸이 있는 폴더면 그 경로, 아니면 빈 글로 FUN_0040ca90(제목 = 이 창 제목). 고른 경로가 있으면 그 대상으로 닫는다.
+                let typed = form.path.trim().trim_matches('"').to_owned();
+                let initial = if !typed.is_empty() && Path::new(&typed).is_dir() { PathBuf::from(typed) } else { PathBuf::new() };
+                self.folder_tree_dialog(&initial, Some(title), |app, folder, ctx| {
+                    if let Some(folder) = folder {
+                        app.answer_dialog(DialogResult::Destination(Some(folder)), ctx);
+                    }
+                });
             }
             DestinationAction::Remove(path) => {
                 let message = self.language_pack.text("RES.SELDEST_DELMUFOLDER", "Remove this folder from history?\n{0}").replace("{0}", &path);
