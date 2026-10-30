@@ -37,6 +37,44 @@ fn press(app: &mut App, ctx: &egui::Context, key: egui::Key, modifiers: egui::Mo
 }
 const NONE: egui::Modifiers = egui::Modifiers::NONE;
 
+/// 원본 miSelect(Spacebar, miSelectClick 0x4311a4) = SelectCurrAndMove(0x7dca04): 폴더·파일 모두 커서 항목을 고르거나 풀고
+/// 다음 항목으로 간다. ".."(Select 0x7dc834)는 고르지 않는다. Ctrl+Shift+화살표는 원본 ArrowKey처럼 선택을 지우지 않고
+/// 옮기기 전 자리부터 새 자리까지 더하고, Shift만 누르면 선택을 지우고 Shift를 누른 자리부터 고른다.
+#[test]
+fn space_marks_and_moves_like_the_original() {
+    let (root, ctx, mut app) = fixture("space", "ko");
+    app.active = 0;
+    draw_panes(&mut app, &ctx);
+    app.active = 0;
+    let names: Vec<String> = app.panes[0].entries.iter().map(|e| e.name.clone()).collect();
+    assert_eq!(names, ["..", "folder1", "a.txt", "b.txt"]);
+    let marks = |app: &App| app.panes[0].selected.iter().copied().collect::<Vec<_>>();
+    app.panes[0].cursor = 0;
+    press(&mut app, &ctx, egui::Key::Space, NONE);
+    assert_eq!((marks(&app), app.panes[0].cursor), (vec![], 1), "\"..\" is not marked, the cursor moves on");
+    press(&mut app, &ctx, egui::Key::Space, NONE);
+    assert_eq!((marks(&app), app.panes[0].cursor), (vec![1], 2), "a folder is marked");
+    press(&mut app, &ctx, egui::Key::Space, NONE);
+    press(&mut app, &ctx, egui::Key::Space, NONE);
+    assert_eq!((marks(&app), app.panes[0].cursor), (vec![1, 2, 3], 3), "files are marked, the last item keeps the cursor");
+    press(&mut app, &ctx, egui::Key::Space, NONE);
+    assert_eq!((marks(&app), app.panes[0].cursor), (vec![1, 2], 3), "Space again unmarks");
+    // 메뉴 항목(편집 메뉴 "선택")도 같은 동작.
+    app.panes[0].selected.clear();
+    app.panes[0].cursor = 1;
+    app.dispatch("select", &ctx);
+    assert_eq!((marks(&app), app.panes[0].cursor), (vec![1], 2));
+    // Ctrl+Shift: 지우지 않고 더한다. 그다음 Shift만: Shift를 누른 자리(2)부터 다시.
+    let ctrl_shift = egui::Modifiers { ctrl: true, shift: true, ..Default::default() };
+    app.panes[0].selected = [3].into_iter().collect();
+    app.panes[0].cursor = 2;
+    press(&mut app, &ctx, egui::Key::ArrowUp, ctrl_shift);
+    assert_eq!((marks(&app), app.panes[0].cursor), (vec![1, 2, 3], 1), "Ctrl+Shift adds the moved range");
+    press(&mut app, &ctx, egui::Key::ArrowUp, egui::Modifiers::SHIFT);
+    assert_eq!((marks(&app), app.panes[0].cursor), (vec![1, 2], 0), "Shift selects from where Shift went down");
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// 두 패널을 한 번 그린다(그린 목록이 쪽 정보를 남긴다).
 fn draw_panes(app: &mut App, ctx: &egui::Context) {
     let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 850.0))), ..Default::default() };

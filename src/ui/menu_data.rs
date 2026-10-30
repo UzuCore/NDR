@@ -191,7 +191,6 @@ pub const MENUS: &[(&str,&str,&str,&[(&str,&str,&str)])] = &[
 /// 메뉴 글 찾기만 쓰는 원본 항목 이름(글쇠 처리 표 ORIGINAL_ACTIONS에는 넣지 않는다: 단축키 동작이 바뀌지 않도록).
 pub const MENU_CAPTIONS: &[(&str,&str)] = &[
 ("find","miFind"),
-("select","miSelect"),
 ("archiveInstall","miArcInstall"),
 ("archiveProperties","miArcProperties"),
 ("historyBack","miHistoryBack"),
@@ -201,6 +200,8 @@ pub const MENU_CAPTIONS: &[(&str,&str)] = &[
 ];
 pub const ORIGINAL_ACTIONS: &[(&str,&str)] = &[
 ("miOpen","open"),
+// 원본 miSelect(Spacebar) = miSelectClick(0x4311a4) → SelectCurrAndMove.
+("miSelect","select"),
 ("miParameterOpen","openWithParameters"),
 ("mipOpenWith","openWith"),
 ("miOpenAllSelectedFiles","openAll"),

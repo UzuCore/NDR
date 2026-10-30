@@ -317,13 +317,31 @@ impl App {
     }
 
     /// C# ToggleFocusedItemSelection: 지금 항목의 표시만 바꾼다(커서는 그대로).
+    /// 원본 Select(0x7dc834): 커서 항목의 선택을 뒤집는다. 드라이브 항목(종류 4)·종류 2·".."는 고르지 않는다.
     pub(super) fn toggle_focused_selection(&mut self) {
         let pane = &mut self.panes[self.active];
-        if pane.cursor >= pane.entries.len() {
+        let Some(entry) = pane.entries.get(pane.cursor) else { return };
+        if entry.drive || entry.is_parent() {
             return;
         }
         if !pane.selected.insert(pane.cursor) {
             pane.selected.remove(&pane.cursor);
+        }
+    }
+
+    /// 원본 SelectCurrAndMove(0x7dca04): miSelect(Spacebar, miSelectClick 0x4311a4)와 내부 명령 SelectCurrAndMove.
+    /// 커서 항목의 선택을 뒤집고(Select), 미리 보기 형식은 오른쪽, 그 밖은 아래 글쇠(ArrowKey)로 옮긴다. 둘 다 다음 항목이다.
+    pub(super) fn select_current_and_move(&mut self) {
+        self.toggle_focused_selection();
+        let pane = &mut self.panes[self.active];
+        let count = pane.entries.len();
+        if count == 0 {
+            return;
+        }
+        let next = (pane.cursor + 1).min(count - 1);
+        if next != pane.cursor {
+            pane.cursor = next;
+            pane.reveal = true;
         }
     }
 
@@ -425,12 +443,10 @@ impl App {
                 return;
             }
             let old = pane.cursor.min(length - 1);
-            if m.ctrl {
+            // 원본 KeyDown·ArrowKey: Ctrl만 누르면 아래 Ctrl 글쇠, Ctrl+Shift는 Shift 글쇠와 같이 옮긴다.
+            if m.ctrl && !m.shift {
                 // 원본 ArrowKey의 Ctrl(Shift 없이) 글쇠: 첫 항목·마지막 폴더·첫 파일·마지막 파일(`list_keys::ctrl_target`).
                 // 마지막 파일은 목록 끝 드라이브 항목(종류 4) 앞이다.
-                if m.shift {
-                    return;
-                }
                 let drives = pane.drive_count();
                 let folders = pane.entries.iter().filter(|e| e.is_dir && !e.drive).count();
                 let files = length - folders - drives;
@@ -476,9 +492,14 @@ impl App {
             pane.cursor = cursor;
             pane.reveal = true;
             if m.shift {
+                // 원본 ArrowKey: Shift면 선택을 지우고 Shift를 누른 자리부터 새 자리까지, Ctrl+Shift면 지우지 않고
+                // 옮기기 전 자리부터 새 자리까지 더한다.
                 let anchor = *pane.shift_anchor.get_or_insert(old);
-                pane.selected.clear();
-                for i in anchor.min(cursor)..=anchor.max(cursor) {
+                let from = if m.ctrl { old } else { anchor };
+                if !m.ctrl {
+                    pane.selected.clear();
+                }
+                for i in from.min(cursor)..=from.max(cursor) {
                     pane.selected.insert(i);
                 }
                 pane.drop_drive_marks();

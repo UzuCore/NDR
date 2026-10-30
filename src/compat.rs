@@ -603,7 +603,8 @@ pub fn import_ini(path: &Path) -> Result<Settings, String> {
             };
             settings.set_text(&format!("{side}{property}"), mode);
         }
-        let mode = match get(section, &format!("viewstyle{index}")).unwrap_or("2") {
+        // 원본 ReadInteger(View, viewstyleN, 0): 없으면 0(자동).
+        let mode = match get(section, &format!("viewstyle{index}")).unwrap_or("0") {
             "1" => "Names",
             "2" => "Details",
             "3" => "Thumbnails",

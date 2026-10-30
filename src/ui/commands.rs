@@ -66,8 +66,8 @@ impl App {
             C::ShowPathHistory=>self.show_history_menu(self.active,None),
             C::FocusAddressBar=>{/* C# BeginAddressEdit(side) = 원본 단축키 명령 0x25 FUN_0048d3c8(활성 패널). */ self.begin_address_edit(self.active,ctx)},
             C::SelectAll{with_folders}=>{let i=self.active;let folders=with_folders||self.settings.flag("SelectFolders",false);let pane=&mut self.panes[i];pane.selected=pane.entries.iter().enumerate().filter(|(_,e)|!e.drive&&!e.is_parent()&&(folders||!e.is_dir)).map(|(j,_)|j).collect();},
-            C::SelectCurrentAndMove=>{let p=&mut self.panes[self.active];if !p.entries.is_empty(){if !p.selected.insert(p.cursor){p.selected.remove(&p.cursor);}p.drop_drive_marks();p.cursor=(p.cursor+1).min(p.entries.len()-1);}},
-            C::SelectCurrent=>{let p=&mut self.panes[self.active];if p.cursor<p.entries.len()&&!p.selected.insert(p.cursor){p.selected.remove(&p.cursor);}p.drop_drive_marks();},
+            C::SelectCurrentAndMove=>self.select_current_and_move(),
+            C::SelectCurrent=>self.toggle_focused_selection(),
             C::DeselectAll=>self.panes[self.active].selected.clear(),
             C::CloseTab=>self.dispatch("closeTab",ctx),
             C::Back=>self.dispatch("back",ctx),
@@ -564,7 +564,7 @@ impl App {
             "selectAll" => {let shift=ctx.input(|i|i.modifiers.shift);self.cycle_selection(shift);},
             "invertSelection" => self.original_invert_selection(),
             // 원본 편집 메뉴 miSelect("선택\tSpacebar"): Space와 같은 지금 항목 표시 전환.
-            "select"=>self.toggle_focused_selection(),
+            "select"=>self.select_current_and_move(),
             // 원본 miRestoreLastSelClick(0x43742c): 남긴 표시가 있을 때만 바꾼다(스킨 테마).
             "restoreSelection" if self.last_selection[i].is_empty() => {},
             "restoreSelection"=>{let last=&self.last_selection[i];self.panes[i].selected=self.panes[i].entries.iter().enumerate().filter(|(_,e)|last.contains(&e.path)).map(|(j,_)|j).collect();},
