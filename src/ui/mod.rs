@@ -1689,13 +1689,15 @@ impl eframe::App for App {
         // 놓을 곳 찾기: 이번 화면에 그리는 패널과 폴더 줄만(한 패널 보기면 숨은 패널은 없다).
         self.pane_rects = [egui::Rect::NOTHING; 2];
         self.folder_rows.clear();
-        egui::CentralPanel::default().show(ctx, |ui| {
+        // 원본 TfMain: 패널(틀)은 pToolbar(alTop)와 bbFunctions(alBottom) 사이를 틈 없이 채운다(FUN_0043d7c0: 패널 너비 = 창 너비 −
+        // 보이는 VertSplitter·pVertBar 너비). 고친 것: 전에는 egui 기본 패널 여백(8)과 틈이 들어가 위 13·아래 9·가운데 16화소가 더 비었다.
+        egui::CentralPanel::default().frame(egui::Frame::central_panel(&ctx.style()).inner_margin(0.0)).show(ctx, |ui| {
             if self.dual {
-                // 두 패널 사이: 원본 pVertBar(ShowVerticalBar, 18~20px) 또는 C# PaneDivider(10px). 끌면 너비(LeftPaneWidth %, 20~80),
+                // 두 패널 사이: 원본 pVertBar(DFM Width 18, alRight) 또는 막대를 숨기면 VertSplitter(Width 4, clBlack). 끌면 너비(LeftPaneWidth %, 20~80),
                 // 두 번 누르면 같은 너비(원본 pmiFrameWidthSame).
                 let full = ui.available_rect_before_wrap();
                 let show_bar = self.settings.flag("ShowVerticalBar", true);
-                let (bar, gap) = (if show_bar { 20.0 } else { 10.0 }, ui.spacing().item_spacing.x);
+                let (bar, gap) = (if show_bar { 18.0 } else { 4.0 }, 0.0);
                 let usable = (full.width() - bar - 2.0 * gap).max(0.0);
                 let left_width = usable * self.left_pane_ratio();
                 let left = egui::Rect::from_min_size(full.min, egui::vec2(left_width, full.height()));
@@ -1740,7 +1742,7 @@ impl eframe::App for App {
                     }
                 }
                 if !show_bar {
-                    ui.painter().rect_filled(middle.shrink2(egui::vec2(3.0, 0.0)), 2.0, ui.visuals().widgets.noninteractive.bg_stroke.color);
+                    ui.painter().rect_filled(middle, 0.0, Color32::BLACK);
                 }
                 // 고친 것: 패널마다 제 자리로 잘라 그린다(좁게 끌면 주소 줄·정보 줄·목록이 옆 패널·세로 막대 위로 넘쳐 겹쳤다).
                 ui.scope_builder(egui::UiBuilder::new().max_rect(left), |ui| {

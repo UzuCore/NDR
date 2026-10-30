@@ -139,8 +139,9 @@ impl App {
         let strip_over = self.toolbar_icon(ctx, "vertbarbtns_over.png");
         let folders = self.settings.strings("WorkingFolders");
         let area = ui.max_rect();
-        let x = area.center().x - 8.0;
-        let cell = |y: f32| egui::Rect::from_min_size(egui::pos2(x, area.min.y + y), egui::vec2(16.0, 16.0));
+        // 원본 pVertBar 자식 자리(DFM Left·Top, 막대 왼쪽 위 기준). 작업 폴더 단추(FUN_0042f27c)는 Left 0.
+        let cell_at = |left: f32, y: f32, height: f32| egui::Rect::from_min_size(egui::pos2(area.min.x + left, area.min.y + y), egui::vec2(16.0, height));
+        let cell = |y: f32| cell_at(0.0, y, 16.0);
         // 원본 TNXPngButton SetNormalImage / SetOverImage: 포인터가 올라가 있으면 over 띠의 같은 칸.
         // (egui Image는 띠 전체의 가로세로 비로 맞춘 뒤 uv를 쓰므로 칸이 납작해진다. 칸을 painter로 바로 그린다.)
         // 꺼진 단추(enabled = false)는 원본 TNXPngButton.Paint 상태 2처럼 꺼짐 그림이 없으면 알파를 반으로(>> 1) 그리고 누르지 못한다.
@@ -168,21 +169,23 @@ impl App {
             }
         }
         let hint = |app: &App, name: &str, fallback: &str| app.language_pack.text(&format!("formMain.Hint.{name}"), fallback);
-        let buttons: [(&str, f32, usize, &str, &str); 8] = [
-            ("bSelectAll", 157.0, 2, "Select All", "◆"),
-            ("bClearSelection", 179.0, 3, "Clear Selection", "◇"),
-            ("bCopyToRight", 219.0, 0, "Copy To Right", "→"),
-            ("bCopyToLeft", 240.0, 1, "Copy To Left", "←"),
-            ("bSort", 289.0, 6, "Arrange", "≡"),
-            ("bColCount", 311.0, 8, "Column", "⋮"),
-            ("bSyncPathToRight", 345.0, 4, "Left Path => Right Path", "▶"),
-            ("bSyncPathToLeft", 363.0, 5, "Left Path <= Right Path", "◀"),
+        // 원본 DFM: (이름, Left, Top, Height, 띠 칸). 동기 단추 둘은 막대 맨 위 16×12(그림은 단추 왼쪽 위에서 잘려 보인다).
+        // 고친 것: 전에는 동기 단추를 Top 345·363 16×16에 두었다.
+        let buttons: [(&str, f32, f32, f32, usize, &str, &str); 8] = [
+            ("bSyncPathToRight", 1.0, 6.0, 12.0, 4, "Left Path => Right Path", "▶"),
+            ("bSyncPathToLeft", 0.0, 17.0, 12.0, 5, "Left Path <= Right Path", "◀"),
+            ("bSelectAll", 0.0, 157.0, 16.0, 2, "Select All", "◆"),
+            ("bClearSelection", 0.0, 179.0, 16.0, 3, "Clear Selection", "◇"),
+            ("bCopyToRight", 0.0, 219.0, 16.0, 0, "Copy To Right", "→"),
+            ("bCopyToLeft", 0.0, 240.0, 16.0, 1, "Copy To Left", "←"),
+            ("bSort", 1.0, 289.0, 16.0, 6, "Arrange", "≡"),
+            ("bColCount", 1.0, 311.0, 16.0, 8, "Column", "⋮"),
         ];
         // 원본 FUN_0044532c(패널 위치가 바뀔 때, 두 패널이면): bSyncPathToRight는 왼쪽, bSyncPathToLeft는 오른쪽 패널 위치가 로컬 폴더(1)일 때만 켠다.
         let local = |index: usize| { let pane = &self.panes[index]; pane.archive.is_none() && pane.remote.is_none() && !super::panes::is_drives(&pane.path) };
         let sync_enabled = [local(0), local(1)];
-        for (name, y, image, fallback, glyph) in buttons {
-            if area.min.y + y + 16.0 > area.max.y {
+        for (name, left, y, height, image, fallback, glyph) in buttons {
+            if area.min.y + y + height > area.max.y {
                 break;
             }
             let tip = hint(self, name, fallback);
@@ -191,7 +194,12 @@ impl App {
                 "bSyncPathToLeft" => sync_enabled[1],
                 _ => true,
             };
-            let response = image_button(ui, cell(y), &strip, &strip_over, image, 10, glyph, enabled).on_hover_text(tip);
+            let rect = cell_at(left, y, height);
+            // TNXPngButton은 그림(16×16)을 단추 왼쪽 위에 그리고 단추 밖은 잘린다.
+            let response = ui.scope(|ui| {
+                ui.set_clip_rect(rect.intersect(ui.clip_rect()));
+                image_button(ui, cell_at(left, y, 16.0), &strip, &strip_over, image, 10, glyph, enabled)
+            }).inner.on_hover_text(tip);
             match name {
                 // 원본 DropDownMenu pmSort / pmColCount: 단추 아래에 그 메뉴. 스킨 테마는 원본 pmSortPopup/pmColCountPopup처럼
                 // 정렬·열 항목을 하위 메뉴 없이 바로 보인다.
@@ -211,7 +219,8 @@ impl App {
         // 원본 iVertThumb(TImage Left 3, Top = 높이 − 25, 12×22, Center, akBottom, crHSplit): 스킨 vertthumb.png를 그 칸 가운데에
         // 원래 크기로 그린다. 끌기는 C# PaneDivider처럼 막대 전체가 받는다(커서도 막대 전체가 crHSplit).
         if let Some(thumb) = self.toolbar_icon(ctx, "vertthumb.png") {
-            let frame = egui::Rect::from_min_size(egui::pos2(area.center().x - 6.0, area.max.y - 25.0), egui::vec2(12.0, 22.0));
+            // FUN_0042cc2c: Top = 막대 높이 − 엄지 높이(22) − 4, Left 3.
+            let frame = egui::Rect::from_min_size(egui::pos2(area.min.x + 3.0, area.max.y - 26.0), egui::vec2(12.0, 22.0));
             let rect = egui::Rect::from_center_size(frame.center(), thumb.size_vec2().min(frame.size()));
             ui.painter().image(thumb.id(), rect, egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)), Color32::WHITE);
         }

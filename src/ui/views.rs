@@ -259,7 +259,7 @@ impl App {
         // C# ResolveColumnCount: 이름 목록은 Left/RightColumnCount(1~19)면 그 수, 0(자동)이면 가장 긴 이름 + 14(+ 아이콘 16) 너비로 나눈다.
         let configured = self.settings.values.get(if index == 0 { "LeftColumnCount" } else { "RightColumnCount" }).and_then(|v| v.as_i64()).unwrap_or(0);
         let columns = if thumbnails {
-            ((avail + ui.spacing().item_spacing.x) / (tile_width + ui.spacing().item_spacing.x)).floor().max(1.0) as usize
+            (avail / tile_width).floor().max(1.0) as usize
         } else if (1..=19).contains(&configured) {
             configured as usize
         } else {
@@ -270,11 +270,11 @@ impl App {
             let item = widest + 14.0 + if self.settings.flag("ShowIcons", true) { 16.0 } else { 0.0 };
             ((ui.available_width().max(1.0) / item.max(1.0)) as usize).clamp(1, 19)
         };
-        let gap = ui.spacing().item_spacing.x;
+        let gap = if thumbnails { 0.0 } else { ui.spacing().item_spacing.x };
         let tile_width = ((avail - gap * columns.saturating_sub(1) as f32) / columns as f32).floor().max(if thumbnails { tile_width.min(avail) } else { 40.0 });
         let rows = visible.len().div_ceil(columns);
         // 원본 UpdateDisplayThumbnails: 줄 높이 = 그 줄에서 가장 큰 GetThumbnailTextHeight(폭 = 썸네일 크기, 줄 간격 2, 최대 4줄) + 크기 + 12.
-        let spacing_y = ui.spacing().item_spacing.y;
+        let spacing_y = if thumbnails { 0.0 } else { ui.spacing().item_spacing.y };
         let heights: Vec<f32> = if thumbnails {
             let pane = &self.panes[index];
             let font = egui::TextStyle::Body.resolve(ui.style());
@@ -375,6 +375,10 @@ impl App {
                     let row_height = heights[tile_row];
                     let rect = egui::Rect::from_min_size(origin + egui::vec2(0.0, tops[tile_row]), egui::vec2(width, row_height));
                     ui.scope_builder(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::left_to_right(egui::Align::Min)), |ui| {
+                        // 원본 UpdateDisplayThumbnails(0x7e1ba0): 칸 너비 = 목록 너비 / 열 수, 칸 사이 틈 없음(줄 사이도).
+                        if thumbnails {
+                            ui.spacing_mut().item_spacing.x = 0.0;
+                        }
                         for column in 0..columns {
                             let Some(&row) = visible.get(tile_row * columns + column) else {
                                 break;
@@ -676,12 +680,10 @@ impl App {
             }
         });
         self.folder_rows.extend(drop_rows);
-        // 원본 FUN_0048e2e0(트리 패널 그리기): 오른쪽 끝(너비 − 1)에 스킨 틀 색 세로선.
+        // 원본 FUN_0048e2e0(트리 패널 그리기): 오른쪽 끝(너비 − 1)에 스킨 색(DAT_008d44c0 + 0x1c, conf.ini [List] lframetree) 세로선.
         if let Some(skin) = self.current_skin() {
-            let stroke = self.skin_frame_stroke(&skin, index);
-            if stroke.width > 0.0 {
-                ui.painter().vline(rect.right() - 0.5, rect.y_range(), egui::Stroke::new(1.0, stroke.color));
-            }
+            let color = super::skin_pane::skin_color(&skin, "lframetree", Color32::from_gray(0x20));
+            ui.painter().vline(rect.right() - 0.5, rect.y_range(), egui::Stroke::new(1.0, color));
         }
         if let Some(path) = shell_menu {
             self.active = index;

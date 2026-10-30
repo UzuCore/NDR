@@ -17,7 +17,7 @@ pub(super) struct CrumbSegment {
 pub(super) const ADDRESS_BAR_HEIGHT: f32 = 19.0;
 const ADDRESS_BUTTON_WIDTH: f32 = 20.0;
 
-fn skin_color(skin: &Skin, key: &str, fallback: Color32) -> Color32 {
+pub(super) fn skin_color(skin: &Skin, key: &str, fallback: Color32) -> Color32 {
     skin.color("List", key).map(|c| Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3])).unwrap_or(fallback)
 }
 

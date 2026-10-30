@@ -2181,7 +2181,8 @@ fn work_folder_buttons_set_open_and_clear_like_the_original() {
     });
     let drawn = drawn.expect("the grip image is painted");
     assert_eq!(drawn.size(), thumb.size_vec2());
-    assert!((drawn.center().x - bar.center().x).abs() < 0.01 && (drawn.center().y - (bar.max.y - 25.0 + 11.0)).abs() < 0.01, "{drawn:?} in {bar:?}");
+    // 원본 iVertThumb(Left 3, 12×22)와 FUN_0042cc2c(Top = 막대 높이 − 22 − 4): 그 칸 가운데에 그림.
+    assert!((drawn.center().x - (bar.min.x + 9.0)).abs() < 0.01 && (drawn.center().y - (bar.max.y - 26.0 + 11.0)).abs() < 0.01, "{drawn:?} in {bar:?}");
     fs::remove_dir_all(root).unwrap();
 }
 

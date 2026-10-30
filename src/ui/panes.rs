@@ -1253,7 +1253,10 @@ impl App {
         let shown = frame
             .stroke(stroke)
             .show(ui, |ui| {
-                ui.spacing_mut().item_spacing.y = outer_spacing;
+                // 원본 틀 안 컨트롤(주소 줄·정보 줄·목록·파일 정보줄)은 Align으로 틈 없이 붙는다. 고친 것: 전에는 egui 기본 틈(3화소)이
+                // 폴더 정보줄과 목록 사이, 목록과 파일 정보줄 사이에 끼었다.
+                let _ = outer_spacing;
+                ui.spacing_mut().item_spacing.y = 0.0;
                 let mut activate = false;
                 let mut open = false;
                 let mut command = None;
