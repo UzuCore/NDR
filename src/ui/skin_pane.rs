@@ -757,9 +757,19 @@ impl App {
         if let Some(position) = ui.input(|i| i.pointer.secondary_clicked().then(|| i.pointer.interact_pos()).flatten()).filter(|p| label.contains(*p)) {
             return self.show_address_bar_menu(index, position);
         }
+        // 원본 pathclick(ini [Operation], 설정 +0xf8, 환경 설정 창에는 없다): 2면 조각·">"·▼를 눌러도(FUN_0048bfa8·FUN_0048c548),
+        // 1·2면 빈 곳을 눌러도(FUN_0048c9b8) 누른 자리에 주소 표시줄 메뉴(FUN_0048d10c). 0이면 아래 동작.
+        let path_click = self.settings.values.get("PathClickMode").and_then(|v| v.as_i64()).unwrap_or(0);
+        let menu_at = pointer.unwrap_or(label.left_bottom());
+        if path_click == 2 && action.is_some() {
+            return self.show_address_bar_menu(index, menu_at);
+        }
         // 경로 조각 옆 빈 곳을 누르면(한 번) 경로 직접 입력. 조각·">"·▼·양끝 단추를 누른 것은 그 동작.
         if (background.clicked() || super::panes::windows_double_clicked(&background)) && action.is_none() && clicked_button.is_none() {
             self.active = index;
+            if matches!(path_click, 1 | 2) {
+                return self.show_address_bar_menu(index, menu_at);
+            }
             return self.begin_address_edit(index, ctx);
         }
         let mut just_opened = false;

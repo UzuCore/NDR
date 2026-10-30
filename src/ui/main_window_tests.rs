@@ -807,6 +807,53 @@ fn apps_key_opens_the_list_menu_at_the_cursor_item() {
     fs::remove_dir_all(root).unwrap();
 }
 
+/// 원본 pathclick(설정 +0xf8): 0이면 주소 표시줄 빈 곳을 누르면 경로 편집, 1이면 그 자리에 주소 표시줄 메뉴(FUN_0048d10c),
+/// 2면 조각을 눌러도 메뉴(그 폴더로 가지 않는다).
+#[test]
+fn path_click_mode_follows_the_original_path_label() {
+    let (root, ctx, mut app) = fixture("pathclick");
+    let run = |app: &mut App, events: Vec<egui::Event>| {
+        let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 850.0))), events, ..Default::default() };
+        let _ = ctx.run(raw, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.columns(2, |columns| {
+                    app.pane_ui(&mut columns[0], 0, ctx);
+                    app.pane_ui(&mut columns[1], 1, ctx);
+                });
+            });
+        });
+    };
+    let click = |app: &mut App, at: egui::Pos2| {
+        let b = |pressed: bool| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+        run(app, vec![egui::Event::PointerMoved(at), b(true)]);
+        run(app, vec![b(false)]);
+        run(app, vec![]);
+    };
+    run(&mut app, vec![]);
+    run(&mut app, vec![]);
+    let pane = app.pane_rects[0];
+    // 주소 표시줄 = 틀 안 첫 줄(높이 19): 왼쪽 단추 20, ▼ 16 뒤에 첫 조각, 오른쪽 단추 20 앞까지 이름표.
+    let bar_y = pane.top() + 2.0 + super::skin_pane::ADDRESS_BAR_HEIGHT / 2.0;
+    let empty = egui::pos2(pane.right() - 26.0, bar_y);
+    click(&mut app, empty);
+    assert!(app.panes[0].address_editing, "mode 0: an empty click starts editing");
+    app.end_address_edit(0);
+    run(&mut app, vec![]);
+    app.settings.values.insert("PathClickMode".into(), serde_json::json!(1));
+    click(&mut app, empty);
+    assert!(!app.panes[0].address_editing, "mode 1: no editing");
+    assert!(app.popup.is_some(), "mode 1: the address bar menu");
+    app.popup = None;
+    // 2: 조각(첫 조각)을 눌러도 메뉴, 그 폴더로 가지 않는다.
+    app.settings.values.insert("PathClickMode".into(), serde_json::json!(2));
+    let path = app.panes[0].path.clone();
+    click(&mut app, egui::pos2(pane.left() + 2.0 + 20.0 + 16.0 + 6.0, bar_y));
+    assert!(app.popup.is_some(), "mode 2: a segment click opens the menu");
+    assert!(!app.panes[0].loading);
+    assert_eq!(app.panes[0].path, path);
+    fs::remove_dir_all(root).unwrap();
+}
+
 #[test]
 fn skin_drag_follows_the_original_list_mouse_move() {
     // 원본 FUN_004856d8(목록 OnMouseMove): 가로·세로 8화소를 넘게 움직여야 끌고, 표시 칸에서 누르면 끌지 않는다.

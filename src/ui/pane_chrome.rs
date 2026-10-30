@@ -512,7 +512,9 @@ impl App {
         let new_tab = local && focused.is_some_and(|e| e.is_dir) && !super::panes::is_drives(&pane.path);
         // 원본 pmMainPopup(0x437f54): mipEditPaste.Enabled = IsClipboardFormatAvailable(CF_HDROP), mipArcExtractAuto.Enabled =
         // 로컬 패널. 다른 항목은 늘 켜져 있다(메뉴는 로컬 패널에서 항목을 눌렀을 때만 뜬다, `list_menu_kind`).
-        let paste = local && (self.clipboard.is_some() || native::read_clipboard_files().is_ok_and(|(p, _)| !p.is_empty()));
+        // 고친 것: 전에는 메뉴가 열린 동안 그림마다 클립보드를 열어 파일 목록을 읽었다(다른 프로그램의 클립보드 쓰기를 막고,
+        // 같은 때 클립보드를 바꾸면 읽던 자료가 풀렸다). 원본처럼 형식이 있는지만 본다.
+        let paste = local && (self.clipboard.is_some() || native::clipboard_has_files());
         let auto_extract = local;
         // 원본 mipExplorerMenu(+0x770)는 pmMainPopup이 건드리지 않아 늘 보인다.
         let explorer = local && has;
