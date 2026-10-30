@@ -570,7 +570,32 @@ impl App {
         let rebuild_cancelled = if ko { "분할 압축 파일 업데이트를 취소했습니다. 기존 압축 파일은 유지됩니다." } else { "The multi-volume archive update was cancelled. The existing archive was kept." }.to_owned();
         // C# RunArchiveCreationWithProgress = FileOperationProgressWindow.Run(allowPause: true). 외부 프로그램은 일시 정지 없음.
         let external = program.is_some();
+        // 진행 창: 원본 TfProgress처럼 lFrom = 원본 폴더, lTo = 압축 파일 폴더, lFileName = 7-Zip이 지금 넣는 파일, 막대 = 7-Zip 백분율.
+        // 고친 것: 전에는 7-Zip이 끝날 때까지 "작업을 준비하고 있습니다"만 보이고 막대가 움직이지 않았다.
+        let source_folder = paths.first().and_then(|p| p.parent()).map(Path::to_path_buf).unwrap_or_default();
+        let total_bytes = super::file_operation::flat_totals(&paths).map(|t| t.1).filter(|b| *b > 0).unwrap_or(100);
+        let progress_info = super::file_operation::ProgressInfo {
+            from: Some(source_folder.to_string_lossy().into_owned()),
+            to: output.parent().map(|p| p.to_string_lossy().into_owned()),
+            total_bytes: Some(total_bytes),
+            prefer_bytes: true,
+            caption: Some(self.language_pack.text("RES.COMPRESSING", "Adding to the archive...")),
+            ..Default::default()
+        };
         let work = move |events: Sender<Event>, cancel: Arc<AtomicBool>| -> Result<(), String> {
+            let sink: archive::ProgressSink = {
+                let events = events.clone();
+                let last = std::sync::Mutex::new(String::new());
+                let base = source_folder.clone();
+                Arc::new(move |percent: u8, name: &str| {
+                    let mut last = last.lock().unwrap_or_else(|e| e.into_inner());
+                    if !name.is_empty() {
+                        *last = name.to_owned();
+                    }
+                    let path = if last.is_empty() { base.clone() } else { base.join(last.as_str()) };
+                    let _ = events.send(Event::Progress { path, bytes: total_bytes.saturating_mul(percent as u64) / 100, files: 0 });
+                })
+            };
             if rebuild {
                 // C# "기존 분할 압축 파일 준비": 숨긴 작업 폴더에 모두 풀고, 고른 항목을 덮어 합친 뒤, 같은 분할 크기로 다시 만든다.
                 let result = rebuild_multivolume(&paths, &output, &options, &events, &cancel);
@@ -580,7 +605,7 @@ impl App {
                 }
                 result?;
             } else {
-                archive::create_with_program(&paths, &output, &options, program.as_ref(), &cancel)?;
+                archive::create_with_progress(&paths, &output, &options, program.as_ref(), &cancel, Some(sink))?;
             }
             let _ = events.send(Event::Progress { path: output.clone(), bytes: 0, files: paths.len() as u64 });
             if moving {
@@ -597,8 +622,7 @@ impl App {
         let started = if external {
             self.start_task(title, work)
         } else {
-            let progress = super::file_operation::ProgressInfo { caption: Some(self.language_pack.text("RES.COMPRESSING", "Adding to the archive...")), ..Default::default() };
-            self.start_pausable_task(title, progress, move |events, cancel, pause| archive::with_pause(pause, || work(events, cancel)))
+            self.start_pausable_task(title, progress_info, move |events, cancel, pause| archive::with_pause(pause, || work(events, cancel)))
         };
         if started {
             if let Some(job) = self.job.as_mut() {

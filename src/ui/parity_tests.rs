@@ -363,6 +363,42 @@ fn original_row_press_keeps_marks() {
     fs::remove_dir_all(root).unwrap();
 }
 
+/// 고친 것: 목록 누르기는 날 입력을 읽으므로, 위에 다른 층(대화 상자 등)이 있으면 그 누름을 받지 않는다(압축하기 창 확인 단추가
+/// 다른 패널 줄 위에 있으면 그 패널이 지금 패널이 되던 것).
+#[test]
+fn list_presses_under_a_dialog_are_ignored() {
+    let (root, ctx, mut app) = fixture("underdialog", "ko");
+    let rect = egui::Rect::from_min_size(egui::pos2(0.0, 20.0), egui::vec2(200.0, 20.0));
+    let at = egui::pos2(100.0, 25.0);
+    let run = |pane: &mut Pane, events: Vec<egui::Event>, covered: bool| {
+        let mut hit = false;
+        let _ = ctx.run(egui::RawInput { events, ..Default::default() }, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| hit = super::panes::original_press_input(pane, 1, rect, ui));
+            if covered {
+                egui::Area::new(egui::Id::new("cover")).order(egui::Order::Foreground).fixed_pos(egui::pos2(50.0, 10.0)).show(ctx, |ui| {
+                    ui.allocate_exact_size(egui::vec2(120.0, 40.0), egui::Sense::click());
+                });
+            }
+        });
+        hit
+    };
+    let press = || vec![egui::Event::PointerMoved(at), egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() }];
+    let release = || vec![egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() }];
+    let pane = &mut app.panes[0];
+    pane.cursor = 0;
+    run(pane, vec![], true);
+    assert!(!run(pane, press(), true), "the press belongs to the layer on top");
+    assert_eq!(pane.cursor, 0);
+    run(pane, release(), true);
+    run(pane, vec![], false);
+    // 앞 누름과 Windows 두 번 누르기 칸 밖(같은 줄의 다른 자리).
+    let other = egui::pos2(190.0, 25.0);
+    let press_other = vec![egui::Event::PointerMoved(other), egui::Event::PointerButton { pos: other, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() }];
+    assert!(run(pane, press_other, false), "without a layer on top the row takes the press");
+    assert_eq!(pane.cursor, 1);
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// 원본 GetSelAreaAt(0x7dae7c)·MouseDown·MouseMove(0x7d65f0): 줄 왼쪽 12화소를 누르면 그 줄을 뒤집고,
 /// 누른 채 끌면 처음 줄부터 포인터 아래 줄까지 고르며, 두 줄째부터는 Ctrl이 없으면 다른 표시를 지운다.
 #[test]

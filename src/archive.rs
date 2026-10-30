@@ -152,6 +152,18 @@ pub fn create_with_program(
     program: Option<&ExternalProgram>,
     cancel: &AtomicBool,
 ) -> Result<(), String> {
+    create_with_progress(sources, output, options, program, cancel, None)
+}
+
+/// create_with_program에 진행 알림(`progress`)을 더한 것: 동봉 7-Zip의 압축 단계(`a`)에 -bsp1을 주고 그 백분율·파일 이름을 알린다.
+pub fn create_with_progress(
+    sources: &[PathBuf],
+    output: &Path,
+    options: &crate::commands::ArchiveOptions,
+    program: Option<&ExternalProgram>,
+    cancel: &AtomicBool,
+    progress: Option<ProgressSink>,
+) -> Result<(), String> {
     check_cancel(cancel)?;
     if sources.is_empty() {
         return Err("No archive sources".into());
@@ -234,6 +246,9 @@ pub fn create_with_program(
             .collect();
         let mut cmd = program_command(program)?;
         cmd.current_dir(&snapshot_abs);
+        // 진행 알림은 동봉 7-Zip만(-bsp1: 백분율과 파일 이름을 표준 출력으로).
+        let sink = progress.filter(|_| program.is_none());
+        let bsp: &[&str] = if sink.is_some() { &["-bsp1"] } else { &[] };
         if let Some(program) = program {
             let args = crate::commands::build_archive_create_args(
                 options,
@@ -262,7 +277,7 @@ pub fn create_with_program(
                 t.arg(path.file_name().ok_or("Archive source name missing")?);
             }
             execute_capture(t, cancel, true)?;
-            cmd.args(["a", &format!("-t{outer}"), "-sccUTF-8", "-y", &format!("-mx={}", options.level.clamp(0, 9))]).arg("--").arg(&archive).arg(&tar);
+            cmd.args(["a", &format!("-t{outer}"), "-sccUTF-8", "-y", &format!("-mx={}", options.level.clamp(0, 9))]).args(bsp).arg("--").arg(&archive).arg(&tar);
         } else {
             cmd.arg("a")
                 .arg(format!("-t{extension}"))
@@ -286,12 +301,12 @@ pub fn create_with_program(
                     cmd.arg("-mem=AES256");
                 }
             }
-            cmd.arg("--").arg(&archive);
+            cmd.args(bsp).arg("--").arg(&archive);
             for path in &source_paths {
                 cmd.arg(path.file_name().ok_or("Archive source name missing")?);
             }
         }
-        execute_capture(cmd, cancel, program.is_none())?;
+        execute_capture_progress(cmd, cancel, program.is_none(), sink)?;
         inspect_tree(&output_stage)?;
         let mut generated = Vec::new();
         for e in fs::read_dir(&output_stage).map_err(|e| e.to_string())? {
@@ -393,24 +408,60 @@ fn program_command(program: Option<&ExternalProgram>) -> Result<Command, String>
 fn execute(command: Command, cancel: &AtomicBool) -> Result<String, String> {
     execute_capture(command, cancel, true)
 }
+/// 압축 진행을 받는 곳: (백분율 0~100, 지금 파일 이름(7-Zip이 알린 상대 이름)).
+pub type ProgressSink = std::sync::Arc<dyn Fn(u8, &str) + Send + Sync>;
+
+/// 7-Zip `-bsp1` 진행 글 한 토막("  23% 4 + 이름" 또는 "  23%")에서 (백분율, 이름).
+pub fn parse_seven_zip_progress(segment: &str) -> Option<(u8, String)> {
+    let percent_at = segment.find('%')?;
+    let digits: String = segment[..percent_at].chars().rev().take_while(|c| c.is_ascii_digit()).collect::<Vec<_>>().into_iter().rev().collect();
+    let percent: u8 = digits.parse::<u32>().ok()?.min(100) as u8;
+    let rest = &segment[percent_at + 1..];
+    let name = rest.split_once(" + ").or_else(|| rest.split_once(" U ")).map(|(_, name)| name.trim().to_owned()).unwrap_or_default();
+    Some((percent, name))
+}
+
 fn execute_capture(
+    command: Command,
+    cancel: &AtomicBool,
+    strict_utf8: bool,
+) -> Result<String, String> {
+    execute_capture_progress(command, cancel, strict_utf8, None)
+}
+
+fn execute_capture_progress(
     mut command: Command,
     cancel: &AtomicBool,
     strict_utf8: bool,
+    progress: Option<ProgressSink>,
 ) -> Result<String, String> {
     check_cancel(cancel)?;
     let mut child = command.spawn().map_err(|e| e.to_string())?;
     let stdout = child.stdout.take().ok_or("Missing stdout")?;
     let stderr = child.stderr.take().ok_or("Missing stderr")?;
-    let read = |mut pipe: Box<dyn Read + Send>| {
+    let read = |mut pipe: Box<dyn Read + Send>, progress: Option<ProgressSink>| {
         thread::spawn(move || {
             let mut bytes = Vec::new();
             let mut buffer = [0; 8192];
             let mut exceeded = false;
+            // -bsp1 진행 글은 \r·\x08(지우기)·\n으로 덮어쓴다. 토막이 끝날 때마다 읽는다.
+            let mut pending = Vec::new();
             loop {
                 let n = pipe.read(&mut buffer)?;
                 if n == 0 {
                     break;
+                }
+                if let Some(sink) = &progress {
+                    for &byte in &buffer[..n] {
+                        if matches!(byte, b'\r' | b'\n' | 0x08) {
+                            if let Some((percent, name)) = std::str::from_utf8(&pending).ok().and_then(parse_seven_zip_progress) {
+                                sink(percent, &name);
+                            }
+                            pending.clear();
+                        } else if pending.len() < 4096 {
+                            pending.push(byte);
+                        }
+                    }
                 }
                 if bytes.len() + n <= 64 * 1024 * 1024 {
                     bytes.extend_from_slice(&buffer[..n])
@@ -421,8 +472,8 @@ fn execute_capture(
             Ok::<_, std::io::Error>((bytes, exceeded))
         })
     };
-    let out = read(Box::new(stdout));
-    let err = read(Box::new(stderr));
+    let out = read(Box::new(stdout), progress);
+    let err = read(Box::new(stderr), None);
     let mut suspended = false;
     let status = loop {
         if check_cancel(cancel).is_err() {
@@ -1937,6 +1988,29 @@ mod tests {
         fs::create_dir_all(&p).unwrap();
         p
     }
+    /// 7-Zip -bsp1 진행 글: 백분율과 파일 이름. 동봉 7-Zip 압축은 끝나기 전에 진행을 알린다.
+    #[test]
+    fn seven_zip_progress_is_parsed_and_reported() {
+        assert_eq!(parse_seven_zip_progress("  23% 4 + folder\\a.bin"), Some((23, "folder\\a.bin".to_owned())));
+        assert_eq!(parse_seven_zip_progress(" 18% + noise.bin"), Some((18, "noise.bin".to_owned())), "bundled 7-Zip -bsp1 line");
+        assert_eq!(parse_seven_zip_progress("100%"), Some((100, String::new())));
+        assert_eq!(parse_seven_zip_progress("Scanning"), None);
+        let p = fixture();
+        let mut state = 0x9e37_79b9u32;
+        let noise: Vec<u8> = (0..3 * 1024 * 1024).map(|_| { state ^= state << 13; state ^= state >> 17; state ^= state << 5; (state >> 24) as u8 }).collect();
+        fs::write(p.join("noise.bin"), &noise).unwrap();
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<(u8, String)>::new()));
+        let record = seen.clone();
+        let sink: ProgressSink = std::sync::Arc::new(move |percent, name| record.lock().unwrap().push((percent, name.to_owned())));
+        let options = crate::commands::ArchiveOptions { extension: "7z".into(), level: 5, password: String::new(), volume_bytes: None, recursive: true, append: false };
+        create_with_progress(&[p.join("noise.bin")], &p.join("out.7z"), &options, None, &AtomicBool::new(false), Some(sink)).unwrap();
+        let seen = seen.lock().unwrap();
+        assert!(!seen.is_empty(), "progress was reported");
+        assert!(seen.iter().all(|(percent, _)| *percent <= 100), "{seen:?}");
+        assert!(p.join("out.7z").is_file());
+        fs::remove_dir_all(p).unwrap();
+    }
+
     #[test]
     fn rejects_windows_escape_keys() {
         for key in [

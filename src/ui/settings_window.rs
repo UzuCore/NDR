@@ -218,7 +218,8 @@ fn original_pages(built: Vec<Vec<Row>>, language: &compat::Language, ko: bool) -
         Some(row)
     };
     let section = |key: &str, fallback: &str| Some(Row::Section(lang(key, fallback).replace('&', "")));
-    let l = |key: &str, fallback: &str| Some(lang(key, fallback));
+    // 줄 이름은 VCL Caption 그대로('&' 단축 문자). 확인란은 그 글자로 눌리고, 글로 보일 때는 '&'를 뺀다.
+    let l = |key: &str, fallback: &str| Some(language.raw(&format!("formPreferences.{key}")).unwrap_or_else(|| fallback.to_owned()));
     let mut file_list = vec![
         section("GroupBox.gbFont", "Font"),
         take("ListFont", l("Caption.lListFont", "File List:")),
@@ -871,7 +872,7 @@ fn put_label(ui: &mut egui::Ui, rect: egui::Rect, text: &str) {
 
 fn put_check(ui: &mut egui::Ui, rows: &mut [Row], key: &str, rect: egui::Rect) {
     if let Some(Row::Check { label, value, .. }) = index_of(rows, key).map(|i| &mut rows[i]) {
-        super::original_dialogs::put_left(ui, rect, egui::Checkbox::new(value, label.replace('&', "")));
+        super::original_dialogs::access_checkbox(ui, rect, value, label);
     }
 }
 
@@ -1254,7 +1255,7 @@ fn list_page(ui: &mut egui::Ui, form: &mut SettingsForm) -> Option<SettingsActio
         let label_cell = |ui: &mut egui::Ui, text: &str| {
             ui.allocate_ui_with_layout(egui::vec2(200.0, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
                 ui.set_min_width(200.0);
-                ui.add(egui::Label::new(text).truncate());
+                ui.add(egui::Label::new(text.replace('&', "")).truncate());
             });
         };
         for (index, row) in form.tabs[tab].iter_mut().enumerate() {
@@ -1268,7 +1269,7 @@ fn list_page(ui: &mut egui::Ui, form: &mut SettingsForm) -> Option<SettingsActio
                     ui.add(egui::Label::new(RichText::new(text.as_str()).weak()).wrap());
                 }
                 Row::Check { label, value, .. } => {
-                    ui.checkbox(value, label.as_str());
+                    ui.checkbox(value, label.replace('&', ""));
                 }
                 Row::Text { label, value, read_only, max, upper, .. } => {
                     ui.horizontal(|ui| {

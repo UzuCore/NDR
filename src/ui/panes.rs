@@ -558,6 +558,11 @@ fn original_press(pane: &mut Pane, row: usize, rect: egui::Rect, ui: &egui::Ui, 
     let (pressed, down, pos, moved, modifiers) = ui.input(|i| (i.pointer.primary_pressed(), i.pointer.primary_down(), i.pointer.interact_pos(), i.pointer.delta() != egui::Vec2::ZERO, i.modifiers));
     let double_press = windows_double_press(ui.ctx());
     let Some(pos) = pos.filter(|p| ui.clip_rect().contains(*p)) else { return false };
+    // 고친 것: 날 입력을 읽으므로, 위에 다른 층(대화 상자·메시지 상자·메뉴)이 있으면 그 누름은 목록 것이 아니다. 전에는 압축하기 창의
+    // 확인 단추가 다른 패널 줄 위에 있으면 그 패널이 지금 패널이 되어 압축 파일이 다른 패널 폴더에 생겼다.
+    if ui.ctx().layer_id_at(pos).is_some_and(|layer| layer != ui.layer_id()) {
+        return false;
+    }
     if pressed && rect.contains(pos) {
         // 원본 MouseDown(0x7d63c8)은 두 번 누르기의 두 번째 누름(ssDouble, WM_LBUTTONDBLCLK)이면 표시·커서를 건드리지 않는다.
         // Windows 기준(windows_double_press) 안의 두 번째 누름이 그것이다. 세 번째 누름은 다시 보통 누름.
