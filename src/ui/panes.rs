@@ -37,10 +37,12 @@ pub(super) fn paint_original_cell(ui: &mut egui::Ui, rect: egui::Rect, column: D
             let galley = layout(ui, &[(number, cell_color), (unit, unit_color)]);
             painter.galley(egui::pos2(inner.right() - galley.size().x, top(galley.size().y)), galley, cell_color);
         }
-        DetailColumn::Modified if text.contains(' ') => {
-            let (date, time) = text.split_once(' ').unwrap_or((text, ""));
+        // 원본 DrawListItem 필드 4: DateToStr는 칸 왼쪽, TimeToStr는 오른쪽. 둘 사이는 listing::LIST_DATE_TIME_GAP.
+        // 고친 것: 첫 빈칸에서 나눠 "5일 전 23:19"가 "5일"과 "전 23:19"로 갈라졌다.
+        DetailColumn::Modified if text.contains(ndr::listing::LIST_DATE_TIME_GAP) => {
+            let (date, time) = text.split_once(ndr::listing::LIST_DATE_TIME_GAP).unwrap_or((text, ""));
             let date = layout(ui, &[(date, cell_color)]);
-            let time = layout(ui, &[(time.trim_start(), cell_color)]);
+            let time = layout(ui, &[(time, cell_color)]);
             // 칸이 좁아 날짜와 시각이 붙으면(사이 6 미만) 한 줄 글로 왼쪽에 쓴다.
             if date.size().x + time.size().x + 6.0 <= inner.width() {
                 painter.galley(egui::pos2(inner.left(), top(date.size().y)), date, cell_color);

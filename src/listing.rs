@@ -189,19 +189,38 @@ pub fn date_text(modified: Option<SystemTime>, date_format: &str, time_format: &
 /// labels[0](TODAY), 1이면 labels[1](YESTERDAY), 2~30이면 labels[2](DATEAGE의 %d = 날수), 그 밖은 날짜 형식.
 /// 열 글은 GetFieldMaxWidth처럼 "날짜 시간"(TimeToStr = 시간 형식).
 pub fn age_date_text(modified: Option<SystemTime>, date_format: &str, time_format: &str, labels: [&str; 3], now: SystemTime) -> String {
-    let Some(time) = modified else { return String::new() };
-    let file_day = chrono::DateTime::<chrono::Local>::from(time).date_naive();
-    let today = chrono::DateTime::<chrono::Local>::from(now).date_naive();
-    let days = if file_day > today { -1 } else { (today - file_day).num_days() };
-    let age = match days {
-        0 => Some(labels[0].to_owned()),
-        1 => Some(labels[1].to_owned()),
-        2..=30 => Some(labels[2].replace("%d", &days.to_string())),
-        _ => None,
-    };
+    date_time_parts(modified, date_format, time_format, Some(labels), now).map(|(date, clock)| format!("{date} {clock}")).unwrap_or_default()
+}
+
+/// 목록 날짜 칸에서 날짜 글과 시각 글 사이. 원본 DrawListItem(필드 4)은 DateToStr를 칸 왼쪽에, TimeToStr를 오른쪽
+/// (DT_RIGHT)에 따로 그린다. 날짜 나이("5일 전", "5 days ago")나 형식 글의 보통 빈칸과 헷갈리지 않게 U+00A0을 쓴다.
+pub const LIST_DATE_TIME_GAP: char = '\u{a0}';
+
+/// 목록 날짜 칸 글: (날짜 글)U+00A0(시각 글). labels가 있으면 날짜 나이(UseDateAge, `age_date_text`와 같은 규칙).
+pub fn list_date_text(modified: Option<SystemTime>, date_format: &str, time_format: &str, labels: Option<[&str; 3]>, now: SystemTime) -> String {
+    date_time_parts(modified, date_format, time_format, labels, now).map(|(date, clock)| format!("{date}{LIST_DATE_TIME_GAP}{clock}")).unwrap_or_default()
+}
+
+/// 원본 DateToStr(0x7df294)와 TimeToStr(0x7df550)의 (날짜 글, 시각 글). 형식이 틀리면 ("yyyy-MM-dd", "HH:mm").
+fn date_time_parts(modified: Option<SystemTime>, date_format: &str, time_format: &str, labels: Option<[&str; 3]>, now: SystemTime) -> Option<(String, String)> {
+    let time = modified?;
+    let age = labels.and_then(|labels| {
+        let file_day = chrono::DateTime::<chrono::Local>::from(time).date_naive();
+        let today = chrono::DateTime::<chrono::Local>::from(now).date_naive();
+        let days = if file_day > today { -1 } else { (today - file_day).num_days() };
+        match days {
+            0 => Some(labels[0].to_owned()),
+            1 => Some(labels[1].to_owned()),
+            2..=30 => Some(labels[2].replace("%d", &days.to_string())),
+            _ => None,
+        }
+    });
     match (age.or_else(|| win32_format(time, date_format, true)), win32_format(time, time_format, false)) {
-        (Some(date), Some(clock)) => format!("{date} {clock}"),
-        _ => chrono::DateTime::<chrono::Local>::from(time).format("%Y-%m-%d %H:%M").to_string(),
+        (Some(date), Some(clock)) => Some((date, clock)),
+        _ => {
+            let local = chrono::DateTime::<chrono::Local>::from(time);
+            Some((local.format("%Y-%m-%d").to_string(), local.format("%H:%M").to_string()))
+        }
     }
 }
 
@@ -518,6 +537,11 @@ mod tests {
         let five = noon - Duration::from_secs(5 * 86_400);
         assert_eq!(date_text(Some(five), "yyyy-MM-dd", "HH:mm", true, true, noon), format!("5일 전 {}", clock(five)));
         assert_eq!(age_date_text(Some(five), "yyyy-MM-dd", "HH:mm", ["T", "Y", "%d ago"], noon), format!("5 ago {}", clock(five)));
+        // 목록 칸: 날짜 글(빈칸이 든 날짜 나이도)과 시각 글 사이는 U+00A0(칸 왼쪽·오른쪽에 따로 그린다).
+        assert_eq!(list_date_text(Some(five), "yyyy-MM-dd", "HH:mm", Some(["T", "Y", "%d days ago"]), noon), format!("5 days ago\u{a0}{}", clock(five)));
+        assert_eq!(list_date_text(None, "yyyy-MM-dd", "HH:mm", None, noon), "");
+        let local = chrono::DateTime::<chrono::Local>::from(five);
+        assert_eq!(list_date_text(Some(five), "yyyy-MM-dd", "HH:mm", None, noon), format!("{}\u{a0}{}", local.format("%Y-%m-%d"), clock(five)));
         let old = noon - Duration::from_secs(31 * 86_400);
         let expected = chrono::DateTime::<chrono::Local>::from(old).format("%Y-%m-%d %H:%M").to_string();
         assert_eq!(date_text(Some(old), "yyyy-MM-dd", "HH:mm", true, true, noon), expected, "31 days or more: the formats");

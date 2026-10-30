@@ -162,11 +162,7 @@ impl App {
                 },
                 kind,
                 if entry.is_dir { String::new() } else { ndr::parity::format_size(entry.size, &unit, thousands) },
-                if use_age {
-                    ndr::listing::age_date_text(entry.modified, &date_format, &time_format, [&age_labels[0], &age_labels[1], &age_labels[2]], now)
-                } else {
-                    ndr::listing::date_text(entry.modified, &date_format, &time_format, false, korean, now)
-                },
+                ndr::listing::list_date_text(entry.modified, &date_format, &time_format, use_age.then(|| [age_labels[0].as_str(), age_labels[1].as_str(), age_labels[2].as_str()]), now),
                 ndr::listing::attribute_text(entry.attributes),
                 description,
             ]);
