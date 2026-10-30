@@ -1109,28 +1109,19 @@ impl App {
             }
         }
         let active = self.active == index;
-        // 원본 스킨 테마: 패널 테두리 lframe*, C# 판 머리 줄 없음, 주소 줄(TNXPathLabel)은 목록 위(원본 FUN_00481978).
-        let skin = self.current_skin();
+        // 원본 패널: 테두리 lframe*, 주소 줄(TNXPathLabel)은 목록 위(원본 FUN_00481978). 스킨을 읽지 못하면 그리지 않는다.
+        let Some(skin_now) = self.current_skin() else { return };
+        let skin = Some(skin_now);
         // 원본 MouseUp(0x7d6740): 왼쪽 단추를 놓으면 표시 칸 끌기를 끝낸다.
         if !ctx.input(|i| i.pointer.primary_down()) {
             self.panes[index].range_drag = None;
         }
         let stroke = match &skin {
             Some(skin) => self.skin_frame_stroke(skin, index),
-            None => egui::Stroke::new(
-                if active { 1.5 } else { 0.5 },
-                if active {
-                    Color32::from_rgb(65, 145, 230)
-                } else {
-                    ui.visuals().widgets.noninteractive.bg_stroke.color
-                },
-            ),
+            None => egui::Stroke::NONE,
         };
-        let frame = match &skin {
-            // 원본 패널 틀: 테두리(lframewidth)만 있고 둥근 모서리·안쪽 여백이 없다.
-            Some(_) => egui::Frame::new().inner_margin(egui::Margin::same(stroke.width.ceil() as i8)),
-            None => egui::Frame::group(ui.style()),
-        };
+        // 원본 패널 틀: 테두리(lframewidth)만 있고 둥근 모서리·안쪽 여백이 없다.
+        let frame = egui::Frame::new().inner_margin(egui::Margin::same(stroke.width.ceil() as i8));
         // 원본 탭 줄(TNXTabSet)은 틀 패널(+0x330) 밖, 패널 바로 위에 붙는다(FUN_00481fb8 SetParent(패널)).
         let outer_spacing = ui.spacing().item_spacing.y;
         if let Some(skin) = &skin {
@@ -1146,11 +1137,7 @@ impl App {
                 let mut command = None;
                 let mut begin_drag = None;
                 let mut folder_rows: Vec<(usize, egui::Rect, PathBuf)> = Vec::new();
-                // C# 패널 틀: 머리 줄, 탭 줄(목록 아래에 주소 표시줄과 정보 표시줄).
-                if skin.is_none() {
-                    self.pane_header(ui, index, ctx);
-                }
-                // 원본 틀 패널 안(스킨 테마): 위에서부터 드라이브 단추 줄(켰을 때), 주소 줄, 폴더 정보 표시줄, 목록(사이 틈 없음).
+                // 원본 틀 패널 안: 위에서부터 드라이브 단추 줄(켰을 때), 주소 줄, 폴더 정보 표시줄, 목록(사이 틈 없음).
                 if let Some(skin) = &skin {
                     ui.scope(|ui| {
                         ui.spacing_mut().item_spacing.y = 0.0;
@@ -1158,12 +1145,9 @@ impl App {
                         self.skin_address_bar(ui, index, ctx, skin);
                         self.skin_folder_info_bar(ui, index, skin);
                     });
-                } else {
-                    self.pane_tabs(ui, index, ctx);
                 }
                 // C# ConfigureGrid 열: 이름, 확장자(이름에 붙이지 않을 때), 종류(ShowFileType), 크기, 수정한 날짜, 속성, 설명.
                 let columns = self.detail_columns(self.language == "ko");
-                let weights: f32 = columns.iter().map(|c| c.2).sum();
                 // 원본 처음 값 viewstyle1/2=0(자동 보기).
                 let view = self.settings.text(if index == 0 { "LeftViewStyle" } else { "RightViewStyle" }, "Auto");
                 let tiles = matches!(view.as_str(), "Thumbnails" | "viewThumbnails");
@@ -1198,39 +1182,18 @@ impl App {
                 // 칸 너비: 자세히 보기는 C# star 비율, 한 열 자동 보기는 C# ApplyAutoDetailColumns(이름 = 나머지, 칸은 내용 너비, 모자라면 숨김).
                 let cell_widths: Vec<Option<f32>> = if tiles || names || auto_columns > 1 || auto_flow {
                     Vec::new()
-                } else if matches!(view.as_str(), "Auto" | "viewAuto") {
-                    self.single_auto_widths(ui, index, ui.available_width() - bar_reserve, &columns)
-                } else if skin.is_some() {
-                    self.original_detail_widths(ui, index, ui.available_width() - bar_reserve, &columns)
                 } else {
-                    let width = ui.available_width() - bar_reserve;
-                    columns.iter().map(|c| Some(width * c.2 / weights)).collect()
+                    self.original_detail_widths(ui, index, ui.available_width() - bar_reserve, &columns)
                 };
                 if !tiles && !names && auto_columns == 1 && !auto_flow {
                     let current = self.side_text(index, "SortMode", "Name");
-                    let mut clicked = None;
-                    if skin.is_some() {
-                        let font = egui::FontId::new(self.list_font_size, egui::FontFamily::Name(super::LIST_FONT_FAMILY.into()));
-                        clicked = self.skin_list_header(ui, index, &columns, &cell_widths, font);
-                    } else {
-                        ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing.x = 0.0;
-                            for ((column, title, _), cell) in columns.iter().zip(&cell_widths) {
-                                let Some(cell) = *cell else { continue };
-                                let mode = column.sort_mode();
-                                let button = egui::Button::new(title.as_str()).selected(mode.is_some() && mode == Some(current.as_str()));
-                                if ui.add_sized([cell, 22.0], button).clicked() {
-                                    clicked = mode;
-                                }
-                            }
-                        });
-                    }
+                    let font = egui::FontId::new(self.list_font_size, egui::FontFamily::Name(super::LIST_FONT_FAMILY.into()));
+                    let clicked = self.skin_list_header(ui, index, &columns, &cell_widths, font);
                     if let Some(mode) = clicked {
-                        // 머리글: 같은 방식이면 내림차순 전환, 다른 방식이면 그 방식 오름차순.
-                        // 원본(0x484d88, 스킨 테마): 다른 방식이면 SetSortType만(내림차순 그대로).
+                        // 원본 머리글(0x484d88): 같은 방식이면 내림차순 전환, 다른 방식이면 SetSortType만(내림차순 그대로).
                         let descending = Self::side_key(index, "SortDescending");
                         let old = self.settings.flag(&descending, false);
-                        let flip = if current == mode { !old } else { skin.is_some() && old };
+                        let flip = if current == mode { !old } else { old };
                         self.settings.set_flag(&descending, flip);
                         self.settings.set_text(&Self::side_key(index, "SortMode"), mode);
                         self.sort_pane(index);
@@ -1244,7 +1207,7 @@ impl App {
                 }
                 // C#처럼 필터는 목록을 받을 때 적용하므로 보이는 줄 = 목록 전체(선택·작업 대상과 일치).
                 let visible: Vec<usize> = (0..self.panes[index].entries.len()).collect();
-                let reserve = if skin.is_some() { self.skin_file_info_height() + ui.spacing().item_spacing.y } else { 60.0 };
+                let reserve = self.skin_file_info_height() + ui.spacing().item_spacing.y;
                 // 원본 FTP 모드 패널: 목록 아래 나눔 막대와 기록 칸(FUN_0048d7ac).
                 let reserve = reserve + self.ftp_log_reserve(index, ui.spacing().item_spacing.y);
                 let height = (ui.available_height() - reserve).max(80.0);

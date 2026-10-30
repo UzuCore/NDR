@@ -13,59 +13,6 @@ fn is_archive(path: &Path) -> bool {
 }
 
 impl App {
-    /// 이 패널의 DataGrid 선택 수(표시한 항목, 없으면 커서 항목).
-    fn selection_count(&self, index: usize) -> usize {
-        let pane = &self.panes[index];
-        if pane.loading {
-            0
-        } else if pane.selected.is_empty() {
-            usize::from(pane.cursor < pane.entries.len())
-        } else {
-            pane.selected.len()
-        }
-    }
-
-    pub(super) fn pane_header(&mut self, ui: &mut egui::Ui, index: usize, ctx: &egui::Context) {
-        let ko = self.language == "ko";
-        let tabs = self.settings.flag("UseTabs", true);
-        let mut command: Option<String> = None;
-        ui.horizontal(|ui| {
-            ui.set_height(26.0);
-            ui.label(RichText::new(match (index, ko) { (0, true) => "왼쪽 패널", (_, true) => "오른쪽 패널", (0, false) => "Left pane", _ => "Right pane" }).strong().family(egui::FontFamily::Name(super::BOLD_FONT_FAMILY.into())).color(Color32::from_rgb(77, 163, 255)));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button(RichText::new(if ko { "트리" } else { "Tree" }).size(11.0)).clicked() {
-                    command = Some("toggleFolders".into());
-                }
-                if tabs {
-                    let response = ui.menu_button("☰", |ui| {
-                        let pane = &self.panes[index];
-                        for (t, path) in pane.tabs.iter().enumerate() {
-                            if ui.selectable_label(t == pane.tab, tab_name(path, &self.language_pack.text("RES.MYCOMPUTER", "My Computer"))).clicked() {
-                                command = Some(format!("tab:{t}"));
-                                ui.close();
-                            }
-                        }
-                        ui.separator();
-                        if let Some(action) = self.tab_actions(ui, index, Some(self.panes[index].tab)) {
-                            command = Some(action);
-                        }
-                    });
-                    response.response.on_hover_text(if ko { "탭 목록" } else { "Tab list" });
-                    if ui.button(RichText::new(if ko { "새 탭 +" } else { "New tab +" }).size(11.0)).clicked() {
-                        command = Some("newTab".into());
-                    }
-                }
-                let count = self.selection_count(index);
-                if count > 0 {
-                    ui.label(RichText::new(if ko { format!("선택 {}개", super::file_operation::n0(count)) } else { format!("Selected {}", super::file_operation::n0(count)) }).size(11.0).weak());
-                }
-            });
-        });
-        if let Some(command) = command {
-            self.active = index;
-            self.tab_command(index, &command, ctx);
-        }
-    }
 
     /// 원본 pmTab(DFM): pmiCloseTab, pmiCloseAllTab, N02("-"), pmiNewTab. 닫기 두 항목은 C#처럼 탭이 둘 이상일 때만 켠다.
     /// 원본 탭 줄(FUN_0048a534)은 포인터 아래에 탭이 없으면(None) 닫기 두 항목을 끈다.
@@ -184,41 +131,6 @@ impl App {
         self.active = index;
         self.navigate(index, path, false);
         self.refresh(index);
-    }
-
-    /// C# 탭 줄(UseTabs일 때): 이름(최대 220), 탭이 둘 이상이면 ×. 오른쪽 단추 = 탭 동작 메뉴.
-    pub(super) fn pane_tabs(&mut self, ui: &mut egui::Ui, index: usize, ctx: &egui::Context) {
-        if !self.settings.flag("UseTabs", true) {
-            return;
-        }
-        let close_tip = self.language_pack.text("formMain.Menu.pmiCloseTab", if self.language == "ko" { "탭 닫기" } else { "Close Tab" });
-        let mut command = None;
-        egui::ScrollArea::horizontal().id_salt(("ndr-tabs", index)).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                let several = self.panes[index].tabs.len() > 1;
-                for t in 0..self.panes[index].tabs.len() {
-                    let pane = &self.panes[index];
-                    let name = tab_name(&pane.tabs[t], &self.language_pack.text("RES.MYCOMPUTER", "My Computer"));
-                    let response = ui.add(egui::Button::selectable(t == pane.tab, egui::RichText::new(name)).truncate().min_size(egui::vec2(0.0, 24.0))).on_hover_text(pane.tabs[t].to_string_lossy());
-                    if response.clicked() {
-                        command = Some(format!("tab:{t}"));
-                    }
-                    super::skin_pane::context_menu(&response, |ui| {
-                        if let Some(action) = self.tab_actions(ui, index, Some(t)) {
-                            command = Some(action);
-                        }
-                    });
-                    if several && ui.small_button("×").on_hover_text(&close_tip).clicked() {
-                        command = Some(format!("closeTab:{t}"));
-                    }
-                    ui.add_space(4.0);
-                }
-            });
-        });
-        if let Some(command) = command {
-            self.active = index;
-            self.tab_command(index, &command, ctx);
-        }
     }
 
     /// C# 주소 표시줄(ShowAddressBar).

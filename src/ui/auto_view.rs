@@ -194,18 +194,6 @@ impl App {
         (header + name.max(0.0), widths)
     }
 
-    /// C# ApplyAutoDetailColumns(한 열 자동 보기): `columns`(detail_columns 순서)마다 너비, 숨긴 칸은 None.
-    pub(super) fn single_auto_widths(&mut self, ui: &egui::Ui, index: usize, width: f32, columns: &[(DetailColumn, String, f32)]) -> Vec<Option<f32>> {
-        if self.panes[index].view.cells.len() != self.panes[index].entries.len() {
-            self.compute_view(index);
-        }
-        let (name_width, widths) = self.auto_widths(ui, index, width, columns);
-        columns
-            .iter()
-            .map(|(column, _, _)| if *column == DetailColumn::Name { Some(name_width) } else { METRICS.iter().position(|m| m == column).and_then(|m| widths[m]) })
-            .collect()
-    }
-
     /// C# RebuildAutoColumns: 열마다 줄 번호들.
     pub(super) fn auto_distribution(&self, index: usize, columns: usize) -> Vec<Vec<usize>> {
         let pane = &self.panes[index];
