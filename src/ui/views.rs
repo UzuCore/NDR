@@ -221,8 +221,8 @@ impl App {
         let list_style = self.list_font_style;
         let original_click = true;
         // 스킨 테마의 미리 보기: 원본 DrawThumbnailItem(0x7da1c4)·DrawFocus 형식 3. 이름 글색은 늘 NXFORE(Font.Color = GetBasic(1)).
-        let skin = if thumbnails { self.current_skin() } else { None };
-        let original = skin.as_ref().map(|_| self.original_list_colors());
+        let skin = self.current_skin();
+        let original = Some(self.original_list_colors());
         let original_fore = original.map(|_| self.basic_list_color("NXFORE"));
         let list_focused = self.active == index;
         // 원본 스킨 세로 막대(TNXScrollBar, 미리 보기도 같은 막대): 넘칠 때만 보이고 그 너비만큼 칸 자리가 좁아진다(자세히 보기와 같은 방식).

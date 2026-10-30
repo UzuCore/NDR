@@ -230,7 +230,7 @@ impl App {
             .collect();
         let active = self.active == index;
         // 원본 스킨 테마: 커서·표시 막대(DrawFocus), 칸 색(DrawListItem), 표시 ▶.
-        let original = self.current_skin().map(|_| self.original_list_colors());
+        let original = Some(self.original_list_colors());
         // 다른 목록처럼 원본 항목 높이(글 높이 + 2)와 줄 간격(LineSpace), 줄 선(ShowRowLines).
         let row_height = self.list_item_height(ui);
         let saved_spacing = ui.spacing().item_spacing.y;
@@ -280,7 +280,6 @@ impl App {
                                         let entry = &pane.entries[row];
                                         let marked = pane.selected.contains(&row);
                                         let cursor_row = pane.cursor == row;
-                                        let selected = marked || (active && cursor_row);
                                         let texts = &pane.view.cells[row];
                                         let default = if entry.is_dir { Color32::from_rgb(228, 188, 85) } else if entry.hidden { Color32::GRAY } else { ui.visuals().text_color() };
                                         let color = pane.view.colors[row].map_or(default, |(r, g, b)| Color32::from_rgb(r, g, b));
@@ -289,7 +288,7 @@ impl App {
                                             Some(o) if cursor_row && active => o.back,
                                             _ => color,
                                         };
-                                        let response = ui.add_sized([name_width, row_height], App::name_button(icon.as_ref(), entry.is_dir, &texts[0], name_color, original.is_none() && selected, list_style));
+                                        let response = ui.add_sized([name_width, row_height], App::name_button(icon.as_ref(), entry.is_dir, &texts[0], name_color, false, list_style));
                                         if cursor_row && original.is_some() && !entry.drive {
                                             super::panes::note_cursor_name(&self.name_tip, ui, index, row, response.rect, &texts[0], &entry.name, list_style);
                                         }
@@ -422,7 +421,7 @@ impl App {
         let count = self.panes[index].entries.len();
         let column_width = (width / columns as f32).floor().max(40.0);
         // 원본 스킨 테마: 커서·표시 막대(DrawFocus), 칸 색(DrawListItem), 표시 ▶.
-        let original = skin.as_ref().map(|_| self.original_list_colors());
+        let original = Some(self.original_list_colors());
         let total_columns = count.div_ceil(rows).max(1);
         let last_first = total_columns.saturating_sub(columns);
         let by_page = self.scroll_by_page(index);
@@ -509,7 +508,6 @@ impl App {
                         let entry = &pane.entries[row];
                         let marked = pane.selected.contains(&row);
                         let cursor_row = pane.cursor == row;
-                        let selected = marked || (active && cursor_row);
                         let texts = &pane.view.cells[row];
                         let default = if entry.is_dir { Color32::from_rgb(228, 188, 85) } else if entry.hidden { Color32::GRAY } else { ui.visuals().text_color() };
                         let color = pane.view.colors[row].map_or(default, |(r, g, b)| Color32::from_rgb(r, g, b));
@@ -522,7 +520,7 @@ impl App {
                             Some(o) if cursor_row && active => o.back,
                             _ => color,
                         };
-                        let framed = original.is_none() && selected;
+                        let framed = false;
                         // 원본 DrawListItem 종류 4: 드라이브 항목은 칸 너비 전체에 이름과 남은 공간 막대.
                         let name_rect = egui::Rect::from_min_size(cell.min, egui::vec2(if entry.drive { column_width } else { name_width.min(column_width) }, item_height));
                         let response = if entry.drive {

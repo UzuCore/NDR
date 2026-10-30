@@ -1289,7 +1289,7 @@ impl App {
                 // 쪽 단위로 여러 쪽이면 마지막 쪽도 쪽 경계에서 시작하도록 빈 줄을 덧댄다(원본은 마지막 쪽 아래가 빈다).
                 let drawn = if by_page && pages > 1 { rows.len().max(pages * page_rows + 2) } else { rows.len() };
                 // 원본 스킨 테마: 커서·표시 막대(DrawFocus)와 칸 색(DrawListItem), 표시 ▶(InitSelMarkBitmap).
-                let original = skin.as_ref().map(|_| self.original_list_colors());
+                let original = Some(self.original_list_colors());
                 let output = area
                     .show_rows(ui, row_height, drawn, |ui, range| {
                         for visible_index in range {
@@ -1308,7 +1308,6 @@ impl App {
                             let pane = &mut self.panes[index];
                             let entry = &pane.entries[row];
                             let selected = pane.selected.contains(&row);
-                            let focused = pane.cursor == row && active;
                             let default = if entry.is_dir {
                                 Color32::from_rgb(228, 188, 85)
                             } else if entry.hidden {
@@ -1320,7 +1319,7 @@ impl App {
                             let cells = &texts.cells[row];
                             let cursor_row = pane.cursor == row;
                             let bar_slot = original.map(|_| ui.painter().add(egui::Shape::Noop));
-                            let framed = original.is_none() && (selected || focused);
+                            let framed = false;
                             let name_color = match original {
                                 Some(o) if cursor_row && active => o.back,
                                 _ => color,
