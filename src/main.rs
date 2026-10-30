@@ -34,18 +34,72 @@ pub struct Options {
     /// 시험용: 시작 확인(화면 밖) 중에 이 종류의 원본 창 견본을 열고 그 화면을 PNG로 저장한다(`--shot 종류 파일`).
     shot: Option<(String, PathBuf)>,
 }
+/// 설정 파일 이름. 설정 파일은 이것 하나만 쓴다.
+const SETTINGS_FILE: &str = "settings.json";
+/// 예전 설정 폴더에서 실행 파일 폴더로 옮겨 오는 것(설정 파일은 마지막에 옮긴다: 도중에 멈추면 다음 시작에 다시 한다).
+const PROFILE_ITEMS: [&str; 4] = ["toolbar.xml", "advrename.save", "treedata", SETTINGS_FILE];
+
+/// 그 폴더에 파일을 만들 수 있는가(만들어 보고 바로 지운다).
+fn writable(directory: &std::path::Path) -> bool {
+    let probe = directory.join(format!(".ndr-write-probe-{}", std::process::id()));
+    let made = std::fs::OpenOptions::new().write(true).create_new(true).open(&probe).is_ok();
+    made && std::fs::remove_file(&probe).is_ok()
+}
+
+/// 파일·폴더 하나를 옮긴다(다른 드라이브면 복사한 뒤 원래 것을 지운다). 대상이 이미 있으면 그대로 둔다.
+fn move_item(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+    if to.exists() || std::fs::rename(from, to).is_ok() {
+        return Ok(());
+    }
+    if from.is_dir() {
+        copy_tree(from, to)?;
+        std::fs::remove_dir_all(from)
+    } else {
+        std::fs::copy(from, to)?;
+        if std::fs::metadata(to)?.len() != std::fs::metadata(from)?.len() {
+            return Err(std::io::Error::other(format!("copy of {} is incomplete", from.display())));
+        }
+        std::fs::remove_file(from)
+    }
+}
+
+/// 설정 폴더 = 실행 파일 폴더(`beside`). 설정 파일은 그 폴더의 settings.json 하나뿐이다.
+/// 그 파일이 아직 없으면 예전 설정 폴더(`old` 차례, %LOCALAPPDATA%\NDR → NDIR-Rust) 가운데 설정 파일이 있는 첫 폴더의
+/// 설정(PROFILE_ITEMS)을 실행 파일 폴더로 옮긴다. 두 곳에 설정이 남지 않게 예전 것은 지우고, 빈 예전 폴더도 지운다.
+/// 실행 파일 폴더에 쓸 수 없으면(예: Program Files) 옮기지 않고 예전 폴더를 그대로 쓴다.
+fn beside_profile(beside: &std::path::Path, old: &[PathBuf]) -> PathBuf {
+    if beside.join(SETTINGS_FILE).is_file() {
+        return beside.to_path_buf();
+    }
+    let source = old.iter().find(|folder| folder.join(SETTINGS_FILE).is_file());
+    if !writable(beside) {
+        return source.or(old.first()).cloned().unwrap_or_else(|| beside.to_path_buf());
+    }
+    if let Some(source) = source {
+        for name in PROFILE_ITEMS {
+            let from = source.join(name);
+            if from.exists() && move_item(&from, &beside.join(name)).is_err() && name == SETTINGS_FILE {
+                // 설정 파일을 옮기지 못했으면 예전 폴더를 쓴다(설정을 잃지 않게).
+                return source.clone();
+            }
+        }
+        let _ = std::fs::remove_dir(source);
+    }
+    beside.to_path_buf()
+}
+
 impl Options {
     fn profile_directory(&self) -> PathBuf {
-        self.profile.clone().unwrap_or_else(|| {
-            let local = PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_else(|| ".".into()));
-            let profile = local.join("NDR");
-            // 프로그램 이름을 NDIR에서 NDR로 바꿨다. 새 폴더가 아직 없으면 예전 설정 폴더(NDIR-Rust)를 복사해 온다(예전 폴더는 그대로 둔다).
-            let old = local.join("NDIR-Rust");
-            if !profile.exists() && old.is_dir() {
-                let _ = copy_tree(&old, &profile);
-            }
-            profile
-        })
+        if let Some(profile) = &self.profile {
+            return profile.clone();
+        }
+        let local = PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_else(|| ".".into()));
+        // 프로그램 이름을 NDIR에서 NDR로 바꾸기 전의 설정 폴더는 NDIR-Rust였다.
+        let old = [local.join("NDR"), local.join("NDIR-Rust")];
+        match std::env::current_exe().ok().and_then(|exe| exe.parent().map(std::path::Path::to_path_buf)) {
+            Some(beside) => beside_profile(&beside, &old),
+            None => old[0].clone(),
+        }
     }
     fn parse() -> Result<Self, String> {
         Self::parse_from(std::env::args().skip(1))
@@ -232,6 +286,40 @@ mod options_tests {
         assert_eq!(options.dual, Some(true));
         let options = parse(vec![format!("/userdir:{}", root.display())]);
         assert_eq!(options.profile.as_deref(), Some(root.as_path()));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// 설정 파일은 실행 파일 옆 settings.json 하나: 없으면 예전 설정 폴더의 설정을 옮기고(예전 것은 지움), 있으면 그대로 쓴다.
+    #[test]
+    fn settings_live_beside_the_executable_and_old_settings_move_there() {
+        let root = std::env::temp_dir().join(format!("ndr-beside-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (beside, old, older) = (root.join("app"), root.join("NDR"), root.join("NDIR-Rust"));
+        for folder in [&beside, &old.join("treedata"), &older] {
+            std::fs::create_dir_all(folder).unwrap();
+        }
+        std::fs::write(old.join("settings.json"), "{\"Theme\":\"Black\"}").unwrap();
+        std::fs::write(old.join("toolbar.xml"), "<toolbar/>").unwrap();
+        std::fs::write(old.join("treedata").join("1234.xcd"), "tree").unwrap();
+        std::fs::write(older.join("settings.json"), "{\"Theme\":\"Dark\"}").unwrap();
+        let folders = [old.clone(), older.clone()];
+        assert_eq!(super::beside_profile(&beside, &folders), beside);
+        assert_eq!(std::fs::read_to_string(beside.join("settings.json")).unwrap(), "{\"Theme\":\"Black\"}", "the first old folder with settings wins");
+        assert_eq!(std::fs::read_to_string(beside.join("toolbar.xml")).unwrap(), "<toolbar/>");
+        assert_eq!(std::fs::read_to_string(beside.join("treedata").join("1234.xcd")).unwrap(), "tree");
+        assert!(!old.exists(), "the old folder is emptied and removed so only one settings file remains");
+        assert!(older.join("settings.json").is_file(), "other old folders are left alone");
+        let leftovers: Vec<_> = std::fs::read_dir(&beside).unwrap().flatten().map(|e| e.file_name()).collect();
+        assert_eq!(leftovers.len(), 3, "no write probe is left behind: {leftovers:?}");
+        // 실행 파일 옆에 설정이 있으면 그대로 쓴다(예전 폴더를 다시 보지 않는다).
+        std::fs::write(beside.join("settings.json"), "{}").unwrap();
+        assert_eq!(super::beside_profile(&beside, &folders), beside);
+        assert_eq!(std::fs::read_to_string(beside.join("settings.json")).unwrap(), "{}");
+        assert!(older.join("settings.json").is_file());
+        // 아무 설정도 없으면 실행 파일 폴더(처음 저장할 때 만든다).
+        let fresh = root.join("fresh");
+        std::fs::create_dir_all(&fresh).unwrap();
+        assert_eq!(super::beside_profile(&fresh, &[root.join("none")]), fresh);
         std::fs::remove_dir_all(&root).unwrap();
     }
 }

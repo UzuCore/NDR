@@ -1660,8 +1660,11 @@ impl App {
         };
         let name = read(form, name_key);
         let size = read(form, size_key).trim().parse::<f32>().unwrap_or(0.0);
+        // 목록 글꼴 크기(ListFontSize)는 화소, 글꼴 상자는 포인트다. 폴더 트리 글꼴 크기는 포인트 그대로.
+        let size = if tree || size <= 0.0 { size } else { ndr::settings::font_pixels_to_points(size as f64) as f32 };
         let style = (form.draft.values.get(style_key).and_then(Value::as_i64).unwrap_or(0) & 0x0F) as u8;
         let Some((name, size, style)) = (self.font_picker)(name.trim(), size, style) else { return };
+        let size = if tree { size } else { ndr::settings::font_points_to_pixels(size as f64) as f32 };
         let Some(form) = self.settings_form() else { return };
         if let Some(Row::Text { value, .. }) = form.row_mut(name_key) {
             *value = name;

@@ -120,14 +120,15 @@ fn settings_window_commits_like_csharp() {
     app.settings_action(SettingsAction::Apply, &ctx);
     assert!(app.settings_form().is_some());
     // 원본 btnListFont(글꼴 변경): 글꼴 상자에서 고른 이름·크기가 줄에, 모양(TFontStyles 바이트)이 ListFontStyle에 들어간다.
-    app.font_picker = |name, _, style| { assert_eq!((name, style), ("Segoe UI", 0), "the current font goes in"); Some(("Tahoma".into(), 10.5, 3)) };
+    // 목록 크기 칸은 화소(처음 값 14 = 10.5포인트), 글꼴 상자는 포인트: 10.5포인트를 고르면 14화소.
+    app.font_picker = |name, size, style| { assert_eq!((name, size, style), ("Segoe UI", 10.5, 0), "the current font goes in as points"); Some(("Tahoma".into(), 12.0, 3)) };
     app.settings_action(SettingsAction::ChooseFont(false), &ctx);
-    assert_eq!((text_of(&mut app, "ListFont"), text_of(&mut app, "ListFontSize")), ("Tahoma".to_owned(), "10.5".to_owned()));
+    assert_eq!((text_of(&mut app, "ListFont"), text_of(&mut app, "ListFontSize")), ("Tahoma".to_owned(), "16".to_owned()), "12 points = 16 pixels");
     assert_eq!(app.settings_form().unwrap().draft.values.get("ListFontStyle"), Some(&serde_json::json!(3)));
-    app.font_picker = |_, _, style| { assert_eq!(style, 0); Some(("Gulim".into(), 9.0, 4)) };
+    app.font_picker = |_, size, style| { assert_eq!((size, style), (9.0, 0), "the folder tree size stays in points"); Some(("Gulim".into(), 9.0, 4)) };
     app.settings_action(SettingsAction::ChooseFont(true), &ctx);
     assert_eq!((text_of(&mut app, "FolderTreeFont"), text_of(&mut app, "FolderTreeFontSize")), ("Gulim".to_owned(), "9".to_owned()));
-    app.font_picker = |name, _, style| { assert_eq!((name, style), ("Tahoma", 3), "the chosen style comes back in"); None };
+    app.font_picker = |name, size, style| { assert_eq!((name, size, style), ("Tahoma", 12.0, 3), "the chosen font comes back in"); None };
     app.settings_action(SettingsAction::ChooseFont(false), &ctx);
     {
         let form = app.settings_form().unwrap();

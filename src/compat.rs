@@ -612,9 +612,11 @@ pub fn import_ini(path: &Path) -> Result<Settings, String> {
         };
         settings.set_text(&format!("{side}ViewStyle"), mode);
     }
-    for (property, section, key, default_size) in [
-        ("List", "Display", "listfont", 12.),
-        ("FolderTree", "Tree", "treefont", 9.),
+    // 원본 listfont·treefont "\"이름\",크기,모양"의 크기는 포인트(TFont.Size). ListFontSize는 화소라 바꿔 넣는다
+    // (값이 없으면 NDR 처음 값 14화소). FolderTreeFontSize는 포인트 그대로.
+    for (property, section, key, default_size, pixels) in [
+        ("List", "Display", "listfont", crate::settings::DEFAULT_LIST_FONT_PIXELS, true),
+        ("FolderTree", "Tree", "treefont", 9., false),
     ] {
         let font = get(section, key).unwrap_or("");
         let mut pieces = font.split(',');
@@ -631,6 +633,7 @@ pub fn import_ini(path: &Path) -> Result<Settings, String> {
             .next()
             .and_then(|v| v.trim().parse::<f64>().ok())
             .filter(|v| v.is_finite())
+            .map(|points| if pixels { crate::settings::font_points_to_pixels(points) } else { points })
             .unwrap_or(default_size)
             .clamp(8., 32.);
         settings
@@ -2245,8 +2248,9 @@ mod tests {
         let file = root.join("nexusfile.ini");
         fs::write(&file, "[Window]\ndualview=0\nlastfocus=1\nskin=black\n[View1]\nlastpath1=C:\\한글\nshowhidden1=1\nsort1=3\n[Operation]\nuseion=0\n[Display]\nlistfont=\"Tahoma\",10,3\n[Tree]\ntreefont=Gulim,9\n[Future]\nunknown=keep\n").unwrap();
         let settings = import_ini(&file).unwrap();
-        // 원본 "\"이름\",크기,모양"(FUN_0044cd58 wsprintfW): 모양 = TFontStyles 바이트.
-        assert_eq!((settings.text("ListFont", ""), settings.values["ListFontSize"].as_f64(), settings.values["ListFontStyle"].as_i64()), ("Tahoma".to_owned(), Some(10.0), Some(3)));
+        // 원본 "\"이름\",크기,모양"(FUN_0044cd58 wsprintfW): 모양 = TFontStyles 바이트. 크기는 포인트 → ListFontSize 화소(10 × 96 / 72 = 13).
+        assert_eq!((settings.text("ListFont", ""), settings.values["ListFontSize"].as_f64(), settings.values["ListFontStyle"].as_i64()), ("Tahoma".to_owned(), Some(13.0), Some(3)));
+        assert_eq!(settings.values["FolderTreeFontSize"].as_f64(), Some(9.0), "the folder tree size stays in points");
         assert_eq!((settings.text("FolderTreeFont", ""), settings.values["FolderTreeFontStyle"].as_i64()), ("Gulim".to_owned(), Some(0)));
         assert!(!settings.flag("DualPaneMode", true));
         assert!(settings.flag("StartWithRightPaneActive", false));

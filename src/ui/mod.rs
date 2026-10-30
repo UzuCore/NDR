@@ -491,7 +491,7 @@ pub struct App {
     window_bounds: Option<(egui::Pos2, egui::Vec2)>,
     /// C# WindowMaximized: 마지막으로 본 최대화 여부(최소화 중에는 바꾸지 않음).
     window_maximized: Option<bool>,
-    /// 원본·C# 판 ListFontSize(화소): 파일 목록 글에만 쓴다.
+    /// ListFontSize(화소, 처음 값 14): 파일 목록 글에만 쓴다. 원본 listfont 크기는 포인트라 가져올 때 바꾼다.
     list_font_size: f32,
     /// 원본 btnFTPShowDetail(">>"): pBottom 높이가 30을 넘으면 22(단추 줄만), 아니면 100.
     results_collapsed: bool,
@@ -796,7 +796,7 @@ impl App {
             list_font_style: 0,
             window_bounds: None,
             window_maximized: None,
-            list_font_size: 12.0,
+            list_font_size: ndr::settings::DEFAULT_LIST_FONT_PIXELS as f32,
             results_collapsed: false,
             ftp_started: None,
             ftp_results: Arc::new(Mutex::new(Vec::new())),

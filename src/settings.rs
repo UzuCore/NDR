@@ -2,6 +2,19 @@ use serde_json::{Map, Value};
 use std::path::Path;
 
 pub const CURRENT_SCHEMA_VERSION: i64 = 4;
+
+/// 파일 목록(패널) 글꼴 크기(ListFontSize, 화소)의 처음 값.
+pub const DEFAULT_LIST_FONT_PIXELS: f64 = 14.;
+
+/// 원본 글꼴 크기(포인트, TFont.Size)를 화소로: 원본 FUN_00644e70 Height = MulDiv(크기, PixelsPerInch 96, 72)(반올림).
+pub fn font_points_to_pixels(points: f64) -> f64 {
+    (points * 96. / 72.).round()
+}
+
+/// 화소 글꼴 크기를 Windows 글꼴 상자에 넘길 포인트로(0.5 단위로 반올림).
+pub fn font_pixels_to_points(pixels: f64) -> f64 {
+    (pixels * 72. / 96. * 2.).round() / 2.
+}
 #[derive(Clone, Debug)]
 pub struct Settings {
     pub values: Map<String, Value>,
@@ -224,7 +237,7 @@ impl Settings {
             ("TreeWindowHeight", 600., 300., 8192.),
             ("FolderTreeFontSize", 9., 8., 32.),
             ("FolderTreeItemWidth", 130., 32., 4096.),
-            ("ListFontSize", 12., 8., 32.),
+            ("ListFontSize", DEFAULT_LIST_FONT_PIXELS, 8., 32.),
         ] {
             let value = self
                 .values
@@ -552,6 +565,10 @@ mod tests {
         assert_eq!(fresh.values["ExtensionColors"][".zip"], "#808000");
         assert_eq!(fresh.values["ExtensionColors"][".jpg"], "#D857EA");
         assert_eq!(fresh.values["ExtensionColors"].as_object().unwrap().len(), 85);
+        // 패널(파일 목록) 글꼴 처음 값 14화소. 원본 포인트(MulDiv(크기, 96, 72)): 12pt = 16px, 9pt = 12px.
+        assert_eq!(fresh.values["ListFontSize"].as_f64(), Some(14.0));
+        assert_eq!((font_points_to_pixels(12.), font_points_to_pixels(9.), font_points_to_pixels(10.5)), (16., 12., 14.));
+        assert_eq!((font_pixels_to_points(14.), font_pixels_to_points(16.)), (10.5, 12.));
         // 스키마 4 전의 C# 처음 값 Dark는 한 번 Black으로, 사용자가 고른 확장자 색은 그대로.
         let mut old = Settings { values: serde_json::from_value(serde_json::json!({"SchemaVersion": 3, "Theme": "Dark", "ExtensionColors": {".txt": "#112233"}})).unwrap() };
         old.normalize();

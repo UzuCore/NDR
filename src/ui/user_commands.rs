@@ -292,13 +292,13 @@ impl App {
             super::set_app_fonts(ctx, data, style & 1 != 0);
             self.list_font_name = Some(key);
         }
-        // C# 판 grid.FontSize = ListFontSize: 크기는 파일 목록에만 쓴다(panes.rs). 나머지 글은 처음 값 12화소 그대로.
+        // C# 판 grid.FontSize = ListFontSize(화소, 처음 값 14): 크기는 파일 목록에만 쓴다(panes.rs). 나머지 글은 처음 값 12화소 그대로.
         self.list_font_size = self
             .settings
             .values
             .get("ListFontSize")
             .and_then(|v| v.as_f64())
-            .unwrap_or(12.0)
+            .unwrap_or(ndr::settings::DEFAULT_LIST_FONT_PIXELS)
             .clamp(8.0, 32.0) as f32;
         ctx.style_mut(|style| {
             for text_style in [
