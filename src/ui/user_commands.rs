@@ -114,6 +114,11 @@ impl App {
             if response.clicked() {
                 clicked = Some(key.clone());
             }
+            // 원본 bbFunctionsContextPopup(0x4373ec): 기본 칸(Alt·Ctrl 칸이 아닐 때)을 오른쪽 단추로 눌러도 그 기능키를 실행한다
+            // (FUN_004308a0, 메뉴는 띄우지 않는다).
+            if response.secondary_clicked() && !(modifiers.alt || modifiers.ctrl) {
+                clicked = Some(key.clone());
+            }
         }
         match clicked {
             Some(key) if modifiers.alt || modifiers.ctrl => {

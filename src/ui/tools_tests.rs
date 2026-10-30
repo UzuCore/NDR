@@ -1664,6 +1664,16 @@ fn skin_function_key_bar_follows_the_original_button_bar() {
     assert!(keys.iter().all(|k| k.2 == Color32::from_rgb(0xE2, 0xA3, 0x1D)), "bbkeytext");
     let tiles = output.shapes.iter().filter(|c| matches!(&c.shape, egui::Shape::Mesh(m) if m.texture_id == tile.id())).count();
     assert!(tiles >= 700 / 8, "{tiles}");
+    // 원본 bbFunctionsContextPopup: 칸을 오른쪽 단추로 눌러도 그 기능키(F7 새 폴더 → 이름 입력 창)를 실행한다.
+    let at = egui::pos2(550.0, 390.0);
+    let button = |pressed: bool| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() };
+    for events in [vec![egui::Event::PointerMoved(at), button(true)], vec![button(false)]] {
+        let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(700.0, 400.0))), events, ..Default::default() };
+        let _ = ctx.run(raw, |ctx| {
+            egui::TopBottomPanel::bottom("functionbar").exact_height(20.0).frame(egui::Frame::NONE).show(ctx, |ui| app.skin_function_key_bar(ui, ctx, &skin));
+        });
+    }
+    assert!(!app.original_dialogs.is_empty() || !app.msgboxes.is_empty(), "a right click on F7 runs F7");
     let _ = fs::remove_dir_all(root);
 }
 
