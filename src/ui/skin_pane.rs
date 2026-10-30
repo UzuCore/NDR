@@ -1453,7 +1453,7 @@ impl App {
             self.skin_crumb_menu = None;
             return;
         }
-        let icons: Vec<Option<egui::TextureHandle>> = children.iter().map(|(child, _)| self.path_icon(ctx, child, true)).collect();
+        let icons: Vec<Option<egui::TextureHandle>> = children.iter().map(|(child, _)| if drives { self.drive_icon(ctx, child) } else { self.path_icon(ctx, child, true) }).collect();
         let mut chosen = None;
         // 원본 경로 라벨 메뉴는 TfMain 메뉴의 반투명(MenuDrawItem 0x42e518의 WS_EX_LAYERED)을 쓰지 않는다.
         super::keep_opaque(ctx, egui::Id::new(("ndr-skin-crumb-menu", index)));
