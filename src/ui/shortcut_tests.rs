@@ -263,21 +263,9 @@ fn keyboard_follows_the_csharp_shortcut_engine() {
     press(&mut app, &ctx, egui::Key::Num2, ALT);
     assert_eq!(app.msgboxes.first().map(|m| (m.title.clone(), m.text.clone())), Some(("NDR".to_owned(), "작업 폴더 2이 설정되지 않았습니다.".to_owned())));
     app.answer_message_box(1, &ctx);
-    // 즐겨찾기 글쇠 Shift+F1(favoriteOpen1): 이름과 경로가 모두 있을 때만.
-    app.settings.set_strings("Favorites", vec![left.join("folder1").to_string_lossy().into_owned()]);
-    app.settings.set_strings("FavoriteNames", vec![String::new()]);
-    press(&mut app, &ctx, egui::Key::F1, SHIFT);
-    assert_eq!(app.panes[0].path, left, "a favorite without a name is skipped");
-    app.settings.set_strings("FavoriteNames", vec!["작업".into()]);
-    press(&mut app, &ctx, egui::Key::F1, SHIFT);
-    assert_eq!(app.panes[0].path, left.join("folder1"));
-    // Alt+Left = 뒤로(원본 miHistoryBack).
+    // Alt+Left = 뒤로(원본 miHistoryBack): 작업 폴더로 옮기기 전 폴더.
     press(&mut app, &ctx, egui::Key::ArrowLeft, ALT);
-    assert_eq!(app.panes[0].path, left);
-    // 사용자가 바꾼 NDR 단축키는 원본 표보다 먼저: Ctrl+B는 원본 miRecycleBin이지만 historyForward로 바꾸면 앞으로.
-    app.settings.values.insert("KeyboardShortcuts".into(), serde_json::json!({"historyForward": "Ctrl+B"}));
-    press(&mut app, &ctx, egui::Key::B, CTRL);
-    assert_eq!(app.panes[0].path, left.join("folder1"), "the user's NDR binding wins over the original map");
+    assert_eq!(app.panes[0].path, left.join("folder1"));
     // 마지막 드라이브 폴더(SaveDriveFolders): 이동하면 기억하고, 드라이브 루트로 가면 되살린다.
     let drive_root = PathBuf::from(left.to_string_lossy()[..3].to_owned());
     assert_eq!(app.restore_drive_folder(drive_root.clone()), left.join("folder1"));
@@ -292,17 +280,8 @@ fn keyboard_follows_the_csharp_shortcut_engine() {
 }
 
 #[test]
-fn keyboard_side_messages_and_space_follow_csharp_in_english() {
+fn work_folder_messages_in_english() {
     let (root, ctx, mut app) = fixture("en", "en");
-    // 원본 표에 Spacebar가 없으면 Space = ToggleFocusedItemSelection(커서는 그대로).
-    app.settings.set_text("OriginalShortcutMapText", "NEXUSFILESHORTCUT1.0\r\n");
-    app.panes[0].cursor = 1;
-    press(&mut app, &ctx, egui::Key::Space, NONE);
-    assert_eq!((app.panes[0].selected.iter().copied().collect::<Vec<_>>(), app.panes[0].cursor), (vec![1], 1));
-    // Ctrl+Left(copyLeft): 왼쪽 패널에서 누르면 안내만.
-    app.active = 0;
-    press(&mut app, &ctx, egui::Key::ArrowLeft, CTRL);
-    assert_eq!(app.status, "Select items in the right pane to copy to the left.");
     // workSet은 영어 상태 글, 작업 폴더 메뉴의 원본 이름 saveWorkFolder2/openWorkFolder2도 같다.
     app.dispatch("saveWorkFolder2", &ctx);
     assert_eq!(app.status, "Work folder 2 saved");
@@ -313,31 +292,6 @@ fn keyboard_side_messages_and_space_follow_csharp_in_english() {
     assert_eq!(app.panes[0].path, root.join("left"));
     app.dispatch("workOpen:4", &ctx);
     assert_eq!(app.msgboxes.first().map(|m| m.text.clone()), Some("Work folder 5 is not set.".to_owned()));
-    fs::remove_dir_all(root).unwrap();
-}
-
-/// C# HandleKeyboardAsync: 글 입력 칸에 초점이 있어도 뒤로·앞으로·상위·즐겨찾기 메뉴는 받는다. 복사 등은 받지 않는다.
-#[test]
-fn text_focus_still_allows_navigation_shortcuts() {
-    let (root, ctx, mut app) = fixture("textfocus", "ko");
-    let left = root.join("left");
-    app.navigate(0, left.join("folder1"), true);
-    wait(&mut app, &ctx);
-    assert_eq!(app.panes[0].path, left.join("folder1"));
-    // Alt+Left(historyBack)는 글 칸 초점에서도 통한다.
-    assert!(app.text_focus_shortcut(egui::Key::ArrowLeft, ALT, &ctx), "historyBack passes through text focus");
-    wait(&mut app, &ctx);
-    assert_eq!(app.panes[0].path, left);
-    // 상위 폴더(goParent, 보통 Backspace) — 바인딩을 명시해 확인.
-    app.navigate(0, left.join("folder1"), true);
-    wait(&mut app, &ctx);
-    app.settings.values.insert("KeyboardShortcuts".into(), serde_json::json!({"goParent": "Alt+Up"}));
-    assert!(app.text_focus_shortcut(egui::Key::ArrowUp, ALT, &ctx), "goParent passes through text focus");
-    wait(&mut app, &ctx);
-    assert_eq!(app.panes[0].path, left);
-    // 복사(copy, Ctrl+C)는 글 칸 초점에서 통하지 않는다(C#의 !textInputFocused 가드).
-    app.settings.values.insert("KeyboardShortcuts".into(), serde_json::json!({"copy": "Ctrl+C"}));
-    assert!(!app.text_focus_shortcut(egui::Key::C, CTRL, &ctx), "copy is blocked while a text field is focused");
     fs::remove_dir_all(root).unwrap();
 }
 

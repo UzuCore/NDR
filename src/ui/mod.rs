@@ -302,11 +302,10 @@ fn parent_item_for(pane: &Pane) -> Option<Entry> {
     let modified = std::fs::metadata(&pane.path).and_then(|m| m.modified()).ok();
     Some(Entry::parent_item(parent.to_path_buf(), modified))
 }
-/// C# QuickSearchState. 스킨 테마는 원본 TNXCustomFileListView 찾는 글(+0x3e0)로 쓴다.
+/// 원본 TNXCustomFileListView 빠른 찾기의 찾는 글(+0x3e0).
 #[derive(Default)]
 struct TypedSearch {
     query: String,
-    last_input: Option<Instant>,
     /// 원본 빠른 찾기가 옮긴 커서. 다른 길(화살표·누르기)로 커서가 바뀌면 찾는 글을 지운다(원본 ArrowKey·MouseDown).
     cursor: Option<usize>,
     /// 원본 WMIMEComposition(0x7d584c)의 조합 중 표시(+0x3dd): 조합을 시작하기 전의 찾는 글.

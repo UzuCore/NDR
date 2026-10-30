@@ -7,9 +7,6 @@
 //! 차이(HANDOFF): 글 입력 칸에 초점이 있으면 목록 글쇠를 하나도 받지 않는다(C#은 뒤로·앞으로 등 몇 개를 받는다). F10(폴더 선택 창)은 보류.
 use super::remote_window::wpf_key;
 use super::*;
-use ndr::shortcut_bindings::{self as bindings, Modifiers as KeyMods};
-
-const PANEL_SCOPE: &str = "파일 패널";
 
 impl App {
     /// 원본 주 창은 글쇠를 늘 목록(TNXCustomFileListView)이 받는다(단추는 TabStop 없음). egui는 Tab이나 화살표로 단추에 글쇠 초점을
@@ -68,19 +65,14 @@ impl App {
         for (original, shift) in std::mem::take(&mut self.pending_numpad) {
             self.run_original_shortcut(&original, shift, ctx);
         }
-        // C# HandleKeyboardAsync: 글 입력 칸에 초점이 있어도 historyBack/Forward/goParent/favoritesMenu는 받는다
-        // (이 넷은 !textInputFocused 가드 없이 먼저 검사된다).
+        // 원본 FormShortCut(0x42b36c)은 파일 목록에 초점이 있을 때만 단축키를 본다: 글 입력 칸에 초점이 있으면 목록 글쇠를 받지 않는다.
         if ctx.wants_keyboard_input() {
-            if let Some((key, modifiers)) = pressed_key(ctx) {
-                self.text_focus_shortcut(key, modifiers, ctx);
-            }
             return;
         }
         // 원본 KeyDown(0x7d7338) → ArrowKey의 [ ]가 먼저, 그다음 WMChar의 빠른 찾기(같은 글자도 받는다).
         self.bracket_keys(ctx);
-        // 스킨 테마: 원본 TNXCustomFileListView 빠른 찾기(WMChar 0x7d5a18 → QuickSearch 0x7d5f9c). C# 테마: C# 판.
-        let typed = if self.skin_active() { self.original_typed_search(ctx) } else { self.typed_search_input(ctx) };
-        if typed {
+        // 원본 TNXCustomFileListView 빠른 찾기(WMChar 0x7d5a18 → QuickSearch 0x7d5f9c).
+        if self.original_typed_search(ctx) {
             return;
         }
         let pressed = pressed_key(ctx);
@@ -110,27 +102,7 @@ impl App {
         self.status = if self.language == "ko" { format!("작업 폴더 {} 저장됨", index + 1) } else { format!("Work folder {} saved", index + 1) };
     }
 
-    /// C#에서 글 입력 칸이 초점을 가져도 통하는 단축키(뒤로·앞으로·상위 폴더·즐겨찾기 메뉴)만. 처리했으면 글쇠를 소비한다.
-    pub(super) fn text_focus_shortcut(&mut self, key: egui::Key, modifiers: egui::Modifiers, ctx: &egui::Context) -> bool {
-        let Some(name) = wpf_key(key) else { return false };
-        let mods = KeyMods { ctrl: modifiers.ctrl, alt: modifiers.alt, shift: modifiers.shift };
-        let m = |app: &App, id: &str| bindings::matches(&app.settings, id, &name, mods);
-        for (id, command) in [("historyBack", "back"), ("historyForward", "forward"), ("goParent", "goParent"), ("favoritesMenu", "favoritesMenu")] {
-            if m(self, id) {
-                self.dispatch(command, ctx);
-                return true;
-            }
-        }
-        false
-    }
-
-    /// 사용자가 KeyboardShortcuts로 바꿔 둔 NDR 글쇠가 이 글쇠와 맞는가(C# UserShortcutOverrideMatches).
-    fn user_override_matches(&self, key: &str, modifiers: KeyMods) -> bool {
-        let Some(configured) = self.settings.values.get("KeyboardShortcuts").and_then(|v| v.as_object()) else { return false };
-        bindings::definitions().iter().any(|d| configured.contains_key(&d.id) && bindings::matches(&self.settings, &d.id, key, modifiers))
-    }
-
-    /// 원본 단축키 표(shortcut.ini)로 고른 메뉴 항목·내부 명령. None이면 NDR 단축키로 넘긴다.
+    /// 원본 단축키 표(shortcut.ini)로 고른 메뉴 항목·내부 명령. None이면 넘긴다.
     fn original_shortcut(&mut self, key: egui::Key, modifiers: egui::Modifiers, ctx: &egui::Context) -> bool {
         let custom = self.settings.values.get("OriginalShortcutMapText").and_then(|v| v.as_str());
         let shortcuts = compat::ShortcutMap::parse(custom);
@@ -197,11 +169,10 @@ impl App {
         self.original_internal(original, ctx)
     }
 
-    /// 한 번 눌린 글쇠를 C# 순서로 처리한다. 처리했으면 true.
+    /// 한 번 눌린 글쇠를 원본 차례로 처리한다: 원본 설정 esckey(Esc 동작)·hanshdrive(영어가 아닌 입력 언어의 Shift+글자 드라이브),
+    /// 그다음 원본 FormShortCut(단축키 표, 기능키 표). 처리했으면 true.
     pub(super) fn shortcut_key(&mut self, key: egui::Key, modifiers: egui::Modifiers, ctx: &egui::Context) -> bool {
         let Some(name) = wpf_key(key) else { return false };
-        let mods = KeyMods { ctrl: modifiers.ctrl, alt: modifiers.alt, shift: modifiers.shift };
-        let ko = self.language == "ko";
         if key == egui::Key::Escape {
             match self.settings.values.get("EscapeKeyAction").and_then(|v| v.as_i64()) {
                 Some(0) => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
@@ -214,7 +185,7 @@ impl App {
             return true;
         }
         // UseAlternateDriveHandling: 영어가 아닌 입력 언어에서 Shift+글자 = 그 드라이브(마지막 폴더 복원).
-        if mods == (KeyMods { shift: true, ..Default::default() })
+        if modifiers.shift && !(modifiers.ctrl || modifiers.alt)
             && self.settings.flag("UseAlternateDriveHandling", false)
             && name.len() == 1
             && name.as_bytes()[0].is_ascii_uppercase()
@@ -226,152 +197,18 @@ impl App {
                 return true;
             }
         }
-        if !self.user_override_matches(&name, mods) && self.original_shortcut(key, modifiers, ctx) {
+        // 원본 FormShortCut(0x42b36c): 메뉴 항목·내부 명령 단축키(shortcut.ini 표, 메뉴 IsShortCut)가 먼저.
+        if self.original_shortcut(key, modifiers, ctx) {
             return true;
         }
-        let m = |app: &App, id: &str| bindings::matches(&app.settings, id, &name, mods);
-        for (id, command) in [("historyBack", "back"), ("historyForward", "forward"), ("goParent", "goParent")] {
-            if m(self, id) {
-                self.dispatch(command, ctx);
-                return true;
-            }
-        }
-        if m(self, "addressEdit") {
-            self.begin_address_edit(self.active, ctx);
+        // 그다음 기능키 표([FuncKey]: F1~F12와 TfPreferences 기능키 목록의 Ctrl+F1~F11 "^F1"~"^F11", FUN_0047cc18 → FUN_0044381c).
+        if !(modifiers.ctrl || modifiers.alt || modifiers.shift) && name.starts_with('F') && name[1..].parse::<u8>().is_ok_and(|n| (1..=12).contains(&n)) && self.invoke_function_key(&name, ctx) {
             return true;
         }
-        for id in ["copy", "cut", "paste"] {
-            if m(self, id) {
-                self.dispatch(id, ctx);
-                return true;
-            }
-        }
-        if !(mods.ctrl || mods.alt || mods.shift) && name.starts_with('F') && name[1..].parse::<u8>().is_ok_and(|n| (1..=12).contains(&n)) && self.invoke_function_key(&name, ctx) {
-            return true;
-        }
-        // 원본 [FuncKey]의 "^F1"~"^F11"(TfPreferences 기능키 목록의 Ctrl+F1~F11): 지정이 있으면 그것을 실행한다.
-        if mods.ctrl && !(mods.alt || mods.shift) && name.starts_with('F') && name[1..].parse::<u8>().is_ok_and(|n| (1..=11).contains(&n)) && self.invoke_function_key(&format!("^{name}"), ctx) {
-            return true;
-        }
-        for (id, command) in [
-            ("lastDestination", "goLastDestination"),
-            ("copyToFolder", "copyToFolder"),
-            ("moveToFolder", "moveToFolder"),
-        ] {
-            if m(self, id) {
-                self.dispatch(command, ctx);
-                return true;
-            }
-        }
-        // 왼쪽/오른쪽 패널로 복사·이동: 이미 그쪽 패널이면 안내만.
-        for (id, side, command, korean, english) in [
-            ("copyLeft", 0, "copyToOther", "오른쪽 패널에서 왼쪽 방향으로 복사할 항목을 선택하세요.", "Select items in the right pane to copy to the left."),
-            ("copyRight", 1, "copyToOther", "왼쪽 패널에서 오른쪽 방향으로 복사할 항목을 선택하세요.", "Select items in the left pane to copy to the right."),
-            ("moveLeft", 0, "moveToOther", "오른쪽 패널에서 왼쪽 방향으로 이동할 항목을 선택하세요.", "Select items in the right pane to move to the left."),
-            ("moveRight", 1, "moveToOther", "왼쪽 패널에서 오른쪽 방향으로 이동할 항목을 선택하세요.", "Select items in the left pane to move to the right."),
-        ] {
-            if m(self, id) {
-                if self.active == side {
-                    self.status = if ko { korean } else { english }.into();
-                } else {
-                    self.dispatch(command, ctx);
-                }
-                return true;
-            }
-        }
-        for (ids, command) in [
-            (&["deleteAltD"][..], "deleteRecycle"),
-            (&["shredShiftAltDelete", "shredShiftAltD"][..], "shred"),
-            (&["advancedRename"][..], "advancedRename"),
-            (&["extractSelected"][..], "extractSelected"),
-            (&["autoExtract"][..], "extractAuto"),
-        ] {
-            if ids.iter().any(|id| m(self, id)) {
-                self.dispatch(command, ctx);
-                return true;
-            }
-        }
-        if m(self, "cycleSelection") {
-            self.cycle_selection(mods.shift);
-            return true;
-        }
-        if key == egui::Key::Space && mods == KeyMods::default() {
-            self.toggle_focused_selection();
-            return true;
-        }
-        if m(self, "favoritesMenu") {
-            self.dispatch("favoritesMenu", ctx);
-            return true;
-        }
-        if m(self, "shortcutsHelp") {
-            self.dispatch("shortcuts", ctx);
-            return true;
-        }
-        for (ids, command) in [
-            (&["rename"][..], "rename"),
-            (&["copyToOther"][..], "copyToOther"),
-            (&["moveToOther"][..], "moveToOther"),
-            (&["refreshF5", "refreshCtrlR"][..], "refresh"),
-            (&["batchRename"][..], "advancedRename"),
-            (&["newFolder"][..], "newFolder"),
-        ] {
-            if ids.iter().any(|id| m(self, id)) {
-                self.dispatch(command, ctx);
-                return true;
-            }
-        }
-        if m(self, "deleteF8") || m(self, "deleteKey") {
-            // C# DeleteAsync(side, UseRecycleBin).
-            let recycle = self.settings.flag("UseRecycleBin", true);
-            self.delete_items(recycle);
-            return true;
-        }
-        if m(self, "deletePermanent") {
-            self.dispatch("deletePermanent", ctx);
-            return true;
-        }
-        if m(self, "openWithParameters") {
-            self.dispatch("openWithParameters", ctx);
-            return true;
-        }
-        if m(self, "open") && !self.panes[self.active].entries.is_empty() {
-            self.dispatch("open", ctx);
-            return true;
-        }
-        for (id, command) in [("newTab", "newTab"), ("closeTab", "closeTab")] {
-            if m(self, id) {
-                self.dispatch(command, ctx);
-                return true;
-            }
-        }
-        if m(self, "focusSearch") {
-            ctx.memory_mut(|memory| memory.request_focus(egui::Id::new("ndr-toolbar-query")));
-            return true;
-        }
-        if m(self, "selectAll") {
-            self.dispatch("selectAll", ctx);
-            return true;
-        }
-        let action = bindings::definitions().into_iter().find(|d| !d.action.is_empty() && d.scope == PANEL_SCOPE && bindings::matches(&self.settings, &d.id, &name, mods)).map(|d| d.action);
-        if let Some(action) = action {
-            self.shortcut_action(action, ctx);
+        if modifiers.ctrl && !(modifiers.alt || modifiers.shift) && name.starts_with('F') && name[1..].parse::<u8>().is_ok_and(|n| (1..=11).contains(&n)) && self.invoke_function_key(&format!("^{name}"), ctx) {
             return true;
         }
         false
-    }
-
-    /// C# ExecuteShortcutActionAsync.
-    fn shortcut_action(&mut self, action: &str, ctx: &egui::Context) {
-        match action {
-            "findNext" => self.find_next(),
-            "filterOrInstall" => {
-                let pane = &self.panes[self.active];
-                let archive_selected = pane.archive.is_none()
-                    && self.target_entries(self.active).iter().any(|e| !e.is_dir && ndr::archive::archive_format(&e.path).is_some());
-                if archive_selected { self.dispatch("archiveInstall", ctx) } else { self.dispatch("filter", ctx) }
-            }
-            other => self.dispatch(other, ctx),
-        }
     }
 
     /// ExecuteMenuCommandAsync의 favoriteOpen:/workOpen:/workSet:/column:. 처리했으면 true.

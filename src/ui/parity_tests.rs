@@ -627,7 +627,7 @@ fn original_quick_search_follows_the_file_list_view() {
     assert!(first == "alpha.txt" || first == "Alphabet.doc");
     type_text(&mut app, &ctx, "lphab");
     assert_eq!(cursor_name(&app), "Alphabet.doc");
-    app.typed_search[0].last_input = Some(Instant::now() - Duration::from_secs(10));
+    thread::sleep(Duration::from_millis(1200));
     type_text(&mut app, &ctx, "e");
     assert_eq!(app.typed_search[0].query, "alphabe", "no timeout: the text keeps growing");
     type_text(&mut app, &ctx, "z");
