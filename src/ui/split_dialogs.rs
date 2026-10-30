@@ -322,23 +322,16 @@ impl App {
 
     /// C# JoinPartsAsync: 선택한 파일들(하나면 번호 조각 전체). 이름이 상대 경로면 현재 폴더에 붙인다. 같은 이름이 있으면
     /// (덮어쓰기에 동의하지 않았으면) 합치지 않고 알린다.
+    /// 원본 miJoinFileClick(0x43bec8): 활성 패널이 로컬 모드이고 데이터 항목(표시, 없으면 커서 항목, FUN_00485bbc)이 있을 때만
+    /// TfFileJoin을 연다(아니면 아무것도 하지 않는다). lbFiles는 그 항목 그대로, 확인하면 표시를 마지막 선택에 남기고 지운다.
     pub(super) fn join_command(&mut self) {
         let i = self.active;
-        let selected: Vec<PathBuf> = if self.panes[i].archive.is_some() { vec![] } else { self.panes[i].targets().into_iter().filter(|p| !p.is_dir()).collect() };
-        if selected.is_empty() {
-            return self.notice("합칠 파일을 하나 이상 선택하세요.", "Select at least one file to join.");
+        if self.panes[i].archive.is_some() || self.panes[i].remote.is_some() {
+            return;
         }
-        let mut inputs = selected.clone();
-        if selected.len() == 1 {
-            let parts = ndr::split::find_numbered_parts(&selected[0]);
-            if !parts.is_empty() {
-                if !ndr::split::has_continuous_numbered_parts(&parts) {
-                    let title = self.tr("파일 합치기", "Join Files").into_owned();
-                    let text = self.tr("분할 파일 번호가 빠져 있거나 001부터 시작하지 않습니다.", "A part number is missing or the parts do not start at 001.").into_owned();
-                    return self.system_box(&title, &text, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
-                }
-                inputs = parts;
-            }
+        let inputs: Vec<PathBuf> = self.panes[i].targets().into_iter().filter(|p| !p.is_dir()).collect();
+        if inputs.is_empty() {
+            return;
         }
         let base = self.panes[i].path.clone();
         let mut form = JoinForm { files: vec![], selected: None, join_text: false, name: ndr::split::suggest_joined_file_name(&inputs[0]), base: base.clone(), overwrite_confirmed: None };
@@ -348,6 +341,8 @@ impl App {
         let title = self.language_pack.text("formFileJoin.Form.Caption", "Join Files");
         self.push_original_dialog(title.clone(), DialogKind::Join(form), move |app, result, _| {
             let DialogResult::Join(Some(options)) = result else { return };
+            // 원본: 확인하면 CopySelection(마지막 선택) + ClearSelection.
+            app.original_take_pane_marks(i);
             let typed = Path::new(&options.name);
             let destination = std::path::absolute(if typed.is_absolute() { typed.to_path_buf() } else { base.join(typed) }).unwrap_or_else(|_| base.join(typed));
             if (destination.is_file() && !options.overwrite_confirmed) || destination.is_dir() {

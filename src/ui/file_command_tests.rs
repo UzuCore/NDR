@@ -572,9 +572,9 @@ fn split_and_join_windows_follow_the_csharp_flows() {
         assert!(left.join(part).is_file(), "{part}");
     }
     assert_eq!(app.status, "3개 조각 파일을 만들었습니다.");
-    // Join from the first part: every numbered part, the original name from the .crc file.
-    app.panes[0].selected.clear();
-    app.panes[0].cursor = row(&app, 0, "big.001");
+    // 원본 miJoinFileClick: 표시한 항목(없으면 커서 항목)이 lbFiles. 이름은 .crc 파일의 원래 이름.
+    let mark_parts = |app: &mut App| app.panes[0].selected = ["big.001", "big.002", "big.003"].iter().map(|n| row(app, 0, n)).collect();
+    mark_parts(&mut app);
     app.dispatch("join", &ctx);
     match &app.original_dialogs[0].kind {
         DialogKind::Join(form) => {
@@ -587,18 +587,19 @@ fn split_and_join_windows_follow_the_csharp_flows() {
     app.submit_split_or_join(&ctx);
     assert!(app.msgboxes[0].text.starts_with("같은 이름의 파일이 이미 있어 합치지 않았습니다."), "an existing result is never replaced");
     app.answer_message_box(1, &ctx);
+    mark_parts(&mut app);
     app.dispatch("join", &ctx);
     app.edit_dialog_kind(|kind| if let DialogKind::Join(form) = kind { form.name = "joined.bin".into() });
     app.submit_split_or_join(&ctx);
+    assert!(app.panes[0].selected.is_empty(), "OK takes the marks (CopySelection + ClearSelection)");
     wait_job(&mut app, &ctx);
     assert_eq!(fs::read(left.join("joined.bin")).unwrap(), payload);
     assert_eq!(app.status, "3개 파일을 합쳤습니다.");
-    fs::remove_file(left.join("big.002")).unwrap();
-    app.refresh(0);
-    wait_listing(&mut app, &ctx);
-    app.panes[0].cursor = row(&app, 0, "big.001");
+    // 표시도 커서 항목도 없으면(폴더) 아무것도 하지 않는다.
+    app.panes[0].selected.clear();
+    app.panes[0].cursor = row(&app, 0, "folder1");
     app.dispatch("join", &ctx);
-    assert_eq!(app.msgboxes[0].text, "분할 파일 번호가 빠져 있거나 001부터 시작하지 않습니다.");
+    assert!(app.original_dialogs.is_empty() && app.msgboxes.is_empty());
     fs::remove_dir_all(root).unwrap();
 }
 
