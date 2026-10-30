@@ -3,7 +3,7 @@
 //! tbMainMenu(0,0 657×22: 폴더·트리·즐겨찾기·바탕 화면·문서·그림·음악·비디오·폴더 찾기), pTop(0,22 657×29: lAddress(3,7),
 //! cbAddress(49,4 449×21), btnOk(511,4 70×22, Default), btnCancel(587,4 70×22)), pMain(0,51: pDrives(1,1 43폭), Shape1(44), TreeView(45,1)),
 //! bbFunctions(0,608 657×19).
-//! 차이(HANDOFF): 폴더·드라이브 그림은 원본 ImageList 대신 그린 모양. 드라이브 단추 그림 없음. 즐겨찾기·폴더 찾기·이름 바꾸기·새 폴더·삭제는 아직.
+//! 차이(HANDOFF): 폴더·드라이브 그림은 원본 ImageList 대신 그린 모양. 드라이브 단추 그림 없음. 창 크기·위치 저장(TntFormClose)은 아직.
 use super::original_dialogs::{DialogKind, DialogResult};
 use super::*;
 use ndr::folder_tree::{self, ScanOptions, Tree};
@@ -66,6 +66,46 @@ pub(super) struct FolderTreeForm {
     pub rows_visible: usize,
     /// 경로의 트리 뿌리(드라이브 뿌리, SystemHooks.tree_root). 시험은 가짜 뿌리.
     pub root_of: fn(&str) -> String,
+    /// pmFavorites(FUN_004259e0): 비지 않은 즐겨찾기 칸(번호, 이름, 경로). 번호 0~9 = Shift+F1~F10, 10~19 = Shift+Ctrl+F1~F10.
+    pub favorites: Vec<(usize, String, String)>,
+    /// tbFavorites 드롭다운(F11)이 열려 있다.
+    pub favorites_open: bool,
+    /// TfSearchFolder(Ctrl+F, tbSearchClick 0x42621c).
+    pub search: Option<SearchFolder>,
+}
+
+/// 원본 TfSearchFolder(ClientWidth 545 × ClientHeight 226): cbSearch(4,8 441×21), btnSearch(462,6 75×25), lbResult(4,37 533×181).
+#[derive(Clone, Debug, Default)]
+pub(super) struct SearchFolder {
+    pub query: String,
+    pub results: Vec<String>,
+    pub selected: Option<usize>,
+    /// 결과 목록에 초점(아니면 cbSearch).
+    pub list_focus: bool,
+    pub first_frame: bool,
+}
+
+impl SearchFolder {
+    /// btnSearchClick 0x452204: 글이 있으면 목록을 비우고, 트리의 모든 항목(앞 순서)에서 이름에 글이 든(StrStrIW) 항목의 전체 경로를 넣는다.
+    /// 하나라도 있으면 첫 줄을 고르고 목록에 초점.
+    pub(super) fn run(&mut self, tree: &Tree) {
+        if self.query.is_empty() {
+            return;
+        }
+        self.results.clear();
+        let needle = self.query.to_lowercase();
+        let mut at = tree.root;
+        while let Some(i) = at {
+            if tree.items[i].name.to_lowercase().contains(&needle) {
+                self.results.push(tree.full_path(i));
+            }
+            at = tree.next_any(i);
+        }
+        if !self.results.is_empty() {
+            self.selected = Some(0);
+            self.list_focus = true;
+        }
+    }
 }
 
 /// 창이 App에 맡기는 일.
@@ -143,6 +183,9 @@ impl FolderTreeForm {
             first_frame: true,
             rows_visible: 20,
             root_of: drive_root,
+            favorites: vec![],
+            favorites_open: false,
+            search: None,
         }
     }
 
@@ -769,6 +812,12 @@ fn hit(ui: &egui::Ui, form: &FolderTreeForm, metrics: &Metrics, font: &egui::Fon
     (item_hit, button_hit)
 }
 
+/// F1~F10의 번호.
+fn function_number(key: egui::Key) -> Option<usize> {
+    use egui::Key::*;
+    [F1, F2, F3, F4, F5, F6, F7, F8, F9, F10].iter().position(|k| *k == key).map(|i| i + 1)
+}
+
 /// TNXButtonBar bbFunctions: "F2=이름 바꾸기;…" 칸(HeadColor 파랑 = 글쇠, 글 = 기능).
 fn function_bar(ui: &mut egui::Ui, rect: egui::Rect, items: &[(String, String)]) -> Option<usize> {
     let mut clicked = None;
@@ -866,6 +915,26 @@ pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, langu
         });
         x += width + 2.0;
     }
+    // tbFavorites(82, DropdownMenu pmFavorites, Hint F11).
+    let favorites_caption = plain("ToolButton.tbFavorites", "Fa&vorites");
+    let favorites_button = at(82.0, 0.0, text_width(ui, &favorites_caption, &menu_font) + 22.0, 22.0);
+    let favorites_response = ui.interact(favorites_button, egui::Id::new("ndr-tree-favorites"), egui::Sense::click()).on_hover_text("F11");
+    if favorites_response.hovered() || form.favorites_open {
+        ui.painter().rect_filled(favorites_button, 2.0, visuals.widgets.hovered.weak_bg_fill);
+    }
+    ui.painter().text(favorites_button.left_center() + egui::vec2(6.0, 0.0), egui::Align2::LEFT_CENTER, format!("{favorites_caption} ▾"), menu_font.clone(), visuals.text_color());
+    if favorites_response.clicked() && !scanning && input {
+        form.favorites_open = !form.favorites_open;
+    }
+    // tbSearch(344, Hint Ctrl+F): tbSearchClick.
+    let search_caption = plain("ToolButton.tbSearch", "Search");
+    let search_button = at(344.0, 0.0, text_width(ui, &search_caption, &menu_font) + 14.0, 22.0);
+    let search_response = ui.interact(search_button, egui::Id::new("ndr-tree-search"), egui::Sense::click()).on_hover_text("Ctrl+F");
+    if search_response.hovered() {
+        ui.painter().rect_filled(search_button, 2.0, visuals.widgets.hovered.weak_bg_fill);
+    }
+    ui.painter().text(search_button.center(), egui::Align2::CENTER_CENTER, &search_caption, menu_font.clone(), visuals.text_color());
+    let mut open_search = search_response.clicked() && !scanning && input;
     // tbDesktop·tbMyDoc·tbMyPic·tbMyMusic·tbMyVideo(Left 166~302, 34 간격): SpecialFolderClick.
     let special = [("Hint.tbDesktop", "Desktop (Ctrl+D)", "desktop"), ("Hint.tbMyDoc", "Documents (Ctrl+G)", "documents"), ("Hint.tbMyPic", "Pictures (Ctrl+Q)", "pictures"), ("Hint.tbMyMusic", "Music (Ctrl+S)", "music"), ("Hint.tbMyVideo", "Videos (Ctrl+O)", "videos")];
     let mut special_click = None;
@@ -999,6 +1068,133 @@ pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, langu
             }
         });
     }
+    // pmFavorites: 이름과 단축키(오른쪽). 고르면 FUN_00425b54 = SetPath(경로).
+    let mut picked_favorite = None;
+    if form.favorites_open {
+        let menu = egui::Area::new(egui::Id::new("ndr-tree-favorites-menu")).order(egui::Order::Foreground).fixed_pos(favorites_button.left_bottom()).show(ui.ctx(), |ui| {
+            egui::Frame::menu(ui.style()).show(ui, |ui| {
+                ui.set_min_width(220.0);
+                if form.favorites.is_empty() {
+                    ui.add_enabled(false, egui::Button::new("-"));
+                }
+                for (slot, name, path) in &form.favorites {
+                    let gesture = if *slot < 10 { format!("Shift+F{}", slot + 1) } else { format!("Shift+Ctrl+F{}", slot - 9) };
+                    if ui.add(egui::Button::new(super::favorites_dialog::access_key(name).0).shortcut_text(gesture)).clicked() {
+                        picked_favorite = Some(path.clone());
+                    }
+                }
+            });
+        });
+        let outside = ui.input(|i| i.pointer.any_pressed()) && !menu.response.contains_pointer() && !favorites_response.contains_pointer();
+        if picked_favorite.is_some() || outside {
+            form.favorites_open = false;
+        }
+    }
+    // TfSearchFolder 창(트리 창 위).
+    let mut search_accept = None;
+    if let Some(search) = form.search.as_mut() {
+        let window = egui::Rect::from_center_size(tree_rect.center(), egui::vec2(545.0, 226.0 + 24.0));
+        ui.painter().rect(window, 2.0, visuals.window_fill(), visuals.window_stroke(), egui::StrokeKind::Inside);
+        let caption = language.raw("formSearchFolder.Form.Caption").unwrap_or_else(|| "Search Folder".into());
+        ui.painter().text(window.left_top() + egui::vec2(8.0, 5.0), egui::Align2::LEFT_TOP, caption, egui::FontId::proportional(13.0), visuals.strong_text_color());
+        let body = egui::Rect::from_min_size(window.min + egui::vec2(0.0, 24.0), egui::vec2(545.0, 226.0));
+        let put = |x: f32, y: f32, w: f32, h: f32| egui::Rect::from_min_size(body.min + egui::vec2(x, y), egui::vec2(w, h));
+        let edit_id = egui::Id::new("ndr-tree-search-text");
+        let edit = ui.put(put(4.0, 8.0, 441.0, 21.0), egui::TextEdit::singleline(&mut search.query).id(edit_id));
+        if search.first_frame {
+            edit.request_focus();
+            search.first_frame = false;
+        }
+        if edit.has_focus() {
+            search.list_focus = false;
+        }
+        // 목록 글쇠는 이 화면 시작부터 목록에 초점이 있을 때만(찾기를 부른 Enter·목록으로 옮긴 ↓를 목록이 다시 받지 않게).
+        let list_keys = search.list_focus && !edit.has_focus() && !edit.lost_focus();
+        let search_label = super::favorites_dialog::access_key(&language.raw("formSearchFolder.Caption.btnSearch").unwrap_or_else(|| "Search".into())).0;
+        let mut run = ui.put(put(462.0, 6.0, 75.0, 25.0), egui::Button::new(search_label)).clicked();
+        // cbSearchKeyPress 0x4523bc: Enter = 찾기. cbSearchKeyDown 0x452bcc: ↓ = 목록으로.
+        if edit.has_focus() || edit.lost_focus() {
+            if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                run = true;
+            }
+            if ui.input(|i| i.key_pressed(egui::Key::ArrowDown)) {
+                search.list_focus = true;
+                ui.memory_mut(|m| m.surrender_focus(edit_id));
+                if search.selected.is_none() && !search.results.is_empty() {
+                    search.selected = Some(0);
+                }
+            }
+        }
+        if run {
+            search.run(&form.tree);
+            if search.list_focus {
+                ui.memory_mut(|m| m.surrender_focus(edit_id));
+            }
+        }
+        // lbResultDrawItem 0x452660: 줄 높이 = 글 높이 + 6, 부모 폴더(회색) + 이름(검정), 고른 줄은 짙은 바탕에 밝은 글.
+        let list = put(4.0, 37.0, 533.0, 181.0);
+        ui.painter().rect(list, 0.0, Color32::WHITE, egui::Stroke::new(1.0, Color32::from_gray(0x90)), egui::StrokeKind::Inside);
+        let row_height = 19.0;
+        let list_response = ui.interact(list, egui::Id::new("ndr-tree-search-list"), egui::Sense::click());
+        let first = search.selected.map(|s| s.saturating_sub(((list.height() / row_height) as usize).saturating_sub(1))).unwrap_or(0);
+        let painter = ui.painter().with_clip_rect(list.shrink(1.0));
+        for (n, path) in search.results.iter().enumerate().skip(first) {
+            let top = list.top() + 1.0 + (n - first) as f32 * row_height;
+            if top > list.bottom() {
+                break;
+            }
+            let row = egui::Rect::from_min_size(egui::pos2(list.left() + 1.0, top), egui::vec2(list.width() - 2.0, row_height));
+            let selected = search.selected == Some(n);
+            if selected {
+                painter.rect_filled(row, 0.0, Color32::from_rgb(0x46, 0x46, 0x46));
+            }
+            let (folder, name) = match path.trim_end_matches('\\').rfind('\\') {
+                Some(i) => (&path[..=i], &path[i + 1..]),
+                None => ("", path.as_str()),
+            };
+            let dim = if selected { Color32::from_gray(0xC0) } else { Color32::from_gray(0x80) };
+            let strong = if selected { Color32::WHITE } else { Color32::BLACK };
+            let drawn = painter.text(row.left_center() + egui::vec2(4.0, 0.0), egui::Align2::LEFT_CENTER, folder, font.clone(), dim);
+            painter.text(egui::pos2(drawn.right() + 2.0, row.center().y), egui::Align2::LEFT_CENTER, name, font.clone(), strong);
+        }
+        if let Some(pos) = list_response.interact_pointer_pos().filter(|_| list_response.clicked() || list_response.double_clicked()) {
+            let n = first + ((pos.y - list.top() - 1.0) / row_height).floor().max(0.0) as usize;
+            if n < search.results.len() {
+                search.selected = Some(n);
+                search.list_focus = true;
+                ui.memory_mut(|m| m.surrender_focus(edit_id));
+                if list_response.double_clicked() {
+                    search_accept = Some(search.results[n].clone());
+                }
+            }
+        }
+        // lbResultKeyDown 0x4523d8: Enter = 그 경로로 닫기, ↑↓ 이동.
+        if list_keys {
+            for (key, _) in &keys {
+                match key {
+                    egui::Key::ArrowDown => search.selected = search.selected.map(|s| (s + 1).min(search.results.len().saturating_sub(1))).or(Some(0)).filter(|_| !search.results.is_empty()),
+                    egui::Key::ArrowUp => search.selected = search.selected.map(|s| s.saturating_sub(1)),
+                    egui::Key::Home => search.selected = (!search.results.is_empty()).then_some(0),
+                    egui::Key::End => search.selected = search.results.len().checked_sub(1),
+                    egui::Key::Enter => {
+                        if let Some(s) = search.selected {
+                            search_accept = search.results.get(s).cloned();
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        // FormKeyDown 0x4523a0: Esc = 닫기.
+        let close = keys.iter().any(|(k, _)| *k == egui::Key::Escape);
+        if close || search_accept.is_some() {
+            form.search = None;
+        }
+        if let Some(path) = search_accept {
+            form.set_path(&path);
+        }
+        return None;
+    }
     if scanning {
         if scan_cancel || keys.iter().any(|(k, _)| *k == egui::Key::Escape) {
             if let Some(scan) = &form.scan {
@@ -1010,11 +1206,25 @@ pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, langu
     if let Some(drive) = picked_drive {
         form.set_drive(&drive);
     }
+    if let Some(path) = picked_favorite {
+        form.set_path(&path);
+    }
     let tree_keys = form.tree_focus && !address.has_focus();
     for (key, m) in keys {
         let plain_key = !m.alt && !m.ctrl;
         match key {
+            egui::Key::Escape if form.favorites_open => form.favorites_open = false,
             egui::Key::Escape => action = Some(FolderTreeAction::Cancel),
+            // TntFormShortCut 0x425704: F11 = tbFavorites 아래에 pmFavorites, Ctrl+F = tbSearchClick.
+            egui::Key::F11 if plain_key && !m.shift => form.favorites_open = !form.favorites_open,
+            egui::Key::F if m.ctrl && !m.alt => open_search = true,
+            // pmFavorites 단축키(FUN_004259e0): Shift+F1~F10 = 0~9번, Shift+Ctrl+F1~F10 = 10~19번.
+            k if m.shift && !m.alt && function_number(k).is_some() => {
+                let n = function_number(k).unwrap_or(1) - 1 + if m.ctrl { 10 } else { 0 };
+                if let Some((_, _, path)) = form.favorites.iter().find(|(slot, _, _)| *slot == n).cloned() {
+                    form.set_path(&path);
+                }
+            }
             egui::Key::Enter if !m.alt => action = Some(FolderTreeAction::Accept(form.address.clone())),
             egui::Key::Enter if m.alt => menu_action = Some("properties"),
             egui::Key::D if m.alt && !m.ctrl => menu_action = Some(if m.shift { "deletePermanent" } else { "delete" }),
@@ -1078,6 +1288,10 @@ pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, langu
     }
     if ui.input(|i| i.key_pressed(egui::Key::Backspace)) && tree_keys && !form.find.is_empty() {
         form.find.pop();
+    }
+    if open_search {
+        form.favorites_open = false;
+        form.search = Some(SearchFolder { first_frame: true, ..Default::default() });
     }
     if let Some(n) = bar_click {
         // bbFunctionsClick 0x4258a0: 0 이름 바꾸기, 1 다음 찾기, 2 전체 최신, 3 하위만, 4 새 폴더, 5 등록정보.
@@ -1150,6 +1364,11 @@ impl App {
         }
         let mut form = FolderTreeForm::new(&self.settings, &self.profile, drives, opened);
         form.root_of = self.system.tree_root;
+        // FUN_004259e0: 비지 않은 칸(이름·경로가 다 있는 칸)만.
+        let names = self.settings.strings("FavoriteNames");
+        form.favorites = self.settings.strings("Favorites").into_iter().enumerate().take(20)
+            .filter_map(|(i, path)| names.get(i).filter(|n| !n.is_empty() && !path.is_empty()).map(|n| (i, n.clone(), path)))
+            .collect();
         form.set_path(&initial.to_string_lossy());
         let title = caption.unwrap_or_else(|| super::favorites_dialog::access_key(&self.language_pack.text("formFolderTree.Form.Caption", "Folder Tree")).0);
         self.push_original_dialog(title, DialogKind::FolderTree(Box::new(form)), move |app, result, ctx| {

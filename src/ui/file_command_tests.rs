@@ -1537,6 +1537,8 @@ fn folder_tree_window_follows_the_original_tffoldertree() {
     TREE_ROOT.with(|r| *r.borrow_mut() = drive.clone());
     app.system.tree_root = fake_tree_root;
     let start = drive.join("x").join("a");
+    app.settings.set_strings("Favorites", vec![drive.join("y").to_string_lossy().into_owned()]);
+    app.settings.set_strings("FavoriteNames", vec!["Y".into()]);
     app.navigate(0, start.clone(), false);
     wait_listing(&mut app, &ctx);
     app.active = 0;
@@ -1580,6 +1582,24 @@ fn folder_tree_window_follows_the_original_tffoldertree() {
     assert!(!start.join("renamed").exists());
     assert_eq!(form(&app).1.as_deref(), Some("a"));
     frame(&mut app, &ctx, vec![key(egui::Key::ArrowRight), key(egui::Key::ArrowLeft)]);
+    assert_eq!(form(&app).1.as_deref(), Some("a"));
+    let with = |key: egui::Key, modifiers: egui::Modifiers| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
+    // pmFavorites(FUN_004259e0): Shift+F1 = 0번 즐겨찾기로 SetPath.
+    frame(&mut app, &ctx, vec![with(egui::Key::F1, egui::Modifiers::SHIFT)]);
+    assert_eq!(form(&app).1.as_deref(), Some("y"), "Shift+F1 = favorite 0");
+    // tbSearchClick(Ctrl+F) → TfSearchFolder: Enter = StrStrIW 찾기(모든 항목), 목록 Enter = 그 경로로 SetPath.
+    frame(&mut app, &ctx, vec![with(egui::Key::F, egui::Modifiers::CTRL)]);
+    frame(&mut app, &ctx, vec![]);
+    app.edit_dialog_kind(|kind| if let DialogKind::FolderTree(form) = kind { form.search.as_mut().unwrap().query = "A2".into() });
+    frame(&mut app, &ctx, vec![key(egui::Key::Enter)]);
+    let results = match app.original_dialogs.last().map(|d| &d.kind) {
+        Some(DialogKind::FolderTree(form)) => form.search.as_ref().map(|s| (s.results.clone(), s.selected)),
+        _ => None,
+    };
+    assert_eq!(results, Some((vec![start.join("a2").to_string_lossy().into_owned()], Some(0))));
+    frame(&mut app, &ctx, vec![key(egui::Key::Enter)]);
+    assert_eq!(form(&app).1.as_deref(), Some("a2"), "lbResult Enter = SetPath");
+    frame(&mut app, &ctx, vec![key(egui::Key::ArrowLeft)]);
     assert_eq!(form(&app).1.as_deref(), Some("a"));
     frame(&mut app, &ctx, vec![key(egui::Key::ArrowDown), key(egui::Key::Enter)]);
     assert!(app.original_dialogs.is_empty(), "Enter = btnOk(Default)");

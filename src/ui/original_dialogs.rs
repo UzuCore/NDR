@@ -770,11 +770,13 @@ impl App {
                     favorites_action = super::favorites_dialog::favorites_ui(ui, form, &self.language_pack);
                 }
                 DialogKind::FolderTree(form) => {
-                    // 원본 tmainwndsize(기본 1): 파일 목록 창과 같은 크기. 아니면 657×627.
-                    let size = if self.settings.flag("TreeWindowMatchesMainSize", true) {
-                        egui::vec2((screen.width() - 24.0).max(657.0), (screen.height() - 64.0).max(400.0))
+                    // FUN_00423e00: tmainwndsize면 파일 목록 창 크기, 아니면 tmaximized면 최대화, 아니면 twidth×theight(바깥 크기).
+                    let full = egui::vec2((screen.width() - 24.0).max(657.0), (screen.height() - 64.0).max(400.0));
+                    let size = if self.settings.flag("TreeWindowMatchesMainSize", true) || self.settings.flag("TreeWindowMaximized", false) {
+                        full
                     } else {
-                        egui::vec2(657.0, 627.0)
+                        let number = |key: &str, default: f64| self.settings.values.get(key).and_then(|v| v.as_f64()).unwrap_or(default) as f32;
+                        egui::vec2((number("TreeWindowWidth", 800.0) - 16.0).clamp(400.0, full.x), (number("TreeWindowHeight", 600.0) - 39.0 - 24.0).clamp(300.0, full.y))
                     };
                     let colors = tree_colors.unwrap_or_else(|| super::folder_tree_dialog::TreeColors::read(&self.settings));
                     folder_tree_action = super::folder_tree_dialog::folder_tree_ui(ui, form, &self.language_pack, &colors, size, !waiting, &tree_icons);
