@@ -361,7 +361,7 @@ fn update_check_context_menu_and_folder_sizes_follow_csharp() {
     assert_eq!(chosen, None);
     // 폴더 크기 자동 표시: 보이는 폴더 줄을 그리면 따로 세어 크기 글이 된다.
     fs::write(root.join("left").join("folder").join("x.bin"), vec![0u8; 2048]).unwrap();
-    app.settings.set_flag("LeftAlwaysShowFolderSize", true);
+    app.settings.set_flag("LeftAutoFolderSize", true);
     draw(&mut app, &ctx);
     let folder = root.join("left").join("folder");
     assert!(app.panes[0].folder_sizes.contains_key(&folder), "queued while drawing");

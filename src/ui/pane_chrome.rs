@@ -600,10 +600,12 @@ impl App {
         chosen
     }
 
-    /// C# QueueFolderSizeCalculation: Left/RightAlwaysShowFolderSize이고 로컬 폴더 줄이면 크기를 따로(동시에 둘까지) 센다.
+    /// C# QueueFolderSizeCalculation: Left/RightAutoFolderSize(C# 판에만 있음, 처음 값 꺼짐)이고 로컬 폴더 줄이면 크기를 따로(동시에 둘까지) 센다.
     /// 세는 동안 "…", 끝나면 크기(읽지 못한 곳이 있으면 "≥ 크기"). 새 목록이 오면 멈춘다.
     pub(super) fn queue_folder_size(&mut self, index: usize, row: usize) {
-        if !self.settings.flag(if index == 0 { "LeftAlwaysShowFolderSize" } else { "RightAlwaysShowFolderSize" }, false) {
+        // 고친 것: 원본 alwaysshowsize("항상 파일크기 보기", Left/RightAlwaysShowFolderSize)는 자동 목록에 크기 칸을 늘 두는 것뿐인데(UpdateDisplayAuto 0x390),
+        // C# 판처럼 그 값으로 모든 폴더 크기를 세었다. 폴더 크기 자동 세기는 따로 둔다.
+        if !self.settings.flag(if index == 0 { "LeftAutoFolderSize" } else { "RightAutoFolderSize" }, false) {
             return;
         }
         self.enqueue_folder_size(index, row);

@@ -503,8 +503,8 @@ impl SettingsForm {
             ("RightShowHiddenFiles", "오른쪽 숨김 / 시스템 파일 표시", "Right: show hidden / system files", false),
             ("LeftFolderSortDescending", "왼쪽 폴더 내림차순", "Left folders descending", false),
             ("RightFolderSortDescending", "오른쪽 폴더 내림차순", "Right folders descending", false),
-            ("LeftAlwaysShowFolderSize", "왼쪽 폴더 크기를 목록에 표시", "Left: show folder sizes in the list", false),
-            ("RightAlwaysShowFolderSize", "오른쪽 폴더 크기를 목록에 표시", "Right: show folder sizes in the list", false),
+            ("LeftAutoFolderSize", "왼쪽 폴더 크기를 목록에 표시", "Left: show folder sizes in the list", false),
+            ("RightAutoFolderSize", "오른쪽 폴더 크기를 목록에 표시", "Right: show folder sizes in the list", false),
         ] {
             display.push(check(key, t(ko, korean, english), default));
         }
