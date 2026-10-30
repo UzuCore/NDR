@@ -317,6 +317,22 @@ impl App {
     }
 
     /// C# ToggleFocusedItemSelection: 지금 항목의 표시만 바꾼다(커서는 그대로).
+    /// 원본 패널 OnEnter(FUN_004849c8): 목록이 초점을 받으면(지금 패널) 로컬 패널(FUN_00481948 = 0)이면 그 폴더를
+    /// 프로세스의 지금 폴더로 한다(SetCurrentDirectoryW). 실행하는 프로그램이 이 폴더를 물려받는다. 시험은 프로세스 전체 값이라 건너뛴다.
+    pub(super) fn sync_current_directory(&mut self) {
+        let pane = &self.panes[self.active];
+        if pane.archive.is_some() || pane.remote.is_some() || pane.loading || super::panes::is_drives(&pane.path) {
+            return;
+        }
+        if self.current_directory.as_ref() == Some(&pane.path) {
+            return;
+        }
+        self.current_directory = Some(pane.path.clone());
+        if !cfg!(test) {
+            let _ = std::env::set_current_dir(&pane.path);
+        }
+    }
+
     /// 원본 Select(0x7dc834): 커서 항목의 선택을 뒤집는다. 드라이브 항목(종류 4)·종류 2·".."는 고르지 않는다.
     pub(super) fn toggle_focused_selection(&mut self) {
         let pane = &mut self.panes[self.active];

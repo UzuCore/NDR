@@ -622,6 +622,8 @@ pub struct App {
     pending_numpad: Vec<(String, bool)>,
     /// Apps 글쇠를 눌렀다(지금 패널의 목록 오른쪽 단추 메뉴, 원본 FUN_00484e8c의 글쇠 경로).
     pending_context_key: bool,
+    /// 마지막으로 SetCurrentDirectoryW로 맞춘 폴더(`sync_current_directory`).
+    current_directory: Option<PathBuf>,
     /// 폴더 선택 대화 상자(제목, 처음 폴더). 테스트에서 바꿔 끼운다.
     folder_picker: fn(&str, Option<&Path>) -> Option<PathBuf>,
     /// 원본 miNetwork의 네트워크 폴더 고르기(SHBrowseForFolderW). 시험에서는 바꿔 끼운다.
@@ -879,6 +881,7 @@ impl App {
             auth_pending: Vec::new(),
             pending_numpad: Vec::new(),
             pending_context_key: false,
+            current_directory: None,
             folder_picker: ndr::file_dialogs::browse_folder,
             network_picker: if cfg!(test) { |_, _| None } else { ndr::file_dialogs::browse_network },
             color_picker: if cfg!(test) { |_| None } else { native::choose_color },
@@ -1596,6 +1599,7 @@ impl eframe::App for App {
         }
         self.poll(ctx);
         self.keyboard(ctx);
+        self.sync_current_directory();
         for pane in &mut self.panes {
             pane.drop_drive_marks();
         }

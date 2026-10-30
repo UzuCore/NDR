@@ -236,6 +236,19 @@ fn list_right_click_menu_follows_the_original_context_popup() {
     }
 }
 
+/// 원본 패널 OnEnter(FUN_004849c8): 지금 패널이 로컬 폴더면 그 폴더가 프로세스의 지금 폴더(시험은 기록만 본다).
+#[test]
+fn active_local_pane_becomes_the_current_directory() {
+    let (root, _ctx, mut app) = fixture("cwd", "ko");
+    app.active = 0;
+    app.sync_current_directory();
+    assert_eq!(app.current_directory.as_ref(), Some(&app.panes[0].path));
+    app.active = 1;
+    app.sync_current_directory();
+    assert_eq!(app.current_directory.as_ref(), Some(&app.panes[1].path));
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// 가짜 드라이브 루트(격리 임시 폴더 둘).
 fn fake_drive_roots() -> Vec<PathBuf> {
     ["A", "B"].iter().map(|l| std::env::temp_dir().join(format!("ndr-keys-fake-drive-{l}"))).collect()
