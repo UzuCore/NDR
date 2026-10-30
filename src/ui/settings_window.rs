@@ -293,12 +293,8 @@ fn original_pages(built: Vec<Vec<Row>>, language: &compat::Language, ko: bool) -
         take("DefaultDeleteButton", l("Caption.lDefDelBtn", "Default Button :")),
         take("EscapeKeyAction", l("Caption.lESC", "ESC function:")),
     ];
+    // 원본 gbArchive(외부 압축 프로그램 ARJ·RAR·7Z·ALZ)는 없앴다(사용자 요청: 압축은 늘 동봉 7-Zip).
     let programs = vec![
-        section("GroupBox.gbArchive", "External Archive Programs"),
-        take("Archive:arj", l("Caption.lARJ", "ARJ:")),
-        take("Archive:rar", l("Caption.lRAR", "RAR:")),
-        take("Archive:7z", l("Caption.l7Z", "7Z:")),
-        take("Archive:alz", l("Caption.lALZ", "ALZ:")),
         section("GroupBox.gbPrograms", "External Program"),
         take("TextViewerPath", l("Caption.lView", "View:")),
         take("TextEditorPath", l("Caption.lEdit", "Edit:")),
@@ -1144,19 +1140,9 @@ fn original_page(ui: &mut egui::Ui, form: &mut SettingsForm, tab: usize, origin:
             put_label(ui, at(24.0, 310.0, 300.0, 15.0), &label_of(rows, "EscapeKeyAction"));
             put_combo(ui, rows, "EscapeKeyAction", at(24.0, 327.0, 145.0, 21.0));
         }
-        // tsExtProgram: gbArchive(32,24 481×170) ARJ·RAR·7Z·ALZ 줄(칸 77 356, "..." 439 30×23), gbPrograms(32,208 481×101) 보기·편집(칸 123 316).
+        // tsExtProgram: gbPrograms(32,208 481×101) 보기·편집(칸 123 316). 원본 gbArchive(32,24 481×170, 외부 압축 프로그램)는 두지 않는다.
         4 => {
             let rows = &mut form.tabs[tab];
-            group_box(ui, at(32.0, 24.0, 481.0, 170.0), &cap("GroupBox.gbArchive", "External Archive Programs"));
-            for (lx, ly, ex, key) in [(24.0, 28.0, 77.0, "Archive:arj"), (24.0, 64.0, 77.0, "Archive:rar"), (24.0, 100.0, 77.0, "Archive:7z"), (23.0, 136.0, 76.0, "Archive:alz")] {
-                put_label(ui, at(32.0 + lx, 24.0 + ly, 50.0, 15.0), &label_of(rows, key));
-                put_edit(ui, rows, key, at(32.0 + ex, 24.0 + ly - 3.0, 356.0, 21.0));
-                if let Some(index) = index_of(rows, key) {
-                    if ui.put(at(32.0 + 439.0, 24.0 + ly - 5.0, 30.0, 23.0), egui::Button::new("...")).clicked() {
-                        action = Some(SettingsAction::BrowseProgram(index));
-                    }
-                }
-            }
             group_box(ui, at(32.0, 208.0, 481.0, 101.0), &cap("GroupBox.gbPrograms", "External Program"));
             for (ly, key) in [(29.0, "TextViewerPath"), (65.0, "TextEditorPath")] {
                 put_label(ui, at(42.0, 208.0 + ly, 110.0, 15.0), &label_of(rows, key));

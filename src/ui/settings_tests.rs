@@ -255,16 +255,18 @@ fn function_key_editor_follows_csharp_in_english() {
         assert_eq!(editor.row(22)[0], "^F11");
         editor.grid.click(1, egui::Modifiers::NONE, false);
     }
-    // F2 편집: 사용자 명령, 이름이 비면 알림.
+    // F2 편집: 사용자 명령. 원본 btnOkClick은 이름이 비면 알리지 않고 명령 파일 이름(확장자 뺌)을 쓴다.
     app.settings_action(SettingsAction::EditFunctionKey, &ctx);
     assert_eq!(app.original_dialogs.last().unwrap().title, "Edit Function Key — F2");
     if let Some(DialogKind::FunctionKeyEdit(edit)) = app.original_dialogs.last_mut().map(|d| &mut d.kind) {
         assert_eq!(edit.name, "F2");
-        edit.name = "  ".into();
+        edit.set_internal(true);
+        assert!(edit.name.is_empty() && edit.command.is_empty(), "rbCommandTypeClick clears the fields");
+        edit.set_internal(false);
+        (edit.name, edit.command, edit.parameters) = ("  ".into(), r"C:\Tools\Notes.exe".into(), " %P ".into());
+        assert_eq!(edit.result().unwrap().name, "Notes");
     }
-    app.function_key_edit_done(true, &ctx);
-    assert_eq!(app.msgboxes.first().map(|m| m.text.clone()), Some("Enter a display name.".to_owned()));
-    app.answer_message_box(1, &ctx);
+    assert!(app.msgboxes.is_empty());
     if let Some(DialogKind::FunctionKeyEdit(edit)) = app.original_dialogs.last_mut().map(|d| &mut d.kind) {
         (edit.name, edit.internal, edit.command, edit.parameters) = (" Notes ".into(), false, " notepad.exe ".into(), " %P ".into());
     }

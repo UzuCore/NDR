@@ -98,9 +98,8 @@ impl FunctionKeyEditorForm {
     }
 }
 
-/// FunctionKeyEditWindow.
+/// 원본 TfEditFunction의 입력.
 pub(super) struct FunctionKeyEditForm {
-    ko: bool,
     pub name: String,
     pub internal: bool,
     pub internal_command: usize,
@@ -109,10 +108,9 @@ pub(super) struct FunctionKeyEditForm {
 }
 
 impl FunctionKeyEditForm {
-    pub(super) fn new(key: &str, source: &Binding, ko: bool) -> Self {
+    pub(super) fn new(key: &str, source: &Binding, _ko: bool) -> Self {
         let internal_command = INTERNAL_COMMANDS.iter().position(|(id, _)| id.eq_ignore_ascii_case(&source.command)).unwrap_or(0);
         Self {
-            ko,
             name: if source.name.is_empty() { key.into() } else { source.name.clone() },
             internal: source.internal,
             internal_command,
@@ -121,17 +119,32 @@ impl FunctionKeyEditForm {
         }
     }
 
-    /// Commit 검사: Err(알림 글).
+    /// 원본 btnOkClick(0x41f73c): 사용자 명령이면 이름이 비었을 때 명령 파일 이름(PathFindFileNameW, 확장자 뺌), 내부 명령이면
+    /// "#" + 고른 명령. 원본은 빈 칸을 막지 않는다(C# 판의 "이름을 입력하세요" 안내는 없다). 명령이 비면 그 글쇠는 지정 없음.
     pub(super) fn result(&self) -> Result<Binding, String> {
-        let name = self.name.trim();
-        let command = if self.internal { INTERNAL_COMMANDS[self.internal_command].0.to_owned() } else { self.command.trim().to_owned() };
-        if name.is_empty() {
-            return Err(if self.ko { "표시할 이름을 입력하세요." } else { "Enter a display name." }.into());
+        let command = if self.internal { INTERNAL_COMMANDS[self.internal_command].0.to_owned() } else { self.command.trim().trim_matches('"').to_owned() };
+        let mut name = self.name.trim().to_owned();
+        if name.is_empty() && !self.internal {
+            let file = command.rsplit(['\\', '/']).next().unwrap_or("");
+            name = match file.rfind('.') {
+                Some(dot) if dot > 0 => file[..dot].to_owned(),
+                _ => file.to_owned(),
+            };
         }
-        if command.is_empty() {
-            return Err(if self.ko { "명령을 선택하거나 입력하세요." } else { "Select or enter a command." }.into());
+        let parameters = if self.internal { String::new() } else { self.parameters.trim().to_owned() };
+        Ok(Binding { name, command, parameters, internal: self.internal })
+    }
+
+    /// 원본 rbCommandTypeClick(0x41f5bc): 종류를 바꾸면 이름·명령·인자 칸을 비우고, 내부 명령이면 첫 명령을 고른다.
+    pub(super) fn set_internal(&mut self, internal: bool) {
+        if self.internal == internal {
+            return;
         }
-        Ok(Binding { name: name.into(), command, parameters: self.parameters.trim().into(), internal: self.internal })
+        self.internal = internal;
+        self.name.clear();
+        self.command.clear();
+        self.parameters.clear();
+        self.internal_command = 0;
     }
 }
 
@@ -170,19 +183,20 @@ pub(super) fn insert_parameter(text: &mut String, caret: usize, caption: &str) -
 /// 원본 TfEditFunction(ClientWidth 462 × ClientHeight 223): rbUserCommand(20,13) rbInternalCommand(229,13), Bevel(20,36 421),
 /// lName(20,60) eName(113,57 141×21), lCommand(20,88) cbCommand(113,85 294×22) btnBrowse(412,85 29×21),
 /// lParams(20,115) eParams(113,112 294×21) btnParam(412,112 28×23, PopupMenu1), lParamTip(오른쪽 끝 407,143),
-/// btnOk(285,191) btnCancel(366,191) 75×25. C# 판의 매크로 안내 글은 lParamTip 아래에 작게 둔다. 확인이면 Some(true), 취소면 Some(false).
+/// btnOk(285,191, 기본) btnCancel(366,191) 75×25. 내부 명령이면 lParams·eParams·btnBrowse·btnParam·lParamTip을 끈다(rbCommandTypeClick).
+/// 확인이면 Some(true), 취소면 Some(false).
 pub(super) fn function_key_edit_ui(ui: &mut egui::Ui, form: &mut FunctionKeyEditForm, language: &compat::Language, enter: bool) -> Option<bool> {
     use super::original_dialogs::put_left;
-    let ko = form.ko;
     let text = |key: &str, fallback: &str| language.text(&format!("formEditFunction.{key}"), fallback);
+    let raw = |key: &str, fallback: &str| language.raw(&format!("formEditFunction.{key}")).unwrap_or_else(|| fallback.to_owned());
     let mut result = None;
     let (area, _) = ui.allocate_exact_size(egui::vec2(462.0, 223.0), egui::Sense::hover());
     let at = |x: f32, y: f32, w: f32, h: f32| egui::Rect::from_min_size(area.min + egui::vec2(x, y), egui::vec2(w, h));
-    if put_left(ui, at(20.0, 13.0, 189.0, 17.0), egui::RadioButton::new(!form.internal, text("Caption.rbUserCommand", "User Defined Command"))).clicked() {
-        form.internal = false;
+    if super::original_dialogs::access_radio(ui, at(20.0, 13.0, 189.0, 17.0), !form.internal, &raw("Caption.rbUserCommand", "User Defined Command")) {
+        form.set_internal(false);
     }
-    if put_left(ui, at(229.0, 13.0, 188.0, 17.0), egui::RadioButton::new(form.internal, text("Caption.rbInternalCommand", "Internal Command"))).clicked() {
-        form.internal = true;
+    if super::original_dialogs::access_radio(ui, at(229.0, 13.0, 188.0, 17.0), form.internal, &raw("Caption.rbInternalCommand", "Internal Command")) {
+        form.set_internal(true);
     }
     ui.painter().hline(area.min.x + 20.0..=area.min.x + 441.0, area.min.y + 36.0, ui.visuals().widgets.noninteractive.bg_stroke);
     put_left(ui, at(20.0, 60.0, 92.0, 15.0), egui::Label::new(text("Caption.lName", "Display Name:")).truncate());
@@ -210,34 +224,33 @@ pub(super) fn function_key_edit_ui(ui: &mut egui::Ui, form: &mut FunctionKeyEdit
             form.command = path.to_string_lossy().into_owned();
         }
     }
-    put_left(ui, at(20.0, 115.0, 92.0, 15.0), egui::Label::new(text("Caption.lParams", "Parameter(s):")).truncate());
+    let user = !form.internal;
+    ui.add_enabled_ui(user, |ui| {
+        put_left(ui, at(20.0, 115.0, 92.0, 15.0), egui::Label::new(text("Caption.lParams", "Parameter(s):")).truncate());
+    });
     // 원본 eParams + btnParam("...", PopupMenu1 → ParameterClick).
     let id = ui.make_persistent_id("function-key-parameters");
-    ui.put(at(113.0, 112.0, 294.0, 21.0), egui::TextEdit::singleline(&mut form.parameters).id(id));
+    super::original_dialogs::put_enabled(ui, at(113.0, 112.0, 294.0, 21.0), user, egui::TextEdit::singleline(&mut form.parameters).id(id));
     ui.scope_builder(egui::UiBuilder::new().max_rect(at(412.0, 112.0, 28.0, 23.0)), |ui| {
-        ui.menu_button("...", |ui| {
-            for caption in PARAMETER_MENU {
-                if ui.button(caption).clicked() {
-                    let mut state = egui::TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
-                    let caret = state.cursor.char_range().map_or(form.parameters.chars().count(), |range| range.primary.index);
-                    let after = insert_parameter(&mut form.parameters, caret, caption);
-                    state.cursor.set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(after))));
-                    state.store(ui.ctx(), id);
-                    ui.close();
+        ui.add_enabled_ui(user, |ui| {
+            ui.menu_button("...", |ui| {
+                for caption in PARAMETER_MENU {
+                    if ui.button(caption).clicked() {
+                        let mut state = egui::TextEdit::load_state(ui.ctx(), id).unwrap_or_default();
+                        let caret = state.cursor.char_range().map_or(form.parameters.chars().count(), |range| range.primary.index);
+                        let after = insert_parameter(&mut form.parameters, caret, caption);
+                        state.cursor.set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(after))));
+                        state.store(ui.ctx(), id);
+                        ui.close();
+                    }
                 }
-            }
+            });
         });
     });
     // 원본 lParamTip(오른쪽 맞춤, 오른쪽 끝 407).
     ui.scope_builder(egui::UiBuilder::new().max_rect(at(20.0, 143.0, 387.0, 15.0)).layout(egui::Layout::right_to_left(egui::Align::Min)), |ui| {
-        ui.add(egui::Label::new(text("Caption.lParamTip", "* $(???) : Active Pane, $(???1) : Left Pane, $(???2) : Right Pane")).truncate());
+        ui.add_enabled(user, egui::Label::new(text("Caption.lParamTip", "* $(???) : Active Pane, $(???1) : Left Pane, $(???2) : Right Pane")).truncate());
     });
-    let note = if ko {
-        "선택 파일: !\\!.!   인자 실행 전 편집: 끝에 %P   활성 패널 매크로: $(PATH), $(SELECTED), $(FILENAME), $(NAME), $(EXTENSION), $(DRIVE)   왼쪽/오른쪽: 숫자 1/2 추가"
-    } else {
-        "Selected files: !\\!.!   Edit parameters before launch: append %P   Active pane macros: $(PATH), $(SELECTED), $(FILENAME), $(NAME), $(EXTENSION), $(DRIVE); add 1 or 2 for left/right."
-    };
-    put_left(ui, at(20.0, 160.0, 421.0, 28.0), egui::Label::new(RichText::new(note).small().weak()).wrap());
     if ui.put(at(285.0, 191.0, 75.0, 25.0), egui::Button::new(text("Caption.btnOk", "OK"))).clicked() {
         result = Some(true);
     }
