@@ -468,13 +468,7 @@ impl App {
             n0(entry.size as usize)
         };
         let date = entry.modified.map(|t| chrono::DateTime::<chrono::Local>::from(t).format("%Y-%m-%d %H:%M").to_string()).unwrap_or_default();
-        let mut attributes = ['_'; 4];
-        for (bit, slot, letter) in [(0x20, 0, 'A'), (0x2, 1, 'H'), (0x1, 2, 'R'), (0x4, 3, 'S')] {
-            if entry.attributes & bit != 0 {
-                attributes[slot] = letter;
-            }
-        }
-        let attributes: String = attributes.iter().collect();
+        let attributes = ndr::listing::attr_string(entry.attributes);
         let mut text = format!("{size}  |  {date}  |  {attributes}");
         match pane.descriptions.get(&entry.name.to_lowercase()).filter(|d| !d.is_empty()) {
             Some(description) => text.push_str(&format!("  |  <c6B9FFF>{description}</c>")),

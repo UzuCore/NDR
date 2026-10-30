@@ -1,107 +1,147 @@
-//! C# ListExportWindow의 값·이스케이프·미리보기 규칙(SaveListAsync는 UTF-8 BOM으로 쓴다).
+//! 원본 TfSaveList(파일 목록 저장하기) 규칙. 미리보기 줄은 FUN_004519a0, 저장은 btnSaveClick(0x452030)의
+//! mPreview.Lines.SaveToFile(이름, TEncoding.Unicode) = BOM FF FE + UTF-16LE, 줄마다 CRLF.
 use crate::parity::{dotnet_extension, dotnet_stem};
 use std::time::SystemTime;
 
-/// 열 열쇠와 언어 키, 기본 글, 처음 켜짐.
-pub const COLUMNS: [(&str, &str, &str, bool); 7] = [
-    ("Name", "Caption.chkFileName", "File Name", true),
-    ("Extension", "Caption.chkExtension", "Extension", true),
-    ("Size", "Caption.chkFileSize", "Size", true),
-    ("Date", "Caption.chkDate", "Date", true),
-    ("Time", "Caption.chkTime", "Time", true),
-    ("Attributes", "Caption.chkAttributes", "Attributes", false),
-    ("Description", "Caption.chkDescription", "Comment", false),
-];
-pub const EDITABLE_ROW_LIMIT: usize = 2000;
-pub const SAMPLE_ROW_LIMIT: usize = 200;
-pub const EDITABLE_CHARACTER_LIMIT: usize = 1_000_000;
-
-/// C# ExportRow(FileItem)에서 쓰는 값.
+/// 원본 TNXFileItem에서 쓰는 값: 이름(+4, 파일은 확장자 뺀 이름, 폴더는 전체), 확장자(+8, 점 없음), 크기(+0x20),
+/// 시각(+0x28), 속성, 설명(+0x10).
 #[derive(Clone, Debug, Default)]
 pub struct ExportRow {
     pub name: String,
+    pub extension: String,
     pub is_dir: bool,
     pub size: u64,
     pub modified: Option<SystemTime>,
-    pub attributes: String,
+    pub attributes: u32,
     pub description: String,
 }
 
-fn win32_short(time: SystemTime, date: bool) -> String {
-    use chrono::{Datelike, Timelike};
-    use windows_sys::Win32::Globalization::{GetDateFormatW, GetTimeFormatW};
-    let local = chrono::DateTime::<chrono::Local>::from(time);
-    let st = windows_sys::Win32::Foundation::SYSTEMTIME {
-        wYear: local.year().clamp(1601, 30827) as u16,
-        wMonth: local.month() as u16,
-        wDayOfWeek: local.weekday().num_days_from_sunday() as u16,
-        wDay: local.day() as u16,
-        wHour: local.hour() as u16,
-        wMinute: local.minute() as u16,
-        wSecond: local.second() as u16,
-        wMilliseconds: 0,
-    };
-    let mut buffer = vec![0u16; 128];
-    // SAFETY: SYSTEMTIME and the buffer live through the call; DATE_SHORTDATE / TIME_NOSECONDS pictures come from the locale.
-    let written = unsafe {
-        if date {
-            GetDateFormatW(0x400, 0x1, &st, std::ptr::null(), buffer.as_mut_ptr(), buffer.len() as i32)
+impl ExportRow {
+    /// 목록 이름을 목록의 이름·확장자 열처럼 나눈다(폴더는 나누지 않는다).
+    pub fn new(file_name: &str, is_dir: bool, size: u64, modified: Option<SystemTime>, attributes: u32, description: String) -> Self {
+        let (name, extension) = if is_dir {
+            (file_name.to_owned(), String::new())
         } else {
-            GetTimeFormatW(0x400, 0x2, &st, std::ptr::null(), buffer.as_mut_ptr(), buffer.len() as i32)
-        }
+            (dotnet_stem(file_name).to_owned(), dotnet_extension(file_name).trim_start_matches('.').to_owned())
+        };
+        Self { name, extension, is_dir, size, modified, attributes, description }
+    }
+    /// 원본 TNXFileItem.GetFileName(0x7d25dc): 폴더는 이름 그대로, 그 밖은 확장자가 있으면 "%s.%s".
+    pub fn file_name(&self) -> String {
+        if self.is_dir || self.extension.is_empty() { self.name.clone() } else { format!("{}.{}", self.name, self.extension) }
+    }
+}
+
+/// 저장할 열(gbColumns). chkFileName은 늘 켜져 있어 따로 두지 않는다. 처음 값은 DFM 그대로.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Columns {
+    pub extension: bool,
+    pub size: bool,
+    pub size_comma: bool,
+    pub date: bool,
+    pub time: bool,
+    pub attributes: bool,
+    pub description: bool,
+}
+
+impl Default for Columns {
+    fn default() -> Self {
+        Self { extension: true, size: true, size_comma: false, date: true, time: true, attributes: false, description: false }
+    }
+}
+
+/// rgDelimiter: 0 탭, 1 쉼표, 2 eUserDelimiter. 결과가 비면 탭(0x8fbeee).
+pub fn delimiter(index: usize, custom: &str) -> String {
+    let text = match index {
+        0 => "\t",
+        1 => ",",
+        _ => custom,
     };
-    if written > 0 { String::from_utf16_lossy(&buffer[..written as usize - 1]) } else { String::new() }
+    if text.is_empty() { "\t".into() } else { text.into() }
 }
 
-/// C# Value: 이름(폴더는 전체, 파일은 확장자 뺀 이름), 확장자(점 없음), 크기("#,##0" 또는 숫자), 날짜("d"), 시간("t"), 속성, 설명.
-pub fn value(row: &ExportRow, column: &str, thousands: bool) -> String {
-    match column {
-        "Name" => if row.is_dir { row.name.clone() } else { dotnet_stem(&row.name).to_owned() },
-        "Extension" => if row.is_dir { String::new() } else { dotnet_extension(&row.name).trim_start_matches('.').to_owned() },
-        "Size" if row.is_dir => String::new(),
-        "Size" => if thousands { crate::parity::format_size(row.size, "B", true).trim_end_matches(" B").to_owned() } else { row.size.to_string() },
-        "Date" => row.modified.map(|t| win32_short(t, true)).unwrap_or_default(),
-        "Time" => row.modified.map(|t| win32_short(t, false)).unwrap_or_default(),
-        "Attributes" => row.attributes.clone(),
-        "Description" => row.description.clone(),
-        _ => String::new(),
+/// FloatToStrF(크기, ffNumber, 15, 0): 천 단위 쉼표.
+fn grouped(value: u64) -> String {
+    let digits = value.to_string();
+    let mut out = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// 시각의 (년, 월, 일, 시, 분, 초). 시각이 없으면 FILETIME 0 = 1601-01-01 00:00:00.
+/// 고친 것: 원본은 UTC FILETIME(+0x28)을 FileTimeToSystemTime으로 바로 바꿔 목록 표시(DateToStr, 지역 시각)와
+/// 다른 UTC 날짜·시간을 썼다. 여기서는 목록처럼 지역 시각을 쓴다.
+fn parts(time: Option<SystemTime>) -> (i32, u32, u32, u32, u32, u32) {
+    use chrono::{Datelike, Timelike};
+    match time {
+        Some(time) => {
+            let local = chrono::DateTime::<chrono::Local>::from(time);
+            (local.year(), local.month(), local.day(), local.hour(), local.minute(), local.second())
+        }
+        None => (1601, 1, 1, 0, 0, 0),
     }
 }
 
-/// C# Escape: 구분자·따옴표·줄바꿈이 있으면 따옴표로 감싸고 안의 따옴표는 두 번.
-pub fn escape(value: &str, delimiter: &str) -> String {
-    if !value.contains(delimiter) && !value.contains(['"', '\r', '\n']) {
-        return value.to_owned();
+/// FUN_004519a0의 한 줄: 이름(chkExtension이면 GetFileName, 아니면 +4 이름) 뒤에 켠 열마다 구분자 + 값.
+/// 크기는 chkSizeComma면 천 단위 쉼표, 아니면 숫자. 날짜 "%d/%02d/%02d", 시간 "%02d:%02d:%02d", 속성 GetAttrString, 설명.
+/// 값을 따옴표로 감싸지 않는다.
+pub fn line(row: &ExportRow, columns: &Columns, delimiter: &str) -> String {
+    let mut text = if columns.extension { row.file_name() } else { row.name.clone() };
+    let (year, month, day, hour, minute, second) = parts(row.modified);
+    if columns.size {
+        text.push_str(delimiter);
+        text.push_str(&if columns.size_comma { grouped(row.size) } else { row.size.to_string() });
     }
-    format!("\"{}\"", value.replace('"', "\"\""))
+    if columns.date {
+        text.push_str(&format!("{delimiter}{year}/{month:02}/{day:02}"));
+    }
+    if columns.time {
+        text.push_str(&format!("{delimiter}{hour:02}:{minute:02}:{second:02}"));
+    }
+    if columns.attributes {
+        text.push_str(delimiter);
+        text.push_str(&crate::listing::attr_string(row.attributes));
+    }
+    if columns.description {
+        text.push_str(delimiter);
+        text.push_str(&row.description);
+    }
+    text
 }
 
-/// 한 줄(끝에 CRLF).
-pub fn line(row: &ExportRow, columns: &[&str], delimiter: &str, thousands: bool) -> String {
-    let values: Vec<String> = columns.iter().map(|c| escape(&value(row, c, thousands), delimiter)).collect();
-    format!("{}\r\n", values.join(delimiter))
+/// 미리보기(mPreview.Lines): 항목마다 한 줄.
+pub fn preview(rows: &[ExportRow], columns: &Columns, delimiter: &str) -> String {
+    rows.iter().map(|row| line(row, columns, delimiter)).collect::<Vec<_>>().join("\n")
 }
 
-/// 전체 내보내기 글.
-pub fn export_text(rows: &[ExportRow], columns: &[&str], delimiter: &str, thousands: bool) -> String {
-    rows.iter().map(|row| line(row, columns, delimiter, thousands)).collect()
+/// 메모 글의 줄(TMemo Lines): CR·LF·CRLF로 나누고, 끝 줄바꿈 뒤의 빈 줄은 줄로 치지 않는다.
+pub fn memo_lines(text: &str) -> Vec<&str> {
+    let mut lines: Vec<&str> = text.split("\r\n").flat_map(|part| part.split(['\r', '\n'])).collect();
+    if lines.last().is_some_and(|l| l.is_empty()) {
+        lines.pop();
+    }
+    lines
 }
 
-/// C# RebuildPreview: 2000줄·100만 자 안이면 전부(편집 가능), 넘으면 처음 200줄만(읽기 전용). (글, 완전한가).
-pub fn preview(rows: &[ExportRow], columns: &[&str], delimiter: &str, thousands: bool) -> (String, bool) {
-    let mut text = String::new();
-    let mut complete = rows.len() <= EDITABLE_ROW_LIMIT;
-    for row in rows.iter().take(EDITABLE_ROW_LIMIT) {
-        text.push_str(&line(row, columns, delimiter, thousands));
-        if text.len() > EDITABLE_CHARACTER_LIMIT {
-            complete = false;
-            break;
+/// Lines.SaveToFile(TEncoding.Unicode)의 바이트: BOM FF FE, 줄마다 CRLF를 붙인 UTF-16LE. 줄이 없으면 None
+/// (btnSaveClick은 Lines.Count > 0일 때만 저장 대화 상자를 연다).
+pub fn file_bytes(text: &str) -> Option<Vec<u8>> {
+    let lines = memo_lines(text);
+    if lines.is_empty() {
+        return None;
+    }
+    let mut bytes = vec![0xFF, 0xFE];
+    for line in lines {
+        for unit in line.encode_utf16().chain("\r\n".encode_utf16()) {
+            bytes.extend_from_slice(&unit.to_le_bytes());
         }
     }
-    if !complete {
-        text = rows.iter().take(SAMPLE_ROW_LIMIT).map(|row| line(row, columns, delimiter, thousands)).collect();
-    }
-    (text, complete)
+    Some(bytes)
 }
 
 #[cfg(test)]
@@ -109,23 +149,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn values_and_escaping_follow_listexportwindow() {
-        let file = ExportRow { name: "report.final.TXT".into(), size: 1_234_567, attributes: "R--A".into(), description: "say \"hi\", ok".into(), ..Default::default() };
-        let folder = ExportRow { name: "photos.2024".into(), is_dir: true, ..Default::default() };
-        assert_eq!(value(&file, "Name", false), "report.final");
-        assert_eq!(value(&file, "Extension", false), "TXT");
-        assert_eq!(value(&file, "Size", true), "1,234,567");
-        assert_eq!(value(&file, "Size", false), "1234567");
-        assert_eq!((value(&folder, "Name", false).as_str(), value(&folder, "Extension", false).as_str(), value(&folder, "Size", true).as_str()), ("photos.2024", "", ""));
-        assert_eq!(value(&file, "Date", false), "", "no time: empty");
-        assert_eq!(escape("a,b", ","), "\"a,b\"");
-        assert_eq!(escape("a\tb", ","), "a\tb");
-        assert_eq!(line(&file, &["Name", "Description"], ",", false), "report.final,\"say \"\"hi\"\", ok\"\r\n");
-        let many: Vec<ExportRow> = (0..2001).map(|i| ExportRow { name: format!("f{i}"), ..Default::default() }).collect();
-        let (text, complete) = preview(&many, &["Name"], "\t", false);
-        assert!(!complete);
-        assert_eq!(text.lines().count(), SAMPLE_ROW_LIMIT);
-        let (text, complete) = preview(&many[..3], &["Name"], "\t", false);
-        assert!(complete && text == "f0\r\nf1\r\nf2\r\n");
+    fn lines_follow_the_original_savelist() {
+        let file = ExportRow::new("report.final.TXT", false, 1_234_567, None, 0x21, "say, \"hi\"".into());
+        let folder = ExportRow::new("photos.2024", true, 0, None, 0x10, String::new());
+        assert_eq!((file.name.as_str(), file.extension.as_str(), file.file_name().as_str()), ("report.final", "TXT", "report.final.TXT"));
+        assert_eq!(folder.file_name(), "photos.2024");
+        let defaults = Columns::default();
+        assert_eq!(line(&file, &defaults, "\t"), "report.final.TXT\t1234567\t1601/01/01\t00:00:00");
+        let all = Columns { extension: false, size_comma: true, attributes: true, description: true, ..defaults };
+        assert_eq!(line(&file, &all, ","), "report.final,1,234,567,1601/01/01,00:00:00,A_R_,say, \"hi\"", "no quoting");
+        assert_eq!(line(&folder, &Columns { size: false, date: false, time: false, ..defaults }, "\t"), "photos.2024");
+        assert_eq!((delimiter(0, "x"), delimiter(1, "x"), delimiter(2, "::"), delimiter(2, "")), ("\t".to_owned(), ",".to_owned(), "::".to_owned(), "\t".to_owned()));
+        assert_eq!(file_bytes(""), None);
+        assert_eq!(file_bytes("a\nb\n").unwrap(), [0xFF, 0xFE, b'a', 0, b'\r', 0, b'\n', 0, b'b', 0, b'\r', 0, b'\n', 0]);
+        assert_eq!(memo_lines("\n"), [""], "one empty line still counts");
     }
 }

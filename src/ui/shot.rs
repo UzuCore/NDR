@@ -167,7 +167,7 @@ impl App {
                 self.push_original_dialog(text(self, "formEditShortCut.Form.Caption"), DialogKind::EditShortcut(form), |_, _, _| {});
             }
             "savelist" => {
-                let rows = (0..3).map(|i| ndr::list_export::ExportRow { name: format!("file{i}.txt"), is_dir: false, size: 1234 * (i + 1), modified: Some(std::time::SystemTime::now()), attributes: "A".into(), description: String::new() }).collect();
+                let rows = (0..3).map(|i| ndr::list_export::ExportRow::new(&format!("file{i}.txt"), false, 1234 * (i + 1), Some(std::time::SystemTime::now()), 0x20, String::new())).collect();
                 let form = super::list_export_dialog::ListExportForm::new(rows);
                 self.push_original_dialog(text(self, "formSaveList.Form.Caption"), DialogKind::ListExport(Box::new(form)), |_, _, _| {});
             }

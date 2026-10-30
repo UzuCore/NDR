@@ -24,6 +24,17 @@ pub fn attribute_text(attributes: u32) -> String {
         .collect()
 }
 
+/// 원본 GetAttrString: "____"의 0번 A(보관), 1번 H(숨김), 2번 R(읽기 전용), 3번 S(시스템).
+pub fn attr_string(attributes: u32) -> String {
+    let mut text = ['_'; 4];
+    for (bit, slot, letter) in [(FILE_ATTRIBUTE_ARCHIVE, 0, 'A'), (FILE_ATTRIBUTE_HIDDEN, 1, 'H'), (FILE_ATTRIBUTE_READONLY, 2, 'R'), (FILE_ATTRIBUTE_SYSTEM, 3, 'S')] {
+        if attributes & bit != 0 {
+            text[slot] = letter;
+        }
+    }
+    text.iter().collect()
+}
+
 /// C# ListLocal의 Kind: 폴더는 "폴더", 확장자가 없으면 "파일", 있으면 "{EXT} 파일"(대문자). 영어는 같은 모양의 영어.
 pub fn type_name(name: &str, is_dir: bool, korean: bool) -> String {
     if is_dir {

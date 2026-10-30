@@ -91,7 +91,8 @@ pub(super) enum DialogResult {
     Attributes(AttributeAction, Option<ndr::tools::AttributeChanges>),
     Split(Option<(PathBuf, u64, u64)>),
     Join(Option<super::split_dialogs::JoinOptions>),
-    ListExport(Option<super::list_export_dialog::ListExportOptions>),
+    /// 파일 목록 저장 창: Some(()) 확인(btnSave, ModalResult 1), None 취소.
+    ListExport(Option<()>),
     EditShortcut(Option<String>),
     AdvancedRename(bool),
     Search(Option<ndr::tools::SearchCriteria>),
@@ -788,7 +789,7 @@ impl App {
                     }
                 }
                 DialogKind::ListExport(form) => {
-                    if let Some(choice) = super::list_export_dialog::list_export_ui(ui, form, &self.language_pack, ko) {
+                    if let Some(choice) = super::list_export_dialog::list_export_ui(ui, form, &self.language_pack) {
                         outcome = Outcome::Choice(choice);
                     }
                 }

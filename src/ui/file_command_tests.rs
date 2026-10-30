@@ -611,7 +611,7 @@ fn pick_save_target(_: &str, _: Option<&Path>, _: &str, _: &[(&str, &str)], _: &
 }
 
 #[test]
-fn list_export_window_saves_like_savelistasync() {
+fn list_export_window_follows_the_original_savelist() {
     let (root, ctx, mut app) = fixture("listexport", "en");
     let left = root.join("left");
     compat::set_description(&left, "beta.txt", "comma, \"quoted\"", true).unwrap();
@@ -619,33 +619,46 @@ fn list_export_window_saves_like_savelistasync() {
     wait_listing(&mut app, &ctx);
     app.save_dialog = pick_save_target;
     SAVE_TARGET.with(|t| *t.borrow_mut() = Some(root.join("list")));
+    // 표시가 없으면 SelectAll(폴더 포함): 모든 항목.
     app.dispatch("saveList", &ctx);
     assert_eq!(app.original_dialogs[0].title, app.language_pack.text("formSaveList.Form.Caption", "?"));
     frame(&mut app, &ctx, vec![]);
-    // No columns: an information box, the window stays.
-    app.edit_dialog_kind(|kind| if let DialogKind::ListExport(form) = kind { form.columns = [false; 7]; form.rebuild(); });
-    app.submit_list_export(&ctx);
-    assert_eq!(app.msgboxes[0].text, "Select at least one column to save.");
-    app.answer_message_box(1, &ctx);
+    let count = app.panes[0].entries.iter().filter(|e| !e.drive && !e.is_parent()).count();
     app.edit_dialog_kind(|kind| if let DialogKind::ListExport(form) = kind {
-        form.columns = [true, true, false, false, false, false, true];
+        assert_eq!(form.rows.len(), count);
+        form.columns = ndr::list_export::Columns { size: false, date: false, time: false, description: true, ..Default::default() };
         form.delimiter = 1;
         form.rebuild();
     });
     app.submit_list_export(&ctx);
     assert!(app.original_dialogs.is_empty());
     let saved = fs::read(root.join("list.txt")).unwrap();
-    assert_eq!(&saved[..3], &[0xEF, 0xBB, 0xBF], "UTF-8 with BOM; .txt added");
-    let text = String::from_utf8(saved[3..].to_vec()).unwrap();
-    assert!(text.contains("beta,txt,\"comma, \"\"quoted\"\"\"\r\n"), "{text}");
-    assert!(text.contains("folder1,,\r\n"));
-    assert_eq!(app.status, format!("Saved {} items.", app.panes[0].entries.len()));
-    // An edited preview is saved as typed.
+    assert_eq!(&saved[..2], &[0xFF, 0xFE], "TEncoding.Unicode; .txt added");
+    let units: Vec<u16> = saved[2..].chunks(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+    let text = String::from_utf16(&units).unwrap();
+    assert!(text.contains("beta.txt,comma, \"quoted\"\r\n"), "no quoting: {text}");
+    assert!(text.contains("folder1,\r\n"));
+    // 표시한 항목만, 확인하면 표시를 가져간다. 저장 대화 상자를 닫아도 창은 확인으로 닫힌다.
+    app.panes[0].selected = [row(&app, 0, "beta.txt")].into_iter().collect();
     app.dispatch("saveList", &ctx);
-    app.edit_dialog_kind(|kind| if let DialogKind::ListExport(form) = kind { form.preview = "edited\r\n".into(); form.edited = true; });
+    app.edit_dialog_kind(|kind| if let DialogKind::ListExport(form) = kind {
+        assert_eq!(form.rows.len(), 1);
+        form.preview = "edited\n".into();
+    });
+    SAVE_TARGET.with(|t| *t.borrow_mut() = None);
+    app.submit_list_export(&ctx);
+    assert!(app.original_dialogs.is_empty() && app.panes[0].selected.is_empty(), "OK takes the marks");
+    // 고친 미리보기를 그대로 쓴다. 빈 미리보기는 저장 대화 상자를 열지 않는다.
+    app.dispatch("saveList", &ctx);
+    app.edit_dialog_kind(|kind| if let DialogKind::ListExport(form) = kind { form.preview = "edited".into() });
     SAVE_TARGET.with(|t| *t.borrow_mut() = Some(root.join("edited.csv")));
     app.submit_list_export(&ctx);
-    assert_eq!(fs::read(root.join("edited.csv")).unwrap(), b"\xEF\xBB\xBFedited\r\n");
+    assert_eq!(fs::read(root.join("edited.csv")).unwrap(), b"\xFF\xFEe\0d\0i\0t\0e\0d\0\r\0\n\0");
+    app.dispatch("saveList", &ctx);
+    app.edit_dialog_kind(|kind| if let DialogKind::ListExport(form) = kind { form.preview.clear() });
+    SAVE_TARGET.with(|t| *t.borrow_mut() = Some(root.join("empty.txt")));
+    app.submit_list_export(&ctx);
+    assert!(app.original_dialogs.is_empty() && !root.join("empty.txt").exists());
     fs::remove_dir_all(root).unwrap();
 }
 
