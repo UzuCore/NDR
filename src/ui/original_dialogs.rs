@@ -1072,6 +1072,15 @@ pub(super) fn access_radio(ui: &mut egui::Ui, rect: egui::Rect, selected: bool, 
     clicked || (ui.is_enabled() && take_dialog_char(ui.ctx(), access))
 }
 
+/// VCL TLabel(Caption의 '&' 단축 문자, FocusControl): 단축 문자를 치면 `target` 칸에 초점을 준다.
+pub(super) fn access_label(ui: &mut egui::Ui, rect: egui::Rect, caption: &str, target: egui::Id) {
+    let (job, access) = access_job(ui, caption);
+    put_left(ui, rect, egui::Label::new(job).truncate());
+    if ui.is_enabled() && take_dialog_char(ui.ctx(), access) {
+        ui.memory_mut(|m| m.request_focus(target));
+    }
+}
+
 /// VCL TCheckBox(Caption의 '&' 단축 문자): 단축 문자를 치면 값을 뒤집는다. 바뀌었으면 true.
 pub(super) fn access_checkbox(ui: &mut egui::Ui, rect: egui::Rect, value: &mut bool, caption: &str) -> bool {
     let (job, access) = access_job(ui, caption);

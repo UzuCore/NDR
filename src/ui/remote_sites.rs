@@ -120,22 +120,25 @@ pub(super) fn sites_ui(ui: &mut egui::Ui, form: &mut SitesForm, language: &compa
     });
     let enabled = form.editing.is_some();
     ui.add_enabled_ui(enabled, |ui| {
-        let label = |ui: &mut egui::Ui, x: f32, y: f32, key: &str, fallback: &str| {
-            put_left(ui, at(x, y, 103.0, 15.0), egui::Label::new(text(key, fallback)).truncate());
+        // VCL TLabel FocusControl: 단축 문자는 옆 칸에 초점을 준다.
+        let raw = |key: &str, fallback: &str| language.raw(&format!("formFTPSiteManager.{key}")).unwrap_or_else(|| fallback.to_owned());
+        let label = |ui: &mut egui::Ui, x: f32, y: f32, key: &str, fallback: &str, target: &str| {
+            super::original_dialogs::access_label(ui, at(x, y, 103.0, 15.0), &raw(key, fallback), egui::Id::new(("ftp-site", target.to_owned())));
         };
-        label(ui, 176.0, 28.0, "Caption.lName", "Site &Name:");
-        ui.put(at(281.0, 25.0, 176.0, 21.0), egui::TextEdit::singleline(&mut form.name));
-        label(ui, 176.0, 56.0, "Caption.lAddress", "Address(&L):");
-        ui.put(at(281.0, 53.0, 176.0, 21.0), egui::TextEdit::singleline(&mut form.host));
-        label(ui, 176.0, 85.0, "Caption.lUser", "&User:");
-        ui.put(at(281.0, 82.0, 121.0, 21.0), egui::TextEdit::singleline(&mut form.user));
-        label(ui, 176.0, 114.0, "Caption.lPassword", "Pass&word:");
-        ui.put(at(281.0, 111.0, 121.0, 21.0), egui::TextEdit::singleline(&mut form.password).password(true));
-        label(ui, 176.0, 142.0, "Caption.lRemoteDir", "&Remote Dir:");
-        ui.put(at(281.0, 139.0, 176.0, 21.0), egui::TextEdit::singleline(&mut form.remote_directory));
-        label(ui, 175.0, 171.0, "Caption.lPort", "&Port:");
-        ui.put(at(280.0, 168.0, 49.0, 21.0), egui::TextEdit::singleline(&mut form.port).horizontal_align(egui::Align::Center));
-        label(ui, 175.0, 200.0, "Caption.lServerType", "&Server Type:");
+        let id = |name: &str| egui::Id::new(("ftp-site", name.to_owned()));
+        label(ui, 176.0, 28.0, "Caption.lName", "Site &Name:", "name");
+        ui.put(at(281.0, 25.0, 176.0, 21.0), egui::TextEdit::singleline(&mut form.name).id(id("name")));
+        label(ui, 176.0, 56.0, "Caption.lAddress", "Address(&L):", "host");
+        ui.put(at(281.0, 53.0, 176.0, 21.0), egui::TextEdit::singleline(&mut form.host).id(id("host")));
+        label(ui, 176.0, 85.0, "Caption.lUser", "&User:", "user");
+        ui.put(at(281.0, 82.0, 121.0, 21.0), egui::TextEdit::singleline(&mut form.user).id(id("user")));
+        label(ui, 176.0, 114.0, "Caption.lPassword", "Pass&word:", "password");
+        ui.put(at(281.0, 111.0, 121.0, 21.0), egui::TextEdit::singleline(&mut form.password).password(true).id(id("password")));
+        label(ui, 176.0, 142.0, "Caption.lRemoteDir", "&Remote Dir:", "remote");
+        ui.put(at(281.0, 139.0, 176.0, 21.0), egui::TextEdit::singleline(&mut form.remote_directory).id(id("remote")));
+        label(ui, 175.0, 171.0, "Caption.lPort", "&Port:", "port");
+        ui.put(at(280.0, 168.0, 49.0, 21.0), egui::TextEdit::singleline(&mut form.port).horizontal_align(egui::Align::Center).id(id("port")));
+        put_left(ui, at(175.0, 200.0, 103.0, 15.0), egui::Label::new(text("Caption.lServerType", "&Server Type:")).truncate());
         ui.scope_builder(egui::UiBuilder::new().max_rect(at(280.0, 197.0, 145.0, 21.0)), |ui| {
             egui::ComboBox::from_id_salt("remote-sites-protocol").width(137.0).selected_text(form.protocol.clone()).show_opaque(ui, |ui| {
                 for name in MANAGER_PROTOCOLS {
@@ -146,18 +149,19 @@ pub(super) fn sites_ui(ui: &mut egui::Ui, form: &mut SitesForm, language: &compa
                 }
             });
         });
-        put_left(ui, at(281.0, 228.0, 99.0, 17.0), egui::Checkbox::new(&mut form.passive, text("Caption.chkPassive", "Passi&ve Mode")));
+        super::original_dialogs::access_checkbox(ui, at(281.0, 228.0, 99.0, 17.0), &mut form.passive, &raw("Caption.chkPassive", "Passi&ve Mode"));
     });
+    let raw = |key: &str, fallback: &str| language.raw(&format!("formFTPSiteManager.{key}")).unwrap_or_else(|| fallback.to_owned());
     let buttons = [
-        (16.0, 264.0, text("Caption.btnAdd", "&Add"), SitesAction::Add),
-        (94.0, 264.0, text("Caption.btnDelete", "&Delete"), SitesAction::Delete),
+        (16.0, 264.0, raw("Caption.btnAdd", "&Add"), SitesAction::Add),
+        (94.0, 264.0, raw("Caption.btnDelete", "&Delete"), SitesAction::Delete),
         (215.0, 264.0, language.text("formFTPQuickConnect.Caption.btnOk", "&Connect").replace('&', ""), SitesAction::Connect),
         (382.0, 226.0, language.text("NDRRemoteSites.Advanced", "Additional settings"), SitesAction::Advanced),
         (298.0, 264.0, text("Caption.btnOk", "OK"), SitesAction::Save),
         (382.0, 264.0, text("Caption.btnCancel", "Cancel"), SitesAction::Cancel),
     ];
     for (x, y, caption, act) in buttons {
-        if ui.put(at(x, y, 75.0, 25.0), egui::Button::new(caption).truncate()).clicked() {
+        if super::original_dialogs::access_button(ui, at(x, y, 75.0, 25.0), &caption) && action.is_none() {
             action = Some(act);
         }
     }

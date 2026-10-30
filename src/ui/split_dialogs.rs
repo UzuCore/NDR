@@ -102,8 +102,10 @@ pub(super) fn split_ui(ui: &mut egui::Ui, form: &mut SplitForm, language: &compa
     job.append(&name, 0.0, egui::TextFormat { font_id: egui::FontId::new(13.0, egui::FontFamily::Name(super::BOLD_FONT_FAMILY.into())), color, ..Default::default() });
     job.append(&format!(" ({bytes} bytes)"), 0.0, egui::TextFormat { font_id: egui::FontId::proportional(13.0), color, ..Default::default() });
     super::original_dialogs::put_left(ui, at(16.0, 16.0, 440.0, 15.0), egui::Label::new(job).truncate()).on_hover_text(form.source.to_string_lossy());
-    super::original_dialogs::put_left(ui, at(16.0, 59.0, 85.0, 15.0), egui::Label::new(split_text(language, "Caption.lPath", "Path to Save:")).truncate());
-    ui.put(at(103.0, 56.0, 311.0, 21.0), egui::TextEdit::singleline(&mut form.path));
+    let raw = |key: &str, fallback: &str| language.raw(&format!("formFileSplit.{key}")).unwrap_or_else(|| fallback.to_owned());
+    let (path_id, size_id) = (egui::Id::new("split-path"), egui::Id::new("split-size"));
+    super::original_dialogs::access_label(ui, at(16.0, 59.0, 85.0, 15.0), &raw("Caption.lPath", "&Path to Save:"), path_id);
+    ui.put(at(103.0, 56.0, 311.0, 21.0), egui::TextEdit::singleline(&mut form.path).id(path_id));
     if ui.put(at(420.0, 54.0, 41.0, 25.0), egui::Button::new("...")).clicked() {
         // 원본(0x423b8e): FILESPLIT + SELECTDEST.
         let title = format!("{}{}", language.text("RES.FILESPLIT", "Split File"), language.text("RES.SELECTDEST", " - Select a destination"));
@@ -112,8 +114,8 @@ pub(super) fn split_ui(ui: &mut egui::Ui, form: &mut SplitForm, language: &compa
             form.path = folder.to_string_lossy().into_owned();
         }
     }
-    super::original_dialogs::put_left(ui, at(16.0, 99.0, 85.0, 15.0), egui::Label::new(split_text(language, "Caption.lSplitSize", "Split Size:")).truncate());
-    ui.put(at(103.0, 96.0, 116.0, 21.0), egui::TextEdit::singleline(&mut form.size));
+    super::original_dialogs::access_label(ui, at(16.0, 99.0, 85.0, 15.0), &raw("Caption.lSplitSize", "&Split Size:"), size_id);
+    ui.put(at(103.0, 96.0, 116.0, 21.0), egui::TextEdit::singleline(&mut form.size).id(size_id));
     ui.scope_builder(egui::UiBuilder::new().max_rect(at(219.0, 96.0, 22.0, 21.0)), |ui| {
         ui.menu_button("▼", |ui| {
             for preset in ndr::split::SPLIT_SIZE_PRESETS {
@@ -148,8 +150,10 @@ pub(super) fn join_ui(ui: &mut egui::Ui, form: &mut JoinForm, language: &compat:
     // lSizeInfo(오른쪽 끝 486,267), chkIsText(16,317), btnOk(330,313) btnCancel(411,313) 75×25.
     let (area, _) = ui.allocate_exact_size(egui::vec2(501.0, 346.0), egui::Sense::hover());
     let at = |x: f32, y: f32, w: f32, h: f32| egui::Rect::from_min_size(area.min + egui::vec2(x, y), egui::vec2(w, h));
-    super::original_dialogs::put_left(ui, at(16.0, 25.0, 108.0, 15.0), egui::Label::new(join_text(language, "Caption.lFileName", "File name:")).truncate());
-    ui.put(at(127.0, 22.0, 323.0, 21.0), egui::TextEdit::singleline(&mut form.name));
+    let name_id = egui::Id::new("join-file-name");
+    let caption = language.raw("formFileJoin.Caption.lFileName").unwrap_or_else(|| "&File name:".into());
+    super::original_dialogs::access_label(ui, at(16.0, 25.0, 108.0, 15.0), &caption, name_id);
+    ui.put(at(127.0, 22.0, 323.0, 21.0), egui::TextEdit::singleline(&mut form.name).id(name_id));
     if ui.put(at(456.0, 20.0, 33.0, 25.0), egui::Button::new("...")).clicked() {
         let title = join_text(language, "Form.Caption", "Join Files");
         let typed = Path::new(&form.name);

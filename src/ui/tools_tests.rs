@@ -494,6 +494,20 @@ fn archive_name_field_follows_the_original_tfaddtoarc() {
     assert_eq!(archive_output_path(r"D:\out\", here), None);
 }
 
+/// VCL TLabel FocusControl: 압축하기 창의 "비밀번호(&P):"는 Alt+P로 비밀번호 칸에 초점을 준다.
+#[test]
+fn archive_window_labels_focus_their_fields() {
+    let (root, ctx, mut app) = fixture("archivelabel", "ko");
+    app.panes[0].selected = [row(&app, "alpha.txt")].into_iter().collect();
+    app.dispatch("createArchive", &ctx);
+    frame(&mut app, &ctx, vec![]);
+    let alt_p = egui::Event::Key { key: egui::Key::P, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::ALT };
+    frame(&mut app, &ctx, vec![alt_p]);
+    frame(&mut app, &ctx, vec![]);
+    assert!(ctx.memory(|m| m.has_focus(egui::Id::new("archive-password"))), "Alt+P focuses the password field");
+    let _ = fs::remove_dir_all(root);
+}
+
 /// 외부 압축 프로그램은 쓰지 않는다: RAR·ARJ(동봉 7-Zip이 못 만듦)는 고를 수 없다.
 #[test]
 fn archive_window_has_no_external_program_formats() {

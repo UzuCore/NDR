@@ -207,8 +207,10 @@ pub(super) fn archive_create_ui(ui: &mut egui::Ui, form: &mut ArchiveCreateForm,
     for (top, key, fallback) in [(16.0, "Caption.lSecName", "1. File Name"), (76.0, "Caption.lSecFormat", "2. Archive Type"), (179.0, "Caption.lSecOptions", "3. Options")] {
         put_left(ui, at(20.0, top, 400.0, 16.0), egui::Label::new(RichText::new(text(key, fallback)).strong().family(egui::FontFamily::Name(super::BOLD_FONT_FAMILY.into())).color(blue)));
     }
-    put_left(ui, at(44.0, 43.0, 60.0, 15.0), egui::Label::new(text("Caption.lFileName", "&Filename:")).truncate());
-    ui.put(at(106.0, 40.0, 275.0, 21.0), egui::TextEdit::singleline(&mut form.file_name));
+    let raw = |key: &str, fallback: &str| language.raw(&format!("formAddToArchive.{key}")).unwrap_or_else(|| fallback.to_owned());
+    let name_id = egui::Id::new("archive-file-name");
+    super::original_dialogs::access_label(ui, at(44.0, 43.0, 60.0, 15.0), &raw("Caption.lFileName", "&Filename:"), name_id);
+    ui.put(at(106.0, 40.0, 275.0, 21.0), egui::TextEdit::singleline(&mut form.file_name).id(name_id));
     // 원본 rbZIP·rbRAR·rb7z·rbALZ·rbARJ(Tag 1~5).
     let original = [("zip", 44.0, "Caption.rbZIP", "&ZIP"), ("rar", 108.0, "Caption.rbRAR", "&RAR"), ("7z", 173.0, "Caption.rb7z", "&7z"), ("alz", 238.0, "Caption.rbALZ", "&ALZ"), ("arj", 303.0, "Caption.rbARJ", "AR&J")];
     let index_of = |extension: &str| form.formats.iter().position(|f| f.extension.trim_start_matches('.').eq_ignore_ascii_case(extension));
@@ -247,8 +249,9 @@ pub(super) fn archive_create_ui(ui: &mut egui::Ui, form: &mut ArchiveCreateForm,
         });
     });
     super::original_dialogs::access_checkbox(ui, at(276.0, 208.0, 156.0, 17.0), &mut form.recursive, &language.raw("formAddToArchive.Caption.chkRecursive").unwrap_or_else(|| "Includ&e Subfolders".into()));
-    put_left(ui, at(44.0, 243.0, 97.0, 15.0), egui::Label::new(text("Caption.lVolume", "Volume(&S):")).truncate());
-    ui.put(at(143.0, 240.0, 99.0, 21.0), egui::TextEdit::singleline(&mut form.volume));
+    let volume_id = egui::Id::new("archive-volume");
+    super::original_dialogs::access_label(ui, at(44.0, 243.0, 97.0, 15.0), &raw("Caption.lVolume", "Volume(&S):"), volume_id);
+    ui.put(at(143.0, 240.0, 99.0, 21.0), egui::TextEdit::singleline(&mut form.volume).id(volume_id));
     ui.scope_builder(egui::UiBuilder::new().max_rect(at(242.0, 240.0, 22.0, 21.0)), |ui| {
         ui.menu_button("▼", |ui| {
             for label in form.volume_labels.clone() {
@@ -259,8 +262,9 @@ pub(super) fn archive_create_ui(ui: &mut egui::Ui, form: &mut ArchiveCreateForm,
             }
         });
     });
-    put_left(ui, at(44.0, 276.0, 97.0, 15.0), egui::Label::new(text("Caption.lPassword", "&Password:")).truncate());
-    ui.put(at(143.0, 273.0, 121.0, 21.0), egui::TextEdit::singleline(&mut form.password).password(true));
+    let password_id = egui::Id::new("archive-password");
+    super::original_dialogs::access_label(ui, at(44.0, 276.0, 97.0, 15.0), &raw("Caption.lPassword", "&Password:"), password_id);
+    ui.put(at(143.0, 273.0, 121.0, 21.0), egui::TextEdit::singleline(&mut form.password).password(true).id(password_id));
     ui.painter().hline(area.min.x + 20.0..=area.min.x + 424.0, area.min.y + 310.0, ui.visuals().widgets.noninteractive.bg_stroke);
     if ui.put(at(253.0, 320.0, 83.0, 25.0), egui::Button::new(text("Caption.btnOk", "Compress"))).clicked() {
         choice = Some(0);
