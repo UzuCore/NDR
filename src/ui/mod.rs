@@ -338,7 +338,6 @@ struct Job {
     report: file_operation::JobReport,
     /// Some = C# FileOperationProgressWindow(삭제·완전 삭제는 None, C#도 창이 없다).
     progress: Option<file_operation::ProgressInfo>,
-    started: Instant,
     /// 오류 상자로 이미 보인 오류 수(C# InteractiveErrorCount).
     interactive: usize,
     /// 충돌에서 건너뛴 항목 수(C# SkippedItems).
@@ -368,7 +367,6 @@ impl Job {
             report: file_operation::JobReport::Generic,
             progress: Some(file_operation::ProgressInfo::default()),
 
-            started: Instant::now(),
             interactive: 0,
             skipped: 0,
             fatal: None,

@@ -271,7 +271,6 @@ pub(super) struct ProgressInfo {
     pub caption: Option<String>,
 }
 
-/// C# FormatDuration.
 /// 원본 0x412308 lTo: 지금 대상 파일의 폴더. 작업이 지금 원본 파일(`current`)의 대상을 알려 왔으면(Event::Target) 그 폴더,
 /// 아니면 시작 원본 폴더(`from`) 아래의 같은 상대 경로를 시작 대상 폴더(`to`)에 붙인 폴더(얻을 수 없으면 `to`).
 pub(super) fn progress_target_line(from: Option<&str>, to: Option<&str>, current: &str, target: Option<&(PathBuf, PathBuf)>) -> Option<String> {
@@ -291,11 +290,7 @@ pub(super) fn progress_target_line(from: Option<&str>, to: Option<&str>, current
     }
 }
 
-fn format_duration(seconds: f64) -> String {
-    let total = seconds.max(0.0) as u64;
-    let (days, hours, minutes, secs) = (total / 86_400, total / 3600 % 24, total / 60 % 60, total % 60);
-    if days >= 1 { format!("{days}.{hours:02}:{minutes:02}:{secs:02}") } else { format!("{hours:02}:{minutes:02}:{secs:02}") }
-}
+
 
 /// C# GetFileOperationSourcePath: 폴더면 그 폴더, 파일이면 들어 있는 폴더.
 pub(super) fn source_folder(path: &Path) -> Option<String> {
@@ -447,7 +442,7 @@ impl App {
         use super::original_dialogs::{path_ellipsis, put_enabled, put_left};
         let ko = self.language == "ko";
         let covered = !self.msgboxes.is_empty() || !self.original_dialogs.is_empty();
-        let remaining_label = self.language_pack.text("formProgress.Caption.lRemaining", "Remaining:");
+
         let cancel_label = super::favorites_dialog::access_key(&self.language_pack.text("formProgress.Caption.btnCancel", "&Cancel")).0;
         let Some(job) = self.job.as_mut().filter(|j| !j.finished) else { return };
         let Some(info) = job.progress.clone() else { return };
@@ -469,13 +464,10 @@ impl App {
         } else {
             None
         };
-        // lRemaining: 원본은 남은 바이트(StrFormatByteSizeW). 바이트 합계가 없으면 C# 판의 남은 시간.
+        // lRemaining: 원본 FUN_00412558 = 남은 바이트(StrFormatByteSizeW), 바이트 합계를 알 때만. 처음(FUN_00411cbc)은 빈 글.
         let remaining = match info.total_bytes.filter(|t| *t > 0) {
             Some(total) if info.prefer_bytes => ndr::native::format_byte_size(total.saturating_sub(job.bytes)),
-            _ => match fraction {
-                Some(f) if f > 0.0 && f < 1.0 => format!("{remaining_label} {}", format_duration(job.started.elapsed().as_secs_f64() * (1.0 - f) / f)),
-                _ => String::new(),
-            },
+            _ => String::new(),
         };
         // lCount: 원본 "(%d)" = 남은 항목 수. 전체를 모르면 C# 판처럼 끝난 수.
         let count = match info.total_files {
