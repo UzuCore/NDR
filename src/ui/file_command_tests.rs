@@ -1494,6 +1494,21 @@ fn popup_frame(app: &mut App, ctx: &egui::Context, events: Vec<egui::Event>) {
 
 
 /// 원본 lbLocationKeyDown(0x41cac0): 위치 목록에서 Delete = 지우기(btnDeleteClick), Insert = 더하기(btnAddClick).
+/// 원본 휴지통 단추 FUN_0042f13c: 아무 키 없음 = 휴지통(설정과 관계없이), Shift = 삭제, Shift+Ctrl = 완전 삭제, Ctrl+Alt = 휴지통 열기, 다른 조합 = 없음.
+#[test]
+fn recycle_button_follows_the_original_keys() {
+    use egui::Modifiers as M;
+    let target = super::commands::recycle_button_target;
+    assert_eq!(target(M::NONE), Some("deleteRecycle"));
+    assert_eq!(target(M::SHIFT), Some("deletePermanent"));
+    assert_eq!(target(M::SHIFT | M::CTRL), Some("shred"));
+    assert_eq!(target(M::CTRL | M::ALT), Some("openRecycle"));
+    assert_eq!(target(M::CTRL), None);
+    assert_eq!(target(M::ALT), None);
+    assert_eq!(target(M::SHIFT | M::ALT), None);
+    assert_eq!(target(M::SHIFT | M::CTRL | M::ALT), None);
+}
+
 #[test]
 fn cleanup_location_keys_follow_the_original() {
     let (root, ctx, app) = fixture("cleanup-keys", "en");

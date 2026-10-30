@@ -526,10 +526,8 @@ impl App {
         match id {
             "historyBack"=>self.dispatch("back",ctx),"historyForward"=>self.dispatch("forward",ctx),"batchRename"=>self.dispatch("advancedRename",ctx),
             "deleteToolbar"=>{
-                // 원본 휴지통 단추(RECYCLEBIN_HINT): 누르기 = 휴지통, Shift = 삭제, Shift+Ctrl = 완전 삭제, Ctrl+Alt = 휴지통 열기.
-                // 아무 키도 없으면 C#처럼 UseRecycleBin을 따른다(차이: 원본 도움말은 늘 휴지통).
-                let m=ctx.input(|i|i.modifiers);
-                let target=if m.ctrl&&m.alt{"openRecycle"}else if m.shift&&m.ctrl{"shred"}else if m.shift{"deletePermanent"}else if self.settings.flag("UseRecycleBin",true){"deleteRecycle"}else{"deletePermanent"};
+                // 원본 휴지통 단추 FUN_0042f13c: 누를 때의 Shift·Ctrl·Alt로 고른다.
+                let Some(target)=recycle_button_target(ctx.input(|i|i.modifiers)) else { return };
                 self.dispatch(target,ctx)
             },"extractToolbar"=>self.dispatch("extractSelected",ctx),
             "open"=>self.open_current(),
@@ -748,6 +746,17 @@ impl App {
             job.progress = Some(super::file_operation::ProgressInfo { allow_pause: true, ..progress });
         }
         true
+    }
+}
+/// 원본 휴지통 단추 FUN_0042f13c(GetKeyState): 아무 키 없음 = 휴지통(FUN_0042c734 형식 0), Shift만 = 삭제(1),
+/// Shift+Ctrl = 완전 삭제(2), Ctrl+Alt = 휴지통 열기(FUN_00432fe4). 다른 조합은 아무것도 하지 않는다.
+pub(super) fn recycle_button_target(m: egui::Modifiers) -> Option<&'static str> {
+    match (m.shift, m.ctrl, m.alt) {
+        (false, false, false) => Some("deleteRecycle"),
+        (true, false, false) => Some("deletePermanent"),
+        (true, true, false) => Some("shred"),
+        (false, true, true) => Some("openRecycle"),
+        _ => None,
     }
 }
 /// C# FileOperationControl.WaitIfPausedAsync: 일시 정지 동안 기다린다(취소하면 바로 돌아간다).
