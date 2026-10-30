@@ -184,7 +184,9 @@ pub fn internal_command(name: &str) -> InternalCommand {
         "SELECT" => SelectCurrent,
         "FTPSITEMANAGER" => Menu("sites"),
         "OPENALLSELECTED" => Menu("openAll"),
-        "FOLDERTREE" => Menu("toggleFolders"),
+        // 고친 것: 원본 FUN_00443f14의 점프 표는 0x2f(OpenAllSelected)·0x30(FolderTree)을 아무것도 안 하는 칸(0x4446dc)으로 둔다.
+        // 기능키 이름(FUNC_FOLDERTREE "폴더 트리")대로 F10 폴더 선택 창(miFolderTreeClick)을 연다.
+        "FOLDERTREE" => Menu("folderTree"),
         "GOTOROOT" => Menu("goRoot"),
         "GOTOPARENT" => Menu("goParent"),
         "GOTOLASTDEST" => Menu("goLastDestination"),
@@ -430,7 +432,7 @@ mod tests {
         assert_eq!(internal_command("#ignored"), Unknown);
         assert_eq!(internal_command("MoveToRight:arg"), CopyToOther { source: 0, moving: true });
         assert_eq!(internal_command("Select"), SelectCurrent);
-        assert_eq!(internal_command("FolderTree"), Menu("toggleFolders"));
+        assert_eq!(internal_command("FolderTree"), Menu("folderTree"));
         assert_eq!(internal_command("Favorites"), FavoritesMenu);
         assert_eq!(internal_command("OpenRecycleBin"), Menu("openRecycle"));
         assert_eq!(internal_command("none"), None);
