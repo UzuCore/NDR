@@ -1509,6 +1509,60 @@ fn recycle_button_follows_the_original_keys() {
     assert_eq!(target(M::SHIFT | M::CTRL | M::ALT), None);
 }
 
+thread_local! {
+    static TREE_ROOT: RefCell<PathBuf> = const { RefCell::new(PathBuf::new()) };
+}
+/// 시험용 트리 뿌리: 가짜 드라이브(시험 폴더) 아래 경로만 그 뿌리.
+fn fake_tree_root(path: &str) -> String {
+    let root = TREE_ROOT.with(|r| r.borrow().clone());
+    let text = root.to_string_lossy().into_owned();
+    if path.to_lowercase().starts_with(&text.to_lowercase()) { format!("{text}\\") } else { String::new() }
+}
+
+/// 원본 miFolderTreeClick 0x43c81a → FUN_0040ca90 → TfFolderTree: 처음 경로를 고르고(트리 파일이 없으면 드라이브를 훑는다),
+/// 화살표(ArrowKey 0x7e7c3c: ↓ = 같은 단계 다음 항목)로 옮기고, Enter(btnOk Default) = 그 경로로 지금 패널을 옮긴다. 닫을 때 트리 파일을 저장한다.
+#[test]
+fn folder_tree_window_follows_the_original_tffoldertree() {
+    let (root, ctx, mut app) = fixture("foldertree", "ko");
+    let drive = root.join("drive");
+    for dir in ["x/a/a1", "x/a/a2", "x/b", "x/c", "y"] {
+        fs::create_dir_all(drive.join(dir)).unwrap();
+    }
+    TREE_ROOT.with(|r| *r.borrow_mut() = drive.clone());
+    app.system.tree_root = fake_tree_root;
+    let start = drive.join("x").join("a");
+    app.navigate(0, start.clone(), false);
+    wait_listing(&mut app, &ctx);
+    app.active = 0;
+    app.dispatch("folderTree", &ctx);
+    assert!(matches!(app.original_dialogs.last().map(|d| &d.kind), Some(DialogKind::FolderTree(_))));
+    assert_eq!(app.original_dialogs.last().unwrap().title, app.language_pack.text("formFolderTree.Form.Caption", "?"));
+    let end = Instant::now() + Duration::from_secs(20);
+    while matches!(app.original_dialogs.last().map(|d| &d.kind), Some(DialogKind::FolderTree(form)) if form.scan.is_some()) {
+        assert!(Instant::now() < end, "scan timeout");
+        frame(&mut app, &ctx, vec![]);
+        thread::sleep(Duration::from_millis(10));
+    }
+    let form = |app: &App| match app.original_dialogs.last().map(|d| &d.kind) {
+        Some(DialogKind::FolderTree(form)) => (form.address.clone(), form.focused.map(|i| form.tree.items[i].name.clone())),
+        _ => panic!("no folder tree"),
+    };
+    assert_eq!(form(&app), (start.to_string_lossy().into_owned(), Some("a".to_owned())), "SetPath(처음 경로)");
+    frame(&mut app, &ctx, vec![key(egui::Key::ArrowDown)]);
+    assert_eq!(form(&app).1.as_deref(), Some("b"), "↓ = next item on the same level");
+    frame(&mut app, &ctx, vec![key(egui::Key::ArrowLeft)]);
+    assert_eq!(form(&app).1.as_deref(), Some("x"), "← = parent");
+    frame(&mut app, &ctx, vec![key(egui::Key::ArrowRight)]);
+    assert_eq!(form(&app).1.as_deref(), Some("a"), "→ = next visible (first child, same row)");
+    frame(&mut app, &ctx, vec![key(egui::Key::ArrowDown), key(egui::Key::Enter)]);
+    assert!(app.original_dialogs.is_empty(), "Enter = btnOk(Default)");
+    wait_listing(&mut app, &ctx);
+    assert_eq!(app.panes[0].path, drive.join("x").join("b"));
+    let saved: Vec<_> = fs::read_dir(root.join("profile").join("treedata")).unwrap().flatten().collect();
+    assert_eq!(saved.len(), 1, "SaveTree on close");
+    fs::remove_dir_all(root).unwrap();
+}
+
 #[test]
 fn cleanup_location_keys_follow_the_original() {
     let (root, ctx, app) = fixture("cleanup-keys", "en");

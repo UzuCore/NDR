@@ -8,6 +8,7 @@ mod destination_dialog;
 mod dialogs;
 mod disk_copy_dialog;
 mod drag_drop;
+mod folder_tree_dialog;
 mod favorites_dialog;
 mod function_key_editor;
 mod file_commands;

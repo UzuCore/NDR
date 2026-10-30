@@ -573,7 +573,15 @@ impl App {
             "toggleFolderInfoBar"=>self.toggle_info_bar("ShowFolderDiskInfoBar"),"toggleFileInfoBar"=>self.toggle_info_bar("ShowFileInfoBar"),"toggleExtensionInfoBar"=>self.toggle_info_bar("ShowExtensionInfoBar"),
             "toggleHidden"=>self.toggle_hidden(),"toggleDual"=>self.dual=!self.dual,
             "viewAuto"|"viewDetails"|"viewNames"|"viewThumbnails"=>self.set_view_style(&id[4..]),
-            "folderTree"|"browseFolder"=>{self.status=self.tr("F10 폴더 선택창 내부 이식은 보류 중입니다.","F10 folder picker internals remain on hold.").into();},
+            // 원본 miFolderTreeClick 0x43c81a: 로컬 위치(FUN_00481948 == 0)면 FUN_0040ca90(지금 폴더) → 고른 경로가 있으면 FUN_0048d6e4(그 폴더로).
+            "folderTree"|"browseFolder"=>{
+                if self.panes[i].archive.is_none()&&self.panes[i].remote.is_none(){
+                    let start=self.panes[i].path.clone();
+                    self.folder_tree_dialog(&start,None,move|app,path,_|{
+                        if let Some(path)=path.filter(|p|!p.as_os_str().is_empty()){app.navigate(i,path,true);}
+                    });
+                }
+            },
             "filter"=>self.show_filter_prompt(),
             "find"=>self.find_command(),"findNext"=>self.find_next(),
             "favorites"=>self.manage_favorites(),"favoritesMenu"=>self.show_favorites_menu(),"addToFavorites"=>self.add_to_favorites_command(),

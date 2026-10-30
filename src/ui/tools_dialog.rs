@@ -58,6 +58,8 @@ pub(super) struct SystemHooks {
     pub wheel_lines: fn() -> u32,
     /// 원본 PlaySoundW(파일, 0x22003)(native::play_wave). 시험에서는 소리를 내지 않고 PLAYED에 남긴다.
     pub play_wave: fn(Option<&Path>) -> bool,
+    /// 폴더 트리 창의 뿌리(드라이브 뿌리 "C:\"). 시험에서는 빈 글(실제 드라이브를 훑지 않는다)이고, 트리 시험은 가짜 뿌리를 끼운다.
+    pub tree_root: fn(&str) -> String,
 }
 
 #[cfg(test)]
@@ -232,6 +234,10 @@ impl Default for SystemHooks {
             play_wave: native::play_wave,
             #[cfg(test)]
             play_wave: record_wave,
+            #[cfg(not(test))]
+            tree_root: super::folder_tree_dialog::drive_root,
+            #[cfg(test)]
+            tree_root: |_| String::new(),
         }
     }
 }

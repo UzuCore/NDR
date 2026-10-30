@@ -914,6 +914,14 @@ pub fn volume_label(root: &Path) -> Option<String> {
     ok.then(|| String::from_utf16_lossy(&name[..name.iter().position(|c| *c == 0).unwrap_or(name.len())]))
 }
 
+/// 원본 xilesShell GetVolumeSerial: GetVolumeInformationW의 볼륨 일련번호(트리 파일 이름 FUN_007e3e7c에 쓴다). 읽을 수 없으면 None.
+pub fn volume_serial(root: &Path) -> Option<u32> {
+    let mut serial = 0u32;
+    // SAFETY: NUL-terminated root; only the serial output is requested.
+    let ok = unsafe { GetVolumeInformationW(wide(root.as_os_str()).as_ptr(), ptr::null_mut(), 0, &mut serial, ptr::null_mut(), ptr::null_mut(), ptr::null_mut(), 0) } != 0;
+    ok.then_some(serial)
+}
+
 /// InputLanguageManager.CurrentInputLanguage가 영어인가(GetKeyboardLayout(0)의 주 언어 = LANG_ENGLISH).
 pub fn english_input_language() -> bool {
     // SAFETY: GetKeyboardLayout(0) reads the calling thread's layout.

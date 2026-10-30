@@ -20,6 +20,7 @@ pub mod split;
 pub mod update;
 pub mod file_dialogs;
 pub mod folder_compare;
+pub mod folder_tree;
 pub mod cleanup;
 pub mod command_line;
 pub mod list_export;
