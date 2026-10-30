@@ -177,14 +177,14 @@ impl App {
             "foldertree" => {
                 let lines: Vec<ndr::folder_tree::Line> = [
                     (true, 0, "C:\\"), (true, 1, "Program Files"), (true, 2, "Common Files"), (false, 2, "Internet Explorer"), (true, 2, "Windows NT"),
-                    (true, 3, "Accessories"), (true, 1, "Users"), (true, 2, "byunj"), (true, 3, "Documents"), (true, 3, "Downloads"), (true, 3, "Pictures"),
+                    (true, 3, "Accessories"), (true, 1, "Users"), (true, 2, "user"), (true, 3, "Documents"), (true, 3, "Downloads"), (true, 3, "Pictures"),
                     (true, 2, "Public"), (true, 1, "Windows"), (false, 2, "System32"), (false, 2, "Temp"),
                 ].iter().map(|(e, l, n)| (*e, *l, n.to_string())).collect();
                 let drives = vec![(PathBuf::from("C:\\"), "Local Disk".to_owned()), (PathBuf::from("D:\\"), "Data".to_owned())];
-                let mut form = super::folder_tree_dialog::FolderTreeForm::new(&self.settings, &self.profile, drives, vec!["C:\\Users\\byunj\\Downloads".into()]);
+                let mut form = super::folder_tree_dialog::FolderTreeForm::new(&self.settings, &self.profile, drives, vec!["C:\\Users\\user\\Downloads".into()]);
                 form.tree = ndr::folder_tree::Tree::from_lines(&lines).unwrap_or_default();
                 form.drive = "C:\\".into();
-                let target = form.tree.find_path("C:\\Users\\byunj\\Pictures");
+                let target = form.tree.find_path("C:\\Users\\user\\Pictures");
                 form.focus(target, 1);
                 self.push_original_dialog(text(self, "formFolderTree.Form.Caption"), DialogKind::FolderTree(Box::new(form)), |_, _, _| {});
             }

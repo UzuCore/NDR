@@ -129,15 +129,16 @@ pub(super) fn is_sub_folder(parent: &Path, child: &Path) -> bool {
     child.len() > parent.len() && child.starts_with(&parent) && child.as_bytes().get(parent.len()) == Some(&b'\\')
 }
 
-/// 보이는 단추. 원본 FUN_004116dc(로컬 복사): 새 항목이 폴더면 btnReplace, 아니면 btnOverNewer(같은 자리).
-/// FUN_00422870: 기존 = 새 경로면 덮어쓰기·새 파일 덮어쓰기·폴더 교체를 숨기고, 폴더 교체가 보일 때 새 항목이 기존 안이면 폴더 교체를,
-/// 기존이 새 항목 안이면 폴더 교체와 덮어쓰기를 숨긴다. 이어서 전송(btnResume)은 C# 판처럼 이어 받을 수 있을 때만.
-pub(super) fn conflict_buttons(form: &ConflictForm) -> Vec<ConflictButton> {
+/// 보이는 단추와 켜짐. 원본 FUN_004116dc(로컬 복사): 새 항목이 폴더면 btnReplace, 아니면 btnOverNewer를 보인다(같은 자리, Visible).
+/// FUN_00422870은 끄기만 한다(Enabled = False, 가상 SetEnabled +0x94): 기존 = 새 경로면 덮어쓰기·새 파일 덮어쓰기·폴더 교체를 끄고,
+/// 폴더 교체가 보일 때 새 항목이 기존 안이면 폴더 교체를, 기존이 새 항목 안이면 폴더 교체와 덮어쓰기를 끈다. 이어서 전송(btnResume,
+/// DFM Visible = False)은 C# 판처럼 이어 받을 수 있는 작업일 때 보이고, 원본처럼 기존이 새 파일보다 작을 때만 켠다.
+/// 고친 것(사용자 지적): 전에는 쓸 수 없는 단추를 숨겨 창이 비어 보였다.
+pub(super) fn conflict_buttons(form: &ConflictForm) -> Vec<(ConflictButton, bool)> {
     let same = form.source.to_string_lossy().eq_ignore_ascii_case(&form.destination.to_string_lossy());
     let mut overwrite = !same;
-    let mut replace = form.source_dir && !same;
-    let newer = !form.source_dir && !same;
-    if replace {
+    let mut replace = !same;
+    if form.source_dir {
         if is_sub_folder(&form.destination, &form.source) {
             replace = false;
         }
@@ -147,21 +148,18 @@ pub(super) fn conflict_buttons(form: &ConflictForm) -> Vec<ConflictButton> {
         }
     }
     let mut buttons = Vec::new();
-    if form.can_resume() {
-        buttons.push(ConflictButton::Resume);
+    if form.allow_resume {
+        buttons.push((ConflictButton::Resume, form.can_resume()));
     }
-    if overwrite {
-        buttons.push(ConflictButton::Overwrite);
+    buttons.push((ConflictButton::Overwrite, overwrite));
+    buttons.push((ConflictButton::Skip, true));
+    if form.source_dir {
+        buttons.push((ConflictButton::ReplaceFolder, replace));
+    } else {
+        buttons.push((ConflictButton::OverwriteNewer, !same));
     }
-    buttons.push(ConflictButton::Skip);
-    if newer {
-        buttons.push(ConflictButton::OverwriteNewer);
-    }
-    if replace {
-        buttons.push(ConflictButton::ReplaceFolder);
-    }
-    buttons.push(ConflictButton::Rename);
-    buttons.push(ConflictButton::Cancel);
+    buttons.push((ConflictButton::Rename, true));
+    buttons.push((ConflictButton::Cancel, true));
     buttons
 }
 
@@ -222,7 +220,7 @@ pub(super) fn conflict_ui(ui: &mut egui::Ui, form: &mut ConflictForm, language: 
     let raw = |key: &str, fallback: &str| language.raw(&format!("formFileExists.{key}")).unwrap_or_else(|| fallback.to_owned());
     super::original_dialogs::access_checkbox(ui, at(20.0, 221.0, 390.0, 17.0), &mut form.apply_all, &raw("Caption.chkApplyAll", "&Apply to all"));
     let mut chosen = None;
-    for button in conflict_buttons(form) {
+    for (button, enabled) in conflict_buttons(form) {
         // 원본 FUN_00422314: 폴더 충돌이면 덮어쓰기 단추 글이 MERGE_FOLDER("폴더 합치기(&G)")다.
         let label = match button {
             ConflictButton::Overwrite if form.source_dir && form.destination_dir => language.raw("RES.MERGE_FOLDER").unwrap_or_else(|| "Mer&ge".into()),
@@ -234,7 +232,7 @@ pub(super) fn conflict_ui(ui: &mut egui::Ui, form: &mut ConflictForm, language: 
             ConflictButton::Rename => raw("Caption.btnRename", "&Rename"),
             ConflictButton::Cancel => raw("Caption.btnAbort", "&Cancel"),
         };
-        if super::original_dialogs::access_button(ui, at(425.0, button.top(), 112.0, 25.0), &label) && chosen.is_none() {
+        if super::original_dialogs::vcl_button(ui, at(425.0, button.top(), 112.0, 25.0), enabled, &label).1 && chosen.is_none() {
             chosen = Some(button.choice());
         }
     }

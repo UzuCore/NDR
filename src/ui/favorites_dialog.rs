@@ -177,7 +177,6 @@ pub(super) fn favorites_ui(ui: &mut egui::Ui, form: &mut FavoritesForm, language
 }
 /// 드롭다운 메뉴 한 줄.
 pub(super) enum PopupItem {
-    Header(String),
     Separator,
     Entry { label: String, access: Option<char>, gesture: String, enabled: bool, checked: bool, action: PopupAction },
 }
@@ -516,9 +515,6 @@ impl App {
                 };
                 for (index, item) in popup.items.iter().enumerate() {
                     match item {
-                        PopupItem::Header(title) => {
-                            ui.label(RichText::new(title).weak());
-                        }
                         PopupItem::Separator => {
                             if visible_separator(index) {
                                 ui.separator();

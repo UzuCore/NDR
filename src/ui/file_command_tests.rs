@@ -1473,7 +1473,6 @@ fn address_bar_menu_follows_the_original_pm_address_bar() {
     let rows: Vec<String> = popup.items.iter().map(|item| match item {
         super::favorites_dialog::PopupItem::Entry { label, .. } => label.clone(),
         super::favorites_dialog::PopupItem::Separator => "-".into(),
-        super::favorites_dialog::PopupItem::Header(title) => format!("[{title}]"),
     }).collect();
     let text = |key: &str| app.language_pack.text(key, "?");
     assert_eq!(rows, [text("Menu.mipAddressCopy"), text("Menu.mipAddressEdit"), "-".into(), "Right".into(), "-".into(), text("Menu.miAddToFavorites"), text("Menu.miOrgFavorites")]);

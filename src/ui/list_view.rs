@@ -266,7 +266,7 @@ pub(super) fn drive_row(ui: &mut egui::Ui, size: egui::Vec2, icon: Option<&egui:
 /// 채움은 늘 (NXFORE, NXBACK, 0.2), 글은 커서 항목이면 항목 글자 색, 아니면 NXSIZE(크기 열 색).
 #[allow(clippy::too_many_arguments)]
 pub(super) fn paint_drive_space(ui: &egui::Ui, rect: egui::Rect, label_right: f32, kind: u32, sizes: Option<(u64, u64)>, cursor: bool, item_color: Color32, free_label: &str, style: u8) {
-    // 원본은 고정 디스크(3)만. 고친 것: 크기를 읽은 WSL 네트워크 드라이브(drive_item_info)도 그린다.
+    // 원본은 고정 디스크(3)만. 고친 것: 크기를 읽은 연결된 네트워크 드라이브(drive_item_info)도 그린다.
     let Some((free, total)) = sizes.filter(|_| kind == 3 || kind == 4) else { return };
     let room = rect.right() - label_right;
     if total == 0 || room <= 79.0 {

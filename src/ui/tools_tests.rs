@@ -1882,7 +1882,6 @@ fn toolbar_user_command_and_container_follow_the_original() {
     let rows: Vec<String> = popup.items.iter().map(|item| match item {
         super::favorites_dialog::PopupItem::Entry { label, .. } => label.clone(),
         super::favorites_dialog::PopupItem::Separator => "-".into(),
-        super::favorites_dialog::PopupItem::Header(text) => text.clone(),
     }).collect();
     assert_eq!(rows, ["Up", "-", "Calc"], "names, and the original caption rule for an unnamed user command");
     thread_local!(static RAN: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) });

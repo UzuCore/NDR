@@ -217,23 +217,25 @@ fn conflict_buttons_follow_the_original_tffileexists() {
         icons: [None, None],
         textures: [None, None],
     };
-    // 파일: 덮어쓰기·건너뛰기·새 파일 덮어쓰기·이름 바꾸기·취소(폴더 교체 없음).
-    assert_eq!(conflict_buttons(&form("c:\\a\\x.txt", "c:\\b\\x.txt", false, false)), [B::Overwrite, B::Skip, B::OverwriteNewer, B::Rename, B::Cancel]);
+    // 파일: 덮어쓰기·건너뛰기·새 파일 덮어쓰기·이름 바꾸기·취소(폴더 교체 없음), 모두 켜짐.
+    assert_eq!(conflict_buttons(&form("c:\\a\\x.txt", "c:\\b\\x.txt", false, false)), [(B::Overwrite, true), (B::Skip, true), (B::OverwriteNewer, true), (B::Rename, true), (B::Cancel, true)]);
     // 새 항목이 폴더: 같은 자리(118)에 새 파일 덮어쓰기 대신 폴더 교체.
-    assert_eq!(conflict_buttons(&form("c:\\a\\d", "c:\\b\\d", true, true)), [B::Overwrite, B::Skip, B::ReplaceFolder, B::Rename, B::Cancel]);
+    assert_eq!(conflict_buttons(&form("c:\\a\\d", "c:\\b\\d", true, true)), [(B::Overwrite, true), (B::Skip, true), (B::ReplaceFolder, true), (B::Rename, true), (B::Cancel, true)]);
     assert_eq!(B::ReplaceFolder.top(), B::OverwriteNewer.top());
-    // 같은 경로: 덮어쓰기·새 파일 덮어쓰기·폴더 교체를 숨긴다.
-    assert_eq!(conflict_buttons(&form("C:\\a\\x.txt", "c:\\A\\X.TXT", false, false)), [B::Skip, B::Rename, B::Cancel]);
-    // 새 항목이 기존 폴더 안이면 폴더 교체만, 기존이 새 폴더 안이면 폴더 교체와 덮어쓰기를 숨긴다.
-    assert_eq!(conflict_buttons(&form("c:\\d\\d", "c:\\d", true, true)), [B::Overwrite, B::Skip, B::Rename, B::Cancel]);
-    assert_eq!(conflict_buttons(&form("c:\\d", "c:\\d\\d", true, true)), [B::Skip, B::Rename, B::Cancel]);
+    // 같은 경로: 덮어쓰기·새 파일 덮어쓰기·폴더 교체를 끈다(숨기지 않는다).
+    assert_eq!(conflict_buttons(&form("C:\\a\\x.txt", "c:\\A\\X.TXT", false, false)), [(B::Overwrite, false), (B::Skip, true), (B::OverwriteNewer, false), (B::Rename, true), (B::Cancel, true)]);
+    // 새 항목이 기존 폴더 안이면 폴더 교체만, 기존이 새 폴더 안이면 폴더 교체와 덮어쓰기를 끈다.
+    assert_eq!(conflict_buttons(&form("c:\\d\\d", "c:\\d", true, true)), [(B::Overwrite, true), (B::Skip, true), (B::ReplaceFolder, false), (B::Rename, true), (B::Cancel, true)]);
+    assert_eq!(conflict_buttons(&form("c:\\d", "c:\\d\\d", true, true)), [(B::Overwrite, false), (B::Skip, true), (B::ReplaceFolder, false), (B::Rename, true), (B::Cancel, true)]);
     assert!(is_sub_folder(std::path::Path::new("C:\\Data\\"), std::path::Path::new("c:\\data\\x")));
     assert!(!is_sub_folder(std::path::Path::new("c:\\data"), std::path::Path::new("c:\\data2\\x")));
     assert!(!is_sub_folder(std::path::Path::new("c:\\data"), std::path::Path::new("c:\\data")));
-    // 이어서 전송은 C# 판처럼 이어 받을 수 있을 때만(맨 위 25).
+    // 이어서 전송: 이어 받을 수 있는 작업이면 보이고(맨 위 25), 기존이 새 파일보다 작을 때만 켜진다(원본 FUN_00422870).
     let mut resumable = form("c:\\a\\x.bin", "c:\\b\\x.bin", false, false);
     (resumable.source_size, resumable.destination_size, resumable.allow_resume) = (Some(20), Some(10), true);
-    assert_eq!(conflict_buttons(&resumable)[0], B::Resume);
+    assert_eq!(conflict_buttons(&resumable)[0], (B::Resume, true));
+    resumable.destination_size = Some(30);
+    assert_eq!(conflict_buttons(&resumable)[0], (B::Resume, false), "a larger existing file cannot be resumed");
     assert_eq!((B::Resume.top(), B::Overwrite.top(), B::Skip.top(), B::Rename.top(), B::Cancel.top()), (25.0, 56.0, 87.0, 149.0, 220.0));
 }
 

@@ -1035,8 +1035,8 @@ pub fn disk_capacity(path: &Path) -> Option<(u64, u64)> {
     Some((free, total))
 }
 
-/// 연결된 네트워크 드라이브의 이름(탐색기처럼): 대상 "\\서버\공유\아래"의 마지막 조각과 그 앞 경로 = "아래 (\\서버\공유)".
-/// "\\서버\공유"면 "공유 (\\서버)". 셸은 WSL(9P) 같은 연결을 "연결 끊긴 네트워크 드라이브"로 보이므로 대신 쓴다.
+/// 연결된 네트워크 드라이브의 이름: 연결 대상 UNC 경로 그대로("\\서버\공유\아래", 끝 '\' 뺌).
+/// 볼륨 이름이 없는 연결(9P 등)은 셸이 "연결 끊긴 네트워크 드라이브"로 보이므로 대신 쓴다. 사용자 요청: 전에는 탐색기처럼 "아래 (\\서버\공유)"였다.
 pub fn network_drive_name(target: &str) -> Option<String> {
     let trimmed = target.trim_end_matches('\\');
     let rest = trimmed.strip_prefix("\\\\")?;
@@ -1044,8 +1044,7 @@ pub fn network_drive_name(target: &str) -> Option<String> {
     if parts.len() < 2 {
         return None;
     }
-    let (last, parent) = parts.split_last()?;
-    Some(format!("{last} (\\\\{})", parent.join("\\")))
+    Some(format!("\\\\{}", parts.join("\\")))
 }
 
 /// 드라이브 글자의 연결 대상 UNC: QueryDosDeviceW("X:")의 "\??\UNC\서버\공유…" 또는
@@ -1114,12 +1113,12 @@ pub fn drive_item_info(root: &Path) -> Option<(String, u32, Option<(u64, u64)>)>
     // SAFETY: NUL-terminated root string.
     let kind = unsafe { GetDriveTypeW(name.as_ptr()) };
     let (mut free, mut total) = (0u64, 0u64);
-    // 고친 것(사용자 요청): 원본은 고정 디스크만 크기를 읽지만, WSL 네트워크 드라이브(\\wsl.localhost·\\wsl$)도 읽는다.
-    // 다른 네트워크 드라이브는 끊겨 있으면 오래 걸릴 수 있어 원본처럼 읽지 않는다.
+    // 고친 것(사용자 요청): 원본은 고정 디스크만 크기를 읽지만, 연결된(볼륨을 읽을 수 있는) 네트워크 드라이브도 읽는다.
+    // 끊긴 네트워크 드라이브는 오래 걸릴 수 있어 원본처럼 읽지 않는다.
     let label = drive_name(root);
-    let wsl = kind == 4 && drive_unc_target(root).is_some_and(|target| { let lower = target.to_lowercase(); lower.starts_with("\\\\wsl.localhost\\") || lower.starts_with("\\\\wsl$\\") });
+    let connected = kind == 4 && connected_network_drive(root);
     // SAFETY: NUL-terminated root string; out pointers refer to live locals.
-    let sizes = ((kind == 3 || wsl) && unsafe { GetDiskFreeSpaceExW(name.as_ptr(), &mut free, &mut total, ptr::null_mut()) } != 0).then_some((free, total));
+    let sizes = ((kind == 3 || connected) && unsafe { GetDiskFreeSpaceExW(name.as_ptr(), &mut free, &mut total, ptr::null_mut()) } != 0).then_some((free, total));
     Some((label, kind, sizes))
 }
 
@@ -1793,14 +1792,13 @@ mod tests {
 
     #[test]
     fn connected_network_drives_get_a_name_from_their_target() {
-        // 사용자 W: = QueryDosDevice "\??\UNC\wsl.localhost\Ubuntu\home\uzu"(9P, 볼륨 이름 없음).
-        assert_eq!(dos_device_unc(r"\??\UNC\wsl.localhost\Ubuntu\home\uzu").as_deref(), Some(r"\\wsl.localhost\Ubuntu\home\uzu"));
-        // SMB(LanmanRedirector) 꼴.
+        // "\??\UNC\…" 꼴(예: 9P·WebDAV 연결)과 SMB(LanmanRedirector) 꼴.
+        assert_eq!(dos_device_unc(r"\??\UNC\host\share\folder").as_deref(), Some(r"\\host\share\folder"));
         assert_eq!(dos_device_unc(r"\Device\LanmanRedirector\;Z:0000000000012345\server\share").as_deref(), Some(r"\\server\share"));
         assert_eq!(dos_device_unc(r"\Device\HarddiskVolume3"), None);
-        // 이름 = 마지막 조각 (앞 경로).
-        assert_eq!(network_drive_name(r"\\wsl.localhost\Ubuntu\home\uzu").as_deref(), Some(r"uzu (\\wsl.localhost\Ubuntu\home)"));
-        assert_eq!(network_drive_name(r"\\server\share\").as_deref(), Some(r"share (\\server)"));
+        // 이름 = 연결 대상 UNC 경로(끝 '\' 뺌). 서버만 있으면 이름이 아니다.
+        assert_eq!(network_drive_name(r"\\host\share\folder").as_deref(), Some(r"\\host\share\folder"));
+        assert_eq!(network_drive_name(r"\\server\share\").as_deref(), Some(r"\\server\share"));
         assert_eq!(network_drive_name(r"\\server"), None);
     }
 
