@@ -156,6 +156,10 @@ impl App {
             bar = bar.style(bar_style).config(egui::containers::menu::MenuConfig::new().style(super::skin_pane::skin_menu_style(skin)));
         }
         bar.ui(ui, |ui| {
+            // 지난 그림에 메뉴 줄의 메뉴가 열려 있었는지(마우스로 다른 메뉴로 옮겨 가기).
+            let bar_open_id = egui::Id::new("ndr-menubar-open");
+            let bar_was_open = ui.data(|d| d.get_temp::<bool>(bar_open_id)).unwrap_or(false) && egui::Popup::is_any_open(&ctx);
+            let mut any_open = false;
             // 원본 TfMain: 메뉴 단추 tbFile … tbHelp(" 파일(&F) " 글)와 그 DropdownMenu pmFile … pmHelp.
             for (title_key, ko_title, en_title, items) in menu_data::MENUS.iter() {
                 let raw_title = self.language_pack.raw(title_key).unwrap_or_else(|| (if ko { *ko_title } else { *en_title }).to_owned());
@@ -174,6 +178,18 @@ impl App {
                     let previous_width = ui.data(|d| d.get_temp::<f32>(width_id)).unwrap_or(0.0);
                     let column_slot = shortcut_colors.map(|_| ui.painter().add(egui::Shape::Noop));
                     let mut widest = 0.0f32;
+                    // 원본 MenuMeasureItem(0x42df68): 항목 너비 = 글 + 0x20 + 단축키 칸(가장 넓은 단축키 + 0xe). 줄마다 그 메뉴에서 가장
+                    // 넓은 단축키 글과 빈칸 둘을 투명하게 잡아 이름 글이 단축키 칸 바탕에 물리지 않게 한다.
+                    let font = egui::TextStyle::Button.resolve(ui.style());
+                    let reserve = items
+                        .iter()
+                        .map(|(id, _, _)| Self::menu_shortcut_text(id, &shortcuts))
+                        .max_by(|a, b| {
+                            let w = |s: &str| ui.fonts_mut(|f| f.layout_no_wrap(s.to_owned(), font.clone(), Color32::WHITE).size().x);
+                            w(a).total_cmp(&w(b))
+                        })
+                        .unwrap_or_default();
+                    let reserve = format!("{reserve}    ");
                     for (id, ko_label, en_label) in *items {
                         if *id == "-" {
                             pending = shown;
@@ -204,7 +220,7 @@ impl App {
                         let response = match self.menu_checked(id) {
                             Some(mut checked) => ui.add_enabled(enabled, egui::Checkbox::new(&mut checked, label)),
                             // 스킨 테마: 단축키 자리는 투명 글로 잡아 두고 원본 단축키 칸(mrback·mrtext·mrover)을 위에 그린다.
-                            None if shortcut_colors.is_some() => ui.add_enabled(enabled, egui::Button::new(label).shortcut_text(RichText::new(shortcut.clone()).color(Color32::TRANSPARENT))),
+                            None if shortcut_colors.is_some() => ui.add_enabled(enabled, egui::Button::new(label).shortcut_text(RichText::new(reserve.clone()).color(Color32::TRANSPARENT))),
                             None => ui.add_enabled(enabled, egui::Button::new(label).shortcut_text(shortcut.clone())),
                         };
                         if let Some(colors) = shortcut_colors {
@@ -237,7 +253,17 @@ impl App {
                     egui::Popup::open_id(&ctx, egui::Popup::default_response_id(&opened.response));
                     ctx.request_repaint();
                 }
+                // Windows 메뉴 줄(원본 TToolBar 메뉴 단추): 한 메뉴가 열려 있는 동안 다른 메뉴 제목에 마우스를 올리면 그 메뉴로 바뀐다.
+                let popup_id = egui::Popup::default_response_id(&opened.response);
+                if opened.inner.is_some() {
+                    any_open = true;
+                } else if bar_was_open && opened.response.hovered() {
+                    egui::Popup::open_id(&ctx, popup_id);
+                    any_open = true;
+                    ctx.request_repaint();
+                }
             }
+            ui.data_mut(|d| d.insert_temp(bar_open_id, any_open));
             // 원본 tbNewUpdateAvailable(조용한 업데이트 확인에서 새 버전을 찾았을 때). 원본 tbDonation(후원하기)은 사용자 요청으로 뺐다.
             if let Some(url) = self.update_available.clone() {
                 let label = self.language_pack.text("ToolButton.tbNewUpdateAvailable", if ko { "새 업데이트" } else { "New Update Available" }).trim().to_owned();

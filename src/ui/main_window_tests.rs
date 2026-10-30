@@ -92,6 +92,30 @@ fn main_menu_follows_the_original_tfmain_dropdowns() {
     assert!(app.popup.is_some(), "the favorites dropdown opened from the menu letter");
     assert_eq!(app.panes[0].cursor, cursor);
     app.popup = None;
+    // Windows 메뉴 줄: 한 메뉴(파일)가 열린 동안 다른 제목(폴더) 위로 마우스를 옮기면 그 메뉴로 바뀐다(누르지 않아도).
+    let favorites = app.menu_label("favoritesMenu", "?");
+    let screen = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 850.0)));
+    let texts = |output: &egui::FullOutput| output.shapes.iter().filter_map(|c| match &c.shape { egui::Shape::Text(t) => Some(t.galley.text().to_owned()), _ => None }).collect::<Vec<_>>();
+    let alt_f = egui::Event::Key { key: egui::Key::F, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::ALT };
+    let frame = |app: &mut App, events: Vec<egui::Event>| {
+        ctx.run(egui::RawInput { events, screen_rect: screen, ..Default::default() }, |ctx| {
+            app.keyboard(ctx);
+            egui::TopBottomPanel::top("menu").show(ctx, |ui| app.menu(ui));
+        })
+    };
+    frame(&mut app, vec![egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }]);
+    frame(&mut app, vec![alt_f]);
+    let opened = frame(&mut app, vec![]);
+    assert!(egui::Popup::is_any_open(&ctx) && !texts(&opened).contains(&favorites), "the File menu is open");
+    let mut switched = false;
+    for x in (10..400).step_by(10) {
+        let output = frame(&mut app, vec![egui::Event::PointerMoved(egui::pos2(x as f32, 10.0))]);
+        if texts(&output).contains(&favorites) {
+            switched = true;
+            break;
+        }
+    }
+    assert!(switched, "hovering the Folder title while a menu is open opens the Folder menu");
     fs::remove_dir_all(root).unwrap();
 }
 

@@ -143,21 +143,23 @@ impl App {
         let cell = |y: f32| egui::Rect::from_min_size(egui::pos2(x, area.min.y + y), egui::vec2(16.0, 16.0));
         // 원본 TNXPngButton SetNormalImage / SetOverImage: 포인터가 올라가 있으면 over 띠의 같은 칸.
         // (egui Image는 띠 전체의 가로세로 비로 맞춘 뒤 uv를 쓰므로 칸이 납작해진다. 칸을 painter로 바로 그린다.)
-        let image_button = |ui: &mut egui::Ui, rect: egui::Rect, normal: &Option<egui::TextureHandle>, over: &Option<egui::TextureHandle>, index: usize, count: usize, fallback: &str| {
-            let texture = if ui.rect_contains_pointer(rect) { over.as_ref().or(normal.as_ref()) } else { normal.as_ref() };
+        // 꺼진 단추(enabled = false)는 원본 TNXPngButton.Paint 상태 2처럼 꺼짐 그림이 없으면 알파를 반으로(>> 1) 그리고 누르지 못한다.
+        let image_button = |ui: &mut egui::Ui, rect: egui::Rect, normal: &Option<egui::TextureHandle>, over: &Option<egui::TextureHandle>, index: usize, count: usize, fallback: &str, enabled: bool| {
+            let texture = if enabled && ui.rect_contains_pointer(rect) { over.as_ref().or(normal.as_ref()) } else { normal.as_ref() };
             match texture {
                 Some(texture) => {
                     let uv = egui::Rect::from_min_max(egui::pos2(index as f32 / count as f32, 0.0), egui::pos2((index + 1) as f32 / count as f32, 1.0));
-                    let response = ui.interact(rect, ui.id().with(("ndr-vertbar-button", index, count, rect.top() as i32)), egui::Sense::click());
-                    ui.painter().image(texture.id(), rect, uv, Color32::WHITE);
+                    let sense = if enabled { egui::Sense::click() } else { egui::Sense::hover() };
+                    let response = ui.interact(rect, ui.id().with(("ndr-vertbar-button", index, count, rect.top() as i32)), sense);
+                    ui.painter().image(texture.id(), rect, uv, if enabled { Color32::WHITE } else { Color32::WHITE.gamma_multiply(0.5) });
                     response
                 }
-                None => ui.put(rect, egui::Button::new(RichText::new(fallback).size(10.0)).frame(false)),
+                None => super::original_dialogs::put_enabled(ui, rect, enabled, egui::Button::new(RichText::new(fallback).size(10.0)).frame(false)),
             }
         };
         for index in 0..5 {
             let assigned = folders.get(index).is_some_and(|p| !p.is_empty());
-            let response = image_button(ui, cell(50.0 + 18.0 * index as f32), if assigned { &set } else { &unset }, &folder_over, index, 5, &(index + 1).to_string());
+            let response = image_button(ui, cell(50.0 + 18.0 * index as f32), if assigned { &set } else { &unset }, &folder_over, index, 5, &(index + 1).to_string(), true);
             let response = response.on_hover_text(self.work_folder_hint(index));
             if response.clicked() {
                 self.work_folder_click(index);
@@ -176,12 +178,20 @@ impl App {
             ("bSyncPathToRight", 345.0, 4, "Left Path => Right Path", "▶"),
             ("bSyncPathToLeft", 363.0, 5, "Left Path <= Right Path", "◀"),
         ];
+        // 원본 FUN_0044532c(패널 위치가 바뀔 때, 두 패널이면): bSyncPathToRight는 왼쪽, bSyncPathToLeft는 오른쪽 패널 위치가 로컬 폴더(1)일 때만 켠다.
+        let local = |index: usize| { let pane = &self.panes[index]; pane.archive.is_none() && pane.remote.is_none() && !super::panes::is_drives(&pane.path) };
+        let sync_enabled = [local(0), local(1)];
         for (name, y, image, fallback, glyph) in buttons {
             if area.min.y + y + 16.0 > area.max.y {
                 break;
             }
             let tip = hint(self, name, fallback);
-            let response = image_button(ui, cell(y), &strip, &strip_over, image, 10, glyph).on_hover_text(tip);
+            let enabled = match name {
+                "bSyncPathToRight" => sync_enabled[0],
+                "bSyncPathToLeft" => sync_enabled[1],
+                _ => true,
+            };
+            let response = image_button(ui, cell(y), &strip, &strip_over, image, 10, glyph, enabled).on_hover_text(tip);
             match name {
                 // 원본 DropDownMenu pmSort / pmColCount: 단추 아래에 그 메뉴. 스킨 테마는 원본 pmSortPopup/pmColCountPopup처럼
                 // 정렬·열 항목을 하위 메뉴 없이 바로 보인다.
