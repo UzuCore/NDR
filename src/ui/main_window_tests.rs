@@ -642,6 +642,37 @@ fn drive_list_cache_does_not_ask_the_drives_on_every_listing() {
     assert_eq!((again, ASKED.load(Ordering::SeqCst)), (first, 2), "after invalidate the drives are read again");
 }
 
+/// 원본 FUN_004856d8: 표시가 있으면 목록 빈 곳에서 눌러 8화소 넘게 끌어도 표시한 항목을 끈다. 끌어서 목록을 굴리지는 않는다.
+#[test]
+fn skin_drag_from_empty_list_space_drags_the_marks() {
+    let (root, ctx, mut app) = fixture("emptydrag");
+    assert!(app.current_skin().is_some());
+    let left = app.panes[0].path.clone();
+    let b = app.panes[0].entries.iter().position(|e| e.name == "b.txt").unwrap();
+    app.panes[0].selected.insert(b);
+    let run = |app: &mut App, events: Vec<egui::Event>| {
+        let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 850.0))), events, ..Default::default() };
+        let _ = ctx.run(raw, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.columns(2, |columns| {
+                    app.pane_ui(&mut columns[0], 0, ctx);
+                    app.pane_ui(&mut columns[1], 1, ctx);
+                });
+            });
+        });
+    };
+    run(&mut app, vec![]);
+    let pane = app.pane_rects[0];
+    let at = egui::pos2(pane.center().x, pane.bottom() - 90.0);
+    run(&mut app, vec![egui::Event::PointerMoved(at), egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() }]);
+    assert!(app.file_drag.is_none(), "a press alone does not drag");
+    run(&mut app, vec![egui::Event::PointerMoved(at + egui::vec2(20.0, 0.0))]);
+    assert_eq!(app.file_drag.as_ref().map(|d| d.paths.clone()), Some(vec![left.join("b.txt")]), "the marked items are dragged from empty space");
+    app.file_drag = None;
+    run(&mut app, vec![egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() }]);
+    fs::remove_dir_all(root).unwrap();
+}
+
 #[test]
 fn skin_drag_follows_the_original_list_mouse_move() {
     // 원본 FUN_004856d8(목록 OnMouseMove): 가로·세로 8화소를 넘게 움직여야 끌고, 표시 칸에서 누르면 끌지 않는다.
@@ -741,6 +772,13 @@ fn skin_drop_effects_follow_the_original_drop_target() {
     app.handle_drop(1, vec![left.join("c.log")], right.clone(), egui::Modifiers::CTRL | egui::Modifiers::SHIFT);
     assert!(app.msgboxes.is_empty());
     assert!(right.join("c.log.lnk").exists(), "\"name.ext.lnk\" shortcut");
+    // 끄는 동안의 효과(DoDragDrop 포인터): 다른 패널 = 이동(같은 드라이브)·Ctrl = 복사·같은 폴더 = 놓을 수 없음.
+    use super::drag_drop::DropEffect as E;
+    let dragged = vec![left.join("a.txt")];
+    assert_eq!(app.original_drop_effect(1, &dragged, &right, egui::Modifiers::NONE, 7), Some(E::Move));
+    assert_eq!(app.original_drop_effect(1, &dragged, &right, egui::Modifiers::CTRL, 7), Some(E::Copy));
+    assert_eq!(app.original_drop_effect(1, &dragged, &right, egui::Modifiers::CTRL | egui::Modifiers::SHIFT, 7), Some(E::Link));
+    assert_eq!(app.original_drop_effect(0, &dragged, &left, egui::Modifiers::NONE, 7), None);
     fs::remove_dir_all(root).unwrap();
 }
 

@@ -1,7 +1,8 @@
 use super::*;
 
 /// 파일 목록 ScrollArea: 끌기·스크롤 막대는 그대로, 바퀴는 원본 규칙(App::wheel_scroll)으로 따로 처리한다.
-pub(super) const WHEEL_OFF: egui::scroll_area::ScrollSource = egui::scroll_area::ScrollSource { scroll_bar: true, drag: true, mouse_wheel: false };
+/// 목록 스크롤: 막대만(바퀴는 원본 WMMouseWheel 처리, 끌어서 굴리기는 원본에 없다 — 빈 곳 끌기는 표시한 항목 끌기).
+pub(super) const WHEEL_OFF: egui::scroll_area::ScrollSource = egui::scroll_area::ScrollSource { scroll_bar: true, drag: false, mouse_wheel: false };
 
 /// C# "::drives::"(내 PC) 보기인가.
 pub(super) fn is_drives(path: &Path) -> bool {
@@ -1214,6 +1215,7 @@ impl App {
                     }
                 }
                 let row_height = self.list_item_height(ui);
+                let list_rect = egui::Rect::from_min_size(ui.cursor().min, egui::vec2(ui.available_width(), height));
                 if tiles {
                     let(a,o,c)=self.tile_rows(ui,index,&visible,height,view.contains("humb"));activate|=a;open|=o;if c.is_some(){command=c;}
                 } else if names || auto_flow {
@@ -1463,6 +1465,16 @@ impl App {
                 }
                 if activate {
                     self.active = index;
+                }
+                // 원본 FUN_004856d8: 빈 곳에서 누른 채 8화소 넘게 끌어도 표시한 항목이 있으면(GetSelCount > 0) 그 항목들을 끈다(스킨 테마).
+                if begin_drag.is_none() && skin.is_some() && self.file_drag.is_none() && !self.panes[index].selected.is_empty() && ctx.dragged_id().is_none() {
+                    let (origin, now, primary, secondary) = ui.input(|i| (i.pointer.press_origin(), i.pointer.latest_pos(), i.pointer.primary_down(), i.pointer.secondary_down()));
+                    if let (Some(origin), Some(now)) = (origin, now) {
+                        let moved = (now - origin).abs();
+                        if (primary || secondary) && list_rect.contains(origin) && (moved.x > 8.0 || moved.y > 8.0) {
+                            begin_drag = Some((self.panes[index].cursor, secondary && !primary));
+                        }
+                    }
                 }
                 if let Some((row, secondary)) = begin_drag {
                     self.begin_file_drag(index, row, secondary, ui.input(|i| i.modifiers));

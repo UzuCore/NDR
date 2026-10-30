@@ -130,6 +130,15 @@ impl App {
             return;
         }
         if !released {
+            // 원본 DoDragDrop 포인터: 놓을 곳의 효과(복사·이동·바로 가기), 놓을 수 없으면 금지 모양. 오른쪽 끌기는 놓기 메뉴라 보통 끌기 모양.
+            let effect = self.drop_target(pointer, &drag.paths).and_then(|(pane, folder)| self.original_drop_effect(pane, &drag.paths, &folder, modifiers, drag.allowed));
+            ctx.set_cursor_icon(match (drag.secondary, effect) {
+                (true, _) => egui::CursorIcon::Default,
+                (false, Some(DropEffect::Copy)) => egui::CursorIcon::Copy,
+                (false, Some(DropEffect::Link)) => egui::CursorIcon::Alias,
+                (false, Some(_)) => egui::CursorIcon::Default,
+                (false, None) => egui::CursorIcon::NoDrop,
+            });
             if let Some(position) = pointer {
                 // 원본 FUN_0048514c(끌기 그림): 검은 테두리 안 0x3C3C3C 바탕, 0xF0F0F0 글. 굵은 머리글 DRAGFILES_INFO(개수),
                 // 0xC0C0C0 줄, 그 아래 끄는 항목 이름(PathFindFileNameW) 최대 15개와 그 앞의 셸 작은 아이콘. 줄 높이 = 글 높이 + 2(최소 18), 너비 = 가장 긴 글 + 22.
@@ -172,6 +181,40 @@ impl App {
         self.handle_drop_with(pane, drag.paths, destination, modifiers, drag.allowed);
     }
 
+    /// 원본 OnDragOver의 효과(0x488700). None = 0(놓을 수 없음, 같은 폴더).
+    pub(super) fn original_drop_effect(&self, pane: usize, candidates: &[PathBuf], destination: &Path, modifiers: egui::Modifiers, allowed: u8) -> Option<DropEffect> {
+        let key = |p: &Path| std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf()).to_string_lossy().trim_end_matches(['\\', '/']).to_lowercase();
+        let parents: Vec<Option<String>> = candidates.iter().map(|p| p.parent().map(key)).collect();
+        let first = parents.first()?;
+        let mixed = parents.iter().any(|p| p != first);
+        if !mixed && first.as_deref() == Some(key(destination).as_str()) {
+            return None;
+        }
+        if self.panes[pane].archive.is_some() || self.panes[pane].remote.is_some() {
+            return None;
+        }
+        let root = |p: &Path| p.components().next().map(|c| c.as_os_str().to_string_lossy().to_lowercase());
+        let (copy, moving, link) = (allowed & 1 != 0, allowed & 2 != 0, allowed & 4 != 0);
+        let same_root = !mixed && candidates.first().and_then(|p| root(p)) == root(&self.panes[pane].path);
+        if modifiers.shift && modifiers.ctrl && link {
+            Some(DropEffect::Link)
+        } else if modifiers.shift && moving {
+            Some(DropEffect::Move)
+        } else if modifiers.ctrl && copy {
+            Some(DropEffect::Copy)
+        } else if same_root && moving {
+            Some(DropEffect::Move)
+        } else if copy {
+            Some(DropEffect::Copy)
+        } else if moving {
+            Some(DropEffect::Move)
+        } else if link {
+            Some(DropEffect::Link)
+        } else {
+            None
+        }
+    }
+
     /// C# HandleDropAsync.
     pub(super) fn handle_drop(&mut self, pane: usize, candidates: Vec<PathBuf>, destination: PathBuf, modifiers: egui::Modifiers) {
         self.handle_drop_with(pane, candidates, destination, modifiers, 7);
@@ -183,32 +226,7 @@ impl App {
     /// - 글쇠가 없으면 한 폴더에서 왔고 그 루트가 놓는 패널 폴더의 루트와 같으면 이동, 아니면 복사(허용한 것 중 복사·이동·바로 가기 차례).
     /// - 복사·이동은 "드래그 앤 드롭 확인"이 켜져 있으면 글쇠와 상관없이 DROPCOPY_CONFIRM·DROPMOVE_CONFIRM으로 묻는다. 바로 가기는 묻지 않는다.
     fn original_drop(&mut self, pane: usize, candidates: Vec<PathBuf>, destination: PathBuf, modifiers: egui::Modifiers, allowed: u8) {
-        let key = |p: &Path| std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf()).to_string_lossy().trim_end_matches(['\\', '/']).to_lowercase();
-        let parents: Vec<Option<String>> = candidates.iter().map(|p| p.parent().map(key)).collect();
-        let mixed = parents.iter().any(|p| *p != parents[0]);
-        if !mixed && parents[0].as_deref() == Some(key(&destination).as_str()) {
-            return;
-        }
-        let root = |p: &Path| p.components().next().map(|c| c.as_os_str().to_string_lossy().to_lowercase());
-        let (copy, moving, link) = (allowed & 1 != 0, allowed & 2 != 0, allowed & 4 != 0);
-        let same_root = !mixed && candidates.first().and_then(|p| root(p)) == root(&self.panes[pane].path);
-        let effect = if modifiers.shift && modifiers.ctrl && link {
-            DropEffect::Link
-        } else if modifiers.shift && moving {
-            DropEffect::Move
-        } else if modifiers.ctrl && copy {
-            DropEffect::Copy
-        } else if same_root && moving {
-            DropEffect::Move
-        } else if copy {
-            DropEffect::Copy
-        } else if moving {
-            DropEffect::Move
-        } else if link {
-            DropEffect::Link
-        } else {
-            return;
-        };
+        let Some(effect) = self.original_drop_effect(pane, &candidates, &destination, modifiers, allowed) else { return };
         self.active = pane;
         if effect == DropEffect::Link {
             return self.apply_drop(effect, candidates, destination);
