@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<toolbar version="1.0" for="NexusFile">
+<item type="InternalCommand">
+	<icon>$(SKINDIR)\tb_back.png</icon>
+	<command>Back</command>
+</item>
+<item type="InternalCommand">
+	<icon>$(SKINDIR)\tb_forward.png</icon>
+	<command>Forward</command>
+</item>
+<item type="Separator" />
+<item type="InternalCommand">
+	<icon>$(SKINDIR)\tb_desktop.png</icon>
+	<command>GoToDesktop</command>
+</item>
+<item type="InternalCommand">
+	<icon>$(SKINDIR)\tb_documents.png</icon>
+	<command>GoToDocuments</command>
+</item>
+<item type="InternalCommand">
+	<icon>$(SKINDIR)\tb_pictures.png</icon>
+	<command>GoToPictures</command>
+</item>
+<item type="InternalCommand">
+	<icon>$(SKINDIR)\tb_music.png</icon>
+	<command>GoToMusic</command>
+</item>
+<item type="InternalCommand">
+	<icon>$(SKINDIR)\tb_videos.png</icon>
+	<command>GoToVideos</command>
+</item>
+<item type="InternalCommand">
+	<icon>$(SKINDIR)\tb_favorites.png</icon>
+	<command>Favorites</command>
+</item>
+<item type="Separator" />
+
+<item type="InternalCommand" align="right">
+	<icon>$(SKINDIR)\tb_recyclebin.png</icon>
+	<command>RecycleBin</command>
+</item>
+
+</toolbar>
