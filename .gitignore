@@ -2,3 +2,11 @@
 /test-output/
 *.tmp
 
+# 빌드에 쓰지 않는 파일(디스크에는 남김: 배포 스크립트·실행 자원·시험)
+/docs/
+/scripts/
+/tests/
+/.cargo/
+/THIRD-PARTY-NOTICES.txt
+/Resources/*
+!/Resources/toolbar.xml
