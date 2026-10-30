@@ -1341,7 +1341,8 @@ fn skin_address_segments_and_frame_colors_follow_the_original() {
     let full = std::path::absolute(&folder).unwrap();
     assert_eq!(segments.len(), full.ancestors().count());
     assert_eq!(segments.last().map(|s| s.label.as_str()), Some("left"));
-    assert!(segments[0].label.ends_with('\\') && segments.iter().all(|s| s.folder.is_some()));
+    // 원본 TNXPathLabel: 루트 조각은 "C:"(끝 '\' 없이).
+    assert!(segments[0].label.ends_with(':') && !segments[0].label.ends_with('\\') && segments.iter().all(|s| s.folder.is_some()), "{}", segments[0].label);
     app.active = 0;
     assert_eq!(app.skin_frame_stroke(&skin, 0), egui::Stroke::new(1.0, Color32::from_rgb(0x30, 0x5B, 0x91)));
     assert_eq!(app.skin_frame_stroke(&skin, 1), egui::Stroke::new(1.0, Color32::from_rgb(0x1C, 0x36, 0x57)), "inactive: 60% lframelocal + 40% lback (000000), FUN_00483300");

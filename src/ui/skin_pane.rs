@@ -604,8 +604,15 @@ impl App {
             }
             return segments;
         }
+        // 첫 조각(루트)은 원본 TNXPathLabel처럼 끝 '\' 없이("C:\" → "C:").
         let local = |path: &Path, first: bool| CrumbSegment {
-            label: if first { path.to_string_lossy().into_owned() } else { path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default() },
+            label: if first {
+                let root = path.to_string_lossy();
+                let trimmed = root.trim_end_matches('\\');
+                if trimmed.is_empty() { root.into_owned() } else { trimmed.to_owned() }
+            } else {
+                path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+            },
             target: CrumbTarget::Local(path.to_path_buf()),
             folder: Some(path.to_path_buf()),
         };

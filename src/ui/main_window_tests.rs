@@ -1292,3 +1292,15 @@ fn back_wheel_and_dot_files_follow_the_user_requests() {
     assert_eq!(app.panes[0].back.first(), Some(&left.join("dir005")), "the oldest entries are dropped");
     let _ = fs::remove_dir_all(root);
 }
+
+/// 사용자 요청: Alt+Enter = 전체 화면 켜고 끄기(창 명령 Fullscreen).
+#[test]
+fn alt_enter_toggles_fullscreen() {
+    let (root, ctx, mut app) = fixture("fullscreen");
+    let alt_enter = egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::ALT };
+    let raw = egui::RawInput { modifiers: egui::Modifiers::ALT, events: vec![alt_enter], screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 850.0))), ..Default::default() };
+    let output = ctx.run(raw, |ctx| app.keyboard(ctx));
+    let commands = &output.viewport_output[&egui::ViewportId::ROOT].commands;
+    assert!(commands.contains(&egui::ViewportCommand::Fullscreen(true)), "{commands:?}");
+    let _ = fs::remove_dir_all(root);
+}

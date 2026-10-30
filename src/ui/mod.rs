@@ -1531,8 +1531,23 @@ impl eframe::App for App {
         let frame_started = Instant::now();
         // 왼쪽 단추 누름을 Windows 두 번 누르기 기준으로 센다(목록이 그려지지 않는 그림의 누름도 빠지지 않게).
         let _ = panes::windows_double_press(ctx);
+        // 고친 것(사용자 지적: 최대화로 시작할 때 깜박임): winit의 with_maximized는 첫 그림 전에 ShowWindow(SW_MAXIMIZE)로 빈 창을
+        // 보였다. main.rs가 작업 영역 크기의 숨은 창으로 만들고, 첫 그림이 보인 뒤(두 번째 그림) 저장한 보통 크기를 되돌릴 크기로 두고 최대화한다.
+        match self.options.maximize_restore {
+            Some((restore, true)) => {
+                native::maximize_with_restore(self.hwnd, restore);
+                self.options.maximize_restore = None;
+                self.window_bounds = Some((egui::pos2(restore.0, restore.1), egui::vec2(restore.2, restore.3)));
+                self.window_maximized = Some(true);
+            }
+            Some((restore, false)) => {
+                self.options.maximize_restore = Some((restore, true));
+                ctx.request_repaint();
+            }
+            None => {}
+        }
         // C# Closing: 보통 창이면 위치·크기를 저장하고 최대화 여부를 따로 둔다. 시작 확인(화면 밖 창)은 기록하지 않는다.
-        if self.options.smoke_seconds.is_none() {
+        if self.options.smoke_seconds.is_none() && self.options.maximize_restore.is_none() {
             let (outer, inner, maximized, minimized) = ctx.input(|i| {
                 let viewport = i.viewport();
                 (viewport.outer_rect, viewport.inner_rect, viewport.maximized, viewport.minimized)

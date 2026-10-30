@@ -33,6 +33,8 @@ pub struct Options {
     report: Option<PathBuf>,
     /// 시험용: 시작 확인(화면 밖) 중에 이 종류의 원본 창 견본을 열고 그 화면을 PNG로 저장한다(`--shot 종류 파일`).
     shot: Option<(String, PathBuf)>,
+    /// 최대화로 시작: (되돌릴 바깥 x, y, 너비, 높이(egui 점), 첫 그림이 끝났는지). App이 첫 그림 뒤에 최대화한다.
+    maximize_restore: Option<((f32, f32, f32, f32), bool)>,
 }
 /// 설정 파일 이름. 설정 파일은 이것 하나만 쓴다.
 const SETTINGS_FILE: &str = "settings.json";
@@ -192,7 +194,7 @@ fn user_directory(value: &str) -> Result<PathBuf, String> {
 
 fn main() {
     let result = (|| -> Result<(), String> {
-        let options = Options::parse()?;
+        let mut options = Options::parse()?;
         let settings =
             ndr::settings::Settings::load(&options.profile_directory().join("settings.json"))
                 .unwrap_or_default();
@@ -226,10 +228,17 @@ fn main() {
             }
             // 저장 값은 원본·C# 판처럼 테두리를 포함한 바깥 크기이므로, 테두리·제목 줄 크기를 빼서 안쪽 크기로 연다.
             let (frame_width, frame_height) = ndr::native::window_frame_points().unwrap_or((16.0, 39.0));
-            viewport = viewport
-                .with_inner_size([(width - frame_width).max(800.0), (height - frame_height).max(480.0)])
-                .with_position([left, top])
-                .with_maximized(settings.flag("WindowMaximized", false));
+            let work = settings.flag("WindowMaximized", false).then(|| ndr::native::work_area_points(left + width / 2.0, top + height / 2.0)).flatten();
+            if let Some((work_left, work_top, work_width, work_height)) = work {
+                // 최대화로 시작: winit with_maximized는 첫 그림 전에 창을 보여 깜박였다. 작업 영역 크기의 숨은 창으로 그린 뒤 최대화한다.
+                viewport = viewport.with_inner_size([(work_width - frame_width).max(800.0), (work_height - frame_height).max(480.0)]).with_position([work_left, work_top]);
+                options.maximize_restore = Some(((left, top, width, height), false));
+            } else {
+                viewport = viewport
+                    .with_inner_size([(width - frame_width).max(800.0), (height - frame_height).max(480.0)])
+                    .with_position([left, top])
+                    .with_maximized(settings.flag("WindowMaximized", false));
+            }
         }
         if options.smoke_seconds.is_some() {
             // 시작 확인은 화면 밖에서, 초점을 뺏지 않고, 작업 표시줄에도 안 보이게 띄운다(사용자 화면을 가리지 않는다).

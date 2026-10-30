@@ -1331,6 +1331,60 @@ pub fn virtual_screen_points() -> Option<(f32, f32, f32, f32)> {
     }
 }
 
+fn system_dpi_scale() -> f32 {
+    use windows_sys::Win32::Graphics::Gdi::{GetDC, GetDeviceCaps, LOGPIXELSX, ReleaseDC};
+    // SAFETY: plain system calls; the screen DC is released before returning.
+    unsafe {
+        let dc = GetDC(ptr::null_mut());
+        let dpi = if dc.is_null() { 96 } else { GetDeviceCaps(dc, LOGPIXELSX as _) };
+        if !dc.is_null() {
+            ReleaseDC(ptr::null_mut(), dc);
+        }
+        if dpi > 0 { dpi as f32 / 96.0 } else { 1.0 }
+    }
+}
+
+/// (x, y)(egui 점) 자리 모니터의 작업 영역(작업 표시줄을 뺀 곳)을 egui 점 단위로(x, y, 너비, 높이).
+pub fn work_area_points(x: f32, y: f32) -> Option<(f32, f32, f32, f32)> {
+    use windows_sys::Win32::Foundation::POINT;
+    use windows_sys::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST};
+    let scale = system_dpi_scale();
+    // SAFETY: plain system calls with a live local MONITORINFO.
+    unsafe {
+        let monitor = MonitorFromPoint(POINT { x: (x * scale) as i32, y: (y * scale) as i32 }, MONITOR_DEFAULTTONEAREST);
+        let mut info: MONITORINFO = std::mem::zeroed();
+        info.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
+        if monitor.is_null() || GetMonitorInfoW(monitor, &mut info) == 0 {
+            return None;
+        }
+        let r = info.rcWork;
+        Some((r.left as f32 / scale, r.top as f32 / scale, (r.right - r.left) as f32 / scale, (r.bottom - r.top) as f32 / scale))
+    }
+}
+
+/// 창을 최대화하고 되돌릴 크기(바깥 x, y, 너비, 높이, egui 점)를 정한다(SetWindowPlacement SW_SHOWMAXIMIZED).
+pub fn maximize_with_restore(hwnd: isize, restore: (f32, f32, f32, f32)) -> bool {
+    use windows_sys::Win32::Foundation::{POINT, RECT};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{SetWindowPlacement, SW_SHOWMAXIMIZED, WINDOWPLACEMENT};
+    if hwnd == 0 {
+        return false;
+    }
+    let scale = system_dpi_scale();
+    let (x, y, w, h) = restore;
+    // rcNormalPosition은 작업 영역 기준 좌표다.
+    let (wx, wy) = work_area_points(x, y).map_or((0.0, 0.0), |(l, t, _, _)| (l, t));
+    let placement = WINDOWPLACEMENT {
+        length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+        flags: 0,
+        showCmd: SW_SHOWMAXIMIZED as u32,
+        ptMinPosition: POINT { x: -1, y: -1 },
+        ptMaxPosition: POINT { x: -1, y: -1 },
+        rcNormalPosition: RECT { left: ((x - wx) * scale) as i32, top: ((y - wy) * scale) as i32, right: ((x - wx + w) * scale) as i32, bottom: ((y - wy + h) * scale) as i32 },
+    };
+    // SAFETY: hwnd is this process's main window; the placement is a live local.
+    unsafe { SetWindowPlacement(hwnd as _, &placement) != 0 }
+}
+
 /// 원본 TForm.Width·Height와 C# Window.Width·Height(WindowWidth·WindowHeight)는 테두리·제목 줄을 포함한 바깥 크기다.
 /// 보통 창(WS_OVERLAPPEDWINDOW)의 바깥 크기 − 안쪽(내용) 크기를 AdjustWindowRectEx로 재서 egui 점 단위(시스템 DPI)로 돌려준다.
 pub fn window_frame_points() -> Option<(f32, f32)> {
