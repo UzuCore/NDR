@@ -197,7 +197,7 @@ impl App {
     pub(super) fn auto_rows(&mut self, ui: &mut egui::Ui, index: usize, columns: usize, height: f32) -> (bool, bool, Option<&'static str>) {
         let list_style = self.list_font_style;
         let original_click = true;
-        let (mut activate, mut open, mut command) = (false, false, None);
+        let (mut activate, mut open, command) = (false, false, None);
         if self.panes[index].view.cells.len() != self.panes[index].entries.len() {
             self.compute_view(index);
         }
@@ -347,11 +347,10 @@ impl App {
                                     activate = true;
                                     open = true;
                                 }
-                                super::skin_pane::context_menu(&response, |ui| {
-                                    if let Some(chosen) = self.list_context_menu(ui, index) {
-                                        command = Some(chosen);
-                                    }
-                                });
+                                // 줄 응답에 메뉴를 붙이지 않는다(패널 메뉴 skin_pane::pane_menu).
+                                if response.secondary_clicked() {
+                                    super::skin_pane::request_pane_menu(ui.ctx(), index);
+                                }
                             }
                         });
                 });
@@ -400,7 +399,7 @@ impl App {
     pub(super) fn flow_rows(&mut self, ui: &mut egui::Ui, index: usize, height: f32, auto: bool) -> (bool, bool, Option<&'static str>) {
         let list_style = self.list_font_style;
         let original_click = true;
-        let (mut activate, mut open, mut command) = (false, false, None);
+        let (mut activate, mut open, command) = (false, false, None);
         if self.panes[index].view.cells.len() != self.panes[index].entries.len() {
             self.compute_view(index);
         }
@@ -583,11 +582,10 @@ impl App {
                             activate = true;
                             open = true;
                         }
-                        super::skin_pane::context_menu(&response, |ui| {
-                            if let Some(chosen) = self.list_context_menu(ui, index) {
-                                command = Some(chosen);
-                            }
-                        });
+                        // 줄 응답에 메뉴를 붙이지 않는다(패널 메뉴 skin_pane::pane_menu).
+                        if response.secondary_clicked() {
+                            super::skin_pane::request_pane_menu(ui.ctx(), index);
+                        }
                     }
                 }
             });

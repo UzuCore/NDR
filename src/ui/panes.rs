@@ -1093,10 +1093,12 @@ impl App {
     }
     pub(super) fn pane_ui(&mut self, ui: &mut egui::Ui, index: usize, ctx: &egui::Context) {
         // 원본 패널(TNXFramePanel): 패널 안 어디를 눌러도(빈 곳·주소 줄·정보 표시줄 포함) 그 패널이 지금 패널이 된다.
-        // 메뉴·대화 상자 같은 위 층을 누른 것은 빼고, 자리는 지난 그림의 패널 칸으로 잰다.
+        // 메뉴·대화 상자 같은 위 층을 누른 것은 빼고, 자리는 이번 그림의 패널 칸(ui.max_rect)으로 잰다.
+        // 고친 것: 지난 그림의 pane_rects로 쟀는데, update가 패널을 그리기 전에 그것을 비워 빈 곳을 눌러도 패널이 바뀌지 않았다.
+        let area = ui.max_rect();
         if let Some(pos) = ctx.input(|i| if i.pointer.any_pressed() { i.pointer.interact_pos() } else { None }) {
             let on_background = ctx.layer_id_at(pos).is_none_or(|layer| layer.order == egui::Order::Background);
-            if on_background && self.pane_rects[index].contains(pos) && self.original_dialogs.is_empty() && self.msgboxes.is_empty() {
+            if on_background && area.contains(pos) && self.original_dialogs.is_empty() && self.msgboxes.is_empty() {
                 self.active = index;
             }
         }
@@ -1416,11 +1418,10 @@ impl App {
                                 row_pressed(pane, row, egui::Modifiers::NONE, true, skin.is_some());
                                 activate = true;
                             }
-                            super::skin_pane::context_menu(&response, |ui| {
-                                if let Some(chosen) = self.list_context_menu(ui, index) {
-                                    command = Some(chosen);
-                                }
-                            });
+                            // 줄 응답에 메뉴를 붙이지 않는다(패널 메뉴 skin_pane::pane_menu).
+                            if response.secondary_clicked() {
+                                super::skin_pane::request_pane_menu(ui.ctx(), index);
+                            }
                         }
                     });
                 // 원본 SetScrollTop(쪽 단위): 막대를 끌어 놓으면 위치는 가장 가까운 쪽 경계(쪽 번호)다.
@@ -1454,6 +1455,12 @@ impl App {
                 ui.spacing_mut().item_spacing.y = saved_spacing;
                 }
                 ui.style_mut().text_styles = saved_text_styles;
+                // 목록 오른쪽 단추 메뉴(줄을 그렸는지와 상관없이 그림마다).
+                super::skin_pane::pane_menu(ui, index, |ui| {
+                    if let Some(chosen) = self.list_context_menu(ui, index) {
+                        command = Some(chosen);
+                    }
+                });
                 self.panes[index].drop_drive_marks();
                 self.original_name_tip(ctx, index);
                 self.ftp_log_ui(ui, index, ftp_log_room);

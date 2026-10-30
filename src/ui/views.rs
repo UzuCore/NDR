@@ -217,7 +217,7 @@ impl App {
     ) -> (bool, bool, Option<&'static str>) {
         let mut activate = false;
         let mut open = false;
-        let mut command = None;
+        let command = None;
         let list_style = self.list_font_style;
         let original_click = true;
         // 스킨 테마의 미리 보기: 원본 DrawThumbnailItem(0x7da1c4)·DrawFocus 형식 3. 이름 글색은 늘 NXFORE(Font.Color = GetBasic(1)).
@@ -519,11 +519,10 @@ impl App {
                                 activate = true;
                                 open = true;
                             }
-                            super::skin_pane::context_menu(&response, |ui| {
-                                if let Some(chosen) = self.list_context_menu(ui, index) {
-                                    command = Some(chosen);
-                                }
-                            });
+                            // 줄 응답에 메뉴를 붙이지 않는다(패널 메뉴 skin_pane::pane_menu).
+                            if response.secondary_clicked() {
+                                super::skin_pane::request_pane_menu(ui.ctx(), index);
+                            }
                         }
                     });
                 }

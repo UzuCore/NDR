@@ -673,6 +673,97 @@ fn skin_drag_from_empty_list_space_drags_the_marks() {
     fs::remove_dir_all(root).unwrap();
 }
 
+/// 원본 TNXFramePanel: 패널 안 빈 곳을 누르면(왼쪽·오른쪽 단추, 보기 형식 모두) 그 패널이 지금 패널이 된다.
+/// update는 패널을 그리기 전에 pane_rects를 비우므로 여기서도 그렇게 한다.
+#[test]
+fn clicking_empty_pane_space_activates_the_pane() {
+    for view in ["Details", "Auto", "Names"] {
+        for button in [egui::PointerButton::Primary, egui::PointerButton::Secondary] {
+            let (root, ctx, mut app) = fixture("emptyclick");
+            app.settings.set_text("LeftViewStyle", view);
+            app.settings.set_text("RightViewStyle", view);
+            let run = |app: &mut App, events: Vec<egui::Event>| {
+                let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 850.0))), events, ..Default::default() };
+                let shown = app.pane_rects;
+                app.pane_rects = [egui::Rect::NOTHING; 2];
+                let _ = ctx.run(raw, |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        ui.columns(2, |columns| {
+                            app.pane_ui(&mut columns[0], 0, ctx);
+                            app.pane_ui(&mut columns[1], 1, ctx);
+                        });
+                    });
+                });
+                if app.pane_rects[0] == egui::Rect::NOTHING {
+                    app.pane_rects = shown;
+                }
+            };
+            for side in [0usize, 1] {
+                app.active = 1 - side;
+                run(&mut app, vec![]);
+                run(&mut app, vec![]);
+                let pane = app.pane_rects[side];
+                for at in [egui::pos2(pane.center().x, pane.bottom() - 60.0), egui::pos2(pane.right() - 20.0, pane.top() + 70.0)] {
+                    app.active = 1 - side;
+                    let b = |pressed: bool| egui::Event::PointerButton { pos: at, button, pressed, modifiers: Default::default() };
+                    run(&mut app, vec![egui::Event::PointerMoved(at), b(true)]);
+                    run(&mut app, vec![b(false)]);
+                    run(&mut app, vec![]);
+                    assert_eq!(app.active, side, "{view} {button:?}: a press at {at:?} activates pane {side}");
+                }
+            }
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+}
+
+/// 목록 오른쪽 단추 메뉴(원본 pmMain)는 연 뒤 누른 줄이 목록에서 안 보이게 넘어가도 닫히지 않는다(전체 update 경로).
+/// 고친 것: 메뉴를 줄 응답에 붙였을 때는 그 줄을 그리지 않은 그림에서 egui가 메뉴를 닫아 바로 사라졌다.
+#[test]
+fn list_menu_stays_open_when_its_row_is_not_drawn() {
+    for view in ["Details", "Auto"] {
+        let (root, ctx, mut app) = fixture("listmenu");
+        app.settings.set_text("LeftViewStyle", view);
+        app.settings.set_text("RightViewStyle", view);
+        for i in 0..150 {
+            fs::write(app.panes[1].path.join(format!("file{i:03}.txt")), b"x").unwrap();
+        }
+        app.refresh(1);
+        wait(&mut app, &ctx);
+        let mut frame = eframe::Frame::_new_kittest();
+        let mut run = |app: &mut App, events: Vec<egui::Event>| {
+            let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 850.0))), events, ..Default::default() };
+            let _ = ctx.run(raw, |ctx| eframe::App::update(app, ctx, &mut frame));
+        };
+        app.active = 0;
+        run(&mut app, vec![]);
+        run(&mut app, vec![]);
+        let pane = app.pane_rects[1];
+        let at = egui::pos2(pane.left() + 80.0, pane.top() + 120.0);
+        let b = |pressed: bool| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() };
+        run(&mut app, vec![egui::Event::PointerMoved(at), b(true)]);
+        run(&mut app, vec![]);
+        run(&mut app, vec![b(false)]);
+        assert!(egui::Popup::is_any_open(&ctx), "{view}: the menu opens");
+        assert_eq!(app.active, 1, "{view}: the right-clicked pane is active");
+        for k in 0..4 {
+            run(&mut app, vec![egui::Event::PointerMoved(at + egui::vec2(4.0 + k as f32 * 8.0, 4.0 + k as f32 * 6.0))]);
+            assert!(egui::Popup::is_any_open(&ctx), "{view}: the menu stays open while the pointer moves into it");
+        }
+        // 누른 줄이 그려지지 않게 목록 끝으로 넘긴다.
+        let last = app.panes[1].entries.len() - 1;
+        app.panes[1].cursor = last;
+        app.panes[1].reveal = true;
+        for _ in 0..4 {
+            run(&mut app, vec![]);
+            assert!(egui::Popup::is_any_open(&ctx), "{view}: the menu stays open when its row scrolls away");
+        }
+        run(&mut app, vec![egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() }]);
+        run(&mut app, vec![]);
+        assert!(!egui::Popup::is_any_open(&ctx), "{view}: Esc closes the menu");
+        fs::remove_dir_all(root).unwrap();
+    }
+}
 #[test]
 fn skin_drag_follows_the_original_list_mouse_move() {
     // 원본 FUN_004856d8(목록 OnMouseMove): 가로·세로 8화소를 넘게 움직여야 끌고, 표시 칸에서 누르면 끌지 않는다.

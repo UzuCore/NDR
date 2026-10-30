@@ -115,6 +115,30 @@ pub(super) fn context_menu(response: &egui::Response, add: impl FnOnce(&mut egui
     .show(add)
 }
 
+/// 목록 오른쪽 단추 메뉴(원본 pmMain, TPopupMenu.Popup)를 이번 그림에서 연다. 열기는 `pane_menu`가 한다.
+pub(super) fn request_pane_menu(ctx: &egui::Context, index: usize) {
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new(("ndr-list-menu-open", index)), true));
+}
+
+/// 목록 오른쪽 단추 메뉴: 패널마다 하나, 누른 자리에 띄운다(스킨 테마면 원본 메뉴 색).
+/// 고친 것: 메뉴를 누른 줄의 응답에 붙였더니, 그 줄을 그리지 않은 그림(쪽 맞춤·목록 다시 읽기 등)에서 egui가
+/// 버려진 메뉴로 보고 닫아 바로 사라졌다. 이제 패널이 그림마다 메뉴를 그린다.
+pub(super) fn pane_menu(ui: &egui::Ui, index: usize, add: impl FnOnce(&mut egui::Ui)) -> Option<egui::InnerResponse<()>> {
+    let ctx = ui.ctx().clone();
+    let open = ctx.data_mut(|d| d.remove_temp::<bool>(egui::Id::new(("ndr-list-menu-open", index)))).unwrap_or(false);
+    let style = ctx.data(|d| d.get_temp::<Option<egui::style::StyleModifier>>(egui::Id::new(MENU_STYLE_ID))).flatten();
+    let popup = egui::Popup::new(egui::Id::new(("ndr-list-menu", index)), ctx, egui::PopupAnchor::PointerFixed, ui.layer_id())
+        .kind(egui::PopupKind::Menu)
+        .layout(egui::Layout::top_down_justified(egui::Align::Min))
+        .gap(0.0)
+        .open_memory(open.then_some(egui::SetOpenCommand::Bool(true)));
+    match style {
+        Some(style) => popup.style(style),
+        None => popup.style(egui::containers::menu::menu_style),
+    }
+    .show(add)
+}
+
 /// `Popup::menu`(단추 아래 펼침)과 같고, 스킨 테마면 원본 메뉴 색을 쓴다.
 pub(super) fn menu_popup(response: &egui::Response) -> egui::Popup<'_> {
     let style = response.ctx.data(|d| d.get_temp::<Option<egui::style::StyleModifier>>(egui::Id::new(MENU_STYLE_ID))).flatten();
