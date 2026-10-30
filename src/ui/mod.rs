@@ -775,7 +775,7 @@ impl App {
         }
         let right = panes_init.pop().expect("right pane");
         let left = panes_init.pop().expect("left pane");
-        let dark = settings.text("Theme", "Black") != "Light";
+        let dark = system_commands::theme_palette(&settings.text("Theme", "Black")).dark();
         ctx.set_visuals(if dark {
             egui::Visuals::dark()
         } else {

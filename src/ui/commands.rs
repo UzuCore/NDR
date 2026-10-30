@@ -580,7 +580,7 @@ impl App {
             "filter"=>self.show_filter_prompt(),
             "find"=>self.find_command(),"findNext"=>self.find_next(),
             "favorites"=>self.manage_favorites(),"favoritesMenu"=>self.show_favorites_menu(),"addToFavorites"=>self.add_to_favorites_command(),
-            "theme"=>self.theme_command(),"language"=>self.language_command(),
+            
             "options"=>self.open_settings_window(),
             "importLegacy"=>self.import_legacy_command(),
             "shortcuts"=>self.show_shortcut_window(),

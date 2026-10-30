@@ -5,8 +5,8 @@
 use super::*;
 use ndr::msgbox::{MB_ICONASTERISK, MB_ICONEXCLAMATION, MB_OK};
 
-/// C# SelectThemeAsync의 선택지.
-pub(super) const THEMES: [&str; 6] = ["Dark", "Light", "System", "Black", "Classic", "Gray"];
+/// 원본 스킨(skin\ 폴더 이름): 검정·클래식·회색.
+pub(super) const THEMES: [&str; 3] = ["Black", "Classic", "Gray"];
 
 /// C# ApplyTheme의 색 표(스킨이 없을 때). (앱 배경, 패널 배경, 돋운 칸, 테두리, 글자, 흐린 글자, 강조).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -28,16 +28,12 @@ impl ThemePalette {
     }
 }
 
-/// C# ApplyTheme: Light와 (Windows 밝은 테마일 때의) System, Classic, Gray, Black, 그 밖은 Dark.
-pub(super) fn theme_palette(theme: &str, windows_light: bool) -> ThemePalette {
-    let light = ThemePalette { app: [0xF3, 0xF6, 0xFB], panel: [0xFF, 0xFF, 0xFF], raised: [0xE9, 0xEE, 0xF5], border: [0xCF, 0xD8, 0xE3], text: [0x11, 0x18, 0x27], muted: [0x52, 0x62, 0x73], accent: [0x17, 0x69, 0xAA] };
+/// 스킨마다 egui 바탕 색(대화 상자 등 스킨이 칠하지 않는 곳). 모르는 이름은 검정.
+pub(super) fn theme_palette(theme: &str) -> ThemePalette {
     match theme {
-        "Light" => light,
-        "System" if windows_light => light,
         "Classic" => ThemePalette { app: [0xDE, 0xDE, 0xDE], panel: [0xF0, 0xF0, 0xF0], raised: [0xFF, 0xFF, 0xFF], border: [0xAA, 0xAA, 0xAA], text: [0, 0, 0], muted: [0x66, 0x66, 0x66], accent: [0x17, 0x69, 0xAA] },
         "Gray" => ThemePalette { app: [0x87, 0x87, 0x87], panel: [0xD1, 0xD7, 0xE2], raised: [0x96, 0x96, 0x96], border: [0x6F, 0x6F, 0x6F], text: [0, 0, 0], muted: [0x33, 0x33, 0x33], accent: [0x4C, 0x82, 0xDC] },
-        "Black" => ThemePalette { app: [0, 0, 0], panel: [0, 0, 0], raised: [0x20, 0x20, 0x20], border: [0x30, 0x30, 0x30], text: [0xC0, 0xC0, 0xC0], muted: [0x85, 0x85, 0x85], accent: [0x4C, 0x82, 0xDC] },
-        _ => ThemePalette { app: [0x0B, 0x10, 0x20], panel: [0x11, 0x18, 0x27], raised: [0x17, 0x22, 0x35], border: [0x26, 0x34, 0x49], text: [0xF1, 0xF5, 0xF9], muted: [0x92, 0xA3, 0xB8], accent: [0x4E, 0xA1, 0xFF] },
+        _ => ThemePalette { app: [0, 0, 0], panel: [0, 0, 0], raised: [0x20, 0x20, 0x20], border: [0x30, 0x30, 0x30], text: [0xC0, 0xC0, 0xC0], muted: [0x85, 0x85, 0x85], accent: [0x4C, 0x82, 0xDC] },
     }
 }
 
@@ -344,21 +340,10 @@ impl App {
         }
     }
 
-    /// C# SelectThemeAsync: "테마 선택"/"NDR 화면 테마" 고르기 → Theme 저장, 바로 적용.
-    pub(super) fn theme_command(&mut self) {
-        let current = self.settings.text("Theme", "Black");
-        let selected = THEMES.iter().position(|t| *t == current).unwrap_or(0);
-        let (title, message) = (self.tr("테마 선택", "Select theme").into_owned(), self.tr("NDR 화면 테마", "NDR screen theme").into_owned());
-        self.choice_dialog(&title, &message, THEMES.iter().map(|t| (*t).to_owned()).collect(), selected, |app, choice, _| {
-            let Some(index) = choice else { return };
-            app.apply_theme(THEMES[index]);
-        });
-    }
-
     /// 테마를 저장하고 바로 적용한다(C# SelectThemeAsync 끝, 원본 스킨 메뉴 FUN_0043e510).
     pub(super) fn apply_theme(&mut self, theme: &str) {
         self.settings.set_text("Theme", theme);
-        self.dark = theme_palette(theme, theme == "System" && native::windows_light_theme()).dark();
+        self.dark = theme_palette(theme).dark();
         self.preferences_dirty = true;
         self.save();
     }
@@ -377,27 +362,6 @@ impl App {
         self.settings.set_text("Language", code);
         self.language = code.to_owned();
         self.save();
-    }
-
-    /// C# SelectLanguageAsync: Languages\*.lang 중 아는 언어 "코드 — 이름" 고르기(처음 = 지금 언어, 없으면 ko) → Language 저장, 바로 적용.
-    pub(super) fn language_command(&mut self) {
-        let languages = settings_window::available_languages(&self.resources);
-        if languages.is_empty() {
-            return;
-        }
-        let choices: Vec<String> = languages.iter().map(|(code, name)| format!("{code} — {name}")).collect();
-        let current = self.settings.text("Language", &self.language);
-        let selected = languages
-            .iter()
-            .position(|(code, _)| code.eq_ignore_ascii_case(&current))
-            .or_else(|| languages.iter().position(|(code, _)| code.eq_ignore_ascii_case("ko")))
-            .unwrap_or(0);
-        let (title, message) = (self.tr("언어 선택", "Select language").into_owned(), self.tr("NDR 메뉴에서 사용할 언어를 선택하세요.", "Select the language for the NDR menus.").into_owned());
-        self.choice_dialog(&title, &message, choices, selected, move |app, choice, _| {
-            let Some(index) = choice else { return };
-            let code = languages[index].0.clone();
-            app.apply_language(&code);
-        });
     }
 
     /// C# ViewTextAsync: 고른 첫 파일(폴더 제외)이 없으면 "텍스트 파일 하나를 선택하세요." 경고. 압축 안이면 임시로 푼다.
@@ -496,21 +460,14 @@ mod tests {
     }
 
     #[test]
-    fn theme_palettes_follow_csharp_apply_theme() {
-        assert_eq!(theme_palette("Dark", true).panel, [0x11, 0x18, 0x27]);
-        assert!(theme_palette("Dark", true).dark());
-        assert_eq!(theme_palette("Light", false).panel, [0xFF, 0xFF, 0xFF]);
-        assert!(!theme_palette("Light", false).dark());
-        // System: light only when Windows apps use the light theme.
-        assert_eq!(theme_palette("System", true), theme_palette("Light", false));
-        assert_eq!(theme_palette("System", false), theme_palette("Dark", false));
-        assert_eq!(theme_palette("Classic", false).app, [0xDE, 0xDE, 0xDE]);
-        assert_eq!(theme_palette("Gray", false).panel, [0xD1, 0xD7, 0xE2]);
-        assert!(!theme_palette("Gray", false).dark());
-        assert_eq!(theme_palette("Black", false).text, [0xC0, 0xC0, 0xC0]);
-        assert!(theme_palette("Black", false).dark());
-        // unknown names fall back to Dark
-        assert_eq!(theme_palette("NexusFile", false), theme_palette("Dark", false));
+    fn skin_palettes() {
+        assert_eq!(theme_palette("Classic").app, [0xDE, 0xDE, 0xDE]);
+        assert_eq!(theme_palette("Gray").panel, [0xD1, 0xD7, 0xE2]);
+        assert!(!theme_palette("Gray").dark());
+        assert_eq!(theme_palette("Black").text, [0xC0, 0xC0, 0xC0]);
+        assert!(theme_palette("Black").dark());
+        // 모르는 이름은 검정.
+        assert_eq!(theme_palette("Dark"), theme_palette("Black"));
     }
 
 }

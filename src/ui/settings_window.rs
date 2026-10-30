@@ -456,7 +456,7 @@ impl SettingsForm {
             check("SaveDriveFolders", lang("Caption.chkDriveFolders", "Save each drive's last folder at exit"), true),
             check("SaveFolderTreeState", t(ko, "폴더 트리 펼침 상태 저장 (NDR 사용자 설정에 보관)", "Save the folder tree expansion state (in NDR user settings)"), false),
             check("RemoveReadOnlyWhenCopying", t(ko, "복사할 때 읽기 전용 속성 해제", "Clear the read-only attribute when copying"), true),
-            combo("Theme", t(ko, "테마", "Theme"), &["Dark", "Light", "System", "Black", "Classic", "Gray"], &draft.text("Theme", "Black")),
+            combo("Theme", t(ko, "테마", "Theme"), &["Black", "Classic", "Gray"], &draft.text("Theme", "Black")),
         ]);
         let mut escape_labels: Vec<String> = lang("ComboBox.cbESC", "Minimize;Exit Program;Command Line;Deselect All;Go to Parent").split(';').map(|s| s.trim().to_owned()).collect();
         if escape_labels.len() != 5 {
@@ -1434,7 +1434,7 @@ impl App {
             self.system_box("NDR", &text, ndr::msgbox::MB_OK | ndr::msgbox::MB_ICONASTERISK, |_, _, _| {});
         }
         self.language = self.settings.text("Language", &self.language);
-        self.dark = self.settings.text("Theme", "Black") != "Light";
+        self.dark = super::system_commands::theme_palette(&self.settings.text("Theme", "Black")).dark();
         self.dual = self.settings.flag("DualPaneMode", true);
         self.profile_load_error = false;
         self.preferences_dirty = true;

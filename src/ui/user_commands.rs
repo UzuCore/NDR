@@ -214,12 +214,9 @@ impl App {
         let _ = (self.shell_runner)(Path::new(program), arguments, &directory);
     }
     pub(super) fn apply_preferences(&mut self, ctx: &egui::Context) {
-        let theme = self
-            .settings
-            .text("Theme", if self.dark { "Dark" } else { "Light" });
-        // C# ApplyTheme: 테마 색 표(System은 Windows 밝은 테마일 때 Light) → 스킨 색 → 색상표.
-        let windows_light = theme == "System" && native::windows_light_theme();
-        let palette = super::system_commands::theme_palette(&theme, windows_light);
+        let theme = self.settings.text("Theme", "Black");
+        // 스킨의 바탕 색 표 → 스킨 색 → 색상표.
+        let palette = super::system_commands::theme_palette(&theme);
         self.dark = palette.dark();
         let mut visuals = super::system_commands::palette_visuals(&palette);
         if let Ok(skin) = ndr::styles::Skin::load(&self.resources.join("Skins"), &theme) {
