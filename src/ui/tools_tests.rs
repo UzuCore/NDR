@@ -1508,7 +1508,8 @@ fn skin_list_header_follows_the_original_draw_list_header() {
         });
     });
     let titles: Vec<(String, f32, Color32)> = output.shapes.iter().filter_map(|c| match &c.shape { egui::Shape::Text(t) => Some((t.galley.text().to_owned(), t.pos.x, t.fallback_color)), _ => None }).collect();
-    assert_eq!(titles.first().map(|t| (t.1, t.2)), Some((5.0, Color32::from_gray(0x73))), "the Name column sorts by default: {titles:?}");
+    // 원본은 GetListHeaderWidth(아이콘 보기 30)부터 칸 글을 + 5에 쓴다: 이름 칸 글은 35(이름 글과 같은 자리).
+    assert_eq!(titles.first().map(|t| (t.1, t.2)), Some((35.0, Color32::from_gray(0x73))), "the Name column sorts by default: {titles:?}");
     assert!(titles.iter().skip(1).all(|t| t.2 == Color32::from_gray(0x4D)), "{titles:?}");
     let marks: Vec<egui::Rect> = output.shapes.iter().filter_map(|c| match &c.shape { egui::Shape::Rect(r) if r.fill == Color32::from_gray(0x3A) => Some(r.rect), _ => None }).collect();
     assert_eq!(marks.len(), 3, "a 5-3-1 triangle");

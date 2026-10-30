@@ -1242,10 +1242,13 @@ impl App {
         let descending = self.side_flag(index, "SortDescending", false);
         let mut x = rect.left();
         let mut clicked = None;
+        // 원본은 머리글을 GetListHeaderWidth부터 그린다. NDR 이름 칸은 그 머리를 담으므로 이름 칸 글은 머리 너비 뒤 + 5(이름 글과 같은 자리).
+        let lead = Self::list_header_width(self.settings.flag("ShowIcons", true));
         for (i, ((column, title, _), width)) in columns.iter().zip(widths).enumerate() {
             let Some(width) = *width else { continue };
             let cell = egui::Rect::from_min_max(egui::pos2(x, rect.top()), egui::pos2(x + width, rect.bottom()));
-            let text = egui::Rect::from_min_max(egui::pos2(x + 5.0, rect.top()), cell.max);
+            let start = if *column == super::list_view::DetailColumn::Name { lead } else { 0.0 };
+            let text = egui::Rect::from_min_max(egui::pos2(x + start + 5.0, rect.top()), cell.max);
             let mode = column.sort_mode();
             let sorted = mode.is_some() && mode == Some(current.as_str());
             let color = mix_color(fore, back, if sorted { 0.6 } else { 0.4 });

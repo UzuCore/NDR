@@ -81,12 +81,16 @@ impl App {
             self.original_fit_name_fields(ui, &fm, room, attach)
         } else {
             let attr = self.list_text_width(ui, if sftp { "drwxrwxrwx" } else { "ARHS" }) + 10.0;
-            let fields = [(2usize, size), (3, max[4] + 10.0), (4, attr), (5, max[6] + 10.0)];
-            for (slot, w) in fields.into_iter().filter(|(slot, _)| !(always && *slot == 2)) {
+            // 원본 필드 차례(ResetFields 0x7db770): NAME, EXT, LOCATION, SIZE, DATEMODIFIED, ATTR, DESC. FitVisibleFields는 차례대로
+            // 돌며 보이기 표시(+0x21)를 보지 않으므로 숨은 LOCATION(+0x21 = 0, 목록 항목의 위치 글은 비어 최대 너비 0)도 10을 쓴다.
+            let fields = [(None, 10.0), (Some(2usize), size), (Some(3), max[4] + 10.0), (Some(4), attr), (Some(5), max[6] + 10.0)];
+            for (slot, w) in fields.into_iter().filter(|(slot, _)| !(always && *slot == Some(2))) {
                 if w < 1.0 || width + w >= column_width {
                     break;
                 }
-                widths[slot] = Some(w);
+                if let Some(slot) = slot {
+                    widths[slot] = Some(w);
+                }
                 width += w;
             }
             if width < column_width {
@@ -377,11 +381,11 @@ impl App {
         let fits = if configured > 0 {
             configured
         } else if auto {
-            // 원본 UpdateDisplayAuto: 들어가는 열 수 = 목록 너비 / 한 항목 너비(원본 칸 너비 규칙).
-            ((width.max(1.0) / self.original_auto_item_width(ui, index).max(1.0)) as usize).clamp(1, 19)
+            // 원본 UpdateDisplayAuto: 들어가는 열 수 = 목록 너비 / 한 항목 너비(원본 칸 너비 규칙, 0이면 1, 위 한도 없음).
+            ((width.max(1.0) / self.original_auto_item_width(ui, index).max(1.0)) as usize).max(1)
         } else {
             // 원본 UpdateDisplayNames: 목록 너비 / (머리 + Adjusted 이름 + Adjusted 확장자).
-            self.original_names_fits(ui, index, width).clamp(1, 19)
+            self.original_names_fits(ui, index, width).max(1)
         };
         // 원본 UpdateDisplayNames: 한 열의 줄 수 = (높이 + LineSpace) / (항목 높이 + LineSpace).
         let space = self.list_line_space();
@@ -419,7 +423,8 @@ impl App {
         }
         let (rows, columns, _) = self.flow_shape(ui, index, width, height, auto);
         let count = self.panes[index].entries.len();
-        let column_width = (width / columns as f32).floor().max(40.0);
+        // 원본 UpdateDisplayAuto/Names: 0x344 = 목록 너비 / 보이는 열 수(정수 나눗셈).
+        let column_width = (width / columns as f32).floor().max(1.0);
         // 원본 스킨 테마: 커서·표시 막대(DrawFocus), 칸 색(DrawListItem), 표시 ▶.
         let original = Some(self.original_list_colors());
         let total_columns = count.div_ceil(rows).max(1);
