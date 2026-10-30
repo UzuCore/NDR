@@ -188,7 +188,8 @@ impl App {
             }
             "archive" => {
                 self.active = 0;
-                self.panes[0].cursor = 0;
+                // ".."가 아닌 첫 항목(".."는 압축 대상이 아니다).
+                self.panes[0].cursor = self.panes[0].entries.iter().position(|e| !e.is_parent() && !e.drive).unwrap_or(0);
                 self.archive_command(super::archive_dialog::ArchiveKind::Create);
             }
             "progress" => {

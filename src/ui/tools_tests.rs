@@ -478,7 +478,7 @@ fn archive_form(app: &App) -> &super::archive_dialog::ArchiveCreateForm {
     }
 }
 
-/// 원본 rbFormatClick(PathRenameExtensionW)과 miArcAddToArchiveClick 끝(PathIsRelativeW → PathCombineW(지금 폴더, 이름)).
+/// 원본 rbFormatClick(PathRenameExtensionW). 압축 파일은 늘 지금 폴더에 만든다(고친 것: 적은 경로는 쓰지 않고 이름만).
 #[test]
 fn archive_name_field_follows_the_original_tfaddtoarc() {
     use super::archive_dialog::{archive_output_path, rename_extension};
@@ -489,30 +489,22 @@ fn archive_name_field_follows_the_original_tfaddtoarc() {
     assert_eq!(rename_extension(".hidden", "zip"), ".hidden.zip");
     let here = Path::new(r"C:\work");
     assert_eq!(archive_output_path("pack.zip", here), Some(PathBuf::from(r"C:\work\pack.zip")));
-    assert_eq!(archive_output_path(r"sub\pack.zip", here), Some(PathBuf::from(r"C:\work\sub\pack.zip")));
-    assert_eq!(archive_output_path(r"D:\out\pack.7z", here), Some(PathBuf::from(r"D:\out\pack.7z")));
+    assert_eq!(archive_output_path(r"sub\pack.zip", here), Some(PathBuf::from(r"C:\work\pack.zip")));
+    assert_eq!(archive_output_path(r"D:\out\pack.7z", here), Some(PathBuf::from(r"C:\work\pack.7z")));
     assert_eq!(archive_output_path("  ", here), None);
+    assert_eq!(archive_output_path(r"D:\out\", here), None);
 }
 
-/// 원본 btnOkClick(0x417074): ZIP이 아닌데 외부 프로그램 칸의 파일이 없으면 창을 닫지 않고 그 칸에 초점을 준다.
+/// 외부 압축 프로그램은 쓰지 않는다: RAR·ARJ(동봉 7-Zip이 못 만듦)는 고를 수 없다.
 #[test]
-fn archive_ok_keeps_the_window_when_the_external_program_is_missing() {
+fn archive_window_has_no_external_program_formats() {
     let (root, ctx, mut app) = fixture("archiveprog", "ko");
+    app.settings.values.insert("ExternalPrograms".into(), serde_json::json!({ "rar": ndr::archive::seven_zip_path().unwrap().to_string_lossy() }));
     app.panes[0].selected = [row(&app, "alpha.txt")].into_iter().collect();
     app.dispatch("createArchive", &ctx);
-    let rar = archive_form(&app).formats.iter().position(|f| f.extension == "rar").expect("rar format");
-    let missing = root.join("no-such-rar.exe").to_string_lossy().into_owned();
-    app.edit_dialog_kind(move |kind| {
-        if let DialogKind::ArchiveCreate(form) = kind {
-            form.set_format(rar);
-            form.external = missing.clone();
-        }
-    });
-    app.submit_archive_create(0, &ctx);
-    assert!(archive_form(&app).focus_external, "the window stays open and asks for the external program field");
-    assert!(app.msgboxes.is_empty(), "no message box like the original");
-    frame(&mut app, &ctx, vec![]);
-    assert!(!archive_form(&app).focus_external, "the next frame focuses the field");
+    let formats: Vec<String> = archive_form(&app).formats.iter().map(|f| f.extension.clone()).collect();
+    assert!(!formats.iter().any(|f| f == "rar" || f == "arj"), "{formats:?}");
+    assert!(archive_form(&app).formats.iter().all(|f| f.program.is_none() && f.builtin));
     let _ = fs::remove_dir_all(root);
 }
 
@@ -543,9 +535,9 @@ fn archive_create_add_move_and_extract_follow_the_csharp_flows() {
     assert_eq!(boxed(&app), ("압축하기".to_owned(), app.language_pack.text("formAddToArchive.Message.InvalidVolume", "Enter a valid volume size such as 10 MB, or 0 for no splitting.")));
     app.answer_message_box(1, &ctx);
     let pack = left.join("pack.zip");
-    // 원본 TfAddToArc cbFileName: 기본 이름(폴더 이름 + 확장자), 다른 패널 폴더의 같은 이름. 저장 상자 없이 그 이름으로 만든다.
+    // 원본 TfAddToArc cbFileName: 기본 이름(폴더 이름 + 확장자). 저장 상자 없이 지금 폴더에 그 이름으로 만든다.
     assert_eq!(archive_form(&app).file_name, "left.zip");
-    assert_eq!(archive_form(&app).file_names, ["left.zip".to_owned(), right.join("left.zip").to_string_lossy().into_owned()]);
+    let _ = &right;
     SAVE_TARGET.with(|t| *t.borrow_mut() = None);
     let named = pack.to_string_lossy().into_owned();
     app.edit_dialog_kind(|kind| if let DialogKind::ArchiveCreate(form) = kind { form.volume = "분할 안함".into(); form.set_format(0); form.file_name = "pack.zip".into(); });
@@ -553,6 +545,8 @@ fn archive_create_add_move_and_extract_follow_the_csharp_flows() {
     wait_job(&mut app, &ctx);
     assert_eq!(app.status, "ZIP 압축 파일을 만들었습니다.");
     assert_eq!(archive_keys(&pack), ["alpha.txt", "folder1/inner.txt"]);
+    wait_until(&mut app, &ctx, |app| !app.panes[0].loading);
+    assert_eq!(app.panes[0].entries[app.panes[0].cursor].name, "pack.zip", "the cursor goes to the new archive");
     assert_eq!(app.settings.text("DefaultArchiveFormatExtension", ""), "zip", "RememberArchiveDialogChoices");
     // 같은 이름으로 다시 만들면 묶음 교체를 묻는다(아니요 = 그대로). 새 목록은 ".."에서 시작하므로 전처럼 folder1에 커서를 둔다.
     app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == "folder1").unwrap();
@@ -1149,21 +1143,20 @@ fn archive_entry_opening_asks_for_the_password_like_csharp() {
 }
 
 
-/// 동봉 7zip+α: 압축 추가 형식에 ALZ(내장). 분할은 동봉 7-Zip으로, 암호는 외부 프로그램이 있어야 한다(7zip+α가 ALZ에 암호를 넣지 않음).
-/// EGG 만들기(원본·C# 판에 없음)는 사용자 요청으로 뺐다(외부 프로그램을 지정하면 C# 판처럼 .EGG (외부 프로그램)은 있다).
+/// 동봉 7zip+α: 압축 추가 형식에 ALZ(내장). 분할은 동봉 7-Zip으로 하고, 암호는 넣을 수 없다(7zip+α가 ALZ에 암호를 넣지 않음).
+/// EGG 만들기(원본·C# 판에 없음)는 사용자 요청으로 뺐다.
 #[test]
-fn built_in_alz_and_egg_split_with_the_bundled_seven_zip_but_need_a_program_for_passwords() {
+fn built_in_alz_splits_with_the_bundled_seven_zip_but_cannot_be_encrypted() {
     let (root, _ctx, app) = fixture("alzegg-formats", "ko");
     let formats = app.archive_formats(true);
-    assert!(!formats.iter().any(|f| f.extension == "egg"), "no EGG creation without a configured program");
+    assert!(!formats.iter().any(|f| f.extension == "egg"), "no EGG creation");
     for (extension, label) in [("alz", "ALZ (내장)")] {
         let format = formats.iter().find(|f| f.extension == extension && f.builtin).cloned().unwrap_or_else(|| panic!("{extension} built in"));
         assert_eq!(format.label, label);
-        let choice = |password: &str, volume: Option<u64>| super::archive_dialog::ArchiveChoice { format: format.clone(), format_index: 0, preset: 0, level: 5, password: password.into(), volume, recursive: true, external: None, output: None };
+        let choice = |password: &str, volume: Option<u64>| super::archive_dialog::ArchiveChoice { format: format.clone(), format_index: 0, preset: 0, level: 5, password: password.into(), volume, recursive: true, output: None };
         assert!(matches!(app.archive_program(&choice("", Some(1024))), Ok(None)), "{extension} splits with the bundled 7-Zip");
-        assert!(app.archive_program(&choice("secret", None)).is_err(), "{extension} password needs a program");
+        assert_eq!(app.archive_program(&choice("secret", None)).unwrap_err(), ".alz 형식은 암호를 넣을 수 없습니다.");
     }
-    assert!(!formats.iter().any(|f| f.label.contains("외부 프로그램 선택") && f.extension == "alz"));
     let _ = fs::remove_dir_all(root);
 }
 
@@ -1243,29 +1236,17 @@ fn nested_archives_of_any_known_format_open_as_panes_like_csharp() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// C# OpenItemAsync(내부에서 못 읽는 압축): TryGetExternalArchiveProgram → "{폴더}\{이름}"에 통째로 풀고 그 폴더로.
+/// 동봉 7-Zip이 못 읽는 압축: 외부 압축 프로그램은 쓰지 않으므로 설정이 남아 있어도 열지 않고 알린다.
 #[test]
-fn ace_archives_open_through_the_external_program_like_csharp() {
-    let (root, ctx, mut app) = fixture("ace-open", "en");
-    let left = root.join("left");
-    fs::write(left.join("inside.txt"), b"ace payload").unwrap();
-    // 동봉 7-Zip이 못 읽는 ACE 자리: 7-Zip은 내용(ZIP 머리)으로 형식을 알아보므로 ZIP을 .ace 이름으로 둔다.
-    let zip = left.join("old.zip");
-    ndr::archive::create(&[left.join("inside.txt")], &zip, None, &AtomicBool::new(false)).unwrap();
-    let ace = left.join("old.ace");
-    fs::rename(&zip, &ace).unwrap();
-    // C# ExternalPrograms["ace"] + ExternalArchiveExtractArgumentTemplates["ace"].
+fn unreadable_archives_are_not_handed_to_an_external_program() {
+    let (root, _ctx, mut app) = fixture("ace-open", "en");
+    let ace = root.join("left").join("old.ace");
+    fs::write(&ace, b"not an archive").unwrap();
     let seven = ndr::archive::seven_zip_path().unwrap();
     app.settings.values.insert("ExternalPrograms".into(), serde_json::json!({ "ace": seven.to_string_lossy() }));
-    app.settings.values.insert("ExternalArchiveExtractArgumentTemplates".into(), serde_json::json!({ "ace": "x {archive} -o{destination} -y {keys}" }));
-    app.open_with_external_archive_program(0, ace.clone(), true);
-    wait_job(&mut app, &ctx);
-    wait_until(&mut app, &ctx, |app| app.panes[0].path == left.join("old") && !app.panes[0].loading);
-    assert_eq!(fs::read(left.join("old").join("inside.txt")).unwrap(), b"ace payload");
-    assert!(app.panes[0].archive.is_none());
-    // 대상 폴더가 비어 있지 않으면 C# 판처럼 "여기에 추가할까요?"(예/아니요, 경고)를 묻는다.
     app.open_with_external_archive_program(0, ace, true);
-    assert!(app.msgboxes.last().is_some_and(|m| m.flags == (ndr::msgbox::MB_YESNO | ndr::msgbox::MB_ICONEXCLAMATION)));
+    assert!(app.job.is_none(), "no extraction job");
+    assert!(app.msgboxes.last().is_some_and(|m| m.text == "The .ace format cannot be opened."), "{:?}", app.msgboxes.last().map(|m| m.text.clone()));
     let _ = fs::remove_dir_all(root);
 }
 

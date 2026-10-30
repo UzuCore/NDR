@@ -177,8 +177,8 @@ fn settings_window_commits_like_csharp() {
     set_text(&mut app, "FolderTreeDepth", "abc");
     set_text(&mut app, "ExtensionColors", "zip=#abcdef; *.TXT=#112233");
     set_text(&mut app, "SpecialFolder:Music", "D:\\Music");
-    set_text(&mut app, "Archive:zip", "");
-    set_text(&mut app, "ArchiveArgs:rar", "");
+    // 외부 압축 프로그램 줄은 없다(사용자 요청).
+    assert!(app.settings_form().unwrap().row_mut("Archive:zip").is_none() && app.settings_form().unwrap().row_mut("UseExternalArchivePrograms").is_none());
     set_text(&mut app, "CleanupLocations", "%TEMP%; ");
     set_text(&mut app, "WF0", "  C:\\work  ");
     set_combo(&mut app, "LeftColumnCount", "3");
@@ -193,8 +193,6 @@ fn settings_window_commits_like_csharp() {
     assert_eq!(s.values.get("FolderTreeDepth").cloned(), depth_before, "an unparsable number keeps the old value");
     assert_eq!(s.values["ExtensionColors"], serde_json::json!({".zip": "#ABCDEF", ".txt": "#112233"}));
     assert_eq!(s.values["SpecialFolderPaths"]["Music"], "D:\\Music");
-    assert_eq!(s.values["ExternalPrograms"]["zip"], "", "Archive:* keeps an empty value");
-    assert!(s.values["ExternalArchiveArgumentTemplates"].get("rar").is_none(), "empty argument templates are removed");
     let temp = std::path::absolute(native::expand_environment("%TEMP%")).unwrap().to_string_lossy().into_owned();
     assert_eq!(s.strings("UserDefinedCleanupLocations"), [temp]);
     assert_eq!(s.strings("WorkingFolders")[0], "C:\\work");

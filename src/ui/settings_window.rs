@@ -282,7 +282,7 @@ fn original_pages(built: Vec<Vec<Row>>, language: &compat::Language, ko: bool) -
     let option = vec![
         take("SelectFolders", l("Caption.chkSelectAllFolder", "Select folder when select all")),
         take("UseExplorerMenu", l("Caption.chkExplorerMenu", "Use an explorer menu for right click")),
-        take("UseExternalArchivePrograms", l("Caption.chkUseExtArcProgram", "Use external program for archive files")),
+
         take("RemoveReadOnlyWhenCopying", l("Caption.chkRemoveReadOnly", "Remove read only attribute when copying from CD/DVD")),
         take("SaveDriveFolders", l("Caption.chkDriveFolders", "Save last folder of each drive")),
         take("ConfirmDragDrop", l("Caption.chkConfirmDrop", "Confirm on drag and drop operation")),
@@ -611,35 +611,14 @@ impl SettingsForm {
         ]);
 
         // 외부 프로그램.
-        let programs_map = object(&draft, "ExternalPrograms");
+        // 외부 압축 프로그램(원본 chkUseExtArcProgram, C# 판 압축 형식별 프로그램·인자)은 쓰지 않는다(사용자 요청).
         let mut programs = vec![
-            check("UseExternalArchivePrograms", t(ko, "압축 파일을 폴더처럼 열지 않고 외부 프로그램 사용", "Open archives with external programs instead of as folders"), false),
             check("UseCopyHandler", t(ko, "등록한 외부 복사 프로그램 사용", "Use the registered external copy program"), false),
             Row::Program { key: "TextViewerPath".into(), label: t(ko, "텍스트 보기 프로그램", "Text viewer program"), value: text_of(&draft, "TextViewerPath") },
             Row::Program { key: "TextEditorPath".into(), label: t(ko, "텍스트 편집 프로그램", "Text editor program"), value: text_of(&draft, "TextEditorPath") },
             Row::Program { key: "CopyHandlerPath".into(), label: language.text("NDRCopyHandler.Path", "External copy/move handler path (TeraCopy or KillCopy)"), value: text_of(&draft, "CopyHandlerPath") },
             text("UpdateManifestUrl", t(ko, "업데이트 JSON 피드 (HTTPS)", "Update JSON feed (HTTPS)"), text_of(&draft, "UpdateManifestUrl")),
         ];
-        for extension in ["zip", "7z", "rar", "arj", "ace", "alz", "cab", "iso", "egg", "tar", "tar.gz", "tar.bz2", "gz", "bz2", "bzip2", "z", "xz"] {
-            let label = match extension {
-                "7z" => t(ko, ".7z / ZIP 고급 옵션용 7-Zip CLI (7z.exe)", ".7z / 7-Zip CLI for advanced ZIP options (7z.exe)"),
-                "rar" => t(ko, ".rar 생성용 RAR CLI (rar.exe)", "RAR CLI for creating .rar (rar.exe)"),
-                _ => if ko { format!(".{extension} 외부 처리 프로그램") } else { format!(".{extension} external program") },
-            };
-            programs.push(Row::Program { key: format!("Archive:{extension}"), label, value: programs_map.get(extension).and_then(Value::as_str).unwrap_or("").to_owned() });
-        }
-        programs.push(Row::Section(t(ko, "외부 압축 명령줄 인자 (선택 사항)", "External archive command-line arguments (optional)")));
-        programs.push(Row::Text { key: "ArchiveArgsHelp".into(), label: t(ko, "인자 예시", "Argument example"), value: "a {recursive} -mx={level} -p{password} -v{volumeMiB}m {archive} {sources}".into(), read_only: true, max: usize::MAX, upper: false });
-        let create_args = object(&draft, "ExternalArchiveArgumentTemplates");
-        for extension in ["rar", "arj", "ace", "alz", "cab", "iso", "egg", "tar", "tar.gz", "tar.bz2", "gz", "bz2", "bzip2", "z", "xz"] {
-            programs.push(text(&format!("ArchiveArgs:{extension}"), if ko { format!(".{extension} 인자") } else { format!(".{extension} arguments") }, create_args.get(extension).and_then(Value::as_str).unwrap_or("").to_owned()));
-        }
-        programs.push(Row::Section(t(ko, "외부 압축 해제 인자 템플릿 (프로그램별로 지정)", "External extraction argument templates (per program)")));
-        programs.push(Row::Text { key: "ArchiveExtractArgsHelp".into(), label: t(ko, "인자 예시", "Argument example"), value: "x {archive} -o{destination} -y -p{password} {keys}".into(), read_only: true, max: usize::MAX, upper: false });
-        let extract_args = object(&draft, "ExternalArchiveExtractArgumentTemplates");
-        for extension in ["zip", "7z", "rar", "arj", "ace", "alz", "cab", "iso", "egg", "tar", "tar.gz", "tar.bz2", "gz", "bz2", "bzip2", "z", "xz"] {
-            programs.push(text(&format!("ArchiveExtractArgs:{extension}"), if ko { format!(".{extension} 해제 인자") } else { format!(".{extension} extraction arguments") }, extract_args.get(extension).and_then(Value::as_str).unwrap_or("").to_owned()));
-        }
         programs.push(Row::Section(language.text("formFunctionKeys.Form.Caption", "Function Keys")));
         programs.push(Row::Note(t(ko, "F1–F12별 표시 이름, 내부 동작 또는 사용자 프로그램/문서와 실행 인자를 편집합니다. 기존 NexusFile 기능키 설정도 자동으로 불러옵니다.",
             "Edit the display name, internal action or user program/document, and launch parameters for F1–F12. Existing NexusFile function key settings are imported automatically.")));
@@ -816,14 +795,8 @@ impl SettingsForm {
                             }
                         }
                         other => {
-                            if let Some(extension) = other.strip_prefix("Archive:") {
-                                map_set(values, "ExternalPrograms", extension, value, false);
-                            } else if let Some(name) = other.strip_prefix("SpecialFolder:") {
+                            if let Some(name) = other.strip_prefix("SpecialFolder:") {
                                 map_set(values, "SpecialFolderPaths", name, value, true);
-                            } else if let Some(extension) = other.strip_prefix("ArchiveArgs:") {
-                                map_set(values, "ExternalArchiveArgumentTemplates", extension, value, true);
-                            } else if let Some(extension) = other.strip_prefix("ArchiveExtractArgs:") {
-                                map_set(values, "ExternalArchiveExtractArgumentTemplates", extension, value, true);
                             }
                         }
                     }
@@ -1155,7 +1128,7 @@ fn original_page(ui: &mut egui::Ui, form: &mut SettingsForm, tab: usize, origin:
             for (top, key) in [
                 (16.0, "SelectFolders"),
                 (38.0, "UseExplorerMenu"),
-                (61.0, "UseExternalArchivePrograms"),
+
                 (84.0, "RemoveReadOnlyWhenCopying"),
                 (107.0, "SaveDriveFolders"),
                 (129.0, "ConfirmDragDrop"),

@@ -408,10 +408,10 @@ fn adding_to_a_multivolume_archive_rebuilds_it_like_csharp() {
     let noise: Vec<u8> = (0..1_572_864).map(|_| { state ^= state << 13; state ^= state >> 17; state ^= state << 5; (state >> 24) as u8 }).collect();
     fs::write(left.join("noise.bin"), &noise).unwrap();
     let options = ndr::commands::ArchiveOptions { extension: "7z".into(), level: 1, password: String::new(), volume_bytes: Some(1024 * 1024), recursive: true, append: false };
-    ndr::archive::create_with_program(&[left.join("noise.bin")], &root.join("right").join("set.7z"), &options, None, &AtomicBool::new(false)).unwrap();
-    let first = root.join("right").join("set.7z.001");
-    assert!(first.exists() && root.join("right").join("set.7z.002").exists());
-    // 더하기: 7z를 고르고 첫 볼륨을 대상으로.
+    ndr::archive::create_with_program(&[left.join("noise.bin")], &left.join("set.7z"), &options, None, &AtomicBool::new(false)).unwrap();
+    let first = left.join("set.7z.001");
+    assert!(first.exists() && left.join("set.7z.002").exists());
+    // 더하기: 7z를 고르고 지금 폴더의 첫 볼륨을 대상으로(압축 파일은 늘 지금 패널 폴더).
     wait(&mut app, &ctx, |app| app.panes.iter().all(|p| !p.loading));
     app.save_dialog = save_to;
     SAVE_TO.with(|s| *s.borrow_mut() = Some(first.clone()));
@@ -430,8 +430,8 @@ fn adding_to_a_multivolume_archive_rebuilds_it_like_csharp() {
     assert!(app.job.as_ref().is_some_and(|j| j.errors.is_empty() && j.fatal.is_none()), "{:?}", app.job.as_ref().map(|j| (&j.errors, &j.fatal)));
     let names: Vec<String> = ndr::archive::list(&first, None).unwrap().into_iter().map(|e| e.key).collect();
     assert!(names.iter().any(|n| n == "noise.bin") && names.iter().any(|n| n == "b.txt"), "{names:?}");
-    assert!(root.join("right").join("set.7z.002").exists(), "still split at the inferred 1 MiB");
-    assert!(!fs::read_dir(root.join("right")).unwrap().any(|e| e.unwrap().file_name().to_string_lossy().starts_with(".ndr-multivolume-update-")), "the staging folder is removed");
+    assert!(left.join("set.7z.002").exists(), "still split at the inferred 1 MiB");
+    assert!(!fs::read_dir(left).unwrap().any(|e| e.unwrap().file_name().to_string_lossy().starts_with(".ndr-multivolume-update-")), "the staging folder is removed");
     fs::remove_dir_all(root).unwrap();
 }
 

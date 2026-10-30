@@ -444,8 +444,6 @@ enum AsyncResult {
     MergeDone(usize, Result<(), String>),
     /// 작업이 끝난 뒤 보일 상태 줄 글.
     ArchiveStatus(String),
-    /// 작업이 끝난 뒤 그 패널을 이 폴더로(외부 프로그램으로 푼 압축 열기).
-    OpenFolder { pane: usize, path: PathBuf },
     /// 드라이브 단추 목록(루트, 도움말).
     Drives(Vec<(PathBuf, String)>),
     /// 원격 명령 결과(사이트 번호, 명령, "호스트:포트", 출력 또는 오류).
@@ -617,6 +615,8 @@ pub struct App {
     http_get: fn(&str, usize) -> Result<ndr::update::HttpResponse, ndr::update::HttpError>,
     /// 새로 고친 목록이 오면 커서를 둘 이름(C# FocusPaneItemByName).
     pending_focus: [Option<String>; 2],
+    /// 압축 작업이 끝나면 커서를 둘 (패널, 만든 압축 파일).
+    archive_focus: Option<(usize, PathBuf)>,
     /// 인수와 함께 열기의 ShellExecuteExW(테스트에서 실제 프로그램을 띄우지 않도록 교체 가능).
     shell_runner: fn(&Path, &str, &Path) -> Result<(), String>,
     /// 프로그램을 바로 실행하고 끝 코드를 기다린다(외부 복사 프로그램). 테스트에서 바꿔 끼운다.
@@ -883,6 +883,7 @@ impl App {
             applied_alpha: -1.0,
             http_get: native::https_get,
             pending_focus: [None, None],
+            archive_focus: None,
             shell_runner: native::shell_execute,
             program_runner: file_operation::run_program,
             save_dialog: ndr::file_dialogs::save_file,
@@ -1288,12 +1289,6 @@ impl App {
                 AsyncResult::MergeSources(output, sources) => self.merge_sources_ready(output, sources),
                 AsyncResult::MergeDone(count, outcome) => self.merge_done(count, outcome),
                 AsyncResult::ArchiveStatus(text) => self.status = self.archive_error_text(&text),
-                AsyncResult::OpenFolder { pane, path } => {
-                    if pane < self.panes.len() {
-                        self.panes[pane].archive = None;
-                        self.navigate(pane, path, true);
-                    }
-                }
                 AsyncResult::RemoteCommand { index, command, host, result } => self.remote_command_done(index, command, host, result),
                 AsyncResult::ExternalCopy { result, status, clear_clipboard } => self.external_copy_done(result, status, clear_clipboard),
                 AsyncResult::ArchiveEntriesOpened { pane, archive, password, opened, failures, navigate_archives } => self.archive_entries_opened(pane, archive, password, opened, failures, navigate_archives),

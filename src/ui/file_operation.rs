@@ -581,6 +581,13 @@ impl App {
                 native::completion_sound();
             }
         };
+        // 압축을 마쳤으면 만든 압축 파일이 있는 패널의 새 목록에서 그 파일에 커서를 둔다.
+        if let Some((pane, output)) = self.archive_focus.take() {
+            let in_pane = output.parent().is_some_and(|folder| ndr::names::equals_ignore_case(&folder.to_string_lossy(), &self.panes[pane].path.to_string_lossy()));
+            if !cancelled && fatal.is_none() && output.exists() && in_pane && self.panes[pane].archive.is_none() {
+                self.pending_focus[pane] = output.file_name().map(|n| n.to_string_lossy().into_owned());
+            }
+        }
         self.refresh(0);
         self.refresh(1);
         self.ftp_queue_done();

@@ -1,5 +1,7 @@
 //! C# CreateArchiveAsync / AddToArchiveAsync(move) / CreateZipAsync / ExtractArchiveAsync(Selected·CurrentFolder·NewFolder·Auto) /
-//! ShowArchivePropertiesAsync와 ArchiveCreateWindow([formAddToArchive]). 압축은 동봉한 7-Zip(또는 설정한 외부 프로그램)으로 한다.
+//! 압축하기 창(원본 TfAddToArc, [formAddToArchive])과 압축 풀기·압축 파일 속성. 압축과 풀기는 늘 동봉한 7-Zip으로 한다.
+//! 고친 것(사용자 요청): 원본의 외부 압축 프로그램 칸(eExternalProg)·외부 프로그램 설정은 쓰지 않는다. RAR·ARJ처럼 동봉 7-Zip이
+//! 만들 수 없는 형식은 고를 수 없다. 이름 칸은 이름만 받고 압축 파일은 늘 지금 패널 폴더에 만든다.
 //! 차이(HANDOFF): C#의 "내장" ZIP/7Z/TAR는 SharpCompress로 쓰지만 Rust는 동봉 7-Zip으로 쓴다(결과 형식은 같다). 다중 볼륨 압축 파일에
 //! 더하기(볼륨 다시 만들기)는 아직 안 된다. 진행 창은 일반 작업 창이고 일시 정지가 없다.
 use super::original_dialogs::{DialogKind, DialogResult};
@@ -40,7 +42,6 @@ pub(super) enum ExtractMode {
 pub(super) struct ArchiveCreateForm {
     pub formats: Vec<ArchiveFormat>,
     pub format: usize,
-    pub external: String,
     pub preset: usize,
     pub password: String,
     pub volume: String,
@@ -48,11 +49,8 @@ pub(super) struct ArchiveCreateForm {
     pub preset_labels: Vec<String>,
     pub volume_labels: Vec<String>,
     pub default_level: i32,
-    /// 원본 TfAddToArc cbFileName: 지금 이름과 목록(기본 이름, 다른 패널 폴더의 같은 이름).
+    /// 원본 TfAddToArc cbFileName: 압축 파일 이름(지금 패널 폴더에 만든다).
     pub file_name: String,
-    pub file_names: Vec<String>,
-    /// 원본 btnOkClick(0x417074): 외부 프로그램 칸 파일이 없으면 창을 닫지 않고 그 칸에 초점(SetFocus + SelectAll).
-    pub focus_external: bool,
 }
 
 /// 원본 rbFormatClick(0x4169d4)의 PathRenameExtensionW: 이름 끝 확장자(.tar.gz·.tar.bz2는 둘 다)를 새 확장자로.
@@ -69,17 +67,13 @@ pub(super) fn rename_extension(name: &str, extension: &str) -> String {
 }
 
 impl ArchiveCreateForm {
-    /// 형식을 바꾸면 외부 프로그램 칸을 그 형식 것으로, cbFileName의 이름과 목록 확장자를 그 형식으로(원본 rbFormatClick).
+    /// 형식을 바꾸면 cbFileName 이름의 확장자를 그 형식으로(원본 rbFormatClick).
     pub(super) fn set_format(&mut self, index: usize) {
         let Some(format) = self.formats.get(index) else { return };
         self.format = index;
-        self.external = format.program.as_ref().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
         let extension = format.extension.clone();
         if !self.file_name.trim().is_empty() {
             self.file_name = rename_extension(&self.file_name, &extension);
-        }
-        for name in &mut self.file_names {
-            *name = rename_extension(name, &extension);
         }
     }
 }
@@ -94,8 +88,7 @@ pub(super) struct ArchiveChoice {
     pub password: String,
     pub volume: Option<u64>,
     pub recursive: bool,
-    pub external: Option<String>,
-    /// 원본 cbFileName의 글(상대 경로면 지금 폴더 기준). None이면 저장 상자로 고른다(빠른 ZIP, 빈 이름).
+    /// 지금 패널 폴더 + cbFileName의 이름. None이면 저장 상자로 고른다(빠른 ZIP, 빈 이름).
     pub output: Option<PathBuf>,
 }
 
@@ -168,15 +161,15 @@ pub(super) fn default_archive_name(paths: &[PathBuf], current: &Path, extension:
     format!("{base}.{extension}")
 }
 
-/// 원본 miArcAddToArchiveClick 끝: cbFileName 글이 상대 경로(PathIsRelativeW)면 PathCombineW(지금 패널 폴더, 글), 아니면 그대로.
-/// 빈 글이면 None.
+/// 압축 파일 경로 = 지금 패널 폴더 + cbFileName의 이름. 고친 것(사용자 요청): 원본은 경로를 적으면(PathIsRelativeW가 거짓) 그 경로에
+/// 만들었지만, 여기서는 적은 글의 파일 이름만 쓰고 늘 지금 폴더에 만든다. 빈 글이면 None.
 pub(super) fn archive_output_path(text: &str, current: &Path) -> Option<PathBuf> {
     let text = text.trim().trim_matches('"');
-    if text.is_empty() {
+    let name = text.rsplit(['\\', '/']).next().unwrap_or("").trim();
+    if name.is_empty() || name == "." || name == ".." {
         return None;
     }
-    let path = Path::new(text);
-    let combined = if path.is_absolute() || text.starts_with("\\\\") { path.to_path_buf() } else { current.join(path) };
+    let combined = current.join(name);
     Some(std::path::absolute(&combined).unwrap_or(combined))
 }
 
@@ -199,13 +192,11 @@ pub(super) fn output_conflict(sources: &[PathBuf], output: &Path, ko: bool) -> O
     None
 }
 
-/// 원본 TfAddToArc(ClientWidth 443 × ClientHeight 354): lSecName(20,16 굵게 파랑), lFileName(44,43) cbFileName(106,40 275×21)
-/// btnBrowseFile(387,40 37×21), lSecFormat(20,76), rbZIP(44,104 굵게)·rbRAR(108)·rb7z(173)·rbALZ(238)·rbARJ(303),
-/// lExtProg(44,129) eExternalProg(171,127 211×21) btnBrowseExtProg(387,127), lHelp(45,157 회색), lSecOptions(20,179),
-/// lLevel(44,209) cbCompLevel(143,206 121×21) chkRecursive(276,208), lVolume(44,243) cbVolume(143,240), lPassword(44,276)
-/// ePassword(143,273), Bevel1(20,310 404), btnOk(253,320) btnCancel(341,320) 83×25.
-/// 원본 다섯 형식 밖의 C# 판 형식(TAR·GZ·EGG 등)은 라디오 줄 오른쪽 작은 목록에서 고른다.
-/// 0 = 압축, 1 = 취소, 2 = 외부 프로그램 찾아보기, 3 = 이름 찾아보기.
+/// 원본 TfAddToArc(ClientWidth 443 × ClientHeight 354): lSecName(20,16 굵게 파랑), lFileName(44,43) cbFileName(106,40 275×21),
+/// lSecFormat(20,76), rbZIP(44,104 굵게)·rb7z(173)·rbALZ(238), lSecOptions(20,179), lLevel(44,209) cbCompLevel(143,206 121×21)
+/// chkRecursive(276,208), lVolume(44,243) cbVolume(143,240), lPassword(44,276) ePassword(143,273), Bevel1(20,310 404),
+/// btnOk(253,320) btnCancel(341,320) 83×25. 외부 프로그램 줄(lExtProg·eExternalProg·btnBrowseExtProg)·lHelp·rbRAR·rbARJ는 두지 않는다.
+/// 원본 다섯 형식 밖의 동봉 7-Zip 형식(TAR 등)은 라디오 줄 오른쪽 작은 목록에서 고른다. 0 = 압축, 1 = 취소.
 pub(super) fn archive_create_ui(ui: &mut egui::Ui, form: &mut ArchiveCreateForm, language: &compat::Language, enter: bool) -> Option<usize> {
     use super::original_dialogs::put_left;
     let text = |key: &str, fallback: &str| language.text(&format!("formAddToArchive.{key}"), fallback);
@@ -217,23 +208,7 @@ pub(super) fn archive_create_ui(ui: &mut egui::Ui, form: &mut ArchiveCreateForm,
         put_left(ui, at(20.0, top, 400.0, 16.0), egui::Label::new(RichText::new(text(key, fallback)).strong().family(egui::FontFamily::Name(super::BOLD_FONT_FAMILY.into())).color(blue)));
     }
     put_left(ui, at(44.0, 43.0, 60.0, 15.0), egui::Label::new(text("Caption.lFileName", "&Filename:")).truncate());
-    let name_width = if form.file_names.is_empty() { 275.0 } else { 253.0 };
-    ui.put(at(106.0, 40.0, name_width, 21.0), egui::TextEdit::singleline(&mut form.file_name));
-    if !form.file_names.is_empty() {
-        ui.scope_builder(egui::UiBuilder::new().max_rect(at(359.0, 40.0, 22.0, 21.0)), |ui| {
-            ui.menu_button("▼", |ui| {
-                for name in form.file_names.clone() {
-                    if ui.button(&name).clicked() {
-                        form.file_name = name;
-                        ui.close();
-                    }
-                }
-            });
-        });
-    }
-    if ui.put(at(387.0, 40.0, 37.0, 21.0), egui::Button::new("...")).clicked() {
-        choice = Some(3);
-    }
+    ui.put(at(106.0, 40.0, 275.0, 21.0), egui::TextEdit::singleline(&mut form.file_name));
     // 원본 rbZIP·rbRAR·rb7z·rbALZ·rbARJ(Tag 1~5).
     let original = [("zip", 44.0, "Caption.rbZIP", "&ZIP"), ("rar", 108.0, "Caption.rbRAR", "&RAR"), ("7z", 173.0, "Caption.rb7z", "&7z"), ("alz", 238.0, "Caption.rbALZ", "&ALZ"), ("arj", 303.0, "Caption.rbARJ", "AR&J")];
     let index_of = |extension: &str| form.formats.iter().position(|f| f.extension.trim_start_matches('.').eq_ignore_ascii_case(extension));
@@ -262,21 +237,6 @@ pub(super) fn archive_create_ui(ui: &mut egui::Ui, form: &mut ArchiveCreateForm,
     if picked != form.format {
         form.set_format(picked);
     }
-    put_left(ui, at(44.0, 129.0, 125.0, 15.0), egui::Label::new(text("Caption.lExtProg", "E&xternal Program:")).truncate());
-    let external = ui.put(at(171.0, 127.0, 211.0, 21.0), egui::TextEdit::singleline(&mut form.external));
-    if std::mem::take(&mut form.focus_external) {
-        // 원본 eExtProg SetFocus + SelectAll.
-        external.request_focus();
-        if let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), external.id) {
-            let length = form.external.chars().count();
-            state.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(length))));
-            state.store(ui.ctx(), external.id);
-        }
-    }
-    if ui.put(at(387.0, 127.0, 37.0, 21.0), egui::Button::new("...")).clicked() {
-        choice = Some(2);
-    }
-    put_left(ui, at(45.0, 157.0, 380.0, 16.0), egui::Label::new(RichText::new(text("Caption.lHelp", "* Only ZIP format does not need an external program.")).color(Color32::GRAY)).truncate());
     put_left(ui, at(44.0, 209.0, 97.0, 15.0), egui::Label::new(text("Caption.lLevel", "Le&vel:")).truncate());
     let current = form.preset_labels.get(form.preset).cloned().unwrap_or_default();
     ui.scope_builder(egui::UiBuilder::new().max_rect(at(143.0, 206.0, 121.0, 21.0)), |ui| {
@@ -339,41 +299,11 @@ impl App {
         };
         self.language_pack.text(&format!("RES.{key}"), fallback)
     }
-    /// ExternalPrograms[key]를 ExpandSetting한 경로가 있는 파일이면.
-    fn configured_program(&self, key: &str) -> Option<PathBuf> {
-        let value = self.settings.values.get("ExternalPrograms")?.as_object()?.iter().find(|(k, _)| k.eq_ignore_ascii_case(key))?.1.as_str()?.to_owned();
-        let path = PathBuf::from(ndr::command_line::expand_setting(&value));
-        path.is_file().then_some(path)
-    }
-
-    fn template(&self, section: &str, key: &str) -> Option<String> {
-        self.settings.values.get(section)?.as_object()?.iter().find(|(k, _)| k.eq_ignore_ascii_case(key))?.1.as_str().map(str::to_owned).filter(|t| !t.trim().is_empty())
-    }
-
-    /// GetArchiveFormatOptions(includeWimCreation).
+    /// 동봉 7-Zip이 만들 수 있는 형식(원본 rbZIP·rb7z·rbALZ, 그 밖의 TAR 등).
     pub(super) fn archive_formats(&self, include_wim: bool) -> Vec<ArchiveFormat> {
         let ko = self.language == "ko";
         let format = |extension: &str, label: String, program: Option<PathBuf>, builtin: bool, max_level: i32| ArchiveFormat { extension: extension.into(), label, program, builtin, max_level };
         let mut formats = vec![format("zip", if ko { "ZIP (내장)" } else { "ZIP (built-in)" }.into(), None, true, 9)];
-        if let Some(program) = self.configured_program("7z") {
-            formats.push(format("zip", if ko { "ZIP (7-Zip 명령줄)" } else { "ZIP (7-Zip command line)" }.into(), Some(program), false, 9));
-        }
-        for extension in ["7z", "rar", "arj", "ace", "alz", "cab", "iso", "egg", "tar", "gz", "bz2", "bzip2", "z", "xz", "tar.gz", "tar.bz2"] {
-            let Some(program) = self.configured_program(extension) else { continue };
-            let label = if extension == "rar" {
-                if ko { "RAR (RAR CLI 프로그램)".into() } else { "RAR (RAR command line)".into() }
-            } else if ko {
-                format!(".{} (외부 프로그램)", extension.to_uppercase())
-            } else {
-                format!(".{} (external program)", extension.to_uppercase())
-            };
-            let max = match extension {
-                "rar" => 5,
-                "arj" => 4,
-                _ => 9,
-            };
-            formats.push(format(extension, label, Some(program), false, max));
-        }
         formats.push(format("7z", if ko { "7Z (내장 LZMA2)" } else { "7Z (built-in LZMA2)" }.into(), None, true, 9));
         formats.push(format("tar", if ko { "TAR (내장)" } else { "TAR (built-in)" }.into(), None, true, 0));
         formats.push(format("tar.gz", if ko { "TAR.GZ (내장 GZip)" } else { "TAR.GZ (built-in GZip)" }.into(), None, true, 9));
@@ -381,11 +311,6 @@ impl App {
         // 원본 arcformat 4 = ALZ(외부 alzprog). 동봉 7-Zip(UzuCore 7zip+α)이 ALZ를 만들므로 내장으로 둔다.
         // 동봉 7zip+α의 EGG 만들기(원본·C# 판에 없음)는 사용자 요청으로 넣지 않는다(.egg 읽기·풀기는 그대로).
         formats.push(format("alz", if ko { "ALZ (내장)" } else { "ALZ (built-in)" }.into(), None, true, 9));
-        for (extension, ko_label, en_label, max) in [("rar", "RAR (외부 프로그램 선택)", "RAR (choose an external program)", 5), ("arj", "ARJ (외부 프로그램 선택)", "ARJ (choose an external program)", 4)] {
-            if !formats.iter().any(|f| f.extension.eq_ignore_ascii_case(extension)) {
-                formats.push(format(extension, if ko { ko_label } else { en_label }.into(), None, false, max));
-            }
-        }
         if include_wim && !formats.iter().any(|f| f.extension == "wim") && archive::seven_zip_path().is_ok_and(|p| p.ends_with("Full\\7z.exe") || p.ends_with("Full/7z.exe")) {
             formats.push(format("wim", "WIM (7-Zip 26.05)".into(), None, true, 9));
         }
@@ -423,7 +348,7 @@ impl App {
         }
         if kind == ArchiveKind::Zip {
             let zip = self.archive_formats(false).remove(0);
-            let choice = ArchiveChoice { format: zip, format_index: 0, preset: 1, level: 2, password: String::new(), volume: None, recursive: true, external: None, output: None };
+            let choice = ArchiveChoice { format: zip, format_index: 0, preset: 1, level: 2, password: String::new(), volume: None, recursive: true, output: None };
             return self.archive_save_step(kind, paths, choice, None);
         }
         let formats = self.archive_formats(kind == ArchiveKind::Create);
@@ -434,17 +359,11 @@ impl App {
         let format = if !default_extension.trim().is_empty() { formats.iter().position(|f| f.extension.eq_ignore_ascii_case(&default_extension)) } else { None }.unwrap_or_else(|| ((default_index - 1).max(0) as usize).min(formats.len() - 1));
         let split = |key: &str, fallback: &str| self.language_pack.text(&format!("formAddToArchive.{key}"), fallback).split(';').map(str::to_owned).collect::<Vec<_>>();
         let volume_labels = split("ComboBox.cbVolume", "No Volume;1440 KB;2880 KB;5 MB;10 MB;20 MB;50 MB;100 MB");
-        // 원본 miArcAddToArchiveClick(0x43a7f8): cbFileName = 기본 이름(하나면 그 이름, 아니면 폴더 이름), 다른 패널이 로컬 폴더면
-        // 그 폴더 + 기본 이름도 목록에 넣고 첫 줄을 고른다. 확장자는 고른 형식(rbFormatClick).
+        // 원본 miArcAddToArchiveClick(0x43a7f8): cbFileName = 기본 이름(하나면 그 이름, 아니면 폴더 이름), 확장자는 고른 형식
+        // (rbFormatClick). 고친 것(사용자 요청): 다른 패널 폴더 + 이름 줄은 넣지 않는다(늘 지금 폴더에 만든다).
         let current = self.panes[self.active].path.clone();
         let name = default_archive_name(&paths, &current, &formats[format].extension);
-        let mut file_names = vec![name.clone()];
-        let other = &self.panes[1 - self.active];
-        if self.dual && other.archive.is_none() && other.remote.is_none() && !super::panes::is_drives(&other.path) && !ndr::names::equals_ignore_case(&other.path.to_string_lossy(), &current.to_string_lossy()) {
-            file_names.push(other.path.join(&name).to_string_lossy().into_owned());
-        }
         let form = ArchiveCreateForm {
-            external: formats[format].program.as_ref().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default(),
             formats,
             format,
             preset,
@@ -455,8 +374,6 @@ impl App {
             volume_labels,
             default_level,
             file_name: name,
-            file_names,
-            focus_external: false,
         };
         let title = self.language_pack.text("formAddToArchive.Form.Caption", "Add to Archive");
         self.push_original_dialog(title, DialogKind::ArchiveCreate(Box::new(form)), move |app, result, _| {
@@ -473,40 +390,12 @@ impl App {
         });
     }
 
-    /// 창 단추: 압축(분할 크기 검사), 취소, 외부 프로그램 찾아보기.
+    /// 창 단추: 압축(분할 크기 검사), 취소.
     pub(super) fn submit_archive_create(&mut self, choice: usize, ctx: &egui::Context) {
-        let open = self.open_dialog;
-        let save = self.save_dialog;
         let current = self.panes[self.active].path.clone();
-        let browse_title = self.language_pack.text("formAddToArchive.Caption.lExtProg", "Select external archive program");
-        let name_title = self.language_pack.text("formAddToArchive.Caption.lFileName", "&Filename:").replace('&', "");
-        let program_filters = super::original_dialogs::program_filter(&self.language_pack);
-        let all_files = self.tr("모든 파일 (*.*)", "All files (*.*)").into_owned();
         let Some(form) = self.archive_form() else { return };
         match choice {
             1 => self.answer_dialog(DialogResult::ArchiveCreate(None), ctx),
-            2 => {
-                let filters: Vec<(&str, &str)> = program_filters.iter().map(|(n, p)| (n.as_str(), p.as_str())).collect();
-                if let Some(path) = open(&browse_title, None, "", &filters) {
-                    if let Some(form) = self.archive_form() {
-                        form.external = path.to_string_lossy().into_owned();
-                    }
-                }
-            }
-            3 => {
-                // cbFileName 옆 찾아보기(원본 btnBrowseFile은 숨김): 저장 상자로 이름을 고른다.
-                let extension = form.formats.get(form.format).map(|f| f.extension.clone()).unwrap_or_default();
-                let named = archive_output_path(&form.file_name, &current);
-                let folder = named.as_ref().and_then(|p| p.parent().map(Path::to_path_buf)).unwrap_or(current.clone());
-                let file = named.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                let spec = format!("*.{extension}");
-                let label = format!(".{} (*.{extension})", extension.to_uppercase());
-                if let Some(path) = save(&name_title, Some(&folder), &file, &[(label.as_str(), spec.as_str()), (all_files.as_str(), "*.*")], &extension, false) {
-                    if let Some(form) = self.archive_form() {
-                        form.file_name = path.to_string_lossy().into_owned();
-                    }
-                }
-            }
             _ => {
                 let Some(format) = form.formats.get(form.format).cloned() else { return };
                 let no_volume = form.volume_labels.first().cloned().unwrap_or_default();
@@ -523,44 +412,25 @@ impl App {
                     password: form.password.clone(),
                     volume,
                     recursive: form.recursive,
-                    external: Some(form.external.trim().to_owned()).filter(|e| !e.is_empty()),
                     output: archive_output_path(&form.file_name, &current),
                 };
-                // 원본 btnOkClick(0x417074): ZIP이 아니면 외부 프로그램 칸의 파일이 있어야(PathFileExistsW) 창을 닫고,
-                // 없으면 창을 그대로 두고 그 칸에 초점을 준다. NDR은 C# 판처럼 동봉 7-Zip이 만들 수 있으면 빈 칸도 받는다.
-                let zip = choice.format.extension.trim_start_matches('.').eq_ignore_ascii_case("zip");
-                let missing = !zip
-                    && match &choice.external {
-                        Some(path) => !Path::new(path).exists(),
-                        None => self.archive_program(&choice).is_err(),
-                    };
-                if missing {
-                    if let Some(form) = self.archive_form() {
-                        form.focus_external = true;
-                    }
-                    return;
-                }
                 self.answer_dialog(DialogResult::ArchiveCreate(Some(choice)), ctx);
             }
         }
     }
 
-    /// 외부 프로그램이 필요하면 그 경로(C# useExternalProgram / ResolveArchiveProgram). Ok(None) = 동봉 7-Zip.
+    /// 동봉 7-Zip으로 만들 수 있는지(외부 프로그램은 쓰지 않는다). Ok(None) = 동봉 7-Zip.
     pub(super) fn archive_program(&self, choice: &ArchiveChoice) -> Result<Option<ExternalProgram>, String> {
         let extension = choice.format.extension.as_str();
-        // 동봉 7zip+α는 ALZ·EGG도 나눠 만든다(.001…). 암호는 넣지 않으므로 그때만 외부 프로그램.
-        let splits = matches!(extension, "zip" | "7z") || (choice.format.builtin && matches!(extension, "alz" | "egg"));
-        let needs_program = !choice.format.builtin || choice.external.is_some() || (!choice.password.is_empty() && !matches!(extension, "zip" | "7z")) || (choice.volume.is_some() && !splits);
-        if !needs_program {
-            return Ok(None);
+        let ko = self.language == "ko";
+        // 동봉 7zip+α는 ZIP·7Z에 암호를 넣고, ZIP·7Z·ALZ·EGG를 나눠 만든다(.001…).
+        if !choice.password.is_empty() && !matches!(extension, "zip" | "7z") {
+            return Err(if ko { format!(".{extension} 형식은 암호를 넣을 수 없습니다.") } else { format!("The .{extension} format cannot be encrypted.") });
         }
-        let key = if matches!(extension, "zip" | "7z") { "7z" } else { extension };
-        let program = choice.external.as_ref().map(PathBuf::from).or_else(|| choice.format.program.clone()).or_else(|| self.configured_program(key));
-        match program.filter(|p| p.is_file()) {
-            Some(program) => Ok(Some(ExternalProgram { program, create_template: self.template("ExternalArchiveArgumentTemplates", extension), extract_template: None })),
-            None if matches!(extension, "zip" | "7z") && choice.format.builtin => Ok(None),
-            None => Err(if self.language == "ko" { format!(".{extension} 압축을 외부 처리하려면 환경 설정에 사용할 명령줄 압축 프로그램을 등록해야 합니다.") } else { format!("Register a command-line archive program in the settings to create .{extension} archives.") }),
+        if choice.volume.is_some() && !matches!(extension, "zip" | "7z" | "alz" | "egg") {
+            return Err(if ko { format!(".{extension} 형식은 분할 압축을 할 수 없습니다.") } else { format!("The .{extension} format cannot be split into volumes.") });
         }
+        Ok(None)
     }
 
     /// 저장 대화 상자부터 검사·확인·실행까지.
@@ -712,6 +582,7 @@ impl App {
         };
         let tx = self.async_tx.clone();
         let moving = kind == ArchiveKind::Move;
+        let focus_output = output.clone();
         let rebuild = options.append && archive::output_family(&output).len() > 1;
         let rebuild_cancelled = if ko { "분할 압축 파일 업데이트를 취소했습니다. 기존 압축 파일은 유지됩니다." } else { "The multi-volume archive update was cancelled. The existing archive was kept." }.to_owned();
         // C# RunArchiveCreationWithProgress = FileOperationProgressWindow.Run(allowPause: true). 외부 프로그램은 일시 정지 없음.
@@ -751,64 +622,15 @@ impl App {
                 job.custom_status = true;
                 job.chime = kind == ArchiveKind::Create;
             }
+            // 압축이 끝나면 만든 압축 파일에 커서를 둔다(사용자 요청).
+            self.archive_focus = Some((self.active, focus_output));
         }
     }
 
-    /// TryGetExternalArchiveProgram: UseExternalArchivePrograms이거나 NDR이 직접 못 읽는 형식이면 ExternalPrograms[형식] 또는 [7z].
-    /// 고른 항목만 풀 때 풀기 인자 형식이 없고 직접 읽을 수 있으면 동봉 7-Zip.
-    fn extract_program(&self, archive: &Path, selected_keys: bool) -> Option<ExternalProgram> {
-        let format = archive::archive_format(archive)?;
-        let internal = archive::can_read_internally(archive);
-        if !(self.settings.flag("UseExternalArchivePrograms", false) || !internal) {
-            return None;
-        }
-        let program = self.configured_program(&format).or_else(|| self.configured_program("7z"))?;
-        let template = self.template("ExternalArchiveExtractArgumentTemplates", &format);
-        if selected_keys && template.is_none() && internal {
-            return None;
-        }
-        Some(ExternalProgram { program, create_template: None, extract_template: template })
-    }
-
-    /// C# OpenItemAsync(동봉 7-Zip이 못 읽는 압축, 예: .ace): TryGetExternalArchiveProgram이 있으면 "{폴더}\{확장자 뗀 이름}"에
-    /// 그 프로그램으로 통째로 풀고 그 폴더로 간다. 로컬 압축 파일(`ask_if_not_empty`)은 대상 폴더가 비어 있지 않으면
-    /// C# 판처럼 "여기에 추가할까요?"를 묻는다. 프로그램이 없으면 C# NotSupportedException 글.
-    pub(super) fn open_with_external_archive_program(&mut self, pane: usize, archive_path: PathBuf, ask_if_not_empty: bool) {
-        let Some(program) = self.extract_program(&archive_path, false) else {
-            let extension = archive_path.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
-            return self.warn(
-                &format!("{extension} 형식은 내부에서 열 수 없습니다. 환경 설정에서 외부 압축 프로그램을 지정하세요."),
-                &format!("The {extension} format cannot be opened internally. Choose an external archive program in Options."),
-            );
-        };
-        let parent = archive_path.parent().map(Path::to_path_buf).unwrap_or_default();
-        let destination = parent.join(archive::extract_folder_name(&archive_path));
-        let not_empty = destination.read_dir().is_ok_and(|mut entries| entries.next().is_some());
-        let start = move |app: &mut App| {
-            let tx = app.async_tx.clone();
-            let title = app.tr("압축 열기", "Open archive").into_owned();
-            let target = destination.clone();
-            app.start_task(title, move |events, cancel| {
-                // C# RunExternalExtractWithPasswordPromptAsync: 암호 진단이면 TITLE_PASSWORD·MSG_PASSWORD로 묻고 다시 푼다. 취소면 조용히 끝.
-                let mut passwords = |archive: &Path| super::commands::ask_password(&events, &cancel, archive);
-                match archive::extract_whole_with_program_with_passwords(&archive_path, &target, None, &program, &cancel, &mut passwords) {
-                    Err(error) if error == "Archive password request cancelled" => return Ok(()),
-                    other => other?,
-                }
-                let _ = tx.send(AsyncResult::OpenFolder { pane, path: target });
-                Ok(())
-            });
-        };
-        if ask_if_not_empty && not_empty {
-            let (title, text) = (self.tr("압축 열기", "Open archive").into_owned(), self.tr("압축 풀기 대상 폴더가 비어 있지 않습니다. 여기에 추가할까요?", "The extraction folder is not empty. Add the files there?").into_owned());
-            self.system_box(&title, &text, MB_YESNO | MB_ICONEXCLAMATION, move |app, answer, _| {
-                if answer == IDYES {
-                    start(app);
-                }
-            });
-        } else {
-            start(self);
-        }
+    /// 동봉 7-Zip이 못 읽는 압축(예: .ace)을 열려고 할 때. 외부 압축 프로그램은 쓰지 않으므로 열 수 없다고 알린다.
+    pub(super) fn open_with_external_archive_program(&mut self, _pane: usize, archive_path: PathBuf, _ask_if_not_empty: bool) {
+        let extension = archive_path.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
+        self.warn(&format!("{extension} 형식은 열 수 없습니다."), &format!("The {extension} format cannot be opened."));
     }
 
     /// C# ExtractArchiveAsync.
@@ -861,7 +683,7 @@ impl App {
 
     fn run_extract(&mut self, archives: Vec<PathBuf>, keys: Vec<String>, password: String, base: PathBuf, mode: ExtractMode) {
         self.remember_destination(&base);
-        let programs: Vec<Option<ExternalProgram>> = archives.iter().map(|a| self.extract_program(a, !keys.is_empty())).collect();
+        let programs: Vec<Option<ExternalProgram>> = archives.iter().map(|_| None).collect();
         let tx = self.async_tx.clone();
         let ko = self.language == "ko";
         let done = if ko { format!("압축을 풀었습니다: {}", base.display()) } else { format!("Extracted to {}", base.display()) };
