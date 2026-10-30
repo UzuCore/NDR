@@ -1325,6 +1325,13 @@ impl App {
                 }
                 let row_height = self.list_item_height(ui);
                 let list_rect = egui::Rect::from_min_size(ui.cursor().min, egui::vec2(ui.available_width(), height));
+                // 원본 WMSize(0x7d5814)·SetListStyle(0x7dc6d4) → AdjustPage: 목록 크기나 보기 형식이 바뀌면 커서에 맞춰 위치를 다시 잡는다.
+                let shape = (list_rect.size(), view.clone());
+                let pane = &mut self.panes[index];
+                if pane.list_shape.as_ref().is_some_and(|old| (old.0 - shape.0).length() > 0.5 || old.1 != shape.1) && !pane.entries.is_empty() {
+                    pane.adjust = Some((pane.cursor.min(pane.entries.len() - 1), false));
+                }
+                pane.list_shape = Some(shape);
                 if self.wheel_moves_cursor(ui, index, list_rect) {
                     activate = true;
                 }
@@ -1382,6 +1389,20 @@ impl App {
                 // 쪽 정보(다 보이는 줄 수, 맨 위·끝까지 보이는 항목)는 ArrowKey의 PageUp·PageDown이 쓴다.
                 let current = egui::scroll_area::State::load(ui.ctx(), ui.make_persistent_id(egui::Id::new(("files", index)))).map_or(0.0, |s| s.offset.y);
                 let mut offset = wheel.unwrap_or(current);
+                // 원본 AdjustPage(형식 2): 쪽 단위면 그 항목이 든 쪽의 처음 줄을 맨 위로, 아니면 위로 벗어날 때 맨 위, 아래로 벗어날 때
+                // 맨 아래로. 다시 읽은 목록은 원본이 그 뒤 SetScrollTop(옛 위치)로 되돌리므로 하지 않는다.
+                if let Some((item, false)) = self.panes[index].adjust.take() {
+                    if let Some(line) = rows.iter().position(|r| matches!(r, DetailRow::Item(i) if *i == item)) {
+                        let (top, bottom) = (line as f32 * stride, line as f32 * stride + row_height);
+                        if by_page {
+                            offset = (line / page_rows) as f32 * page_px;
+                        } else if top < offset {
+                            offset = top;
+                        } else if bottom > offset + height {
+                            offset = bottom - height;
+                        }
+                    }
+                }
                 if std::mem::take(&mut self.panes[index].reveal) && wheel.is_none() {
                     let cursor = self.panes[index].cursor;
                     if let Some(line) = rows.iter().position(|r| matches!(r, DetailRow::Item(i) if *i == cursor)) {

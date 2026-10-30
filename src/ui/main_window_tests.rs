@@ -1304,3 +1304,67 @@ fn alt_enter_toggles_fullscreen() {
     assert!(commands.contains(&egui::ViewportCommand::Fullscreen(true)), "{commands:?}");
     let _ = fs::remove_dir_all(root);
 }
+
+/// 원본 AdjustPage(0x7daf24): 목록 크기가 바뀌거나(WMSize) 같은 폴더를 다시 읽으면(FileListChanged) 커서 열이 마지막 보이는 열이 되게
+/// 가로 위치를 다시 잡는다(커서 열이 왼쪽 밖이면 그 열부터).
+#[test]
+fn resize_and_refresh_adjust_the_page_like_the_original() {
+    let (root, ctx, mut app) = fixture("adjust-page");
+    let left = app.panes[0].path.clone();
+    for i in 0..600 {
+        fs::create_dir_all(left.join(format!("dir{i:03}"))).unwrap();
+    }
+    app.settings.set_text("LeftViewStyle", "Names");
+    app.refresh(0);
+    wait(&mut app, &ctx);
+    let run = |app: &mut App, height: f32| {
+        let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, height))), ..Default::default() };
+        let _ = ctx.run(raw, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.columns(2, |columns| {
+                    app.pane_ui(&mut columns[0], 0, ctx);
+                    app.pane_ui(&mut columns[1], 1, ctx);
+                });
+            });
+        });
+    };
+    run(&mut app, 850.0);
+    run(&mut app, 850.0);
+    let rows = app.panes[0].page.rows;
+    // 커서를 뒤쪽에 두고 보이게 한 뒤, 커서를 보이는 첫 열로 옮긴다(위치는 그대로).
+    app.panes[0].cursor = 500;
+    app.panes[0].reveal = true;
+    run(&mut app, 850.0);
+    let first = app.panes[0].first_column;
+    assert!(first > 0);
+    app.panes[0].cursor = first * rows;
+    run(&mut app, 850.0);
+    assert_eq!(app.panes[0].first_column, first, "moving inside the page keeps the position");
+    // 목록 크기가 바뀌면(창 높이) 커서 열이 마지막 보이는 열이 된다.
+    run(&mut app, 650.0);
+    run(&mut app, 650.0);
+    let columns = app.panes[0].page.columns;
+    let rows = app.panes[0].page.rows;
+    let column = app.panes[0].cursor / rows;
+    assert_eq!(app.panes[0].first_column, (column / columns) * columns, "page scrolling (default): WMSize → AdjustPage shows the cursor's page");
+    // 줄 단위(ScrollStep 1): 커서 열이 마지막 보이는 열이 된다.
+    app.settings.values.insert("LeftScrollStep".into(), serde_json::json!(1));
+    app.panes[0].first_column = column;
+    run(&mut app, 650.0);
+    run(&mut app, 600.0);
+    run(&mut app, 600.0);
+    let rows = app.panes[0].page.rows;
+    let column = app.panes[0].cursor / rows;
+    assert!(column >= first);
+    assert_eq!(app.panes[0].first_column, (column + 1).saturating_sub(columns), "WMSize → AdjustPage");
+    // 같은 폴더를 다시 읽어도 같다(커서 열을 처음 보이는 열로 둔 뒤 새로 고침).
+    app.panes[0].first_column = column;
+    run(&mut app, 600.0);
+    assert_eq!(app.panes[0].first_column, column);
+    app.refresh(0);
+    wait(&mut app, &ctx);
+    run(&mut app, 600.0);
+    assert_eq!(app.panes[0].entries[app.panes[0].cursor].name, format!("dir{:03}", app.panes[0].cursor - 1), "cursor stays");
+    assert_eq!(app.panes[0].first_column, (column + 1).saturating_sub(columns), "FileListChanged → AdjustPage");
+    let _ = fs::remove_dir_all(root);
+}

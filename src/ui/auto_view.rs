@@ -245,6 +245,7 @@ impl App {
         let cursor = self.panes[index].cursor;
         self.panes[index].page = list_keys::ListPage { style: list_keys::ListStyle::Details, rows: ((height / (row_height + ui.spacing().item_spacing.y)).floor() as usize).max(1), columns: 1, top: cursor, last: cursor };
         self.panes[index].reveal = false;
+        self.panes[index].adjust = None;
         let (by_page, wheel_lines) = (self.scroll_by_page(index), (self.system.wheel_lines)());
         let mut begin_drag = None;
         let mut folder_rows = Vec::new();
@@ -444,6 +445,19 @@ impl App {
             let notches = if notches == 0 { raw.signum() as i64 } else { notches };
             let step = if by_page { columns } else { 1 } as i64;
             first = snap((first as i64 - notches * step).clamp(0, last_first as i64) as usize);
+        }
+        // 원본 AdjustPage(0x7daf24, 형식 0·1): 쪽 단위면 그 항목의 쪽, 아니면 그 열이 왼쪽 밖일 때 그 열부터, 그 밖에는 언제나 그 열이
+        // 마지막 보이는 열이 되게(0보다 작으면 0) 둔다. 그 뒤 SetItemIndex(reveal)가 커서를 보이게 한다.
+        if let Some((item, _)) = self.panes[index].adjust.take() {
+            let column = item.min(count.saturating_sub(1)) / rows;
+            first = if by_page {
+                (column / columns) * columns
+            } else if column < first {
+                column
+            } else {
+                (column + 1).saturating_sub(columns)
+            };
+            first = first.min(last_first);
         }
         // 원본 SetItemIndex(형식 0·1): 커서 열이 왼쪽 밖이면 그 열부터, 오른쪽 밖이면 그 열이 마지막 열이 되게(쪽 단위는 그 쪽의 처음 열).
         if std::mem::take(&mut self.panes[index].reveal) {

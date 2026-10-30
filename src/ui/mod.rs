@@ -149,6 +149,12 @@ struct Pane {
     first_column: usize,
     /// 다음 그림에서 커서가 보이게 넘긴다(원본 SetItemIndex).
     reveal: bool,
+    /// 원본 AdjustPage(0x7daf24): 다음 그림에서 이 항목 번호에 맞춰 위치를 다시 잡는다. 목록 크기가 바뀔 때(WMSize 0x7d5814),
+    /// 보기 형식이 바뀔 때(SetListStyle 0x7dc6d4), 같은 위치를 다시 읽었을 때(FileListChanged 0x7d79c8, 열로 흐르는 목록만).
+    /// 두 번째 값이 참이면 목록을 다시 읽어서다(자세히·미리 보기는 원본이 그 뒤 SetScrollTop(옛 위치)로 되돌리므로 무시한다).
+    adjust: Option<(usize, bool)>,
+    /// 지난 그림의 목록 크기와 보기 형식(바뀌면 adjust).
+    list_shape: Option<(egui::Vec2, String)>,
     /// Shift를 누른 채 움직이기 시작한 자리(원본 SetShiftDownIndex 0xf4).
     shift_anchor: Option<usize>,
     /// 원본 표시 칸 끌기(+0x3d4 기준 줄, +0x3d8 지난 끝 줄). 왼쪽 단추를 놓으면 없앤다(MouseUp).
@@ -195,6 +201,8 @@ impl Pane {
             page: list_keys::ListPage::default(),
             first_column: 0,
             reveal: false,
+            adjust: None,
+            list_shape: None,
             shift_anchor: None,
             range_drag: None,
             cut_marks: HashSet::new(),
@@ -1140,6 +1148,11 @@ impl App {
                     }
                 }
                 pane.first_column = first_column;
+                // 원본 FileListChanged(0x7d79c8) → AdjustPage(옛 커서 번호, 목록 길이로 자름), 그 뒤 FUN_00487ce8이 SetItemIndex.
+                if !pane.entries.is_empty() {
+                    pane.adjust = Some((old_cursor.min(pane.entries.len() - 1), true));
+                    pane.reveal = true;
+                }
             }
         }
     }

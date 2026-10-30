@@ -333,6 +333,18 @@ impl App {
             None => current,
         };
         // 원본 SetItemIndex(형식 3)·ArrowKey: 커서 줄이 보이게 넘기고, 한 줄의 칸 수와 다 보이는 줄 수를 남긴다.
+        // 원본 AdjustPage(형식 3): 그 항목의 줄이 위로 벗어나면 맨 위, 아래로 벗어나면 맨 아래로. 다시 읽은 목록은 원본이 그 뒤
+        // SetScrollTop(옛 위치)로 되돌리므로 하지 않는다.
+        if let Some((item, false)) = self.panes[index].adjust.take() {
+            let line = item / columns.max(1);
+            if let (Some(&top), Some(&h)) = (tops.get(line), heights.get(line)) {
+                if top + h > offset + height {
+                    offset = top + h - height;
+                } else if top < offset {
+                    offset = top;
+                }
+            }
+        }
         if std::mem::take(&mut self.panes[index].reveal) && wheel.is_none() {
             let line = self.panes[index].cursor / columns.max(1);
             if let (Some(&top), Some(&h)) = (tops.get(line), heights.get(line)) {
