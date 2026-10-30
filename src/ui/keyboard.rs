@@ -642,9 +642,9 @@ impl App {
             self.drive_cache_pending = true;
             let tx = self.async_tx.clone();
             thread::spawn(move || {
-                let drives = native::drives()
+                // 원본 TNXDriveList.Refresh: 종류가 0·1이 아니면 미디어가 없어도 단추가 있다. 고친 것: 전에는 준비된 드라이브만.
+                let drives = native::listed_drives()
                     .into_iter()
-                    .filter(|root| root.is_dir())
                     .map(|root| {
                         let kind = native::drive_type_name(&root);
                         let tip = match native::volume_label(&root).filter(|l| !l.trim().is_empty()) {

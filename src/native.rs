@@ -327,6 +327,16 @@ pub fn drives() -> Vec<PathBuf> {
 pub fn ready_drives() -> Vec<PathBuf> {
     drives().into_iter().filter(|root| volume_label(root).is_some()).collect()
 }
+/// 원본 TNXDriveList.Refresh(0x7b7df0): GetLogicalDrives의 A~Z 가운데 GetDriveTypeW가 0(알 수 없음)·1(루트 없음)이 아닌 것.
+/// 미디어가 없는 CD·카드 리더도 들어간다.
+pub fn listed_drives() -> Vec<PathBuf> {
+    use windows_sys::Win32::Storage::FileSystem::GetDriveTypeW;
+    drives()
+        .into_iter()
+        // SAFETY: NUL-terminated root string.
+        .filter(|root| unsafe { GetDriveTypeW(wide(root.as_os_str()).as_ptr()) } > 1)
+        .collect()
+}
 /// 원본 FUN_004351cc: SetVolumeLabelW(루트, 새 이름). 실패하면 GetLastError.
 pub fn set_volume_label(root: &Path, label: &str) -> Result<(), u32> {
     // SAFETY: both arguments are NUL-terminated UTF-16 buffers that outlive the call.
