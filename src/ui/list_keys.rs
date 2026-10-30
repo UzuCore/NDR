@@ -200,9 +200,26 @@ pub(super) fn flow_layout(count: usize, fits: usize, configured: usize, rows_ful
     (rows, fewer(rows, fits), bar)
 }
 
+/// 열로 흐르는 목록에서 맨 왼쪽에 올 수 있는 마지막 열. 원본 UpdateScrollBar(형식 0·1): 줄 단위면 열 수 − 보이는 열 수,
+/// 쪽 단위면 마지막 쪽의 처음 열(쪽 번호 × 보이는 열 수, 오른쪽이 빌 수 있다).
+pub(super) fn flow_last_first(total_columns: usize, columns: usize, by_page: bool) -> usize {
+    let (total, columns) = (total_columns.max(1), columns.max(1));
+    if by_page { ((total - 1) / columns) * columns } else { total.saturating_sub(columns) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 쪽 단위는 마지막 쪽(빈 열이 남아도)의 처음 열까지, 줄 단위는 마지막 열이 오른쪽 끝에 오는 데까지.
+    #[test]
+    fn the_last_page_of_a_flow_list_is_reachable() {
+        assert_eq!(flow_last_first(5, 2, true), 4, "pages start at 0, 2, 4");
+        assert_eq!(flow_last_first(5, 2, false), 3);
+        assert_eq!(flow_last_first(4, 2, true), 2);
+        assert_eq!(flow_last_first(1, 3, true), 0);
+        assert_eq!(flow_last_first(2, 3, false), 0);
+    }
 
     fn flow(rows: usize, columns: usize, top: usize) -> ListPage {
         ListPage { style: ListStyle::Flow, rows, columns, top, last: 0 }

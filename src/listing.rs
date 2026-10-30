@@ -1,7 +1,7 @@
 //! C# 파일 목록 규칙: FileSystemService.ListLocal의 열 글(종류, 속성, 날짜), MainWindow.SortPaneItems의 정렬,
 //! FileGroupingService의 묶음 키, FileTypeCatalog의 묶음 분류, ExtensionColorConverter의 글자 색.
 use crate::fsops::Entry;
-use crate::parity::{dotnet_extension, dotnet_stem};
+use crate::parity::{list_extension, list_stem};
 use serde_json::Value;
 use std::{cmp::Ordering, ffi::OsStr, os::windows::ffi::OsStrExt, time::SystemTime};
 
@@ -40,7 +40,7 @@ pub fn type_name(name: &str, is_dir: bool, korean: bool) -> String {
     if is_dir {
         return if korean { "폴더" } else { "Folder" }.into();
     }
-    let extension = dotnet_extension(name);
+    let extension = list_extension(name);
     if extension.is_empty() {
         return if korean { "파일" } else { "File" }.into();
     }
@@ -251,11 +251,11 @@ pub struct SortOptions {
 }
 
 fn sort_base(entry: &Entry) -> &str {
-    if entry.is_dir { &entry.name } else { dotnet_stem(&entry.name) }
+    if entry.is_dir { &entry.name } else { list_stem(&entry.name) }
 }
 
 fn sort_extension(entry: &Entry) -> &str {
-    if entry.is_dir { "" } else { dotnet_extension(&entry.name) }
+    if entry.is_dir { "" } else { list_extension(&entry.name) }
 }
 
 /// LegacyPriorityRank: 폴더 1, 고정(Pinned) 2, 보통 3, 열 때 받기(RecallOnOpen) 4.
@@ -326,7 +326,7 @@ pub fn group_key(entry: &Entry, mode: &str, folder_category_mode: &str) -> Strin
     }
     match mode {
         "Extension" => {
-            let extension = dotnet_extension(&entry.name);
+            let extension = list_extension(&entry.name);
             if extension.is_empty() { "10|No extension".into() } else { format!("10|{}", extension.to_lowercase()) }
         }
         "Size" => match entry.size {
@@ -343,7 +343,7 @@ pub fn group_key(entry: &Entry, mode: &str, folder_category_mode: &str) -> Strin
             Some(time) => format!("10|{}", chrono::DateTime::<chrono::Local>::from(time).format("%Y-%m")),
         },
         "Category" => {
-            let order = match group_category(dotnet_extension(&entry.name)) {
+            let order = match group_category(list_extension(&entry.name)) {
                 "Archives" => "10|Archives",
                 "Documents" => "20|Documents",
                 "Spreadsheets" => "30|Spreadsheets",
@@ -455,7 +455,7 @@ pub fn entry_color(entry: &Entry, extension_colors: Option<&serde_json::Map<Stri
     } else if entry.attributes & FILE_ATTRIBUTE_READONLY != 0 && lookup(nexus_colors, "NXREADONLY").is_some() {
         lookup(nexus_colors, "NXREADONLY")
     } else {
-        lookup(extension_colors, dotnet_extension(&entry.name))
+        lookup(extension_colors, list_extension(&entry.name))
     };
     let color = color.filter(|c| !c.trim().is_empty()).or_else(|| lookup(nexus_colors, "NXFORE"));
     color.and_then(hex_color)
@@ -470,7 +470,7 @@ pub fn original_item_color(entry: &Entry, extension_colors: Option<&serde_json::
     } else if entry.is_dir {
         basic("NXFOLDER")
     } else {
-        lookup(extension_colors, dotnet_extension(&entry.name)).and_then(hex_color).unwrap_or_else(|| basic("NXFORE"))
+        lookup(extension_colors, list_extension(&entry.name)).and_then(hex_color).unwrap_or_else(|| basic("NXFORE"))
     }
 }
 
@@ -499,7 +499,7 @@ pub fn color_sort_key(entry: &Entry, extension_colors: Option<&serde_json::Map<S
     if entry.is_dir {
         return tcolor(element("NXFOLDER")).unwrap_or(u32::MAX);
     }
-    let Some(file) = tcolor(lookup(extension_colors, dotnet_extension(&entry.name))) else { return u32::MAX };
+    let Some(file) = tcolor(lookup(extension_colors, list_extension(&entry.name))) else { return u32::MAX };
     if tcolor(element("NXFORE")) == Some(file) { u32::MAX } else { file }
 }
 

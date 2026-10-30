@@ -1116,6 +1116,8 @@ impl App {
                 if let Some(row) = pane.entries.iter().position(|e| ndr::names::equals_ignore_case(&e.name, &name)) {
                     pane.cursor = row;
                     pane.selected.clear();
+                    // 원본 FUN_00486694 → SetItemIndex: 커서 항목이 보이게 넘긴다(쪽 단위면 그 쪽). 고친 것: 전에는 첫 쪽에 머물렀다.
+                    pane.reveal = true;
                     focused = true;
                 }
             }

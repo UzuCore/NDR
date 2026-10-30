@@ -350,6 +350,20 @@ pub fn dotnet_stem(name: &str) -> &str {
     }
 }
 
+/// 파일 목록의 확장자(점 포함): `dotnet_extension`과 같되, 맨 앞 점은 확장자로 보지 않는다(".gitconfig"는 이름만).
+/// 고친 것(사용자 요청): 원본·C# 판은 ".gitconfig"를 빈 이름 + 확장자 "gitconfig"로 보였다.
+pub fn list_extension(name: &str) -> &str {
+    match name.rfind('.') {
+        Some(at) if at > 0 && at + 1 < name.len() => &name[at..],
+        _ => "",
+    }
+}
+
+/// 파일 목록의 확장자 없는 이름(`list_extension`과 짝).
+pub fn list_stem(name: &str) -> &str {
+    &name[..name.len() - list_extension(name).len()]
+}
+
 /// C# SelectQuickSearchMatch: 시작은 커서 항목(커서가 없거나 마지막 항목이면 0, cycle_from_next면 다음 항목).
 /// 거기서 한 바퀴 돌며 먼저 StrCmpNIW 접두 일치, 없으면 StrStrIW 부분 일치.
 pub fn quick_search_match(names: &[String], cursor: Option<usize>, query: &str, cycle_from_next: bool) -> Option<usize> {
@@ -488,5 +502,10 @@ mod tests {
         assert_eq!((dotnet_extension("a.tar.gz"), dotnet_stem("a.tar.gz")), (".gz", "a.tar"));
         assert_eq!((dotnet_extension(".gitignore"), dotnet_stem(".gitignore")), (".gitignore", ""));
         assert_eq!((dotnet_extension("name."), dotnet_extension("noext")), ("", ""));
+        // 목록: 맨 앞 점은 이름의 일부.
+        assert_eq!((list_stem(".gitconfig"), list_extension(".gitconfig")), (".gitconfig", ""));
+        assert_eq!((list_stem(".config.json"), list_extension(".config.json")), (".config", ".json"));
+        assert_eq!((list_stem("a.tar.gz"), list_extension("a.tar.gz")), ("a.tar", ".gz"));
+        assert_eq!((list_stem("name."), list_extension("name.")), ("name.", ""));
     }
 }

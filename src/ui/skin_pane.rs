@@ -1367,7 +1367,7 @@ impl App {
     pub(super) fn open_extension_info(&mut self, index: usize) {
         let pane = &self.panes[index];
         let Some(entry) = pane.entries.get(pane.cursor).filter(|e| !e.is_dir && !e.drive) else { return };
-        let extension = ndr::parity::dotnet_extension(&entry.name).trim_start_matches('.').to_owned();
+        let extension = ndr::parity::list_extension(&entry.name).trim_start_matches('.').to_owned();
         let url = format!("https://ext.xiles.app/?ext={extension}");
         if let Err(error) = (self.shell_runner)(std::path::Path::new(&url), "", std::path::Path::new("")) {
             self.status = error;

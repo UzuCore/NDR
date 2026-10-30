@@ -193,18 +193,33 @@ impl App {
         pane.cut_marks.contains(&entry.path) || entry.attributes & 2 != 0 || (sftp && entry.name.starts_with('.'))
     }
 
-    /// 이름 칸 단추: 아이콘이 있으면 16x16 그림 + 이름, 없으면 C# 판처럼 폴더 표시("▸") + 이름.
-    /// 원본 DrawListItem은 이름을 칸 왼쪽(+5)부터 그린다. 칸보다 좁은 이름도 왼쪽에 붙도록 끝에 늘어나는 빈 칸(Atom::grow)을 둔다.
+    /// 원본 GetListHeaderWidth: 이름 칸 앞 머리 너비(표시 칸 12 + 아이콘 16 + 2, 아이콘을 보이지 않으면 14).
+    pub(super) fn list_header_width(icons: bool) -> f32 {
+        if icons { 30.0 } else { 14.0 }
+    }
+
+    /// 원본 DrawListItem(0x7d8f58) 이름 칸: 아이콘은 칸 왼쪽 + 12(왼쪽 12화소는 표시 ▶ 칸), 세로 가운데((항목 높이 − 16) / 2).
+    /// 이름은 칸 왼쪽 + 머리 너비(`list_header_width`) + 5부터 오른쪽 − 5까지 한 줄(넘치면 …, DT_END_ELLIPSIS).
+    /// 고친 것(사용자 요청: 가이드선에 아이콘·글이 물리지 않게): 전에는 egui 단추 안쪽 여백(4화소)부터 그려 열 선·패널 테두리에 붙었다.
     /// style = 원본 ListFont 모양(밑줄·취소선은 list_text로 입힌다).
-    pub(super) fn name_button<'a>(icon: Option<&egui::TextureHandle>, _is_dir: bool, text: &str, color: Color32, selected: bool, style: u8) -> egui::Button<'a> {
-        // 원본 DrawListItem: 이름은 DT_END_ELLIPSIS로 칸 안에서 줄인다(넘쳐서 옆 칸을 밀지 않는다).
-        match icon {
-            Some(texture) => egui::Button::selectable(selected, (egui::Image::new((texture.id(), egui::vec2(16.0, 16.0))), super::list_text(text.to_owned(), style).color(color), egui::Atom::grow())),
-            // 아이콘을 보이지 않으면 원본처럼 아이콘 없이 이름만(머리 너비만큼 띄움). "▸" 같은 기호는 목록 글꼴에 없어 빈 네모로 보였다.
-            None => egui::Button::selectable(selected, (super::list_text(format!("  {text}"), style).color(color), egui::Atom::grow())),
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn name_cell(ui: &mut egui::Ui, size: egui::Vec2, icon: Option<&egui::TextureHandle>, icons: bool, text: &str, color: Color32, style: u8) -> egui::Response {
+        let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+        if ui.is_rect_visible(rect) {
+            let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
+            if let Some(texture) = icon {
+                let top = rect.top() + ((rect.height() - 16.0) / 2.0).floor();
+                let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+                painter.image(texture.id(), egui::Rect::from_min_size(egui::pos2(rect.left() + 12.0, top), egui::vec2(16.0, 16.0)), uv, Color32::WHITE);
+            }
+            let left = rect.left() + Self::list_header_width(icons) + 5.0;
+            let mut job = egui::text::LayoutJob::default();
+            super::list_text(text, style).color(color).append_to(&mut job, ui.style(), egui::FontSelection::Default, egui::Align::Center);
+            job.wrap = egui::text::TextWrapping { max_width: (rect.right() - 5.0 - left).max(0.0), max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
+            let galley = ui.fonts_mut(|f| f.layout_job(job));
+            painter.galley(egui::pos2(left, rect.top() + ((rect.height() - galley.size().y) / 2.0).floor()), galley, color);
         }
-        .truncate()
-        .frame(selected)
+        response
     }
 
     pub(super) fn tile_rows(

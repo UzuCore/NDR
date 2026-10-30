@@ -229,6 +229,7 @@ impl App {
             })
             .collect();
         let active = self.active == index;
+        let icons_shown = self.settings.flag("ShowIcons", true);
         // 원본 스킨 테마: 커서·표시 막대(DrawFocus), 칸 색(DrawListItem), 표시 ▶.
         let original = Some(self.original_list_colors());
         // 다른 목록처럼 원본 항목 높이(글 높이 + 2)와 줄 간격(LineSpace), 줄 선(ShowRowLines).
@@ -288,7 +289,7 @@ impl App {
                                             Some(o) if cursor_row && active => o.back,
                                             _ => color,
                                         };
-                                        let response = ui.add_sized([name_width, row_height], App::name_button(icon.as_ref(), entry.is_dir, &texts[0], name_color, false, list_style));
+                                        let response = App::name_cell(ui, egui::vec2(name_width, row_height), icon.as_ref(), icons_shown, &texts[0], name_color, list_style);
                                         if cursor_row && original.is_some() && !entry.drive {
                                             super::panes::note_cursor_name(&self.name_tip, ui, index, row, response.rect, &texts[0], &entry.name, list_style);
                                         }
@@ -422,8 +423,11 @@ impl App {
         // 원본 스킨 테마: 커서·표시 막대(DrawFocus), 칸 색(DrawListItem), 표시 ▶.
         let original = Some(self.original_list_colors());
         let total_columns = count.div_ceil(rows).max(1);
-        let last_first = total_columns.saturating_sub(columns);
         let by_page = self.scroll_by_page(index);
+        // 원본 UpdateScrollBar(형식 0·1): 줄 단위면 위치 0..열 수 − 보이는 열 수, 쪽 단위면 위치 = 쪽 번호(0..쪽 수 − 1)라
+        // 마지막 쪽도 쪽 처음 열에서 시작한다(오른쪽이 빌 수 있다). 고친 것: 전에는 쪽 단위에서도 열 수 − 보이는 열 수로 잘라
+        // 마지막 쪽으로 넘어가지 못하는 크기가 있었다.
+        let last_first = list_keys::flow_last_first(total_columns, columns, by_page);
         let snap = |first: usize| if by_page { (first / columns) * columns } else { first };
         let mut first = snap(self.panes[index].first_column.min(last_first));
         // 원본 WMMouseWheel(형식 0·1): 가로 막대 위치 ± SmallChange(줄 단위 = 한 열, 쪽 단위 = 한 쪽). 스킨 테마는 원본처럼 세로 바퀴만
@@ -446,6 +450,7 @@ impl App {
             } else if column >= first + columns {
                 first = column + 1 - columns;
             }
+            first = first.min(last_first);
         }
         let headers = self.detail_columns(self.language == "ko");
         let (name_width, widths) = if auto {
@@ -457,6 +462,7 @@ impl App {
         };
         let drive_extent = self.drive_text_extent(ui, index);
         let free_label = self.language_pack.text("RES.DISKFREE", "Free");
+        let icons_shown = self.settings.flag("ShowIcons", true);
         let active = self.active == index;
         let mut begin_drag = None;
         let mut folder_rows = Vec::new();
@@ -476,8 +482,14 @@ impl App {
         }
         let output = area
             .show_viewport(ui, |ui, viewport| {
-                ui.set_min_size(egui::vec2(total_columns as f32 * column_width, rows as f32 * pitch));
+                // 가로 위치가 마지막 시작 열(last_first)까지 닿도록 내용 너비를 잡는다(egui는 내용 − 보이는 너비까지만 넘긴다).
+                let content_width = (total_columns as f32 * column_width).max(last_first as f32 * column_width + width);
+                ui.set_min_size(egui::vec2(content_width, rows as f32 * pitch));
                 let origin = ui.min_rect().min;
+                // 보이는 열(columns개) 밖은 그리지 않는다. 고친 것: 목록 너비가 열 수로 나누어떨어지지 않으면 남은 몇 화소에
+                // 다음 열이 살짝 보였다.
+                let visible = egui::Rect::from_min_max(origin + egui::vec2(viewport.min.x, viewport.min.y), origin + egui::vec2(viewport.min.x + columns as f32 * column_width, viewport.max.y));
+                ui.set_clip_rect(ui.clip_rect().intersect(visible));
                 let shown_first = ((viewport.min.x / column_width).floor().max(0.0)) as usize;
                 let shown_last = ((viewport.max.x / column_width).ceil() as usize).min(total_columns);
                 // 원본 Paint(+0x386, 형식 3이 아니면): 보이는 열 사이(i × 항목 너비 − 1)에 위 4부터 아래 − 4까지 NXLINE 세로선.
@@ -530,7 +542,7 @@ impl App {
                             if cursor_row && original.is_some() {
                                 super::panes::note_cursor_name(&self.name_tip, ui, index, row, name_rect, &label, &entry.name, list_style);
                             }
-                            ui.put(name_rect, App::name_button(icon.as_ref(), entry.is_dir, &label, name_color, framed, list_style))
+                            App::name_cell(&mut ui.new_child(egui::UiBuilder::new().max_rect(name_rect)), name_rect.size(), icon.as_ref(), icons_shown, &label, name_color, list_style)
                         };
                         let mut x = name_rect.right();
                         for (metric, column) in METRICS.iter().enumerate().filter(|_| !entry.drive) {

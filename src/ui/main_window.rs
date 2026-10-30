@@ -28,7 +28,7 @@ pub(super) fn summarize(entries: &[Entry], ko: bool) -> PaneSummary {
         }
         summary.files += 1;
         summary.bytes = summary.bytes.saturating_add(entry.size);
-        let extension = match ndr::parity::dotnet_extension(&entry.name) {
+        let extension = match ndr::parity::list_extension(&entry.name) {
             "" => (if ko { "(확장자 없음)" } else { "(no extension)" }).to_owned(),
             e => e.to_owned(),
         };
@@ -389,7 +389,7 @@ impl App {
             // C# GroupBy(선택 순서대로 처음 나온 확장자 순) → 앞 4개.
             let mut groups: Vec<(String, usize)> = Vec::new();
             for entry in selected_files {
-                let key = match ndr::parity::dotnet_extension(&entry.name) {
+                let key = match ndr::parity::list_extension(&entry.name) {
                     "" => (if ko { "(확장자 없음)" } else { "(no extension)" }).to_owned(),
                     e => e.to_owned(),
                 };

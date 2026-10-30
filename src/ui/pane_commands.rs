@@ -69,7 +69,7 @@ impl App {
         }
         let Some(focused) = pane.entries.get(pane.cursor).filter(|e| !e.drive && !e.is_parent()) else { return };
         let rows: Vec<usize> = if !focused.is_dir {
-            let key = |name: &str| if same_extension { ndr::parity::dotnet_extension(name).to_owned() } else { ndr::parity::dotnet_stem(name).to_owned() };
+            let key = |name: &str| if same_extension { ndr::parity::list_extension(name).to_owned() } else { ndr::parity::list_stem(name).to_owned() };
             let wanted = key(&focused.name);
             (0..pane.entries.len()).filter(|&i| !pane.entries[i].is_dir && !pane.entries[i].drive && ndr::names::equals_ignore_case(&key(&pane.entries[i].name), &wanted)).collect()
         } else if same_extension {

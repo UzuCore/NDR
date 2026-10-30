@@ -133,7 +133,7 @@ impl App {
                 view.colors.push(skin.then(|| ndr::listing::original_item_color(entry, extension_colors, basic)));
                 continue;
             }
-            let extension = if entry.is_dir || attach { "" } else { ndr::parity::dotnet_extension(&entry.name) };
+            let extension = if entry.is_dir || attach { "" } else { ndr::parity::list_extension(&entry.name) };
             let stem = &entry.name[..entry.name.len() - extension.len()];
             let description = pane.descriptions.get(&entry.name.to_lowercase()).cloned().unwrap_or_default();
             // 원본 DrawListItem 설명 칸(필드 6, 0x7da043): 설명(+0x10)이 비고 showfiletype(+0x384)이면 파일 종류 글(+0xc).
@@ -146,7 +146,7 @@ impl App {
             } else if pane.archive.is_some() || pane.remote.is_some() || entry.name == ".." {
                 String::new()
             } else {
-                let key = if entry.is_dir { None } else { Some(ndr::parity::dotnet_extension(&entry.name).to_lowercase()) };
+                let key = if entry.is_dir { None } else { Some(ndr::parity::list_extension(&entry.name).to_lowercase()) };
                 shell_types.entry(key).or_insert_with_key(|key| native::shell_type_name(key.as_deref().unwrap_or(""), key.is_none())).clone()
             };
             let description = if description.is_empty() && skin && show_file_type { kind.clone() } else { description };
@@ -156,9 +156,9 @@ impl App {
                 if entry.is_dir {
                     String::new()
                 } else if skin {
-                    character_case(ndr::parity::dotnet_extension(&entry.name).trim_start_matches('.'), case)
+                    character_case(ndr::parity::list_extension(&entry.name).trim_start_matches('.'), case)
                 } else {
-                    ndr::parity::dotnet_extension(&entry.name).to_owned()
+                    ndr::parity::list_extension(&entry.name).to_owned()
                 },
                 kind,
                 if entry.is_dir { String::new() } else { ndr::parity::format_size(entry.size, &unit, thousands) },
@@ -186,8 +186,8 @@ impl App {
         self.panes[index].view = view;
     }
 
-    /// 원본 UpdateDisplay(0x7e01f8)의 0x368: 드라이브 항목 이름 글 가운데 가장 넓은 너비. 이름 단추 왼쪽 끝에서 그 글 끝까지
-    /// (단추 안쪽 여백 + 아이콘, 아이콘이 없으면 "▸ "를 붙인 글로 잰다). 드라이브 항목이 없으면 0.
+    /// 원본 UpdateDisplay(0x7e01f8)의 0x368: 드라이브 항목 이름 글 가운데 가장 넓은 너비. 항목 왼쪽 끝에서 그 글 끝까지
+    /// (머리 너비 + 5 + 글, `drive_row`와 같은 여백). 드라이브 항목이 없으면 0.
     pub(super) fn drive_text_extent(&self, ui: &egui::Ui, index: usize) -> f32 {
         let pane = &self.panes[index];
         if !pane.entries.iter().any(|e| e.drive) {
@@ -200,13 +200,10 @@ impl App {
                 .iter()
                 .zip(&pane.view.cells)
                 .filter(|(e, _)| e.drive)
-                .map(|(_, cells)| {
-                    let text = if icons { cells[0].clone() } else { format!("  {}", cells[0]) };
-                    fonts.layout_no_wrap(text, font.clone(), Color32::WHITE).size().x
-                })
+                .map(|(_, cells)| fonts.layout_no_wrap(cells[0].clone(), font.clone(), Color32::WHITE).size().x)
                 .fold(0.0f32, f32::max)
         });
-        ui.spacing().button_padding.x + if icons { 16.0 + ui.spacing().icon_spacing } else { 0.0 } + widest
+        App::list_header_width(icons) + 5.0 + widest
     }
 }
 
@@ -223,15 +220,12 @@ pub(super) fn drive_row(ui: &mut egui::Ui, size: egui::Vec2, icon: Option<&egui:
             ui.painter().rect_filled(rect, visuals.corner_radius, visuals.weak_bg_fill);
         }
         let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
-        let mut x = rect.left() + ui.spacing().button_padding.x;
-        let shown = match icon {
-            Some(texture) => {
-                egui::Image::new((texture.id(), egui::vec2(16.0, 16.0))).paint_at(ui, egui::Rect::from_min_size(egui::pos2(x, rect.center().y - 8.0), egui::vec2(16.0, 16.0)));
-                x += 16.0 + ui.spacing().icon_spacing;
-                text.to_owned()
-            }
-            None => format!("  {text}"),
-        };
+        // 원본 DrawListItem: 아이콘은 왼쪽 + 12, "%s:" 글은 머리 너비(GetListHeaderWidth) + 5부터(이름 칸과 같은 여백).
+        if let Some(texture) = icon {
+            egui::Image::new((texture.id(), egui::vec2(16.0, 16.0))).paint_at(ui, egui::Rect::from_min_size(egui::pos2(rect.left() + 12.0, rect.top() + ((rect.height() - 16.0) / 2.0).floor()), egui::vec2(16.0, 16.0)));
+        }
+        let x = rect.left() + App::list_header_width(icon.is_some()) + 5.0;
+        let shown = text.to_owned();
         let drawn = painter.text(egui::pos2(x, rect.center().y), egui::Align2::LEFT_CENTER, shown, egui::TextStyle::Button.resolve(ui.style()), color);
         // 원본 ListFont 모양의 밑줄(4)·취소선(8).
         if style & 4 != 0 {

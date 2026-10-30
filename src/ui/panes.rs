@@ -847,6 +847,14 @@ impl App {
             pane.back.push(pane.path.clone());
             pane.forward.clear();
         }
+        // 고친 것(사용자 요청): 뒤로·주소 줄 등으로 지금 폴더의 상위 폴더로 가면 떠나온 하위 폴더에 커서를 둔다(그 쪽이 보인다).
+        // 원본 FUN_00486694는 ".."(1)·"\"(2)로 갈 때만 그렇게 하고, 뒤로(FUN_0048d58c)는 첫 항목으로 돌아갔다.
+        if pane.archive.is_none() && self.pending_focus[index].is_none() {
+            if let Ok(rest) = pane.path.strip_prefix(&path) {
+                self.pending_focus[index] = rest.components().next().map(|c| c.as_os_str().to_string_lossy().into_owned());
+            }
+        }
+        let pane = &mut self.panes[index];
         pane.path = path.clone();
         pane.address = path.to_string_lossy().into_owned();
         let local = pane.archive.is_none();
@@ -987,6 +995,41 @@ impl App {
         let notches = raw / ui.ctx().options(|o| o.input_options.line_scroll_speed).max(1.0);
         let current = egui::scroll_area::State::load(ui.ctx(), ui.make_persistent_id(salt)).map_or(0.0, |s| s.offset.y);
         Some((current - notches * Self::wheel_step(by_page, height, row_height, wheel_lines)).max(0.0))
+    }
+    /// 사용자 요청(원본과 다름): 목록 위에서 굴린 바퀴는 목록을 넘기지 않고 커서를 위·아래로 옮긴다(한 칸에 한 번, 보기마다
+    /// 위·아래 글쇠와 같이 `list_keys::arrow_target`). 커서가 보이게 넘기는 것은 글쇠와 같다(reveal). 원본 WMMouseWheel(0x7d5ba0)은
+    /// 목록만 넘겼다. 터치패드의 잘게 나뉜 바퀴는 모아서 한 칸이 되면 옮긴다. 바퀴는 여기서 다 쓰므로 목록 보기들의 바퀴
+    /// 넘기기(wheel_scroll 등)는 0을 받는다. 커서를 옮겼으면 true(그 패널이 활성).
+    pub(super) fn wheel_moves_cursor(&mut self, ui: &mut egui::Ui, index: usize, list_rect: egui::Rect) -> bool {
+        let (raw, zoom) = ui.input(|i| (Self::vertical_wheel(i), i.modifiers.ctrl || i.modifiers.command));
+        if raw == 0.0 || zoom || !ui.rect_contains_pointer(list_rect) {
+            return false;
+        }
+        ui.input_mut(|i| {
+            i.raw_scroll_delta = egui::Vec2::ZERO;
+            i.smooth_scroll_delta = egui::Vec2::ZERO;
+        });
+        let speed = ui.ctx().options(|o| o.input_options.line_scroll_speed).max(1.0);
+        let id = egui::Id::new(("ndr-wheel-rest", index));
+        let total = ui.data(|d| d.get_temp::<f32>(id)).unwrap_or(0.0) + raw / speed;
+        let steps = total.trunc();
+        ui.data_mut(|d| d.insert_temp(id, total - steps));
+        let pane = &mut self.panes[index];
+        let count = pane.entries.len();
+        if steps == 0.0 || count == 0 || pane.loading {
+            return false;
+        }
+        let key = if steps > 0.0 { list_keys::ListKey::Up } else { list_keys::ListKey::Down };
+        let mut cursor = pane.cursor.min(count - 1);
+        for _ in 0..steps.abs() as usize {
+            cursor = list_keys::arrow_target(&pane.page, cursor, count, key);
+        }
+        if cursor != pane.cursor {
+            pane.cursor = cursor;
+            pane.reveal = true;
+            pane.shift_anchor = None;
+        }
+        true
     }
     /// 원본 SetScrollTop(형식 2, 쪽 단위 0xc5 == 2): 세로 위치 = 쪽 번호 × 한 쪽 줄 수 × 줄 높이(0..쪽 수 − 1).
     /// 바퀴로 옮긴 위치를 가장 가까운 쪽 경계로 맞춘다. 마지막 쪽도 쪽 경계에서 시작한다(아래가 비어 보일 수 있음).
@@ -1251,6 +1294,9 @@ impl App {
                 }
                 let row_height = self.list_item_height(ui);
                 let list_rect = egui::Rect::from_min_size(ui.cursor().min, egui::vec2(ui.available_width(), height));
+                if self.wheel_moves_cursor(ui, index, list_rect) {
+                    activate = true;
+                }
                 if tiles {
                     let(a,o,c)=self.tile_rows(ui,index,&visible,height,view.contains("humb"));activate|=a;open|=o;if c.is_some(){command=c;}
                 } else if names || auto_flow {
@@ -1274,6 +1320,7 @@ impl App {
                 // 원본 드라이브 항목(종류 4): 이름 칸 끝(가장 넓은 드라이브 이름)과 DISKFREE 글.
                 let drive_extent = self.drive_text_extent(ui, index);
                 let free_label = self.language_pack.text("RES.DISKFREE", "Free");
+                let icons_shown = self.settings.flag("ShowIcons", true);
                 let view_cache = std::mem::take(&mut self.panes[index].view);
                 let (rows, texts) = (&view_cache.rows, &view_cache);
                 let width = ui.available_width() - bar_reserve;
@@ -1381,7 +1428,7 @@ impl App {
                                         let text = folder_size.as_ref().unwrap_or(&cells[column.index()]);
                                         let size = [cell, row_height];
                                         if *column == DetailColumn::Name {
-                                            name_response = Some(ui.add_sized(size, App::name_button(icon.as_ref(), entry.is_dir, text, name_color, framed, list_style)));
+                                            name_response = Some(App::name_cell(ui, egui::vec2(cell, row_height), icon.as_ref(), icons_shown, text, name_color, list_style));
                                             if cursor_row && original.is_some() {
                                                 if let Some(response) = &name_response {
                                                     note_cursor_name(&self.name_tip, ui, index, row, response.rect, text, &entry.name, list_style);
