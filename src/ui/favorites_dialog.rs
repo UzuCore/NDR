@@ -1,6 +1,6 @@
 //! 원본 즐겨찾기: TfOrgFavorites(즐겨찾기 구성, miOrgFavoritesClick 0x433990), 즐겨찾기 메뉴(FUN_0042eedc), 열기(FUN_0048d4b4),
 //! 그리고 경로 기록 메뉴(#SHOWPATHHISTORY). 드롭다운은 `App::popup` 하나.
-//! 차이(HANDOFF): 경로변경은 보류 중인 공용 폴더 트리 선택창(FUN_0040ca90) 대신 Windows 폴더 선택 대화 상자.
+//! 경로변경은 원본처럼 폴더 트리 창(FUN_0040ca90).
 use super::original_dialogs::{DialogKind, DialogResult};
 use super::*;
 
@@ -286,16 +286,16 @@ impl App {
                 });
             }
             FavoritesAction::ModifyPath => {
-                // btnModifyPathClick(0x44c058): 처음 폴더 = 경로(SubItems가 둘일 때).
+                // btnModifyPathClick(0x44c058): FUN_0040ca90(처음 경로 = SubItems가 둘이면 경로, 아니면 빈 글) — 폴더 트리 창.
                 let Some(index) = form.selected else { return };
                 let current = form.rows[index].get(1).cloned().unwrap_or_default();
-                let title = self.language_pack.text("formFolderTree.Form.Caption", "Select Folder");
-                let initial = Path::new(&current).is_dir().then(|| PathBuf::from(&current));
-                let Some(folder) = (self.folder_picker)(&title, initial.as_deref()) else { return };
-                let path = folder.to_string_lossy().into_owned();
-                if let Some(form) = self.favorites_form() {
-                    form.set_path(index, path);
-                }
+                self.folder_tree_dialog(Path::new(&current), None, move |app, folder, _| {
+                    let Some(folder) = folder else { return };
+                    let path = folder.to_string_lossy().into_owned();
+                    if let Some(form) = app.favorites_form() {
+                        form.set_path(index, path);
+                    }
+                });
             }
             FavoritesAction::Delete => form.delete(),
             FavoritesAction::Up => form.move_selected(false),

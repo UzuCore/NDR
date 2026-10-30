@@ -1288,12 +1288,6 @@ fn computer_cleanup_follows_the_original_tfcleanup() {
     fs::remove_dir_all(root).unwrap();
 }
 
-thread_local! {
-    static PICKED_FOLDER: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
-}
-fn pick_folder(_: &str, _: Option<&Path>) -> Option<PathBuf> {
-    PICKED_FOLDER.with(|p| p.borrow().clone())
-}
 fn top_prompt(app: &App) -> (String, String, String) {
     let dialog = app.original_dialogs.last().expect("a dialog is open");
     match &dialog.kind {
@@ -1311,7 +1305,6 @@ fn favorites(app: &App) -> &super::favorites_dialog::FavoritesForm {
 #[test]
 fn favorites_window_follows_the_original_orgfavorites() {
     let (root, ctx, mut app) = fixture("favorites", "ko");
-    app.folder_picker = pick_folder;
     let (left, right) = (root.join("left"), root.join("right"));
     let gone = root.join("gone").to_string_lossy().into_owned();
     app.settings.set_strings("Favorites", vec![right.to_string_lossy().into_owned(), gone.clone(), gone.clone()]);
@@ -1333,8 +1326,9 @@ fn favorites_window_follows_the_original_orgfavorites() {
     // 빈 줄 경로변경: 이름(PathFindFileNameW) + 경로.
     app.edit_dialog_kind(|kind| if let DialogKind::Favorites(form) = kind { form.selected = Some(1) });
     let folder = left.join("folder1");
-    PICKED_FOLDER.with(|p| *p.borrow_mut() = Some(folder.clone()));
     act(&mut app, A::ModifyPath, &ctx);
+    assert!(matches!(app.original_dialogs.last().map(|d| &d.kind), Some(DialogKind::FolderTree(_))), "FUN_0040ca90 folder tree");
+    app.answer_dialog(DialogResult::FolderTree(Some(folder.clone())), &ctx);
     assert_eq!(favorites(&app).rows[1], ["folder1".to_owned(), folder.to_string_lossy().into_owned()]);
     // 이름변경: TfGetText(제목 RES.RENAME, 처음 값 = 이름).
     act(&mut app, A::Rename, &ctx);
@@ -1342,8 +1336,8 @@ fn favorites_window_follows_the_original_orgfavorites() {
     app.answer_dialog(DialogResult::Text(Some("작업".into())), &ctx);
     assert_eq!(favorites(&app).rows[1][0], "작업");
     // 경로변경은 이름을 그대로 둔다.
-    PICKED_FOLDER.with(|p| *p.borrow_mut() = Some(right.clone()));
     act(&mut app, A::ModifyPath, &ctx);
+    app.answer_dialog(DialogResult::FolderTree(Some(right.clone())), &ctx);
     assert_eq!(favorites(&app).rows[1], ["작업".to_owned(), right.to_string_lossy().into_owned()]);
     // 위/아래는 SubItems를 바꾸고 고른 줄도 옮긴다. 맨 위·맨 아래에서는 그대로.
     act(&mut app, A::Up, &ctx);
