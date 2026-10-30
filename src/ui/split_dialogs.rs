@@ -286,13 +286,11 @@ impl App {
                 total_files: parts,
                 total_bytes: Some(length),
                 prefer_bytes: true,
-                allow_pause: true,
                 caption: Some(app.language_pack.text("RES.SPLITTING", "Splitting a file...")),
             };
-            let started = app.start_pausable_task(title.clone(), progress, move |events, cancel, pause| {
+            let started = app.start_progress_task(title.clone(), progress, move |events, cancel| {
                 let outcome = ndr::split::split_file(&source, size, &destination, &cancel, &mut |files, bytes, path| {
                     let _ = events.send(Event::Progress { path: path.to_path_buf(), bytes, files });
-                    super::commands::wait_while_paused(&pause, &cancel);
                 });
                 let _ = tx.send(AsyncResult::SplitDone { source, outcome, cancelled: cancel.load(Ordering::Relaxed) });
                 Ok(())
@@ -366,14 +364,12 @@ impl App {
                 total_files: totals.map(|t| t.0),
                 total_bytes: totals.map(|t| t.1),
                 prefer_bytes: true,
-                allow_pause: true,
                 caption: Some(app.language_pack.text("RES.JOINING", "Joining files...")),
             };
-            let started = app.start_pausable_task(task_title, progress, move |events, cancel, pause| {
+            let started = app.start_progress_task(task_title, progress, move |events, cancel| {
                 let count = options.files.len();
                 let outcome = ndr::split::join_ordered_files(&options.files, &destination, options.join_text, options.overwrite_confirmed, &cancel, &mut |files, bytes, path| {
                     let _ = events.send(Event::Progress { path: path.to_path_buf(), bytes, files });
-                    super::commands::wait_while_paused(&pause, &cancel);
                 });
                 let _ = tx.send(AsyncResult::JoinDone { count, outcome: outcome.map(|_| ()), cancelled: cancel.load(Ordering::Relaxed) });
                 Ok(())

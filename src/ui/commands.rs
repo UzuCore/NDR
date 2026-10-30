@@ -728,22 +728,18 @@ impl App {
         }
         true
     }
-    /// C# FileOperationProgressWindow.Run(allowPause: true)으로 도는 작업: 진행 창 인수와, 작업에 넘기는 일시 정지 표시.
-    /// 작업은 진행을 알릴 때마다 `wait_while_paused`로 멈춤 지점을 둔다.
-    pub(super) fn start_pausable_task(
+    /// 원본 TfProgress(취소 단추만)를 보이며 도는 작업.
+    pub(super) fn start_progress_task(
         &mut self,
         title: String,
         progress: super::file_operation::ProgressInfo,
-        task: impl FnOnce(Sender<Event>, Arc<AtomicBool>, Arc<AtomicBool>) -> Result<(), String> + Send + 'static,
+        task: impl FnOnce(Sender<Event>, Arc<AtomicBool>) -> Result<(), String> + Send + 'static,
     ) -> bool {
-        let pause = Arc::new(AtomicBool::new(false));
-        let shared = pause.clone();
-        if !self.start_task(title, move |events, cancel| task(events, cancel, shared)) {
+        if !self.start_task(title, task) {
             return false;
         }
         if let Some(job) = self.job.as_mut() {
-            job.pause = pause;
-            job.progress = Some(super::file_operation::ProgressInfo { allow_pause: true, ..progress });
+            job.progress = Some(progress);
         }
         true
     }

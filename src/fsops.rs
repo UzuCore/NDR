@@ -93,8 +93,7 @@ pub enum ConflictChoice {
 pub struct OperationOptions {
     pub remove_read_only: bool,
     pub use_descriptions: bool,
-    /// C# FileOperationControl.Pause/Resume: 켜져 있는 동안 다음 확인 지점에서 기다린다.
-    pub pause: Option<Arc<AtomicBool>>,
+
     /// C# FileOperationControl.ErrorResolver: 오류마다 Event::Failure로 묻는다(아니면 Event::Error).
     pub interactive_errors: bool,
     /// 원본 충돌 0x10(이름 바꾸기): 자동 이름(C# GetAvailableTarget) 대신 Event::RenameTarget으로 새 이름을 묻는다.
@@ -105,7 +104,6 @@ impl Default for OperationOptions {
         Self {
             remove_read_only: false,
             use_descriptions: true,
-            pause: None,
             interactive_errors: false,
             prompt_rename: false,
         }
@@ -873,14 +871,8 @@ impl Job {
             files: self.files,
         });
     }
-    /// 확인 지점: 일시 정지 중이면 기다리고, 취소면 Err.
+    /// 확인 지점: 취소면 Err.
     fn check(&self) -> Result<(), String> {
-        if let Some(pause) = &self.options.pause {
-            while pause.load(Ordering::Relaxed) {
-                check_cancel(&self.cancel)?;
-                std::thread::sleep(Duration::from_millis(50));
-            }
-        }
         check_cancel(&self.cancel)
     }
     /// C# FileOperationControl.ReportError: 오류를 알린다. 묻는 방식이면 답을 기다리고, 계속하지 않으면 취소(Err).

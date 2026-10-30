@@ -245,7 +245,7 @@ fn conflict_window_progress_window_and_reports_follow_csharp() {
     copy_to_other(&mut app, &ctx, &["a.txt"]);
     let job = app.job.as_ref().expect("a job");
     let info = job.progress.clone().expect("FileOperationProgressWindow");
-    assert_eq!((job.title.as_str(), info.from.as_deref(), info.to.as_deref(), info.total_files, info.allow_pause), ("항목 복사", Some(&*left.to_string_lossy()), Some(&*right.to_string_lossy()), Some(1), true));
+    assert_eq!((job.title.as_str(), info.from.as_deref(), info.to.as_deref(), info.total_files), ("항목 복사", Some(&*left.to_string_lossy()), Some(&*right.to_string_lossy()), Some(1)));
     wait(&mut app, &ctx, |app| conflict(app).is_some());
     {
         let form = conflict(&app).unwrap();
@@ -432,28 +432,5 @@ fn adding_to_a_multivolume_archive_rebuilds_it_like_csharp() {
     assert!(names.iter().any(|n| n == "noise.bin") && names.iter().any(|n| n == "b.txt"), "{names:?}");
     assert!(left.join("set.7z.002").exists(), "still split at the inferred 1 MiB");
     assert!(!fs::read_dir(left).unwrap().any(|e| e.unwrap().file_name().to_string_lossy().starts_with(".ndr-multivolume-update-")), "the staging folder is removed");
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
-fn pausable_tasks_wait_at_progress_points() {
-    // C# FileOperationControl.Pause/WaitIfPausedAsync(분할·합치기·동기화 진행 창의 일시 정지).
-    let (root, ctx, mut app) = fixture("pause");
-    let reached = Arc::new(AtomicBool::new(false));
-    let flag = reached.clone();
-    assert!(app.start_pausable_task("pause".into(), super::file_operation::ProgressInfo::default(), move |_, cancel, pause| {
-        thread::sleep(Duration::from_millis(150));
-        super::commands::wait_while_paused(&pause, &cancel);
-        flag.store(true, Ordering::Relaxed);
-        Ok(())
-    }));
-    let job = app.job.as_ref().unwrap();
-    assert!(job.progress.as_ref().is_some_and(|p| p.allow_pause), "the progress window shows the pause button");
-    job.pause.store(true, Ordering::Relaxed);
-    thread::sleep(Duration::from_millis(500));
-    assert!(!reached.load(Ordering::Relaxed), "the task waits while paused");
-    app.job.as_ref().unwrap().pause.store(false, Ordering::Relaxed);
-    wait(&mut app, &ctx, finished);
-    assert!(reached.load(Ordering::Relaxed));
     fs::remove_dir_all(root).unwrap();
 }

@@ -1086,7 +1086,7 @@ fn folder_sync_follows_synchronizefoldersasync() {
     assert_eq!(app.msgboxes[0].text, format!("Synchronize the 3 selected files from\n{}\nto\n{}\n? Extra files in the destination are not deleted.", left.display(), right.display()));
     assert_eq!(app.msgboxes[0].flags, MB_YESNO | ndr::msgbox::MB_ICONQUESTION);
     app.answer_message_box(6, &ctx);
-    assert!(app.job.as_ref().is_some_and(|j| j.title == "Synchronize folders" && j.modal.is_none() && j.progress.as_ref().is_some_and(|p| p.allow_pause && p.total_files == Some(3))), "FileOperationProgressWindow with pause");
+    assert!(app.job.as_ref().is_some_and(|j| j.title == "Synchronize folders" && j.modal.is_none() && j.progress.as_ref().is_some_and(|p| p.total_files == Some(3))), "progress window");
     frame_with_progress(&mut app, &ctx);
     wait_job(&mut app, &ctx);
     assert_eq!(app.status, "Synchronization complete · 3 files copied · 0 folders created · 0 skipped · 0 errors");

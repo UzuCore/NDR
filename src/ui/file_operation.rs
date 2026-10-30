@@ -267,7 +267,6 @@ pub(super) struct ProgressInfo {
     pub total_files: Option<u64>,
     pub total_bytes: Option<u64>,
     pub prefer_bytes: bool,
-    pub allow_pause: bool,
     /// 원본 진행 창 캡션(COMPRESSING·EXTRACTING·SPLITTING·JOINING). 없으면 작업 종류로 고르거나 작업 제목.
     pub caption: Option<String>,
 }
@@ -376,7 +375,6 @@ impl App {
             total_files: totals.map(|t| t.0),
             total_bytes: totals.map(|t| t.1),
             prefer_bytes: !moving,
-            allow_pause: true,
             caption: None,
         };
         let report = JobReport::Transfer { verb, requested: sources.len(), clear_clipboard: moving && kind == TransferKind::Paste };
@@ -484,14 +482,8 @@ impl App {
             Some(total) => format!("({})", n0(total.saturating_sub(job.files) as usize)),
             None => format!("({})", n0(job.files as usize)),
         };
-        let cancelled = job.cancel.load(Ordering::Relaxed);
-        let paused = job.pause.load(Ordering::Relaxed);
-        // lFileName: 파일 이름. 준비 중이면 원본 MSG_*_PREPARING, 취소·일시 정지 안내는 C# 판 글.
-        let file_line = if cancelled {
-            (if ko { "작업을 취소하고 있습니다." } else { "Cancelling the operation." }).to_owned()
-        } else if let Some(note) = &job.note {
-            note.clone()
-        } else if job.path.is_empty() {
+        // lFileName: 파일 이름. 준비 중이면 원본 MSG_*_PREPARING.
+        let file_line = if job.path.is_empty() {
             // 원본 FUN_00411cbc: 준비 창 글 = 종류별 MSG_COPY/MOVE/DEL_PREPARING. 그 밖의 작업은 C# 글.
             match &job.report {
                 JobReport::Transfer { verb: (_, "move"), .. } => self.language_pack.text("RES.MSG_MOVE_PREPARING", "Preparing for moving file/folder(s)"),
@@ -503,7 +495,6 @@ impl App {
             Path::new(&job.path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| job.path.clone())
         };
         let mut cancel = !covered && ctx.input(|i| i.key_pressed(egui::Key::Escape));
-        let mut toggle_pause = false;
         // 원본 진행 창 캡션(FUN_00411cbc 종류별): COPYING / MOVING / DELETING / RECYCLING. 그 밖의 작업은 C# 제목.
         let caption = match &job.report {
             _ if info.caption.is_some() => info.caption.clone().unwrap_or_default(),
@@ -536,13 +527,8 @@ impl App {
                 None => egui::ProgressBar::new(0.0).animate(true),
             };
             ui.put(at(18.0, 94.0, 327.0, 16.0), bar.desired_height(16.0));
-            if info.allow_pause {
-                let label = if paused { if ko { "계속" } else { "Resume" } } else if ko { "일시 정지" } else { "Pause" };
-                if put_enabled(ui, at(355.0, 60.0, 78.0, 25.0), !cancelled, egui::Button::new(label)).clicked() {
-                    toggle_pause = true;
-                }
-            }
-            if put_enabled(ui, at(355.0, 90.0, 78.0, 25.0), !cancelled, egui::Button::new(&cancel_label)).clicked() {
+            // 원본 btnCancelClick(0x451528): 취소 표시만 세운다(단추·글은 그대로, 작업이 다음 확인 지점에서 멈춘다).
+            if put_enabled(ui, at(355.0, 90.0, 78.0, 25.0), true, egui::Button::new(&cancel_label)).clicked() {
                 cancel = true;
             }
             put_left(ui, at(18.0, 116.0, 268.0, 14.0), egui::Label::new(RichText::new(&remaining).size(12.0)).truncate());
@@ -551,18 +537,7 @@ impl App {
         if covered {
             return;
         }
-        if toggle_pause {
-            let now = !job.pause.load(Ordering::Relaxed);
-            job.pause.store(now, Ordering::Relaxed);
-            job.note = Some(match (now, ko) {
-                (true, true) => "작업을 일시 정지했습니다.".into(),
-                (true, false) => "The operation is paused.".into(),
-                (false, true) => "작업을 계속합니다.".into(),
-                (false, false) => "Continuing the operation.".into(),
-            });
-        }
         if cancel {
-            job.pause.store(false, Ordering::Relaxed);
             job.cancel.store(true, Ordering::Relaxed);
         }
     }

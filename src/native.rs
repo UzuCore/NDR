@@ -1612,37 +1612,6 @@ pub fn windows_light_theme() -> bool {
     }
 }
 
-/// 프로세스의 모든 스레드를 멈추거나(SuspendThread) 다시 돌린다(ResumeThread). 외부 7-Zip 압축 작업의 일시 정지에 쓴다.
-/// 스레드 목록은 CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD). 한 스레드라도 바꿨으면 true.
-pub fn suspend_process(pid: u32, suspend: bool) -> bool {
-    use windows_sys::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next};
-    use windows_sys::Win32::System::Threading::{OpenThread, ResumeThread, SuspendThread, THREAD_SUSPEND_RESUME};
-    // SAFETY: the snapshot and thread handles are closed here; THREADENTRY32 carries its size.
-    unsafe {
-        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
-        if snapshot == INVALID_HANDLE_VALUE {
-            return false;
-        }
-        let mut entry: THREADENTRY32 = std::mem::zeroed();
-        entry.dwSize = size_of::<THREADENTRY32>() as u32;
-        let mut changed = false;
-        let mut more = Thread32First(snapshot, &mut entry) != 0;
-        while more {
-            if entry.th32OwnerProcessID == pid {
-                let thread = OpenThread(THREAD_SUSPEND_RESUME, 0, entry.th32ThreadID);
-                if !thread.is_null() {
-                    let previous = if suspend { SuspendThread(thread) } else { ResumeThread(thread) };
-                    changed |= previous != u32::MAX;
-                    CloseHandle(thread);
-                }
-            }
-            more = Thread32Next(snapshot, &mut entry) != 0;
-        }
-        CloseHandle(snapshot);
-        changed
-    }
-}
-
 /// 원본 pmEditPopup: IsClipboardFormatAvailable(CF_HDROP = 15). 클립보드를 열지 않는다.
 pub fn clipboard_has_files() -> bool {
     // SAFETY: no pointers; only queries the clipboard format list.

@@ -338,8 +338,6 @@ struct Job {
     report: file_operation::JobReport,
     /// Some = C# FileOperationProgressWindow(삭제·완전 삭제는 None, C#도 창이 없다).
     progress: Option<file_operation::ProgressInfo>,
-    /// 일시 정지(C# FileOperationControl.Pause).
-    pause: Arc<AtomicBool>,
     started: Instant,
     /// 오류 상자로 이미 보인 오류 수(C# InteractiveErrorCount).
     interactive: usize,
@@ -347,8 +345,7 @@ struct Job {
     skipped: usize,
     /// 작업 전체가 멈춘 오류(C# FatalError).
     fatal: Option<String>,
-    /// 진행 창 상태 글(일시 정지·계속). 다음 진행 소식에서 지운다.
-    note: Option<String>,
+
     /// 원본 줄을 처음 알려 온 경로의 폴더로 정했으면 그 값.
     from_seen: Option<String>,
     /// 마지막 Event::Target(원본 파일, 실제 대상 파일). 진행 창 lTo는 지금 원본 파일의 대상 폴더.
@@ -370,12 +367,12 @@ impl Job {
             custom_status: false,
             report: file_operation::JobReport::Generic,
             progress: Some(file_operation::ProgressInfo::default()),
-            pause: Arc::new(AtomicBool::new(false)),
+
             started: Instant::now(),
             interactive: 0,
             skipped: 0,
             fatal: None,
-            note: None,
+
             from_seen: None,
             target: None,
         }
@@ -1031,7 +1028,7 @@ impl App {
         let options = fsops::OperationOptions {
             remove_read_only: self.settings.flag("RemoveReadOnlyWhenCopying", true),
             use_descriptions: self.settings.flag("UseDescriptionFile", true),
-            pause: progress.as_ref().filter(|p| p.allow_pause).map(|_| job.pause.clone()),
+
             interactive_errors: matches!(operation, Operation::Copy { .. } | Operation::Delete { .. } | Operation::DeleteSkipping { .. }),
             prompt_rename: matches!(operation, Operation::Copy { .. }),
         };
@@ -1177,9 +1174,6 @@ impl App {
                     job.path = path.to_string_lossy().into_owned();
                     job.bytes = bytes;
                     job.files = files;
-                    if !job.pause.load(Ordering::Relaxed) {
-                        job.note = None;
-                    }
                 }
                 Event::Conflict { source, destination, allow_resume, reply } => self.ask_file_conflict(source, destination, allow_resume, reply),
                 Event::Target { source, destination } => job.target = Some((source, destination)),

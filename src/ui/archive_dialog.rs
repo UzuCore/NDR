@@ -622,7 +622,7 @@ impl App {
         let started = if external {
             self.start_task(title, work)
         } else {
-            self.start_pausable_task(title, progress_info, move |events, cancel, pause| archive::with_pause(pause, || work(events, cancel)))
+            self.start_progress_task(title, progress_info, work)
         };
         if started {
             if let Some(job) = self.job.as_mut() {
@@ -757,7 +757,7 @@ impl App {
         let started = if external {
             self.start_task(title, work)
         } else {
-            self.start_pausable_task(title, progress, move |events, cancel, pause| archive::with_pause(pause, || work(events, cancel)))
+            self.start_progress_task(title, progress, work)
         };
         if started {
             if let Some(job) = self.job.as_mut() {

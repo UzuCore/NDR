@@ -748,16 +748,14 @@ impl App {
             total_files: Some(files),
             total_bytes: None,
             prefer_bytes: false,
-            allow_pause: true,
             caption: None,
         };
         let recycle = self.settings.flag("UseRecycleBin", true);
         let tx = self.async_tx.clone();
         let title = self.tr("폴더 동기화", "Synchronize folders").into_owned();
-        let started = self.start_pausable_task(title, progress, move |events, cancel, pause| {
+        let started = self.start_progress_task(title, progress, move |events, cancel| {
             let outcome = fc::copy_differences(&source, &destination, &selected, source_is_left, behavior, recycle, &cancel, &mut |copied, bytes, path| {
                 let _ = events.send(Event::Progress { path: path.to_path_buf(), bytes, files: copied });
-                super::commands::wait_while_paused(&pause, &cancel);
             });
             let _ = tx.send(AsyncResult::SyncDone(outcome, cancel.load(Ordering::Relaxed)));
             Ok(())

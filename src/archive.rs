@@ -4,37 +4,16 @@ use crate::fsops::{
     unique_path,
 };
 use std::{
-    cell::RefCell,
     collections::HashSet,
     fs,
     io::Read,
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering as PauseOrdering},
-    },
+    sync::atomic::AtomicBool,
     thread,
     time::Duration,
 };
 
-thread_local! {
-    /// C# FileOperationControl.WaitIfPaused 자리: 이 스레드에서 도는 7-Zip 실행을 일시 정지할 표시(없으면 멈추지 않는다).
-    static PAUSE: RefCell<Option<Arc<AtomicBool>>> = const { RefCell::new(None) };
-}
-
-/// `work`가 도는 동안 이 스레드의 7-Zip 실행이 `pause`를 따른다: 켜지면 7-Zip 프로세스의 스레드를 멈추고(SuspendThread),
-/// 꺼지면 다시 돌린다. 취소하면 다시 돌린 뒤 끝낸다.
-pub fn with_pause<R>(pause: Arc<AtomicBool>, work: impl FnOnce() -> R) -> R {
-    let previous = PAUSE.with(|p| p.replace(Some(pause)));
-    let result = work();
-    PAUSE.with(|p| *p.borrow_mut() = previous);
-    result
-}
-
-fn pause_requested() -> bool {
-    PAUSE.with(|p| p.borrow().as_ref().is_some_and(|flag| flag.load(PauseOrdering::Relaxed)))
-}
 #[derive(Debug, Clone)]
 pub struct ArchiveEntry {
     pub key: String,
@@ -474,22 +453,13 @@ fn execute_capture_progress(
     };
     let out = read(Box::new(stdout), progress);
     let err = read(Box::new(stderr), None);
-    let mut suspended = false;
     let status = loop {
         if check_cancel(cancel).is_err() {
-            if suspended {
-                crate::native::suspend_process(child.id(), false);
-            }
             let _ = child.kill();
             let _ = child.wait();
             let _ = out.join();
             let _ = err.join();
             return Err("Cancelled".into());
-        }
-        let paused = pause_requested();
-        if paused != suspended {
-            crate::native::suspend_process(child.id(), paused);
-            suspended = paused;
         }
         match child.try_wait() {
             Ok(Some(status)) => break status,
@@ -2486,32 +2456,5 @@ mod entry_tests {
         assert!(external_password_failure("7-Zip failed (exit code: 2): ERROR: Wrong password : a.txt") && external_password_failure("x\nEnter password (will not be echoed):"));
         assert!(!external_password_failure("ERROR: a password.txt : cannot open"));
         fs::remove_dir_all(root).unwrap();
-    }
-}
-
-#[cfg(test)]
-mod pause_tests {
-    use super::*;
-    use std::time::Instant;
-
-    /// with_pause: while the flag is on, the running program's threads are suspended (ping cannot finish), then it resumes.
-    #[test]
-    fn paused_program_is_suspended_until_resumed() {
-        let mut command = Command::new("ping");
-        command.args(["-n", "3", "127.0.0.1"]).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
-        let pause = Arc::new(AtomicBool::new(true));
-        let release = pause.clone();
-        let resumer = thread::spawn(move || {
-            thread::sleep(Duration::from_millis(2500));
-            release.store(false, PauseOrdering::Relaxed);
-        });
-        let started = Instant::now();
-        let output = with_pause(pause, || execute_capture(command, &AtomicBool::new(false), false));
-        let elapsed = started.elapsed();
-        resumer.join().unwrap();
-        assert!(output.is_ok(), "{output:?}");
-        // ping -n 3 alone takes about 2 s; suspended for 2.5 s first it needs at least 3.5 s.
-        assert!(elapsed >= Duration::from_millis(3500), "{elapsed:?}");
-        assert!(!pause_requested(), "the flag is scoped to with_pause");
     }
 }

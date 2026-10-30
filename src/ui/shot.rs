@@ -196,7 +196,7 @@ impl App {
                 let (source, target) = (folder.join("a"), folder.join("b"));
                 let info = super::file_operation::ProgressInfo { from: Some(source.to_string_lossy().into_owned()), to: Some(target.to_string_lossy().into_owned()), total_files: Some(12), total_bytes: Some(48 * 1024 * 1024), prefer_bytes: true, ..Default::default() };
                 let file = source.join("document.txt");
-                self.start_pausable_task("Copy".into(), info, move |events, cancel, _| {
+                self.start_progress_task("Copy".into(), info, move |events, cancel| {
                     let _ = events.send(ndr::fsops::Event::Progress { path: file, bytes: 20 * 1024 * 1024, files: 4 });
                     let started = std::time::Instant::now();
                     while !cancel.load(std::sync::atomic::Ordering::Relaxed) && started.elapsed() < std::time::Duration::from_secs(4) {
