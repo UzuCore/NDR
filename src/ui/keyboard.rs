@@ -423,9 +423,11 @@ impl App {
 
     /// 원본 ArrowKey의 `[`·`]`(Ctrl·Alt·Shift 없이): 목록 끝 드라이브 항목 사이를 옮긴다(`list_keys::bracket_target`).
     fn bracket_keys(&mut self, ctx: &egui::Context) {
-        let (open, close) = ctx.input(|i| {
-            let plain = i.modifiers.is_none();
-            (plain && i.key_pressed(egui::Key::OpenBracket), plain && i.key_pressed(egui::Key::CloseBracket))
+        // 원본 KeyDown(0x7d7338) → ArrowKey: `[`·`]`는 Ctrl(Shift 없이)만 아니면 받는다. Shift면 뒤의 범위 선택도 한다.
+        // 고친 것: 전에는 Shift를 누르면 아무 일도 없었다.
+        let (open, close, shift) = ctx.input(|i| {
+            let allowed = !i.modifiers.ctrl && !i.modifiers.alt && !i.modifiers.command;
+            (allowed && i.key_pressed(egui::Key::OpenBracket), allowed && i.key_pressed(egui::Key::CloseBracket), i.modifiers.shift)
         });
         if !open && !close {
             return;
@@ -441,7 +443,16 @@ impl App {
             if target != cursor {
                 pane.cursor = target;
                 pane.reveal = true;
-                pane.shift_anchor = None;
+                if shift {
+                    let anchor = *pane.shift_anchor.get_or_insert(cursor);
+                    pane.selected.clear();
+                    for i in anchor.min(target)..=anchor.max(target) {
+                        pane.selected.insert(i);
+                    }
+                    pane.drop_drive_marks();
+                } else {
+                    pane.shift_anchor = None;
+                }
             }
         }
     }
