@@ -1,20 +1,17 @@
-//! C# ManageFavoritesAsync + FavoritesWindow(즐겨찾기 구성), ShowFavoritesMenu(F11·#FAVORITES·기능키 줄의 즐겨찾기 드롭다운),
-//! OpenFavoriteAsync, ShowNavigationHistoryMenu/NavigateHistoryEntryAsync(#SHOWPATHHISTORY). 드롭다운은 `App::popup` 하나.
-//! 차이(HANDOFF): 경로변경은 보류 중인 공용 폴더 트리 선택창 대신 Windows 폴더 선택 대화 상자. 단축키 열은 원본 즐겨찾기 메뉴
-//! 단축키(FUN_0042eedc: Shift+F1~F10, Shift+Ctrl+F1~F10)이고, 그 글쇠는 keyboard.rs shortcut_key가 받는다(favoriteOpen:N).
+//! 원본 즐겨찾기: TfOrgFavorites(즐겨찾기 구성, miOrgFavoritesClick 0x433990), 즐겨찾기 메뉴(FUN_0042eedc), 열기(FUN_0048d4b4),
+//! 그리고 경로 기록 메뉴(#SHOWPATHHISTORY). 드롭다운은 `App::popup` 하나.
+//! 차이(HANDOFF): 경로변경은 보류 중인 공용 폴더 트리 선택창(FUN_0040ca90) 대신 Windows 폴더 선택 대화 상자.
 use super::original_dialogs::{DialogKind, DialogResult};
 use super::*;
 
-/// 즐겨찾기 칸 수(C#은 20칸을 채워 보인다).
+/// 즐겨찾기 칸 수(원본 FUN_0044bed8은 20줄을 만든다).
 const SLOTS: usize = 20;
 
-/// FavoritesWindow의 입력: (이름, 경로) 칸들(빈 칸은 둘 다 빈 글), 선택한 줄, 현재 폴더.
+/// TfOrgFavorites의 ListView: 줄마다 SubItems(0개, 이름 1개, 또는 이름·경로 2개)와 고른 줄(ItemIndex).
 #[derive(Clone, Debug)]
 pub(super) struct FavoritesForm {
-    pub items: Vec<(String, String)>,
+    pub rows: Vec<Vec<String>>,
     pub selected: Option<usize>,
-    pub current: String,
-    pub gestures: Vec<String>,
 }
 
 /// 원본 즐겨찾기 메뉴(FUN_0042eedc): 0~9번 항목은 "Shift+F%d"(번호 + 1), 10~19번은 "Shift+Ctrl+F%d"(번호 − 9) 단축키.
@@ -26,73 +23,68 @@ pub(super) fn favorite_gesture(_settings: &ndr::settings::Settings, index: usize
     }
 }
 
-fn trimmed_name(path: &str) -> String {
-    let trimmed = if path.len() > 3 { path.trim_end_matches(['\\', '/']) } else { path };
-    Path::new(trimmed).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+/// 구성 창 단축키 열(FUN_0044bed8의 Caption): "Shift + F%d"(0~9번), "Shift+Ctrl+F%d"(10~19번).
+fn window_gesture(index: usize) -> String {
+    if index < 10 { format!("Shift + F{}", index + 1) } else { format!("Shift+Ctrl+F{}", index - 9) }
 }
 
 impl FavoritesForm {
-    /// 이름이나 경로가 빈 항목은 빈 칸, 20칸까지 채운다.
-    pub(super) fn new(favorites: Vec<(String, String)>, current: String, settings: &ndr::settings::Settings) -> Self {
-        let mut items: Vec<(String, String)> = favorites.into_iter().map(|(name, path)| if name.is_empty() || path.is_empty() { (String::new(), String::new()) } else { (name, path) }).collect();
-        while items.len() < SLOTS {
-            items.push((String::new(), String::new()));
-        }
-        let gestures = (0..items.len()).map(|i| favorite_gesture(settings, i)).collect();
-        Self { items, selected: None, current, gestures }
+    /// FUN_0044bed8: 20줄. 이름과 경로가 둘 다 있는 칸(FUN_00410a44)만 SubItems에 이름·경로를 넣는다.
+    pub(super) fn new(favorites: Vec<(String, String)>) -> Self {
+        let mut rows: Vec<Vec<String>> = favorites.into_iter().take(SLOTS).map(|(name, path)| if name.is_empty() || path.is_empty() { vec![] } else { vec![name, path] }).collect();
+        rows.resize(SLOTS, vec![]);
+        Self { rows, selected: None }
     }
 
-    /// AddEntry: 같은 경로가 있으면 그대로, 이름은 마지막 폴더 이름(없으면 경로), 첫 빈 칸(없으면 끝)에 넣고 고른다.
-    pub(super) fn add_entry(&mut self, path: &str) {
-        if self.items.iter().any(|(_, known)| ndr::names::equals_ignore_case(known, path)) {
-            return;
+    /// btnDeleteClick(0x44c004): 고른 줄의 SubItems.Clear(줄은 남는다).
+    pub(super) fn delete(&mut self) {
+        if let Some(row) = self.selected.and_then(|i| self.rows.get_mut(i)) {
+            row.clear();
         }
-        let name = trimmed_name(path);
-        let entry = (if name.is_empty() { path.to_owned() } else { name }, path.to_owned());
-        let slot = match self.items.iter().position(|(_, p)| p.is_empty()) {
-            Some(slot) => {
-                self.items[slot] = entry;
-                slot
-            }
-            None => {
-                self.items.push(entry);
-                self.items.len() - 1
-            }
-        };
-        self.selected = Some(slot);
     }
 
-    /// RemoveSelected: 앞 20칸은 비우고, 그 뒤는 지운다.
-    pub(super) fn remove_selected(&mut self) {
-        let Some(index) = self.selected.filter(|i| *i < self.items.len()) else { return };
-        if index < SLOTS {
-            self.items[index] = (String::new(), String::new());
-        } else {
-            self.items.remove(index);
-        }
-        self.selected = Some(index.min(self.items.len() - 1));
-    }
-
-    pub(super) fn move_selected(&mut self, delta: isize) {
+    /// btnUpClick(0x44c698)·btnDownClick(0x44c7c0): 이웃 줄과 SubItems를 바꾸고 고른 줄도 옮긴다. 단축키 열은 자리에 남는다.
+    pub(super) fn move_selected(&mut self, down: bool) {
         let Some(index) = self.selected else { return };
-        let next = index as isize + delta;
-        if next < 0 || next as usize >= self.items.len() {
-            return;
-        }
-        self.items.swap(index, next as usize);
-        self.selected = Some(next as usize);
+        let next = match down {
+            true if index < SLOTS - 1 => index + 1,
+            false if index > 0 => index - 1,
+            _ => return,
+        };
+        self.rows.swap(index, next);
+        self.selected = Some(next);
     }
 
-    /// 저장 결과: 이름이나 경로가 빈 항목은 빈 칸.
+    /// btnRenameClick(0x44c3bc)의 확인: SubItems가 없으면 이름을 더하고, 있으면 이름(0번)을 바꾼다.
+    pub(super) fn set_name(&mut self, index: usize, name: String) {
+        let Some(row) = self.rows.get_mut(index) else { return };
+        if row.is_empty() { row.push(name) } else { row[0] = name }
+    }
+
+    /// btnModifyPathClick(0x44c058)의 고른 폴더: SubItems가 없으면 이름(PathFindFileNameW) + 경로를 더한다. 있으면 이름이 빈 경우
+    /// 이름을 채우고, 이름만 있으면 경로를 더하고, 둘 다 있으면 경로를 바꾼다.
+    pub(super) fn set_path(&mut self, index: usize, path: String) {
+        let Some(row) = self.rows.get_mut(index) else { return };
+        let name = ndr::names::find_file_name(&path);
+        if row.is_empty() {
+            row.push(name);
+            row.push(path);
+            return;
+        }
+        if row[0].is_empty() {
+            row[0] = name;
+        }
+        if row.len() == 1 { row.push(path) } else { row[1] = path }
+    }
+
+    /// btnSaveClick(0x44c8fc): 즐겨찾기를 모두 비운 뒤, SubItems가 둘이고 이름·경로가 다 있는 줄만 그 칸에 넣는다.
     pub(super) fn result(&self) -> Vec<(String, String)> {
-        self.items.iter().map(|(name, path)| if name.is_empty() || path.is_empty() { (String::new(), String::new()) } else { (name.clone(), path.clone()) }).collect()
+        self.rows.iter().map(|row| match row.as_slice() { [name, path] if !name.is_empty() && !path.is_empty() => (name.clone(), path.clone()), _ => (String::new(), String::new()) }).collect()
     }
 }
 
 /// 창 단추.
 pub(super) enum FavoritesAction {
-    AddCurrent,
-    AddPath,
     Rename,
     ModifyPath,
     Delete,
@@ -102,19 +94,18 @@ pub(super) enum FavoritesAction {
     Cancel,
 }
 
-/// 원본 TfOrgFavorites(ClientWidth 487 × ClientHeight 512): ListView(8,41 469×381, 열 단축키 90·이름 100·경로 250, 없는 경로는 흐리게),
-/// btnRename(8,428) btnModifyPath(89,428) btnUp(170,428) btnDown(251,428) 79×25, btnDelete(402,428 75×25), Bevel1(8,464 469),
-/// btnSave(319,479) btnCancel(403,479) 75×25. 위 빈 띠(0~41)에는 C# 판에만 있는 "현재 폴더 추가"·"경로 추가" 단추를 둔다.
-pub(super) fn favorites_ui(ui: &mut egui::Ui, form: &mut FavoritesForm, language: &compat::Language, ko: bool, enter: bool) -> Option<FavoritesAction> {
+/// 원본 TfOrgFavorites(ClientWidth 487 × ClientHeight 512): ListView(8,41 469×381, 열 Shortcut 90·Name 100·Path 250, 열 누르기 없음,
+/// ReadOnly·RowSelect, 두 번 누르기 = btnModifyPathClick, 없는 경로는 clSilver), btnRename(8,428) btnModifyPath(89,428) btnUp(170,428)
+/// btnDown(251,428) 79×25, btnDelete(402,428 75×25), Bevel1(8,464 469, 윗줄), btnSave(319,479) btnCancel(403,479, Cancel) 75×25.
+/// Default 단추는 없다(Enter는 아무것도 하지 않는다).
+pub(super) fn favorites_ui(ui: &mut egui::Ui, form: &mut FavoritesForm, language: &compat::Language) -> Option<FavoritesAction> {
     let caption = |key: &str, fallback: &str| language.text(&format!("formOrgFavorites.Caption.{key}"), fallback);
     let mut action = None;
     let (area, _) = ui.allocate_exact_size(egui::vec2(487.0, 512.0), egui::Sense::hover());
     let at = |x: f32, y: f32, w: f32, h: f32| egui::Rect::from_min_size(area.min + egui::vec2(x, y), egui::vec2(w, h));
     let buttons = [
-        (at(8.0, 8.0, 110.0, 25.0), if ko { "현재 폴더 추가".to_owned() } else { "Add current folder".to_owned() }, FavoritesAction::AddCurrent),
-        (at(122.0, 8.0, 110.0, 25.0), if ko { "경로 추가".to_owned() } else { "Add path".to_owned() }, FavoritesAction::AddPath),
         (at(8.0, 428.0, 79.0, 25.0), caption("btnRename", "&Rename"), FavoritesAction::Rename),
-        (at(89.0, 428.0, 79.0, 25.0), caption("btnModifyPath", "Chang&e Path"), FavoritesAction::ModifyPath),
+        (at(89.0, 428.0, 79.0, 25.0), caption("btnModifyPath", "&Edit"), FavoritesAction::ModifyPath),
         (at(170.0, 428.0, 79.0, 25.0), caption("btnUp", "&Up"), FavoritesAction::Up),
         (at(251.0, 428.0, 79.0, 25.0), caption("btnDown", "Do&wn"), FavoritesAction::Down),
         (at(402.0, 428.0, 75.0, 25.0), caption("btnDelete", "&Delete"), FavoritesAction::Delete),
@@ -149,23 +140,25 @@ pub(super) fn favorites_ui(ui: &mut egui::Ui, form: &mut FavoritesForm, language
     ui.scope_builder(egui::UiBuilder::new().max_rect(rows), |ui| {
         egui::ScrollArea::vertical().id_salt("favorites-list").auto_shrink([false, false]).show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
-            for (index, (name, path)) in form.items.iter().enumerate() {
+            for (index, row) in form.rows.iter().enumerate() {
                 let (rect, response) = ui.allocate_exact_size(egui::vec2(total, 20.0), egui::Sense::click());
                 let selected = form.selected == Some(index);
                 if selected {
                     ui.painter().rect_filled(rect, 0.0, visuals.selection.bg_fill);
                 }
-                let unavailable = !Path::new(path).exists();
                 let color = if selected { visuals.selection.stroke.color } else { visuals.text_color() };
-                let path_color = if unavailable && !selected { Color32::from_rgb(0xC0, 0xC0, 0xC0).gamma_multiply(0.8) } else { color };
-                let gesture = form.gestures.get(index).map(String::as_str).unwrap_or("");
+                // ListViewAdvancedCustomDrawSubItem(0x44c5b8): 경로 열은 SubItems가 둘이고 PathFileExistsW가 거짓이면 clSilver.
+                let missing = row.len() >= 2 && !Path::new(&row[1]).exists();
+                let path_color = if missing && !selected { Color32::from_rgb(0xC0, 0xC0, 0xC0).gamma_multiply(0.8) } else { color };
+                let gesture = window_gesture(index);
+                let name = row.first().map(String::as_str).unwrap_or("");
+                let path = row.get(1).map(String::as_str).unwrap_or("");
                 let mut x = rect.left();
-                for ((text, width), cell_color) in [gesture, name.as_str(), path.as_str()].into_iter().zip(widths).zip([color, color, path_color]) {
+                for ((text, width), cell_color) in [gesture.as_str(), name, path].into_iter().zip(widths).zip([color, color, path_color]) {
                     let cell = egui::Rect::from_min_size(egui::pos2(x, rect.top()), egui::vec2(width, 20.0));
                     ui.painter().with_clip_rect(cell.shrink2(egui::vec2(4.0, 0.0))).text(cell.left_center() + egui::vec2(6.0, 0.0), egui::Align2::LEFT_CENTER, text, font.clone(), cell_color);
                     x += width;
                 }
-                let response = if path.is_empty() { response } else { response.on_hover_text(path.as_str()) };
                 if response.clicked() {
                     form.selected = Some(index);
                 }
@@ -178,9 +171,6 @@ pub(super) fn favorites_ui(ui: &mut egui::Ui, form: &mut FavoritesForm, language
     });
     if double {
         action = Some(FavoritesAction::ModifyPath);
-    }
-    if enter && action.is_none() {
-        action = Some(FavoritesAction::Save);
     }
     action
 }
@@ -250,7 +240,7 @@ impl App {
         }
     }
 
-    /// 압축 파일 안이면 압축 파일이 있는 폴더(C# ActiveState의 현재 폴더).
+    /// 압축 파일 안이면 압축 파일이 있는 폴더(지금 폴더).
     pub(super) fn favorites_current(&self) -> String {
         let p = &self.panes[self.active];
         match &p.archive {
@@ -259,15 +249,16 @@ impl App {
         }
     }
 
-    /// 설정의 즐겨찾기(이름이 없으면 마지막 폴더 이름).
+    /// 설정의 즐겨찾기 칸(이름, 경로).
     fn favorite_entries(&self) -> Vec<(String, String)> {
         let names = self.settings.strings("FavoriteNames");
-        self.settings.strings("Favorites").into_iter().enumerate().map(|(i, path)| (names.get(i).cloned().unwrap_or_else(|| trimmed_name(&path)), path)).collect()
+        self.settings.strings("Favorites").into_iter().enumerate().map(|(i, path)| (names.get(i).cloned().unwrap_or_default(), path)).collect()
     }
 
-    /// C# ManageFavoritesAsync: 저장하면 Favorites/FavoriteNames를 바꾸고 설정을 저장한다.
+    /// 원본 miOrgFavoritesClick(0x433990): TfOrgFavorites를 띄우고, 저장하면 즐겨찾기(20칸)를 바꾼다. 닫힌 뒤 메뉴는 다시 만든다
+    /// (여기서는 메뉴를 열 때마다 설정에서 만든다).
     pub(super) fn manage_favorites(&mut self) {
-        let form = FavoritesForm::new(self.favorite_entries(), self.favorites_current(), &self.settings);
+        let form = FavoritesForm::new(self.favorite_entries());
         let title = self.language_pack.text("formOrgFavorites.Form.Caption", "Organize Favorites");
         self.push_original_dialog(title, DialogKind::Favorites(Box::new(form)), |app, result, _| {
             let DialogResult::Favorites(Some(items)) = result else { return };
@@ -279,57 +270,35 @@ impl App {
 
     /// 창 단추.
     pub(super) fn favorites_action(&mut self, action: FavoritesAction, ctx: &egui::Context) {
-        let ko = self.language == "ko";
         let Some(form) = self.favorites_form() else { return };
         match action {
-            FavoritesAction::AddCurrent => {
-                let current = form.current.clone();
-                if Path::new(&current).is_dir() {
-                    form.add_entry(&current);
-                }
-            }
-            FavoritesAction::AddPath => {
-                let current = form.current.clone();
-                let (title, message) = if ko { ("즐겨찾기 추가", "폴더 경로") } else { ("Add favorite", "Folder path") };
-                self.prompt(title, message, &current, None, false, |app, value, _| {
-                    let Some(value) = value.filter(|v| !v.trim().is_empty() && Path::new(v).is_dir()) else { return };
-                    let full = std::path::absolute(&value).map(|p| p.to_string_lossy().into_owned()).unwrap_or(value);
-                    if let Some(form) = app.favorites_form() {
-                        form.add_entry(&full);
-                    }
-                });
-            }
             FavoritesAction::Rename => {
+                // btnRenameClick(0x44c3bc): 고른 줄이 없으면 아무것도 하지 않는다. TfGetText(제목 RES.RENAME, 글 없음, 처음 값 = 이름).
                 let Some(index) = form.selected else { return };
-                let name = form.items[index].0.clone();
-                let (title, message) = if ko { ("즐겨찾기 이름", "표시 이름") } else { ("Favorite name", "Display name") };
-                self.prompt(title, message, &name, None, false, move |app, value, _| {
+                let name = form.rows[index].first().cloned().unwrap_or_default();
+                let title = self.language_pack.text("RES.RENAME", "Rename");
+                self.prompt(&title, "", &name, None, false, move |app, value, _| {
                     let Some(value) = value else { return };
                     if let Some(form) = app.favorites_form() {
-                        form.items[index].0 = value;
-                        form.selected = Some(index);
+                        form.set_name(index, value);
                     }
                 });
             }
             FavoritesAction::ModifyPath => {
+                // btnModifyPathClick(0x44c058): 처음 폴더 = 경로(SubItems가 둘일 때).
                 let Some(index) = form.selected else { return };
-                let current = form.items[index].1.clone();
+                let current = form.rows[index].get(1).cloned().unwrap_or_default();
                 let title = self.language_pack.text("formFolderTree.Form.Caption", "Select Folder");
                 let initial = Path::new(&current).is_dir().then(|| PathBuf::from(&current));
                 let Some(folder) = (self.folder_picker)(&title, initial.as_deref()) else { return };
                 let path = folder.to_string_lossy().into_owned();
                 if let Some(form) = self.favorites_form() {
-                    let item = &mut form.items[index];
-                    if item.0.is_empty() {
-                        item.0 = trimmed_name(&path);
-                    }
-                    item.1 = path;
-                    form.selected = Some(index);
+                    form.set_path(index, path);
                 }
             }
-            FavoritesAction::Delete => form.remove_selected(),
-            FavoritesAction::Up => form.move_selected(-1),
-            FavoritesAction::Down => form.move_selected(1),
+            FavoritesAction::Delete => form.delete(),
+            FavoritesAction::Up => form.move_selected(false),
+            FavoritesAction::Down => form.move_selected(true),
             FavoritesAction::Save => {
                 let items = form.result();
                 self.answer_dialog(DialogResult::Favorites(Some(items)), ctx);
@@ -338,30 +307,21 @@ impl App {
         }
     }
 
-    /// C# ShowFavoritesMenu: 이름이 있는 즐겨찾기마다 "&N. 이름"(이름에 '&'가 있거나 10번째부터는 이름 그대로)과 단축키 글,
-    /// 없으면 "즐겨찾기가 없습니다"(끔), 구분선, "즐겨찾기 관리…". 메뉴 줄 가운데에 연다.
+    /// 원본 즐겨찾기 메뉴(pmFavorites, FUN_0042eedc): 이름과 경로가 다 있는 칸마다 Caption = 이름 그대로('&'는 단축 문자),
+    /// 단축키 글, 누르면 그 칸을 연다. 그 뒤에 고정 항목. 메뉴 줄 가운데에 연다.
     pub(super) fn show_favorites_menu(&mut self) {
-        let names = self.settings.strings("FavoriteNames");
         let mut items = vec![];
-        for (index, path) in self.settings.strings("Favorites").into_iter().enumerate() {
-            let stored = names.get(index).cloned().unwrap_or_default();
-            if path.is_empty() || stored.is_empty() {
+        for (index, (name, path)) in self.favorite_entries().into_iter().enumerate().take(SLOTS) {
+            if path.is_empty() || name.is_empty() {
                 continue;
             }
-            let mut name = if stored.trim().is_empty() { trimmed_name(&path) } else { stored };
-            if name.trim().is_empty() {
-                name = path.clone();
-            }
-            let legacy = if name.contains('&') || index >= 9 { name } else { format!("&{}. {name}", index + 1) };
-            let (label, access) = access_key(&legacy);
+            let (label, access) = access_key(&name);
             items.push(PopupItem::Entry { label, access, gesture: favorite_gesture(&self.settings, index), enabled: true, action: PopupAction::OpenFavorite(path) });
         }
         // 원본 pmFavorites(DFM): 즐겨찾기 줄들 다음에 고정 항목 N22("-"), miAddToFavorites, miOrgFavorites.
-        // (C#의 "즐겨찾기가 없습니다" 줄은 원본에 없다.)
         self.favorites_tail(&mut items);
         self.popup = Some(PopupMenu { items, position: None, highlight: None, opened: true });
     }
-
     /// 즐겨찾기 메뉴 끝의 고정 항목: "-", miAddToFavorites(로컬 패널일 때), miOrgFavorites.
     fn favorites_tail(&self, items: &mut Vec<PopupItem>) {
         let ko = self.language == "ko";
@@ -474,19 +434,10 @@ impl App {
         self.popup = Some(PopupMenu { items, position, highlight: None, opened: true });
     }
 
-    /// C# OpenFavoriteAsync: ResolveLocalNavigationPath(환경 변수, "~", 상대 경로는 현재 폴더 기준)가 있는 폴더면 활성 패널을 옮긴다.
+    /// 원본 FUN_0048d4b4(즐겨찾기 메뉴 FUN_0042f078에서): 그 칸의 경로가 있으면(PathFileExistsW) 활성 패널을 그 폴더로 옮긴다.
+    /// 환경 변수나 "~"는 풀지 않는다.
     pub(super) fn open_favorite(&mut self, path: &str) {
-        let expanded = native::expand_environment(path.trim().trim_matches('"'));
-        let home = PathBuf::from(std::env::var_os("USERPROFILE").unwrap_or_default());
-        let expanded = if expanded == "~" {
-            home.clone()
-        } else if let Some(rest) = expanded.strip_prefix("~\\").or_else(|| expanded.strip_prefix("~/")) {
-            home.join(rest)
-        } else {
-            PathBuf::from(expanded)
-        };
-        let base = PathBuf::from(self.favorites_current());
-        let target = std::path::absolute(base.join(&expanded)).unwrap_or(expanded);
+        let target = PathBuf::from(path);
         if target.is_dir() {
             self.navigate(self.active, target, true);
         }

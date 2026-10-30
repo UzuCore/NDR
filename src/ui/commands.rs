@@ -507,12 +507,12 @@ impl App {
             return;
         }
         let i = self.active;
-        // 원본 CopySelection(→ +0xd08): 복사·이동·삭제·완전 삭제·설명·고급 이름 바꾸기·이름 바꾸기·속성·목록 저장·압축 풀기·압축 더하기·
-        // 합치기·바로 가기 만들기를 시작할 때 지금 표시를 "선택 복원"용으로 남긴다(스킨 테마).
-        const REMEMBERS: [&str; 28] = [
+        // 원본 CopySelection(→ +0xd08): 복사·이동·삭제·완전 삭제·설명·고급 이름 바꾸기·이름 바꾸기·속성·압축 풀기·압축 더하기·
+        // 바로 가기 만들기를 시작할 때 지금 표시를 "선택 복원"용으로 남긴다(스킨 테마). 목록 저장·합치기는 확인했을 때만 남긴다.
+        const REMEMBERS: [&str; 26] = [
             "copyToOther", "moveToOther", "copyToFolder", "moveToFolder", "contextCopyTo", "contextMoveTo", "deleteRecycle", "deletePermanent", "contextDelete", "shred",
-            "description", "contextDescription", "advancedRename", "rename", "contextRename", "attributes", "contextAttributes", "saveList",
-            "extractSelected", "extractCurrent", "extractNewFolder", "extractAuto", "contextAutoExtract", "archiveAdd", "join", "shortcut", "quickLaunchShortcut", "batchRename",
+            "description", "contextDescription", "advancedRename", "rename", "contextRename", "attributes", "contextAttributes",
+            "extractSelected", "extractCurrent", "extractNewFolder", "extractAuto", "contextAutoExtract", "archiveAdd", "shortcut", "quickLaunchShortcut", "batchRename",
         ];
         if REMEMBERS.contains(&id) {
             self.remember_marks();

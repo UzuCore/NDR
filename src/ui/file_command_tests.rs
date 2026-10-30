@@ -1404,62 +1404,74 @@ fn favorites(app: &App) -> &super::favorites_dialog::FavoritesForm {
 }
 
 #[test]
-fn favorites_window_follows_managefavoritesasync() {
+fn favorites_window_follows_the_original_orgfavorites() {
     let (root, ctx, mut app) = fixture("favorites", "ko");
     app.folder_picker = pick_folder;
     let (left, right) = (root.join("left"), root.join("right"));
-    app.settings.set_strings("Favorites", vec![right.to_string_lossy().into_owned(), root.join("gone").to_string_lossy().into_owned()]);
-    app.settings.set_strings("FavoriteNames", vec!["오른쪽".into(), String::new()]);
+    let gone = root.join("gone").to_string_lossy().into_owned();
+    app.settings.set_strings("Favorites", vec![right.to_string_lossy().into_owned(), gone.clone(), gone.clone()]);
+    app.settings.set_strings("FavoriteNames", vec!["오른쪽".into(), String::new(), "없음".into()]);
     app.dispatch("favorites", &ctx);
     assert_eq!(app.original_dialogs[0].title, "즐겨찾기 구성", "[formOrgFavorites] Form.Caption");
     let form = favorites(&app);
-    assert_eq!(form.items.len(), 20, "20 slots");
-    assert_eq!(form.items[0], ("오른쪽".to_owned(), right.to_string_lossy().into_owned()));
-    assert_eq!(form.items[1], (String::new(), String::new()), "an entry without a name is an empty slot");
-    assert_eq!((form.gestures[0].as_str(), form.gestures[10].as_str()), ("Shift+F1", "Shift+Ctrl+F1"), "the original favorites menu shortcuts (FUN_0042eedc)");
+    assert_eq!(form.rows.len(), 20, "FUN_0044bed8 makes 20 rows");
+    assert_eq!(form.rows[0], ["오른쪽".to_owned(), right.to_string_lossy().into_owned()]);
+    assert!(form.rows[1].is_empty(), "a slot without a name has no SubItems");
+    assert_eq!(form.rows[2], ["없음".to_owned(), gone.clone()]);
     frame(&mut app, &ctx, vec![]);
     let act = |app: &mut App, action, ctx: &egui::Context| app.favorites_action(action, ctx);
-    // 현재 폴더 추가: 첫 빈 칸, 이름은 폴더 이름. 같은 경로는 한 번.
-    act(&mut app, super::favorites_dialog::FavoritesAction::AddCurrent, &ctx);
-    act(&mut app, super::favorites_dialog::FavoritesAction::AddCurrent, &ctx);
-    let form = favorites(&app);
-    assert_eq!((form.items[1].0.as_str(), form.selected), ("left", Some(1)));
-    assert_eq!(form.items.iter().filter(|(_, p)| !p.is_empty()).count(), 2);
-    // 경로 추가(입력 상자, 없는 폴더는 무시).
-    act(&mut app, super::favorites_dialog::FavoritesAction::AddPath, &ctx);
-    assert_eq!(top_prompt(&app).0, "즐겨찾기 추가");
-    app.answer_dialog(DialogResult::Text(Some(root.join("nope").to_string_lossy().into_owned())), &ctx);
-    assert_eq!(favorites(&app).items.iter().filter(|(_, p)| !p.is_empty()).count(), 2);
+    use super::favorites_dialog::FavoritesAction as A;
+    // 고른 줄이 없으면 이름변경·경로변경은 아무것도 하지 않는다.
+    act(&mut app, A::Rename, &ctx);
+    act(&mut app, A::ModifyPath, &ctx);
+    assert_eq!(app.original_dialogs.len(), 1);
+    // 빈 줄 경로변경: 이름(PathFindFileNameW) + 경로.
+    app.edit_dialog_kind(|kind| if let DialogKind::Favorites(form) = kind { form.selected = Some(1) });
     let folder = left.join("folder1");
-    act(&mut app, super::favorites_dialog::FavoritesAction::AddPath, &ctx);
-    app.answer_dialog(DialogResult::Text(Some(folder.to_string_lossy().into_owned())), &ctx);
-    assert_eq!(favorites(&app).items[2], ("folder1".to_owned(), folder.to_string_lossy().into_owned()));
-    // 이름 바꾸기(빈 이름도 받는다), 경로 바꾸기(폴더 선택), 위/아래, 삭제.
-    act(&mut app, super::favorites_dialog::FavoritesAction::Rename, &ctx);
-    assert_eq!(top_prompt(&app), ("즐겨찾기 이름".to_owned(), "표시 이름".to_owned(), "folder1".to_owned()));
+    PICKED_FOLDER.with(|p| *p.borrow_mut() = Some(folder.clone()));
+    act(&mut app, A::ModifyPath, &ctx);
+    assert_eq!(favorites(&app).rows[1], ["folder1".to_owned(), folder.to_string_lossy().into_owned()]);
+    // 이름변경: TfGetText(제목 RES.RENAME, 처음 값 = 이름).
+    act(&mut app, A::Rename, &ctx);
+    assert_eq!(top_prompt(&app), ("이름 바꾸기".to_owned(), String::new(), "folder1".to_owned()));
     app.answer_dialog(DialogResult::Text(Some("작업".into())), &ctx);
-    PICKED_FOLDER.with(|p| *p.borrow_mut() = Some(right.join("FOLDER1")));
-    act(&mut app, super::favorites_dialog::FavoritesAction::ModifyPath, &ctx);
-    assert_eq!(favorites(&app).items[2], ("작업".to_owned(), right.join("FOLDER1").to_string_lossy().into_owned()), "the name stays");
-    act(&mut app, super::favorites_dialog::FavoritesAction::Up, &ctx);
-    assert_eq!((favorites(&app).items[1].0.as_str(), favorites(&app).selected), ("작업", Some(1)));
-    act(&mut app, super::favorites_dialog::FavoritesAction::Down, &ctx);
-    act(&mut app, super::favorites_dialog::FavoritesAction::Delete, &ctx);
-    assert_eq!(favorites(&app).items[2], (String::new(), String::new()), "the first 20 slots are emptied, not removed");
-    assert_eq!(favorites(&app).items.len(), 20);
-    frame(&mut app, &ctx, vec![]);
-    act(&mut app, super::favorites_dialog::FavoritesAction::Save, &ctx);
+    assert_eq!(favorites(&app).rows[1][0], "작업");
+    // 경로변경은 이름을 그대로 둔다.
+    PICKED_FOLDER.with(|p| *p.borrow_mut() = Some(right.clone()));
+    act(&mut app, A::ModifyPath, &ctx);
+    assert_eq!(favorites(&app).rows[1], ["작업".to_owned(), right.to_string_lossy().into_owned()]);
+    // 위/아래는 SubItems를 바꾸고 고른 줄도 옮긴다. 맨 위·맨 아래에서는 그대로.
+    act(&mut app, A::Up, &ctx);
+    assert_eq!((favorites(&app).rows[0][0].as_str(), favorites(&app).rows[1][0].as_str(), favorites(&app).selected), ("작업", "오른쪽", Some(0)));
+    act(&mut app, A::Up, &ctx);
+    assert_eq!(favorites(&app).selected, Some(0));
+    app.edit_dialog_kind(|kind| if let DialogKind::Favorites(form) = kind { form.selected = Some(19) });
+    act(&mut app, A::Down, &ctx);
+    assert_eq!(favorites(&app).selected, Some(19));
+    // 이름만 있는 줄은 저장되지 않는다(SubItems가 둘이어야 한다).
+    app.edit_dialog_kind(|kind| if let DialogKind::Favorites(form) = kind { form.selected = Some(5) });
+    act(&mut app, A::Rename, &ctx);
+    app.answer_dialog(DialogResult::Text(Some("이름만".into())), &ctx);
+    assert_eq!(favorites(&app).rows[5], ["이름만".to_owned()]);
+    // 삭제는 SubItems만 지운다(줄은 남는다).
+    app.edit_dialog_kind(|kind| if let DialogKind::Favorites(form) = kind { form.selected = Some(2) });
+    act(&mut app, A::Delete, &ctx);
+    assert!(favorites(&app).rows[2].is_empty() && favorites(&app).rows.len() == 20);
+    // Enter는 저장하지 않는다(Default 단추 없음).
+    frame(&mut app, &ctx, vec![key(egui::Key::Enter)]);
+    assert_eq!(app.original_dialogs.len(), 1);
+    act(&mut app, A::Save, &ctx);
     assert!(app.original_dialogs.is_empty());
     let saved = app.settings.strings("Favorites");
-    assert_eq!(saved.len(), 20);
-    assert_eq!(&saved[..2], [right.to_string_lossy().into_owned(), left.to_string_lossy().into_owned()]);
-    assert_eq!(&app.settings.strings("FavoriteNames")[..3], ["오른쪽".to_owned(), "left".to_owned(), String::new()]);
-    // 취소는 바꾸지 않는다.
+    assert_eq!(&saved[..3], [right.to_string_lossy().into_owned(), right.to_string_lossy().into_owned(), String::new()]);
+    assert_eq!(&app.settings.strings("FavoriteNames")[..6], ["작업".to_owned(), "오른쪽".to_owned(), String::new(), String::new(), String::new(), String::new()]);
+    // 취소(Esc, btnCancel Cancel)는 바꾸지 않는다.
     app.dispatch("favorites", &ctx);
-    act(&mut app, super::favorites_dialog::FavoritesAction::AddCurrent, &ctx);
+    app.edit_dialog_kind(|kind| if let DialogKind::Favorites(form) = kind { form.selected = Some(0) });
+    act(&mut app, A::Delete, &ctx);
     frame(&mut app, &ctx, vec![key(egui::Key::Escape)]);
     assert!(app.original_dialogs.is_empty());
-    assert_eq!(app.settings.strings("Favorites")[2], "");
+    assert_eq!(app.settings.strings("FavoriteNames")[0], "작업");
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -1467,8 +1479,8 @@ fn favorites_window_follows_managefavoritesasync() {
 fn favorites_menu_and_path_history_follow_the_context_menus() {
     let (root, ctx, mut app) = fixture("favmenu", "en");
     let (left, right) = (root.join("left"), root.join("right"));
-    app.settings.set_strings("Favorites", vec![right.to_string_lossy().into_owned(), String::new(), "folder1".into()]);
-    app.settings.set_strings("FavoriteNames", vec!["R&ight".into(), String::new(), "Sub".into()]);
+    app.settings.set_strings("Favorites", vec![right.to_string_lossy().into_owned(), String::new(), left.join("folder1").to_string_lossy().into_owned()]);
+    app.settings.set_strings("FavoriteNames", vec!["R&ight".into(), String::new(), "&Sub".into()]);
     // F11 = 즐겨찾기 드롭다운(관리 창이 아니다).
     frame_keys(&mut app, &ctx, vec![key(egui::Key::F11)]);
     let popup = app.popup.as_ref().expect("F11 opens the favorites menu");
@@ -1479,7 +1491,7 @@ fn favorites_menu_and_path_history_follow_the_context_menus() {
     // 원본 pmFavorites: 즐겨찾기 줄, 구분선, miAddToFavorites, miOrgFavorites.
     let add = app.language_pack.text("Menu.miAddToFavorites", "?");
     let organize = app.language_pack.text("Menu.miOrgFavorites", "?");
-    assert_eq!(labels, [("Right".to_owned(), Some('i'), "Shift+F1".to_owned()), ("3. Sub".to_owned(), Some('3'), "Shift+F3".to_owned()), (add, None, String::new()), (organize, None, String::new())], "a name with & keeps its own access key");
+    assert_eq!(labels, [("Right".to_owned(), Some('i'), "Shift+F1".to_owned()), ("Sub".to_owned(), Some('S'), "Shift+F3".to_owned()), (add, None, String::new()), (organize, None, String::new())], "FUN_0042eedc: Caption = the name as stored");
     // 원본 miAddToFavoritesClick: TfGetText(TITLE_ADDFAV, MSG_ADDFAV(%s = 폴더), 처음 값 = 폴더 이름) → 확인이면 끝(빈 칸)에 더한다.
     let saved_popup = app.popup.take();
     app.dispatch("addToFavorites", &ctx);
@@ -1491,8 +1503,8 @@ fn favorites_menu_and_path_history_follow_the_context_menus() {
     assert_eq!(app.settings.strings("Favorites")[1], left.to_string_lossy(), "the first empty slot");
     assert_eq!(app.settings.strings("FavoriteNames")[1], "Mine");
     app.popup = saved_popup;
-    // 단축 문자 3 → 상대 경로 "folder1"은 현재 폴더 기준.
-    popup_frame(&mut app, &ctx, vec![egui::Event::Text("3".into())]);
+    // 단축 문자 s → 그 칸의 폴더(FUN_0048d4b4).
+    popup_frame(&mut app, &ctx, vec![egui::Event::Text("s".into())]);
     assert!(app.popup.is_none());
     wait_listing(&mut app, &ctx);
     assert_eq!(app.panes[0].path, left.join("folder1"));

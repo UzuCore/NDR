@@ -760,7 +760,7 @@ impl App {
                     }
                 }
                 DialogKind::Favorites(form) => {
-                    favorites_action = super::favorites_dialog::favorites_ui(ui, form, &self.language_pack, ko, enter);
+                    favorites_action = super::favorites_dialog::favorites_ui(ui, form, &self.language_pack);
                 }
                 DialogKind::CleanupOptions(form) => {
                     cleanup_action = super::cleanup_dialog::options_ui(ui, form, &self.language_pack, ko, enter);

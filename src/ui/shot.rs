@@ -173,7 +173,7 @@ impl App {
             }
             "favorites" => {
                 let items = vec![("Data".to_owned(), "D:\\data".to_owned()), ("Missing".to_owned(), "Z:\\nowhere".to_owned())];
-                let form = super::favorites_dialog::FavoritesForm::new(items, "D:\\".into(), &self.settings);
+                let form = super::favorites_dialog::FavoritesForm::new(items);
                 self.push_original_dialog(text(self, "formOrgFavorites.Form.Caption"), DialogKind::Favorites(Box::new(form)), |_, _, _| {});
             }
             "funckey" => {
