@@ -570,6 +570,13 @@ fn original_press(pane: &mut Pane, row: usize, rect: egui::Rect, ui: &egui::Ui, 
     if ui.ctx().layer_id_at(pos).is_some_and(|layer| layer != ui.layer_id()) {
         return false;
     }
+    // 원본 MouseDown(0x7d63c8): 표시를 바꾸는 갈래만 왼쪽 단추(ssLeft 8)이고 SetItemFocused·찾는 글 지우기는 어느 단추든 한다.
+    // 고친 것: 전에는 가운데 단추로 누르면 아무 일도 없었다(오른쪽 단추는 따로 처리).
+    if ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Middle)) && rect.contains(pos) {
+        pane.item_pressed = true;
+        pane.cursor = row;
+        return true;
+    }
     if pressed && rect.contains(pos) {
         // 원본 MouseDown(0x7d63c8)은 두 번 누르기의 두 번째 누름(ssDouble, WM_LBUTTONDBLCLK)이면 표시·커서를 건드리지 않는다.
         // Windows 기준(windows_double_press) 안의 두 번째 누름이 그것이다. 세 번째 누름은 다시 보통 누름.

@@ -56,15 +56,35 @@ pub(super) fn permission_text(is_dir: bool, mode: u32) -> String {
     text
 }
 
-fn character_case(text: &str, mode: i64) -> String {
+/// 원본 StrCharCase(0x7db714): 1 = CharLowerW, 2 = CharUpperW, 3 = FUN_007d223c(CharLowerW 뒤 맨 앞이나 빈칸 다음의 a~z만 대문자).
+/// 고친 것: 전에는 3에서 글 전체의 첫 글자만 대문자로 바꾸고 나머지는 그대로 두었다.
+pub(super) fn character_case(text: &str, mode: i64) -> String {
     match mode {
         1 => text.to_lowercase(),
         2 => text.to_uppercase(),
         3 => {
-            let mut chars = text.chars();
-            chars.next().map(|first| first.to_uppercase().chain(chars).collect()).unwrap_or_default()
+            let mut previous = ' ';
+            text.to_lowercase()
+                .chars()
+                .map(|c| {
+                    let out = if previous == ' ' && c.is_ascii_lowercase() { c.to_ascii_uppercase() } else { c };
+                    previous = c;
+                    out
+                })
+                .collect()
         }
         _ => text.into(),
+    }
+}
+
+#[cfg(test)]
+mod character_case_tests {
+    #[test]
+    fn title_case_follows_fun_007d223c() {
+        assert_eq!(super::character_case("my REPORT file", 3), "My Report File");
+        assert_eq!(super::character_case("a-b c", 3), "A-b C", "only after a space");
+        assert_eq!(super::character_case("éclair été", 3), "éclair été", "a-z only");
+        assert_eq!((super::character_case("AbC", 1), super::character_case("AbC", 2)), ("abc".to_owned(), "ABC".to_owned()));
     }
 }
 
@@ -244,8 +264,13 @@ pub(super) fn drive_row(ui: &mut egui::Ui, size: egui::Vec2, icon: Option<&egui:
             egui::Image::new((texture.id(), egui::vec2(16.0, 16.0))).paint_at(ui, egui::Rect::from_min_size(egui::pos2(rect.left() + 12.0, rect.top() + ((rect.height() - 16.0) / 2.0).floor()), egui::vec2(16.0, 16.0)));
         }
         let x = rect.left() + App::list_header_width(icon.is_some()) + 5.0;
-        let shown = text.to_owned();
-        let drawn = painter.text(egui::pos2(x, rect.center().y), egui::Align2::LEFT_CENTER, shown, egui::TextStyle::Button.resolve(ui.style()), color);
+        // 원본 DrawListItem 종류 4: 드라이브 이름은 DT_END_ELLIPSIS(local_64 | 0x8000)라 칸보다 길면 "…"로 줄인다.
+        // 고친 것: 전에는 칸 끝에서 글자 중간이 잘렸다.
+        let mut job = egui::text::LayoutJob::simple_singleline(text.to_owned(), egui::TextStyle::Button.resolve(ui.style()), color);
+        job.wrap = egui::text::TextWrapping { max_width: (rect.right() - 5.0 - x).max(0.0), max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
+        let galley = ui.fonts_mut(|f| f.layout_job(job));
+        let drawn = egui::Rect::from_min_size(egui::pos2(x, rect.center().y - galley.size().y / 2.0), galley.size());
+        painter.galley(drawn.min, galley, color);
         // 원본 ListFont 모양의 밑줄(4)·취소선(8).
         if style & 4 != 0 {
             painter.hline(drawn.x_range(), drawn.bottom() - 1.5, egui::Stroke::new(1.0, color));
@@ -331,7 +356,8 @@ mod tests {
         assert_eq!(character_case("Report Final", 0), "Report Final");
         assert_eq!(character_case("Report Final", 1), "report final");
         assert_eq!(character_case("Report Final", 2), "REPORT FINAL");
-        assert_eq!(character_case("report final", 3), "Report final");
+        // 원본 FUN_007d223c: 낱말마다 첫 a~z를 대문자(C# FileNameDisplayConverter는 첫 글자만).
+        assert_eq!(character_case("report final", 3), "Report Final");
         assert_eq!(character_case("", 3), "");
     }
 }

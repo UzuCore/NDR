@@ -139,6 +139,23 @@ impl App {
                 (false, Some(_)) => egui::CursorIcon::Default,
                 (false, None) => egui::CursorIcon::NoDrop,
             });
+            // 원본 OnDragOver(FUN_004888fc): 포인터 아래 항목이 폴더(종류 1)이고 끄는 항목이 아니면 SetDropTargetIndex(그 항목), 그 밖은 −1.
+            // DrawListItem(0x7d90bc)·DrawThumbnailItem(0x7da2ae)은 그 항목 칸에 글 색 펜으로 Rectangle(왼쪽, 위, 오른쪽, 아래 − 1)을 그린다.
+            // 고친 것: 전에는 놓을 폴더에 아무 표시가 없었다.
+            if let Some(position) = pointer {
+                let target = self.folder_rows.iter().find(|(pane, rect, path)| self.pane_rects[*pane].contains(position) && rect.contains(position) && !drag.paths.contains(path)).cloned();
+                if let Some((pane, rect, path)) = target {
+                    let row = self.panes[pane].entries.iter().position(|e| e.path == path);
+                    let cursor_bar = row == Some(self.panes[pane].cursor) && self.active == pane;
+                    let color = if cursor_bar {
+                        self.basic_list_color("NXBACK")
+                    } else {
+                        row.and_then(|r| self.panes[pane].view.colors.get(r).copied().flatten()).map_or(self.basic_list_color("NXFOLDER"), |(r, g, b)| Color32::from_rgb(r, g, b))
+                    };
+                    let frame = egui::Rect::from_min_max(rect.min, egui::pos2(rect.max.x, rect.max.y - 1.0));
+                    ctx.layer_painter(egui::LayerId::background()).with_clip_rect(self.pane_rects[pane]).rect_stroke(frame, 0.0, egui::Stroke::new(1.0, color), egui::StrokeKind::Inside);
+                }
+            }
             if let Some(position) = pointer {
                 // 원본 FUN_0048514c(끌기 그림): 검은 테두리 안 0x3C3C3C 바탕, 0xF0F0F0 글. 굵은 머리글 DRAGFILES_INFO(개수),
                 // 0xC0C0C0 줄, 그 아래 끄는 항목 이름(PathFindFileNameW) 최대 15개와 그 앞의 셸 작은 아이콘. 줄 높이 = 글 높이 + 2(최소 18), 너비 = 가장 긴 글 + 22.

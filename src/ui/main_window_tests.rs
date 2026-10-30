@@ -1433,3 +1433,39 @@ fn details_scroll_follows_refresh_sort_and_navigation_like_the_original() {
     assert_eq!((app.panes[0].cursor, app.panes[0].page.top), (0, 0), "a new folder starts at the top");
     let _ = fs::remove_dir_all(root);
 }
+
+
+/// 원본 MouseDown(0x7d63c8): 가운데 단추로 눌러도 SetItemFocused(커서만 옮기고 표시는 그대로).
+#[test]
+fn middle_click_moves_the_cursor_like_the_original() {
+    let (root, ctx, mut app) = fixture("middle-click");
+    let left = app.panes[0].path.clone();
+    for i in 0..20 {
+        fs::create_dir_all(left.join(format!("d{i:03}"))).unwrap();
+    }
+    app.settings.set_text("LeftViewStyle", "Details");
+    app.refresh(0);
+    wait(&mut app, &ctx);
+    let run = |app: &mut App, events: Vec<egui::Event>| {
+        let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 850.0))), events, ..Default::default() };
+        let _ = ctx.run(raw, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.columns(2, |columns| {
+                    app.pane_ui(&mut columns[0], 0, ctx);
+                    app.pane_ui(&mut columns[1], 1, ctx);
+                });
+            });
+        });
+    };
+    run(&mut app, vec![]);
+    run(&mut app, vec![]);
+    let target = left.join("d005");
+    let rect = app.folder_rows.iter().find(|(pane, _, path)| *pane == 0 && *path == target).map(|(_, rect, _)| *rect).expect("the folder row is drawn");
+    let at = rect.center();
+    let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Middle, pressed, modifiers: Default::default() };
+    run(&mut app, vec![egui::Event::PointerMoved(at), button(true)]);
+    run(&mut app, vec![button(false)]);
+    let pane = &app.panes[0];
+    assert_eq!((pane.entries[pane.cursor].name.as_str(), pane.selected.len()), ("d005", 0));
+    let _ = fs::remove_dir_all(root);
+}
