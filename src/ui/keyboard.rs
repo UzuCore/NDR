@@ -560,22 +560,6 @@ impl App {
         }
     }
 
-    /// C# LoadDriveButtonsAsync: 준비된 드라이브만, 글은 "C:", 도움말은 "C:\ 이름 · 종류". 5초마다 다시 읽는다.
-    pub(super) fn drive_buttons(&mut self, ui: &mut egui::Ui) {
-        if !self.settings.flag("ShowDriveButtons", false) {
-            return;
-        }
-        let drives = self.drive_button_list();
-        ui.horizontal_wrapped(|ui| {
-            for (root, tip) in drives {
-                let text = root.to_string_lossy().trim_end_matches(['\\', '/']).to_owned();
-                if ui.small_button(text).on_hover_text(tip).clicked() {
-                    self.navigate_drive(self.active, root);
-                }
-            }
-        });
-    }
-
     /// 드라이브 단추 목록(루트, 도움말). 5초가 지났으면 따로 다시 읽기 시작하고, 그동안은 지난 목록.
     pub(super) fn drive_button_list(&mut self) -> Vec<(PathBuf, String)> {
         let stale = self.drive_cache.as_ref().is_none_or(|(at, _)| at.elapsed() > Duration::from_secs(5));

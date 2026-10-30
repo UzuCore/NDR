@@ -543,8 +543,6 @@ pub struct App {
     instance_guard: Option<ndr::lifecycle::InstanceGuard>,
     /// 도구 모음 그림(테마|파일 이름 → 그림, 못 읽으면 None).
     toolbar_icons: HashMap<String, Option<egui::TextureHandle>>,
-    /// 지난 장면의 도구 모음 왼쪽/오른쪽 묶음 너비(창보다 넓으면 오른쪽 묶음을 이어 붙이고 가로로 굴린다).
-    toolbar_widths: (f32, f32),
     profile_load_error: bool,
     preferences_dirty: bool,
     close_when_idle: bool,
@@ -841,7 +839,6 @@ impl App {
             navigation: None,
             instance_guard: None,
             toolbar_icons: HashMap::new(),
-            toolbar_widths: (0.0, 0.0),
             profile_load_error: error.is_some(),
             preferences_dirty: true,
             close_when_idle: false,
@@ -1599,60 +1596,31 @@ impl eframe::App for App {
         for pane in &mut self.panes {
             pane.drop_drive_marks();
         }
-        // 원본 메뉴 줄 바탕(tbMainMenuAdvancedCustomDraw): 스킨 테마면 [Menu] mmainback.
+        // 원본 메뉴 줄 바탕(tbMainMenuAdvancedCustomDraw): [Menu] mmainback.
         let skin_now = self.current_skin();
         skin_pane::set_menu_style(ctx, skin_now.as_ref().map(skin_pane::skin_menu_style));
-        let menu_frame = match skin_now {
-            Some(skin) => egui::Frame::side_top_panel(&ctx.style()).fill(skin_pane::skin_menu_bar_style(&skin).0),
+        let menu_frame = match &skin_now {
+            Some(skin) => egui::Frame::side_top_panel(&ctx.style()).fill(skin_pane::skin_menu_bar_style(skin).0),
             None => egui::Frame::side_top_panel(&ctx.style()),
         };
         egui::TopBottomPanel::top("menu").frame(menu_frame).show(ctx, |ui| {
             self.menu(ui);
             self.paint_original_search_text(ui);
         });
-        // C# MainWindow.xaml: 메뉴, 도구 모음(ShowToolBar), 즐겨찾기 줄, 두 패널, 아래 줄(상태 글 + 기능키).
-        // 원본 NexusFile에는 없는 제목 배너(N 로고·NDR·설명·LOCAL·ARCHIVE·FTP·SFTP 줄)는 두지 않는다.
-        // 배너의 비교/체크섬/원격 단추는 메뉴(compare, miChecksum, miFTPQuickConnect)로 그대로 닿는다.
-        if self.settings.flag("ShowToolBar", true) {
-            match self.current_skin() {
-                // 원본 pToolbar(alTop): 스킨 테마면 높이 tbheight(검정 51), 배경 그림과 그림 단추(toolbar.rs skin_toolbar).
-                Some(skin) => {
-                    let height = skin.positive_integer("Toolbar", "tbheight", 51) as f32;
-                    egui::TopBottomPanel::top("toolbar").exact_height(height).frame(egui::Frame::NONE).show_separator_line(false).show(ctx, |ui| self.skin_toolbar(ui, ctx, &skin));
-                }
-                None => {
-                    egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
-                        ui.horizontal(|ui| self.user_toolbar(ui, ctx));
-                    });
-                }
+        // 원본 TfMain: 메뉴 줄(tbMainMenu), 도구 모음(pToolbar), 두 패널, 기능키 줄(bbFunctions). 상태 줄은 없다.
+        if let Some(skin) = skin_now {
+            // 원본 pToolbar(alTop): 높이 tbheight(검정 51), 배경 그림과 그림 단추(toolbar.rs skin_toolbar).
+            if self.settings.flag("ShowToolBar", true) {
+                let height = skin.positive_integer("Toolbar", "tbheight", 51) as f32;
+                egui::TopBottomPanel::top("toolbar").exact_height(height).frame(egui::Frame::NONE).show_separator_line(false).show(ctx, |ui| self.skin_toolbar(ui, ctx, &skin));
             }
-        }
-        // C# 판 즐겨찾기 줄(즐겨찾기 … 현재 위치 추가 +)은 원본에 없다. 스킨 테마는 원본처럼 그리지 않는다(즐겨찾기는 도구 모음 단추).
-        if self.current_skin().is_none() {
-            egui::TopBottomPanel::top("favorites").show_separator_line(false).show(ctx, |ui| self.favorites_section(ui));
-        }
-        let function_bar = self.settings.flag("ShowFunctionBar", true);
-        match self.current_skin() {
-            // 원본 bbFunctions(DFM Height 20): 스킨 테마면 F2~F8 칸(user_commands.rs skin_function_key_bar). 끄면 아무 줄도 없다.
+            // 원본 bbFunctions(DFM Height 20): F2~F8 칸(user_commands.rs skin_function_key_bar). 끄면 아무 줄도 없다.
             // NDR 상태 글은 원본에 없으므로(원본 창에는 상태 줄이 없음) 목록 자리를 줄이지 않고 기능키 줄 위에 잠깐 겹쳐 보인다.
-            Some(skin) => {
-                if function_bar {
-                    egui::TopBottomPanel::bottom("functionbar").exact_height(20.0).frame(egui::Frame::NONE).show_separator_line(false).show(ctx, |ui| self.skin_function_key_bar(ui, ctx, &skin));
-                }
-                let _ = self.skin_status_overlay(ctx, if function_bar { 20.0 } else { 0.0 });
+            let function_bar = self.settings.flag("ShowFunctionBar", true);
+            if function_bar {
+                egui::TopBottomPanel::bottom("functionbar").exact_height(20.0).frame(egui::Frame::NONE).show_separator_line(false).show(ctx, |ui| self.skin_function_key_bar(ui, ctx, &skin));
             }
-            None => {
-                egui::TopBottomPanel::bottom("functionbar").show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.set_min_height(user_commands::FUNCTION_BAR_HEIGHT);
-                        ui.label(RichText::new(&self.status).weak());
-                        ui.add_space(12.0);
-                        if function_bar {
-                            self.function_key_bar(ui, ctx);
-                        }
-                    });
-                });
-            }
+            let _ = self.skin_status_overlay(ctx, if function_bar { 20.0 } else { 0.0 });
         }
         if self.show_results {
             // 원본 pBottom Height 100(btnFTPShowDetail로 22 ↔ 100), splBottom으로 높이를 바꾼다.

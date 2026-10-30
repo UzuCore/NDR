@@ -31,7 +31,6 @@ fn draw(app: &mut App, ctx: &egui::Context) {
     let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 850.0))), ..Default::default() };
     let _ = ctx.run(raw, |ctx| {
         egui::TopBottomPanel::top("menu").show(ctx, |ui| app.menu(ui));
-        egui::TopBottomPanel::top("favorites").show(ctx, |ui| app.favorites_section(ui));
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.columns(2, |columns| {
                 app.pane_ui(&mut columns[0], 0, ctx);
@@ -250,11 +249,6 @@ fn main_window_frame_info_bars_tabs_and_address_follow_csharp() {
     app.dispatch("toggleFileInfoBar", &ctx);
     assert!(!app.settings.flag("ShowFileInfoBar", true));
     draw(&mut app, &ctx);
-    // 즐겨찾기 줄: 현재 위치 추가 + → 폴더 이름 단추.
-    app.active = 0;
-    app.add_current_favorite();
-    app.add_current_favorite();
-    assert_eq!(app.favorite_buttons(), vec![("left".to_owned(), left.to_string_lossy().into_owned())]);
     // 탭: 새 탭은 같은 위치, 다른 탭 모두 닫기.
     app.dispatch("newTab", &ctx);
     assert_eq!(app.panes[0].tabs.len(), 2);

@@ -1,24 +1,5 @@
 use super::*;
 
-/// 기능키 줄 높이(단추 최소 높이 38 + 여백).
-pub(super) const FUNCTION_BAR_HEIGHT: f32 = 40.0;
-
-/// C# DefaultFunctionKeyName(TranslateText의 한국어 원문, 영어).
-fn default_function_key_name(key: &str) -> (&'static str, &'static str) {
-    match key {
-        "F2" => ("이름 변경", "Rename"),
-        "F3" => ("다른 패널로 복사", "Copy to other pane"),
-        "F4" => ("다른 패널로 이동", "Move to other pane"),
-        "F5" => ("새로 고침", "Refresh"),
-        "F6" => ("일괄 이름 변경", "Batch rename"),
-        "F7" => ("새 폴더", "New folder"),
-        "F8" => ("삭제", "Delete"),
-        "F10" => ("폴더 선택 창", "Folder picker"),
-        "F11" => ("즐겨찾기", "Favorites"),
-        "F12" => ("단축키 안내", "Shortcut help"),
-        _ => ("", ""),
-    }
-}
 
 /// 원본 FUN_00479970(기능키 칸 이름, [FuncKey] 값 하나): 빈 값은 빈 이름. "[이름]명령"이면 [ ] 안 글(비었으면 [ 뒤 전부),
 /// "#내부 명령"이면 내부 명령 목록에 있을 때 RES FUNC_<이름 대문자>(FUN_004586ac, 없으면 # 뒤 글), 그 밖(프로그램)은
@@ -79,65 +60,6 @@ impl App {
         };
         // "<-=..."처럼 글쇠 자리에 '='가 올 수 없으므로 첫 '='에서 나눈다.
         Some(text.lines().filter_map(|line| line.split_once('=')).map(|(key, name)| (key.to_owned(), name.to_owned())).collect())
-    }
-
-    /// C# BuildFunctionKeyBar: F1~F12 단추. 이름은 지정한 이름, 없으면 기본 이름. 풍선 도움말은 키, 이름, 명령과 인수.
-    /// 줄 높이는 단추 높이로 고정한다(가운데 맞춤 배치가 남은 높이를 다 차지하면 아래 패널이 프레임마다 커져 목록을 덮는다).
-    pub(super) fn function_key_bar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        let size = egui::vec2(ui.available_width(), FUNCTION_BAR_HEIGHT);
-        // 원본 FUN_0048423c/FUN_00430940: Alt(VK_MENU)를 누르면 단추 줄 글을 ALTFUNCTIONS로, Ctrl이면 CTRLFUNCTIONS로 바꾼다.
-        if let Some(items) = self.modifier_functions(ctx.input(|i| i.modifiers)) {
-            let modifiers = ctx.input(|i| i.modifiers);
-            ui.allocate_ui_with_layout(size, egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                ui.set_height(FUNCTION_BAR_HEIGHT);
-                let mut clicked = None;
-                for (key, name) in &items {
-                    let mut job = egui::text::LayoutJob::default();
-                    job.halign = egui::Align::Center;
-                    job.append(key, 0.0, egui::TextFormat { font_id: egui::FontId::proportional(9.0), color: ui.visuals().weak_text_color(), ..Default::default() });
-                    job.append(&format!("\n{name}"), 0.0, egui::TextFormat { font_id: egui::FontId::proportional(10.0), color: ui.visuals().text_color(), ..Default::default() });
-                    if ui.add(egui::Button::new(job).frame(false).min_size(egui::vec2(62.0, 38.0))).clicked() {
-                        clicked = Some(key.clone());
-                    }
-                }
-                if let Some(key) = clicked.and_then(|k| modifier_function_key(&k)) {
-                    self.shortcut_key(key, modifiers, ctx);
-                }
-            });
-            return;
-        }
-        ui.allocate_ui_with_layout(size, egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.set_height(FUNCTION_BAR_HEIGHT);
-            let mut clicked = None;
-            for number in (1..=12).rev() {
-                let key = format!("F{number}");
-                let binding = ndr::commands::resolve_function_key(&self.settings, &key);
-                let (ko, en) = default_function_key_name(&key);
-                let name = binding.as_ref().map(|b| b.name.clone()).filter(|n| !n.trim().is_empty()).unwrap_or_else(|| self.tr(ko, en).into_owned());
-                let tooltip = match &binding {
-                    None => format!("{key}: {name}"),
-                    Some(b) => format!("{key}: {}\n{} {}", b.name, b.command, b.parameters).trim().to_owned(),
-                };
-                let mut job = egui::text::LayoutJob::default();
-                job.halign = egui::Align::Center;
-                let muted = ui.visuals().weak_text_color();
-                job.append(&key, 0.0, egui::TextFormat { font_id: egui::FontId::proportional(9.0), color: muted, ..Default::default() });
-                if !name.is_empty() {
-                    let text = ui.visuals().text_color();
-                    job.append(&format!("\n{name}"), 0.0, egui::TextFormat { font_id: egui::FontId::proportional(10.0), color: text, ..Default::default() });
-                }
-                job.wrap.max_width = 96.0;
-                job.wrap.max_rows = 2;
-                job.wrap.break_anywhere = true;
-                let button = egui::Button::new(job).frame(false).min_size(egui::vec2(62.0, 38.0));
-                if ui.add(button).on_hover_text(tooltip).clicked() {
-                    clicked = Some(key);
-                }
-            }
-            if let Some(key) = clicked {
-                self.run_function_key_button(&key, ctx);
-            }
-        });
     }
 
     /// 원본 bbFunctions(TNXButtonBar, 스킨 테마): FUN_00430714의 F2~F8 일곱 칸("F%d %s"), Alt·Ctrl을 누르면 ALTFUNCTIONS·CTRLFUNCTIONS 칸.

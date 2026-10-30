@@ -887,23 +887,8 @@ fn filters_apply_to_the_listing() {
 }
 
 #[test]
-fn function_key_bar_buttons_follow_buildfunctionkeybar() {
-    let (root, ctx, mut app) = fixture("fkeys", "en");
-    app.settings.values.insert(
-        "FunctionKeyBindings".into(),
-        serde_json::json!({"F9":{"Name":"Owned tool","Command":"#Refresh","IsInternalCommand":true}}),
-    );
-    // The bar sits in the bottom panel like App::update; its height must not creep up frame after frame.
-    let mut heights = vec![];
-    for _ in 0..6 {
-        let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 850.0))), ..Default::default() };
-        let _ = ctx.run(raw, |ctx| {
-            let panel = egui::TopBottomPanel::bottom("functionbar").show(ctx, |ui| app.function_key_bar(ui, &ctx.clone()));
-            heights.push(panel.response.rect.height());
-            egui::CentralPanel::default().show(ctx, |_| {});
-        });
-    }
-    assert!(heights.iter().all(|h| *h < 60.0), "the function-key bar keeps one row: {heights:?}");
+fn function_key_bar_texts_and_error_texts_follow_the_original() {
+    let (root, _ctx, app) = fixture("fkeys", "en");
     // 원본 FUN_00430940: Alt만 = ALTFUNCTIONS, Ctrl만 = CTRLFUNCTIONS("글쇠=이름" 줄), 그 밖은 F1~F12.
     let alt = app.modifier_functions(egui::Modifiers::ALT).unwrap();
     assert_eq!((alt[0].0.as_str(), alt[0].1.as_str(), alt.len()), ("C", "Copy", 8));
@@ -920,20 +905,6 @@ fn function_key_bar_buttons_follow_buildfunctionkeybar() {
     assert_eq!(app.archive_error_text("7-Zip failed (exit code: 2): ERROR: Wrong password : a"), app.language_pack.text("RES.INVALID_PASSWORD", "?"));
     assert_eq!(app.archive_error_text("7-Zip failed (exit code: 2): ERROR: Missing volume : x.002"), app.language_pack.text("RES.CANNOT_FIND_NEXTVOLUME", "?"));
     assert_eq!(app.archive_error_text("Access is denied. (os error 5)"), "Access is denied. (os error 5)");
-    let raw = egui::RawInput { modifiers: egui::Modifiers::ALT, screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 850.0))), ..Default::default() };
-    let _ = ctx.run(raw, |ctx| {
-        egui::TopBottomPanel::bottom("functionbar").show(ctx, |ui| app.function_key_bar(ui, &ctx.clone()));
-    });
-    app.run_function_key_button("F1", &ctx);
-    assert_eq!(app.status, "F1: No action is configured.");
-    app.run_function_key_button("F7", &ctx);
-    assert!(matches!(&app.original_dialogs[0].kind, original_dialogs::DialogKind::Prompt { .. }), "F7 without a binding: New Folder");
-    assert_eq!(app.original_dialogs[0].title, app.language_pack.text("RES.TITLE_NEWFOLDER", "?"));
-    app.answer_dialog(original_dialogs::DialogResult::Text(None), &ctx);
-    let generation = app.panes[app.active].generation;
-    app.run_function_key_button("F9", &ctx);
-    assert!(app.panes[app.active].generation > generation, "F9 runs its #Refresh binding");
-    wait_listing(&mut app, &ctx);
     fs::remove_dir_all(root).unwrap();
 }
 
