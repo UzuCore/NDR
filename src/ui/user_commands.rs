@@ -150,11 +150,24 @@ impl App {
     }
 
     pub(super) fn invoke_function_key(&mut self, key: &str, ctx: &egui::Context) -> bool {
-        let Some(binding) = ndr::commands::resolve_function_key(&self.settings, key) else {
-            return false;
+        let binding = match ndr::commands::resolve_function_key(&self.settings, key) {
+            Some(binding) => binding,
+            // 원본은 [FuncKey]가 없으면 default\nexusfile.ini 값(F2 #Rename … F8 #RecycleBin)을 쓴다. 고친 것: 이 판은 기본 값을
+            // 기능키 줄 이름에만 쓰고 실행하지 않아, 새 프로필에서 F3(복사)·F4(이동) 등이 아무 일도 하지 않았다.
+            // 프로필에 그 글쇠 칸이 있으면(빈 값이어도) 그 값을 따른다.
+            None if !self.function_key_configured(key) && !original_default_function_key(key).is_empty() => {
+                let command = original_default_function_key(key);
+                ndr::commands::FunctionBinding { name: key.to_owned(), command: command.to_owned(), parameters: String::new(), internal: true, legacy: true }
+            }
+            None => return false,
         };
         self.run_binding(&binding, ctx);
         true
+    }
+
+    /// 프로필에 그 기능키 칸(FunctionKeys 또는 FunctionKeyBindings)이 있는가.
+    fn function_key_configured(&self, key: &str) -> bool {
+        ["FunctionKeys", "FunctionKeyBindings"].iter().any(|field| self.settings.values.get(*field).and_then(|v| v.as_object()).is_some_and(|map| map.keys().any(|k| k.eq_ignore_ascii_case(key))))
     }
 
     /// 기능키·도구 모음 UserCommand의 지정 하나를 실행한다(C# ExecuteFunctionKeyMacroAsync, 원본 FUN_0044381c).

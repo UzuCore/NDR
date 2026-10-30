@@ -301,6 +301,83 @@ fn favorites_menu_shortcuts_follow_the_original() {
     fs::remove_dir_all(root).unwrap();
 }
 
+/// 원본 [FuncKey] F3=#CopyTo, F4=#MoveTo → TfSelectDest. 글쇠만으로(F3, Enter) 복사·이동이 끝나야 한다.
+#[test]
+fn f3_and_f4_copy_and_move_with_keys_only() {
+    let (root, ctx, mut app) = fixture("f3copy", "ko");
+    let (left, right) = (root.join("left"), root.join("right"));
+    let draw = |app: &mut App, ctx: &egui::Context, events: Vec<egui::Event>| {
+        let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 850.0))), events, ..Default::default() };
+        let _ = ctx.run(raw, |ctx| {
+            app.keyboard(ctx);
+            app.popup_menu_ui(ctx);
+            app.original_dialog_ui(ctx);
+            app.msgbox_ui(ctx);
+        });
+    };
+    let cursor_on = |app: &mut App, name: &str| app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == name).unwrap();
+    let key = |key: egui::Key| vec![egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: NONE }, egui::Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers: NONE }];
+    let settle = |app: &mut App, ctx: &egui::Context| {
+        let end = Instant::now() + Duration::from_secs(20);
+        while app.job.as_ref().is_some_and(|j| !j.finished) || app.panes.iter().any(|p| p.loading) {
+            assert!(Instant::now() < end, "timeout");
+            app.poll(ctx);
+            thread::sleep(Duration::from_millis(5));
+        }
+        for _ in 0..3 {
+            draw(app, ctx, vec![]);
+        }
+    };
+    draw(&mut app, &ctx, vec![]);
+    cursor_on(&mut app, "a.txt");
+    draw(&mut app, &ctx, key(egui::Key::F3));
+    assert_eq!(app.original_dialogs.len(), 1, "F3 opens the destination window");
+    draw(&mut app, &ctx, vec![]);
+    draw(&mut app, &ctx, key(egui::Key::Enter));
+    settle(&mut app, &ctx);
+    assert!(app.original_dialogs.is_empty() && app.msgboxes.is_empty(), "no window left");
+    assert_eq!(fs::read(right.join("a.txt")).unwrap(), b"a", "F3 + Enter copies to the other pane");
+    cursor_on(&mut app, "b.txt");
+    draw(&mut app, &ctx, key(egui::Key::F4));
+    draw(&mut app, &ctx, vec![]);
+    draw(&mut app, &ctx, key(egui::Key::Enter));
+    settle(&mut app, &ctx);
+    assert!(right.join("b.txt").is_file() && !left.join("b.txt").exists(), "F4 + Enter moves to the other pane");
+    // 현재 패널: 경로 칸에 "." → 같은 폴더.
+    cursor_on(&mut app, "a.txt");
+    draw(&mut app, &ctx, key(egui::Key::F3));
+    app.edit_dialog_kind(|kind| if let super::original_dialogs::DialogKind::Destination(form) = kind { form.path = ".".into() });
+    draw(&mut app, &ctx, vec![]);
+    draw(&mut app, &ctx, key(egui::Key::Enter));
+    use super::original_dialogs::{DialogKind, DialogResult};
+    let wait_for = |app: &mut App, ctx: &egui::Context, what: &dyn Fn(&App) -> bool| {
+        let end = Instant::now() + Duration::from_secs(20);
+        while !what(app) {
+            assert!(Instant::now() < end, "timeout");
+            app.poll(ctx);
+            thread::sleep(Duration::from_millis(5));
+        }
+    };
+    // 원본 FUN_004134e0: 대상(자기 자신)이 있으므로 TfFileExists. 이름 바꾸기 → 새 이름으로 복사.
+    wait_for(&mut app, &ctx, &|app| app.original_dialogs.last().is_some_and(|d| matches!(d.kind, DialogKind::FileConflict(_))));
+    app.answer_dialog(DialogResult::FileConflict(Some((ndr::fsops::ConflictChoice::Rename, false))), &ctx);
+    wait_for(&mut app, &ctx, &|app| app.original_dialogs.last().is_some_and(|d| matches!(d.kind, DialogKind::Prompt { .. })));
+    app.answer_dialog(DialogResult::Text(Some("a2.txt".into())), &ctx);
+    settle(&mut app, &ctx);
+    assert_eq!(fs::read(left.join("a2.txt")).unwrap(), b"a", "copied in the current pane under the new name");
+    // 덮어쓰기는 자기 자신을 망가뜨리지 않고 건너뛴다(고친 것).
+    cursor_on(&mut app, "a.txt");
+    draw(&mut app, &ctx, key(egui::Key::F3));
+    app.edit_dialog_kind(|kind| if let DialogKind::Destination(form) = kind { form.path = left.to_string_lossy().into_owned() });
+    draw(&mut app, &ctx, vec![]);
+    draw(&mut app, &ctx, key(egui::Key::Enter));
+    wait_for(&mut app, &ctx, &|app| app.original_dialogs.last().is_some_and(|d| matches!(d.kind, DialogKind::FileConflict(_))));
+    app.answer_dialog(DialogResult::FileConflict(Some((ndr::fsops::ConflictChoice::Overwrite, false))), &ctx);
+    settle(&mut app, &ctx);
+    assert_eq!(fs::read(left.join("a.txt")).unwrap(), b"a");
+    fs::remove_dir_all(root).unwrap();
+}
+
 #[test]
 fn work_folder_messages_in_english() {
     let (root, ctx, mut app) = fixture("en", "en");

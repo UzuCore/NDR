@@ -195,10 +195,35 @@ pub fn run_with_options(
                     let boundary = index + 1 < count;
                     let result = (|| {
                         let name = s.file_name().ok_or("A filesystem root cannot be copied")?;
-                        let target = destination.join(name);
-                        // C#: 원본과 대상이 같은 경로면 조용히 건너뛴다.
+                        let mut target = destination.join(name);
                         if absolute(&s)?.to_string_lossy().eq_ignore_ascii_case(&absolute(&target)?.to_string_lossy()) {
-                            return Ok(());
+                            // 이동은 제자리라 할 일이 없다.
+                            if move_files {
+                                return Ok(());
+                            }
+                            // 원본 FUN_004134e0: 같은 폴더로 복사하면 대상(자기 자신)이 있으므로 TfFileExists를 묻고, 이름 바꾸기(0x10)면
+                            // FUN_00411bb4로 새 이름을 받아 그 이름으로 복사한다. 고친 것: 덮어쓰기 등 다른 답은 원본을 망가뜨릴 수 있어
+                            // 건너뛴다(원본은 자기 자신 위에 CopyFileW를 시도한다).
+                            let is_dir = fs::symlink_metadata(&s).map(|m| m.is_dir()).map_err(|e| e.to_string())?;
+                            match j.conflict(&s, &target)? {
+                                ConflictChoice::Rename if j.options.prompt_rename => match j.ask_rename(name.to_string_lossy().into_owned())? {
+                                    Some(new) if !new.trim().is_empty() && !new.contains(['\\', '/']) && !new.eq_ignore_ascii_case(&name.to_string_lossy()) => {
+                                        target = target.with_file_name(new);
+                                        if fs::symlink_metadata(&target).is_ok() {
+                                            target = available_target(&target, is_dir)?;
+                                        }
+                                    }
+                                    _ => {
+                                        j.skipped(&s);
+                                        return Ok(());
+                                    }
+                                },
+                                ConflictChoice::Rename => target = available_target(&target, is_dir)?,
+                                _ => {
+                                    j.skipped(&s);
+                                    return Ok(());
+                                }
+                            }
                         }
                         if inside(&s, &target)? {
                             return Err("Destination is the source or lies inside it".into());
