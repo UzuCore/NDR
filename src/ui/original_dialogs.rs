@@ -510,6 +510,13 @@ impl App {
         let mut favorites_action = None;
         let mut folder_tree_action = None;
         let tree_colors = matches!(dialog.kind, DialogKind::FolderTree(_)).then(|| super::folder_tree_dialog::TreeColors::read(&self.settings));
+        if let DialogKind::FolderTree(form) = &mut dialog.kind {
+            if form.drive_icons.len() != form.drives.len() {
+                let roots: Vec<PathBuf> = form.drives.iter().map(|(r, _)| r.clone()).collect();
+                form.drive_icons = roots.iter().map(|r| self.drive_icon(ctx, r)).collect();
+                form.folder_icon = self.path_icon(ctx, Path::new("folder"), true);
+            }
+        }
         let tree_icons: Vec<Option<egui::TextureHandle>> = if tree_colors.is_some() {
             ["tb_desktop.png", "tb_documents.png", "tb_pictures.png", "tb_music.png", "tb_videos.png"].iter().map(|name| self.toolbar_icon(ctx, name)).collect()
         } else {

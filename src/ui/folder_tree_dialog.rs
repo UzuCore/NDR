@@ -72,6 +72,9 @@ pub(super) struct FolderTreeForm {
     pub favorites_open: bool,
     /// TfSearchFolder(Ctrl+F, tbSearchClick 0x42621c).
     pub search: Option<SearchFolder>,
+    /// TNXFolderTreeView ImageList(+0x2f4): 셸 폴더 아이콘(0번)과 pDrives 드라이브 단추 그림(SHGetFileInfoW). 창을 처음 그릴 때 채운다.
+    pub folder_icon: Option<egui::TextureHandle>,
+    pub drive_icons: Vec<Option<egui::TextureHandle>>,
 }
 
 /// 원본 TfSearchFolder(ClientWidth 545 × ClientHeight 226): cbSearch(4,8 441×21), btnSearch(462,6 75×25), lbResult(4,37 533×181).
@@ -186,6 +189,8 @@ impl FolderTreeForm {
             favorites: vec![],
             favorites_open: false,
             search: None,
+            folder_icon: None,
+            drive_icons: vec![],
         }
     }
 
@@ -208,6 +213,12 @@ impl FolderTreeForm {
         if folder_tree::save_file(&self.tree, &file).is_ok() {
             self.dirty = false;
         }
+    }
+
+    /// 지금 드라이브의 셸 아이콘.
+    fn drive_icon(&self) -> Option<&egui::TextureHandle> {
+        let n = self.drives.iter().position(|(r, _)| (self.root_of)(&r.to_string_lossy()).eq_ignore_ascii_case(&self.drive))?;
+        self.drive_icons.get(n)?.as_ref()
     }
 
     fn opened_path(&self) -> Option<String> {
@@ -738,11 +749,18 @@ fn draw_item(ui: &egui::Ui, painter: &egui::Painter, rect: egui::Rect, form: &Fo
     let icon_top = ((metrics.row - 16.0) / 2.0).floor();
     let full = tree.full_path(i);
     let opened = form.opened.iter().any(|p| p.trim_end_matches('\\').eq_ignore_ascii_case(full.trim_end_matches('\\')));
+    let full_uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
     if form.show_icon {
         if is_root {
-            draw_drive_icon(painter, at(x + 2.0, y + icon_top));
+            match form.drive_icon() {
+                Some(icon) => { painter.image(icon.id(), egui::Rect::from_min_size(at(x + 2.0, y + icon_top), egui::vec2(16.0, 16.0)), full_uv, Color32::WHITE); }
+                None => draw_drive_icon(painter, at(x + 2.0, y + icon_top)),
+            }
         } else {
-            draw_folder_icon(painter, at(x, y + icon_top), form.focused == Some(i));
+            match &form.folder_icon {
+                Some(icon) => { painter.image(icon.id(), egui::Rect::from_min_size(at(x, y + icon_top), egui::vec2(16.0, 16.0)), full_uv, Color32::WHITE); }
+                None => draw_folder_icon(painter, at(x, y + icon_top), form.focused == Some(i)),
+            }
         }
     }
     if is_root {
@@ -766,7 +784,10 @@ fn draw_item(ui: &egui::Ui, painter: &egui::Painter, rect: egui::Rect, form: &Fo
             let ax = item_x(form, metrics, ancestor);
             let is_top = Some(ancestor) == tree.root;
             if !is_top && form.show_icon {
-                draw_folder_icon(painter, at(ax, y + icon_top), false);
+                match &form.folder_icon {
+                    Some(icon) => { painter.image(icon.id(), egui::Rect::from_min_size(at(ax, y + icon_top), egui::vec2(16.0, 16.0)), full_uv, Color32::WHITE.gamma_multiply(0.6)); }
+                    None => draw_folder_icon(painter, at(ax, y + icon_top), false),
+                }
             }
             let left = ax + if form.show_icon { 16.0 } else { 0.0 } + if is_top { 2.0 } else { 0.0 };
             let right = if is_top { ax + metrics.root - 16.0 } else { ax + metrics.name - 6.0 };
@@ -917,18 +938,21 @@ pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, langu
     }
     // tbFavorites(82, DropdownMenu pmFavorites, Hint F11).
     let favorites_caption = plain("ToolButton.tbFavorites", "Fa&vorites");
-    let favorites_button = at(82.0, 0.0, text_width(ui, &favorites_caption, &menu_font) + 22.0, 22.0);
+    // 원본 자리(82·166·344)보다 글이 넓으면 그만큼 오른쪽으로 민다.
+    let favorites_left = x.max(82.0);
+    let favorites_button = at(favorites_left, 0.0, text_width(ui, &favorites_caption, &menu_font) + 22.0, 22.0);
+    let shift = (favorites_button.right() - area.min.x + 8.0 - 166.0).max(0.0);
     let favorites_response = ui.interact(favorites_button, egui::Id::new("ndr-tree-favorites"), egui::Sense::click()).on_hover_text("F11");
     if favorites_response.hovered() || form.favorites_open {
         ui.painter().rect_filled(favorites_button, 2.0, visuals.widgets.hovered.weak_bg_fill);
     }
-    ui.painter().text(favorites_button.left_center() + egui::vec2(6.0, 0.0), egui::Align2::LEFT_CENTER, format!("{favorites_caption} ▾"), menu_font.clone(), visuals.text_color());
+    ui.painter().text(favorites_button.left_center() + egui::vec2(6.0, 0.0), egui::Align2::LEFT_CENTER, format!("{favorites_caption} ▼"), menu_font.clone(), visuals.text_color());
     if favorites_response.clicked() && !scanning && input {
         form.favorites_open = !form.favorites_open;
     }
     // tbSearch(344, Hint Ctrl+F): tbSearchClick.
     let search_caption = plain("ToolButton.tbSearch", "Search");
-    let search_button = at(344.0, 0.0, text_width(ui, &search_caption, &menu_font) + 14.0, 22.0);
+    let search_button = at(344.0 + shift, 0.0, text_width(ui, &search_caption, &menu_font) + 14.0, 22.0);
     let search_response = ui.interact(search_button, egui::Id::new("ndr-tree-search"), egui::Sense::click()).on_hover_text("Ctrl+F");
     if search_response.hovered() {
         ui.painter().rect_filled(search_button, 2.0, visuals.widgets.hovered.weak_bg_fill);
@@ -939,7 +963,7 @@ pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, langu
     let special = [("Hint.tbDesktop", "Desktop (Ctrl+D)", "desktop"), ("Hint.tbMyDoc", "Documents (Ctrl+G)", "documents"), ("Hint.tbMyPic", "Pictures (Ctrl+Q)", "pictures"), ("Hint.tbMyMusic", "Music (Ctrl+S)", "music"), ("Hint.tbMyVideo", "Videos (Ctrl+O)", "videos")];
     let mut special_click = None;
     for (n, (key, fallback, id)) in special.iter().enumerate() {
-        let button = at(166.0 + 34.0 * n as f32, 0.0, 30.0, 22.0);
+        let button = at(166.0 + shift + 34.0 * n as f32, 0.0, 30.0, 22.0);
         let response = ui.interact(button, egui::Id::new(("ndr-tree-special", n)), egui::Sense::click()).on_hover_text(text(key, fallback));
         if response.hovered() {
             ui.painter().rect_filled(button, 2.0, visuals.widgets.hovered.weak_bg_fill);
@@ -983,7 +1007,17 @@ pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, langu
         if down || response.hovered() {
             ui.painter().rect(button, 2.0, if down { Color32::from_rgb(0xD8, 0xE6, 0xF8) } else { Color32::from_rgb(0xEC, 0xF2, 0xFB) }, egui::Stroke::new(1.0, Color32::from_rgb(0x9C, 0xB4, 0xD8)), egui::StrokeKind::Inside);
         }
-        ui.painter().text(button.center(), egui::Align2::CENTER_CENTER, caption, egui::FontId::proportional(12.0), Color32::BLACK);
+        // FUN_00424ec4: 단추마다 글(드라이브)과 16×16 셸 아이콘.
+        match form.drive_icons.get(n).cloned().flatten() {
+            Some(icon) => {
+                let icon_rect = egui::Rect::from_min_size(egui::pos2(button.left() + 3.0, button.center().y - 8.0), egui::vec2(16.0, 16.0));
+                ui.painter().image(icon.id(), icon_rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
+                ui.painter().text(egui::pos2(icon_rect.right() + 2.0, button.center().y), egui::Align2::LEFT_CENTER, caption, egui::FontId::proportional(11.0), Color32::BLACK);
+            }
+            None => {
+                ui.painter().text(button.center(), egui::Align2::CENTER_CENTER, caption, egui::FontId::proportional(12.0), Color32::BLACK);
+            }
+        }
         if response.clicked() && !scanning {
             picked_drive = Some(root.to_string_lossy().into_owned());
         }

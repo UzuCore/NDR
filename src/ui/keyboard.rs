@@ -4,7 +4,7 @@
 //! Space(지금 항목 표시 전환) → 동작이 있는 정의(legacy*, favoriteOpenN). 그 뒤 목록 이동(위/아래/Home/End/Tab, egui에는 목록 상자가 없다).
 //! 함께: CycleFileSelection, ToggleFocusedItemSelection, ExecuteShortcutActionAsync, ExecuteMenuCommandAsync의 favoriteOpen:/workOpen:/
 //! workSet:/column:, RememberDriveFolder/RestoreLastDriveFolder, 드라이브 단추(ShowDriveButtons, 준비된 드라이브, 볼륨 이름 도움말).
-//! 차이(HANDOFF): 글 입력 칸에 초점이 있으면 목록 글쇠를 하나도 받지 않는다(C#은 뒤로·앞으로 등 몇 개를 받는다). F10(폴더 선택 창)은 보류.
+//! 차이(HANDOFF): 글 입력 칸에 초점이 있으면 목록 글쇠를 하나도 받지 않는다(C#은 뒤로·앞으로 등 몇 개를 받는다).
 use super::remote_window::wpf_key;
 use super::*;
 
