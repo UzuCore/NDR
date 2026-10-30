@@ -196,7 +196,8 @@ pub(super) fn rename_ui(ui: &mut egui::Ui, form: &mut RenameForm, language: &com
             ui.put(page(48.0, 70.0, 241.0, 21.0), egui::TextEdit::singleline(&mut editor.text));
             put_left(ui, page(18.0, 105.0, 300.0, 15.0), egui::Label::new(t("Caption.lInsLoc", "B. Insert Location:")));
             radio(ui, page(48.0, 126.0, 137.0, 17.0), &mut editor.position, "Position", r("Caption.rbInsertLocPos", "Position"));
-            ui.put(page(191.0, 124.0, 64.0, 22.0), egui::TextEdit::singleline(&mut numbers[0]));
+            // 원본 0x41888c: seInsertPos는 rbInsertLocPos가 골라졌을 때만 켜진다.
+            put_enabled(ui, page(191.0, 124.0, 64.0, 22.0), editor.position == "Position", egui::TextEdit::singleline(&mut numbers[0]));
             radio(ui, page(48.0, 147.0, 137.0, 17.0), &mut editor.position, "Prefix", r("Caption.rbInsertLocFirst", "Prefix"));
             radio(ui, page(48.0, 168.0, 137.0, 17.0), &mut editor.position, "Suffix", r("Caption.rbInsertLocLast", "Suffix"));
         }
@@ -238,10 +239,12 @@ pub(super) fn rename_ui(ui: &mut egui::Ui, form: &mut RenameForm, language: &com
             });
             put_left(ui, page(16.0, 110.0, 190.0, 15.0), egui::Label::new(t("Caption.lDelTo", "C. To")));
             radio(ui, page(28.0, 133.0, 120.0, 17.0), &mut editor.delete_to_mode, "Count", r("Caption.rbDelCount", "Count:"));
-            ui.put(page(151.0, 130.0, 57.0, 21.0), egui::TextEdit::singleline(&mut numbers[1]));
+            // 원본 0x418954: seDelCount는 rbDelCount, eDelToDelimiter는 rbToDelimiter가 골라졌을 때만 켜진다.
+            let by_count = editor.delete_to_mode == "Count";
+            put_enabled(ui, page(151.0, 130.0, 57.0, 21.0), by_count, egui::TextEdit::singleline(&mut numbers[1]));
             put_left(ui, page(214.0, 133.0, 120.0, 15.0), egui::Label::new(t("Caption.lUnit", "character(s)")));
             radio(ui, page(28.0, 160.0, 120.0, 17.0), &mut editor.delete_to_mode, "Delimiter", r("Caption.rbToDelimiter", "Delimiter:"));
-            ui.put(page(151.0, 158.0, 90.0, 21.0), egui::TextEdit::singleline(&mut editor.delete_to_delimiter));
+            put_enabled(ui, page(151.0, 158.0, 90.0, 21.0), !by_count, egui::TextEdit::singleline(&mut editor.delete_to_delimiter));
         }
         "Case" => {
             for (top, value, key, fallback) in [
@@ -263,7 +266,8 @@ pub(super) fn rename_ui(ui: &mut egui::Ui, form: &mut RenameForm, language: &com
             ui.put(page(166.0, 85.0, 51.0, 21.0), egui::TextEdit::singleline(&mut numbers[4]));
             put_left(ui, page(12.0, 124.0, 90.0, 15.0), egui::Label::new(t("Caption.lNumLoc", "B. Location")));
             radio(ui, page(104.0, 123.0, 149.0, 17.0), &mut editor.position, "Position", r("Caption.rbNumLocPos", "Position"));
-            ui.put(page(259.0, 121.0, 64.0, 21.0), egui::TextEdit::singleline(&mut numbers[0]));
+            // 원본 0x4189a8: seNumLocPos는 rbNumLocPos가 골라졌을 때만 켜진다.
+            put_enabled(ui, page(259.0, 121.0, 64.0, 21.0), editor.position == "Position", egui::TextEdit::singleline(&mut numbers[0]));
             radio(ui, page(104.0, 144.0, 149.0, 17.0), &mut editor.position, "Prefix", r("Caption.rbNumLocFirst", "Prefix"));
             radio(ui, page(104.0, 164.0, 149.0, 17.0), &mut editor.position, "Suffix", r("Caption.rbNumLocLast", "Suffix"));
         }

@@ -866,6 +866,14 @@ fn label_value(rows: &[Row], key: &str) -> String {
     }
 }
 
+/// 고르기 줄에서 지금 고른 값의 키.
+fn combo_key(rows: &[Row], key: &str) -> Option<String> {
+    match index_of(rows, key).map(|i| &rows[i]) {
+        Some(Row::Combo { choices, selected, .. }) => selected.and_then(|i| choices.get(i)).map(|(value, _)| value.clone()),
+        _ => None,
+    }
+}
+
 fn put_label(ui: &mut egui::Ui, rect: egui::Rect, text: &str) {
     super::original_dialogs::put_left(ui, rect, egui::Label::new(text.replace('&', "")).truncate());
 }
@@ -1006,8 +1014,11 @@ fn original_page(ui: &mut egui::Ui, form: &mut SettingsForm, tab: usize, origin:
                 put_left(ui, at(vx + x, vy + 164.0, 140.0, 16.0), egui::Label::new(RichText::new(title).strong().family(egui::FontFamily::Name(super::BOLD_FONT_FAMILY.into())).color(blue)));
                 put_label(ui, at(vx + x, vy + 184.0, 140.0, 15.0), &label_of(rows, &format!("{side}ViewStyle")));
                 put_combo(ui, rows, &format!("{side}ViewStyle"), at(vx + x, vy + 203.0, 126.0, 21.0));
-                put_check(ui, rows, &format!("{side}AlwaysShowFolderSize"), at(vx + x, vy + 230.0, 146.0, 17.0));
-                put_check(ui, rows, &format!("{side}ScrollStep"), at(vx + x, vy + 253.0, 146.0, 17.0));
+                // 원본 cbViewStyle1/2 OnChange(0x451118·0x45116c): chkAlwaysShowSize는 자동(0)일 때만, chkScrollStep은 미리 보기(3)가
+                // 아닐 때만 켜진다.
+                let view = combo_key(rows, &format!("{side}ViewStyle")).unwrap_or_default();
+                ui.add_enabled_ui(view == "Auto", |ui| put_check(ui, rows, &format!("{side}AlwaysShowFolderSize"), at(vx + x, vy + 230.0, 146.0, 17.0)));
+                ui.add_enabled_ui(view != "Thumbnails", |ui| put_check(ui, rows, &format!("{side}ScrollStep"), at(vx + x, vy + 253.0, 146.0, 17.0)));
                 put_label(ui, at(vx + x, vy + 272.0, 140.0, 15.0), &label_of(rows, &format!("{side}SortMode")));
                 put_combo(ui, rows, &format!("{side}SortMode"), at(vx + x, vy + 290.0, 126.0, 21.0));
                 put_check(ui, rows, &format!("{side}SortDescending"), at(vx + x, vy + 318.0, 143.0, 17.0));

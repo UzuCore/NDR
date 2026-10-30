@@ -252,10 +252,11 @@ pub(super) fn options_ui(ui: &mut egui::Ui, form: &mut CleanupOptionsForm, langu
                 _ => results[row].0.size_text(),
             }, &|row| results[row].1)));
         }
-        if vcl_button(ui, at(36.0, 458.0, 85.0, 25.0), has_results, &r("Caption.btnSelectAll", "Select All(&Z)")).1 {
+        // 원본 chkUserDefinedClick(0x41bcc0): btnSelectAll·btnDeselectAll도 확인란만 따른다(결과가 없어도 켜짐).
+        if vcl_button(ui, at(36.0, 458.0, 85.0, 25.0), true, &r("Caption.btnSelectAll", "Select All(&Z)")).1 && has_results {
             action = Some(CleanupAction::SelectAll);
         }
-        if vcl_button(ui, at(127.0, 458.0, 84.0, 25.0), has_results, &r("Caption.btnDeselectAll", "Deselect All(&X)")).1 {
+        if vcl_button(ui, at(127.0, 458.0, 84.0, 25.0), true, &r("Caption.btnDeselectAll", "Deselect All(&X)")).1 && has_results {
             action = Some(CleanupAction::SelectNone);
         }
     });

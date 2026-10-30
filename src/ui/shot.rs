@@ -236,7 +236,8 @@ impl App {
             }
             "advrename" | "advrename-delete" => {
                 self.active = 0;
-                self.panes[0].cursor = 0;
+                // 0번은 ".."(r106부터)라 이름 바꿀 수 없다. 첫 보통 항목.
+                self.panes[0].cursor = self.panes[0].entries.iter().position(|e| !e.is_parent() && !e.drive).unwrap_or(0);
                 self.advanced_rename();
                 if let Some(DialogKind::AdvancedRename(form)) = self.original_dialogs.last_mut().map(|d| &mut d.kind) {
                     form.editor.text = "new_".into();

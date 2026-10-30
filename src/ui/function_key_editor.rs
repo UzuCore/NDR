@@ -215,24 +215,23 @@ pub(super) fn function_key_edit_ui(ui: &mut egui::Ui, form: &mut FunctionKeyEdit
     } else {
         ui.put(at(113.0, 85.0, 294.0, 21.0), egui::TextEdit::singleline(&mut form.command));
     }
-    // 원본 btnBrowse(OpenDialog): 사용자 명령이면 실행할 파일을 고른다.
-    let browse = super::original_dialogs::put_enabled(ui, at(412.0, 85.0, 29.0, 21.0), !form.internal, egui::Button::new("..."));
-    if browse.clicked() {
-        let title = text("Form.Caption", "Edit Function Key");
-        let initial = Path::new(form.command.trim()).parent().filter(|p| p.is_dir()).map(Path::to_path_buf);
-        if let Some(path) = ndr::file_dialogs::open_file(&title, initial.as_deref(), "", &[("*.*", "*.*")]) {
-            form.command = path.to_string_lossy().into_owned();
-        }
-    }
+    // 원본 rbCommandTypeClick(0x41f5bc): 내부 명령이면 lParams(+0x3f4)·eParams(+0x400)·btnBrowse(+0x40c)·btnParam(+0x460)·
+    // lParamTip(+0x464)을 숨긴다(Visible, 끄기가 아님).
     let user = !form.internal;
-    ui.add_enabled_ui(user, |ui| {
+    if user {
+        // 원본 btnBrowse(OpenDialog): 사용자 명령이면 실행할 파일을 고른다.
+        if ui.put(at(412.0, 85.0, 29.0, 21.0), egui::Button::new("...")).clicked() {
+            let title = text("Form.Caption", "Edit Function Key");
+            let initial = Path::new(form.command.trim()).parent().filter(|p| p.is_dir()).map(Path::to_path_buf);
+            if let Some(path) = ndr::file_dialogs::open_file(&title, initial.as_deref(), "", &[("*.*", "*.*")]) {
+                form.command = path.to_string_lossy().into_owned();
+            }
+        }
         put_left(ui, at(20.0, 115.0, 92.0, 15.0), egui::Label::new(text("Caption.lParams", "Parameter(s):")).truncate());
-    });
-    // 원본 eParams + btnParam("...", PopupMenu1 → ParameterClick).
-    let id = ui.make_persistent_id("function-key-parameters");
-    super::original_dialogs::put_enabled(ui, at(113.0, 112.0, 294.0, 21.0), user, egui::TextEdit::singleline(&mut form.parameters).id(id));
-    ui.scope_builder(egui::UiBuilder::new().max_rect(at(412.0, 112.0, 28.0, 23.0)), |ui| {
-        ui.add_enabled_ui(user, |ui| {
+        // 원본 eParams + btnParam("...", PopupMenu1 → ParameterClick).
+        let id = ui.make_persistent_id("function-key-parameters");
+        ui.put(at(113.0, 112.0, 294.0, 21.0), egui::TextEdit::singleline(&mut form.parameters).id(id));
+        ui.scope_builder(egui::UiBuilder::new().max_rect(at(412.0, 112.0, 28.0, 23.0)), |ui| {
             ui.menu_button("...", |ui| {
                 for caption in PARAMETER_MENU {
                     if ui.button(caption).clicked() {
@@ -246,11 +245,11 @@ pub(super) fn function_key_edit_ui(ui: &mut egui::Ui, form: &mut FunctionKeyEdit
                 }
             });
         });
-    });
-    // 원본 lParamTip(오른쪽 맞춤, 오른쪽 끝 407).
-    ui.scope_builder(egui::UiBuilder::new().max_rect(at(20.0, 143.0, 387.0, 15.0)).layout(egui::Layout::right_to_left(egui::Align::Min)), |ui| {
-        ui.add_enabled(user, egui::Label::new(text("Caption.lParamTip", "* $(???) : Active Pane, $(???1) : Left Pane, $(???2) : Right Pane")).truncate());
-    });
+        // 원본 lParamTip(오른쪽 맞춤, 오른쪽 끝 407).
+        ui.scope_builder(egui::UiBuilder::new().max_rect(at(20.0, 143.0, 387.0, 15.0)).layout(egui::Layout::right_to_left(egui::Align::Min)), |ui| {
+            ui.add(egui::Label::new(text("Caption.lParamTip", "* $(???) : Active Pane, $(???1) : Left Pane, $(???2) : Right Pane")).truncate());
+        });
+    }
     if ui.put(at(285.0, 191.0, 75.0, 25.0), egui::Button::new(text("Caption.btnOk", "OK"))).clicked() {
         result = Some(true);
     }
