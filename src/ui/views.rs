@@ -618,6 +618,7 @@ impl App {
         let mut picked = None;
         let mut toggled = None;
         let mut shell_menu: Option<PathBuf> = None;
+        let mut drop_rows: Vec<(usize, egui::Rect, PathBuf)> = Vec::new();
         // 하위 폴더를 아직 읽는 중이면 고른 줄이 없으므로, 그 줄이 나올 때까지 넘기기를 미룬다.
         let reveal_id = egui::Id::new(("ndr-pane-tree-reveal", index));
         let reveal = reveal || ui.ctx().data(|d| d.get_temp::<bool>(reveal_id)).unwrap_or(false);
@@ -666,12 +667,15 @@ impl App {
                 if response.double_clicked() && !empty {
                     toggled = Some(path.clone());
                 }
+                // 원본 FUN_0048da38: 트리도 놓을 곳(TNXDropFileTarget.Register(트리)).
+                drop_rows.push((index, row.intersect(ui.clip_rect()), path.clone()));
                 // 원본 FUN_0048e69c(트리 OnContextPopup): 고른 폴더의 셸 메뉴(FUN_00459128).
                 if response.secondary_clicked() {
                     shell_menu = Some(path.clone());
                 }
             }
         });
+        self.folder_rows.extend(drop_rows);
         // 원본 FUN_0048e2e0(트리 패널 그리기): 오른쪽 끝(너비 − 1)에 스킨 틀 색 세로선.
         if let Some(skin) = self.current_skin() {
             let stroke = self.skin_frame_stroke(&skin, index);
