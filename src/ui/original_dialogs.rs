@@ -711,7 +711,8 @@ impl App {
                 }
                 DialogKind::Destination(form) => {
                     let icon = self.path_icon(ctx, Path::new("A"), true);
-                    destination_action = super::destination_dialog::destination_ui_original(ui, form, enter, icon.as_ref(), screen.height());
+                    let drive_icons: Vec<Option<egui::TextureHandle>> = form.drives.iter().map(|d| self.drive_icon(ctx, Path::new(&d.root))).collect();
+                    destination_action = super::destination_dialog::destination_ui_original(ui, form, enter, icon.as_ref(), &drive_icons, screen.height());
                 }
                 DialogKind::DiskCopy(form) => {
                     disk_action = super::disk_copy_dialog::disk_copy_ui(ui, form);

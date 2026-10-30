@@ -471,6 +471,8 @@ fn destination_list_keys_follow_the_original() {
         ok_label: "OK".into(),
         original: true,
         selected: 0,
+        drives: Vec::new(),
+        free_label: String::new(),
     };
     let mut run = |key: egui::Key, modifiers: egui::Modifiers| {
         // 목록에 글쇠 초점(경로 칸이 아님).
@@ -478,7 +480,7 @@ fn destination_list_keys_follow_the_original() {
         let raw = egui::RawInput { modifiers, events: vec![egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }], ..Default::default() };
         let mut got = None;
         let _ = ctx.run(raw, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| got = destination_ui_original(ui, &mut form, false, None, 850.0));
+            egui::CentralPanel::default().show(ctx, |ui| got = destination_ui_original(ui, &mut form, false, None, &[], 850.0));
         });
         got
     };
@@ -514,6 +516,8 @@ fn original_destination_list_follows_tfselectdest() {
         ok_label: "OK".into(),
         original: true,
         selected: 0,
+        drives: Vec::new(),
+        free_label: String::new(),
     };
     let items: Vec<_> = original_items(&form).into_iter().map(|(item, _)| item).collect();
     assert_eq!(items, vec![DestinationItem::Initial(s(&initial)), DestinationItem::Recent(s(&recent)), DestinationItem::Work(0, s(&work))], "the default folder is not repeated among the recents; only existing work folders");
@@ -523,7 +527,7 @@ fn original_destination_list_follows_tfselectdest() {
         let raw = egui::RawInput { time: Some(time), events, screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 850.0))), ..Default::default() };
         let mut got = None;
         let _ = ctx.run(raw, |ctx| {
-            egui::Area::new(egui::Id::new("dest-test")).fixed_pos(egui::Pos2::ZERO).show(ctx, |ui| got = destination_ui_original(ui, form, false, None, 850.0));
+            egui::Area::new(egui::Id::new("dest-test")).fixed_pos(egui::Pos2::ZERO).show(ctx, |ui| got = destination_ui_original(ui, form, false, None, &[], 850.0));
         });
         got
     };
@@ -542,7 +546,7 @@ fn original_destination_list_follows_tfselectdest() {
     let alt = egui::Modifiers::ALT;
     let raw = egui::RawInput { modifiers: alt, events: vec![egui::Event::Key { key: egui::Key::D, physical_key: None, pressed: true, repeat: false, modifiers: alt }], ..Default::default() };
     let _ = ctx.run(raw, |ctx| {
-        egui::Area::new(egui::Id::new("dest-test")).fixed_pos(egui::Pos2::ZERO).show(ctx, |ui| destination_ui_original(ui, &mut form, false, None, 850.0));
+        egui::Area::new(egui::Id::new("dest-test")).fixed_pos(egui::Pos2::ZERO).show(ctx, |ui| destination_ui_original(ui, &mut form, false, None, &[], 850.0));
     });
     assert!(ctx.memory(|m| m.has_focus(egui::Id::new("ndr-destination-path"))), "Alt+D focuses the path box");
     // 첫 줄을 두 번 누르면 확인(앞 누르기와 두 번 누르기로 묶이지 않게 쉬었다가).
@@ -554,6 +558,18 @@ fn original_destination_list_follows_tfselectdest() {
     let accepted = run(&mut form, vec![press(first, true), press(first, false)]);
     assert!(matches!(accepted, Some(DestinationAction::Accept)), "double click = OK");
     assert_eq!(form.path, s(&initial));
+    // 원본 FUN_004532d4 종류 8: 드라이브 줄은 끝 묶음, CD/DVD(5)는 뺀다. 목록에 글쇠 초점이면 글자(A~Z, Shift도) = 그 드라이브로 확인.
+    use super::destination_dialog::DestinationDrive;
+    let drive = |root: &str, kind: u32| DestinationDrive { root: root.into(), name: "Disk".into(), kind, sizes: Some((10, 100)) };
+    form.drives = vec![drive("C:\\", 3), drive("E:\\", 5), drive("Z:\\", 4)];
+    let items = original_items(&form);
+    let drives: Vec<(String, bool)> = items.iter().filter_map(|(item, first)| if let DestinationItem::Drive(d) = item { Some((d.root.clone(), *first)) } else { None }).collect();
+    assert_eq!(drives, [("C:\\".to_owned(), true), ("Z:\\".to_owned(), false)], "no CD/DVD; the drives start a new group");
+    ctx.memory_mut(|m| m.request_focus(egui::Id::new("ndr-destination-list")));
+    let key = |key: egui::Key, modifiers: egui::Modifiers| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
+    assert!(matches!(run(&mut form, vec![key(egui::Key::Z, egui::Modifiers::NONE)]), Some(DestinationAction::MostUsed(p)) if p == "Z:\\"));
+    assert!(matches!(run(&mut form, vec![key(egui::Key::C, egui::Modifiers::SHIFT)]), Some(DestinationAction::MostUsed(p)) if p == "C:\\"));
+    assert!(run(&mut form, vec![key(egui::Key::Q, egui::Modifiers::NONE)]).is_none(), "no such drive");
     fs::remove_dir_all(root).unwrap();
 }
 

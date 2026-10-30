@@ -35,26 +35,42 @@ pub(super) struct DestinationForm {
     pub original: bool,
     /// 원본 lbList의 고른 줄(ItemIndex). 고르면 cbPath에 그 경로(lbListClick 0x453b40).
     pub selected: usize,
+    /// 원본 드라이브 줄(종류 8). 창을 열 때의 드라이브 목록.
+    pub drives: Vec<DestinationDrive>,
+    /// 드라이브 줄의 남은 공간 글(원본 "%10s %s"의 둘째 글, RES.DISKFREE).
+    pub free_label: String,
 }
 
-/// 원본 TfSelectDest 목록 줄(FUN_004532d4): 종류 1 = 처음 폴더(+0x420, 다른 패널), 2 = 최근(자주 쓴 폴더 +0x434), 4 = 작업 폴더(+0x438).
-/// 종류 8(드라이브)은 드라이브 목록과 함께 옮기지 않았다.
+/// 원본 TfSelectDest 목록 줄(FUN_004532d4): 종류 1 = 처음 폴더(+0x420, 다른 패널), 2 = 최근(자주 쓴 폴더 +0x434), 4 = 작업 폴더(+0x438),
+/// 8 = 드라이브(TNXDriveList, CD/DVD(5)는 뺌).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum DestinationItem {
     Initial(String),
     Recent(String),
     Work(usize, String),
+    Drive(DestinationDrive),
+}
+
+/// 대상 선택 창의 드라이브 줄 자료(TNXDriveInfo: 루트, GetDriveName +0x1c, 종류 +0x18, 고정 디스크면 (여유 +0x10, 전체 +8)).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct DestinationDrive {
+    pub root: String,
+    pub name: String,
+    pub kind: u32,
+    pub sizes: Option<(u64, u64)>,
 }
 
 impl DestinationItem {
     pub(super) fn path(&self) -> &str {
         match self {
             DestinationItem::Initial(p) | DestinationItem::Recent(p) | DestinationItem::Work(_, p) => p,
+            DestinationItem::Drive(drive) => &drive.root,
         }
     }
 }
 
-/// 원본 FUN_004532d4의 목록: 처음 폴더(있으면), 그것과 다른 최근 폴더, 비어 있지 않고 있는 작업 폴더. (줄, 묶음의 첫 줄인지).
+/// 원본 FUN_004532d4의 목록: 처음 폴더(있으면), 그것과 다른 최근 폴더, 비어 있지 않고 있는 작업 폴더, CD/DVD가 아닌 드라이브.
+/// (줄, 묶음의 첫 줄인지).
 pub(super) fn original_items(form: &DestinationForm) -> Vec<(DestinationItem, bool)> {
     let mut items = Vec::new();
     let initial = form.initial.to_string_lossy().into_owned();
@@ -75,6 +91,11 @@ pub(super) fn original_items(form: &DestinationForm) -> Vec<(DestinationItem, bo
             continue;
         }
         items.push((DestinationItem::Work(index, path.clone()), first));
+        first = false;
+    }
+    let mut first = true;
+    for drive in form.drives.iter().filter(|d| d.kind != 5) {
+        items.push((DestinationItem::Drive(drive.clone()), first));
         first = false;
     }
     items
@@ -103,6 +124,7 @@ fn list_keys(ui: &egui::Ui, form: &DestinationForm, typing: bool) -> Option<Dest
         MostUsed(usize),
         Initial,
         Clear,
+        Drive(char),
     }
     const DIGITS: [egui::Key; 10] = [egui::Key::Num0, egui::Key::Num1, egui::Key::Num2, egui::Key::Num3, egui::Key::Num4, egui::Key::Num5, egui::Key::Num6, egui::Key::Num7, egui::Key::Num8, egui::Key::Num9];
     if typing {
@@ -111,6 +133,8 @@ fn list_keys(ui: &egui::Ui, form: &DestinationForm, typing: bool) -> Option<Dest
     let typed = ui.input(|i| {
         i.events.iter().find_map(|e| match e {
             egui::Event::Key { key: egui::Key::Delete, pressed: true, modifiers, .. } if modifiers.shift && !modifiers.ctrl && !modifiers.alt => Some(Pick::Clear),
+            // 원본 lbListKeyDown: 수식 키 없이 또는 Shift와 A~Z = 그 드라이브 루트로 확인.
+            egui::Event::Key { key, pressed: true, modifiers, .. } if !modifiers.ctrl && !modifiers.alt && key.name().len() == 1 && key.name().chars().all(|c| c.is_ascii_uppercase()) => key.name().chars().next().map(Pick::Drive),
             egui::Event::Key { key, pressed: true, modifiers, .. } => {
                 let n = DIGITS.iter().position(|k| k == key)?;
                 let plain = !modifiers.any();
@@ -139,6 +163,7 @@ fn list_keys(ui: &egui::Ui, form: &DestinationForm, typing: bool) -> Option<Dest
             .map(|p| DestinationAction::MostUsed(p.clone())),
         Pick::Initial if form.initial.is_dir() => Some(DestinationAction::MostUsed(initial.into_owned())),
         Pick::Clear => Some(DestinationAction::Clear),
+        Pick::Drive(letter) => form.drives.iter().find(|d| d.root.chars().next().is_some_and(|c| c.eq_ignore_ascii_case(&letter))).map(|d| DestinationAction::MostUsed(d.root.clone())),
         _ => None,
     }
 }
@@ -151,7 +176,7 @@ fn list_keys(ui: &egui::Ui, form: &DestinationForm, typing: bool) -> Option<Dest
 /// 누르면 고르고 경로 칸에 그 경로(lbListClick), 두 번 누르면 확인(OnDblClick = btnOkClick), 오른쪽 단추는 최근 줄이면 pmMUFolder.
 /// 목록에 글쇠 초점이 있으면 위/아래로 고르고 Delete는 고른 최근 줄을 지운다(pmiMUFDeleteClick). btnTree(폴더 트리)는 옮기지 않아
 /// 그 자리에 C# 판의 다른 폴더 찾아보기를 둔다.
-pub(super) fn destination_ui_original(ui: &mut egui::Ui, form: &mut DestinationForm, enter: bool, icon: Option<&egui::TextureHandle>, screen_height: f32) -> Option<DestinationAction> {
+pub(super) fn destination_ui_original(ui: &mut egui::Ui, form: &mut DestinationForm, enter: bool, icon: Option<&egui::TextureHandle>, drive_icons: &[Option<egui::TextureHandle>], screen_height: f32) -> Option<DestinationAction> {
     let mut action = None;
     let items = original_items(form);
     if form.selected >= items.len() {
@@ -159,7 +184,10 @@ pub(super) fn destination_ui_original(ui: &mut egui::Ui, form: &mut DestinationF
     }
     let font = egui::TextStyle::Body.resolve(ui.style());
     let measure = |ui: &egui::Ui, text: &str| ui.fonts_mut(|f| f.layout_no_wrap(text.to_owned(), font.clone(), Color32::BLACK).size().x);
-    let widest = items.iter().map(|(item, _)| measure(ui, item.path())).fold(0.0f32, f32::max);
+    // 원본: 창 너비는 폴더 줄 글(+0x414)로만, 드라이브 줄의 "%C: %s" 글 너비(+0x418)는 남은 공간 글 자리에 쓴다.
+    let drive_text = |drive: &DestinationDrive| format!("{}: {}", drive.root.chars().next().unwrap_or(' ').to_ascii_uppercase(), drive.name);
+    let widest = items.iter().filter(|(item, _)| !matches!(item, DestinationItem::Drive(_))).map(|(item, _)| measure(ui, item.path())).fold(0.0f32, f32::max);
+    let drive_width = items.iter().filter_map(|(item, _)| if let DestinationItem::Drive(d) = item { Some(measure(ui, &drive_text(d))) } else { None }).fold(0.0f32, f32::max);
     let sections = items.iter().enumerate().filter(|(i, (_, first))| *i > 0 && *first).count();
     let width = (widest.ceil() + 28.0).clamp(350.0, 800.0);
     let height = (items.len() as f32 * 18.0 + sections as f32 * 3.0 + 82.0).clamp(300.0, (screen_height - 50.0).max(300.0));
@@ -228,8 +256,63 @@ pub(super) fn destination_ui_original(ui: &mut egui::Ui, form: &mut DestinationF
                 painter.hline(row.x_range(), row.top() + 1.5, egui::Stroke::new(1.0, Color32::from_gray(0xc0)));
             }
             let icon_rect = egui::Rect::from_min_size(egui::pos2(content.left() + 4.0, content.center().y - 8.0), egui::vec2(16.0, 16.0));
-            if let Some(icon) = icon {
+            let row_icon = match item {
+                DestinationItem::Drive(drive) => form.drives.iter().position(|d| d == drive).and_then(|i| drive_icons.get(i)).and_then(|t| t.as_ref()),
+                _ => icon,
+            };
+            if let Some(icon) = row_icon {
                 painter.image(icon.id(), icon_rect, egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)), Color32::WHITE);
+            }
+            if let DestinationItem::Drive(drive) = item {
+                // 원본 lbListDrawItem 종류 8: "%C: %s"(드라이브 글자, GetDriveName)를 왼쪽 + 24에, 고정 디스크(3)면 그 뒤
+                // (+0x418 가장 넓은 드라이브 글 + 4)에 "%10s %s"(여유 StrFormatByteSizeW, DISKFREE), 글 뒤 + 6부터 80(남은 자리가 80보다
+                // 좁으면 끝까지) × (줄 − 8) 막대: GRAYTEXT 테, 안쪽(1 들여) 쓴 비율만큼 채움(51% 이상 하늘, 71% 이상 주황, 91% 이상 빨강을
+                // 창 색과 섞음(FUN_004539ec, 150/255), 50% 이하는 GRAYTEXT).
+                let text_color = if selected { Color32::WHITE } else { Color32::BLACK };
+                let x = content.left() + 24.0;
+                let galley = ui.fonts_mut(|f| f.layout_no_wrap(drive_text(drive), font.clone(), text_color));
+                painter.galley(egui::pos2(x, content.center().y - galley.size().y / 2.0), galley, text_color);
+                if let (3, Some((free, total))) = (drive.kind, drive.sizes) {
+                    let x = x + drive_width + 4.0;
+                    let galley = ui.fonts_mut(|f| f.layout_no_wrap(format!("{:>10} {}", ndr::native::format_byte_size(free), form.free_label), font.clone(), text_color));
+                    let text_width = galley.size().x;
+                    painter.galley(egui::pos2(x, content.center().y - galley.size().y / 2.0), galley, text_color);
+                    let left = x + text_width + 6.0;
+                    let right = if content.right() - left > 80.0 { left + 80.0 } else { content.right() };
+                    if right > left + 2.0 {
+                        let bar = egui::Rect::from_min_max(egui::pos2(left, content.top() + 4.0), egui::pos2(right, content.bottom() - 4.0));
+                        let gray = { let (r, g, b) = ndr::native::system_color(17); Color32::from_rgb(r, g, b) };
+                        painter.rect_stroke(bar, 0.0, egui::Stroke::new(1.0, gray), egui::StrokeKind::Inside);
+                        let used = if total == 0 { 100 } else { (total.saturating_sub(free) as u128 * 100 / total as u128) as u32 };
+                        let window = { let (r, g, b) = ndr::native::system_color(5); Color32::from_rgb(r, g, b) };
+                        let tint = |c: Color32| {
+                            let t = (255.0 - 150.0) / 255.0;
+                            let mix = |a: u8, b: u8| (a as f32 * (1.0 - t) + b as f32 * t).round() as u8;
+                            Color32::from_rgb(mix(c.r(), window.r()), mix(c.g(), window.g()), mix(c.b(), window.b()))
+                        };
+                        let fill = match used {
+                            91.. => tint(Color32::from_rgb(0xff, 0, 0)),
+                            71.. => tint(Color32::from_rgb(0xff, 0x80, 0)),
+                            51.. => tint(Color32::from_rgb(0xa6, 0xca, 0xf0)),
+                            _ => gray,
+                        };
+                        let inner = bar.shrink(1.0);
+                        let filled = egui::Rect::from_min_max(inner.min, egui::pos2(inner.left() + ((inner.width() - 2.0).max(0.0) * used as f32 / 100.0).floor(), inner.bottom()));
+                        painter.rect_filled(filled, 0.0, fill);
+                    }
+                }
+                let response = ui.interact(row, list_id.with(index), egui::Sense::click());
+                if response.clicked() || super::panes::windows_double_clicked(&response) || response.secondary_clicked() {
+                    form.selected = index;
+                    if !response.secondary_clicked() {
+                        form.path = drive.root.clone();
+                    }
+                    ui.memory_mut(|m| m.request_focus(list_id));
+                }
+                if super::panes::windows_double_clicked(&response) {
+                    action = Some(DestinationAction::Accept);
+                }
+                continue;
             }
             if let DestinationItem::Work(n, _) = item {
                 // 원본 +0x424 번호 그림 대신 작은 번호 칸.
@@ -353,6 +436,19 @@ impl App {
             _ => fallback,
         };
         let work = self.settings.strings("WorkingFolders");
+        // 원본 FUN_004532d4 종류 8: 전역 드라이브 목록(TNXDriveList, 목록 패널과 같은 캐시).
+        let drive_items = if cfg!(test) {
+            (self.system.ready_drives)().into_iter().map(|root| { let info = (self.system.drive_item)(&root); (root, info) }).collect()
+        } else {
+            super::panes::cached_drive_items(&self.drive_list, self.system.ready_drives, self.system.drive_item)
+        };
+        let drives = drive_items
+            .into_iter()
+            .filter_map(|(root, info)| {
+                let (name, kind, sizes) = info?;
+                Some(DestinationDrive { root: root.to_string_lossy().into_owned(), name, kind, sizes })
+            })
+            .collect();
         let form = DestinationForm {
             most_used: self.most_used_destinations(),
             work_folders: std::array::from_fn(|i| work.get(i).map(|w| w.trim().to_owned()).unwrap_or_default()),
@@ -364,6 +460,8 @@ impl App {
             ok_label: text(self, "formSelectDest", "Caption.btnOk", "OK"),
             original: true,
             selected: 0,
+            drives,
+            free_label: self.language_pack.text("RES.DISKFREE", "Free"),
             initial,
         };
         let title = format!("{}{}", self.language_pack.text(title_key, title_fallback), self.language_pack.text("RES.SELECTDEST", " - Select a destination"));
