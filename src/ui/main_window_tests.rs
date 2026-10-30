@@ -630,6 +630,13 @@ fn shortened_thumbnail_names_show_the_original_tooltip() {
     assert!(rect.width() >= thumb + 8.0 - 0.5, "{rect:?}");
     assert!(rect.height() > 30.0, "the full name breaks into several lines: {rect:?}");
     assert_eq!(show(&mut app, "a.txt"), None, "a name that fits has no tooltip");
+    // 원본 목록 생성자(0x7d4ef5): 목록 도움말은 3초 뒤 숨는다(TNXToolTipWnd 처음 값 5초가 아니다).
+    let row = app.panes[0].entries.iter().position(|e| e.name == long).unwrap();
+    app.panes[0].cursor = row;
+    draw(&mut app, &ctx);
+    app.tip_since[0] = Some((row, Instant::now() - Duration::from_millis(600 + super::panes::TIP_HIDE_MS + 100)));
+    draw(&mut app, &ctx);
+    assert_eq!((super::panes::TIP_HIDE_MS, app.name_tip_shown[0]), (3000, None), "hidden after three seconds");
     fs::remove_dir_all(root).unwrap();
 }
 

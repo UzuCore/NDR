@@ -325,7 +325,7 @@ impl App {
     /// 원본 SetItemIndex(0x7dbdec): 커서가 옮겨 간 항목(드라이브 제외)의 이름이 줄여 그려졌으면 600ms(+0x408) 뒤
     /// ShowToolTip(0x7d7454)이 TNXToolTipWnd(WS_POPUP | WS_BORDER, 바탕 clInfoBk, 글 clInfoText, 목록 글꼴)에 온 이름을
     /// 가운데로 그린다. 자리: 항목 칸 왼쪽 + GetListHeaderWidth(아이콘이면 30, 아니면 14) − 2, 위 − 2, 너비 = 글 너비 + 10,
-    /// 높이 = 줄 높이 + 4, 화면 밖이면 안으로 민다. 5초(+0x2c8) 뒤 숨는다. 목록에 초점이 있을 때만(활성 패널, 창 초점). 스킨 테마.
+    /// 높이 = 줄 높이 + 4, 화면 밖이면 안으로 민다. 3초(TIP_HIDE_MS) 뒤 숨는다. 목록에 초점이 있을 때만(활성 패널, 창 초점). 스킨 테마.
     pub(super) fn original_name_tip(&mut self, ctx: &egui::Context, index: usize) {
         let tip = self.name_tip.borrow_mut().take_if(|(pane, ..)| *pane == index);
         let thumb_tip = self.thumb_tip.borrow_mut().take_if(|(pane, ..)| *pane == index);
@@ -356,7 +356,7 @@ impl App {
             if row != cursor || drive || self.active != index || !ctx.input(|i| i.focused) || lines.is_empty() {
                 return;
             }
-            let (delay, life) = (Duration::from_millis(600), Duration::from_millis(600 + 5000));
+            let (delay, life) = (Duration::from_millis(600), Duration::from_millis(600 + TIP_HIDE_MS));
             let elapsed = now.saturating_duration_since(since);
             if elapsed < delay {
                 ctx.request_repaint_after(delay - elapsed);
@@ -405,7 +405,7 @@ impl App {
         if header + shown.size().x + 5.0 <= cell.width() {
             return;
         }
-        let (delay, life) = (Duration::from_millis(600), Duration::from_millis(600 + 5000));
+        let (delay, life) = (Duration::from_millis(600), Duration::from_millis(600 + TIP_HIDE_MS));
         let elapsed = now.saturating_duration_since(since);
         if elapsed < delay {
             ctx.request_repaint_after(delay - elapsed);
@@ -438,6 +438,10 @@ impl App {
         self.name_tip_shown[index] = Some(rect);
     }
 }
+
+/// 원본 TNXToolTipWnd 숨김 시간(+0x2c8): 처음 값은 5000(0x7efbd9)이지만 목록 생성자가 3000으로 바꾼다(0x7d4ef5).
+/// 고친 것: 전에는 5초였다.
+pub(super) const TIP_HIDE_MS: u64 = 3000;
 
 /// 원본 TNXToolTipWnd는 따로 뜨는 팝업 창(WS_POPUP | WS_BORDER)이라 메인 창 밖까지 나가고, 화면(Screen.Width/Height) 밖이면 안으로 민다.
 /// 툴팁이 창 안에 들어가면 false(창 안에 그린다). 넘치면 테두리 없는 egui 창(활성화하지 않음, 포인터 통과, 늘 위, 작업 표시줄 없음)을
