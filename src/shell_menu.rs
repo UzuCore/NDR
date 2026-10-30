@@ -447,6 +447,10 @@ unsafe extern "system" fn paste_key_proc(hwnd: HWND, message: u32, wparam: WPARA
         if message == WM_KEYDOWN && !alt && ((key == b'V' as usize && ctrl && !shift) || (key == VK_INSERT as usize && shift && !ctrl)) {
             PASTE_KEYS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
+        // 원본 목록은 Apps 글쇠(VK_APPS, WM_CONTEXTMENU의 자리 -1, -1)로도 오른쪽 단추 메뉴를 띄운다(FUN_00484e8c). egui에는 그 글쇠가 없다.
+        if message == WM_KEYDOWN && key == 0x5d {
+            CONTEXT_KEYS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
         if (0x60..=0x6f).contains(&key) && key != 0x6c {
             NUMPAD_KEYS.lock().unwrap_or_else(|e| e.into_inner()).push((key as u16, ctrl, shift, alt));
         }
@@ -467,6 +471,13 @@ pub fn install_paste_key_hook(hwnd: isize) -> Result<(), String> {
     std::mem::forget(api);
     if installed.as_bool() { Ok(()) } else { Err("SetWindowSubclass failed".into()) }
 }
+/// Apps 글쇠(VK_APPS) 누름 수(take_context_keys).
+static CONTEXT_KEYS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+/// 지난번 뒤로 눌린 Apps 글쇠 수.
+pub fn take_context_keys() -> u32 {
+    CONTEXT_KEYS.swap(0, std::sync::atomic::Ordering::Relaxed)
+}
+
 /// 지난번 뒤로 센 붙여넣기 글쇠 수.
 pub fn take_paste_keys() -> u32 {
     PASTE_KEYS.swap(0, std::sync::atomic::Ordering::Relaxed)

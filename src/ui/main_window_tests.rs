@@ -764,6 +764,37 @@ fn list_menu_stays_open_when_its_row_is_not_drawn() {
         fs::remove_dir_all(root).unwrap();
     }
 }
+/// 원본 FUN_00484e8c 글쇠 경로(Apps 글쇠, MousePos -1, -1): 지금 패널의 커서 항목 칸 아래에 pmMain을 띄우고,
+/// 표시가 없고 커서 항목이 ".."이면 띄우지 않는다.
+#[test]
+fn apps_key_opens_the_list_menu_at_the_cursor_item() {
+    let (root, ctx, mut app) = fixture("appskey");
+    let mut frame = eframe::Frame::_new_kittest();
+    let mut run = |app: &mut App, events: Vec<egui::Event>| {
+        let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 850.0))), events, ..Default::default() };
+        let _ = ctx.run(raw, |ctx| eframe::App::update(app, ctx, &mut frame));
+    };
+    app.active = 0;
+    app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == "a.txt").unwrap();
+    run(&mut app, vec![]);
+    run(&mut app, vec![]);
+    app.pending_context_key = true;
+    run(&mut app, vec![]);
+    run(&mut app, vec![]);
+    assert!(egui::Popup::is_any_open(&ctx), "Apps opens pmMain for the cursor item");
+    assert!(!app.pending_context_key);
+    run(&mut app, vec![egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() }]);
+    run(&mut app, vec![]);
+    assert!(!egui::Popup::is_any_open(&ctx));
+    app.panes[0].cursor = 0;
+    assert!(app.panes[0].entries[0].is_parent());
+    app.pending_context_key = true;
+    run(&mut app, vec![]);
+    run(&mut app, vec![]);
+    assert!(!egui::Popup::is_any_open(&ctx), "\"..\" without marks: no menu");
+    fs::remove_dir_all(root).unwrap();
+}
+
 #[test]
 fn skin_drag_follows_the_original_list_mouse_move() {
     // 원본 FUN_004856d8(목록 OnMouseMove): 가로·세로 8화소를 넘게 움직여야 끌고, 표시 칸에서 누르면 끌지 않는다.

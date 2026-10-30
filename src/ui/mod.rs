@@ -620,6 +620,8 @@ pub struct App {
     auth_pending: Vec<usize>,
     /// 원본 단축키 표가 받은 숫자판 글쇠(원본 이름, Shift). raw_input_hook이 넣고 keyboard가 실행한다.
     pending_numpad: Vec<(String, bool)>,
+    /// Apps 글쇠를 눌렀다(지금 패널의 목록 오른쪽 단추 메뉴, 원본 FUN_00484e8c의 글쇠 경로).
+    pending_context_key: bool,
     /// 폴더 선택 대화 상자(제목, 처음 폴더). 테스트에서 바꿔 끼운다.
     folder_picker: fn(&str, Option<&Path>) -> Option<PathBuf>,
     /// 원본 miNetwork의 네트워크 폴더 고르기(SHBrowseForFolderW). 시험에서는 바꿔 끼운다.
@@ -876,6 +878,7 @@ impl App {
             file_clipboard: if cfg!(test) { |_, _| Ok(()) } else { native::clipboard_files },
             auth_pending: Vec::new(),
             pending_numpad: Vec::new(),
+            pending_context_key: false,
             folder_picker: ndr::file_dialogs::browse_folder,
             network_picker: if cfg!(test) { |_, _| None } else { ndr::file_dialogs::browse_network },
             color_picker: if cfg!(test) { |_| None } else { native::choose_color },
@@ -1499,6 +1502,7 @@ impl eframe::App for App {
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
         let pastes = ndr::shell_menu::take_paste_keys();
         let numpad = ndr::shell_menu::take_numpad_keys();
+        let context_keys = ndr::shell_menu::take_context_keys();
         let text_focus = ctx.memory(|m| m.focused()).is_some_and(|id| egui::text_edit::TextEditState::load(ctx, id).is_some());
         if !text_focus {
             use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_INSERT};
@@ -1510,6 +1514,9 @@ impl eframe::App for App {
                         strip_numpad_events(raw_input, vk);
                         self.pending_numpad.push((original, shift));
                     }
+                }
+                if context_keys > 0 {
+                    self.pending_context_key = true;
                 }
             }
         }

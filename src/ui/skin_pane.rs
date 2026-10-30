@@ -125,17 +125,23 @@ pub(super) fn take_pane_menu_request(ctx: &egui::Context, index: usize) -> bool 
     ctx.data_mut(|d| d.remove_temp::<bool>(egui::Id::new(("ndr-list-menu-open", index)))).unwrap_or(false)
 }
 
-/// 목록 오른쪽 단추 메뉴: 패널마다 하나, 누른 자리에 띄운다(스킨 테마면 원본 메뉴 색). open이면 이번 그림에서 연다.
+/// 목록 오른쪽 단추 메뉴: 패널마다 하나(스킨 테마면 원본 메뉴 색). open_at이 있으면 이번 그림에서 그 자리에 연다
+/// (누른 자리, 글쇠면 커서 항목 칸의 왼쪽 아래). 자리는 열린 동안 기억한다.
 /// 고친 것: 메뉴를 누른 줄의 응답에 붙였더니, 그 줄을 그리지 않은 그림(쪽 맞춤·목록 다시 읽기 등)에서 egui가
 /// 버려진 메뉴로 보고 닫아 바로 사라졌다. 이제 패널이 그림마다 메뉴를 그린다.
-pub(super) fn pane_menu(ui: &egui::Ui, index: usize, open: bool, add: impl FnOnce(&mut egui::Ui)) -> Option<egui::InnerResponse<()>> {
+pub(super) fn pane_menu(ui: &egui::Ui, index: usize, open_at: Option<egui::Pos2>, add: impl FnOnce(&mut egui::Ui)) -> Option<egui::InnerResponse<()>> {
     let ctx = ui.ctx().clone();
+    let at_id = egui::Id::new(("ndr-list-menu-at", index));
+    if let Some(at) = open_at {
+        ctx.data_mut(|d| d.insert_temp(at_id, at));
+    }
+    let at = ctx.data(|d| d.get_temp::<egui::Pos2>(at_id)).unwrap_or_default();
     let style = ctx.data(|d| d.get_temp::<Option<egui::style::StyleModifier>>(egui::Id::new(MENU_STYLE_ID))).flatten();
-    let popup = egui::Popup::new(egui::Id::new(("ndr-list-menu", index)), ctx, egui::PopupAnchor::PointerFixed, ui.layer_id())
+    let popup = egui::Popup::new(egui::Id::new(("ndr-list-menu", index)), ctx, egui::PopupAnchor::Position(at), ui.layer_id())
         .kind(egui::PopupKind::Menu)
         .layout(egui::Layout::top_down_justified(egui::Align::Min))
         .gap(0.0)
-        .open_memory(open.then_some(egui::SetOpenCommand::Bool(true)));
+        .open_memory(open_at.map(|_| egui::SetOpenCommand::Bool(true)));
     match style {
         Some(style) => popup.style(style),
         None => popup.style(egui::containers::menu::menu_style),

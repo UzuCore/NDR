@@ -1489,15 +1489,25 @@ impl App {
                 }
                 ui.style_mut().text_styles = saved_text_styles;
                 // 목록 오른쪽 단추 메뉴(줄을 그렸는지와 상관없이 그림마다). 원본 OnContextPopup(FUN_00484e8c)이 무엇을 띄울지 고른다.
-                let open_menu = super::skin_pane::take_pane_menu_request(ctx, index) && match self.list_menu_kind(index) {
-                    ListMenu::Main => true,
+                // 글쇠(Apps, MousePos -1, -1)는 지금 패널만: 표시가 없고 커서 항목이 ".."이면 띄우지 않고, 자리는 커서 항목 칸의 왼쪽 아래.
+                let mouse_menu = super::skin_pane::take_pane_menu_request(ctx, index);
+                let key_menu = index == self.active && std::mem::take(&mut self.pending_context_key);
+                let parent_only = self.panes[index].selected.is_empty() && self.panes[index].entries.get(self.panes[index].cursor).is_some_and(|e| e.is_parent());
+                let kind = if mouse_menu || (key_menu && !parent_only) { self.list_menu_kind(index) } else { ListMenu::None };
+                let open_menu = match kind {
+                    ListMenu::Main if !mouse_menu => {
+                        let cursor = self.panes[index].cursor;
+                        let at = self.name_tip.borrow().as_ref().filter(|tip| tip.0 == index && tip.1 == cursor).map(|tip| tip.2.left_bottom());
+                        Some(at.unwrap_or(list_rect.left_top()))
+                    }
+                    ListMenu::Main => Some(ctx.input(|i| i.pointer.interact_pos()).unwrap_or(list_rect.left_top())),
                     ListMenu::Shell(paths) => {
                         if let Err(error) = ndr::shell_menu::show(&paths) {
                             self.status = error;
                         }
-                        false
+                        None
                     }
-                    ListMenu::None => false,
+                    ListMenu::None => None,
                 };
                 super::skin_pane::pane_menu(ui, index, open_menu, |ui| {
                     if let Some(chosen) = self.list_context_menu(ui, index) {
