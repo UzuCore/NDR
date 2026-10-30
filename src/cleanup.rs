@@ -129,6 +129,60 @@ fn trimmed_key(path: &Path) -> String {
     trimmed.to_lowercase()
 }
 
+/// 원본 TfCleanup 사용자 지정 검색(btnSearchClick 0x41c338 → FUN_0041bedc): 위치마다, 폴더 안의 하위 폴더를 먼저 차례로
+/// (들어갈 때 `entering`(폴더) — 원본 lResult 글), 그다음 그 폴더의 파일을 확장자 패턴마다(";" 순서, 패턴이 없으면 모두) 찾는다.
+/// 재분석 지점 폴더는 들어가지 않고 같은 파일은 한 번. 멈춤(`stop`, 원본 +0x434)이면 그때까지 찾은 것을 돌려준다.
+pub fn search_until_stopped(roots: &[(PathBuf, Vec<String>)], stop: &AtomicBool, entering: &mut dyn FnMut(&Path)) -> Vec<Candidate> {
+    fn walk(directory: &Path, patterns: &[String], stop: &AtomicBool, entering: &mut dyn FnMut(&Path), found: &mut Vec<Candidate>, seen: &mut HashSet<String>, depth: usize) {
+        if depth > 256 || stop.load(Ordering::Relaxed) {
+            return;
+        }
+        let Ok(entries) = fs::read_dir(directory) else { return };
+        let mut folders = Vec::new();
+        let mut files = Vec::new();
+        for entry in entries.flatten() {
+            if stop.load(Ordering::Relaxed) {
+                return;
+            }
+            let Ok(metadata) = entry.metadata() else { continue };
+            let attributes = metadata.file_attributes();
+            if attributes & FILE_ATTRIBUTE_DIRECTORY != 0 {
+                if attributes & FILE_ATTRIBUTE_REPARSE_POINT == 0 {
+                    folders.push(entry.path());
+                }
+            } else {
+                files.push((entry.file_name().to_string_lossy().into_owned(), entry.path(), metadata.len()));
+            }
+        }
+        for folder in folders {
+            if stop.load(Ordering::Relaxed) {
+                return;
+            }
+            entering(&folder);
+            walk(&folder, patterns, stop, entering, found, seen, depth + 1);
+        }
+        let all = [String::new()];
+        let patterns: &[String] = if patterns.is_empty() { &all } else { patterns };
+        for pattern in patterns {
+            for (name, path, size) in &files {
+                if (pattern.is_empty() || matches_win32_expression(pattern, name)) && seen.insert(path.to_string_lossy().to_lowercase()) {
+                    found.push(Candidate { name: name.clone(), full_path: path.clone(), size: *size });
+                }
+            }
+        }
+    }
+    let mut found = Vec::new();
+    let mut seen = HashSet::new();
+    for (root, patterns) in roots {
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
+        entering(root);
+        walk(root, patterns, stop, entering, &mut found, &mut seen, 0);
+    }
+    found
+}
+
 /// CleanupScanProgressWindow.Scan: 위치마다 깊이 우선(없는 위치·열지 못한 폴더는 건너뜀, 같은 폴더는 한 번),
 /// 재분석 지점 폴더는 들어가지 않는다. 파일은 패턴(없으면 모두)에 맞으면 후보(전체 경로 기준 한 번).
 /// 진행: 패턴을 통과한 파일에서 확인한 항목 수가 256의 배수일 때, 끝에 (확인 수, 후보 수, "").
@@ -263,6 +317,24 @@ mod tests {
         assert!(matches_win32_expression("a.*", "a") && matches_win32_expression("a.*", "a.txt"), "DOS_DOT");
         assert!(matches_win32_expression("*", "anything") && !matches_win32_expression("*.tmp", ""));
         assert_eq!(parse_patterns("tmp;;bak"), ["*.tmp", "*.", "*.bak"], "empty pieces are kept");
+    }
+
+    /// 원본 FUN_0041bedc: 하위 폴더를 먼저, 그다음 이 폴더 파일을 패턴 순서로. 멈추면 찾은 것까지.
+    #[test]
+    fn search_follows_the_original_order_and_stops() {
+        let root = std::env::temp_dir().join(format!("ndr-cleanup-search-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        fs::create_dir_all(root.join("sub")).unwrap();
+        for name in ["a.bak", "b.tmp", "keep.txt", "sub/c.tmp"] {
+            fs::write(root.join(name), b"1").unwrap();
+        }
+        let stop = AtomicBool::new(false);
+        let mut entered = Vec::new();
+        let found = search_until_stopped(&[(root.clone(), parse_patterns("tmp;bak"))], &stop, &mut |p| entered.push(p.to_path_buf()));
+        assert_eq!(found.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["c.tmp", "b.tmp", "a.bak"]);
+        assert_eq!(entered, [root.clone(), root.join("sub")]);
+        stop.store(true, Ordering::Relaxed);
+        assert!(search_until_stopped(&[(root.clone(), vec![])], &stop, &mut |_| {}).is_empty(), "stopped before starting");
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

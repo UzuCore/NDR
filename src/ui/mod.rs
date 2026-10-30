@@ -398,8 +398,6 @@ enum ModalKind {
     Message,
     /// 검색: "검색 항목 N · 결과 N" 다음 줄에 path(files = 확인한 항목, bytes = 결과), 막대는 늘 움직인다.
     Search,
-    /// 정리 위치 검색: "{scanned}: N  ·  {matches}: N"(+ 다음 줄에 path), 막대는 늘 움직인다.
-    Cleanup { scanned: String, matches: String },
 }
 
 struct PasswordRequest {
@@ -434,7 +432,9 @@ enum AsyncResult {
     SearchInPane { pane: usize, root: PathBuf, outcome: Result<Vec<Entry>, String>, cancelled: bool },
     CompareDone(compare_dialog::CompareRun, Result<(Vec<ndr::folder_compare::Difference>, Vec<String>), String>, bool),
     SyncDone(Result<ndr::folder_compare::SyncResult, String>, bool),
-    CleanupScanned(Result<Vec<ndr::cleanup::Candidate>, String>, bool),
+    /// 컴퓨터 청소 사용자 지정 검색이 들어간 폴더(lResult)와 끝(찾은 것).
+    CleanupSearchFolder(String),
+    CleanupScanned(Vec<ndr::cleanup::Candidate>),
     /// C# RunSafely 모양의 경고 상자(MessageBox(글, "NDR", 경고)).
     Warning(String),
     MergeSources(PathBuf, Result<Vec<PathBuf>, String>),
@@ -1276,7 +1276,8 @@ impl App {
                 AsyncResult::SearchInPane { pane, root, outcome, cancelled } => self.search_done(pane, root, outcome, cancelled),
                 AsyncResult::CompareDone(run, outcome, cancelled) => self.compare_done(run, outcome, cancelled),
                 AsyncResult::SyncDone(outcome, cancelled) => self.sync_done(outcome, cancelled),
-                AsyncResult::CleanupScanned(outcome, cancelled) => self.cleanup_scanned(outcome, cancelled),
+                AsyncResult::CleanupSearchFolder(folder) => self.cleanup_search_folder(folder),
+                AsyncResult::CleanupScanned(found) => self.cleanup_scanned(found),
                 AsyncResult::Warning(text) => self.system_box("NDR", &text, ndr::msgbox::MB_OK | ndr::msgbox::MB_ICONEXCLAMATION, |_, _, _| {}),
                 AsyncResult::MergeSources(output, sources) => self.merge_sources_ready(output, sources),
                 AsyncResult::MergeDone(count, outcome) => self.merge_done(count, outcome),

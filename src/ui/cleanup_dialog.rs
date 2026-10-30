@@ -6,7 +6,7 @@ use super::grid::{self, Column, GridState, GridView};
 use super::original_dialogs::{DialogKind, DialogResult};
 use super::*;
 use ndr::cleanup::{self, Candidate};
-use ndr::msgbox::{IDYES, MB_ICONEXCLAMATION, MB_ICONQUESTION, MB_OK, MB_YESNO};
+use ndr::msgbox::{IDYES, MB_ICONQUESTION, MB_YESNO};
 
 fn same_path(a: &str, b: &str) -> bool {
     ndr::names::equals_ignore_case(a, b)
@@ -29,6 +29,18 @@ pub(super) struct CleanupOptionsForm {
     pub results: Vec<(Candidate, bool)>,
     pub grid: GridState,
     pub searched: bool,
+    /// 원본 btnSearchClick(0x41c338): 찾는 동안(btnSearch.Tag = 1, 글 = STOP) 멈춤 표시(+0x434)와 lResult에 보일 지금 폴더.
+    pub search_stop: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    pub current: String,
+}
+
+impl Drop for CleanupOptionsForm {
+    /// 창을 닫으면 찾기도 멈춘다.
+    fn drop(&mut self) {
+        if let Some(stop) = &self.search_stop {
+            stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
 }
 
 impl CleanupOptionsForm {
@@ -47,6 +59,8 @@ impl CleanupOptionsForm {
             results: vec![],
             grid: GridState::new(0),
             searched: false,
+            search_stop: None,
+            current: String::new(),
         };
         for drive in native::drives() {
             if native::is_fixed_drive(&drive) {
@@ -192,11 +206,16 @@ pub(super) fn options_ui(ui: &mut egui::Ui, form: &mut CleanupOptionsForm, langu
         if ui.put(at(36.0, 251.0, 408.0, 21.0), egui::TextEdit::singleline(&mut form.extensions)).changed() {
             form.invalidate();
         }
-        if vcl_button(ui, at(450.0, 248.0, 75.0, 25.0), true, &r("Caption.btnSearch", "&Search")).1 {
+        // 원본 btnSearchClick: 찾는 동안 단추 글은 STOP(누르면 멈춤).
+        let search_caption = if form.search_stop.is_some() { language.raw("RES.STOP").unwrap_or_else(|| "Stop".into()) } else { r("Caption.btnSearch", "&Search") };
+        if vcl_button(ui, at(450.0, 248.0, 75.0, 25.0), true, &search_caption).1 {
             action = Some(CleanupAction::Search);
         }
-        // 원본(0x41c549): 검색이 끝나면 lResult 글을 SEARCHRESULT + Format(" (%d)", 결과 수)로 바꾼다(천 단위 구분 없음). 검색 전은 DFM 글.
-        let label = if form.searched {
+        // 원본(0x41c549): 찾는 동안 lResult = 들어간 폴더(epPathEllipsis), 끝나면 SEARCHRESULT + Format(" (%d)", 결과 수)
+        // (천 단위 구분 없음). 검색 전은 DFM 글.
+        let label = if form.search_stop.is_some() {
+            super::original_dialogs::path_ellipsis(ui, &form.current, 489.0, &egui::FontId::proportional(13.0))
+        } else if form.searched {
             format!("{} ({})", language.text("RES.SEARCHRESULT", "Search Result"), form.results.len())
         } else {
             t("Caption.lResult", "Search Result")
@@ -249,7 +268,8 @@ pub(super) fn options_ui(ui: &mut egui::Ui, form: &mut CleanupOptionsForm, langu
             action = Some(CleanupAction::Remove);
         }
     }
-    if vcl_button(ui, at(440.0, 16.0, 97.0, 53.0), true, &r("Caption.btnOk", "Start")).1 {
+    // 원본 btnSearchClick: 찾는 동안 btnOk(+0x418)는 꺼진다.
+    if vcl_button(ui, at(440.0, 16.0, 97.0, 53.0), form.search_stop.is_none(), &r("Caption.btnOk", "Start")).1 {
         action = Some(CleanupAction::Accept);
     }
     if vcl_button(ui, at(440.0, 84.0, 97.0, 25.0), true, &r("Caption.btnClose", "Close")).1 {
@@ -326,41 +346,46 @@ impl App {
         });
     }
 
-    /// 사용자 지정 검색(작은 진행 창). 위치가 없으면 창 없이 빈 결과.
-    fn start_cleanup_scan(&mut self, roots: Vec<(PathBuf, Vec<String>)>) {
-        if roots.is_empty() {
-            return self.cleanup_scanned(Ok(vec![]), false);
-        }
-        let modal = ModalProgress {
-            stop: self.language_pack.text("RES.CANCEL", "Cancel"),
-            stopping: None,
-            stopping_text: text(&self.language_pack, "Caption.lblCanceling", "Canceling cleanup scan…"),
-            kind: ModalKind::Cleanup { scanned: text(&self.language_pack, "Caption.lblScanned", "Items scanned"), matches: text(&self.language_pack, "Caption.lblMatches", "Matches") },
-        };
-        let title = text(&self.language_pack, "Caption.lblScanTitle", "Scanning cleanup locations");
+    /// 원본 btnSearchClick(0x41c338, Tag 0): 결과를 비우고, btnOk를 끄고, 단추 글을 STOP으로 바꾼 뒤 위치마다 FUN_0041bedc로
+    /// 찾는다(창은 그대로 쓸 수 있고 lResult에 지금 폴더). 다시 누르면(Tag 1) 멈춘다(+0x434). 끝나면 cleanup_scanned.
+    fn start_cleanup_search(&mut self) {
         let tx = self.async_tx.clone();
-        self.start_modal_task(title, modal, move |events, cancel| {
-            let outcome = cleanup::scan(&roots, &cancel, &mut |scanned, matches, path| {
-                let _ = events.send(Event::Progress { path: path.to_path_buf(), bytes: matches as u64, files: scanned });
+        let Some(form) = self.cleanup_options_form() else { return };
+        if let Some(stop) = &form.search_stop {
+            stop.store(true, Ordering::Relaxed);
+            return;
+        }
+        form.clear_results();
+        let roots = form.search_roots();
+        let stop = Arc::new(AtomicBool::new(false));
+        form.search_stop = Some(stop.clone());
+        form.current = roots.first().map(|(p, _)| p.to_string_lossy().into_owned()).unwrap_or_default();
+        thread::spawn(move || {
+            let mut last = Instant::now();
+            let found = cleanup::search_until_stopped(&roots, &stop, &mut |folder| {
+                // 글은 화면이 따라갈 만큼만 보낸다.
+                if last.elapsed() >= Duration::from_millis(50) {
+                    last = Instant::now();
+                    let _ = tx.send(AsyncResult::CleanupSearchFolder(folder.to_string_lossy().into_owned()));
+                }
             });
-            let _ = tx.send(AsyncResult::CleanupScanned(outcome, cancel.load(Ordering::Relaxed)));
-            Ok(())
+            let _ = tx.send(AsyncResult::CleanupScanned(found));
         });
     }
 
-    /// 검색 결과를 lvResult에 넣는다(모두 확인 표시).
-    pub(super) fn cleanup_scanned(&mut self, outcome: Result<Vec<Candidate>, String>, cancelled: bool) {
-        match outcome {
-            Err(_) if cancelled => {}
-            Err(error) => {
-                let title = self.cleanup_title();
-                self.system_box(&title, &error, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
-            }
-            Ok(found) => {
-                if let Some(form) = self.cleanup_options_form() {
-                    form.set_results(found);
-                }
-            }
+    /// 찾는 중 들어간 폴더(lResult).
+    pub(super) fn cleanup_search_folder(&mut self, folder: String) {
+        if let Some(form) = self.cleanup_options_form().filter(|f| f.search_stop.is_some()) {
+            form.current = folder;
+        }
+    }
+
+    /// 찾기가 끝나거나 멈춤: 찾은 것을 lvResult에 넣고(모두 확인 표시) 단추를 되돌린다.
+    pub(super) fn cleanup_scanned(&mut self, found: Vec<Candidate>) {
+        if let Some(form) = self.cleanup_options_form() {
+            form.search_stop = None;
+            form.current.clear();
+            form.set_results(found);
         }
     }
 
@@ -407,11 +432,7 @@ impl App {
         let folder_picker = self.folder_picker;
         let Some(form) = self.cleanup_options_form() else { return };
         match action {
-            CleanupAction::Search => {
-                form.clear_results();
-                let roots = form.search_roots();
-                self.start_cleanup_scan(roots);
-            }
+            CleanupAction::Search => self.start_cleanup_search(),
             CleanupAction::Browse => {
                 let picker = if ko { "정리할 위치 선택" } else { "Select cleanup location" };
                 let initial = if Path::new(&form.location_input).is_dir() { PathBuf::from(&form.location_input) } else { PathBuf::from(std::env::var_os("USERPROFILE").unwrap_or_default()) };

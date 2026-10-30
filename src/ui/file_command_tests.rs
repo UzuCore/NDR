@@ -1225,9 +1225,16 @@ fn computer_cleanup_follows_the_original_tfcleanup() {
         form.locations = vec![junk_text.clone()];
         form.extensions = "tmp;bak".into();
     });
+    // 원본 btnSearchClick: 창 안에서 찾는다(작업 창 없음). 찾는 동안 단추 글은 STOP, 시작 단추는 꺼진다.
     app.cleanup_action(super::cleanup_dialog::CleanupAction::Search, &ctx);
-    frame_with_progress(&mut app, &ctx);
-    wait_job(&mut app, &ctx);
+    assert!(app.job.is_none() && cleanup_options(&app).search_stop.is_some());
+    frame(&mut app, &ctx, vec![]);
+    let end = Instant::now() + Duration::from_secs(20);
+    while cleanup_options(&app).search_stop.is_some() {
+        assert!(Instant::now() < end, "search timeout");
+        app.poll(&ctx);
+        thread::sleep(Duration::from_millis(5));
+    }
     let mut found: Vec<String> = cleanup_options(&app).results.iter().map(|(c, checked)| { assert!(checked); c.name.clone() }).collect();
     found.sort();
     assert_eq!(found, ["a.tmp", "b.bak", "c.tmp", "d.tmp"]);

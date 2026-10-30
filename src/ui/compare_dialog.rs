@@ -871,10 +871,7 @@ impl App {
                 let counts = if ko { format!("검색 항목 {} · 결과 {}", n0(job.files as usize), n0(job.bytes as usize)) } else { format!("Scanned {} · Results {}", n0(job.files as usize), n0(job.bytes as usize)) };
                 (format!("{counts}\n{}", job.path), None, None)
             }
-            ModalKind::Cleanup { scanned, matches } => {
-                let counts = format!("{scanned}: {}  ·  {matches}: {}", n0(job.files as usize), n0(job.bytes as usize));
-                (if job.path.is_empty() { counts } else { format!("{counts}\n{}", job.path) }, None, None)
-            }
+
         };
         let status = if stopping { modal.stopping_text.clone() } else { status };
         super::keep_opaque(ctx, egui::Id::new("ndr-modal-progress"));
