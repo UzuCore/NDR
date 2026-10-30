@@ -653,6 +653,26 @@ impl App {
         }
         ListMenu::Main
     }
+
+    /// 원본 목록 OnMouseDown(FUN_00485078): 오른쪽 단추를 누른 채(Shift 상태 ssRight) 왼쪽 단추를 누르면, "탐색기 메뉴 사용하기"가
+    /// 꺼져 있거나 표시가 없고 커서 항목이 드라이브면 탐색기(셸) 메뉴(FUN_00486104: 로컬 패널만, 드라이브면 그 드라이브, 아니면
+    /// 표시한 항목 또는 커서 항목), 켜져 있으면 pmMain을 누른 자리에 띄운다(오른쪽 단추 메뉴와 반대).
+    pub(super) fn rocker_menu_kind(&self, index: usize) -> ListMenu {
+        let pane = &self.panes[index];
+        let Some(focused) = pane.entries.get(pane.cursor) else { return ListMenu::None };
+        let drive_cursor = pane.selected.is_empty() && focused.drive;
+        if !self.settings.flag("UseExplorerMenu", false) || drive_cursor {
+            if pane.archive.is_some() || pane.remote.is_some() || pane.loading {
+                return ListMenu::None;
+            }
+            if drive_cursor {
+                return ListMenu::Shell(vec![focused.path.clone()]);
+            }
+            let targets = pane.targets();
+            return if targets.is_empty() { ListMenu::None } else { ListMenu::Shell(targets) };
+        }
+        ListMenu::Main
+    }
 }
 
 pub(super) fn row_pressed(pane: &mut Pane, row: usize, modifiers: egui::Modifiers, secondary: bool, original: bool) {
@@ -1540,7 +1560,16 @@ impl App {
                 let mouse_menu = super::skin_pane::take_pane_menu_request(ctx, index);
                 let key_menu = index == self.active && std::mem::take(&mut self.pending_context_key);
                 let parent_only = self.panes[index].selected.is_empty() && self.panes[index].entries.get(self.panes[index].cursor).is_some_and(|e| e.is_parent());
-                let kind = if mouse_menu || (key_menu && !parent_only) { self.list_menu_kind(index) } else { ListMenu::None };
+                // 원본 FUN_00485078: 오른쪽 단추를 누른 채 왼쪽 단추(누른 줄로 커서를 옮긴 뒤)면 rocker_menu_kind.
+                let rocker = ui.rect_contains_pointer(list_rect) && ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary) && i.pointer.button_down(egui::PointerButton::Secondary));
+                let kind = if rocker {
+                    self.rocker_menu_kind(index)
+                } else if mouse_menu || (key_menu && !parent_only) {
+                    self.list_menu_kind(index)
+                } else {
+                    ListMenu::None
+                };
+                let mouse_menu = mouse_menu || rocker;
                 let open_menu = match kind {
                     ListMenu::Main if !mouse_menu => {
                         let cursor = self.panes[index].cursor;

@@ -214,6 +214,13 @@ fn list_right_click_menu_follows_the_original_context_popup() {
     app.settings.set_flag("UseExplorerMenu", true);
     let a = app.panes[0].entries[file].path.clone();
     assert!(matches!(app.list_menu_kind(0), ListMenu::Shell(ref p) if *p == [a.clone()]), "explorer menu setting: the marked items");
+    // 원본 FUN_00485078(오른쪽 단추를 누른 채 왼쪽 단추): 탐색기 메뉴 설정과 반대.
+    assert!(matches!(app.rocker_menu_kind(0), ListMenu::Main), "explorer menu setting on: the rocker gesture gives pmMain");
+    app.settings.set_flag("UseExplorerMenu", false);
+    assert!(matches!(app.rocker_menu_kind(0), ListMenu::Shell(ref p) if *p == [a.clone()]), "setting off: the shell menu of the marked items");
+    app.panes[0].selected.clear();
+    assert!(matches!(app.rocker_menu_kind(0), ListMenu::Shell(ref p) if *p == [drive_path.clone()]), "an unmarked drive cursor: its shell menu");
+    app.panes[0].selected.insert(file);
     app.settings.set_flag("UseExplorerMenu", false);
     // pmMain: 탐색기 메뉴가 맨 위에 늘 있고, 붙여넣기 밖의 항목은 켜져 있다(여기 클립보드 파일은 없다고 보지 않는다).
     app.panes[0].selected.clear();
