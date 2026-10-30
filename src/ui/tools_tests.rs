@@ -161,7 +161,7 @@ fn boxed(app: &App) -> (String, String) {
 }
 
 #[test]
-fn command_line_find_and_open_with_follow_the_csharp_flows() {
+fn command_line_find_and_open_with_follow_the_original() {
     let (root, ctx, mut app) = fixture("command", "ko");
     let left = root.join("left");
     // 찾기: TfGetText(TITLE_FIND, MSG_FIND, 빈 글).
@@ -220,28 +220,6 @@ fn command_line_find_and_open_with_follow_the_csharp_flows() {
     app.panes[0].cursor = row(&app, "alpha.txt");
     app.dispatch("openWith", &ctx);
     assert_eq!(launched(), [("rundll32.exe".to_owned(), format!("shell32.dll,OpenAs_RunDLL {}", left.join("alpha.txt").display()), left.clone())]);
-    // C# OpenWithAsync는 C# 테마의 흐름.
-    app.settings.set_text("Theme", "Light");
-    app.panes[0].selected = [row(&app, "alpha.txt"), row(&app, "beta.txt")].into_iter().collect();
-    app.dispatch("openWith", &ctx);
-    let (title, message, value, _) = prompt(&app);
-    assert_eq!((title.as_str(), message.as_str(), value.as_str()), ("다른 프로그램으로 열기", "실행할 프로그램 경로", "notepad.exe"));
-    app.answer_dialog(DialogResult::Text(Some("C:\\tools\\viewer.exe".into())), &ctx);
-    assert_eq!(prompt(&app).2, "{file}");
-    app.answer_dialog(DialogResult::Text(Some("-x {file}".into())), &ctx);
-    let runs = launched();
-    assert_eq!(runs.len(), 2, "one launch per file");
-    assert_eq!(runs[0], ("C:\\tools\\viewer.exe".to_owned(), format!("-x \"{}\"", left.join("alpha.txt").display()), left.clone()));
-    app.dispatch("openWith", &ctx);
-    app.answer_dialog(DialogResult::Text(Some("viewer".into())), &ctx);
-    app.answer_dialog(DialogResult::Text(Some("{files}".into())), &ctx);
-    let runs = launched();
-    assert_eq!(runs.len(), 1, "{{files}} launches once");
-    assert!(runs[0].1.contains("alpha.txt\" \"") && runs[0].1.ends_with("beta.txt\""));
-    app.panes[0].selected.clear();
-    app.panes[0].cursor = row(&app, "folder1");
-    app.dispatch("openWith", &ctx);
-    assert_eq!(boxed(&app), ("NDR".to_owned(), "다른 프로그램으로 열 파일을 선택하세요.".to_owned()));
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -1103,23 +1081,9 @@ fn system_commands_follow_csharp() {
     assert_eq!(recorded, vec![(left.join("alpha.txt"), "properties*".to_owned()), (left.join("beta.txt"), "properties*".to_owned())]);
     app.panes[0].selected.clear();
     VERBS.with(|v| v.borrow_mut().clear());
-    app.settings.set_text("Theme", "Light");
-    app.dispatch("properties", &ctx);
-    app.settings.set_text("Theme", "Black");
-    assert_eq!(VERBS.with(|v| v.borrow().clone()), vec![(left.join("alpha.txt"), "properties".to_owned())]);
     // 원본 miFileInfoClick(0x4452bc, 스킨 테마): https://ext.xiles.app/?ext=확장자.
     app.dispatch("fileInfo", &ctx);
     assert_eq!(launched().first().map(|(program, _, _)| program.clone()), Some("https://ext.xiles.app/?ext=txt".to_owned()));
-    // ShowFileInformation(C# 테마): "Label: value" rows in a text window titled Menu("fileInfo").
-    app.settings.set_text("Theme", "Light");
-    app.dispatch("fileInfo", &ctx);
-    app.settings.set_text("Theme", "Black");
-    let text = app.text.take().expect("file information");
-    assert_eq!(text.title, app.language_pack.text("Menu.miFileInfo", "What is this file?"));
-    let lines: Vec<&str> = text.text.split("\r\n").collect();
-    assert!(lines[0].ends_with(": alpha.txt"), "{lines:?}");
-    assert!(lines[3].ends_with(&format!(": {}", left.join("alpha.txt").display())), "{lines:?}");
-    assert_eq!(lines.len(), 7, "name, type, extension, location, size, date, attributes: {lines:?}");
     // ViewTextAsync: the configured viewer gets the quoted file path in the file's folder; with none, the NDR text window.
     app.settings.set_text("TextViewerPath", "viewer.exe");
     app.dispatch("textView", &ctx);
@@ -1133,33 +1097,6 @@ fn system_commands_follow_csharp() {
     app.dispatch("textView", &ctx);
     assert!(launched().is_empty() && app.msgboxes.is_empty());
     app.panes[0].cursor = file_cursor;
-    app.settings.set_text("Theme", "Light");
-    app.settings.set_text("TextEditorPath", "");
-    app.dispatch("textEdit", &ctx);
-    wait_until(&mut app, &ctx, |app| app.text.is_some());
-    let document = app.text.take().unwrap();
-    assert!(document.editable && document.text == "alpha.txt");
-    app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.is_dir).unwrap();
-    app.dispatch("textView", &ctx);
-    assert_eq!(boxed(&app).1, "Select one text file.");
-    app.msgboxes.clear();
-    // SelectThemeAsync: six themes, the choice is stored as is.
-    app.dispatch("theme", &ctx);
-    let (title, options) = choice(&app);
-    assert_eq!((title.as_str(), options.len()), ("Select theme", 6));
-    app.answer_dialog(DialogResult::Choice(Some(5)), &ctx);
-    assert_eq!(app.settings.text("Theme", "?"), "Gray");
-    assert!(!app.dark);
-    app.save();
-    assert_eq!(app.settings.text("Theme", "?"), "Gray", "saving keeps the chosen theme");
-    // SelectLanguageAsync: "code — name" from Languages\*.lang.
-    app.dispatch("language", &ctx);
-    if !app.original_dialogs.is_empty() {
-        let (_, options) = choice(&app);
-        let ko = options.iter().position(|o| o.starts_with("ko ")).expect("Korean is listed");
-        app.answer_dialog(DialogResult::Choice(Some(ko)), &ctx);
-        assert_eq!((app.language.as_str(), app.settings.text("Language", "?").as_str()), ("ko", "ko"));
-    }
     // ShowAbout: information box with the profile folder.
     app.dispatch("about", &ctx);
     let (_, about) = boxed(&app);
@@ -1924,10 +1861,6 @@ fn skin_list_menu_has_only_the_original_items() {
     let skin = menu(&mut app);
     assert!(!skin.iter().any(|t| t.contains("other pane") || *t == copy_path), "{skin:?}");
     assert!(skin.iter().any(|t| t.contains("Properties")), "{skin:?}");
-    app.settings.set_text("Theme", "Light");
-    assert!(app.current_skin().is_none());
-    let csharp = menu(&mut app);
-    assert!(csharp.iter().any(|t| t.contains("other pane")) && csharp.iter().any(|t| *t == copy_path), "{csharp:?}");
     let _ = fs::remove_dir_all(root);
 }
 
@@ -2069,44 +2002,29 @@ fn drive_root_goes_up_to_this_pc_and_drive_items_rename_their_volume_label() {
     let (left, right) = (root.join("left"), root.join("right"));
     DRIVES.with(|d| *d.borrow_mut() = vec![left.clone(), right.clone()]);
     LABELS.with(|l| *l.borrow_mut() = vec![(left.clone(), "OLD".into())]);
-    // C# GoUpAsync: 드라이브 루트(상위 없음)에서 위로 = "::drives::"(내 PC). 거기서 위로는 그대로.
     let drive_root = PathBuf::from(left.components().next().unwrap().as_os_str()).join("\\");
-    // 원본 FUN_00459ba8(스킨 테마): 루트에서는 위로 가지 않는다.
+    // 원본 FUN_00459ba8: 루트에서는 위로 가지 않는다.
     assert!(app.current_skin().is_some());
     app.navigate(0, drive_root.clone(), false);
     wait_until(&mut app, &ctx, |app| !app.panes[0].loading);
     app.parent();
     assert_eq!(app.panes[0].path, drive_root, "the original stays at a drive root");
-    app.settings.set_text("Theme", "Light");
+    // 원본 FUN_00486474: "목록에 디스크 드라이브 목록 보기"가 켜져 있으면 폴더 목록 끝에 드라이브 항목.
+    app.settings.set_flag("ShowDriveList", true);
     app.navigate(0, left.clone(), false);
     wait_until(&mut app, &ctx, |app| !app.panes[0].loading);
-    app.navigate(0, drive_root, false);
-    wait_until(&mut app, &ctx, |app| !app.panes[0].loading);
-    app.parent();
-    wait_until(&mut app, &ctx, |app| !app.panes[0].loading);
-    assert_eq!(app.panes[0].path, PathBuf::from(super::remote_window::DRIVES));
-    let names: Vec<String> = app.panes[0].entries.iter().map(|e| e.name.clone()).collect();
-    assert_eq!(names, [left.to_string_lossy().into_owned(), right.to_string_lossy().into_owned()]);
-    assert!(app.panes[0].entries.iter().all(|e| e.is_dir));
-    let [folder, file, _] = app.info_texts(0);
-    assert_eq!(folder, "::drives:: · Drives 2", "C# folder summary without disk text");
-    // 원본 FUN_0048a5cc 드라이브 항목: "이름 (C:)  |  Hard Disk  |  여유 DISKFREE / 전체".
-    let letter = left.to_string_lossy().chars().next().unwrap().to_ascii_uppercase();
-    assert_eq!(file, format!("Test ({letter}:)  |  Hard Disk  |  {} Free / {}", native::format_byte_size(2048), native::format_byte_size(8192)));
-    assert!(app.panes[0].disk.is_none());
-    app.parent();
-    assert_eq!(app.panes[0].path, PathBuf::from(super::remote_window::DRIVES), "This PC has no parent");
-    // ShowDriveList 끄면 빈 목록.
+    assert_eq!(app.panes[0].drive_count(), 2);
+    let first_drive = app.panes[0].entries.len() - 2;
     app.settings.set_flag("ShowDriveList", false);
     app.refresh(0);
     wait_until(&mut app, &ctx, |app| !app.panes[0].loading);
-    assert!(app.panes[0].entries.is_empty());
+    assert_eq!(app.panes[0].drive_count(), 0);
     app.settings.set_flag("ShowDriveList", true);
     app.refresh(0);
     wait_until(&mut app, &ctx, |app| !app.panes[0].loading);
     // 원본 FUN_004351cc 드라이브 갈래: TfGetText(창 제목, MSG_DRIVELABEL, 지금 볼륨 이름) → SetVolumeLabelW.
     app.active = 0;
-    app.panes[0].cursor = 0;
+    app.panes[0].cursor = first_drive;
     app.dispatch("rename", &ctx);
     let (title, message, value, _) = prompt(&app);
     assert_eq!((title.as_str(), message, value.as_str()), ("NDR", app.language_pack.text("RES.MSG_DRIVELABEL", "?"), "OLD"));
@@ -2128,11 +2046,13 @@ fn drive_root_goes_up_to_this_pc_and_drive_items_rename_their_volume_label() {
     assert!(app.status.is_empty() && app.msgboxes.is_empty() && app.pane_message.is_none());
     assert_eq!(fake_volume_label(&left).as_deref(), Some("NEW"));
     // 준비되지 않은 드라이브(볼륨 정보 없음)는 아무것도 묻지 않는다.
-    app.panes[0].cursor = 1;
+    app.panes[0].cursor = first_drive + 1;
     app.dispatch("rename", &ctx);
     assert!(app.original_dialogs.is_empty());
     // 드라이브 항목을 열면 그 루트로.
-    app.panes[0].cursor = 0;
+    app.navigate(0, right.clone(), false);
+    wait_until(&mut app, &ctx, |app| !app.panes[0].loading);
+    app.panes[0].cursor = app.panes[0].entries.len() - 2;
     app.open_current();
     wait_until(&mut app, &ctx, |app| !app.panes[0].loading);
     assert_eq!(app.panes[0].path, left);
@@ -2158,13 +2078,6 @@ fn closing_while_working_asks_the_original_question_and_columns_use_field_names(
     // 원본 GetList: 종류 글은 셸 이름(SHGetFileInfoW SHGFI_TYPENAME).
     let entry = &app.panes[0].entries[file];
     assert_eq!(cells[DetailColumn::Kind.index()], native::shell_type_name(ndr::parity::dotnet_extension(&entry.name), false));
-    app.settings.set_text("Theme", "Light");
-    assert!(app.current_skin().is_none());
-    let titles: Vec<String> = app.detail_columns(true).into_iter().map(|(_, title, _)| title).collect();
-    assert_eq!(titles, [name, ext, "종류".to_owned(), size, date, attr, desc]);
-    app.compute_view(0);
-    assert_eq!(app.panes[0].view.cells[file][DetailColumn::Description.index()], "", "C# theme: the description stays empty");
-    app.settings.set_text("Theme", "Black");
     // 원본 FormCloseQuery(0x42a798): 작업 중이면 STILL_HAVE_OPERATION(TITLE_INFO, 0x2124). 아니요 = 그대로, 예 = 멈추고 닫기.
     assert!(app.start_task("long".into(), |_, cancel| {
         while !cancel.load(std::sync::atomic::Ordering::Relaxed) {

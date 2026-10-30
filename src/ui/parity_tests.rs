@@ -736,11 +736,6 @@ fn original_listing_is_read_in_place_with_a_parent_item() {
     wait_listing(&mut app, &ctx);
     assert_eq!(app.panes[0].path, root, "opening \"..\" goes up");
     assert_eq!(cursor_name(&app), "left", "the cursor is on the folder we came from (original FUN_00486694)");
-    // C# 테마는 C# 판처럼 따로 읽는다.
-    app.settings.set_text("Theme", "Light");
-    app.refresh(0);
-    assert!(app.panes[0].loading);
-    wait_listing(&mut app, &ctx);
     fs::remove_dir_all(root).unwrap();
 }
 /// egui-winit의 Copy·Cut·Paste 사건은 원본 단축키 글쇠(Ctrl+C·X·V)로 되돌린다. 클립보드에 글이 없어 egui가 버린 붙여넣기는
@@ -860,50 +855,6 @@ fn names_of(app: &App, pane: usize) -> Vec<String> {
     let mut names: Vec<String> = app.panes[pane].entries.iter().map(|e| e.name.clone()).collect();
     names.sort();
     names
-}
-
-#[test]
-fn typed_quick_search_keeps_one_buffer_per_pane() {
-    let (root, ctx, mut app) = fixture("quicksearch", "ko");
-    // C# 판 빠른 찾기는 C# 테마의 동작이다. 스킨 테마는 아래 original_quick_search_follows_the_file_list_view.
-    app.settings.set_text("Theme", "Light");
-    app.panes[0].cursor = index_of(&app, "folder1");
-    app.panes[0].selected = [index_of(&app, "gamma.log")].into_iter().collect();
-    type_text(&mut app, &ctx, "a");
-    let first = cursor_name(&app);
-    assert!(first == "alpha.txt" || first == "Alphabet.doc");
-    type_text(&mut app, &ctx, "lphab");
-    assert_eq!(cursor_name(&app), "Alphabet.doc", "typed within the timeout: one query");
-    assert_eq!(app.status, "빠른 찾기: alphab");
-    assert_eq!(app.panes[0].selected.len(), 1, "marks unchanged (original select-bar move)");
-    type_text(&mut app, &ctx, "z");
-    assert_eq!(app.typed_search[0].query, "z", "no match: retry with the new character alone");
-    assert_eq!(app.status, "빠른 찾기: z · 찾을 수 없음");
-    keyboard_frame(&mut app, &ctx, vec![key(egui::Key::Backspace)]);
-    assert!(app.typed_search[0].query.is_empty());
-    assert_eq!(app.status, "빠른 찾기를 지웠습니다.");
-    assert_eq!(app.panes[0].path, root.join("left"), "Backspace went to the quick search, not to the parent folder");
-
-    type_text(&mut app, &ctx, "g");
-    app.typed_search[0].last_input = Some(Instant::now() - Duration::from_millis(1500));
-    type_text(&mut app, &ctx, "b");
-    assert_eq!((app.typed_search[0].query.as_str(), cursor_name(&app).as_str()), ("b", "beta.txt"), "after 1100 ms a new query starts");
-    type_text(&mut app, &ctx, "e");
-    app.find_next();
-    assert_eq!(cursor_name(&app), "beta.txt", "Find Next uses the typed prefix");
-    app.active = 1;
-    type_text(&mut app, &ctx, "q");
-    assert_eq!(app.typed_search[0].query, "be", "each pane keeps its own buffer");
-    assert_eq!(app.typed_search[1].query, "q");
-    app.active = 0;
-    keyboard_frame(&mut app, &ctx, vec![key(egui::Key::Escape)]);
-    assert!(app.typed_search[0].query.is_empty());
-    assert_eq!(app.panes[0].selected.len(), 1, "Esc cleared the quick search, not the marks");
-    type_text(&mut app, &ctx, "a");
-    app.refresh(0);
-    assert!(app.typed_search[0].query.is_empty(), "a refresh drops the buffer");
-    wait_listing(&mut app, &ctx);
-    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -1056,7 +1007,7 @@ fn system_temp() -> Option<PathBuf> {
 }
 
 /// 원본 miSortByClick(0x431c88): 같은 정렬 종류를 다시 고르면 내림차순 전환. miToTempClick(0x4330b0): GetTempPath + GetLongPathName,
-/// 실패하면 그대로. (스킨 테마. C# 테마는 같은 종류를 다시 골라도 그대로.)
+/// 실패하면 그대로.
 #[test]
 fn original_sort_and_temp_commands_follow_the_handlers() {
     let (root, ctx, mut app) = fixture("origsort", "ko");
@@ -1072,12 +1023,6 @@ fn original_sort_and_temp_commands_follow_the_handlers() {
     app.dispatch("sortNone", &ctx);
     app.dispatch("sortNone", &ctx);
     assert!(app.settings.flag("LeftSortDescending", false), "None never toggles");
-    app.settings.set_text("Theme", "Light");
-    app.dispatch("sortName", &ctx);
-    app.dispatch("sortName", &ctx);
-    assert!(app.settings.flag("LeftSortDescending", false), "C# themes keep C# SetSortMode");
-    app.settings.set_text("Theme", "Black");
-    assert!(app.current_skin().is_some());
     // To Temp: 실패하면 움직이지 않는다(시험 기본 가짜는 None).
     let before = app.panes[0].path.clone();
     app.dispatch("temp", &ctx);
@@ -1106,135 +1051,9 @@ fn original_ghosted_icons_follow_draw_list_item() {
     let ghost = app.row_icon_for_skin(0, alpha, Some(icon.clone())).unwrap();
     assert_eq!(ghost.id(), app.ghost_icons[&icon.id()].id());
     assert_eq!(app.row_icon_for_skin(0, gamma, Some(icon.clone())).unwrap().id(), icon.id());
-    // C# 테마는 흐리게 그리지 않는다.
-    app.settings.set_text("Theme", "Light");
-    assert!(!app.row_ghosted(0, alpha));
-    app.settings.set_text("Theme", "Black");
     // 새 목록 = 새 항목: 잘라낸 표시가 없어진다.
     app.refresh(0);
     wait_listing(&mut app, &ctx);
     assert!(app.panes[0].cut_marks.is_empty());
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
-fn pane_commands_follow_the_csharp_handlers() {
-    let (root, ctx, mut app) = fixture("panecmd", "ko");
-    // C# 판 선택 명령은 C# 테마의 동작이다. 스킨 테마는 original_selection_commands_follow_the_handlers.
-    app.settings.set_text("Theme", "Light");
-    let left = root.join("left");
-    fs::write(left.join("alpha.log"), b"x").unwrap();
-    fs::write(left.join("ALPHA.md"), b"x").unwrap();
-    app.refresh(0);
-    wait_listing(&mut app, &ctx);
-    // Select All leaves folders out unless SelectFolders is on.
-    app.dispatch("selectAll", &ctx);
-    assert!(!app.panes[0].selected.contains(&index_of(&app, "folder1")));
-    assert_eq!(app.panes[0].selected.len(), app.panes[0].entries.len() - 2, "no folder1, no \"..\"");
-    app.settings.set_flag("SelectFolders", true);
-    app.dispatch("selectAll", &ctx);
-    assert_eq!(app.panes[0].selected.len(), app.panes[0].entries.len() - 1, "everything but \"..\"");
-    // Same extension / same base name, case-insensitive, anchored on the cursor; the old marks can be restored.
-    app.panes[0].selected = [index_of(&app, "beta.txt")].into_iter().collect();
-    app.panes[0].cursor = index_of(&app, "alpha.txt");
-    app.dispatch("selectSameExt", &ctx);
-    let marked = |app: &App| { let mut v: Vec<String> = app.panes[0].selected.iter().map(|i| app.panes[0].entries[*i].name.clone()).collect(); v.sort(); v };
-    assert_eq!(marked(&app), ["alpha.txt", "beta.txt"]);
-    app.dispatch("selectSameName", &ctx);
-    assert_eq!(marked(&app), ["ALPHA.md", "alpha.log", "alpha.txt"]);
-    app.dispatch("restoreSelection", &ctx);
-    assert_eq!(marked(&app), ["alpha.txt", "beta.txt"]);
-    // Hidden toggle, view style text and status.
-    app.dispatch("toggleHidden", &ctx);
-    assert!(app.settings.flag("LeftShowHiddenFiles", false) && app.settings.flag("ShowHiddenFiles", false));
-    assert_eq!(app.status, "왼쪽 패널 숨김 항목 표시");
-    wait_listing(&mut app, &ctx);
-    app.dispatch("viewNames", &ctx);
-    assert_eq!((app.settings.text("LeftViewStyle", ""), app.status.as_str()), ("Names".to_string(), "왼쪽 패널 보기: Names"));
-    // Last destination missing: an information box, no navigation.
-    app.dispatch("goLastDestination", &ctx);
-    assert_eq!(app.msgboxes[0].text, "아직 사용할 수 있는 마지막 대상 폴더가 없습니다.");
-    assert_eq!((app.msgboxes[0].title.as_str(), app.msgboxes[0].flags), ("NDR", ndr::msgbox::MB_OK | ndr::msgbox::MB_ICONASTERISK));
-    app.answer_message_box(1, &ctx);
-    // Folder size: one summary box, nested roots counted once.
-    fs::write(left.join("folder1/inner.bin"), [0u8; 10]).unwrap();
-    app.panes[0].selected = [index_of(&app, "folder1"), index_of(&app, "alpha.txt")].into_iter().collect();
-    app.dispatch("calculateFolderSize", &ctx);
-    let end = Instant::now() + Duration::from_secs(10);
-    while app.msgboxes.is_empty() {
-        assert!(Instant::now() < end, "folder size timeout");
-        app.poll(&ctx);
-        thread::sleep(Duration::from_millis(5));
-    }
-    assert_eq!(app.msgboxes[0].title, "선택 항목 크기");
-    assert_eq!(app.msgboxes[0].text, "폴더: 1개\n파일: 2개\n전체 크기: 19 bytes (19 B)");
-    assert_eq!(app.msgboxes[0].flags, ndr::msgbox::MB_OK | ndr::msgbox::MB_ICONASTERISK);
-    wait_job(&mut app, &ctx);
-    // Go to root: the drive root of the listed folder.
-    app.dispatch("goRoot", &ctx);
-    wait_listing(&mut app, &ctx);
-    assert_eq!(app.panes[0].path.parent(), None);
-    fs::remove_dir_all(root).unwrap();
-}
-
-#[test]
-fn details_list_follows_the_csharp_grid() {
-    let (root, ctx, mut app) = fixture("details", "ko");
-    // C# 격자(종류 열)는 C# 테마의 모양이다. 스킨 테마는 tools_tests가 본다.
-    app.settings.set_text("Theme", "Light");
-    let left = root.join("left");
-    compat::set_description(&left, "beta.txt", "베타 설명", true).unwrap();
-    fs::write(left.join("hidden.txt"), b"h").unwrap();
-    native::set_attributes(&left.join("hidden.txt"), false, true).unwrap();
-    fs::write(left.join("big.bin"), vec![0u8; 3000]).unwrap();
-    app.refresh(0);
-    wait_listing(&mut app, &ctx);
-    assert!(app.panes[0].entries.iter().all(|e| e.name != "hidden.txt"), "hidden items are skipped while hidden display is off");
-    let row = index_of(&app, "beta.txt");
-    let cells = app.panes[0].view.cells[row].clone();
-    assert_eq!(cells[DetailColumn::Name.index()], "beta", "the extension has its own column");
-    assert_eq!(cells[DetailColumn::Extension.index()], ".txt");
-    assert_eq!(cells[DetailColumn::Kind.index()], "TXT 파일");
-    assert_eq!(cells[DetailColumn::Size.index()], "8 B");
-    assert_eq!(cells[DetailColumn::Attributes.index()], ndr::listing::attribute_text(ndr::native::attributes(&left.join("beta.txt")).unwrap()));
-    assert_eq!(cells[DetailColumn::Description.index()], "베타 설명");
-    let folder = app.panes[0].view.cells[index_of(&app, "folder1")].clone();
-    assert_eq!((folder[DetailColumn::Size.index()].as_str(), folder[DetailColumn::Kind.index()].as_str()), ("", "폴더"));
-    assert_eq!(app.panes[0].view.cells[index_of(&app, "big.bin")][DetailColumn::Size.index()], "2.9 KB");
-    app.settings.set_flag("AttachExtensionToName", true);
-    app.settings.values.insert("CharacterCase".into(), serde_json::json!(2));
-    app.compute_view(0);
-    assert_eq!(app.panes[0].view.cells[row][DetailColumn::Name.index()], "BETA.TXT");
-    assert!(app.detail_columns(true).iter().all(|(c, _, _)| *c != DetailColumn::Extension));
-    app.settings.set_flag("AttachExtensionToName", false);
-    app.settings.values.insert("CharacterCase".into(), serde_json::json!(0));
-
-    // Sort by size keeps the marks and the cursor on the same items; folders stay first.
-    app.panes[0].selected = [index_of(&app, "gamma.log")].into_iter().collect();
-    app.panes[0].cursor = index_of(&app, "alpha.txt");
-    app.dispatch("sort:Size", &ctx);
-    assert_eq!(app.settings.text("LeftSortMode", ""), "Size");
-    let order: Vec<String> = app.panes[0].entries.iter().map(|e| e.name.clone()).collect();
-    assert_eq!((order[0].as_str(), order[1].as_str()), ("..", "folder1"), "the parent item stays first, then folders");
-    assert_eq!(order.last().unwrap(), "big.bin");
-    assert_eq!(cursor_name(&app), "alpha.txt");
-    assert_eq!(app.panes[0].selected.iter().map(|i| app.panes[0].entries[*i].name.clone()).collect::<Vec<_>>(), ["gamma.log"]);
-    app.dispatch("sortDescending", &ctx);
-    assert_eq!(app.panes[0].entries[2].name, "big.bin", "descending: the largest file first after \"..\" and the folders");
-
-    // Groups by extension with headers; the folder group comes first.
-    app.dispatch("groupMode:Extension", &ctx);
-    let headers: Vec<String> = app.panes[0].view.rows.iter().filter_map(|r| if let DetailRow::Header(h) = r { Some(h.clone()) } else { None }).collect();
-    assert_eq!(headers[0], app.language_pack.text("RES.FOLDERS", "?"));
-    assert!(headers.contains(&".txt".to_string()) && headers.contains(&".log".to_string()));
-    app.dispatch("groupShowName", &ctx);
-    assert!(app.panes[0].view.rows.iter().all(|r| matches!(r, DetailRow::Item(_))), "group names hidden");
-    app.dispatch("groupMode:Bogus", &ctx);
-    assert_eq!(app.settings.text("LeftGroupMode", ""), "Extension", "unknown modes are ignored");
-    let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 850.0))), ..Default::default() };
-    let _ = ctx.run(raw, |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| app.pane_ui(ui, 0, &ctx.clone()));
-    });
-    let _ = native::set_attributes(&left.join("hidden.txt"), false, false);
     fs::remove_dir_all(root).unwrap();
 }

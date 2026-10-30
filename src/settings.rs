@@ -152,13 +152,11 @@ impl Settings {
         if original_schema < 4 && self.text("Theme", "Dark").eq_ignore_ascii_case("Dark") {
             self.set_text("Theme", "Black");
         }
+        // 테마는 원본 스킨(검정·클래식·회색)뿐이다. 예전 C# 판 테마(Dark·Light·System)나 모르는 이름은 원본 처음 값 Black.
         let theme = self.text("Theme", "Black");
         self.set_text(
             "Theme",
-            if matches!(
-                theme.as_str(),
-                "Dark" | "Light" | "System" | "Black" | "Classic" | "Gray"
-            ) {
+            if matches!(theme.as_str(), "Black" | "Classic" | "Gray") {
                 theme.as_str()
             } else {
                 "Black"
@@ -559,10 +557,10 @@ mod tests {
         old.normalize();
         assert_eq!(old.text("Theme", ""), "Black");
         assert_eq!(old.values["ExtensionColors"], serde_json::json!({".txt": "#112233"}));
-        // 스키마 4에서 고른 Dark와 비운 확장자 색은 그대로 둔다.
+        // 테마는 원본 스킨뿐: 예전에 고른 C# 판 테마 Dark도 Black. 비운 확장자 색은 그대로 둔다.
         let mut chosen = Settings { values: serde_json::from_value(serde_json::json!({"SchemaVersion": 4, "Theme": "Dark", "ExtensionColors": {}})).unwrap() };
         chosen.normalize();
-        assert_eq!(chosen.text("Theme", ""), "Dark");
+        assert_eq!(chosen.text("Theme", ""), "Black");
         assert!(chosen.values["ExtensionColors"].as_object().unwrap().is_empty());
     }
     #[test]

@@ -183,17 +183,18 @@ impl App {
         texture
     }
 
-    /// 지금 테마가 원본 스킨인가(이미 읽어 둔 skin_cache로, &self에서). 테마가 바뀐 첫 장면은 current_skin이 다시 읽을 때까지 false일 수 있다.
+    /// 지금 테마가 원본 스킨인가(이미 읽어 둔 skin_cache로, &self에서). 테마는 원본 스킨(검정·클래식·회색)뿐이므로 스킨을 읽었으면 늘 true.
     pub(super) fn skin_active(&self) -> bool {
-        let theme = self.settings.text("Theme", "Black");
-        self.skin_cache.as_ref().is_some_and(|(name, skin)| *name == theme && skin.is_some())
+        self.skin_cache.as_ref().is_some_and(|(_, skin)| skin.is_some())
     }
 
-    /// 지금 테마의 원본 스킨(검정·클래식·회색). 테마가 바뀔 때만 conf.ini를 다시 읽는다. C# 판 테마면 None.
+    /// 지금 테마의 원본 스킨(검정·클래식·회색). 테마가 바뀔 때만 conf.ini를 다시 읽는다. 원본 스킨이 아닌 이름이나 읽지 못한 스킨이면
+    /// 원본 처음 값 검정(Black)을 쓴다.
     pub(super) fn current_skin(&mut self) -> Option<ndr::styles::Skin> {
         let theme = self.settings.text("Theme", "Black");
         if self.skin_cache.as_ref().map(|(name, _)| name.as_str()) != Some(theme.as_str()) {
-            let skin = ndr::styles::Skin::load(&self.resources.join("Skins"), &theme).ok();
+            let folder = self.resources.join("Skins");
+            let skin = ndr::styles::Skin::load(&folder, &theme).ok().or_else(|| ndr::styles::Skin::load(&folder, "Black").ok());
             self.skin_cache = Some((theme, skin));
         }
         self.skin_cache.as_ref().and_then(|(_, skin)| skin.clone())

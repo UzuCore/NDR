@@ -1287,26 +1287,6 @@ fn computer_cleanup_follows_rundiskcleanupasync() {
         thread::sleep(Duration::from_millis(5));
     }
     assert_eq!(KO_EMPTIED.load(Ordering::SeqCst), 0);
-    app.settings.set_text("Theme", "Light");
-    app.dispatch("emptyRecycle", &ctx);
-    assert_eq!((app.msgboxes[0].title.as_str(), app.msgboxes[0].text.as_str(), app.msgboxes[0].flags), ("휴지통 비우기", "휴지통의 모든 항목을 영구적으로 지울까요?", MB_YESNO | ndr::msgbox::MB_ICONEXCLAMATION));
-    app.answer_message_box(6, &ctx);
-    let end = Instant::now() + Duration::from_secs(10);
-    while app.status != "휴지통을 비웠습니다." {
-        assert!(Instant::now() < end, "recycle timeout");
-        app.poll(&ctx);
-        thread::sleep(Duration::from_millis(5));
-    }
-    assert_eq!(KO_EMPTIED.load(Ordering::SeqCst), 1);
-    app.recycle_emptier = failing_empty;
-    app.dispatch("emptyRecycle", &ctx);
-    app.answer_message_box(6, &ctx);
-    while app.msgboxes.is_empty() {
-        assert!(Instant::now() < end, "recycle timeout");
-        app.poll(&ctx);
-        thread::sleep(Duration::from_millis(5));
-    }
-    assert_eq!((app.msgboxes[0].title.as_str(), app.msgboxes[0].text.as_str()), ("NDR", "휴지통을 비우지 못했습니다."));
     app.answer_message_box(1, &ctx);
     wait_listing(&mut app, &ctx);
     fs::remove_dir_all(root).unwrap();

@@ -689,8 +689,9 @@ impl App {
         let drive_items = move |cache: &std::sync::Arc<std::sync::Mutex<DriveListCache>>| {
             if cfg!(test) { ready_drives().into_iter().map(|root| { let info = drive_item(&root); (root, info) }).collect() } else { cached_drive_items(cache, ready_drives, drive_item) }
         };
-        // 내 PC 보기의 드라이브는 전처럼 부른 스레드에서 읽는다(캐시가 있으면 바로).
-        let this_pc: Option<Vec<(PathBuf, Option<DriveInfo>)>> = drives_view.then(|| if show_drive_list { drive_items(&drive_list) } else { Vec::new() });
+        // 내 PC 보기의 드라이브는 전처럼 부른 스레드에서 읽는다(캐시가 있으면 바로). 시험은 가짜 드라이브가 스레드마다 있으므로
+        // 덧붙이는 드라이브도 부른 스레드에서 읽는다.
+        let this_pc: Option<Vec<(PathBuf, Option<DriveInfo>)>> = (drives_view || (cfg!(test) && append_drives)).then(|| if show_drive_list { drive_items(&drive_list) } else { Vec::new() });
         thread::spawn(move || {
             // 원본 TNXDriveList는 시작할 때 한 번 만들어 들고 있다(목록마다 드라이브를 다시 묻지 않음). NDR은 패널 목록마다
             // 드라이브를 읽던 것을 캐시로 바꿨다(5초 안이면 그대로, 지나면 그대로 쓰고 뒤에서 새로 읽음). 끊긴 네트워크 드라이브처럼

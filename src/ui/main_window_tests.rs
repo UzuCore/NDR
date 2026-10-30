@@ -373,9 +373,8 @@ fn update_check_context_menu_and_folder_sizes_follow_csharp() {
 }
 
 #[test]
-fn drag_and_drop_follows_csharp() {
+fn drag_and_drop_follows_the_original() {
     let (root, ctx, mut app) = fixture("drop");
-    app.settings.set_text("Theme", "Light");
     let (left, right) = (root.join("left"), root.join("right"));
     let wait_job = |app: &mut App, ctx: &egui::Context| {
         let end = Instant::now() + Duration::from_secs(20);
@@ -385,38 +384,22 @@ fn drag_and_drop_follows_csharp() {
             thread::sleep(Duration::from_millis(5));
         }
     };
-    let choice = |app: &App| match app.original_dialogs.last().map(|d| (&d.title, &d.kind)) {
-        Some((title, super::original_dialogs::DialogKind::Choice(form))) => (title.clone(), form.message.clone(), form.options.clone()),
-        _ => panic!("no choice dialog"),
-    };
-    // ConfirmDragDrop(기본) = 원본 FUN_00488b64: 같은 드라이브면 이동을 DRAGDROP / DROPMOVE_CONFIRM(개수)로 묻는다. 예면 진행 창 작업.
+    // ConfirmDragDrop(기본) = 원본 FUN_00488b64: 같은 드라이브면 이동을 DRAGDROP / DROPMOVE_CONFIRM(개수)로 묻는다. 예면 옮긴다.
     app.handle_drop(1, vec![left.join("a.txt")], right.clone(), egui::Modifiers::NONE);
     let question = app.msgboxes.first().map(|m| (m.title.clone(), m.text.clone(), m.flags)).expect("the drop question");
     assert_eq!(question, (app.language_pack.text("RES.DRAGDROP", "?"), app.language_pack.text("RES.DROPMOVE_CONFIRM", "?").replace("%d", "1"), ndr::msgbox::MB_YESNO | ndr::msgbox::MB_ICONQUESTION));
     app.answer_message_box(ndr::msgbox::IDYES, &ctx);
-    assert_eq!(app.job.as_ref().map(|j| j.title.as_str()), Some("항목 이동"));
     wait_job(&mut app, &ctx);
     assert!(right.join("a.txt").exists() && !left.join("a.txt").exists());
-    assert_eq!(app.status, "요청한 1개 항목을 이동했습니다.");
-    // Ctrl = 바로 복사(묻지 않음).
-    app.handle_drop(1, vec![left.join("b.txt")], right.clone(), egui::Modifiers::CTRL);
-    assert!(app.original_dialogs.is_empty());
-    wait_job(&mut app, &ctx);
-    assert!(right.join("b.txt").exists() && left.join("b.txt").exists());
-    // 같은 폴더에 놓으면 옮길 것이 없어 바로 가기와 취소만.
-    app.handle_drop(0, vec![left.join("b.txt")], left.clone(), egui::Modifiers::NONE);
-    assert_eq!(choice(&app).2.len(), 2);
-    app.answer_dialog(super::original_dialogs::DialogResult::Choice(Some(0)), &ctx);
-    assert!(left.join("b.txt.lnk").exists(), "\"name.ext.lnk\" shortcut");
-    // 폴더 안의 폴더로는 옮기지 않는다. ConfirmDragDrop을 끄면 같은 드라이브는 이동.
+    // 폴더 안의 폴더로는 옮기지 않는다. ConfirmDragDrop을 끄면 같은 드라이브는 묻지 않고 이동.
     app.settings.set_flag("ConfirmDragDrop", false);
     app.handle_drop(0, vec![left.join("folder")], left.join("folder"), egui::Modifiers::NONE);
-    assert!(app.original_dialogs.is_empty());
+    assert!(app.original_dialogs.is_empty() && app.msgboxes.is_empty());
     wait_job(&mut app, &ctx);
     app.handle_drop(1, vec![left.join("c.log")], right.clone(), egui::Modifiers::NONE);
     wait_job(&mut app, &ctx);
     // 원본 끌기 그림(FUN_0048514c): 놓기 전에는 DRAGFILES_INFO 머리글과 이름을 그리고 끌기를 이어 간다.
-    app.file_drag = Some(super::drag_drop::FileDrag { paths: vec![right.join("a.txt"), right.join("b.txt")], secondary: false, source: 1, allowed: 7 });
+    app.file_drag = Some(super::drag_drop::FileDrag { paths: vec![right.join("a.txt"), right.join("c.log")], secondary: false, source: 1, allowed: 7 });
     let raw = egui::RawInput { events: vec![egui::Event::PointerMoved(egui::pos2(50.0, 50.0))], ..Default::default() };
     let _ = ctx.run(raw, |ctx| app.drag_drop_frame(ctx));
     assert!(app.file_drag.is_some(), "still dragging");
@@ -445,7 +428,7 @@ fn drag_and_drop_follows_csharp() {
     assert!(app.msgboxes.is_empty(), "no DROPCOPY_CONFIRM from the menu");
     wait_job(&mut app, &ctx);
     assert!(right.join("c.log").exists() && left.join("c.log").exists(), "Copy Here copies");
-    // 끌기 시작: 선택에 없는 줄이면 그 줄만.
+    // 끌기 시작: 표시가 없으면 누른 줄.
     app.panes[0].selected.clear();
     let row = app.panes[0].entries.iter().position(|e| e.name == "folder").unwrap();
     app.begin_file_drag(0, row, false, egui::Modifiers::NONE);
@@ -474,7 +457,7 @@ fn network_share_prompt_only_for_credential_failures() {
 }
 
 #[test]
-fn auto_view_columns_follow_csharp() {
+fn auto_view_columns_follow_the_original() {
     let (root, ctx, mut app) = fixture("auto");
     app.settings.set_text("LeftViewStyle", "Auto");
     // 설정한 열 수(1~19)면 그 수, 아니면 너비로 나눈 수(1400 너비의 한 패널이면 둘 이상).
@@ -492,24 +475,7 @@ fn auto_view_columns_follow_csharp() {
     draw(&mut app, &ctx);
     app.settings.values.insert("LeftColumnCount".into(), serde_json::json!(1));
     draw(&mut app, &ctx);
-    // 한 열 자동 보기(C# ApplyAutoDetailColumns): 이름은 나머지 너비, 칸은 최소~최대, 좁으면 뒤 칸부터 숨긴다.
-    app.settings.set_text("Theme", "Light");
-    let columns = app.detail_columns(true);
-    let mut widths = (Vec::new(), Vec::new());
-    let _ = ctx.run(raw.clone(), |ctx| {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            widths.0 = app.single_auto_widths(ui, 0, 900.0, &columns);
-            widths.1 = app.single_auto_widths(ui, 0, 300.0, &columns);
-        });
-    });
-    let (wide, narrow) = widths;
-    assert_eq!(wide.len(), columns.len());
-    assert!(wide.iter().all(Option::is_some), "{wide:?}");
-    let total: f32 = wide.iter().flatten().sum();
-    assert!((total - 900.0).abs() < 1.0, "the name column takes the rest: {wide:?}");
-    assert!(narrow[0].is_some() && narrow.iter().skip(1).any(Option::is_none), "a narrow pane hides some cells: {narrow:?}");
-    // 원본 FitVisibleFields(스킨 테마): 칸은 내용 너비라 넓은 열에서는 다 들어가고 이름은 늘지 않으며, 좁은 열에서는 뒤 칸부터 빠진다.
-    app.settings.set_text("Theme", "Black");
+    // 원본 FitVisibleFields: 칸은 내용 너비라 넓은 열에서는 다 들어가고 이름은 늘지 않으며, 좁은 열에서는 뒤 칸부터 빠진다.
     assert!(app.current_skin().is_some());
     let mut fitted = (0.0, [None; 6], 0.0, [None; 6]);
     let _ = ctx.run(raw, |ctx| {
@@ -606,12 +572,6 @@ fn refresh_keeps_marks_and_folder_sizes_like_the_original() {
     wait(&mut app, &ctx);
     assert!(app.panes[0].selected.is_empty());
     // C# RefreshPaneAsync는 모두 비운다.
-    app.settings.set_text("Theme", "Light");
-    let a = row(&app, "a.txt");
-    app.panes[0].selected = [a].into_iter().collect();
-    app.refresh(0);
-    wait(&mut app, &ctx);
-    assert!(app.panes[0].selected.is_empty());
     fs::remove_dir_all(root).unwrap();
 }
 
