@@ -50,8 +50,11 @@ pub fn type_name(name: &str, is_dir: bool, korean: bool) -> String {
 
 /// SYSTEMTIME(현지 시각).
 fn local_systemtime(time: SystemTime) -> windows_sys::Win32::Foundation::SYSTEMTIME {
+    systemtime_of(&chrono::DateTime::<chrono::Local>::from(time))
+}
+
+fn systemtime_of(local: &chrono::DateTime<chrono::Local>) -> windows_sys::Win32::Foundation::SYSTEMTIME {
     use chrono::{Datelike, Timelike};
-    let local = chrono::DateTime::<chrono::Local>::from(time);
     windows_sys::Win32::Foundation::SYSTEMTIME {
         wYear: local.year().clamp(1601, 30827) as u16,
         wMonth: local.month() as u16,
@@ -109,21 +112,63 @@ fn dotnet_to_picture(format: &str) -> String {
 }
 
 /// GetDateFormatW / GetTimeFormatW(LOCALE_USER_DEFAULT, 그림 문자열). .NET 사용자 지정 형식과 같은 글자(yyyy, MM, dd, HH, mm, ss, tt…)를 쓴다.
+/// 고친 것(빠르기): 전에는 항목마다 지역 설정 구분 기호를 두 번씩 읽고(GetLocaleInfoW) 그림 문자열을 다시 만들어, 파일 2만 개 목록의
+/// 칸 글 만들기가 70ms 가까이 걸렸다. 그림 문자열은 몇 초 동안 다시 쓰고(지역 설정을 바꾸면 곧 따른다), 같은 날·같은 시각의 글도 다시 쓴다.
 fn win32_format(time: SystemTime, format: &str, date: bool) -> Option<String> {
-    use windows_sys::Win32::Globalization::{GetDateFormatW, GetTimeFormatW};
-    const LOCALE_USER_DEFAULT: u32 = 0x400;
+    win32_format_st(&local_systemtime(time), format, date)
+}
+
+fn win32_format_st(st: &windows_sys::Win32::Foundation::SYSTEMTIME, format: &str, date: bool) -> Option<String> {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::time::{Duration, Instant};
+    thread_local! {
+        static PICTURES: RefCell<(Option<Instant>, HashMap<String, Vec<u16>>)> = RefCell::new((None, HashMap::new()));
+        static TEXTS: RefCell<HashMap<(bool, String, i64), String>> = RefCell::new(HashMap::new());
+    }
     if format.is_empty() {
         return Some(String::new());
     }
-    let st = local_systemtime(time);
-    let picture = wide(&dotnet_to_picture(format));
-    let mut buffer = vec![0u16; 256];
+    // 날짜 글은 그 날, 시각 글은 그 초에만 달렸다.
+    let slot = if date { (st.wYear as i64) * 10_000 + (st.wMonth as i64) * 100 + st.wDay as i64 } else { (st.wHour as i64) * 3600 + (st.wMinute as i64) * 60 + st.wSecond as i64 };
+    let fresh = PICTURES.with(|p| {
+        let mut p = p.borrow_mut();
+        let stale = p.0.is_none_or(|at| at.elapsed() > Duration::from_secs(5));
+        if stale {
+            p.0 = Some(Instant::now());
+            p.1.clear();
+        }
+        stale
+    });
+    if fresh {
+        TEXTS.with(|t| t.borrow_mut().clear());
+    }
+    let key = (date, format.to_owned(), slot);
+    if let Some(text) = TEXTS.with(|t| t.borrow().get(&key).cloned()) {
+        return Some(text);
+    }
+    let picture = PICTURES.with(|p| p.borrow_mut().1.entry(format.to_owned()).or_insert_with(|| wide(&dotnet_to_picture(format))).clone());
+    let text = win32_format_with(st, &picture, date)?;
+    TEXTS.with(|t| {
+        let mut t = t.borrow_mut();
+        if t.len() > 20_000 {
+            t.clear();
+        }
+        t.insert(key, text.clone());
+    });
+    Some(text)
+}
+
+fn win32_format_with(st: &windows_sys::Win32::Foundation::SYSTEMTIME, picture: &[u16], date: bool) -> Option<String> {
+    use windows_sys::Win32::Globalization::{GetDateFormatW, GetTimeFormatW};
+    const LOCALE_USER_DEFAULT: u32 = 0x400;
+    let mut buffer = [0u16; 256];
     // SAFETY: SYSTEMTIME and both strings live through the call; the buffer length is passed.
     let written = unsafe {
         if date {
-            GetDateFormatW(LOCALE_USER_DEFAULT, 0, &st, picture.as_ptr(), buffer.as_mut_ptr(), buffer.len() as i32)
+            GetDateFormatW(LOCALE_USER_DEFAULT, 0, st, picture.as_ptr(), buffer.as_mut_ptr(), buffer.len() as i32)
         } else {
-            GetTimeFormatW(LOCALE_USER_DEFAULT, 0, &st, picture.as_ptr(), buffer.as_mut_ptr(), buffer.len() as i32)
+            GetTimeFormatW(LOCALE_USER_DEFAULT, 0, st, picture.as_ptr(), buffer.as_mut_ptr(), buffer.len() as i32)
         }
     };
     (written > 0).then(|| String::from_utf16_lossy(&buffer[..written as usize - 1]))
@@ -204,9 +249,11 @@ pub fn list_date_text(modified: Option<SystemTime>, date_format: &str, time_form
 /// 원본 DateToStr(0x7df294)와 TimeToStr(0x7df550)의 (날짜 글, 시각 글). 형식이 틀리면 ("yyyy-MM-dd", "HH:mm").
 fn date_time_parts(modified: Option<SystemTime>, date_format: &str, time_format: &str, labels: Option<[&str; 3]>, now: SystemTime) -> Option<(String, String)> {
     let time = modified?;
+    // 고친 것(빠르기): 현지 시각 바꾸기(chrono Local)를 항목마다 네 번 하던 것을 한 번으로, 오늘 날짜는 같은 now면 다시 쓴다.
+    let local = chrono::DateTime::<chrono::Local>::from(time);
     let age = labels.and_then(|labels| {
-        let file_day = chrono::DateTime::<chrono::Local>::from(time).date_naive();
-        let today = chrono::DateTime::<chrono::Local>::from(now).date_naive();
+        let file_day = local.date_naive();
+        let today = today_of(now);
         let days = if file_day > today { -1 } else { (today - file_day).num_days() };
         match days {
             0 => Some(labels[0].to_owned()),
@@ -215,18 +262,36 @@ fn date_time_parts(modified: Option<SystemTime>, date_format: &str, time_format:
             _ => None,
         }
     });
-    match (age.or_else(|| win32_format(time, date_format, true)), win32_format(time, time_format, false)) {
+    let st = systemtime_of(&local);
+    match (age.or_else(|| win32_format_st(&st, date_format, true)), win32_format_st(&st, time_format, false)) {
         (Some(date), Some(clock)) => Some((date, clock)),
-        _ => {
-            let local = chrono::DateTime::<chrono::Local>::from(time);
-            Some((local.format("%Y-%m-%d").to_string(), local.format("%H:%M").to_string()))
-        }
+        _ => Some((local.format("%Y-%m-%d").to_string(), local.format("%H:%M").to_string())),
     }
+}
+
+/// `now`의 현지 날짜(같은 now를 거듭 물으면 한 번만 바꾼다).
+fn today_of(now: SystemTime) -> chrono::NaiveDate {
+    use std::cell::Cell;
+    thread_local! {
+        static TODAY: Cell<Option<(SystemTime, chrono::NaiveDate)>> = const { Cell::new(None) };
+    }
+    TODAY.with(|cell| match cell.get() {
+        Some((at, day)) if at == now => day,
+        _ => {
+            let day = chrono::DateTime::<chrono::Local>::from(now).date_naive();
+            cell.set(Some((now, day)));
+            day
+        }
+    })
 }
 
 /// StrCmpLogicalW(UseLogicalSort) 또는 현재 문화권 대소문자 무시 비교(CompareStringW NORM_IGNORECASE).
 pub fn compare_text(a: &str, b: &str, logical: bool) -> Ordering {
-    let (a, b) = (wide(a), wide(b));
+    compare_wide(&wide(a), &wide(b), logical)
+}
+
+/// compare_text의 바탕: 이미 NUL로 끝나는 UTF-16 글끼리.
+fn compare_wide(a: &[u16], b: &[u16], logical: bool) -> Ordering {
     // SAFETY: both buffers are NUL-terminated and live through the call.
     let result = unsafe {
         if logical {
@@ -236,7 +301,7 @@ pub fn compare_text(a: &str, b: &str, logical: bool) -> Ordering {
             const NORM_IGNORECASE: u32 = 0x1;
             match windows_sys::Win32::Globalization::CompareStringW(LOCALE_USER_DEFAULT, NORM_IGNORECASE, a.as_ptr(), -1, b.as_ptr(), -1) {
                 // 실패(0)면 전에는 늘 "작다"가 되어 정렬 순서가 깨질 수 있었다(Rust sort는 그때 panic할 수 있다). UTF-16 값 순서로 비교한다.
-                0 => return a.cmp(&b),
+                0 => return a.cmp(b),
                 raw => raw - 2,
             }
         }
@@ -275,34 +340,47 @@ fn priority_rank(entry: &Entry) -> u8 {
     }
 }
 
-fn compare_by_mode(a: &Entry, b: &Entry, mode: &str, logical: bool, color: &dyn Fn(&Entry) -> u32) -> Ordering {
-    let base = || compare_text(sort_base(a), sort_base(b), logical);
-    let ext = || compare_text(sort_extension(a), sort_extension(b), false);
-    match mode {
-        "None" => Ordering::Equal,
-        "Extension" => ext().then_with(base),
-        "Size" => a.size.cmp(&b.size).then_with(base).then_with(ext),
-        "Modified" => a.modified.cmp(&b.modified).then_with(ext).then_with(base),
-        "Attributes" => a.attributes.cmp(&b.attributes).then_with(ext).then_with(base),
-        "Color" => color(a).cmp(&color(b)).then_with(ext).then_with(base),
-        _ => base().then_with(ext),
-    }
-}
-
 /// C# SortPaneItems(묶음 전): 폴더(폴더 방식) 다음 파일(우선순위 순위 오름차순, 그 안에서 파일 방식). 안정 정렬이라
 /// "None"은 목록을 받은 순서. 내림차순은 순위를 뺀 열쇠 전체를 거꾸로(OrderByDescending.ThenByDescending).
 pub fn sort_entries(entries: &mut Vec<Entry>, options: &SortOptions, color: &dyn Fn(&Entry) -> u32) {
     let (mut folders, mut files): (Vec<Entry>, Vec<Entry>) = std::mem::take(entries).into_iter().partition(|e| e.is_dir);
-    folders.sort_by(|a, b| {
-        let order = compare_by_mode(a, b, &options.folder_mode, options.logical, color);
-        if options.folder_descending { order.reverse() } else { order }
-    });
-    files.sort_by(|a, b| {
-        let order = compare_by_mode(a, b, &options.file_mode, options.logical, color);
-        priority_rank(a).cmp(&priority_rank(b)).then(if options.file_descending { order.reverse() } else { order })
-    });
+    sort_group(&mut folders, &options.folder_mode, options.folder_descending, options.logical, color, false);
+    sort_group(&mut files, &options.file_mode, options.file_descending, options.logical, color, true);
     entries.extend(folders);
     entries.extend(files);
+}
+
+/// sort_entries의 한 무리(폴더 또는 파일). compare_by_mode와 같은 차례지만, 고친 것(빠르기): 비교 글(UTF-16)과 색을 항목마다
+/// 한 번만 만든다. 전에는 비교할 때마다 두 이름을 UTF-16으로 바꿔(2만 개면 약 30만 번) 정렬이 화면을 70ms 넘게 멈췄다.
+fn sort_group(list: &mut Vec<Entry>, mode: &str, descending: bool, logical: bool, color: &dyn Fn(&Entry) -> u32, priority: bool) {
+    struct Key {
+        base: Vec<u16>,
+        ext: Vec<u16>,
+        color: u32,
+        rank: u8,
+    }
+    let keys: Vec<Key> = list
+        .iter()
+        .map(|e| Key { base: wide(sort_base(e)), ext: wide(sort_extension(e)), color: if mode == "Color" { color(e) } else { 0 }, rank: if priority { priority_rank(e) } else { 0 } })
+        .collect();
+    let mut order: Vec<usize> = (0..list.len()).collect();
+    order.sort_by(|&i, &j| {
+        let (a, b, ka, kb) = (&list[i], &list[j], &keys[i], &keys[j]);
+        let base = || compare_wide(&ka.base, &kb.base, logical);
+        let ext = || compare_wide(&ka.ext, &kb.ext, false);
+        let by_mode = match mode {
+            "None" => Ordering::Equal,
+            "Extension" => ext().then_with(base),
+            "Size" => a.size.cmp(&b.size).then_with(base).then_with(ext),
+            "Modified" => a.modified.cmp(&b.modified).then_with(ext).then_with(base),
+            "Attributes" => a.attributes.cmp(&b.attributes).then_with(ext).then_with(base),
+            "Color" => ka.color.cmp(&kb.color).then_with(ext).then_with(base),
+            _ => base().then_with(ext),
+        };
+        ka.rank.cmp(&kb.rank).then(if descending { by_mode.reverse() } else { by_mode })
+    });
+    let mut taken: Vec<Option<Entry>> = std::mem::take(list).into_iter().map(Some).collect();
+    *list = order.into_iter().filter_map(|i| taken[i].take()).collect();
 }
 
 /// FileTypeCatalog의 묶음 분류(확장자는 점 포함, 대소문자 무시).

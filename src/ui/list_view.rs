@@ -158,6 +158,7 @@ impl App {
         let sftp_modes = pane.remote.as_ref().filter(|r| r.is_sftp()).and_then(|r| r.modes.lock().ok().map(|m| (r.path.clone(), m.clone())));
         let mut view = PaneView::default();
         let mut shell_types: HashMap<Option<String>, String> = HashMap::new();
+        let mut item_colors: HashMap<String, (u8, u8, u8)> = HashMap::new();
         for entry in &pane.entries {
             if entry.drive {
                 // 원본 DrawListItem 종류 4: "%s:" 뒤에 드라이브 이름(item+8). 다른 칸(확장자·크기·날짜·속성·설명)은 그리지 않는다.
@@ -169,7 +170,7 @@ impl App {
             }
             let extension = if entry.is_dir || attach { "" } else { ndr::parity::list_extension(&entry.name) };
             let stem = &entry.name[..entry.name.len() - extension.len()];
-            let description = pane.descriptions.get(&entry.name.to_lowercase()).cloned().unwrap_or_default();
+            let description = if pane.descriptions.is_empty() { String::new() } else { pane.descriptions.get(&entry.name.to_lowercase()).cloned().unwrap_or_default() };
             // 원본 DrawListItem 설명 칸(필드 6, 0x7da043): 설명(+0x10)이 비고 showfiletype(+0x384)이면 파일 종류 글(+0xc).
             // 원본 GetList(0x45a34c)의 종류 글은 셸 이름(SHGetFileInfoW SHGFI_TYPENAME|USEFILEATTRIBUTES, 확장자마다 한 번,
             // ".."는 없음). 압축·FTP 목록은 SetFileType을 부르지 않아 비어 있다.
@@ -207,7 +208,13 @@ impl App {
                 description,
             ]);
             view.colors.push(if skin {
-                Some(ndr::listing::original_item_color(entry, extension_colors, basic))
+                // 고친 것(빠르기): 확장자 색표를 항목마다 처음부터 훑던 것을 확장자마다 한 번만 찾는다.
+                if entry.is_dir {
+                    Some(ndr::listing::original_item_color(entry, extension_colors, basic))
+                } else {
+                    let key = ndr::parity::list_extension(&entry.name).to_ascii_lowercase();
+                    Some(*item_colors.entry(key).or_insert_with(|| ndr::listing::original_item_color(entry, extension_colors, basic)))
+                }
             } else {
                 ndr::listing::entry_color(entry, extension_colors, nexus_colors)
             });

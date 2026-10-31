@@ -1806,9 +1806,43 @@ fn big_folder_frame_time() {
     for i in 0..20000 {
         fs::write(big.join(format!("file{i:05}.txt")), b"").unwrap();
     }
+    let start = Instant::now();
     app.navigate(0, big.clone(), false);
     wait(&mut app, &ctx);
+    eprintln!("listing 20k: {:.1} ms", start.elapsed().as_secs_f64() * 1000.0);
     assert_eq!(app.panes[0].entries.len(), 20001);
+    for command in ["sort:Size", "sort:Name", "sortDescending", "sortDescending", "selectAll", "invertSelection"] {
+        let start = Instant::now();
+        app.dispatch(command, &ctx);
+        wait(&mut app, &ctx);
+        eprintln!("{command}: {:.1} ms", start.elapsed().as_secs_f64() * 1000.0);
+    }
+    let start = Instant::now();
+    app.compute_view(0);
+    eprintln!("compute_view: {:.1} ms", start.elapsed().as_secs_f64() * 1000.0);
+    let mut entries = app.panes[0].entries.clone();
+    let options = ndr::listing::SortOptions { folder_mode: "Name".into(), folder_descending: false, file_mode: "Size".into(), file_descending: false, logical: true };
+    let start = Instant::now();
+    ndr::listing::sort_entries(&mut entries, &options, &|_| 0);
+    eprintln!("sort_entries: {:.1} ms", start.elapsed().as_secs_f64() * 1000.0);
+    let times: Vec<std::time::SystemTime> = (0..20000u64).map(|i| std::time::UNIX_EPOCH + Duration::from_secs(1_600_000_000 + i * 3607)).collect();
+    let now = std::time::SystemTime::now();
+    let start = Instant::now();
+    for &t in &times {
+        let _ = ndr::listing::list_date_text(Some(t), "yyyy-MM-dd", "HH:mm", Some(["Today", "Yesterday", "%d days ago"]), now);
+    }
+    eprintln!("list_date_text x20k (spread): {:.1} ms", start.elapsed().as_secs_f64() * 1000.0);
+    let start = Instant::now();
+    for &t in &times {
+        let _ = chrono::DateTime::<chrono::Local>::from(t).date_naive();
+    }
+    eprintln!("chrono Local x20k: {:.1} ms", start.elapsed().as_secs_f64() * 1000.0);
+    let start = Instant::now();
+    for e in &entries {
+        let _ = ndr::parity::size_to_str(e.size, "Auto", true);
+        let _ = ndr::listing::attr_string(e.attributes);
+    }
+    eprintln!("size+attr x20k: {:.1} ms", start.elapsed().as_secs_f64() * 1000.0);
     for view in ["Auto", "Details", "Names", "Thumbnails"] {
         app.settings.set_text("LeftViewStyle", view);
         let mut times = Vec::new();
