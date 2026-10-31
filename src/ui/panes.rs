@@ -822,9 +822,20 @@ impl App {
                 )
                 .map(|items| {
                     let mut entries = std::collections::BTreeMap::new();
+                    // The current folder's own time, by the same rule as its row one level up: its folder entry, otherwise the first entry below it.
+                    // The original ".." of an archive subfolder shows that time; previously NDR used the archive file's time at every level.
+                    let current = location.prefix.trim_end_matches('/');
+                    let (mut own_time, mut first_below) = (None, None);
                     for e in items {
                         // Fix: on Windows 7-Zip reports with \, like "dir\sub\c.txt", so entering an archive subfolder ("dir/") looked empty.
                         let key = e.key.replace('\\', "/");
+                        if !current.is_empty() {
+                            if key.trim_end_matches('/') == current {
+                                own_time = Some(e.modified);
+                            } else if first_below.is_none() && key.starts_with(&location.prefix) {
+                                first_below = Some(e.modified);
+                            }
+                        }
                         if let Some(rest) = key.strip_prefix(&location.prefix) {
                             let mut pieces = rest.split('/');
                             if let Some(name) = pieces.next() {
@@ -850,7 +861,11 @@ impl App {
                             }
                         }
                     }
-                    entries.into_values().collect()
+                    let mut listed: Vec<Entry> = entries.into_values().collect();
+                    if let Some(modified) = own_time.or(first_below) {
+                        listed.insert(0, Entry::parent_item(PathBuf::from(".."), modified));
+                    }
+                    listed
                 })
             } else {
                 fsops::list_dir(&path, show_hidden).map(|mut entries| {

@@ -1780,6 +1780,8 @@ fn implied_archive_folders_take_the_date_of_their_first_entry() {
     let source = root.join("src");
     fs::create_dir_all(source.join("dir/sub")).unwrap();
     fs::write(source.join("dir/sub/c.txt"), b"c").unwrap();
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(5 * 86_400);
+    fs::File::options().write(true).open(source.join("dir/sub/c.txt")).unwrap().set_modified(old).unwrap();
     let zip = left.join("pack.zip");
     // Relative file path only: 7-Zip stores "dir\sub\c.txt" with no folder entries.
     let status = std::process::Command::new(ndr::archive::seven_zip_path().unwrap())
@@ -1800,5 +1802,13 @@ fn implied_archive_folders_take_the_date_of_their_first_entry() {
     wait_listing(&mut app, &ctx);
     let dir = app.panes[0].entries.iter().find(|e| e.name == "dir").cloned().expect("implied folder");
     assert!(dir.is_dir && dir.modified.is_some() && dir.modified == listed[0].modified, "{:?} vs {:?}", dir.modified, listed[0].modified);
+    // Inside "dir" the original ".." shows that folder's own time (the same time as its row above), not the archive file's time.
+    let zip_time = fs::metadata(&zip).unwrap().modified().ok();
+    assert_ne!(zip_time.map(|t| t.duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() / 60), dir.modified.map(|t| t.duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() / 60), "the dates must differ for this check");
+    app.panes[0].cursor = row(&app, 0, "dir");
+    app.open_current();
+    wait_listing(&mut app, &ctx);
+    let parent = &app.panes[0].entries[0];
+    assert!(parent.is_parent() && parent.modified == dir.modified, "{:?} vs {:?}", parent.modified, dir.modified);
     let _ = fs::remove_dir_all(root);
 }

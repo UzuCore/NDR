@@ -1265,11 +1265,16 @@ impl App {
                         self.pending_focus[listing.pane] = pane.entries.get(pane.cursor).map(|e| e.name.clone());
                     }
                     pane.listed = Some(location);
+                    // An archive subfolder listing carries its own ".." with the current folder's time (panes.rs); keep that time.
+                    let listed_parent_time = pane.archive.as_ref().and_then(|_| entries.iter().find(|e| e.is_parent()).map(|e| e.modified));
                     if !pane.filter.is_empty() {
                         entries.retain(|e| e.drive || ndr::parity::matches_filter(&pane.filter, &e.name));
                     }
                     // Original GetList (0x45a34c), archive listing (0x45ecd0), SFTP listing (0x45bb0c), C# ListLocal: ".." first unless at a root.
-                    if let Some(parent) = parent_item_for(pane) {
+                    if let Some(mut parent) = parent_item_for(pane) {
+                        if let Some(modified) = listed_parent_time {
+                            parent.modified = modified;
+                        }
                         entries.retain(|e| !e.is_parent());
                         entries.insert(0, parent);
                     }
