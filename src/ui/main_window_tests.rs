@@ -1228,7 +1228,7 @@ fn executables_get_their_own_icon_like_the_original_shell_image_list() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// 사용자 지적(2026-10-31) 패널 동작: 뒤로 가면 떠나온 하위 폴더에 커서가 가고 그 쪽이 보인다, 바퀴는 커서를 위·아래로 옮긴다,
+/// 사용자 지적(2026-10-31) 패널 동작: 뒤로 가면 떠나온 하위 폴더에 커서가 가고 그 쪽이 보인다, 바퀴는 원본처럼 목록을 쪽 단위로 넘긴다,
 /// ".gitconfig" 같은 점 파일은 확장자 없이 이름 전체를 보인다.
 #[test]
 fn back_wheel_and_dot_files_follow_the_user_requests() {
@@ -1265,16 +1265,23 @@ fn back_wheel_and_dot_files_follow_the_user_requests() {
     };
     run(&mut app, vec![]);
     run(&mut app, vec![]);
-    // 바퀴: 아래로 두 칸 = 커서 두 항목 아래, 위로 한 칸 = 한 항목 위. 오른쪽 패널 위에서 굴리면 그 패널이 활성.
+    // 바퀴: 사용자 요청(2026-10-31 16:49)으로 원본 WMMouseWheel처럼 목록을 넘긴다. 커서와 활성 패널은 그대로이고,
+    // 쪽 단위(처음 값)라 아래로 한 칸 = 다음 쪽(보이는 열 수만큼), 위로 한 칸 = 앞 쪽.
     app.active = 1;
     app.panes[0].cursor = 0;
     let at = app.pane_rects[0].center();
     let wheel = |y: f32| egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Line, delta: egui::vec2(0.0, y), modifiers: Default::default() };
-    run(&mut app, vec![egui::Event::PointerMoved(at), wheel(-2.0)]);
-    assert_eq!((app.panes[0].cursor, app.active), (2, 0), "two notches down move the cursor two items and activate the pane");
+    assert_eq!(app.panes[0].first_column, 0);
+    run(&mut app, vec![egui::Event::PointerMoved(at), wheel(-1.0)]);
+    run(&mut app, vec![]);
+    let page = app.panes[0].first_column;
+    assert!(page > 0, "one notch down scrolls a page");
+    assert_eq!((app.panes[0].cursor, app.active), (0, 1), "the wheel does not move the cursor or activate the pane");
     run(&mut app, vec![wheel(1.0)]);
-    assert_eq!(app.panes[0].cursor, 1);
+    run(&mut app, vec![]);
+    assert_eq!((app.panes[0].first_column, app.panes[0].cursor), (0, 0), "one notch up scrolls back");
     // 뒤 쪽의 폴더로 들어갔다가 뒤로: 그 폴더에 커서, 그 쪽이 보인다(첫 열이 0이 아님).
+    app.active = 0;
     let target = row(&app, "dir800");
     app.panes[0].cursor = target;
     app.panes[0].reveal = true;

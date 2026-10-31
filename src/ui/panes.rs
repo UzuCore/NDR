@@ -1064,41 +1064,6 @@ impl App {
         let current = egui::scroll_area::State::load(ui.ctx(), ui.make_persistent_id(salt)).map_or(0.0, |s| s.offset.y);
         Some((current - notches * Self::wheel_step(by_page, height, row_height, wheel_lines)).max(0.0))
     }
-    /// 사용자 요청(원본과 다름): 목록 위에서 굴린 바퀴는 목록을 넘기지 않고 커서를 위·아래로 옮긴다(한 칸에 한 번, 보기마다
-    /// 위·아래 글쇠와 같이 `list_keys::arrow_target`). 커서가 보이게 넘기는 것은 글쇠와 같다(reveal). 원본 WMMouseWheel(0x7d5ba0)은
-    /// 목록만 넘겼다. 터치패드의 잘게 나뉜 바퀴는 모아서 한 칸이 되면 옮긴다. 바퀴는 여기서 다 쓰므로 목록 보기들의 바퀴
-    /// 넘기기(wheel_scroll 등)는 0을 받는다. 커서를 옮겼으면 true(그 패널이 활성).
-    pub(super) fn wheel_moves_cursor(&mut self, ui: &mut egui::Ui, index: usize, list_rect: egui::Rect) -> bool {
-        let (raw, zoom) = ui.input(|i| (Self::vertical_wheel(i), i.modifiers.ctrl || i.modifiers.command));
-        if raw == 0.0 || zoom || !ui.rect_contains_pointer(list_rect) {
-            return false;
-        }
-        ui.input_mut(|i| {
-            i.raw_scroll_delta = egui::Vec2::ZERO;
-            i.smooth_scroll_delta = egui::Vec2::ZERO;
-        });
-        let speed = ui.ctx().options(|o| o.input_options.line_scroll_speed).max(1.0);
-        let id = egui::Id::new(("ndr-wheel-rest", index));
-        let total = ui.data(|d| d.get_temp::<f32>(id)).unwrap_or(0.0) + raw / speed;
-        let steps = total.trunc();
-        ui.data_mut(|d| d.insert_temp(id, total - steps));
-        let pane = &mut self.panes[index];
-        let count = pane.entries.len();
-        if steps == 0.0 || count == 0 || pane.loading {
-            return false;
-        }
-        let key = if steps > 0.0 { list_keys::ListKey::Up } else { list_keys::ListKey::Down };
-        let mut cursor = pane.cursor.min(count - 1);
-        for _ in 0..steps.abs() as usize {
-            cursor = list_keys::arrow_target(&pane.page, cursor, count, key);
-        }
-        if cursor != pane.cursor {
-            pane.cursor = cursor;
-            pane.reveal = true;
-            pane.shift_anchor = None;
-        }
-        true
-    }
     /// 원본 SetScrollTop(형식 2, 쪽 단위 0xc5 == 2): 세로 위치 = 쪽 번호 × 한 쪽 줄 수 × 줄 높이(0..쪽 수 − 1).
     /// 바퀴로 옮긴 위치를 가장 가까운 쪽 경계로 맞춘다. 마지막 쪽도 쪽 경계에서 시작한다(아래가 비어 보일 수 있음).
     pub(super) fn page_snap(offset: f32, page_px: f32, pages: usize) -> f32 {
@@ -1426,9 +1391,8 @@ impl App {
                     pane.adjust = Some((pane.cursor.min(pane.entries.len() - 1), false));
                 }
                 pane.list_shape = Some(shape);
-                if self.wheel_moves_cursor(ui, index, list_rect) {
-                    activate = true;
-                }
+                // 사용자 요청(2026-10-31 16:49): 바퀴는 원본 WMMouseWheel(0x7d5ba0)처럼 목록을 넘긴다(쪽 단위 설정이면 한 쪽씩).
+                // r138~r160의 "바퀴 = 커서 위·아래"는 되돌렸다. 각 보기의 wheel_scroll이 처리한다.
                 if tiles {
                     let(a,o,c)=self.tile_rows(ui,index,&visible,height,view.contains("humb"));activate|=a;open|=o;if c.is_some(){command=c;}
                 } else if names || auto_flow {
