@@ -21,7 +21,7 @@ pub enum HttpError {
 
 pub const MAX_MANIFEST_BYTES: usize = 256 * 1024;
 
-/// System.Version.TryParse: 점으로 나눈 2~4개의 0 이상 정수.
+/// System.Version.TryParse: 2 to 4 non-negative integers separated by dots.
 pub fn parse_version(text: &str) -> Option<Vec<u32>> {
     let parts: Vec<&str> = text.trim().split('.').collect();
     if !(2..=4).contains(&parts.len()) {
@@ -30,7 +30,7 @@ pub fn parse_version(text: &str) -> Option<Vec<u32>> {
     parts.iter().map(|p| p.trim().parse::<u32>().ok().filter(|v| *v <= i32::MAX as u32)).collect()
 }
 
-/// System.Version 비교(없는 자리는 -1로 본다: 2.0 < 2.0.0).
+/// System.Version comparison (missing parts count as -1: 2.0 < 2.0.0).
 pub fn compare_versions(a: &[u32], b: &[u32]) -> std::cmp::Ordering {
     for i in 0..4 {
         let x = a.get(i).map_or(-1i64, |v| *v as i64);
@@ -46,7 +46,7 @@ pub fn version_text(version: &[u32]) -> String {
     version.iter().map(u32::to_string).collect::<Vec<_>>().join(".")
 }
 
-/// LegacyUpdateFeedDetector.TryReadNexusFileVersion: NexusFile 피드면 Ok(Some(버전)), 아니면 Ok(None), 깨졌으면 Err.
+/// LegacyUpdateFeedDetector.TryReadNexusFileVersion: Ok(Some(version)) for a NexusFile feed, otherwise Ok(None), Err when broken.
 pub fn legacy_nexusfile_version(content: &[u8]) -> Result<Option<String>, String> {
     let Ok(text) = std::str::from_utf8(content) else { return Ok(None) };
     let text = text.trim_start_matches('\u{feff}').replace("\r\n", "\n").replace('\r', "\n");
@@ -64,15 +64,15 @@ pub fn legacy_nexusfile_version(content: &[u8]) -> Result<Option<String>, String
     Ok(version.map(|v| version_text(&v)))
 }
 
-/// 피드 읽은 뒤의 판단.
+/// Decision after reading the feed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Manifest {
-    /// NexusFile 피드(그 버전).
+    /// A NexusFile feed (its version).
     Legacy(String),
-    /// 새 버전(버전 글, 다운로드 주소).
+    /// A new version (version text, download address).
     Newer(String, String),
     UpToDate,
-    /// 언어 파일 키(InvalidVersion, InvalidDownloadUrl).
+    /// Language file key (InvalidVersion, InvalidDownloadUrl).
     Invalid(&'static str),
 }
 
