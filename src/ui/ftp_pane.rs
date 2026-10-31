@@ -308,6 +308,8 @@ pub(super) struct FtpResultRow {
     pub size: Option<u64>,
     pub done: u64,
     pub state: RowState,
+    /// When this row's transfer began (original OnWorkBegin FUN_00468d08 stores Now and resets the speed), for lFTPTransferred's KB/s.
+    pub started: Option<std::time::Instant>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -332,6 +334,17 @@ pub(super) fn ftp_totals(rows: &[FtpResultRow]) -> (u64, u64, u64) {
         .sum();
     let percent = if total == 0 { 100 } else { (done.min(total) as u128 * 100 / total as u128) as u64 };
     (done, total, percent)
+}
+
+/// Original OnWork FUN_00468f0c: speed = bytes of the item in transfer / 1024 / whole seconds (DecodeTime h·m·s) since its OnWorkBegin
+/// (FUN_00468d08); it stays 0 during the first second. A folder row counts the bytes of all its files. Previously all bytes of the queue were
+/// divided by the time since the queue began.
+pub(super) fn ftp_speed(rows: &[FtpResultRow], now: std::time::Instant) -> f64 {
+    rows.iter()
+        .find(|r| r.state == RowState::Running)
+        .and_then(|r| r.started.map(|t| (r.done, now.saturating_duration_since(t).as_secs())))
+        .filter(|&(_, seconds)| seconds > 0)
+        .map_or(0.0, |(bytes, seconds)| bytes as f64 / 1024.0 / seconds as f64)
 }
 
 /// Original lFTPTransferred: wsprintf("%d %% (%s / %s) - %s", percent, bytes received, total size, FormatFloat("0.00 KB/s", speed)).
@@ -693,7 +706,7 @@ impl App {
         let rows = self.ftp_results.clone();
         if let Ok(mut list) = rows.lock() {
             list.clear();
-            list.extend(items.iter().map(|(source, name, size, _)| FtpResultRow { upload: false, local: destination.join(name).to_string_lossy().into_owned(), remote: source.clone(), size: (*size > 0).then_some(*size), done: 0, state: RowState::Waiting }));
+            list.extend(items.iter().map(|(source, name, size, _)| FtpResultRow { upload: false, local: destination.join(name).to_string_lossy().into_owned(), remote: source.clone(), size: (*size > 0).then_some(*size), done: 0, state: RowState::Waiting, started: None }));
         }
         // End of original FUN_0043f800: show the bottom pane (pBottom).
         self.show_results = true;
@@ -717,7 +730,10 @@ impl App {
                         set_row(&rows, row, |r| r.state = RowState::Cancelled);
                         continue;
                     }
-                    set_row(&rows, row, |r| r.state = RowState::Running);
+                    set_row(&rows, row, |r| {
+                        r.state = RowState::Running;
+                        r.started = Some(std::time::Instant::now());
+                    });
                     let local = destination.join(name);
                     let mut resolve = |src: &str, dst: &str, info: &ndr::remote::ConflictInfo| ask_remote_conflict(&events, &cancel, src, dst, info);
                     let mut progress = |p: TransferProgress| {
@@ -780,7 +796,7 @@ impl App {
             list.extend(items.iter().map(|local| {
                 let name = local.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                 let size = std::fs::metadata(local).ok().filter(|m| m.is_file()).map(|m| m.len());
-                FtpResultRow { upload: true, local: local.to_string_lossy().into_owned(), remote: join_remote(&remote.path, &name), size, done: 0, state: RowState::Waiting }
+                FtpResultRow { upload: true, local: local.to_string_lossy().into_owned(), remote: join_remote(&remote.path, &name), size, done: 0, state: RowState::Waiting, started: None }
             }));
         }
         self.show_results = true;
@@ -804,7 +820,10 @@ impl App {
                         set_row(&rows, row, |r| r.state = RowState::Cancelled);
                         continue;
                     }
-                    set_row(&rows, row, |r| r.state = RowState::Running);
+                    set_row(&rows, row, |r| {
+                        r.state = RowState::Running;
+                        r.started = Some(std::time::Instant::now());
+                    });
                     let name = local.file_name().map(|n| n.to_string_lossy().into_owned()).ok_or("Upload source has no name")?;
                     let destination = join_remote(&remote.path, &name);
                     let mut resolve = |src: &str, dst: &str, info: &ndr::remote::ConflictInfo| ask_remote_conflict(&events, &cancel, src, dst, info);
@@ -987,8 +1006,7 @@ impl App {
         let running = transferring && !rows.is_empty();
         ui.put(at(159.0, 2.0, 150.0, 16.0), egui::ProgressBar::new(if running { percent as f32 / 100.0 } else { 0.0 }).desired_height(16.0).corner_radius(0.0));
         if running {
-            let seconds = self.ftp_started.map_or(0.0, |t| t.elapsed().as_secs_f64());
-            let speed = if seconds > 0.0 { done as f64 / 1024.0 / seconds } else { 0.0 };
+            let speed = ftp_speed(&rows, std::time::Instant::now());
             let text = ftp_transferred_text(percent, &native::format_byte_size(done), &native::format_byte_size(total), speed);
             super::original_dialogs::put_left(ui, at(315.0, 3.0, (bar.width() - 315.0 - 52.0).max(0.0), 16.0), egui::Label::new(text).truncate());
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
@@ -1303,7 +1321,22 @@ mod tests {
     use super::*;
 
     fn row(size: Option<u64>, done: u64, state: RowState) -> FtpResultRow {
-        FtpResultRow { upload: false, local: String::new(), remote: String::new(), size, done, state }
+        FtpResultRow { upload: false, local: String::new(), remote: String::new(), size, done, state, started: None }
+    }
+
+    /// Original FUN_00468f0c: the running item's bytes / 1024 / whole seconds since it began; 0 in its first second.
+    #[test]
+    fn ftp_speed_follows_the_original_on_work() {
+        let now = std::time::Instant::now();
+        let begun = |secs: u64| now.checked_sub(std::time::Duration::from_millis(secs)).unwrap();
+        let rows = vec![
+            FtpResultRow { started: Some(begun(9_000)), ..row(Some(10), 10, RowState::Done) },
+            FtpResultRow { started: Some(begun(2_900)), ..row(Some(8192), 4096, RowState::Running) },
+        ];
+        assert_eq!(ftp_speed(&rows, now), 2.0, "4 KB over 2 whole seconds");
+        let fresh = vec![FtpResultRow { started: Some(begun(900)), ..row(Some(8192), 4096, RowState::Running) }];
+        assert_eq!(ftp_speed(&fresh, now), 0.0, "under one second");
+        assert_eq!(ftp_speed(&[row(Some(1), 0, RowState::Waiting)], now), 0.0);
     }
 
     #[test]

@@ -110,6 +110,7 @@ impl Language {
         }
     }
     /// Accepts RES.KEY, Root.KEY, formMain.Menu.miOpen, Menu.miOpen or a bare root key.
+    /// Original FUN_0040bd74 / FUN_0040bc8c: ReadString(section, key, default) on the language TIniFile (DAT_008d44bc), the default when no file is loaded.
     pub fn text(&self, key: &str, fallback: &str) -> String {
         clean_language_text(self.raw(key).as_deref().unwrap_or(fallback))
     }
@@ -276,6 +277,7 @@ pub fn expand_command(
             (format!("$({group}1)"), left),
             (format!("$({group}2)"), right),
         ] {
+            // Original FUN_00442dd4 replaces each token with FUN_0040d5a8 (StrCmpNIW at every position, so case does not matter).
             let regex = regex::RegexBuilder::new(&regex::escape(&token))
                 .case_insensitive(true)
                 .build()

@@ -3,7 +3,7 @@ use super::*;
 
 /// Original FUN_00479970 (function key cell name from one [FuncKey] value): an empty value gives an empty name. "[name]command" gives the text inside [ ] (everything after [ when empty),
 /// "#internal command" gives RES FUNC_<upper-case name> when it is in the internal command list (FUN_004586ac, otherwise the text after #), and anything else (a program)
-/// the file name after PathStripPath and PathRemoveExtension (an extension containing a space is not treated as an extension).
+/// the program part (FUN_0040d494) after PathStripPath and PathRemoveExtension (an extension containing a space is not treated as an extension).
 pub(super) fn original_function_key_caption(command: &str, resource: &dyn Fn(&str) -> Option<String>) -> String {
     let command = command.trim();
     if command.is_empty() {
@@ -17,11 +17,31 @@ pub(super) fn original_function_key_caption(command: &str, resource: &dyn Fn(&st
         let known = super::function_key_editor::INTERNAL_COMMANDS.iter().any(|(id, _)| id.trim_start_matches('#').eq_ignore_ascii_case(name));
         return known.then(|| resource(&format!("FUNC_{}", name.to_uppercase()))).flatten().unwrap_or_else(|| name.to_owned());
     }
-    let file = command.rsplit(['\\', '/']).next().unwrap_or(command);
+    let program = original_program_part(command);
+    // PathStripPathW keeps the text after the last '\', '/' or ':' that is followed by more text.
+    let mut start = 0;
+    for (i, c) in program.char_indices() {
+        let next = program[i + c.len_utf8()..].chars().next();
+        if matches!(c, '\\' | '/' | ':') && next.is_some_and(|n| n != '\\' && n != '/') {
+            start = i + c.len_utf8();
+        }
+    }
+    let file = &program[start..];
     match file.rfind('.') {
         Some(dot) if !file[dot..].contains(' ') => file[..dot].to_owned(),
         _ => file.to_owned(),
     }
+}
+
+/// Original FUN_0040d494 (program part of a command line, used for the function key name): a leading quote runs to the next quote (or the end),
+/// otherwise the text runs to the first space; spaces around it are removed (FUN_0040d424). Previously the arguments stayed in the name, so
+/// "\"C:\Program Files\x.exe\" /a" showed `x.exe" /a` instead of "x".
+fn original_program_part(command: &str) -> &str {
+    let (body, end) = match command.strip_prefix('"') {
+        Some(rest) => (rest, rest.find('"')),
+        None => (command, command.find(' ')),
+    };
+    end.map_or(body, |i| &body[..i]).trim_matches(' ')
 }
 
 /// Original default function keys (default\nexusfile.ini [FuncKey]): internal commands used when nothing is assigned.

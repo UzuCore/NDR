@@ -1820,8 +1820,12 @@ fn function_key_captions_follow_the_original_button_bar() {
     assert_eq!(original_function_key_caption("#Unknown", &resource), "Unknown", "not an internal command");
     assert_eq!(original_function_key_caption("[메모장]C:\\Windows\\notepad.exe", &resource), "메모장");
     assert_eq!(original_function_key_caption("[]x", &resource), "]x", "empty label: everything after [");
-    assert_eq!(original_function_key_caption("C:\\Tools\\my tool.exe", &resource), "my tool");
-    assert_eq!(original_function_key_caption("C:\\Tools\\v1.0 beta\\run", &resource), "run");
+    // FUN_0040d494: only the program part counts; an unquoted space starts the arguments.
+    assert_eq!(original_function_key_caption("C:\\Tools\\my tool.exe", &resource), "my");
+    assert_eq!(original_function_key_caption("\"C:\\Tools\\my tool.exe\" /a %s", &resource), "my tool");
+    assert_eq!(original_function_key_caption("notepad.exe %s", &resource), "notepad");
+    assert_eq!(original_function_key_caption("\"C:\\v1.0 beta\\run", &resource), "run", "no closing quote: to the end");
+    assert_eq!(original_function_key_caption("C:\\Tools\\v1.0 beta\\run", &resource), "v1");
     assert_eq!(original_function_key_caption("  ", &resource), "");
 }
 

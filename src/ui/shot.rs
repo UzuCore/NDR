@@ -311,8 +311,8 @@ impl App {
                 use super::ftp_pane::{FtpResultRow, RowState};
                 if let Ok(mut rows) = self.ftp_results.lock() {
                     *rows = vec![
-                        FtpResultRow { upload: false, local: "C:\\down\\a.zip".into(), remote: "/pub/a.zip".into(), size: Some(4000), done: 1000, state: RowState::Running },
-                        FtpResultRow { upload: false, local: "C:\\down\\b.txt".into(), remote: "/pub/b.txt".into(), size: Some(10), done: 0, state: RowState::Waiting },
+                        FtpResultRow { upload: false, local: "C:\\down\\a.zip".into(), remote: "/pub/a.zip".into(), size: Some(4000), done: 1000, state: RowState::Running, started: None },
+                        FtpResultRow { upload: false, local: "C:\\down\\b.txt".into(), remote: "/pub/b.txt".into(), size: Some(10), done: 0, state: RowState::Waiting, started: None },
                     ];
                 }
                 self.show_results = true;

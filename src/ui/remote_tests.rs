@@ -677,8 +677,8 @@ fn ftp_pane_mode_connects_lists_transfers_and_disconnects_like_the_original() {
     // Failed rows stay and the result area stays too.
     app.show_results = true;
     app.ftp_results.lock().unwrap().extend([
-        super::ftp_pane::FtpResultRow { upload: false, local: "x".into(), remote: "/pub/x".into(), size: Some(5), done: 5, state: super::ftp_pane::RowState::Done },
-        super::ftp_pane::FtpResultRow { upload: false, local: "y".into(), remote: "/pub/y".into(), size: Some(5), done: 0, state: super::ftp_pane::RowState::Failed("550".into()) },
+        super::ftp_pane::FtpResultRow { upload: false, local: "x".into(), remote: "/pub/x".into(), size: Some(5), done: 5, state: super::ftp_pane::RowState::Done, started: None },
+        super::ftp_pane::FtpResultRow { upload: false, local: "y".into(), remote: "/pub/y".into(), size: Some(5), done: 0, state: super::ftp_pane::RowState::Failed("550".into()), started: None },
     ]);
     app.ftp_queue_done();
     assert!(app.show_results);
