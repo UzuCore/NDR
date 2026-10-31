@@ -1214,7 +1214,7 @@ impl App {
             kept => kept,
         };
     }
-    /// 목록 스레드의 결과 하나를 패널에 넣는다(poll과 원본처럼 기다리는 refresh가 함께 쓴다).
+    /// Puts one result of the listing thread into the pane (shared by poll and the waiting refresh, like the original).
     fn apply_listing(&mut self, listing: Listing, auth_panes: &mut Vec<usize>) {
         let skin = true;
         {
@@ -1225,10 +1225,10 @@ impl App {
             pane.loading = false;
             self.crumb_cache.clear();
             let pane = &mut self.panes[listing.pane];
-            // 원본 새로 고침(FUN_00487ce8, 새로 고침·작업 뒤 등 대부분 (1, 1)로 부름)은 같은 폴더를 다시 읽을 때 표시(CopySelection →
-            // RestoreSelection, 이름으로), 센 폴더 크기(종류 1이고 +0x68인 항목의 +0x20/+0x24/+0x60을 이름으로 되돌림), 맨 위 위치
-            // (SetScrollTop)를 지키고, 커서 이름이 없어졌으면 옛 번호(목록보다 크면 드라이브를 뺀 마지막 항목)에 둔다. 잘라냄 표시(+100)는
-            // 새 항목이라 없어진다. C# RefreshPaneAsync는 모두 비우므로 스킨 테마만.
+            // The original refresh (FUN_00487ce8, mostly called with (1, 1) after refreshes and operations) keeps, when rereading the same folder, the marks (CopySelection ->
+            // RestoreSelection, by name), counted folder sizes (+0x20/+0x24/+0x60 of kind-1 items with +0x68 restored by name), and the top position
+            // (SetScrollTop); when the cursor name is gone it uses the old index (the last item before the drives when beyond the list). Cut marks (+100)
+            // disappear because the items are new. C# RefreshPaneAsync clears everything, so only the skin theme does this.
             let kept = (skin && listing.result.is_ok() && pane.listed.as_deref() == Some(location_key(pane).as_str())).then(|| {
                 let marks: Vec<String> = pane.selected.iter().filter_map(|&row| pane.entries.get(row)).filter(|e| !e.drive && !e.is_parent()).map(|e| e.name.clone()).collect();
                 let sizes: Vec<(PathBuf, String, Option<u64>)> = pane.folder_sizes.iter().filter_map(|(path, size)| size.clone().map(|s| (path.clone(), s, pane.folder_bytes.get(path).copied()))).collect();
@@ -1243,7 +1243,7 @@ impl App {
             pane.disk = None;
             match listing.result {
                 Ok(mut entries) => {
-                    // 원본 새로 고침(FUN_00487ce8): 같은 폴더를 다시 읽으면 커서는 같은 이름의 항목에 남는다(다른 패널로 복사한 뒤 등).
+                    // Original refresh (FUN_00487ce8): rereading the same folder keeps the cursor on the item with the same name (after copying to the other pane and so on).
                     let location = location_key(pane);
                     if pane.listed.as_deref() == Some(location.as_str()) && self.pending_focus[listing.pane].is_none() {
                         self.pending_focus[listing.pane] = pane.entries.get(pane.cursor).map(|e| e.name.clone());
@@ -1252,7 +1252,7 @@ impl App {
                     if !pane.filter.is_empty() {
                         entries.retain(|e| e.drive || ndr::parity::matches_filter(&pane.filter, &e.name));
                     }
-                    // 원본 GetList(0x45a34c)·압축 목록(0x45ecd0)·SFTP 목록(0x45bb0c), C# ListLocal: 루트가 아니면 맨 앞에 "..".
+                    // Original GetList (0x45a34c), archive listing (0x45ecd0), SFTP listing (0x45bb0c), C# ListLocal: ".." first unless at a root.
                     if let Some(parent) = parent_item_for(pane) {
                         entries.retain(|e| !e.is_parent());
                         entries.insert(0, parent);
@@ -1277,28 +1277,28 @@ impl App {
             }
             self.sort_pane(listing.pane);
             let pane = &mut self.panes[listing.pane];
-            // 새 목록은 정렬한 뒤 맨 위에서 시작한다(sort_pane은 커서 항목을 따라가므로 다시 맞춘다).
+            // A new list starts at the top after sorting (sort_pane follows the cursor item, so set it again).
             pane.cursor = 0;
             if self.settings.flag("ShowFolderDiskInfoBar", true) {
                 self.update_disk_capacity(listing.pane);
             }
             let pane = &mut self.panes[listing.pane];
             let mut focused = false;
-            // 같은 위치를 다시 읽으면서 따로 고른 이름이 없으면(원본 FUN_00487ce8 param_2, param_4 빈 글) 원본은 SetItemIndex 뒤
-            // SetScrollTop(옛 위치)로 되돌린다: 자세히·미리 보기는 옛 위치를 지키고, 열로 흐르는 목록만 AdjustPage + SetItemIndex.
+            // When rereading the same location with no chosen name (original FUN_00487ce8 param_2, empty param_4), the original does SetItemIndex then
+            // SetScrollTop (old position): Details and Thumbnails keep the old position, only column-flowing lists do AdjustPage + SetItemIndex.
             let restore_top = kept.as_ref().is_some_and(|k| !k.4);
             if let Some(name) = self.pending_focus[listing.pane].take() {
                 if let Some(row) = pane.entries.iter().position(|e| ndr::names::equals_ignore_case(&e.name, &name)) {
                     pane.cursor = row;
                     pane.selected.clear();
-                    // 원본 FUN_00486694 → SetItemIndex: 커서 항목이 보이게 넘긴다(쪽 단위면 그 쪽). 고친 것: 전에는 첫 쪽에 머물렀다.
+                    // Original FUN_00486694 -> SetItemIndex: scrolls the cursor item into view (that page when paging). Fixed: previously it stayed on the first page.
                     pane.reveal = !restore_top;
                     focused = true;
                 }
             }
-            // 새 위치: 원본은 언제나 SetItemIndex(0 또는 고른 이름)라 그 항목이 보인다. 고친 것: 자세히 보기는 전 폴더의 세로 위치가
-            // 남아 첫 항목이 안 보일 수 있었다. (원본은 그 앞에 전 폴더의 커서 번호로 AdjustPage를 하지만, 전 폴더에 따라 화면이
-            // 달라지는 부작용이라 옮기지 않았다.)
+            // New location: the original always does SetItemIndex (0 or the chosen name), so that item is visible. Fixed: in Details the previous folder's vertical position
+            // remained and the first item could be hidden. (The original first does AdjustPage with the previous folder's cursor index, but that side effect makes the screen
+            // depend on the previous folder, so it was not ported.)
             if kept.is_none() {
                 pane.reveal = true;
             }
@@ -1321,17 +1321,17 @@ impl App {
                     }
                 }
                 pane.first_column = first_column;
-                // 원본 FileListChanged(0x7d79c8) → AdjustPage(옛 커서 번호, 목록 길이로 자름), 그 뒤 FUN_00487ce8이 SetItemIndex.
-                // 자세히·미리 보기는 그 뒤 SetScrollTop(옛 위치)로 되돌리므로 열로 흐르는 목록만 위치가 바뀐다(adjust 두 번째 값).
+                // Original FileListChanged (0x7d79c8) -> AdjustPage (old cursor index, clamped to the list length), then FUN_00487ce8 does SetItemIndex.
+                // Details and Thumbnails then restore SetScrollTop (old position), so only column-flowing lists change position (second value of adjust).
                 if !pane.entries.is_empty() {
                     pane.adjust = Some((old_cursor.min(pane.entries.len() - 1), true));
                 }
             }
         }
     }
-    /// 목록을 넣은 뒤의 일(네트워크 공유 인증 등). poll이 부른다.
+    /// Work after the list is put in (network share authentication etc.). Called by poll.
     fn after_listings(&mut self, auth_panes: Vec<usize>, ctx: &egui::Context) {
-        // C# RefreshPaneAsync(allowNetworkAuthPrompt): UNC 목록이 자격 증명 실패면 연결 창 → 성공하면 한 번 더 읽기, 실패면 "네트워크 연결" 경고.
+        // C# RefreshPaneAsync(allowNetworkAuthPrompt): when a UNC listing fails on credentials, the connect window -> one more read on success, a "network connection" warning on failure.
         for index in auth_panes {
             let path = self.panes[index].path.clone();
             let code = (self.system.network_path_error)(&path);
@@ -1385,7 +1385,7 @@ impl App {
                     self.password_request = Some(PasswordRequest { archive, reply });
                 }
                 Event::ChangeVolume { volume, reply } => {
-                    // 원본 0x439593: wsprintf(ARC_CHANGEVOL, 볼륨 이름) → TfMsgBox(TITLE_ERROR, "", 글, 0x31). 확인(1)이면 다시 시도.
+                    // Original 0x439593: wsprintf(ARC_CHANGEVOL, volume name) -> TfMsgBox(TITLE_ERROR, "", text, 0x31). OK (1) retries.
                     let title = self.language_pack.text("RES.TITLE_ERROR", "Error");
                     let text = self.language_pack.text("RES.ARC_CHANGEVOL", "%s\nPlease, insert a disk containing this file and click 'OK'").replacen("%s", &volume, 1);
                     self.message_box(&title, "", &text, ndr::msgbox::MB_OKCANCEL | ndr::msgbox::MB_ICONEXCLAMATION, move |_, answer, _| {
@@ -1495,10 +1495,10 @@ impl App {
         }
     }
 
-    /// 원본 FUN_00442bc8 → FUN_00442d80: 드라이브가 생기거나 없어지면 패널마다 드라이브 줄(FUN_00459628: 로컬·드라이브 목록 패널의 끝에 붙인
-    /// 드라이브 항목을 새로 붙임)·드라이브 단추(FUN_00483108)·폴더/디스크 정보 줄(FUN_0048b500)을 새로 만든다.
-    /// NDR은 드라이브 캐시를 비우고 드라이브 단추를 다시 읽게 한 뒤, 드라이브 줄을 보이는 로컬 패널을 다시 읽는다(커서·표시는 지킨다).
-    /// 고친 것: 전에는 USB 드라이브를 꽂거나 빼도 5초 캐시가 지나고 그 패널을 다시 읽을 때까지 목록에 나타나지 않았다.
+    /// Original FUN_00442bc8 -> FUN_00442d80: when a drive appears or disappears, each pane rebuilds its drive rows (FUN_00459628: re-appends the drive items at the end of
+    /// local and drive list panes), drive buttons (FUN_00483108) and folder/disk info bar (FUN_0048b500).
+    /// NDR clears the drive cache, rereads the drive buttons, then rereads local panes that show drive rows (keeping cursor and marks).
+    /// Fixed: previously plugging or removing a USB drive did not show up until the 5-second cache expired and that pane was reread.
     pub(super) fn drives_changed(&mut self) {
         panes::DriveListCache::invalidate(&self.drive_list);
         self.drive_cache = None;
@@ -1514,9 +1514,9 @@ impl App {
         }
     }
 }
-/// C# RestorePaneTabs: 저장한 탭 가운데 있는 폴더만 남기고, 저장한 고른 탭(SelectedLeftTab, 원래 번호)이 남아 있으면 그 탭을 고른다.
-/// 남은 탭이 없으면 시작 폴더 하나. 차이: C#은 탭이 있으면 명령줄·시작 폴더를 쓰지 않지만, NDR은 정해 준 폴더(fixed)면
-/// 그 폴더의 탭을 고르고 없으면 맨 앞에 더한다(전부터의 NDR 동작). 돌려주는 값 = (탭 목록, 고른 탭 번호).
+/// C# RestorePaneTabs: keeps only saved tabs whose folders exist, and selects the saved selected tab (SelectedLeftTab, original index) if it remains.
+/// With no tab left, one start folder. Difference: C# ignores the command line and start folder when tabs exist, but NDR, for a given folder (fixed),
+/// selects that folder's tab or adds it at the front (earlier NDR behavior). Returns (tab list, selected tab index).
 pub(super) fn restore_tabs(saved: &[String], selected: Option<usize>, start: &Path, fixed: bool, exists: impl Fn(&Path) -> bool) -> (Vec<PathBuf>, usize) {
     let available: Vec<(usize, PathBuf)> = saved.iter().enumerate().map(|(index, path)| (index, PathBuf::from(path))).filter(|(_, path)| exists(path)).collect();
     if available.is_empty() {
@@ -1536,31 +1536,31 @@ pub(super) fn restore_tabs(saved: &[String], selected: Option<usize>, start: &Pa
     }
 }
 
-/// 원본 usemenualpha(설정 +0xb6): 메뉴를 그릴 때(FUN_0042e518) 메뉴 창에 WS_EX_LAYERED + 알파 0xF0(240/255).
-/// C# 판 MainMenu·ContextMenu.Opacity = 0.94.
+/// Original usemenualpha (setting +0xb6): when drawing menus (FUN_0042e518) the menu window gets WS_EX_LAYERED + alpha 0xF0 (240/255).
+/// C# version MainMenu/ContextMenu.Opacity = 0.94.
 pub(super) const MENU_ALPHA: f32 = 240.0 / 255.0;
-/// 이 프레임에 흐리게 하지 않을 앞쪽 층 id 목록(ctx 임시 자료).
+/// Foreground layer ids not to fade this frame (ctx temp data).
 const OPAQUE_LAYERS: &str = "ndr-opaque-foreground-layers";
 
-/// 앞쪽(Foreground) 층에 그리지만 메뉴가 아닌 것(egui::Modal 창 등)을 이 프레임의 투명 메뉴 처리에서 뺀다.
+/// Excludes things drawn on the foreground layer that are not menus (egui::Modal windows etc.) from this frame's menu transparency.
 pub(super) fn keep_opaque(ctx: &egui::Context, id: egui::Id) {
     ctx.data_mut(|d| d.get_temp_mut_or_default::<Vec<egui::Id>>(egui::Id::new(OPAQUE_LAYERS)).push(id));
 }
 
-/// 원본 창(VCL TForm)은 제목 줄을 끌어 옮길 수 있다. egui::Modal은 가운데에 고정되므로, 가운데에서 끈 만큼(ctx 임시 자료) 옮긴 자리에 둔다.
-/// 새 창(새 id)은 원본 poOwnerFormCenter·poMainFormCenter처럼 가운데에서 시작한다.
+/// Original windows (VCL TForm) move by dragging the title bar. egui::Modal is fixed at the center, so it is placed offset by the dragged amount (ctx temp data).
+/// A new window (new id) starts centered like the original poOwnerFormCenter / poMainFormCenter.
 pub(super) fn movable_modal(ctx: &egui::Context, id: egui::Id) -> egui::Modal {
     let offset = ctx.data(|d| d.get_temp::<egui::Vec2>(id.with("ndr-drag-offset"))).unwrap_or_default();
     egui::Modal::new(id).area(egui::Modal::default_area(id).anchor(egui::Align2::CENTER_CENTER, offset))
 }
 
-/// 제목 줄 칸(`rect`, 닫기 단추는 빼고 넘긴다)을 끌면 그 창(`movable_modal`의 id)을 옮긴다.
+/// Dragging the title bar area (`rect`, passed without the close button) moves that window (id of `movable_modal`).
 pub(super) fn drag_title(ui: &egui::Ui, id: egui::Id, rect: egui::Rect) {
     let response = ui.interact(rect, id.with("ndr-title-drag"), egui::Sense::drag());
     if response.dragged() {
         let delta = response.drag_delta();
         let ctx = ui.ctx();
-        // 창이 화면 밖으로 다 나가지 않게: 제목 줄 가운데가 화면 안에 남을 만큼만 옮긴다.
+        // Keep the window from leaving the screen entirely: move only so far that the title bar center stays on screen.
         let screen = ctx.content_rect();
         let center = rect.center() + delta;
         let delta = egui::vec2(
@@ -1572,7 +1572,7 @@ pub(super) fn drag_title(ui: &egui::Ui, id: egui::Id, rect: egui::Rect) {
     }
 }
 
-/// 제목 줄 한 줄(굵은 제목 + 오른쪽 닫기 단추). 줄을 끌면 창이 움직인다. 닫기 단추를 누르면 true.
+/// One title bar row (bold title + close button on the right). Dragging the row moves the window. True when the close button is pressed.
 pub(super) fn modal_title_bar(ui: &mut egui::Ui, id: egui::Id, title: &str, width: Option<f32>) -> bool {
     let mut close = false;
     let mut button_left = None;
@@ -1595,8 +1595,8 @@ pub(super) fn modal_title_bar(ui: &mut egui::Ui, id: egui::Id, title: &str, widt
     close
 }
 
-/// 펼침 목록(egui ComboBox)의 목록도 앞쪽 층의 Popup이지만 메뉴가 아니다. 원본·C# 판은 메뉴만 투명하므로
-/// 목록 층(egui: 단추 id.with("popup"))을 이 프레임의 투명 메뉴 처리에서 뺀다. ComboBox는 show_ui 대신 이것으로 띄운다.
+/// The list of a drop-down (egui ComboBox) is also a foreground Popup but not a menu. The original and C# version make only menus transparent, so
+/// the list layer (egui: button id.with("popup")) is excluded from this frame's menu transparency. ComboBoxes are opened with this instead of show_ui.
 pub(super) trait ComboOpaque {
     fn show_opaque<R>(self, ui: &mut egui::Ui, menu_contents: impl FnOnce(&mut egui::Ui) -> R) -> egui::InnerResponse<Option<R>>;
 }
@@ -1609,9 +1609,9 @@ impl ComboOpaque for egui::ComboBox {
     }
 }
 
-/// 이 프레임에 그린 앞쪽(Foreground) 층 = 메뉴·오른쪽 단추 메뉴·펼침 목록의 모든 모양에 alpha를 곱한다
-/// (egui 메뉴는 따로 된 창이 아니어서 그린 뒤 층째로 흐리게 한다). 앞쪽 층에 그리는 메뉴가 아닌 것(egui::Modal로 띄운 원본 창·
-/// 메시지 상자·진행 창, 패널 알림 글)은 `keep_opaque`로 알린 층이라 그대로 둔다. alpha가 1이면 알린 목록만 비운다.
+/// Multiplies all shapes of the foreground layers drawn this frame (menus, right-click menus, drop-down lists) by alpha
+/// (egui menus are not separate windows, so whole layers are faded after drawing). Non-menu things on the foreground layer (original windows opened with egui::Modal,
+/// message boxes, progress windows, pane notices) are layers announced with `keep_opaque` and stay as is. With alpha 1 only the announced list is cleared.
 pub(super) fn fade_foreground_layers(ctx: &egui::Context, alpha: f32) {
     let opaque: Vec<egui::Id> = ctx.data_mut(|d| d.remove_temp::<Vec<egui::Id>>(egui::Id::new(OPAQUE_LAYERS))).unwrap_or_default();
     if alpha >= 1.0 {
@@ -1643,24 +1643,24 @@ pub(super) fn fade_foreground_layers(ctx: &egui::Context, alpha: f32) {
     });
 }
 
-/// 파일 목록 글꼴 묶음 이름(원본·C# 판 ListFont). 목록을 그리는 동안만 Body·Button 글꼴로 쓴다.
+/// Font family name of the file list (original and C# ListFont). Used as the Body and Button font only while drawing lists.
 pub(super) const LIST_FONT_FAMILY: &str = "list";
-/// 목록 밖 글 크기(화소). C# 판은 ListFontSize를 목록에만 쓰므로 나머지는 처음 값 12 그대로.
+/// Text size outside lists (pixels). The C# version applies ListFontSize only to lists, so the rest stays at the default 12.
 pub(super) const BASE_TEXT_SIZE: f32 = 12.0;
 
-/// 원본 ListFont 모양의 밑줄(4)·취소선(8)을 목록 글에 입힌다(굵게·기울임은 "list" 묶음의 글꼴 파일로 정한다).
+/// Applies underline (4) and strikeout (8) of the original ListFont style to list text (bold and italic come from the font files of the "list" family).
 pub(super) fn list_text(text: impl Into<String>, style: u8) -> RichText {
     let text = RichText::new(text);
     let text = if style & 4 != 0 { text.underline() } else { text };
     if style & 8 != 0 { text.strikethrough() } else { text }
 }
 
-/// 앱 글꼴: egui 기본에 맑은 고딕(한글)을 앞에 넣고, 원본 WinMain(0x403568)처럼 Vista 이상의 기본 글꼴 Segoe UI를 맨 앞에 둔다
-/// (원본 창은 모두 ParentFont라 Application DefaultFont = Segoe UI 9pt = 12화소, 한글은 Windows 글꼴 연결로 맑은 고딕).
-/// list_font(글꼴 파일, TTC 번호)가 있으면 "list" 묶음 = 그 글꼴 → 맑은 고딕 → 기본. 없으면 "list" 묶음은 보통 글꼴과 같다.
-/// list_bold(원본 ListFont 모양의 굵게)면 "list" 묶음의 한글은 맑은 고딕 Bold(malgunbd.ttf, 있으면)로 그린다.
+/// App fonts: Malgun Gothic (Korean) before the egui defaults, and Segoe UI, the default font of Vista and later, at the very front like original WinMain (0x403568)
+/// (all original windows are ParentFont, so Application DefaultFont = Segoe UI 9pt = 12 px, and Korean uses Malgun Gothic through Windows font linking).
+/// With list_font (font file, TTC index) the "list" family = that font -> Malgun Gothic -> defaults. Without it the "list" family equals the normal font.
+/// With list_bold (bold of the original ListFont style), Korean in the "list" family is drawn with Malgun Gothic Bold (malgunbd.ttf, when present).
 pub(super) fn set_app_fonts(ctx: &egui::Context, list_font: Option<(&'static [u8], u32)>, list_bold: bool) {
-    // 글꼴 파일은 사상해서(native::mapped_file) 'static으로 넘긴다: egui는 빌린 글꼴은 복사하지 않는다(Vec면 한 벌 더 복사).
+    // Font files are memory-mapped (native::mapped_file) and passed as 'static: egui does not copy borrowed fonts (a Vec would be copied once more).
     let font = |path: &str| native::mapped_file(Path::new(path)).map(|bytes| Arc::new(egui::FontData::from_static(bytes)));
     let mut fonts = egui::FontDefinitions::default();
     if let Some(data) = font("C:/Windows/Fonts/malgun.ttf") {
@@ -1692,7 +1692,7 @@ pub(super) fn set_app_fonts(ctx: &egui::Context, list_font: Option<(&'static [u8
         None => fonts.families.get(&egui::FontFamily::Proportional).cloned().unwrap_or_default(),
     };
     fonts.families.insert(egui::FontFamily::Name(LIST_FONT_FAMILY.into()), list);
-    // NXLabel 마크업 <b>(원본 TNXLabel: 그 글꼴의 굵은 꼴): Segoe UI Bold → 맑은 고딕 Bold → 보통 글꼴. 파일이 없으면 보통 글꼴.
+    // NXLabel markup <b> (original TNXLabel: the bold face of that font): Segoe UI Bold -> Malgun Gothic Bold -> normal font. The normal font when the files are missing.
     let mut bold = fonts.families.get(&egui::FontFamily::Proportional).cloned().unwrap_or_default();
     for (name, file) in [("KoreanBoldUI", "C:/Windows/Fonts/malgunbd.ttf"), ("UIBold", "C:/Windows/Fonts/segoeuib.ttf")] {
         if let Some(data) = font(file) {
@@ -1704,16 +1704,16 @@ pub(super) fn set_app_fonts(ctx: &egui::Context, list_font: Option<(&'static [u8
     ctx.set_fonts(fonts);
 }
 
-/// 굵은 글 묶음 이름(NXLabel 마크업 <b>).
+/// Bold text family name (NXLabel markup <b>).
 pub(super) const BOLD_FONT_FAMILY: &str = "bold";
 
 impl eframe::App for App {
-    /// egui-winit은 Ctrl+C·Ctrl+X·Ctrl+V(Ctrl+Insert·Shift+Delete·Shift+Insert)를 글쇠 사건 대신 Copy·Cut·Paste로 바꾸고,
-    /// 클립보드에 글이 없으면 붙여넣기는 버린다. 글 입력 칸에 초점이 없으면 원본 단축키(miEditCopy·miEditCut·miEditPaste)가
-    /// 받도록 글쇠 사건으로 되돌린다.
+    /// egui-winit turns Ctrl+C, Ctrl+X, Ctrl+V (Ctrl+Insert, Shift+Delete, Shift+Insert) into Copy, Cut and Paste instead of key events,
+    /// and drops paste when the clipboard has no text. When no text field has focus they are turned back into key events so the original shortcuts
+    /// (miEditCopy, miEditCut, miEditPaste) receive them.
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
-        // 메모리: egui 글자 그림판(font atlas)의 너비는 GPU 최대 텍스처 크기(NVIDIA 32768 → 16384)라 줄이 조금만 늘어도 수십 MB였다.
-        // 2048로 두면 쓰는 만큼만 아래로 늘어난다(화면 그리기 쪽의 실제 한계는 그대로).
+        // Memory: the egui glyph atlas width is the GPU maximum texture size (NVIDIA 32768 -> 16384), so a few more rows cost tens of MB.
+        // At 2048 it grows downward only as needed (the real limit on the rendering side stays the same).
         raw_input.max_texture_side = Some(raw_input.max_texture_side.unwrap_or(2048).min(2048));
         let pastes = ndr::shell_menu::take_paste_keys();
         let numpad = ndr::shell_menu::take_numpad_keys();
@@ -1729,8 +1729,8 @@ impl eframe::App for App {
                         strip_numpad_events(raw_input, vk);
                         self.pending_numpad.push((original, shift));
                     } else if matches!(vk, 0x6e | 0x6f) {
-                        // 고친 것: egui는 숫자판 '.'(VK_DECIMAL)·'/'(VK_DIVIDE)를 본 글쇠 '.'·'/'와 같은 Key로 준다. 원본에서는 다른 글쇠라
-                        // '.'(상위 폴더)·'/'(miCommandLine)로 듣지 않는다. 눌림 사건만 빼고 글자(빠른 찾기)는 남긴다.
+                        // Fixed: egui reports numpad '.' (VK_DECIMAL) and '/' (VK_DIVIDE) as the same Key as the main '.' and '/'. In the original they are different keys,
+                        // so they do not act as '.' (parent folder) or '/' (miCommandLine). Only the press events are removed; the characters (quick search) stay.
                         let key = if vk == 0x6e { egui::Key::Period } else { egui::Key::Slash };
                         if let Some(i) = raw_input.events.iter().position(|e| matches!(e, egui::Event::Key { key: k, pressed: true, .. } if *k == key)) {
                             raw_input.events.remove(i);
@@ -1746,10 +1746,10 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
         self.frames += 1;
         let frame_started = Instant::now();
-        // 왼쪽 단추 누름을 Windows 두 번 누르기 기준으로 센다(목록이 그려지지 않는 그림의 누름도 빠지지 않게).
+        // Count left button presses by the Windows double-click rule (so presses in frames that do not draw the list are not missed).
         let _ = panes::windows_double_press(ctx);
-        // 고친 것(사용자 지적: 최대화로 시작할 때 깜박임): winit의 with_maximized는 첫 그림 전에 ShowWindow(SW_MAXIMIZE)로 빈 창을
-        // 보였다. main.rs가 작업 영역 크기의 숨은 창으로 만들고, 첫 그림이 보인 뒤(두 번째 그림) 저장한 보통 크기를 되돌릴 크기로 두고 최대화한다.
+        // Fixed (user report: flicker when starting maximized): winit with_maximized showed an empty window with ShowWindow(SW_MAXIMIZE) before the first frame.
+        // main.rs creates a hidden window of work area size, and after the first frame is shown (second frame) the saved normal size becomes the restore size and the window is maximized.
         match self.options.maximize_restore {
             Some((restore, true)) => {
                 native::maximize_with_restore(self.hwnd, restore);
@@ -1763,7 +1763,7 @@ impl eframe::App for App {
             }
             None => {}
         }
-        // C# Closing: 보통 창이면 위치·크기를 저장하고 최대화 여부를 따로 둔다. 시작 확인(화면 밖 창)은 기록하지 않는다.
+        // C# Closing: a normal window saves its position and size, and the maximized state separately. The startup check (off-screen window) is not recorded.
         if self.options.smoke_seconds.is_none() && self.options.maximize_restore.is_none() {
             let (outer, inner, maximized, minimized) = ctx.input(|i| {
                 let viewport = i.viewport();
@@ -1785,7 +1785,7 @@ impl eframe::App for App {
             self.close_when_idle = false;
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
-        // C# DiskCopyWindow OnClosing: 디스크 작업 중에는 닫지 않는다(이미지 만들기는 취소 요청).
+        // C# DiskCopyWindow OnClosing: no closing during disk work (image creation gets a cancel request).
         if ctx.input(|i| i.viewport().close_requested()) && self.disk_copy_blocks_close() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         }
@@ -1820,8 +1820,8 @@ impl eframe::App for App {
                 ndr::lifecycle::LifecycleEvent::Exit => {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close)
                 }
-                // 원본 FUN_00442bc8(SHCNE_MEDIAINSERTED/MEDIAREMOVED·DRIVEADD/REMOVED): CD 넣기·빼기처럼 드라이브 글자는 그대로이고
-                // 미디어만 바뀌어도 드라이브 줄·단추·정보 줄을 새로 만든다.
+                // Original FUN_00442bc8 (SHCNE_MEDIAINSERTED/MEDIAREMOVED, DRIVEADD/REMOVED): like inserting or removing a CD, even when the drive letter stays and
+                // only the media changes, the drive rows, buttons and info bars are rebuilt.
                 ndr::lifecycle::LifecycleEvent::DevicesChanged => self.drives_changed(),
             }
         }
@@ -1840,7 +1840,7 @@ impl eframe::App for App {
         for pane in &mut self.panes {
             pane.drop_drive_marks();
         }
-        // 원본 메뉴 줄 바탕(tbMainMenuAdvancedCustomDraw): [Menu] mmainback.
+        // Original menu bar background (tbMainMenuAdvancedCustomDraw): [Menu] mmainback.
         let skin_now = self.current_skin();
         skin_pane::set_menu_style(ctx, skin_now.as_ref().map(skin_pane::skin_menu_style));
         let menu_frame = match &skin_now {
@@ -1851,15 +1851,15 @@ impl eframe::App for App {
             self.menu(ui);
             self.paint_original_search_text(ui);
         });
-        // 원본 TfMain: 메뉴 줄(tbMainMenu), 도구 모음(pToolbar), 두 패널, 기능키 줄(bbFunctions). 상태 줄은 없다.
+        // Original TfMain: menu bar (tbMainMenu), toolbar (pToolbar), two panes, function key row (bbFunctions). There is no status bar.
         if let Some(skin) = skin_now {
-            // 원본 pToolbar(alTop): 높이 tbheight(검정 51), 배경 그림과 그림 단추(toolbar.rs skin_toolbar).
+            // Original pToolbar (alTop): height tbheight (black 51), background image and image buttons (toolbar.rs skin_toolbar).
             if self.settings.flag("ShowToolBar", true) {
                 let height = skin.positive_integer("Toolbar", "tbheight", 51) as f32;
                 egui::TopBottomPanel::top("toolbar").exact_height(height).frame(egui::Frame::NONE).show_separator_line(false).show(ctx, |ui| self.skin_toolbar(ui, ctx, &skin));
             }
-            // 원본 bbFunctions(DFM Height 20): F2~F8 칸(user_commands.rs skin_function_key_bar). 끄면 아무 줄도 없다.
-            // NDR 상태 글은 원본에 없으므로(원본 창에는 상태 줄이 없음) 목록 자리를 줄이지 않고 기능키 줄 위에 잠깐 겹쳐 보인다.
+            // Original bbFunctions (DFM Height 20): F2-F8 cells (user_commands.rs skin_function_key_bar). Turned off, no row at all.
+            // NDR status text does not exist in the original (the window has no status bar), so it is overlaid briefly above the function key row without shrinking the list.
             let function_bar = self.settings.flag("ShowFunctionBar", true);
             if function_bar {
                 egui::TopBottomPanel::bottom("functionbar").exact_height(20.0).frame(egui::Frame::NONE).show_separator_line(false).show(ctx, |ui| self.skin_function_key_bar(ui, ctx, &skin));
@@ -1867,22 +1867,22 @@ impl eframe::App for App {
             let _ = self.skin_status_overlay(ctx, if function_bar { 20.0 } else { 0.0 });
         }
         if self.show_results {
-            // 원본 pBottom Height 100(btnFTPShowDetail로 22 ↔ 100), splBottom으로 높이를 바꾼다.
+            // Original pBottom Height 100 (22 <-> 100 with btnFTPShowDetail), resized with splBottom.
             let panel = egui::TopBottomPanel::bottom(if self.results_collapsed { "ftp-results-collapsed" } else { "ftp-results" });
             let panel = if self.results_collapsed { panel.resizable(false).exact_height(24.0) } else { panel.resizable(true).default_height(100.0) };
             panel.show(ctx, |ui| self.ftp_results_ui(ui));
         }
-        // 원본 폴더 보기(Alt+F3)는 패널마다 목록 왼쪽에 그린다(pane_ui → pane_tree_ui).
-        // 놓을 곳 찾기: 이번 화면에 그리는 패널과 폴더 줄만(한 패널 보기면 숨은 패널은 없다).
+        // The original folder view (Alt+F3) is drawn per pane left of the list (pane_ui -> pane_tree_ui).
+        // Drop target lookup: only the panes and folder rows drawn this frame (in single-pane view the hidden pane has none).
         self.pane_rects = [egui::Rect::NOTHING; 2];
         self.folder_rows.clear();
         self.tree_drop_rows.clear();
-        // 원본 TfMain: 패널(틀)은 pToolbar(alTop)와 bbFunctions(alBottom) 사이를 틈 없이 채운다(FUN_0043d7c0: 패널 너비 = 창 너비 −
-        // 보이는 VertSplitter·pVertBar 너비). 고친 것: 전에는 egui 기본 패널 여백(8)과 틈이 들어가 위 13·아래 9·가운데 16화소가 더 비었다.
+        // Original TfMain: panes (frames) fill the space between pToolbar (alTop) and bbFunctions (alBottom) without gaps (FUN_0043d7c0: pane width = window width -
+        // visible VertSplitter and pVertBar widths). Fixed: previously the egui default panel margin (8) and gaps left 13 px above, 9 below and 16 in the middle.
         egui::CentralPanel::default().frame(egui::Frame::central_panel(&ctx.style()).inner_margin(0.0)).show(ctx, |ui| {
             if self.dual {
-                // 두 패널 사이: 원본 pVertBar(DFM Width 18, alRight) 또는 막대를 숨기면 VertSplitter(Width 4, clBlack). 끌면 너비(LeftPaneWidth %, 20~80),
-                // 두 번 누르면 같은 너비(원본 pmiFrameWidthSame).
+                // Between the panes: the original pVertBar (DFM Width 18, alRight), or VertSplitter (Width 4, clBlack) when the bar is hidden. Dragging sets the width (LeftPaneWidth %, 20-80),
+                // a double click makes equal widths (original pmiFrameWidthSame).
                 let full = ui.available_rect_before_wrap();
                 let show_bar = self.settings.flag("ShowVerticalBar", true);
                 let (bar, gap) = (if show_bar { 18.0 } else { 4.0 }, 0.0);

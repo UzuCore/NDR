@@ -70,7 +70,7 @@ fn main_menu_follows_the_original_tfmain_dropdowns() {
     assert!(app.panes[0].selected.contains(&1));
     assert_eq!(app.menu_checked("toggleFileInfoBar"), Some(true));
     draw(&mut app, &ctx);
-    // Original TToolBar CM_DIALOGCHAR: Alt+letter that is not a shortcut (폴더(&O) → Alt+O) opens the dropdown of that menu button.
+    // Original TToolBar CM_DIALOGCHAR: Alt+letter that is not a shortcut ("폴더(&O)" -> Alt+O) opens the dropdown of that menu button.
     assert!(!egui::Popup::is_any_open(&ctx));
     let alt_o = egui::Event::Key { key: egui::Key::O, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::ALT };
     let raw = egui::RawInput { events: vec![alt_o], screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 850.0))), ..Default::default() };
@@ -1355,7 +1355,7 @@ fn resize_and_refresh_adjust_the_page_like_the_original() {
     run(&mut app, 850.0);
     run(&mut app, 850.0);
     let rows = app.panes[0].page.rows;
-    // 커서를 뒤쪽에 두고 보이게 한 뒤, 커서를 보이는 첫 열로 옮긴다(위치는 그대로).
+    // Put the cursor far back and reveal it, then move the cursor to the first visible column (position unchanged).
     app.panes[0].cursor = 500;
     app.panes[0].reveal = true;
     run(&mut app, 850.0);
@@ -1364,14 +1364,14 @@ fn resize_and_refresh_adjust_the_page_like_the_original() {
     app.panes[0].cursor = first * rows;
     run(&mut app, 850.0);
     assert_eq!(app.panes[0].first_column, first, "moving inside the page keeps the position");
-    // 목록 크기가 바뀌면(창 높이) 커서 열이 마지막 보이는 열이 된다.
+    // When the list size changes (window height) the cursor column becomes the last visible column.
     run(&mut app, 650.0);
     run(&mut app, 650.0);
     let columns = app.panes[0].page.columns;
     let rows = app.panes[0].page.rows;
     let column = app.panes[0].cursor / rows;
     assert_eq!(app.panes[0].first_column, (column / columns) * columns, "page scrolling (default): WMSize → AdjustPage shows the cursor's page");
-    // 줄 단위(ScrollStep 1): 커서 열이 마지막 보이는 열이 된다.
+    // By line (ScrollStep 1): the cursor column becomes the last visible column.
     app.settings.values.insert("LeftScrollStep".into(), serde_json::json!(1));
     app.panes[0].first_column = column;
     run(&mut app, 650.0);
@@ -1381,7 +1381,7 @@ fn resize_and_refresh_adjust_the_page_like_the_original() {
     let column = app.panes[0].cursor / rows;
     assert!(column >= first);
     assert_eq!(app.panes[0].first_column, (column + 1).saturating_sub(columns), "WMSize → AdjustPage");
-    // 같은 폴더를 다시 읽어도 같다(커서 열을 처음 보이는 열로 둔 뒤 새로 고침).
+    // Rereading the same folder gives the same result (refresh after putting the cursor column first).
     app.panes[0].first_column = column;
     run(&mut app, 600.0);
     assert_eq!(app.panes[0].first_column, column);
@@ -1393,8 +1393,8 @@ fn resize_and_refresh_adjust_the_page_like_the_original() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// 원본 FUN_00487ce8·SetSortType(0x7dbb28): 자세히 보기에서 같은 폴더를 다시 읽으면 옛 세로 위치(SetScrollTop), 정렬을 바꾸면 커서
-/// 항목이 보이게(SetItemIndex), 다른 폴더로 가면 첫 항목부터 보인다.
+/// Original FUN_00487ce8 and SetSortType (0x7dbb28): in Details, rereading the same folder keeps the old vertical position (SetScrollTop), changing the sort makes the cursor
+/// item visible (SetItemIndex), and going to another folder shows the list from the first item.
 #[test]
 fn details_scroll_follows_refresh_sort_and_navigation_like_the_original() {
     let (root, ctx, mut app) = fixture("details-scroll");
@@ -1428,13 +1428,13 @@ fn details_scroll_follows_refresh_sort_and_navigation_like_the_original() {
     run(&mut app);
     let top = app.panes[0].page.top;
     assert!(top > 0, "scrolled down to the cursor");
-    // 같은 폴더 다시 읽기: 옛 위치를 지킨다.
+    // Rereading the same folder keeps the old position.
     app.refresh(0);
     wait(&mut app, &ctx);
     run(&mut app);
     run(&mut app);
     assert_eq!(app.panes[0].page.top, top, "SetScrollTop(old top)");
-    // 내림차순으로 정렬: 커서 항목(f250)이 앞쪽으로 옮겨 가고 보인다.
+    // Sorting descending: the cursor item (f250) moves to the front and is visible.
     assert!(app.sort_command("sortDescending"));
     run(&mut app);
     run(&mut app);
@@ -1442,7 +1442,7 @@ fn details_scroll_follows_refresh_sort_and_navigation_like_the_original() {
     let cursor = app.panes[0].cursor;
     assert_eq!(app.panes[0].entries[cursor].name, "f250.txt");
     assert!(page.top <= cursor && cursor <= page.last, "SetSortDescend → SetItemIndex: {page:?} {cursor}");
-    // 다른 폴더: 첫 항목부터.
+    // Another folder: from the first item.
     app.navigate(0, left.join("sub"), true);
     wait(&mut app, &ctx);
     run(&mut app);
@@ -1452,7 +1452,7 @@ fn details_scroll_follows_refresh_sort_and_navigation_like_the_original() {
 }
 
 
-/// 원본 MouseDown(0x7d63c8): 가운데 단추로 눌러도 SetItemFocused(커서만 옮기고 표시는 그대로).
+/// Original MouseDown (0x7d63c8): a middle-button press also does SetItemFocused (moves only the cursor, marks unchanged).
 #[test]
 fn middle_click_moves_the_cursor_like_the_original() {
     let (root, ctx, mut app) = fixture("middle-click");
@@ -1487,7 +1487,7 @@ fn middle_click_moves_the_cursor_like_the_original() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// 원본 TNXShellChangeNotify(패널 +0x374): 다른 프로그램이 지금 폴더에 파일을 만들면 Delay(1500ms) 뒤 그 폴더를 다시 읽는다.
+/// Original TNXShellChangeNotify (pane +0x374): when another program creates a file in the current folder, that folder is reread after Delay(1500 ms).
 #[test]
 fn panes_refresh_after_outside_changes_like_tnxshellchangenotify() {
     let (root, ctx, mut app) = fixture("change-notify");
@@ -1511,8 +1511,8 @@ fn panes_refresh_after_outside_changes_like_tnxshellchangenotify() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// 원본 자기 작업(새 폴더 FUN_00432378, 이름 바꾸기 FUN_004351cc, 속성 FUN_0043657c, 압축 FUN_0043a7f8 …): SetActive(0) → 작업 →
-/// 다시 읽기(FUN_00487ce8) → SetActive(1)(새 감시). 그래서 자기 작업이 낸 바뀜으로 1.5초 뒤 한 번 더 읽지 않고, 그 뒤 바깥 바뀜은 잡는다.
+/// Original own operations (new folder FUN_00432378, rename FUN_004351cc, attributes FUN_0043657c, archive FUN_0043a7f8 ...): SetActive(0) -> operation ->
+/// reread (FUN_00487ce8) -> SetActive(1) (new watch). So an own change does not cause another read 1.5 s later, while later outside changes are caught.
 #[test]
 fn own_changes_followed_by_a_refresh_do_not_relist_again() {
     let (root, ctx, mut app) = fixture("own-change");
@@ -1521,7 +1521,7 @@ fn own_changes_followed_by_a_refresh_do_not_relist_again() {
     app.poll(&ctx);
     std::thread::sleep(std::time::Duration::from_millis(300));
     let before = app.panes[0].generation;
-    // 자기 작업: 바꾸고 바로 다시 읽기(원본 순서와 같다).
+    // Own operation: change then reread at once (same order as the original).
     fs::create_dir(left.join("made-by-us")).unwrap();
     app.refresh(0);
     let end = std::time::Instant::now() + std::time::Duration::from_millis(2500);
@@ -1531,7 +1531,7 @@ fn own_changes_followed_by_a_refresh_do_not_relist_again() {
     }
     assert_eq!(app.panes[0].generation, before + 1, "only our own refresh, no delayed second listing");
     assert!(app.panes[0].entries.iter().any(|e| e.name == "made-by-us"));
-    // 그 뒤 바깥 바뀜은 새 감시가 잡는다.
+    // Later outside changes are caught by the new watch.
     fs::write(left.join("made-outside.txt"), b"x").unwrap();
     let end = std::time::Instant::now() + std::time::Duration::from_secs(8);
     while !app.panes[0].entries.iter().any(|e| e.name == "made-outside.txt") {
@@ -1544,7 +1544,7 @@ fn own_changes_followed_by_a_refresh_do_not_relist_again() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// 원본 TfMain DFM(pmFile … pmHelp, Visible=False 항목 뺌, 겹친·끝 구분선은 하나로/없이): 주 메뉴에 보이는 항목과 차례.
+/// Original TfMain DFM (pmFile ... pmHelp, Visible=False items removed, doubled and trailing separators merged or dropped): visible main menu items and their order.
 #[test]
 fn main_menu_items_follow_the_tfmain_dfm() {
     let submenu = |id: &str| match id {
@@ -1590,7 +1590,7 @@ fn main_menu_items_follow_the_tfmain_dfm() {
         "miToDesktop miToDocuments miToPictures miToMusic miToVideos miToDownloads - miControlPanel miAddRemoveProg - miRecycleBin miEmptyRecycleBin - miToTemp miEmptyTemp - miCommandLine",
         "miArcAdd - miArcExtract miArcExtractToCurr miArcExtractAuto",
         "miFTPQuickConnect - miFTPConnect miFTPDisconnect - miFTPGet miFTPPut - miMapNetworkDrive miUnmapNetworkDrive",
-        // 사용자 요청: 컴퓨터 청소(miCleanupDisk)는 뺐다.
+        // User request: Disk Cleanup (miCleanupDisk) was removed.
         "miTextViewer miTextEditor - miClearDescriptions - miSaveList - miSplitFile miJoinFile - miCompareFolder - miOptions",
         "miHelp miShortcut - miHomepage - miCheckUpdate - miAbout",
     ];
@@ -1600,8 +1600,8 @@ fn main_menu_items_follow_the_tfmain_dfm() {
     assert!(wrong.is_empty(), "{}", wrong.concat());
 }
 
-/// 원본 GetItemAt(0x7dac1c): 자세히(형식 2) 줄 간격 = 항목 높이 + LineSpace이고 줄 위의 틈은 그 항목, 열로 흐르는 목록(형식 0·1)은
-/// 항목 아래 틈이 그 항목이다.
+/// Original GetItemAt (0x7dac1c): in Details (style 2) the row pitch is item height + LineSpace and the gap above a row belongs to that item; in column-flowing lists (styles 0/1)
+/// the gap below an item belongs to it.
 #[test]
 fn clicks_in_the_line_space_pick_the_original_item() {
     let (root, ctx, mut app) = fixture("line-space");
@@ -1641,8 +1641,8 @@ fn clicks_in_the_line_space_pick_the_original_item() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// 원본 miShowFoldersClick(0x445258) → FUN_0048da38: 지금 패널에만 목록 왼쪽 폴더 트리(너비 treewidth, 처음 120)와 3화소 나눔 막대,
-/// 목록은 그 오른쪽. 그 패널 설정(ShowLeft/RightFolderTree)에 남는다.
+/// Original miShowFoldersClick (0x445258) -> FUN_0048da38: only on the current pane, a folder tree left of the list (width treewidth, initially 120) and a 3 px divider,
+/// with the list to its right. Stored in that pane's setting (ShowLeft/RightFolderTree).
 #[test]
 fn show_folders_adds_a_tree_inside_the_active_pane() {
     let (root, ctx, mut app) = fixture("pane-tree");
@@ -1684,9 +1684,9 @@ fn show_folders_adds_a_tree_inside_the_active_pane() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// 원본 패널 트리(TNXShellTreeView = VCL TTreeView, OnChange FUN_0048e320): 트리에 초점이 있으면 ↓↑는 고른 항목을 옮기고
-/// 그때마다 패널이 그 폴더로 간다. ←는 펼친 항목을 접고, 접힌 항목에서는 부모로. 글자는 그 글자로 시작하는 다음 항목.
-/// 목록을 누르면 초점이 목록으로 돌아간다.
+/// Original pane tree (TNXShellTreeView = VCL TTreeView, OnChange FUN_0048e320): with focus in the tree, Down/Up move the selected item
+/// and each time the pane goes to that folder. Left collapses an expanded item and goes to the parent from a collapsed one. A letter goes to the next item starting with it.
+/// Clicking the list returns focus to the list.
 #[test]
 fn pane_tree_keys_follow_the_ttreeview() {
     use ndr::shell_tree::{ShellNode, Special};
@@ -1714,18 +1714,18 @@ fn pane_tree_keys_follow_the_ttreeview() {
     };
     press(&mut app, egui::Key::ArrowDown, None);
     assert_eq!(app.panes[0].path, left.join("alpha"), "↓ = next item, OnChange moves the pane");
-    // 글자 b: 다음 "b…" 항목.
+    // Letter b: the next "b..." item.
     app.panes[0].tree_synced = Some(app.panes[0].path.clone());
     press(&mut app, egui::Key::B, Some("b"));
     assert_eq!(app.panes[0].path, left.join("beta"));
-    // ←(접힌 항목): 부모로.
+    // Left (collapsed item): to the parent.
     app.panes[0].tree_synced = Some(app.panes[0].path.clone());
     press(&mut app, egui::Key::ArrowLeft, None);
     assert_eq!(app.panes[0].path, left, "← on a collapsed item selects its parent");
-    // ←(펼친 항목): 접는다.
+    // Left (expanded item): collapses it.
     press(&mut app, egui::Key::ArrowLeft, None);
     assert!(!app.panes[0].tree_open.iter().any(|k| ndr::shell_tree::same_key(k, &left)), "← on an open item collapses it");
-    // 목록을 누르면 초점이 목록으로.
+    // Clicking the list moves focus to the list.
     app.pane_rects[0] = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(600.0, 800.0));
     app.panes[0].tree_rect = Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(120.0, 800.0)));
     let click = vec![
@@ -1739,8 +1739,8 @@ fn pane_tree_keys_follow_the_ttreeview() {
 }
 
 
-/// 원본 UpdateScrollBar·ArrowKey·AdjustPage(형식 2): 칸 너비 합이 목록보다 넓으면 가로로 넘길 수 있고, 오른쪽·왼쪽 글쇠는 20씩,
-/// 목록 크기가 바뀌면 가로 위치가 0이 된다.
+/// Original UpdateScrollBar, ArrowKey and AdjustPage (style 2): when the total cell width exceeds the list it can scroll horizontally, Right/Left keys move by 20,
+/// and a list size change resets the horizontal position to 0.
 #[test]
 fn narrow_details_scroll_horizontally_like_the_original() {
     let (root, ctx, mut app) = fixture("details-hscroll");
@@ -1775,14 +1775,14 @@ fn narrow_details_scroll_horizontally_like_the_original() {
     run(&mut app, vec![key(egui::Key::ArrowLeft)], 700.0);
     run(&mut app, vec![], 700.0);
     assert_eq!((app.panes[0].detail_x, app.panes[0].cursor), (20.0, cursor), "Left scrolls back and the cursor stays");
-    // 목록 크기가 바뀌면(AdjustPage) 0.
+    // A list size change (AdjustPage) resets it to 0.
     run(&mut app, vec![], 650.0);
     run(&mut app, vec![], 650.0);
     assert_eq!(app.panes[0].detail_x, 0.0);
     let _ = fs::remove_dir_all(root);
 }
 
-/// 원본 단축키 표가 pmMain 팝업 항목·하위 메뉴 이름에 글쇠를 걸었을 때의 명령 id(menu_data::ORIGINAL_ACTIONS)도 받는다.
+/// Also accepts the command ids (menu_data::ORIGINAL_ACTIONS) used when the original shortcut table binds keys to pmMain popup items or submenu names.
 #[test]
 fn shortcut_names_of_popup_and_submenu_items_are_known_commands() {
     let (root, ctx, mut app) = fixture("popup-ids");
@@ -1802,8 +1802,8 @@ fn shortcut_names_of_popup_and_submenu_items_are_known_commands() {
 }
 
 
-/// 원본 KeyDown(FUN_0048423c)의 단축키가 아닌 글쇠: '.' = 상위 폴더(빠른 찾기 글이 비었을 때), Ctrl+Tab·Ctrl+Shift+Tab = 다음·이전 탭,
-/// Shift+글자 = 그 드라이브(영문 입력이거나 hanshdrive를 켰을 때).
+/// Non-shortcut keys of the original KeyDown (FUN_0048423c): '.' = parent folder (when the quick search text is empty), Ctrl+Tab / Ctrl+Shift+Tab = next/previous tab,
+/// Shift+letter = that drive (with English input, or when hanshdrive is on).
 #[test]
 fn keydown_period_ctrl_tab_and_shift_drive_follow_the_original() {
     let (root, ctx, mut app) = fixture("keydown");
@@ -1838,7 +1838,7 @@ fn keydown_period_ctrl_tab_and_shift_drive_follow_the_original() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// 큰 폴더(파일 2만 개)에서 한 장면 그리기 시간(손으로만 돌린다: cargo test --release -- --ignored big_folder_frame_time).
+/// Frame time of one frame on a large folder (20,000 files) (run by hand only: cargo test --release -- --ignored big_folder_frame_time).
 #[test]
 #[ignore]
 fn big_folder_frame_time() {
@@ -1916,8 +1916,8 @@ fn big_folder_frame_time() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// original_field_max의 빠른 재기(글자 폭 합, GDI GetTextExtentPoint처럼 짝 간격 조정 없음)가 그려지는 글(egui는 짝 간격을
-/// 줄인다)보다 좁지 않아 칸에 글이 늘 들어가는지.
+/// Whether the fast measure of original_field_max (sum of glyph widths, no kerning like GDI GetTextExtentPoint) is never narrower than the drawn text (egui
+/// tightens kerning), so text always fits in its cell.
 #[test]
 fn field_widths_by_glyph_sum_match_the_laid_out_width() {
     let (root, ctx, app) = fixture("glyph-sum");
@@ -1935,7 +1935,7 @@ fn field_widths_by_glyph_sum_match_the_laid_out_width() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// 원본 FUN_00483640: 바로 가기(.lnk)의 대상이 폴더면 셸로 열지 않고 그 패널을 그 폴더로 옮긴다.
+/// Original FUN_00483640: when a shortcut (.lnk) targets a folder, the pane moves to that folder instead of opening it in the shell.
 #[test]
 fn opening_a_folder_shortcut_moves_the_pane_into_the_target() {
     let (root, ctx, mut app) = fixture("folder-shortcut");
@@ -1955,7 +1955,7 @@ fn opening_a_folder_shortcut_moves_the_pane_into_the_target() {
 }
 
 
-/// 원본 FUN_00489d20(탭 바꿈): 탭의 폴더가 없어졌으면 있는 상위 폴더로, 위치가 하나도 없으면 그 탭을 지운다.
+/// Original FUN_00489d20 (tab switch): if a tab's folder is gone, go to an existing parent; with no location at all, remove that tab.
 #[test]
 fn switching_to_a_tab_whose_folder_is_gone_follows_the_original() {
     let (root, ctx, mut app) = fixture("tab-gone");
@@ -1978,8 +1978,8 @@ fn switching_to_a_tab_whose_folder_is_gone_follows_the_original() {
 }
 
 
-/// 사용자 보고: 압축 파일 안에서 ".."로 나오지 못하고 안의 파일을 복사하지 못했다. 압축 파일 맨 위의 ".."는 압축 파일이 있는 폴더를
-/// 다시 읽어 그 압축 파일에 커서를 두고, 압축 안 파일은 다른 패널로 복사(풀기)된다.
+/// User report: inside an archive ".." did not leave it and files inside could not be copied. ".." at the archive top rereads the folder containing
+/// the archive and puts the cursor on the archive; files inside the archive are copied (extracted) to the other pane.
 #[test]
 fn leaving_an_archive_with_dotdot_relists_the_folder_and_inner_files_copy_out() {
     let (root, ctx, mut app) = fixture("archive-leave");
@@ -1997,7 +1997,7 @@ fn leaving_an_archive_with_dotdot_relists_the_folder_and_inner_files_copy_out() 
     wait(&mut app, &ctx);
     assert!(app.panes[0].archive.is_some());
     assert!(app.panes[0].entries.iter().any(|e| e.name == "inside.txt"), "{:?}", app.panes[0].entries.iter().map(|e| &e.name).collect::<Vec<_>>());
-    // 안의 파일을 다른 패널로 복사(풀기).
+    // Copy (extract) the inner file to the other pane.
     app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == "inside.txt").unwrap();
     app.copy_to_other(0, false, &ctx);
     let end = Instant::now() + Duration::from_secs(30);
@@ -2010,7 +2010,7 @@ fn leaving_an_archive_with_dotdot_relists_the_folder_and_inner_files_copy_out() 
         thread::sleep(Duration::from_millis(10));
     }
     assert_eq!(fs::read(right.join("inside.txt")).unwrap(), b"inner");
-    // 맨 위의 "..": 압축 밖으로, 그 폴더를 다시 읽고 압축 파일에 커서.
+    // ".." at the top: out of the archive, reread that folder and put the cursor on the archive.
     app.active = 0;
     app.panes[0].cursor = 0;
     assert!(app.panes[0].entries[0].is_parent());
@@ -2023,8 +2023,8 @@ fn leaving_an_archive_with_dotdot_relists_the_folder_and_inner_files_copy_out() 
     let _ = fs::remove_dir_all(root);
 }
 
-/// 원본 패널 트리 놓기 대상(FUN_0048da38의 TNXDropFileTarget): 끄는 동안 하위 폴더가 있는 노드에 1200ms 머물면 펼치고
-/// (타이머 +0x2f4 → FUN_0048edf0), 놓으면 FUN_00488b64(효과, 노드 폴더, 1 = 확인 건너뜀)라 "드래그 앤 드롭 확인"을 묻지 않는다.
+/// Original pane tree drop target (TNXDropFileTarget of FUN_0048da38): hovering 1200 ms over a node with subfolders while dragging expands it
+/// (timer +0x2f4 -> FUN_0048edf0), and a drop is FUN_00488b64(effect, node folder, 1 = skip confirmation), so "confirm drag and drop" is not asked.
 #[test]
 fn dropping_on_the_pane_tree_expands_on_hover_and_skips_the_confirmation() {
     let (root, ctx, mut app) = fixture("tree-drop");
@@ -2039,10 +2039,10 @@ fn dropping_on_the_pane_tree_expands_on_hover_and_skips_the_confirmation() {
     assert!(!app.tree_drag_hover(Some(row.center()), start + Duration::from_millis(1100), &ctx));
     assert!(app.tree_drag_hover(Some(row.center()), start + Duration::from_millis(1250), &ctx), "expanded after 1200 ms");
     assert!(app.panes[1].tree_open.contains(&right));
-    // 노드를 벗어나면 머문 시각이 지워진다(OnLeave / 노드 없음).
+    // Leaving the node clears the hover time (OnLeave / no node).
     assert!(!app.tree_drag_hover(Some(egui::pos2(10.0, 10.0)), start + Duration::from_millis(1300), &ctx));
     assert!(app.tree_drop_hover.is_none());
-    // 놓기: 확인 상자 없이 바로(같은 드라이브라 원본 규칙대로 이동).
+    // Drop: right away without a confirmation box (same drive, so a move by the original rule).
     app.file_drag = None;
     app.tree_drop(1, vec![left.join("a.txt")], right.clone(), egui::Modifiers::NONE, 7);
     assert!(app.msgboxes.is_empty(), "a tree drop does not ask ConfirmDragDrop");
@@ -2058,8 +2058,8 @@ fn dropping_on_the_pane_tree_expands_on_hover_and_skips_the_confirmation() {
 }
 
 
-/// 원본 miShowHiddenClick(0x4348e0) → FUN_0048e564: 숨김 보기를 바꾸면 패널 폴더 트리도 숨김 폴더를 보이거나 감춘다
-/// (+0x3f8 비트 4, 트리를 다시 만듦). 트리 하위 폴더 캐시는 숨김 보기마다 따로라 다른 패널의 설정과 섞이지 않는다.
+/// Original miShowHiddenClick (0x4348e0) -> FUN_0048e564: changing the hidden view also shows or hides hidden folders in the pane folder tree
+/// (+0x3f8 bit 4, the tree is rebuilt). The tree subfolder cache is kept per hidden view, so it does not mix with the other pane's setting.
 #[test]
 fn pane_tree_follows_the_hidden_toggle() {
     let (root, ctx, mut app) = fixture("tree-hidden");
@@ -2079,7 +2079,7 @@ fn pane_tree_follows_the_hidden_toggle() {
     };
     let names = |app: &mut App, hidden: bool| -> Vec<String> {
         let end = Instant::now() + Duration::from_secs(20);
-        // 시험 폴더는 숨김 폴더(AppData) 아래라 숨김을 끈 트리에서는 바탕 화면부터 이어지지 않는다. 그 폴더의 하위 읽기를 직접 요청한다.
+        // The test folder is below a hidden folder (AppData), so a tree with hidden items off does not connect from the Desktop. Request that folder's children directly.
         app.request_tree_children(0, &left);
         loop {
             draw(app);
@@ -2099,7 +2099,7 @@ fn pane_tree_follows_the_hidden_toggle() {
     assert!(app.panes[0].show_hidden);
     let shown = names(&mut app, true);
     assert!(shown.iter().any(|n| n == "visible-dir") && shown.iter().any(|n| n == "hidden-dir"), "{shown:?}");
-    // 오른쪽 패널(숨김 보기 끔)이 같은 폴더를 트리에서 읽으면 왼쪽(켬)의 결과를 쓰지 않는다.
+    // When the right pane (hidden off) reads the same folder in its tree, it does not use the left pane's (hidden on) result.
     assert!(!app.panes[1].show_hidden);
     let end = Instant::now() + Duration::from_secs(20);
     app.request_tree_children(1, &left);
@@ -2116,35 +2116,35 @@ fn pane_tree_follows_the_hidden_toggle() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// 원본 mipOpenInNewTabClick(0x4453b4): 폴더 → 그 폴더 탭, ".." → 상위 폴더 탭, 파일 → 그 파일 경로 탭(FUN_00489d20이 폴더로 가서
-/// 그 파일에 커서), 새 탭은 끝에 붙고 그 탭으로 바뀐다. 탭 사용이 꺼져 있으면 아무것도 하지 않는다.
+/// Original mipOpenInNewTabClick (0x4453b4): folder -> a tab for that folder, ".." -> a tab for the parent, file -> a tab with that file path (FUN_00489d20 goes to the folder and
+/// puts the cursor on the file); the new tab is appended and becomes current. Nothing happens when tabs are off.
 #[test]
 fn open_in_new_tab_follows_the_original() {
     let (root, ctx, mut app) = fixture("open-new-tab");
     let left = app.panes[0].path.clone();
     app.active = 0;
     let row = |app: &App, name: &str| app.panes[0].entries.iter().position(|e| e.name == name).unwrap();
-    // 폴더.
+    // Folder.
     app.panes[0].cursor = row(&app, "folder");
     app.dispatch("openInNewTab", &ctx);
     wait(&mut app, &ctx);
     assert_eq!((app.panes[0].tabs.len(), app.panes[0].tab), (2, 1));
     assert_eq!(app.panes[0].path, left.join("folder"));
-    // "..": 상위 폴더(= left) 탭.
+    // "..": a tab for the parent (= left).
     app.panes[0].cursor = 0;
     assert!(app.panes[0].entries[0].is_parent());
     app.dispatch("openInNewTab", &ctx);
     wait(&mut app, &ctx);
     assert_eq!((app.panes[0].tabs.len(), app.panes[0].tab), (3, 2));
     assert_eq!(app.panes[0].path, left);
-    // 파일: 실행하지 않고 그 폴더 탭에서 그 파일에 커서.
+    // File: not run; the cursor goes to that file in a tab for its folder.
     app.panes[0].cursor = row(&app, "b.txt");
     app.dispatch("openInNewTab", &ctx);
     wait(&mut app, &ctx);
     assert_eq!((app.panes[0].tabs.len(), app.panes[0].tab), (4, 3));
     assert_eq!(app.panes[0].path, left);
     assert_eq!(app.panes[0].entries[app.panes[0].cursor].name, "b.txt");
-    // 탭 사용 끔: 아무것도 하지 않는다(지금 탭에서 열지도 않는다).
+    // Tabs off: nothing happens (not even opening in the current tab).
     app.settings.set_flag("UseTabs", false);
     app.panes[0].cursor = row(&app, "folder");
     app.dispatch("openInNewTab", &ctx);
@@ -2154,8 +2154,8 @@ fn open_in_new_tab_follows_the_original() {
 }
 
 
-/// 원본 FUN_00442bc8 → FUN_00442d80: 드라이브가 생기거나 없어지면 드라이브 줄을 보이는 로컬 패널을 새로 만든다(드라이브 캐시도 비움).
-/// 압축·FTP 패널은 건드리지 않고, 빠른 찾기 글은 지킨다.
+/// Original FUN_00442bc8 -> FUN_00442d80: when a drive appears or disappears, local panes that show the drive rows are rebuilt (the drive cache is cleared too).
+/// Archive and FTP panes are left alone, and the quick search text is kept.
 #[test]
 fn drive_changes_relist_local_panes_with_drive_rows() {
     let (root, ctx, mut app) = fixture("drive-change");
@@ -2177,7 +2177,7 @@ fn drive_changes_relist_local_panes_with_drive_rows() {
     assert!(app.drive_cache.is_none(), "drive buttons are read again");
     assert_eq!(app.typed_search[0].query, "ab", "the typed quick search text is kept");
     wait(&mut app, &ctx);
-    // 드라이브 줄을 끄면 로컬 폴더 패널은 다시 읽지 않는다(내 PC 보기는 읽는다).
+    // With drive rows off, a local folder pane is not reread (the My PC view is).
     app.settings.set_flag("ShowDriveList", false);
     let before = app.panes[0].generation;
     app.drives_changed();
@@ -2186,8 +2186,8 @@ fn drive_changes_relist_local_panes_with_drive_rows() {
 }
 
 
-/// 원본 TNXDropTarget(0x7b21a0 DragOver, 0x7b1e04 DoTargetScroll, 타이머 100ms, 여백 20): 끄는 동안 목록 아래쪽 15화소 띠 안에 있으면
-/// 100ms마다 한 칸씩 굴린다(가운데에서는 굴리지 않는다).
+/// Original TNXDropTarget (0x7b21a0 DragOver, 0x7b1e04 DoTargetScroll, 100 ms timer, margin 20): while dragging inside the bottom 15 px band of a list
+/// it scrolls one step every 100 ms (not in the middle).
 #[test]
 fn dragging_near_the_list_edge_scrolls_like_the_drop_target() {
     let (root, ctx, mut app) = fixture("drag-scroll");
@@ -2226,11 +2226,11 @@ fn dragging_near_the_list_edge_scrolls_like_the_drop_target() {
     run(&mut app);
     assert_eq!(app.panes[0].drag_scroll, (0, 0), "the request is used");
     assert_eq!(app.panes[0].page.top, first_before + 1, "the list moved down one line");
-    // 위쪽 가장자리(같은 패널, 타이머는 이어서 돈다): 한 칸 위로.
+    // Top edge (same pane, the timer keeps running): one step up.
     let top = egui::pos2(rect.center().x, rect.top() + 3.0);
     assert!(app.drag_edge_scroll(Some(top), start + Duration::from_millis(300), &ctx));
     assert_eq!(app.panes[0].drag_scroll, (-1, 0));
-    // 패널 폴더 트리 아래쪽 가장자리: 트리를 한 줄 굴린다(원본 트리 효과 0x48e790도 같은 띠).
+    // Bottom edge of the pane folder tree: scrolls the tree one row (the original tree effect 0x48e790 uses the same band).
     app.panes[0].drag_scroll = (0, 0);
     let tree = egui::Rect::from_min_size(rect.min, egui::vec2(150.0, 400.0));
     app.panes[0].tree_rect = Some(tree);

@@ -1,5 +1,5 @@
 // Menu inventory generated from r69; behavior is implemented in commands.rs.
-/// 원본 DFM에서 Visible=False인 메뉴 항목(NDR 명령 이름). 스킨 테마(원본 모양)에서는 숨긴다.
+/// Menu items with Visible=False in the original DFM (NDR command names). Hidden in the skin theme (original look).
 pub const ORIGINAL_HIDDEN: &[&str] = &[
     "archiveMove",       // miArcMove
     "extractNewFolder",  // miArcExtractToFolder
@@ -9,8 +9,8 @@ pub const ORIGINAL_HIDDEN: &[&str] = &[
     "synchronize",       // miSynchronizeFolder
     "search",            // miSearchFile
 ];
-/// 원본 TfMain 메뉴 단추(tbFile … tbHelp, DropdownMenu = pmFile … pmHelp)의 차례와 항목(docs/original-menus.txt).
-/// (제목 언어 키, 한국어, 영어, 항목). 항목 "-"은 구분선, "@…"은 하위 메뉴(checksum, workFolders, listStyle, columns, sort, filter).
+/// Order and items of the original TfMain menu buttons (tbFile ... tbHelp, DropdownMenu = pmFile ... pmHelp) (docs/original-menus.txt).
+/// (title language key, Korean, English, items). Item "-" is a separator, "@..." a submenu (checksum, workFolders, listStyle, columns, sort, filter).
 pub const MENUS: &[(&str,&str,&str,&[(&str,&str,&str)])] = &[
 ("ToolButton.tbFile","파일","File",&[
 ("open","열기 / 실행","Open/Execute"),
@@ -177,14 +177,14 @@ pub const MENUS: &[(&str,&str,&str,&[(&str,&str,&str)])] = &[
 ("shortcuts","단축키 도움말","Shortcut Keys"),
 ("-","",""),
 ("homepage","홈페이지","Homepage"),
-// 사용자 요청: 원본 miEmail(지원 이메일 복사)은 뺀다.
+// User request: the original miEmail (copy the support address) is left out.
 ("-","",""),
 ("update","업데이트 확인…","Check Update"),
 ("-","",""),
 ("about","정보","About"),
 ]),
 ];
-/// 메뉴 글 찾기만 쓰는 원본 항목 이름(글쇠 처리 표 ORIGINAL_ACTIONS에는 넣지 않는다: 단축키 동작이 바뀌지 않도록).
+/// Original item names used only for menu text lookup (not added to the key table ORIGINAL_ACTIONS, so shortcut behavior does not change).
 pub const MENU_CAPTIONS: &[(&str,&str)] = &[
 ("find","miFind"),
 ("archiveInstall","miArcInstall"),
@@ -196,7 +196,7 @@ pub const MENU_CAPTIONS: &[(&str,&str)] = &[
 ];
 pub const ORIGINAL_ACTIONS: &[(&str,&str)] = &[
 ("miOpen","open"),
-// 원본 miSelect(Spacebar) = miSelectClick(0x4311a4) → SelectCurrAndMove.
+// Original miSelect (Spacebar) = miSelectClick (0x4311a4) -> SelectCurrAndMove.
 ("miSelect","select"),
 ("miParameterOpen","openWithParameters"),
 ("mipOpenWith","openWith"),
@@ -289,7 +289,7 @@ pub const ORIGINAL_ACTIONS: &[(&str,&str)] = &[
 ("miShowHidden","toggleHidden"),
 ("miDualView","toggleDual"),
 ("miFolderTree","folderTree"),
-// 원본 miFavoritesClick(디스패처 0x11)은 즐겨찾기 드롭다운이다. 글쇠는 앞의 것을 쓰고, 아래 짝은 "favorites"의 메뉴 글 찾기용.
+// Original miFavoritesClick (dispatcher 0x11) is the favorites drop-down. Keys use the earlier entry; the pair below is for the "favorites" menu text lookup.
 ("miFavorites","favoritesMenu"),
 ("miAddToFavorites","addToFavorites"),
 ("miOrgFavorites","favorites"),

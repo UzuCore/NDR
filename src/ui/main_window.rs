@@ -1,17 +1,17 @@
-//! C# MainWindow.xaml 바깥 틀. 원본 NexusFile에 없는 제목 배너(N 로고·NDR·설명 줄)는 두지 않는다. 비교/체크섬/원격은 메뉴로 닿는다.
-//! 즐겨찾기 줄(BuildFavorites, 현재 위치 추가 +, 드라이브 단추), 패널 아래 정보 표시줄(UpdatePaneInfoBars, 폴더/디스크·파일·확장자),
-//! AddInfoBarMenu/ToggleInfoBar, UpdateDiskCapacityAsync, 아래 줄(상태 글 + 기능키 표시줄).
-//! 차이(HANDOFF): 영어 화면은 C#이 한국어로 고정한 글도 영어로 보인다.
+//! Outer frame of C# MainWindow.xaml. The title banner absent from the original NexusFile (N logo, NDR, description line) is left out. Compare, checksum and remote are reached through menus.
+//! Favorites row (BuildFavorites, add current location +, drive buttons), info bars below the panes (UpdatePaneInfoBars, folder/disk, file, extension),
+//! AddInfoBarMenu/ToggleInfoBar, UpdateDiskCapacityAsync, bottom row (status text + function key bar).
+//! Difference (HANDOFF): an English UI also shows in English the texts C# fixed to Korean.
 use super::file_operation::n0;
 use super::*;
 
-/// C# PaneState.UpdateSummary(목록을 받을 때 한 번 센다).
+/// C# PaneState.UpdateSummary (counted once when the list is received).
 #[derive(Clone, Debug, Default)]
 pub(super) struct PaneSummary {
     pub folders: usize,
     pub files: usize,
     pub bytes: u64,
-    /// (확장자, 개수): 개수 내림차순, 같으면 이름(대소문자 무시) 순.
+    /// (extension, count): count descending, ties by name (case-insensitive).
     pub extensions: Vec<(String, usize)>,
 }
 
@@ -43,8 +43,8 @@ pub(super) fn summarize(entries: &[Entry], ko: bool) -> PaneSummary {
 }
 
 impl App {
-    /// 스킨 테마의 NDR 상태 글(원본에는 상태 줄이 없다): 목록 자리를 줄이지 않고 창 아래(기능키 줄 바로 위, `bottom_inset`) 왼쪽에
-    /// 4초 동안 겹쳐 보인다. 글이 바뀌면 다시 센다. 글 자체(self.status)는 그대로 둔다.
+    /// NDR status text in the skin theme (the original has no status bar): overlaid for 4 seconds at the bottom left of the window (right above the function key row, `bottom_inset`)
+    /// without shrinking the list area. A new text restarts the count. The text itself (self.status) is kept.
     pub(super) fn skin_status_overlay(&mut self, ctx: &egui::Context, bottom_inset: f32) -> Option<egui::Rect> {
         if self.status.is_empty() {
             self.status_seen = None;
@@ -76,7 +76,7 @@ impl App {
         Some(rect)
     }
 
-    /// 원본 FUN_0042f27c 작업 폴더 단추 도움말: 비었으면 WORKFOLDER_SETHINT, 있으면 "경로\nWORKFOLDER_UNSETHINT".
+    /// Tooltip of original FUN_0042f27c work folder buttons: WORKFOLDER_SETHINT when empty, otherwise "path\nWORKFOLDER_UNSETHINT".
     pub(super) fn work_folder_hint(&self, index: usize) -> String {
         let path = self.settings.strings("WorkingFolders").get(index).cloned().unwrap_or_default();
         if path.is_empty() {
@@ -86,7 +86,7 @@ impl App {
         }
     }
 
-    /// 원본 FUN_0042fc84: 지정된 칸이면 그 폴더로(FUN_0042fdf0), 빈 칸이면 묻지 않고 지금 폴더로 지정한다.
+    /// Original FUN_0042fc84: a set slot goes to that folder (FUN_0042fdf0), an empty slot is set to the current folder without asking.
     pub(super) fn work_folder_click(&mut self, index: usize) {
         let path = self.settings.strings("WorkingFolders").get(index).cloned().unwrap_or_default();
         if !path.is_empty() {
@@ -104,7 +104,7 @@ impl App {
         self.set_work_folder(index, current.to_string_lossy().into_owned());
     }
 
-    /// 원본 FUN_0042fe60: 오른쪽 단추면 그 칸을 비운다(묻지 않음).
+    /// Original FUN_0042fe60: the right button clears that slot (without asking).
     pub(super) fn work_folder_clear(&mut self, index: usize) {
         let mut folders = self.settings.strings("WorkingFolders");
         folders.resize(5, String::new());
@@ -113,24 +113,24 @@ impl App {
         self.save();
     }
 
-    /// C# LeftColumn/RightColumn Star 너비: LeftPaneWidth / (LeftPaneWidth + RightPaneWidth), 20~80%.
+    /// C# LeftColumn/RightColumn star widths: LeftPaneWidth / (LeftPaneWidth + RightPaneWidth), 20-80%.
     pub(super) fn left_pane_ratio(&self) -> f32 {
         let value = |key: &str| self.settings.values.get(key).and_then(|v| v.as_f64()).filter(|v| v.is_finite() && *v > 0.0).unwrap_or(50.0);
         let (left, right) = (value("LeftPaneWidth"), value("RightPaneWidth"));
         ((left / (left + right)) as f32).clamp(0.2, 0.8)
     }
 
-    /// 나눔 막대 끌기(C# PaneDivider, 원본 iVertThumb)·두 번 누르기(원본 pmiFrameWidthSame = 50%): 왼쪽 % (20~80)와 나머지.
+    /// Dragging the divider (C# PaneDivider, original iVertThumb) and double-clicking it (original pmiFrameWidthSame = 50%): left % (20-80) and the rest.
     pub(super) fn set_left_pane_width(&mut self, percent: f64) {
         let left = percent.clamp(20.0, 80.0);
         self.settings.values.insert("LeftPaneWidth".into(), serde_json::json!(left));
         self.settings.values.insert("RightPaneWidth".into(), serde_json::json!(100.0 - left));
     }
 
-    /// 원본 pVertBar(두 패널 사이, DFM 0xa27870): 작업 폴더 단추 다섯 개(Top 50 + 18·i, 스킨 workfolders_set/unset.png 띠의 i번째 칸)와
-    /// DFM 단추들 — bSelectAll(157), bClearSelection(179), bCopyToRight(219), bCopyToLeft(240), bSort(289, pmSort),
-    /// bColCount(311, pmColCount), bSyncPathToLeft/Right(bSyncAddressClick). 그림은 스킨 vertbarbtns.png 띠(FUN_0042cc2c의 칸 번호 표
-    /// [0,1,2,3,4,5,6,8]; 칸 그림으로 단추를 맞췄다). 도움말은 [formMain] Hint.b….
+    /// Original pVertBar (between the panes, DFM 0xa27870): five work folder buttons (Top 50 + 18*i, i-th cell of the skin workfolders_set/unset.png strip) and
+    /// the DFM buttons bSelectAll (157), bClearSelection (179), bCopyToRight (219), bCopyToLeft (240), bSort (289, pmSort),
+    /// bColCount (311, pmColCount), bSyncPathToLeft/Right (bSyncAddressClick). Images are cells of the skin vertbarbtns.png strip (cell table of FUN_0042cc2c
+    /// [0,1,2,3,4,5,6,8]; buttons were matched by their cell images). Tooltips are [formMain] Hint.b....
     pub(super) fn vertical_bar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let set = self.toolbar_icon(ctx, "workfolders_set.png");
         let unset = self.toolbar_icon(ctx, "workfolders_unset.png");
@@ -139,12 +139,12 @@ impl App {
         let strip_over = self.toolbar_icon(ctx, "vertbarbtns_over.png");
         let folders = self.settings.strings("WorkingFolders");
         let area = ui.max_rect();
-        // 원본 pVertBar 자식 자리(DFM Left·Top, 막대 왼쪽 위 기준). 작업 폴더 단추(FUN_0042f27c)는 Left 0.
+        // Child positions of the original pVertBar (DFM Left/Top relative to the bar's top left). Work folder buttons (FUN_0042f27c) have Left 0.
         let cell_at = |left: f32, y: f32, height: f32| egui::Rect::from_min_size(egui::pos2(area.min.x + left, area.min.y + y), egui::vec2(16.0, height));
         let cell = |y: f32| cell_at(0.0, y, 16.0);
-        // 원본 TNXPngButton SetNormalImage / SetOverImage: 포인터가 올라가 있으면 over 띠의 같은 칸.
-        // (egui Image는 띠 전체의 가로세로 비로 맞춘 뒤 uv를 쓰므로 칸이 납작해진다. 칸을 painter로 바로 그린다.)
-        // 꺼진 단추(enabled = false)는 원본 TNXPngButton.Paint 상태 2처럼 꺼짐 그림이 없으면 알파를 반으로(>> 1) 그리고 누르지 못한다.
+        // Original TNXPngButton SetNormalImage / SetOverImage: the same cell of the over strip while the pointer is over it.
+        // (egui Image fits the whole strip's aspect ratio before applying uv, which squashes the cell, so the cell is painted directly.)
+        // A disabled button (enabled = false) is drawn at half alpha (>> 1) without a disabled image, like state 2 of original TNXPngButton.Paint, and cannot be clicked.
         let image_button = |ui: &mut egui::Ui, rect: egui::Rect, normal: &Option<egui::TextureHandle>, over: &Option<egui::TextureHandle>, index: usize, count: usize, fallback: &str, enabled: bool| {
             let texture = if enabled && ui.rect_contains_pointer(rect) { over.as_ref().or(normal.as_ref()) } else { normal.as_ref() };
             match texture {
@@ -169,8 +169,8 @@ impl App {
             }
         }
         let hint = |app: &App, name: &str, fallback: &str| app.language_pack.text(&format!("formMain.Hint.{name}"), fallback);
-        // 원본 DFM: (이름, Left, Top, Height, 띠 칸). 동기 단추 둘은 막대 맨 위 16×12(그림은 단추 왼쪽 위에서 잘려 보인다).
-        // 고친 것: 전에는 동기 단추를 Top 345·363 16×16에 두었다.
+        // Original DFM: (name, Left, Top, Height, strip cell). The two sync buttons are 16x12 at the very top of the bar (the image is clipped from the button's top left).
+        // Fixed: previously the sync buttons were 16x16 at Top 345 and 363.
         let buttons: [(&str, f32, f32, f32, usize, &str, &str); 8] = [
             ("bSyncPathToRight", 1.0, 6.0, 12.0, 4, "Left Path => Right Path", "▶"),
             ("bSyncPathToLeft", 0.0, 17.0, 12.0, 5, "Left Path <= Right Path", "◀"),
@@ -181,7 +181,7 @@ impl App {
             ("bSort", 1.0, 289.0, 16.0, 6, "Arrange", "≡"),
             ("bColCount", 1.0, 311.0, 16.0, 8, "Column", "⋮"),
         ];
-        // 원본 FUN_0044532c(패널 위치가 바뀔 때, 두 패널이면): bSyncPathToRight는 왼쪽, bSyncPathToLeft는 오른쪽 패널 위치가 로컬 폴더(1)일 때만 켠다.
+        // Original FUN_0044532c (when a pane location changes, with two panes): bSyncPathToRight is enabled only when the left pane location is a local folder (1), bSyncPathToLeft for the right pane.
         let local = |index: usize| { let pane = &self.panes[index]; pane.archive.is_none() && pane.remote.is_none() && !super::panes::is_drives(&pane.path) };
         let sync_enabled = [local(0), local(1)];
         for (name, left, y, height, image, fallback, glyph) in buttons {
@@ -195,14 +195,14 @@ impl App {
                 _ => true,
             };
             let rect = cell_at(left, y, height);
-            // TNXPngButton은 그림(16×16)을 단추 왼쪽 위에 그리고 단추 밖은 잘린다.
+            // TNXPngButton draws its image (16x16) at the button's top left and clips outside the button.
             let response = ui.scope(|ui| {
                 ui.set_clip_rect(rect.intersect(ui.clip_rect()));
                 image_button(ui, cell_at(left, y, 16.0), &strip, &strip_over, image, 10, glyph, enabled)
             }).inner.on_hover_text(tip);
             match name {
-                // 원본 DropDownMenu pmSort / pmColCount: 단추 아래에 그 메뉴. 스킨 테마는 원본 pmSortPopup/pmColCountPopup처럼
-                // 정렬·열 항목을 하위 메뉴 없이 바로 보인다.
+                // Original DropDownMenu pmSort / pmColCount: that menu below the button. The skin theme shows the sort and column items directly without submenus,
+                // like the original pmSortPopup/pmColCountPopup.
                 "bSort" | "bColCount" => {
                     super::skin_pane::menu_popup(&response).show(|ui| {
                         if name == "bSort" {
@@ -216,17 +216,17 @@ impl App {
                 _ => {}
             }
         }
-        // 원본 iVertThumb(TImage Left 3, Top = 높이 − 25, 12×22, Center, akBottom, crHSplit): 스킨 vertthumb.png를 그 칸 가운데에
-        // 원래 크기로 그린다. 끌기는 C# PaneDivider처럼 막대 전체가 받는다(커서도 막대 전체가 crHSplit).
+        // Original iVertThumb (TImage Left 3, Top = height - 25, 12x22, Center, akBottom, crHSplit): draws the skin vertthumb.png at its own size centered in that cell.
+        // Like C# PaneDivider the whole bar takes the drag (the cursor is crHSplit over the whole bar too).
         if let Some(thumb) = self.toolbar_icon(ctx, "vertthumb.png") {
-            // FUN_0042cc2c: Top = 막대 높이 − 엄지 높이(22) − 4, Left 3.
+            // FUN_0042cc2c: Top = bar height - thumb height (22) - 4, Left 3.
             let frame = egui::Rect::from_min_size(egui::pos2(area.min.x + 3.0, area.max.y - 26.0), egui::vec2(12.0, 22.0));
             let rect = egui::Rect::from_center_size(frame.center(), thumb.size_vec2().min(frame.size()));
             ui.painter().image(thumb.id(), rect, egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)), Color32::WHITE);
         }
     }
 
-    /// 원본 pVertBar 단추 OnClick: 모두 선택/해제, 왼쪽↔오른쪽 복사(MSG_TOLEFT/TORIGHT 확인), 경로 맞추기(bSyncAddressClick, Tag).
+    /// Original pVertBar button OnClick: select all/none, copy left<->right (MSG_TOLEFT/TORIGHT confirmation), sync paths (bSyncAddressClick, Tag).
     pub(super) fn vertical_bar_click(&mut self, name: &str, ctx: &egui::Context) {
         match name {
             "bSelectAll" => {
@@ -234,14 +234,14 @@ impl App {
                 self.original_button_select_all(shift);
             }
             "bClearSelection" => self.panes[self.active].selected.clear(),
-            // 원본 bCopyToRightClick(0x42dd08)/bCopyToLeftClick(0x42dd30): Shift를 누르고 있으면 이동(스킨 테마).
+            // Original bCopyToRightClick (0x42dd08) / bCopyToLeftClick (0x42dd30): holding Shift moves (skin theme).
             "bCopyToRight" | "bCopyToLeft" => {
                 let moving = ctx.input(|i| i.modifiers.shift);
                 self.original_copy_to_other(if name == "bCopyToRight" { 0 } else { 1 }, moving, ctx);
             }
             "bSyncPathToRight" | "bSyncPathToLeft" => {
                 let (from, to) = if name == "bSyncPathToRight" { (0, 1) } else { (1, 0) };
-                // 원본 bSyncAddressClick(0x438458): 보내는 쪽이 로컬 모드(0)일 때만. 받는 쪽이 FTP면 FUN_0048d6e4처럼 로컬 폴더로 간다(끊김).
+                // Original bSyncAddressClick (0x438458): only when the sending side is in local mode (0). If the receiving side is FTP it goes to the local folder like FUN_0048d6e4 (disconnecting).
                 if self.panes[from].archive.is_none() && self.panes[from].remote.is_none() {
                     let path = self.panes[from].path.clone();
                     self.navigate(to, path, true);
@@ -251,8 +251,8 @@ impl App {
         }
     }
 
-    /// C# ToggleInfoBar. 메뉴는 원본 보기 메뉴의 miViewFolderInfoBar·miViewFileInfoBar 체크 항목(C# AddInfoBarMenu 하위 메뉴 대신).
-    /// 고친 것: 원본 miViewExtensionInfoClick(0x434c20)은 빈 함수라 확장자 정보 줄을 메뉴로 켜고 끌 수 없었다 → ShowExtensionInfoBar를 바꾼다.
+    /// C# ToggleInfoBar. The menu uses the original View menu check items miViewFolderInfoBar and miViewFileInfoBar (instead of the C# AddInfoBarMenu submenu).
+    /// Fixed: original miViewExtensionInfoClick (0x434c20) is an empty function, so the extension info bar could not be toggled from the menu -> it toggles ShowExtensionInfoBar.
     pub(super) fn toggle_info_bar(&mut self, key: &str) {
         let default = key != "ShowExtensionInfoBar";
         let value = !self.settings.flag(key, default);
@@ -264,11 +264,11 @@ impl App {
         self.save();
     }
 
-    /// C# UpdateDiskCapacityAsync 자리: 로컬 드라이브(네트워크 아님, 준비됨)의 원본 재료(드라이브 글, 여유, 전체). 다른 목록이 오면 버린다.
+    /// In place of C# UpdateDiskCapacityAsync: original data of a local drive (not network, ready) (drive text, free, total). Dropped when another listing arrives.
     pub(super) fn update_disk_capacity(&mut self, index: usize) {
         let pane = &mut self.panes[index];
         pane.disk = None;
-        // 원본 FUN_004408f8: FTP 모드에서는 디스크 정보 글(+0x33c, +0x340)을 숨긴다.
+        // Original FUN_004408f8: FTP mode hides the disk info text (+0x33c, +0x340).
         if pane.archive.is_some() || pane.remote.is_some() || super::panes::is_drives(&pane.path) {
             return;
         }
@@ -278,9 +278,9 @@ impl App {
         });
     }
 
-    /// 원본 폴더 정보 표시줄(FUN_0048aa30 + FUN_0048b500 + FUN_00484b24)의 글: (FOLDERINFO, 드라이브 글, 오른쪽 글, 도움말).
-    /// 표시한 항목이 있으면 오른쪽은 SELECTED_INFO(파일 크기 합, 폴더가 끼면 "+"), 없으면 드라이브 글 + DISKINFO_SHORT(여유)이고
-    /// 도움말은 DISKINFO_LONG(여유, 전체)의 태그 뺀 글.
+    /// Text of the original folder info bar (FUN_0048aa30 + FUN_0048b500 + FUN_00484b24): (FOLDERINFO, drive text, right text, tooltip).
+    /// With marked items the right side is SELECTED_INFO (sum of file sizes, "+" when folders are included), otherwise drive text + DISKINFO_SHORT (free), and
+    /// the tooltip is the DISKINFO_LONG (free, total) text without tags.
     pub(super) fn folder_info(&self, index: usize) -> (String, String, String, String) {
         let pane = &self.panes[index];
         let summary = pane.summary.clone().unwrap_or_default();
@@ -307,8 +307,8 @@ impl App {
         }
     }
 
-    /// 원본 FUN_0040e138(글, 목록) → TfMessage FUN_0044a1d4: 그 목록 가운데에 검은 바탕 글 창(WS_EX_LAYERED, 글 크기 + 40)을 띄우고
-    /// Timer1(3000ms)로 닫는다. 누르면 바로 닫힌다(OnClick).
+    /// Original FUN_0040e138(text, list) -> TfMessage FUN_0044a1d4: shows a black text window (WS_EX_LAYERED, text size + 40) centered on that list and
+    /// closes it with Timer1 (3000 ms). A click closes it at once (OnClick).
     pub(super) fn pane_message(&mut self, index: usize, text: impl Into<String>) {
         self.pane_message = Some((text.into(), index.min(1), Instant::now()));
     }
@@ -338,7 +338,7 @@ impl App {
         }
     }
 
-    /// C# UpdatePaneInfoBars: (폴더/디스크, 파일, 확장자) 글.
+    /// C# UpdatePaneInfoBars: (folder/disk, file, extension) texts.
     pub(super) fn info_texts(&mut self, index: usize) -> [String; 3] {
         let ko = self.language == "ko";
         let unit = self.settings.text("SizeUnit", "Auto");
@@ -354,7 +354,7 @@ impl App {
         let pane = &self.panes[index];
         let summary = pane.summary.clone().unwrap_or_default();
         let folder = if super::panes::is_drives(&pane.path) {
-            // C# UpdatePaneInfoBars: "::drives::" · 드라이브 N개(디스크 글 없음).
+            // C# UpdatePaneInfoBars: "::drives::" and N drives (no disk text).
             let count = pane.entries.len();
             format!("{} · {}", pane.path.display(), if ko { format!("드라이브 {count}개") } else { format!("Drives {count}") })
         } else {
@@ -362,7 +362,7 @@ impl App {
             if right.is_empty() { counts } else { format!("{counts}  {drive}{right}") }
         };
         let pane = &self.panes[index];
-        // DataGrid 선택(표시한 항목, 없으면 커서 항목).
+        // DataGrid selection (marked items, otherwise the cursor item).
         let selected: Vec<usize> = if pane.loading {
             vec![]
         } else if pane.selected.is_empty() {
@@ -406,7 +406,7 @@ impl App {
         let count = |n: usize| if ko { format!("{}개", n0(n)) } else { n0(n) };
         let selected_files: Vec<&Entry> = selected.iter().map(|r| &pane.entries[*r]).filter(|e| !e.is_dir).collect();
         let extension = if !selected_files.is_empty() {
-            // C# GroupBy(선택 순서대로 처음 나온 확장자 순) → 앞 4개.
+            // C# GroupBy (extensions in order of first appearance in the selection) -> the first 4.
             let mut groups: Vec<(String, usize)> = Vec::new();
             for entry in selected_files {
                 let key = match ndr::parity::list_extension(&entry.name) {
@@ -426,7 +426,7 @@ impl App {
         [folder, file, extension]
     }
 
-    /// C# LeftInfoBars(열 2* : 1.4* : 1, 10pt 흐린 글, 잘리면 …, 도움말 = 전체 글).
+    /// C# LeftInfoBars (columns 2* : 1.4* : 1, faint 10pt text, ellipsis when clipped, tooltip = full text).
     pub(super) fn info_bars(&mut self, ui: &mut egui::Ui, index: usize) {
         let shown = [self.settings.flag("ShowFolderDiskInfoBar", true), self.settings.flag("ShowFileInfoBar", true), self.settings.flag("ShowExtensionInfoBar", false)];
         if !shown.iter().any(|s| *s) {
@@ -458,15 +458,15 @@ impl App {
             }
         });
     }
-    /// 원본 파일 정보 표시줄(FUN_0048a5cc, 라벨 0x34c): 초점 항목의 "크기  |  날짜  |  속성" 뒤에 설명이 있으면
-    /// "  |  <c6B9FFF>설명</c>", 없으면 "  |  이름". 크기는 FloatToStrF(ffNumber, 0자리), 크기를 모르는 폴더는 FOLDER,
-    /// 날짜는 FormatFileTime(2) = "%.4d-%.2d-%.2d %.2d:%.2d"(지역 시각), 속성은 GetAttrString = "____"에 A·H·R·S.
+    /// Original file info bar (FUN_0048a5cc, label 0x34c): "size  |  date  |  attributes" of the focused item, followed by
+    /// "  |  <c6B9FFF>description</c>" when there is a description, otherwise "  |  name". Size via FloatToStrF(ffNumber, 0 digits), FOLDER for folders without a size,
+    /// date via FormatFileTime(2) = "%.4d-%.2d-%.2d %.2d:%.2d" (local time), attributes via GetAttrString = A/H/R/S in "____".
     pub(super) fn file_info(&self, index: usize) -> Option<String> {
         let pane = &self.panes[index];
         let entry = pane.entries.get(pane.cursor)?;
         if super::panes::is_drives(&pane.path) || entry.drive {
-            // 드라이브 항목(+0x3c == 4): 고정 디스크 "%s (%s:)  |  %s  |  %s %s / %s"(DISKFREE), 그 밖 "%s (%s:)  |  %s".
-            // 종류 이름은 원본 표 0x9128bc 그대로(번역하지 않음). 정보가 없으면 None(C# 판 글).
+            // Drive item (+0x3c == 4): a fixed disk shows "%s (%s:)  |  %s  |  %s %s / %s" (DISKFREE), others "%s (%s:)  |  %s".
+            // Type names are the original table 0x9128bc as is (not translated). None without info (C# version text).
             let (name, kind, sizes) = pane.drive_infos.get(&entry.path)?;
             let letter = entry.name.chars().next()?.to_ascii_uppercase();
             let kind_name = ["", "", "Removable Disk", "Hard Disk", "Network Drive", "CD/DVD", "RAM Disk"].get(*kind as usize).copied().unwrap_or("");
@@ -479,7 +479,7 @@ impl App {
             });
         }
         let size = if entry.is_dir {
-            // 원본: 크기를 센 폴더는 항목 크기(바이트)를 FloatToStrF(ffNumber, 0자리) — 파일과 같은 천 단위 숫자.
+            // Original: a counted folder shows the item size (bytes) via FloatToStrF(ffNumber, 0 digits), the same thousands format as files.
             match pane.folder_bytes.get(&entry.path) {
                 Some(bytes) => n0(*bytes as usize),
                 None => self.language_pack.text("RES.FOLDER", "Folder"),
@@ -497,8 +497,8 @@ impl App {
         Some(text)
     }
 
-    /// 원본 폴더 정보 표시줄의 배치: 왼쪽 FOLDERINFO, 오른쪽 끝에 여유(또는 선택 정보), 그 앞에 드라이브 글.
-    /// FUN_0048b500처럼 (칸 너비 - 왼쪽 글 - 오른쪽 글 - 18) <= 드라이브 글 너비이면 드라이브 글을 비운다. 도움말 = DISKINFO_LONG.
+    /// Layout of the original folder info bar: FOLDERINFO on the left, free space (or selection info) at the right end, the drive text before it.
+    /// Like FUN_0048b500 the drive text is emptied when (cell width - left text - right text - 18) <= drive text width. Tooltip = DISKINFO_LONG.
     fn folder_info_cell(&self, ui: &mut egui::Ui, index: usize, width: f32) {
         let (counts, drive, right, hint) = self.folder_info(index);
         let color = ui.visuals().weak_text_color();
@@ -530,12 +530,12 @@ impl App {
         self.language_pack.text(&format!("NDRUpdate.{key}"), fallback)
     }
 
-    /// C# CheckForUpdatesAsync(앞부분): 피드가 없으면 안내, HTTPS가 아니면 오류, 아니면 따로 받아 온다.
+    /// C# CheckForUpdatesAsync (first part): a notice when there is no feed, an error when it is not HTTPS, otherwise fetch it separately.
     pub(super) fn check_for_updates(&mut self) {
         self.start_update_check(false);
     }
 
-    /// silent = 원본의 조용한 확인([+0x54] == 1, 시작할 때): 안내·오류 상자 없이 결과만 본다.
+    /// silent = the original quiet check ([+0x54] == 1, at startup): only the result is used, without notice or error boxes.
     pub(super) fn start_update_check(&mut self, silent: bool) {
         let title = self.update_text("Title", "NDR Update");
         let feed = self.settings.text("UpdateManifestUrl", "").trim().to_owned();
@@ -546,7 +546,7 @@ impl App {
             let message = self.update_text("FeedMissing", "The update manifest URL is not configured. Add an HTTPS JSON feed in Settings.");
             return self.system_box(&title, &message, ndr::msgbox::MB_OK | ndr::msgbox::MB_ICONASTERISK, |_, _, _| {});
         }
-        // 고친 것: feed[..8]은 8바이트째가 여러 바이트 글자 가운데면 panic했다.
+        // Fixed: feed[..8] panicked when byte 8 fell inside a multi-byte character.
         let https = feed.get(..8).is_some_and(|head| head.eq_ignore_ascii_case("https://")) && feed.get(8..).is_some_and(|rest| !rest.trim_start_matches('/').is_empty());
         if !https {
             if silent {
@@ -561,8 +561,8 @@ impl App {
         });
     }
 
-    /// C# CheckForUpdatesAsync(뒷부분). 오류는 RunSafely처럼 "NDR" 경고 상자, 안내는 정보 상자.
-    /// 조용한 확인이면(원본 FUN_00441dd8 0x441e3d) 새 버전일 때 메뉴 줄 단추(tbNewUpdateAvailable)만 보이고 나머지는 아무것도 하지 않는다.
+    /// C# CheckForUpdatesAsync (second part). Errors use an "NDR" warning box like RunSafely, notices an information box.
+    /// For the quiet check (original FUN_00441dd8 0x441e3d), a newer version only shows the menu bar button (tbNewUpdateAvailable) and nothing else happens.
     pub(super) fn update_done(&mut self, result: Result<ndr::update::HttpResponse, ndr::update::HttpError>, silent: bool) {
         use ndr::msgbox::{IDYES, MB_ICONASTERISK, MB_ICONEXCLAMATION, MB_OK, MB_YESNO};
         use ndr::update::{HttpError, Manifest};
@@ -602,12 +602,12 @@ impl App {
                 self.system_box(&title, &text, MB_OK | MB_ICONASTERISK, |_, _, _| {});
             }
             Ok(Manifest::UpToDate) => {
-                // 원본 FUN_00441dd8: 최신이면 ShowMessage(UPDATE_NOUPDATE) — 아이콘 없는 프로그램 제목 상자.
+                // Original FUN_00441dd8: when up to date, ShowMessage(UPDATE_NOUPDATE), a program-titled box without an icon.
                 let text = self.language_pack.text("RES.UPDATE_NOUPDATE", "This application is up-to-date.");
                 self.system_box("NDR", &text, MB_OK, |_, _, _| {});
             }
             Ok(Manifest::Newer(_, url)) => {
-                // 원본: MessageBoxW(UPDATE_NEWUPDATE, 제목 UPDATE, 0x44 = 예/아니요 + 정보), 예면 내려받기 쪽을 연다.
+                // Original: MessageBoxW(UPDATE_NEWUPDATE, title UPDATE, 0x44 = yes/no + information); yes opens the download page.
                 let caption = self.language_pack.text("RES.UPDATE", "Update");
                 let question = self.language_pack.text("RES.UPDATE_NEWUPDATE", "There is a new update for this application.\nDo you want to go to download?");
                 self.system_box(&caption, &question, MB_YESNO | MB_ICONASTERISK, move |app, answer, _| {

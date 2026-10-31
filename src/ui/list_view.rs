@@ -293,14 +293,14 @@ pub(super) fn drive_row(ui: &mut egui::Ui, size: egui::Vec2, icon: Option<&egui:
     response
 }
 
-/// 원본 DrawListItem 종류 4의 남은 공간(0x7d8f58): 고정 디스크(종류 3)이고 전체 크기를 알 때, 드라이브 이름 칸 끝(`label_right`)에서
-/// 5px 띄어 70 × min(8, 줄 높이) 막대를 그리고 안쪽 68px에 쓴 비율만큼 채운다. 막대는 오른쪽에 80px 넘게 남을 때만,
-/// 막대 뒤 "여유 크기(StrFormatByteSizeW) DISKFREE" 글은 그 뒤로 80px 넘게 남을 때만 그린다(오른쪽 5px 앞에서 자른다).
-/// 색(0x7d9770~0x7d98f2): 테두리는 커서 항목(ItemIndex)이면 항목 글자 색, 아니면 FUN_007d7e6c(NXFORE, NXBACK, 0.3),
-/// 채움은 늘 (NXFORE, NXBACK, 0.2), 글은 커서 항목이면 항목 글자 색, 아니면 NXSIZE(크기 열 색).
+/// Free space of original DrawListItem kind 4 (0x7d8f58): for a fixed disk (type 3) with a known total size, a 70 x min(8, row height) bar drawn
+/// 5 px after the end of the drive name cell (`label_right`), its inner 68 px filled by the used ratio. The bar is drawn only when more than 80 px remain on the right,
+/// and the "free size (StrFormatByteSizeW) DISKFREE" text after it only when more than 80 px remain after that (clipped 5 px before the right edge).
+/// Colors (0x7d9770-0x7d98f2): the border uses the item text color for the cursor item (ItemIndex), otherwise FUN_007d7e6c(NXFORE, NXBACK, 0.3);
+/// the fill is always (NXFORE, NXBACK, 0.2); the text uses the item text color for the cursor item, otherwise NXSIZE (size column color).
 #[allow(clippy::too_many_arguments)]
 pub(super) fn paint_drive_space(ui: &egui::Ui, rect: egui::Rect, label_right: f32, kind: u32, sizes: Option<(u64, u64)>, cursor: bool, item_color: Color32, free_label: &str, style: u8) {
-    // 원본은 고정 디스크(3)만. 고친 것: 크기를 읽은 연결된 네트워크 드라이브(drive_item_info)도 그린다.
+    // The original draws only fixed disks (3). Fixed: connected network drives whose size was read (drive_item_info) are drawn too.
     let Some((free, total)) = sizes.filter(|_| kind == 3 || kind == 4) else { return };
     let room = rect.right() - label_right;
     if total == 0 || room <= 79.0 {
@@ -330,7 +330,7 @@ pub(super) fn paint_drive_space(ui: &egui::Ui, rect: egui::Rect, label_right: f3
             egui::TextStyle::Button.resolve(ui.style()),
             text_color,
         );
-        // 원본 ListFont 모양의 밑줄(4)·취소선(8).
+        // Underline (4) and strikeout (8) of the original ListFont style.
         if style & 4 != 0 {
             text_painter.hline(drawn.x_range(), drawn.bottom() - 1.5, egui::Stroke::new(1.0, text_color));
         }
@@ -340,7 +340,7 @@ pub(super) fn paint_drive_space(ui: &egui::Ui, rect: egui::Rect, label_right: f3
     }
 }
 
-/// 원본 FUN_007d7e6c: 채널마다 Round(a × t + b × (1 − t)). Delphi Round는 반올림 짝수.
+/// Original FUN_007d7e6c: per channel Round(a x t + b x (1 - t)). Delphi Round rounds half to even.
 pub(super) fn blend(a: Color32, b: Color32, t: f32) -> Color32 {
     let mix = |x: u8, y: u8| (f32::from(x) * t + (1.0 - t) * f32::from(y)).round_ties_even().clamp(0.0, 255.0) as u8;
     Color32::from_rgb(mix(a.r(), b.r()), mix(a.g(), b.g()), mix(a.b(), b.b()))
@@ -353,7 +353,7 @@ mod tests {
     #[test]
     fn drive_bar_blend_follows_fun_007d7e6c() {
         use super::Color32;
-        // 기본 NXFORE C0C0C0, NXBACK 000000: 테두리 0.3 → 58(57.6), 채움 0.2 → 38(38.4).
+        // Default NXFORE C0C0C0, NXBACK 000000: border 0.3 -> 58 (57.6), fill 0.2 -> 38 (38.4).
         let (fore, back) = (Color32::from_rgb(0xC0, 0xC0, 0xC0), Color32::BLACK);
         assert_eq!(super::blend(fore, back, 0.3), Color32::from_rgb(58, 58, 58));
         assert_eq!(super::blend(fore, back, 0.2), Color32::from_rgb(38, 38, 38));
@@ -364,7 +364,7 @@ mod tests {
         assert_eq!(character_case("Report Final", 0), "Report Final");
         assert_eq!(character_case("Report Final", 1), "report final");
         assert_eq!(character_case("Report Final", 2), "REPORT FINAL");
-        // 원본 FUN_007d223c: 낱말마다 첫 a~z를 대문자(C# FileNameDisplayConverter는 첫 글자만).
+        // Original FUN_007d223c: the first a-z of each word becomes upper case (C# FileNameDisplayConverter does only the first character).
         assert_eq!(character_case("report final", 3), "Report Final");
         assert_eq!(character_case("", 3), "");
     }
