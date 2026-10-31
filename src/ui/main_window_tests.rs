@@ -1819,7 +1819,7 @@ fn big_folder_frame_time() {
             }
             let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 850.0))), ..Default::default() };
             let start = Instant::now();
-            let _ = ctx.run(raw, |ctx| {
+            let output = ctx.run(raw, |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     ui.columns(2, |columns| {
                         app.pane_ui(&mut columns[0], 0, ctx);
@@ -1827,7 +1827,12 @@ fn big_folder_frame_time() {
                     });
                 });
             });
+            let shapes = output.shapes.len();
+            let _ = ctx.tessellate(output.shapes, output.pixels_per_point);
             times.push(start.elapsed().as_secs_f64() * 1000.0);
+            if frame == 29 {
+                eprintln!("{view}: {shapes} shapes");
+            }
         }
         times.sort_by(|a, b| a.partial_cmp(b).unwrap());
         eprintln!("{view}: median {:.2} ms, max {:.2} ms", times[times.len() / 2], times[times.len() - 1]);
