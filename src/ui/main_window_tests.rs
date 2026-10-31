@@ -1739,3 +1739,22 @@ fn narrow_details_scroll_horizontally_like_the_original() {
     assert_eq!(app.panes[0].detail_x, 0.0);
     let _ = fs::remove_dir_all(root);
 }
+
+/// 원본 단축키 표가 pmMain 팝업 항목·하위 메뉴 이름에 글쇠를 걸었을 때의 명령 id(menu_data::ORIGINAL_ACTIONS)도 받는다.
+#[test]
+fn shortcut_names_of_popup_and_submenu_items_are_known_commands() {
+    let (root, ctx, mut app) = fixture("popup-ids");
+    let ids = [
+        "contextView", "contextEdit", "contextCopy", "contextCut", "contextPaste", "contextCopyTo", "contextMoveTo", "contextDelete", "contextRename", "contextAttributes",
+        "contextDescription", "contextArchiveAdd", "contextAutoExtract", "contextProperties", "dropCopy", "dropMove", "dropShortcut", "dropCancel", "ftpConnect",
+        "lastDestination", "setWorkFolder", "treeRefreshRecursive", "theme", "shortcutsHelp",
+    ];
+    for id in ids {
+        app.status.clear();
+        app.original_dialogs.clear();
+        app.msgboxes.clear();
+        app.dispatch(id, &ctx);
+        assert!(!app.status.starts_with("Unknown command"), "{id}: {}", app.status);
+    }
+    let _ = fs::remove_dir_all(root);
+}

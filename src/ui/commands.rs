@@ -541,6 +541,35 @@ impl App {
         if self.prefixed_command(id) {
             return;
         }
+        // 고친 것: 원본 단축키 표(shortcut.ini)가 팝업 항목(mipEditCopy 등)·하위 메뉴 이름에 글쇠를 걸면 그 이름의 명령 id가
+        // 어디에서도 받지 않아 "Unknown command"가 되었다. 팝업 메뉴(pane_chrome)와 같은 명령으로 보낸다.
+        let alias = match id {
+            "contextView" => Some("textView"),
+            "contextEdit" => Some("textEdit"),
+            "contextCopy" => Some("copy"),
+            "contextCut" => Some("cut"),
+            "contextPaste" => Some("paste"),
+            "contextCopyTo" => Some("copyToFolder"),
+            "contextMoveTo" => Some("moveToFolder"),
+            "contextDelete" => Some("deleteRecycle"),
+            "contextRename" => Some("rename"),
+            "contextAttributes" => Some("attributes"),
+            "contextDescription" => Some("description"),
+            "contextArchiveAdd" => Some("archiveAdd"),
+            "contextAutoExtract" => Some("extractAuto"),
+            "contextProperties" => Some("properties"),
+            "lastDestination" => Some("goLastDestination"),
+            "shortcutsHelp" => Some("shortcuts"),
+            _ => None,
+        };
+        if let Some(target) = alias {
+            return self.dispatch(target, ctx);
+        }
+        // 하위 메뉴를 여는 항목(작업 폴더 지정·FTP 연결·스킨), 끌어 놓기 메뉴 항목(놓을 때만 뜸), 폴더 트리 창의 항목
+        // (miTreeRefresh·miSubRefresh, TfMain에는 없다)은 주 창 글쇠로는 아무것도 하지 않는다.
+        if matches!(id, "setWorkFolder" | "ftpConnect" | "theme" | "dropCopy" | "dropMove" | "dropShortcut" | "dropCancel" | "treeRefresh" | "treeRefreshRecursive") {
+            return;
+        }
         let i = self.active;
         // 원본 CopySelection(→ +0xd08): 복사·이동·삭제·완전 삭제·설명·고급 이름 바꾸기·이름 바꾸기·속성·압축 풀기·압축 더하기·
         // 바로 가기 만들기를 시작할 때 지금 표시를 "선택 복원"용으로 남긴다(스킨 테마). 목록 저장·합치기는 확인했을 때만 남긴다.
