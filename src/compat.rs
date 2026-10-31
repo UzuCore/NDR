@@ -841,6 +841,8 @@ fn import_sidecars(settings: &mut Settings, parent: &Path, ini: &Path) -> Result
         settings.set_strings("FavoriteNames", slots.into_iter().map(|(n, _)| n).collect());
     }
     // Original tabs.save writer FUN_0046dad8: "NEXUSFILETABS.VER1", then "[Tab%d]" per pane followed by that pane's tab lines, saved as Unicode.
+    // The reader FUN_0046d4b4 takes the pane number from "[Tab%d]" and every non-empty line after it; an older file ("[Tabs%d]" sections of
+    // name=value lines) is converted and saved again in the new form.
     if let Some(text) = read_utf16_sidecar(&parent.join("tabs.save"))? {
         let lines: Vec<_> = text.lines().collect();
         let mut panes: [Vec<String>; 2] = [Vec::new(), Vec::new()];
