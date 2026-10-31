@@ -191,7 +191,7 @@ impl App {
                 for (index, character) in display.chars().enumerate() {
                     let mut format = egui::TextFormat { font_id: font.clone(), color: text_color, ..Default::default() };
                     if underline == Some(index) {
-                        format.underline = egui::Stroke::new(1.0, text_color);
+                        format.underline = egui::Stroke::new(1.0_f32, text_color);
                     }
                     job.append(&character.to_string(), 0.0, format);
                 }

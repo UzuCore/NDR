@@ -252,11 +252,11 @@ pub(super) fn destination_ui_original(ui: &mut egui::Ui, form: &mut DestinationF
                 mesh.add_triangle(0, 1, 2);
                 mesh.add_triangle(0, 2, 3);
                 painter.add(egui::Shape::mesh(mesh));
-                painter.hline(content.x_range(), content.top() + 0.5, egui::Stroke::new(1.0, Color32::from_rgb(0x32, 0x32, 0x32)));
-                painter.hline(content.x_range(), content.top() + 1.5, egui::Stroke::new(1.0, Color32::from_rgb(0x78, 0x78, 0x78)));
+                painter.hline(content.x_range(), content.top() + 0.5, egui::Stroke::new(1.0_f32, Color32::from_rgb(0x32, 0x32, 0x32)));
+                painter.hline(content.x_range(), content.top() + 1.5, egui::Stroke::new(1.0_f32, Color32::from_rgb(0x78, 0x78, 0x78)));
             }
             if extra > 0.0 {
-                painter.hline(row.x_range(), row.top() + 1.5, egui::Stroke::new(1.0, Color32::from_gray(0xc0)));
+                painter.hline(row.x_range(), row.top() + 1.5, egui::Stroke::new(1.0_f32, Color32::from_gray(0xc0)));
             }
             let icon_rect = egui::Rect::from_min_size(egui::pos2(content.left() + 4.0, content.center().y - 8.0), egui::vec2(16.0, 16.0));
             let row_icon = match item {
@@ -285,7 +285,7 @@ pub(super) fn destination_ui_original(ui: &mut egui::Ui, form: &mut DestinationF
                     if right > left + 2.0 {
                         let bar = egui::Rect::from_min_max(egui::pos2(left, content.top() + 4.0), egui::pos2(right, content.bottom() - 4.0));
                         let gray = { let (r, g, b) = ndr::native::system_color(17); Color32::from_rgb(r, g, b) };
-                        painter.rect_stroke(bar, 0.0, egui::Stroke::new(1.0, gray), egui::StrokeKind::Inside);
+                        painter.rect_stroke(bar, 0.0, egui::Stroke::new(1.0_f32, gray), egui::StrokeKind::Inside);
                         let used = if total == 0 { 100 } else { (total.saturating_sub(free) as u128 * 100 / total as u128) as u32 };
                         let window = { let (r, g, b) = ndr::native::system_color(5); Color32::from_rgb(r, g, b) };
                         let tint = |c: Color32| {

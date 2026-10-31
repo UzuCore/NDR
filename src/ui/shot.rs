@@ -73,7 +73,7 @@ impl App {
             let rect = egui::Rect::from_min_size(egui::pos2(screen.right() - 60.0, screen.top() + 80.0), egui::vec2(180.0, 22.0));
             let galley = ctx.fonts_mut(|f| f.layout_no_wrap("a-very-long-file-name-for-the-tooltip.txt".into(), egui::FontId::proportional(12.0), egui::Color32::BLACK));
             let paint = |painter: &egui::Painter, rect: egui::Rect| {
-                painter.rect(rect, 0.0, egui::Color32::from_rgb(255, 255, 225), egui::Stroke::new(1.0, egui::Color32::BLACK), egui::StrokeKind::Inside);
+                painter.rect(rect, 0.0, egui::Color32::from_rgb(255, 255, 225), egui::Stroke::new(1.0_f32, egui::Color32::BLACK), egui::StrokeKind::Inside);
                 painter.galley((rect.center() - galley.size() / 2.0).round(), galley.clone(), egui::Color32::BLACK);
             };
             if super::panes::show_tip_window(ctx, 0, rect, &paint) {

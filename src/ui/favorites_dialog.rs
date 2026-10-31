@@ -530,7 +530,7 @@ impl App {
                             let response = ui.add_enabled(*enabled, button);
                             if *checked {
                                 let (x, y) = (response.rect.left() + 8.0, response.rect.center().y);
-                                let stroke = egui::Stroke::new(1.5, ui.visuals().text_color());
+                                let stroke = egui::Stroke::new(1.5_f32, ui.visuals().text_color());
                                 ui.painter().line_segment([egui::pos2(x, y), egui::pos2(x + 3.0, y + 3.0)], stroke);
                                 ui.painter().line_segment([egui::pos2(x + 3.0, y + 3.0), egui::pos2(x + 9.0, y - 4.0)], stroke);
                             }

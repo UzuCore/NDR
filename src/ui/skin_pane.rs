@@ -51,10 +51,10 @@ pub(super) fn skin_menu_style(skin: &Skin) -> egui::style::StyleModifier {
         v.override_text_color = None;
         v.window_fill = back;
         v.panel_fill = back;
-        v.window_stroke = egui::Stroke::new(1.0, border);
+        v.window_stroke = egui::Stroke::new(1.0_f32, border);
         v.menu_corner_radius = egui::CornerRadius::ZERO;
         v.weak_text_color = Some(shortcut);
-        v.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, divider);
+        v.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0_f32, divider);
         v.widgets.noninteractive.fg_stroke.color = disabled;
         v.widgets.inactive.fg_stroke.color = text;
         for state in [&mut v.widgets.hovered, &mut v.widgets.active, &mut v.widgets.open] {
@@ -362,7 +362,7 @@ pub(super) fn focus_bar_shapes(rect: egui::Rect, bar: &FocusBar) -> Vec<egui::Sh
     mesh.add_triangle(0, 2, 3);
     let mut shapes = vec![egui::Shape::mesh(mesh)];
     if let Some(line) = bar.lines {
-        let stroke = egui::Stroke::new(1.0, line);
+        let stroke = egui::Stroke::new(1.0_f32, line);
         shapes.push(egui::Shape::hline(rect.left()..=rect.right() - 1.0, rect.top() + 0.5, stroke));
         shapes.push(egui::Shape::hline(rect.left()..=rect.right() - 1.0, rect.bottom() - 0.5, stroke));
     }
@@ -443,7 +443,7 @@ pub(super) fn rounded_gradient_shapes(rect: egui::Rect, radius: f32, top: Color3
     for i in 1..=n {
         mesh.add_triangle(0, i, if i == n { 1 } else { i + 1 });
     }
-    vec![egui::Shape::mesh(mesh), egui::Shape::rect_stroke(rect, egui::CornerRadius::same(radius as u8), egui::Stroke::new(1.0, line), egui::StrokeKind::Inside)]
+    vec![egui::Shape::mesh(mesh), egui::Shape::rect_stroke(rect, egui::CornerRadius::same(radius as u8), egui::Stroke::new(1.0_f32, line), egui::StrokeKind::Inside)]
 }
 
 /// The ▶ of the original InitSelMarkBitmap(0x7db878, 6×10, color NXSELECT): for each column x (1~4), rows x ~ 8 − x. Drawn at row left + 2, vertically centered.
@@ -556,7 +556,7 @@ fn skin_markup_job(text: &str, base: Color32) -> egui::text::LayoutJob {
     for span in ndr::markup::render(text) {
         let family = if span.bold { egui::FontFamily::Name(super::BOLD_FONT_FAMILY.into()) } else { egui::FontFamily::Proportional };
         let color = span.color.map_or(base, |(r, g, b)| Color32::from_rgb(r, g, b));
-        let underline = if span.underline { egui::Stroke::new(1.0, color) } else { egui::Stroke::NONE };
+        let underline = if span.underline { egui::Stroke::new(1.0_f32, color) } else { egui::Stroke::NONE };
         job.append(&span.text, 0.0, egui::TextFormat { font_id: egui::FontId::new(super::BASE_TEXT_SIZE, family), color, italics: span.italic, underline, ..Default::default() });
     }
     job
@@ -829,7 +829,7 @@ impl App {
         let (glyph_x, glyph_y) = (x + 4.0, (top + (height - 4.0) / 2.0).floor());
         for i in 0..4 {
             let y = glyph_y + i as f32 + 0.5;
-            painter.line_segment([egui::pos2(glyph_x + i as f32, y), egui::pos2(glyph_x + 8.0 - i as f32, y)], egui::Stroke::new(1.0, if lead_hot { over } else { divider }));
+            painter.line_segment([egui::pos2(glyph_x + i as f32, y), egui::pos2(glyph_x + 8.0 - i as f32, y)], egui::Stroke::new(1.0_f32, if lead_hot { over } else { divider }));
         }
         if lead_hot && pressed {
             action = Some((None, Some((PathBuf::new(), true, lead.left_bottom()))));
@@ -878,7 +878,7 @@ impl App {
             let middle = top + (height / 2.0).floor();
             let arrow = egui::Rect::from_min_max(egui::pos2(right, top), egui::pos2(right + 16.0, top + height));
             let arrow_hot = segment.folder.is_some() && pointer.is_some_and(|p| arrow.contains(p));
-            let stroke = egui::Stroke::new(1.0, if arrow_hot { over } else { divider });
+            let stroke = egui::Stroke::new(1.0_f32, if arrow_hot { over } else { divider });
             if i + 1 != count || segment.folder.is_some() {
                 painter.line_segment([egui::pos2(right + 2.0, top), egui::pos2(right + 10.0, middle + 1.0)], stroke);
                 painter.line_segment([egui::pos2(right + 2.0, top + height), egui::pos2(right + 10.0, middle)], stroke);
@@ -1110,7 +1110,7 @@ impl App {
         let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), FOLDER_INFO_HEIGHT), egui::Sense::hover());
         let painter = ui.painter().with_clip_rect(rect);
         painter.rect_filled(rect, 0.0, skin_color(skin, "lfolderback", Color32::BLACK));
-        painter.hline(rect.x_range(), rect.bottom() - 0.5, egui::Stroke::new(1.0, skin_color(skin, "lfolderdivider", Color32::from_gray(0x3C))));
+        painter.hline(rect.x_range(), rect.bottom() - 0.5, egui::Stroke::new(1.0_f32, skin_color(skin, "lfolderdivider", Color32::from_gray(0x3C))));
         let base = skin_color(skin, "lfoldertext", Color32::from_gray(0xC0));
         let hex = |key: &str| skin.color("List", key).map(|c| format!("<c{:02X}{:02X}{:02X}>", c[0], c[1], c[2])).unwrap_or_else(|| "<c000000>".into());
         let drives = super::panes::is_drives(&self.panes[index].path);
@@ -1432,7 +1432,7 @@ impl App {
             job.wrap = egui::text::TextWrapping { max_width: text.width().max(0.0), max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
             let galley = ui.fonts_mut(|f| f.layout_job(job));
             painter.galley(egui::pos2(text.left(), rect.top() + ((rect.height() - galley.size().y) / 2.0).floor()), galley, color);
-            painter.vline(cell.right() - 0.5, rect.y_range(), egui::Stroke::new(1.0, mix_color(line, back, 0.3)));
+            painter.vline(cell.right() - 0.5, rect.y_range(), egui::Stroke::new(1.0_f32, mix_color(line, back, 0.3)));
             let hit = cell.intersect(rect);
             if hit.width() > 0.0 && ui.interact(hit, egui::Id::new(("ndr-skin-header", index, i)), egui::Sense::click()).clicked() {
                 clicked = mode;
@@ -1453,7 +1453,7 @@ impl App {
         let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), DRIVE_BAR_HEIGHT), egui::Sense::hover());
         let painter = ui.painter().with_clip_rect(rect);
         painter.rect_filled(rect, 0.0, skin_color(skin, "ldrivesback", Color32::from_gray(0x20)));
-        painter.hline(rect.x_range(), rect.bottom() - 0.5, egui::Stroke::new(1.0, skin_color(skin, "ldrivesframe", Color32::from_gray(0x1A))));
+        painter.hline(rect.x_range(), rect.bottom() - 0.5, egui::Stroke::new(1.0_f32, skin_color(skin, "ldrivesframe", Color32::from_gray(0x1A))));
         let (text, hot) = (skin_color(skin, "ldrivestext", Color32::from_gray(0xCC)), skin_color(skin, "ldriveshot", Color32::WHITE));
         let mut chosen = None;
         for (i, (root, tip)) in drives.iter().enumerate() {
@@ -1571,7 +1571,7 @@ impl App {
             let widest = ui.fonts_mut(|f| children.iter().map(|(_, h)| f.layout_no_wrap(h.clone(), font.clone(), Color32::BLACK).size().x).fold(0.0f32, f32::max));
             let item_width = (widest + 28.0).ceil();
             let item_height = (ui.fonts_mut(|f| f.row_height(&font)) + 6.0).ceil().max(20.0);
-            egui::Frame::new().fill(Color32::WHITE).stroke(egui::Stroke::new(1.0, Color32::from_gray(0xA0))).inner_margin(egui::Margin::same(2)).show(ui, |ui| {
+            egui::Frame::new().fill(Color32::WHITE).stroke(egui::Stroke::new(1.0_f32, Color32::from_gray(0xA0))).inner_margin(egui::Margin::same(2)).show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
                 egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
                     for ((child, header), icon) in children.iter().zip(&icons) {

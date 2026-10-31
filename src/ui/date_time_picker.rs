@@ -181,7 +181,7 @@ fn calendar_ui(ui: &mut egui::Ui, shown: &mut (i32, u32), selected: NaiveDate) -
                 let text = egui::RichText::new(date.day().to_string()).color(if inside { ui.visuals().text_color() } else { ui.visuals().weak_text_color() });
                 let response = ui.add_sized([cell.x, cell.y], egui::Button::new(text).frame(false).selected(date == selected));
                 if date == today {
-                    ui.painter().rect_stroke(response.rect.shrink(1.0), 0.0, egui::Stroke::new(1.0, Color32::from_rgb(0xE0, 0x40, 0x40)), egui::StrokeKind::Inside);
+                    ui.painter().rect_stroke(response.rect.shrink(1.0), 0.0, egui::Stroke::new(1.0_f32, Color32::from_rgb(0xE0, 0x40, 0x40)), egui::StrokeKind::Inside);
                 }
                 if response.clicked() {
                     picked = Some(date);

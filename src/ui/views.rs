@@ -806,7 +806,7 @@ impl App {
                 if let (true, Some((fill, border))) = (selected, selection_box) {
                     // Themed selection box from 2 px left of the icon to 5 px past the text, the whole row high, 1 px border with rounded corners.
                     let boxed = egui::Rect::from_min_max(egui::pos2(row.left() + indent + 19.0, row.top()), egui::pos2(text_rect.left() + 2.0 + galley.size().x + 5.0, row.bottom()));
-                    ui.painter().rect(boxed, 1.0, fill, egui::Stroke::new(1.0, border), egui::StrokeKind::Inside);
+                    ui.painter().rect(boxed, 1.0, fill, egui::Stroke::new(1.0_f32, border), egui::StrokeKind::Inside);
                 }
                 // Expand indicator: only for items the shell reported as having subfolders (SFGAO_HASSUBFOLDER); removed if found empty on read.
                 // Original CanExpand (0x7ede40): a folder node with no children yet is populated, then HasChildren = child count > 0.
@@ -817,7 +817,7 @@ impl App {
                     // The themed chevrons of the captured original: collapsed ">" 4 x 8 px, expanded "v" 8 x 4 px, 1 px strokes (tree_glyph_color).
                     let c = egui::pos2(arrow.center().x.floor() + 0.5, arrow.center().y.floor() + 1.5);
                     let points = if open { vec![c + egui::vec2(-4.0, -2.0), c + egui::vec2(0.0, 2.0), c + egui::vec2(4.0, -2.0)] } else { vec![c + egui::vec2(-2.0, -4.0), c + egui::vec2(2.0, 0.0), c + egui::vec2(-2.0, 4.0)] };
-                    ui.painter().add(egui::Shape::line(points, egui::Stroke::new(1.2, tree_glyph_color(background, open))));
+                    ui.painter().add(egui::Shape::line(points, egui::Stroke::new(1.2_f32, tree_glyph_color(background, open))));
                 }
                 if let Some(icon) = self.shell_node_icon(ui.ctx(), node) {
                     // Original InitNode (0x7ed85c): a ghosted folder (hidden) gets Cut = true, which TTreeView draws with the dimmed icon.
@@ -896,7 +896,7 @@ impl App {
         // Original FUN_0048e2e0 (tree panel drawing): a vertical line in the skin color (DAT_008d44c0 + 0x1c, conf.ini [List] lframetree) at the right edge (width − 1).
         if let Some(skin) = self.current_skin() {
             let color = super::skin_pane::skin_color(&skin, "lframetree", Color32::from_gray(0x3C));
-            ui.painter().vline(rect.right() - 0.5, rect.y_range(), egui::Stroke::new(1.0, color));
+            ui.painter().vline(rect.right() - 0.5, rect.y_range(), egui::Stroke::new(1.0_f32, color));
         }
         if let Some(path) = shell_menu {
             self.active = index;

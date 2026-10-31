@@ -325,7 +325,7 @@ impl App {
                                 }
                                 if row_lines {
                                     let y = Self::row_line_y(ui.painter(), response.rect.bottom(), ui.spacing().item_spacing.y);
-                                    ui.painter().hline(response.rect.left()..=response.rect.left() + column_width, y, egui::Stroke::new(1.0, line_color));
+                                    ui.painter().hline(response.rect.left()..=response.rect.left() + column_width, y, egui::Stroke::new(1.0_f32, line_color));
                                 }
                                 // Clicking anywhere on the row picks that item (the whole row, not just the name cell; original GetItemAt = the whole item cell).
                                 let row_rect = egui::Rect::from_min_size(response.rect.min, egui::vec2(column_width, row_height));
@@ -528,7 +528,7 @@ impl App {
                 let shown_last = ((viewport.max.x / column_width).ceil() as usize).min(total_columns);
                 // Original Paint (0x7d61ec; +0x386, not style 3): NXLINE vertical lines between visible columns (i x item width - 1) from top + 4 to bottom - 4.
                 if column_lines {
-                    let stroke = egui::Stroke::new(1.0, line_color);
+                    let stroke = egui::Stroke::new(1.0_f32, line_color);
                     for column in shown_first.max(1)..shown_last {
                         let x = ui.painter().round_to_pixel_center(origin.x + column as f32 * column_width - 0.5);
                         ui.painter().vline(x, (origin.y + viewport.min.y + 4.0)..=(origin.y + viewport.min.y + height - 4.0), stroke);
@@ -544,7 +544,7 @@ impl App {
                         // Original DrawListItem (+0x387): horizontal line under the item at bottom + LineSpace / 2 - 1.
                         if row_lines {
                             let y = Self::row_line_y(ui.painter(), cell.bottom(), pitch - item_height);
-                            ui.painter().hline(cell.left()..=cell.right(), y, egui::Stroke::new(1.0, line_color));
+                            ui.painter().hline(cell.left()..=cell.right(), y, egui::Stroke::new(1.0_f32, line_color));
                         }
                         self.queue_folder_size(index, row);
                         let icon = self.file_icon(ui.ctx(), index, row);

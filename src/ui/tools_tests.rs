@@ -1376,8 +1376,8 @@ fn skin_address_segments_and_frame_colors_follow_the_original() {
     // Original TNXPathLabel: the root segment is "C:" (without the trailing '\').
     assert!(segments[0].label.ends_with(':') && !segments[0].label.ends_with('\\') && segments.iter().all(|s| s.folder.is_some()), "{}", segments[0].label);
     app.active = 0;
-    assert_eq!(app.skin_frame_stroke(&skin, 0), egui::Stroke::new(1.0, Color32::from_rgb(0x30, 0x5B, 0x91)));
-    assert_eq!(app.skin_frame_stroke(&skin, 1), egui::Stroke::new(1.0, Color32::from_rgb(0x1C, 0x36, 0x57)), "inactive: 60% lframelocal + 40% lback (000000), FUN_00483300");
+    assert_eq!(app.skin_frame_stroke(&skin, 0), egui::Stroke::new(1.0_f32, Color32::from_rgb(0x30, 0x5B, 0x91)));
+    assert_eq!(app.skin_frame_stroke(&skin, 1), egui::Stroke::new(1.0_f32, Color32::from_rgb(0x1C, 0x36, 0x57)), "inactive: 60% lframelocal + 40% lback (000000), FUN_00483300");
     app.panes[0].archive = Some(ArchiveLocation { file: folder.join("x.zip"), prefix: "inner/".into(), password: String::new() });
     assert_eq!(app.skin_frame_stroke(&skin, 0).color, Color32::from_rgb(0x50, 0x50, 0x00));
     let labels: Vec<String> = app.crumb_segments(0).into_iter().map(|s| s.label).collect();

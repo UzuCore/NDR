@@ -360,7 +360,7 @@ pub(super) fn folder_compare_ui(ui: &mut egui::Ui, form: &mut FolderCompareForm,
     let columns = [Column::text("", 30.0), Column::right(form.left_caption.clone(), side), Column::center(result_title, RESULT_COLUMN_WIDTH), Column::text(form.right_caption.clone(), side)];
     let events = ui
         .scope_builder(egui::UiBuilder::new().max_rect(at(8.0, 44.0, 621.0, 375.0)), |ui| {
-            ui.painter().rect_stroke(at(8.0, 44.0, 621.0, 375.0), 0.0, egui::Stroke::new(1.0, Color32::from_gray(160)), egui::StrokeKind::Inside);
+            ui.painter().rect_stroke(at(8.0, 44.0, 621.0, 375.0), 0.0, egui::Stroke::new(1.0_f32, Color32::from_gray(160)), egui::StrokeKind::Inside);
             let FolderCompareForm { rows, grid: state, .. } = form;
             let rows: &Vec<Difference> = rows;
             let color = |row: usize| Some(result_color(rows[row].kind));

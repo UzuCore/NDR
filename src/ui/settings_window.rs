@@ -1089,7 +1089,7 @@ fn original_page(ui: &mut egui::Ui, form: &mut SettingsForm, tab: usize, origin:
                                     .horizontal(|ui| {
                                         let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 12.0), egui::Sense::hover());
                                         ui.painter().rect_filled(rect, 0.0, fill);
-                                        ui.painter().rect_stroke(rect, 0.0, egui::Stroke::new(1.0, Color32::BLACK), egui::StrokeKind::Inside);
+                                        ui.painter().rect_stroke(rect, 0.0, egui::Stroke::new(1.0_f32, Color32::BLACK), egui::StrokeKind::Inside);
                                         ui.add(egui::Button::new(text.as_str()).frame(false))
                                     })
                                     .inner;
@@ -1118,7 +1118,7 @@ fn original_page(ui: &mut egui::Ui, form: &mut SettingsForm, tab: usize, origin:
                             .horizontal(|ui| {
                                 let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 12.0), egui::Sense::hover());
                                 ui.painter().rect_filled(rect, 0.0, fill);
-                                ui.painter().rect_stroke(rect, 0.0, egui::Stroke::new(1.0, Color32::BLACK), egui::StrokeKind::Inside);
+                                ui.painter().rect_stroke(rect, 0.0, egui::Stroke::new(1.0_f32, Color32::BLACK), egui::StrokeKind::Inside);
                                 ui.add(egui::Button::selectable(color_selected == Some(i), RichText::new(names.join(";")).color(fill)).truncate())
                             })
                             .inner;

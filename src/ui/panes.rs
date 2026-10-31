@@ -385,7 +385,7 @@ impl App {
             let mut rect = inner.expand(4.0);
             let (back, border, fore) = (color(24), color(6), color(23));
             let paint = |painter: &egui::Painter, rect: egui::Rect| {
-                painter.rect(rect, 0.0, back, egui::Stroke::new(1.0, border), egui::StrokeKind::Inside);
+                painter.rect(rect, 0.0, back, egui::Stroke::new(1.0_f32, border), egui::StrokeKind::Inside);
                 let inner = rect.shrink(4.0);
                 for (i, galley) in lines.iter().enumerate() {
                     let at = egui::pos2(inner.center().x - galley.size().x / 2.0, inner.top() + i as f32 * line_height).round();
@@ -430,7 +430,7 @@ impl App {
         let mut rect = egui::Rect::from_min_size(egui::pos2(cell.left() + header - 2.0, cell.top() - 2.0), egui::vec2(full.size().x + 10.0, cell.height() + 4.0));
         let (back, border, fore) = (color(24), color(6), color(23));
         let paint = |painter: &egui::Painter, rect: egui::Rect| {
-            painter.rect(rect, 0.0, back, egui::Stroke::new(1.0, border), egui::StrokeKind::Inside);
+            painter.rect(rect, 0.0, back, egui::Stroke::new(1.0_f32, border), egui::StrokeKind::Inside);
             let at = (rect.center() - full.size() / 2.0).round();
             painter.galley(at, full.clone(), fore);
         };
@@ -1647,7 +1647,7 @@ impl App {
                             if row_lines {
                                 let y = Self::row_line_y(ui.painter(), line.response.rect.bottom(), ui.spacing().item_spacing.y);
                                 let left = line.response.rect.left();
-                                ui.painter().hline(left..=left + width, y, egui::Stroke::new(1.0, line_color));
+                                ui.painter().hline(left..=left + width, y, egui::Stroke::new(1.0_f32, line_color));
                             }
                             // Pressing anywhere on the row hits that item (the whole row, not just the name cell). Original GetItemAt(format 2): index = (y + position + LineSpace − header)
                             // / (height + LineSpace), so the gap above the row (LineSpace) also belongs to that item.

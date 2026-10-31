@@ -288,10 +288,10 @@ pub(super) fn drive_row(ui: &mut egui::Ui, size: egui::Vec2, icon: Option<&egui:
         painter.galley(drawn.min, galley, color);
         // Underline (4) and strikeout (8) of the original ListFont style.
         if style & 4 != 0 {
-            painter.hline(drawn.x_range(), drawn.bottom() - 1.5, egui::Stroke::new(1.0, color));
+            painter.hline(drawn.x_range(), drawn.bottom() - 1.5, egui::Stroke::new(1.0_f32, color));
         }
         if style & 8 != 0 {
-            painter.hline(drawn.x_range(), drawn.center().y, egui::Stroke::new(1.0, color));
+            painter.hline(drawn.x_range(), drawn.center().y, egui::Stroke::new(1.0_f32, color));
         }
         if let Some((kind, sizes)) = info {
             paint_drive_space(ui, rect, rect.left() + label_right, kind, sizes, cursor, color, free_label, style);
@@ -325,7 +325,7 @@ pub(super) fn paint_drive_space(ui: &egui::Ui, rect: egui::Rect, label_right: f3
     let text_color = if cursor { item_color } else { ui.visuals().weak_text_color() };
     let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
     let outer = egui::Rect::from_min_size(egui::pos2(left, top), egui::vec2(70.0, height));
-    painter.rect_stroke(outer, 0.0, egui::Stroke::new(1.0, outline), egui::StrokeKind::Inside);
+    painter.rect_stroke(outer, 0.0, egui::Stroke::new(1.0_f32, outline), egui::StrokeKind::Inside);
     painter.rect_filled(egui::Rect::from_min_size(egui::pos2(left + 1.0, top + 1.0), egui::vec2(fill, (height - 2.0).max(0.0))), 0.0, fill_color);
     if room - 80.0 > 80.0 {
         let text_rect = egui::Rect::from_min_max(egui::pos2(left + 81.0, rect.top()), egui::pos2(rect.right() - 5.0, rect.bottom()));
@@ -339,10 +339,10 @@ pub(super) fn paint_drive_space(ui: &egui::Ui, rect: egui::Rect, label_right: f3
         );
         // Underline (4) and strikeout (8) of the original ListFont style.
         if style & 4 != 0 {
-            text_painter.hline(drawn.x_range(), drawn.bottom() - 1.5, egui::Stroke::new(1.0, text_color));
+            text_painter.hline(drawn.x_range(), drawn.bottom() - 1.5, egui::Stroke::new(1.0_f32, text_color));
         }
         if style & 8 != 0 {
-            text_painter.hline(drawn.x_range(), drawn.center().y, egui::Stroke::new(1.0, text_color));
+            text_painter.hline(drawn.x_range(), drawn.center().y, egui::Stroke::new(1.0_f32, text_color));
         }
     }
 }

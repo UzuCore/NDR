@@ -282,7 +282,7 @@ impl App {
                         row.and_then(|r| self.panes[pane].view.colors.get(r).copied().flatten()).map_or(self.basic_list_color("NXFOLDER"), |(r, g, b)| Color32::from_rgb(r, g, b))
                     };
                     let frame = egui::Rect::from_min_max(rect.min, egui::pos2(rect.max.x, rect.max.y - 1.0));
-                    ctx.layer_painter(egui::LayerId::background()).with_clip_rect(self.pane_rects[pane]).rect_stroke(frame, 0.0, egui::Stroke::new(1.0, color), egui::StrokeKind::Inside);
+                    ctx.layer_painter(egui::LayerId::background()).with_clip_rect(self.pane_rects[pane]).rect_stroke(frame, 0.0, egui::Stroke::new(1.0_f32, color), egui::StrokeKind::Inside);
                 }
             }
             if let Some(position) = pointer {
@@ -304,7 +304,7 @@ impl App {
                 painter.rect_filled(rect, 0.0, Color32::BLACK);
                 painter.rect_filled(rect.shrink(1.0), 0.0, Color32::from_rgb(0x3C, 0x3C, 0x3C));
                 painter.galley(rect.min + egui::vec2(4.0, 2.0), header, Color32::WHITE);
-                painter.line_segment([rect.min + egui::vec2(4.0, row), rect.min + egui::vec2(size.x - 4.0, row)], egui::Stroke::new(1.0, Color32::from_rgb(0xC0, 0xC0, 0xC0)));
+                painter.line_segment([rect.min + egui::vec2(4.0, row), rect.min + egui::vec2(size.x - 4.0, row)], egui::Stroke::new(1.0_f32, Color32::from_rgb(0xC0, 0xC0, 0xC0)));
                 for (index, name) in names.into_iter().enumerate() {
                     let top = rect.min + egui::vec2(2.0, (index + 1) as f32 * row + 3.0);
                     if let Some(Some(icon)) = icons.get(index) {

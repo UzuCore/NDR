@@ -701,13 +701,13 @@ fn draw_folder_icon(painter: &egui::Painter, at: egui::Pos2, selected: bool) {
     let fill = if selected { Color32::from_rgb(0xF0, 0xC8, 0x50) } else { Color32::from_rgb(0xE8, 0xBE, 0x48) };
     painter.rect_filled(tab, 1.0, fill);
     painter.rect_filled(body, 1.0, fill);
-    painter.rect_stroke(body, 1.0, egui::Stroke::new(1.0, Color32::from_rgb(0xB0, 0x88, 0x20)), egui::StrokeKind::Inside);
+    painter.rect_stroke(body, 1.0, egui::Stroke::new(1.0_f32, Color32::from_rgb(0xB0, 0x88, 0x20)), egui::StrokeKind::Inside);
 }
 
 fn draw_drive_icon(painter: &egui::Painter, at: egui::Pos2) {
     let body = egui::Rect::from_min_size(at + egui::vec2(1.0, 5.0), egui::vec2(14.0, 7.0));
     painter.rect_filled(body, 1.0, Color32::from_rgb(0xC8, 0xC8, 0xC8));
-    painter.rect_stroke(body, 1.0, egui::Stroke::new(1.0, Color32::from_rgb(0x70, 0x70, 0x70)), egui::StrokeKind::Inside);
+    painter.rect_stroke(body, 1.0, egui::Stroke::new(1.0_f32, Color32::from_rgb(0x70, 0x70, 0x70)), egui::StrokeKind::Inside);
     painter.rect_filled(egui::Rect::from_min_size(at + egui::vec2(11.0, 9.0), egui::vec2(2.0, 1.0)), 0.0, Color32::from_rgb(0x30, 0xC0, 0x30));
 }
 
@@ -727,7 +727,7 @@ fn paint_tree(ui: &egui::Ui, rect: egui::Rect, form: &FolderTreeForm, colors: &T
         let label = painter.layout_no_wrap(root_label.to_owned(), egui::FontId::proportional(36.0), mark);
         painter.galley(egui::pos2(rect.right() - label.size().x - 20.0, rect.top() + drive_height + 6.0), label, mark);
     }
-    let line = egui::Stroke::new(1.0, colors.line);
+    let line = egui::Stroke::new(1.0_f32, colors.line);
     let at = |x: f32, y: f32| rect.min + egui::vec2(x, y);
     let y_of = |i: usize| (form.tree.items[i].row as f32 - form.top_row as f32) * metrics.row;
     let half = (metrics.row / 2.0).floor();
@@ -763,7 +763,7 @@ fn draw_item(ui: &egui::Ui, painter: &egui::Painter, rect: egui::Rect, form: &Fo
     let is_root = Some(i) == tree.root;
     let at = |dx: f32, dy: f32| rect.min + egui::vec2(dx, dy);
     let half = (metrics.row / 2.0).floor();
-    let line = egui::Stroke::new(1.0, colors.line);
+    let line = egui::Stroke::new(1.0_f32, colors.line);
     if !is_root {
         if !tree.is_first_child(i) {
             painter.line_segment([at(x - 8.0, y + half), at(x - 8.0, y)], line);
@@ -779,11 +779,11 @@ fn draw_item(ui: &egui::Ui, painter: &egui::Painter, rect: egui::Rect, form: &Fo
             let top = ((metrics.row - 9.0) / 2.0).floor();
             let button = egui::Rect::from_min_size(at(x - 12.0, y + top), egui::vec2(9.0, 9.0));
             painter.rect_filled(button, 0.0, colors.back);
-            painter.rect_stroke(button, 0.0, egui::Stroke::new(1.0, colors.line), egui::StrokeKind::Inside);
+            painter.rect_stroke(button, 0.0, egui::Stroke::new(1.0_f32, colors.line), egui::StrokeKind::Inside);
             let c = button.center();
-            painter.line_segment([egui::pos2(c.x - 2.0, c.y), egui::pos2(c.x + 2.5, c.y)], egui::Stroke::new(1.0, colors.fore));
+            painter.line_segment([egui::pos2(c.x - 2.0, c.y), egui::pos2(c.x + 2.5, c.y)], egui::Stroke::new(1.0_f32, colors.fore));
             if !item.expanded {
-                painter.line_segment([egui::pos2(c.x, c.y - 2.0), egui::pos2(c.x, c.y + 2.5)], egui::Stroke::new(1.0, colors.fore));
+                painter.line_segment([egui::pos2(c.x, c.y - 2.0), egui::pos2(c.x, c.y + 2.5)], egui::Stroke::new(1.0_f32, colors.fore));
             }
         }
     }
@@ -827,7 +827,7 @@ fn draw_item(ui: &egui::Ui, painter: &egui::Painter, rect: egui::Rect, form: &Fo
         painter.rect_filled(text_rect, 0.0, fill);
         painter.text(text_rect.left_center(), egui::Align2::LEFT_CENTER, &text, font.clone(), colors.back);
         let frame = Color32::from_rgb(fill.r().saturating_sub(0x46), fill.g().saturating_sub(0x46), fill.b().saturating_sub(0x46));
-        painter.rect_stroke(text_rect.expand2(egui::vec2(1.0, 1.0)), 0.0, egui::Stroke::new(1.0, frame), egui::StrokeKind::Inside);
+        painter.rect_stroke(text_rect.expand2(egui::vec2(1.0, 1.0)), 0.0, egui::Stroke::new(1.0_f32, frame), egui::StrokeKind::Inside);
         // Ancestor names not shown on this row are drawn in their columns (NXTHINT) — so the selected row reads like a path.
         let mut ancestor = i;
         while tree.items[ancestor].level > 0 {
@@ -1071,7 +1071,7 @@ pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, langu
     let drives_rect = egui::Rect::from_min_size(main.min + egui::vec2(1.0, 1.0), egui::vec2(43.0, main.height() - 2.0));
     // pDrivesPaint 0x426800: white → F0F0F0 background.
     ui.painter().rect_filled(drives_rect, 0.0, Color32::from_rgb(0xF6, 0xF6, 0xF6));
-    ui.painter().vline(drives_rect.right() + 0.5, drives_rect.y_range(), egui::Stroke::new(1.0, Color32::from_rgb(0xE4, 0xE4, 0xE4)));
+    ui.painter().vline(drives_rect.right() + 0.5, drives_rect.y_range(), egui::Stroke::new(1.0_f32, Color32::from_rgb(0xE4, 0xE4, 0xE4)));
     let mut picked_drive = None;
     for (n, (root, _)) in form.drives.iter().enumerate() {
         let caption = root.to_string_lossy().trim_end_matches('\\').to_owned();
@@ -1079,7 +1079,7 @@ pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, langu
         let down = (form.root_of)(&root.to_string_lossy()).eq_ignore_ascii_case(&form.drive);
         let response = ui.interact(button, egui::Id::new(("ndr-tree-drive", n)), egui::Sense::click());
         if down || response.hovered() {
-            ui.painter().rect(button, 2.0, if down { Color32::from_rgb(0xD8, 0xE6, 0xF8) } else { Color32::from_rgb(0xEC, 0xF2, 0xFB) }, egui::Stroke::new(1.0, Color32::from_rgb(0x9C, 0xB4, 0xD8)), egui::StrokeKind::Inside);
+            ui.painter().rect(button, 2.0, if down { Color32::from_rgb(0xD8, 0xE6, 0xF8) } else { Color32::from_rgb(0xEC, 0xF2, 0xFB) }, egui::Stroke::new(1.0_f32, Color32::from_rgb(0x9C, 0xB4, 0xD8)), egui::StrokeKind::Inside);
         }
         // FUN_00424ec4: each button has text (drive) and a 16×16 shell icon.
         match form.drive_icons.get(n).cloned().flatten() {
@@ -1241,7 +1241,7 @@ pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, langu
         }
         // lbResultDrawItem 0x452660: row height = text height + 6, parent folder (gray) + name (black); the selected row is light text on a dark background.
         let list = put(4.0, 37.0, 533.0, 181.0);
-        ui.painter().rect(list, 0.0, Color32::WHITE, egui::Stroke::new(1.0, Color32::from_gray(0x90)), egui::StrokeKind::Inside);
+        ui.painter().rect(list, 0.0, Color32::WHITE, egui::Stroke::new(1.0_f32, Color32::from_gray(0x90)), egui::StrokeKind::Inside);
         let row_height = 19.0;
         let list_response = ui.interact(list, egui::Id::new("ndr-tree-search-list"), egui::Sense::click());
         let first = search.selected.map(|s| s.saturating_sub(((list.height() / row_height) as usize).saturating_sub(1))).unwrap_or(0);

@@ -298,7 +298,7 @@ pub(super) fn markup_job(text: &str, size: f32, color: Color32, wrap: f32) -> La
         }
         format.italics = span.italic;
         if span.underline {
-            format.underline = egui::Stroke::new(1.0, format.color);
+            format.underline = egui::Stroke::new(1.0_f32, format.color);
         }
         job.append(&span.text, 0.0, format);
     }
@@ -1164,7 +1164,7 @@ pub(super) fn access_job_colored(ui: &egui::Ui, caption: &str, color: Option<Col
     for (index, character) in display.chars().enumerate() {
         let mut format = egui::TextFormat { font_id: font.clone(), color: color.unwrap_or(Color32::PLACEHOLDER), ..Default::default() };
         if underline == Some(index) {
-            format.underline = egui::Stroke::new(1.0, line);
+            format.underline = egui::Stroke::new(1.0_f32, line);
             access = Some(character);
         }
         job.append(&character.to_string(), 0.0, format);
