@@ -20,24 +20,38 @@ fn temporary_suffix() -> String {
     format!("{:016x}{:08x}", nanos as u64, std::process::id())
 }
 
-/// SplitFileWindow.TryParseSize: "number[.number] unit"; no unit, M, MB, MIB = MiB; B, BYTE(S), K, KB, KIB, G, GB, GIB. At least 1 byte.
-pub fn parse_split_size(text: &str) -> Option<u64> {
-    let text = text.trim();
-    let split = text.find(|c: char| !(c.is_ascii_digit() || c == '.')).unwrap_or(text.len());
-    let (amount, unit) = (&text[..split], text[split..].trim_start());
-    if amount.is_empty() || amount.starts_with('.') || amount.ends_with('.') || amount.matches('.').count() > 1 || !unit.chars().all(|c| c.is_ascii_alphabetic()) {
-        return None;
-    }
-    let amount: f64 = amount.parse().ok()?;
-    let multiplier = match unit.to_ascii_uppercase().as_str() {
-        "" | "M" | "MB" | "MIB" => 1024.0 * 1024.0,
-        "B" | "BYTE" | "BYTES" => 1.0,
-        "K" | "KB" | "KIB" => 1024.0,
-        "G" | "GB" | "GIB" => 1024.0 * 1024.0 * 1024.0,
-        _ => return None,
+/// Original FUN_0040d86c (split size cbSplitSizeChange/miSplitFileClick, archive volume miArcAddToArchiveClick): the text upper-cased; the unit
+/// is 2^30 if it contains "GB", else 2^20 for "MB", else 1024 for "KB", else 1 (bytes); the number is the text before the first space or
+/// letter read by StrToInt64ExW (leading white space, optional sign, decimal digits up to the first other character; no digits = 0),
+/// times the unit. Fixed: the original copied the text into a 32-character buffer without a length check.
+pub fn original_size_value(text: &str) -> i64 {
+    let upper = text.to_uppercase();
+    let unit: i64 = if upper.contains("GB") {
+        1 << 30
+    } else if upper.contains("MB") {
+        1 << 20
+    } else if upper.contains("KB") {
+        1024
+    } else {
+        1
     };
-    let size = (amount * multiplier).trunc();
-    (amount > 0.0 && size >= 1.0 && size < 9.2e18).then_some(size as u64)
+    let end = upper.find(|c: char| c == ' ' || c.is_alphabetic()).unwrap_or(upper.len());
+    let number = upper[..end].trim_start();
+    let (negative, digits) = match number.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, number.strip_prefix('+').unwrap_or(number)),
+    };
+    let digits: String = digits.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if digits.is_empty() {
+        return 0;
+    }
+    let value = digits.bytes().fold(0i64, |v, d| v.wrapping_mul(10).wrapping_add(i64::from(d - b'0')));
+    (if negative { value.wrapping_neg() } else { value }).wrapping_mul(unit)
+}
+
+/// Split size: the original rule (`original_size_value`). Fixed: a value of 0 or less was passed on to the splitter; it is rejected here.
+pub fn parse_split_size(text: &str) -> Option<u64> {
+    u64::try_from(original_size_value(text)).ok().filter(|&size| size > 0)
 }
 
 /// SizePresets.
@@ -485,15 +499,20 @@ mod tests {
     }
 
     #[test]
-    fn split_sizes_follow_splitfilewindow() {
+    fn split_sizes_follow_the_original_reader() {
         assert_eq!(parse_split_size("1440 KB"), Some(1440 * 1024));
-        assert_eq!(parse_split_size("2.5"), Some((2.5 * 1024.0 * 1024.0) as u64), "no unit: MiB");
+        assert_eq!(parse_split_size("5 mb"), Some(5 << 20), "upper-cased first");
+        assert_eq!(parse_split_size("2.5 MB"), Some(2 << 20), "StrToInt64ExW stops at the dot");
+        assert_eq!(parse_split_size("100"), Some(100), "no unit: bytes");
+        assert_eq!(parse_split_size("1g"), Some(1), "a bare G is not a unit");
+        assert_eq!(parse_split_size("1GB"), Some(1 << 30));
         assert_eq!(parse_split_size("10 bytes"), Some(10));
-        assert_eq!(parse_split_size("1g"), Some(1 << 30));
+        assert_eq!(original_size_value("분할 안함"), 0);
+        assert_eq!(original_size_value(" 5 MB"), 0, "a leading space ends the number at once");
+        assert_eq!(original_size_value("-3 KB"), -3072);
         assert_eq!(parse_split_size("0 MB"), None);
+        assert_eq!(parse_split_size("-3 KB"), None, "Fixed: the original passed it on");
         assert_eq!(parse_split_size("abc"), None);
-        assert_eq!(parse_split_size("5 TB"), None);
-        assert_eq!(parse_split_size("0.5 B"), None, "less than one byte");
         assert_eq!(default_split_size(1000), "720 KB");
         assert_eq!(default_split_size(3 * 1024 * 1024), "1440 KB");
         assert_eq!(default_split_size(30 * 1024 * 1024), "10 MB");

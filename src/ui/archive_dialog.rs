@@ -94,30 +94,10 @@ pub(super) struct ArchiveChoice {
     pub output: Option<PathBuf>,
 }
 
-/// TryGetVolumeSizeBytes: the first item (no split) or empty text is None, "number[unit]" (b/k/m/g, powers of 1024), 0 is None. Invalid text is Err.
-pub(super) fn parse_volume(text: &str, no_volume: &str) -> Result<Option<u64>, ()> {
-    let text = text.trim();
-    if text.is_empty() || text.to_lowercase() == no_volume.trim().to_lowercase() {
-        return Ok(None);
-    }
-    let digits_end = text.find(|c: char| !(c.is_ascii_digit() || c == '.')).unwrap_or(text.len());
-    let (number, unit) = (&text[..digits_end], text[digits_end..].trim().to_lowercase());
-    if number.is_empty() || number == "." || number.matches('.').count() > 1 {
-        return Err(());
-    }
-    let value: f64 = number.parse().map_err(|_| ())?;
-    let multiplier = match unit.as_str() {
-        "" | "b" | "byte" | "bytes" => 1.0,
-        "k" | "kb" | "kib" => 1024.0,
-        "m" | "mb" | "mib" => 1024.0 * 1024.0,
-        "g" | "gb" | "gib" => 1024.0 * 1024.0 * 1024.0,
-        _ => return Err(()),
-    };
-    let size = value * multiplier;
-    if !(0.0..=i64::MAX as f64).contains(&size) {
-        return Err(());
-    }
-    Ok((size.trunc() >= 1.0).then_some(size.trunc() as u64))
+/// Volume size: original miArcAddToArchiveClick (0x43a7f8) reads the combo text with FUN_0040d86c (`original_size_value`); 0 or less (the first
+/// item "no splitting", empty or unreadable text) means one archive.
+pub(super) fn parse_volume(text: &str) -> Option<u64> {
+    u64::try_from(ndr::split::original_size_value(text)).ok().filter(|&size| size > 0)
 }
 
 /// CompressionPresetIndex(level): 1 or less is fast, 6 or more is maximum, otherwise normal.
@@ -383,12 +363,7 @@ impl App {
             1 => self.answer_dialog(DialogResult::ArchiveCreate(None), ctx),
             _ => {
                 let Some(format) = form.formats.get(form.format).cloned() else { return };
-                let no_volume = form.volume_labels.first().cloned().unwrap_or_default();
-                let Ok(volume) = parse_volume(&form.volume, &no_volume) else {
-                    let title = self.language_pack.text("formAddToArchive.Form.Caption", "Add to Archive");
-                    let message = self.language_pack.text("formAddToArchive.Message.InvalidVolume", "Enter a valid volume size such as 10 MB, or 0 for no splitting.");
-                    return self.system_box(&title, &message, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
-                };
+                let volume = parse_volume(&form.volume);
                 let choice = ArchiveChoice {
                     level: level_for_preset(&format, form.preset, form.default_level),
                     format,
@@ -819,13 +794,14 @@ mod tests {
 
     #[test]
     fn archive_window_rules_follow_archivecreatewindow() {
-        assert_eq!(parse_volume("No Volume", "No Volume"), Ok(None));
-        assert_eq!(parse_volume("", "분할 안함"), Ok(None));
-        assert_eq!(parse_volume("1440 KB", "x"), Ok(Some(1440 * 1024)));
-        assert_eq!(parse_volume("1.5m", "x"), Ok(Some(1572864)));
-        assert_eq!(parse_volume("0", "x"), Ok(None), "0 means no splitting");
-        assert_eq!(parse_volume("12 bytes", "x"), Ok(Some(12)));
-        assert!(parse_volume("ten MB", "x").is_err() && parse_volume("5 TB", "x").is_err() && parse_volume("1.2.3", "x").is_err());
+        assert_eq!(parse_volume("No Volume"), None);
+        assert_eq!(parse_volume("분할 안함"), None);
+        assert_eq!(parse_volume(""), None);
+        assert_eq!(parse_volume("1440 KB"), Some(1440 * 1024));
+        assert_eq!(parse_volume("1.5 MB"), Some(1 << 20), "StrToInt64ExW stops at the dot");
+        assert_eq!(parse_volume("0"), None, "0 means no splitting");
+        assert_eq!(parse_volume("12 bytes"), Some(12));
+        assert_eq!(parse_volume("ten MB"), None, "unreadable text: one archive");
         let zip = ArchiveFormat { extension: "zip".into(), label: String::new(), program: None, builtin: true, max_level: 9 };
         let tar = ArchiveFormat { extension: "tar".into(), max_level: 0, ..zip.clone() };
         let rar = ArchiveFormat { extension: "rar".into(), max_level: 5, ..zip.clone() };

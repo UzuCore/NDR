@@ -567,10 +567,7 @@ fn archive_create_add_move_and_extract_follow_the_csharp_flows() {
     assert_eq!(form.preset_labels, ["최고", "보통", "빠르게"]);
     assert_eq!(form.volume, "분할 안함");
     frame(&mut app, &ctx, vec![]);
-    app.edit_dialog_kind(|kind| if let DialogKind::ArchiveCreate(form) = kind { form.volume = "열 MB".into(); });
-    app.submit_archive_create(0, &ctx);
-    assert_eq!(boxed(&app), ("압축하기".to_owned(), app.language_pack.text("formAddToArchive.Message.InvalidVolume", "Enter a valid volume size such as 10 MB, or 0 for no splitting.")));
-    app.answer_message_box(1, &ctx);
+    // Original FUN_0040d86c: unreadable volume text such as "열 MB" reads as 0 = one archive (archive_dialog parse_volume); there is no warning.
     let pack = left.join("pack.zip");
     // Original TfAddToArc cbFileName: default name (folder name + extension). Created with that name in the current folder without a save box.
     assert_eq!(archive_form(&app).file_name, "left.zip");
