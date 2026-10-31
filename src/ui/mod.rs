@@ -483,6 +483,8 @@ enum AsyncResult {
     ArchiveStatus(String),
     /// 드라이브 단추 목록(루트, 도움말).
     Drives(Vec<(PathBuf, String)>),
+    /// 드라이브가 생기거나 없어졌다(GetLogicalDrives 비트가 바뀜, 원본 SHCNE_DRIVEADD/DRIVEREMOVED 처리 FUN_00442bc8).
+    DrivesChanged,
     /// 원격 명령 결과(사이트 번호, 명령, "호스트:포트", 출력 또는 오류).
     RemoteCommand { site: String, command: String, host: String, result: Result<String, String> },
     /// 폴더 크기 자동 표시 결과(패널, 목록 세대, 폴더, 글).
@@ -550,6 +552,8 @@ pub struct App {
     watch_folders: bool,
     /// 감시 스레드가 다시 그리기를 부를 egui 문맥(refresh가 감시를 다시 열 때 쓴다).
     egui_ctx: egui::Context,
+    /// 드라이브 집합 감시 스레드를 멈출 표시(native::spawn_drive_watch).
+    drive_watch_stop: Arc<AtomicBool>,
     /// 전송을 시작한 때(lFTPTransferred의 KB/s).
     ftp_started: Option<std::time::Instant>,
     ftp_results: Arc<Mutex<Vec<ftp_pane::FtpResultRow>>>,
@@ -865,6 +869,7 @@ impl App {
             favorites_button: None,
             watch_folders: !cfg!(test),
             egui_ctx: ctx.clone(),
+            drive_watch_stop: Arc::new(AtomicBool::new(false)),
             ftp_started: None,
             ftp_results: Arc::new(Mutex::new(Vec::new())),
             ftp_pause: Arc::new(AtomicBool::new(false)),
@@ -974,6 +979,13 @@ impl App {
         };
         app.refresh(0);
         app.refresh(1);
+        if !cfg!(test) {
+            let (tx, repaint) = (app.async_tx.clone(), ctx.clone());
+            native::spawn_drive_watch(app.drive_watch_stop.clone(), move || {
+                let _ = tx.send(AsyncResult::DrivesChanged);
+                repaint.request_repaint();
+            });
+        }
         app
     }
     fn tr<'a>(&self, ko: &'a str, en: &'a str) -> std::borrow::Cow<'a, str> {
@@ -1457,6 +1469,26 @@ impl App {
                     self.drive_cache = Some((Instant::now(), drives));
                     self.drive_cache_pending = false;
                 }
+                AsyncResult::DrivesChanged => self.drives_changed(),
+            }
+        }
+    }
+
+    /// 원본 FUN_00442bc8 → FUN_00442d80: 드라이브가 생기거나 없어지면 패널마다 드라이브 줄(FUN_00459628: 로컬·드라이브 목록 패널의 끝에 붙인
+    /// 드라이브 항목을 새로 붙임)·드라이브 단추(FUN_00483108)·폴더/디스크 정보 줄(FUN_0048b500)을 새로 만든다.
+    /// NDR은 드라이브 캐시를 비우고 드라이브 단추를 다시 읽게 한 뒤, 드라이브 줄을 보이는 로컬 패널을 다시 읽는다(커서·표시는 지킨다).
+    /// 고친 것: 전에는 USB 드라이브를 꽂거나 빼도 5초 캐시가 지나고 그 패널을 다시 읽을 때까지 목록에 나타나지 않았다.
+    pub(super) fn drives_changed(&mut self) {
+        panes::DriveListCache::invalidate(&self.drive_list);
+        self.drive_cache = None;
+        let show_drive_list = self.settings.flag("ShowDriveList", true);
+        for index in 0..self.panes.len() {
+            let pane = &self.panes[index];
+            let local = pane.archive.is_none() && pane.remote.is_none();
+            if local && (panes::is_drives(&pane.path) || show_drive_list) && !pane.loading {
+                let typed = std::mem::take(&mut self.typed_search[index]);
+                self.refresh(index);
+                self.typed_search[index] = typed;
             }
         }
     }
@@ -1956,6 +1988,7 @@ impl eframe::App for App {
             job.cancel.store(true, Ordering::Relaxed);
         }
         self.tool_cancel.store(true, Ordering::Relaxed);
+        self.drive_watch_stop.store(true, Ordering::Relaxed);
         if let Some(password) = self.password_request.take() {
             let _ = password.reply.send(None);
         }

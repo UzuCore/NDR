@@ -2151,3 +2151,35 @@ fn open_in_new_tab_follows_the_original() {
     assert_eq!((app.panes[0].tabs.len(), app.panes[0].path.clone()), (4, left.clone()));
     let _ = fs::remove_dir_all(root);
 }
+
+
+/// 원본 FUN_00442bc8 → FUN_00442d80: 드라이브가 생기거나 없어지면 드라이브 줄을 보이는 로컬 패널을 새로 만든다(드라이브 캐시도 비움).
+/// 압축·FTP 패널은 건드리지 않고, 빠른 찾기 글은 지킨다.
+#[test]
+fn drive_changes_relist_local_panes_with_drive_rows() {
+    let (root, ctx, mut app) = fixture("drive-change");
+    let left = app.panes[0].path.clone();
+    let source = root.join("packed.txt");
+    fs::write(&source, b"x").unwrap();
+    let zip = left.join("pack.zip");
+    ndr::archive::create(&[source], &zip, None, &std::sync::atomic::AtomicBool::new(false)).unwrap();
+    app.panes[1].archive = Some(ArchiveLocation { file: zip.clone(), prefix: String::new(), password: String::new() });
+    app.refresh(1);
+    wait(&mut app, &ctx);
+    app.settings.set_flag("ShowDriveList", true);
+    let (left_before, right_before) = (app.panes[0].generation, app.panes[1].generation);
+    app.drive_cache = Some((Instant::now(), Vec::new()));
+    app.typed_search[0].query = "ab".into();
+    app.drives_changed();
+    assert_eq!(app.panes[0].generation, left_before + 1, "the local pane with drive rows is listed again");
+    assert_eq!(app.panes[1].generation, right_before, "the archive pane is left alone");
+    assert!(app.drive_cache.is_none(), "drive buttons are read again");
+    assert_eq!(app.typed_search[0].query, "ab", "the typed quick search text is kept");
+    wait(&mut app, &ctx);
+    // 드라이브 줄을 끄면 로컬 폴더 패널은 다시 읽지 않는다(내 PC 보기는 읽는다).
+    app.settings.set_flag("ShowDriveList", false);
+    let before = app.panes[0].generation;
+    app.drives_changed();
+    assert_eq!(app.panes[0].generation, before);
+    let _ = fs::remove_dir_all(root);
+}

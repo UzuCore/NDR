@@ -360,6 +360,25 @@ pub fn drives() -> Vec<PathBuf> {
         .map(|n| PathBuf::from(format!("{}:\\", char::from(b'A' + n))))
         .collect()
 }
+/// 원본 SHChangeNotify 처리(FUN_00442bc8: SHCNE_DRIVEADD → TNXDriveList.Add, SHCNE_DRIVEREMOVED → Delete, 미디어 넣기·빼기 → Update,
+/// 그 뒤 FUN_00442d80이 패널마다 드라이브 줄·단추·정보 줄을 새로 그림)의 자리: 따로 된 스레드가 1초마다 GetLogicalDrives 비트를 보고
+/// 바뀌면 `on_change`를 부른다(UI는 바뀔 때만 깨어난다). `stop`이 켜지면 끝낸다.
+pub fn spawn_drive_watch(stop: std::sync::Arc<std::sync::atomic::AtomicBool>, on_change: impl Fn() + Send + 'static) {
+    use std::sync::atomic::Ordering;
+    std::thread::spawn(move || {
+        // SAFETY: GetLogicalDrives takes no arguments and only reads system state.
+        let mut last = unsafe { GetLogicalDrives() };
+        while !stop.load(Ordering::Relaxed) {
+            std::thread::sleep(std::time::Duration::from_millis(1000));
+            // SAFETY: as above.
+            let now = unsafe { GetLogicalDrives() };
+            if now != last {
+                last = now;
+                on_change();
+            }
+        }
+    });
+}
 /// C# DriveInfo.GetDrives().Where(IsReady): 볼륨 정보를 읽을 수 있는 드라이브만.
 pub fn ready_drives() -> Vec<PathBuf> {
     drives().into_iter().filter(|root| volume_label(root).is_some()).collect()
