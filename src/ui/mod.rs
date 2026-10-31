@@ -1864,7 +1864,11 @@ impl eframe::App for App {
             Some(skin) => egui::Frame::side_top_panel(&ctx.style()).fill(skin_pane::skin_menu_bar_style(skin).0),
             None => egui::Frame::side_top_panel(&ctx.style()),
         };
-        egui::TopBottomPanel::top("menu").frame(menu_frame).show(ctx, |ui| {
+        // 18 px menu buttons + 2 px above (text row as on the captured original) + 1 px below = the original 21 px bar.
+        let menu_frame = menu_frame.inner_margin(egui::Margin { left: 8, right: 8, top: 2, bottom: 1 });
+        // Original tbMainMenu (TfMain DFM Height 21, ButtonHeight 21; pToolbar Top 21) has no separator under it: the toolbar starts on the next
+        // pixel row. Previously egui's default panel separator added a 1 px 0x303030 line and the panel was 22 px, pushing everything below down.
+        egui::TopBottomPanel::top("menu").frame(menu_frame).exact_height(21.0).show_separator_line(false).show(ctx, |ui| {
             self.menu(ui);
             self.paint_original_search_text(ui);
         });

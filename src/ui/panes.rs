@@ -1115,8 +1115,12 @@ impl App {
         self.settings.values.get("ListLineSpace").and_then(|v| v.as_i64()).unwrap_or(0).clamp(0, 32) as f32
     }
     /// Original UpdateDisplayDetails/UpdateDisplayNames (+0x340): item height = the list font's text height + 2, and at least 16 when icons are shown (+0x385).
+    /// The text height is VCL Canvas.TextHeight, i.e. the GDI tmHeight of the list font (Tahoma 16 px: 19, rows 21 px apart on the captured original);
+    /// egui's own line height (19.3) is only the fallback. Previously the rounded-up egui height made every row 1 px taller (22 px).
     pub(super) fn list_item_height(&self, ui: &egui::Ui) -> f32 {
-        let text = ui.text_style_height(&egui::TextStyle::Body).ceil() + 2.0;
+        let face = self.settings.text("ListFont", "Segoe UI");
+        let gdi = ndr::native::gdi_text_height(&face, self.list_font_size.round() as i32, self.list_font_style);
+        let text = gdi.map_or_else(|| ui.text_style_height(&egui::TextStyle::Body).ceil(), |h| h as f32) + 2.0;
         if self.settings.flag("ShowIcons", true) { text.max(16.0) } else { text }
     }
     /// Original DrawListItem (+0x387): an NXLINE horizontal line (integer division, thickness 1) on the pixel row below the item (bottom + LineSpace / 2 − 1).
@@ -1267,8 +1271,10 @@ impl App {
             Some(skin) => self.skin_frame_stroke(skin, index),
             None => egui::Stroke::NONE,
         };
-        // Original pane frame: only a border (lframewidth), with no rounded corners or inner padding.
-        let frame = egui::Frame::new().inner_margin(egui::Margin::same(stroke.width.ceil() as i8));
+        // Original pane frame: only a border (lframewidth), with no rounded corners or inner padding. egui 0.33 Frame already reserves the stroke
+        // width (total margin = inner margin + stroke width), so no inner margin: the address bar starts on the row right below the border.
+        // Previously an inner margin of the stroke width left a 1 px gap inside the border on every side (captured original: none).
+        let frame = egui::Frame::new();
         // The original tab bar (TNXTabSet) sits outside the frame panel (+0x330), attached right above the pane (FUN_00481fb8 SetParent(pane)).
         let outer_spacing = ui.spacing().item_spacing.y;
         if let Some(skin) = &skin {

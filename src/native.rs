@@ -63,6 +63,42 @@ pub fn reject_nul(text: &str) -> Result<(), String> {
     }
 }
 
+/// VCL TCanvas.TextHeight of a font (GetTextExtentPoint32 height = TEXTMETRIC tmHeight) for `face` at `pixels` em height
+/// (TFont.Height = -pixels), `style` bit 1 bold and bit 2 italic. GDI rounds the ascent and the descent separately (Tahoma 16 px: 16 + 3 = 19),
+/// while egui's line height keeps the fraction (19.3). Cached per font; None when GDI cannot create the font.
+pub fn gdi_text_height(face: &str, pixels: i32, style: u8) -> Option<i32> {
+    use std::{collections::HashMap, sync::Mutex};
+    use windows_sys::Win32::Graphics::Gdi::{
+        CreateFontW, DeleteObject, GetDC, GetTextMetricsW, ReleaseDC, SelectObject, DEFAULT_CHARSET, TEXTMETRICW,
+    };
+    static CACHE: Mutex<Option<HashMap<(String, i32, u8), Option<i32>>>> = Mutex::new(None);
+    let key = (face.to_owned(), pixels, style & 3);
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(known) = cache.get_or_insert_with(HashMap::new).get(&key) {
+        return *known;
+    }
+    let name = wide(face);
+    let height = (!face.contains('\0') && pixels > 0).then(|| {
+        // SAFETY: NUL-terminated face name; every GDI object and the screen DC are released before returning.
+        unsafe {
+            let font = CreateFontW(-pixels, 0, 0, 0, if style & 1 != 0 { 700 } else { 400 }, (style & 2 != 0) as u32, 0, 0, DEFAULT_CHARSET as u32, 0, 0, 0, 0, name.as_ptr());
+            if font.is_null() {
+                return None;
+            }
+            let dc = GetDC(ptr::null_mut());
+            let old = SelectObject(dc, font);
+            let mut metrics: TEXTMETRICW = std::mem::zeroed();
+            let ok = GetTextMetricsW(dc, &mut metrics) != 0;
+            SelectObject(dc, old);
+            ReleaseDC(ptr::null_mut(), dc);
+            DeleteObject(font);
+            (ok && metrics.tmHeight > 0).then_some(metrics.tmHeight)
+        }
+    }).flatten();
+    cache.get_or_insert_with(HashMap::new).insert(key, height);
+    height
+}
+
 /// The ".." entry the file system reports in FindFirstFileW(folder\*), as original GetList (0x45a34c) adds it: its dwFileAttributes and
 /// ftLastWriteTime (NTFS reports the parent folder there, so below a drive root it carries the root's hidden and system bits).
 /// Stops at that entry. None when the listing has no ".." (the original then adds its own ".." with attribute 0x10 and GetFolderTime).
@@ -2098,6 +2134,13 @@ mod tests {
 
     /// Original DoGetData 0x7b0d48 CFSTR_SHELLIDLIST: count, count + 1 offsets, the folder id list, then one relative id list per item;
     /// items from different folders give none.
+    /// VCL Canvas.TextHeight = GDI tmHeight: Tahoma at 16 px is 19 (rows of the captured original are 19 + 2 = 21 px apart).
+    #[test]
+    fn gdi_text_height_matches_the_original_row_pitch() {
+        assert_eq!(super::gdi_text_height("Tahoma", 16, 0), Some(19));
+        assert_eq!(super::gdi_text_height("Tahoma", 16, 0), Some(19), "cached");
+        assert_eq!(super::gdi_text_height("Tahoma", 0, 0), None);
+    }
     /// Original GetList (0x45a34c): ".." comes from FindFirstFileW(folder\*); on NTFS it describes the parent folder.
     #[test]
     fn dot_dot_entry_reports_the_parent_folder() {
