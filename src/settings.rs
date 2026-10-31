@@ -1,7 +1,7 @@
 use serde_json::{Map, Value};
 use std::path::Path;
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 4;
+pub const CURRENT_SCHEMA_VERSION: i64 = 5;
 
 /// Default file list (pane) font size (ListFontSize, pixels). User decision: 16 px (the original default\nexusfile.ini has "Segoe UI",9 = 12 px).
 pub const DEFAULT_LIST_FONT_PIXELS: f64 = 16.;
@@ -363,16 +363,21 @@ impl Settings {
             );
         }
         for key in ["LeftFolderSortMode", "RightFolderSortMode"] {
-            let mode = self.text(key, "Name");
+            let mut mode = self.text(key, "Auto");
+            // Schema 5: folder sort "Auto" (original foldersort 0, see listing::effective_folder_sort) became the default. Earlier settings stored
+            // the old default "Name" on every save (the original has no folder sort option in its menus or preferences), so it is reset once.
+            if original_schema < 5 && mode == "Name" {
+                mode = "Auto".into();
+            }
             self.set_text(
                 key,
                 if matches!(
                     mode.as_str(),
-                    "None" | "Name" | "Extension" | "Size" | "Modified" | "Attributes" | "Color"
+                    "Auto" | "None" | "Name" | "Extension" | "Size" | "Modified" | "Attributes" | "Color"
                 ) {
                     mode.as_str()
                 } else {
-                    "Name"
+                    "Auto"
                 },
             );
         }
@@ -589,7 +594,15 @@ mod tests {
     fn schema_migrations_preserve_original_toolbar_hidden_tree_and_theme_behavior() {
         let mut settings=Settings{values:serde_json::from_value(serde_json::json!({"SchemaVersion":0,"ShowDeleteButton":false,"ShowHiddenFiles":true,"ShowFolderTree":true,"NavigateOnPathClick":true,"Theme":"NexusFile Color Map","UseLogicalSort":false,"LogicalSort":true,"Future":{"Keep":[1,2]},"ExternalPrograms":{"rar":"C:\\Tools\\rar.exe"}})).unwrap()};
         settings.normalize();
-        assert_eq!(settings.values["SchemaVersion"], 4);
+        assert_eq!(settings.values["SchemaVersion"], CURRENT_SCHEMA_VERSION);
+        assert_eq!(settings.text("LeftFolderSortMode", ""), "Auto", "original default foldersort=0");
+        // Schema 5: the old stored default "Name" becomes "Auto" once; a choice saved after that stays.
+        let mut old = Settings { values: serde_json::from_value(serde_json::json!({"SchemaVersion": 4, "LeftFolderSortMode": "Name", "RightFolderSortMode": "Size"})).unwrap() };
+        old.normalize();
+        assert_eq!((old.text("LeftFolderSortMode", ""), old.text("RightFolderSortMode", "")), ("Auto".to_owned(), "Size".to_owned()));
+        old.set_text("LeftFolderSortMode", "Name");
+        old.normalize();
+        assert_eq!(old.text("LeftFolderSortMode", ""), "Name");
         assert!(!settings.flag("ShowDeleteToolbarButton", true));
         assert!(settings.flag("ShowDeleteButton", false));
         assert!(settings.flag("LeftShowHiddenFiles", false));

@@ -474,7 +474,7 @@ impl SettingsForm {
         let case_index = draft.values.get("CharacterCase").and_then(Value::as_i64).unwrap_or(0).clamp(0, 3) as usize;
         let views = ["Auto", "Names", "Details", "Thumbnails"];
         let sorts = ["None", "Name", "Extension", "Size", "Modified", "Attributes", "Color"];
-        let folder_sorts = ["Name", "Extension", "Size", "Modified", "Attributes", "Color"];
+        let folder_sorts = ["Auto", "Name", "Extension", "Size", "Modified", "Attributes", "Color"];
         let groups = ["None", "Extension", "Size", "Time", "Category"];
         let categories = vec![("Auto".to_owned(), t(ko, "자동", "Auto")), ("Default".to_owned(), t(ko, "기본값", "Default"))];
         let columns: Vec<&str> = vec!["Auto", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19"];
@@ -487,8 +487,8 @@ impl SettingsForm {
             combo("RightViewStyle", t(ko, "오른쪽 기본 보기", "Right default view"), &views, &draft.text("RightViewStyle", "Auto")),
             combo("LeftSortMode", t(ko, "왼쪽 정렬", "Left sort"), &sorts, &draft.text("LeftSortMode", "Name")),
             combo("RightSortMode", t(ko, "오른쪽 정렬", "Right sort"), &sorts, &draft.text("RightSortMode", "Name")),
-            combo("LeftFolderSortMode", t(ko, "왼쪽 폴더 정렬", "Left folder sort"), &folder_sorts, &draft.text("LeftFolderSortMode", "Name")),
-            combo("RightFolderSortMode", t(ko, "오른쪽 폴더 정렬", "Right folder sort"), &folder_sorts, &draft.text("RightFolderSortMode", "Name")),
+            combo("LeftFolderSortMode", t(ko, "왼쪽 폴더 정렬", "Left folder sort"), &folder_sorts, &draft.text("LeftFolderSortMode", "Auto")),
+            combo("RightFolderSortMode", t(ko, "오른쪽 폴더 정렬", "Right folder sort"), &folder_sorts, &draft.text("RightFolderSortMode", "Auto")),
             combo("LeftGroupMode", t(ko, "왼쪽 그룹 기준", "Left grouping"), &groups, &draft.text("LeftGroupMode", "None")),
             combo("RightGroupMode", t(ko, "오른쪽 그룹 기준", "Right grouping"), &groups, &draft.text("RightGroupMode", "None")),
             choice_row("LeftFolderCategoryMode", t(ko, "왼쪽 폴더 범주", "Left folder category"), categories.clone(), &draft.text("LeftFolderCategoryMode", "Auto")),

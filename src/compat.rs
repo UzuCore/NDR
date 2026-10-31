@@ -598,7 +598,10 @@ pub fn import_ini(path: &Path) -> Result<Settings, String> {
             );
         }
         for (property, key) in [("SortMode", "sort"), ("FolderSortMode", "foldersort")] {
-            let mode = match get(section, &format!("{key}{index}")).unwrap_or("1") {
+            // Original TNXFileSortType: 1 name ... 6 color; foldersort 0 (the default) follows the file sort (listing::effective_folder_sort).
+            let folder = key == "foldersort";
+            let mode = match get(section, &format!("{key}{index}")).unwrap_or(if folder { "0" } else { "1" }) {
+                "0" if folder => "Auto",
                 "2" => "Extension",
                 "3" => "Size",
                 "4" => "Modified",

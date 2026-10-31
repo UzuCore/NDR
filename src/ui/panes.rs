@@ -1140,7 +1140,7 @@ impl App {
     /// keeping the selection and cursor on the same items.
     pub(super) fn sort_pane(&mut self, index: usize) {
         let options = ndr::listing::SortOptions {
-            folder_mode: self.side_text(index, "FolderSortMode", "Name"),
+            folder_mode: self.side_text(index, "FolderSortMode", "Auto"),
             folder_descending: self.side_flag(index, "FolderSortDescending", false),
             file_mode: self.side_text(index, "SortMode", "Name"),
             file_descending: self.side_flag(index, "SortDescending", false),

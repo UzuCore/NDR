@@ -344,10 +344,28 @@ fn priority_rank(entry: &Entry) -> u8 {
 /// "None" is the received order. Descending reverses the whole key except the rank (OrderByDescending.ThenByDescending).
 pub fn sort_entries(entries: &mut Vec<Entry>, options: &SortOptions, color: &dyn Fn(&Entry) -> u32) {
     let (mut folders, mut files): (Vec<Entry>, Vec<Entry>) = std::mem::take(entries).into_iter().partition(|e| e.is_dir);
-    sort_group(&mut folders, &options.folder_mode, options.folder_descending, options.logical, color, false);
+    let (folder_mode, folder_descending) = effective_folder_sort(options);
+    sort_group(&mut folders, folder_mode, folder_descending, options.logical, color, false);
     sort_group(&mut files, &options.file_mode, options.file_descending, options.logical, color, true);
     entries.extend(folders);
     entries.extend(files);
+}
+
+/// Folder sort "Auto" = original foldersort 0 (the default). TNXFileList sort FUN_007d3350: with folder type 0 the folders take the file
+/// type, except extension (2), size (3) and color (6), which become name (1); no file sort (0) leaves both unsorted. The folder comparer
+/// FUN_007d32ac reverses with the same descending flag (+0x24) as the files (the original has no separate folder descend setter).
+/// Previously NDR sorted folders by name unless the C# folder sort was set, so a time sort left the folders in name order.
+pub fn effective_folder_sort(options: &SortOptions) -> (&str, bool) {
+    if options.folder_mode != "Auto" {
+        return (&options.folder_mode, options.folder_descending);
+    }
+    let mode = match options.file_mode.as_str() {
+        "None" => "None",
+        "Modified" => "Modified",
+        "Attributes" => "Attributes",
+        _ => "Name",
+    };
+    (mode, options.file_descending)
 }
 
 /// One group of sort_entries (folders or files). Same order as compare_by_mode, but fixed (speed): comparison texts (UTF-16) and colors are built once
@@ -598,6 +616,26 @@ mod tests {
     }
     fn options(folder: &str, file: &str, descending: bool) -> SortOptions {
         SortOptions { folder_mode: folder.into(), folder_descending: descending, file_mode: file.into(), file_descending: descending, logical: true }
+    }
+
+    /// Original FUN_007d3350 with foldersort 0: folders follow a time or attribute sort and its descending flag; extension, size and color
+    /// sorts keep the folders in name order.
+    #[test]
+    fn auto_folder_sort_follows_the_file_sort() {
+        let at = |name: &str, secs: u64| Entry { modified: Some(SystemTime::UNIX_EPOCH + Duration::from_secs(secs)), ..entry(name, true, 0, 0x10) };
+        let folders = || vec![at("Languages", 30), at("Skins", 10), at("Tools", 20)];
+        let auto = |file: &str, descending: bool| {
+            let mut list = folders();
+            let options = SortOptions { folder_mode: "Auto".into(), folder_descending: false, file_mode: file.into(), file_descending: descending, logical: true };
+            sort_entries(&mut list, &options, &|_| 0);
+            list.into_iter().map(|e| e.name).collect::<Vec<_>>()
+        };
+        assert_eq!(auto("Modified", false), ["Skins", "Tools", "Languages"]);
+        assert_eq!(auto("Modified", true), ["Languages", "Tools", "Skins"]);
+        assert_eq!(auto("Size", false), ["Languages", "Skins", "Tools"]);
+        assert_eq!(auto("Extension", true), ["Tools", "Skins", "Languages"]);
+        assert_eq!(auto("None", false), ["Languages", "Skins", "Tools"]);
+        assert_eq!(effective_folder_sort(&options("Name", "Modified", false)), ("Name", false));
     }
 
     #[test]
