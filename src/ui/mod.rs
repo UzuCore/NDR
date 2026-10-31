@@ -155,6 +155,8 @@ struct Pane {
     detail_x: f32,
     /// 지난 그림의 미리 보기 줄 자리(줄마다 위·높이, 맨 위 위치, 목록 높이, 열 수). 원본 형식 3 PageUp·PageDown이 쓴다.
     thumb_rows: Option<(Vec<f32>, Vec<f32>, f32, f32, usize)>,
+    /// 미리 보기 줄 높이 캐시(열쇠, 높이들): 목록·칸 수·크기가 같으면 다시 재지 않는다.
+    thumb_heights: Option<(u64, Vec<f32>)>,
     /// 원본 패널 폴더 트리(TNXShellTreeView, miShowFoldersClick): 펼친 폴더와, 펼침을 맞춘 마지막 패널 위치(SetPath).
     tree_open: HashSet<PathBuf>,
     tree_synced: Option<PathBuf>,
@@ -225,6 +227,7 @@ impl Pane {
             first_column: 0,
             detail_x: 0.0,
             thumb_rows: None,
+            thumb_heights: None,
             tree_open: HashSet::new(),
             tree_synced: None,
             tree_selected: None,

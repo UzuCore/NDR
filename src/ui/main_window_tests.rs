@@ -1795,3 +1795,42 @@ fn keydown_period_ctrl_tab_and_shift_drive_follow_the_original() {
     assert_eq!(app.panes[0].path, PathBuf::from(format!("{letter}:\\")), "Shift+{letter} = that drive's root (no remembered folder)");
     let _ = fs::remove_dir_all(root);
 }
+
+/// 큰 폴더(파일 2만 개)에서 한 장면 그리기 시간(손으로만 돌린다: cargo test --release -- --ignored big_folder_frame_time).
+#[test]
+#[ignore]
+fn big_folder_frame_time() {
+    let (root, ctx, mut app) = fixture("big-folder");
+    let big = root.join("big");
+    fs::create_dir_all(&big).unwrap();
+    for i in 0..20000 {
+        fs::write(big.join(format!("file{i:05}.txt")), b"").unwrap();
+    }
+    app.navigate(0, big.clone(), false);
+    wait(&mut app, &ctx);
+    assert_eq!(app.panes[0].entries.len(), 20001);
+    for view in ["Auto", "Details", "Names", "Thumbnails"] {
+        app.settings.set_text("LeftViewStyle", view);
+        let mut times = Vec::new();
+        for frame in 0..30 {
+            app.folder_rows.clear();
+            if frame % 3 == 0 {
+                app.panes[0].cursor = (app.panes[0].cursor + 997) % 20001;
+            }
+            let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 850.0))), ..Default::default() };
+            let start = Instant::now();
+            let _ = ctx.run(raw, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.columns(2, |columns| {
+                        app.pane_ui(&mut columns[0], 0, ctx);
+                        app.pane_ui(&mut columns[1], 1, ctx);
+                    });
+                });
+            });
+            times.push(start.elapsed().as_secs_f64() * 1000.0);
+        }
+        times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        eprintln!("{view}: median {:.2} ms, max {:.2} ms", times[times.len() / 2], times[times.len() - 1]);
+    }
+    let _ = fs::remove_dir_all(root);
+}

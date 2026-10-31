@@ -301,27 +301,49 @@ impl App {
         // 원본 UpdateDisplayThumbnails: 줄 높이 = 그 줄에서 가장 큰 GetThumbnailTextHeight(폭 = 썸네일 크기, 줄 간격 2, 최대 4줄) + 크기 + 12.
         let spacing_y = if thumbnails { 0.0 } else { ui.spacing().item_spacing.y };
         let heights: Vec<f32> = if thumbnails {
-            let pane = &self.panes[index];
             let font = egui::TextStyle::Body.resolve(ui.style());
-            ui.fonts_mut(|fonts| {
-                let line_height = fonts.row_height(&font);
-                (0..rows)
-                    .map(|r| {
-                        let tallest = visible[r * columns..((r + 1) * columns).min(visible.len())]
-                            .iter()
-                            .filter_map(|&row| pane.entries.get(row))
-                            .map(|entry| {
-                                let caption = match pane.drive_infos.get(&entry.path).filter(|_| entry.drive) {
-                                    Some((label, _, _)) => format!("{label} ({}:)", entry.name.trim_end_matches(['\\', ':'])),
-                                    None => entry.name.clone(),
-                                };
-                                thumbnail_text_height(&caption, thumb, 4, 2.0, line_height, entry.drive, &mut |c| fonts.glyph_width(&font, c))
+            let line_height = ui.fonts_mut(|fonts| fonts.row_height(&font));
+            // 고친 것(빠르기): 전에는 그림마다 모든 항목의 이름 폭을 재서(2만 개면 한 장면에 15ms) 미리 보기 보기가 느렸다.
+            // 원본처럼 목록·칸 수·크기가 바뀔 때만 다시 잰다(항목 차례·이름·드라이브 이름을 열쇠로).
+            let key = {
+                use std::hash::{Hash, Hasher};
+                let pane = &self.panes[index];
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                (columns, rows, thumb.to_bits(), line_height.to_bits(), font.size.to_bits(), format!("{:?}", font.family), pane.drive_infos.len()).hash(&mut hasher);
+                for &row in visible.iter() {
+                    row.hash(&mut hasher);
+                    if let Some(entry) = pane.entries.get(row) {
+                        (entry.name.as_str(), entry.drive).hash(&mut hasher);
+                    }
+                }
+                hasher.finish()
+            };
+            match &self.panes[index].thumb_heights {
+                Some((cached_key, cached)) if *cached_key == key => cached.clone(),
+                _ => {
+                    let pane = &self.panes[index];
+                    let heights: Vec<f32> = ui.fonts_mut(|fonts| {
+                        (0..rows)
+                            .map(|r| {
+                                let tallest = visible[r * columns..((r + 1) * columns).min(visible.len())]
+                                    .iter()
+                                    .filter_map(|&row| pane.entries.get(row))
+                                    .map(|entry| {
+                                        let caption = match pane.drive_infos.get(&entry.path).filter(|_| entry.drive) {
+                                            Some((label, _, _)) => format!("{label} ({}:)", entry.name.trim_end_matches(['\\', ':'])),
+                                            None => entry.name.clone(),
+                                        };
+                                        thumbnail_text_height(&caption, thumb, 4, 2.0, line_height, entry.drive, &mut |c| fonts.glyph_width(&font, c))
+                                    })
+                                    .fold(0.0f32, f32::max);
+                                thumb + 12.0 + tallest
                             })
-                            .fold(0.0f32, f32::max);
-                        thumb + 12.0 + tallest
-                    })
-                    .collect()
-            })
+                            .collect()
+                    });
+                    self.panes[index].thumb_heights = Some((key, heights.clone()));
+                    heights
+                }
+            }
         } else {
             vec![26.0; rows]
         };
