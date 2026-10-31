@@ -727,6 +727,8 @@ impl App {
     pub(super) fn refresh(&mut self, index: usize) {
         // C# RefreshPaneAsync: 그 패널의 빠른 찾기 입력을 버린다.
         self.typed_search[index] = TypedSearch::default();
+        // 원본은 자기 작업 동안 TNXShellChangeNotify를 끄고(SetActive(0)) 작업 뒤 다시 읽는다: 그 사이의 바뀜 알림은 버려진다.
+        self.panes[index].change_due = None;
         // 원본 새로 고침은 표시를 이름으로 되돌리므로(apply_listing) 새 목록이 올 때까지 표시를 둔다.
         let pane = &mut self.panes[index];
         pane.generation += 1;

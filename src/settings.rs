@@ -233,8 +233,8 @@ impl Settings {
             ("LeftPaneWidth", 50., 20., 80.),
             ("RightPaneWidth", 50., 20., 80.),
             // 원본 TfMain Constraints.MinWidth·MinHeight 250.
-            ("WindowWidth", 1450., 250., 8192.),
-            ("WindowHeight", 900., 250., 8192.),
+            ("WindowWidth", 800., 250., 8192.),
+            ("WindowHeight", 600., 250., 8192.),
             ("WindowLeft", 10., -16384., 16384.),
             ("WindowTop", 10., -16384., 16384.),
             ("TreeWindowLeft", 10., -16384., 16384.),

@@ -2170,6 +2170,14 @@ impl ShortcutMap {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// 원본 default/nexusfile.ini를 가져온 설정을 NDR_DEFAULT_INI_DUMP 파일로 쓴다(기본값 대조용, 손으로만 돌린다).
+    #[test]
+    #[ignore]
+    fn dump_original_default_ini() {
+        let (Some(ini), Some(out)) = (std::env::var_os("NDR_DEFAULT_INI"), std::env::var_os("NDR_DEFAULT_INI_DUMP")) else { return };
+        let settings = import_ini(Path::new(&ini)).unwrap();
+        fs::write(out, serde_json::to_string_pretty(&settings.values).unwrap()).unwrap();
+    }
     fn sandbox(label: &str) -> PathBuf {
         let root = std::env::temp_dir().join(format!("ndr-compat-{}-{label}", std::process::id()));
         fs::create_dir_all(&root).unwrap();

@@ -219,26 +219,29 @@ fn main() {
             .with_inner_size([1400.0, 850.0])
             // 원본 TfMain DFM Constraints.MinWidth·MinHeight = 250(바깥 크기). 고친 것: 전에는 800×480보다 작게 줄일 수 없었다.
             .with_min_inner_size([250.0, 250.0]);
-        // C# ApplyWindowBoundsFromSettings: 저장한 창이 있으면(HasWindowBounds) 그 크기·위치(화면 안으로)·최대화.
-        if settings.flag("HasWindowBounds", false) && options.smoke_seconds.is_none() {
-            let number = |key: &str, default: f64| settings.values.get(key).and_then(|v| v.as_f64()).unwrap_or(default) as f32;
-            let (width, height) = (number("WindowWidth", 1450.0), number("WindowHeight", 900.0));
+        // C# ApplyWindowBoundsFromSettings: 저장한 창이 있으면(HasWindowBounds) 그 크기·위치(화면 안으로)·최대화. 없으면 원본 처음 설정
+        // (default/nexusfile.ini [Window] left=10 top=10 width=800 height=600 maximized=0). 고친 것: 전에는 처음 실행이 1400×850이었다.
+        if options.smoke_seconds.is_none() {
+            let saved = settings.flag("HasWindowBounds", false);
+            let number = |key: &str, default: f64| if saved { settings.values.get(key).and_then(|v| v.as_f64()).unwrap_or(default) as f32 } else { default as f32 };
+            let (width, height) = (number("WindowWidth", 800.0), number("WindowHeight", 600.0));
             let (mut left, mut top) = (number("WindowLeft", 10.0), number("WindowTop", 10.0));
             if let Some(screen) = ndr::native::virtual_screen_points() {
                 (left, top) = ndr::native::clamp_window_position(left, top, width, height, screen);
             }
             // 저장 값은 원본·C# 판처럼 테두리를 포함한 바깥 크기이므로, 테두리·제목 줄 크기를 빼서 안쪽 크기로 연다.
             let (frame_width, frame_height) = ndr::native::window_frame_points().unwrap_or((16.0, 39.0));
-            let work = settings.flag("WindowMaximized", false).then(|| ndr::native::work_area_points(left + width / 2.0, top + height / 2.0)).flatten();
+            let maximized = saved && settings.flag("WindowMaximized", false);
+            let work = maximized.then(|| ndr::native::work_area_points(left + width / 2.0, top + height / 2.0)).flatten();
             if let Some((work_left, work_top, work_width, work_height)) = work {
                 // 최대화로 시작: winit with_maximized는 첫 그림 전에 창을 보여 깜박였다. 작업 영역 크기의 숨은 창으로 그린 뒤 최대화한다.
-                viewport = viewport.with_inner_size([(work_width - frame_width).max(800.0), (work_height - frame_height).max(480.0)]).with_position([work_left, work_top]);
+                viewport = viewport.with_inner_size([(work_width - frame_width).max(250.0), (work_height - frame_height).max(250.0)]).with_position([work_left, work_top]);
                 options.maximize_restore = Some(((left, top, width, height), false));
             } else {
                 viewport = viewport
-                    .with_inner_size([(width - frame_width).max(800.0), (height - frame_height).max(480.0)])
+                    .with_inner_size([(width - frame_width).max(250.0), (height - frame_height).max(250.0)])
                     .with_position([left, top])
-                    .with_maximized(settings.flag("WindowMaximized", false));
+                    .with_maximized(maximized);
             }
         }
         if options.smoke_seconds.is_some() {

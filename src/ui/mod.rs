@@ -1109,7 +1109,10 @@ impl App {
                         self.panes[index].change_due = Some((now + FOLDER_CHANGE_DELAY, 0));
                     } else {
                         self.panes[index].change_due = None;
+                        // 바뀜 알림으로 다시 읽을 때는 친 빠른 찾기 글을 지킨다(원본 FUN_00487ce8은 찾기 글을 건드리지 않는다).
+                        let typed = std::mem::take(&mut self.typed_search[index]);
                         self.refresh(index);
+                        self.typed_search[index] = typed;
                     }
                 } else {
                     ctx.request_repaint_after(due - now);
