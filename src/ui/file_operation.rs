@@ -544,7 +544,8 @@ impl App {
         let unreported: Vec<String> = errors.iter().skip(interactive.min(errors.len())).cloned().collect();
         let sound = |app: &App| {
             // 원본 0x43d9fc(completesound): PlaySoundW("<프로그램 폴더>\complete.wav", 0x22003). 낼 수 없으면 C#처럼 MessageBeep.
-            if app.settings.flag("PlayCompletionSound", false) && !(app.system.play_wave)(Some(&app.resources.join("complete.wav"))) {
+            // 원본 처음 설정 completesound=1(생성자 +0xdc = 1).
+            if app.settings.flag("PlayCompletionSound", true) && !(app.system.play_wave)(Some(&app.resources.join("complete.wav"))) {
                 native::completion_sound();
             }
         };

@@ -437,7 +437,7 @@ impl SettingsForm {
             check("UseContentComparison", t(ko, "폴더 비교에서 파일 내용 확인", "Compare file contents in folder comparison"), true),
             check("ShowHiddenFoldersInTree", t(ko, "폴더 트리에서 숨김 폴더 표시", "Show hidden folders in the folder tree"), false),
             check("ShowFolderTreeIcons", t(ko, "폴더 트리 아이콘 표시", "Show folder tree icons"), true),
-            check("PlayCompletionSound", t(ko, "작업 완료 소리", "Play a sound when an operation completes"), false),
+            check("PlayCompletionSound", t(ko, "작업 완료 소리", "Play a sound when an operation completes"), true),
             check("PlayWaveInProgram", lang("Caption.chkPlayWave", "Play .wav(Wave Sound) file in this program."), true),
             check("UseSingleInstance", t(ko, "한 번에 NDR 하나만 실행", "Run only one NDR at a time"), false),
         ]);

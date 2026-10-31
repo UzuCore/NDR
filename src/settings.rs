@@ -222,6 +222,10 @@ impl Settings {
         {
             self.values.insert("EscapeKeyAction".into(), Value::Null);
         }
+        // 원본 처음 설정(default/nexusfile.ini esckey=0, 생성자 +0xd8 = 0): Esc = 최소화. 고른 적이 없으면 0.
+        if !self.values.contains_key("EscapeKeyAction") {
+            self.values.insert("EscapeKeyAction".into(), json!(0));
+        }
         for (key, default, min, max) in [
             // 원본 패널 폴더 트리 너비(ini treewidth1/2 처음 120, 나눔 막대 MinSize 50 — FUN_0048da38).
             ("LeftFolderTreeWidth", 120., 50., 600.),
@@ -594,6 +598,7 @@ mod tests {
         assert!(settings.flag("ShowLeftFolderTree", false));
         assert!(settings.flag("ShowRightFolderTree", false));
         assert_eq!(settings.values["PathClickMode"], 1);
+        assert_eq!(settings.values["EscapeKeyAction"], 0, "original default ini esckey=0 (minimize)");
         assert!(settings.flag("UseNexusFileColorMap", false));
         assert_eq!(settings.text("Theme", ""), "Black");
         assert!(!settings.flag("UseLogicalSort", true));
