@@ -840,6 +840,7 @@ fn import_sidecars(settings: &mut Settings, parent: &Path, ini: &Path) -> Result
         settings.set_strings("Favorites", slots.iter().map(|(_, v)| v.clone()).collect());
         settings.set_strings("FavoriteNames", slots.into_iter().map(|(n, _)| n).collect());
     }
+    // Original tabs.save writer FUN_0046dad8: "NEXUSFILETABS.VER1", then "[Tab%d]" per pane followed by that pane's tab lines, saved as Unicode.
     if let Some(text) = read_utf16_sidecar(&parent.join("tabs.save"))? {
         let lines: Vec<_> = text.lines().collect();
         let mut panes: [Vec<String>; 2] = [Vec::new(), Vec::new()];
@@ -1968,6 +1969,9 @@ const SHIFTED_CODES: &[u16] = &[
 ];
 
 /// Original Delphi TShortCut: low byte VK, 0x2000 Shift, 0x4000 Ctrl, 0x8000 Alt.
+/// Original FUN_0047a158 (text → shortcut): splits at '+' (not the last character), Ctrl/Alt/Shift set the state, one character is looked up
+/// in the shifted table (adds Shift), then the punctuation table, else CharUpperA; Bksp/Esc/Ins/Del become the full names before the
+/// 0x29-entry key-name table. The reverse is FUN_0047a458.
 pub fn text_to_shortcut(text: &str) -> u16 {
     let mut key = 0;
     let mut state = 0;
@@ -2025,6 +2029,8 @@ pub fn text_to_shortcut(text: &str) -> u16 {
     }
     if key > 255 { 0 } else { key | state }
 }
+/// Original FUN_0047a458 (shortcut → text): "Ctrl+", "Shift+", "Alt+" in that order, then the key name table, the punctuation table, or
+/// the character itself for '0'..'Z'.
 pub fn shortcut_to_text(shortcut: u16) -> String {
     let mut result = String::new();
     for (mask, text) in [(0x4000, "Ctrl+"), (0x2000, "Shift+"), (0x8000, "Alt+")] {

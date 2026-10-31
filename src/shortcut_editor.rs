@@ -240,6 +240,8 @@ pub fn set_line(lines: &[String], index: usize, text: &str) -> Vec<String> {
 }
 
 /// Saved text. FUN_0047cb40 saves without a header, mixing with defaults on the next start; NDR writes the header so edited lines are read as is (approved fix).
+/// The loader FUN_0047c7b0: a missing file gets the defaults with the "NEXUSFILESHORTCUT1.0" header; a file with the header replaces the
+/// list (lines after it); a file without it keeps the default names and takes each value found by name, then is saved with the header.
 pub fn to_file_text(lines: &[String]) -> String {
     format!("NEXUSFILESHORTCUT1.0\r\n{}\r\n", lines.join("\r\n"))
 }
