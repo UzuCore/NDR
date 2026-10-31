@@ -1934,3 +1934,49 @@ fn switching_to_a_tab_whose_folder_is_gone_follows_the_original() {
     assert_eq!(app.panes[0].path, left.join("folder"), "the nearest existing parent of the vanished tab folder");
     let _ = fs::remove_dir_all(root);
 }
+
+
+/// 사용자 보고: 압축 파일 안에서 ".."로 나오지 못하고 안의 파일을 복사하지 못했다. 압축 파일 맨 위의 ".."는 압축 파일이 있는 폴더를
+/// 다시 읽어 그 압축 파일에 커서를 두고, 압축 안 파일은 다른 패널로 복사(풀기)된다.
+#[test]
+fn leaving_an_archive_with_dotdot_relists_the_folder_and_inner_files_copy_out() {
+    let (root, ctx, mut app) = fixture("archive-leave");
+    let left = app.panes[0].path.clone();
+    let right = app.panes[1].path.clone();
+    let source = root.join("inside.txt");
+    fs::write(&source, b"inner").unwrap();
+    let zip = left.join("pack.zip");
+    ndr::archive::create(&[source.clone()], &zip, None, &std::sync::atomic::AtomicBool::new(false)).unwrap();
+    app.refresh(0);
+    wait(&mut app, &ctx);
+    app.active = 0;
+    app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == "pack.zip").unwrap();
+    app.open_current();
+    wait(&mut app, &ctx);
+    assert!(app.panes[0].archive.is_some());
+    assert!(app.panes[0].entries.iter().any(|e| e.name == "inside.txt"), "{:?}", app.panes[0].entries.iter().map(|e| &e.name).collect::<Vec<_>>());
+    // 안의 파일을 다른 패널로 복사(풀기).
+    app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == "inside.txt").unwrap();
+    app.copy_to_other(0, false, &ctx);
+    let end = Instant::now() + Duration::from_secs(30);
+    while !right.join("inside.txt").exists() {
+        assert!(Instant::now() < end, "copy out of the archive timed out (status: {})", app.status);
+        app.poll(&ctx);
+        if !app.msgboxes.is_empty() {
+            app.answer_message_box(6, &ctx);
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(fs::read(right.join("inside.txt")).unwrap(), b"inner");
+    // 맨 위의 "..": 압축 밖으로, 그 폴더를 다시 읽고 압축 파일에 커서.
+    app.active = 0;
+    app.panes[0].cursor = 0;
+    assert!(app.panes[0].entries[0].is_parent());
+    app.open_current();
+    wait(&mut app, &ctx);
+    assert!(app.panes[0].archive.is_none());
+    assert_eq!(app.panes[0].path, left);
+    assert_eq!(app.panes[0].entries.get(app.panes[0].cursor).map(|e| e.name.as_str()), Some("pack.zip"), "the cursor is on the archive we left");
+    assert!(!app.panes[0].entries.iter().any(|e| e.name == "inside.txt"), "the archive listing is gone");
+    let _ = fs::remove_dir_all(root);
+}

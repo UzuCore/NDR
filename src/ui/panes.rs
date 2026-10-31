@@ -882,7 +882,11 @@ impl App {
             self.active = active;
         }
         let pane = &mut self.panes[index];
-        if pane.path == path && !pane.loading {
+        // 같은 위치면 건너뛴다. 고친 것: 전에는 경로만 비교해, 압축 파일 맨 위에서 ".."로 나오면(압축은 지웠지만 패널 경로는 그
+        // 압축 파일이 있는 폴더 그대로라) 다시 읽지 않아 압축 안 목록이 남았고, 그 항목을 로컬 파일로 다뤄 복사도 되지 않았다.
+        // 지금 보이는 목록(listed)이 바로 그 로컬 폴더일 때만 건너뛴다.
+        let same_listing = pane.archive.is_none() && pane.remote.is_none() && pane.listed.as_deref() == Some(format!("dir|{}", path.display()).to_lowercase().as_str());
+        if pane.path == path && !pane.loading && same_listing {
             return;
         }
         // 원본 위치 바뀌기 전 사건(위치 +0x38 = FUN_0048631c): 그 패널의 알림 창(TfMessage, +0x30c)이 떠 있으면 닫고 표시를 지운다
