@@ -825,9 +825,14 @@ impl Commit {
                             .to_string_lossy()
                             .into_owned();
                         let parent = dest.parent().ok_or("Invalid archive destination parent")?;
+                        // 고친 것: 파일은 번호를 확장자 앞에 붙인다("보고서 (1).txt"). 전에는 "보고서.txt (1)"이 되어 확장자 연결이 끊겼다.
+                        let (stem, extension) = match name.rfind('.') {
+                            Some(dot) if dot > 0 => (&name[..dot], &name[dot..]),
+                            _ => (name.as_str(), ""),
+                        };
                         let mut index = 1;
                         loop {
-                            let candidate = parent.join(format!("{name} ({index})"));
+                            let candidate = parent.join(format!("{stem} ({index}){extension}"));
                             if fs::symlink_metadata(&candidate).is_err() {
                                 dest = candidate;
                                 break;
@@ -1847,6 +1852,20 @@ mod interactive_tests {
             .is_err()
         );
         assert!(!p.join("not-created").exists());
+        fs::remove_dir_all(p).unwrap();
+    }
+    #[test]
+    fn renamed_extracted_files_keep_their_extension_last() {
+        let p = super::tests::fixture();
+        fs::write(p.join("report.txt"), b"new").unwrap();
+        let cancel = AtomicBool::new(false);
+        create(&[p.join("report.txt")], &p.join("r.7z"), None, &cancel).unwrap();
+        fs::create_dir(p.join("out")).unwrap();
+        fs::write(p.join("out/report.txt"), b"old").unwrap();
+        extract_interactive(&p.join("r.7z"), &p.join("out"), None, &cancel, &mut |_, _| ConflictChoice::Rename, &mut |_, _| None).unwrap();
+        assert_eq!(fs::read(p.join("out/report.txt")).unwrap(), b"old");
+        assert_eq!(fs::read(p.join("out/report (1).txt")).unwrap(), b"new");
+        assert!(!p.join("out/report.txt (1)").exists());
         fs::remove_dir_all(p).unwrap();
     }
     fn mixed_zip(p: &Path) {

@@ -463,6 +463,37 @@ mod tests {
         h.join().unwrap();
         all
     }
+    #[test]
+    fn cancelled_resume_restores_the_existing_part() {
+        let p = fixture();
+        fs::create_dir(p.join("in")).unwrap();
+        fs::create_dir(p.join("out")).unwrap();
+        let data: Vec<u8> = (0..48u32 * 1024 * 1024).map(|i| (i % 251) as u8).collect();
+        fs::write(p.join("in/a"), &data).unwrap();
+        let existing = 1024 * 1024;
+        fs::write(p.join("out/a"), &data[..existing]).unwrap();
+        let (tx, rx) = mpsc::channel();
+        let flag = Arc::new(AtomicBool::new(false));
+        let (s, d, worker_flag) = (p.join("in/a"), p.join("out"), flag.clone());
+        let h = thread::spawn(move || run(Operation::Copy { sources: vec![s], destination: d, move_files: false }, tx, worker_flag));
+        let mut resumed = false;
+        for e in rx {
+            match e {
+                Event::Conflict { reply, .. } => {
+                    reply.send(ConflictChoice::Resume).unwrap();
+                    resumed = true;
+                }
+                // 이어 쓴 첫 조각 뒤에 취소한다.
+                Event::Progress { bytes, .. } if resumed && bytes > 0 => flag.store(true, Ordering::SeqCst),
+                _ => {}
+            }
+        }
+        h.join().unwrap();
+        assert!(resumed);
+        assert_eq!(fs::metadata(p.join("out/a")).unwrap().len(), existing as u64, "the partly appended bytes are cut off again");
+        assert_eq!(fs::read(p.join("out/a")).unwrap(), &data[..existing]);
+        fs::remove_dir_all(p).unwrap();
+    }
     pub(super) fn prepared() -> PathBuf {
         let p = fixture();
         fs::create_dir(p.join("in")).unwrap();
@@ -573,7 +604,7 @@ mod tests {
 }
 use std::{
     fs::{File, OpenOptions},
-    io::{Read, Write},
+    io::{Read, Seek, Write},
     sync::mpsc,
     time::Duration,
 };
@@ -1341,19 +1372,34 @@ impl Job {
             writable.set_readonly(false);
             fs::set_permissions(d, writable).map_err(|e| e.to_string())?;
         }
-        let mut out = OpenOptions::new().append(true).open(d).map_err(|e| e.to_string())?;
-        let mut buf = vec![0; 1024 * 1024];
-        loop {
-            self.check()?;
-            let n = input.read(&mut buf).map_err(|e| e.to_string())?;
-            if n == 0 {
-                break;
+        let mut out = OpenOptions::new().write(true).open(d).map_err(|e| e.to_string())?;
+        let written = (|| -> Result<(), String> {
+            out.seek(std::io::SeekFrom::Start(existing)).map_err(|e| e.to_string())?;
+            let mut buf = vec![0; 1024 * 1024];
+            loop {
+                self.check()?;
+                let n = input.read(&mut buf).map_err(|e| e.to_string())?;
+                if n == 0 {
+                    break;
+                }
+                out.write_all(&buf[..n]).map_err(|e| e.to_string())?;
+                self.bytes += n as u64;
+                self.progress(s);
             }
-            out.write_all(&buf[..n]).map_err(|e| e.to_string())?;
-            self.bytes += n as u64;
-            self.progress(s);
+            out.sync_all().map_err(|e| e.to_string())
+        })();
+        if let Err(error) = written {
+            // 고친 것: 이어 쓰다 취소하거나 실패하면 대상이 중간 크기로 남았다. 이어 쓰기 전 크기로 잘라 되돌린다.
+            let restored = out.set_len(existing).and_then(|()| out.sync_all());
+            drop(out);
+            if self.options.remove_read_only && original.readonly() {
+                let _ = fs::set_permissions(d, original);
+            }
+            return Err(match restored {
+                Ok(()) => error,
+                Err(truncate) => format!("{error} (the partly resumed file could not be restored: {truncate})"),
+            });
         }
-        out.sync_all().map_err(|e| e.to_string())?;
         preserve_times(&out, m)?;
         drop(out);
         let mut permissions = m.permissions();

@@ -26,18 +26,18 @@ pub(super) fn thumbnail_lines(text: &str, width: f32, max_lines: usize, glyph: &
             break;
         }
         let rest = &chars[offset..];
-        let n = fit(rest, glyph);
+        // 고친 것: 칸이 첫 글자보다 좁으면 빈 줄만 쌓였다. 줄마다 적어도 한 글자는 넣는다.
+        let n = fit(rest, glyph).max(1);
         if (line < max_lines && offset + n < chars.len()) || extent(rest, glyph) <= width {
             lines.push(rest[..n].iter().collect());
             offset += n;
         } else {
-            for keep in (1..n).rev() {
+            let shortened = (1..n).rev().find_map(|keep| {
                 let candidate: String = rest[..keep].iter().chain("...".chars().collect::<Vec<_>>().iter()).collect();
-                if extent(&candidate.chars().collect::<Vec<_>>(), glyph) <= width {
-                    lines.push(candidate);
-                    break;
-                }
-            }
+                (extent(&candidate.chars().collect::<Vec<_>>(), glyph) <= width).then_some(candidate)
+            });
+            // 고친 것: "..."를 붙일 자리가 없으면 마지막 줄이 통째로 빠졌다. 그때는 들어가는 글자만 보인다.
+            lines.push(shortened.unwrap_or_else(|| rest[..n].iter().collect()));
             break;
         }
     }
@@ -57,7 +57,8 @@ pub(super) fn thumbnail_text_height(text: &str, width: f32, max_lines: usize, sp
                 total += glyph(c);
                 total <= width
             })
-            .count();
+            .count()
+            .max(1);
         if chars.len() <= offset + n || lines >= max_lines.max(1) {
             break;
         }
@@ -754,5 +755,14 @@ mod tests {
         assert_eq!(thumbnail_text_height("abcdefg", 35.0, 4, 2.0, 15.0, false, &mut glyph), 51.0);
         assert_eq!(thumbnail_text_height("abcdefghijklmnop", 35.0, 4, 2.0, 15.0, false, &mut glyph), 68.0);
         assert_eq!(thumbnail_text_height("ab", 35.0, 4, 2.0, 15.0, true, &mut glyph), 25.0);
+    }
+
+    #[test]
+    fn captions_narrower_than_one_glyph_still_end() {
+        // 칸(8px)이 글자(10px)보다 좁다: 전에는 높이 계산이 끝나지 않았고 이름이 빈 줄로 보였다.
+        assert_eq!(thumbnail_text_height("abcdefg", 8.0, 4, 2.0, 15.0, false, &mut glyph), 68.0);
+        assert_eq!(thumbnail_lines("abcdefg", 8.0, 4, &mut glyph), ["a", "b", "c", "d"]);
+        // 넷째 줄에 "..."를 붙일 자리가 없으면 들어가는 글자만 남긴다(전에는 그 줄이 빠졌다).
+        assert_eq!(thumbnail_lines("abcdefghij", 12.0, 4, &mut glyph), ["a", "b", "c", "d"]);
     }
 }
