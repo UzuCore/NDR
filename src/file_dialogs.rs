@@ -8,7 +8,7 @@ use windows::{
     Win32::{
         System::Com::{CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize},
         UI::Shell::{
-            Common::COMDLG_FILTERSPEC, FOS_ALLOWMULTISELECT, FOS_FILEMUSTEXIST, FOS_FORCEFILESYSTEM, FOS_OVERWRITEPROMPT, FOS_PICKFOLDERS, FileOpenDialog, FileSaveDialog, IFileDialog, IFileOpenDialog, IFileSaveDialog, IShellItem,
+            Common::COMDLG_FILTERSPEC, FOS_ALLOWMULTISELECT, FOS_FILEMUSTEXIST, FOS_FORCEFILESYSTEM, FOS_OVERWRITEPROMPT, FileOpenDialog, FileSaveDialog, IFileDialog, IFileOpenDialog, IFileSaveDialog, IShellItem,
             SHCreateItemFromParsingName, SIGDN_FILESYSPATH,
         },
     },
@@ -57,16 +57,66 @@ fn prepare(dialog: &IFileDialog, title: &str, folder: Option<&Path>) {
     }
 }
 
-/// C# OpenFolderDialog.
+/// Original folder picker FUN_0040cc50 (Add folder in Find, BrowseStartPath / BrowseSystemPath in Preferences): SHBrowseForFolderW with
+/// flags 0x49 (only file system folders, new dialog style) and, when the start folder exists, callback FUN_0040ca60 selecting it on
+/// BFFM_INITIALIZED. Previously the newer folder version of the open dialog was shown.
 pub fn browse_folder(title: &str, initial: Option<&Path>) -> Option<PathBuf> {
+    shell_browse(title, initial, None, 0x49)
+}
+
+/// SHBrowseForFolderW under `root` (a CSIDL, or the desktop) with `flags`; `initial` is selected when it is an existing folder.
+/// The chosen file system path; None on cancel or when the choice has no path.
+fn shell_browse(title: &str, initial: Option<&Path>, root: Option<i32>, flags: u32) -> Option<PathBuf> {
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+    use windows_sys::Win32::{
+        Foundation::{HWND, LPARAM},
+        UI::{
+            Shell::{BFFM_INITIALIZED, BFFM_SETSELECTIONW, BROWSEINFOW, Common::ITEMIDLIST, SHBrowseForFolderW, SHGetFolderLocation, SHGetPathFromIDListW},
+            WindowsAndMessaging::SendMessageW,
+        },
+    };
+    unsafe extern "system" fn select_initial(hwnd: HWND, message: u32, _lparam: LPARAM, data: LPARAM) -> i32 {
+        if message == BFFM_INITIALIZED && data != 0 {
+            // SAFETY: data points to the NUL-terminated wide path that shell_browse keeps alive while the dialog runs.
+            unsafe { SendMessageW(hwnd, BFFM_SETSELECTIONW, 1, data) };
+        }
+        0
+    }
+    let wide = |text: &std::ffi::OsStr| text.encode_wide().chain(Some(0)).collect::<Vec<u16>>();
+    let title = wide(std::ffi::OsStr::new(title));
+    let initial = initial.filter(|p| p.is_dir()).map(|p| wide(p.as_os_str()));
+    let mut display = [0u16; 260];
+    let mut chosen_path = [0u16; 260];
     let _com = Com::new();
-    // SAFETY: COM object lifetime is managed by the windows crate wrappers.
+    // SAFETY: every buffer passed to the shell outlives the modal call; the ID lists are freed with CoTaskMemFree.
     unsafe {
-        let dialog: IFileOpenDialog = CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER).ok()?;
-        dialog.SetOptions(dialog.GetOptions().ok()? | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM).ok()?;
-        prepare(&dialog.cast().ok()?, title, initial);
-        dialog.Show(None).ok()?;
-        item_path(&dialog.GetResult().ok()?)
+        let mut root_list: *mut ITEMIDLIST = std::ptr::null_mut();
+        if let Some(csidl) = root
+            && SHGetFolderLocation(std::ptr::null_mut(), csidl, std::ptr::null_mut(), 0, &mut root_list) != 0
+        {
+            return None;
+        }
+        let info = BROWSEINFOW {
+            hwndOwner: std::ptr::null_mut(),
+            pidlRoot: root_list,
+            pszDisplayName: display.as_mut_ptr(),
+            lpszTitle: title.as_ptr(),
+            ulFlags: flags,
+            lpfn: initial.is_some().then_some(select_initial as unsafe extern "system" fn(HWND, u32, LPARAM, LPARAM) -> i32),
+            lParam: initial.as_ref().map_or(0, |w| w.as_ptr() as LPARAM),
+            iImage: 0,
+        };
+        let chosen = SHBrowseForFolderW(&info);
+        if !root_list.is_null() {
+            CoTaskMemFree(Some(root_list as *const _));
+        }
+        if chosen.is_null() {
+            return None;
+        }
+        let found = SHGetPathFromIDListW(chosen, chosen_path.as_mut_ptr()) != 0;
+        CoTaskMemFree(Some(chosen as *const _));
+        let length = chosen_path.iter().position(|&c| c == 0).unwrap_or(chosen_path.len());
+        (found && length > 0).then(|| PathBuf::from(std::ffi::OsString::from_wide(&chosen_path[..length])))
     }
 }
 
@@ -150,52 +200,5 @@ pub fn save_file(title: &str, initial: Option<&Path>, file_name: &str, filters: 
 /// Original miNetwork (0x4416ec -> FUN_0040d040): SHBrowseForFolderW (root SHGetFolderLocation(CSIDL_NETWORK 0x12), title, 0x249,
 /// callback FUN_0040cf90 selects the initial folder on BFFM_INITIALIZED). The chosen file system path; None on cancel or when there is no path.
 pub fn browse_network(title: &str, initial: Option<&Path>) -> Option<PathBuf> {
-    use std::os::windows::ffi::{OsStrExt, OsStringExt};
-    use windows_sys::Win32::{
-        Foundation::{HWND, LPARAM},
-        System::Com::CoTaskMemFree,
-        UI::{
-            Shell::{BFFM_INITIALIZED, BFFM_SETSELECTIONW, BROWSEINFOW, CSIDL_NETWORK, Common::ITEMIDLIST, SHBrowseForFolderW, SHGetFolderLocation, SHGetPathFromIDListW},
-            WindowsAndMessaging::SendMessageW,
-        },
-    };
-    unsafe extern "system" fn select_initial(hwnd: HWND, message: u32, _lparam: LPARAM, data: LPARAM) -> i32 {
-        if message == BFFM_INITIALIZED && data != 0 {
-            // SAFETY: data points to the NUL-terminated wide path that browse_network keeps alive while the dialog runs.
-            unsafe { SendMessageW(hwnd, BFFM_SETSELECTIONW, 1, data) };
-        }
-        0
-    }
-    let wide = |text: &std::ffi::OsStr| text.encode_wide().chain(Some(0)).collect::<Vec<u16>>();
-    let title = wide(std::ffi::OsStr::new(title));
-    let initial = initial.filter(|p| p.is_dir()).map(|p| wide(p.as_os_str()));
-    let mut display = [0u16; 260];
-    let mut chosen_path = [0u16; 260];
-    let _com = Com::new();
-    // SAFETY: every buffer passed to the shell outlives the modal call; the ID lists are freed with CoTaskMemFree.
-    unsafe {
-        let mut root: *mut ITEMIDLIST = std::ptr::null_mut();
-        if SHGetFolderLocation(std::ptr::null_mut(), CSIDL_NETWORK as i32, std::ptr::null_mut(), 0, &mut root) != 0 {
-            return None;
-        }
-        let info = BROWSEINFOW {
-            hwndOwner: std::ptr::null_mut(),
-            pidlRoot: root,
-            pszDisplayName: display.as_mut_ptr(),
-            lpszTitle: title.as_ptr(),
-            ulFlags: 0x249,
-            lpfn: Some(select_initial),
-            lParam: initial.as_ref().map_or(0, |w| w.as_ptr() as LPARAM),
-            iImage: 0,
-        };
-        let chosen = SHBrowseForFolderW(&info);
-        CoTaskMemFree(root as *const _);
-        if chosen.is_null() {
-            return None;
-        }
-        let found = SHGetPathFromIDListW(chosen, chosen_path.as_mut_ptr()) != 0;
-        CoTaskMemFree(chosen as *const _);
-        let length = chosen_path.iter().position(|&c| c == 0).unwrap_or(chosen_path.len());
-        (found && length > 0).then(|| PathBuf::from(std::ffi::OsString::from_wide(&chosen_path[..length])))
-    }
+    shell_browse(title, initial, Some(windows_sys::Win32::UI::Shell::CSIDL_NETWORK as i32), 0x249)
 }

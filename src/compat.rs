@@ -1679,6 +1679,8 @@ fn normalized_description(value: &str) -> Option<String> {
         Some(value.replace(['\r', '\n'], " "))
     }
 }
+/// Original FUN_0040edf8 saves a description by rewriting descript.dat from the pane's items ("%s=%s" for every item with text;
+/// deleted when none). Fixed: entries of names not in the listing (hidden, filtered) were lost that way; only this name changes here.
 pub fn set_description(
     directory: &Path,
     name: &str,
@@ -1747,6 +1749,8 @@ pub fn rename_descriptions(
     }
     write_descriptions(directory, &output)
 }
+/// Original FUN_0040f020 (after a delete): drops the deleted names from that folder's descript.dat and saves it (attributes 0x20, then
+/// 0x22) or deletes it when empty.
 pub fn remove_descriptions(directory: &Path, names: &[String]) -> Result<(), String> {
     let mut entries = description_data(directory)?;
     let count = entries.len();
