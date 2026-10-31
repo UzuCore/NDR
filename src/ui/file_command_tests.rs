@@ -1742,3 +1742,34 @@ fn archive_conflicts_ask_and_drops_into_archive_folders() {
     assert!(right.join("c.txt").is_file(), "a plain drop copies");
     let _ = fs::remove_dir_all(root);
 }
+
+/// FUN_00405e60: an archive without folder entries still lists the implied folder, dated by the entry that made it.
+#[test]
+fn implied_archive_folders_take_the_date_of_their_first_entry() {
+    let (root, ctx, mut app) = fixture("archive-implied-folder", "en");
+    let left = root.join("left");
+    let source = root.join("src");
+    fs::create_dir_all(source.join("dir/sub")).unwrap();
+    fs::write(source.join("dir/sub/c.txt"), b"c").unwrap();
+    let zip = left.join("pack.zip");
+    // Relative file path only: 7-Zip stores "dir\sub\c.txt" with no folder entries.
+    let status = std::process::Command::new(ndr::archive::seven_zip_path().unwrap())
+        .current_dir(&source)
+        .args(["a", "-tzip", "-bso0", "-bsp0"])
+        .arg(&zip)
+        .arg("dir\\sub\\c.txt")
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let listed = ndr::archive::list(&zip, None).unwrap();
+    assert!(listed.iter().all(|e| !e.is_dir), "no folder entries: {:?}", listed.iter().map(|e| e.key.clone()).collect::<Vec<_>>());
+    app.refresh(0);
+    wait_listing(&mut app, &ctx);
+    app.active = 0;
+    app.panes[0].cursor = row(&app, 0, "pack.zip");
+    app.open_current();
+    wait_listing(&mut app, &ctx);
+    let dir = app.panes[0].entries.iter().find(|e| e.name == "dir").cloned().expect("implied folder");
+    assert!(dir.is_dir && dir.modified.is_some() && dir.modified == listed[0].modified, "{:?} vs {:?}", dir.modified, listed[0].modified);
+    let _ = fs::remove_dir_all(root);
+}

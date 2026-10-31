@@ -815,13 +815,14 @@ impl App {
                                     continue;
                                 }
                                 let folder = pieces.next().is_some() || e.is_dir;
-                                // 그 항목 자신이면 그 시각. 아래 항목에서 나온 폴더는 폴더 항목이 나올 때 채운다.
+                                // 그 항목 자신이면 그 시각. 아래 항목에서 나온 폴더(압축에 폴더 항목이 없음)는 원본 FUN_00405e60처럼
+                                // 그 폴더를 만든 첫 아래 항목의 시각(+0x414/0x418)을 쓰고, 폴더 항목이 나오면 그 시각으로 바꾼다.
                                 let slot = entries.entry(name.to_owned()).or_insert(Entry {
                                     path: PathBuf::from(format!("{}{name}", location.prefix)),
                                     name: name.to_owned(),
                                     is_dir: folder,
                                     size: if folder { 0 } else { e.size },
-                                    modified: None,
+                                    modified: e.modified,
                                     hidden: false,
                                     attributes: if folder { 0x10 } else { 0 },
                                     drive: false,
