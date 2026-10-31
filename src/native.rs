@@ -378,6 +378,8 @@ fn shell_id_list(paths: &[PathBuf]) -> Option<Vec<u8>> {
     }
     result
 }
+/// Paste reads CF_HDROP and Preferred DropEffect. The original drop target (TNXDropFileTarget DoGetData 0x7b2920) takes CF_HDROP first and then
+/// NUL-separated Unicode and ANSI name lists from its other formats; window drops arrive here through winit as CF_HDROP paths.
 pub fn read_clipboard_files() -> Result<(Vec<PathBuf>, bool), String> {
     let _clipboard = Clipboard::open()?;
     let handle = unsafe { GetClipboardData(15) };
@@ -421,6 +423,8 @@ pub fn drives() -> Vec<PathBuf> {
 /// Stands in for the original SHChangeNotify handling (FUN_00442bc8: SHCNE_DRIVEADD → TNXDriveList.Add, SHCNE_DRIVEREMOVED → Delete, media insert/eject → Update,
 /// after which FUN_00442d80 redraws each pane's drive bar, buttons and info bar): a separate thread checks the GetLogicalDrives bits every second and
 /// calls `on_change` when they change (the UI only wakes on a change). Stops when `stop` is set.
+/// Add (0x7b7948) and Update (0x7b7ad8) both add an unknown root whose GetDriveTypeW is not 0/1 and is in the list's type set, then re-sort the
+/// list (comparator 0x7b7924); a known root is refreshed (TNXDriveInfo.Refresh). Re-reading the whole list gives the same result.
 pub fn spawn_drive_watch(stop: std::sync::Arc<std::sync::atomic::AtomicBool>, on_change: impl Fn() + Send + 'static) {
     use std::sync::atomic::Ordering;
     std::thread::spawn(move || {

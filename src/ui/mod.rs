@@ -1312,6 +1312,8 @@ impl App {
                     pane.cursor = if old_cursor < pane.entries.len() { old_cursor } else { (pane.entries.len() - drives).saturating_sub(1) };
                 }
                 for name in &marks {
+                    // Original FileListChanged (0x7d79c8) -> FixSelection (0x7dcc78): every item is unmarked, the TNXSelectedFiles names are collected and
+                    // cleared, and each name still found in the new list (FUN_007d2ee4) is marked and added again.
                     if let Some(row) = pane.entries.iter().position(|e| !e.drive && !e.is_parent() && ndr::names::equals_ignore_case(&e.name, name)) {
                         pane.selected.insert(row);
                     }

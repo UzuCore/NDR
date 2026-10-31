@@ -530,6 +530,7 @@ pub(super) enum HoldStep {
 /// DoScrollTimer (0x7ce734, then 80 ms) pages the track toward the pointer and stops once the thumb covers it. So a held arrow pauses
 /// while the pointer is off it and resumes on return, and a held track stops for the rest of the press once the pointer leaves the
 /// track or the thumb reaches it. Fixed earlier NDR behavior that kept repeating wherever the held pointer went.
+/// Constructor (0x7ce368): range 0..100, position 0, buttons 16 px at 96 DPI (MulDiv by the screen DPI), the repeat timer created off at 80 ms.
 pub(super) fn scroll_hold(ui: &egui::Ui, id: egui::Id, buttons: [(&egui::Response, f32); 2], track: &egui::Response, thumb: egui::Rect, pointer: Option<egui::Pos2>) -> HoldStep {
     let stopped_id = id.with("track-stopped");
     if let Some((button, step)) = buttons.iter().find(|(r, _)| r.is_pointer_button_down_on()) {
@@ -980,7 +981,7 @@ impl App {
         let mut new_first = None;
         let menu = button(ui, 0, slot(rect.left(), rect.top()), true, "menu");
         let mut over_button = menu.hovered();
-        // Original UpdateMenu: "&%d. %s" (1-9), then "&%c. %s" (A-), the current tab checked (MenuPopup 0x7d19c4). Typing that letter while the menu is open goes to that tab (Windows menu access letter).
+        // Original UpdateMenu (0x7d182c): "&%d. %s" (1-9), then "&%c. %s" (A-), the current tab checked (MenuPopup 0x7d19c4). Typing that letter while the menu is open goes to that tab (Windows menu access letter).
         menu_popup(&menu).show(|ui| {
             for (t, name) in names.iter().enumerate() {
                 let key = if t < 9 { char::from(b'1' + t as u8) } else { char::from(b'A' + (t - 9) as u8) };
