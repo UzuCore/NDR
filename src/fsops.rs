@@ -599,7 +599,9 @@ use std::{
     time::Duration,
 };
 /// Original FUN_004138d4 (inside GetFileListToWork FUN_00413ac4): files and bytes below the chosen items, so the progress window
-/// knows the totals before copying. Reparse points and (with descriptions on) description files are not counted because the copy
+/// knows the totals before copying. The job thread FUN_0041377c first runs FUN_0041381c (counters to 0, every item -7 = not done,
+/// then GetFileListToWork), then copy/move FUN_004153a4 or delete FUN_004156c4, and posts 0x401 when done.
+/// Reparse points and (with descriptions on) description files are not counted because the copy
 /// does not take them. For a move, an item that can be renamed as a whole (same root, destination name free) counts as one item,
 /// like the original's same-drive branch.
 fn tree_totals(sources: &[PathBuf], destination: &Path, moving: bool, descriptions: bool, cancel: &AtomicBool) -> (u64, u64) {
