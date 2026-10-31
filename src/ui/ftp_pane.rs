@@ -620,6 +620,11 @@ impl App {
     }
 
     /// Open a folder in an FTP pane (a folder row in the list: change the remote path and re-read).
+    /// Original TNXFileListAdapter FUN_0045b198 (hourglass cursor): if the server's PWD differs from the adapter's folder (+0x1c) it first CWDs
+    /// back there, then sends CWD name (CDUP for ".."), and the new folder is the server's PWD (SFTP: SetCurrentDir / GetCurrentDir).
+    /// NDR lists absolute paths and never depends on the server's current folder, so the re-sync step is not needed; the folder shown
+    /// is the joined path rather than the server's resolved one. Connect FUN_0045cd40 also starts a TTimer whose OnTimer (0x45e6b0) is
+    /// an empty function, so there is no keep-alive to port.
     pub(super) fn ftp_open_dir(&mut self, index: usize, name: &str) {
         let Some(remote) = self.panes[index].remote.as_mut() else { return };
         remote.path = join_remote(&remote.path, name);

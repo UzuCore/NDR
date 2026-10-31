@@ -45,7 +45,8 @@ pub(super) struct PaneView {
 
 /// CharacterCase of C# FileNameDisplayConverter: 0 as is, 1 lower, 2 upper, 3 first letter upper.
 /// SFTP permission bits as list text ("drwxr-xr-x"): original OnGetAttrString (FUN_00485aa0) shows the row's permission text (+0x74) as is on FTP panes,
-/// otherwise GetAttrString (width "drwxrwxrwx").
+/// otherwise GetAttrString (width "drwxrwxrwx"). The SFTP adapter builds it in FUN_0045b900: "----------" (0x8ffa42), 'd' for a folder, then
+/// r/w/x from bits 0x100..0x1.
 pub(super) fn permission_text(is_dir: bool, mode: u32) -> String {
     let mut text = String::from(if is_dir { 'd' } else { '-' });
     for shift in [6, 3, 0] {

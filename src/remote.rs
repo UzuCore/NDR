@@ -1554,6 +1554,9 @@ impl Client {
     pub fn delete_tree(&mut self, remote: &str, cancel: &AtomicBool) -> Result<(), String> {
         self.delete_tree_with_progress(remote, cancel, &mut |_| {})
     }
+    /// Original TNXFileListAdapter FUN_0045d370 (panel FTP/SFTP folder delete): enters the folder, deletes its files, recurses into each
+    /// subfolder except "." and "..", removes it (FTP RemoveDir / SFTP DeleteDir) and returns to the previous folder. Same result here with
+    /// absolute paths; links are deleted without being followed, and a root or dot path is refused.
     pub fn delete_tree_with_progress(
         &mut self,
         remote: &str,

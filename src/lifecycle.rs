@@ -648,7 +648,7 @@ mod win {
         Hotkey(Option<u32>, Sender<Result<bool, String>>),
         Tray(bool, Sender<Result<(), String>>),
         Labels(String, String, String, Sender<Result<(), String>>),
-        Wake(Box<dyn Fn() + Send>),
+        Wake(Box<dyn Fn() + Send>, Sender<()>),
         Shutdown,
     }
     struct WindowState {
@@ -806,7 +806,10 @@ mod win {
                             };
                             let _ = reply.send(result);
                         }
-                        UiCommand::Wake(wake) => state.wake = Some(wake),
+                        UiCommand::Wake(wake, reply) => {
+                            state.wake = Some(wake);
+                            let _ = reply.send(());
+                        }
                         UiCommand::Shutdown => {
                             unsafe {
                                 PostMessageW(hwnd, WM_CLOSE, 0, 0);
@@ -1099,9 +1102,13 @@ mod win {
             self.status.tray.load(Ordering::Relaxed)
         }
         /// Wake function called after sending lifecycle events (device changes etc.) (redraws the UI).
+        /// Waits until the window thread has installed it: a WM_DEVICECHANGE sent to the window is handled before posted messages, so
+        /// returning early could let a device change arrive without a wake (the lifecycle test failed this way under load).
         pub fn set_wake(&self, wake: Box<dyn Fn() + Send>) -> Result<(), String> {
-            self.commands.send(UiCommand::Wake(wake)).map_err(|_| "Lifecycle worker stopped".to_string())?;
-            self.wake()
+            let (tx, rx) = mpsc::channel();
+            self.commands.send(UiCommand::Wake(wake, tx)).map_err(|_| "Lifecycle worker stopped".to_string())?;
+            self.wake()?;
+            rx.recv_timeout(Duration::from_secs(2)).map_err(|e| e.to_string())
         }
         #[cfg(test)]
         pub(crate) fn send_device_change(&self, event: usize, header: &[u32]) -> Result<(), String> {

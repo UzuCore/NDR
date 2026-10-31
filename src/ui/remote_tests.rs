@@ -579,6 +579,23 @@ fn ftp_pane_mode_connects_lists_transfers_and_disconnects_like_the_original() {
     assert_eq!(names(&app, 0), ["pub", "readme.txt"]);
     assert_eq!(app.address_text(0), "ftp://ftp.example/");
     assert!(app.panes[0].disk.is_none(), "the original hides the disk info in FTP mode");
+    // Original FUN_0048c548 (FTP mode): ">" after the host segment lists the remote subfolders (enumerator FUN_0045c948, sorted);
+    // the leading ▼ adds nothing, so no drive list appears on an FTP pane. Choosing an item opens that remote folder.
+    {
+        FAKE_FTP.lock().unwrap().insert("/Docs".into(), (true, Vec::new()));
+        let segments = app.crumb_segments(0);
+        assert_eq!(segments[0].folder.as_deref(), Some(Path::new("/")));
+        let children = app.crumb_children(0, Path::new("/"), false);
+        assert_eq!(children.iter().map(|(p, n)| (p.to_string_lossy().into_owned(), n.as_str())).collect::<Vec<_>>(), [("/Docs".to_owned(), "Docs"), ("/pub".to_owned(), "pub")]);
+        assert!(app.crumb_children(0, Path::new(""), true).is_empty(), "no drive list on an FTP pane");
+        FAKE_FTP.lock().unwrap().remove("/Docs");
+        app.go_crumb(0, super::pane_chrome::CrumbTarget::Remote("/pub".into()));
+        wait_until(&mut app, &ctx, |app| !app.panes[0].loading);
+        assert_eq!(names(&app, 0), ["..", "a.txt"]);
+        app.go_crumb(0, super::pane_chrome::CrumbTarget::Remote("/".into()));
+        wait_until(&mut app, &ctx, |app| !app.panes[0].loading);
+        assert_eq!(names(&app, 0), ["pub", "readme.txt"]);
+    }
     // Original FUN_004408f8: for non-SFTP connections, an FTP log box below the pane (FUN_0048d7ac, height 60) records control lines.
     let log_lines = |app: &App| app.panes[0].remote.as_ref().and_then(|r| r.log.as_ref()).map(|l| l.lock().unwrap().lines.clone()).unwrap_or_default();
     assert_eq!(app.panes[0].ftp_log_height, 60.0);

@@ -636,12 +636,14 @@ impl App {
         let pane = &self.panes[index];
         let mut segments = Vec::new();
         if let Some(remote) = &pane.remote {
-            segments.push(CrumbSegment { label: format!("ftp://{}", remote.host), target: CrumbTarget::Remote("/".into()), folder: None });
+            // Original FUN_0048c548 (FTP mode 2, level > 0): the ">" after a segment lists that remote folder's subfolders through the
+            // enumerator (TNXFTPEnumerator slot +0x1c = FUN_0045c948). `folder` carries the remote path ("/" for the host segment).
+            segments.push(CrumbSegment { label: format!("ftp://{}", remote.host), target: CrumbTarget::Remote("/".into()), folder: Some(PathBuf::from("/")) });
             let mut path = String::new();
             for part in remote.path.split('/').filter(|p| !p.is_empty()) {
                 path.push('/');
                 path.push_str(part);
-                segments.push(CrumbSegment { label: part.to_owned(), target: CrumbTarget::Remote(path.clone()), folder: None });
+                segments.push(CrumbSegment { label: part.to_owned(), target: CrumbTarget::Remote(path.clone()), folder: Some(PathBuf::from(&path)) });
             }
             return segments;
         }
@@ -1515,7 +1517,8 @@ impl App {
         let outside = !just_opened && !press_open && ctx.input(|i| i.pointer.any_click()) && !area.response.hovered() && !area.response.rect.contains(ctx.input(|i| i.pointer.interact_pos()).unwrap_or(position));
         if let Some(child) = chosen {
             self.skin_crumb_menu = None;
-            self.go_crumb(index, CrumbTarget::Local(child));
+            let target = if self.panes[index].remote.is_some() { CrumbTarget::Remote(child.to_string_lossy().replace('\\', "/")) } else { CrumbTarget::Local(child) };
+            self.go_crumb(index, target);
         } else if outside || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             self.skin_crumb_menu = None;
         }

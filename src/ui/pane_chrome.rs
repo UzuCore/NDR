@@ -373,10 +373,35 @@ impl App {
     }
 
     /// C# ShowLocalPathMenu: subfolders (hidden ones only when hidden items show), or the drive list ("name (C:)") at a drive root. Read once while open.
+    /// Original FUN_0048c548 by pane kind (FUN_00481948): local = drives or FindFirstFileW subfolders; FTP = the leading ▼ adds nothing and
+    /// ">" asks the enumerator for the remote folder's subfolders (FUN_0045c948: FTP list entries that are not files / SFTP type 2,
+    /// then TStringList Sorted); archive = nothing. An empty list shows no menu. Fixed: "." and ".." from servers that list them are dropped.
     pub(super) fn crumb_children(&mut self, index: usize, path: &Path, drives: bool) -> Vec<(PathBuf, String)> {
-        let key = (path.to_path_buf(), drives);
+        // Remote paths are per connection, so their cache key carries the pane (the cache is cleared whenever a listing arrives).
+        let key = match &self.panes[index].remote {
+            Some(_) => (PathBuf::from(format!("\u{1}ftp{index}{}", path.to_string_lossy())), drives),
+            None => (path.to_path_buf(), drives),
+        };
         if let Some(cached) = self.crumb_cache.get(&key) {
             return cached.clone();
+        }
+        if self.panes[index].archive.is_some() || (drives && self.panes[index].remote.is_some()) {
+            return Vec::new();
+        }
+        if let Some(remote) = &self.panes[index].remote {
+            let folder = path.to_string_lossy().replace('\\', "/");
+            // The listing shares the pane's connection; while a transfer holds it the menu stays closed instead of freezing the window.
+            let Ok(mut fs) = remote.fs.try_lock() else { return Vec::new() };
+            let Ok(items) = fs.list(&folder) else { return Vec::new() };
+            drop(fs);
+            let mut children: Vec<(PathBuf, String)> = items
+                .into_iter()
+                .filter(|e| e.is_dir && e.name != "." && e.name != "..")
+                .map(|e| (PathBuf::from(super::ftp_pane::join_remote(&folder, &e.name)), e.name))
+                .collect();
+            children.sort_by(|a, b| a.1.to_uppercase().cmp(&b.1.to_uppercase()));
+            self.crumb_cache.insert(key, children.clone());
+            return children;
         }
         let children: Vec<(PathBuf, String)> = if drives {
             native::drives()
