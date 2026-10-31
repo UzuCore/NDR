@@ -626,6 +626,9 @@ pub struct App {
     skin_cache: Option<(String, Option<ndr::styles::Skin>)>,
     /// Subfolder list opened from the skin address bar: (panel, folder, whether it is a drive list, position).
     skin_crumb_menu: Option<(usize, PathBuf, bool, egui::Pos2)>,
+    /// The address bar menu was opened by a press that is not released yet (original MouseDown 0x7c9d94 opens DropDownMenu on press):
+    /// its release neither closes the menu nor counts as a click on the address bar.
+    skin_crumb_press: bool,
     /// Whether each extension (lowercase, no dot) has a per-file shell icon (system.per_file_icon, asked only once).
     per_file_icon_types: HashMap<String, bool>,
     /// C# ShellOverlayIconCache (per path, cleared when it exceeds 512) plus the pending paths and where to send to the overlay worker thread (STA).
@@ -932,6 +935,7 @@ impl App {
             ghost_icons: HashMap::new(),
             skin_cache: None,
             skin_crumb_menu: None,
+            skin_crumb_press: false,
             per_file_icon_types: HashMap::new(),
             overlay_icons: HashMap::new(),
             overlay_pending: HashSet::new(),

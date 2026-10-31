@@ -886,6 +886,52 @@ fn path_click_mode_follows_the_original_path_label() {
     fs::remove_dir_all(root).unwrap();
 }
 
+/// Original TNXPathLabel MouseDown (0x7c9d94): pressing a divider (the drive ▼ here) opens its DropDownMenu at once.
+/// The release of that press keeps the menu open and is not an empty-space click (no path editing); a later click outside closes it.
+#[test]
+fn address_bar_dividers_open_their_menu_on_press() {
+    let (root, ctx, mut app) = fixture("pathpress");
+    let run = |app: &mut App, events: Vec<egui::Event>| {
+        let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 850.0))), events, ..Default::default() };
+        let _ = ctx.run(raw, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.columns(2, |columns| {
+                    app.pane_ui(&mut columns[0], 0, ctx);
+                    app.pane_ui(&mut columns[1], 1, ctx);
+                });
+            });
+        });
+    };
+    let button = |at: egui::Pos2, pressed: bool| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+    run(&mut app, vec![]);
+    run(&mut app, vec![]);
+    let pane = app.pane_rects[0];
+    let bar_y = pane.top() + 2.0 + super::skin_pane::ADDRESS_BAR_HEIGHT / 2.0;
+    let lead = egui::pos2(pane.left() + 2.0 + 8.0, bar_y);
+    run(&mut app, vec![egui::Event::PointerMoved(lead), button(lead, true)]);
+    assert!(app.skin_crumb_menu.as_ref().is_some_and(|(pane, _, drives, _)| *pane == 0 && *drives), "the press opens the drive menu");
+    run(&mut app, vec![button(lead, false)]);
+    run(&mut app, vec![]);
+    assert!(app.skin_crumb_menu.is_some(), "the release of the opening press keeps the menu");
+    assert!(!app.panes[0].address_editing, "nor does it start path editing");
+    assert!(!app.skin_crumb_press);
+    let away = egui::pos2(pane.center().x, pane.center().y);
+    run(&mut app, vec![egui::Event::PointerMoved(away), button(away, true)]);
+    run(&mut app, vec![button(away, false)]);
+    run(&mut app, vec![]);
+    assert!(app.skin_crumb_menu.is_none(), "a click outside closes it");
+    // Press on the ▼, drag onto the first drive and release there: that drive is chosen (TrackPopupMenu press-drag-release).
+    let before = app.panes[0].path.clone();
+    run(&mut app, vec![egui::Event::PointerMoved(lead), button(lead, true)]);
+    assert!(app.skin_crumb_menu.is_some());
+    let first = egui::pos2(pane.left() + 2.0 + 30.0, pane.top() + 2.0 + super::skin_pane::ADDRESS_BAR_HEIGHT + 2.0 + 8.0);
+    run(&mut app, vec![egui::Event::PointerMoved(first)]);
+    run(&mut app, vec![button(first, false)]);
+    assert!(app.skin_crumb_menu.is_none(), "releasing over an item chooses it");
+    assert_ne!(app.panes[0].path, before, "the pane goes to the chosen drive");
+    fs::remove_dir_all(root).unwrap();
+}
+
 #[test]
 fn skin_drag_follows_the_original_list_mouse_move() {
     // Original FUN_004856d8 (list OnMouseMove): it must move more than 8 pixels horizontally or vertically to drag, and pressing in the mark cell does not drag.

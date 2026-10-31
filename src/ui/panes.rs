@@ -328,9 +328,11 @@ impl App {
     }
 
     /// Original SetItemIndex(0x7dbdec): if the name of the item the cursor moved to (excluding drives) was drawn truncated, after 600ms (+0x408)
-    /// ShowToolTip(0x7d7454) draws the full name centered in a TNXToolTipWnd (WS_POPUP | WS_BORDER, background clInfoBk, text clInfoText, list font). Position: item cell
+    /// ToolTipTimer (0x7d7838) calls ShowToolTip(0x7d7454) for the cursor item (+0x3e4 tip window +0xc), which draws the full name centered in a TNXToolTipWnd (WS_POPUP | WS_BORDER, background clInfoBk, text clInfoText, list font). Position: item cell
     /// left + GetListHeaderWidth (30 with icons, else 14) − 2, top − 2, width = text width + 10,
     /// height = line height + 4; if off-screen, push it inside. Hides after 3 seconds (TIP_HIDE_MS). Only when the list has focus (active pane, window focus). Skin theme.
+    /// The hover timer MouseMoveTimer (0x7d78d4, +0x3ec) is created disabled in the constructor (0x7d4a28) and only ever disabled again
+    /// (CMMouseLeave 0x7d5708), so the original shows no tip for the item under the mouse; NDR does the same.
     pub(super) fn original_name_tip(&mut self, ctx: &egui::Context, index: usize) {
         let tip = self.name_tip.borrow_mut().take_if(|(pane, ..)| *pane == index);
         let thumb_tip = self.thumb_tip.borrow_mut().take_if(|(pane, ..)| *pane == index);

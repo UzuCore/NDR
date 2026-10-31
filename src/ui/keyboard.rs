@@ -493,6 +493,7 @@ impl App {
             let pane = &mut self.panes[self.active];
             let length = pane.entries.len();
             if !m.shift {
+                // Original KeyUp (0x7d7410): releasing Shift (VK_SHIFT) forgets the Shift anchor (+0x3d0 = -1).
                 pane.shift_anchor = None;
             }
             if length == 0 || m.alt {

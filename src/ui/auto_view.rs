@@ -524,7 +524,7 @@ impl App {
                 ui.set_clip_rect(ui.clip_rect().intersect(visible));
                 let shown_first = ((viewport.min.x / column_width).floor().max(0.0)) as usize;
                 let shown_last = ((viewport.max.x / column_width).ceil() as usize).min(total_columns);
-                // Original Paint (+0x386, not style 3): NXLINE vertical lines between visible columns (i x item width - 1) from top + 4 to bottom - 4.
+                // Original Paint (0x7d61ec; +0x386, not style 3): NXLINE vertical lines between visible columns (i x item width - 1) from top + 4 to bottom - 4.
                 if column_lines {
                     let stroke = egui::Stroke::new(1.0, line_color);
                     for column in shown_first.max(1)..shown_last {

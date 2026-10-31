@@ -747,6 +747,12 @@ impl App {
         );
         let pointer = ui.input(|i| i.pointer.hover_pos()).filter(|p| label.contains(*p));
         let clicked = ui.input(|i| i.pointer.primary_clicked());
+        // Original MouseDown (0x7c9d94): pressing a divider (GetDividerIndexAt) opens DropDownMenu at once; a folder segment only
+        // remembers the pressed index (+0x208) and MouseUp (0x7c9f80) goes there when released on the same segment (egui click).
+        let pressed = ui.input(|i| i.pointer.primary_pressed());
+        if self.skin_crumb_press && !ui.input(|i| i.pointer.primary_down() || i.pointer.primary_released()) {
+            self.skin_crumb_press = false;
+        }
         let (top, height) = (label.top(), label.height());
         let mut action: Option<(Option<CrumbTarget>, Option<(PathBuf, bool, egui::Pos2)>)> = None;
         // DrawDivider: a ▼ made of 4 rows (8, 6, 4, 2 pixels) starting at x + 4. Click for the drive list.
@@ -758,7 +764,7 @@ impl App {
             let y = glyph_y + i as f32 + 0.5;
             painter.line_segment([egui::pos2(glyph_x + i as f32, y), egui::pos2(glyph_x + 8.0 - i as f32, y)], egui::Stroke::new(1.0, if lead_hot { over } else { divider }));
         }
-        if lead_hot && clicked {
+        if lead_hot && pressed {
             action = Some((None, Some((PathBuf::new(), true, lead.left_bottom()))));
         }
         x += 16.0;
@@ -810,7 +816,7 @@ impl App {
             }
             if clicked && hot {
                 action = Some((Some(segment.target), None));
-            } else if clicked && arrow_hot {
+            } else if pressed && arrow_hot {
                 let drive_root = i == 0 && count == 1;
                 action = Some((None, segment.folder.map(|folder| (folder, drive_root, arrow.left_bottom()))));
             }
@@ -825,10 +831,12 @@ impl App {
         let path_click = self.settings.values.get("PathClickMode").and_then(|v| v.as_i64()).unwrap_or(0);
         let menu_at = pointer.unwrap_or(label.left_bottom());
         if path_click == 2 && action.is_some() {
+            self.skin_crumb_press |= pressed;
             return self.show_address_bar_menu(index, menu_at);
         }
         // One click on empty space beside the path segments starts typing a path. Clicks on segments, ">", ▼ or the end buttons do their own action.
-        if (background.clicked() || super::panes::windows_double_clicked(&background)) && action.is_none() && clicked_button.is_none() {
+        // The release of a press that opened a menu is not a click on empty space.
+        if (background.clicked() || super::panes::windows_double_clicked(&background)) && action.is_none() && clicked_button.is_none() && !self.skin_crumb_press {
             self.active = index;
             if matches!(path_click, 1 | 2) {
                 return self.show_address_bar_menu(index, menu_at);
@@ -852,6 +860,7 @@ impl App {
             (None, Some((None, Some((folder, drives, position))))) => {
                 self.active = index;
                 self.skin_crumb_menu = Some((index, folder, drives, position));
+                self.skin_crumb_press = pressed;
                 just_opened = true;
             }
             _ => {}
@@ -1303,7 +1312,9 @@ impl App {
 
     /// Original TNXFileListView.DrawListHeader (0x7e2274, Details): height = list font height + 8 (CMFontChanged), background is the list color,
     /// column names from left + 5 (one line, ellipsis on overflow) in NXFORE x 0.4 + NXBACK x 0.6; the sort column uses x 0.6 with a 5x3 triangle at the top center
-    /// (descending ▼, ascending ▲, x 0.3). A vertical line NXLINE x 0.3 + NXBACK x 0.7 at each column's right end. Returns the sort mode of the clicked column.
+    /// (descending ▼, ascending ▲, x 0.3). A vertical line NXLINE x 0.3 + NXBACK x 0.7 at each column's right end. Returns the sort mode of the clicked column
+    /// (original Click 0x7e28bc: in Details, a click above the header bottom (+0x3b4) walks the visible columns from GetListHeaderWidth − scroll (+0x378)
+    /// and fires OnHeaderClick (+0x2f0) with the column under the pointer).
     pub(super) fn skin_list_header(&self, ui: &mut egui::Ui, index: usize, columns: &[(super::list_view::DetailColumn, String, f32)], widths: &[Option<f32>], font: egui::FontId, scroll_x: f32) -> Option<&'static str> {
         let (back, fore, line) = (self.basic_list_color("NXBACK"), self.basic_list_color("NXFORE"), self.basic_list_color("NXLINE"));
         let height = ui.fonts_mut(|f| f.row_height(&font)).ceil() + 8.0;
@@ -1465,6 +1476,8 @@ impl App {
         }
         let icons: Vec<Option<egui::TextureHandle>> = children.iter().map(|(child, _)| if drives { self.drive_icon(ctx, child) } else { self.path_icon(ctx, child, true) }).collect();
         let mut chosen = None;
+        // Opened by a press that is still held (TrackPopupMenu from MouseDown): releasing over an item chooses it, releasing elsewhere keeps the menu.
+        let (press_open, released) = (self.skin_crumb_press, ctx.input(|i| i.pointer.primary_released()));
         // The original path label menu does not use the translucency of the TfMain menus (WS_EX_LAYERED in MenuDrawItem 0x42e518).
         super::keep_opaque(ctx, egui::Id::new(("ndr-skin-crumb-menu", index)));
         let area = egui::Area::new(egui::Id::new(("ndr-skin-crumb-menu", index))).order(egui::Order::Foreground).fixed_pos(position).show(ctx, |ui| {
@@ -1489,14 +1502,14 @@ impl App {
                         }
                         let galley = ui.fonts_mut(|f| f.layout_no_wrap(header.clone(), font.clone(), fore));
                         ui.painter().galley(egui::pos2(rect.left() + 24.0, rect.center().y - galley.size().y / 2.0), galley, fore);
-                        if response.clicked() {
+                        if response.clicked() || (press_open && released && response.hovered()) {
                             chosen = Some(child.clone());
                         }
                     }
                 });
             });
         });
-        let outside = !just_opened && ctx.input(|i| i.pointer.any_click()) && !area.response.hovered() && !area.response.rect.contains(ctx.input(|i| i.pointer.interact_pos()).unwrap_or(position));
+        let outside = !just_opened && !press_open && ctx.input(|i| i.pointer.any_click()) && !area.response.hovered() && !area.response.rect.contains(ctx.input(|i| i.pointer.interact_pos()).unwrap_or(position));
         if let Some(child) = chosen {
             self.skin_crumb_menu = None;
             self.go_crumb(index, CrumbTarget::Local(child));
