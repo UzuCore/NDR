@@ -376,7 +376,8 @@ impl App {
 
     /// C# ShowLocalPathMenu: subfolders (hidden ones only when hidden items show), or the drive list ("name (C:)") at a drive root. Read once while open.
     /// Original FUN_0048c548 by pane kind (FUN_00481948): local = drives or FindFirstFileW subfolders; FTP = the leading ▼ adds nothing and
-    /// ">" asks the enumerator for the remote folder's subfolders (FUN_0045c948: FTP list entries that are not files / SFTP type 2,
+    /// ">" asks the enumerator for the remote folder's subfolders (FUN_0045c948, body 0x45c94e: hourglass cursor; FTP changes to the folder,
+    /// lists with "AList" and keeps entries that are not files, then returns to the pane folder; SFTP SetCurrentDir + ListDir keeps type 2,
     /// then TStringList Sorted); archive = nothing. An empty list shows no menu. Fixed: "." and ".." from servers that list them are dropped.
     pub(super) fn crumb_children(&mut self, index: usize, path: &Path, drives: bool) -> Vec<(PathBuf, String)> {
         // Remote paths are per connection, so their cache key carries the pane (the cache is cleared whenever a listing arrives).
@@ -497,6 +498,8 @@ impl App {
             None => self.panes[index].path.clone(),
         };
         let resolve = |text: &str| -> PathBuf {
+            // Original TNXFileSystemEnumerator::SetPath 0x45a10c: a relative path (or "..") is entered from the pane folder with
+            // SetCurrentDirectoryW and read back with GetCurrentDirectoryW; std::path::absolute (GetFullPathNameW) gives the same full path.
             let home = PathBuf::from(std::env::var_os("USERPROFILE").unwrap_or_default());
             let path = if text == "~" {
                 home

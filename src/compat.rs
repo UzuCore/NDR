@@ -802,6 +802,10 @@ fn read_utf16_sidecar(path: &Path) -> Result<Option<String>, String> {
 fn import_sidecars(settings: &mut Settings, parent: &Path, ini: &Path) -> Result<(), String> {
     use serde_json::json;
     if let Some(text) = read_utf16_sidecar(&parent.join("favorits.save"))? {
+        // Original FUN_004101bc: clears the 20 slots (FUN_00410948), reads favorits.save as Unicode with a Tab name/value separator ('='
+        // for "NEXUSFILEFAV.VER2"); versioned lines give slot = StrToIntDef(first 2 chars, -1) (< 20), name = the next 255 chars and
+        // value = Values[name]; a VER2 file is saved again as VER2.1 (FUN_00410778). Fixed: a negative slot such as "-5" is skipped
+        // (the original only rejected -1 and wrote outside the table).
         let lines: Vec<_> = text.lines().collect();
         let mut slots = vec![(String::new(), String::new()); 20];
         let versioned = lines
@@ -1620,6 +1624,12 @@ fn description_data(directory: &Path) -> Result<Vec<(String, String)>, String> {
         })
         .collect())
 }
+/// Original FUN_0040e86c (descriptions for a listing): with "Read comment file" on, descript.ion is read and empty lines dropped;
+/// `"name with spaces" text` takes the name inside the quotes, otherwise the first space ends the name (a line without a space has no
+/// description). descript.dat follows first and the descript.ion lines are appended after it, so the first match (case-insensitive
+/// IndexOfName) wins and an empty DAT value hides the descript.ion text.
+/// Fixed: for a quoted name the original shifted the rest left by one without shortening it, so the last character appeared twice,
+/// and it kept the spaces after the first one; the text is trimmed here.
 fn description_legacy(directory: &Path) -> Result<Vec<(String, String)>, String> {
     let bytes = match fs::read(directory.join("descript.ion")) {
         Ok(v) => v,
@@ -1630,10 +1640,10 @@ fn description_legacy(directory: &Path) -> Result<Vec<(String, String)>, String>
         .lines()
         .filter_map(|line| {
             let (name, value) = if let Some(quoted) = line.strip_prefix('"') {
-                quoted.split_once('"').unwrap_or((quoted, ""))
+                // Without a closing quote the line gets no '=' in the original, so it is not a description.
+                quoted.split_once('"')?
             } else {
-                let index = line.find([' ', '\t']).unwrap_or(line.len());
-                (&line[..index], &line[index..])
+                line.split_once(' ')?
             };
             if name.is_empty() {
                 None
@@ -1761,6 +1771,8 @@ pub struct DescriptionTransfer {
     pub move_entry: bool,
 }
 /// Applies successful copy/move comment changes, grouping writes by directory; returns all metadata errors.
+/// Original FUN_0040f2d4: looks each copied/moved name up in the source folder's descript.dat, adds or replaces it in the target's,
+/// removes it from the source on a move, and saves each changed file as Unicode (deleted when empty), attributes 0x20 then 0x22.
 pub fn apply_description_transfers(transfers: &[DescriptionTransfer]) -> Vec<String> {
     #[derive(Default)]
     struct Changes {
@@ -2418,6 +2430,18 @@ mod tests {
                 .unwrap()
                 .contains_key("a b.txt")
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+    /// Original FUN_0040e86c: a quoted name or the text before the first space; tabs, lines without a space and an unclosed quote give
+    /// no description. Fixed: the last character is not doubled and the text is trimmed.
+    #[test]
+    fn legacy_descriptions_follow_the_original_reader() {
+        let root = sandbox("description-ion");
+        fs::write(root.join("descript.ion"), "\"a b.txt\" quoted text\r\nplain.txt   spaced\r\ntab.txt\tignored\r\nlonely.txt\r\n\"open.txt rest\r\n\r\n").unwrap();
+        let read = read_descriptions(&root, true).unwrap();
+        assert_eq!(read.get("a b.txt").map(String::as_str), Some("quoted text"));
+        assert_eq!(read.get("plain.txt").map(String::as_str), Some("spaced"));
+        assert_eq!(read.len(), 2, "{read:?}");
         fs::remove_dir_all(root).unwrap();
     }
     #[test]
