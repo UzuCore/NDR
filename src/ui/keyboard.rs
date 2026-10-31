@@ -106,14 +106,13 @@ impl App {
         self.list_navigation(ctx);
     }
 
-    /// Sets work folder N (in place of original FUN_0042fa5c): set, save, C# status text "work folder N saved".
+    /// Sets work folder N (original FUN_0042fa5c / FUN_00479904): set and save, with no notice (the C# status text was removed).
     pub(super) fn set_work_folder(&mut self, index: usize, path: String) {
         let mut folders = self.settings.strings("WorkingFolders");
         folders.resize(5, String::new());
         folders[index] = path;
         self.settings.set_strings("WorkingFolders", folders);
         self.save();
-        self.status = if self.language == "ko" { format!("작업 폴더 {} 저장됨", index + 1) } else { format!("Work folder {} saved", index + 1) };
     }
 
     /// Menu item or internal command chosen by the original shortcut table (shortcut.ini). None passes it on.
@@ -288,7 +287,12 @@ impl App {
         }
         if let Some(index) = number("workOpen:") {
             let path = self.settings.strings("WorkingFolders").get(index).cloned().unwrap_or_default();
-            if !path.trim().is_empty() && Path::new(&path).is_dir() {
+            // Original miGoToWorkFolderN -> FUN_0042fdf0 navigates to WF<n> (FUN_0048d6e4); an empty slot does nothing (seen in the running original:
+            // Alt+3 twice with WF3 empty kept the pane where it was). Only the work folder button (FUN_0042fc84, work_folder_click) sets an empty slot.
+            // Previously an empty slot showed a "not set" box.
+            if path.trim().is_empty() {
+                return true;
+            } else if Path::new(&path).is_dir() {
                 self.navigate(self.active, PathBuf::from(path), true);
             } else {
                 let text = if ko { format!("작업 폴더 {}이 설정되지 않았습니다.", index + 1) } else { format!("Work folder {} is not set.", index + 1) };

@@ -342,9 +342,9 @@ fn keyboard_follows_the_csharp_shortcut_engine() {
     app.settings.values.insert("EscapeKeyAction".into(), serde_json::json!(3));
     press(&mut app, &ctx, egui::Key::Escape, NONE);
     assert!(app.panes[0].selected.is_empty());
-    // Work folders: Ctrl+1 saves (original miWorkFolder1), Alt+1 goes there, Alt+2 without a saved folder notifies.
+    // Work folders: Ctrl+1 saves (original miWorkFolder1) without a notice, Alt+1 goes there, Alt+2 without a saved folder does nothing.
     press(&mut app, &ctx, egui::Key::Num1, CTRL);
-    assert_eq!(app.status, "작업 폴더 1 저장됨");
+    assert!(app.msgboxes.is_empty());
     assert_eq!(app.settings.strings("WorkingFolders")[0], left.to_string_lossy());
     // Original FUN_0042fff58: an already set work folder asks MSG_UNSETWORKFOLDER (current value) yes/no. No keeps it, yes changes it.
     app.navigate(0, left.join("folder1"), true);
@@ -366,8 +366,10 @@ fn keyboard_follows_the_csharp_shortcut_engine() {
     press(&mut app, &ctx, egui::Key::Num1, ALT);
     assert_eq!(app.panes[0].path, left);
     press(&mut app, &ctx, egui::Key::Num2, ALT);
-    assert_eq!(app.msgboxes.first().map(|m| (m.title.clone(), m.text.clone())), Some(("NDR".to_owned(), "작업 폴더 2이 설정되지 않았습니다.".to_owned())));
-    app.answer_message_box(1, &ctx);
+    // Original miGoToWorkFolder2 with WF2 empty: nothing happens (no box, pane and slot unchanged).
+    assert!(app.msgboxes.is_empty());
+    assert_eq!(app.panes[0].path, left);
+    assert_eq!(app.settings.strings("WorkingFolders")[1], "");
     // Alt+Left = back (original miHistoryBack): the folder before moving to the work folder.
     press(&mut app, &ctx, egui::Key::ArrowLeft, ALT);
     assert_eq!(app.panes[0].path, left.join("folder1"));
@@ -486,14 +488,18 @@ fn f3_and_f4_copy_and_move_with_keys_only() {
 #[test]
 fn work_folder_messages_in_english() {
     let (root, ctx, mut app) = fixture("en", "en");
-    // workSet uses the English status text; the original names saveWorkFolder2/openWorkFolder2 of the work folder menu work the same.
+    // The original menu names saveWorkFolder2/openWorkFolder2 work like workSet/workOpen; saving shows no notice.
     app.dispatch("saveWorkFolder2", &ctx);
-    assert_eq!(app.status, "Work folder 2 saved");
+    assert_eq!(app.settings.strings("WorkingFolders")[1], root.join("left").to_string_lossy());
     app.navigate(0, root.join("right"), true);
     wait(&mut app, &ctx);
     app.dispatch("openWorkFolder2", &ctx);
     wait(&mut app, &ctx);
     assert_eq!(app.panes[0].path, root.join("left"));
+    // A saved folder that no longer exists is reported in English.
+    let mut folders = app.settings.strings("WorkingFolders");
+    folders[4] = root.join("missing").to_string_lossy().into_owned();
+    app.settings.set_strings("WorkingFolders", folders);
     app.dispatch("workOpen:4", &ctx);
     assert_eq!(app.msgboxes.first().map(|m| m.text.clone()), Some("Work folder 5 is not set.".to_owned()));
     fs::remove_dir_all(root).unwrap();
