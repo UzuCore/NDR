@@ -390,8 +390,10 @@ fn sort_group(list: &mut Vec<Entry>, mode: &str, descending: bool, logical: bool
             "None" => Ordering::Equal,
             "Extension" => ext().then_with(base),
             "Size" => a.size.cmp(&b.size).then_with(base).then_with(ext),
-            "Modified" => a.modified.cmp(&b.modified).then_with(ext).then_with(base),
-            "Attributes" => a.attributes.cmp(&b.attributes).then_with(ext).then_with(base),
+            // Original file comparer FUN_007d307c: base name (+4, StrCmpLogicalW or lstrcmpiW) breaks time and attribute ties before the
+            // extension (+8, lstrcmpiW); color ties compare the extension first. Previously time and attribute ties used the extension first.
+            "Modified" => a.modified.cmp(&b.modified).then_with(base).then_with(ext),
+            "Attributes" => a.attributes.cmp(&b.attributes).then_with(base).then_with(ext),
             "Color" => ka.color.cmp(&kb.color).then_with(ext).then_with(base),
             _ => base().then_with(ext),
         };
@@ -636,6 +638,11 @@ mod tests {
         assert_eq!(auto("Extension", true), ["Tools", "Skins", "Languages"]);
         assert_eq!(auto("None", false), ["Languages", "Skins", "Tools"]);
         assert_eq!(effective_folder_sort(&options("Name", "Modified", false)), ("Name", false));
+        // FUN_007d307c: equal times fall back to the base name, then the extension.
+        let same = |name: &str| Entry { modified: Some(SystemTime::UNIX_EPOCH), ..entry(name, false, 0, 0x20) };
+        let mut files = vec![same("b.aaa"), same("a.zzz"), same("a.bbb")];
+        sort_entries(&mut files, &options("Auto", "Modified", false), &|_| 0);
+        assert_eq!(names(&files), ["a.bbb", "a.zzz", "b.aaa"]);
     }
 
     #[test]
