@@ -200,6 +200,8 @@ pub(super) struct PaneRemote {
     /// Permission bits from the last listing (remote path → mode). Original item +0x74 (the value passed to TfFTPAttributes).
     pub modes: Arc<Mutex<std::collections::HashMap<String, u32>>>,
     /// The lines of the original pane +0x358 FTP log pane (FUN_0048d7ac). Absent on the first connection to an SFTP site.
+    /// The adapter's client setup FUN_0045adac attaches an IO handler whose sent (FUN_0045afd0, direction 1) and received
+    /// (FUN_0045b0b4, direction 0) callbacks forward each control line to the adapter's OnLog event (+0x48), which fills this pane.
     pub log: Option<Arc<Mutex<ndr::remote::ProtocolLog>>>,
 }
 
