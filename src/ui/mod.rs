@@ -1589,6 +1589,30 @@ pub(super) fn drag_title(ui: &egui::Ui, id: egui::Id, rect: egui::Rect) {
     }
 }
 
+/// Title row that does not widen the window (original dialogs have the DFM client width). Draws the bold title now; `modal_title_finish`, called
+/// after the contents, puts the close button at the contents' right edge and draws the line under the row. Previously the title row's right-to-left
+/// part and the separator took egui's default area width (600 px), so a 444 px TfRename showed about 600 px wide.
+pub(super) fn modal_title_start(ui: &mut egui::Ui, title: &str) -> egui::Rect {
+    let row = ui.horizontal(|ui| {
+        ui.label(RichText::new(title).strong().family(egui::FontFamily::Name(BOLD_FONT_FAMILY.into())));
+        ui.add_space(ui.spacing().interact_size.y + 4.0);
+    });
+    ui.add_space(ui.spacing().item_spacing.y + 1.0);
+    row.response.rect
+}
+
+/// Second half of `modal_title_start`: true when the close button is pressed. Dragging the rest of the row moves the window.
+pub(super) fn modal_title_finish(ui: &mut egui::Ui, id: egui::Id, row: egui::Rect) -> bool {
+    let right = ui.min_rect().right().max(row.right());
+    let side = row.height();
+    let button = egui::Rect::from_min_size(egui::pos2(right - side, row.top()), egui::vec2(side, side));
+    let close = ui.put(button, egui::Button::new("×").small()).clicked();
+    let line_y = row.bottom() + (ui.spacing().item_spacing.y + 1.0) / 2.0;
+    ui.painter().hline(row.left()..=right, line_y, ui.visuals().widgets.noninteractive.bg_stroke);
+    drag_title(ui, id, egui::Rect::from_min_max(row.min, egui::pos2(button.left() - 2.0, row.bottom())));
+    close
+}
+
 /// One title bar row (bold title + close button on the right). Dragging the row moves the window. True when the close button is pressed.
 pub(super) fn modal_title_bar(ui: &mut egui::Ui, id: egui::Id, title: &str, width: Option<f32>) -> bool {
     let mut close = false;

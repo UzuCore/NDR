@@ -634,10 +634,7 @@ impl App {
         let modal_id = egui::Id::new(("ndr-original-dialog", serial));
         super::keep_opaque(ctx, modal_id);
         super::movable_modal(ctx, modal_id).show(ctx, |ui| {
-            if super::modal_title_bar(ui, modal_id, &title, None) {
-                outcome = Outcome::Cancel;
-            }
-            ui.separator();
+            let title_row = super::modal_title_start(ui, &title);
             match &mut dialog.kind {
                 DialogKind::Prompt { message, value, history, password, .. } => {
                     // Original TfGetText (ClientWidth 444 × ClientHeight 127): lMessage (18,8 411×53, bottom aligned), cbText (16,67 413×21),
@@ -968,6 +965,9 @@ impl App {
                         }
                     }
                 }
+            }
+            if super::modal_title_finish(ui, modal_id, title_row) {
+                outcome = Outcome::Cancel;
             }
         });
         self.original_dialogs.push(taken);

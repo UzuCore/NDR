@@ -141,6 +141,16 @@ impl App {
         compat::ShortcutMap::parse(custom).resolve(compat::text_to_shortcut(&text))
     }
 
+    /// Whether the file list would hold the keyboard focus in the original: the window is focused, no text field takes keys, and no dialog,
+    /// message box or modal progress window is open (those take the focus from the list). Menus are left out: Windows menu mode keeps the focus.
+    pub(super) fn list_has_focus(&self, ctx: &egui::Context) -> bool {
+        ctx.input(|i| i.focused)
+            && !ctx.wants_keyboard_input()
+            && self.msgboxes.is_empty()
+            && self.original_dialogs.is_empty()
+            && !self.job.as_ref().is_some_and(|j| j.modal.is_some() || (!j.finished && j.progress.is_some()))
+    }
+
     /// State where the list does not take keys (a dialog, message box, progress window or menu is open). Same as the first check in keyboard.
     pub(super) fn keyboard_blocked(&self, ctx: &egui::Context) -> bool {
         self.job.as_ref().is_some_and(|j| !j.finished && j.progress.is_some())

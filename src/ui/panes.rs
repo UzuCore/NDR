@@ -365,7 +365,7 @@ impl App {
         // and overlap it above the name text (+0x2cc = 0: multi-line centered). NDR aligns it to the first line of the name text inside the cell.
         if let Some((_, row, cell, text_top, thumb, lines)) = thumb_tip {
             let drive = self.panes[index].entries.get(row).is_none_or(|e| e.drive);
-            if row != cursor || drive || self.active != index || !ctx.input(|i| i.focused) || lines.is_empty() {
+            if row != cursor || drive || self.active != index || !self.list_has_focus(ctx) || lines.is_empty() {
                 return;
             }
             let (delay, life) = (Duration::from_millis(600), Duration::from_millis(600 + TIP_HIDE_MS));
@@ -410,7 +410,9 @@ impl App {
         }
         let Some((_, row, cell, shown, full)) = tip else { return };
         let drive = self.panes[index].entries.get(row).is_none_or(|e| e.drive);
-        if row != cursor || drive || self.active != index || !ctx.input(|i| i.focused) {
+        // ShowToolTip runs only while the list has the focus: a dialog opened before the 600 ms timer (F2 rename on a truncated name) leaves no tip,
+        // as on the captured original. Previously NDR drew the tip over its in-window dialog.
+        if row != cursor || drive || self.active != index || !self.list_has_focus(ctx) {
             return;
         }
         let header = if self.settings.flag("ShowIcons", true) { 30.0 } else { 14.0 };
