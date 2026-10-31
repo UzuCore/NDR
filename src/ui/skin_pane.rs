@@ -500,6 +500,7 @@ pub(super) fn split_size_text(text: &str) -> (&str, &str) {
 
 /// Original TNXScrollBar.UpdateThumbWidth·RecalcThumbPos(0x7cfdf0·0x7cfe90): usable length = track length − button × 2,
 /// thumb length = usable length × visible amount / total (not below the track thickness or 20, and not above the usable length), position = button + (usable length − thumb) × current / (total − visible amount).
+/// SetParams 0x7cfd48 / SetPageSize 0x7cfb9c (page not above max) recompute the thumb, and Change 0x7cfcbc re-clamps the position.
 /// Returns (top of track to top of thumb, thumb length).
 pub(super) fn scrollbar_thumb(track: f32, thickness: f32, button: f32, offset: f32, content: f32, viewport: f32) -> (f32, f32) {
     let usable = (track - 2.0 * button).max(0.0);
@@ -689,6 +690,8 @@ impl App {
     /// SetPath 0x7c855c: separator '\' (+0x1d8); a path starting with "\\" is UNC (+0x21c = 1, first segment = PathStripToRoot without the
     /// trailing '\'), one starting with '/' uses '/' (+0x21c = 2); then one segment per text between separators, empty ones skipped.
     /// The constructor (0x7c8050) only sets defaults (separator, colors, the folder icon image list, a 10 ms OnDrawTimer).
+    /// PathOfLevel 0x7ca1c8 joins segments 0..=level with the separator (a UNC path gets its leading "\\" back), GetPath 0x7c84d8 is the
+    /// last level, and MenuClick 0x7c9560 passes the clicked level's path plus the chosen subfolder to OnPathClick (`CrumbSegment.folder`).
     pub(super) fn crumb_segments(&self, index: usize) -> Vec<CrumbSegment> {
         let pane = &self.panes[index];
         let mut segments = Vec::new();
@@ -1218,6 +1221,9 @@ impl App {
         piece(0.0, 8.0, 0.0);
         piece(size.y - 8.0, 8.0, length - 8.0);
         // Drag: keeps the grab offset (from the thumb top to the pointer) and moves the thumb position.
+        // Original ThumbMoved 0x7cf9f4: thumb top = pointer − grab, kept between the buttons; position = range × offset / (usable length)
+        // with integer division (truncated), the far end giving the last position; Scroll 0x7cfc14 clamps it to [min, max − page + 1].
+        // Previously the position was rounded.
         let grab_id = id.with("grab");
         let pointer = ui.input(|i| i.pointer.interact_pos());
         if grip.drag_started() {
@@ -1230,7 +1236,7 @@ impl App {
             let usable = rect.height() - 2.0 * button - length;
             if let (Some(p), true) = (pointer, usable > 0.0) {
                 let fraction = ((p.y - grab - rect.top() - button) / usable).clamp(0.0, 1.0);
-                return Some((fraction * max).round());
+                return Some((fraction * max).floor());
             }
             return None;
         }
@@ -1322,7 +1328,8 @@ impl App {
             let usable = rect.width() - 2.0 * button - length;
             if let (Some(p), true) = (pointer, usable > 0.0) {
                 let fraction = ((p.x - grab - rect.left() - button) / usable).clamp(0.0, 1.0);
-                return Some((fraction * max).round());
+                // Same as the vertical bar: ThumbMoved 0x7cf9f4 truncates.
+                return Some((fraction * max).floor());
             }
             return None;
         }

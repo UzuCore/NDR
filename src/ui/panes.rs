@@ -1165,7 +1165,9 @@ impl App {
         self.compute_view(index);
     }
     /// Original SetSortType/SetSortDescend (0x7dbb28/0x7dba3c): changing the sort runs the list's FileListChanged → AdjustPage(old cursor index),
-    /// then SetItemIndex (make visible) to the cursor name's new position. Fix: previously, if the cursor item moved due to sorting, the view stayed put and it could be off-screen.
+    /// then SetItemIndex (make visible) to the cursor name's new position. SetFolderSortType 0x7dbc14 does the same for the folder sort
+    /// (remembers the focused name, re-sorts, SetItemIndex to that name).
+    /// Fix: previously, if the cursor item moved due to sorting, the view stayed put and it could be off-screen.
     pub(super) fn resort_pane(&mut self, index: usize) {
         let old = self.panes[index].cursor;
         self.sort_pane(index);
@@ -1338,6 +1340,8 @@ impl App {
                     (1, false)
                 };
                 // Original DrawItems(0x7da82c): Auto(0) and Names(1) views are always column-flowing lists, and the header (DrawListHeader) is drawn only in Details(2).
+                // A single item change goes through DrawItem(TNXFileItem) 0x7ded00 (that row painted off screen with DrawItem(TCanvas) 0x7d7ad4,
+                // clipped to the client area and below the Details header); egui repaints the whole list each frame instead.
                 // So in the skin theme, even when it fits one column it is a flowing list (no header, with the UpdateDisplayAuto cell width).
                 let auto_view = matches!(view.as_str(), "Auto" | "viewAuto");
                 let auto_flow = !grouped && (auto_columns > 1 || auto_bar || (auto_view && skin.is_some()));
