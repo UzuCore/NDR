@@ -689,7 +689,7 @@ impl App {
                 let (k, e) = (format!("네트워크 드라이브 연결 해제에 실패했습니다. Windows 오류 {code}: {message}"), format!("Could not disconnect the network drive. Windows error {code}: {message}"));
                 return app.warn(&k, &e);
             }
-            // 원본 FUN_004350bc: 활성 패널이 로컬 모드(0)일 때만 새로 읽는다.
+            // Original FUN_004350bc: rereads only when the active pane is in local mode (0).
             super::panes::DriveListCache::invalidate(&app.drive_list);
             if app.panes[app.active].archive.is_none() && app.panes[app.active].remote.is_none() {
                 app.refresh(app.active);
@@ -697,7 +697,7 @@ impl App {
         });
     }
 
-    /// C# ToggleExplorerIntegrationAsync: 등록돼 있으면 제거를, 아니면 추가를 묻는다.
+    /// C# ToggleExplorerIntegrationAsync: asks to remove when registered, otherwise to add.
     pub(super) fn explorer_integration_command(&mut self) {
         let caption = self.tr("탐색기 통합", "Explorer integration").into_owned();
         let enabled = (self.system.explorer_enabled)();
@@ -720,8 +720,8 @@ impl App {
         });
     }
 
-    /// C# ImportLegacySettingsAsync: INI 고르기 → 설정 바꾸기, 옆의 toolbar.xml도 가져오기(있던 것은 .backup-시각으로 보관),
-    /// 언어·테마·두 패널·시작 위치를 다시 적용.
+    /// C# ImportLegacySettingsAsync: choose an INI -> replace settings, also import the toolbar.xml beside it (an existing one is kept as .backup-time),
+    /// then reapply language, theme, both panes and start locations.
     pub(super) fn import_legacy_command(&mut self) {
         let ko = self.language == "ko";
         let exe_dir = std::env::current_exe().ok().and_then(|p| p.parent().map(Path::to_path_buf)).unwrap_or_default();
@@ -758,7 +758,7 @@ impl App {
         self.status = if self.language == "ko" { format!("레거시 설정을 가져왔습니다: {name}") } else { format!("Imported legacy settings: {name}") };
     }
 
-    /// C# InstallSelectedArchive: 압축 파일에 셸 동사 "install".
+    /// C# InstallSelectedArchive: shell verb "install" on the archive.
     pub(super) fn install_archive_command(&mut self) {
         let i = self.active;
         if self.panes[i].archive.is_some() {
@@ -774,7 +774,7 @@ impl App {
     }
 }
 
-/// NexusFileToolbarService.ImportBesideLegacyIni: INI 옆 toolbar.xml이 읽히면 프로필로 복사(있던 파일은 .backup-yyyyMMdd-HHmmss[-N]).
+/// NexusFileToolbarService.ImportBesideLegacyIni: when the toolbar.xml beside the INI is readable, copies it to the profile (an existing file becomes .backup-yyyyMMdd-HHmmss[-N]).
 pub(super) fn import_toolbar_beside(ini: &Path, profile: &Path) -> Option<Result<(), String>> {
     let source = ini.parent()?.join("toolbar.xml");
     if !source.is_file() {

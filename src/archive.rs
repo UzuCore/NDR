@@ -19,11 +19,11 @@ pub struct ArchiveEntry {
     pub key: String,
     pub is_dir: bool,
     pub size: u64,
-    /// 7-Zip 목록의 "Modified = YYYY-MM-DD HH:MM:SS[.fffffff]"(현지 시각). 없으면 None.
+    /// "Modified = YYYY-MM-DD HH:MM:SS[.fffffff]" of a 7-Zip listing (local time). None when missing.
     pub modified: Option<std::time::SystemTime>,
 }
 
-/// 7-Zip -slt의 수정 시각(현지 시각) → SystemTime.
+/// 7-Zip -slt modification time (local time) -> SystemTime.
 fn parse_modified(text: &str) -> Option<std::time::SystemTime> {
     use chrono::TimeZone;
     let naive = chrono::NaiveDateTime::parse_from_str(text.trim(), "%Y-%m-%d %H:%M:%S%.f").ok()?;
@@ -143,7 +143,7 @@ pub fn create_with_program(
     create_with_progress(sources, output, options, program, cancel, None)
 }
 
-/// create_with_program에 진행 알림(`progress`)을 더한 것: 동봉 7-Zip의 압축 단계(`a`)에 -bsp1을 주고 그 백분율·파일 이름을 알린다.
+/// create_with_program plus progress reporting (`progress`): passes -bsp1 to the archive step (`a`) of the bundled 7-Zip and reports its percentage and file name.
 pub fn create_with_progress(
     sources: &[PathBuf],
     output: &Path,
@@ -161,7 +161,7 @@ pub fn create_with_progress(
     }
     ensure_plain_path(output)?;
     let extension = options.extension.trim_start_matches('.').to_lowercase();
-    // C# 내장 TAR.GZ / TAR.BZ2: TAR를 만든 뒤 GZip/BZip2로 감싼다.
+    // C# built-in TAR.GZ / TAR.BZ2: create a TAR, then wrap it with GZip/BZip2.
     let wrapped = match extension.as_str() {
         "tar.gz" | "tgz" => Some("gzip"),
         "tar.bz2" | "tbz" | "tbz2" | "tar.bzip2" => Some("bzip2"),
@@ -219,7 +219,7 @@ pub fn create_with_progress(
         fs::create_dir(&output_stage).map_err(|e| e.to_string())?;
         let output_stage_abs = fs::canonicalize(&output_stage).map_err(|e| e.to_string())?;
         let archive = output_stage_abs.join(expected);
-        // 더하기: 있는 압축 파일을 준비 폴더에 복사해 그 사본에 더한다(실패해도 원본은 그대로).
+        // Add: copy the existing archive to a staging folder and add to that copy (the original stays intact on failure).
         if options.append && output.is_file() && wrapped.is_none() {
             fs::copy(output, &archive).map_err(|e| e.to_string())?;
             let mut permissions = fs::metadata(&archive).map_err(|e| e.to_string())?.permissions();
@@ -234,7 +234,7 @@ pub fn create_with_progress(
             .collect();
         let mut cmd = program_command(program)?;
         cmd.current_dir(&snapshot_abs);
-        // 진행 알림은 동봉 7-Zip만(-bsp1: 백분율과 파일 이름을 표준 출력으로).
+        // Progress reporting only for the bundled 7-Zip (-bsp1: percentage and file name to standard output).
         let sink = progress.filter(|_| program.is_none());
         let bsp: &[&str] = if sink.is_some() { &["-bsp1"] } else { &[] };
         if let Some(program) = program {
@@ -247,7 +247,7 @@ pub fn create_with_progress(
             )?;
             cmd.args(args);
         } else if let Some(outer) = wrapped {
-            // 1) TAR(더하기면 있는 압축을 풀어 나온 TAR에), 2) 감싸기.
+            // 1) TAR (for an add, into the TAR extracted from the existing archive), 2) wrap.
             let tar = snapshot_abs.join(".ndr-inner.tar");
             if options.append && output.is_file() {
                 let unpack = snapshot_abs.join(".ndr-inner");
@@ -396,10 +396,10 @@ fn program_command(program: Option<&ExternalProgram>) -> Result<Command, String>
 fn execute(command: Command, cancel: &AtomicBool) -> Result<String, String> {
     execute_capture(command, cancel, true)
 }
-/// 압축 진행을 받는 곳: (백분율 0~100, 지금 파일 이름(7-Zip이 알린 상대 이름)).
+/// Receiver of archive progress: (percentage 0-100, current file name (the relative name 7-Zip reported)).
 pub type ProgressSink = std::sync::Arc<dyn Fn(u8, &str) + Send + Sync>;
 
-/// 7-Zip `-bsp1` 진행 글 한 토막("  23% 4 + 이름" 또는 "  23%")에서 (백분율, 이름).
+/// (percentage, name) from one chunk of 7-Zip `-bsp1` progress text ("  23% 4 + name" or "  23%").
 pub fn parse_seven_zip_progress(segment: &str) -> Option<(u8, String)> {
     let percent_at = segment.find('%')?;
     let digits: String = segment[..percent_at].chars().rev().take_while(|c| c.is_ascii_digit()).collect::<Vec<_>>().into_iter().rev().collect();
@@ -432,7 +432,7 @@ fn execute_capture_progress(
             let mut bytes = Vec::new();
             let mut buffer = [0; 8192];
             let mut exceeded = false;
-            // -bsp1 진행 글은 \r·\x08(지우기)·\n으로 덮어쓴다. 토막이 끝날 때마다 읽는다.
+            // -bsp1 progress text overwrites itself with \r, \x08 (erase) and \n. Read at each chunk end.
             let mut pending = Vec::new();
             loop {
                 let n = pipe.read(&mut buffer)?;
@@ -495,7 +495,7 @@ fn execute_capture_progress(
     }
     if !status.success() {
         let message = String::from_utf8_lossy(&err);
-        // C# HasExternalArchivePasswordDiagnostic: 표준 출력의 "Enter password (will not be echoed):" 줄도 암호 진단이다.
+        // C# HasExternalArchivePasswordDiagnostic: an "Enter password (will not be echoed):" line on standard output is also a password diagnostic.
         let prompt = String::from_utf8_lossy(&out)
             .lines()
             .any(|line| line.trim().eq_ignore_ascii_case(EXTERNAL_PASSWORD_PROMPT))
@@ -512,8 +512,8 @@ fn execute_capture_progress(
         Ok(String::from_utf8_lossy(&out).into_owned())
     }
 }
-/// 7-Zip 출력은 -sccUTF-8로 UTF-8이어야 한다. 단 동봉 7zip+α(UzuCore)는 머리글 "7zip+α … Copyright (c) …"를
-/// -scc 적용 전에 OEM 코드 페이지로 찍으므로(Main.cpp ShowCopyrightAndHelp, α = CP949 A5 E1) 그 첫 줄만 손실 허용으로 읽는다.
+/// 7-Zip output must be UTF-8 via -sccUTF-8. But the bundled 7zip+ (UzuCore) prints its header "7zip+α ... Copyright (c) ..."
+/// in the OEM code page before -scc applies (Main.cpp ShowCopyrightAndHelp, α = CP949 A5 E1), so only that first line is read lossily.
 fn decode_tool_output(out: Vec<u8>) -> Result<String, String> {
     let start = out.iter().take_while(|b| matches!(b, b'\r' | b'\n')).count();
     let end = out[start..].iter().position(|&b| b == b'\n').map_or(out.len(), |p| start + p + 1);
@@ -593,12 +593,12 @@ fn parse_listing(text: &str) -> Result<Vec<ArchiveEntry>, String> {
                 .iter()
                 .any(|prefix| line.strip_prefix(prefix).is_some_and(|value| !value.trim().is_empty()))
             {
-                // 7-Zip은 TAR 항목마다 빈 "Symbolic Link = " 줄을 쓴다. 값이 있는 링크만 막는다.
+                // 7-Zip writes an empty "Symbolic Link = " line for every TAR entry. Only links with a value are blocked.
                 return Err("Archive links are rejected".into());
             }
         }
         if let Some(mut key) = key {
-            // 동봉 7zip+α의 ALZ·EGG 처리기는 폴더를 "폴더\"처럼 끝 구분자를 붙여 보고한다(다른 형식은 "폴더"). 폴더 항목만 뗀다.
+            // The ALZ and EGG handlers of the bundled 7zip+ report folders with a trailing separator like "folder\" (other formats "folder"). Strip it from folder entries only.
             if dir {
                 key.truncate(key.trim_end_matches(['/', '\\']).len());
             }
@@ -779,7 +779,7 @@ impl Commit {
                 if prompt_directory {
                     match resolver(stage, dest) {
                         ConflictChoice::Skip => return Ok(()),
-                        // C# IsArchiveEntryNewer: 항목이 더 새로울 때만 합친다.
+                        // C# IsArchiveEntryNewer: merge only when the entry is newer.
                         ConflictChoice::OverwriteNewer if !entry_newer(stage, dest) => return Ok(()),
                         ConflictChoice::Cancel => {
                             return Err("Archive extraction cancelled at a folder conflict".into());
@@ -838,7 +838,7 @@ impl Commit {
                             .to_string_lossy()
                             .into_owned();
                         let parent = dest.parent().ok_or("Invalid archive destination parent")?;
-                        // 고친 것: 파일은 번호를 확장자 앞에 붙인다("보고서 (1).txt"). 전에는 "보고서.txt (1)"이 되어 확장자 연결이 끊겼다.
+                        // Fixed: for files the number goes before the extension ("report (1).txt"). Previously it became "report.txt (1)" and broke the extension association.
                         let (stem, extension) = match name.rfind('.') {
                             Some(dot) if dot > 0 => (&name[..dot], &name[dot..]),
                             _ => (name.as_str(), ""),
@@ -867,7 +867,7 @@ impl Commit {
         Ok(())
     }
 }
-/// C# IsArchiveEntryNewer: 풀어 둔 항목(원본 시간 유지)이 대상보다 새로운가. 시간을 모르면 아니다.
+/// C# IsArchiveEntryNewer: whether an extracted entry (original time kept) is newer than the destination. Not when the time is unknown.
 fn entry_newer(stage: &Path, dest: &Path) -> bool {
     match (fs::metadata(stage).and_then(|m| m.modified()), fs::metadata(dest).and_then(|m| m.modified())) {
         (Ok(entry), Ok(target)) => entry > target,
@@ -1062,7 +1062,7 @@ const ARCHIVE_EXTENSIONS: &[&str] = &[
     ".wim", ".swm", ".esd", ".ppkg",
 ];
 
-/// C# FileSystemService.GetArchiveFormat(이름): 긴 확장자부터, 숫자 3자리 이상 분할 꼬리 허용, .partN.rar, .rNN, .zNN, .aNN(N), .001.
+/// C# FileSystemService.GetArchiveFormat(name): longest extensions first, split tails of 3+ digits allowed, .partN.rar, .rNN, .zNN, .aNN(N), .001.
 pub fn archive_format(path: &Path) -> Option<String> {
     let name = path.file_name()?.to_string_lossy().into_owned();
     let lower = name.to_lowercase();
@@ -1105,9 +1105,9 @@ pub fn archive_format(path: &Path) -> Option<String> {
     }
     None
 }
-/// C# BuiltInArchiveExtensions(+ 분할 조각 규칙): NDR이 직접 읽는 형식. 아니면 외부 프로그램 쪽.
-/// ALZ·EGG는 동봉 7-Zip(UzuCore 7zip+α)이 읽으므로 여기에 더한다. ACE는 C# 판(SharpCompress 순차 읽기)은 읽지만 동봉 7-Zip은
-/// 형식 목록에 없어 못 읽으므로 뺀다(외부 압축 프로그램으로 통째로 푼다, `extract_whole_with_program`).
+/// C# BuiltInArchiveExtensions (+ split piece rules): formats NDR reads itself. Otherwise the external program side.
+/// ALZ and EGG are added here because the bundled 7-Zip (UzuCore 7zip+) reads them. ACE is read by the C# version (SharpCompress sequential reading) but not by the bundled 7-Zip,
+/// whose format list lacks it, so it is left out (extracted whole with an external archiver, `extract_whole_with_program`).
 pub fn can_read_internally(path: &Path) -> bool {
     const BUILT_IN: &[&str] = &["zip", "7z", "rar", "arj", "alz", "egg", "tar", "gz", "bz2", "bzip2", "z", "tar.gz", "tar.bz2", "tar.bzip2", "tar.xz", "tar.lz", "tar.zst", "tgz", "tbz", "tbz2", "txz", "tlz", "tzst"];
     let Some(format) = archive_format(path) else { return false };
@@ -1127,13 +1127,13 @@ pub fn can_read_internally(path: &Path) -> bool {
     true
 }
 
-/// C# CanReadArchiveInternally || GetExternalArchiveListingProgram(동봉 7-Zip): NDR이 그 안으로 들어가 목록을 볼 수 있는 압축 형식인가.
-/// 동봉 7-Zip은 ACE만 못 읽는다.
+/// C# CanReadArchiveInternally || GetExternalArchiveListingProgram (bundled 7-Zip): whether NDR can enter the archive format and list it.
+/// The bundled 7-Zip cannot read only ACE.
 pub fn bundled_can_browse(path: &Path) -> bool {
     archive_format(path).is_some_and(|format| format != "ace")
 }
 
-/// C# GetExtractFolderName: PathRemoveExtensionW(파일 이름) — 마지막 확장자만 뗀다(sample.7z.001 → sample.7z).
+/// C# GetExtractFolderName: PathRemoveExtensionW(file name), removing only the last extension (sample.7z.001 -> sample.7z).
 pub fn extract_folder_name(archive: &Path) -> String {
     let name = archive.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     match name.rfind('.') {
@@ -1142,7 +1142,7 @@ pub fn extract_folder_name(archive: &Path) -> String {
     }
 }
 
-/// C# CreateUniqueExtractFolder(FUN_00438cb0): "{parent}\{name}", 있으면 "{…}(2)", "(3)"… CreateDirectoryW로 새로 만든 것만.
+/// C# CreateUniqueExtractFolder (FUN_00438cb0): "{parent}\{name}", then "{...}(2)", "(3)"... when it exists; only folders newly created with CreateDirectoryW.
 pub fn create_unique_extract_folder(parent: &Path, name: &str) -> Result<PathBuf, String> {
     let text = parent.to_string_lossy();
     let separator = if text.ends_with(['\\', '/']) { "" } else { "\\" };
@@ -1158,7 +1158,7 @@ pub fn create_unique_extract_folder(parent: &Path, name: &str) -> Result<PathBuf
     Err(format!("압축 풀기 폴더 이름을 정할 수 없습니다: {base}"))
 }
 
-/// C# GetArchiveBaseName(묶음 이름).
+/// C# GetArchiveBaseName (set name).
 pub fn base_name(path: &Path) -> String {
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let lower = name.to_lowercase();
@@ -1191,7 +1191,7 @@ pub fn base_name(path: &Path) -> String {
     Path::new(&name).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or(name)
 }
 
-/// C# GetArchiveOutputFamilyFiles: 같은 폴더에서 형식과 묶음 이름이 같은 파일들(이름 순).
+/// C# GetArchiveOutputFamilyFiles: files in the same folder with the same format and set name (by name).
 pub fn output_family(path: &Path) -> Vec<PathBuf> {
     let Some(format) = archive_format(path) else { return vec![] };
     let full = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
@@ -1208,18 +1208,18 @@ pub fn output_family(path: &Path) -> Vec<PathBuf> {
     files
 }
 
-/// 사용자 요청(원본에는 없는 기능): 압축 파일 안의 항목을 그 자리에서 더하기·지우기·이름 바꾸기. 동봉 7-Zip이 고칠 수 있는
-/// 한 볼륨의 zip·7z·tar·wim만 된다(rar·alz·egg·iso·나눈 압축·gz처럼 한 파일만 감싼 것은 안 된다).
+/// User request (not in the original): add, delete and rename items inside an archive in place. Only single-volume zip, 7z, tar and wim, which the bundled 7-Zip can modify, work
+/// (not rar, alz, egg, iso, split archives, or single-file wrappers like gz).
 pub fn can_modify(path: &Path) -> bool {
     let extension = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).unwrap_or_default();
     if !matches!(extension.as_str(), "zip" | "7z" | "tar" | "wim") || !path.is_file() {
         return false;
     }
-    // 나눈 zip(.z01 …)은 고치지 않는다.
+    // Split zips (.z01 ...) are not modified.
     !(extension == "zip" && path.with_extension("z01").is_file())
 }
 
-/// 압축 파일을 같은 폴더의 준비 폴더에 복사해 그 사본을 7-Zip으로 고친 뒤, 다 되면 원본과 바꾼다(실패·취소면 원본 그대로).
+/// Copies the archive to a staging folder in the same folder, modifies the copy with 7-Zip, then swaps it with the original when done (on failure or cancel the original stays).
 fn modify_archive(archive: &Path, cancel: &AtomicBool, run: impl FnOnce(&Path) -> Result<(), String>) -> Result<(), String> {
     check_cancel(cancel)?;
     if !can_modify(archive) {
@@ -1265,7 +1265,7 @@ fn entry_arg(key: &str) -> Result<String, String> {
     Ok(key.replace('/', "\\"))
 }
 
-/// 압축 안 항목(폴더면 그 안까지) 지우기(7-Zip d).
+/// Deletes archive items (folders with their contents) (7-Zip d).
 pub fn delete_entries(archive: &Path, keys: &[String], password: Option<&str>, cancel: &AtomicBool) -> Result<(), String> {
     if keys.is_empty() {
         return Ok(());
@@ -1278,7 +1278,7 @@ pub fn delete_entries(archive: &Path, keys: &[String], password: Option<&str>, c
     })
 }
 
-/// 압축 안 항목 이름 바꾸기(7-Zip rn, 폴더면 그 안 항목의 경로도 바뀐다).
+/// Renames an archive item (7-Zip rn; for a folder the paths of the items inside change too).
 pub fn rename_entry(archive: &Path, from: &str, to: &str, password: Option<&str>, cancel: &AtomicBool) -> Result<(), String> {
     let (from, to) = (entry_arg(from)?, entry_arg(to)?);
     modify_archive(archive, cancel, |copy| {
@@ -1288,10 +1288,10 @@ pub fn rename_entry(archive: &Path, from: &str, to: &str, password: Option<&str>
     })
 }
 
-/// 압축 안으로 더할 때 같은 이름이 있으면 고르는 처리.
+/// Choice when a name already exists while adding into an archive.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AddConflict {
-    /// 그대로 더한다(파일은 바뀌고 폴더는 합쳐진다).
+    /// Adds as is (files are replaced, folders merge).
     Merge,
     /// 있는 항목(폴더면 안까지)을 지우고 더한다.
     Replace,

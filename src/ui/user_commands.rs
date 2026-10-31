@@ -1,9 +1,9 @@
 use super::*;
 
 
-/// 원본 FUN_00479970(기능키 칸 이름, [FuncKey] 값 하나): 빈 값은 빈 이름. "[이름]명령"이면 [ ] 안 글(비었으면 [ 뒤 전부),
-/// "#내부 명령"이면 내부 명령 목록에 있을 때 RES FUNC_<이름 대문자>(FUN_004586ac, 없으면 # 뒤 글), 그 밖(프로그램)은
-/// PathStripPath·PathRemoveExtension한 파일 이름(확장자에 빈칸이 있으면 확장자로 보지 않음).
+/// Original FUN_00479970 (function key cell name from one [FuncKey] value): an empty value gives an empty name. "[name]command" gives the text inside [ ] (everything after [ when empty),
+/// "#internal command" gives RES FUNC_<upper-case name> when it is in the internal command list (FUN_004586ac, otherwise the text after #), and anything else (a program)
+/// the file name after PathStripPath and PathRemoveExtension (an extension containing a space is not treated as an extension).
 pub(super) fn original_function_key_caption(command: &str, resource: &dyn Fn(&str) -> Option<String>) -> String {
     let command = command.trim();
     if command.is_empty() {
@@ -24,7 +24,7 @@ pub(super) fn original_function_key_caption(command: &str, resource: &dyn Fn(&st
     }
 }
 
-/// 원본 기본 기능키(default\nexusfile.ini [FuncKey]): 지정이 없을 때의 내부 명령.
+/// Original default function keys (default\nexusfile.ini [FuncKey]): internal commands used when nothing is assigned.
 fn original_default_function_key(key: &str) -> &'static str {
     match key {
         "F2" => "#Rename",
@@ -38,7 +38,7 @@ fn original_default_function_key(key: &str) -> &'static str {
     }
 }
 
-/// ALTFUNCTIONS/CTRLFUNCTIONS 단추를 누르면 그 글쇠(같은 Alt/Ctrl과 함께)를 누른 것과 같다.
+/// Pressing an ALTFUNCTIONS/CTRLFUNCTIONS button is the same as pressing that key (with the same Alt/Ctrl).
 fn modifier_function_key(key: &str) -> Option<egui::Key> {
     match key {
         "<-" => Some(egui::Key::ArrowLeft),
@@ -48,7 +48,7 @@ fn modifier_function_key(key: &str) -> Option<egui::Key> {
 }
 
 impl App {
-    /// 원본 ALTFUNCTIONS/CTRLFUNCTIONS("글쇠=이름" 줄): Alt만 누르면 앞의 것, Ctrl만 누르면 뒤의 것. 그 밖은 None(F1~F12 단추).
+    /// Original ALTFUNCTIONS/CTRLFUNCTIONS ("key=name" rows): the first while only Alt is held, the second while only Ctrl is held. Otherwise None (F1-F12 buttons).
     pub(super) fn modifier_functions(&self, modifiers: egui::Modifiers) -> Option<Vec<(String, String)>> {
         let text = match (modifiers.alt, modifiers.ctrl, modifiers.shift) {
             (true, false, false) => self.language_pack.text("RES.ALTFUNCTIONS", "C=Copy\nM=Move\nD=Delete\nR=Rename\nK=New Folder\nU=Select All\nV=View Text\nB=Edit Text"),
@@ -58,13 +58,13 @@ impl App {
             ),
             _ => return None,
         };
-        // "<-=..."처럼 글쇠 자리에 '='가 올 수 없으므로 첫 '='에서 나눈다.
+        // '=' cannot be the key itself (as in "<-=..."), so split at the first '='.
         Some(text.lines().filter_map(|line| line.split_once('=')).map(|(key, name)| (key.to_owned(), name.to_owned())).collect())
     }
 
-    /// 원본 bbFunctions(TNXButtonBar, 스킨 테마): FUN_00430714의 F2~F8 일곱 칸("F%d %s"), Alt·Ctrl을 누르면 ALTFUNCTIONS·CTRLFUNCTIONS 칸.
-    /// Paint(0x7c1568): 칸 너비 = 줄 너비 / 칸 수, 배경 bbbackimg 가로 반복. DrawItem(0x7c0ec0): 왼쪽 + 5에 글쇠 글(bbkeytext),
-    /// 그 너비 + 8 뒤에 이름(bbtext, 포인터가 있으면 bbover), 누른 칸은 (1, 1) 밀림, 칸 오른쪽 끝 − 2에 bbdividerimg(세로 가운데).
+    /// Original bbFunctions (TNXButtonBar, skin theme): seven cells F2-F8 of FUN_00430714 ("F%d %s"), ALTFUNCTIONS/CTRLFUNCTIONS cells while Alt/Ctrl is held.
+    /// Paint (0x7c1568): cell width = row width / cell count, background bbbackimg tiled horizontally. DrawItem (0x7c0ec0): key text (bbkeytext) at left + 5,
+    /// the name after its width + 8 (bbtext, bbover when hovered), a pressed cell shifts by (1, 1), and bbdividerimg at the cell's right end - 2 (vertically centered).
     pub(super) fn skin_function_key_bar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, skin: &ndr::styles::Skin) {
         let rect = ui.max_rect();
         if let Some(back) = skin.values.get("buttonbar.bbbackimg").cloned().and_then(|file| self.skin_bitmap(ctx, &file)) {
@@ -81,7 +81,7 @@ impl App {
             None => (2..=8)
                 .map(|number| {
                     let key = format!("F{number}");
-                    // 원본 FUN_00479970: [FuncKey] 값으로 이름을 정한다. C# 판 지정에 이름이 있으면 그 이름, 지정이 없으면 원본 기본 값.
+                    // Original FUN_00479970: the name comes from the [FuncKey] value. A named C# assignment uses that name; with no assignment, the original default value.
                     let resource = |name: &str| self.language_pack.raw(&format!("RES.{name}"));
                     let name = match ndr::commands::resolve_function_key(&self.settings, &key) {
                         Some(b) if !b.legacy && !b.name.trim().is_empty() => b.name,
@@ -102,7 +102,7 @@ impl App {
             let cell = egui::Rect::from_min_size(egui::pos2(rect.left() + width * index as f32, rect.top()), egui::vec2(width, rect.height()));
             let response = ui.interact(cell, egui::Id::new(("ndr-skin-fkey", index)), egui::Sense::click());
             let shift = if response.is_pointer_button_down_on() { egui::vec2(1.0, 1.0) } else { egui::Vec2::ZERO };
-            // 칸 글은 오른쪽 끝 구분선(− 2) 앞까지.
+            // Cell text runs up to the divider at the right end (- 2).
             let painter = ui.painter().with_clip_rect(cell.with_max_x(cell.right() - 3.0));
             let drawn = painter.text(egui::pos2(cell.left() + 5.0, cell.center().y) + shift, egui::Align2::LEFT_CENTER, key, font.clone(), key_color);
             painter.text(egui::pos2(drawn.right() + 8.0, cell.center().y) + shift, egui::Align2::LEFT_CENTER, name, font.clone(), if response.hovered() { over_color } else { text_color });
@@ -114,8 +114,8 @@ impl App {
             if response.clicked() {
                 clicked = Some(key.clone());
             }
-            // 원본 bbFunctionsContextPopup(0x4373ec): 기본 칸(Alt·Ctrl 칸이 아닐 때)을 오른쪽 단추로 눌러도 그 기능키를 실행한다
-            // (FUN_004308a0, 메뉴는 띄우지 않는다).
+            // Original bbFunctionsContextPopup (0x4373ec): right-clicking a base cell (not the Alt/Ctrl cells) also runs that function key
+            // (FUN_004308a0, no menu appears).
             if response.secondary_clicked() && !(modifiers.alt || modifiers.ctrl) {
                 clicked = Some(key.clone());
             }
@@ -131,7 +131,7 @@ impl App {
         }
     }
 
-    /// C# RunFunctionKeyButtonAsync: 지정이 있으면 그 매크로, 없으면 기본 동작, 그 밖은 "설정된 동작이 없습니다."
+    /// C# RunFunctionKeyButtonAsync: the macro when assigned, otherwise the default action, else "no action is set."
     pub(super) fn run_function_key_button(&mut self, key: &str, ctx: &egui::Context) {
         if self.invoke_function_key(key, ctx) {
             return;
@@ -158,9 +158,9 @@ impl App {
     pub(super) fn invoke_function_key(&mut self, key: &str, ctx: &egui::Context) -> bool {
         let binding = match ndr::commands::resolve_function_key(&self.settings, key) {
             Some(binding) => binding,
-            // 원본은 [FuncKey]가 없으면 default\nexusfile.ini 값(F2 #Rename … F8 #RecycleBin)을 쓴다. 고친 것: 이 판은 기본 값을
-            // 기능키 줄 이름에만 쓰고 실행하지 않아, 새 프로필에서 F3(복사)·F4(이동) 등이 아무 일도 하지 않았다.
-            // 프로필에 그 글쇠 칸이 있으면(빈 값이어도) 그 값을 따른다.
+            // Without [FuncKey] the original uses the default\nexusfile.ini values (F2 #Rename ... F8 #RecycleBin). Fixed: this version used the defaults
+            // only for the function key row names and never ran them, so in a new profile F3 (copy), F4 (move) and others did nothing.
+            // When the profile has that key's slot (even with an empty value), its value is followed.
             None if !self.function_key_configured(key) && !original_default_function_key(key).is_empty() => {
                 let command = original_default_function_key(key);
                 ndr::commands::FunctionBinding { name: key.to_owned(), command: command.to_owned(), parameters: String::new(), internal: true, legacy: true }
@@ -171,12 +171,12 @@ impl App {
         true
     }
 
-    /// 프로필에 그 기능키 칸(FunctionKeys 또는 FunctionKeyBindings)이 있는가.
+    /// Whether the profile has that function key's slot (FunctionKeys or FunctionKeyBindings).
     fn function_key_configured(&self, key: &str) -> bool {
         ["FunctionKeys", "FunctionKeyBindings"].iter().any(|field| self.settings.values.get(*field).and_then(|v| v.as_object()).is_some_and(|map| map.keys().any(|k| k.eq_ignore_ascii_case(key))))
     }
 
-    /// 기능키·도구 모음 UserCommand의 지정 하나를 실행한다(C# ExecuteFunctionKeyMacroAsync, 원본 FUN_0044381c).
+    /// Runs one function key or toolbar UserCommand assignment (C# ExecuteFunctionKeyMacroAsync, original FUN_0044381c).
     pub(super) fn run_binding(&mut self, binding: &ndr::commands::FunctionBinding, ctx: &egui::Context) {
         let panes = self.panes.each_ref().map(|p| compat::MacroPane {
             path: p.path.clone(),
@@ -204,7 +204,7 @@ impl App {
             }
             ndr::commands::PreparedCommand::External { program, arguments, prompt } => {
                 if prompt {
-                    // C# ExecuteFunctionKeyMacroAsync: TakeParameterPrompt면 InputDialog(TITLE_EDITPARAM, MSG_EDITPARAM, 인수), 취소면 실행 안 함.
+                    // C# ExecuteFunctionKeyMacroAsync: with TakeParameterPrompt, InputDialog(TITLE_EDITPARAM, MSG_EDITPARAM, arguments); cancel does not run.
                     let title = self.language_pack.text("TITLE_EDITPARAM", "Edit Parameters");
                     let message = self.language_pack.text("MSG_EDITPARAM", "Type Parameters.");
                     self.prompt(&title, &message, &arguments, None, false, move |app, text, _| {
@@ -219,8 +219,8 @@ impl App {
         }
     }
 
-    /// C# ExecuteFunctionKeyMacroAsync(인수 편집 뒤): 빈 프로그램은 아무것도 안 함, 있는 폴더면 활성 패널에서 열기,
-    /// 아니면 ShellExecuteEx(프로그램, 인수, 활성 패널 폴더(없으면 지정 없음)). 실패는 셸이 직접 알리므로 따로 알리지 않는다.
+    /// C# ExecuteFunctionKeyMacroAsync (after editing arguments): an empty program does nothing, an existing folder opens in the active pane,
+    /// otherwise ShellExecuteEx(program, arguments, active pane folder (none when missing)). The shell reports failures itself, so nothing else is shown.
     pub(super) fn run_function_key_program(&mut self, program: &str, arguments: &str) {
         if program.is_empty() {
             return;
@@ -234,7 +234,7 @@ impl App {
     }
     pub(super) fn apply_preferences(&mut self, ctx: &egui::Context) {
         let theme = self.settings.text("Theme", "Black");
-        // 스킨의 바탕 색 표 → 스킨 색 → 색상표.
+        // Skin base color table -> skin colors -> color table.
         let palette = super::system_commands::theme_palette(&theme);
         self.dark = palette.dark();
         let mut visuals = super::system_commands::palette_visuals(&palette);
@@ -278,8 +278,8 @@ impl App {
             }
         }
         ctx.set_visuals(visuals);
-        // 원본·C# 판 ListFont(글꼴 이름)와 원본 모양(ListFontStyle, TFontStyles: 1 굵게·2 기울임): 바뀌었을 때만
-        // 그 꼴의 글꼴 파일("이름 Bold" 등, 없으면 가까운 꼴·보통 꼴)을 읽어 "list" 묶음을 다시 만든다(못 찾으면 보통 글꼴).
+        // Original and C# ListFont (font name) plus the original style (ListFontStyle, TFontStyles: 1 bold, 2 italic): only when they change,
+        // the font file of that face ("name Bold" etc., otherwise the nearest or regular face) is read and the "list" family rebuilt (the normal font when not found).
         let list_font = self.settings.text("ListFont", "Segoe UI");
         let style = (self.settings.values.get("ListFontStyle").and_then(|v| v.as_i64()).unwrap_or(0) & 0x0F) as u8;
         let key = format!("{list_font}\u{0}{}", style & 3);
@@ -292,7 +292,7 @@ impl App {
             super::set_app_fonts(ctx, data, style & 1 != 0);
             self.list_font_name = Some(key);
         }
-        // C# 판 grid.FontSize = ListFontSize(화소, 처음 값 14): 크기는 파일 목록에만 쓴다(panes.rs). 나머지 글은 처음 값 12화소 그대로.
+        // C# version grid.FontSize = ListFontSize (pixels, default 14): the size applies only to the file list (panes.rs). Other text stays at the default 12 px.
         self.list_font_size = self
             .settings
             .values
@@ -314,14 +314,14 @@ impl App {
             }
         });
         self.dual = self.settings.flag("DualPaneMode", self.dual);
-        // C# WindowOpacity: 알파를 바로 적용(다시 시작 필요 없음). 창 글 = clamp(WindowAlpha/255, 0.35, 1.0).
-        // 시작 확인 때는 화면 밖 창이라 건드리지 않는다.
+        // C# WindowOpacity: alpha applies at once (no restart). Window value = clamp(WindowAlpha/255, 0.35, 1.0).
+        // During the startup check the window is off screen, so it is left alone.
         if self.options.smoke_seconds.is_none() {
-            // C# ApplyWindowOpacity: UseWindowAlpha가 켜져 있을 때만 알파, 꺼져 있으면 불투명(1.0).
+            // C# ApplyWindowOpacity: alpha only when UseWindowAlpha is on, otherwise opaque (1.0).
             let raw = self.settings.values.get("WindowAlpha").and_then(|v| v.as_f64()).unwrap_or(210.0);
             let alpha = if self.settings.flag("UseWindowAlpha", false) { native::window_opacity(raw) } else { 1.0 };
             if (alpha - self.applied_alpha).abs() > f32::EPSILON {
-                // 처음부터 불투명이면 층 창(WS_EX_LAYERED)을 켜지 않는다.
+                // When opaque from the start, the layered window (WS_EX_LAYERED) is not turned on.
                 if !(self.applied_alpha < 0.0 && alpha >= 1.0) {
                     native::set_window_opacity(self.hwnd, alpha);
                 }

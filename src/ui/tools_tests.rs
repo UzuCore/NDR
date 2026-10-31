@@ -1,6 +1,6 @@
 //! C# ChecksumAsync, MergeTextFilesAsync, OpenWithAsync, RunCommandAsync, OriginalFindAsync, Map/UnmapNetworkDriveAsync,
-//! ToggleExplorerIntegrationAsync, ImportLegacySettingsAsync, InstallSelectedArchive, SelectDestinationFolder/RememberDestination를
-//! Rust UI에서 확인한다. 한국어와 영어만. 격리 폴더만 쓰고, 프로그램 실행·네트워크 드라이브·레지스트리·폴더/파일 대화 상자는 가짜 함수다.
+//! ToggleExplorerIntegrationAsync, ImportLegacySettingsAsync, InstallSelectedArchive and SelectDestinationFolder/RememberDestination
+//! in the Rust UI. Korean and English only. Only isolated folders; running programs, network drives, the registry and folder/file dialogs are fakes.
 use super::original_dialogs::{DialogKind, DialogResult};
 use super::*;
 use std::{cell::RefCell, fs};
@@ -25,7 +25,7 @@ fn fake_drives() -> Vec<PathBuf> {
 fn fake_volume_label(root: &Path) -> Option<String> {
     LABELS.with(|l| l.borrow().iter().rev().find(|(r, _)| r == root).map(|(_, label)| label.clone()))
 }
-/// "deny"로 시작하는 이름은 ERROR_ACCESS_DENIED(5), "fail"은 다른 오류(1).
+/// Names starting with "deny" give ERROR_ACCESS_DENIED (5), "fail" another error (1).
 fn fake_set_volume_label(root: &Path, label: &str) -> Result<(), u32> {
     if label.starts_with("deny") {
         return Err(5);
@@ -77,7 +77,7 @@ fn run_verb(path: &Path, verb: &str) -> Result<(), String> {
     VERBS.with(|v| v.borrow_mut().push((path.to_path_buf(), verb.into())));
     Ok(())
 }
-/// 여러 항목 속성 창(원본 FUN_00458da8): 경로마다 "properties*"로 남긴다.
+/// Multi-item properties window (original FUN_00458da8): records "properties*" per path.
 fn record_properties(paths: &[PathBuf]) -> Result<(), String> {
     VERBS.with(|v| v.borrow_mut().extend(paths.iter().map(|p| (p.clone(), "properties*".to_owned()))));
     Ok(())
@@ -112,7 +112,7 @@ fn fixture(label: &str, language: &str) -> (PathBuf, egui::Context, App) {
     wait_until(&mut app, &ctx, |app| app.panes.iter().all(|p| !p.loading));
     (root, ctx, app)
 }
-/// 시간이 다 되면 부른 줄을 알린다(#[track_caller]) — 어느 기다림이 멈췄는지 바로 보이게.
+/// On timeout reports the calling line (#[track_caller]) so it is clear which wait stalled.
 #[track_caller]
 fn wait_until(app: &mut App, ctx: &egui::Context, done: impl Fn(&App) -> bool) {
     let caller = std::panic::Location::caller();
@@ -163,13 +163,13 @@ fn boxed(app: &App) -> (String, String) {
 fn command_line_find_and_open_with_follow_the_original() {
     let (root, ctx, mut app) = fixture("command", "ko");
     let left = root.join("left");
-    // 찾기: TfGetText(TITLE_FIND, MSG_FIND, 빈 글).
+    // Find: TfGetText(TITLE_FIND, MSG_FIND, empty text).
     app.dispatch("find", &ctx);
     let (title, message, value, _) = prompt(&app);
     assert_eq!((title, message, value), (app.language_pack.text("RES.TITLE_FIND", "?"), app.language_pack.text("RES.MSG_FIND", "?"), String::new()));
     app.answer_dialog(DialogResult::Text(Some("gam".into())), &ctx);
     assert_eq!(app.panes[0].entries[app.panes[0].cursor].name, "gamma.log");
-    // 명령 실행: 기록이 있는 입력 상자.
+    // Run command: an input box with history.
     app.settings.set_strings("CommandHistory", vec!["old".into()]);
     app.dispatch("command", &ctx);
     let (title, message, _, history) = prompt(&app);
@@ -177,7 +177,7 @@ fn command_line_find_and_open_with_follow_the_original() {
     app.answer_dialog(DialogResult::Text(Some("someprog.exe a b".into())), &ctx);
     assert_eq!(launched(), [("someprog.exe".to_owned(), "a b".to_owned(), left.clone())], "ShellExecuteEx(name, arguments, current folder)");
     assert_eq!(app.settings.strings("CommandHistory"), ["someprog.exe a b", "old"]);
-    // 원본 shortcut.ini miCommandLine=/: 목록에서 / 글쇠(VK_OEM_2)로 같은 입력 상자.
+    // Original shortcut.ini miCommandLine=/: the same input box with the / key (VK_OEM_2) from the list.
     let slash = vec![
         egui::Event::Key { key: egui::Key::Slash, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE },
         egui::Event::Text("/".into()),
@@ -187,7 +187,7 @@ fn command_line_find_and_open_with_follow_the_original() {
     let (title, _, _, _) = prompt(&app);
     assert_eq!(title, app.language_pack.text("RES.TITLE_CMD", "?"), "the / key opens the command line");
     app.answer_dialog(DialogResult::Text(None), &ctx);
-    // 실행 파일 기록: 이름이 같은 후보 하나면 그 경로를 인수 없이.
+    // Executable history: one candidate with the same name runs that path without arguments.
     let tool = left.join("folder1").join("tool.exe");
     fs::write(&tool, b"").unwrap();
     app.settings.set_strings("ExecutableHistory", vec![format!("tool={}", tool.display()), "ghost=C:\\nowhere\\ghost.exe".into()]);
@@ -195,7 +195,7 @@ fn command_line_find_and_open_with_follow_the_original() {
     assert_eq!(launched(), [(tool.to_string_lossy().into_owned(), String::new(), left.clone())]);
     app.run_command("ghost".into());
     assert_eq!(launched(), [("ghost".to_owned(), String::new(), left.clone())], "a missing cached path is no candidate");
-    // 후보가 여럿이면 고르는 메뉴.
+    // Several candidates show a choice menu.
     let second = left.join("tool.exe");
     fs::write(&second, b"").unwrap();
     app.settings.set_strings("ExecutableHistory", vec![format!("tool={}", tool.display()), format!("tool={}", second.display())]);
@@ -222,17 +222,17 @@ fn command_line_find_and_open_with_follow_the_original() {
     let history = app.settings.strings("CommandHistory");
     assert_eq!(history[0], "ftp://host.invalid/dir");
     assert!(history.len() <= 20);
-    // 다른 프로그램으로 열기: 프로그램(처음 값 TextViewerPath) → 인수 템플릿.
+    // Open with another program: program (initially TextViewerPath) -> argument template.
     app.navigate(0, left.clone(), true);
     wait_until(&mut app, &ctx, |app| !app.panes[0].loading);
-    // 원본 mipOpenWithClick(0x43da54, 스킨 테마): 커서 파일을 rundll32 shell32.dll,OpenAs_RunDLL 로.
+    // Original mipOpenWithClick (0x43da54, skin theme): the cursor file goes to rundll32 shell32.dll,OpenAs_RunDLL.
     app.panes[0].cursor = row(&app, "alpha.txt");
     app.dispatch("openWith", &ctx);
     assert_eq!(launched(), [("rundll32.exe".to_owned(), format!("shell32.dll,OpenAs_RunDLL {}", left.join("alpha.txt").display()), left.clone())]);
     fs::remove_dir_all(root).unwrap();
 }
 
-/// 목록 스레드에서 불리므로 스레드 지역 값을 쓰지 않는다: 늘 "Test", 고정 디스크, 여유 2 KB / 전체 8 KB.
+/// Called from the listing thread, so it does not use thread-local values: always "Test", fixed disk, 2 KB free / 8 KB total.
 fn fake_drive_item(_: &Path) -> Option<(String, u32, Option<(u64, u64)>)> {
     Some(("Test".into(), 3, Some((2048, 8192))))
 }
@@ -246,7 +246,7 @@ fn copied_checksum(text: &str) -> Result<(), String> {
 fn checksum_merge_and_destination_follow_the_csharp_flows() {
     let (root, ctx, mut app) = fixture("checksum", "en");
     let (left, right) = (root.join("left"), root.join("right"));
-    // 원본 TfChecksum(하위 메뉴 MD5): 초점 파일 하나, 제목 "MD5", 처음엔 CALCULATING, 끝나면 소문자 해시와 켜진 복사 단추.
+    // Original TfChecksum (submenu MD5): one focused file, title "MD5", CALCULATING at first, then a lower-case hash and an enabled copy button.
     app.panes[0].cursor = row(&app, "alpha.txt");
     app.dispatch("checksum:Md5", &ctx);
     assert_eq!(app.original_dialogs[0].title, "MD5");
@@ -258,7 +258,7 @@ fn checksum_merge_and_destination_follow_the_csharp_flows() {
     assert!(matches!(&app.original_dialogs[0].kind, DialogKind::Checksum { value, .. } if *value == md5));
     app.clipboard_writer = copied_checksum;
     frame(&mut app, &ctx, vec![]);
-    // Enter = 초점 받은 복사 단추.
+    // Enter = the focused copy button.
     frame(&mut app, &ctx, vec![enter()]);
     assert_eq!(COPIED.with(|c| c.borrow().clone()), md5);
     assert_eq!(app.original_dialogs.len(), 1, "copying keeps the window open");
@@ -268,7 +268,7 @@ fn checksum_merge_and_destination_follow_the_csharp_flows() {
     app.clipboard_writer = |_| Ok(());
     app.answer_dialog(DialogResult::Checksum, &ctx);
     assert!(app.original_dialogs.is_empty() && app.text.is_none());
-    // CRC는 IntToHex(8자, 대문자). 폴더에 초점이 있으면 아무 일도 없다.
+    // CRC is IntToHex(8 chars, upper case). With focus on a folder nothing happens.
     app.dispatch("checksum:Crc32", &ctx);
     wait_until(&mut app, &ctx, |app| matches!(&app.original_dialogs[0].kind, DialogKind::Checksum { ready: true, .. }));
     let crc32 = ndr::tools::checksum(&left.join("alpha.txt"), "crc32").unwrap();
@@ -277,7 +277,7 @@ fn checksum_merge_and_destination_follow_the_csharp_flows() {
     app.panes[0].cursor = row(&app, "folder1");
     app.dispatch("checksum:Sha1", &ctx);
     assert!(app.original_dialogs.is_empty());
-    // C# 판의 SHA-256은 글 창 그대로.
+    // SHA-256 of the C# version keeps the text window.
     app.panes[0].cursor = row(&app, "alpha.txt");
     app.dispatch("checksum:Sha256", &ctx);
     wait_until(&mut app, &ctx, |app| app.text.is_some());
@@ -297,7 +297,7 @@ fn checksum_merge_and_destination_follow_the_csharp_flows() {
     app.dispatch("checksum", &ctx);
     assert_eq!(boxed(&app).1, "Select the files to checksum.");
     app.answer_message_box(1, &ctx);
-    // 텍스트 파일 합치기: 둘 이상, 저장 경로, 같은 경로 검사, 구분 고르기.
+    // Merge text files: two or more, save path, same path check, choose a separator.
     app.panes[0].selected = [row(&app, "alpha.txt")].into_iter().collect();
     app.dispatch("merge", &ctx);
     assert_eq!(boxed(&app), ("NDR".to_owned(), "Select at least two text files to merge.".to_owned()));
@@ -315,7 +315,7 @@ fn checksum_merge_and_destination_follow_the_csharp_flows() {
     assert_eq!(app.status, "Merged 2 text files.");
     assert_eq!(fs::read(root.join("merged.txt")).unwrap(), b"alpha.txt\r\n\r\nbeta.txt\r\n\r\n");
     wait_until(&mut app, &ctx, |app| !app.panes[0].loading);
-    // 다른 폴더로 복사: 대상 선택 창(작업 폴더, 자주 쓴 대상), RememberDestination.
+    // Copy to another folder: the destination window (work folders, most used destinations), RememberDestination.
     let mut work = vec![right.to_string_lossy().into_owned()];
     work.resize(5, String::new());
     app.settings.set_strings("WorkingFolders", work);
@@ -325,7 +325,7 @@ fn checksum_merge_and_destination_follow_the_csharp_flows() {
     frame(&mut app, &ctx, vec![]);
     app.destination_action(super::destination_dialog::DestinationAction::Work(1), &ctx);
     assert_eq!(boxed(&app), ("Copy - Select a destination".to_owned(), "Work folder 2 is not set or is unavailable.".to_owned()));
-    // 상자가 위에 있어도 대상 선택 창은 그 뒤에 그대로 그려진다(예전에는 사라졌다).
+    // Even with a box on top, the destination window keeps being drawn behind it (it used to disappear).
     let serial = app.original_dialogs.last().unwrap().serial;
     frame(&mut app, &ctx, vec![]);
     let dialog_layer = egui::Id::new(("ndr-original-dialog", serial));
@@ -351,7 +351,7 @@ fn checksum_merge_and_destination_follow_the_csharp_flows() {
     wait_job(&mut app, &ctx);
     assert!(right.join("beta.txt").is_file() && !left.join("beta.txt").exists(), "moved");
     assert_eq!(app.settings.values["MostUsedDestinations"][0]["UseCount"].as_u64(), Some(2));
-    // 찾아보기와 기록에서 지우기.
+    // Browse and remove from history.
     app.panes[0].cursor = row(&app, "gamma.log");
     app.dispatch("copyToFolder", &ctx);
     app.destination_action(super::destination_dialog::DestinationAction::Remove(right.to_string_lossy().into_owned()), &ctx);
@@ -362,7 +362,7 @@ fn checksum_merge_and_destination_follow_the_csharp_flows() {
     app.answer_dialog(super::original_dialogs::DialogResult::FolderTree(Some(root.join("left").join("folder1"))), &ctx);
     wait_job(&mut app, &ctx);
     assert!(left.join("folder1").join("gamma.log").is_file());
-    // 원본 btnOkClick(0x453c4c): 드라이브 줄(종류 8)을 고르고 경로 칸이 그 루트이면 확인 = 폴더 트리(btnTreeClick).
+    // Original btnOkClick (0x453c4c): with a drive row (kind 8) chosen and the path field at that root, OK = folder tree (btnTreeClick).
     DRIVES.with(|d| *d.borrow_mut() = vec![right.clone()]);
     app.panes[0].cursor = row(&app, "gamma.log");
     app.dispatch("copyToFolder", &ctx);
@@ -383,7 +383,7 @@ thread_local! {
     static NETWORK_PICKS: std::cell::RefCell<Vec<(String, Option<PathBuf>)>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
-/// 원본 miNetwork 폴더 고르기 대신: 제목과 처음 폴더를 적고 처음 폴더의 "net"을 고른다.
+/// In place of the original miNetwork folder picker: records the title and initial folder and picks "net" in the initial folder.
 fn fake_network_picker(title: &str, initial: Option<&Path>) -> Option<PathBuf> {
     NETWORK_PICKS.with(|p| p.borrow_mut().push((title.to_owned(), initial.map(Path::to_path_buf))));
     initial.map(|p| if p.ends_with("net") { p.to_path_buf() } else { p.join("net") })
@@ -394,7 +394,7 @@ fn network_drives_explorer_import_and_install_follow_the_csharp_flows() {
     let (root, ctx, mut app) = fixture("system", "ko");
     let used: Vec<String> = native::drives().iter().map(|d| d.to_string_lossy().to_lowercase()).collect();
     let letter = ('m'..='y').find(|c| !used.iter().any(|d| d.starts_with(&format!("{c}:")))).expect("a free drive letter");
-    // 네트워크 드라이브 연결: 문자 → 공유 경로 → 예/아니요/취소 → (아니요) 계정 입력 창.
+    // Map network drive: letter -> share path -> yes/no/cancel -> (no) account input window.
     app.dispatch("mapDrive", &ctx);
     assert_eq!(prompt(&app).0, "네트워크 드라이브 연결");
     app.answer_dialog(DialogResult::Text(Some("12".into())), &ctx);
@@ -423,7 +423,7 @@ fn network_drives_explorer_import_and_install_follow_the_csharp_flows() {
     app.answer_dialog(DialogResult::Credentials(Some(("bad".into(), String::new()))), &ctx);
     assert_eq!(boxed(&app).1, "네트워크 드라이브 연결에 실패했습니다. Windows 오류 86: The specified network password is not correct.");
     app.answer_message_box(1, &ctx);
-    // 연결 해제.
+    // Disconnect.
     app.dispatch("unmapDrive", &ctx);
     assert_eq!(choice(&app), ("네트워크 드라이브 연결 해제".to_owned(), vec!["Z:".to_owned()]));
     app.answer_dialog(DialogResult::Choice(Some(0)), &ctx);
@@ -433,7 +433,7 @@ fn network_drives_explorer_import_and_install_follow_the_csharp_flows() {
     app.dispatch("unmapDrive", &ctx);
     assert_eq!(boxed(&app).1, "연결된 네트워크 드라이브가 없습니다.");
     app.answer_message_box(1, &ctx);
-    // 원본 miNetwork(SHBrowseForFolderW, 뿌리 = 네트워크, 제목 [RES] NETWORK): 지금 폴더를 처음 선택으로 열고, 고르면 그 폴더로 간다.
+    // Original miNetwork (SHBrowseForFolderW, root = network, title [RES] NETWORK): opens with the current folder selected, and a choice goes to that folder.
     app.active = 0;
     let start = app.panes[0].path.clone();
     fs::create_dir_all(start.join("net")).unwrap();
@@ -448,7 +448,7 @@ fn network_drives_explorer_import_and_install_follow_the_csharp_flows() {
     fs::remove_dir(start.join("net")).unwrap();
     app.navigate(0, start.clone(), true);
     wait_until(&mut app, &ctx, |app| !app.panes[0].loading);
-    // 탐색기 메뉴: 없으면 추가를, 있으면 제거를 묻는다.
+    // Explorer menu: asks to add when absent, to remove when present.
     app.dispatch("shellIntegration", &ctx);
     assert_eq!(boxed(&app), ("탐색기 통합".to_owned(), "현재 계정의 Windows 탐색기 폴더 메뉴에 NDR을 추가할까요?".to_owned()));
     app.answer_message_box(6, &ctx);
@@ -458,7 +458,7 @@ fn network_drives_explorer_import_and_install_follow_the_csharp_flows() {
     assert_eq!(boxed(&app).1, "NDR의 탐색기 폴더 메뉴 등록을 제거할까요?");
     app.answer_message_box(7, &ctx);
     assert_eq!(EXPLORER.with(|e| e.borrow().clone()), [true], "No changes nothing");
-    // 압축 파일 설치(셸 동사 install).
+    // Install archive (shell verb install).
     app.panes[0].cursor = row(&app, "alpha.txt");
     app.dispatch("archiveInstall", &ctx);
     assert_eq!(boxed(&app).1, "설치할 압축 파일을 선택하세요.");
@@ -470,7 +470,7 @@ fn network_drives_explorer_import_and_install_follow_the_csharp_flows() {
     app.panes[0].cursor = row(&app, "setup.zip");
     app.dispatch("archiveInstall", &ctx);
     assert_eq!(VERBS.with(|v| v.borrow().clone()), [(package, "install".to_owned())]);
-    // 레거시 INI 가져오기: 설정 바꾸기, 옆의 toolbar.xml(있던 것은 보관), 시작 위치.
+    // Import legacy INI: replace settings, the toolbar.xml beside it (an existing one kept), start locations.
     let legacy = root.join("legacy");
     fs::create_dir_all(&legacy).unwrap();
     let ini = legacy.join("nexusfile.ini");
@@ -501,7 +501,7 @@ fn archive_form(app: &App) -> &super::archive_dialog::ArchiveCreateForm {
     }
 }
 
-/// 원본 rbFormatClick(PathRenameExtensionW). 압축 파일은 늘 지금 폴더에 만든다(고친 것: 적은 경로는 쓰지 않고 이름만).
+/// Original rbFormatClick (PathRenameExtensionW). The archive always goes to the current folder (fixed: a typed path is not used, only the name).
 #[test]
 fn archive_name_field_follows_the_original_tfaddtoarc() {
     use super::archive_dialog::{archive_output_path, rename_extension};
@@ -518,7 +518,7 @@ fn archive_name_field_follows_the_original_tfaddtoarc() {
     assert_eq!(archive_output_path(r"D:\out\", here), None);
 }
 
-/// VCL TLabel FocusControl: 압축하기 창의 "비밀번호(&P):"는 Alt+P로 비밀번호 칸에 초점을 준다.
+/// VCL TLabel FocusControl: "비밀번호(&P):" of the create archive window focuses the password field with Alt+P.
 #[test]
 fn archive_window_labels_focus_their_fields() {
     let (root, ctx, mut app) = fixture("archivelabel", "ko");
@@ -532,7 +532,7 @@ fn archive_window_labels_focus_their_fields() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// 외부 압축 프로그램은 쓰지 않는다: RAR·ARJ(동봉 7-Zip이 못 만듦)는 고를 수 없다.
+/// External archivers are not used: RAR and ARJ (the bundled 7-Zip cannot create them) cannot be chosen.
 #[test]
 fn archive_window_has_no_external_program_formats() {
     let (root, ctx, mut app) = fixture("archiveprog", "ko");
@@ -545,7 +545,7 @@ fn archive_window_has_no_external_program_formats() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// 원본 cbFileName에 이름을 넣는다.
+/// Puts a name in the original cbFileName.
 fn name_archive(app: &mut App, name: &str) {
     let name = name.to_owned();
     app.edit_dialog_kind(move |kind| if let DialogKind::ArchiveCreate(form) = kind { form.file_name = name.clone(); });
@@ -558,7 +558,7 @@ fn archive_create_add_move_and_extract_follow_the_csharp_flows() {
     app.settings.set_flag("UseRecycleBin", false);
     fs::write(left.join("folder1").join("inner.txt"), b"inner").unwrap();
     app.panes[0].selected = [row(&app, "alpha.txt"), row(&app, "folder1")].into_iter().collect();
-    // 압축하기 창: 하위 폴더 포함(폴더가 있으면 처음 켬), 분할 크기 검사.
+    // Create archive window: include subfolders (initially on when there are folders), split size check.
     app.dispatch("createArchive", &ctx);
     assert_eq!(app.original_dialogs.last().unwrap().title, "압축하기");
     let form = archive_form(&app);
@@ -572,13 +572,13 @@ fn archive_create_add_move_and_extract_follow_the_csharp_flows() {
     assert_eq!(boxed(&app), ("압축하기".to_owned(), app.language_pack.text("formAddToArchive.Message.InvalidVolume", "Enter a valid volume size such as 10 MB, or 0 for no splitting.")));
     app.answer_message_box(1, &ctx);
     let pack = left.join("pack.zip");
-    // 원본 TfAddToArc cbFileName: 기본 이름(폴더 이름 + 확장자). 저장 상자 없이 지금 폴더에 그 이름으로 만든다.
+    // Original TfAddToArc cbFileName: default name (folder name + extension). Created with that name in the current folder without a save box.
     assert_eq!(archive_form(&app).file_name, "left.zip");
     let _ = &right;
     SAVE_TARGET.with(|t| *t.borrow_mut() = None);
     let named = pack.to_string_lossy().into_owned();
     app.edit_dialog_kind(|kind| if let DialogKind::ArchiveCreate(form) = kind { form.volume = "분할 안함".into(); form.set_format(0); form.file_name = "pack.zip".into(); });
-    // 창이 떠 있는 동안 다른 패널이 지금 패널이 되어도 압축 파일은 창을 연 패널 폴더에 생긴다.
+    // Even if another pane becomes current while the window is open, the archive is created in the folder of the pane that opened the window.
     app.active = 1;
     app.submit_archive_create(0, &ctx);
     app.active = 0;
@@ -588,7 +588,7 @@ fn archive_create_add_move_and_extract_follow_the_csharp_flows() {
     wait_until(&mut app, &ctx, |app| !app.panes[0].loading);
     assert_eq!(app.panes[0].entries[app.panes[0].cursor].name, "pack.zip", "the cursor goes to the new archive");
     assert_eq!(app.settings.text("DefaultArchiveFormatExtension", ""), "zip", "RememberArchiveDialogChoices");
-    // 같은 이름으로 다시 만들면 묶음 교체를 묻는다(아니요 = 그대로). 새 목록은 ".."에서 시작하므로 전처럼 folder1에 커서를 둔다.
+    // Creating again with the same name asks to replace the set (no = unchanged). The new list starts at "..", so put the cursor on folder1 as before.
     app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == "folder1").unwrap();
     app.dispatch("createArchive", &ctx);
     name_archive(&mut app, &named);
@@ -597,7 +597,7 @@ fn archive_create_add_move_and_extract_follow_the_csharp_flows() {
     assert!(boxed(&app).1.starts_with("기존 압축 파일 묶음 1개를 새 결과로 교체할까요?\r\n\r\npack.zip"));
     app.answer_message_box(7, &ctx);
     assert!(app.job.as_ref().is_none_or(|j| j.finished));
-    // 압축 파일에 추가: 있던 항목은 남는다. 형식이 다르면 알린다.
+    // Add to an archive: existing items stay. A different format is reported.
     app.panes[0].selected = [row(&app, "beta.txt")].into_iter().collect();
     app.dispatch("archiveAdd", &ctx);
     assert_eq!(archive_form(&app).file_name, "beta.zip", "one item: its own name");
@@ -612,7 +612,7 @@ fn archive_create_add_move_and_extract_follow_the_csharp_flows() {
     app.submit_archive_create(0, &ctx);
     assert_eq!(boxed(&app), ("NDR".to_owned(), "대상 파일의 형식(7z)과 선택한 형식(.zip)이 다릅니다.".to_owned()));
     app.answer_message_box(1, &ctx);
-    // 압축 파일로 이동: 확인 뒤 원본을 지운다(이 시험은 휴지통을 쓰지 않는다).
+    // Move into an archive: sources are deleted after confirmation (this test does not use the Recycle Bin).
     app.panes[0].selected = [row(&app, "gamma.log")].into_iter().collect();
     app.dispatch("archiveMove", &ctx);
     name_archive(&mut app, &named);
@@ -622,20 +622,20 @@ fn archive_create_add_move_and_extract_follow_the_csharp_flows() {
     wait_job(&mut app, &ctx);
     assert!(!left.join("gamma.log").exists());
     assert_eq!(archive_keys(&pack), ["alpha.txt", "beta.txt", "folder1/inner.txt", "gamma.log"]);
-    // 새 폴더에 풀기: pack, pack(2).
+    // Extract into a new folder: pack, pack(2).
     app.panes[0].selected.clear();
     app.panes[0].cursor = row(&app, "pack.zip");
     app.dispatch("extractNewFolder", &ctx);
     wait_job(&mut app, &ctx);
     assert_eq!(app.status, format!("압축을 풀었습니다: {}", left.display()));
-    // 진행 창 막대: 목록을 읽은 뒤 전체 항목 수를 알린다(Event::Totals).
+    // Progress window bar: reports the total item count after reading the listing (Event::Totals).
     assert!(app.job.as_ref().and_then(|j| j.progress.as_ref()).and_then(|p| p.total_files).is_some_and(|n| n >= 4), "extraction reports its total");
     assert!(left.join("pack").join("folder1").join("inner.txt").is_file());
     app.panes[0].cursor = row(&app, "pack.zip");
     app.dispatch("extractNewFolder", &ctx);
     wait_job(&mut app, &ctx);
     assert!(PathBuf::from(format!("{}\\pack(2)", left.display())).join("gamma.log").is_file());
-    // 자동: 맨 위가 폴더 하나면 그대로, 아니면 새 폴더.
+    // Auto: as is when the top level is one folder, otherwise a new folder.
     fs::create_dir_all(left.join("solo")).unwrap();
     fs::write(left.join("solo").join("x.txt"), b"x").unwrap();
     let cancel = AtomicBool::new(false);
@@ -651,8 +651,8 @@ fn archive_create_add_move_and_extract_follow_the_csharp_flows() {
     app.dispatch("extractAuto", &ctx);
     wait_job(&mut app, &ctx);
     assert!(PathBuf::from(format!("{}\\pack(3)", left.display())).join("alpha.txt").is_file());
-    // 압축 파일 안: 원본 miCopyToClick = FUN_00439bac(형식 0) — 압축 풀기 대상 선택 창(처음 값 다른 패널), 확인하면 그 항목 풀기.
-    // 이동은 아래(사용자 요청으로 바뀜).
+    // Inside an archive: original miCopyToClick = FUN_00439bac (mode 0), the extraction destination window (initially the other pane); OK extracts those items.
+    // Move is below (changed per user request).
     app.panes[0].archive = Some(ArchiveLocation { file: pack.clone(), prefix: String::new(), password: String::new() });
     app.refresh(0);
     wait_until(&mut app, &ctx, |app| !app.panes[0].loading);
@@ -667,7 +667,7 @@ fn archive_create_add_move_and_extract_follow_the_csharp_flows() {
     wait_job(&mut app, &ctx);
     assert!(right.join("folder1").join("inner.txt").is_file() && !right.join("alpha.txt").exists());
     app.panes[0].cursor = row(&app, "folder1");
-    // 원본은 압축 안 이동(miMoveToClick)이 아무것도 하지 않았다. 사용자 요청으로 고칠 수 있는 zip이면 대상 선택 창을 연다(여기서는 취소).
+    // In the original, moving inside an archive (miMoveToClick) did nothing. Per user request a modifiable zip opens the destination window (cancelled here).
     app.dispatch("moveToOther", &ctx);
     assert!(app.msgboxes.is_empty() && app.original_dialogs.len() == 1 && app.job.as_ref().is_none_or(|j| j.finished), "move inside a zip asks for a destination");
     app.destination_action(super::destination_dialog::DestinationAction::Cancel, &ctx);
@@ -682,11 +682,11 @@ fn archive_create_add_move_and_extract_follow_the_csharp_flows() {
     fs::remove_dir_all(root).unwrap();
 }
 
-// ---- 디스크 복사(C# DiskCopyWindow). 장치 함수는 모두 가짜이고, 이미지 파일은 격리 폴더에만 쓴다. ----
+// ---- Disk copy (C# DiskCopyWindow). All device functions are fakes and image files go only to isolated folders. ----
 use super::disk_copy_dialog::{DiskAction, DiskHooks, DiskMode, DiskStage, physical_text};
 use ndr::disk::{PhysicalDisk, RemovableDrive};
 
-/// 가짜 장치 함수는 일꾼 스레드에서 불리므로 기록은 전역이다. 디스크 테스트끼리는 이 잠금으로 차례를 지킨다.
+/// The fake device functions are called on the worker thread, so the records are global. Disk tests take turns with this lock.
 static DISK_LOCK: Mutex<()> = Mutex::new(());
 static DISK_CALLS: Mutex<Vec<String>> = Mutex::new(Vec::new());
 static DISK_HOLD: AtomicBool = AtomicBool::new(false);
@@ -795,7 +795,7 @@ fn disk_copy_window_follows_the_csharp_flows() {
     frame(&mut app, &ctx, vec![]);
     {
         let form = app.disk_copy_form().unwrap();
-        // 처음: 직접 복사, 원본 = 첫 드라이브, 대상 = 두 번째.
+        // Initially: direct copy, source = first drive, destination = second.
         assert_eq!((form.mode, form.drive, form.destination_drive, form.physical_disk, form.destination_physical), (DiskMode::Copy, Some(0), Some(1), Some(0), Some(1)));
         assert_eq!((form.drive_label(), form.start_label()), ("원본 드라이브", "드라이브 복사"));
         assert_eq!(form.status, "이동식 드라이브와 이미지 파일을 선택하세요.");
@@ -808,7 +808,7 @@ fn disk_copy_window_follows_the_csharp_flows() {
         form.destination_drive = Some(1);
         form.verify = true;
     }
-    // 직접 복사: 경고 확인(아니요면 아무것도 하지 않음, 예면 복사 → 창이 닫힘).
+    // Direct copy: warning confirmation (no does nothing, yes copies -> the window closes).
     app.disk_copy_action(DiskAction::Start, &ctx);
     assert_eq!(boxed(&app), ("이동식 드라이브 직접 복사".to_owned(), "F:\\ (이동식 디스크)의 기존 볼륨 데이터가 E:\\ (USB-A) 내용으로 덮어씁니다.\n\n작업 중에는 드라이브를 분리하거나 NDR을 종료하지 마세요. 계속할까요?".to_owned()));
     assert_eq!(app.msgboxes[0].flags, ndr::msgbox::MB_YESNO | ndr::msgbox::MB_ICONEXCLAMATION);
@@ -819,7 +819,7 @@ fn disk_copy_window_follows_the_csharp_flows() {
     assert_eq!(app.disk_copy_form().unwrap().status, "드라이브를 잠그고 있습니다…");
     wait_until(&mut app, &ctx, |app| app.original_dialogs.is_empty());
     assert_eq!(disk_calls(), ["copy E:\\ F:\\ true"], "verify follows the check box; success closes the window");
-    // 이미지 만들기: 찾아보기(저장 대화 상자: 문서 폴더, E-.img, .img 형식, 덮어쓰기 확인) → 확인 없이 시작.
+    // Create image: browse (save dialog: Documents folder, E-.img, .img type, overwrite prompt) -> starts without confirmation.
     disk_open_window(&mut app, &ctx);
     let image = root.join("E-.img");
     SAVE_TARGET.with(|t| *t.borrow_mut() = Some(image.clone()));
@@ -843,7 +843,7 @@ fn disk_copy_window_follows_the_csharp_flows() {
     wait_until(&mut app, &ctx, |app| app.original_dialogs.is_empty());
     assert_eq!(disk_calls(), [format!("read E:\\ {}", image.display())]);
     assert!(image.is_file());
-    // 취소: 만들기 중에는 취소 단추와 창 닫기(취소 요청)가 된다. 창은 남고 상태 글이 바뀐다.
+    // Cancel: during creation the cancel button and closing the window (cancel request) work. The window stays and the status text changes.
     for action in [DiskAction::Cancel, DiskAction::Close] {
         disk_open_window(&mut app, &ctx);
         DISK_HOLD.store(true, Ordering::SeqCst);
@@ -867,7 +867,7 @@ fn disk_copy_window_follows_the_csharp_flows() {
         app.disk_copy_action(DiskAction::Close, &ctx);
         assert!(app.original_dialogs.is_empty(), "닫기 closes an idle window");
     }
-    // 한 드라이브 복사(미디어 교체): 임시 이미지 → 교체 확인. 아니요면 쓰지 않고 임시 이미지를 지운다.
+    // One-drive copy (media swap): temp image -> swap confirmation. No writes nothing and deletes the temp image.
     disk_open_window(&mut app, &ctx);
     {
         let form = app.disk_copy_form().unwrap();
@@ -911,7 +911,7 @@ fn disk_copy_window_follows_the_csharp_flows() {
             assert!(form.run.is_none() && !temp.exists() && disk_calls().is_empty());
             continue;
         }
-        // 예 → 같은 디스크 번호에 쓰기(검증 확인란 따름). 실패하면 복구용 이미지를 남기고 복원 방식으로 바꾼다.
+        // Yes -> write to the same disk number (following the verify checkbox). On failure keep the recovery image and switch to restore mode.
         DISK_FAIL_WRITE.store(true, Ordering::SeqCst);
         app.answer_message_box(swap, &ctx);
         assert_eq!(app.disk_copy_form().unwrap().status, "대상 미디어에 이미지를 기록하고 있습니다…");
@@ -925,7 +925,7 @@ fn disk_copy_window_follows_the_csharp_flows() {
         assert!(temp.is_file(), "the recovery image is kept");
         assert_eq!((form.mode, form.image_path.as_str(), form.whole_disk), (DiskMode::Restore, &*temp.to_string_lossy(), true));
         assert_eq!((form.path_label(), form.start_label()), ("원본 전체 디스크 이미지", "전체 디스크 복원"));
-        // 남은 이미지로 전체 디스크 복원: 확인 → 검증 없이 쓰기 → 창이 닫힘.
+        // Whole-disk restore from the remaining image: confirm -> write without verify -> the window closes.
         app.disk_copy_action(DiskAction::Start, &ctx);
         assert_eq!(boxed(&app), ("전체 물리 디스크 복원".to_owned(), format!("{disk3}의 파티션 테이블과 모든 파티션을 포함한 물리 디스크 전체가 {name} 내용으로 덮어써집니다.\n\n작업 중에는 디스크를 분리하거나 NDR을 종료하지 마세요. 계속할까요?")));
         app.answer_message_box(6, &ctx);
@@ -955,7 +955,7 @@ fn disk_copy_window_in_english_reports_errors_like_csharp() {
     frame(&mut app, &ctx, vec![]);
     app.disk_copy_action(DiskAction::Close, &ctx);
     assert!(app.original_dialogs.is_empty());
-    // 전체 디스크 복원: 찾아보기(열기 대화 상자) → 확인 → 쓰기 실패 → "복원 또는 드라이브 복사" 오류, 창은 남는다.
+    // Whole-disk restore: browse (open dialog) -> confirm -> write fails -> "restore or drive copy" error, the window stays.
     app.disk.physical_disks = two_disks;
     disk_open_window(&mut app, &ctx);
     let image = root.join("backup.img");
@@ -983,7 +983,7 @@ fn disk_copy_window_in_english_reports_errors_like_csharp() {
     assert_eq!(boxed(&app), ("Disk Copy".to_owned(), "An error occurred while restoring or copying the drive. Data on the target disk may have been partly changed.\n\nDevice write failed".to_owned()));
     app.answer_message_box(1, &ctx);
     assert!(app.disk_copy_form().is_some_and(|f| f.run.is_none()) && !app.disk_copy_blocks_close());
-    // 볼륨 복원 확인 글, 볼륨 이미지 만들기 실패("The image could not be created").
+    // Volume restore confirmation text, volume image creation failure ("The image could not be created").
     {
         let form = app.disk_copy_form().unwrap();
         form.whole_disk = false;
@@ -1010,8 +1010,8 @@ fn disk_copy_window_in_english_reports_errors_like_csharp() {
 
 #[test]
 fn function_key_parameter_prompt_follows_csharp() {
-    // C# ExecuteFunctionKeyMacroAsync: 프로그램 매크로 → 패널 매크로 → %p면 InputDialog(TITLE_EDITPARAM, MSG_EDITPARAM, 인수) →
-    // 빈 프로그램 무시, 있는 폴더는 열기, 아니면 ShellExecuteEx(프로그램, 인수 글, 활성 패널 폴더).
+    // C# ExecuteFunctionKeyMacroAsync: program macros -> pane macros -> for %p InputDialog(TITLE_EDITPARAM, MSG_EDITPARAM, arguments) ->
+    // empty program ignored, an existing folder opens, otherwise ShellExecuteEx(program, argument text, active pane folder).
     let (root, ctx, mut app) = fixture("fkey-prompt", "en");
     let left = root.join("left");
     let alpha = row(&app, "alpha.txt");
@@ -1031,16 +1031,16 @@ fn function_key_parameter_prompt_follows_csharp() {
     assert!(launched().is_empty(), "nothing runs before the answer");
     app.answer_dialog(DialogResult::Text(Some("edited \"a b\"".into())), &ctx);
     assert_eq!(launched(), [("tool.exe".to_owned(), "edited \"a b\"".to_owned(), left.clone())], "the edited text is the whole argument string");
-    // 취소면 실행하지 않는다.
+    // Cancel does not run.
     app.run_function_key_button("F9", &ctx);
     app.answer_dialog(DialogResult::Text(None), &ctx);
     assert!(launched().is_empty(), "Cancel runs nothing");
-    // 옛 FunctionKeys: [이름] 떼고, 인수는 패널 매크로를 푼 한 줄 그대로.
+    // Old FunctionKeys: [name] removed, arguments are the single line with pane macros expanded.
     app.run_function_key_button("F7", &ctx);
     assert!(app.original_dialogs.is_empty(), "no %p, no prompt");
     let path = format!("{}\\", left.display());
     assert_eq!(launched(), [("viewer.exe".to_owned(), format!("\"alpha.txt\" {path}"), left.clone())]);
-    // 있는 폴더는 활성 패널에서 연다.
+    // An existing folder opens in the active pane.
     app.run_function_key_button("F11", &ctx);
     wait_until(&mut app, &ctx, |app| !app.panes[0].loading);
     assert_eq!(app.panes[0].path, folder);
@@ -1112,7 +1112,7 @@ fn system_commands_follow_csharp() {
     // ShowProperties: the focused item's shell properties.
     app.panes[0].cursor = index(&app, "alpha.txt");
     VERBS.with(|v| v.borrow_mut().clear());
-    // 원본 miPropertiesClick(스킨 테마): 표시한 항목 전부의 여러 파일 속성 창.
+    // Original miPropertiesClick (skin theme): the multi-file properties window of all marked items.
     app.panes[0].selected = [index(&app, "alpha.txt"), index(&app, "beta.txt")].into_iter().collect();
     app.dispatch("properties", &ctx);
     let mut recorded = VERBS.with(|v| v.borrow().clone());
@@ -1120,14 +1120,14 @@ fn system_commands_follow_csharp() {
     assert_eq!(recorded, vec![(left.join("alpha.txt"), "properties*".to_owned()), (left.join("beta.txt"), "properties*".to_owned())]);
     app.panes[0].selected.clear();
     VERBS.with(|v| v.borrow_mut().clear());
-    // 원본 miFileInfoClick(0x4452bc, 스킨 테마): https://ext.xiles.app/?ext=확장자.
+    // Original miFileInfoClick (0x4452bc, skin theme): https://ext.xiles.app/?ext=<extension>.
     app.dispatch("fileInfo", &ctx);
     assert_eq!(launched().first().map(|(program, _, _)| program.clone()), Some("https://ext.xiles.app/?ext=txt".to_owned()));
     // ViewTextAsync: the configured viewer gets the quoted file path in the file's folder; with none, the NDR text window.
     app.settings.set_text("TextViewerPath", "viewer.exe");
     app.dispatch("textView", &ctx);
     assert_eq!(launched(), vec![("viewer.exe".to_owned(), format!("\"{}\"", left.join("alpha.txt").display()), left.clone())]);
-    // 원본 FUN_00430304(스킨 테마): 설정이 비면 notepad.exe, 커서가 폴더면 아무것도 하지 않는다.
+    // Original FUN_00430304 (skin theme): notepad.exe when the setting is empty; nothing when the cursor is a folder.
     app.settings.set_text("TextEditorPath", "");
     app.dispatch("textEdit", &ctx);
     assert_eq!(launched(), vec![("notepad.exe".to_owned(), format!("\"{}\"", left.join("alpha.txt").display()), left.clone())]);
@@ -1140,18 +1140,18 @@ fn system_commands_follow_csharp() {
     app.dispatch("about", &ctx);
     let (_, about) = boxed(&app);
     assert!(about.starts_with(&format!("NDR {}", env!("CARGO_PKG_VERSION"))) && about.contains(&app.profile.display().to_string()), "{about}");
-    // 사용자 요청: 버전 1.0.0, 홈페이지 = NDR 저장소.
+    // User request: version 1.0.0, homepage = the NDR repository.
     assert_eq!(env!("CARGO_PKG_VERSION"), "1.0.0");
     app.dispatch("homepage", &ctx);
     assert_eq!(launched().first().map(|(program, _, _)| program.clone()), Some("https://github.com/UzuCore/NDR".to_owned()));
-    // 사용자 요청: 도움말도 NDR 저장소.
+    // User request: Help also opens the NDR repository.
     LAUNCHED.with(|l| l.borrow_mut().clear());
     app.dispatch("help", &ctx);
     assert_eq!(launched().first().map(|(program, _, _)| program.clone()), Some("https://github.com/UzuCore/NDR".to_owned()));
     let _ = fs::remove_dir_all(&root);
 }
 
-/// C# OpenItemAsync(압축 패널) + ExtractExternalWithPasswordPromptAsync: 항목을 임시로 풀어 열고, 암호가 틀리면 묻는다.
+/// C# OpenItemAsync (archive pane) + ExtractExternalWithPasswordPromptAsync: extracts the item temporarily to open it, and asks when the password is wrong.
 #[test]
 fn archive_entry_opening_asks_for_the_password_like_csharp() {
     let (root, ctx, mut app) = fixture("entry-open", "en");
@@ -1168,7 +1168,7 @@ fn archive_entry_opening_asks_for_the_password_like_csharp() {
     wait_until(&mut app, &ctx, |app| app.password_request.is_some());
     let request = app.password_request.take().unwrap();
     assert_eq!(request.archive, secret);
-    // 원본 FUN_004399b4: TfGetText(TITLE_PASSWORD, MSG_PASSWORD, 빈 글), 가린 입력.
+    // Original FUN_004399b4: TfGetText(TITLE_PASSWORD, MSG_PASSWORD, empty text), masked input.
     app.open_password_prompt(request);
     let (title, message, value, history) = prompt(&app);
     assert_eq!((title, message, value, history), (app.language_pack.text("RES.TITLE_PASSWORD", "?"), app.language_pack.text("RES.MSG_PASSWORD", "?"), String::new(), None));
@@ -1196,7 +1196,7 @@ fn archive_entry_opening_asks_for_the_password_like_csharp() {
 }
 
 
-/// 압축하기 형식에 ALZ·EGG는 없다(사용자 요청, 풀기만 된다). zip·7z 밖의 형식은 암호를 넣을 수 없다.
+/// The create archive formats have no ALZ or EGG (user request; extract only). Formats other than zip and 7z cannot have passwords.
 #[test]
 fn alz_and_egg_are_not_creation_formats() {
     let (root, _ctx, app) = fixture("alzegg-formats", "ko");
@@ -1209,8 +1209,8 @@ fn alz_and_egg_are_not_creation_formats() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// 원본 0x483c79: playwav(처음 값 켜짐)면 .wav를 셸로 열지 않고 PlaySoundW(NULL) 뒤 PlaySoundW(파일)로 재생한다.
-/// 원본 0x43d9fc: 완료 소리는 프로그램 폴더의 complete.wav.
+/// Original 0x483c79: with playwav (default on), a .wav is not opened in the shell but played with PlaySoundW(NULL) then PlaySoundW(file).
+/// Original 0x43d9fc: the completion sound is complete.wav in the program folder.
 #[test]
 fn wave_files_play_inside_ndr_and_the_completion_sound_is_complete_wav() {
     let (root, ctx, mut app) = fixture("playwav", "en");
@@ -1225,7 +1225,7 @@ fn wave_files_play_inside_ndr_and_the_completion_sound_is_complete_wav() {
     assert_eq!(super::tools_dialog::PLAYED.with(|p| p.borrow().clone()), vec![None, Some(wave.clone())]);
     assert!(launched().is_empty(), "not handed to the shell");
     assert!(app.panes[0].archive.is_none());
-    // 완료 소리.
+    // Completion sound.
     super::tools_dialog::PLAYED.with(|p| p.borrow_mut().clear());
     app.settings.set_flag("PlayCompletionSound", true);
     assert!(app.start_task("Copy".into(), |_, _| Ok(())));
@@ -1237,7 +1237,7 @@ fn wave_files_play_inside_ndr_and_the_completion_sound_is_complete_wav() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// 원본 TNXScrollStep: 2(처음 값) = 쪽 단위(한 칸에 보이는 줄 수), 1 = 줄 단위(Mouse.WheelScrollLines 줄).
+/// Original TNXScrollStep: 2 (default) = by page (one step = visible rows), 1 = by line (Mouse.WheelScrollLines rows).
 #[test]
 fn wheel_steps_follow_the_original_scroll_step() {
     let (root, _ctx, mut app) = fixture("scrollstep", "en");
@@ -1248,14 +1248,14 @@ fn wheel_steps_follow_the_original_scroll_step() {
     assert_eq!(App::wheel_step(true, 10.0, 25.0, 3), 25.0, "at least one row");
     assert_eq!(App::wheel_step(false, 110.0, 25.0, 3), 75.0, "WheelScrollLines rows");
     assert_eq!(App::wheel_step(false, 600.0, 150.0, 1), 150.0, "thumbnails: one row");
-    // 원본 SetScrollTop(쪽 단위): 위치는 쪽 경계, 0..쪽 수 − 1.
+    // Original SetScrollTop (by page): positions at page boundaries, 0..pages - 1.
     assert_eq!(App::page_snap(90.0, 100.0, 5), 100.0, "nearest page boundary");
     assert_eq!(App::page_snap(-50.0, 100.0, 5), 0.0);
     assert_eq!(App::page_snap(900.0, 100.0, 5), 400.0, "the last page starts on a boundary");
     let _ = fs::remove_dir_all(root);
 }
 
-/// C# OpenItemAsync: 압축 안에서 연 항목이 동봉 7-Zip이 읽는 압축 형식이면(예: .iso) 셸로 열지 않고 그 안으로 들어간다.
+/// C# OpenItemAsync: an item opened inside an archive that is an archive format the bundled 7-Zip reads (e.g. .iso) is entered instead of opened in the shell.
 #[test]
 fn nested_archives_of_any_known_format_open_as_panes_like_csharp() {
     let (root, ctx, mut app) = fixture("nested-iso", "en");
@@ -1265,7 +1265,7 @@ fn nested_archives_of_any_known_format_open_as_panes_like_csharp() {
     assert_eq!(app.panes[0].archive.as_ref().map(|l| l.file.clone()), Some(iso));
     assert!(launched().is_empty(), "not handed to the shell");
     wait_until(&mut app, &ctx, |app| !app.panes[0].loading);
-    // ALZ·EGG는 동봉 7-Zip(UzuCore 7zip+α)이 읽으므로 패널로 연다.
+    // ALZ and EGG are read by the bundled 7-Zip (UzuCore 7zip+), so they open as panes.
     for name in ["old.alz", "old.egg"] {
         let nested = root.join("left").join(name);
         fs::write(&nested, b"x").unwrap();
@@ -1275,7 +1275,7 @@ fn nested_archives_of_any_known_format_open_as_panes_like_csharp() {
         app.panes[1].archive = None;
     }
     assert!(launched().is_empty(), "ALZ/EGG not handed to the shell");
-    // 동봉 7-Zip이 못 읽는 ACE: C# TryGetExternalArchiveProgram 길. 외부 프로그램이 없으면 셸로 열지 않고 C# 오류 글(NDR 경고 상자).
+    // ACE, which the bundled 7-Zip cannot read: the C# TryGetExternalArchiveProgram path. Without an external program it is not opened in the shell; the C# error text (NDR warning box).
     let ace = root.join("left").join("old.ace");
     fs::write(&ace, b"x").unwrap();
     app.archive_entries_opened(1, root.join("outer.zip"), None, vec![ace.clone()], vec![], true);
@@ -1285,7 +1285,7 @@ fn nested_archives_of_any_known_format_open_as_panes_like_csharp() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// 동봉 7-Zip이 못 읽는 압축: 외부 압축 프로그램은 쓰지 않으므로 설정이 남아 있어도 열지 않고 알린다.
+/// Archives the bundled 7-Zip cannot read: external archivers are not used, so even with a leftover setting it is not opened and a notice shows.
 #[test]
 fn unreadable_archives_are_not_handed_to_an_external_program() {
     let (root, _ctx, mut app) = fixture("ace-open", "en");
@@ -1299,7 +1299,7 @@ fn unreadable_archives_are_not_handed_to_an_external_program() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// 원본 0x439593: 다음 볼륨이 없으면 TfMsgBox(TITLE_ERROR, ARC_CHANGEVOL %s, MB_OKCANCEL | MB_ICONEXCLAMATION). 확인 = 다시 시도, 취소 = 끝.
+/// Original 0x439593: when the next volume is missing, TfMsgBox(TITLE_ERROR, ARC_CHANGEVOL %s, MB_OKCANCEL | MB_ICONEXCLAMATION). OK = retry, cancel = end.
 #[test]
 fn missing_next_volume_asks_arc_changevol_like_the_original() {
     let (root, ctx, mut app) = fixture("changevol", "en");
@@ -1322,7 +1322,7 @@ fn missing_next_volume_asks_arc_changevol_like_the_original() {
     fs::remove_dir_all(root).unwrap();
 }
 
-/// C# ApplySingleInstanceModeAsync: 환경 설정의 "한 번에 하나만 실행"은 바로 적용된다. 다른 NDR이 이미 잡고 있으면 이전 값으로 되돌리고 알린다.
+/// C# ApplySingleInstanceModeAsync: "run only one instance" in preferences applies at once. When another NDR already holds it, revert to the previous value and notify.
 #[test]
 fn single_instance_mode_applies_without_restart_like_csharp() {
     let (root, ctx, mut app) = fixture("single", "en");
@@ -1364,7 +1364,7 @@ fn single_instance_mode_applies_without_restart_like_csharp() {
 }
 
 
-/// 원본 주소 줄(TNXPathLabel.SetPath) 조각과 패널 테두리 색(검정 스킨: lframelocal 305B91, lframearc 505000, lframeinactive 3C3C3C).
+/// Original address bar (TNXPathLabel.SetPath) segments and pane frame colors (black skin: lframelocal 305B91, lframearc 505000, lframeinactive 3C3C3C).
 #[test]
 fn skin_address_segments_and_frame_colors_follow_the_original() {
     let (root, _ctx, mut app) = fixture("skin-crumbs", "en");
@@ -1376,7 +1376,7 @@ fn skin_address_segments_and_frame_colors_follow_the_original() {
     let full = std::path::absolute(&folder).unwrap();
     assert_eq!(segments.len(), full.ancestors().count());
     assert_eq!(segments.last().map(|s| s.label.as_str()), Some("left"));
-    // 원본 TNXPathLabel: 루트 조각은 "C:"(끝 '\' 없이).
+    // Original TNXPathLabel: the root segment is "C:" (without the trailing '\').
     assert!(segments[0].label.ends_with(':') && !segments[0].label.ends_with('\\') && segments.iter().all(|s| s.folder.is_some()), "{}", segments[0].label);
     app.active = 0;
     assert_eq!(app.skin_frame_stroke(&skin, 0), egui::Stroke::new(1.0, Color32::from_rgb(0x30, 0x5B, 0x91)));
@@ -1388,7 +1388,7 @@ fn skin_address_segments_and_frame_colors_follow_the_original() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// 원본 TNXTabSet(스킨 테마): CalcTabWidth 너비 규칙, 첫 탭 맞춤, 탭이 하나면 줄을 그리지 않음, 탭 그림·글 색.
+/// Original TNXTabSet (skin theme): CalcTabWidth width rules, first tab alignment, no row with one tab, tab image and text colors.
 #[test]
 fn skin_tab_set_follows_the_original_tnxtabset() {
     use super::skin_pane::{tab_first_index, tab_set_layout, TabSetLayout};
@@ -1422,7 +1422,7 @@ fn skin_tab_set_follows_the_original_tnxtabset() {
     assert!(pieces.first().is_some_and(|r| r.left() == 16.0 && r.width() == 5.0 && r.height() == 24.0), "left part at 16: {pieces:?}");
     let texts: Vec<(String, Color32)> = output.shapes.iter().filter_map(|c| match &c.shape { egui::Shape::Text(t) if t.galley.text() != "after" => Some((t.galley.text().to_owned(), t.fallback_color)), _ => None }).collect();
     assert_eq!(texts, [("alpha".to_owned(), Color32::from_gray(0x66)), ("beta".to_owned(), Color32::from_gray(0xC0))], "tabtext, tabactive");
-    // 탭 목록 단추(왼쪽 끝 12 × 24)를 누르면 "1. alpha"·"2. beta". 메뉴가 열린 동안 "1"을 치면 첫 탭(원본 "&1. ").
+    // The tab list button (left end 12 x 24) shows "1. alpha" and "2. beta". Typing "1" while the menu is open goes to the first tab (original "&1. ").
     let run_events = |app: &mut App, events: Vec<egui::Event>| {
         let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 300.0))), events, ..Default::default() };
         ctx.run(raw, |ctx| {
@@ -1443,7 +1443,7 @@ fn skin_tab_set_follows_the_original_tnxtabset() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// 원본 +0x344: 숨김 파일을 보이는 패널은 폴더 정보 뒤에 빨간 "H".
+/// Original +0x344: a pane showing hidden files has a red "H" after the folder info.
 #[test]
 fn skin_folder_info_shows_the_original_hidden_mark() {
     let (root, ctx, mut app) = fixture("skin-hidden-mark", "en");
@@ -1463,7 +1463,7 @@ fn skin_folder_info_shows_the_original_hidden_mark() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// 원본 확장자 정보 줄(라벨 0x350): 글은 비어 있고, 누르면 FUN_0048bd50이 초점 파일의 https://ext.xiles.app/?ext=%s를 연다.
+/// Original extension info row (label 0x350): empty text; clicking runs FUN_0048bd50, which opens https://ext.xiles.app/?ext=%s for the focused file.
 #[test]
 fn skin_extension_info_line_opens_the_extension_page() {
     let (root, ctx, mut app) = fixture("skin-extinfo", "en");
@@ -1496,7 +1496,7 @@ fn skin_extension_info_line_opens_the_extension_page() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// 원본 폴더 정보 표시줄(FUN_00482700, 20, lfolderback·lfoldertext·lfoldersubtext1)과 파일 정보 표시줄(FUN_00482d44, 20/40, lfileback·lfiletext).
+/// Original folder info bar (FUN_00482700, 20, lfolderback, lfoldertext, lfoldersubtext1) and file info bar (FUN_00482d44, 20/40, lfileback, lfiletext).
 #[test]
 fn skin_info_bars_follow_the_original() {
     let (root, ctx, mut app) = fixture("skin-infobars", "en");
@@ -1527,7 +1527,7 @@ fn skin_info_bars_follow_the_original() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// 원본 DrawListHeader(0x7e2274): 칸 이름 NXFORE×0.4+NXBACK×0.6, 정렬 칸 ×0.6과 맨 위 ▲(오름차순), 세로선 NXLINE×0.3.
+/// Original DrawListHeader (0x7e2274): column names NXFORE*0.4+NXBACK*0.6, the sort column *0.6 with ▲ at the top (ascending), vertical lines NXLINE*0.3.
 #[test]
 fn skin_list_header_follows_the_original_draw_list_header() {
     use super::skin_pane::mix_color;
@@ -1544,7 +1544,7 @@ fn skin_list_header_follows_the_original_draw_list_header() {
         });
     });
     let titles: Vec<(String, f32, Color32)> = output.shapes.iter().filter_map(|c| match &c.shape { egui::Shape::Text(t) => Some((t.galley.text().to_owned(), t.pos.x, t.fallback_color)), _ => None }).collect();
-    // 원본은 GetListHeaderWidth(아이콘 보기 30)부터 칸 글을 + 5에 쓴다: 이름 칸 글은 35(이름 글과 같은 자리).
+    // The original writes column text at + 5 from GetListHeaderWidth (30 in icon view): the name cell text is at 35 (same spot as the name text).
     assert_eq!(titles.first().map(|t| (t.1, t.2)), Some((35.0, Color32::from_gray(0x73))), "the Name column sorts by default: {titles:?}");
     assert!(titles.iter().skip(1).all(|t| t.2 == Color32::from_gray(0x4D)), "{titles:?}");
     let marks: Vec<egui::Rect> = output.shapes.iter().filter_map(|c| match &c.shape { egui::Shape::Rect(r) if r.fill == Color32::from_gray(0x3A) => Some(r.rect), _ => None }).collect();
@@ -1553,7 +1553,7 @@ fn skin_list_header_follows_the_original_draw_list_header() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// 원본 드라이브 단추 줄(FUN_004825d8·FUN_00483108): 22 높이, ldrivesback 바탕, 단추는 36씩, 글 ldrivestext.
+/// Original drive button row (FUN_004825d8, FUN_00483108): height 22, ldrivesback background, buttons every 36, text ldrivestext.
 #[test]
 fn skin_drive_bar_follows_the_original() {
     let (root, ctx, mut app) = fixture("skin-drives", "en");
@@ -1575,7 +1575,7 @@ fn skin_drive_bar_follows_the_original() {
     assert!(fills.contains(&(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 22.0)), Color32::from_gray(0x20))), "ldrivesback: {fills:?}");
     let labels: Vec<(String, f32, f32, Color32)> = output.shapes.iter().filter_map(|c| match &c.shape { egui::Shape::Text(t) => Some((t.galley.text().to_owned(), t.pos.x, t.galley.size().x, t.fallback_color)), _ => None }).collect();
     assert_eq!(labels.iter().map(|l| l.0.as_str()).collect::<Vec<_>>(), ["C:", "D:"], "one button per drive");
-    // 원본 TNXImageButton 글 배치 1: 그림 x = (36 − (간격 2 + 글 너비 + 그림 너비)) div 2, 글 x = 그림 x + 그림 너비 + 2(아이콘을 끄면 그림 너비 0).
+    // Original TNXImageButton text layout 1: image x = (36 - (spacing 2 + text width + image width)) div 2, text x = image x + image width + 2 (image width 0 with icons off).
     for (i, l) in labels.iter().enumerate() {
         assert_eq!(l.1, 36.0 * i as f32 + ((36.0 - (2.0 + l.2.round())) / 2.0).trunc() + 2.0, "{l:?}");
     }
@@ -1583,7 +1583,7 @@ fn skin_drive_bar_follows_the_original() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// 원본 TNXScrollBar(UpdateThumbWidth·RecalcThumbPos): 엄지 길이 = 쓸 길이 × 보이는 양 / 전체(최소 막대 두께·20), 위치 = 단추 + 비례.
+/// Original TNXScrollBar (UpdateThumbWidth, RecalcThumbPos): thumb length = usable length x visible / total (at least the bar thickness, 20), position = button + proportion.
 #[test]
 fn skin_scrollbar_thumb_follows_the_original_tnxscrollbar() {
     use super::skin_pane::scrollbar_thumb;
@@ -1594,8 +1594,8 @@ fn skin_scrollbar_thumb_follows_the_original_tnxscrollbar() {
     assert_eq!(scrollbar_thumb(40.0, 12.0, 16.0, 0.0, 1000.0, 250.0), (16.0, 8.0), "never longer than the track between the buttons");
 }
 
-/// 원본 DrawFocus(0x7d7f54)·GraphUtil HLS·InitSelMarkBitmap·크기 칸 나누기.
-/// 원본 가로 TNXScrollBar: 세로 그림을 90° 돌려 그린다(FUN_007cdfc0 시계 방향, FUN_007ce0e4 반시계 방향).
+/// Original DrawFocus (0x7d7f54), GraphUtil HLS, InitSelMarkBitmap and size cell division.
+/// Original horizontal TNXScrollBar: draws the vertical images rotated 90 degrees (FUN_007cdfc0 clockwise, FUN_007ce0e4 counterclockwise).
 #[test]
 fn skin_horizontal_scrollbar_rotates_the_vertical_pieces() {
     use super::skin_pane::rotated_image;
@@ -1608,7 +1608,7 @@ fn skin_horizontal_scrollbar_rotates_the_vertical_pieces() {
         });
         output.shapes.iter().find_map(|c| match &c.shape { egui::Shape::Mesh(m) if m.texture_id == egui::TextureId::Managed(7) => Some(m.vertices.iter().map(|v| (v.pos, v.uv)).collect::<Vec<_>>()), _ => None }).expect("the rotated mesh")
     };
-    // 시계 방향: 그림 왼쪽 아래 → 왼쪽 위, 왼쪽 위 → 오른쪽 위(위쪽 끝이 오른쪽으로). 반시계 방향: 오른쪽 위 → 왼쪽 위.
+    // Clockwise: image bottom left -> top left, top left -> top right (the top edge goes right). Counterclockwise: top right -> top left.
     let cw = corners(true);
     assert_eq!(cw[0], (dest.left_top(), egui::pos2(0.0, 1.0)));
     assert_eq!(cw[1], (dest.right_top(), egui::pos2(0.0, 0.0)));
@@ -1620,7 +1620,7 @@ fn skin_horizontal_scrollbar_rotates_the_vertical_pieces() {
 #[test]
 fn skin_address_segments_shrink_like_the_original_update_display_info() {
     use super::skin_pane::path_label_widths;
-    // 이름표 200(쓸 폭 184, 첫 몫 = 첫 글 + 20), "..." 10.
+    // Label 200 (usable 184, first share = first text + 20), "..." 10.
     assert_eq!(path_label_widths(&[50], 10, 300), [54], "fits: text + 4");
     assert_eq!(path_label_widths(&[300], 10, 200), [168], "one segment: label − 32");
     assert_eq!(path_label_widths(&[20, 300], 10, 200), [24, 128], "two: last = 184 − (20 + 36)");
@@ -1634,7 +1634,7 @@ fn skin_address_segments_shrink_like_the_original_update_display_info() {
 fn skin_thumbnail_focus_follows_the_original_draw_focus_style_3() {
     use super::skin_pane::{rounded_gradient_shapes, thumbnail_focus, thumbnail_focus_rect};
     let gray = Color32::from_gray;
-    // NXSELECT FFFFFF(밝기 240 → 아래 190 = CA), NXBACK 000000. 섞는 값은 원본 single 상수(0.9 = 0.89999998 → 229).
+    // NXSELECT FFFFFF (lightness 240 -> lower 190 = CA), NXBACK 000000. Blend values are original single constants (0.9 = 0.89999998 -> 229).
     let (select, back) = (gray(0xFF), gray(0x00));
     assert_eq!(thumbnail_focus(select, back, true, false, false, true), (gray(0x66), gray(0x51), gray(0x99)), "cursor, focused: 0.4 and line 0.6");
     assert_eq!(thumbnail_focus(select, back, true, true, false, true).2, gray(0xE5), "marked cursor line 0.9");
@@ -1642,13 +1642,13 @@ fn skin_thumbnail_focus_follows_the_original_draw_focus_style_3() {
     assert_eq!(thumbnail_focus(select, back, true, true, false, false).2, gray(0xB2), "unfocused marked cursor line 0.7");
     assert_eq!(thumbnail_focus(select, back, false, true, false, false), (gray(26), gray(20), gray(77)), "unfocused marked: 0.1 and line 0.3");
     assert_eq!(thumbnail_focus(select, back, false, false, true, true), (gray(128), gray(101), gray(255)), "drop target: 0.5 and line 1.0");
-    // 어두운 NXSELECT는 위를 밝힌다(밝기 < 50 → +50).
+    // A dark NXSELECT lightens the top (lightness < 50 -> +50).
     let (top, bottom, _) = thumbnail_focus(gray(0x10), back, true, false, false, true);
     assert!(top.r() > bottom.r(), "{top:?} {bottom:?}");
-    // 자리: 칸 150 × 200, 크기 120, 글 20 → 왼쪽 (150 − 132) div 2 + 1 = 10, 위 1, 130 × 150.
+    // Position: cell 150 x 200, size 120, text 20 -> left (150 - 132) div 2 + 1 = 10, top 1, 130 x 150.
     let cell = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(150.0, 200.0));
     assert_eq!(thumbnail_focus_rect(cell, 120.0, 20.0), egui::Rect::from_min_size(egui::pos2(10.0, 1.0), egui::vec2(130.0, 150.0)));
-    // 둥근 사각형(반지름 4): 그러데이션 채우기와 1화소 테두리.
+    // Rounded rectangle (radius 4): gradient fill and a 1 px border.
     let shapes = rounded_gradient_shapes(egui::Rect::from_min_size(egui::pos2(10.0, 1.0), egui::vec2(130.0, 150.0)), 4.0, gray(0x66), gray(0x51), gray(0x99));
     let egui::Shape::Mesh(mesh) = &shapes[0] else { panic!("fill mesh") };
     assert_eq!(mesh.calc_bounds(), egui::Rect::from_min_size(egui::pos2(10.0, 1.0), egui::vec2(130.0, 150.0)));
@@ -1680,7 +1680,7 @@ fn skin_focus_bar_follows_the_original_draw_focus() {
     ], "a 7-5-3-1 ▶ at left + 2, centred on the row");
 }
 
-/// 원본 bbFunctions(스킨 테마): F2~F8 일곱 칸(같은 너비), 글쇠 글은 bbkeytext(검정 E2A31D), 배경 btnbar_back.bmp 반복.
+/// Original bbFunctions (skin theme): seven equal cells F2-F8, key text bbkeytext (black E2A31D), background btnbar_back.bmp repeated.
 #[test]
 fn skin_function_key_bar_follows_the_original_button_bar() {
     let (root, ctx, mut app) = fixture("skin-fkeys", "ko");
@@ -1704,7 +1704,7 @@ fn skin_function_key_bar_follows_the_original_button_bar() {
     assert!(keys.iter().all(|k| k.2 == Color32::from_rgb(0xE2, 0xA3, 0x1D)), "bbkeytext");
     let tiles = output.shapes.iter().filter(|c| matches!(&c.shape, egui::Shape::Mesh(m) if m.texture_id == tile.id())).count();
     assert!(tiles >= 700 / 8, "{tiles}");
-    // 원본 bbFunctionsContextPopup: 칸을 오른쪽 단추로 눌러도 그 기능키(F7 새 폴더 → 이름 입력 창)를 실행한다.
+    // Original bbFunctionsContextPopup: right-clicking a cell also runs that function key (F7 new folder -> name input window).
     let at = egui::pos2(550.0, 390.0);
     let button = |pressed: bool| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() };
     for events in [vec![egui::Event::PointerMoved(at), button(true)], vec![button(false)]] {
@@ -1717,7 +1717,7 @@ fn skin_function_key_bar_follows_the_original_button_bar() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// 원본 FUN_00479970: "[이름]명령"은 [ ] 안, "#내부 명령"은 RES FUNC_<대문자>, 프로그램은 확장자를 뺀 파일 이름.
+/// Original FUN_00479970: "[name]command" uses the text inside [ ], "#internal command" RES FUNC_<UPPER>, programs the file name without extension.
 #[test]
 fn function_key_captions_follow_the_original_button_bar() {
     use super::user_commands::original_function_key_caption;
@@ -1737,8 +1737,8 @@ fn function_key_captions_follow_the_original_button_bar() {
     assert_eq!(original_function_key_caption("  ", &resource), "");
 }
 
-/// 원본 FUN_00444710(스킨 테마): 단추 35×35를 위 tbtopoffset(검정 7)에, 왼쪽 4부터 폭 + 4씩, 구분선 칸 15,
-/// align=right 항목은 (너비 − 6 − Σ(폭 + 4))부터. 배경은 toolbar_back.bmp를 가로로 이어 그린다.
+/// Original FUN_00444710 (skin theme): 35x35 buttons at top tbtopoffset (black 7), from left 4 every width + 4, separator cells 15,
+/// align=right items from (width - 6 - sum(width + 4)). The background tiles toolbar_back.bmp horizontally.
 #[test]
 fn skin_toolbar_follows_the_original_layout() {
     let (left, right) = super::toolbar::toolbar_slots(&[35.0, 35.0, 15.0, 35.0], &[35.0], 800.0);
@@ -1756,13 +1756,13 @@ fn skin_toolbar_follows_the_original_layout() {
     let bounds = |id: egui::TextureId| output.shapes.iter().filter_map(|c| match &c.shape { egui::Shape::Mesh(m) if m.texture_id == id => Some(m.calc_bounds()), _ => None }).collect::<Vec<_>>();
     let first = app.toolbar.items.iter().position(|i| i.kind == ndr::commands::ToolbarKind::Command && i.icon.ends_with("tb_back.png")).expect("a Back item");
     assert_eq!(first, 0, "Back comes first in the shipped toolbar.xml");
-    // 원본 default\toolbar.xml: 뒤로·앞으로 | 바탕 화면·문서·사진·음악·동영상·즐겨찾기 | 휴지통(오른쪽).
+    // Original default\toolbar.xml: back, forward | desktop, documents, pictures, music, videos, favorites | Recycle Bin (right).
     let commands: Vec<(&str, bool)> = app.toolbar.items.iter().filter(|i| i.kind == ndr::commands::ToolbarKind::Command).map(|i| (i.icon.rsplit('\\').next().unwrap_or(""), i.align_right)).collect();
     assert_eq!(commands, [("tb_back.png", false), ("tb_forward.png", false), ("tb_desktop.png", false), ("tb_documents.png", false), ("tb_pictures.png", false), ("tb_music.png", false), ("tb_videos.png", false), ("tb_favorites.png", false), ("tb_recyclebin.png", true)]);
     assert_eq!(bounds(back.id()).first().copied(), Some(egui::Rect::from_min_size(egui::pos2(4.0, 7.0), egui::vec2(35.0, 35.0))));
     let tiles = bounds(tile.id());
     assert!(tiles.len() >= 1000 / 8 && tiles.iter().all(|r| r.height() == 51.0), "{}", tiles.len());
-    // 원본 TNXImageButton(그림 칸 하나): 포인터를 올려도 그대로, 누른 동안 색 × 6 / 10(FUN_007c39e4).
+    // Original TNXImageButton (one image cell): hovering changes nothing, pressing makes colors x 6 / 10 (FUN_007c39e4).
     let at = egui::pos2(20.0, 20.0);
     let frame = |app: &mut App, events: Vec<egui::Event>| {
         let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 700.0))), events, ..Default::default() };
@@ -1771,7 +1771,7 @@ fn skin_toolbar_follows_the_original_layout() {
         })
     };
     let back_color = |output: &egui::FullOutput| output.shapes.iter().find_map(|c| match &c.shape { egui::Shape::Mesh(m) if m.texture_id == back.id() => m.vertices.first().map(|v| v.color), _ => None });
-    // 원본 Back 단추(+0xd70): 기록이 없으면 Enabled = False → 상수 알파 0x82.
+    // Original Back button (+0xd70): without history Enabled = False -> constant alpha 0x82.
     app.panes[app.active].back.clear();
     let disabled = frame(&mut app, vec![egui::Event::PointerMoved(at)]);
     assert_eq!(back_color(&disabled), Some(Color32::WHITE.gamma_multiply(130.0 / 255.0)), "no history: disabled");
@@ -1785,7 +1785,7 @@ fn skin_toolbar_follows_the_original_layout() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// 원본 FUN_00444710: Favorites 단추는 DropDownMenu = pmFavorites. 누르면 단추 왼쪽 아래에 즐겨찾기 메뉴가 열린다.
+/// Original FUN_00444710: the Favorites button has DropDownMenu = pmFavorites. Clicking opens the favorites menu at the button's bottom left.
 #[test]
 fn skin_toolbar_favorites_drops_down_the_favorites_menu() {
     let (root, ctx, mut app) = fixture("skin-favorites", "en");
@@ -1797,7 +1797,7 @@ fn skin_toolbar_favorites_drops_down_the_favorites_menu() {
             egui::TopBottomPanel::top("toolbar").exact_height(51.0).frame(egui::Frame::NONE).show(ctx, |ui| app.skin_toolbar(ui, ctx, &skin));
         })
     };
-    // 왼쪽 묶음: 뒤로 4, 앞으로 43, 구분선 82(15), 바탕 화면 101 … 즐겨찾기 296(너비 35, 위 7).
+    // Left group: back 4, forward 43, separator 82 (15), desktop 101 ... favorites 296 (width 35, top 7).
     let at = egui::pos2(310.0, 20.0);
     let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
     frame(&mut app, vec![egui::Event::PointerMoved(at)]);
@@ -1809,7 +1809,7 @@ fn skin_toolbar_favorites_drops_down_the_favorites_menu() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// 원본 TNXLabel 마크업 &lt;b&gt;: "bold" 묶음(Segoe UI Bold)은 보통 꼴보다 넓다.
+/// Original TNXLabel markup &lt;b&gt;: the "bold" family (Segoe UI Bold) is wider than the normal face.
 #[test]
 fn bold_markup_uses_a_bold_face() {
     let (root, ctx, _app) = fixture("bold-face", "en");
@@ -1828,8 +1828,8 @@ fn bold_markup_uses_a_bold_face() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// 원본 pmMain(DFM): 스킨 테마의 목록 오른쪽 단추 메뉴에는 원본 항목만 있다. C# 테마는 C# 판의 열기·다른 패널로·경로 복사 줄을 둔다.
-/// 원본 pVertBar 단추(TNXPngButton, vertbarbtns.png 160×16 = 16×16 칸 10개): 칸은 16×16 그대로 그린다(납작하지 않게).
+/// Original pmMain (DFM): the list right-click menu of the skin theme has only original items. The C# theme keeps the C# open, to other pane and copy path rows.
+/// Original pVertBar buttons (TNXPngButton, vertbarbtns.png 160x16 = ten 16x16 cells): cells are drawn at 16x16 (not squashed).
 #[test]
 fn vertical_bar_cells_are_square() {
     let (root, ctx, mut app) = fixture("vertbar-cells", "en");
@@ -1853,7 +1853,7 @@ fn vertical_bar_cells_are_square() {
 
 #[test]
 fn skin_menus_use_the_original_menu_colours() {
-    // 원본 MenuDrawItem(0x42e518)·메뉴 줄(0x430e74): 스킨 [Menu] 색(검정: mback 141414, mtext B4B4B4, mhighlight E6E6E6, mover 000000,
+    // Original MenuDrawItem (0x42e518) and menu bar (0x430e74): skin [Menu] colors (black: mback 141414, mtext B4B4B4, mhighlight E6E6E6, mover 000000,
     // mdivider 303030, mborder 5F5F5F, mrtext C8C8C8, mmainback 2A2A2A, mmaintext 9F9F9F, mmainoverback 333333, mmainover FFFFFF).
     let (root, _ctx, mut app) = fixture("skin-menu-colours", "en");
     app.settings.set_text("Theme", "Black");
@@ -1866,7 +1866,7 @@ fn skin_menus_use_the_original_menu_colours() {
     assert_eq!((v.widgets.hovered.weak_bg_fill, v.widgets.hovered.fg_stroke.color), (Color32::from_rgb(0xE6, 0xE6, 0xE6), Color32::BLACK));
     assert_eq!((v.widgets.noninteractive.bg_stroke.color, v.weak_text_color), (Color32::from_rgb(0x30, 0x30, 0x30), Some(Color32::from_rgb(0xC8, 0xC8, 0xC8))));
     assert_eq!(v.override_text_color, None);
-    // 원본 MenuDrawItem: 글은 줄 왼쪽 + 0x10(그 앞은 체크 그림 자리), MenuMeasureItem 너비는 글 + 0x20.
+    // Original MenuDrawItem: text at row left + 0x10 (the check image slot before it), MenuMeasureItem width = text + 0x20.
     assert_eq!(style.spacing.button_padding.x, super::skin_pane::MENU_GUTTER);
     assert_eq!(super::skin_pane::MENU_GUTTER, 16.0);
     let (bar_back, bar) = super::skin_pane::skin_menu_bar_style(&skin);
@@ -1874,14 +1874,14 @@ fn skin_menus_use_the_original_menu_colours() {
     bar.apply(&mut style);
     assert_eq!(bar_back, Color32::from_rgb(0x2A, 0x2A, 0x2A));
     assert_eq!((style.visuals.widgets.inactive.fg_stroke.color, style.visuals.widgets.hovered.weak_bg_fill, style.visuals.widgets.hovered.fg_stroke.color), (Color32::from_rgb(0x9F, 0x9F, 0x9F), Color32::from_rgb(0x33, 0x33, 0x33), Color32::WHITE));
-    // 단축키 칸: mrback 000000, mrtext C8C8C8, mrover 5577EE.
+    // Shortcut column: mrback 000000, mrtext C8C8C8, mrover 5577EE.
     assert_eq!(super::skin_pane::skin_menu_shortcut_colors(&skin), (Color32::BLACK, Color32::from_rgb(0xC8, 0xC8, 0xC8), Color32::from_rgb(0x55, 0x77, 0xEE)));
     let _ = fs::remove_dir_all(root);
 }
 
 #[test]
 fn checked_menu_items_draw_the_original_check_bitmaps() {
-    // 원본 MenuDrawItem: 체크 항목은 CHECK(21점), 라디오 항목은 RCHECK(12점)를 줄 왼쪽에 그리고, 체크되지 않으면 그리지 않는다.
+    // Original MenuDrawItem: checkable items draw CHECK (21 points), radio items RCHECK (12 points) at the row left, nothing when unchecked.
     let ctx = egui::Context::default();
     let mut counts = Vec::new();
     for (checked, radio) in [(true, false), (true, true), (false, false)] {
@@ -1900,8 +1900,8 @@ fn checked_menu_items_draw_the_original_check_bitmaps() {
     assert_eq!(counts, vec![21, 12, 0]);
 }
 
-/// 원본 FUN_0048aa30: 내 PC의 폴더 정보줄도 FOLDERINFO(드라이브는 세지 않는다). 내부 경로 "::drives::"는 보이지 않는다.
-/// 원본 FUN_0048c548: 주소 줄 ">" 메뉴의 하위 폴더는 FindFirstFileW 차례(NTFS 이름 순).
+/// Original FUN_0048aa30: the folder info bar of My PC also uses FOLDERINFO (drives are not counted). The internal path "::drives::" is never shown.
+/// Original FUN_0048c548: subfolders of the address bar ">" menu come in FindFirstFileW order (NTFS name order).
 #[test]
 fn my_computer_info_bar_and_crumb_children_follow_the_original() {
     let (root, ctx, mut app) = fixture("drives-info", "en");
@@ -1924,7 +1924,7 @@ fn my_computer_info_bar_and_crumb_children_follow_the_original() {
     output.shapes.iter().for_each(|c| texts(&c.shape, &mut out));
     let all = out.join(" ");
     assert!(!all.contains("::drives::") && all.contains('0'), "{all}");
-    // 하위 폴더 순서.
+    // Subfolder order.
     let folder = root.join("crumbs");
     for name in ["beta", "Alpha", "gamma"] {
         fs::create_dir_all(folder.join(name)).unwrap();
@@ -1964,7 +1964,7 @@ fn skin_list_menu_has_only_the_original_items() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// 원본 도구 모음 UserCommand(FUN_0044381c, 내부 명령 아님)와 Container(pmToolBarPopup FUN_00444e60 → FUN_00444e04).
+/// Original toolbar UserCommand (FUN_0044381c, not internal) and Container (pmToolBarPopup FUN_00444e60 -> FUN_00444e04).
 #[test]
 fn toolbar_user_command_and_container_follow_the_original() {
     let (root, ctx, mut app) = fixture("toolbar-container", "en");
@@ -1992,7 +1992,7 @@ fn toolbar_user_command_and_container_follow_the_original() {
 #[test]
 fn empty_temp_asks_with_counts_and_empties_only_the_contents_like_the_original() {
     let (root, ctx, mut app) = fixture("empty-temp", "en");
-    // 시험용 가짜 임시 폴더(실제 GetTempPathW 폴더는 건드리지 않는다).
+    // Fake temp folder for tests (the real GetTempPathW folder is not touched).
     let temp = root.join("fake-temp");
     fs::create_dir_all(temp.join("sub")).unwrap();
     fs::write(temp.join("a.txt"), "12345").unwrap();
@@ -2002,23 +2002,23 @@ fn empty_temp_asks_with_counts_and_empties_only_the_contents_like_the_original()
     let mut permissions = fs::metadata(&locked).unwrap().permissions();
     permissions.set_readonly(true);
     fs::set_permissions(&locked, permissions).unwrap();
-    // GetTempPathW가 실패하면(None) 아무것도 하지 않는다.
+    // When GetTempPathW fails (None), nothing happens.
     TEMP_FOLDER.with(|t| *t.borrow_mut() = None);
     app.dispatch("emptyTemp", &ctx);
     assert!(app.msgboxes.is_empty() && app.original_dialogs.is_empty());
     TEMP_FOLDER.with(|t| *t.borrow_mut() = Some(temp.clone()));
     app.dispatch("emptyTemp", &ctx);
-    // 셈은 따로 돈다: 그동안 화면은 멈추지 않고, 끝나면 묻는다.
+    // Counting runs separately: the screen does not freeze meanwhile, and it asks when done.
     wait_until(&mut app, &ctx, |app| !app.msgboxes.is_empty());
     let (title, text) = app.msgboxes.first().map(|m| (m.title.clone(), m.text.clone())).expect("the MSG_EMPTYTEMP question");
     assert_eq!(title, app.language_pack.text("RES.TITLE_EMPTYTEMP", "?"));
     let expected = app.language_pack.text("RES.MSG_EMPTYTEMP", "?").replacen("%d", "3", 1).replacen("%s", &ndr::native::format_byte_size(9), 1);
     assert_eq!(text, expected);
     assert!(app.original_dialogs.is_empty(), "no cleanup scan window (C# flow) any more");
-    // 아니요: 그대로.
+    // No: unchanged.
     app.answer_message_box(ndr::msgbox::IDNO, &ctx);
     assert!(temp.join("a.txt").exists());
-    // 예: 안의 항목만 지우고(읽기 전용도 묻지 않고) 폴더는 남긴다.
+    // Yes: deletes only the contents (read-only ones too, without asking) and keeps the folder.
     app.dispatch("emptyTemp", &ctx);
     wait_until(&mut app, &ctx, |app| !app.msgboxes.is_empty());
     app.answer_message_box(ndr::msgbox::IDYES, &ctx);
@@ -2037,13 +2037,13 @@ fn drive_root_goes_up_to_this_pc_and_drive_items_rename_their_volume_label() {
     DRIVES.with(|d| *d.borrow_mut() = vec![left.clone(), right.clone()]);
     LABELS.with(|l| *l.borrow_mut() = vec![(left.clone(), "OLD".into())]);
     let drive_root = PathBuf::from(left.components().next().unwrap().as_os_str()).join("\\");
-    // 원본 FUN_00459ba8: 루트에서는 위로 가지 않는다.
+    // Original FUN_00459ba8: does not go up from a root.
     assert!(app.current_skin().is_some());
     app.navigate(0, drive_root.clone(), false);
     wait_until(&mut app, &ctx, |app| !app.panes[0].loading);
     app.parent();
     assert_eq!(app.panes[0].path, drive_root, "the original stays at a drive root");
-    // 원본 FUN_00486474: "목록에 디스크 드라이브 목록 보기"가 켜져 있으면 폴더 목록 끝에 드라이브 항목.
+    // Original FUN_00486474: with "show disk drives in the list" on, drive items follow the folder list.
     app.settings.set_flag("ShowDriveList", true);
     app.navigate(0, left.clone(), false);
     wait_until(&mut app, &ctx, |app| !app.panes[0].loading);
@@ -2056,7 +2056,7 @@ fn drive_root_goes_up_to_this_pc_and_drive_items_rename_their_volume_label() {
     app.settings.set_flag("ShowDriveList", true);
     app.refresh(0);
     wait_until(&mut app, &ctx, |app| !app.panes[0].loading);
-    // 원본 FUN_004351cc 드라이브 갈래: TfGetText(창 제목, MSG_DRIVELABEL, 지금 볼륨 이름) → SetVolumeLabelW.
+    // Drive branch of original FUN_004351cc: TfGetText(window title, MSG_DRIVELABEL, current volume name) -> SetVolumeLabelW.
     app.active = 0;
     app.panes[0].cursor = first_drive;
     app.dispatch("rename", &ctx);
@@ -2064,12 +2064,12 @@ fn drive_root_goes_up_to_this_pc_and_drive_items_rename_their_volume_label() {
     assert_eq!((title.as_str(), message, value.as_str()), ("NDR", app.language_pack.text("RES.MSG_DRIVELABEL", "?"), "OLD"));
     app.answer_dialog(DialogResult::Text(Some("NEW".into())), &ctx);
     assert_eq!(fake_volume_label(&left).as_deref(), Some("NEW"));
-    // ERROR_ACCESS_DENIED는 원본 TfMessage(목록 가운데 잠깐 뜨는 알림, 3초), 다른 실패와 빈 이름은 조용히.
+    // ERROR_ACCESS_DENIED uses the original TfMessage (a brief notice in the middle of the list, 3 seconds); other failures and empty names are silent.
     app.dispatch("rename", &ctx);
     app.answer_dialog(DialogResult::Text(Some("deny-me".into())), &ctx);
     assert_eq!(app.pane_message.as_ref().map(|(t, i, _)| (t.clone(), *i)), Some((app.language_pack.text("RES.ACCESS_DENIED", "?"), 0)));
     assert!(app.status.is_empty(), "not on the status line");
-    // 원본 Timer1(3000ms): 3초가 지나면 닫힌다.
+    // Original Timer1 (3000 ms): closes after 3 seconds.
     app.pane_message.as_mut().unwrap().2 = Instant::now() - Duration::from_millis(3100);
     app.pane_message_ui(&ctx);
     assert!(app.pane_message.is_none());
@@ -2079,11 +2079,11 @@ fn drive_root_goes_up_to_this_pc_and_drive_items_rename_their_volume_label() {
     app.answer_dialog(DialogResult::Text(Some(String::new())), &ctx);
     assert!(app.status.is_empty() && app.msgboxes.is_empty() && app.pane_message.is_none());
     assert_eq!(fake_volume_label(&left).as_deref(), Some("NEW"));
-    // 준비되지 않은 드라이브(볼륨 정보 없음)는 아무것도 묻지 않는다.
+    // A drive that is not ready (no volume info) asks nothing.
     app.panes[0].cursor = first_drive + 1;
     app.dispatch("rename", &ctx);
     assert!(app.original_dialogs.is_empty());
-    // 드라이브 항목을 열면 그 루트로.
+    // Opening a drive item goes to its root.
     app.navigate(0, right.clone(), false);
     wait_until(&mut app, &ctx, |app| !app.panes[0].loading);
     app.panes[0].cursor = app.panes[0].entries.len() - 2;
@@ -2099,20 +2099,20 @@ fn drive_root_goes_up_to_this_pc_and_drive_items_rename_their_volume_label() {
 #[test]
 fn closing_while_working_asks_the_original_question_and_columns_use_field_names() {
     let (root, ctx, mut app) = fixture("close-working", "ko");
-    // 원본 열 머리글 FIELD_*("종류"는 C# 열: C# 테마에만). 스킨 테마는 원본 여섯 칸.
+    // Original column headers FIELD_* ("type" is a C# column, only in the C# theme). The skin theme has the six original cells.
     let [name, ext, size, date, attr, desc] = ["FIELD_NAME", "FIELD_EXT", "FIELD_SIZE", "FIELD_DATEMODIFIED", "FIELD_ATTR", "FIELD_DESC"].map(|key| app.language_pack.text(&format!("RES.{key}"), "?"));
     assert!(app.current_skin().is_some(), "the default theme is the Black skin");
     let titles: Vec<String> = app.detail_columns(true).into_iter().map(|(_, title, _)| title).collect();
     assert_eq!(titles, [name.clone(), ext.clone(), size.clone(), date.clone(), attr.clone(), desc.clone()]);
-    // 원본 DrawListItem 설명 칸: 설명이 없고 showfiletype이면 파일 종류 글.
+    // Original DrawListItem description cell: the file type text when there is no description and showfiletype is on.
     app.compute_view(0);
     let file = app.panes[0].entries.iter().position(|e| !e.is_dir && !e.drive).expect("a file");
     let cells = app.panes[0].view.cells[file].clone();
     assert_eq!(cells[DetailColumn::Description.index()], cells[DetailColumn::Kind.index()]);
-    // 원본 GetList: 종류 글은 셸 이름(SHGetFileInfoW SHGFI_TYPENAME).
+    // Original GetList: the type text is the shell name (SHGetFileInfoW SHGFI_TYPENAME).
     let entry = &app.panes[0].entries[file];
     assert_eq!(cells[DetailColumn::Kind.index()], native::shell_type_name(ndr::parity::dotnet_extension(&entry.name), false));
-    // 원본 FormCloseQuery(0x42a798): 작업 중이면 STILL_HAVE_OPERATION(TITLE_INFO, 0x2124). 아니요 = 그대로, 예 = 멈추고 닫기.
+    // Original FormCloseQuery (0x42a798): during a job STILL_HAVE_OPERATION (TITLE_INFO, 0x2124). No = keep, yes = stop and close.
     assert!(app.start_task("long".into(), |_, cancel| {
         while !cancel.load(std::sync::atomic::Ordering::Relaxed) {
             thread::sleep(Duration::from_millis(5));
@@ -2130,7 +2130,7 @@ fn closing_while_working_asks_the_original_question_and_columns_use_field_names(
     app.answer_message_box(ndr::msgbox::IDYES, &ctx);
     assert!(app.job.as_ref().is_some_and(|j| j.cancel.load(std::sync::atomic::Ordering::Relaxed)), "Yes stops the operation");
     wait_job(&mut app, &ctx);
-    // 원본 BACKHINT/FORWARDHINT: 단추가 열 경로를 넣은 도움말. 기록이 없으면 단추 글.
+    // Original BACKHINT/FORWARDHINT: tooltips with the path the button opens. Without history the button text.
     let left = root.join("left");
     app.active = 0;
     app.navigate(0, left.join("folder1"), true);
@@ -2147,24 +2147,24 @@ fn work_folder_buttons_set_open_and_clear_like_the_original() {
     let (root, ctx, mut app) = fixture("work-buttons", "ko");
     let left = root.join("left");
     app.active = 0;
-    // 원본 FUN_0042f27c 도움말: 빈 칸 = WORKFOLDER_SETHINT.
+    // Original FUN_0042f27c tooltip: an empty slot = WORKFOLDER_SETHINT.
     assert_eq!(app.work_folder_hint(2), app.language_pack.text("RES.WORKFOLDER_SETHINT", "?"));
-    // 원본 FUN_0042fc84: 빈 칸 누르기 = 묻지 않고 지금 폴더로 지정.
+    // Original FUN_0042fc84: clicking an empty slot sets it to the current folder without asking.
     app.work_folder_click(2);
     assert!(app.msgboxes.is_empty());
     assert_eq!(app.settings.strings("WorkingFolders")[2], left.to_string_lossy());
     assert_eq!(app.work_folder_hint(2), format!("{}\n{}", left.display(), app.language_pack.text("RES.WORKFOLDER_UNSETHINT", "?")));
-    // 지정된 칸 누르기 = 그 폴더로.
+    // Clicking a set slot goes to that folder.
     app.navigate(0, left.join("folder1"), true);
     wait_until(&mut app, &ctx, |app| !app.panes[0].loading);
     app.work_folder_click(2);
     wait_until(&mut app, &ctx, |app| !app.panes[0].loading);
     assert_eq!(app.panes[0].path, left);
     assert_eq!(app.settings.strings("WorkingFolders")[2], left.to_string_lossy(), "opening does not overwrite");
-    // 원본 FUN_0042fe60: 오른쪽 단추 = 비우기.
+    // Original FUN_0042fe60: the right button clears it.
     app.work_folder_clear(2);
     assert!(app.settings.strings("WorkingFolders")[2].is_empty());
-    // 원본 pVertBar 단추: 모두 선택 해제, 경로 맞추기(bSyncAddressClick).
+    // Original pVertBar buttons: select none, sync paths (bSyncAddressClick).
     app.panes[0].selected = [0usize].into_iter().collect();
     app.vertical_bar_click("bClearSelection", &ctx);
     assert!(app.panes[0].selected.is_empty());
@@ -2177,7 +2177,7 @@ fn work_folder_buttons_set_open_and_clear_like_the_original() {
     app.vertical_bar_click("bSyncPathToLeft", &ctx);
     wait_until(&mut app, &ctx, |app| !app.panes[0].loading);
     assert_eq!(app.panes[0].path, right, "left path = right path");
-    // 나눔 막대(C# PaneDivider LeftPaneWidth %, 20~80; 원본 pmiFrameWidthSame = 50%).
+    // Divider (C# PaneDivider LeftPaneWidth %, 20-80; original pmiFrameWidthSame = 50%).
     assert!((app.left_pane_ratio() - 0.5).abs() < 1e-6);
     app.set_left_pane_width(30.0);
     assert!((app.left_pane_ratio() - 0.3).abs() < 1e-6);
@@ -2185,7 +2185,7 @@ fn work_folder_buttons_set_open_and_clear_like_the_original() {
     assert!((app.left_pane_ratio() - 0.8).abs() < 1e-6, "clamped to 80%");
     assert_eq!(app.settings.values.get("RightPaneWidth").and_then(|v| v.as_f64()), Some(20.0));
     app.set_left_pane_width(50.0);
-    // 막대 그리기(스킨 띠 그림)도 해 본다. 원본 iVertThumb: 막대 아래(높이 − 25 칸) 가운데에 vertthumb.png 원래 크기.
+    // Also draws the bar (skin strip images). Original iVertThumb: vertthumb.png at its own size centered at the bar bottom (height - 25 cell).
     app.settings.set_text("Theme", "Black");
     let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 850.0))), ..Default::default() };
     let mut bar = egui::Rect::NOTHING;
@@ -2202,7 +2202,7 @@ fn work_folder_buttons_set_open_and_clear_like_the_original() {
     });
     let drawn = drawn.expect("the grip image is painted");
     assert_eq!(drawn.size(), thumb.size_vec2());
-    // 원본 iVertThumb(Left 3, 12×22)와 FUN_0042cc2c(Top = 막대 높이 − 22 − 4): 그 칸 가운데에 그림.
+    // Original iVertThumb (Left 3, 12x22) and FUN_0042cc2c (Top = bar height - 22 - 4): the image centered in that cell.
     assert!((drawn.center().x - (bar.min.x + 9.0)).abs() < 0.01 && (drawn.center().y - (bar.max.y - 26.0 + 11.0)).abs() < 0.01, "{drawn:?} in {bar:?}");
     fs::remove_dir_all(root).unwrap();
 }
@@ -2212,7 +2212,7 @@ fn control_panel_and_add_remove_programs_follow_original() {
     let (root, ctx, mut app) = fixture("system-menu", "ko");
     launched();
     VERBS.with(|v| v.borrow_mut().clear());
-    // 원본 miControlPanelClick: control.exe. miAddRemovePorgClick(0x432fc8): rundll32.exe "shell32.dll,Control_RunDLL appwiz.cpl".
+    // Original miControlPanelClick: control.exe. miAddRemovePorgClick (0x432fc8): rundll32.exe "shell32.dll,Control_RunDLL appwiz.cpl".
     app.dispatch("controlPanel", &ctx);
     assert_eq!(VERBS.with(|v| v.borrow().clone()), vec![(PathBuf::from("control.exe"), "open".to_owned())]);
     app.dispatch("addRemovePrograms", &ctx);
