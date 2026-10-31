@@ -764,6 +764,11 @@ struct Job {
     quiet: bool,
 }
 impl Job {
+    /// 원본 FUN_00412b00: 복사한 대상의 읽기 전용은 설정(remreadonly)이 켜져 있고 원본이 CD/DVD에 있을 때만 뗀다.
+    /// 고친 것: 전에는 설정이 켜져 있으면 어느 드라이브에서 복사하든 읽기 전용을 뗐다.
+    fn clear_copied_read_only(&self, source: &Path) -> bool {
+        self.options.remove_read_only && on_optical_drive(source)
+    }
     fn description(&mut self, path: &Path) -> Result<Option<String>, String> {
         if !self.options.use_descriptions {
             return Ok(None);
@@ -1043,7 +1048,7 @@ impl Job {
                 preserve_times(&directory, &m)?;
                 drop(directory);
                 let mut permissions = m.permissions();
-                if self.options.remove_read_only {
+                if self.clear_copied_read_only(s) {
                     permissions.set_readonly(false)
                 }
                 fs::set_permissions(&d, permissions).map_err(|e| e.to_string())?;
@@ -1103,7 +1108,7 @@ impl Job {
             }
             preserve_times(&out, &m)?;
             let mut permissions = m.permissions();
-            if self.options.remove_read_only {
+            if self.clear_copied_read_only(s) {
                 permissions.set_readonly(false)
             }
             out.set_permissions(permissions)
@@ -1111,7 +1116,9 @@ impl Job {
             out.sync_all().map_err(|e| e.to_string())?;
             drop(out);
             check_cancel(&self.cancel)?;
-            let original_permissions = if self.options.remove_read_only && overwrite {
+            // 원본 FUN_004134e0(덮어쓰기): 설정과 상관없이 있는 대상의 속성을 지우고(SetFileAttributesW 0x20) 바꾼다.
+            // 고친 것: 전에는 읽기 전용 해제 설정이 꺼져 있으면 읽기 전용 대상을 덮어쓰지 못했다.
+            let original_permissions = if overwrite {
                 fs::metadata(&d)
                     .ok()
                     .map(|m| m.permissions())
@@ -1314,7 +1321,7 @@ impl Job {
             }
         }
         let original = fs::metadata(d).map_err(|e| e.to_string())?.permissions();
-        if self.options.remove_read_only && original.readonly() {
+        if original.readonly() {
             let mut writable = original.clone();
             writable.set_readonly(false);
             fs::set_permissions(d, writable).map_err(|e| e.to_string())?;
@@ -1339,7 +1346,7 @@ impl Job {
             // 고친 것: 이어 쓰다 취소하거나 실패하면 대상이 중간 크기로 남았다. 이어 쓰기 전 크기로 잘라 되돌린다.
             let restored = out.set_len(existing).and_then(|()| out.sync_all());
             drop(out);
-            if self.options.remove_read_only && original.readonly() {
+            if original.readonly() {
                 let _ = fs::set_permissions(d, original);
             }
             return Err(match restored {
@@ -1350,7 +1357,7 @@ impl Job {
         preserve_times(&out, m)?;
         drop(out);
         let mut permissions = m.permissions();
-        if self.options.remove_read_only {
+        if self.clear_copied_read_only(s) {
             permissions.set_readonly(false);
         }
         fs::set_permissions(d, permissions).map_err(|e| e.to_string())?;
@@ -1643,6 +1650,7 @@ mod safety_tests {
     }
     #[test]
     fn configured_copy_can_replace_readonly_target() {
+        // 원본 FUN_004134e0: 덮어쓰기는 설정(remreadonly)과 상관없이 대상 속성을 지우고(0x20) 바꾼다.
         let p = tests::prepared();
         let mut permissions = fs::metadata(p.join("out/a")).unwrap().permissions();
         permissions.set_readonly(true);
@@ -1660,7 +1668,7 @@ mod safety_tests {
                 tx,
                 Arc::new(AtomicBool::new(false)),
                 OperationOptions {
-                    remove_read_only: true,
+                    remove_read_only: false,
                     use_descriptions: true,
                     ..Default::default()
                 },
@@ -1713,12 +1721,18 @@ mod safety_tests {
             !events.iter().any(|e| matches!(e, Event::Error { .. })),
             "{events:?}"
         );
+        // 원본 FUN_00412b00: 읽기 전용 해제는 원본이 CD/DVD(GetDriveTypeW 5)일 때만이라, 고정 디스크에서 복사하면 남는다.
+        assert!(!on_optical_drive(&p.join("in/a")));
         assert!(
-            !fs::metadata(p.join("out/a"))
+            fs::metadata(p.join("out/a"))
                 .unwrap()
                 .permissions()
-                .readonly()
+                .readonly(),
+            "a copy from a fixed disk keeps the read-only attribute"
         );
+        let mut out_permissions = fs::metadata(p.join("out/a")).unwrap().permissions();
+        out_permissions.set_readonly(false);
+        fs::set_permissions(p.join("out/a"), out_permissions).unwrap();
         assert!(!p.join("out/descript.dat").exists());
         let mut permissions = fs::metadata(p.join("in/a")).unwrap().permissions();
         permissions.set_readonly(false);
@@ -1979,6 +1993,29 @@ pub fn same_or_inside(path: &Path, root: &Path) -> bool {
     let normal = |p: &Path| std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf()).to_string_lossy().replace('/', "\\").trim_end_matches('\\').to_lowercase();
     let (path, root) = (normal(path), normal(root));
     path == root || path.starts_with(&(root + "\\"))
+}
+
+/// 원본 FUN_00412b00: 복사·이동이 끝나면 "CD/DVD에서 복사할 때 읽기 전용 해제"(remreadonly, +0xd4)가 켜져 있고 원본의 루트
+/// (PathStripToRootW)가 CD-ROM 드라이브(GetDriveTypeW == 5)일 때만 대상의 읽기 전용(0x1)을 뗀다.
+#[cfg(windows)]
+pub fn on_optical_drive(path: &Path) -> bool {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::GetDriveTypeW;
+    let Ok(full) = std::path::absolute(path) else { return false };
+    let Some(root) = full.components().next().map(|c| {
+        let mut r = PathBuf::from(c.as_os_str());
+        r.push("\\");
+        r
+    }) else {
+        return false;
+    };
+    let wide: Vec<u16> = root.as_os_str().encode_wide().chain(Some(0)).collect();
+    // SAFETY: NUL-terminated root path for the duration of the call.
+    unsafe { GetDriveTypeW(wide.as_ptr()) == 5 }
+}
+#[cfg(not(windows))]
+pub fn on_optical_drive(_path: &Path) -> bool {
+    false
 }
 
 /// RemoveDirectoryW / DeleteFileW: 링크(재분석 지점)를 따라가지 않고 링크 자체를 지운다(C# Directory.Delete / File.Delete).
