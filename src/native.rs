@@ -1713,6 +1713,48 @@ pub fn original_link_path(target: &Path, folder: &Path) -> PathBuf {
     PathBuf::from(link)
 }
 
+/// GetLongPathNameW(짧은 이름 "PROGRA~1"을 긴 이름으로). 실패하면 None.
+pub fn long_path(path: &Path) -> Option<PathBuf> {
+    use windows_sys::Win32::Storage::FileSystem::GetLongPathNameW;
+    let short = wide(path);
+    let mut long = vec![0u16; 0x400];
+    // SAFETY: NUL-terminated input; the output length is passed.
+    let length = unsafe { GetLongPathNameW(short.as_ptr(), long.as_mut_ptr(), long.len() as u32) } as usize;
+    (length > 0 && length < long.len()).then(|| PathBuf::from(String::from_utf16_lossy(&long[..length])))
+}
+
+/// 원본 GetShortcutTarget(바로 가기, &WIN32_FIND_DATAW): IShellLinkW를 읽어(IPersistFile::Load) 대상 경로(GetPath)와 그 찾기 자료의
+/// 속성이 폴더(FILE_ATTRIBUTE_DIRECTORY)인지. 읽지 못하면 None.
+pub fn shortcut_target(link: &Path) -> Option<(PathBuf, bool)> {
+    use windows::{
+        Win32::{
+            Storage::FileSystem::WIN32_FIND_DATAW,
+            System::Com::*,
+            UI::Shell::{IShellLinkW, ShellLink},
+        },
+        core::{Interface, PCWSTR},
+    };
+    // SAFETY: COM is initialised for this call; buffers outlive the calls that use them.
+    unsafe {
+        let initialized = CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_ok();
+        let result = (|| -> windows::core::Result<(PathBuf, bool)> {
+            let shell_link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)?;
+            let persist: IPersistFile = shell_link.cast()?;
+            let name = wide(link);
+            persist.Load(PCWSTR(name.as_ptr()), STGM_READ)?;
+            let mut buffer = [0u16; 1024];
+            let mut data = WIN32_FIND_DATAW::default();
+            shell_link.GetPath(&mut buffer, &mut data, 0)?;
+            let length = buffer.iter().position(|&c| c == 0).unwrap_or(buffer.len());
+            Ok((PathBuf::from(String::from_utf16_lossy(&buffer[..length])), data.dwFileAttributes & 0x10 != 0))
+        })();
+        if initialized {
+            CoUninitialize();
+        }
+        result.ok().filter(|(path, _)| !path.as_os_str().is_empty())
+    }
+}
+
 /// C# OriginalShortcutService.Create (원본 @CreateShortcut 0x7b3d04): SetPath(대상), SetArguments(""),
 /// SetWorkingDirectory(PathRemoveFileSpecW(대상)), SetIconLocation(NULL, 1), SetHotkey(0), SetShowCmd(0),
 /// IPersistFile::Save(링크, TRUE) — 있는 링크는 조용히 바꾼다. 원본 호출부는 결과를 보지 않는다.

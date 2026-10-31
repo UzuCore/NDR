@@ -1892,3 +1892,22 @@ fn field_widths_by_glyph_sum_match_the_laid_out_width() {
     });
     let _ = fs::remove_dir_all(root);
 }
+
+/// 원본 FUN_00483640: 바로 가기(.lnk)의 대상이 폴더면 셸로 열지 않고 그 패널을 그 폴더로 옮긴다.
+#[test]
+fn opening_a_folder_shortcut_moves_the_pane_into_the_target() {
+    let (root, ctx, mut app) = fixture("folder-shortcut");
+    let left = app.panes[0].path.clone();
+    let target = root.join("target-folder");
+    fs::create_dir_all(&target).unwrap();
+    ndr::native::create_original_shortcut(&target, &left).unwrap();
+    app.refresh(0);
+    wait(&mut app, &ctx);
+    let link = app.panes[0].entries.iter().position(|e| e.name.to_ascii_lowercase().ends_with(".lnk")).expect("the shortcut is listed");
+    app.active = 0;
+    app.panes[0].cursor = link;
+    app.open_current();
+    wait(&mut app, &ctx);
+    assert_eq!(app.panes[0].path.to_string_lossy().to_lowercase(), target.to_string_lossy().to_lowercase());
+    let _ = fs::remove_dir_all(root);
+}

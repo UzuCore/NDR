@@ -1009,6 +1009,11 @@ impl App {
             // 원본 0x483c79(playwav, 처음 값 켜짐 0x46f088): 확장자가 wav면 PlaySoundW(NULL)로 멈춘 뒤 PlaySoundW(파일, 0x22003). 셸로 열지 않는다.
             (self.system.play_wave)(None);
             (self.system.play_wave)(Some(&entry.path));
+        } else if let Some(folder) = entry.path.extension().is_some_and(|e| e.eq_ignore_ascii_case("lnk")).then(|| (self.system.shortcut_target)(&entry.path)).flatten().filter(|(_, folder)| *folder).map(|(target, _)| target) {
+            // 원본 FUN_00483640(파일 열기): 바로 가기(.lnk)의 대상(GetShortcutTarget)이 폴더면 GetLongPathNameW 뒤 그 패널을 그 폴더로.
+            // 고친 것: 전에는 셸로 열어 탐색기 창이 새로 떴다.
+            let folder = std::path::absolute(&folder).unwrap_or(folder);
+            self.navigate(i, native::long_path(&folder).unwrap_or(folder), true);
         } else {
             // C# OpenItemAsync: RememberOpenedExecutable(.exe/.lnk) 후 실행.
             let mut rows = self.settings.strings("ExecutableHistory");

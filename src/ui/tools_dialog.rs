@@ -62,6 +62,8 @@ pub(super) struct SystemHooks {
     pub tree_root: fn(&str) -> String,
     /// 원본 폴더 트리 삭제 FUN_004266ac의 SHFileOperationW(FO_DELETE)(native::shell_delete). 0 = 성공. 시험에서는 셸 창 없이 지운다.
     pub shell_delete: fn(&Path, bool) -> i32,
+    /// 원본 GetShortcutTarget(바로 가기의 대상, 폴더인지)(native::shortcut_target).
+    pub shortcut_target: fn(&Path) -> Option<(PathBuf, bool)>,
 }
 
 #[cfg(test)]
@@ -244,6 +246,7 @@ impl Default for SystemHooks {
             shell_delete: native::shell_delete,
             #[cfg(test)]
             shell_delete: |path, _| if std::fs::remove_dir_all(path).is_ok() { 0 } else { 2 },
+            shortcut_target: native::shortcut_target,
         }
     }
 }
