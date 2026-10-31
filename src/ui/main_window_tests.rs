@@ -2229,5 +2229,14 @@ fn dragging_near_the_list_edge_scrolls_like_the_drop_target() {
     let top = egui::pos2(rect.center().x, rect.top() + 3.0);
     assert!(app.drag_edge_scroll(Some(top), start + Duration::from_millis(300), &ctx));
     assert_eq!(app.panes[0].drag_scroll, (-1, 0));
+    // 패널 폴더 트리 아래쪽 가장자리: 트리를 한 줄 굴린다(원본 트리 효과 0x48e790도 같은 띠).
+    app.panes[0].drag_scroll = (0, 0);
+    let tree = egui::Rect::from_min_size(rect.min, egui::vec2(150.0, 400.0));
+    app.panes[0].tree_rect = Some(tree);
+    let t = start + Duration::from_millis(1000);
+    let near = egui::pos2(tree.center().x, tree.bottom() - 4.0);
+    assert!(!app.drag_edge_scroll(Some(near), t, &ctx), "a new place starts the timer again");
+    assert!(app.drag_edge_scroll(Some(near), t + Duration::from_millis(100), &ctx));
+    assert_eq!((app.panes[0].tree_drag_scroll, app.panes[0].drag_scroll), (1, (0, 0)), "the tree scrolls, not the list");
     let _ = fs::remove_dir_all(root);
 }

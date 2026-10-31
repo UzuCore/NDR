@@ -185,6 +185,8 @@ struct Pane {
     list_rect: Option<egui::Rect>,
     /// 이번 화면에 목록을 굴릴 칸 수(세로, 가로): 원본 TNXDropTarget.DoTargetScroll이 WM_VSCROLL/WM_HSCROLL SB_LINEUP·SB_LINEDOWN을 보낸 자리.
     drag_scroll: (i8, i8),
+    /// 패널 폴더 트리를 굴릴 줄 수(끄는 동안 위·아래 가장자리).
+    tree_drag_scroll: i8,
     /// Shift를 누른 채 움직이기 시작한 자리(원본 SetShiftDownIndex 0xf4).
     shift_anchor: Option<usize>,
     /// 원본 표시 칸 끌기(+0x3d4 기준 줄, +0x3d8 지난 끝 줄). 왼쪽 단추를 놓으면 없앤다(MouseUp).
@@ -248,6 +250,7 @@ impl Pane {
             list_shape: None,
             list_rect: None,
             drag_scroll: (0, 0),
+            tree_drag_scroll: 0,
             shift_anchor: None,
             range_drag: None,
             cut_marks: HashSet::new(),

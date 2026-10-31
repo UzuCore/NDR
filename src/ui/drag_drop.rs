@@ -103,7 +103,12 @@ impl App {
     /// DoTargetScroll(0x7b1e04)이 여백 20(+0x6c) 안이면 WM_VSCROLL(위·아래)·WM_HSCROLL(왼쪽·오른쪽) 한 칸을 보낸다.
     /// 굴린 칸은 `Pane.drag_scroll`로 넘기고 다음 그림에서 목록이 옮긴다. 굴렸으면 true.
     pub(super) fn drag_edge_scroll(&mut self, position: Option<egui::Pos2>, now: Instant, ctx: &egui::Context) -> bool {
-        let hit = position.and_then(|p| (0..self.panes.len()).find_map(|i| self.panes[i].list_rect.filter(|r| r.contains(p)).map(|r| (i, r, p))));
+        // 패널 폴더 트리(원본 트리 놓기 효과 0x48e790도 같은 15화소 띠에서 굴리기 표시를 붙인다). 트리는 세로만 굴린다.
+        // 칸 번호: 트리는 패널 번호 + 100.
+        let tree_hit = position.and_then(|p| (0..self.panes.len()).find_map(|i| self.panes[i].tree_rect.filter(|r| r.contains(p) && self.pane_rects[i].contains(p)).map(|r| (i, r, p))));
+        let hit = tree_hit
+            .map(|(i, r, p)| (i + 100, r, p))
+            .or_else(|| position.and_then(|p| (0..self.panes.len()).find_map(|i| self.panes[i].list_rect.filter(|r| r.contains(p)).map(|r| (i, r, p)))));
         let Some((pane, rect, p)) = hit else {
             self.drag_scroll_tick = None;
             return false;
@@ -132,6 +137,13 @@ impl App {
         ctx.request_repaint_after(DRAG_SCROLL_INTERVAL);
         if dy == 0 && dx == 0 {
             return false;
+        }
+        if pane >= 100 {
+            if dy == 0 {
+                return false;
+            }
+            self.panes[pane - 100].tree_drag_scroll = dy;
+            return true;
         }
         self.panes[pane].drag_scroll = (dy, dx);
         true

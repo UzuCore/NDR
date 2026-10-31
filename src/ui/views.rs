@@ -710,6 +710,11 @@ impl App {
             } else if line >= first + page {
                 area = area.vertical_scroll_offset(((line + 1) as f32 * row_height - rect.height()).max(0.0));
             }
+        } else if self.panes[index].tree_drag_scroll != 0 {
+            // 원본 트리 놓기 효과(0x48e790)의 굴리기 표시 + TNXDropTarget.DoTargetScroll(0x7b1e04): WM_VSCROLL 한 줄.
+            let dy = std::mem::take(&mut self.panes[index].tree_drag_scroll) as f32;
+            let current = egui::scroll_area::State::load(ui.ctx(), child.make_persistent_id(egui::Id::new(("ndr-pane-tree-scroll", index)))).map_or(self.panes[index].tree_first as f32 * row_height, |s| s.offset.y);
+            area = area.vertical_scroll_offset((current + dy * row_height).max(0.0));
         }
         let mut visible = 0..0;
         area.show_rows(&mut child, row_height, rows.len(), |ui, range| {

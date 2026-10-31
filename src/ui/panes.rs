@@ -1285,6 +1285,9 @@ impl App {
                 let tree_key = if index == 0 { "LeftFolderTreeWidth" } else { "RightFolderTreeWidth" };
                 let tree_width = if tree_shown { (self.settings.values.get(tree_key).and_then(|v| v.as_f64()).unwrap_or(120.0) as f32).clamp(50.0, (full.width() - 53.0).max(50.0)) } else { 0.0 };
                 let splitter = if tree_shown { 3.0 } else { 0.0 };
+                if !tree_shown {
+                    self.panes[index].tree_rect = None;
+                }
                 if tree_shown {
                     let spacing = outer.spacing().item_spacing.y;
                     let below = self.skin_file_info_height() + spacing + self.ftp_log_reserve(index, spacing);
