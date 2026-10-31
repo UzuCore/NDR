@@ -1594,6 +1594,38 @@ fn skin_scrollbar_thumb_follows_the_original_tnxscrollbar() {
     assert_eq!(scrollbar_thumb(40.0, 12.0, 16.0, 0.0, 1000.0, 250.0), (16.0, 8.0), "never longer than the track between the buttons");
 }
 
+/// Original TNXPngButton DropDownMenu (MouseDown 0x7cc31c → DropDown 0x7ccc38 → Click 0x7cca74): the menu opens on the press, stays open
+/// after the release, and a second press on the button closes it.
+#[test]
+fn dropdown_button_menu_opens_on_press() {
+    let ctx = egui::Context::default();
+    let button = egui::Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(16.0, 16.0));
+    let frame = |events: Vec<egui::Event>| {
+        let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 400.0))), events, ..Default::default() };
+        let mut open = false;
+        let _ = ctx.run(raw, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let response = ui.interact(button, egui::Id::new("dropdown-test"), egui::Sense::click());
+                open = super::skin_pane::menu_popup(&response).show(|ui| ui.label("item")).is_some();
+            });
+        });
+        open
+    };
+    let at = button.center();
+    let pointer = |pressed: bool| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    assert!(!frame(vec![egui::Event::PointerMoved(at)]));
+    assert!(frame(vec![pointer(true)]), "the press opens the menu");
+    assert!(frame(vec![]), "still open while held");
+    assert!(frame(vec![pointer(false)]), "the release of the opening press keeps it open");
+    assert!(frame(vec![]));
+    assert!(!frame(vec![pointer(true)]), "a second press closes it");
+    assert!(!frame(vec![pointer(false)]));
+    assert!(!frame(vec![]));
+    // Press and release in one frame also leaves it open.
+    assert!(frame(vec![pointer(true), pointer(false)]));
+    assert!(frame(vec![]));
+}
+
 /// Original TNXScrollBar MouseMove (0x7cea58) / DoScrollTimer (0x7ce734): a held arrow pauses while the pointer is off it and resumes on
 /// return; a held track stops for the rest of the press once the pointer reaches the thumb or leaves the track.
 #[test]

@@ -190,9 +190,24 @@ pub(super) fn pane_menu(ui: &egui::Ui, index: usize, open_at: Option<egui::Pos2>
 }
 
 /// Same as `Popup::menu` (dropdown below a button), but uses the original menu colors for a skin theme.
+/// Original TNXPngButton with a DropDownMenu: MouseDown 0x7cc31c (left button, enabled) → DropDown 0x7ccc38 → Click 0x7cca74 shows the menu
+/// with TrackPopupMenuEx at the button's bottom-left on the press itself; a press on the button while the menu is open only closes it
+/// (the menu takes that click and RemoveClicks 0x7cc8e0 drops the rest). Previously the menu opened on release.
 pub(super) fn menu_popup(response: &egui::Response) -> egui::Popup<'_> {
     let style = response.ctx.data(|d| d.get_temp::<Option<egui::style::StyleModifier>>(egui::Id::new(MENU_STYLE_ID))).flatten();
-    let popup = egui::Popup::menu(response);
+    let pressed = (response.is_pointer_button_down_on() || response.clicked()) && response.ctx.input(|i| i.pointer.primary_pressed());
+    let opened_id = response.id.with("ndr-menu-opened-by-press");
+    let opened = response.ctx.data(|d| d.get_temp::<bool>(opened_id)).unwrap_or(false);
+    // Until the opening press has ended (egui may deliver the release a frame later), its release is not a click outside the menu.
+    let settled = response.ctx.input(|i| !i.pointer.any_down() && !i.pointer.any_released() && !i.pointer.any_click());
+    let release = (opened || pressed) && !settled;
+    if pressed || (opened && settled) {
+        response.ctx.data_mut(|d| d.insert_temp(opened_id, pressed));
+    }
+    let mut popup = egui::Popup::menu(response).open_memory(pressed.then_some(egui::SetOpenCommand::Toggle));
+    if release {
+        popup = popup.close_behavior(egui::PopupCloseBehavior::IgnoreClicks);
+    }
     match style {
         Some(style) => popup.style(style),
         None => popup,

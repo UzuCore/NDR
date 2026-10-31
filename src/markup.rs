@@ -85,6 +85,8 @@ pub fn render(text: &str) -> Vec<Span> {
 
 /// Text without tags, as the original TNXLabel.GetTextOnly 0x7c5368: every "<...>" is removed (known tag or not), a '<' with no
 /// later '>' is dropped by itself, and "&lt;" / "&gt;" become '<' / '>'. CR LF becomes LF as in `render`.
+/// GetActualText 0x7c6894 is GetTextOnly(Caption); TextWidth 0x7c59d8 / GetTextWidth 0x7c5a44 are TextExtent(..).cx; CMTextChanged 0x7c65b4
+/// and CMFontChanged 0x7c6834 recompute the text rect (CalcTextRect), AdjustBounds and repaint.
 pub fn plain_text(text: &str) -> String {
     let mut result = String::with_capacity(text.len());
     let mut rest = text;
