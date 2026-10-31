@@ -632,6 +632,9 @@ impl App {
 
     /// Address-bar segments (original TNXPathLabel.SetPath): FTP = "ftp://host" + folders, archive = archive file folders + archive name + inner folders,
     /// My Computer = a single MYCOMPUTER, local = from the root down to the current folder.
+    /// SetPath 0x7c855c: separator '\' (+0x1d8); a path starting with "\\" is UNC (+0x21c = 1, first segment = PathStripToRoot without the
+    /// trailing '\'), one starting with '/' uses '/' (+0x21c = 2); then one segment per text between separators, empty ones skipped.
+    /// The constructor (0x7c8050) only sets defaults (separator, colors, the folder icon image list, a 10 ms OnDrawTimer).
     pub(super) fn crumb_segments(&self, index: usize) -> Vec<CrumbSegment> {
         let pane = &self.panes[index];
         let mut segments = Vec::new();
@@ -792,6 +795,8 @@ impl App {
             let cell = egui::Rect::from_min_size(egui::pos2(x, top), egui::vec2(width, height));
             let hot = pointer.is_some_and(|p| cell.contains(p));
             if hot {
+                // Original hover = FocusBackColor fill at once. OnDrawTimer (0x7ca34c) would fade Color -> FocusBackColor over 100 steps of 10 ms
+                // into the rect +0x23c, but its timer (+0x238) is created disabled and nothing enables it, so it never runs.
                 painter.rect_filled(cell, 0.0, focus);
                 // Original MouseMove(0x7c9e30): hovering a segment shows a tooltip with Hint = PathOfLevel (the path joined by separators up to that segment).
                 let path_of_level = match &segment.target {
@@ -876,6 +881,8 @@ impl App {
     /// button image tabbtnimgs (12x12 cells: ≡ 《 》 ×, the lower row for hover).
     /// Paint (0x7d0c28): per tab a left 5 + middle 10 each + right 5 image; text from left + 7 to right - 7 (the current tab at top 0 and right - 17, others top + 3).
     /// A left click goes to that tab (MouseDown), hovering shows a balloon tooltip with the full path, the right button opens pmTab (FUN_0048a534).
+    /// Constructor 0x7d02c0: height 0x18, four 12-pixel TNXPngButtons (close = CloseTabClick, the ≡ list with the MenuPopup drop-down menu,
+    /// LeftScroll, RightScroll), TabsChanged on the tab list; the destructor 0x7d0664 only frees them.
     pub(super) fn skin_tab_set(&mut self, ui: &mut egui::Ui, index: usize, ctx: &egui::Context, skin: &Skin) {
         let count = self.panes[index].tabs.len();
         if !self.settings.flag("UseTabs", true) || count < 2 {
