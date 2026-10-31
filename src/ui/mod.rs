@@ -1460,6 +1460,8 @@ impl App {
                 AsyncResult::ArchivePassword { archive, reply } => self.password_request = Some(PasswordRequest { archive, reply }),
                 AsyncResult::TextSource { path, edit } => self.text_source_ready(path, edit),
                 AsyncResult::FolderSizeRow { pane, generation, path, text, bytes } => {
+                    // Original FUN_0048ee0c: finds the row whose folder + name equals the counted path (lstrcmpiW), stores the 64-bit size
+                    // (+0x20/+0x24) and the count (+0x60), marks it counted (+0x68 = 1) and repaints. Rows are keyed by path here.
                     if self.panes[pane].generation == generation {
                         self.panes[pane].folder_bytes.insert(path.clone(), bytes);
                         self.panes[pane].folder_sizes.insert(path, Some(text));

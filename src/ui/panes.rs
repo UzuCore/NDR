@@ -10,6 +10,8 @@ pub(super) fn is_drives(path: &Path) -> bool {
 }
 
 /// Original GetSelAreaAt(0x7dae7c): in non-thumbnail views, the left 12 pixels of the item cell (GetItemRect's left ~ left + 0xc).
+/// GetItemRect (0x7daae4): styles 0/1 = column index / rows × column width − horizontal position, row = remainder × (height + gap);
+/// style 2 (Details) = −horizontal position, y = (height + gap) × index − top + header; style 3 (Thumbnails) = the stored cell position.
 fn selection_area(rect: egui::Rect) -> egui::Rect {
     egui::Rect::from_min_max(rect.min, egui::pos2((rect.left() + 12.0).min(rect.right()), rect.bottom()))
 }
@@ -1075,6 +1077,8 @@ impl App {
         Some((current - notches * Self::wheel_step(by_page, height, row_height, wheel_lines)).max(0.0))
     }
     /// Original SetScrollTop (format 2, page step 0xc5 == 2): vertical position = page number × rows per page × row height (0..page count − 1).
+    /// SetScrollTop 0x7e1ee4: otherwise the top is clamped to content − client height (Details add the header), never below 0, then the
+    /// scroll bar position follows (in pages when paging) and the list repaints.
     /// Snap the wheel-moved position to the nearest page boundary. The last page also starts at a page boundary (the bottom may look empty).
     pub(super) fn page_snap(offset: f32, page_px: f32, pages: usize) -> f32 {
         if page_px <= 0.0 {

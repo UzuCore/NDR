@@ -332,6 +332,9 @@ impl App {
     }
 
     /// Effect of the original OnDragOver (0x488700). None = 0 (cannot drop, same folder).
+    /// The values it reads are recorded at drag start by FUN_00488520: +0x2f8 = right-button drag (effect left to the shell), +0x2fc =
+    /// the first item's folder, +0x2f9 = some item lies in another folder (`mixed` here). The pane tree uses the same rules (drag start
+    /// 0x48e93c, drag over 0x48e790).
     pub(super) fn original_drop_effect(&self, pane: usize, candidates: &[PathBuf], destination: &Path, modifiers: egui::Modifiers, allowed: u8) -> Option<DropEffect> {
         if self.panes[pane].archive.is_some() {
             // User request (the original cannot drop on non-local panes): a modifiable archive adds local items by copy (Shift = move). No shortcuts.

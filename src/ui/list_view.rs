@@ -93,6 +93,8 @@ mod character_case_tests {
 impl App {
     /// Visible columns, headers and width ratios (C# star widths 2.4, 0.55, 1.0, 0.8, 1.2, 0.55, 1.4).
     /// Column titles = original FIELD_NAME/EXT/SIZE/DATEMODIFIED/ATTR/DESC (TNXCustomFileListView headers). The "type" column exists only in the C# version.
+    /// GetFieldTitle (0x7e2760) takes the field's English name from the table at 0x92d428 (Name, Ext, Location, Size, Date modified, Attr,
+    /// Description) and passes it through GetString (0x7e2134, the OnGetString event = the language file); Location stays hidden in panes.
     pub(super) fn detail_columns(&self, _ko: bool) -> Vec<(DetailColumn, String, f32)> {
         let field = |key: &str, fallback: &str| self.language_pack.text(&format!("RES.{key}"), fallback);
         let mut columns = vec![(DetailColumn::Name, field("FIELD_NAME", "Name"), 2.4)];

@@ -59,6 +59,8 @@ impl App {
             // keeps TabIndex at the same number clamped to [0, count - 1]. So closing a tab before the current one shifted the mark to the next tab;
             // closing from the menu switched to that tab (OnChange), while closing with × only moved the mark and left the pane as is (mark and pane out of sync).
             // Fixed: NDR keeps the current tab when an earlier tab closes. Closing the current tab goes to the tab with the same number (or the last) like the original.
+            // FUN_0048a3dc (tab removal): with one tab nothing happens; otherwise the tab row stays visible only while more than one tab
+            // will remain (Visible = count > 2 before removal), then the tab object is freed and removed.
             let pane = &mut self.panes[index];
             if pane.tabs.len() <= 1 || t >= pane.tabs.len() {
                 return;
