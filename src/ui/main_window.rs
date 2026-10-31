@@ -546,7 +546,8 @@ impl App {
             let message = self.update_text("FeedMissing", "The update manifest URL is not configured. Add an HTTPS JSON feed in Settings.");
             return self.system_box(&title, &message, ndr::msgbox::MB_OK | ndr::msgbox::MB_ICONASTERISK, |_, _, _| {});
         }
-        let https = feed.len() > 8 && feed[..8].eq_ignore_ascii_case("https://") && !feed[8..].trim_start_matches('/').is_empty();
+        // 고친 것: feed[..8]은 8바이트째가 여러 바이트 글자 가운데면 panic했다.
+        let https = feed.get(..8).is_some_and(|head| head.eq_ignore_ascii_case("https://")) && feed.get(8..).is_some_and(|rest| !rest.trim_start_matches('/').is_empty());
         if !https {
             if silent {
                 return;

@@ -906,6 +906,10 @@ impl PermissionForm {
             return;
         }
         let digits = [value / 100, value / 10 % 10, value % 10];
+        // 고친 것: 778 미만이라도 "689"처럼 8·9가 든 값은 8진수가 아니다. 전에는 그 자리를 0으로 읽어 다른 권한을 보냈다.
+        if digits.iter().any(|&d| d > 7) {
+            return;
+        }
         for group in 0..3 {
             for permission in 0..3 {
                 self.bits[group][permission] = digits[group] & (4 >> permission) != 0;
@@ -1332,6 +1336,10 @@ impl App {
         } else {
             parse_port(&form.port)
         };
+        // 고친 것: FTP·FTPS는 포트를 16비트로 잘라(99999 → 34463) 다른 포트에 연결했다. 범위 밖이면 SFTP처럼 알린다(0은 연결 단계의 알림).
+        if !(0..=65535).contains(&port) {
+            return self.remote_box_plain(t(ko, "호스트, 사용자 이름, 올바른 포트를 입력하세요.", "Enter a host, a user name and a valid port."), t(ko, "원격 연결", "Remote connection"));
+        }
         if host.is_empty() {
             return self.remote_box_plain(t(ko, "호스트, 사용자 이름, 올바른 포트를 입력하세요.", "Enter a host, a user name and a valid port."), t(ko, "원격 연결", "Remote connection"));
         }

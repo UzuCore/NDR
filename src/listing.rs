@@ -234,7 +234,11 @@ pub fn compare_text(a: &str, b: &str, logical: bool) -> Ordering {
         } else {
             const LOCALE_USER_DEFAULT: u32 = 0x400;
             const NORM_IGNORECASE: u32 = 0x1;
-            windows_sys::Win32::Globalization::CompareStringW(LOCALE_USER_DEFAULT, NORM_IGNORECASE, a.as_ptr(), -1, b.as_ptr(), -1) - 2
+            match windows_sys::Win32::Globalization::CompareStringW(LOCALE_USER_DEFAULT, NORM_IGNORECASE, a.as_ptr(), -1, b.as_ptr(), -1) {
+                // 실패(0)면 전에는 늘 "작다"가 되어 정렬 순서가 깨질 수 있었다(Rust sort는 그때 panic할 수 있다). UTF-16 값 순서로 비교한다.
+                0 => return a.cmp(&b),
+                raw => raw - 2,
+            }
         }
     };
     result.cmp(&0)

@@ -184,6 +184,12 @@ fn remote_window_follows_the_csharp_connection_and_local_flows() {
     assert_eq!(boxed(&app), ("원격 연결 실패".to_owned(), "포트 0에는 연결할 수 없습니다.".to_owned()));
     app.answer_message_box(1, &ctx);
     assert!(connects().is_empty());
+    // 범위 밖 포트는 16비트로 잘라 연결하지 않는다.
+    form(&mut app).port = "99999".into();
+    app.remote_action(RemoteAction::Connect, &ctx);
+    assert!(!app.msgboxes.is_empty(), "an out-of-range FTP port is refused at once");
+    app.answer_message_box(1, &ctx);
+    assert!(connects().is_empty());
     // SFTP 서버 키: 처음 보는 키면 묻고, 예면 그 키로 다시 연결한다.
     app.remote_action(RemoteAction::Protocol(2), &ctx);
     {
@@ -228,6 +234,9 @@ fn remote_helpers_follow_nexusfile_rules() {
     permissions.mode_text = "799".into();
     permissions.text_changed();
     assert_eq!(permissions.mode(), 0o640, "778 and above are ignored");
+    permissions.mode_text = "689".into();
+    permissions.text_changed();
+    assert_eq!(permissions.mode(), 0o640, "digits 8 and 9 are not octal and are ignored");
     permissions.mode_text = "6x".into();
     permissions.text_changed();
     assert_eq!(permissions.mode_text, "6");

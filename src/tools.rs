@@ -189,6 +189,10 @@ pub fn join_files(parts: &[PathBuf], output: &Path, cancel: &AtomicBool) -> Resu
     result
 }
 fn contains(path: &Path, text: &str, cancel: &AtomicBool) -> Result<bool, String> {
+    // 빈 글은 어디에나 있다(windows(0)은 panic이므로 먼저 끝낸다).
+    if text.is_empty() {
+        return Ok(true);
+    }
     let mut needles = vec![
         text.as_bytes().to_vec(),
         text.encode_utf16().flat_map(u16::to_le_bytes).collect(),

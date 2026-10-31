@@ -466,7 +466,7 @@ enum AsyncResult {
     /// 드라이브 단추 목록(루트, 도움말).
     Drives(Vec<(PathBuf, String)>),
     /// 원격 명령 결과(사이트 번호, 명령, "호스트:포트", 출력 또는 오류).
-    RemoteCommand { index: usize, command: String, host: String, result: Result<String, String> },
+    RemoteCommand { site: String, command: String, host: String, result: Result<String, String> },
     /// 폴더 크기 자동 표시 결과(패널, 목록 세대, 폴더, 글).
     FolderSizeRow { pane: usize, generation: u64, path: PathBuf, text: String, bytes: u64 },
     /// 업데이트 피드를 받음.
@@ -1372,7 +1372,7 @@ impl App {
                 AsyncResult::MergeSources(output, sources) => self.merge_sources_ready(output, sources),
                 AsyncResult::MergeDone(count, outcome) => self.merge_done(count, outcome),
                 AsyncResult::ArchiveStatus(text) => self.status = self.archive_error_text(&text),
-                AsyncResult::RemoteCommand { index, command, host, result } => self.remote_command_done(index, command, host, result),
+                AsyncResult::RemoteCommand { site, command, host, result } => self.remote_command_done(site, command, host, result),
                 AsyncResult::ExternalCopy { result, status, clear_clipboard } => self.external_copy_done(result, status, clear_clipboard),
                 AsyncResult::ArchiveEntriesOpened { pane, archive, password, opened, failures, navigate_archives } => self.archive_entries_opened(pane, archive, password, opened, failures, navigate_archives),
                 AsyncResult::ArchivePassword { archive, reply } => self.password_request = Some(PasswordRequest { archive, reply }),

@@ -482,15 +482,22 @@ impl App {
             let Some(index) = index else { return };
             let Some(site) = sites.get(index).cloned() else { return };
             let message = if ko { format!("{} ({})에서 실행할 명령", site.name, site.protocol) } else { format!("Command to run on {} ({})", site.name, site.protocol) };
+            // 고친 것: 사이트를 목록 차례(index)로 기억하면, 명령이 도는 동안 사이트를 더하거나 지웠을 때 다른 사이트에 키를 저장하고 다시 실행했다.
+            let name = site.name.clone();
             app.prompt(t(ko, "원격 명령", "Remote command"), &message, "pwd", None, false, move |app, command, _| {
                 let Some(command) = command.filter(|c| !c.trim().is_empty()) else { return };
-                app.execute_remote_command(index, command, None);
+                app.execute_remote_command(name, command, None);
             });
         });
     }
 
-    fn execute_remote_command(&mut self, index: usize, command: String, accepted: Option<String>) {
-        let Some(site) = load_sites(&self.settings).get(index).cloned() else { return };
+    fn execute_remote_command(&mut self, name: String, command: String, accepted: Option<String>) {
+        let Some(site) = load_sites(&self.settings).into_iter().find(|s| s.name == name) else { return };
+        // 고친 것: 포트를 16비트로 잘라 다른 포트에 연결했다(0은 연결 단계의 알림).
+        let Ok(port) = u16::try_from(site.port) else {
+            let ko = self.language == "ko";
+            return self.system_box("NDR", t(ko, "올바른 포트를 입력하세요.", "Enter a valid port."), MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
+        };
         let sftp = site.protocol.eq_ignore_ascii_case("SFTP");
         let private_key = PathBuf::from(&site.private_key_path);
         let has_key = !site.private_key_path.trim().is_empty() && private_key.is_file();
@@ -498,7 +505,7 @@ impl App {
             name: site.name.clone(),
             protocol: site.protocol.clone(),
             host: site.host.clone(),
-            port: site.port as u16,
+            port,
             user: site.user.clone(),
             password: native::unprotect_secret(&site.encrypted_password).unwrap_or_default(),
             private_key: if has_key { private_key } else { PathBuf::new() },
@@ -523,12 +530,12 @@ impl App {
                 let _ = client.close();
                 output
             });
-            let _ = tx.send(AsyncResult::RemoteCommand { index, command, host: format!("{}:{}", config.host, config.port), result });
+            let _ = tx.send(AsyncResult::RemoteCommand { site: config.name.clone(), command, host: format!("{}:{}", config.host, config.port), result });
         });
     }
 
     /// 원격 명령 결과: 서버 키 확인이면 묻고 다시, 아니면 글 창 또는 경고 상자.
-    pub(super) fn remote_command_done(&mut self, index: usize, command: String, host: String, result: Result<String, String>) {
+    pub(super) fn remote_command_done(&mut self, site_name: String, command: String, host: String, result: Result<String, String>) {
         let ko = self.language == "ko";
         match result {
             Ok(output) => {
@@ -554,12 +561,12 @@ impl App {
                     }
                     // C#: 사이트의 KnownHostFingerprint가 바뀌면 저장한다.
                     let mut sites = load_sites(&app.settings);
-                    if let Some(site) = sites.get_mut(index) {
+                    if let Some(site) = sites.iter_mut().find(|s| s.name == site_name) {
                         site.known_host_fingerprint = candidate.clone();
                         store_sites(&mut app.settings, &sites);
                         app.save();
                     }
-                    app.execute_remote_command(index, command, Some(candidate));
+                    app.execute_remote_command(site_name, command, Some(candidate));
                 });
             }
         }
