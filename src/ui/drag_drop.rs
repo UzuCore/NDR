@@ -200,6 +200,22 @@ impl App {
 
     /// 원본 OnDragOver의 효과(0x488700). None = 0(놓을 수 없음, 같은 폴더).
     pub(super) fn original_drop_effect(&self, pane: usize, candidates: &[PathBuf], destination: &Path, modifiers: egui::Modifiers, allowed: u8) -> Option<DropEffect> {
+        if self.panes[pane].archive.is_some() {
+            // 사용자 요청(원본은 로컬이 아닌 패널에 놓을 수 없다): 고칠 수 있는 압축이면 로컬 항목을 복사(Shift = 이동)로 더한다. 바로 가기는 없다.
+            if self.editable_archive(pane).is_none() || candidates.is_empty() || candidates.iter().any(|p| !p.is_absolute()) {
+                return None;
+            }
+            let (copy, moving) = (allowed & 1 != 0, allowed & 2 != 0);
+            return if modifiers.shift && !modifiers.ctrl && moving {
+                Some(DropEffect::Move)
+            } else if copy {
+                Some(DropEffect::Copy)
+            } else if moving {
+                Some(DropEffect::Move)
+            } else {
+                None
+            };
+        }
         let key = |p: &Path| std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf()).to_string_lossy().trim_end_matches(['\\', '/']).to_lowercase();
         let parents: Vec<Option<String>> = candidates.iter().map(|p| p.parent().map(key)).collect();
         let first = parents.first()?;
@@ -269,22 +285,21 @@ impl App {
     /// handle_drop에 끌기를 시작할 때 허용한 효과(allowed)를 더한 것. 스킨 테마는 original_drop, C# 테마는 C# HandleDropAsync.
     pub(super) fn handle_drop_with(&mut self, pane: usize, candidates: Vec<PathBuf>, destination: PathBuf, modifiers: egui::Modifiers, allowed: u8) {
         if self.panes[pane].archive.is_some() {
-            // 사용자 요청(원본에는 없음): 압축 패널에 로컬 파일·폴더를 놓으면 그 안 지금 폴더에 더한다(Shift = 이동).
+            // 사용자 요청(원본에는 없음): 압축 패널에 로컬 파일·폴더를 놓으면 그 안 지금 폴더(압축 안 폴더 줄 위면 그 폴더)에 더한다.
             let local: Vec<PathBuf> = candidates.into_iter().filter(|p| p.is_absolute() && p.exists()).collect();
-            if local.is_empty() {
-                return;
-            }
+            let Some(effect) = self.original_drop_effect(pane, &local, &destination, modifiers, allowed) else { return };
             self.active = pane;
-            let moving = modifiers.shift && !modifiers.ctrl;
+            let moving = effect == DropEffect::Move;
+            let prefix = self.archive_drop_prefix(pane, &destination);
             if !self.settings.flag("ConfirmDragDrop", true) {
-                return self.archive_add_into(pane, local, moving);
+                return self.archive_add_into_at(pane, prefix, local, moving);
             }
             let (key, fallback) = if moving { ("RES.DROPMOVE_CONFIRM", "You want to move %d obejct(s)?") } else { ("RES.DROPCOPY_CONFIRM", "You want to copy %d object(s)?") };
             let text = self.language_pack.text(key, fallback).replace("%d", &local.len().to_string());
             let title = self.language_pack.text("RES.DRAGDROP", "Drag and Drop");
             return self.message_box(&title, "", &text, ndr::msgbox::MB_YESNO | ndr::msgbox::MB_ICONQUESTION, move |app, answer, _| {
                 if answer == ndr::msgbox::IDYES {
-                    app.archive_add_into(pane, local, moving);
+                    app.archive_add_into_at(pane, prefix, local, moving);
                 }
             });
         }
@@ -297,7 +312,12 @@ impl App {
     /// 원본 오른쪽 단추 끌기(FUN_00488a.. `[+0x2f8] == 1`): 놓은 곳에 pmDrop(miDropCopy, miDropMove, miDropShortcut, N2 "-", miDropCancel)을 연다.
     pub(super) fn show_drop_menu(&mut self, pane: usize, paths: Vec<PathBuf>, destination: PathBuf, position: egui::Pos2) {
         use super::favorites_dialog::{access_key, PopupAction, PopupItem, PopupMenu};
-        if self.panes[pane].archive.is_some() || !destination.is_dir() || paths.is_empty() {
+        // 사용자 요청: 고칠 수 있는 압축 패널이면 복사·이동만 켜고 바로 가기는 회색(압축 안에는 바로 가기를 만들 수 없다).
+        let in_archive = self.panes[pane].archive.is_some();
+        if in_archive && (self.editable_archive(pane).is_none() || paths.is_empty() || paths.iter().any(|p| !p.is_absolute())) {
+            return;
+        }
+        if !in_archive && (!destination.is_dir() || paths.is_empty()) {
             return;
         }
         let ko = self.language == "ko";
@@ -315,11 +335,12 @@ impl App {
             }
             let caption = self.language_pack.raw(&format!("Menu.{key}")).unwrap_or_else(|| (if ko { ko_text } else { en_text }).to_owned());
             let (label, access) = access_key(&caption);
+            let enabled = !(in_archive && effect == Some(DropEffect::Link));
             let action = match effect {
-                Some(effect) => PopupAction::Drop { pane, effect, paths: paths.clone(), destination: destination.clone() },
-                None => PopupAction::Close,
+                Some(effect) if enabled => PopupAction::Drop { pane, effect, paths: paths.clone(), destination: destination.clone() },
+                _ => PopupAction::Close,
             };
-            items.push(PopupItem::Entry { label, access, gesture: String::new(), enabled: true, checked: false, action });
+            items.push(PopupItem::Entry { label, access, gesture: String::new(), enabled, checked: false, action });
         }
         self.popup = Some(PopupMenu { items, position: Some(position), highlight: None, opened: true });
     }
@@ -327,7 +348,20 @@ impl App {
     /// 원본 DropMenuClick(0x43025c): Tag 1..3 → 효과 1/2/4로 FUN_00488b64(…, 확인 건너뜀 = 1). 그래서 ConfirmDragDrop을 묻지 않는다.
     /// 옮길 것이 없으면(같은 폴더) 바로 가기만 만든다(C# FilterDropPaths).
     pub(super) fn drop_from_menu(&mut self, pane: usize, effect: DropEffect, candidates: Vec<PathBuf>, destination: PathBuf) {
-        if self.panes[pane].archive.is_some() || !destination.is_dir() || candidates.is_empty() {
+        if self.panes[pane].archive.is_some() {
+            if effect == DropEffect::Link || candidates.is_empty() {
+                return;
+            }
+            self.active = pane;
+            if let Some((source, dragged)) = self.pending_drag_marks.take() {
+                if candidates.iter().all(|p| dragged.contains(p)) {
+                    self.take_drag_marks(source);
+                }
+            }
+            let prefix = self.archive_drop_prefix(pane, &destination);
+            return self.archive_add_into_at(pane, prefix, candidates, effect == DropEffect::Move);
+        }
+        if !destination.is_dir() || candidates.is_empty() {
             return;
         }
         self.active = pane;

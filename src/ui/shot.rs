@@ -232,11 +232,6 @@ impl App {
                 let form = super::function_key_editor::FunctionKeyEditForm::new("F9", &binding, self.language == "ko");
                 self.push_original_dialog(text(self, "formEditFunction.Form.Caption"), DialogKind::FunctionKeyEdit(Box::new(form)), |_, _, _| {});
             }
-            "cleanup" => {
-                let mut form = super::cleanup_dialog::CleanupOptionsForm::new("tmp;$$$;bak;old".into(), &[]);
-                form.user_defined = true;
-                self.push_original_dialog(text(self, "formCleanup.Form.Caption"), DialogKind::CleanupOptions(Box::new(form)), |_, _, _| {});
-            }
             "archive" => {
                 self.active = 0;
                 // ".."가 아닌 첫 항목(".."는 압축 대상이 아니다).

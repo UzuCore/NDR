@@ -262,7 +262,6 @@ impl Settings {
             "CommandHistory",
             "ExecutableHistory",
             "RecentRemoteHosts",
-            "UserDefinedCleanupLocations",
             "FolderTreeExcludedPaths",
             "LeftFolderTreeExpandedPaths",
             "RightFolderTreeExpandedPaths",

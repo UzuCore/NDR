@@ -120,9 +120,23 @@ impl App {
         });
     }
 
+    /// 압축 패널에 놓은 곳: 압축 안 폴더 줄(항목 경로 = 압축 안 키)이면 그 폴더("폴더/"), 아니면 None(지금 폴더).
+    pub(super) fn archive_drop_prefix(&self, pane: usize, destination: &Path) -> Option<String> {
+        self.panes[pane].archive.as_ref()?;
+        let row = self.panes[pane].entries.iter().find(|e| e.is_dir && !e.is_parent() && !e.drive && e.path == destination)?;
+        let key = row.path.to_string_lossy().replace('\\', "/");
+        Some(format!("{}/", key.trim_end_matches('/')))
+    }
+
     /// 로컬 파일·폴더를 압축 패널(`target`)의 지금 폴더에 더한다. 이동이면 다 더한 뒤 원본을 지운다.
     pub(super) fn archive_add_into(&mut self, target: usize, sources: Vec<PathBuf>, moving: bool) {
-        let Some((file, prefix, password)) = self.editable_archive(target) else { return self.archive_read_only_notice() };
+        self.archive_add_into_at(target, None, sources, moving);
+    }
+
+    /// archive_add_into와 같고 `prefix`가 있으면 그 압축 안 폴더("폴더/")에 더한다(끌어 놓은 폴더 줄).
+    pub(super) fn archive_add_into_at(&mut self, target: usize, prefix: Option<String>, sources: Vec<PathBuf>, moving: bool) {
+        let Some((file, current, password)) = self.editable_archive(target) else { return self.archive_read_only_notice() };
+        let prefix = prefix.unwrap_or(current);
         if sources.is_empty() {
             return;
         }
@@ -130,10 +144,12 @@ impl App {
             return self.notice("압축 파일을 그 자신 안에 넣을 수 없습니다.", "An archive cannot be added into itself.");
         }
         let title = if moving { self.tr("압축 안으로 이동", "Move into archive") } else { self.tr("압축 안으로 복사", "Copy into archive") }.into_owned();
-        self.archive_edit_task(title, &file.clone(), move |_, cancel| {
-            ndr::archive::add_entries(&file, &prefix, &sources, password.as_deref(), cancel)?;
+        self.archive_edit_task(title, &file.clone(), move |events, cancel| {
+            let mut conflicts = |source: &Path, entry: &ndr::archive::ArchiveEntry| ask_add_conflict(events, cancel, &file, source, entry);
+            let skipped = ndr::archive::add_entries_with(&file, &prefix, &sources, password.as_deref(), cancel, &mut conflicts)?;
             if moving {
-                for source in &sources {
+                // 같은 이름에서 건너뛴 항목은 원본을 남긴다.
+                for source in sources.iter().filter(|s| !skipped.contains(s)) {
                     let removed = if source.is_dir() { std::fs::remove_dir_all(source) } else { std::fs::remove_file(source) };
                     removed.map_err(|e| format!("{}: {e}", source.display()))?;
                 }
@@ -156,30 +172,90 @@ impl App {
         let password = (!location.password.is_empty()).then(|| location.password.clone());
         let title = if moving { self.tr("압축에서 이동", "Move out of archive") } else { self.tr("압축에서 복사", "Copy out of archive") }.into_owned();
         self.archive_edit_task(title, &file.clone(), move |events, cancel| {
-            let mut conflicts = |from: &Path, to: &Path| super::commands::ask_conflict(events, cancel, from, to);
+            // 같은 이름에서 건너뛰었을 수 있는 대상(건너뛰기·새것만 덮어쓰기). 그 항목은 이동이어도 압축에서 지우지 않는다(폴더면 폴더 전체를 남긴다).
+            let mut held: Vec<PathBuf> = Vec::new();
+            let mut conflicts = |from: &Path, to: &Path| {
+                let choice = super::commands::ask_conflict(events, cancel, from, to);
+                if matches!(choice, ConflictChoice::Skip | ConflictChoice::OverwriteNewer) {
+                    held.push(to.to_path_buf());
+                }
+                choice
+            };
             let mut passwords = |archive: &Path, _: Option<&str>| super::commands::ask_password(events, cancel, archive);
-            match &into {
+            let name_of = |k: &String| k.rsplit('/').next().unwrap_or(k).to_owned();
+            let kept: Vec<String> = match &into {
                 Some((target_file, target_prefix, target_password)) => {
                     let stage = std::env::temp_dir().join(format!("ndr-archive-move-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos())));
                     std::fs::create_dir_all(&stage).map_err(|e| e.to_string())?;
                     let result = (|| {
                         ndr::archive::extract_entries_with_program(&file, &stage, &keys, password.as_deref(), cancel, &mut conflicts, &mut passwords, None, &mut |_, _, _| {})?;
                         // 고른 항목은 상위 경로 없이 이름만으로 풀린다.
-                        let extracted: Vec<PathBuf> = keys.iter().map(|k| stage.join(k.rsplit('/').next().unwrap_or(k))).filter(|p| p.exists()).collect();
-                        ndr::archive::add_entries(target_file, target_prefix, &extracted, target_password.as_deref(), cancel)
+                        let extracted: Vec<PathBuf> = keys.iter().map(|k| stage.join(name_of(k))).filter(|p| p.exists()).collect();
+                        let mut add_conflicts = |source: &Path, entry: &ndr::archive::ArchiveEntry| ask_add_conflict(events, cancel, target_file, source, entry);
+                        let skipped = ndr::archive::add_entries_with(target_file, target_prefix, &extracted, target_password.as_deref(), cancel, &mut add_conflicts)?;
+                        Ok::<_, String>(keys.iter().filter(|k| skipped.contains(&stage.join(name_of(k)))).cloned().collect())
                     })();
                     let _ = std::fs::remove_dir_all(&stage);
-                    result?;
+                    result?
                 }
                 None => {
                     std::fs::create_dir_all(&destination).map_err(|e| e.to_string())?;
                     ndr::archive::extract_entries_with_program(&file, &destination, &keys, password.as_deref(), cancel, &mut conflicts, &mut passwords, None, &mut |_, _, _| {})?;
+                    keys.iter()
+                        .filter(|k| {
+                            let target = destination.join(name_of(k));
+                            held.iter().any(|h| ndr::fsops::same_or_inside(h, &target))
+                        })
+                        .cloned()
+                        .collect()
                 }
-            }
+            };
             if moving {
-                ndr::archive::delete_entries(&file, &keys, password.as_deref(), cancel)?;
+                let moved: Vec<String> = keys.iter().filter(|k| !kept.contains(k)).cloned().collect();
+                ndr::archive::delete_entries(&file, &moved, password.as_deref(), cancel)?;
             }
             Ok(())
         });
+    }
+}
+
+/// 압축 안에 같은 이름이 있을 때(작업 스레드에서): 원본 TfFileExists로 묻는다. 대상 칸은 "압축 파일\안 경로"와 그 항목의 크기·시각.
+/// 덮어쓰기 = 바꾸기(폴더는 합치기), 폴더 바꾸기 = 지우고 더하기, 새것만 = 원본이 더 새로울 때만, 이름 바꾸기 = 새 이름을 묻는다.
+fn ask_add_conflict(events: &Sender<Event>, cancel: &AtomicBool, archive: &Path, source: &Path, entry: &ndr::archive::ArchiveEntry) -> ndr::archive::AddConflict {
+    use ndr::archive::AddConflict;
+    let shown = archive.join(entry.key.replace('/', "\\"));
+    super::file_operation::set_virtual_entry(&shown, Some((entry.is_dir, (!entry.is_dir).then_some(entry.size), entry.modified)));
+    let choice = super::commands::ask_conflict(events, cancel, source, &shown);
+    super::file_operation::set_virtual_entry(&shown, None);
+    match choice {
+        ConflictChoice::Overwrite | ConflictChoice::Resume => AddConflict::Merge,
+        ConflictChoice::ReplaceFolder => AddConflict::Replace,
+        ConflictChoice::OverwriteNewer => {
+            let newer = match (std::fs::metadata(source).and_then(|m| m.modified()).ok(), entry.modified) {
+                (Some(new), Some(old)) => new > old,
+                _ => true,
+            };
+            if newer { AddConflict::Merge } else { AddConflict::Skip }
+        }
+        ConflictChoice::Skip => AddConflict::Skip,
+        ConflictChoice::Cancel => AddConflict::Cancel,
+        ConflictChoice::Rename => {
+            let name = source.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            let (tx, rx) = std::sync::mpsc::channel();
+            if events.send(Event::RenameTarget { name, reply: tx }).is_err() {
+                return AddConflict::Cancel;
+            }
+            loop {
+                if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                    return AddConflict::Cancel;
+                }
+                match rx.recv_timeout(std::time::Duration::from_millis(100)) {
+                    Ok(Some(new_name)) if !new_name.trim().is_empty() => return AddConflict::Rename(new_name),
+                    Ok(_) => return AddConflict::Skip,
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(_) => return AddConflict::Cancel,
+                }
+            }
+        }
     }
 }

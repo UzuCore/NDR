@@ -1,5 +1,5 @@
 //! WPF DataGrid 자리의 egui 표: 머리글(누르면 정렬), 줄 선택(Ctrl/Shift, 위/아래/Home/End, Ctrl+A), Ctrl+C(선택 줄을 탭 글로),
-//! 확인란 열. 폴더 비교 결과 창과 컴퓨터 청소 창이 같이 쓴다. 줄 데이터는 부르는 쪽이 갖고, 보이는 순서와 선택만 여기 둔다.
+//! 확인란 열. 폴더 비교 결과 창이 쓴다. 줄 데이터는 부르는 쪽이 갖고, 보이는 순서와 선택만 여기 둔다.
 use super::*;
 use std::{cmp::Ordering as Order, collections::BTreeSet, ops::Range};
 

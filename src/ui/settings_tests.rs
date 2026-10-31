@@ -180,7 +180,8 @@ fn settings_window_commits_like_csharp() {
     set_text(&mut app, "SpecialFolder:Music", "D:\\Music");
     // 외부 압축 프로그램 줄은 없다(사용자 요청).
     assert!(app.settings_form().unwrap().row_mut("Archive:zip").is_none() && app.settings_form().unwrap().row_mut("UseExternalArchivePrograms").is_none());
-    set_text(&mut app, "CleanupLocations", "%TEMP%; ");
+    // 컴퓨터 청소 칸도 없다(사용자 요청으로 컴퓨터 청소를 뺐다).
+    assert!(app.settings_form().unwrap().row_mut("CleanupLocations").is_none() && app.settings_form().unwrap().row_mut("UserDefinedCleanupExtensions").is_none());
     set_text(&mut app, "WF0", "  C:\\work  ");
     set_combo(&mut app, "LeftColumnCount", "3");
     set_combo(&mut app, "EscapeKeyAction", "3");
@@ -194,8 +195,6 @@ fn settings_window_commits_like_csharp() {
     assert_eq!(s.values.get("FolderTreeDepth").cloned(), depth_before, "an unparsable number keeps the old value");
     assert_eq!(s.values["ExtensionColors"], serde_json::json!({".zip": "#ABCDEF", ".txt": "#112233"}));
     assert_eq!(s.values["SpecialFolderPaths"]["Music"], "D:\\Music");
-    let temp = std::path::absolute(native::expand_environment("%TEMP%")).unwrap().to_string_lossy().into_owned();
-    assert_eq!(s.strings("UserDefinedCleanupLocations"), [temp]);
     assert_eq!(s.strings("WorkingFolders")[0], "C:\\work");
     assert_eq!((s.values["LeftColumnCount"].as_i64(), s.values["EscapeKeyAction"].as_i64(), s.values["PathClickMode"].as_i64()), (Some(3), Some(3), Some(1)));
     assert_eq!(s.values["NavigateOnPathClick"], true);

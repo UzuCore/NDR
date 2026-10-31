@@ -940,25 +940,6 @@ pub fn search_advanced_with_progress(
     progress(scanned, found.len(), Path::new(""));
     Ok(found)
 }
-/// Return cleanup candidates only. The caller presents the list and chooses deletion.
-pub fn cleanup_scan(
-    root: &Path,
-    patterns: &str,
-    cancel: &AtomicBool,
-) -> Result<Vec<Entry>, String> {
-    if patterns.trim().is_empty() {
-        return Err("Cleanup patterns must be explicit".into());
-    }
-    search_advanced(
-        &SearchCriteria {
-            roots: vec![root.to_owned()],
-            name_patterns: patterns.into(),
-            include_hidden: true,
-            ..Default::default()
-        },
-        cancel,
-    )
-}
 /// Decode UTF-8/UTF-16 BOM or Korean ANSI inputs, then write one selected encoding.
 pub fn merge_text_files(
     parts: &[PathBuf],
@@ -1172,8 +1153,6 @@ mod advanced_tests {
         assert!(search_advanced(&criteria, &cancel).unwrap().is_empty());
         criteria.minimum_bytes = Some(100);
         assert!(search_advanced(&criteria, &cancel).unwrap().is_empty());
-        fs::write(p.join("x.tmp"), b"garbage").unwrap();
-        assert_eq!(cleanup_scan(&p, "*.tmp;*.bak", &cancel).unwrap().len(), 1);
         fs::remove_dir_all(p).unwrap();
     }
     #[test]

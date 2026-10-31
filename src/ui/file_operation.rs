@@ -4,7 +4,7 @@
 //! 압축·분할·합치기·폴더 크기 작업의 진행 창에는 일시 정지 단추가 없다(그 작업들은 멈춤 지점이 없다).
 use super::original_dialogs::{DialogKind, DialogResult};
 use super::*;
-use ndr::msgbox::{IDYES, MB_ICONASTERISK, MB_ICONEXCLAMATION, MB_ICONHAND, MB_ICONQUESTION, MB_OK, MB_YESNO};
+use ndr::msgbox::{IDYES, MB_ICONEXCLAMATION, MB_ICONHAND, MB_ICONQUESTION, MB_OK, MB_YESNO};
 use std::fs;
 use std::os::windows::fs::MetadataExt;
 use std::time::SystemTime;
@@ -29,6 +29,18 @@ pub(super) struct ConflictForm {
     pub textures: [Option<egui::TextureHandle>; 2],
 }
 
+/// 실제 파일이 아닌 충돌 대상(압축 안 항목)의 정보: (보일 경로, 폴더인가, 크기, 수정 시각). 압축 작업 스레드가 묻기 전에 넣고 답을 받은 뒤 뺀다.
+type VirtualEntry = (PathBuf, bool, Option<u64>, Option<SystemTime>);
+static VIRTUAL_ENTRIES: std::sync::Mutex<Vec<VirtualEntry>> = std::sync::Mutex::new(Vec::new());
+
+pub(super) fn set_virtual_entry(path: &Path, info: Option<(bool, Option<u64>, Option<SystemTime>)>) {
+    let mut entries = VIRTUAL_ENTRIES.lock().unwrap_or_else(|e| e.into_inner());
+    entries.retain(|(p, ..)| p != path);
+    if let Some((directory, size, modified)) = info {
+        entries.push((path.to_path_buf(), directory, size, modified));
+    }
+}
+
 fn describe(path: &Path) -> (bool, Option<u64>, Option<SystemTime>) {
     match fs::symlink_metadata(path) {
         Ok(m) => {
@@ -37,7 +49,12 @@ fn describe(path: &Path) -> (bool, Option<u64>, Option<SystemTime>) {
             let reparse = attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0;
             (directory, (!directory && !reparse).then(|| m.len()), m.modified().ok())
         }
-        Err(_) => (false, None, None),
+        Err(_) => VIRTUAL_ENTRIES
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .find(|(p, ..)| p == path)
+            .map_or((false, None, None), |(_, directory, size, modified)| (*directory, *size, *modified)),
     }
 }
 
@@ -253,8 +270,6 @@ pub(super) enum JobReport {
     Delete { recycle: bool, skipped: usize },
     /// C# ShredAsync 끝.
     Shred,
-    /// 원본 TfCleanup 정리 끝(FUN_0041c77c): 정리 창을 다시 켜고 MSG_CLEANUP_DONE(정리 창 제목, MB_ICONINFORMATION).
-    Cleanup,
 }
 
 /// C# FileOperationProgressWindow 인수.
@@ -478,7 +493,7 @@ impl App {
             match &job.report {
                 JobReport::Transfer { verb: (_, "move"), .. } => self.language_pack.text("RES.MSG_MOVE_PREPARING", "Preparing for moving file/folder(s)"),
                 JobReport::Transfer { .. } => self.language_pack.text("RES.MSG_COPY_PREPARING", "Preparing for copying file/folder(s)"),
-                JobReport::Delete { .. } | JobReport::Shred | JobReport::Cleanup => self.language_pack.text("RES.MSG_DEL_PREPARING", "Preparing for deleting file/folder(s)"),
+                JobReport::Delete { .. } | JobReport::Shred => self.language_pack.text("RES.MSG_DEL_PREPARING", "Preparing for deleting file/folder(s)"),
                 _ => (if ko { "작업을 준비하고 있습니다." } else { "Preparing the operation." }).to_owned(),
             }
         } else {
@@ -491,7 +506,7 @@ impl App {
             JobReport::Transfer { verb: (_, "move"), .. } => self.language_pack.text("RES.MOVING", "Moving..."),
             JobReport::Transfer { .. } => self.language_pack.text("RES.COPYING", "Copying..."),
             JobReport::Delete { recycle: true, .. } => self.language_pack.text("RES.RECYCLING", "Sending to the RecycleBin..."),
-            JobReport::Delete { .. } | JobReport::Shred | JobReport::Cleanup => self.language_pack.text("RES.DELETING", "Deleting..."),
+            JobReport::Delete { .. } | JobReport::Shred => self.language_pack.text("RES.DELETING", "Deleting..."),
             _ => job.title.clone(),
         };
         super::keep_opaque(ctx, egui::Id::new("ndr-file-progress"));
@@ -654,15 +669,6 @@ impl App {
                 } else {
                     let title = self.tr("일부 항목을 완전히 삭제하지 못했습니다.", "Some items could not be shredded.").into_owned();
                     self.text = Some(TextDocument { title, text: all.join("\r\n") });
-                }
-            }
-            JobReport::Cleanup => {
-                // 원본 FUN_0041c77c: 오류는 알리지 않고(플래그 0x80), 끝나면 MessageBoxW(MSG_CLEANUP_DONE, 정리 창 제목, MB_ICONINFORMATION).
-                self.status.clear();
-                if !cancelled {
-                    let title = self.language_pack.text("formCleanup.Form.Caption", "Disk Clean-Up");
-                    let text = self.language_pack.text("RES.MSG_CLEANUP_DONE", "Cleanup completed.");
-                    self.system_box(&title, &text, MB_OK | MB_ICONASTERISK, |_, _, _| {});
                 }
             }
         }

@@ -693,7 +693,8 @@ impl App {
             "shortcut"|"quickLaunchShortcut"=>self.shortcut_command(id=="quickLaunchShortcut"),
             "pasteShortcut"=>self.paste_shortcut_command(),
             "diskCopy"=>self.open_disk_copy(),
-            "cleanup"=>self.cleanup_command(),"emptyTemp"=>self.empty_temp_command(),
+            // 사용자 요청: 컴퓨터 청소(원본 miCleanupDisk, TfCleanup)는 뺐다.
+            "emptyTemp"=>self.empty_temp_command(),
             "desktop"|"documents"|"pictures"|"music"|"videos"|"downloads"|"temp"=>self.special_folder_command(id),
             "openRecycle"=>result=(self.system.run_verb)(Path::new("shell:RecycleBinFolder"),"open"),
             "emptyRecycle"=>self.empty_recycle_command(),
@@ -705,8 +706,8 @@ impl App {
             "shellIntegration"=>self.explorer_integration_command(),
             // 사용자 요청: 홈페이지는 NDR 저장소(원본 miHomepage는 xiles.app), 원본 miEmail(지원 이메일 복사)은 뺐다.
             "homepage"=>result=(self.shell_runner)(Path::new(HOMEPAGE_URL),"",Path::new("")),
-            // 원본 miHelpClick(0x445b60): "https://www.xiles.app/help/nexusfile/".
-            "help"=>result=(self.shell_runner)(Path::new("https://www.xiles.app/help/nexusfile/"),"",Path::new("")),
+            // 사용자 요청: 도움말도 NDR 저장소(원본 miHelpClick(0x445b60)은 "https://www.xiles.app/help/nexusfile/").
+            "help"=>result=(self.shell_runner)(Path::new(HOMEPAGE_URL),"",Path::new("")),
             // 원본 miMoreLanguagesClick(FUN_00445b88): ShellExecute "open" https://www.xiles.app/languages/#NexusFile (0x8ee3bc).
             "moreLanguages"=>result=(self.shell_runner)(Path::new("https://www.xiles.app/languages/#NexusFile"),"",Path::new("")),
             "about"=>self.about_command(),

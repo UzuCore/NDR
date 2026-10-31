@@ -808,7 +808,8 @@ impl App {
                                     continue;
                                 }
                                 let folder = pieces.next().is_some() || e.is_dir;
-                                entries.entry(name.to_owned()).or_insert(Entry {
+                                // 그 항목 자신이면 그 시각. 아래 항목에서 나온 폴더는 폴더 항목이 나올 때 채운다.
+                                let slot = entries.entry(name.to_owned()).or_insert(Entry {
                                     path: PathBuf::from(format!("{}{name}", location.prefix)),
                                     name: name.to_owned(),
                                     is_dir: folder,
@@ -818,6 +819,9 @@ impl App {
                                     attributes: if folder { 0x10 } else { 0 },
                                     drive: false,
                                 });
+                                if rest.trim_end_matches('/') == name {
+                                    slot.modified = e.modified;
+                                }
                             }
                         }
                     }

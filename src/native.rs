@@ -1088,12 +1088,6 @@ fn known_folder(id: &windows_sys::core::GUID) -> Option<PathBuf> {
         path.filter(|p| !p.as_os_str().is_empty())
     }
 }
-pub fn internet_cache_folder() -> Option<PathBuf> {
-    known_folder(&FOLDERID_InternetCache)
-}
-pub fn cookies_folder() -> Option<PathBuf> {
-    known_folder(&FOLDERID_Cookies)
-}
 /// Environment.GetFolderPath(SpecialFolder.MyDocuments) = FOLDERID_Documents.
 pub fn documents_folder() -> Option<PathBuf> {
     known_folder(&FOLDERID_Documents)

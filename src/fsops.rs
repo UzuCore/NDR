@@ -59,14 +59,6 @@ pub enum Operation {
     EmptyFolder {
         folder: PathBuf,
     },
-    /// 원본 TfCleanup btnOkClick(0x41b5cc)의 지우기 작업(종류 2, 플래그 0xF0): 폴더(임시·쿠키·인터넷 임시 파일)는 안의 항목만,
-    /// 파일(사용자 지정 검색에서 고른 것)은 그 파일을 영구 삭제한다. 이름이 `keep_names`인 파일("desktop.ini", "index.dat",
-    /// +0x844 목록)은 남긴다. 묻지도 알리지도 않는다.
-    Cleanup {
-        folders: Vec<PathBuf>,
-        files: Vec<PathBuf>,
-        keep_names: Vec<String>,
-    },
     Mkdir {
         path: PathBuf,
     },
@@ -303,51 +295,6 @@ pub fn run_with_options(
                 for child in children {
                     j.check()?;
                     if j.delete_filtered(&child, &[], 0, true).is_err() && j.cancel.load(Ordering::Relaxed) {
-                        return Err("Cancelled".into());
-                    }
-                }
-            }
-            Operation::Cleanup { folders, files, keep_names } => {
-                j.quiet = true;
-                let kept = |p: &Path| p.file_name().is_some_and(|n| keep_names.iter().any(|k| n.to_string_lossy().eq_ignore_ascii_case(k)));
-                // 남길 이름의 파일을 먼저 모은다(그 위 폴더도 지우지 않는다).
-                let mut skipped = Vec::new();
-                fn collect(dir: &Path, kept: &dyn Fn(&Path) -> bool, out: &mut Vec<PathBuf>, depth: usize) {
-                    if depth > 256 {
-                        return;
-                    }
-                    let Ok(items) = fs::read_dir(dir) else { return };
-                    for item in items.flatten() {
-                        let path = item.path();
-                        let Ok(m) = fs::symlink_metadata(&path) else { continue };
-                        if is_reparse(&m) {
-                            continue;
-                        }
-                        if m.is_dir() {
-                            collect(&path, kept, out, depth + 1);
-                        } else if kept(&path) {
-                            out.push(path);
-                        }
-                    }
-                }
-                for folder in &folders {
-                    collect(folder, &kept, &mut skipped, 0);
-                }
-                for folder in &folders {
-                    let children: Vec<PathBuf> = match fs::read_dir(folder) {
-                        Ok(items) => items.filter_map(|item| item.ok().map(|i| i.path())).collect(),
-                        Err(_) => Vec::new(),
-                    };
-                    for child in children {
-                        j.check()?;
-                        if j.delete_filtered(&child, &skipped, 0, true).is_err() && j.cancel.load(Ordering::Relaxed) {
-                            return Err("Cancelled".into());
-                        }
-                    }
-                }
-                for file in files.iter().filter(|f| !kept(f)) {
-                    j.check()?;
-                    if j.delete_filtered(file, &[], 0, true).is_err() && j.cancel.load(Ordering::Relaxed) {
                         return Err("Cancelled".into());
                     }
                 }

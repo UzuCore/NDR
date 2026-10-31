@@ -19,6 +19,15 @@ pub struct ArchiveEntry {
     pub key: String,
     pub is_dir: bool,
     pub size: u64,
+    /// 7-Zip 목록의 "Modified = YYYY-MM-DD HH:MM:SS[.fffffff]"(현지 시각). 없으면 None.
+    pub modified: Option<std::time::SystemTime>,
+}
+
+/// 7-Zip -slt의 수정 시각(현지 시각) → SystemTime.
+fn parse_modified(text: &str) -> Option<std::time::SystemTime> {
+    use chrono::TimeZone;
+    let naive = chrono::NaiveDateTime::parse_from_str(text.trim(), "%Y-%m-%d %H:%M:%S%.f").ok()?;
+    chrono::Local.from_local_datetime(&naive).earliest().map(std::time::SystemTime::from)
 }
 #[derive(Debug, Clone)]
 pub struct ExternalProgram {
@@ -565,9 +574,12 @@ fn parse_listing(text: &str) -> Result<Vec<ArchiveEntry>, String> {
         let mut key = None;
         let mut dir = false;
         let mut size = 0;
+        let mut modified = None;
         for line in block.lines() {
             if let Some(v) = line.strip_prefix("Path = ") {
                 key = Some(v.to_owned())
+            } else if let Some(v) = line.strip_prefix("Modified = ") {
+                modified = parse_modified(v)
             } else if line == "Folder = +" {
                 dir = true
             } else if let Some(v) = line.strip_prefix("Size = ") {
@@ -598,6 +610,7 @@ fn parse_listing(text: &str) -> Result<Vec<ArchiveEntry>, String> {
                 key,
                 is_dir: dir,
                 size,
+                modified,
             })
         }
     }
@@ -1275,45 +1288,130 @@ pub fn rename_entry(archive: &Path, from: &str, to: &str, password: Option<&str>
     })
 }
 
+/// 압축 안으로 더할 때 같은 이름이 있으면 고르는 처리.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AddConflict {
+    /// 그대로 더한다(파일은 바뀌고 폴더는 합쳐진다).
+    Merge,
+    /// 있는 항목(폴더면 안까지)을 지우고 더한다.
+    Replace,
+    Skip,
+    /// 이 이름으로 더한다(그 이름도 있으면 다시 묻는다).
+    Rename(String),
+    Cancel,
+}
+
 /// 파일·폴더를 압축 안 `prefix`("폴더/아래/" 또는 맨 위 "") 아래에 더한다(7-Zip a). 같은 이름은 바꾼다.
-/// 준비 폴더에 그 경로 모양을 만들어 복사한 뒤(원본 파일은 건드리지 않는다) 맨 위 이름만 넘긴다.
 pub fn add_entries(archive: &Path, prefix: &str, sources: &[PathBuf], password: Option<&str>, cancel: &AtomicBool) -> Result<(), String> {
+    add_entries_with(archive, prefix, sources, password, cancel, &mut |_, _| AddConflict::Merge).map(|_| ())
+}
+
+/// add_entries에 같은 이름 처리(`conflicts(원본, 있는 항목)`)를 더한 것.
+/// 준비 폴더에 그 경로 모양을 만들어 복사한 뒤(원본 파일은 건드리지 않는다) 맨 위 이름만 넘긴다.
+pub fn add_entries_with(
+    archive: &Path,
+    prefix: &str,
+    sources: &[PathBuf],
+    password: Option<&str>,
+    cancel: &AtomicBool,
+    conflicts: &mut dyn FnMut(&Path, &ArchiveEntry) -> AddConflict,
+) -> Result<Vec<PathBuf>, String> {
     if sources.is_empty() {
-        return Ok(());
+        return Ok(Vec::new());
     }
     let prefix = prefix.trim_matches('/');
     if !prefix.is_empty() {
         validate_key(prefix)?;
     }
+    // 있는 항목(폴더 항목이 따로 없어도 그 아래 항목이 있으면 폴더로 본다).
+    let existing = list_cancel(archive, password, cancel)?;
+    let find = |key: &str| -> Option<ArchiveEntry> {
+        let wanted = key.to_lowercase();
+        let normal = |k: &str| k.replace('\\', "/").trim_end_matches('/').to_lowercase();
+        existing.iter().find(|e| normal(&e.key) == wanted).cloned().or_else(|| {
+            let folder = format!("{wanted}/");
+            existing.iter().any(|e| normal(&e.key).starts_with(&folder)).then(|| ArchiveEntry { key: key.to_owned(), is_dir: true, size: 0, modified: None })
+        })
+    };
     let snapshot = unique_path(&std::env::temp_dir(), "archive-add");
     fs::create_dir(&snapshot).map_err(|e| e.to_string())?;
     let result = (|| {
         let base = if prefix.is_empty() { snapshot.clone() } else { snapshot.join(prefix.replace('/', "\\")) };
         fs::create_dir_all(&base).map_err(|e| e.to_string())?;
         let mut names = HashSet::new();
+        let mut removals = Vec::new();
+        let mut skipped = Vec::new();
         for source in sources {
             let name = source.file_name().ok_or("Cannot add a filesystem root")?;
-            let text = name.to_str().ok_or("Archive source filename must be Unicode")?;
-            validate_key(text)?;
+            let mut text = name.to_str().ok_or("Archive source filename must be Unicode")?.to_owned();
+            validate_key(&text)?;
+            let source_dir = source.is_dir();
+            let mut skip = false;
+            loop {
+                let key = if prefix.is_empty() { text.clone() } else { format!("{prefix}/{text}") };
+                let Some(entry) = find(&key) else { break };
+                match conflicts(source, &entry) {
+                    AddConflict::Merge if entry.is_dir == source_dir => break,
+                    AddConflict::Merge | AddConflict::Replace => {
+                        removals.push(key);
+                        break;
+                    }
+                    AddConflict::Skip => {
+                        skip = true;
+                        break;
+                    }
+                    AddConflict::Rename(new_name) => {
+                        validate_key(&new_name)?;
+                        if new_name.contains(['/', '\\']) {
+                            return Err(format!("Unsafe archive entry: {new_name:?}"));
+                        }
+                        text = new_name;
+                    }
+                    AddConflict::Cancel => return Err("Archive add cancelled".into()),
+                }
+            }
+            if skip {
+                skipped.push(source.clone());
+                continue;
+            }
             if !names.insert(text.to_lowercase()) {
                 return Err("Duplicate archive source names".into());
             }
-            copy_tree(source, &base.join(name), cancel)?;
+            copy_tree(source, &base.join(&text), cancel)?;
+        }
+        if names.is_empty() {
+            return Ok(skipped);
         }
         let tops: Vec<String> = if prefix.is_empty() {
-            sources.iter().filter_map(|s| s.file_name().map(|n| n.to_string_lossy().into_owned())).collect()
+            names_in(&base)?
         } else {
             vec![prefix.split('/').next().unwrap_or(prefix).to_owned()]
         };
         let snapshot_abs = fs::canonicalize(&snapshot).map_err(|e| e.to_string())?;
+        let removals = removals.iter().map(|k| entry_arg(k)).collect::<Result<Vec<_>, _>>()?;
         modify_archive(archive, cancel, |copy| {
+            if !removals.is_empty() {
+                let mut command = edit_command("d", copy, password)?;
+                command.args(&removals);
+                execute(command, cancel)?;
+            }
             let mut command = edit_command("a", copy, password)?;
             command.current_dir(&snapshot_abs).args(&tops);
             execute(command, cancel).map(|_| ())
-        })
+        })?;
+        Ok(skipped)
     })();
     let _ = fs::remove_dir_all(&snapshot);
     result
+}
+
+/// 폴더 바로 아래 이름들.
+fn names_in(folder: &Path) -> Result<Vec<String>, String> {
+    let mut names = Vec::new();
+    for item in fs::read_dir(folder).map_err(|e| e.to_string())? {
+        names.push(item.map_err(|e| e.to_string())?.file_name().to_string_lossy().into_owned());
+    }
+    Ok(names)
 }
 
 /// 압축 안 `prefix` 아래에 빈 폴더 `name`을 만든다.
@@ -2026,6 +2124,46 @@ mod interactive_tests {
             assert!(after_add.iter().any(|k| k == key), "{key} in {after_add:?}");
         }
         assert!(p.join("new.txt").is_file(), "the source stays");
+        // 같은 이름: 콜백이 받는 항목, 건너뛰기·새 이름·바꾸기.
+        fs::write(p.join("new.txt"), b"second").unwrap();
+        let mut seen = Vec::new();
+        add_entries_with(&zip, "", &[p.join("new.txt")], None, &cancel, &mut |source, entry| {
+            seen.push((source.to_path_buf(), entry.key.replace('\\', "/"), entry.is_dir, entry.size, entry.modified.is_some()));
+            AddConflict::Skip
+        })
+        .unwrap();
+        assert_eq!(seen, vec![(p.join("new.txt"), "new.txt".to_owned(), false, 3, true)]);
+        let mut asked = 0;
+        add_entries_with(&zip, "", &[p.join("new.txt")], None, &cancel, &mut |_, entry| {
+            asked += 1;
+            // 첫 새 이름도 있으면 다시 묻는다.
+            if asked == 1 { AddConflict::Rename("a.txt".into()) } else { assert_eq!(entry.key, "a.txt"); AddConflict::Rename("new (2).txt".into()) }
+        })
+        .unwrap();
+        assert_eq!(asked, 2);
+        let read = |key: &str| {
+            let out = p.join(format!("read-{}", key.replace('/', "-")));
+            let _ = fs::remove_dir_all(&out);
+            extract_entries_with_program(&zip, &out, &[key.into()], None, &cancel, &mut |_, _| ConflictChoice::Overwrite, &mut |_, _| None, None, &mut |_, _, _| {}).unwrap();
+            fs::read(out.join(key.rsplit('/').next().unwrap())).unwrap()
+        };
+        assert_eq!(read("new.txt"), b"new", "skipped");
+        assert_eq!(read("new (2).txt"), b"second");
+        // 폴더 바꾸기: 있는 폴더 안 항목은 없어지고 새 폴더 내용만.
+        fs::create_dir_all(p.join("other/dir")).unwrap();
+        fs::write(p.join("other/dir/only.txt"), b"only").unwrap();
+        add_entries_with(&zip, "", &[p.join("other/dir")], None, &cancel, &mut |_, entry| {
+            assert!(entry.is_dir);
+            AddConflict::Replace
+        })
+        .unwrap();
+        let replaced = keys(&zip);
+        assert!(replaced.iter().any(|k| k == "dir/only.txt") && !replaced.iter().any(|k| k.starts_with("dir/sub")), "{replaced:?}");
+        assert!(add_entries_with(&zip, "", &[p.join("new.txt")], None, &cancel, &mut |_, _| AddConflict::Cancel).is_err());
+        // 다시 앞 상태로(아래 시험은 dir/sub가 있다고 본다).
+        add_entries_with(&zip, "", &[p.join("src/dir")], None, &cancel, &mut |_, _| AddConflict::Replace).unwrap();
+        add_entries(&zip, "dir/sub/", &[p.join("new.txt")], None, &cancel).unwrap();
+        add_folder(&zip, "dir/", "empty", None, &cancel).unwrap();
         // 이름 바꾸기: 폴더면 안 항목도.
         rename_entry(&zip, "dir/sub", "dir/moved", None, &cancel).unwrap();
         let after_rename = keys(&zip);

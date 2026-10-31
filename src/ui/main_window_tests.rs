@@ -51,7 +51,7 @@ fn main_menu_follows_the_original_tfmain_dropdowns() {
     assert_eq!((ids(0)[0], *ids(0).last().unwrap()), ("open", "exit"));
     assert!(ids(1).starts_with(&["folderTree", "favoritesMenu"]) && ids(1).contains(&"@workFolders") && ids(1).last() == Some(&"refresh"));
     assert!(["@listStyle", "@columns", "@sort", "@filter"].iter().all(|s| ids(3).contains(s)));
-    assert!(ids(7).contains(&"split") && ids(7).contains(&"join") && ids(7).contains(&"cleanup"));
+    assert!(ids(7).contains(&"split") && ids(7).contains(&"join") && !ids(7).contains(&"cleanup"), "the disk cleanup item was removed");
     // 원본 항목 글: Menu.miFind(MENU_CAPTIONS), Menu.miOpen(ORIGINAL_ACTIONS), 없으면 C# 글.
     assert_eq!(app.menu_label("find", "?"), app.language_pack.text("Menu.miFind", "?").replace('&', ""));
     assert_eq!(app.menu_label("open", "?"), app.language_pack.text("Menu.miOpen", "?").replace('&', ""));
@@ -1549,7 +1549,8 @@ fn main_menu_items_follow_the_tfmain_dfm() {
         "miToDesktop miToDocuments miToPictures miToMusic miToVideos miToDownloads - miControlPanel miAddRemoveProg - miRecycleBin miEmptyRecycleBin - miToTemp miEmptyTemp - miCommandLine",
         "miArcAdd - miArcExtract miArcExtractToCurr miArcExtractAuto",
         "miFTPQuickConnect - miFTPConnect miFTPDisconnect - miFTPGet miFTPPut - miMapNetworkDrive miUnmapNetworkDrive",
-        "miTextViewer miTextEditor - miClearDescriptions - miSaveList - miSplitFile miJoinFile - miCleanupDisk - miCompareFolder - miOptions",
+        // 사용자 요청: 컴퓨터 청소(miCleanupDisk)는 뺐다.
+        "miTextViewer miTextEditor - miClearDescriptions - miSaveList - miSplitFile miJoinFile - miCompareFolder - miOptions",
         "miHelp miShortcut - miHomepage - miCheckUpdate - miAbout",
     ];
     let menus: Vec<String> = super::menu_data::MENUS.iter().map(|(_, _, _, items)| shown(items)).collect();

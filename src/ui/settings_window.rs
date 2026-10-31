@@ -598,8 +598,6 @@ impl SettingsForm {
         }
         paths.extend([
             check("ShowFavoritesBar", t(ko, "즐겨찾기 바 표시", "Show the favorites bar"), true),
-            text("UserDefinedCleanupExtensions", t(ko, "정리 대상 확장자 (세미콜론 구분)", "Cleanup extensions (semicolon separated)"), text_of(&draft, "UserDefinedCleanupExtensions")),
-            text("CleanupLocations", t(ko, "사용자 정리 위치 (세미콜론 구분)", "User cleanup locations (semicolon separated)"), draft.strings("UserDefinedCleanupLocations").join(";")),
             text("FolderTreeDepth", t(ko, "폴더 트리 탐색 깊이 (1–64)", "Folder tree scan depth (1–64)"), number_text(&draft, "FolderTreeDepth")),
             text("FolderTreeFont", t(ko, "폴더 트리 글꼴", "Folder tree font"), text_of(&draft, "FolderTreeFont")),
             text("FolderTreeFontSize", t(ko, "폴더 트리 글꼴 크기", "Folder tree font size"), number_text(&draft, "FolderTreeFontSize")),
@@ -744,7 +742,7 @@ impl SettingsForm {
                             let colors = parse_extension_colors(value)?;
                             values.insert(key.clone(), Value::Object(colors.into_iter().map(|(k, v)| (k, Value::String(v))).collect()));
                         }
-                        "LeftPath" | "RightPath" | "DateFormat" | "TimeFormat" | "ListFont" | "UserDefinedCleanupExtensions" | "TextViewerPath" | "TextEditorPath" | "CopyHandlerPath"
+                        "LeftPath" | "RightPath" | "DateFormat" | "TimeFormat" | "ListFont" | "TextViewerPath" | "TextEditorPath" | "CopyHandlerPath"
                         | "UpdateManifestUrl" | "FolderTreeFont" => {
                             values.insert(key.clone(), Value::String(value.into()));
                         }
@@ -759,9 +757,6 @@ impl SettingsForm {
                                 _ => return Err(if self.ko { "활성화 단축키에는 영문자 또는 숫자 한 글자만 입력하세요.".into() } else { "Enter one letter or digit for the activation shortcut.".into() }),
                             };
                             values.insert(key.clone(), Value::String(accepted));
-                        }
-                        "CleanupLocations" => {
-                            values.insert("UserDefinedCleanupLocations".into(), json!(full_paths(value, false)));
                         }
                         "TreeExcludedPaths" => {
                             values.insert("FolderTreeExcludedPaths".into(), json!(full_paths(value, true)));

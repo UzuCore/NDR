@@ -44,7 +44,6 @@ pub(super) enum DialogKind {
     /// 원본 TfCompareFolder(640×505) 한 창: 비교·중단·결과 저장·닫기.
     FolderCompare(Box<super::compare_dialog::FolderCompareForm>),
     Comparison(Box<super::compare_dialog::ComparisonForm>),
-    CleanupOptions(Box<super::cleanup_dialog::CleanupOptionsForm>),
     Favorites(Box<super::favorites_dialog::FavoritesForm>),
     /// 원본 TfFolderTree(폴더 선택, F10).
     FolderTree(Box<super::folder_tree_dialog::FolderTreeForm>),
@@ -104,8 +103,6 @@ pub(super) enum DialogResult {
     FolderCompare,
     /// 동기화 미리보기에서 "복사"를 켠 차이(원래 순서). 비교 결과 창을 닫으면 None.
     Comparison(Option<Vec<ndr::folder_compare::Difference>>),
-    /// 而댄벂??泥?냼 李쎌쓣 ?レ쓬: Some((?ъ슜??吏???꾩튂, ?뺤옣??) = btnClose(?④릿??, None = Esc쨌?リ린 ?⑥텛.
-    CleanupOptions(Option<(Vec<String>, String)>),
     /// (지울 파일, 휴지통도 비울지). 취소면 None.
     /// 저장한 (이름, 경로) 칸들. 취소면 None.
     Favorites(Option<Vec<(String, String)>>),
@@ -577,7 +574,6 @@ impl App {
         let mut search_action = None;
         let mut comparison_action = None;
         let mut folder_compare_action = None;
-        let mut cleanup_action = None;
         let mut favorites_action = None;
         let mut folder_tree_action = None;
         let tree_colors = matches!(dialog.kind, DialogKind::FolderTree(_)).then(|| super::folder_tree_dialog::TreeColors::read(&self.settings));
@@ -867,9 +863,6 @@ impl App {
                     let colors = tree_colors.unwrap_or_else(|| super::folder_tree_dialog::TreeColors::read(&self.settings));
                     folder_tree_action = super::folder_tree_dialog::folder_tree_ui(ui, form, &self.language_pack, &colors, size, !waiting, &tree_icons);
                 }
-                DialogKind::CleanupOptions(form) => {
-                    cleanup_action = super::cleanup_dialog::options_ui(ui, form, &self.language_pack, ko, enter);
-                }
                 DialogKind::Comparison(form) => {
                     // FolderComparisonWindow: 1120×700(작은 화면이면 줄인다).
                     let size = egui::vec2((screen.width() - 64.0).clamp(480.0, 1096.0), (screen.height() - 300.0).clamp(140.0, 500.0));
@@ -975,9 +968,6 @@ impl App {
         if waiting {
             return;
         }
-        if let Some(action) = cleanup_action {
-            return self.cleanup_action(action, ctx);
-        }
         if let Some(action) = favorites_action {
             return self.favorites_action(action, ctx);
         }
@@ -1069,7 +1059,6 @@ impl App {
             // ×·Esc = 닫기 단추(원본 btnCancel Cancel=True). 비교 중이면 멈추고 닫는다.
             (_, DialogKind::FolderCompare(_)) => return self.folder_compare_action(super::compare_dialog::FolderCompareAction::Close, ctx),
             (_, DialogKind::Comparison(_)) => DialogResult::Comparison(None),
-            (_, DialogKind::CleanupOptions(_)) => DialogResult::CleanupOptions(None),
             (_, DialogKind::Favorites(_)) => DialogResult::Favorites(None),
             (_, DialogKind::FolderTree(_)) => return self.folder_tree_action(super::folder_tree_dialog::FolderTreeAction::Cancel, ctx),
             (Outcome::Ok, DialogKind::Credentials { user, password }) => DialogResult::Credentials(Some((user.trim().to_owned(), password.clone()))),

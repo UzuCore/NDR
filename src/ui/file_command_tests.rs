@@ -1243,126 +1243,6 @@ fn frame_with_progress_events(app: &mut App, ctx: &egui::Context, events: Vec<eg
     let _ = ctx.run(raw, |ctx| app.modal_progress_ui(ctx));
 }
 
-static SHELL_EMPTIED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-fn fake_shell_empty() -> Result<(), String> {
-    SHELL_EMPTIED.fetch_add(1, Ordering::SeqCst);
-    Ok(())
-}
-fn cleanup_options(app: &App) -> &super::cleanup_dialog::CleanupOptionsForm {
-    match &app.original_dialogs.last().expect("a dialog is open").kind {
-        DialogKind::CleanupOptions(form) => form,
-        _ => panic!("the cleanup window is not on top"),
-    }
-}
-/// 정리 대상만 담은 격리 폴더: a.tmp, b.bak, c.tmp(숨김+읽기 전용), keep.txt, sub/d.tmp(각 5바이트).
-fn junk_folder(root: &Path) -> PathBuf {
-    let junk = root.join("junk");
-    fs::create_dir_all(junk.join("sub")).unwrap();
-    for name in ["a.tmp", "b.bak", "c.tmp", "keep.txt", "sub/d.tmp"] {
-        fs::write(junk.join(name), b"12345").unwrap();
-    }
-    native::set_attributes(&junk.join("c.tmp"), true, true).unwrap();
-    junk
-}
-thread_local! {
-    static CLEANUP_TEMP: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
-}
-fn cleanup_temp() -> Option<PathBuf> {
-    CLEANUP_TEMP.with(|t| t.borrow().clone())
-}
-
-/// 원본 TfCleanup btnOkClick(0x41b5cc): MSG_CLEANUP 예/아니요 → 휴지통(셸 창) → 지우기 작업(임시 폴더는 안의 항목만,
-/// 확인 표시한 검색 결과 파일, desktop.ini·index.dat는 남김) → MSG_CLEANUP_DONE. 창은 열린 채로 남는다.
-#[test]
-fn computer_cleanup_follows_the_original_tfcleanup() {
-    let (root, ctx, mut app) = fixture("cleanup", "ko");
-    let junk = junk_folder(&root);
-    let temp = root.join("temp");
-    fs::create_dir_all(temp.join("sub")).unwrap();
-    for name in ["x.log", "desktop.ini", "sub/y.dat", "sub/index.dat"] {
-        fs::write(temp.join(name), b"t").unwrap();
-    }
-    CLEANUP_TEMP.with(|t| *t.borrow_mut() = Some(temp.clone()));
-    app.system.temp_folder = cleanup_temp;
-    app.shell_recycle_emptier = fake_shell_empty;
-    app.dispatch("cleanup", &ctx);
-    assert_eq!(app.original_dialogs[0].title, "컴퓨터 청소", "[formCleanup] Form.Caption");
-    let form = cleanup_options(&app);
-    assert!(form.system_temp && form.internet_temp && !form.cookies && form.recycle && !form.user_defined, "DFM defaults");
-    assert_eq!(form.extensions, ndr::cleanup::DEFAULT_EXTENSIONS);
-    // 원본 TntFormShow(0x41ba80): chkTemp의 Hint = 임시 폴더 경로(캐시·쿠키는 시험에서 구하지 않는다).
-    assert_eq!(form.hints, [temp.to_string_lossy().into_owned(), String::new(), String::new()]);
-    frame(&mut app, &ctx, vec![]);
-    // 사용자 지정 검색: 격리 폴더만, tmp;bak.
-    let junk_text = junk.to_string_lossy().into_owned();
-    app.edit_dialog_kind(|kind| if let DialogKind::CleanupOptions(form) = kind {
-        form.user_defined = true;
-        form.locations = vec![junk_text.clone()];
-        form.extensions = "tmp;bak".into();
-    });
-    // 원본 btnSearchClick: 창 안에서 찾는다(작업 창 없음). 찾는 동안 단추 글은 STOP, 시작 단추는 꺼진다.
-    app.cleanup_action(super::cleanup_dialog::CleanupAction::Search, &ctx);
-    assert!(app.job.is_none() && cleanup_options(&app).search_stop.is_some());
-    frame(&mut app, &ctx, vec![]);
-    let end = Instant::now() + Duration::from_secs(20);
-    while cleanup_options(&app).search_stop.is_some() {
-        assert!(Instant::now() < end, "search timeout");
-        app.poll(&ctx);
-        thread::sleep(Duration::from_millis(5));
-    }
-    let mut found: Vec<String> = cleanup_options(&app).results.iter().map(|(c, checked)| { assert!(checked); c.name.clone() }).collect();
-    found.sort();
-    assert_eq!(found, ["a.tmp", "b.bak", "c.tmp", "d.tmp"]);
-    // 원본 btnAdd = 폴더 고르기 창. 취소하면 아무것도 바뀌지 않는다.
-    app.folder_picker = |_, _| None;
-    app.cleanup_action(super::cleanup_dialog::CleanupAction::Browse, &ctx);
-    assert!(cleanup_options(&app).searched, "a cancelled picker changes nothing");
-    app.edit_dialog_kind(|kind| if let DialogKind::CleanupOptions(form) = kind {
-        for row in form.results.iter_mut() {
-            row.1 = row.0.name != "b.bak";
-        }
-    });
-    // 시작: MSG_CLEANUP 예/아니요(창 제목). 아니요면 아무것도 하지 않는다.
-    let accept = |app: &mut App, ctx: &egui::Context| app.cleanup_action(super::cleanup_dialog::CleanupAction::Accept, ctx);
-    accept(&mut app, &ctx);
-    assert_eq!((app.msgboxes[0].title.as_str(), app.msgboxes[0].text.as_str(), app.msgboxes[0].flags), ("컴퓨터 청소", "정말로 선택된 항목들의 파일을 삭제하시겠습니까?", MB_YESNO | ndr::msgbox::MB_ICONQUESTION), "RES.MSG_CLEANUP");
-    app.answer_message_box(7, &ctx);
-    assert!(app.job.is_none() && temp.join("x.log").exists());
-    accept(&mut app, &ctx);
-    app.answer_message_box(6, &ctx);
-    wait_job(&mut app, &ctx);
-    // 원본 FUN_0041c77c: MSG_CLEANUP_DONE(정리 창 제목, 정보 아이콘). 창은 그대로 있다.
-    assert_eq!((app.msgboxes[0].title.clone(), app.msgboxes[0].text.clone(), app.msgboxes[0].flags), ("컴퓨터 청소".to_owned(), app.language_pack.text("RES.MSG_CLEANUP_DONE", "?"), MB_OK | ndr::msgbox::MB_ICONASTERISK));
-    app.answer_message_box(1, &ctx);
-    assert!(matches!(app.original_dialogs.last().map(|d| &d.kind), Some(DialogKind::CleanupOptions(_))), "the window stays open");
-    // 임시 폴더: 안의 항목만, desktop.ini·index.dat(그 위 폴더도)는 남긴다.
-    assert!(temp.is_dir() && !temp.join("x.log").exists() && !temp.join("sub/y.dat").exists());
-    assert!(temp.join("desktop.ini").exists() && temp.join("sub/index.dat").exists());
-    // 사용자 지정: 확인 표시한 파일만(숨김·읽기 전용도 묻지 않고).
-    assert!(!junk.join("a.tmp").exists() && !junk.join("c.tmp").exists() && !junk.join("sub/d.tmp").exists());
-    assert!(junk.join("b.bak").exists() && junk.join("keep.txt").exists());
-    let end = Instant::now() + Duration::from_secs(10);
-    while SHELL_EMPTIED.load(Ordering::SeqCst) == 0 {
-        assert!(Instant::now() < end, "shell recycle timeout");
-        thread::sleep(Duration::from_millis(5));
-    }
-    // 닫기: 사용자 지정 위치·확장자를 남긴다.
-    app.cleanup_action(super::cleanup_dialog::CleanupAction::Close, &ctx);
-    assert!(app.original_dialogs.is_empty());
-    assert_eq!(app.settings.strings("UserDefinedCleanupLocations"), [junk_text.clone()]);
-    assert_eq!(app.settings.text("UserDefinedCleanupExtensions", "?"), "tmp;bak");
-    // 휴지통 비우기 명령: NDR 상자 없이 SHEmptyRecycleBinW(셸 확인 창).
-    let before = SHELL_EMPTIED.load(Ordering::SeqCst);
-    app.dispatch("emptyRecycle", &ctx);
-    assert!(app.msgboxes.is_empty());
-    while SHELL_EMPTIED.load(Ordering::SeqCst) == before {
-        assert!(Instant::now() < end, "shell recycle timeout");
-        thread::sleep(Duration::from_millis(5));
-    }
-    wait_listing(&mut app, &ctx);
-    fs::remove_dir_all(root).unwrap();
-}
-
 fn top_prompt(app: &App) -> (String, String, String) {
     let dialog = app.original_dialogs.last().expect("a dialog is open");
     match &dialog.kind {
@@ -1563,7 +1443,6 @@ fn popup_frame(app: &mut App, ctx: &egui::Context, events: Vec<egui::Event>) {
 }
 
 
-/// 원본 lbLocationKeyDown(0x41cac0): 위치 목록에서 Delete = 지우기(btnDeleteClick), Insert = 더하기(btnAddClick).
 /// 원본 휴지통 단추 FUN_0042f13c: 아무 키 없음 = 휴지통(설정과 관계없이), Shift = 삭제, Shift+Ctrl = 완전 삭제, Ctrl+Alt = 휴지통 열기, 다른 조합 = 없음.
 #[test]
 fn recycle_button_follows_the_original_keys() {
@@ -1674,30 +1553,6 @@ fn folder_tree_window_follows_the_original_tffoldertree() {
     fs::remove_dir_all(root).unwrap();
 }
 
-#[test]
-fn cleanup_location_keys_follow_the_original() {
-    let (root, ctx, app) = fixture("cleanup-keys", "en");
-    let mut form = super::cleanup_dialog::CleanupOptionsForm::new("tmp".into(), &["C:\\junk".into()]);
-    form.user_defined = true;
-    form.selected_location = Some(0);
-    let press = |form: &mut super::cleanup_dialog::CleanupOptionsForm, key: egui::Key| {
-        let events = vec![egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }];
-        let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 700.0))), events, ..Default::default() };
-        let mut action = None;
-        let _ = ctx.run(raw, |ctx| {
-            egui::CentralPanel::default().frame(egui::Frame::NONE).show(ctx, |ui| {
-                action = super::cleanup_dialog::options_ui(ui, form, &app.language_pack, false, false);
-            });
-        });
-        action
-    };
-    assert!(matches!(press(&mut form, egui::Key::Delete), Some(super::cleanup_dialog::CleanupAction::Remove)));
-    assert!(matches!(press(&mut form, egui::Key::Insert), Some(super::cleanup_dialog::CleanupAction::Browse)));
-    form.selected_location = None;
-    assert!(press(&mut form, egui::Key::Delete).is_none(), "no selected location: nothing");
-    let _ = fs::remove_dir_all(root);
-}
-
 
 /// 사용자 요청: 압축 파일 안에서 새 폴더·빈 파일·이름 바꾸기·삭제, 압축 안으로 복사·이동, 압축 밖으로 이동, 하위 폴더에서 복사.
 #[test]
@@ -1781,5 +1636,109 @@ fn archive_items_can_be_created_renamed_deleted_added_and_moved() {
     wait_job(&mut app, &ctx);
     let keys: Vec<String> = ndr::archive::list(&zip, None).unwrap().into_iter().map(|e| e.key.replace('\\', "/")).collect();
     assert!(keys.iter().any(|k| k == "dir/new.txt") && keys.iter().any(|k| k == "dir/sub/c.txt"), "{keys:?}");
+    let _ = fs::remove_dir_all(root);
+}
+
+/// 압축 안으로 넣을 때 같은 이름이면 원본 TfFileExists로 묻고(대상 = 압축 안 항목의 크기), 건너뛴 항목은 이동이어도 원본을 남긴다.
+/// 압축 패널의 오른쪽 끌기 메뉴는 복사·이동만 켜지고, 폴더 줄에 놓으면 그 압축 안 폴더에 들어간다.
+#[test]
+fn archive_conflicts_ask_and_drops_into_archive_folders() {
+    let (root, ctx, mut app) = fixture("archive-conflict", "ko");
+    let (left, right) = (root.join("left"), root.join("right"));
+    let source = root.join("src");
+    fs::create_dir_all(source.join("dir")).unwrap();
+    fs::write(source.join("a.txt"), b"a").unwrap();
+    fs::write(source.join("keep.txt"), b"inside").unwrap();
+    fs::write(source.join("dir/x.txt"), b"x").unwrap();
+    let zip = left.join("pack.zip");
+    ndr::archive::create(&[source.join("a.txt"), source.join("keep.txt"), source.join("dir")], &zip, None, &std::sync::atomic::AtomicBool::new(false)).unwrap();
+    for (name, body) in [("a.txt", "newer"), ("b.txt", "b"), ("c.txt", "c"), ("keep.txt", "outside")] {
+        fs::write(right.join(name), body).unwrap();
+    }
+    app.refresh(0);
+    app.refresh(1);
+    wait_listing(&mut app, &ctx);
+    app.active = 0;
+    app.panes[0].cursor = row(&app, 0, "pack.zip");
+    app.open_current();
+    wait_listing(&mut app, &ctx);
+    let read = |key: &str| {
+        let out = root.join(format!("read-{}-{}", key.replace('/', "-"), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        ndr::archive::extract_entries_with_program(&zip, &out, &[key.into()], None, &std::sync::atomic::AtomicBool::new(false), &mut |_, _| ndr::fsops::ConflictChoice::Overwrite, &mut |_, _| None, None, &mut |_, _, _| {}).unwrap();
+        fs::read_to_string(out.join(key.rsplit('/').next().unwrap())).unwrap()
+    };
+    let wait_conflict = |app: &mut App| -> (PathBuf, bool, Option<u64>, bool) {
+        let end = Instant::now() + Duration::from_secs(30);
+        loop {
+            assert!(Instant::now() < end, "no conflict dialog (status: {})", app.status);
+            app.poll(&ctx);
+            if let Some(DialogKind::FileConflict(form)) = app.original_dialogs.first().map(|d| &d.kind) {
+                return (form.destination.clone(), form.destination_dir, form.destination_size, form.destination_modified.is_some());
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+    };
+    let answer = |app: &mut App, choice: ndr::fsops::ConflictChoice| app.answer_dialog(DialogResult::FileConflict(Some((choice, false))), &ctx);
+    // 복사: 같은 이름이면 묻는다. 대상 칸은 압축 안 항목(크기 1바이트).
+    app.active = 1;
+    app.panes[1].cursor = row(&app, 1, "a.txt");
+    app.copy_to_other(1, false, &ctx);
+    let (destination, destination_dir, destination_size, has_time) = wait_conflict(&mut app);
+    assert_eq!(destination, zip.join("a.txt"));
+    assert_eq!((destination_dir, destination_size), (false, Some(1)));
+    assert!(has_time, "the archive entry time is shown");
+    answer(&mut app, ndr::fsops::ConflictChoice::Skip);
+    wait_job(&mut app, &ctx);
+    assert_eq!(read("a.txt"), "a", "skipped");
+    // 이동 + 건너뛰기: 원본이 남는다.
+    app.panes[1].cursor = row(&app, 1, "a.txt");
+    app.copy_to_other(1, true, &ctx);
+    wait_conflict(&mut app);
+    answer(&mut app, ndr::fsops::ConflictChoice::Skip);
+    wait_job(&mut app, &ctx);
+    assert!(right.join("a.txt").is_file(), "a skipped move keeps the source");
+    // 덮어쓰기.
+    app.panes[1].cursor = row(&app, 1, "a.txt");
+    app.copy_to_other(1, false, &ctx);
+    wait_conflict(&mut app);
+    answer(&mut app, ndr::fsops::ConflictChoice::Overwrite);
+    wait_job(&mut app, &ctx);
+    assert_eq!(read("a.txt"), "newer");
+    // 압축 → 로컬 이동 + 건너뛰기: 압축 안 항목이 남는다.
+    app.active = 0;
+    app.panes[0].cursor = row(&app, 0, "keep.txt");
+    app.copy_to_other(0, true, &ctx);
+    wait_conflict(&mut app);
+    answer(&mut app, ndr::fsops::ConflictChoice::Skip);
+    wait_job(&mut app, &ctx);
+    assert_eq!(fs::read_to_string(right.join("keep.txt")).unwrap(), "outside");
+    assert_eq!(read("keep.txt"), "inside", "a skipped move out keeps the archive entry");
+    // 오른쪽 끌기 메뉴: 복사·이동 켜짐, 바로 가기 회색.
+    let zip_folder = app.panes[0].path.clone();
+    app.show_drop_menu(0, vec![right.join("b.txt")], zip_folder.clone(), egui::pos2(10.0, 10.0));
+    let states: Vec<bool> = app
+        .popup
+        .as_ref()
+        .expect("drop menu")
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            super::favorites_dialog::PopupItem::Entry { enabled, .. } => Some(*enabled),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(states, vec![true, true, false, true]);
+    app.popup = None;
+    app.drop_from_menu(0, super::drag_drop::DropEffect::Move, vec![right.join("b.txt")], zip_folder);
+    wait_job(&mut app, &ctx);
+    assert_eq!(read("b.txt"), "b");
+    assert!(!right.join("b.txt").exists(), "moved into the archive");
+    // 압축 안 폴더 줄에 놓기 = 그 폴더 안으로(끌어 놓기 확인의 예).
+    app.handle_drop(0, vec![right.join("c.txt")], PathBuf::from("dir"), egui::Modifiers::NONE);
+    assert!(!app.msgboxes.is_empty(), "drag and drop confirmation");
+    app.answer_message_box(6, &ctx);
+    wait_job(&mut app, &ctx);
+    assert_eq!(read("dir/c.txt"), "c");
+    assert!(right.join("c.txt").is_file(), "a plain drop copies");
     let _ = fs::remove_dir_all(root);
 }

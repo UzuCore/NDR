@@ -29,8 +29,6 @@ pub(super) struct SystemHooks {
     pub clipboard_files: fn() -> Vec<PathBuf>,
     /// 원본 miEmptyTempClick의 GetTempPathW + GetLongPathNameW. 시험에서는 실제 임시 폴더를 건드리지 않도록 늘 가짜.
     pub temp_folder: fn() -> Option<PathBuf>,
-    /// 원본 TfCleanup의 SHGetSpecialFolderPathW(CSIDL_INTERNET_CACHE 0x20, CSIDL_COOKIES 0x21). 시험에서는 늘 None.
-    pub special_folder: fn(u32) -> Option<PathBuf>,
     /// C# ListLocal("::drives::"): 준비된 드라이브 루트들.
     pub ready_drives: fn() -> Vec<PathBuf>,
     /// 드라이브 볼륨 이름 읽기(GetVolumeInformationW)와 바꾸기(원본 FUN_004351cc의 SetVolumeLabelW, 실패 = GetLastError).
@@ -132,16 +130,6 @@ fn no_temp_folder() -> Option<PathBuf> {
     None
 }
 
-/// CSIDL_INTERNET_CACHE(0x20), CSIDL_COOKIES(0x21).
-#[cfg(not(test))]
-fn real_special_folder(csidl: u32) -> Option<PathBuf> {
-    match csidl {
-        0x20 => native::internet_cache_folder(),
-        0x21 => native::cookies_folder(),
-        _ => None,
-    }
-}
-
 fn system_clipboard_files() -> Vec<PathBuf> {
     native::read_clipboard_files().map(|(paths, _)| paths).unwrap_or_default()
 }
@@ -178,10 +166,6 @@ impl Default for SystemHooks {
             temp_folder: native::temp_folder,
             #[cfg(test)]
             temp_folder: no_temp_folder,
-            #[cfg(not(test))]
-            special_folder: real_special_folder,
-            #[cfg(test)]
-            special_folder: |_| None,
             #[cfg(not(test))]
             ready_drives: native::ready_drives,
             #[cfg(test)]
