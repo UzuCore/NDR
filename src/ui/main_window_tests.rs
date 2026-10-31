@@ -1541,7 +1541,7 @@ fn main_menu_items_follow_the_tfmain_dfm() {
         "miArcAdd - miArcExtract miArcExtractToCurr miArcExtractAuto",
         "miFTPQuickConnect - miFTPConnect miFTPDisconnect - miFTPGet miFTPPut - miMapNetworkDrive miUnmapNetworkDrive",
         "miTextViewer miTextEditor - miClearDescriptions - miSaveList - miSplitFile miJoinFile - miCleanupDisk - miCompareFolder - miOptions",
-        "miHelp miShortcut - miHomepage miEmail - miCheckUpdate - miAbout",
+        "miHelp miShortcut - miHomepage - miCheckUpdate - miAbout",
     ];
     let menus: Vec<String> = super::menu_data::MENUS.iter().map(|(_, _, _, items)| shown(items)).collect();
     assert_eq!(menus.len(), expected.len());

@@ -254,11 +254,6 @@ fn clear_descriptions_and_email_use_the_original_box() {
     app.answer_message_box(6, &ctx);
     assert!(!data.exists(), "Yes deletes descript.dat");
 
-    app.dispatch("email", &ctx);
-    assert_eq!(clipboard(), vec!["xiles@xiles.net".to_string()]);
-    assert_eq!(app.msgboxes[0].flags, ndr::msgbox::MB_OK | ndr::msgbox::MB_ICONASTERISK);
-    assert_eq!(app.msgboxes[0].text, app.language_pack.text("RES.EMAILCOPIED", "?"));
-    assert_eq!(ndr::msgbox::lines(&app.msgboxes[0].text).len(), 2);
     fs::remove_dir_all(root).unwrap();
 }
 

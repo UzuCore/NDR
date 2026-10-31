@@ -179,7 +179,7 @@ pub const MENUS: &[(&str,&str,&str,&[(&str,&str,&str)])] = &[
 ("shortcuts","단축키 도움말","Shortcut Keys"),
 ("-","",""),
 ("homepage","홈페이지","Homepage"),
-("email","이메일","Email"),
+// 사용자 요청: 원본 miEmail(지원 이메일 복사)은 뺀다.
 ("-","",""),
 ("update","업데이트 확인…","Check Update"),
 ("-","",""),
@@ -361,7 +361,6 @@ pub const ORIGINAL_ACTIONS: &[(&str,&str)] = &[
 ("miShortcut","shortcuts"),
 ("miHelp","help"),
 ("miHomepage","homepage"),
-("miEmail","email"),
 ("miToLastDest","lastDestination"),
 ("miFavorites","favorites"),
 ("miFolderTree","browseFolder"),

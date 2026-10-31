@@ -1,5 +1,8 @@
 use super::*;
 
+/// 도움말 메뉴의 홈페이지(사용자 요청: NDR 저장소).
+pub(super) const HOMEPAGE_URL: &str = "https://github.com/UzuCore/NDR";
+
 impl App {
     /// 원본 miSortBy의 항목들(miSortByNone … miSortByColor, 구분선, miSortDescend). 지금 정렬에 표시. 고른 명령.
     pub(super) fn sort_items(&mut self, ui: &mut egui::Ui, ko: bool) -> Option<String> {
@@ -670,7 +673,8 @@ impl App {
             // 원본 miControlPanelClick은 control.exe, miAddRemovePorgClick(0x432fc8)은 rundll32.exe "shell32.dll,Control_RunDLL appwiz.cpl".
             "controlPanel"=>result=(self.system.run_verb)(Path::new("control.exe"),"open"),"addRemovePrograms"=>result=(self.shell_runner)(Path::new("rundll32.exe"),"shell32.dll,Control_RunDLL appwiz.cpl",Path::new("")),
             "shellIntegration"=>self.explorer_integration_command(),
-            "homepage"=>result=(self.shell_runner)(Path::new("https://www.xiles.app"),"",Path::new("")),"email"=>self.copy_support_email(),
+            // 사용자 요청: 홈페이지는 NDR 저장소(원본 miHomepage는 xiles.app), 원본 miEmail(지원 이메일 복사)은 뺐다.
+            "homepage"=>result=(self.shell_runner)(Path::new(HOMEPAGE_URL),"",Path::new("")),
             // 원본 miHelpClick(0x445b60): "https://www.xiles.app/help/nexusfile/".
             "help"=>result=(self.shell_runner)(Path::new("https://www.xiles.app/help/nexusfile/"),"",Path::new("")),
             // 원본 miMoreLanguagesClick(FUN_00445b88): ShellExecute "open" https://www.xiles.app/languages/#NexusFile (0x8ee3bc).
@@ -713,16 +717,6 @@ impl App {
                 Err(error) => app.status = error,
             }
         });
-    }
-    /// C# CopySupportEmail (original miEmailClick 0x434234): Clipboard.AsText, then TfMsgBox(form Caption, '',
-    /// EMAILCOPIED, MB_ICONASTERISK).
-    pub(super) fn copy_support_email(&mut self) {
-        if let Err(error) = (self.clipboard_writer)("xiles@xiles.net") {
-            self.status = error;
-            return;
-        }
-        let text = self.language_pack.text("RES.EMAILCOPIED", "Email address(xiles@xiles.net) is copied to the clipboard.\nPaste(Ctrl+V) into any textbox to use this Email address.");
-        self.message_box(ndr::msgbox::FORM_CAPTION, "", &text, ndr::msgbox::MB_OK | ndr::msgbox::MB_ICONASTERISK, |_, _, _| {});
     }
     pub(super) fn transfer_from(&mut self, i: usize, sources: Vec<PathBuf>, destination: PathBuf, moving: bool, kind: super::file_operation::TransferKind) {
         if sources.is_empty() {

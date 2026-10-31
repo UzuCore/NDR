@@ -1127,6 +1127,10 @@ fn system_commands_follow_csharp() {
     app.dispatch("about", &ctx);
     let (_, about) = boxed(&app);
     assert!(about.starts_with(&format!("NDR {}", env!("CARGO_PKG_VERSION"))) && about.contains(&app.profile.display().to_string()), "{about}");
+    // 사용자 요청: 버전 1.0.0, 홈페이지 = NDR 저장소.
+    assert_eq!(env!("CARGO_PKG_VERSION"), "1.0.0");
+    app.dispatch("homepage", &ctx);
+    assert_eq!(launched().first().map(|(program, _, _)| program.clone()), Some("https://github.com/UzuCore/NDR".to_owned()));
     let _ = fs::remove_dir_all(&root);
 }
 
