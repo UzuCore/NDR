@@ -505,6 +505,9 @@ impl SettingsForm {
             ("RightFolderSortDescending", "오른쪽 폴더 내림차순", "Right folders descending", false),
             ("LeftAutoFolderSize", "왼쪽 폴더 크기를 목록에 표시", "Left: show folder sizes in the list", false),
             ("RightAutoFolderSize", "오른쪽 폴더 크기를 목록에 표시", "Right: show folder sizes in the list", false),
+            // Original chkAlwaysShowSize1/2 (alwaysshowsize): the options page placed them, but the rows were missing, so the boxes never showed.
+            ("LeftAlwaysShowFolderSize", "왼쪽 항상 파일크기 보기", "Left: always show size", false),
+            ("RightAlwaysShowFolderSize", "오른쪽 항상 파일크기 보기", "Right: always show size", false),
         ] {
             display.push(check(key, t(ko, korean, english), default));
         }
