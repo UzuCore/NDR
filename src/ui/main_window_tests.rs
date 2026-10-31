@@ -1839,3 +1839,22 @@ fn big_folder_frame_time() {
     }
     let _ = fs::remove_dir_all(root);
 }
+
+/// original_field_max의 빠른 재기(글자 폭 합, GDI GetTextExtentPoint처럼 짝 간격 조정 없음)가 그려지는 글(egui는 짝 간격을
+/// 줄인다)보다 좁지 않아 칸에 글이 늘 들어가는지.
+#[test]
+fn field_widths_by_glyph_sum_match_the_laid_out_width() {
+    let (root, ctx, app) = fixture("glyph-sum");
+    let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))), ..Default::default() };
+    let _ = ctx.run(raw, |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            let font = egui::FontId::new(app.list_font_size, egui::FontFamily::Name(super::LIST_FONT_FAMILY.into()));
+            for text in ["report.txt", "AVAWAVAW To.pdf", "한글 파일 이름.hwp", "2026-10-31 13:52", "1,234,567", "WWWWAAAA.WWA"] {
+                let sum = ui.fonts_mut(|f| text.chars().map(|c| f.glyph_width(&font, c)).sum::<f32>().ceil());
+                let laid = app.list_text_width(ui, text);
+                assert!(sum + 1.0 >= laid, "{text}: sum {sum} vs layout {laid}");
+            }
+        });
+    });
+    let _ = fs::remove_dir_all(root);
+}

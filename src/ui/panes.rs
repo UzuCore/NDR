@@ -184,35 +184,40 @@ impl App {
         if let Some((_, fm)) = ui.data(|d| d.get_temp::<(u64, FieldMax)>(id)).filter(|c| c.0 == key) {
             return fm;
         }
-        let measure = |text: &str| self.list_text_width(ui, text);
+        // 고친 것(빠르기): 전에는 항목마다 글 배치(layout_no_wrap, 그림 조각 만들기)로 재서 파일 2만 개면 약 60ms였고, 폴더 감시로
+        // 목록이 다시 읽힐 때마다 그만큼 멈췄다. 글자 폭의 합으로 잰다(원본 GetTextWidth도 글자 폭 합이다).
+        let font = egui::FontId::new(self.list_font_size, egui::FontFamily::Name(super::LIST_FONT_FAMILY.into()));
         let mut fm = FieldMax::default();
         let (mut ext_sum, mut ext_count) = (0f32, 0usize);
-        for (entry, cells) in pane.entries.iter().zip(&pane.view.cells) {
-            if entry.drive {
-                continue;
-            }
-            let name = measure(&cells[0]);
-            fm.max[0] = fm.max[0].max(name);
-            fm.name_sum += name;
-            fm.items += 1;
-            if !entry.is_dir {
-                let ext = measure(&cells[1]);
-                fm.max[1] = fm.max[1].max(ext);
-                if ext > 0.0 {
-                    ext_sum += ext;
-                    ext_count += 1;
+        ui.fonts_mut(|fonts| {
+            let mut measure = |text: &str| -> f32 { text.chars().map(|c| fonts.glyph_width(&font, c)).sum::<f32>().ceil() };
+            for (entry, cells) in pane.entries.iter().zip(&pane.view.cells) {
+                if entry.drive {
+                    continue;
                 }
-                if entry.size > 0 {
-                    fm.max[3] = fm.max[3].max(measure(&cells[3]));
+                let name = measure(&cells[0]);
+                fm.max[0] = fm.max[0].max(name);
+                fm.name_sum += name;
+                fm.items += 1;
+                if !entry.is_dir {
+                    let ext = measure(&cells[1]);
+                    fm.max[1] = fm.max[1].max(ext);
+                    if ext > 0.0 {
+                        ext_sum += ext;
+                        ext_count += 1;
+                    }
+                    if entry.size > 0 {
+                        fm.max[3] = fm.max[3].max(measure(&cells[3]));
+                    }
                 }
+                fm.max[4] = fm.max[4].max(measure(&cells[4]));
+                fm.max[6] = fm.max[6].max(measure(&cells[6]));
             }
-            fm.max[4] = fm.max[4].max(measure(&cells[4]));
-            fm.max[6] = fm.max[6].max(measure(&cells[6]));
-        }
+        });
         if ext_count > 0 {
             fm.ext_average = (ext_sum / ext_count as f32).floor();
         }
-        fm.max[3] = fm.max[3].max(measure(&self.language_pack.text("RES.FIELD_SIZE", "Size")));
+        fm.max[3] = fm.max[3].max(self.list_text_width(ui, &self.language_pack.text("RES.FIELD_SIZE", "Size")));
         ui.data_mut(|d| d.insert_temp(id, (key, fm)));
         fm
     }
