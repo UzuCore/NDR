@@ -1,5 +1,5 @@
-//! C# NDR(r66 경로 복사, r69 찾기, r70 원본 메시지 상자) 동작을 Rust UI에서 확인한다. 한국어와 영어만 검수한다.
-//! 실제 클립보드는 건드리지 않는다(clipboard_writer 교체).
+//! Checks C# NDR behavior (r66 copy path, r69 find, r70 original message boxes) in the Rust UI. Only Korean and English are checked.
+//! The real clipboard is not touched (clipboard_writer is replaced).
 use super::*;
 use std::{cell::RefCell, fs, rc::Rc};
 
@@ -143,8 +143,8 @@ fn msgbox_layout_focus_and_keyboard() {
     fs::remove_dir_all(root).unwrap();
 }
 
-/// 원본 miCopyToClick → FUN_0042bdc4 → TfSelectDest(FUN_0043cb24): 경로 칸 처음 값은 다른 패널 폴더이고, 고쳐서 같은 패널 안
-/// 폴더(상대 경로도)로 복사·이동할 수 있다(스킨 테마).
+/// Original miCopyToClick -> FUN_0042bdc4 -> TfSelectDest (FUN_0043cb24): the path field starts with the other pane folder and can be edited to copy or move
+/// into a folder in the same pane (relative paths too) (skin theme).
 #[test]
 fn original_copy_menu_lets_the_destination_be_typed() {
     let (root, ctx, mut app) = fixture("seldest", "ko");
@@ -156,7 +156,7 @@ fn original_copy_menu_lets_the_destination_be_typed() {
         _ => panic!("the destination dialog"),
     };
     assert_eq!(PathBuf::from(&path), std::path::absolute(root.join("right")).unwrap(), "the other pane by default");
-    // 같은 패널 안 하위 폴더(상대 경로)로.
+    // Into a subfolder of the same pane (relative path).
     if let original_dialogs::DialogKind::Destination(form) = &mut app.original_dialogs.last_mut().unwrap().kind {
         form.path = "folder1".into();
     }
@@ -164,7 +164,7 @@ fn original_copy_menu_lets_the_destination_be_typed() {
     assert!(app.original_dialogs.is_empty());
     wait_job(&mut app, &ctx);
     assert_eq!(fs::read(root.join("left/folder1/alpha.txt")).unwrap(), b"alpha.txt", "copied inside the same pane");
-    // 없는 폴더는 창을 닫지 않는다.
+    // A missing folder does not close the window.
     app.panes[0].cursor = index_of(&app, "beta.txt");
     app.dispatch("moveToOther", &ctx);
     if let original_dialogs::DialogKind::Destination(form) = &mut app.original_dialogs.last_mut().unwrap().kind {
@@ -201,33 +201,33 @@ fn copy_to_other_asks_the_original_direction_box() {
     app.answer_message_box(2, &ctx);
     assert!(app.job.as_ref().is_none_or(|j| j.finished), "close box declines");
     app.settings.set_flag("ConfirmDragDrop", false);
-    // 새로 읽어도 커서는 alpha.txt에 남으므로(원본 새로 고침), 오른쪽에 없는 gamma.log를 고른다.
+    // Rereading keeps the cursor on alpha.txt (original refresh), so choose gamma.log, which is not on the right.
     app.panes[0].cursor = index_of(&app, "gamma.log");
     app.copy_to_other(0, false, &ctx);
     assert!(app.msgboxes.is_empty(), "no box when the confirmation is off");
     wait_job(&mut app, &ctx);
     assert!(root.join("right/gamma.log").exists());
-    // 원본 FUN_0042d518/FUN_0042d910(수직 막대·단축키, 스킨 테마): confirmdrop과 상관없이 묻고, Shift 단추 = 이동.
+    // Original FUN_0042d518/FUN_0042d910 (vertical bar and shortcut, skin theme): asks regardless of confirmdrop; Shift on the button = move.
     assert!(app.current_skin().is_some());
     app.panes[0].cursor = index_of(&app, "beta.txt");
     app.original_copy_to_other(0, true, &ctx);
     let expected = app.language_pack.text("RES.MSG_TORIGHT", "?").replace("%s", &app.language_pack.text("RES.MOVE", "?"));
     assert_eq!(app.msgboxes.first().map(|b| b.text.clone()), Some(expected), "always asked");
     app.answer_message_box(7, &ctx);
-    // 패널이 하나면 아무것도 하지 않는다.
+    // With a single pane nothing happens.
     let dual = app.dual;
     app.dual = false;
     app.original_copy_to_other(0, false, &ctx);
     assert!(app.msgboxes.is_empty() && app.job.as_ref().is_none_or(|j| j.finished));
     app.dual = dual;
     app.settings.set_flag("ConfirmDragDrop", true);
-    // 원본 내부 명령 0x25 FocusAddressBar(FUN_0048d3c8) = C# BeginAddressEdit: 활성 패널 주소 편집.
+    // Original internal command 0x25 FocusAddressBar (FUN_0048d3c8) = C# BeginAddressEdit: edit the active pane's address.
     app.active = 1;
     assert!(app.original_internal("FocusAddressBar", &ctx));
     assert!(app.panes[1].address_editing && !app.panes[0].address_editing);
     assert!(app.original_dialogs.is_empty(), "not the command line prompt");
     app.end_address_edit(1);
-    // 원본 내부 명령 0x2a Select: 커서 항목 선택만 뒤집는다(커서는 그대로, 고급 선택 창이 아님).
+    // Original internal command 0x2a Select: flips only the cursor item's selection (cursor stays; not the advanced select window).
     assert!(!app.panes[1].entries.is_empty());
     app.panes[1].selected.clear();
     let cursor = app.panes[1].cursor;
@@ -328,8 +328,8 @@ fn keyboard_frame(app: &mut App, ctx: &egui::Context, events: Vec<egui::Event>) 
     let _ = ctx.run(raw, |ctx| app.keyboard(ctx));
 }
 
-/// 원본 MouseDown(0x7d63c8)(스킨 테마): 그냥 누르기·오른쪽 단추는 표시를 두고 커서만, Shift는 커서~누른 줄을 더함,
-/// Ctrl은 뒤집기(고른 줄이 없으면 전 커서 줄도). C# 테마는 그냥 누르기가 표시를 지운다.
+/// Original MouseDown (0x7d63c8) (skin theme): a plain click or the right button keeps the marks and moves only the cursor, Shift adds cursor..clicked row,
+/// Ctrl flips (also the previous cursor row when nothing is selected). In the C# theme a plain click clears the marks.
 #[test]
 fn original_row_press_keeps_marks() {
     let (root, _ctx, mut app) = fixture("rowpress", "ko");
@@ -358,8 +358,8 @@ fn original_row_press_keeps_marks() {
     fs::remove_dir_all(root).unwrap();
 }
 
-/// 고친 것: 목록 누르기는 날 입력을 읽으므로, 위에 다른 층(대화 상자 등)이 있으면 그 누름을 받지 않는다(압축하기 창 확인 단추가
-/// 다른 패널 줄 위에 있으면 그 패널이 지금 패널이 되던 것).
+/// Fixed: list clicks read raw input, so with another layer on top (a dialog etc.) the click is ignored (when the archive window OK button lay
+/// over a row of the other pane, that pane used to become current).
 #[test]
 fn list_presses_under_a_dialog_are_ignored() {
     let (root, ctx, mut app) = fixture("underdialog", "ko");
@@ -386,7 +386,7 @@ fn list_presses_under_a_dialog_are_ignored() {
     assert_eq!(pane.cursor, 0);
     run(pane, release(), true);
     run(pane, vec![], false);
-    // 앞 누름과 Windows 두 번 누르기 칸 밖(같은 줄의 다른 자리).
+    // Outside the Windows double-click box of the previous press (another spot on the same row).
     let other = egui::pos2(190.0, 25.0);
     let press_other = vec![egui::Event::PointerMoved(other), egui::Event::PointerButton { pos: other, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() }];
     assert!(run(pane, press_other, false), "without a layer on top the row takes the press");
@@ -394,8 +394,8 @@ fn list_presses_under_a_dialog_are_ignored() {
     fs::remove_dir_all(root).unwrap();
 }
 
-/// 원본 GetSelAreaAt(0x7dae7c)·MouseDown·MouseMove(0x7d65f0): 줄 왼쪽 12화소를 누르면 그 줄을 뒤집고,
-/// 누른 채 끌면 처음 줄부터 포인터 아래 줄까지 고르며, 두 줄째부터는 Ctrl이 없으면 다른 표시를 지운다.
+/// Original GetSelAreaAt (0x7dae7c), MouseDown and MouseMove (0x7d65f0): clicking the left 12 px of a row flips that row,
+/// dragging while pressed selects from the first row to the row under the pointer, and from the second row on other marks are cleared unless Ctrl is held.
 #[test]
 fn original_selection_area_toggles_and_drags() {
     let (root, ctx, mut app) = fixture("selarea", "ko");
@@ -424,7 +424,7 @@ fn original_selection_area_toggles_and_drags() {
     run(pane, vec![egui::Event::PointerMoved(egui::pos2(60.0, 65.0))], 3);
     assert_eq!(marks(pane), vec![1, 2, 3], "later moves without Ctrl clear the other marks");
     assert_eq!(pane.cursor, 1, "dragging does not move the cursor");
-    // 단추를 놓으면(MouseUp) 끌기 끝. 표시 칸 밖 그냥 누르기는 커서만.
+    // Releasing the button (MouseUp) ends the drag. A plain click outside the mark cell moves only the cursor.
     let _ = ctx.run(egui::RawInput { events: vec![egui::Event::PointerButton { pos: egui::pos2(60.0, 65.0), button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() }], ..Default::default() }, |_| {});
     pane.range_drag = None;
     let at = egui::pos2(100.0, 5.0);
@@ -432,7 +432,7 @@ fn original_selection_area_toggles_and_drags() {
     assert!(run(pane, plain, 0));
     assert_eq!((pane.cursor, marks(pane), pane.range_drag), (0, vec![1, 2, 3], None));
     let _ = ctx.run(egui::RawInput { events: vec![egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() }], ..Default::default() }, |_| {});
-    // Shift+누르기: 커서~누른 줄을 더하고, 누른 채 끌면 범위를 다시 잡는다.
+    // Shift+click adds cursor..clicked row, and dragging while pressed takes the range again.
     let at = egui::pos2(100.0, 45.0);
     let shift = egui::Modifiers::SHIFT;
     let press = vec![egui::Event::PointerMoved(at), egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: shift }];
@@ -448,7 +448,7 @@ fn original_selection_area_toggles_and_drags() {
     fs::remove_dir_all(root).unwrap();
 }
 
-/// 원본 TfSelectDest lbListKeyDown(0x454130): 1~9·Alt+1~9 = 작업 폴더, Ctrl+1~9 = 자주 쓴 폴더, 0 = 처음 폴더, Shift+Delete = 기록 지우기.
+/// Original TfSelectDest lbListKeyDown (0x454130): 1-9 / Alt+1-9 = work folders, Ctrl+1-9 = most used folders, 0 = initial folder, Shift+Delete = clear history.
 #[test]
 fn destination_list_keys_follow_the_original() {
     use super::destination_dialog::{destination_ui_original, DestinationAction, DestinationForm};
@@ -471,7 +471,7 @@ fn destination_list_keys_follow_the_original() {
         special_folders: Default::default(),
     };
     let mut run = |key: egui::Key, modifiers: egui::Modifiers| {
-        // 목록에 글쇠 초점(경로 칸이 아님).
+        // Key focus in the list (not the path field).
         ctx.memory_mut(|m| m.request_focus(egui::Id::new("ndr-test-elsewhere")));
         let raw = egui::RawInput { modifiers, events: vec![egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }], ..Default::default() };
         let mut got = None;
@@ -490,8 +490,8 @@ fn destination_list_keys_follow_the_original() {
     fs::remove_dir_all(root).unwrap();
 }
 
-/// 원본 TfSelectDest(스킨 테마): 목록 = 처음 폴더, 그것과 다른 최근 폴더, 있는 작업 폴더. 누르면 고르고 경로 칸에 그 경로, 위/아래로 고르고,
-/// Delete는 고른 최근 줄을 지우고, 두 번 누르면 확인.
+/// Original TfSelectDest (skin theme): list = initial folder, recent folders other than it, existing work folders. A click selects and puts the path in the path field, Up/Down select,
+/// Delete removes the selected recent row, a double click confirms.
 #[test]
 fn original_destination_list_follows_tfselectdest() {
     use super::destination_dialog::{destination_ui_original, original_items, DestinationAction, DestinationForm, DestinationItem};
@@ -518,7 +518,7 @@ fn original_destination_list_follows_tfselectdest() {
     };
     let items: Vec<_> = original_items(&form).into_iter().map(|(item, _)| item).collect();
     assert_eq!(items, vec![DestinationItem::Initial(s(&initial)), DestinationItem::Recent(s(&recent)), DestinationItem::Work(0, s(&work))], "the default folder is not repeated among the recents; only existing work folders");
-    // 원본 FormKeyDown(0x454b8c): Ctrl+Q = 사진 폴더(FUN_0040db88(2))를 경로 칸에. 빈 특수 폴더(Ctrl+D)는 그대로.
+    // Original FormKeyDown (0x454b8c): Ctrl+Q = Pictures folder (FUN_0040db88(2)) into the path field. An empty special folder (Ctrl+D) leaves it as is.
     let ctrl = egui::Modifiers::CTRL;
     for key in [egui::Key::D, egui::Key::Q] {
         let raw = egui::RawInput { time: Some(1.0), modifiers: ctrl, events: vec![egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: ctrl }], ..Default::default() };
@@ -542,7 +542,7 @@ fn original_destination_list_follows_tfselectdest() {
     let press = |pos: egui::Pos2, pressed: bool| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
     run(&mut form, vec![]);
     run(&mut form, vec![]);
-    // 둘째 줄(최근, 묶음 첫 줄이라 + 3): 18 ~ 39.
+    // Second row (recent, the first row of its group so + 3): 18 to 39.
     let at = egui::pos2(100.0, 28.0);
     run(&mut form, vec![egui::Event::PointerMoved(at), press(at, true)]);
     run(&mut form, vec![press(at, false)]);
@@ -550,14 +550,14 @@ fn original_destination_list_follows_tfselectdest() {
     assert!(matches!(run(&mut form, vec![egui::Event::Key { key: egui::Key::Delete, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }]), Some(DestinationAction::Remove(p)) if p == s(&recent)));
     run(&mut form, vec![egui::Event::Key { key: egui::Key::ArrowDown, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }]);
     assert_eq!((form.selected, form.path.clone()), (2, s(&work)));
-    // 원본 cbPath Hint "Alt+D": 경로 칸으로 글쇠 초점.
+    // Original cbPath Hint "Alt+D": key focus to the path field.
     let alt = egui::Modifiers::ALT;
     let raw = egui::RawInput { modifiers: alt, events: vec![egui::Event::Key { key: egui::Key::D, physical_key: None, pressed: true, repeat: false, modifiers: alt }], ..Default::default() };
     let _ = ctx.run(raw, |ctx| {
         egui::Area::new(egui::Id::new("dest-test")).fixed_pos(egui::Pos2::ZERO).show(ctx, |ui| destination_ui_original(ui, &mut form, false, None, &[], 850.0));
     });
     assert!(ctx.memory(|m| m.has_focus(egui::Id::new("ndr-destination-path"))), "Alt+D focuses the path box");
-    // 첫 줄을 두 번 누르면 확인(앞 누르기와 두 번 누르기로 묶이지 않게 쉬었다가).
+    // Double-clicking the first row confirms (pause first so it does not pair with the previous click as a double click).
     for _ in 0..10 {
         run(&mut form, vec![]);
     }
@@ -566,7 +566,7 @@ fn original_destination_list_follows_tfselectdest() {
     let accepted = run(&mut form, vec![press(first, true), press(first, false)]);
     assert!(matches!(accepted, Some(DestinationAction::Accept)), "double click = OK");
     assert_eq!(form.path, s(&initial));
-    // 원본 FUN_004532d4 종류 8: 드라이브 줄은 끝 묶음, CD/DVD(5)는 뺀다. 목록에 글쇠 초점이면 글자(A~Z, Shift도) = 그 드라이브로 확인.
+    // Original FUN_004532d4 kind 8: drive rows are the last group, CD/DVD (5) left out. With key focus in the list, a letter (A-Z, with Shift too) confirms that drive.
     use super::destination_dialog::DestinationDrive;
     let drive = |root: &str, kind: u32| DestinationDrive { root: root.into(), name: "Disk".into(), kind, sizes: Some((10, 100)) };
     form.drives = vec![drive("C:\\", 3), drive("E:\\", 5), drive("Z:\\", 4)];
@@ -581,7 +581,7 @@ fn original_destination_list_follows_tfselectdest() {
     fs::remove_dir_all(root).unwrap();
 }
 
-/// 원본 MouseDown(0x7d63c8): 두 번 누르기의 두 번째 누름(ssDouble)은 표시를 건드리지 않는다. 미리 보기(형식 3)에는 표시 칸이 없다.
+/// Original MouseDown (0x7d63c8): the second press of a double click (ssDouble) does not touch the marks. Thumbnails (style 3) have no mark cell.
 #[test]
 fn a_double_press_toggles_once_and_thumbnails_have_no_selection_area() {
     let (root, ctx, mut app) = fixture("dblpress", "ko");
@@ -608,13 +608,13 @@ fn a_double_press_toggles_once_and_thumbnails_have_no_selection_area() {
     assert!(!pane.item_pressed, "the double press skips the whole MouseDown block");
     press(pane, 12.0, egui::Modifiers::NONE, false);
     assert!(!pane.selected.contains(&1), "a later press toggles again");
-    // 미리 보기: 왼쪽 12화소도 그냥 누르기(커서만), Ctrl은 누르는 순간 뒤집는다.
+    // Thumbnails: the left 12 px is a plain click too (cursor only), Ctrl flips on press.
     pane.cursor = 0;
     press(pane, 20.0, egui::Modifiers::NONE, true);
     assert_eq!((pane.cursor, pane.selected.contains(&1)), (1, false));
     press(pane, 22.0, egui::Modifiers::CTRL, true);
     assert!(pane.selected.contains(&1));
-    // Windows 기준(WM_LBUTTONDBLCLK): 앞 누름에서 GetDoubleClickTime 안이고 SM_CXDOUBLECLK × SM_CYDOUBLECLK 사각 안인 두 번째 누름만.
+    // Windows rule (WM_LBUTTONDBLCLK): only a second press within GetDoubleClickTime of the previous one and inside the SM_CXDOUBLECLK x SM_CYDOUBLECLK box.
     let probe = |time: f64, pos: egui::Pos2| {
         let mut got = false;
         let down = vec![egui::Event::PointerMoved(pos), egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() }];
@@ -630,7 +630,7 @@ fn a_double_press_toggles_once_and_thumbnails_have_no_selection_area() {
     assert!(!probe(30.3, egui::pos2(61.0, 25.0)), "the third press is a normal press again");
     assert!(!probe(30.3 + ms as f64 / 1000.0 + 0.05, egui::pos2(61.0, 25.0)), "later than GetDoubleClickTime");
     assert_eq!(ctx.options(|o| o.input_options.max_double_click_delay), ms as f64 / 1000.0, "egui double clicks use the Windows double-click time");
-    // 한 곳을 누르고 곧 다른 곳을 두 번 누르기: egui는 세 번 누르기로 돌려 double_clicked가 아니지만 Windows에는 두 번 누르기다.
+    // Click one spot, then soon double-click another: egui reports a triple click so double_clicked is false, but Windows sees a double click.
     let click = |time: f64, pos: egui::Pos2| {
         let mut got = false;
         let area = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 400.0));
@@ -652,7 +652,7 @@ fn a_double_press_toggles_once_and_thumbnails_have_no_selection_area() {
     fs::remove_dir_all(root).unwrap();
 }
 
-/// 원본 WMChar(0x7d5a18)·QuickSearch(0x7d5ca8, 0x7d5f9c): 글자 거르기, 찾는 차례, 시간 제한 없음, 다른 길로 커서를 옮기면 지움.
+/// Original WMChar (0x7d5a18) and QuickSearch (0x7d5ca8, 0x7d5f9c): character filtering, search order, no time limit, cleared when the cursor moves another way.
 #[test]
 fn original_quick_search_follows_the_file_list_view() {
     use super::quick_search::{OriginalSearchKey as K, original_quick_search, original_search_key};
@@ -688,24 +688,24 @@ fn original_quick_search_follows_the_file_list_view() {
     assert_eq!(app.typed_search[0].query, "", "no match even for the new character alone: the text is emptied");
     type_text(&mut app, &ctx, "b");
     assert_eq!((app.typed_search[0].query.as_str(), cursor_name(&app).as_str()), ("b", "beta.txt"));
-    // 원본 FormShortCut: 찾는 글이 있으면 Backspace는 빠른 찾기. 비면 원본처럼 0번 항목으로 간다.
+    // Original FormShortCut: Backspace goes to quick search while there is search text. When empty it goes to item 0 like the original.
     keyboard_frame(&mut app, &ctx, vec![key(egui::Key::Backspace)]);
     assert!(app.typed_search[0].query.is_empty());
     assert_eq!(app.panes[0].cursor, 0);
     assert_eq!(app.panes[0].path, root.join("left"), "Backspace went to the quick search, not to history back");
-    // 다른 길로 커서를 옮기면 찾는 글을 지운다(원본 ArrowKey).
+    // Moving the cursor another way clears the search text (original ArrowKey).
     type_text(&mut app, &ctx, "g");
     assert_eq!(app.typed_search[0].query, "g");
     app.panes[0].cursor = index_of(&app, "beta.txt");
     keyboard_frame(&mut app, &ctx, vec![]);
     assert!(app.typed_search[0].query.is_empty());
-    // 원본 MouseDown은 같은 항목을 눌러도 찾는 글을 지운다.
+    // Original MouseDown clears the search text even when the same item is clicked.
     type_text(&mut app, &ctx, "g");
     assert_eq!(app.typed_search[0].query, "g");
     app.panes[0].item_pressed = true;
     keyboard_frame(&mut app, &ctx, vec![]);
     assert!(app.typed_search[0].query.is_empty(), "a press on the found item clears the text");
-    // 원본 WMIMEComposition(0x7d584c): 조합 글자를 끝에 붙이고(바뀌면 끝 글자를 바꿈), 결과가 오면 조합을 끝낸다.
+    // Original WMIMEComposition (0x7d584c): appends the composing character (replacing the last one when it changes) and ends composition when the result arrives.
     fs::write(root.join("left").join("가나다.txt"), b"x").unwrap();
     fs::write(root.join("left").join("가방.txt"), b"x").unwrap();
     app.refresh(0);
@@ -724,14 +724,14 @@ fn original_quick_search_follows_the_file_list_view() {
     assert_eq!((app.typed_search[0].query.as_str(), cursor_name(&app).as_str()), ("가바", "가나다.txt"), "no match mid-syllable: kept");
     keyboard_frame(&mut app, &ctx, vec![ime(egui::ImeEvent::Preedit("방".into()))]);
     assert_eq!((app.typed_search[0].query.as_str(), cursor_name(&app).as_str()), ("가방", "가방.txt"), "the composing character is replaced");
-    // 조합 글이 비면(결과 없이 끝나면) 끝 글자를 지운다.
+    // When the composition text becomes empty (ending without a result), the last character is removed.
     keyboard_frame(&mut app, &ctx, vec![ime(egui::ImeEvent::Disabled)]);
     assert_eq!(app.typed_search[0].query, "가");
     assert!(app.typed_search[0].ime_base.is_none());
     fs::remove_dir_all(root).unwrap();
 }
-/// 원본 주 창은 글쇠를 늘 목록이 받는다. egui 단추가 글쇠 초점을 가져도(Tab·화살표 초점 이동) 목록 글쇠가 끊기지 않고,
-/// 초점 단추에서 Space·Enter가 누르기로 바뀌지 않는다.
+/// In the original main window the list always takes keys. Even when an egui button gets key focus (Tab or arrow focus movement), list keys keep working,
+/// and Space/Enter on a focused button do not become clicks.
 #[test]
 fn widget_focus_never_takes_the_list_keyboard() {
     let (root, ctx, mut app) = fixture("focus", "ko");
@@ -763,7 +763,7 @@ fn widget_focus_never_takes_the_list_keyboard() {
     ctx.memory_mut(|m| m.request_focus(button_id.get().unwrap()));
     run(&mut app, vec![key(egui::Key::Space)]);
     assert_eq!(clicks.get(), 0, "Space did not press the focused button");
-    // Tab은 원본처럼 패널을 바꾸고, egui가 단추에 초점을 주지 않는다. 다시 누르면 다시 바뀐다.
+    // Tab switches panes like the original and egui does not focus a button. Pressing again switches again.
     let active = app.active;
     run(&mut app, vec![key(egui::Key::Tab)]);
     run(&mut app, vec![]);
@@ -773,7 +773,7 @@ fn widget_focus_never_takes_the_list_keyboard() {
     assert_eq!(app.active, active, "Tab keeps switching panes");
     fs::remove_dir_all(root).unwrap();
 }
-/// 원본 GetList(0x45a34c): 목록은 그 자리에서 읽고(스킨 테마, "읽는 중" 없음), 루트가 아니면 맨 앞에 ".."(고를 수 없고 열면 상위).
+/// Original GetList (0x45a34c): the list is read in place (skin theme, no "reading"), with ".." first unless at a root (not selectable; opening it goes up).
 #[test]
 fn original_listing_is_read_in_place_with_a_parent_item() {
     let (root, ctx, mut app) = fixture("inplace", "ko");
@@ -792,8 +792,8 @@ fn original_listing_is_read_in_place_with_a_parent_item() {
     assert_eq!(cursor_name(&app), "left", "the cursor is on the folder we came from (original FUN_00486694)");
     fs::remove_dir_all(root).unwrap();
 }
-/// egui-winit의 Copy·Cut·Paste 사건은 원본 단축키 글쇠(Ctrl+C·X·V)로 되돌린다. 클립보드에 글이 없어 egui가 버린 붙여넣기는
-/// 창 하위 클래스가 센 만큼 덧붙인다.
+/// egui-winit Copy, Cut and Paste events are turned back into the original shortcut keys (Ctrl+C, X, V). Pastes egui dropped because the clipboard has no text
+/// are added back as counted by the window subclass.
 #[test]
 fn clipboard_shortcuts_reach_the_file_list() {
     let ctrl = egui::Modifiers::CTRL;
@@ -805,7 +805,7 @@ fn clipboard_shortcuts_reach_the_file_list() {
     super::restore_clipboard_keys(&mut raw, 1, false);
     let keys: Vec<egui::Key> = raw.events.iter().filter_map(|e| if let egui::Event::Key { key, .. } = e { Some(*key) } else { None }).collect();
     assert_eq!(keys, [egui::Key::Delete, egui::Key::Insert], "Shift+Delete cut, Shift+Insert paste");
-    // 파일 목록에서 Ctrl+C는 원본 miEditCopy(= copy 명령)로 간다.
+    // In the file list, Ctrl+C goes to the original miEditCopy (= copy command).
     let (root, ctx, mut app) = fixture("clipkeys", "ko");
     app.refresh(0);
     wait_listing(&mut app, &ctx);
@@ -814,7 +814,7 @@ fn clipboard_shortcuts_reach_the_file_list() {
     super::restore_clipboard_keys(&mut raw, 0, false);
     let _ = ctx.run(raw, |ctx| app.keyboard(ctx));
     assert_eq!(app.clipboard.as_ref().map(|(paths, cut)| (paths.len(), *cut)), Some((1, false)), "Ctrl+C copied the cursor item");
-    // 원본 단축키 표의 숫자판 글쇠: Num * = miInvertSelection, Num + = miAdvSelect, Num / = miSelectSameExt, Ctrl+Num / = miSelectSameName.
+    // Numpad keys of the original shortcut table: Num * = miInvertSelection, Num + = miAdvSelect, Num / = miSelectSameExt, Ctrl+Num / = miSelectSameName.
     assert_eq!(app.numpad_shortcut(0x6a, false, false, false).as_deref(), Some("miInvertSelection"));
     assert_eq!(app.numpad_shortcut(0x6b, false, false, false).as_deref(), Some("miAdvSelect"));
     assert_eq!(app.numpad_shortcut(0x6f, true, false, false).as_deref(), Some("miSelectSameName"));
@@ -829,7 +829,7 @@ fn clipboard_shortcuts_reach_the_file_list() {
     assert!(!app.panes[0].selected.is_empty(), "Num * inverted the selection");
     fs::remove_dir_all(root).unwrap();
 }
-/// 원본 GetItemAt·TNXFramePanel: 줄 어디를 눌러도(이름 칸 밖, 날짜 칸 등) 그 항목, 패널 어디를 눌러도 그 패널이 지금 패널.
+/// Original GetItemAt and TNXFramePanel: clicking anywhere on a row (outside the name cell, the date cell etc.) picks that item, and clicking anywhere in a pane makes it current.
 #[test]
 fn empty_pane_area_press_activates_in_the_main_layout() {
     let (root, ctx, mut app) = fixture("emptyclick", "ko");
@@ -860,7 +860,7 @@ fn empty_pane_area_press_activates_in_the_main_layout() {
     }
     fs::remove_dir_all(root).unwrap();
 }
-/// 원본 GetItemAt·TNXFramePanel: 줄 어디를 눌러도(이름 칸 밖, 날짜 칸 등) 그 항목, 패널 어디를 눌러도 그 패널이 지금 패널.
+/// Original GetItemAt and TNXFramePanel: clicking anywhere on a row (outside the name cell, the date cell etc.) picks that item, and clicking anywhere in a pane makes it current.
 #[test]
 fn clicks_anywhere_on_a_row_or_pane_follow_the_original() {
     let (root, ctx, mut app) = fixture("rowclick", "ko");
@@ -884,12 +884,12 @@ fn clicks_anywhere_on_a_row_or_pane_follow_the_original() {
     };
     draw(&mut app, vec![]);
     draw(&mut app, vec![]);
-    // 오른쪽 패널을 지금 패널로 두고 왼쪽 패널 아래쪽 빈 곳을 누르면 왼쪽이 지금 패널.
+    // With the right pane current, clicking empty space low in the left pane makes the left one current.
     app.active = 1;
     let left = app.pane_rects[0];
     click(&mut app, egui::pos2(left.center().x, left.bottom() - 60.0));
     assert_eq!(app.active, 0, "a press on the empty pane area activates it");
-    // 날짜 칸 쪽(이름 칸 밖)을 위에서부터 눌러 보면 커서가 그 줄로 간다.
+    // Clicking down the date cell side (outside the name cell) from the top moves the cursor to that row.
     app.panes[0].cursor = 0;
     let x = left.right() - 150.0;
     let mut moved = false;
@@ -943,7 +943,7 @@ fn filters_apply_to_the_listing() {
 #[test]
 fn function_key_bar_texts_and_error_texts_follow_the_original() {
     let (root, _ctx, app) = fixture("fkeys", "en");
-    // 원본 FUN_00430940: Alt만 = ALTFUNCTIONS, Ctrl만 = CTRLFUNCTIONS("글쇠=이름" 줄), 그 밖은 F1~F12.
+    // Original FUN_00430940: Alt only = ALTFUNCTIONS, Ctrl only = CTRLFUNCTIONS ("key=name" rows), otherwise F1-F12.
     let alt = app.modifier_functions(egui::Modifiers::ALT).unwrap();
     assert_eq!((alt[0].0.as_str(), alt[0].1.as_str(), alt.len()), ("C", "Copy", 8));
     let ctrl = app.modifier_functions(egui::Modifiers::CTRL).unwrap();
@@ -951,19 +951,19 @@ fn function_key_bar_texts_and_error_texts_follow_the_original() {
     assert_eq!(ctrl[6].0, "<-");
     assert!(app.modifier_functions(egui::Modifiers::NONE).is_none());
     assert!(app.modifier_functions(egui::Modifiers::ALT | egui::Modifiers::CTRL).is_none());
-    // 원본 OD_PROGRAMFILTER(TOpenDialog.Filter "이름|무늬|…")로 프로그램 고르기 상자의 거르개를 만든다.
+    // The program picker filter is built from the original OD_PROGRAMFILTER (TOpenDialog.Filter "name|pattern|...").
     let filters = original_dialogs::program_filter(&app.language_pack);
     assert_eq!(filters, [("Program Files(*.exe)".to_owned(), "*.exe".to_owned()), ("All Files(*.*)".to_owned(), "*.*".to_owned())]);
     assert_eq!(original_dialogs::delphi_filter("a|b|c"), [("a".to_owned(), "b".to_owned())], "an unpaired tail is dropped");
-    // 원본 FUN_00404890: 7-Zip 오류는 원본 압축 오류 글로, 다른 글은 그대로.
+    // Original FUN_00404890: 7-Zip errors become original archive error texts, other texts stay.
     assert_eq!(app.archive_error_text("7-Zip failed (exit code: 2): ERROR: Wrong password : a"), app.language_pack.text("RES.INVALID_PASSWORD", "?"));
     assert_eq!(app.archive_error_text("7-Zip failed (exit code: 2): ERROR: Missing volume : x.002"), app.language_pack.text("RES.CANNOT_FIND_NEXTVOLUME", "?"));
     assert_eq!(app.archive_error_text("Access is denied. (os error 5)"), "Access is denied. (os error 5)");
     fs::remove_dir_all(root).unwrap();
 }
 
-/// 원본 miSelectAllClick(0x4311c4)·bSelectAllClick(0x431450)·miInvertSelectionClick(0x43163c)·miSelectSameExt/NameClick·
-/// miRestoreLastSelClick(0x43742c)·CopySelection(스킨 테마).
+/// Original miSelectAllClick (0x4311c4), bSelectAllClick (0x431450), miInvertSelectionClick (0x43163c), miSelectSameExt/NameClick,
+/// miRestoreLastSelClick (0x43742c) and CopySelection (skin theme).
 #[test]
 fn original_selection_commands_follow_the_handlers() {
     let (root, ctx, mut app) = fixture("origsel", "ko");
@@ -976,25 +976,25 @@ fn original_selection_commands_follow_the_handlers() {
     let marked = |app: &App| { let mut v: Vec<String> = app.panes[0].selected.iter().map(|i| app.panes[0].entries[*i].name.clone()).collect(); v.sort(); v };
     let files = app.panes[0].entries.iter().filter(|e| !e.is_dir && !e.drive).count();
     let folder = index_of(&app, "folder1");
-    // 메뉴 모두 선택: 파일만 → 파일을 다 골랐으면 폴더까지 → 그 밖에는 지움.
+    // Menu select all: files only -> with all files selected, folders too -> otherwise clear.
     app.dispatch("selectAll", &ctx);
     assert_eq!((app.panes[0].selected.len(), app.panes[0].selected.contains(&folder)), (files, false));
     app.dispatch("selectAll", &ctx);
     assert!(app.panes[0].selected.contains(&folder), "all files marked: folders are added");
     app.dispatch("selectAll", &ctx);
     assert!(app.panes[0].selected.is_empty(), "everything marked: cleared");
-    // 수직 막대 단추: 다 골랐으면 지우고 파일만.
+    // Vertical bar button: if all are selected, clear and select files only.
     app.original_button_select_all(false);
     app.original_button_select_all(false);
     assert!(app.panes[0].selected.contains(&folder));
     app.original_button_select_all(false);
     assert_eq!((app.panes[0].selected.len(), app.panes[0].selected.contains(&folder)), (files, false));
-    // 반전: 파일만(폴더는 selectfolder일 때만).
+    // Invert: files only (folders only with selectfolder).
     app.panes[0].selected = [index_of(&app, "beta.txt")].into_iter().collect();
     app.dispatch("invertSelection", &ctx);
     assert!(!app.panes[0].selected.contains(&folder) && !app.panes[0].selected.contains(&index_of(&app, "beta.txt")));
     assert_eq!(app.panes[0].selected.len(), files - 1);
-    // 같은 확장자: 하나라도 안 골랐으면 모두 고르고(다른 표시는 그대로), 다 골랐으면 푼다.
+    // Same extension: mark all if any is unmarked (other marks stay), unmark when all are marked.
     app.panes[0].selected = [index_of(&app, "gamma.log")].into_iter().collect();
     app.panes[0].cursor = index_of(&app, "alpha.txt");
     app.dispatch("selectSameExt", &ctx);
@@ -1003,7 +1003,7 @@ fn original_selection_commands_follow_the_handlers() {
     assert_eq!(marked(&app), ["gamma.log"]);
     app.dispatch("selectSameName", &ctx);
     assert_eq!(marked(&app), ["ALPHA.md", "alpha.log", "alpha.txt", "gamma.log"]);
-    // 선택 복원은 파일 작업을 시작할 때 남긴 표시(CopySelection). 선택 명령은 남기지 않는다.
+    // Restore Selection uses the marks saved when a file job started (CopySelection). Selection commands do not save.
     assert!(app.last_selection[0].is_empty());
     app.dispatch("restoreSelection", &ctx);
     assert_eq!(marked(&app), ["ALPHA.md", "alpha.log", "alpha.txt", "gamma.log"], "nothing remembered: unchanged");
@@ -1013,7 +1013,7 @@ fn original_selection_commands_follow_the_handlers() {
     app.panes[0].selected.clear();
     app.dispatch("restoreSelection", &ctx);
     assert_eq!(marked(&app), ["ALPHA.md", "alpha.log", "alpha.txt", "gamma.log"]);
-    // 원본 miCalculateSelectedFolderSizeClick(0x4457d4): 고른 폴더의 크기를 목록 크기 칸으로 세고 표시를 지운다(요약 상자 없음).
+    // Original miCalculateSelectedFolderSizeClick (0x4457d4): counts the chosen folders' sizes into the list size cell and clears the marks (no summary box).
     let folder_path = app.panes[0].entries[folder].path.clone();
     app.panes[0].selected = [folder, index_of(&app, "beta.txt")].into_iter().collect();
     app.dispatch("calculateFolderSize", &ctx);
@@ -1031,8 +1031,8 @@ fn system_temp() -> Option<PathBuf> {
     Some(std::env::temp_dir())
 }
 
-/// 원본 miSortByClick(0x431c88): 같은 정렬 종류를 다시 고르면 내림차순 전환. miToTempClick(0x4330b0): GetTempPath + GetLongPathName,
-/// 실패하면 그대로.
+/// Original miSortByClick (0x431c88): choosing the same sort kind again toggles descending. miToTempClick (0x4330b0): GetTempPath + GetLongPathName,
+/// unchanged on failure.
 #[test]
 fn original_sort_and_temp_commands_follow_the_handlers() {
     let (root, ctx, mut app) = fixture("origsort", "ko");
@@ -1048,7 +1048,7 @@ fn original_sort_and_temp_commands_follow_the_handlers() {
     app.dispatch("sortNone", &ctx);
     app.dispatch("sortNone", &ctx);
     assert!(app.settings.flag("LeftSortDescending", false), "None never toggles");
-    // To Temp: 실패하면 움직이지 않는다(시험 기본 가짜는 None).
+    // To Temp: does not move on failure (the default test fake returns None).
     let before = app.panes[0].path.clone();
     app.dispatch("temp", &ctx);
     assert_eq!(app.panes[0].path, before);
@@ -1059,8 +1059,8 @@ fn original_sort_and_temp_commands_follow_the_handlers() {
     fs::remove_dir_all(root).unwrap();
 }
 
-/// 원본 DrawListItem(0x7d8f58)·TNXShellImageList.Draw(0x7b8ebc): 잘라낸 항목·숨김 속성은 아이콘을 ILD_BLEND50(흰색)으로 흐리게.
-/// (잘라내기 명령은 실제 클립보드를 쓰므로 여기서는 표시만 넣는다.)
+/// Original DrawListItem (0x7d8f58) and TNXShellImageList.Draw (0x7b8ebc): cut items and hidden items get icons faded with ILD_BLEND50 (white).
+/// (The cut command uses the real clipboard, so only the mark is set here.)
 #[test]
 fn original_ghosted_icons_follow_draw_list_item() {
     let (root, ctx, mut app) = fixture("origghost", "ko");
@@ -1076,7 +1076,7 @@ fn original_ghosted_icons_follow_draw_list_item() {
     let ghost = app.row_icon_for_skin(0, alpha, Some(icon.clone())).unwrap();
     assert_eq!(ghost.id(), app.ghost_icons[&icon.id()].id());
     assert_eq!(app.row_icon_for_skin(0, gamma, Some(icon.clone())).unwrap().id(), icon.id());
-    // 새 목록 = 새 항목: 잘라낸 표시가 없어진다.
+    // New list = new items: the cut marks are gone.
     app.refresh(0);
     wait_listing(&mut app, &ctx);
     assert!(app.panes[0].cut_marks.is_empty());

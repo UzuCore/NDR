@@ -1,12 +1,12 @@
-//! 원본 TfMsgBox 화면(fMsgBox DFM: 클라이언트 413x119, pTitle/lTitle, Image1, lSummary, lText, btn3/btn2/btn1).
-//! egui에는 OS 대화 상자가 없으므로 모달 영역 안에 DFM 좌표대로 그린다. 결과는 콜백으로 돌려준다.
+//! Original TfMsgBox screen (fMsgBox DFM: client 413x119, pTitle/lTitle, Image1, lSummary, lText, btn3/btn2/btn1).
+//! egui has no OS dialog, so it is drawn inside a modal area at the DFM coordinates. The result comes back through a callback.
 use super::*;
 use eframe::egui::{FontId, Rect, Sense, Vec2, pos2, text::LayoutJob, vec2};
 use ndr::msgbox as mb;
 
 pub(super) type MsgBoxCallback = Box<dyn FnOnce(&mut App, i32, &egui::Context)>;
 
-/// 그린 결과(테스트와 진단용).
+/// Drawn result (for tests and diagnostics).
 #[derive(Clone, Debug, Default)]
 pub(super) struct MsgBoxLayout {
     pub client: Vec2,
@@ -28,7 +28,7 @@ pub(super) struct MsgBox {
     pub serial: u64,
     pub focused: bool,
     pub layout: Option<MsgBoxLayout>,
-    /// USER32 MessageBoxW 모양: 제목 띠 없음, 캡션은 창 제목 줄.
+    /// USER32 MessageBoxW look: no title band, the caption is the window title bar.
     pub system: bool,
     on_result: Option<MsgBoxCallback>,
 }
@@ -36,7 +36,7 @@ pub(super) struct MsgBox {
 const FONT: f32 = 12.0;
 
 impl App {
-    /// FUN_0040bb38(title, summary, text, flags): 빈 제목은 제품 이름. 결과는 Win32 방식 ID로 콜백에 전달된다.
+    /// FUN_0040bb38(title, summary, text, flags): an empty title means the product name. The result is passed to the callback as a Win32-style ID.
     pub(super) fn message_box(
         &mut self,
         title: &str,
@@ -59,7 +59,7 @@ impl App {
         });
     }
 
-    /// 원본이 MessageBoxW(caption, text, flags)를 부르는 곳. 빈 캡션은 그대로 둔다(원본 NULL 캡션).
+    /// Where the original calls MessageBoxW(caption, text, flags). An empty caption stays empty (original NULL caption).
     pub(super) fn system_box(
         &mut self,
         caption: &str,
@@ -74,7 +74,7 @@ impl App {
         }
     }
 
-    /// 버튼의 ModalResult로 맨 앞 상자를 닫는다. ModalResult 0(원본이 처리하지 않는 종류의 DFM 버튼)은 닫지 않는다.
+    /// Closes the front box with the button's ModalResult. ModalResult 0 (DFM buttons of a kind the original does not handle) does not close.
     pub(super) fn answer_message_box(&mut self, modal_result: i32, ctx: &egui::Context) {
         if modal_result == 0 || self.msgboxes.is_empty() {
             return;
@@ -85,7 +85,7 @@ impl App {
         }
     }
 
-    /// [RES] 캡션(단축 문자 '&' 포함). 언어 항목이 없으면 원본 리터럴.
+    /// [RES] caption (with the '&' access key). The original literal when the language entry is missing.
     fn msgbox_caption(&self, spec: &mb::ButtonSpec) -> String {
         if spec.key.is_empty() {
             return String::new();
@@ -156,7 +156,7 @@ impl App {
             let visible = specs.iter().filter(|s| s.is_some()).count();
             let client = vec2(mb::client_width(&geometry, visible), geometry.client_height);
 
-            // 창 제목 줄(폼 Caption과 닫기 단추: 닫으면 mrCancel). 줄을 끌면 창이 움직인다.
+            // Window title bar (form Caption and close button: closing gives mrCancel). Dragging the bar moves the window.
             if super::modal_title_bar(ui, modal_id, &caption, Some(client.x)) {
                 pressed = Some(2);
             }
@@ -196,7 +196,7 @@ impl App {
                     job.append(&character.to_string(), 0.0, format);
                 }
                 let response = ui.put(button_rect, egui::Button::new(job).min_size(vec2(78.0, 25.0)));
-                // TfMsgBox: TabOrder의 첫 버튼. MessageBoxW 자리(system): MB_DEFBUTTON1..3.
+                // TfMsgBox: the first button in TabOrder. In place of MessageBoxW (system): MB_DEFBUTTON1..3.
                 let focus_slot = if system { mb::system_default_slot(&specs, flags) } else { mb::first_visible(&specs) };
                 if Some(slot) == focus_slot && !focused {
                     response.request_focus();
@@ -216,7 +216,7 @@ impl App {
             layout.captions = captions.clone();
         });
 
-        // 키보드: Esc는 Cancel 버튼, 포커스 없는 Enter는 Default 버튼, 단축 문자는 Alt 없이도(CM_DIALOGCHAR).
+        // Keyboard: Esc is the Cancel button, Enter without focus the Default button, access keys work without Alt (CM_DIALOGCHAR).
         if pressed.is_none() {
             let any_focused = layout.slot_ids.iter().flatten().any(|id| ctx.memory(|m| m.has_focus(*id)));
             ctx.input(|input| {

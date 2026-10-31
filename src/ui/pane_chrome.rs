@@ -1,12 +1,12 @@
-//! C# 패널 틀(MainWindow.xaml LeftPane): 머리 줄("왼쪽 패널", 선택 N개, 새 탭 +, ☰ 탭 목록, 트리), 탭 줄(UseTabs, 탭마다 ×,
-//! 오른쪽 단추 메뉴 = 새 탭/탭 닫기/다른 탭 모두 닫기), 아래 주소 표시줄(ShowAddressBar: 경로 조각 단추 + ⌄ 하위 폴더, … 직접 입력,
-//! ▼ 이동 기록, ↻ 새로 고침, PathClickMode), NavigateAddressAsync("압축!/접두" 포함).
-//! 차이(HANDOFF): 탭마다 따로 이동 기록을 두지 않는다(패널 하나의 기록). 압축 안 경로 조각에는 하위 폴더 ⌄가 없다.
-//! "트리" 단추는 C#의 패널별 폴더 트리 창 대신 Rust의 폴더 트리 칸을 켜고 끈다(폴더 트리 창은 보류).
+//! C# pane frame (MainWindow.xaml LeftPane): header row ("left pane", N selected, new tab +, ☰ tab list, tree), tab row (UseTabs, × per tab,
+//! right-click menu = new tab / close tab / close all other tabs), address bar below (ShowAddressBar: path segment buttons + ⌄ subfolders, ... type a path,
+//! ▼ history, ↻ refresh, PathClickMode), NavigateAddressAsync (including "archive!/prefix").
+//! Difference (HANDOFF): tabs do not keep separate histories (one history per pane). Path segments inside archives have no ⌄ subfolder button.
+//! The "tree" button toggles the Rust folder tree area instead of the C# per-pane folder tree window (the folder tree window is on hold).
 use super::*;
 use std::fs;
 
-/// Rust가 압축 패널로 여는 확장자(open_current와 같다).
+/// Extensions Rust opens as archive panes (same as open_current).
 fn is_archive(path: &Path) -> bool {
     let extension = path.extension().unwrap_or_default().to_string_lossy().to_ascii_lowercase();
     ["zip", "7z", "rar", "tar", "gz", "bz2", "xz", "iso", "cab", "lzh"].contains(&extension.as_str())
@@ -14,8 +14,8 @@ fn is_archive(path: &Path) -> bool {
 
 impl App {
 
-    /// 원본 pmTab(DFM): pmiCloseTab, pmiCloseAllTab, N02("-"), pmiNewTab. 닫기 두 항목은 C#처럼 탭이 둘 이상일 때만 켠다.
-    /// 원본 탭 줄(FUN_0048a534)은 포인터 아래에 탭이 없으면(None) 닫기 두 항목을 끈다.
+    /// Original pmTab (DFM): pmiCloseTab, pmiCloseAllTab, N02 ("-"), pmiNewTab. The two close items are enabled only with two or more tabs, like C#.
+    /// The original tab row (FUN_0048a534) disables the two close items when no tab is under the pointer (None).
     pub(super) fn tab_actions(&self, ui: &mut egui::Ui, index: usize, tab: Option<usize>) -> Option<String> {
         let menu = |key: &str, fallback: &str| self.language_pack.text(&format!("formMain.Menu.{key}"), fallback);
         let ko = self.language == "ko";
@@ -38,14 +38,14 @@ impl App {
         chosen
     }
 
-    /// 탭 명령(C#의 탭마다 PaneState: 탭마다 따로 뒤로/앞으로 기록을 둔다).
+    /// Tab commands (C# PaneState per tab: each tab keeps its own back/forward history).
     pub(super) fn tab_command(&mut self, index: usize, command: &str, ctx: &egui::Context) {
         let number = |prefix: &str| command.strip_prefix(prefix).and_then(|n| n.parse::<usize>().ok());
         if let Some(t) = number("tab:") {
             return self.select_tab(index, t);
         }
         if let Some(t) = number("newTabFrom:") {
-            // C# AddTab(side, state): 그 탭의 위치를 가진 새 탭(기록은 비어 있다).
+            // C# AddTab(side, state): a new tab with that tab's location (empty history).
             let path = self.new_tab_location(index, t);
             let pane = &mut self.panes[index];
             pane.tab_history.resize(pane.tabs.len(), Default::default());
@@ -55,10 +55,10 @@ impl App {
             return self.select_tab(index, last);
         }
         if let Some(t) = number("closeTab:") {
-            // 원본 pmiCloseTabClick(0x442578) → FUN_00442414, × 단추 TNXTabSet.CloseTabClick(0x7d17c8): 탭을 지우면 TabsChanged(0x7d161c)가
-            // TabIndex를 같은 번호로 두고 [0, 개수 − 1]로 자른다. 그래서 지금 탭보다 앞의 탭을 닫으면 표시가 다음 탭으로 밀리고,
-            // 메뉴로 닫으면 그 탭으로 바뀌며(OnChange), × 단추로 닫으면 표시만 옮겨지고 패널은 그대로였다(표시와 패널이 어긋남).
-            // 고친 것: NDR은 앞의 탭을 닫아도 지금 탭을 그대로 둔다. 지금 탭을 닫으면 원본처럼 같은 번호(없으면 마지막) 탭으로 간다.
+            // Original pmiCloseTabClick (0x442578) -> FUN_00442414, the × button TNXTabSet.CloseTabClick (0x7d17c8): after deleting a tab, TabsChanged (0x7d161c)
+            // keeps TabIndex at the same number clamped to [0, count - 1]. So closing a tab before the current one shifted the mark to the next tab;
+            // closing from the menu switched to that tab (OnChange), while closing with × only moved the mark and left the pane as is (mark and pane out of sync).
+            // Fixed: NDR keeps the current tab when an earlier tab closes. Closing the current tab goes to the tab with the same number (or the last) like the original.
             let pane = &mut self.panes[index];
             if pane.tabs.len() <= 1 || t >= pane.tabs.len() {
                 return;
@@ -66,7 +66,7 @@ impl App {
             pane.tab_history.resize(pane.tabs.len(), Default::default());
             let selected = pane.tab == t;
             if !selected {
-                // 지금 탭의 기록은 그대로 두고 닫는 탭만 뺀다.
+                // Keep the current tab's history and remove only the closed tab.
                 pane.tabs.remove(t);
                 pane.tab_history.remove(t);
                 if pane.tab > t {
@@ -103,10 +103,10 @@ impl App {
         self.dispatch(command, ctx);
     }
 
-    /// 원본 mipOpenInNewTabClick(0x4453b4): 탭 사용(+0xf3)이 켜져 있고 로컬 패널(FUN_00481948 == 0)이면, 초점 항목이 ".."이면 지금 폴더의
-    /// 상위(PathRemoveFileSpecW), 아니면 지금 폴더\이름으로 탭("%s|%s")을 끝에 더하고 그 탭으로 바꾼다(SetTabIndex → FUN_00489d20).
-    /// 탭 사용이 꺼져 있거나 압축·FTP면 아무것도 하지 않는다. 고친 것: 전에는 새 탭을 만든 뒤 항목을 열어서, 탭 사용이 꺼져 있으면
-    /// 지금 탭에서 열었고 파일이면 실행했다(원본은 파일이면 그 폴더로 가서 그 파일에 커서).
+    /// Original mipOpenInNewTabClick (0x4453b4): with tabs on (+0xf3) and a local pane (FUN_00481948 == 0), appends a tab ("%s|%s") for the parent of the current folder
+    /// (PathRemoveFileSpecW) when the focused item is "..", otherwise current folder\name, and switches to it (SetTabIndex -> FUN_00489d20).
+    /// Nothing happens with tabs off or in archive/FTP panes. Fixed: previously it created the tab and then opened the item, so with tabs off it
+    /// opened in the current tab, and files were run (the original goes to the file's folder and puts the cursor on it).
     pub(super) fn open_in_new_tab(&mut self, index: usize) {
         if !self.settings.flag("UseTabs", true) {
             return;
@@ -125,7 +125,7 @@ impl App {
         self.select_tab(index, last);
     }
 
-    /// 새 탭 위치. 원본 miNewTabClick(0x4420f4)·pmiNewTabClick(0x44229c)은 FTP 모드(2)에서 "c:\\\tc:\\"(0x8ede2a) 탭을 만든다(그 탭으로 가면 FTP가 끊긴다).
+    /// Location of a new tab. Original miNewTabClick (0x4420f4) and pmiNewTabClick (0x44229c) create a "c:\\\tc:\\" (0x8ede2a) tab in FTP mode (2) (switching to it disconnects FTP).
     pub(super) fn new_tab_location(&self, index: usize, tab: usize) -> PathBuf {
         let pane = &self.panes[index];
         if pane.remote.is_some() {
@@ -149,8 +149,8 @@ impl App {
         self.show_tab(index);
     }
 
-    /// 고른 탭의 위치를 연다(기록에 넣지 않는다). 원본 FUN_00489d20(탭 바꿈): 위치가 있으면 폴더로(파일이면 그 폴더로 가서 그 파일에
-    /// 커서), 없으면 있는 상위 폴더로, 그것도 없으면 그 탭을 지운다. 고친 것: 전에는 없는 위치를 그대로 열려 했고, 같은 위치를 두 번 읽었다.
+    /// Opens the chosen tab's location (without adding to history). Original FUN_00489d20 (tab switch): an existing location goes to the folder (for a file, its folder with the cursor
+    /// on the file); otherwise an existing parent; if none exists, the tab is removed. Fixed: previously it tried to open missing locations as is and read the same location twice.
     fn show_tab(&mut self, index: usize) {
         let pane = &mut self.panes[index];
         let Some(path) = pane.tabs.get(pane.tab).cloned() else { return };
@@ -183,7 +183,7 @@ impl App {
         }
     }
 
-    /// C# 주소 표시줄(ShowAddressBar).
+    /// C# address bar (ShowAddressBar).
     pub(super) fn address_bar(&mut self, ui: &mut egui::Ui, index: usize, ctx: &egui::Context) {
         if !self.settings.flag("ShowAddressBar", true) {
             return;
@@ -235,12 +235,12 @@ impl App {
             });
         });
         ui.add_space(4.0);
-        // 원본 pmAddressBar: 주소 표시줄(경로 조각 위 포함)을 오른쪽 단추로 누르면 주소 복사·편집과 즐겨찾기 메뉴.
+        // Original pmAddressBar: right-clicking the address bar (including over path segments) shows copy/edit address and the favorites menu.
         let right_click = ui.input(|i| i.pointer.secondary_clicked().then(|| i.pointer.interact_pos()).flatten()).filter(|p| rect.contains(*p));
         if let Some(position) = right_click.filter(|_| !self.panes[index].address_editing) {
             return self.show_address_bar_menu(index, position);
         }
-        // PathClickMode 1: 단추 밖을 누르면, 2: 어디를 눌러도(조각 단추 포함) 즐겨찾기 메뉴.
+        // PathClickMode 1: clicking outside the buttons, 2: clicking anywhere (including segment buttons) shows the favorites menu.
         let favorites = match (mode, &action) {
             (2, Some(AddressAction::Navigate(_))) => true,
             (1 | 2, None) => background.clicked(),
@@ -272,7 +272,7 @@ impl App {
         pane.address = pane.path.to_string_lossy().into_owned();
     }
 
-    /// C# RenderPathBreadcrumb: 압축이면 "압축 이름 › 폴더…", 아니면 "루트 › 폴더…"(지금 폴더는 굵게). 로컬 조각마다 ⌄(하위 폴더, 드라이브 루트는 드라이브 목록).
+    /// C# RenderPathBreadcrumb: "archive name › folder..." for archives, otherwise "root › folder..." (current folder bold). Each local segment has ⌄ (subfolders, the drive list at a drive root).
     fn crumbs(&mut self, ui: &mut egui::Ui, index: usize) -> Option<AddressAction> {
         let mut chosen = None;
         let current = ui.visuals().strong_text_color();
@@ -285,7 +285,7 @@ impl App {
             ui.add(egui::Button::new(if is_current { text.strong().family(egui::FontFamily::Name(super::BOLD_FONT_FAMILY.into())) } else { text }).frame(false)).clicked()
         };
         if let Some(remote) = self.panes[index].remote.clone() {
-            // 원본 FUN_0048aa30(FTP 모드): "/%s%s" 경로. 호스트 조각 = 루트.
+            // Original FUN_0048aa30 (FTP mode): "/%s%s" path. The host segment = root.
             let parts: Vec<&str> = remote.path.split('/').filter(|p| !p.is_empty()).collect();
             if crumb(ui, &format!("ftp://{}", remote.host), parts.is_empty()) {
                 chosen = Some(AddressAction::Navigate(CrumbTarget::Remote("/".into())));
@@ -304,8 +304,8 @@ impl App {
         if let Some(location) = self.panes[index].archive.clone() {
             let parts: Vec<&str> = location.prefix.split('/').filter(|p| !p.is_empty()).collect();
             let name = location.file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            // 원본 FUN_0048aa30(압축 모드): TNXPathLabel.SetPath(PathCombine(압축 파일, 안 경로)) — 압축 파일이 있는 폴더부터 보인다.
-            // 그 폴더 조각을 누르면 압축에서 나와 그 폴더로 간다.
+            // Original FUN_0048aa30 (archive mode): TNXPathLabel.SetPath(PathCombine(archive file, inner path)), shown from the folder containing the archive.
+            // Clicking that folder segment leaves the archive and goes to that folder.
             let full = std::path::absolute(&location.file).unwrap_or_else(|_| location.file.clone());
             let mut folders: Vec<PathBuf> = full.parent().map(|p| p.ancestors().map(Path::to_path_buf).collect()).unwrap_or_default();
             folders.reverse();
@@ -330,7 +330,7 @@ impl App {
             }
             return chosen;
         }
-        // C#: "::drives::"는 "내 PC" 조각 하나(누르면 다시 읽기).
+        // C#: "::drives::" is one "My PC" segment (clicking rereads).
         if super::panes::is_drives(&self.panes[index].path) {
             let label = self.language_pack.text("RES.MYCOMPUTER", "My Computer");
             if crumb(ui, &label, true) {
@@ -372,7 +372,7 @@ impl App {
         chosen
     }
 
-    /// C# ShowLocalPathMenu: 하위 폴더(숨김은 숨김 표시일 때만) 또는 드라이브 루트면 드라이브 목록("이름 (C:)"). 열려 있는 동안 한 번만 읽는다.
+    /// C# ShowLocalPathMenu: subfolders (hidden ones only when hidden items show), or the drive list ("name (C:)") at a drive root. Read once while open.
     pub(super) fn crumb_children(&mut self, index: usize, path: &Path, drives: bool) -> Vec<(PathBuf, String)> {
         let key = (path.to_path_buf(), drives);
         if let Some(cached) = self.crumb_cache.get(&key) {
@@ -405,8 +405,8 @@ impl App {
                         .collect::<Vec<_>>()
                 })
                 .map(|mut children| {
-                    // 원본 FUN_0048c548은 FindFirstFileW/FindNextFileW 차례(NTFS = 이름의 대문자 순). 고친 것: read_dir 차례는
-                    // 정해져 있지 않아 이름 순이 아닐 수 있었다.
+                    // Original FUN_0048c548 uses FindFirstFileW/FindNextFileW order (NTFS = upper-cased name order). Fixed: read_dir order
+                    // is unspecified and could differ from name order.
                     children.sort_by(|a, b| a.1.to_uppercase().cmp(&b.1.to_uppercase()));
                     children
                 })
@@ -442,9 +442,9 @@ impl App {
         }
     }
 
-    /// 원본 주소 칸 Enter(FUN_0048cb30): 글이 "http://"로 시작하면 기본 프로그램으로 열고(ShellExecute "open"), "ftp://"면 그 패널의
-    /// FTP 빠른 연결(FUN_0043e9f8 → TfFTPQuickConnect, 호스트 칸 = 글), 그 밖은 그 폴더로 간다(FUN_00459968). 대소문자는 가리지 않는다.
-    /// 고친 것: 원본은 "https://"를 폴더 이름으로 보아 갈 수 없다고 했다. 이제 "http://"처럼 연다.
+    /// Original address field Enter (FUN_0048cb30): text starting with "http://" opens in the default program (ShellExecute "open"), "ftp://" starts that pane's
+    /// FTP quick connect (FUN_0043e9f8 -> TfFTPQuickConnect, host field = text), anything else goes to that folder (FUN_00459968). Case-insensitive.
+    /// Fixed: the original treated "https://" as a folder name and could not go there. Now it opens like "http://".
     pub(super) fn original_address_enter(&mut self, index: usize, text: &str) {
         let value = text.trim();
         let lower = value.to_lowercase();
@@ -461,8 +461,8 @@ impl App {
         self.navigate_address(index, value);
     }
 
-    /// C# NavigateAddressAsync + ResolveLocalNavigationPath: 환경 변수, "~", 상대 경로(지금 폴더 기준), "압축!/접두".
-    /// 없는 폴더는 "폴더 이동" 경고.
+    /// C# NavigateAddressAsync + ResolveLocalNavigationPath: environment variables, "~", relative paths (from the current folder), "archive!/prefix".
+    /// A missing folder warns "go to folder".
     pub(super) fn navigate_address(&mut self, index: usize, address: &str) {
         let value = native::expand_environment(address.trim().trim_matches('"'));
         let base = match &self.panes[index].archive {
@@ -493,7 +493,7 @@ impl App {
         }
         let path = resolve(&value);
         let ko = self.language == "ko";
-        // C# NavigateLocalAsync: UNC 공유가 자격 증명을 요구하면 Windows 연결 창, 취소면 그만, 실패면 오류.
+        // C# NavigateLocalAsync: a UNC share requiring credentials shows the Windows connect window; cancel stops, failure reports an error.
         if !path.is_dir() {
             let code = (self.system.network_path_error)(&path);
             if matches!(code, 5 | 65 | 86 | 1326) {
@@ -518,7 +518,7 @@ impl App {
     }
 }
 
-/// C# TabName: 폴더 이름(없으면 경로). "::drives::"는 원본 MYCOMPUTER 글.
+/// C# TabName: folder name (the path when none). "::drives::" uses the original MYCOMPUTER text.
 pub(super) fn tab_name(path: &Path, my_computer: &str) -> String {
     if super::panes::is_drives(path) {
         return my_computer.to_owned();
@@ -529,7 +529,7 @@ pub(super) fn tab_name(path: &Path, my_computer: &str) -> String {
 pub(super) enum CrumbTarget {
     Local(PathBuf),
     Archive(String),
-    /// 패널 FTP 모드의 원격 폴더.
+    /// Remote folder of the pane FTP mode.
     Remote(String),
 }
 
@@ -543,13 +543,13 @@ enum AddressAction {
 }
 
 impl App {
-    /// C# BuildContextMenu(목록 오른쪽 단추 메뉴): 메뉴 글은 [formMain] Menu.mip…/mi… 키, 열릴 때 C#과 같은 조건으로 켜고 끈다.
+    /// C# BuildContextMenu (list right-click menu): menu texts use [formMain] Menu.mip.../mi... keys, enabled and disabled on open by the same conditions as C#.
     pub(super) fn list_context_menu(&self, ui: &mut egui::Ui, index: usize) -> Option<&'static str> {
         let items = self.list_menu_items(index);
         self.draw_list_menu(ui, items)
     }
 
-    /// pmMain 항목(글, 명령, 켜짐). None은 구분선(맨 앞·맨 뒤·겹친 구분선은 뺐다).
+    /// pmMain items (text, command, enabled). None is a separator (leading, trailing and doubled separators removed).
     pub(super) fn list_menu_items(&self, index: usize) -> Vec<Option<(String, &'static str, bool)>> {
         let pane = &self.panes[index];
         let rows: Vec<usize> = if pane.loading {
@@ -561,32 +561,32 @@ impl App {
         };
         let local = pane.archive.is_none();
         let has = !rows.is_empty();
-        // 원본 pmMainPopup(0x437f54): 초점 항목이 파일(+0x3c == 3)이면 mipOpenWith·mipView·mipEdit를 보이고, 로컬 패널(종류 0)에서
-        // 초점 항목이 폴더(1)일 때만 mipOpenInNewTab을 보인다. mipArcExtractAuto는 로컬 패널이면 켠다.
+        // Original pmMainPopup (0x437f54): when the focused item is a file (+0x3c == 3) shows mipOpenWith, mipView and mipEdit; shows mipOpenInNewTab only on a local pane (kind 0)
+        // when the focused item is a folder (1). mipArcExtractAuto is enabled on local panes.
         let focused = (!pane.loading).then(|| pane.entries.get(pane.cursor)).flatten();
         let focused_file = focused.is_some_and(|e| !e.is_dir);
-        // 원본 0x438003: mipOpenInNewTab.Visible = 패널 종류 0(로컬) && 초점 항목 종류 1(폴더). 탭 사용 설정과는 상관없다(누르면 처리기가 본다).
-        // 내 PC 보기의 드라이브 줄은 원본 종류 4라 보이지 않는다.
+        // Original 0x438003: mipOpenInNewTab.Visible = pane kind 0 (local) && focused item kind 1 (folder). Independent of the tabs setting (the handler checks it on click).
+        // Drive rows of the My PC view are original kind 4, so it is not shown.
         let new_tab = local && pane.remote.is_none() && focused.is_some_and(|e| e.is_dir && !e.drive) && !super::panes::is_drives(&pane.path);
-        // 원본 pmMainPopup(0x437f54): mipEditPaste.Enabled = IsClipboardFormatAvailable(CF_HDROP), mipArcExtractAuto.Enabled =
-        // 로컬 패널. 다른 항목은 늘 켜져 있다(메뉴는 로컬 패널에서 항목을 눌렀을 때만 뜬다, `list_menu_kind`).
-        // 고친 것: 전에는 메뉴가 열린 동안 그림마다 클립보드를 열어 파일 목록을 읽었다(다른 프로그램의 클립보드 쓰기를 막고,
-        // 같은 때 클립보드를 바꾸면 읽던 자료가 풀렸다). 원본처럼 형식이 있는지만 본다.
+        // Original pmMainPopup (0x437f54): mipEditPaste.Enabled = IsClipboardFormatAvailable(CF_HDROP), mipArcExtractAuto.Enabled =
+        // local pane. Other items are always enabled (the menu appears only when an item is clicked on a local pane, `list_menu_kind`).
+        // Fixed: previously every frame while the menu was open opened the clipboard and read the file list (blocking other programs' clipboard writes,
+        // and a clipboard change at the same time released the data being read). Like the original it only checks whether the format exists.
         let paste = local && (self.clipboard.is_some() || native::clipboard_has_files());
         let auto_extract = local;
-        // 원본 mipExplorerMenu(+0x770)는 pmMainPopup이 건드리지 않아 늘 보인다.
+        // Original mipExplorerMenu (+0x770) is untouched by pmMainPopup, so it is always visible.
         let explorer = local && has;
-        // 원래 글(& 포함): 그리기 때 &를 빼고, 메뉴가 열린 동안 친 글자(menu_letter)와 같은 접근 글자의 항목을 고른다.
+        // Original text (with &): & is removed when drawing, and a letter typed while the menu is open (menu_letter) picks the item with that access letter.
         let text = |key: &str, fallback: &str| self.language_pack.raw(&format!("formMain.Menu.{key}")).unwrap_or_else(|| fallback.to_owned());
         type Item<'a> = Option<(String, &'static str, bool)>;
-        // 원본 pmMain(docs/original-menus.txt) 차례: 탐색기 메뉴 | 새 탭에서 열기 | 다른 프로그램으로 열기·보기·편집 | 복사·잘라내기·붙여넣기 |
-        // 복사 위치·이동 위치 | 삭제·이름 바꾸기·속성/시간·설명 | 압축 추가·자동 풀기 | 속성.
+        // Original pmMain order (docs/original-menus.txt): Explorer menu | open in new tab | open with, view, edit | copy, cut, paste |
+        // copy to, move to | delete, rename, attributes/time, description | add to archive, auto extract | properties.
         let mut items: Vec<Item> = Vec::new();
         if explorer {
             items.push(Some((text("mipExplorerMenu", "탐색기 메뉴"), "explorerMenu", true)));
             items.push(None);
         }
-        // 이 목록에서 None은 구분선이므로 새 탭 항목은 있을 때만 넣는다.
+        // None is a separator in this list, so the new tab item is added only when present.
         if new_tab {
             items.push(Some((text("mipOpenInNewTab", "새 탭에서 열기"), "openInNewTab", true)));
         }
@@ -621,7 +621,7 @@ impl App {
             Some((text("mipProperties", "속성"), "properties", local && has)),
         ]);
 
-        // VCL 메뉴(AutoLineReduction = maAutomatic)처럼 맨 앞·맨 뒤·겹친 구분선은 그리지 않는다.
+        // Like VCL menus (AutoLineReduction = maAutomatic), leading, trailing and doubled separators are not drawn.
         let mut reduced: Vec<Item> = Vec::new();
         for item in items {
             if item.is_none() && reduced.last().is_none_or(Option::is_none) {
@@ -658,18 +658,18 @@ impl App {
         chosen
     }
 
-    /// C# QueueFolderSizeCalculation: Left/RightAutoFolderSize(C# 판에만 있음, 처음 값 꺼짐)이고 로컬 폴더 줄이면 크기를 따로(동시에 둘까지) 센다.
-    /// 세는 동안 "…", 끝나면 크기(읽지 못한 곳이 있으면 "≥ 크기"). 새 목록이 오면 멈춘다.
+    /// C# QueueFolderSizeCalculation: with Left/RightAutoFolderSize (C# only, default off) on a local folder row, counts the size separately (up to two at once).
+    /// Shows "..." while counting and the size when done ("≥ size" when some parts were unreadable). Stops when a new list arrives.
     pub(super) fn queue_folder_size(&mut self, index: usize, row: usize) {
-        // 고친 것: 원본 alwaysshowsize("항상 파일크기 보기", Left/RightAlwaysShowFolderSize)는 자동 목록에 크기 칸을 늘 두는 것뿐인데(UpdateDisplayAuto 0x390),
-        // C# 판처럼 그 값으로 모든 폴더 크기를 세었다. 폴더 크기 자동 세기는 따로 둔다.
+        // Fixed: original alwaysshowsize ("always show file size", Left/RightAlwaysShowFolderSize) only keeps a size cell in the Auto list (UpdateDisplayAuto 0x390),
+        // but like the C# version it used that value to count every folder size. Automatic folder size counting is now separate.
         if !self.settings.flag(if index == 0 { "LeftAutoFolderSize" } else { "RightAutoFolderSize" }, false) {
             return;
         }
         self.enqueue_folder_size(index, row);
     }
 
-    /// 폴더 줄의 크기를 따로 센다(자동 표시와 원본 miCalculateSelectedFolderSizeClick이 함께 쓴다).
+    /// Counts a folder row's size separately (shared by the automatic display and the original miCalculateSelectedFolderSizeClick).
     pub(super) fn enqueue_folder_size(&mut self, index: usize, row: usize) {
         let pane = &mut self.panes[index];
         if pane.archive.is_some() || pane.remote.is_some() {
@@ -730,7 +730,7 @@ fn folder_size_worker(shared: FolderSizeQueue, tx: Sender<AsyncResult>) {
             continue;
         }
         let Some(summary) = ndr::tools::folder_size_summary(std::slice::from_ref(&job.path), &job.cancel) else { continue };
-        // 원본 DrawListItem: 폴더 크기(+0x60 != -1)도 SizeToStr로 그린다.
+        // Original DrawListItem: folder sizes (+0x60 != -1) are drawn with SizeToStr too.
         let size = ndr::parity::size_to_str(summary.total_bytes, &job.unit, job.thousands);
         let text = if summary.errors.is_empty() { size } else { format!("≥ {size}") };
         if tx.send(AsyncResult::FolderSizeRow { pane: job.pane, generation: job.generation, path: job.path, text, bytes: summary.total_bytes }).is_err() {

@@ -1,16 +1,16 @@
-//! C# MainWindow.QuickSearch.cs의 파일 목록 빠른 찾기(패널마다 입력 버퍼)와 빠른 필터(QuickFilterAsync, ShowFilterAsync).
-//! 폴더 트리 빠른 찾기는 폴더 트리 이식(보류)과 함께 남긴다.
+//! File list quick search (input buffer per pane) and quick filter (QuickFilterAsync, ShowFilterAsync) of C# MainWindow.QuickSearch.cs.
+//! Folder tree quick search stays with the folder tree port (on hold).
 use super::*;
 
 impl App {
-    /// C# QuickFilterAsync: 검색 칸이나 도구 모음 빠른 찾기 칸에서 Enter.
+    /// C# QuickFilterAsync: Enter in the search field or the toolbar quick search field.
     pub(super) fn quick_filter(&mut self, pane: usize, text: &str) {
         self.panes[pane].filter = ndr::parity::quick_filter_pattern(text);
         self.refresh(pane);
     }
 
-    /// C# ShowFilterAsync = 원본 miFilterCustomClick(0x441504): TfGetText(TITLE_FILTER, MSG_FILTER, 현재 필터),
-    /// 앞뒤 공백을 떼어 적용하고 새로 읽는다. 상태 줄 알림은 C#.
+    /// C# ShowFilterAsync = original miFilterCustomClick (0x441504): TfGetText(TITLE_FILTER, MSG_FILTER, current filter),
+    /// applied with leading and trailing spaces trimmed, then reread. The status line notice is from C#.
     pub(super) fn show_filter_prompt(&mut self) {
         let pane = self.active;
         let title = self.language_pack.text("RES.TITLE_FILTER", "Filter");
@@ -25,14 +25,14 @@ impl App {
         });
     }
 
-    /// 스킨 테마의 빠른 찾기(원본 TNXCustomFileListView). 처리했으면 true.
-    /// - 찾는 글(+0x3e0)은 시간이 지나도 남고, 커서를 다른 길(화살표·Home/End·쪽 넘김·누르기)로 옮기거나 목록이 바뀌면 지운다
-    ///   (원본 ArrowKey 0x7d69dc·MouseDown 0x7d63c8·FileListChanged 0x7d79c8).
-    /// - 글자는 WMChar(0x7d5a18) 규칙으로 거르고, Backspace는 찾는 글이 있을 때만 받는다(그 밖에는 원본 FormShortCut 0x42b36c처럼 단축키).
+    /// Quick search of the skin theme (original TNXCustomFileListView). True when handled.
+    /// - The search text (+0x3e0) stays over time and is cleared when the cursor moves another way (arrows, Home/End, paging, clicks) or the list changes
+    ///   (original ArrowKey 0x7d69dc, MouseDown 0x7d63c8, FileListChanged 0x7d79c8).
+    /// - Characters are filtered by the WMChar (0x7d5a18) rules, and Backspace is taken only while there is search text (otherwise a shortcut like original FormShortCut 0x42b36c).
     pub(super) fn original_typed_search(&mut self, ctx: &egui::Context) -> bool {
         for pane in 0..2 {
             let cursor = self.panes[pane].cursor;
-            // 원본 MouseDown(0x7d63c8)은 항목을 누를 때마다(같은 항목이어도) 찾는 글을 지운다.
+            // Original MouseDown (0x7d63c8) clears the search text on every item click (even the same item).
             let pressed = std::mem::take(&mut self.panes[pane].item_pressed);
             let search = &mut self.typed_search[pane];
             if !search.query.is_empty() && (pressed || search.cursor != Some(cursor)) {
@@ -41,7 +41,7 @@ impl App {
         }
         let pane = self.active;
         let has_text = !self.typed_search[pane].query.is_empty();
-        // 원본 목록 창은 IME를 받는다: 목록에 글쇠가 갈 때 IME를 켜 두고(조합 창은 패널 왼쪽 위), 조합 글로 찾는다.
+        // The original list window accepts IME input: the IME stays on while keys go to the list (composition window at the pane top left) and the composition text searches.
         let rect = self.pane_rects[pane];
         ctx.output_mut(|o| o.ime = Some(egui::output::IMEOutput { rect, cursor_rect: egui::Rect::from_min_size(rect.min, egui::vec2(1.0, 16.0)) }));
         let ime: Vec<egui::ImeEvent> = ctx.input(|input| input.events.iter().filter_map(|e| if let egui::Event::Ime(ev) = e { Some(ev.clone()) } else { None }).collect());
@@ -70,8 +70,8 @@ impl App {
         handled
     }
 
-    /// 원본 WMChar의 한 글자 처리와 QuickSearch(0x7d5f9c): 찾는 글에 붙여(Backspace는 끝 글자를 지우고) 지금 항목부터 찾고,
-    /// 못 찾고 새 글자가 찾는 글보다 짧으면 그 글자만으로 다음 항목부터 다시 찾는다. 그래도 없으면 찾는 글을 비운다.
+    /// One character of original WMChar plus QuickSearch (0x7d5f9c): appends to the search text (Backspace removes the last character) and searches from the current item;
+    /// if not found and the new character is shorter than the search text, searches again from the next item with that character alone. If still not found, the search text is cleared.
     fn original_quick_search_step(&mut self, pane: usize, key: OriginalSearchKey) {
         let mut text = std::mem::take(&mut self.typed_search[pane].query);
         let typed = match key {
@@ -96,8 +96,8 @@ impl App {
         search.cursor = Some(cursor);
     }
 
-    /// 원본 QuickSearch(0x7d5f9c): 찾는 글로 지금 항목부터 찾고, 못 찾고 친 글자가 찾는 글보다 짧으면 그 글자만으로
-    /// 다음 항목부터 다시 찾는다. 그래도 없으면 찾는 글을 비운다.
+    /// Original QuickSearch (0x7d5f9c): searches from the current item with the search text; if not found and the typed character is shorter than the search text, searches
+    /// again from the next item with that character alone. If still not found, the search text is cleared.
     fn original_search_text(&mut self, pane: usize, mut text: String, typed: String) {
         let names: Vec<String> = self.panes[pane].entries.iter().map(|e| e.name.clone()).collect();
         let cursor = self.panes[pane].cursor;
@@ -119,9 +119,9 @@ impl App {
         search.cursor = Some(cursor);
     }
 
-    /// 원본 WMIMEComposition(0x7d584c): 조합을 시작하면 찾는 글 끝에 조합 글자를 붙이고, 조합이 바뀌면 끝 글자를 바꾸고,
-    /// 조합 글이 비면 끝 글자를 지운다. 결과 글(GCS_RESULTSTR)이 오면 조합을 끝낸다. 메시지마다 QuickSearch(조합 글자).
-    /// egui: Preedit = 조합 중, Commit = 결과, Disabled(결과 없이) = 조합 글이 빈 것.
+    /// Original WMIMEComposition (0x7d584c): starting a composition appends the composing character to the search text, a changed composition replaces the last character,
+    /// and an empty composition removes it. The result text (GCS_RESULTSTR) ends the composition. Each message runs QuickSearch(composing character).
+    /// egui: Preedit = composing, Commit = result, Disabled (without result) = empty composition.
     pub(super) fn original_ime_search(&mut self, pane: usize, events: &[egui::ImeEvent]) -> bool {
         let committed = events.iter().any(|e| matches!(e, egui::ImeEvent::Commit(_)));
         let mut handled = false;
@@ -144,8 +144,8 @@ impl App {
             handled = true;
             let typed: String = composition.chars().last().map(String::from).unwrap_or_default();
             if !result {
-                // 고친 것: 원본은 조합 중간 글자(예: "방"을 치는 동안의 "바")로 찾지 못하면 찾는 글을 비워 한글 찾기가 끊긴다.
-                // NDR은 조합 중에는 찾지 못해도 글을 남기고 커서를 그대로 두며, 결과 글이 오면 원본 규칙대로 찾는다.
+                // Fixed: the original cleared the search text when an intermediate composition character (for example "바" while typing "방") found nothing, which broke Korean search.
+                // NDR keeps the text and the cursor during composition even without a match, and searches by the original rules when the result arrives.
                 let names: Vec<String> = self.panes[pane].entries.iter().map(|e| e.name.clone()).collect();
                 if let Some(row) = original_quick_search(&names, self.panes[pane].cursor, &text, true) {
                     self.panes[pane].cursor = row;
@@ -162,8 +162,8 @@ impl App {
         handled
     }
 
-    /// 원본 tbMainMenuAdvancedCustomDraw(0x430e74): 지금 패널의 찾는 글이 있으면 메뉴 줄 오른쪽 끝(오른쪽 − 글 너비 − 10)에
-    /// 대문자(FUN_00514870, a~z만)로, 세로 가운데, 스킨 [Menu] mtext 색으로 그린다.
+    /// Original tbMainMenuAdvancedCustomDraw (0x430e74): when the current pane has search text, draws it at the right end of the menu bar (right - text width - 10)
+    /// in upper case (FUN_00514870, a-z only), vertically centered, in the skin [Menu] mtext color.
     pub(super) fn paint_original_search_text(&mut self, ui: &egui::Ui) {
         let Some(skin) = self.current_skin() else { return };
         let text = &self.typed_search[self.active].query;
@@ -179,17 +179,17 @@ impl App {
     }
 }
 
-/// 원본 WMChar 글자 거르기의 결과.
+/// Result of the original WMChar character filter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum OriginalSearchKey {
-    /// '!'(0x21): 찾는 글을 비운다(SetSearchText("")).
+    /// '!' (0x21): clears the search text (SetSearchText("")).
     Clear,
     Back,
     Char(char),
 }
 
-/// 원본 WMChar(0x7d5a18): Caps Lock이 꺼져 있으면 대문자 A~Z는 받지 않고, 찾는 글이 비었으면 Backspace·'.'도 받지 않는다.
-/// 받는 글자는 '.'·Backspace와 0x21~0x7e 가운데 \ / : * ? 가 아닌 것(FUN_007d59bc). 공백과 한글 등은 받지 않는다.
+/// Original WMChar (0x7d5a18): with Caps Lock off, upper case A-Z is not taken; with empty search text, Backspace and '.' are not taken either.
+/// Accepted characters are '.', Backspace, and 0x21-0x7e except \ / : * ? (FUN_007d59bc). Spaces, Korean and so on are not taken.
 pub(super) fn original_search_key(c: char, caps_lock: bool, text_empty: bool) -> Option<OriginalSearchKey> {
     let code = c as u32;
     if !caps_lock && c.is_ascii_uppercase() {
@@ -208,9 +208,9 @@ pub(super) fn original_search_key(c: char, caps_lock: bool, text_empty: bool) ->
     Some(if c == '\u{8}' { OriginalSearchKey::Back } else { OriginalSearchKey::Char(c) })
 }
 
-/// 원본 QuickSearch(글, 지금 항목 포함)(0x7d5ca8). 글이 비었으면 0. 지금 항목(포함하지 않으면 다음, 마지막이면 처음)부터 끝까지
-/// 앞부분이 같은 이름(StrCmpNIW), 시작이 처음이 아니면 처음부터 지금 항목 앞까지, 그다음 같은 차례로 이름 안에 든 것(StrStrIW).
-/// 시작이 처음이면 이름 안 찾기는 하지 않는다(원본 그대로).
+/// Original QuickSearch(text, include current item) (0x7d5ca8). 0 for empty text. From the current item (the next one when not included, the first after the last) to the end
+/// names with the same prefix (StrCmpNIW), then from the first item up to the current one when it did not start at the first, then the same order for names containing the text (StrStrIW).
+/// When it starts at the first item, the containment search is skipped (as in the original).
 pub(super) fn original_quick_search(names: &[String], cursor: usize, text: &str, inclusive: bool) -> Option<usize> {
     if names.is_empty() {
         return None;

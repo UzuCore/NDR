@@ -1,8 +1,8 @@
-//! C# RemoteSitesWindow(FTP 사이트 관리자, 780×490, [formFTPSiteManager]) + RemoteSiteEditorWindow(원격 사이트, 620×650)
+//! C# RemoteSitesWindow (FTP site manager, 780x490, [formFTPSiteManager]) + RemoteSiteEditorWindow (remote site, 620x650)
 //! + ManageRemoteSitesAsync + RunRemoteCommandAsync/SelectRemoteSite/ExecuteSshCommand.
-//! 관리자: 왼쪽 이름 목록, 오른쪽 이름·주소·사용자·비밀번호·원격 폴더·포트·서버 종류(FTP/SFTP/FTPS)·수동 모드. 다른 줄로 옮기면 지금 줄을
-//! 확인하고(이름·주소가 비면 TfMsgBox FTPSITE_INVALIDINFO) 적는다(종류·포트·주소가 바뀌거나 SFTP가 아니면 저장한 서버 키를 지운다).
-//! 추가(TfGetText FTPSITE_ADD, 같은 이름이면 FTPSITE_EXISTS), 삭제(FTPSITE_DELCONFIRM 예/아니요), 추가 설정(편집 창), 연결, 확인, 취소.
+//! Manager: name list on the left, name, address, user, password, remote folder, port, server type (FTP/SFTP/FTPS) and passive mode on the right. Moving to another row
+//! validates the current row (TfMsgBox FTPSITE_INVALIDINFO when name or address is empty) and stores it (the saved server key is cleared when type, port or address change, or when not SFTP).
+//! Add (TfGetText FTPSITE_ADD, FTPSITE_EXISTS for a duplicate name), delete (FTPSITE_DELCONFIRM yes/no), advanced settings (editor window), connect, OK, cancel.
 use super::original_dialogs::{DialogKind, DialogResult};
 use super::remote_window::{SiteProfile, load_sites, parse_port, prepare_host, store_sites, t};
 use super::*;
@@ -15,15 +15,15 @@ fn names_equal(left: &str, right: &str) -> bool {
     left.to_lowercase() == right.to_lowercase()
 }
 
-/// 관리자 서버 종류 목록 순서.
+/// Order of the manager's server type list.
 pub(super) const MANAGER_PROTOCOLS: [&str; 3] = ["FTP", "SFTP", "FTPS"];
-/// 편집 창 프로토콜 목록 순서.
+/// Order of the editor's protocol list.
 pub(super) const EDITOR_PROTOCOLS: [&str; 3] = ["FTP", "FTPS", "SFTP"];
 
 pub(super) struct SitesForm {
     pub sites: Vec<SiteProfile>,
     pub selected: Option<usize>,
-    /// C# _editingSite(지금 칸에 보이는 사이트).
+    /// C# _editingSite (the site shown in the fields now).
     pub editing: Option<usize>,
     pub name: String,
     pub host: String,
@@ -58,7 +58,7 @@ impl SitesForm {
         self.passive = site.as_ref().is_none_or(|s| s.passive);
     }
 
-    /// CommitSelection: 빈 이름·주소면 false(부르는 쪽이 FTPSITE_INVALIDINFO 상자).
+    /// CommitSelection: false for an empty name or address (the caller shows the FTPSITE_INVALIDINFO box).
     pub(super) fn commit(&mut self) -> bool {
         let Some(index) = self.editing else { return true };
         if self.name.is_empty() || self.host.is_empty() {
@@ -93,11 +93,11 @@ pub(super) enum SitesAction {
     Cancel,
 }
 
-/// 원본 TfFTPSiteManager(ClientWidth 472 × ClientHeight 297): lbSites(16,25 153×206), lName(176,28) eName(281,25 176),
+/// Original TfFTPSiteManager (ClientWidth 472 x ClientHeight 297): lbSites (16,25 153x206), lName (176,28) eName (281,25 176),
 /// lAddress(176,56) eHost(281,53 176), lUser(176,85) eUser(281,82 121), lPassword(176,114) ePassword(281,111 121),
-/// lRemoteDir(176,142) eRemoteDir(281,139 176), lPort(175,171) ePort(280,168 49 가운데), lServerType(175,200) cbServerType(280,197 145),
+/// lRemoteDir (176,142) eRemoteDir (281,139 176), lPort (175,171) ePort (280,168 49 centered), lServerType (175,200) cbServerType (280,197 145),
 /// chkPassive(281,228), btnAdd(16,264)·btnDelete(94,264)·btnOk(298,264)·btnCancel(382,264) 75×25.
-/// C# 판에만 있는 연결 단추는 삭제와 확인 사이(215,264), 추가 설정은 수동 모드 오른쪽(382,226)에 둔다.
+/// The connect button, only in the C# version, sits between delete and OK (215,264); advanced settings sit right of passive mode (382,226).
 pub(super) fn sites_ui(ui: &mut egui::Ui, form: &mut SitesForm, language: &compat::Language, enter: bool) -> Option<SitesAction> {
     use super::original_dialogs::put_left;
     let text = |key: &str, fallback: &str| language.text(&format!("formFTPSiteManager.{key}"), fallback).replace('&', "");
@@ -120,7 +120,7 @@ pub(super) fn sites_ui(ui: &mut egui::Ui, form: &mut SitesForm, language: &compa
     });
     let enabled = form.editing.is_some();
     ui.add_enabled_ui(enabled, |ui| {
-        // VCL TLabel FocusControl: 단축 문자는 옆 칸에 초점을 준다.
+        // VCL TLabel FocusControl: the access key focuses the field next to it.
         let raw = |key: &str, fallback: &str| language.raw(&format!("formFTPSiteManager.{key}")).unwrap_or_else(|| fallback.to_owned());
         let label = |ui: &mut egui::Ui, x: f32, y: f32, key: &str, fallback: &str, target: &str| {
             super::original_dialogs::access_label(ui, at(x, y, 103.0, 15.0), &raw(key, fallback), egui::Id::new(("ftp-site", target.to_owned())));
@@ -216,7 +216,7 @@ impl SiteEditorForm {
         }
     }
 
-    /// Commit 검사와 결과(키 파일이 없으면 Err(알림 글), 빈 값이면 Err(""): FTPSITE_INVALIDINFO).
+    /// Commit checks and result (Err(notice text) when the key file is missing, Err("") for empty values: FTPSITE_INVALIDINFO).
     pub(super) fn result(&self) -> Result<SiteProfile, (bool, String)> {
         if !EDITOR_PROTOCOLS.contains(&self.protocol.as_str()) || self.host.is_empty() || self.name.is_empty() {
             return Err((true, "FTPSITE_INVALIDINFO".into()));
@@ -335,7 +335,7 @@ impl App {
         self.language_pack.text("formFTPSiteManager.Form.Caption", "FTP Site Manager")
     }
 
-    /// TfMsgBox(Caption, "", RES 글, MB_OK | MB_ICONASTERISK).
+    /// TfMsgBox(Caption, "", RES text, MB_OK | MB_ICONASTERISK).
     fn site_message(&mut self, key: &str, fallback: &str) {
         let title = self.site_title();
         let text = self.language_pack.text(&format!("RES.{key}"), fallback);
@@ -396,7 +396,7 @@ impl App {
                         return;
                     }
                     let Some(form) = app.sites_form() else { return };
-                    // 지우기 전에 편집 중 참조를 놓는다(원본은 낡은 위치로 다음 줄을 덮어쓴다).
+                    // Release the editing reference before deleting (the original overwrites the next row through the stale position).
                     form.editing = None;
                     form.sites.remove(index);
                     let next = (!form.sites.is_empty()).then(|| index.min(form.sites.len() - 1));
@@ -470,7 +470,7 @@ impl App {
         }
     }
 
-    /// C# RunRemoteCommandAsync: 사이트 고르기 → 명령 입력(처음 값 pwd) → SFTP는 SSH 명령, FTP는 제어 명령 → "원격 명령 결과" 글 창.
+    /// C# RunRemoteCommandAsync: choose a site -> enter a command (initially pwd) -> SSH command for SFTP, control command for FTP -> "remote command result" text window.
     pub(super) fn run_remote_command(&mut self) {
         let sites = load_sites(&self.settings);
         if sites.is_empty() {
@@ -482,7 +482,7 @@ impl App {
             let Some(index) = index else { return };
             let Some(site) = sites.get(index).cloned() else { return };
             let message = if ko { format!("{} ({})에서 실행할 명령", site.name, site.protocol) } else { format!("Command to run on {} ({})", site.name, site.protocol) };
-            // 고친 것: 사이트를 목록 차례(index)로 기억하면, 명령이 도는 동안 사이트를 더하거나 지웠을 때 다른 사이트에 키를 저장하고 다시 실행했다.
+            // Fixed: remembering the site by list position (index) stored the key on another site and reran when sites were added or removed while the command ran.
             let name = site.name.clone();
             app.prompt(t(ko, "원격 명령", "Remote command"), &message, "pwd", None, false, move |app, command, _| {
                 let Some(command) = command.filter(|c| !c.trim().is_empty()) else { return };
@@ -493,7 +493,7 @@ impl App {
 
     fn execute_remote_command(&mut self, name: String, command: String, accepted: Option<String>) {
         let Some(site) = load_sites(&self.settings).into_iter().find(|s| s.name == name) else { return };
-        // 고친 것: 포트를 16비트로 잘라 다른 포트에 연결했다(0은 연결 단계의 알림).
+        // Fixed: the port was truncated to 16 bits and connected to another port (0 is reported at the connect step).
         let Ok(port) = u16::try_from(site.port) else {
             let ko = self.language == "ko";
             return self.system_box("NDR", t(ko, "올바른 포트를 입력하세요.", "Enter a valid port."), MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
@@ -534,7 +534,7 @@ impl App {
         });
     }
 
-    /// 원격 명령 결과: 서버 키 확인이면 묻고 다시, 아니면 글 창 또는 경고 상자.
+    /// Remote command result: asks and retries for a server key confirmation, otherwise a text window or a warning box.
     pub(super) fn remote_command_done(&mut self, site_name: String, command: String, host: String, result: Result<String, String>) {
         let ko = self.language == "ko";
         match result {

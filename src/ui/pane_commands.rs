@@ -1,8 +1,8 @@
-//! C# NDR 패널 명령(선택, 이동, 보기, 숨김, 폴더 크기)을 옮긴 것.
+//! Ports the C# NDR pane commands (selection, navigation, view, hidden items, folder size).
 use super::*;
 use ndr::msgbox::{MB_ICONASTERISK, MB_OK};
 
-/// C# ChangeAttributesAsync 진행 상태.
+/// C# ChangeAttributesAsync progress state.
 pub(super) struct AttributeRun {
     pane: usize,
     paths: Vec<PathBuf>,
@@ -10,7 +10,7 @@ pub(super) struct AttributeRun {
     completed: usize,
     skipped: usize,
     errors: Vec<String>,
-    /// 원본 FUN_0043657c: 적용했거나 건너뛴 항목(실패하지 않은 것)은 목록 표시를 푼다(Select(번호, false)). 취소한 항목부터는 남는다.
+    /// Original FUN_0043657c: applied or skipped items (those that did not fail) are unmarked in the list (Select(index, false)). Items from the cancelled one on stay marked.
     processed: Vec<PathBuf>,
 }
 
@@ -19,8 +19,8 @@ impl App {
         if pane == 0 { self.tr("왼쪽", "Left") } else { self.tr("오른쪽", "Right") }
     }
 
-    /// 원본 bSelectAllClick(0x431450, 수직 막대 "모두 선택" 단추, 스킨 테마). 폴더도 고를지 = 설정(selectfolder) XOR Shift.
-    /// 표시가 없으면 SelectAll(폴더 여부). 있으면: 폴더·파일을 모두 골랐으면 지우고 파일만, 파일만 모두 골랐으면 폴더까지, 그 밖에는 파일을 더한다.
+    /// Original bSelectAllClick (0x431450, vertical bar "select all" button, skin theme). Whether folders are included = setting (selectfolder) XOR Shift.
+    /// Without marks SelectAll(folders). With marks: if all folders and files are selected, clear and select files only; if all files only, include folders; otherwise add files.
     pub(super) fn original_button_select_all(&mut self, shift: bool) {
         let folders_too = self.settings.flag("SelectFolders", false) != shift;
         let pane = &mut self.panes[self.active];
@@ -45,8 +45,8 @@ impl App {
         }
     }
 
-    /// 원본 miInvertSelectionClick(0x43163c, 스킨 테마): 파일은 늘, 폴더는 설정(selectfolder)이 켜졌을 때만 표시를 뒤집는다.
-    /// 드라이브 항목은 고르지 않는다(Select가 종류 4를 거른다). "선택 복원"용 기억은 바꾸지 않는다.
+    /// Original miInvertSelectionClick (0x43163c, skin theme): flips files always and folders only when the setting (selectfolder) is on.
+    /// Drive items are never selected (Select skips kind 4). The memory for "Restore Selection" is not changed.
     pub(super) fn original_invert_selection(&mut self) {
         let folders = self.settings.flag("SelectFolders", false);
         let pane = &mut self.panes[self.active];
@@ -61,9 +61,9 @@ impl App {
         }
     }
 
-    /// 원본 miSelectSameExtClick(0x431720)·miSelectSameNameClick(0x431a04)(스킨 테마): 커서가 파일이면 확장자(또는 확장자를 뺀 이름)가
-    /// 같은 파일 가운데 하나라도 표시가 없으면 모두 고르고, 다 골라져 있으면 모두 푼다(다른 표시는 그대로).
-    /// 같은 확장자에서 커서가 폴더면 폴더 전체를 같은 방식으로 뒤집는다. 같은 이름은 파일일 때만.
+    /// Original miSelectSameExtClick (0x431720) / miSelectSameNameClick (0x431a04) (skin theme): when the cursor is a file, if any file with the same extension (or the name without extension)
+    /// is unmarked, mark them all; if all are marked, unmark them all (other marks stay).
+    /// For same extension, when the cursor is a folder, all folders flip the same way. Same name works only on files.
     pub(super) fn original_select_same(&mut self, same_extension: bool) {
         let pane = &mut self.panes[self.active];
         if pane.loading {
@@ -89,7 +89,7 @@ impl App {
         }
     }
 
-    /// 원본 CopySelection(목록 → +0xd08): 파일 작업을 시작할 때 지금 표시를 "선택 복원"(miRestoreLastSel)용으로 남긴다.
+    /// Original CopySelection (list -> +0xd08): when a file job starts, the current marks are saved for "Restore Selection" (miRestoreLastSel).
     pub(super) fn remember_marks(&mut self) {
         let pane = &self.panes[self.active];
         let mut rows: Vec<usize> = pane.selected.iter().copied().collect();
@@ -97,7 +97,7 @@ impl App {
         self.last_selection[self.active] = rows.into_iter().filter_map(|i| pane.entries.get(i).map(|e| e.path.clone())).collect();
     }
 
-    /// C# GoToRootAsync: 압축 파일 안이면 압축 파일의 맨 위, 아니면 드라이브 루트(이미 루트면 그대로). 원격은 "/".
+    /// C# GoToRootAsync: the archive top inside an archive, otherwise the drive root (unchanged when already at the root). Remote goes to "/".
     pub(super) fn go_root(&mut self) {
         let i = self.active;
         if self.panes[i].remote.is_some() {
@@ -117,7 +117,7 @@ impl App {
         }
     }
 
-    /// C# GoToLastDestinationAsync: 마지막 대상 폴더가 없거나 사라졌으면 알린다.
+    /// C# GoToLastDestinationAsync: notifies when there is no last destination folder or it disappeared.
     pub(super) fn go_last_destination(&mut self) {
         let destination = self.settings.text("LastDestination", "");
         if destination.trim().is_empty() || !Path::new(&destination).is_dir() {
@@ -127,7 +127,7 @@ impl App {
         self.navigate(self.active, destination.into(), true);
     }
 
-    /// C# ToggleHiddenAsync: 활성 패널의 숨김 표시를 바꾸고 설정(Left/RightShowHiddenFiles, ShowHiddenFiles)에 남긴 뒤 새로 고친다.
+    /// C# ToggleHiddenAsync: toggles the active pane's hidden item display, stores it in the settings (Left/RightShowHiddenFiles, ShowHiddenFiles) and refreshes.
     pub(super) fn toggle_hidden(&mut self) {
         let i = self.active;
         let visible = !self.panes[i].show_hidden;
@@ -135,7 +135,7 @@ impl App {
         self.settings.set_flag(if i == 0 { "LeftShowHiddenFiles" } else { "RightShowHiddenFiles" }, visible);
         let any = self.panes[0].show_hidden || self.panes[1].show_hidden;
         self.settings.set_flag("ShowHiddenFiles", any);
-        // 원본 miShowHiddenClick(0x4348e0): 새로 고침(FUN_00487ce8)을 (커서 지킴 1, 표시 지킴 0)으로 부른다.
+        // Original miShowHiddenClick (0x4348e0): calls refresh (FUN_00487ce8) with (keep cursor 1, keep marks 0).
         self.panes[i].selected.clear();
         self.refresh(i);
         let side = self.side_name(i);
@@ -146,7 +146,7 @@ impl App {
         };
     }
 
-    /// C# SetViewStyle: Left/RightViewStyle에 "Auto"/"Details"/"Names"/"Thumbnails"를 남기고 상태 줄에 알린다.
+    /// C# SetViewStyle: stores "Auto"/"Details"/"Names"/"Thumbnails" in Left/RightViewStyle and reports it in the status line.
     pub(super) fn set_view_style(&mut self, style: &str) {
         let i = self.active;
         self.settings.set_text(if i == 0 { "LeftViewStyle" } else { "RightViewStyle" }, style);
@@ -154,9 +154,9 @@ impl App {
         self.status = if self.language == "ko" { format!("{side} 패널 보기: {style}") } else { format!("{side} pane view: {style}") };
     }
 
-    /// C# CalculateSelectedFolderSizeAsync: 같은 경로는 한 번, 고른 폴더 안에 든 항목은 빼고, 진행 창에서 센 뒤 요약 상자를 띄운다.
-    /// 스킨 테마는 원본 miCalculateSelectedFolderSizeClick(0x4457d4): 대상(표시, 없으면 커서) 가운데 폴더(종류 1)만 모아,
-    /// 있으면 표시를 지우고 패널의 폴더 크기 세기(FUN_0048efa8)에 넘긴다. 크기는 목록의 크기 칸에 나온다(요약 상자 없음).
+    /// C# CalculateSelectedFolderSizeAsync: each path once, items inside chosen folders left out, counted in a progress window, then a summary box.
+    /// The skin theme follows original miCalculateSelectedFolderSizeClick (0x4457d4): collects only folders (kind 1) among the targets (marks, otherwise the cursor),
+    /// and if any, clears the marks and hands them to the pane folder size count (FUN_0048efa8). Sizes appear in the list's size cell (no summary box).
     pub(super) fn calculate_folder_size(&mut self) {
         let i = self.active;
         let pane = &self.panes[i];
@@ -177,8 +177,8 @@ impl App {
         }
     }
 
-    /// C# ChangeAttributesAsync: 항목마다 속성 창. 취소는 멈추고, 건너뛰기는 다음 항목, 모두 적용은 남은 항목 전부(지금 항목 포함)에
-    /// 적용하고 끝낸다. 적용은 따로 돌고 끝나면 다음 항목으로 넘어간다. 끝나면 새로 고치고 오류 창이나 상태 줄로 알린다.
+    /// C# ChangeAttributesAsync: an attributes window per item. Cancel stops, skip goes to the next item, apply to all applies to all remaining items (including the current one)
+    /// and ends. Applying runs separately and moves on to the next item when done. At the end it refreshes and reports through an error window or the status line.
     pub(super) fn change_attributes(&mut self) {
         let i = self.active;
         if self.panes[i].remote.is_some() {

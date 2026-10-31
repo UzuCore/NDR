@@ -1902,8 +1902,8 @@ impl eframe::App for App {
                 } else if divider.drag_stopped() {
                     self.save();
                 }
-                // 원본 pmVertBar(pVertBarContextPopup, 단추 밖 오른쪽 단추): 양쪽 너비를 같게 / 왼쪽 너비 => 오른쪽 너비 /
-                // 왼쪽 너비 <= 오른쪽 너비. 뒤의 둘(pmiFrameWidth 0x43d960)은 50:50으로 두고 창 너비를 그쪽 패널 너비의 두 배로 바꾼다.
+                // Original pmVertBar (pVertBarContextPopup, right-click outside the buttons): equal widths / left width => right width /
+                // left width <= right width. The last two (pmiFrameWidth 0x43d960) set 50:50 and change the window width to twice that side's pane width.
                 let mut frame_action = None;
                 skin_pane::context_menu(&divider, |ui| {
                     let label = |key: &str, fallback: &str| self.language_pack.text(&format!("Menu.{key}"), fallback).replace('&', "");
@@ -1932,7 +1932,7 @@ impl eframe::App for App {
                 if !show_bar {
                     ui.painter().rect_filled(middle, 0.0, Color32::BLACK);
                 }
-                // 고친 것: 패널마다 제 자리로 잘라 그린다(좁게 끌면 주소 줄·정보 줄·목록이 옆 패널·세로 막대 위로 넘쳐 겹쳤다).
+                // Fixed: each pane is clipped to its own area (when dragged narrow, the address bar, info bar and list spilled over the next pane and the vertical bar).
                 ui.scope_builder(egui::UiBuilder::new().max_rect(left), |ui| {
                     ui.set_clip_rect(left.intersect(ui.clip_rect()));
                     self.pane_ui(ui, 0, ctx)
@@ -1956,23 +1956,23 @@ impl eframe::App for App {
         self.popup_menu_ui(ctx);
         self.shortcut_window_ui(ctx);
         self.original_dialog_ui(ctx);
-        // 모달 진행 창은 그 아래 창(예: 청소 옵션 창의 사용자 지정 검색) 위에 그린다.
+        // The modal progress window is drawn above the window under it (for example the custom search of the cleanup options window).
         self.modal_progress_ui(ctx);
         self.msgbox_ui(ctx);
         self.pane_message_ui(ctx);
         self.fade_menus(ctx);
         if let Some(seconds) = self.options.smoke_seconds {
             self.shot_step(ctx);
-            // 시작 확인은 다른 창 뒤에서 돌아야 한다(앞 창이 되면 보고서에 남기고 배포 스크립트가 멈춘다).
+            // The startup check must run behind other windows (if it becomes the foreground window, the report records it and the release script stops).
             if self.hwnd != 0 && native::is_foreground(self.hwnd) {
                 self.smoke_foreground = true;
             }
-            // 진단: 이번 그림을 다시 그리게 한 곳(egui RepaintCause, 파일:줄). 가만히 있을 때 계속 다시 그리는지 찾는 데 쓴다.
+            // Diagnostics: what requested this frame's repaint (egui RepaintCause, file:line). Used to find continuous repaints while idle.
             let causes: Vec<String> = ctx.repaint_causes().iter().map(|c| c.to_string()).collect();
             for cause in causes {
                 *self.smoke_repaint_causes.entry(cause).or_insert(0) += 1;
             }
-            // 진단: 가장 오래 걸린 그림(ms, 첫 그림 3개는 글꼴·아이콘 준비라 뺀다).
+            // Diagnostics: the slowest frame (ms; the first 3 frames are excluded because they prepare fonts and icons).
             if self.frames > 3 {
                 let ms = frame_started.elapsed().as_secs_f64() * 1000.0;
                 self.smoke_slowest_frame_ms = self.smoke_slowest_frame_ms.max(ms);
@@ -1980,13 +1980,13 @@ impl eframe::App for App {
                     self.smoke_slow_frames += 1;
                 }
             }
-            // 진단: 시작부터 두 패널 목록이 처음 다 읽힐 때까지(ms).
+            // Diagnostics: from startup until both pane lists are first fully read (ms).
             if self.smoke_loaded_ms.is_none() && self.panes.iter().all(|p| !p.loading) {
                 self.smoke_loaded_ms = Some(self.started.elapsed().as_millis() as u64);
             }
             if self.started.elapsed() > Duration::from_secs(seconds) {
                 if let Some(path) = &self.options.report {
-                    // leftCount/rightCount = 목록 항목(끝에 덧붙인 드라이브 항목은 leftDrives/rightDrives로 따로).
+                    // leftCount/rightCount = list items (drive items appended at the end are counted separately in leftDrives/rightDrives).
                     let items = |p: &Pane| p.entries.len() - p.drive_count();
                     let report = serde_json::json!({"language":self.language,"frames":self.frames,"leftCount":items(&self.panes[0]),"rightCount":items(&self.panes[1]),"leftDrives":self.panes[0].drive_count(),"rightDrives":self.panes[1].drive_count(),"leftError":self.panes[0].error,"rightError":self.panes[1].error,"leftLoading":self.panes[0].loading,"rightLoading":self.panes[1].loading,"profile":self.profile,"runtime":"Rust","renderer":"OpenGL","foreground":self.smoke_foreground,"repaintCauses":self.smoke_repaint_causes,"slowestFrameMs":(self.smoke_slowest_frame_ms * 10.0).round() / 10.0,"slowFrames":self.smoke_slow_frames,"loadedMs":self.smoke_loaded_ms,"tipWindow":self.smoke_tip_window});
                     let _ = std::fs::write(
