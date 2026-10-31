@@ -1929,7 +1929,7 @@ impl App {
                         &entry.remote_path,
                         &local,
                         cancel,
-                        &mut |_, _| if overwrite { ConflictChoice::Overwrite } else { ConflictChoice::Skip },
+                        &mut |_, _, _| if overwrite { ConflictChoice::Overwrite } else { ConflictChoice::Skip },
                         &mut |p| {
                             wait_if_paused(pause, cancel);
                             files = p.files as usize;
@@ -2020,7 +2020,7 @@ impl App {
                     let remote = format!("{}/{name}", remote_directory.trim_end_matches('/'));
                     let size = std::fs::metadata(file).map(|m| m.len()).ok();
                     report(remote.clone(), 0, size, completed);
-                    client.upload_tree_with_conflicts(file, &remote, cancel, &mut |_, _| ConflictChoice::Overwrite, &mut |p| {
+                    client.upload_tree_with_conflicts(file, &remote, cancel, &mut |_, _, _| ConflictChoice::Overwrite, &mut |p| {
                         wait_if_paused(pause, cancel);
                         report(p.path.clone(), p.bytes, size, completed);
                     })?;
@@ -2067,7 +2067,7 @@ impl App {
         self.remote_start_transfer(title, TransferKind::UploadFolder { name }, move |client, pause, cancel, report| {
             let mut completed = 0usize;
             report(remote_root.clone(), 0, None, 0);
-            let result = client.upload_tree_with_conflicts(&root, &remote_root, cancel, &mut |_, _| ConflictChoice::Overwrite, &mut |p| {
+            let result = client.upload_tree_with_conflicts(&root, &remote_root, cancel, &mut |_, _, _| ConflictChoice::Overwrite, &mut |p| {
                 wait_if_paused(pause, cancel);
                 completed = p.files as usize;
                 report(p.path.clone(), p.bytes, None, completed);

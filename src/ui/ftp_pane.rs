@@ -20,13 +20,28 @@ pub(super) const FTP_LOG_HEIGHT: f32 = 60.0;
 const FTP_LOG_MIN: f32 = 30.0;
 const FTP_SPLITTER_HEIGHT: f32 = 3.0;
 
+/// 원본 FTP 대기열(FUN_00467f0c): 폴더 항목은 묻지 않고 없으면 만들고 있으면 그대로 쓴다(폴더끼리 = 합치기).
+/// 파일이 같은 이름이면 TfFileExists로 묻는다(FUN_00467764: 원격 쪽 크기·시각도 보이고, btnResume = 이어서 전송 가능할 때).
+/// 고친 것: 전에는 폴더끼리도 물었고, 원격 쪽 크기·시각이 비어 이어서 전송 단추를 쓸 수 없었다.
+pub(super) fn ask_remote_conflict(events: &Sender<Event>, cancel: &AtomicBool, source: &str, destination: &str, info: &ndr::remote::ConflictInfo) -> ConflictChoice {
+    if info.remote.is_dir && info.local_dir {
+        return ConflictChoice::Overwrite;
+    }
+    let remote = Path::new(if info.remote_is_source { source } else { destination });
+    let modified = info.remote.modified.and_then(|s| u64::try_from(s).ok()).map(|s| std::time::UNIX_EPOCH + Duration::from_secs(s));
+    super::file_operation::set_virtual_entry(remote, Some((info.remote.is_dir, (!info.remote.is_dir).then_some(info.remote.size), modified)));
+    let choice = super::commands::ask_conflict_resumable(events, cancel, Path::new(source), Path::new(destination), info.can_resume);
+    super::file_operation::set_virtual_entry(remote, None);
+    choice
+}
+
 /// 패널 FTP 모드가 쓰는 원격 동작(시험에서는 가짜로 바꾼다).
 pub(super) trait PaneFs: Send {
     fn pwd(&mut self) -> Result<String, String>;
     fn change_directory(&mut self, current: &str, path: &str) -> Result<(String, Option<String>), String>;
     fn list(&mut self, path: &str) -> Result<Vec<RemoteEntry>, String>;
-    fn download(&mut self, remote: &str, local: &Path, cancel: &AtomicBool, resolve: &mut dyn FnMut(&str, &str) -> ConflictChoice, progress: &mut dyn FnMut(TransferProgress)) -> Result<(), String>;
-    fn upload(&mut self, local: &Path, remote: &str, cancel: &AtomicBool, resolve: &mut dyn FnMut(&str, &str) -> ConflictChoice, progress: &mut dyn FnMut(TransferProgress)) -> Result<(), String>;
+    fn download(&mut self, remote: &str, local: &Path, cancel: &AtomicBool, resolve: &mut dyn FnMut(&str, &str, &ndr::remote::ConflictInfo) -> ConflictChoice, progress: &mut dyn FnMut(TransferProgress)) -> Result<(), String>;
+    fn upload(&mut self, local: &Path, remote: &str, cancel: &AtomicBool, resolve: &mut dyn FnMut(&str, &str, &ndr::remote::ConflictInfo) -> ConflictChoice, progress: &mut dyn FnMut(TransferProgress)) -> Result<(), String>;
     /// 원본 FTP 엔진 FUN_0045d0b4(새 폴더), FUN_0045d214(이름 바꾸기), FUN_0045de18(폴더·파일 목록 지우기).
     fn mkdir(&mut self, path: &str) -> Result<(), String>;
     fn rename(&mut self, from: &str, to: &str) -> Result<(), String>;
@@ -48,10 +63,10 @@ impl PaneFs for Client {
     fn list(&mut self, path: &str) -> Result<Vec<RemoteEntry>, String> {
         Client::list(self, path)
     }
-    fn download(&mut self, remote: &str, local: &Path, cancel: &AtomicBool, resolve: &mut dyn FnMut(&str, &str) -> ConflictChoice, progress: &mut dyn FnMut(TransferProgress)) -> Result<(), String> {
+    fn download(&mut self, remote: &str, local: &Path, cancel: &AtomicBool, resolve: &mut dyn FnMut(&str, &str, &ndr::remote::ConflictInfo) -> ConflictChoice, progress: &mut dyn FnMut(TransferProgress)) -> Result<(), String> {
         self.download_tree_with_conflicts(remote, local, cancel, resolve, progress)
     }
-    fn upload(&mut self, local: &Path, remote: &str, cancel: &AtomicBool, resolve: &mut dyn FnMut(&str, &str) -> ConflictChoice, progress: &mut dyn FnMut(TransferProgress)) -> Result<(), String> {
+    fn upload(&mut self, local: &Path, remote: &str, cancel: &AtomicBool, resolve: &mut dyn FnMut(&str, &str, &ndr::remote::ConflictInfo) -> ConflictChoice, progress: &mut dyn FnMut(TransferProgress)) -> Result<(), String> {
         self.upload_tree_with_conflicts(local, remote, cancel, resolve, progress)
     }
     fn mkdir(&mut self, path: &str) -> Result<(), String> {
@@ -119,10 +134,10 @@ impl PaneFs for LoggedFs {
         self.set_prefix(path);
         self.run(|fs| fs.list(path))
     }
-    fn download(&mut self, remote: &str, local: &Path, cancel: &AtomicBool, resolve: &mut dyn FnMut(&str, &str) -> ConflictChoice, progress: &mut dyn FnMut(TransferProgress)) -> Result<(), String> {
+    fn download(&mut self, remote: &str, local: &Path, cancel: &AtomicBool, resolve: &mut dyn FnMut(&str, &str, &ndr::remote::ConflictInfo) -> ConflictChoice, progress: &mut dyn FnMut(TransferProgress)) -> Result<(), String> {
         self.run(|fs| fs.download(remote, local, cancel, resolve, progress))
     }
-    fn upload(&mut self, local: &Path, remote: &str, cancel: &AtomicBool, resolve: &mut dyn FnMut(&str, &str) -> ConflictChoice, progress: &mut dyn FnMut(TransferProgress)) -> Result<(), String> {
+    fn upload(&mut self, local: &Path, remote: &str, cancel: &AtomicBool, resolve: &mut dyn FnMut(&str, &str, &ndr::remote::ConflictInfo) -> ConflictChoice, progress: &mut dyn FnMut(TransferProgress)) -> Result<(), String> {
         self.run(|fs| fs.upload(local, remote, cancel, resolve, progress))
     }
     fn mkdir(&mut self, path: &str) -> Result<(), String> {
@@ -616,7 +631,7 @@ impl App {
                     }
                     set_row(&rows, row, |r| r.state = RowState::Running);
                     let local = destination.join(name);
-                    let mut resolve = |src: &str, dst: &str| super::commands::ask_conflict(&events, &cancel, Path::new(src), Path::new(dst));
+                    let mut resolve = |src: &str, dst: &str, info: &ndr::remote::ConflictInfo| ask_remote_conflict(&events, &cancel, src, dst, info);
                     let mut progress = |p: TransferProgress| {
                         set_row(&rows, row, |r| r.done = p.bytes);
                         let _ = events.send(Event::Progress { path: PathBuf::from(p.path), bytes: p.bytes, files: p.files });
@@ -699,7 +714,7 @@ impl App {
                     set_row(&rows, row, |r| r.state = RowState::Running);
                     let name = local.file_name().map(|n| n.to_string_lossy().into_owned()).ok_or("Upload source has no name")?;
                     let destination = join_remote(&remote.path, &name);
-                    let mut resolve = |src: &str, dst: &str| super::commands::ask_conflict(&events, &cancel, Path::new(src), Path::new(dst));
+                    let mut resolve = |src: &str, dst: &str, info: &ndr::remote::ConflictInfo| ask_remote_conflict(&events, &cancel, src, dst, info);
                     let mut progress = |p: TransferProgress| {
                         set_row(&rows, row, |r| r.done = p.bytes);
                         let _ = events.send(Event::Progress { path: PathBuf::from(p.path), bytes: p.bytes, files: p.files });

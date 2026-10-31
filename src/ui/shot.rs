@@ -23,10 +23,10 @@ impl super::ftp_pane::PaneFs for ShotFtp {
             ndr::remote::RemoteEntry { name: "readme.txt".into(), size: 1234, mode: Some(0o644), ..Default::default() },
         ])
     }
-    fn download(&mut self, _: &str, _: &Path, _: &AtomicBool, _: &mut dyn FnMut(&str, &str) -> ConflictChoice, _: &mut dyn FnMut(ndr::remote::TransferProgress)) -> Result<(), String> {
+    fn download(&mut self, _: &str, _: &Path, _: &AtomicBool, _: &mut dyn FnMut(&str, &str, &ndr::remote::ConflictInfo) -> ConflictChoice, _: &mut dyn FnMut(ndr::remote::TransferProgress)) -> Result<(), String> {
         Err("sample".into())
     }
-    fn upload(&mut self, _: &Path, _: &str, _: &AtomicBool, _: &mut dyn FnMut(&str, &str) -> ConflictChoice, _: &mut dyn FnMut(ndr::remote::TransferProgress)) -> Result<(), String> {
+    fn upload(&mut self, _: &Path, _: &str, _: &AtomicBool, _: &mut dyn FnMut(&str, &str, &ndr::remote::ConflictInfo) -> ConflictChoice, _: &mut dyn FnMut(ndr::remote::TransferProgress)) -> Result<(), String> {
         Err("sample".into())
     }
     fn mkdir(&mut self, _: &str) -> Result<(), String> {

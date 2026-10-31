@@ -881,7 +881,11 @@ pub(super) fn wait_while_paused(pause: &AtomicBool, cancel: &AtomicBool) {
 pub(super) fn run_nested(operation:Operation,events:&Sender<Event>,cancel:&Arc<AtomicBool>)->Result<(),String>{let(tx,rx)=mpsc::channel();let flag=cancel.clone();thread::spawn(move||fsops::run(operation,tx,flag));let mut failure=None;for event in rx{match event{Event::Finished{..}=>{},Event::Error{ref message,..}=>{failure=Some(message.clone());let _=events.send(event);},_=>{let _=events.send(event);}}}failure.map_or(Ok(()),Err)}
 
 pub(super) fn ask_conflict(events:&Sender<Event>,cancel:&AtomicBool,source:&Path,destination:&Path)->ConflictChoice{
-    let(tx,rx)=mpsc::channel();if events.send(Event::Conflict{source:source.to_path_buf(),destination:destination.to_path_buf(),allow_resume:false,reply:tx}).is_err(){return ConflictChoice::Cancel;}
+    ask_conflict_resumable(events,cancel,source,destination,false)
+}
+/// `allow_resume`: 충돌 창의 이어서 전송 단추를 보인다(원격 전송, 원본 btnResume).
+pub(super) fn ask_conflict_resumable(events:&Sender<Event>,cancel:&AtomicBool,source:&Path,destination:&Path,allow_resume:bool)->ConflictChoice{
+    let(tx,rx)=mpsc::channel();if events.send(Event::Conflict{source:source.to_path_buf(),destination:destination.to_path_buf(),allow_resume,reply:tx}).is_err(){return ConflictChoice::Cancel;}
     loop{if cancel.load(Ordering::Relaxed){return ConflictChoice::Cancel;}match rx.recv_timeout(Duration::from_millis(100)){Ok(choice)=>return choice,Err(mpsc::RecvTimeoutError::Timeout)=>{},Err(_)=>return ConflictChoice::Cancel}}
 }
 /// 원본 ARC_CHANGEVOL: 다음 볼륨을 넣고 확인하면 true(다시 시도). 취소·작업 취소면 false.

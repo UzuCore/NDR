@@ -8,7 +8,7 @@ use base64::{
 use sha2::{Digest, Sha256};
 use ssh2::{OpenFlags, OpenType, Session, Sftp};
 use std::fs::{self, File, OpenOptions};
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -147,6 +147,32 @@ pub struct TransferProgress {
     pub path: String,
     pub bytes: u64,
     pub files: u64,
+}
+
+/// 트리 전송이 같은 이름을 물을 때 넘기는 정보. 원본 FUN_00467764(TfFileExists 채우기): 원격 쪽 크기·시각을 보이고,
+/// btnResume은 FTP면 서버가 REST를 받을 때(Synapse CanResume), SFTP면 늘 켠다.
+pub struct ConflictInfo<'a> {
+    /// 원격 쪽 항목(받기 = 원본, 보내기 = 대상).
+    pub remote: &'a RemoteEntry,
+    /// 로컬 쪽이 폴더인가.
+    pub local_dir: bool,
+    /// 받기면 true(원격 = 원본), 보내기면 false(원격 = 대상).
+    pub remote_is_source: bool,
+    pub can_resume: bool,
+}
+
+/// 원본 FUN_00467dfc·FUN_00469210: "새 파일만 덮어쓰기"는 새 것의 시각이 기존보다 늦을 때 덮어쓰고 아니면 건너뛴다.
+/// 모르는 시각은 0(원본 FILETIME 0)으로 본다.
+fn newer_wins(new: Option<i64>, existing: Option<i64>) -> crate::fsops::ConflictChoice {
+    if new.unwrap_or(0) > existing.unwrap_or(0) {
+        crate::fsops::ConflictChoice::Overwrite
+    } else {
+        crate::fsops::ConflictChoice::Skip
+    }
+}
+
+fn local_seconds(meta: &fs::Metadata) -> Option<i64> {
+    meta.modified().ok().map(|time| filetime::FileTime::from_system_time(time).unix_seconds())
 }
 
 trait TransferStream: Read + Write {
@@ -565,6 +591,10 @@ impl FtpControl {
             Self::Utf8(ftp) => ftp.get_ref(),
             Self::Encoded(ftp) => ftp.control.get_ref().tcp(),
         }
+    }
+    /// REST n(350): 다음 RETR/STOR가 n바이트부터. Synapse TFTPSend.InternalRetr/InternalStor(RestoreAt > 0)와 같다.
+    fn rest(&mut self, offset: u64) -> FtpResult<()> {
+        self.custom_command(&format!("REST {offset}"), &[Status::RequestFilePending]).map(|_| ())
     }
     fn mtime(&mut self, path: &str) -> FtpResult<i64> {
         let response = self
@@ -988,7 +1018,7 @@ impl Client {
         remote: &str,
         local: &Path,
         cancel: &AtomicBool,
-        resolve: &mut dyn FnMut(&str, &str) -> crate::fsops::ConflictChoice,
+        resolve: &mut dyn FnMut(&str, &str, &ConflictInfo) -> crate::fsops::ConflictChoice,
         progress: &mut dyn FnMut(TransferProgress),
     ) -> Result<(), String> {
         use crate::fsops::ConflictChoice;
@@ -1005,10 +1035,27 @@ impl Client {
             }
             if fs::symlink_metadata(&destination).is_ok() {
                 let meta = local_regular_metadata(&destination)?;
-                match normalize_choice(resolve(&source, &destination.to_string_lossy())) {
+                let can_resume = !entry.is_dir && meta.is_file() && self.can_resume();
+                let info = ConflictInfo { remote: &entry, local_dir: meta.is_dir(), remote_is_source: true, can_resume };
+                let mut choice = resolve(&source, &destination.to_string_lossy(), &info);
+                if choice == ConflictChoice::OverwriteNewer {
+                    choice = newer_wins(entry.modified, local_seconds(&meta));
+                }
+                if choice == ConflictChoice::Resume {
+                    // 원본 FUN_00467f0c(+0x40): 로컬 부분 파일의 크기부터 받아 뒤에 붙인다. 이어 받을 수 없으면 덮어쓴다.
+                    if can_resume && meta.len() < entry.size {
+                        self.download_resume(&source, &destination, cancel)?;
+                        bytes += entry.size;
+                        files += 1;
+                        progress(TransferProgress { path: source, bytes, files });
+                        continue;
+                    }
+                    choice = ConflictChoice::Overwrite;
+                }
+                match choice {
                     ConflictChoice::Cancel => return Err("Transfer cancelled".into()),
                     ConflictChoice::Skip => continue,
-                    ConflictChoice::OverwriteNewer | ConflictChoice::Resume => unreachable!("normalize_choice maps these to Overwrite"),
+                    ConflictChoice::OverwriteNewer | ConflictChoice::Resume => unreachable!("handled above"),
                     ConflictChoice::Rename => destination = unique_local_path(&destination)?,
                     ConflictChoice::Overwrite if entry.is_dir && meta.is_dir() => {
                         if let Some(times) = self.directory_times(&source)? {
@@ -1109,7 +1156,7 @@ impl Client {
         local: &Path,
         remote: &str,
         cancel: &AtomicBool,
-        resolve: &mut dyn FnMut(&str, &str) -> crate::fsops::ConflictChoice,
+        resolve: &mut dyn FnMut(&str, &str, &ConflictInfo) -> crate::fsops::ConflictChoice,
         progress: &mut dyn FnMut(TransferProgress),
     ) -> Result<(), String> {
         use crate::fsops::ConflictChoice;
@@ -1120,10 +1167,27 @@ impl Client {
             check_cancel(cancel)?;
             let meta = local_regular_metadata(&source)?;
             if let Some(entry) = self.remote_entry(&destination)? {
-                match normalize_choice(resolve(&source.to_string_lossy(), &destination)) {
+                let can_resume = meta.is_file() && !entry.is_dir && !entry.is_symlink && self.can_resume();
+                let info = ConflictInfo { remote: &entry, local_dir: meta.is_dir(), remote_is_source: false, can_resume };
+                let mut choice = resolve(&source.to_string_lossy(), &destination, &info);
+                if choice == ConflictChoice::OverwriteNewer {
+                    choice = newer_wins(local_seconds(&meta), entry.modified);
+                }
+                if choice == ConflictChoice::Resume {
+                    // 원본 FUN_0087c2f0(Synapse StoreFile Restore)·SFTP PutFile(이어서): 원격 부분 파일 뒤에 나머지를 붙인다.
+                    if can_resume && entry.size < meta.len() {
+                        self.upload_resume(&source, &destination, cancel)?;
+                        bytes += meta.len();
+                        files += 1;
+                        progress(TransferProgress { path: destination, bytes, files });
+                        continue;
+                    }
+                    choice = ConflictChoice::Overwrite;
+                }
+                match choice {
                     ConflictChoice::Cancel => return Err("Transfer cancelled".into()),
                     ConflictChoice::Skip => continue,
-                    ConflictChoice::OverwriteNewer | ConflictChoice::Resume => unreachable!("normalize_choice maps these to Overwrite"),
+                    ConflictChoice::OverwriteNewer | ConflictChoice::Resume => unreachable!("handled above"),
                     ConflictChoice::Rename => {
                         destination = self.unique_remote_path(&destination)?
                     }
@@ -1756,6 +1820,142 @@ impl Client {
                 Ok(entries)
             }
         }
+    }
+
+    /// 원본 btnResume 켜짐: FTP는 Synapse CanResume(로그인 때 "REST 1"이 350이면 참)처럼 REST를 받는지 묻고(여기서는 "REST 0",
+    /// 다음 전송에 영향 없음), SFTP는 늘 된다.
+    pub fn can_resume(&mut self) -> bool {
+        match self.backend.as_mut() {
+            Some(Backend::Ftp(ftp)) => ftp.stream.rest(0).is_ok(),
+            Some(Backend::Sftp { .. }) => true,
+            None => false,
+        }
+    }
+
+    /// 원본 FUN_00467f0c(+0x40 이어 받기, 시작 = 로컬 크기): 로컬 부분 파일 뒤에 원격 파일의 나머지를 붙인다(FTP REST, SFTP seek).
+    pub fn download_resume(&mut self, remote: &str, local: &Path, cancel: &AtomicBool) -> Result<(), String> {
+        validate_text(remote)?;
+        check_cancel(cancel)?;
+        let meta = local_regular_metadata(local)?;
+        if !meta.is_file() {
+            return Err("Resume target must be a regular local file".into());
+        }
+        let offset = meta.len();
+        let mut output = OpenOptions::new().append(true).open(local).map_err(err)?;
+        let mut remote_times = None;
+        let result: Result<(), String> = match self.backend()? {
+            Backend::Ftp(ftp) => (|| {
+                let size = ftp.stream.size(remote).ok().map(|n| n as u64);
+                match ftp.stream.mtime(remote) {
+                    Ok(mtime) => remote_times = Some((mtime, mtime)),
+                    Err(FtpError::UnexpectedResponse(_)) => {}
+                    Err(error) => return Err(err(error)),
+                }
+                ftp.stream.rest(offset).map_err(err)?;
+                let mut data = ftp.data("RETR", remote)?;
+                let copied = copy_cancel(&mut data, &mut output, cancel)?;
+                ftp.stream.finalize_retr_stream(data).map_err(err)?;
+                if size.is_some_and(|size| size != offset + copied) {
+                    return Err("Resumed download size did not match remote file".into());
+                }
+                Ok(())
+            })(),
+            Backend::Sftp { sftp, .. } => (|| {
+                let path = sftp_path(remote)?;
+                let stat = sftp.lstat(path).map_err(err)?;
+                if !stat.is_file() {
+                    return Err("Download source must be a regular file; symbolic links are not followed".into());
+                }
+                if let Some(mtime) = stat.mtime.and_then(|time| i64::try_from(time).ok()) {
+                    remote_times = Some((stat.atime.and_then(|time| i64::try_from(time).ok()).unwrap_or(mtime), mtime));
+                }
+                let mut input = sftp.open(path).map_err(err)?;
+                input.seek(SeekFrom::Start(offset)).map_err(err)?;
+                let copied = copy_cancel(&mut input, &mut output, cancel)?;
+                input.close().map_err(err)?;
+                if stat.size.is_some_and(|size| size != offset + copied) {
+                    return Err("Resumed download size did not match remote file".into());
+                }
+                Ok(())
+            })(),
+        };
+        if result.is_err() && matches!(self.backend, Some(Backend::Ftp(_))) {
+            self.invalidate();
+        }
+        result?;
+        output.sync_all().map_err(err)?;
+        drop(output);
+        if let Some((atime, mtime)) = remote_times
+            && let Err(error) = filetime::set_file_times(local, filetime::FileTime::from_unix_time(atime, 0), filetime::FileTime::from_unix_time(mtime, 0))
+        {
+            self.warnings.push(format!("Resumed bytes received; timestamps could not be preserved for {}: {error}", local.display()));
+        }
+        Ok(())
+    }
+
+    /// 원본 FUN_0087c2f0(FTP 이어 보내기 = Synapse StoreFile Restore: REST 원격 크기 + STOR)과 SFTP PutFile(이어서):
+    /// 원격 부분 파일 뒤에 로컬 파일의 나머지를 붙인다. 제자리에 쓰므로 임시 이름을 거치지 않는다.
+    pub fn upload_resume(&mut self, local: &Path, remote: &str, cancel: &AtomicBool) -> Result<(), String> {
+        validate_text(remote)?;
+        check_cancel(cancel)?;
+        let meta = local_regular_metadata(local)?;
+        if !meta.is_file() {
+            return Err("Upload source must be a regular file".into());
+        }
+        let existing = self.remote_entry(remote)?.ok_or("Remote resume target does not exist")?;
+        if existing.is_dir || existing.is_symlink {
+            return Err("Remote resume target must be a regular file".into());
+        }
+        let offset = existing.size;
+        if offset > meta.len() {
+            return Err("Remote file is larger than the local file".into());
+        }
+        let mut input = File::open(local).map_err(err)?;
+        input.seek(SeekFrom::Start(offset)).map_err(err)?;
+        let source_mtime = filetime::FileTime::from_last_modification_time(&meta).unix_seconds();
+        let source_atime = filetime::FileTime::from_last_access_time(&meta).unix_seconds();
+        let mut metadata_warning = None;
+        let result: Result<(), String> = match self.backend()? {
+            Backend::Ftp(ftp) => (|| {
+                ftp.stream.rest(offset).map_err(err)?;
+                let mut data = ftp.data("STOR", remote)?;
+                let copied = copy_cancel(&mut input, &mut data, cancel)?;
+                ftp.stream.finalize_put_stream(data).map_err(err)?;
+                if offset + copied != meta.len() {
+                    return Err("Upload source size changed during transfer".into());
+                }
+                if let Err(error) = ftp.stream.set_mtime(remote, source_mtime) {
+                    if !matches!(error, FtpError::UnexpectedResponse(_)) {
+                        return Err(err(error));
+                    }
+                    metadata_warning = Some(format!("Resumed bytes sent; modification time could not be preserved for {remote}: {error}"));
+                }
+                Ok(())
+            })(),
+            Backend::Sftp { sftp, .. } => (|| {
+                let path = sftp_path(remote)?;
+                let mut output = sftp.open_mode(path, OpenFlags::WRITE, 0o600, OpenType::File).map_err(err)?;
+                output.seek(SeekFrom::Start(offset)).map_err(err)?;
+                let copied = copy_cancel(&mut input, &mut output, cancel)?;
+                output.close().map_err(err)?;
+                if offset + copied != meta.len() || sftp.stat(path).map_err(err)?.size != Some(meta.len()) {
+                    return Err("Resumed upload size verification failed".into());
+                }
+                if let (Ok(atime), Ok(mtime)) = (u64::try_from(source_atime), u64::try_from(source_mtime))
+                    && let Err(error) = sftp.setstat(path, ssh2::FileStat { size: None, uid: None, gid: None, perm: None, atime: Some(atime), mtime: Some(mtime) })
+                {
+                    metadata_warning = Some(format!("Resumed bytes sent; timestamps could not be preserved for {remote}: {error}"));
+                }
+                Ok(())
+            })(),
+        };
+        if let Some(warning) = metadata_warning {
+            self.warnings.push(warning);
+        }
+        if result.is_err() && matches!(self.backend, Some(Backend::Ftp(_))) {
+            self.invalidate();
+        }
+        result
     }
 
     pub fn download(
@@ -3053,7 +3253,7 @@ else:
                         "/remote-tree",
                         &output_tree,
                         &cancel,
-                        &mut |_, _| crate::fsops::ConflictChoice::Overwrite,
+                        &mut |_, _, _| crate::fsops::ConflictChoice::Overwrite,
                         &mut |_| {},
                     )
                     .unwrap();
@@ -3067,7 +3267,7 @@ else:
                         "/remote-tree",
                         &output_tree,
                         &cancel,
-                        &mut |_, _| crate::fsops::ConflictChoice::ReplaceFolder,
+                        &mut |_, _, _| crate::fsops::ConflictChoice::ReplaceFolder,
                         &mut |_| {},
                     )
                     .unwrap();
@@ -3078,7 +3278,7 @@ else:
                             "/remote-tree",
                             &output_tree,
                             &cancel,
-                            &mut |_, _| crate::fsops::ConflictChoice::Cancel,
+                            &mut |_, _, _| crate::fsops::ConflictChoice::Cancel,
                             &mut |_| {}
                         )
                         .is_err()
@@ -3094,7 +3294,7 @@ else:
                         &tree,
                         "/remote-tree",
                         &cancel,
-                        &mut |_, _| crate::fsops::ConflictChoice::Overwrite,
+                        &mut |_, _, _| crate::fsops::ConflictChoice::Overwrite,
                         &mut |_| {},
                     )
                     .unwrap();
@@ -3128,7 +3328,7 @@ else:
                             &tree,
                             "/remote-tree",
                             &cancel,
-                            &mut |_, _| crate::fsops::ConflictChoice::ReplaceFolder,
+                            &mut |_, _, _| crate::fsops::ConflictChoice::ReplaceFolder,
                             &mut |_| {}
                         )
                         .is_err()
@@ -3149,7 +3349,7 @@ else:
                         &tree,
                         "/remote-tree",
                         &cancel,
-                        &mut |_, _| crate::fsops::ConflictChoice::Skip,
+                        &mut |_, _, _| crate::fsops::ConflictChoice::Skip,
                         &mut |_| {},
                     )
                     .unwrap();
@@ -3169,7 +3369,7 @@ else:
                         &tree,
                         "/remote-tree",
                         &cancel,
-                        &mut |_, _| crate::fsops::ConflictChoice::Rename,
+                        &mut |_, _, _| crate::fsops::ConflictChoice::Rename,
                         &mut |_| {},
                     )
                     .unwrap();
@@ -3180,7 +3380,7 @@ else:
                         "/remote-tree",
                         &output_tree,
                         &cancel,
-                        &mut |_, _| crate::fsops::ConflictChoice::Rename,
+                        &mut |_, _, _| crate::fsops::ConflictChoice::Rename,
                         &mut |_| {},
                     )
                     .unwrap();
@@ -3192,7 +3392,7 @@ else:
                         &tree,
                         "/remote-tree",
                         &cancel,
-                        &mut |_, _| crate::fsops::ConflictChoice::ReplaceFolder,
+                        &mut |_, _, _| crate::fsops::ConflictChoice::ReplaceFolder,
                         &mut |_| {},
                     )
                     .unwrap();
@@ -3478,11 +3678,63 @@ else:
             "an unreadable private key must not fall back to password authentication"
         );
     }
-}
-/// 원격 전송에는 새 파일만 덮어쓰기·이어 쓰기가 없다: 덮어쓰기로 다룬다.
-fn normalize_choice(choice: crate::fsops::ConflictChoice) -> crate::fsops::ConflictChoice {
-    match choice {
-        crate::fsops::ConflictChoice::OverwriteNewer | crate::fsops::ConflictChoice::Resume => crate::fsops::ConflictChoice::Overwrite,
-        other => other,
+
+    /// 원본 FTP 대기열 FUN_00467f0c(+0x40 이어서, REST + RETR/STOR, SFTP seek)·FUN_00467dfc(새 파일만 덮어쓰기 = 시각 비교).
+    #[test]
+    #[ignore = "owned localhost integration; requires Python, pyftpdlib, paramiko, cryptography and pyOpenSSL"]
+    fn owned_resume_fixture() {
+        use crate::fsops::ConflictChoice;
+        let content: Vec<u8> = (0..100_000u32).map(|i| (i * 7 % 251) as u8).collect();
+        for protocol in ["ftp", "ftp-euc-kr", "sftp"] {
+            let fixture = Fixture::start(protocol);
+            let mut config = fixture.config(protocol);
+            if protocol == "sftp" {
+                let error: serde_json::Value = serde_json::from_str(&Client::connect(&config).err().unwrap()).unwrap();
+                config.fingerprint = error["candidate"].as_str().unwrap().into();
+            }
+            let mut client = Client::connect(&config).unwrap();
+            let home = client.pwd().unwrap();
+            let remote = |name: &str| format!("{}/{name}", home.trim_end_matches('/'));
+            let cancel = AtomicBool::new(false);
+            let local = fixture.root.join("local");
+            fs::create_dir_all(&local).unwrap();
+            assert!(client.can_resume(), "{protocol}: REST/seek must be available");
+            // 받기 이어서: 로컬에 앞 30000바이트만 있다.
+            fs::write(fixture.root.join("big.bin"), &content).unwrap();
+            fs::write(local.join("big.bin"), &content[..30_000]).unwrap();
+            let mut asked = None;
+            client
+                .download_tree_with_conflicts(&remote("big.bin"), &local.join("big.bin"), &cancel, &mut |_, _, info| {
+                    asked = Some((info.remote.size, info.can_resume, info.remote_is_source));
+                    ConflictChoice::Resume
+                }, &mut |_| {})
+                .unwrap();
+            assert_eq!(asked, Some((100_000, true, true)), "{protocol}");
+            assert_eq!(fs::read(local.join("big.bin")).unwrap(), content, "{protocol}: resumed download");
+            // 보내기 이어서: 원격에 앞 40000바이트만 있다.
+            fs::write(fixture.root.join("up.bin"), &content[..40_000]).unwrap();
+            fs::write(local.join("up.bin"), &content).unwrap();
+            client
+                .upload_tree_with_conflicts(&local.join("up.bin"), &remote("up.bin"), &cancel, &mut |_, _, info| {
+                    assert!(info.can_resume && !info.remote_is_source && info.remote.size == 40_000, "{protocol}");
+                    ConflictChoice::Resume
+                }, &mut |_| {})
+                .unwrap();
+            assert_eq!(fs::read(fixture.root.join("up.bin")).unwrap(), content, "{protocol}: resumed upload");
+            // 새 파일만 덮어쓰기: 원격이 더 오래됐으면 받기는 건너뛰고 보내기는 덮어쓴다.
+            fs::write(fixture.root.join("old.txt"), b"remote").unwrap();
+            filetime::set_file_mtime(fixture.root.join("old.txt"), filetime::FileTime::from_unix_time(1_600_000_000, 0)).unwrap();
+            fs::write(local.join("old.txt"), b"local").unwrap();
+            client
+                .download_tree_with_conflicts(&remote("old.txt"), &local.join("old.txt"), &cancel, &mut |_, _, _| ConflictChoice::OverwriteNewer, &mut |_| {})
+                .unwrap();
+            assert_eq!(fs::read(local.join("old.txt")).unwrap(), b"local", "{protocol}: an older remote file is skipped");
+            client
+                .upload_tree_with_conflicts(&local.join("old.txt"), &remote("old.txt"), &cancel, &mut |_, _, _| ConflictChoice::OverwriteNewer, &mut |_| {})
+                .unwrap();
+            assert_eq!(fs::read(fixture.root.join("old.txt")).unwrap(), b"local", "{protocol}: a newer local file overwrites");
+            let _ = client.close();
+        }
     }
 }
+

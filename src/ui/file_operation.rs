@@ -42,6 +42,10 @@ pub(super) fn set_virtual_entry(path: &Path, info: Option<(bool, Option<u64>, Op
 }
 
 fn describe(path: &Path) -> (bool, Option<u64>, Option<SystemTime>) {
+    // 압축 안·원격 항목은 작업 스레드가 넣어 둔 정보가 먼저다("/dir/a"가 현재 드라이브의 실제 파일로 풀리지 않게).
+    if let Some((_, directory, size, modified)) = VIRTUAL_ENTRIES.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|(p, ..)| p == path) {
+        return (*directory, *size, *modified);
+    }
     match fs::symlink_metadata(path) {
         Ok(m) => {
             let attributes = m.file_attributes();
@@ -49,12 +53,7 @@ fn describe(path: &Path) -> (bool, Option<u64>, Option<SystemTime>) {
             let reparse = attributes & FILE_ATTRIBUTE_REPARSE_POINT != 0;
             (directory, (!directory && !reparse).then(|| m.len()), m.modified().ok())
         }
-        Err(_) => VIRTUAL_ENTRIES
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .iter()
-            .find(|(p, ..)| p == path)
-            .map_or((false, None, None), |(_, directory, size, modified)| (*directory, *size, *modified)),
+        Err(_) => (false, None, None),
     }
 }
 

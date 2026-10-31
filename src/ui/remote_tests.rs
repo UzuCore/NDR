@@ -486,7 +486,7 @@ impl super::ftp_pane::PaneFs for FakeFtp {
             })
             .collect())
     }
-    fn download(&mut self, remote: &str, local: &Path, _cancel: &AtomicBool, _resolve: &mut dyn FnMut(&str, &str) -> ConflictChoice, progress: &mut dyn FnMut(ndr::remote::TransferProgress)) -> Result<(), String> {
+    fn download(&mut self, remote: &str, local: &Path, _cancel: &AtomicBool, _resolve: &mut dyn FnMut(&str, &str, &ndr::remote::ConflictInfo) -> ConflictChoice, progress: &mut dyn FnMut(ndr::remote::TransferProgress)) -> Result<(), String> {
         let (dir, data) = FAKE_FTP.lock().unwrap().get(remote).cloned().ok_or("no such remote file")?;
         if dir {
             return Err("folders are not used in this test".into());
@@ -495,7 +495,7 @@ impl super::ftp_pane::PaneFs for FakeFtp {
         progress(ndr::remote::TransferProgress { path: remote.to_owned(), bytes: data.len() as u64, files: 1 });
         Ok(())
     }
-    fn upload(&mut self, local: &Path, remote: &str, _cancel: &AtomicBool, _resolve: &mut dyn FnMut(&str, &str) -> ConflictChoice, _progress: &mut dyn FnMut(ndr::remote::TransferProgress)) -> Result<(), String> {
+    fn upload(&mut self, local: &Path, remote: &str, _cancel: &AtomicBool, _resolve: &mut dyn FnMut(&str, &str, &ndr::remote::ConflictInfo) -> ConflictChoice, _progress: &mut dyn FnMut(ndr::remote::TransferProgress)) -> Result<(), String> {
         let data = fs::read(local).map_err(|e| e.to_string())?;
         FAKE_FTP.lock().unwrap().insert(remote.to_owned(), (false, data));
         Ok(())
@@ -785,4 +785,34 @@ fn quick_connect_site_save_failure_shows_the_csharp_warning() {
     assert_eq!(warning.title, title);
     assert!(!app.status.contains("Example"), "status: {}", app.status);
     let _ = fs::remove_dir_all(&root);
+}
+
+/// FUN_00467f0c: folders merge without a prompt; a file conflict shows the remote size and time and offers resume.
+#[test]
+fn remote_conflicts_merge_folders_and_describe_the_remote_file() {
+    let (events, received) = mpsc::channel();
+    let cancel = AtomicBool::new(false);
+    let folder = RemoteEntry { name: "dir".into(), is_dir: true, ..Default::default() };
+    let info = ndr::remote::ConflictInfo { remote: &folder, local_dir: true, remote_is_source: true, can_resume: true };
+    assert_eq!(super::ftp_pane::ask_remote_conflict(&events, &cancel, "/dir", "C:\\local\\dir", &info), ConflictChoice::Overwrite);
+    assert!(received.try_recv().is_err(), "no dialog for two folders");
+    let root = std::env::temp_dir().join(format!("ndr-remote-conflict-{}", std::process::id()));
+    fs::create_dir_all(&root).unwrap();
+    let local = root.join("big.bin");
+    fs::write(&local, vec![0u8; 10]).unwrap();
+    let file = RemoteEntry { name: "big.bin".into(), size: 1000, modified: Some(1_700_000_000), ..Default::default() };
+    let local_text = local.to_string_lossy().into_owned();
+    let worker = std::thread::spawn(move || {
+        let cancel = AtomicBool::new(false);
+        let info = ndr::remote::ConflictInfo { remote: &file, local_dir: false, remote_is_source: true, can_resume: true };
+        super::ftp_pane::ask_remote_conflict(&events, &cancel, "/pub/big.bin", &local_text, &info)
+    });
+    let Ok(Event::Conflict { source, destination, allow_resume, reply }) = received.recv_timeout(Duration::from_secs(5)) else { panic!("conflict dialog expected") };
+    let form = super::file_operation::ConflictForm::read(&source, &destination, allow_resume);
+    assert_eq!((form.source_size, form.destination_size), (Some(1000), Some(10)));
+    assert_eq!(form.source_modified, Some(std::time::UNIX_EPOCH + Duration::from_secs(1_700_000_000)));
+    assert!(form.can_resume(), "a smaller local file can be resumed");
+    reply.send(ConflictChoice::Resume).unwrap();
+    assert_eq!(worker.join().unwrap(), ConflictChoice::Resume);
+    let _ = fs::remove_dir_all(root);
 }
