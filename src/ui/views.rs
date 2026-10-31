@@ -1,5 +1,8 @@
 use super::*;
 
+/// Pane folder tree level width (VCL TCustomTreeView Indent default 19, matching the captured original).
+const TREE_INDENT: f32 = 19.0;
+
 /// Formats whose shell icon differs per file (executables and icon files whose DefaultIcon is "%1", shortcuts that use the target's icon, etc.).
 pub(super) fn has_own_icon(path: &Path) -> bool {
     const OWN: [&str; 10] = ["exe", "lnk", "ico", "cur", "ani", "url", "scr", "cpl", "msc", "appref-ms"];
@@ -170,16 +173,15 @@ impl App {
     }
 
     /// Icon of a pane folder-tree item (TNXShellTreeView: that item's icon from the shell image list). Before it is read, the folder icon.
+    /// The running original shows these icons with both the list's showicon=0 and [Tree] tshowicon=0 (that key is the F10 window's), so the
+    /// list's ShowIcons does not apply. Fixed: previously the tree lost its icons with the list icons turned off.
     pub(super) fn shell_node_icon(&mut self, ctx: &egui::Context, node: &ndr::shell_tree::ShellNode) -> Option<egui::TextureHandle> {
-        if !self.settings.flag("ShowIcons", true) {
-            return None;
-        }
         match self.overlay_icons.get(&node.key) {
             Some(Some(texture)) => Some(texture.clone()),
-            Some(None) => self.path_icon(ctx, &node.key, true),
+            Some(None) => self.any_path_icon(ctx, &node.key, true),
             None => {
                 self.queue_icon_job(node.key.clone(), 2);
-                self.path_icon(ctx, &node.key, true)
+                self.any_path_icon(ctx, &node.key, true)
             }
         }
     }
@@ -189,6 +191,11 @@ impl App {
         if !self.settings.flag("ShowIcons", true) {
             return None;
         }
+        self.any_path_icon(ctx, path, directory)
+    }
+
+    /// `path_icon` without the list's ShowIcons setting (the pane folder tree always shows icons).
+    pub(super) fn any_path_icon(&mut self, ctx: &egui::Context, path: &Path, directory: bool) -> Option<egui::TextureHandle> {
         let key = if directory {
             "<DIR>".to_owned()
         } else {
@@ -662,7 +669,8 @@ impl App {
         // (Color, +0x7c) is black (0), white (focused 0xFEFEFE, otherwise 0xFFFFFF); otherwise the tree font color (NXFORE).
         // Fix: previously it drew NXFORE text on an NXSELECT background (the original uses the system highlight color).
         let (background, text) = (self.basic_list_color("NXBACK"), self.basic_list_color("NXFORE"));
-        let (select, selected_text) = tree_selection_colors(background, text, native::system_color(13));
+        let tree_focused = self.tree_focus == Some(index);
+        let (selection_box, selected_text) = tree_selection_colors(background, text, native::system_color(13), tree_focused);
         ui.painter().rect_filled(rect, 0.0, background);
         let path = self.panes[index].path.clone();
         let local = self.panes[index].archive.is_none() && self.panes[index].remote.is_none() && !super::panes::is_drives(&path);
@@ -720,8 +728,28 @@ impl App {
         ui.ctx().data_mut(|d| d.insert_temp(reveal_id, reveal && selected_line.is_none()));
         let mut area = egui::ScrollArea::both().id_salt(("ndr-pane-tree-scroll", index)).auto_shrink([false, false]).max_height(rect.height());
         if let (true, Some(line)) = (reveal, selected_line) {
-            let depth = rows[line].1 as f32;
-            area = area.vertical_scroll_offset((line as f32 * row_height - rect.height() / 2.0).max(0.0)).horizontal_scroll_offset((depth * 16.0 - 16.0).max(0.0));
+            // TreeView expansion (TVM_EXPAND) scrolls so the expanded folder's items fit, which puts the parent at the top when they overflow (the
+            // captured original shows "로컬 디스크 (D:)" as the first row); then the target is made visible. Previously the target was centered
+            // and the view scrolled one level right.
+            let depth = rows[line].1;
+            let page = ((rect.height() / row_height).floor() as usize).max(1);
+            let mut top = self.panes[index].tree_first;
+            if let Some(parent) = (0..line).rev().find(|&i| rows[i].1 + 1 == depth) {
+                let end = (parent + 1..rows.len()).find(|&i| rows[i].1 <= rows[parent].1).unwrap_or(rows.len()) - 1;
+                if end + 1 - parent > page || parent < top {
+                    top = parent;
+                } else if end >= top + page {
+                    top = end + 1 - page;
+                }
+            }
+            if line < top {
+                top = line;
+            } else if line >= top + page {
+                top = line + 1 - page;
+            }
+            let item_left = (depth as f32 - 1.0) * TREE_INDENT + 21.0;
+            let horizontal = if item_left > rect.width() - 60.0 { (item_left - rect.width() / 2.0).max(0.0) } else { 0.0 };
+            area = area.vertical_scroll_offset(top as f32 * row_height).horizontal_scroll_offset(horizontal);
         } else if let (true, Some(line)) = (std::mem::take(&mut self.panes[index].tree_scroll_to), selected_line) {
             // If the keyboard-moved row is outside the visible range (last frame), scroll only enough to reach that edge (like TTreeView).
             let (first, page) = (self.panes[index].tree_first, self.panes[index].tree_page.max(1));
@@ -742,31 +770,36 @@ impl App {
             ui.spacing_mut().item_spacing.y = 0.0;
             for (line, (node, depth)) in rows[range.clone()].iter().enumerate() {
                 let galley = ui.painter().layout_no_wrap(node.name.clone(), font.clone(), Color32::PLACEHOLDER);
-                let indent = *depth as f32 * 16.0;
-                let width = (indent + 16.0 + 18.0 + galley.size().x + 6.0).max(ui.available_width());
+                // Layout measured in the running original (TTreeView Indent 19): the button cell is the level's first 19 px (glyph centered),
+                // the 16 px icon starts 21 px in, the text 42 px in. FUN_0048da38 turns ShowRoot off (FUN_006c9330(tree, 0)), so the root
+                // (desktop) has no button cell and level d starts at (d - 1) x 19. Previously 16 px levels from the root, the icon at 17, the text at 36.
+                let indent = (*depth as f32 - 1.0) * TREE_INDENT;
+                let width = (indent + 42.0 + galley.size().x + 6.0).max(ui.available_width());
                 let (row, response) = ui.allocate_exact_size(egui::vec2(width, row_height), egui::Sense::click());
                 let selected = selected_line == Some(range.start + line)
                     // Original FUN_0048eb0c: while dragging, the node under the pointer is the DropTarget (TreeView draws it highlighted like the selected item).
                     || (self.file_drag.is_some() && self.tree_drop_hover.as_ref().is_some_and(|(p, key, _)| *p == index && same_key(key, &node.key)));
-                let text_rect = egui::Rect::from_min_size(egui::pos2(row.left() + indent + 34.0, row.top()), egui::vec2(galley.size().x + 4.0, row_height));
-                if selected {
-                    ui.painter().rect_filled(text_rect, 0.0, select);
+                let text_rect = egui::Rect::from_min_size(egui::pos2(row.left() + indent + 40.0, row.top()), egui::vec2(galley.size().x + 4.0, row_height));
+                if let (true, Some((fill, border))) = (selected, selection_box) {
+                    // Themed selection box from 2 px left of the icon to 5 px past the text, the whole row high, 1 px border with rounded corners.
+                    let boxed = egui::Rect::from_min_max(egui::pos2(row.left() + indent + 19.0, row.top()), egui::pos2(text_rect.left() + 2.0 + galley.size().x + 5.0, row.bottom()));
+                    ui.painter().rect(boxed, 1.0, fill, egui::Stroke::new(1.0, border), egui::StrokeKind::Inside);
                 }
-                // Expand indicator (▸/▾): only for items the shell reported as having subfolders (SFGAO_HASSUBFOLDER); removed if found empty on read.
+                // Expand indicator: only for items the shell reported as having subfolders (SFGAO_HASSUBFOLDER); removed if found empty on read.
                 // Original CanExpand (0x7ede40): a folder node with no children yet is populated, then HasChildren = child count > 0.
-                let arrow = egui::Rect::from_min_size(egui::pos2(row.left() + indent, row.top()), egui::vec2(16.0, row_height));
+                let arrow = egui::Rect::from_min_size(egui::pos2(row.left() + indent, row.top()), egui::vec2(TREE_INDENT, row_height));
                 let open = self.panes[index].tree_open.iter().any(|k| same_key(k, &node.key));
                 let expandable = node.has_children && !self.tree_cache.get(&(node.key.clone(), self.panes[index].show_hidden)).is_some_and(|c| c.is_empty());
-                if expandable {
-                    // The list font may not have ▸·▾ glyphs, so draw a triangle shape.
-                    let c = arrow.center();
-                    let points = if open { vec![c + egui::vec2(-4.0, -2.0), c + egui::vec2(4.0, -2.0), c + egui::vec2(0.0, 3.0)] } else { vec![c + egui::vec2(-2.0, -4.0), c + egui::vec2(3.0, 0.0), c + egui::vec2(-2.0, 4.0)] };
-                    ui.painter().add(egui::Shape::convex_polygon(points, text, egui::Stroke::NONE));
+                if expandable && *depth > 0 {
+                    // The themed chevrons of the captured original: collapsed ">" 4 x 8 px, expanded "v" 8 x 4 px, 1 px strokes (tree_glyph_color).
+                    let c = egui::pos2(arrow.center().x.floor() + 0.5, arrow.center().y.floor() + 1.5);
+                    let points = if open { vec![c + egui::vec2(-4.0, -2.0), c + egui::vec2(0.0, 2.0), c + egui::vec2(4.0, -2.0)] } else { vec![c + egui::vec2(-2.0, -4.0), c + egui::vec2(2.0, 0.0), c + egui::vec2(-2.0, 4.0)] };
+                    ui.painter().add(egui::Shape::line(points, egui::Stroke::new(1.2, tree_glyph_color(background, open))));
                 }
                 if let Some(icon) = self.shell_node_icon(ui.ctx(), node) {
                     // Original InitNode (0x7ed85c): a ghosted folder (hidden) gets Cut = true, which TTreeView draws with the dimmed icon.
                     let icon = if node.ghosted { self.ghost_icons.get(&icon.id()).cloned().unwrap_or(icon) } else { icon };
-                    ui.painter().image(icon.id(), egui::Rect::from_center_size(egui::pos2(row.left() + indent + 25.0, row.center().y), egui::vec2(16.0, 16.0)), egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
+                    ui.painter().image(icon.id(), egui::Rect::from_center_size(egui::pos2(row.left() + indent + 29.0, row.center().y), egui::vec2(16.0, 16.0)), egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
                 }
                 let editing = self.panes[index].tree_edit.as_ref().is_some_and(|(folder, _)| node.path.as_ref().is_some_and(|p| same_key(p, folder)));
                 if editing {
@@ -1087,11 +1120,25 @@ pub(super) fn tree_renamable(node: &ndr::shell_tree::ShellNode) -> bool {
     node.special == ndr::shell_tree::Special::None && !ndr::shell_tree::is_virtual(&node.key) && node.path.as_ref().is_some_and(|p| p.parent().is_some() && p.file_name().is_some())
 }
 
-/// Pane folder-tree selected-row (background, text) colors: VCL TCustomTreeView sets the selected item's brush to clHighlight (`highlight` = GetSysColor(13)),
-/// and the original OnCustomDrawItem FUN_0048e104 sets the text color to white if the tree background is black, otherwise the tree font color.
-pub(super) fn tree_selection_colors(background: Color32, fore: Color32, highlight: (u8, u8, u8)) -> (Color32, Color32) {
+/// Pane folder-tree selected row, as the running original draws it (themed TTreeView on the list background): with the keyboard focus in the
+/// tree a box over icon and text filled with the highlight color (GetSysColor(13)) at about 24 % over the background and a 1 px highlight
+/// border; without the focus no box at all. Text: OnCustomDrawItem FUN_0048e104 sets white on a black background (0xFEFEFE focused,
+/// 0xFFFFFF otherwise), else the tree font color. Returns (Some((fill, border)) when a box is drawn, text color).
+/// Fixed: previously a solid highlight bar was drawn whether or not the tree had the focus.
+pub(super) fn tree_selection_colors(background: Color32, fore: Color32, highlight: (u8, u8, u8), focused: bool) -> (Option<(Color32, Color32)>, Color32) {
     let (r, g, b) = highlight;
-    (Color32::from_rgb(r, g, b), if background == Color32::BLACK { Color32::WHITE } else { fore })
+    let blend = |c: u8, bg: u8| ((c as f32 * 0.24) + (bg as f32 * 0.76)).round() as u8;
+    let text = if background == Color32::BLACK { if focused { Color32::from_gray(0xFE) } else { Color32::WHITE } } else { fore };
+    let boxed = focused.then(|| (Color32::from_rgb(blend(r, background.r()), blend(g, background.g()), blend(b, background.b())), Color32::from_rgb(r, g, b)));
+    (boxed, text)
+}
+
+/// Expand glyph color of the themed tree on `background`: the captured original shows a collapsed ">" as 0x8B and an expanded "v" as 0x1B on
+/// black, i.e. 0xA6 at 84 % and 0x26 at 72 % coverage.
+pub(super) fn tree_glyph_color(background: Color32, open: bool) -> Color32 {
+    let (c, a) = if open { (0x26 as f32, 0.72) } else { (0xA6 as f32, 0.84) };
+    let mix = |bg: u8| (c * a + bg as f32 * (1.0 - a)).round() as u8;
+    Color32::from_rgb(mix(background.r()), mix(background.g()), mix(background.b()))
 }
 
 
@@ -1100,11 +1147,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pane_tree_selection_uses_the_system_highlight_like_the_ttreeview() {
-        let highlight = (0, 120, 215);
-        // If the background is black (original default NXBACK 000000), white text; otherwise the tree font color (NXFORE). The background is always the system highlight color.
-        assert_eq!(tree_selection_colors(Color32::BLACK, Color32::from_gray(0xC0), highlight), (Color32::from_rgb(0, 120, 215), Color32::WHITE));
-        assert_eq!(tree_selection_colors(Color32::WHITE, Color32::from_rgb(1, 2, 3), highlight), (Color32::from_rgb(0, 120, 215), Color32::from_rgb(1, 2, 3)));
+    fn pane_tree_selection_follows_the_captured_original() {
+        let highlight = (0, 0x78, 0xD4);
+        // Focused on black: fill 001C33 (24 %) and a 0078D4 border, text 0xFEFEFE (pixels measured in the running original).
+        assert_eq!(tree_selection_colors(Color32::BLACK, Color32::from_gray(0xC0), highlight, true), (Some((Color32::from_rgb(0, 0x1D, 0x33), Color32::from_rgb(0, 0x78, 0xD4))), Color32::from_gray(0xFE)));
+        // Not focused: no box, white text.
+        assert_eq!(tree_selection_colors(Color32::BLACK, Color32::from_gray(0xC0), highlight, false), (None, Color32::WHITE));
+        // Other backgrounds keep the tree font color.
+        assert_eq!(tree_selection_colors(Color32::WHITE, Color32::from_rgb(1, 2, 3), highlight, false).1, Color32::from_rgb(1, 2, 3));
+        assert_eq!((tree_glyph_color(Color32::BLACK, false), tree_glyph_color(Color32::BLACK, true)), (Color32::from_gray(0x8B), Color32::from_gray(0x1B)));
     }
 
     /// A fake font where each glyph is 10px and only '.' is 2px.
