@@ -18,6 +18,8 @@ pub(super) struct PaneSummary {
 pub(super) fn summarize(entries: &[Entry], ko: bool) -> PaneSummary {
     let mut summary = PaneSummary::default();
     let mut extensions: Vec<(String, usize)> = Vec::new();
+    // Original FUN_0048aa30 counts with FUN_007d2f80 every item of kind 1 and 3, so ".." is counted as a folder ("5 폴더" for four folders,
+    // seen in the running original). Fixed: ".." (and drive items) are not counted.
     for entry in entries {
         if entry.drive || entry.is_parent() {
             continue;
