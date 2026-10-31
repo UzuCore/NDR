@@ -310,8 +310,8 @@ fn format_number(value: f64, decimals: usize, thousands: bool, trim: bool) -> St
 /// Original TNXCustomFileListView::SizeToStr (0x7df870): list size cell text. unit = SizeUnit (Auto, B, KB, MB, GB = 0-4 of original +0x318),
 /// comma = UseThousandsSeparator (+0x31c, original [Display] usesizecomma).
 /// - Auto (FUN_007df5a4): from 1000 GB TB ((size>>30)/1024), from 1000 MB (0x3e800000) GB ((size>>20)/1024),
-///   from 1000 KB (0xfa000) MB ((size>>10)/1024), from 1024 KB, otherwise "%d" (no unit). Values of 100 or more use Round(v),
-///   10 or more Round(v*10)/10, otherwise Round(v*100)/100 (Delphi Round = round half to even) -> FloatToStrF(ffFixed, 10, digits) + " " + unit.
+///   from 1000 KB (0xfa000) MB ((size>>10)/1024), from 1024 KB, otherwise "%d" (no unit). Values of 100 or more use Floor(v),
+///   10 or more Floor(v*10)/10, otherwise Floor(v*100)/100 (FUN_00535544) -> FloatToStrF(ffFixed, 10, digits) + " " + unit.
 ///   Unit table 0x92d414 = "b","KB","MB","GB","TB". No thousands separators.
 /// - A chosen unit uses FloatToText (ffFixed, or ffNumber with commas, 20, digits): B without decimals or unit text, KB/MB/GB two decimals + " KB" and so on.
 pub fn size_to_str(size: u64, unit: &str, comma: bool) -> String {
@@ -346,12 +346,10 @@ pub fn size_to_str(size: u64, unit: &str, comma: bool) -> String {
         return size.to_string();
     };
     let digits = if mantissa >= 100 * 1024 { 0 } else if mantissa >= 10 * 1024 { 1 } else { 2 };
-    // Round(v x 10^digits), v = mantissa / 1024, rounding half to even.
+    // Floor(v x 10^digits) / 10^digits, v = mantissa / 1024 (FUN_00535544 = Trunc, minus one when Frac < 0, i.e. Math.Floor).
+    // Fixed: previously rounded half to even, so 353,836 bytes showed "346 KB" where the running original shows "345 KB".
     let numerator = mantissa as u128 * 10u128.pow(digits);
-    let (mut q, rest) = (numerator / 1024, numerator % 1024);
-    if rest * 2 > 1024 || (rest * 2 == 1024 && q % 2 == 1) {
-        q += 1;
-    }
+    let q = numerator / 1024;
     format!("{} {}", fixed(q, digits, false), UNITS[index])
 }
 
@@ -544,14 +542,17 @@ mod tests {
         assert_eq!(size_to_str(1023, "Auto", true), "1023");
         assert_eq!(size_to_str(1024, "Auto", true), "1.00 KB");
         assert_eq!(size_to_str(1536, "Auto", false), "1.50 KB");
-        assert_eq!(size_to_str(1152, "Auto", false), "1.12 KB", "Round is round-half-even");
+        assert_eq!(size_to_str(1152, "Auto", false), "1.12 KB");
         assert_eq!(size_to_str(10240, "Auto", true), "10.0 KB");
         assert_eq!(size_to_str(102_400, "Auto", true), "100 KB");
-        assert_eq!(size_to_str(1_023_999, "Auto", true), "1000 KB");
-        assert_eq!(size_to_str(1_024_000, "Auto", true), "0.98 MB", "1000 KB and above is MB");
-        assert_eq!(size_to_str(1_234_567, "Auto", true), "1.18 MB");
+        // FUN_00535544 is Floor: the running original shows 353,836 bytes as "345 KB" (345.54) and 9,006 as "8.79 KB".
+        assert_eq!(size_to_str(353_836, "Auto", true), "345 KB");
+        assert_eq!(size_to_str(9_006, "Auto", true), "8.79 KB");
+        assert_eq!(size_to_str(1_023_999, "Auto", true), "999 KB");
+        assert_eq!(size_to_str(1_024_000, "Auto", true), "0.97 MB", "1000 KB and above is MB");
+        assert_eq!(size_to_str(1_234_567, "Auto", true), "1.17 MB");
         assert_eq!(size_to_str(5 << 30, "Auto", true), "5.00 GB");
-        assert_eq!(size_to_str(2_000_000_000_000, "Auto", true), "1.82 TB");
+        assert_eq!(size_to_str(2_000_000_000_000, "Auto", true), "1.81 TB");
         // Chosen unit: B has no unit text, commas use ffNumber.
         assert_eq!(size_to_str(1_234_567, "B", true), "1,234,567");
         assert_eq!(size_to_str(1_234_567, "B", false), "1234567");
