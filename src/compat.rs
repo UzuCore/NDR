@@ -989,6 +989,9 @@ fn import_sidecars(settings: &mut Settings, parent: &Path, ini: &Path) -> Result
     }
     Ok(())
 }
+/// Original ftpsite.ini reader FUN_00457b6c: a trimmed line starting with "[" opens a site whose name drops the first and last character, the
+/// following lines up to the next "[" are its Values; FUN_00457720 reads host, port (StrToIntDef 21), user, pass (hex FUN_00456f50 then RC4
+/// FUN_00456d5c), remotedir, passive (StrToIntDef 1, nonzero = on) and servertype.
 fn import_remote_site(header: &str, rows: &[&str]) -> Result<serde_json::Value, String> {
     let get = |wanted: &str| {
         rows.iter()

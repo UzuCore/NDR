@@ -3,6 +3,8 @@
 //! Manager: name list on the left, name, address, user, password, remote folder, port, server type (FTP/SFTP/FTPS) and passive mode on the right. Moving to another row
 //! validates the current row (TfMsgBox FTPSITE_INVALIDINFO when name or address is empty) and stores it (the saved server key is cleared when type, port or address change, or when not SFTP).
 //! Add (TfGetText FTPSITE_ADD, FTPSITE_EXISTS for a duplicate name), delete (FTPSITE_DELCONFIRM yes/no), advanced settings (editor window), connect, OK, cancel.
+//! Original TfFTPSiteManager: the row check-and-store is FUN_00428438 (index < 0 passes; port through StrToIntDef FUN_0040c2a0), and btnAddClick
+//! (0x428048) first runs it on the selected row, then asks for the name (FUN_0040bea0 finds a duplicate) and adds the row (FUN_00427b00 refreshes).
 use super::original_dialogs::{DialogKind, DialogResult};
 use super::remote_window::{SiteProfile, load_sites, parse_port, prepare_host, store_sites, t};
 use super::*;
