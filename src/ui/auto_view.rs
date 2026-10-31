@@ -448,6 +448,13 @@ impl App {
             let step = if by_page { columns } else { 1 } as i64;
             first = snap((first as i64 - notches * step).clamp(0, last_first as i64) as usize);
         }
+        // Original TNXDropTarget.DoTargetScroll (0x7b1e04): while dragging near the left or right edge, WM_HSCROLL one column (a page in page mode).
+        let dx = std::mem::take(&mut self.panes[index].drag_scroll.1);
+        if dx != 0 {
+            let step = if by_page { columns } else { 1 } as i64;
+            first = snap((first as i64 + dx as i64 * step).clamp(0, last_first as i64) as usize);
+        }
+        self.panes[index].drag_scroll.0 = 0;
         // 원본 AdjustPage(0x7daf24, 형식 0·1): 쪽 단위면 그 항목의 쪽, 아니면 그 열이 왼쪽 밖일 때 그 열부터, 그 밖에는 언제나 그 열이
         // 마지막 보이는 열이 되게(0보다 작으면 0) 둔다. 그 뒤 SetItemIndex(reveal)가 커서를 보이게 한다.
         if let Some((item, reload)) = self.panes[index].adjust.take() {

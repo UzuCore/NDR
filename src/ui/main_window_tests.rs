@@ -2183,3 +2183,51 @@ fn drive_changes_relist_local_panes_with_drive_rows() {
     assert_eq!(app.panes[0].generation, before);
     let _ = fs::remove_dir_all(root);
 }
+
+
+/// 원본 TNXDropTarget(0x7b21a0 DragOver, 0x7b1e04 DoTargetScroll, 타이머 100ms, 여백 20): 끄는 동안 목록 아래쪽 15화소 띠 안에 있으면
+/// 100ms마다 한 칸씩 굴린다(가운데에서는 굴리지 않는다).
+#[test]
+fn dragging_near_the_list_edge_scrolls_like_the_drop_target() {
+    let (root, ctx, mut app) = fixture("drag-scroll");
+    let left = app.panes[0].path.clone();
+    for i in 0..300 {
+        fs::write(left.join(format!("f{i:03}.txt")), b"x").unwrap();
+    }
+    app.settings.set_text("LeftViewStyle", "Details");
+    app.settings.values.insert("LeftScrollStep".into(), serde_json::json!(1));
+    app.refresh(0);
+    wait(&mut app, &ctx);
+    let run = |app: &mut App| {
+        let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 850.0))), ..Default::default() };
+        let _ = ctx.run(raw, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.columns(2, |columns| {
+                    app.pane_ui(&mut columns[0], 0, ctx);
+                    app.pane_ui(&mut columns[1], 1, ctx);
+                });
+            });
+        });
+    };
+    run(&mut app);
+    run(&mut app);
+    let rect = app.panes[0].list_rect.expect("the list area is recorded");
+    let start = Instant::now();
+    let middle = rect.center();
+    assert!(!app.drag_edge_scroll(Some(middle), start, &ctx), "no scrolling in the middle");
+    let bottom = egui::pos2(rect.center().x, rect.bottom() - 5.0);
+    assert!(!app.drag_edge_scroll(Some(bottom), start, &ctx), "the timer starts first");
+    assert!(!app.drag_edge_scroll(Some(bottom), start + Duration::from_millis(50), &ctx));
+    assert!(app.drag_edge_scroll(Some(bottom), start + Duration::from_millis(100), &ctx), "one line after 100 ms");
+    assert_eq!(app.panes[0].drag_scroll, (1, 0));
+    let first_before = app.panes[0].page.top;
+    run(&mut app);
+    run(&mut app);
+    assert_eq!(app.panes[0].drag_scroll, (0, 0), "the request is used");
+    assert_eq!(app.panes[0].page.top, first_before + 1, "the list moved down one line");
+    // 위쪽 가장자리(같은 패널, 타이머는 이어서 돈다): 한 칸 위로.
+    let top = egui::pos2(rect.center().x, rect.top() + 3.0);
+    assert!(app.drag_edge_scroll(Some(top), start + Duration::from_millis(300), &ctx));
+    assert_eq!(app.panes[0].drag_scroll, (-1, 0));
+    let _ = fs::remove_dir_all(root);
+}

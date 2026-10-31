@@ -361,6 +361,15 @@ impl App {
         let here = line_at(current);
         let stride = heights.get(here).map_or(26.0, |h| *h) + spacing_y;
         let wheel = Self::wheel_scroll(ui, egui::Id::new(("tiles", index)), height, stride, by_page, wheel_lines);
+        // 원본 DoTargetScroll: 끄는 동안 위·아래 가장자리면 한 줄(쪽 단위면 한 쪽)씩.
+        let dy = std::mem::take(&mut self.panes[index].drag_scroll.0);
+        self.panes[index].drag_scroll.1 = 0;
+        let wheel = if dy != 0 {
+            let step = if by_page { Self::wheel_step(true, height, stride, 1) } else { stride };
+            Some((current + dy as f32 * step).max(0.0))
+        } else {
+            wheel
+        };
         let mut area = egui::ScrollArea::vertical()
             .id_salt(("tiles", index))
             .scroll_source(super::panes::WHEEL_OFF)

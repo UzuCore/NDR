@@ -9,6 +9,8 @@ use super::*;
 
 /// 원본 패널 트리 놓기 타이머(+0x2f4, FUN_0048da38의 Interval 0x4b0).
 pub(super) const TREE_DROP_EXPAND_DELAY: Duration = Duration::from_millis(1200);
+/// 원본 TNXDropTarget 굴리기 타이머(+0x74, 생성자 0x7b1bc4의 Interval 0x64).
+pub(super) const DRAG_SCROLL_INTERVAL: Duration = Duration::from_millis(100);
 
 /// 끌고 있는 패널 항목.
 pub(super) struct FileDrag {
@@ -96,6 +98,45 @@ impl App {
         Some((pane, folder.unwrap_or_else(|| self.panes[pane].path.clone())))
     }
 
+    /// 원본 목록 놓기 대상의 가장자리 굴리기: 놓기 효과(0x488700)는 포인터가 목록 위쪽 15화소(y ≤ 14) 또는 아래쪽 15화소(y > 높이 − 15) 안이면
+    /// 굴리기 표시(0x80000000)를 붙이고, TNXDropTarget.DragOver(0x7b21a0)가 그동안 100ms 타이머(+0x74)를 켠다. 타이머가 울릴 때마다
+    /// DoTargetScroll(0x7b1e04)이 여백 20(+0x6c) 안이면 WM_VSCROLL(위·아래)·WM_HSCROLL(왼쪽·오른쪽) 한 칸을 보낸다.
+    /// 굴린 칸은 `Pane.drag_scroll`로 넘기고 다음 그림에서 목록이 옮긴다. 굴렸으면 true.
+    pub(super) fn drag_edge_scroll(&mut self, position: Option<egui::Pos2>, now: Instant, ctx: &egui::Context) -> bool {
+        let hit = position.and_then(|p| (0..self.panes.len()).find_map(|i| self.panes[i].list_rect.filter(|r| r.contains(p)).map(|r| (i, r, p))));
+        let Some((pane, rect, p)) = hit else {
+            self.drag_scroll_tick = None;
+            return false;
+        };
+        let (x, y, w, h) = (p.x - rect.left(), p.y - rect.top(), rect.width(), rect.height());
+        let flagged = !(y > 14.0 && y <= h - 15.0);
+        if !flagged {
+            self.drag_scroll_tick = None;
+            return false;
+        }
+        let next = match self.drag_scroll_tick {
+            Some((p, at)) if p == pane => at,
+            _ => {
+                self.drag_scroll_tick = Some((pane, now + DRAG_SCROLL_INTERVAL));
+                ctx.request_repaint_after(DRAG_SCROLL_INTERVAL);
+                return false;
+            }
+        };
+        if now < next {
+            ctx.request_repaint_after(next - now);
+            return false;
+        }
+        let dy = if y < 20.0 { -1 } else if y > h - 20.0 { 1 } else { 0 };
+        let dx = if x < 20.0 { -1 } else if x > w - 20.0 { 1 } else { 0 };
+        self.drag_scroll_tick = Some((pane, now + DRAG_SCROLL_INTERVAL));
+        ctx.request_repaint_after(DRAG_SCROLL_INTERVAL);
+        if dy == 0 && dx == 0 {
+            return false;
+        }
+        self.panes[pane].drag_scroll = (dy, dx);
+        true
+    }
+
     /// 그 위치의 패널 폴더 트리 줄(패널, 폴더, 셸 열쇠, 펼칠 수 있음). 원본 트리 OnDragOver FUN_0048eb0c의 GetNodeAt.
     pub(super) fn tree_drop_at(&self, position: Option<egui::Pos2>) -> Option<(usize, PathBuf, PathBuf, bool)> {
         let position = position?;
@@ -179,6 +220,13 @@ impl App {
         // 패널 폴더 트리 위면 원본 트리 OnDragOver: 그 노드를 강조하고(pane_tree_ui), 머물면 1200ms 뒤 펼친다.
         if !released && self.tree_drag_hover(pointer, Instant::now(), ctx) {
             ctx.request_repaint();
+        }
+        // 목록 위·아래 가장자리면 원본 DoTargetScroll처럼 100ms마다 한 칸씩 굴린다.
+        if !released && self.drag_edge_scroll(pointer, Instant::now(), ctx) {
+            ctx.request_repaint();
+        }
+        if released {
+            self.drag_scroll_tick = None;
         }
         let Some(drag) = &self.file_drag else { return };
         // 창 밖으로 끌고 나가면 셸 끌기(C# DoDragDrop)로 넘긴다. 놓을 곳(탐색기 등)이 복사·이동·바로 가기를 한다.

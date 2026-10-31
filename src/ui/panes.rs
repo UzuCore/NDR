@@ -1405,6 +1405,7 @@ impl App {
                     pane.adjust = Some((pane.cursor.min(pane.entries.len() - 1), false));
                 }
                 pane.list_shape = Some(shape);
+                pane.list_rect = Some(list_rect);
                 // 사용자 요청(2026-10-31 16:49): 바퀴는 원본 WMMouseWheel(0x7d5ba0)처럼 목록을 넘긴다(쪽 단위 설정이면 한 쪽씩).
                 // r138~r160의 "바퀴 = 커서 위·아래"는 되돌렸다. 각 보기의 wheel_scroll이 처리한다.
                 if tiles {
@@ -1456,6 +1457,17 @@ impl App {
                 let page_px = page_rows as f32 * stride;
                 // 원본 SetScrollTop(쪽 단위): 바퀴로 옮긴 위치는 쪽 경계(쪽 번호 × 한 쪽)다.
                 let wheel = Self::wheel_scroll(ui, egui::Id::new(("files", index)), height, stride, by_page, (self.system.wheel_lines)()).map(|o| if by_page { Self::page_snap(o, page_px, pages) } else { o });
+                // 원본 DoTargetScroll: 끄는 동안 위·아래 가장자리면 한 칸(쪽 단위면 한 쪽)씩.
+                let dy = std::mem::take(&mut self.panes[index].drag_scroll.0);
+                self.panes[index].drag_scroll.1 = 0;
+                let wheel = if dy != 0 {
+                    let step = if by_page { page_px } else { stride };
+                    let now_offset = egui::scroll_area::State::load(ui.ctx(), ui.make_persistent_id(egui::Id::new(("files", index)))).map_or(0.0, |s| s.offset.y);
+                    let moved = (now_offset + dy as f32 * step).max(0.0);
+                    Some(if by_page { Self::page_snap(moved, page_px, pages) } else { moved })
+                } else {
+                    wheel
+                };
                 let mut area = egui::ScrollArea::both()
                     .id_salt(("files", index))
                     .scroll_source(WHEEL_OFF)

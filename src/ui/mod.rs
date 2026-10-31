@@ -181,6 +181,10 @@ struct Pane {
     adjust: Option<(usize, bool)>,
     /// 지난 그림의 목록 크기와 보기 형식(바뀌면 adjust).
     list_shape: Option<(egui::Vec2, String)>,
+    /// 지난 화면의 목록 영역(끄는 동안 가장자리 자동 굴리기에 쓴다).
+    list_rect: Option<egui::Rect>,
+    /// 이번 화면에 목록을 굴릴 칸 수(세로, 가로): 원본 TNXDropTarget.DoTargetScroll이 WM_VSCROLL/WM_HSCROLL SB_LINEUP·SB_LINEDOWN을 보낸 자리.
+    drag_scroll: (i8, i8),
     /// Shift를 누른 채 움직이기 시작한 자리(원본 SetShiftDownIndex 0xf4).
     shift_anchor: Option<usize>,
     /// 원본 표시 칸 끌기(+0x3d4 기준 줄, +0x3d8 지난 끝 줄). 왼쪽 단추를 놓으면 없앤다(MouseUp).
@@ -242,6 +246,8 @@ impl Pane {
             reveal: false,
             adjust: None,
             list_shape: None,
+            list_rect: None,
+            drag_scroll: (0, 0),
             shift_anchor: None,
             range_drag: None,
             cut_marks: HashSet::new(),
@@ -642,6 +648,8 @@ pub struct App {
     tree_drop_rows: Vec<(usize, egui::Rect, PathBuf, PathBuf, bool)>,
     /// 끄는 동안 머문 트리 노드(패널, 열쇠, 머물기 시작한 때). 원본 FUN_0048eb0c·타이머 +0x2f4(1200ms) → FUN_0048edf0 펼치기.
     tree_drop_hover: Option<(usize, PathBuf, Instant)>,
+    /// 끄는 동안 가장자리 굴리기 타이머(패널, 다음 울릴 때). 원본 TNXDropTarget +0x74(100ms).
+    drag_scroll_tick: Option<(usize, Instant)>,
     pane_rects: [egui::Rect; 2],
     /// 창 밖으로 끌어 내기(셸 끌기). 테스트에서는 끈다(실제 끌기 고리를 돌리지 않는다).
     allow_drag_out: bool,
@@ -933,6 +941,7 @@ impl App {
             folder_rows: Vec::new(),
             tree_drop_rows: Vec::new(),
             tree_drop_hover: None,
+            drag_scroll_tick: None,
             pane_rects: [egui::Rect::NOTHING; 2],
             allow_drag_out: !cfg!(test),
             hwnd: 0,
