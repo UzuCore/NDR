@@ -653,6 +653,7 @@ impl SettingsForm {
             ("Caption.TntLabel3", "pixel"),
             ("GroupBox.gbTreeFont", "Font"),
             ("GroupBox.gbArchive", "External Archive Programs"),
+            ("Caption.chkUseExtArcProgram", "Use external archive programs"),
             ("GroupBox.gbPrograms", "External Program"),
             ("GroupBox.gbMyFolders", "Paths"),
             ("Caption.lHelpPath", "Leave blank to use system default path"),
@@ -1169,6 +1170,12 @@ fn original_page(ui: &mut egui::Ui, form: &mut SettingsForm, tab: usize, origin:
             ] {
                 put_check(ui, rows, key, at(24.0, top, 505.0, 17.0));
             }
+            // Original chkUseExtArcProgram (24,61): NDR uses only the built-in 7-Zip (user decision), so it is shown greyed out and unchecked.
+            // Previously the row was left out, leaving a gap.
+            ui.add_enabled_ui(false, |ui| {
+                let mut unused = false;
+                super::original_dialogs::access_checkbox(ui, at(24.0, 61.0, 505.0, 17.0), &mut unused, &cap("Caption.chkUseExtArcProgram", "Use external archive programs"));
+            });
             put_label(ui, at(46.0, 253.0, 300.0, 15.0), &label_of(rows, "DefaultDeleteButton"));
             put_combo(ui, rows, "DefaultDeleteButton", at(46.0, 270.0, 101.0, 21.0));
             // The original changes these only in the OnClick/OnChange of the two controls.
@@ -1179,9 +1186,20 @@ fn original_page(ui: &mut egui::Ui, form: &mut SettingsForm, tab: usize, origin:
             put_label(ui, at(24.0, 310.0, 300.0, 15.0), &label_of(rows, "EscapeKeyAction"));
             put_combo(ui, rows, "EscapeKeyAction", at(24.0, 327.0, 145.0, 21.0));
         }
-        // tsExtProgram: gbPrograms (32,208 481x101) view and edit (fields 123 316). The original gbArchive (32,24 481x170, external archivers) is left out.
+        // tsExtProgram: gbArchive (32,24 481x170: ARJ/RAR/7Z/ALZ rows 29/65/101/137, fields 77 356, "..." 439) and gbPrograms (32,208 481x101)
+        // view and edit (fields 123 316). NDR uses only the built-in 7-Zip (user decision), so gbArchive is shown greyed out and empty.
+        // Previously gbArchive was left out.
         4 => {
             let rows = &mut form.tabs[tab];
+            group_box(ui, at(32.0, 24.0, 481.0, 170.0), &cap("GroupBox.gbArchive", "External Archiver"));
+            ui.add_enabled_ui(false, |ui| {
+                for (ly, label) in [(29.0, "ARJ:"), (65.0, "RAR:"), (101.0, "7Z:"), (137.0, "ALZ:")] {
+                    put_label(ui, at(32.0 + 26.0, 24.0 + ly, 50.0, 15.0), label);
+                    let mut empty = String::new();
+                    ui.put(at(32.0 + 77.0, 24.0 + ly - 4.0, 356.0, 21.0), egui::TextEdit::singleline(&mut empty));
+                    let _ = ui.put(at(32.0 + 439.0, 24.0 + ly - 6.0, 30.0, 23.0), egui::Button::new("..."));
+                }
+            });
             group_box(ui, at(32.0, 208.0, 481.0, 101.0), &cap("GroupBox.gbPrograms", "External Program"));
             for (ly, key) in [(29.0, "TextViewerPath"), (65.0, "TextEditorPath")] {
                 put_label(ui, at(42.0, 208.0 + ly, 110.0, 15.0), &label_of(rows, key));
@@ -1367,6 +1385,18 @@ pub(super) fn settings_ui(ui: &mut egui::Ui, form: &mut SettingsForm, enter: boo
     let mut action = None;
     let (area, _) = ui.allocate_exact_size(egui::vec2(577.0, 512.0), egui::Sense::hover());
     let at = |x: f32, y: f32, w: f32, h: f32| egui::Rect::from_min_size(area.min + egui::vec2(x, y), egui::vec2(w, h));
+    // TPageControl: Ctrl+Tab selects the next page and Ctrl+Shift+Tab the previous one, wrapping around (seen in the running original).
+    // The keys are consumed so egui does not move the focus instead. Previously Ctrl+Tab only moved the focus between the page tabs.
+    let count = form.tab_titles.len();
+    if count > 0 {
+        // consume_key ignores Shift when the pattern has none, so the Shift pattern goes first.
+        let (previous, next) = ui.input_mut(|i| (i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::Tab), i.consume_key(egui::Modifiers::CTRL, egui::Key::Tab)));
+        if previous {
+            form.tab = (form.tab + count - 1) % count;
+        } else if next {
+            form.tab = (form.tab + 1) % count;
+        }
+    }
     ui.scope_builder(egui::UiBuilder::new().max_rect(at(9.0, 8.0, 557.0, 22.0)).layout(egui::Layout::left_to_right(egui::Align::Center)), |ui| {
         ui.spacing_mut().item_spacing.x = 1.0;
         for (index, title) in form.tab_titles.iter().enumerate() {
