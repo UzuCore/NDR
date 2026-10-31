@@ -1,6 +1,5 @@
 //! Ports the C# NDR pane commands (selection, navigation, view, hidden items, folder size).
 use super::*;
-use ndr::msgbox::{MB_ICONASTERISK, MB_OK};
 
 /// C# ChangeAttributesAsync progress state.
 pub(super) struct AttributeRun {
@@ -117,12 +116,12 @@ impl App {
         }
     }
 
-    /// C# GoToLastDestinationAsync: notifies when there is no last destination folder or it disappeared.
+    /// Original FUN_00443f14 case 0x33 (GoToLastDest, Ctrl+Backspace): when the last destination (+0xe20) is set and PathFileExistsW, the active pane
+    /// goes there (local mode, FUN_00459968); otherwise nothing happens. Previously NDR showed the C# notice "no last destination folder yet".
     pub(super) fn go_last_destination(&mut self) {
         let destination = self.settings.text("LastDestination", "");
-        if destination.trim().is_empty() || !Path::new(&destination).is_dir() {
-            let text = self.tr("아직 사용할 수 있는 마지막 대상 폴더가 없습니다.", "There is no last destination folder to use yet.").into_owned();
-            return self.system_box("NDR", &text, MB_OK | MB_ICONASTERISK, |_, _, _| {});
+        if destination.trim().is_empty() || !Path::new(&destination).exists() {
+            return;
         }
         self.navigate(self.active, destination.into(), true);
     }
