@@ -213,10 +213,15 @@ fn conflict_buttons_follow_the_original_tffileexists() {
         source_modified: None,
         destination_modified: None,
         allow_resume: false,
+        remote: false,
         apply_all: false,
         icons: [None, None],
         textures: [None, None],
     };
+    // Original FTP queue (FUN_00467764): btnOverNewer shown and btnReplace hidden even when the source is a folder (remote file vs local folder).
+    let mut remote = form("/srv/d", "c:\\b\\d", true, false);
+    remote.remote = true;
+    assert_eq!(conflict_buttons(&remote), [(B::Overwrite, true), (B::Skip, true), (B::OverwriteNewer, true), (B::Rename, true), (B::Cancel, true)]);
     // File: overwrite, skip, overwrite newer, rename, cancel (no replace folder), all enabled.
     assert_eq!(conflict_buttons(&form("c:\\a\\x.txt", "c:\\b\\x.txt", false, false)), [(B::Overwrite, true), (B::Skip, true), (B::OverwriteNewer, true), (B::Rename, true), (B::Cancel, true)]);
     // New item is a folder: replace folder instead of overwrite newer at the same position (118).

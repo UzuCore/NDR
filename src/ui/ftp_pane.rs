@@ -29,7 +29,7 @@ pub(super) fn ask_remote_conflict(events: &Sender<Event>, cancel: &AtomicBool, s
     }
     let remote = Path::new(if info.remote_is_source { source } else { destination });
     let modified = info.remote.modified.and_then(|s| u64::try_from(s).ok()).map(|s| std::time::UNIX_EPOCH + Duration::from_secs(s));
-    super::file_operation::set_virtual_entry(remote, Some((info.remote.is_dir, (!info.remote.is_dir).then_some(info.remote.size), modified)));
+    super::file_operation::set_remote_entry(remote, Some((info.remote.is_dir, (!info.remote.is_dir).then_some(info.remote.size), modified)));
     let choice = loop {
         let choice = super::commands::ask_conflict_resumable(events, cancel, Path::new(source), Path::new(destination), info.can_resume);
         if choice != ConflictChoice::Rename {
@@ -60,7 +60,7 @@ pub(super) fn ask_remote_conflict(events: &Sender<Event>, cancel: &AtomicBool, s
             Ok(_) => continue,
         }
     };
-    super::file_operation::set_virtual_entry(remote, None);
+    super::file_operation::set_remote_entry(remote, None);
     choice
 }
 

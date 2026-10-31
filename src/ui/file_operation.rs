@@ -23,27 +23,44 @@ pub(super) struct ConflictForm {
     pub source_modified: Option<SystemTime>,
     pub destination_modified: Option<SystemTime>,
     pub allow_resume: bool,
+    /// One side is a remote (FTP/SFTP) item: original FUN_00467764 shows btnOverNewer and hides btnReplace.
+    pub remote: bool,
     pub apply_all: bool,
     /// Original imgOrg / imgNew (32x32 shell icons): RGBA and drawn textures of [existing, new].
     pub icons: [Option<(usize, usize, Vec<u8>)>; 2],
     pub textures: [Option<egui::TextureHandle>; 2],
 }
 
-/// Info about a conflict target that is not a real file (archive item): (shown path, is folder, size, modified time). The archive job thread sets it before asking and removes it after the answer.
-type VirtualEntry = (PathBuf, bool, Option<u64>, Option<SystemTime>);
+/// Info about a conflict target that is not a real file (archive or remote item): (shown path, is folder, size, modified time, remote).
+/// The job thread sets it before asking and removes it after the answer.
+type VirtualEntry = (PathBuf, bool, Option<u64>, Option<SystemTime>, bool);
 static VIRTUAL_ENTRIES: std::sync::Mutex<Vec<VirtualEntry>> = std::sync::Mutex::new(Vec::new());
 
-pub(super) fn set_virtual_entry(path: &Path, info: Option<(bool, Option<u64>, Option<SystemTime>)>) {
+fn put_virtual_entry(path: &Path, info: Option<(bool, Option<u64>, Option<SystemTime>)>, remote: bool) {
     let mut entries = VIRTUAL_ENTRIES.lock().unwrap_or_else(|e| e.into_inner());
     entries.retain(|(p, ..)| p != path);
     if let Some((directory, size, modified)) = info {
-        entries.push((path.to_path_buf(), directory, size, modified));
+        entries.push((path.to_path_buf(), directory, size, modified, remote));
     }
+}
+
+/// Archive item shown in the conflict window.
+pub(super) fn set_virtual_entry(path: &Path, info: Option<(bool, Option<u64>, Option<SystemTime>)>) {
+    put_virtual_entry(path, info, false);
+}
+
+/// Remote (FTP/SFTP) item shown in the conflict window; the window then uses the original FTP button set (FUN_00467764).
+pub(super) fn set_remote_entry(path: &Path, info: Option<(bool, Option<u64>, Option<SystemTime>)>) {
+    put_virtual_entry(path, info, true);
+}
+
+fn is_remote_entry(path: &Path) -> bool {
+    VIRTUAL_ENTRIES.lock().unwrap_or_else(|e| e.into_inner()).iter().any(|(p, .., remote)| *remote && p == path)
 }
 
 fn describe(path: &Path) -> (bool, Option<u64>, Option<SystemTime>) {
     // For archive and remote items, the info set by the job thread wins (so "/dir/a" is not resolved to a real file on the current drive).
-    if let Some((_, directory, size, modified)) = VIRTUAL_ENTRIES.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|(p, ..)| p == path) {
+    if let Some((_, directory, size, modified, _)) = VIRTUAL_ENTRIES.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|(p, ..)| p == path) {
         return (*directory, *size, *modified);
     }
     match fs::symlink_metadata(path) {
@@ -61,7 +78,8 @@ impl ConflictForm {
     pub(super) fn read(source: &Path, destination: &Path, allow_resume: bool) -> Self {
         let (source_dir, source_size, source_modified) = describe(source);
         let (destination_dir, destination_size, destination_modified) = describe(destination);
-        Self { source: source.into(), destination: destination.into(), source_dir, destination_dir, source_size, destination_size, source_modified, destination_modified, allow_resume, apply_all: false, icons: [None, None], textures: [None, None] }
+        let remote = is_remote_entry(source) || is_remote_entry(destination);
+        Self { source: source.into(), destination: destination.into(), source_dir, destination_dir, source_size, destination_size, source_modified, destination_modified, allow_resume, remote, apply_all: false, icons: [None, None], textures: [None, None] }
     }
     /// C# CanResume.
     pub(super) fn can_resume(&self) -> bool {
@@ -169,7 +187,9 @@ pub(super) fn conflict_buttons(form: &ConflictForm) -> Vec<(ConflictButton, bool
     }
     buttons.push((ConflictButton::Overwrite, overwrite));
     buttons.push((ConflictButton::Skip, true));
-    if form.source_dir {
+    // Original FTP queue (FUN_00467764): btnOverNewer Visible = 1 and btnReplace Visible = 0, whatever the item kinds.
+    // Fixed (r169): the FTP window used to show "replace folder" for a remote file against a local folder.
+    if form.source_dir && !form.remote {
         buttons.push((ConflictButton::ReplaceFolder, replace));
     } else {
         buttons.push((ConflictButton::OverwriteNewer, !same));

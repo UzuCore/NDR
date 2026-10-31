@@ -812,6 +812,8 @@ fn remote_conflicts_merge_folders_and_describe_the_remote_file() {
     assert_eq!((form.source_size, form.destination_size), (Some(1000), Some(10)));
     assert_eq!(form.source_modified, Some(std::time::UNIX_EPOCH + Duration::from_secs(1_700_000_000)));
     assert!(form.can_resume(), "a smaller local file can be resumed");
+    assert!(form.remote, "the remote side marks the window as an FTP conflict");
+    assert!(super::file_operation::conflict_buttons(&form).iter().all(|(b, _)| *b != super::file_operation::ConflictButton::ReplaceFolder));
     reply.send(ConflictChoice::Resume).unwrap();
     assert_eq!(worker.join().unwrap(), ConflictChoice::Resume);
     let _ = fs::remove_dir_all(root);
