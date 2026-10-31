@@ -55,6 +55,10 @@ impl App {
             return self.select_tab(index, last);
         }
         if let Some(t) = number("closeTab:") {
+            // 원본 pmiCloseTabClick(0x442578) → FUN_00442414, × 단추 TNXTabSet.CloseTabClick(0x7d17c8): 탭을 지우면 TabsChanged(0x7d161c)가
+            // TabIndex를 같은 번호로 두고 [0, 개수 − 1]로 자른다. 그래서 지금 탭보다 앞의 탭을 닫으면 표시가 다음 탭으로 밀리고,
+            // 메뉴로 닫으면 그 탭으로 바뀌며(OnChange), × 단추로 닫으면 표시만 옮겨지고 패널은 그대로였다(표시와 패널이 어긋남).
+            // 고친 것: NDR은 앞의 탭을 닫아도 지금 탭을 그대로 둔다. 지금 탭을 닫으면 원본처럼 같은 번호(없으면 마지막) 탭으로 간다.
             let pane = &mut self.panes[index];
             if pane.tabs.len() <= 1 || t >= pane.tabs.len() {
                 return;
@@ -97,6 +101,28 @@ impl App {
             return self.show_tab(index);
         }
         self.dispatch(command, ctx);
+    }
+
+    /// 원본 mipOpenInNewTabClick(0x4453b4): 탭 사용(+0xf3)이 켜져 있고 로컬 패널(FUN_00481948 == 0)이면, 초점 항목이 ".."이면 지금 폴더의
+    /// 상위(PathRemoveFileSpecW), 아니면 지금 폴더\이름으로 탭("%s|%s")을 끝에 더하고 그 탭으로 바꾼다(SetTabIndex → FUN_00489d20).
+    /// 탭 사용이 꺼져 있거나 압축·FTP면 아무것도 하지 않는다. 고친 것: 전에는 새 탭을 만든 뒤 항목을 열어서, 탭 사용이 꺼져 있으면
+    /// 지금 탭에서 열었고 파일이면 실행했다(원본은 파일이면 그 폴더로 가서 그 파일에 커서).
+    pub(super) fn open_in_new_tab(&mut self, index: usize) {
+        if !self.settings.flag("UseTabs", true) {
+            return;
+        }
+        let pane = &self.panes[index];
+        if pane.archive.is_some() || pane.remote.is_some() || pane.loading {
+            return;
+        }
+        let Some(entry) = pane.entries.get(pane.cursor) else { return };
+        let path = if entry.is_parent() { pane.path.parent().map(Path::to_path_buf).unwrap_or_else(|| pane.path.clone()) } else { entry.path.clone() };
+        let pane = &mut self.panes[index];
+        pane.tab_history.resize(pane.tabs.len(), Default::default());
+        pane.tabs.push(path);
+        pane.tab_history.push(Default::default());
+        let last = pane.tabs.len() - 1;
+        self.select_tab(index, last);
     }
 
     /// 새 탭 위치. 원본 miNewTabClick(0x4420f4)·pmiNewTabClick(0x44229c)은 FTP 모드(2)에서 "c:\\\tc:\\"(0x8ede2a) 탭을 만든다(그 탭으로 가면 FTP가 끊긴다).
@@ -539,7 +565,9 @@ impl App {
         // 초점 항목이 폴더(1)일 때만 mipOpenInNewTab을 보인다. mipArcExtractAuto는 로컬 패널이면 켠다.
         let focused = (!pane.loading).then(|| pane.entries.get(pane.cursor)).flatten();
         let focused_file = focused.is_some_and(|e| !e.is_dir);
-        let new_tab = local && focused.is_some_and(|e| e.is_dir) && !super::panes::is_drives(&pane.path);
+        // 원본 0x438003: mipOpenInNewTab.Visible = 패널 종류 0(로컬) && 초점 항목 종류 1(폴더). 탭 사용 설정과는 상관없다(누르면 처리기가 본다).
+        // 내 PC 보기의 드라이브 줄은 원본 종류 4라 보이지 않는다.
+        let new_tab = local && pane.remote.is_none() && focused.is_some_and(|e| e.is_dir && !e.drive) && !super::panes::is_drives(&pane.path);
         // 원본 pmMainPopup(0x437f54): mipEditPaste.Enabled = IsClipboardFormatAvailable(CF_HDROP), mipArcExtractAuto.Enabled =
         // 로컬 패널. 다른 항목은 늘 켜져 있다(메뉴는 로컬 패널에서 항목을 눌렀을 때만 뜬다, `list_menu_kind`).
         // 고친 것: 전에는 메뉴가 열린 동안 그림마다 클립보드를 열어 파일 목록을 읽었다(다른 프로그램의 클립보드 쓰기를 막고,

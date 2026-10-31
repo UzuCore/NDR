@@ -1758,13 +1758,7 @@ impl App {
                     self.open_current();
                 }
                 if let Some(command) = command {
-                    if command == "openInNewTab" {
-                        // C# OpenSelectedInNewTabAsync: 같은 위치의 새 탭에서 연다.
-                        self.dispatch("newTab", ctx);
-                        self.open_current();
-                    } else {
-                        self.dispatch(command, ctx);
-                    }
+                    self.dispatch(command, ctx);
                 }
             });
         ui.spacing_mut().item_spacing.y = outer_spacing;

@@ -2114,3 +2114,40 @@ fn pane_tree_follows_the_hidden_toggle() {
     let _ = std::process::Command::new("attrib").arg("-h").arg(left.join("hidden-dir")).status();
     let _ = fs::remove_dir_all(root);
 }
+
+/// 원본 mipOpenInNewTabClick(0x4453b4): 폴더 → 그 폴더 탭, ".." → 상위 폴더 탭, 파일 → 그 파일 경로 탭(FUN_00489d20이 폴더로 가서
+/// 그 파일에 커서), 새 탭은 끝에 붙고 그 탭으로 바뀐다. 탭 사용이 꺼져 있으면 아무것도 하지 않는다.
+#[test]
+fn open_in_new_tab_follows_the_original() {
+    let (root, ctx, mut app) = fixture("open-new-tab");
+    let left = app.panes[0].path.clone();
+    app.active = 0;
+    let row = |app: &App, name: &str| app.panes[0].entries.iter().position(|e| e.name == name).unwrap();
+    // 폴더.
+    app.panes[0].cursor = row(&app, "folder");
+    app.dispatch("openInNewTab", &ctx);
+    wait(&mut app, &ctx);
+    assert_eq!((app.panes[0].tabs.len(), app.panes[0].tab), (2, 1));
+    assert_eq!(app.panes[0].path, left.join("folder"));
+    // "..": 상위 폴더(= left) 탭.
+    app.panes[0].cursor = 0;
+    assert!(app.panes[0].entries[0].is_parent());
+    app.dispatch("openInNewTab", &ctx);
+    wait(&mut app, &ctx);
+    assert_eq!((app.panes[0].tabs.len(), app.panes[0].tab), (3, 2));
+    assert_eq!(app.panes[0].path, left);
+    // 파일: 실행하지 않고 그 폴더 탭에서 그 파일에 커서.
+    app.panes[0].cursor = row(&app, "b.txt");
+    app.dispatch("openInNewTab", &ctx);
+    wait(&mut app, &ctx);
+    assert_eq!((app.panes[0].tabs.len(), app.panes[0].tab), (4, 3));
+    assert_eq!(app.panes[0].path, left);
+    assert_eq!(app.panes[0].entries[app.panes[0].cursor].name, "b.txt");
+    // 탭 사용 끔: 아무것도 하지 않는다(지금 탭에서 열지도 않는다).
+    app.settings.set_flag("UseTabs", false);
+    app.panes[0].cursor = row(&app, "folder");
+    app.dispatch("openInNewTab", &ctx);
+    wait(&mut app, &ctx);
+    assert_eq!((app.panes[0].tabs.len(), app.panes[0].path.clone()), (4, left.clone()));
+    let _ = fs::remove_dir_all(root);
+}

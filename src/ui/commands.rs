@@ -616,6 +616,7 @@ impl App {
             "goLastDestination"=>self.go_last_destination(),
             "newTab"=>{if self.settings.flag("UseTabs",true){let tab=self.panes[i].tab;self.tab_command(i,&format!("newTabFrom:{tab}"),ctx);}},
             "closeTab"=>{if self.settings.flag("UseTabs",true){let tab=self.panes[i].tab;self.tab_command(i,&format!("closeTab:{tab}"),ctx);}},
+            "openInNewTab"=>self.open_in_new_tab(i),
             "newFolder"=>self.new_folder(),
             "newEmpty"=>self.create_empty_file(),
             "rename"=>self.rename_items(),
