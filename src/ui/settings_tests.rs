@@ -120,8 +120,8 @@ fn settings_window_commits_like_csharp() {
     app.settings_action(SettingsAction::Apply, &ctx);
     assert!(app.settings_form().is_some());
     // Original btnListFont (change font): the name and size chosen in the font box go to the row, the style (TFontStyles byte) to ListFontStyle.
-    // The list size field is pixels (initially 14 = 10.5 points), the font box points: choosing 10.5 points gives 14 pixels.
-    app.font_picker = |name, size, style| { assert_eq!((name, size, style), ("Segoe UI", 10.5, 0), "the current font goes in as points"); Some(("Tahoma".into(), 12.0, 3)) };
+    // The list size field is pixels (initially 16 = 12 points), the font box points: choosing 12 points gives 16 pixels.
+    app.font_picker = |name, size, style| { assert_eq!((name, size, style), ("Segoe UI", 12.0, 0), "the current font goes in as points"); Some(("Tahoma".into(), 12.0, 3)) };
     app.settings_action(SettingsAction::ChooseFont(false), &ctx);
     assert_eq!((text_of(&mut app, "ListFont"), text_of(&mut app, "ListFontSize")), ("Tahoma".to_owned(), "16".to_owned()), "12 points = 16 pixels");
     assert_eq!(app.settings_form().unwrap().draft.values.get("ListFontStyle"), Some(&serde_json::json!(3)));

@@ -3,8 +3,8 @@ use std::path::Path;
 
 pub const CURRENT_SCHEMA_VERSION: i64 = 4;
 
-/// Default file list (pane) font size (ListFontSize, pixels).
-pub const DEFAULT_LIST_FONT_PIXELS: f64 = 14.;
+/// Default file list (pane) font size (ListFontSize, pixels). User decision: 16 px (the original default\nexusfile.ini has "Segoe UI",9 = 12 px).
+pub const DEFAULT_LIST_FONT_PIXELS: f64 = 16.;
 
 /// Original font size (points, TFont.Size) to pixels: original FUN_00644e70 Height = MulDiv(size, PixelsPerInch 96, 72) (rounded).
 pub fn font_points_to_pixels(points: f64) -> f64 {
@@ -570,8 +570,8 @@ mod tests {
         assert_eq!(fresh.values["ExtensionColors"][".zip"], "#808000");
         assert_eq!(fresh.values["ExtensionColors"][".jpg"], "#D857EA");
         assert_eq!(fresh.values["ExtensionColors"].as_object().unwrap().len(), 85);
-        // Default pane (file list) font 14 px. Original points (MulDiv(size, 96, 72)): 12pt = 16px, 9pt = 12px.
-        assert_eq!(fresh.values["ListFontSize"].as_f64(), Some(14.0));
+        // Default pane (file list) font 16 px. Original points (MulDiv(size, 96, 72)): 12pt = 16px, 9pt = 12px.
+        assert_eq!(fresh.values["ListFontSize"].as_f64(), Some(16.0));
         assert_eq!((font_points_to_pixels(12.), font_points_to_pixels(9.), font_points_to_pixels(10.5)), (16., 12., 14.));
         assert_eq!((font_pixels_to_points(14.), font_pixels_to_points(16.)), (10.5, 12.));
         // The C# default Dark from before schema 4 becomes Black once; extension colors the user chose stay.
