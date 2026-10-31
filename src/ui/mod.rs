@@ -1759,6 +1759,18 @@ impl eframe::App for App {
         let pastes = ndr::shell_menu::take_paste_keys();
         let numpad = ndr::shell_menu::take_numpad_keys();
         let context_keys = ndr::shell_menu::take_context_keys();
+        // Windows delivers Alt+key as WM_SYSCHAR, which never types: in the original, Alt+` (FocusAddressBar) opens the address field with the whole
+        // path selected and nothing typed. egui also reports the character as Text, which replaced that selection with "`". Drop Text that comes with
+        // Alt held; AltGr (Ctrl+Alt) still types.
+        let mut alt_held = raw_input.modifiers.alt && !raw_input.modifiers.ctrl;
+        raw_input.events.retain(|event| match event {
+            egui::Event::Key { modifiers, pressed: true, .. } => {
+                alt_held = modifiers.alt && !modifiers.ctrl;
+                true
+            }
+            egui::Event::Text(_) => !alt_held,
+            _ => true,
+        });
         let text_focus = ctx.memory(|m| m.focused()).is_some_and(|id| egui::text_edit::TextEditState::load(ctx, id).is_some());
         if !text_focus {
             use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_INSERT};

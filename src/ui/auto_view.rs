@@ -236,6 +236,8 @@ impl App {
             .collect();
         let active = self.active == index;
         let icons_shown = self.settings.flag("ShowIcons", true);
+        // Cursor bar style follows the list's real focus (see pane_ui).
+        let bar_focus = active && self.list_has_focus(ui.ctx());
         // Original skin theme: cursor and mark bars (DrawFocus), cell colors (DrawListItem), mark ▶.
         let original = Some(self.original_list_colors());
         // Like other lists: original item height (text height + 2), line spacing (LineSpace) and row lines (ShowRowLines).
@@ -316,7 +318,7 @@ impl App {
                                 if let (Some(slot), Some(o), Some((color, cursor_row, marked))) = (bar_slot, original, bar_state) {
                                     let rect = egui::Rect::from_min_size(response.rect.min, egui::vec2(column_width, row_height));
                                     if cursor_row || marked {
-                                        let bar = super::skin_pane::focus_bar(color, o.back, o.select, cursor_row, marked, active);
+                                        let bar = super::skin_pane::focus_bar(color, o.back, o.select, cursor_row, marked, bar_focus);
                                         ui.painter().set(slot, egui::Shape::Vec(super::skin_pane::focus_bar_shapes(rect, &bar)));
                                     }
                                     if marked {
@@ -498,6 +500,8 @@ impl App {
         let free_label = self.language_pack.text("RES.DISKFREE", "Free");
         let icons_shown = self.settings.flag("ShowIcons", true);
         let active = self.active == index;
+        // Cursor bar style follows the list's real focus (see pane_ui).
+        let bar_focus = active && self.list_has_focus(ui.ctx());
         let mut begin_drag = None;
         let mut folder_rows = Vec::new();
         // Row height of a column-flowing list (same original item height as Details).
@@ -558,7 +562,7 @@ impl App {
                         let color = pane.view.colors[row].map_or(default, |(r, g, b)| Color32::from_rgb(r, g, b));
                         let label = if auto || entry.drive || original.is_some() { texts[0].clone() } else { entry.name.clone() };
                         if let Some(o) = original.filter(|_| cursor_row || marked) {
-                            let bar = super::skin_pane::focus_bar(color, o.back, o.select, cursor_row, marked, active);
+                            let bar = super::skin_pane::focus_bar(color, o.back, o.select, cursor_row, marked, bar_focus);
                             ui.painter().extend(super::skin_pane::focus_bar_shapes(cell, &bar));
                         }
                         let name_color = match original {

@@ -1265,6 +1265,9 @@ impl App {
             }
         }
         let active = self.active == index;
+        // Cursor bar style (DrawFocus focused/unfocused) follows the list's real focus: the original draws the unfocused bar when the window is
+        // inactive or the focus is in the address field or a dialog. Previously NDR used the focused bar for the active pane at all times.
+        let list_focus = active && self.list_has_focus(ctx);
         // Original pane: border lframe*, and the address bar (TNXPathLabel) sits above the list (original FUN_00481978). If the skin cannot be read, do not draw.
         let Some(skin_now) = self.current_skin() else { return };
         let skin = Some(skin_now);
@@ -1638,7 +1641,7 @@ impl App {
                             if let (Some(slot), Some(o)) = (bar_slot, original) {
                                 let rect = egui::Rect::from_min_size(line.response.rect.left_top(), egui::vec2(width, row_height));
                                 if cursor_row || selected {
-                                    let bar = super::skin_pane::focus_bar(color, o.back, o.select, cursor_row, selected, active);
+                                    let bar = super::skin_pane::focus_bar(color, o.back, o.select, cursor_row, selected, list_focus);
                                     ui.painter().set(slot, egui::Shape::Vec(super::skin_pane::focus_bar_shapes(rect, &bar)));
                                 }
                                 if selected {

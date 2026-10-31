@@ -757,21 +757,6 @@ impl App {
         let painter = ui.painter().with_clip_rect(rect);
         // Original FUN_004896d8: laback (0x141414 if missing) is used for the frame (TNXPaintPanel) and the label background.
         painter.rect_filled(rect, 0.0, skin_color(skin, "laback", Color32::from_gray(0x14)));
-        if self.panes[index].address_editing {
-            let id = egui::Id::new(("ndr-address", index));
-            let response = ui.put(rect.shrink2(egui::vec2(ADDRESS_BUTTON_WIDTH, 0.0)), egui::TextEdit::singleline(&mut self.panes[index].address).id(id).desired_width(f32::INFINITY));
-            if response.lost_focus() {
-                let go = ui.input(|i| i.key_pressed(egui::Key::Enter));
-                let text = self.panes[index].address.clone();
-                self.end_address_edit(index);
-                if go {
-                    self.original_address_enter(index, &text);
-                }
-            } else if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                self.end_address_edit(index);
-            }
-            return;
-        }
         // The two end buttons (TNXImageButton, addressbtns.png: columns = buttons (0 ▼ history, 1 ↺ refresh), rows = normal·hovered).
         // Original FUN_00481978: both buttons have Align = alRight(4), width 0x14; refresh (+0x328, OnClick FUN_0048ce78 -> FUN_00487ce8) and
         // path history (+0x324, OnClick FUN_0048ced4). The running original (captured window) shows [refresh ↺][history ▼] at the right edge,
@@ -795,6 +780,50 @@ impl App {
             if response.on_hover_text(tip).clicked() {
                 clicked_button = Some((cell, slot.left_bottom()));
             }
+        }
+        if self.panes[index].address_editing {
+            // Original address edit (FocusAddressBar, Alt+`): a standard white edit box over the path label, left of the two end buttons, which stay
+            // visible (captured original: 0x646464 1 px frame at the bar edge, white field, black text, whole path selected). Previously NDR used the
+            // dark egui field and hid the buttons.
+            let id = egui::Id::new(("ndr-address", index));
+            let field = egui::Rect::from_min_max(rect.min, egui::pos2(left_button.left(), rect.bottom()));
+            ui.painter().rect(field, 0.0, Color32::WHITE, egui::Stroke::new(1.0_f32, Color32::from_gray(0x64)), egui::StrokeKind::Inside);
+            let edit = egui::TextEdit::singleline(&mut self.panes[index].address)
+                .id(id)
+                .frame(false)
+                .text_color(Color32::BLACK)
+                .margin(egui::Margin { left: 3, right: 2, top: 0, bottom: 0 })
+                .vertical_align(egui::Align::Center)
+                .desired_width(f32::INFINITY);
+            let response = ui.scope(|ui| {
+                let visuals = ui.visuals_mut();
+                visuals.selection.bg_fill = Color32::from_rgb(0x00, 0x78, 0xD7);
+                visuals.selection.stroke.color = Color32::WHITE;
+                visuals.text_cursor.stroke.color = Color32::BLACK;
+                ui.put(field.shrink(1.0), edit)
+            }).inner;
+            if response.lost_focus() {
+                let go = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                let text = self.panes[index].address.clone();
+                self.end_address_edit(index);
+                if go {
+                    self.original_address_enter(index, &text);
+                }
+            } else if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                self.end_address_edit(index);
+            }
+            match clicked_button {
+                Some((0, position)) => {
+                    self.active = index;
+                    self.show_history_menu(index, Some(position));
+                }
+                Some(_) => {
+                    self.active = index;
+                    self.refresh(index);
+                }
+                None => {}
+            }
+            return;
         }
         // The center path text (TNXPathLabel).
         let label = egui::Rect::from_min_max(egui::pos2(rect.left(), rect.top()), egui::pos2(left_button.left(), rect.bottom()));

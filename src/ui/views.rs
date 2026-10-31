@@ -284,7 +284,8 @@ impl App {
         let skin = self.current_skin();
         let original = Some(self.original_list_colors());
         let original_fore = original.map(|_| self.basic_list_color("NXFORE"));
-        let list_focused = self.active == index;
+        // Cursor bar style follows the list's real focus (see pane_ui).
+        let list_focused = self.active == index && self.list_has_focus(ui.ctx());
         // Original skin vertical scrollbar (TNXScrollBar, same bar for the preview): shown only when content overflows, and its width narrows the cell area (same as detail view).
         let ctx = ui.ctx().clone();
         let skin_bar = match &skin {
