@@ -788,7 +788,9 @@ impl App {
                     // Original FUN_0048da38: the tree is also a drop target (TNXDropFileTarget.Register(tree)). Filesystem folders only.
                     drop_rows.push((index, row.intersect(ui.clip_rect()), folder.clone()));
                     tree_rows_for_drop.push((index, row.intersect(ui.clip_rect()), folder.clone(), node.key.clone(), expandable && !open));
-                    // Original FUN_0048e69c (tree OnContextPopup): the shell menu of the selected folder (FUN_00459128).
+                    // Original FUN_0048e69c (tree OnContextPopup): the shell menu of the selected folder (FUN_00459128 → FUN_00458a1c → FUN_004588e0:
+                    // TrackPopupMenuEx(0x102) and InvokeCommand, no verb hooks). TNXCustomShellTreeView's own ExecuteCommand/CommandCompleted
+                    // (0x7ed684/0x7ed488: "rename" edits the label, "delete" leaves the folder first, "paste"/"rfDesktop" refresh) belong to its built-in popup, which the pane tree does not use.
                     if response.secondary_clicked() {
                         shell_menu = Some(folder.clone());
                     }

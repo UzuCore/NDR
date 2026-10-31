@@ -452,6 +452,29 @@ fn delete_warning_and_protected_item_confirmation() {
     assert!(app.original_dialogs.is_empty(), "no second question after Yes to All");
     wait_job(&mut app, &ctx);
     assert!(!left.join("a.txt").exists() && !left.join("b.txt").exists());
+    // Original TfDelConfirm: Esc does nothing (no Cancel button); closing it (0x10) stops the whole delete.
+    for name in ["c.txt", "d.txt"] {
+        fs::write(left.join(name), b"x").unwrap();
+        native::set_attributes(&left.join(name), true, false).unwrap();
+    }
+    app.refresh(0);
+    wait_listing(&mut app, &ctx);
+    app.panes[0].selected = [row(&app, 0, "c.txt"), row(&app, 0, "d.txt")].into_iter().collect();
+    app.dispatch("deletePermanent", &ctx);
+    answer_warning(&mut app, &ctx, DeleteWarningChoice::Yes);
+    wait_dialog_or_job(&mut app, &ctx);
+    frame(&mut app, &ctx, vec![]);
+    frame(&mut app, &ctx, vec![key(egui::Key::Escape)]);
+    frame(&mut app, &ctx, vec![]);
+    assert!(matches!(app.original_dialogs.first().map(|d| &d.kind), Some(DialogKind::DeleteConfirm { .. })), "Esc keeps TfDelConfirm open");
+    app.answer_dialog(DialogResult::DeleteConfirm(DeleteConfirmChoice::Cancel), &ctx);
+    frame(&mut app, &ctx, vec![]);
+    assert!(app.original_dialogs.is_empty() && app.job.as_ref().is_none_or(|job| job.finished), "closing the window starts no delete");
+    wait_job(&mut app, &ctx);
+    assert!(left.join("c.txt").exists() && left.join("d.txt").exists());
+    for name in ["c.txt", "d.txt"] {
+        let _ = native::set_attributes(&left.join(name), false, false);
+    }
     let _ = native::set_attributes(&tree.join("keep/hidden.txt"), false, false);
     fs::remove_dir_all(root).unwrap();
 }

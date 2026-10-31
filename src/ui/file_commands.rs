@@ -394,6 +394,9 @@ impl App {
                     DeleteConfirmChoice::All => run.approve_all = true,
                     DeleteConfirmChoice::No => run.skipped.push(path),
                     DeleteConfirmChoice::Yes => {}
+                    // Original FUN_00414884: answer 0x10 aborts the delete (FUN_0040ac38, ERROR_CANCELLED). NDR asks before deleting
+                    // anything, so nothing is deleted (the original keeps what it deleted before reaching this item).
+                    DeleteConfirmChoice::Cancel => return,
                 }
                 run.index += 1;
                 app.protected_step(run);

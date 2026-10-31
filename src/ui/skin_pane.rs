@@ -539,7 +539,8 @@ pub(super) fn tab_set_layout(text_widths: &[i32], width: i32) -> TabSetLayout {
     TabSetLayout { tab_width: tab, visible: (available / tab).max(0) as usize, scroll: available < count * tab }
 }
 
-/// Original SetTabIndex·TabsChanged first-tab alignment: keep the current tab visible and leave no empty space at the end.
+/// Original SetTabIndex (0x7d13b4) and TabsChanged first-tab alignment: keep the current tab visible and leave no empty space at the end.
+/// The scroll buttons follow SetFirstIndex (0x7d1514): left enabled when first > 0, right when first < count − visible.
 pub(super) fn tab_first_index(first: usize, active: usize, visible: usize, count: usize) -> usize {
     let visible = visible.max(1);
     let mut first = first.min(active);
@@ -913,7 +914,7 @@ impl App {
         let mut new_first = None;
         let menu = button(ui, 0, slot(rect.left(), rect.top()), true, "menu");
         let mut over_button = menu.hovered();
-        // Original UpdateMenu: "&%d. %s" (1-9), then "&%c. %s" (A-), the current tab checked. Typing that letter while the menu is open goes to that tab (Windows menu access letter).
+        // Original UpdateMenu: "&%d. %s" (1-9), then "&%c. %s" (A-), the current tab checked (MenuPopup 0x7d19c4). Typing that letter while the menu is open goes to that tab (Windows menu access letter).
         menu_popup(&menu).show(|ui| {
             for (t, name) in names.iter().enumerate() {
                 let key = if t < 9 { char::from(b'1' + t as u8) } else { char::from(b'A' + (t - 9) as u8) };
@@ -925,7 +926,7 @@ impl App {
             }
         });
         if layout.scroll {
-            // Original LeftScroll/RightScroll: shifts the first tab by one and switches to the tab at that end.
+            // Original LeftScroll/RightScroll (0x7d1780: SetFirstIndex(first + 1), then SetTabIndex(new first + visible − 1)): shifts the first tab by one and switches to the tab at that end.
             let left = button(ui, 1, slot(rect.left() + 16.0, rect.top()), first > 0, "left");
             let right = button(ui, 2, slot(rect.right() - TAB_BUTTON_WIDTH - 2.0, rect.top()), first + layout.visible < count, "right");
             over_button |= left.hovered() || right.hovered();
@@ -947,7 +948,8 @@ impl App {
                 command = Some(format!("closeTab:{active}"));
             }
         }
-        // IndexOfTabAt: outside the leading area (16 or 32), (x - leading area) / tab width + first tab.
+        // IndexOfTabAt (0x7d1314): outside the leading area (16 or 32), (x - leading area) / tab width + first tab; -1 past the last or the visible count.
+        // MouseMove (0x7d114c) keeps the hovered index (+0x2c4) for the hot tab image and shows the hint for it.
         let tab_at = |p: egui::Pos2| -> Option<usize> {
             let x = p.x - rect.left();
             if !rect.contains(p) || x < lead {
@@ -995,6 +997,7 @@ impl App {
         for (texture, at, uv, tint) in button_paints.take() {
             painter.image(texture, at, uv, tint);
         }
+        // Original MouseDown (0x7d1100): a left press on a tab (IndexOfTabAt != -1) switches to it at once (SetTabIndex).
         if response.hovered() && !over_button && ui.input(|i| i.pointer.primary_pressed()) {
             if let Some(t) = hot {
                 command = Some(format!("tab:{t}"));

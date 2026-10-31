@@ -25,6 +25,8 @@ pub(super) enum DeleteConfirmChoice {
     All,
     Yes,
     No,
+    /// The window was closed without a button (original OnClose 0x41eea4 → 0x10): the whole delete stops.
+    Cancel,
 }
 
 pub(super) enum DialogKind {
@@ -1022,7 +1024,8 @@ impl App {
             return self.folder_compare_action(action, ctx);
         }
         // The folder tree window handles Esc itself (cancels scanning if a scan is in progress).
-        let escape = escape && !self.original_dialogs.last().is_some_and(|d| matches!(d.kind, DialogKind::FolderTree(_)));
+        // Original TfDelConfirm has no button with Cancel = True (DFM btnAll/btnYes/btnNo), so Esc does nothing there.
+        let escape = escape && !self.original_dialogs.last().is_some_and(|d| matches!(d.kind, DialogKind::FolderTree(_) | DialogKind::DeleteConfirm { .. }));
         if escape && matches!(outcome, Outcome::None) {
             // C# AttributeTimeWindow: Esc is Skip.
             outcome = if self.original_dialogs.last().is_some_and(|d| matches!(d.kind, DialogKind::Attributes(_))) { Outcome::Choice(1) } else { Outcome::Cancel };
@@ -1090,6 +1093,8 @@ impl App {
             (_, DialogKind::DeleteWarning { .. }) => DialogResult::DeleteWarning(DeleteWarningChoice::No),
             (Outcome::Choice(0), DialogKind::DeleteConfirm { .. }) => DialogResult::DeleteConfirm(DeleteConfirmChoice::All),
             (Outcome::Choice(1), DialogKind::DeleteConfirm { .. }) => DialogResult::DeleteConfirm(DeleteConfirmChoice::Yes),
+            // Original TfDelConfirm: btnAll 8, btnYes 4, btnNo 2 (0x41ee68/0x41ee7c/0x41ee90); closing with × leaves 0 and OnClose (0x41eea4) makes it 0x10.
+            (Outcome::Cancel, DialogKind::DeleteConfirm { .. }) => DialogResult::DeleteConfirm(DeleteConfirmChoice::Cancel),
             (_, DialogKind::DeleteConfirm { .. }) => DialogResult::DeleteConfirm(DeleteConfirmChoice::No),
             (_, DialogKind::Prompt { .. }) => DialogResult::Text(None),
         };
