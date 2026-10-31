@@ -144,6 +144,7 @@ pub(super) fn sites_ui(ui: &mut egui::Ui, form: &mut SitesForm, language: &compa
                 for name in MANAGER_PROTOCOLS {
                     if ui.selectable_label(form.protocol == name, name).clicked() && form.protocol != name {
                         form.protocol = name.into();
+                        // Original cbServerType OnChange (FUN_00428844): ItemIndex 0 (FTP) sets ePort to "21", 1 (SFTP) to "22".
                         form.port = if name == "SFTP" { "22" } else { "21" }.into();
                     }
                 }

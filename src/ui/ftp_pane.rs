@@ -401,7 +401,8 @@ pub(super) fn remote_tree_size(list: &mut dyn FnMut(&str) -> Result<Vec<RemoteEn
     Some(total)
 }
 
-/// Local side of `remote_tree_size` (upload of a folder).
+/// Local side of `remote_tree_size` (upload of a folder). Original FUN_00465e6c walks FindFirstFileW("*") and adds files with nFileSizeLow only.
+/// Fixed: files of 4 GB or more counted wrong in the original; the full 64-bit size is used here.
 pub(super) fn local_tree_size(folder: &Path, cancel: &AtomicBool) -> Option<u64> {
     use std::os::windows::fs::MetadataExt;
     let (mut total, mut pending) = (0u64, vec![folder.to_path_buf()]);

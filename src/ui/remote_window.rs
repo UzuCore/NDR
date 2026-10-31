@@ -894,7 +894,7 @@ impl PermissionForm {
         }
         mode
     }
-    /// Mode_TextChanged: for three digits below 778, sets the checkboxes (each digit & (4 >> cell)).
+    /// Mode_TextChanged (original FUN_00427238: three characters and a value below 0x30a = 778 → FUN_00426fc4): sets the checkboxes (each digit & (4 >> cell)).
     pub(super) fn text_changed(&mut self) {
         self.mode_text.retain(|c| c.is_ascii_digit());
         self.mode_text.truncate(3);
