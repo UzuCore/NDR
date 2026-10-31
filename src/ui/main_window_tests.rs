@@ -2021,3 +2021,37 @@ fn leaving_an_archive_with_dotdot_relists_the_folder_and_inner_files_copy_out() 
     assert!(!app.panes[0].entries.iter().any(|e| e.name == "inside.txt"), "the archive listing is gone");
     let _ = fs::remove_dir_all(root);
 }
+
+/// 원본 패널 트리 놓기 대상(FUN_0048da38의 TNXDropFileTarget): 끄는 동안 하위 폴더가 있는 노드에 1200ms 머물면 펼치고
+/// (타이머 +0x2f4 → FUN_0048edf0), 놓으면 FUN_00488b64(효과, 노드 폴더, 1 = 확인 건너뜀)라 "드래그 앤 드롭 확인"을 묻지 않는다.
+#[test]
+fn dropping_on_the_pane_tree_expands_on_hover_and_skips_the_confirmation() {
+    let (root, ctx, mut app) = fixture("tree-drop");
+    let (left, right) = (app.panes[0].path.clone(), app.panes[1].path.clone());
+    assert!(app.settings.flag("ConfirmDragDrop", true), "the list drop would ask");
+    let row = egui::Rect::from_min_size(egui::pos2(700.0, 100.0), egui::vec2(200.0, 18.0));
+    app.pane_rects = [egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(650.0, 800.0)), egui::Rect::from_min_size(egui::pos2(650.0, 0.0), egui::vec2(650.0, 800.0))];
+    app.tree_drop_rows = vec![(1, row, right.clone(), right.clone(), true)];
+    app.file_drag = Some(super::drag_drop::FileDrag { paths: vec![left.join("a.txt")], secondary: false, source: 0, allowed: 7 });
+    let start = Instant::now();
+    assert!(!app.tree_drag_hover(Some(row.center()), start, &ctx), "not before the timer");
+    assert!(!app.tree_drag_hover(Some(row.center()), start + Duration::from_millis(1100), &ctx));
+    assert!(app.tree_drag_hover(Some(row.center()), start + Duration::from_millis(1250), &ctx), "expanded after 1200 ms");
+    assert!(app.panes[1].tree_open.contains(&right));
+    // 노드를 벗어나면 머문 시각이 지워진다(OnLeave / 노드 없음).
+    assert!(!app.tree_drag_hover(Some(egui::pos2(10.0, 10.0)), start + Duration::from_millis(1300), &ctx));
+    assert!(app.tree_drop_hover.is_none());
+    // 놓기: 확인 상자 없이 바로(같은 드라이브라 원본 규칙대로 이동).
+    app.file_drag = None;
+    app.tree_drop(1, vec![left.join("a.txt")], right.clone(), egui::Modifiers::NONE, 7);
+    assert!(app.msgboxes.is_empty(), "a tree drop does not ask ConfirmDragDrop");
+    wait(&mut app, &ctx);
+    let end = Instant::now() + Duration::from_secs(10);
+    while !right.join("a.txt").exists() {
+        assert!(Instant::now() < end, "the drop did not run (status: {})", app.status);
+        app.poll(&ctx);
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(!left.join("a.txt").exists(), "same root: moved");
+    let _ = fs::remove_dir_all(root);
+}

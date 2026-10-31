@@ -630,6 +630,10 @@ pub struct App {
     pending_drag_marks: Option<(usize, Vec<PathBuf>)>,
     /// 이번 화면에 그린 폴더 줄(패널, 줄 영역, 폴더). 놓을 곳을 찾는다. 화면마다 비운다.
     folder_rows: Vec<(usize, egui::Rect, PathBuf)>,
+    /// 이번 화면에 그린 패널 폴더 트리 줄(패널, 줄 영역, 폴더, 셸 열쇠, 펼칠 수 있음). 원본 트리 놓기 대상(TNXDropFileTarget +0x36c).
+    tree_drop_rows: Vec<(usize, egui::Rect, PathBuf, PathBuf, bool)>,
+    /// 끄는 동안 머문 트리 노드(패널, 열쇠, 머물기 시작한 때). 원본 FUN_0048eb0c·타이머 +0x2f4(1200ms) → FUN_0048edf0 펼치기.
+    tree_drop_hover: Option<(usize, PathBuf, Instant)>,
     pane_rects: [egui::Rect; 2],
     /// 창 밖으로 끌어 내기(셸 끌기). 테스트에서는 끈다(실제 끌기 고리를 돌리지 않는다).
     allow_drag_out: bool,
@@ -918,6 +922,8 @@ impl App {
             file_drag: None,
             pending_drag_marks: None,
             folder_rows: Vec::new(),
+            tree_drop_rows: Vec::new(),
+            tree_drop_hover: None,
             pane_rects: [egui::Rect::NOTHING; 2],
             allow_drag_out: !cfg!(test),
             hwnd: 0,
@@ -1810,6 +1816,7 @@ impl eframe::App for App {
         // 놓을 곳 찾기: 이번 화면에 그리는 패널과 폴더 줄만(한 패널 보기면 숨은 패널은 없다).
         self.pane_rects = [egui::Rect::NOTHING; 2];
         self.folder_rows.clear();
+        self.tree_drop_rows.clear();
         // 원본 TfMain: 패널(틀)은 pToolbar(alTop)와 bbFunctions(alBottom) 사이를 틈 없이 채운다(FUN_0043d7c0: 패널 너비 = 창 너비 −
         // 보이는 VertSplitter·pVertBar 너비). 고친 것: 전에는 egui 기본 패널 여백(8)과 틈이 들어가 위 13·아래 9·가운데 16화소가 더 비었다.
         egui::CentralPanel::default().frame(egui::Frame::central_panel(&ctx.style()).inner_margin(0.0)).show(ctx, |ui| {

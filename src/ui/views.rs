@@ -682,6 +682,7 @@ impl App {
         let mut toggled: Option<PathBuf> = None;
         let mut shell_menu: Option<PathBuf> = None;
         let mut drop_rows: Vec<(usize, egui::Rect, PathBuf)> = Vec::new();
+        let mut tree_rows_for_drop: Vec<(usize, egui::Rect, PathBuf, PathBuf, bool)> = Vec::new();
         // 하위 폴더를 아직 읽는 중이면 고른 줄이 없으므로, 그 줄이 나올 때까지 넘기기를 미룬다.
         let reveal_id = egui::Id::new(("ndr-pane-tree-reveal", index));
         let reveal = reveal || ui.ctx().data(|d| d.get_temp::<bool>(reveal_id)).unwrap_or(false);
@@ -710,7 +711,9 @@ impl App {
                 let indent = *depth as f32 * 16.0;
                 let width = (indent + 16.0 + 18.0 + galley.size().x + 6.0).max(ui.available_width());
                 let (row, response) = ui.allocate_exact_size(egui::vec2(width, row_height), egui::Sense::click());
-                let selected = selected_line == Some(range.start + line);
+                let selected = selected_line == Some(range.start + line)
+                    // 원본 FUN_0048eb0c: 끄는 동안 포인터 아래 노드를 DropTarget으로(TreeView는 고른 항목처럼 강조해 그린다).
+                    || (self.file_drag.is_some() && self.tree_drop_hover.as_ref().is_some_and(|(p, key, _)| *p == index && same_key(key, &node.key)));
                 let text_rect = egui::Rect::from_min_size(egui::pos2(row.left() + indent + 34.0, row.top()), egui::vec2(galley.size().x + 4.0, row_height));
                 if selected {
                     ui.painter().rect_filled(text_rect, 0.0, select);
@@ -743,6 +746,7 @@ impl App {
                 if let Some(folder) = &node.path {
                     // 원본 FUN_0048da38: 트리도 놓을 곳(TNXDropFileTarget.Register(트리)). 파일 시스템 폴더만.
                     drop_rows.push((index, row.intersect(ui.clip_rect()), folder.clone()));
+                    tree_rows_for_drop.push((index, row.intersect(ui.clip_rect()), folder.clone(), node.key.clone(), expandable && !open));
                     // 원본 FUN_0048e69c(트리 OnContextPopup): 고른 폴더의 셸 메뉴(FUN_00459128).
                     if response.secondary_clicked() {
                         shell_menu = Some(folder.clone());
@@ -751,9 +755,10 @@ impl App {
             }
         });
         self.folder_rows.extend(drop_rows);
+        self.tree_drop_rows.extend(tree_rows_for_drop);
         // 원본 FUN_0048e2e0(트리 패널 그리기): 오른쪽 끝(너비 − 1)에 스킨 색(DAT_008d44c0 + 0x1c, conf.ini [List] lframetree) 세로선.
         if let Some(skin) = self.current_skin() {
-            let color = super::skin_pane::skin_color(&skin, "lframetree", Color32::from_gray(0x20));
+            let color = super::skin_pane::skin_color(&skin, "lframetree", Color32::from_gray(0x3C));
             ui.painter().vline(rect.right() - 0.5, rect.y_range(), egui::Stroke::new(1.0, color));
         }
         if let Some(path) = shell_menu {

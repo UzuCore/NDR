@@ -17,6 +17,9 @@ pub(super) struct CrumbSegment {
 pub(super) const ADDRESS_BAR_HEIGHT: f32 = 19.0;
 const ADDRESS_BUTTON_WIDTH: f32 = 20.0;
 
+/// 스킨 conf.ini [List] 색. 키가 없을 때의 값(fallback)은 원본이 FUN_00463798에 넘기는 기본 TColor를 따른다(예: lback·laback 141414,
+/// latext 646464, lfolderdivider 3C3C3C, ldrivesframe 1A1A1A, lframetree 3C3C3C). 원본 기본값이 0(검정)인 글·바탕 키
+/// (lfileback, lfiletext, lfolderback, 메뉴 색)는 검정 바탕에 검은 글이 되므로 읽을 수 있는 값으로 둔다(고친 것). 동봉 스킨 셋은 모든 키가 있다.
 pub(super) fn skin_color(skin: &Skin, key: &str, fallback: Color32) -> Color32 {
     skin.color("List", key).map(|c| Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3])).unwrap_or(fallback)
 }
@@ -201,7 +204,7 @@ pub(super) fn menu_popup(response: &egui::Response) -> egui::Popup<'_> {
 pub(super) fn skin_menu_bar_style(skin: &Skin) -> (Color32, egui::style::StyleModifier) {
     let back = menu_color(skin, "mmainback", Color32::from_gray(0x2A));
     let text = menu_color(skin, "mmaintext", Color32::from_gray(0x9F));
-    let over_back = menu_color(skin, "mmainoverback", Color32::from_gray(0x33));
+    let over_back = menu_color(skin, "mmainoverback", Color32::from_gray(0x5A));
     let over = menu_color(skin, "mmainover", Color32::WHITE);
     let style = egui::style::StyleModifier::new(move |style| {
         egui::containers::menu::menu_style(style);
@@ -688,7 +691,8 @@ impl App {
         }
         let (rect, background) = ui.allocate_exact_size(egui::vec2(ui.available_width(), ADDRESS_BAR_HEIGHT), egui::Sense::click());
         let painter = ui.painter().with_clip_rect(rect);
-        painter.rect_filled(rect, 0.0, skin_color(skin, "laback", Color32::from_rgb(0x20, 0x20, 0x20)));
+        // 원본 FUN_004896d8: laback(없으면 0x141414)을 틀(TNXPaintPanel)과 이름표 바탕에 쓴다.
+        painter.rect_filled(rect, 0.0, skin_color(skin, "laback", Color32::from_gray(0x14)));
         if self.panes[index].address_editing {
             let id = egui::Id::new(("ndr-address", index));
             let response = ui.put(rect.shrink2(egui::vec2(ADDRESS_BUTTON_WIDTH, 0.0)), egui::TextEdit::singleline(&mut self.panes[index].address).id(id).desired_width(f32::INFINITY));
@@ -728,12 +732,15 @@ impl App {
         let label = egui::Rect::from_min_max(egui::pos2(left_button.right(), rect.top()), egui::pos2(right_button.left(), rect.bottom()));
         let painter = ui.painter().with_clip_rect(label);
         let font = egui::FontId::proportional(super::BASE_TEXT_SIZE);
+        // 원본 FUN_004896d8(스킨 conf.ini [List]에 없을 때의 값): latext → Font.Color 0x646464, lacurr → SetLastFolderColor
+        // TColor 0x9696B4(= RGB B4 96 96), laover → SetHighlightColor 0x969696, lafocus → SetFocusBackColor 0x323232,
+        // ladivider → SetDividerColor 0x141414. 고친 것: 전에는 검정 스킨 값을 기본값으로 써서 키가 없는 스킨에서 색이 달랐다.
         let (text, current, over, focus, divider) = (
-            skin_color(skin, "latext", Color32::from_gray(0x6E)),
-            skin_color(skin, "lacurr", Color32::from_gray(0xC0)),
-            skin_color(skin, "laover", Color32::from_gray(0xDD)),
-            skin_color(skin, "lafocus", Color32::from_gray(0x10)),
-            skin_color(skin, "ladivider", Color32::from_gray(0x50)),
+            skin_color(skin, "latext", Color32::from_gray(0x64)),
+            skin_color(skin, "lacurr", Color32::from_rgb(0xB4, 0x96, 0x96)),
+            skin_color(skin, "laover", Color32::from_gray(0x96)),
+            skin_color(skin, "lafocus", Color32::from_gray(0x32)),
+            skin_color(skin, "ladivider", Color32::from_gray(0x14)),
         );
         let pointer = ui.input(|i| i.pointer.hover_pos()).filter(|p| label.contains(*p));
         let clicked = ui.input(|i| i.pointer.primary_clicked());
@@ -1018,7 +1025,7 @@ impl App {
         let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), FOLDER_INFO_HEIGHT), egui::Sense::hover());
         let painter = ui.painter().with_clip_rect(rect);
         painter.rect_filled(rect, 0.0, skin_color(skin, "lfolderback", Color32::BLACK));
-        painter.hline(rect.x_range(), rect.bottom() - 0.5, egui::Stroke::new(1.0, skin_color(skin, "lfolderdivider", Color32::from_gray(9))));
+        painter.hline(rect.x_range(), rect.bottom() - 0.5, egui::Stroke::new(1.0, skin_color(skin, "lfolderdivider", Color32::from_gray(0x3C))));
         let base = skin_color(skin, "lfoldertext", Color32::from_gray(0xC0));
         let hex = |key: &str| skin.color("List", key).map(|c| format!("<c{:02X}{:02X}{:02X}>", c[0], c[1], c[2])).unwrap_or_else(|| "<c000000>".into());
         let drives = super::panes::is_drives(&self.panes[index].path);
@@ -1349,7 +1356,7 @@ impl App {
         let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), DRIVE_BAR_HEIGHT), egui::Sense::hover());
         let painter = ui.painter().with_clip_rect(rect);
         painter.rect_filled(rect, 0.0, skin_color(skin, "ldrivesback", Color32::from_gray(0x20)));
-        painter.hline(rect.x_range(), rect.bottom() - 0.5, egui::Stroke::new(1.0, skin_color(skin, "ldrivesframe", Color32::from_gray(0x19))));
+        painter.hline(rect.x_range(), rect.bottom() - 0.5, egui::Stroke::new(1.0, skin_color(skin, "ldrivesframe", Color32::from_gray(0x1A))));
         let (text, hot) = (skin_color(skin, "ldrivestext", Color32::from_gray(0xCC)), skin_color(skin, "ldriveshot", Color32::WHITE));
         let mut chosen = None;
         for (i, (root, tip)) in drives.iter().enumerate() {

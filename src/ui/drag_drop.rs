@@ -7,6 +7,9 @@
 use super::file_operation::TransferKind;
 use super::*;
 
+/// 원본 패널 트리 놓기 타이머(+0x2f4, FUN_0048da38의 Interval 0x4b0).
+pub(super) const TREE_DROP_EXPAND_DELAY: Duration = Duration::from_millis(1200);
+
 /// 끌고 있는 패널 항목.
 pub(super) struct FileDrag {
     pub paths: Vec<PathBuf>,
@@ -93,6 +96,60 @@ impl App {
         Some((pane, folder.unwrap_or_else(|| self.panes[pane].path.clone())))
     }
 
+    /// 그 위치의 패널 폴더 트리 줄(패널, 폴더, 셸 열쇠, 펼칠 수 있음). 원본 트리 OnDragOver FUN_0048eb0c의 GetNodeAt.
+    pub(super) fn tree_drop_at(&self, position: Option<egui::Pos2>) -> Option<(usize, PathBuf, PathBuf, bool)> {
+        let position = position?;
+        self.tree_drop_rows
+            .iter()
+            .find(|(pane, rect, ..)| self.pane_rects[*pane].contains(position) && rect.contains(position))
+            .map(|(pane, _, folder, key, expandable)| (*pane, folder.clone(), key.clone(), *expandable))
+    }
+
+    /// 원본 트리 OnDragOver(FUN_0048eb0c): 포인터 아래 노드를 놓을 곳 표시(DropTarget)로 두고, 하위 폴더가 있는 노드면 타이머
+    /// (+0x2f4, 1200ms)를 켠다. 타이머가 울리면 FUN_0048edf0이 그 노드를 펼친다. 노드에서 벗어나면 표시를 지우고 타이머를 끈다(OnLeave
+    /// FUN_0048ec90, 노드 없음). 펼쳤으면 true.
+    pub(super) fn tree_drag_hover(&mut self, position: Option<egui::Pos2>, now: Instant, ctx: &egui::Context) -> bool {
+        let Some((pane, _, key, expandable)) = self.tree_drop_at(position) else {
+            self.tree_drop_hover = None;
+            return false;
+        };
+        let since = match &self.tree_drop_hover {
+            Some((p, k, since)) if *p == pane && ndr::shell_tree::same_key(k, &key) => *since,
+            _ => now,
+        };
+        self.tree_drop_hover = Some((pane, key.clone(), since));
+        if !expandable {
+            return false;
+        }
+        let wait = TREE_DROP_EXPAND_DELAY.saturating_sub(now.saturating_duration_since(since));
+        if wait.is_zero() {
+            self.panes[pane].tree_open.insert(key.clone());
+            // 원본 타이머는 꺼지지 않고 1200ms마다 그 노드에 다시 울린다(이미 펼친 노드는 그대로).
+            self.tree_drop_hover = Some((pane, key, now));
+            return true;
+        }
+        ctx.request_repaint_after(wait);
+        false
+    }
+
+    /// 원본 트리 OnDrop(FUN_0048ecd0): 오른쪽 끌기면 pmDrop, 아니면 FUN_00488b64(효과, 노드 폴더, 1 = 확인 건너뜀, 0).
+    /// 그래서 트리에 놓으면 "드래그 앤 드롭 확인"을 묻지 않는다(목록에 놓을 때만 묻는다).
+    pub(super) fn tree_drop(&mut self, pane: usize, candidates: Vec<PathBuf>, destination: PathBuf, modifiers: egui::Modifiers, allowed: u8) {
+        self.tree_drop_hover = None;
+        if !destination.is_dir() || candidates.is_empty() {
+            return;
+        }
+        let Some(effect) = self.original_drop_effect(pane, &candidates, &destination, modifiers, allowed) else { return };
+        self.active = pane;
+        if effect == DropEffect::Link {
+            return self.apply_drop(effect, candidates, destination);
+        }
+        let paths = filter_drop_paths(&candidates, &destination);
+        if !paths.is_empty() {
+            self.apply_drop(effect, paths, destination);
+        }
+    }
+
     /// 매 화면 끝: 끌고 있으면 포인터 옆에 개수, 놓으면 그 패널(폴더 줄 위면 그 폴더)에 놓기. 탐색기·셸 끌기에서 놓은 파일도.
     pub(super) fn drag_drop_frame(&mut self, ctx: &egui::Context) {
         let (pointer, released, modifiers, dropped, inner) = ctx.input(|i| {
@@ -108,9 +165,20 @@ impl App {
                 let (ctrl, shift) = native::drop_modifiers();
                 (position, egui::Modifiers { ctrl, shift, ..Default::default() })
             };
+            if let Some((tree_pane, folder, ..)) = self.tree_drop_at(position) {
+                return self.tree_drop(tree_pane, dropped, folder, modifiers, 7);
+            }
             let (pane, destination) = self.drop_target(position, &[]).unwrap_or_else(|| (self.active, self.panes[self.active].path.clone()));
             self.handle_drop(pane, dropped, destination, modifiers);
             return;
+        }
+        if self.file_drag.is_none() {
+            self.tree_drop_hover = None;
+            return;
+        }
+        // 패널 폴더 트리 위면 원본 트리 OnDragOver: 그 노드를 강조하고(pane_tree_ui), 머물면 1200ms 뒤 펼친다.
+        if !released && self.tree_drag_hover(pointer, Instant::now(), ctx) {
+            ctx.request_repaint();
         }
         let Some(drag) = &self.file_drag else { return };
         // 창 밖으로 끌고 나가면 셸 끌기(C# DoDragDrop)로 넘긴다. 놓을 곳(탐색기 등)이 복사·이동·바로 가기를 한다.
@@ -143,7 +211,8 @@ impl App {
             // DrawListItem(0x7d90bc)·DrawThumbnailItem(0x7da2ae)은 그 항목 칸에 글 색 펜으로 Rectangle(왼쪽, 위, 오른쪽, 아래 − 1)을 그린다.
             // 고친 것: 전에는 놓을 폴더에 아무 표시가 없었다.
             if let Some(position) = pointer {
-                let target = self.folder_rows.iter().find(|(pane, rect, path)| self.pane_rects[*pane].contains(position) && rect.contains(position) && !drag.paths.contains(path)).cloned();
+                let on_tree = self.tree_drop_at(pointer).is_some();
+                let target = if on_tree { None } else { self.folder_rows.iter().find(|(pane, rect, path)| self.pane_rects[*pane].contains(position) && rect.contains(position) && !drag.paths.contains(path)).cloned() };
                 if let Some((pane, rect, path)) = target {
                     let row = self.panes[pane].entries.iter().position(|e| e.path == path);
                     let cursor_bar = row == Some(self.panes[pane].cursor) && self.active == pane;
@@ -192,7 +261,11 @@ impl App {
         // NDR은 확인 상자·놓기 메뉴에서 실제로 옮길 때(apply_drop) 한다(고친 것: 원본은 "아니요"·취소에도 지운다).
         self.pending_drag_marks = Some((drag.source, drag.paths.clone()));
         if drag.secondary {
+            self.tree_drop_hover = None;
             return self.show_drop_menu(pane, drag.paths, destination, pointer.unwrap_or_default());
+        }
+        if let Some((tree_pane, folder, ..)) = self.tree_drop_at(pointer).filter(|(_, folder, ..)| !drag.paths.contains(folder)) {
+            return self.tree_drop(tree_pane, drag.paths, folder, modifiers, drag.allowed);
         }
         // 같은 패널의 빈 곳이면 C#처럼 바로 가기만 고를 수 있다(부모 = 대상인 항목은 옮기지 않는다).
         self.handle_drop_with(pane, drag.paths, destination, modifiers, drag.allowed);
