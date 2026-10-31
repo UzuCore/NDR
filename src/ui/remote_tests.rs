@@ -793,7 +793,7 @@ fn remote_conflicts_merge_folders_and_describe_the_remote_file() {
     let (events, received) = mpsc::channel();
     let cancel = AtomicBool::new(false);
     let folder = RemoteEntry { name: "dir".into(), is_dir: true, ..Default::default() };
-    let info = ndr::remote::ConflictInfo { remote: &folder, local_dir: true, remote_is_source: true, can_resume: true };
+    let info = ndr::remote::ConflictInfo { remote: &folder, local_dir: true, remote_is_source: true, can_resume: true, new_name: Default::default() };
     assert_eq!(super::ftp_pane::ask_remote_conflict(&events, &cancel, "/dir", "C:\\local\\dir", &info), ConflictChoice::Overwrite);
     assert!(received.try_recv().is_err(), "no dialog for two folders");
     let root = std::env::temp_dir().join(format!("ndr-remote-conflict-{}", std::process::id()));
@@ -804,7 +804,7 @@ fn remote_conflicts_merge_folders_and_describe_the_remote_file() {
     let local_text = local.to_string_lossy().into_owned();
     let worker = std::thread::spawn(move || {
         let cancel = AtomicBool::new(false);
-        let info = ndr::remote::ConflictInfo { remote: &file, local_dir: false, remote_is_source: true, can_resume: true };
+        let info = ndr::remote::ConflictInfo { remote: &file, local_dir: false, remote_is_source: true, can_resume: true, new_name: Default::default() };
         super::ftp_pane::ask_remote_conflict(&events, &cancel, "/pub/big.bin", &local_text, &info)
     });
     let Ok(Event::Conflict { source, destination, allow_resume, reply }) = received.recv_timeout(Duration::from_secs(5)) else { panic!("conflict dialog expected") };
@@ -815,4 +815,27 @@ fn remote_conflicts_merge_folders_and_describe_the_remote_file() {
     reply.send(ConflictChoice::Resume).unwrap();
     assert_eq!(worker.join().unwrap(), ConflictChoice::Resume);
     let _ = fs::remove_dir_all(root);
+}
+/// FUN_00467658: Rename asks for the name; a cancelled name prompt asks the conflict again; the typed name is handed back.
+#[test]
+fn remote_conflict_rename_asks_for_the_new_name() {
+    let (events, received) = mpsc::channel();
+    let worker = std::thread::spawn(move || {
+        let cancel = AtomicBool::new(false);
+        let file = RemoteEntry { name: "a.txt".into(), size: 5, ..Default::default() };
+        let info = ndr::remote::ConflictInfo { remote: &file, local_dir: false, remote_is_source: false, can_resume: false, new_name: Default::default() };
+        let choice = super::ftp_pane::ask_remote_conflict(&events, &cancel, "C:\\local\\a.txt", "/pub/a.txt", &info);
+        (choice, info.new_name.take())
+    });
+    let next = || received.recv_timeout(Duration::from_secs(5)).expect("event");
+    let Event::Conflict { reply, .. } = next() else { panic!("conflict expected") };
+    reply.send(ConflictChoice::Rename).unwrap();
+    let Event::RenameTarget { name, reply } = next() else { panic!("name prompt expected") };
+    assert_eq!(name, "a.txt");
+    reply.send(None).unwrap();
+    let Event::Conflict { reply, .. } = next() else { panic!("a cancelled name prompt asks again") };
+    reply.send(ConflictChoice::Rename).unwrap();
+    let Event::RenameTarget { reply, .. } = next() else { panic!("name prompt expected") };
+    reply.send(Some("b.txt".into())).unwrap();
+    assert_eq!(worker.join().unwrap(), (ConflictChoice::Rename, Some("b.txt".into())));
 }

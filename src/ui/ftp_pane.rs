@@ -22,7 +22,7 @@ const FTP_SPLITTER_HEIGHT: f32 = 3.0;
 
 /// 원본 FTP 대기열(FUN_00467f0c): 폴더 항목은 묻지 않고 없으면 만들고 있으면 그대로 쓴다(폴더끼리 = 합치기).
 /// 파일이 같은 이름이면 TfFileExists로 묻는다(FUN_00467764: 원격 쪽 크기·시각도 보이고, btnResume = 이어서 전송 가능할 때).
-/// 고친 것: 전에는 폴더끼리도 물었고, 원격 쪽 크기·시각이 비어 이어서 전송 단추를 쓸 수 없었다.
+/// 고친 것: 전에는 폴더끼리도 물었고, 원격 쪽 크기·시각이 비어 이어서 전송 단추를 쓸 수 없었고, 이름 바꾸기는 묻지 않고 " (1)"을 붙였다.
 pub(super) fn ask_remote_conflict(events: &Sender<Event>, cancel: &AtomicBool, source: &str, destination: &str, info: &ndr::remote::ConflictInfo) -> ConflictChoice {
     if info.remote.is_dir && info.local_dir {
         return ConflictChoice::Overwrite;
@@ -30,7 +30,36 @@ pub(super) fn ask_remote_conflict(events: &Sender<Event>, cancel: &AtomicBool, s
     let remote = Path::new(if info.remote_is_source { source } else { destination });
     let modified = info.remote.modified.and_then(|s| u64::try_from(s).ok()).map(|s| std::time::UNIX_EPOCH + Duration::from_secs(s));
     super::file_operation::set_virtual_entry(remote, Some((info.remote.is_dir, (!info.remote.is_dir).then_some(info.remote.size), modified)));
-    let choice = super::commands::ask_conflict_resumable(events, cancel, Path::new(source), Path::new(destination), info.can_resume);
+    let choice = loop {
+        let choice = super::commands::ask_conflict_resumable(events, cancel, Path::new(source), Path::new(destination), info.can_resume);
+        if choice != ConflictChoice::Rename {
+            break choice;
+        }
+        // 원본 FUN_00467658(0x10 이름 바꾸기): 대상 이름을 입력 창으로 묻는다. 확인이면 그 이름으로 다시 하고, 취소면 같은 이름을 다시 묻는다.
+        let name = destination.rsplit(['/', '\\']).next().unwrap_or(destination).to_owned();
+        let (tx, rx) = mpsc::channel();
+        if events.send(Event::RenameTarget { name, reply: tx }).is_err() {
+            break ConflictChoice::Cancel;
+        }
+        let answer = loop {
+            if cancel.load(Ordering::Relaxed) {
+                break Err(());
+            }
+            match rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(answer) => break Ok(answer),
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(_) => break Err(()),
+            }
+        };
+        match answer {
+            Err(()) => break ConflictChoice::Cancel,
+            Ok(Some(new)) if !new.trim().is_empty() && !new.contains(['/', '\\']) => {
+                *info.new_name.borrow_mut() = Some(new);
+                break ConflictChoice::Rename;
+            }
+            Ok(_) => continue,
+        }
+    };
     super::file_operation::set_virtual_entry(remote, None);
     choice
 }

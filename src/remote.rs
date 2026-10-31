@@ -159,6 +159,8 @@ pub struct ConflictInfo<'a> {
     /// 받기면 true(원격 = 원본), 보내기면 false(원격 = 대상).
     pub remote_is_source: bool,
     pub can_resume: bool,
+    /// "이름 바꾸기"에 묻는 쪽이 넣는 새 이름(원본 FUN_00467658 입력 창). 비면 " (1)" 식으로 빈 이름을 고른다.
+    pub new_name: std::cell::RefCell<Option<String>>,
 }
 
 /// 원본 FUN_00467dfc·FUN_00469210: "새 파일만 덮어쓰기"는 새 것의 시각이 기존보다 늦을 때 덮어쓰고 아니면 건너뛴다.
@@ -1036,8 +1038,14 @@ impl Client {
             if fs::symlink_metadata(&destination).is_ok() {
                 let meta = local_regular_metadata(&destination)?;
                 let can_resume = !entry.is_dir && meta.is_file() && self.can_resume();
-                let info = ConflictInfo { remote: &entry, local_dir: meta.is_dir(), remote_is_source: true, can_resume };
+                let info = ConflictInfo { remote: &entry, local_dir: meta.is_dir(), remote_is_source: true, can_resume, new_name: Default::default() };
                 let mut choice = resolve(&source, &destination.to_string_lossy(), &info);
+                if choice == ConflictChoice::Rename && let Some(name) = info.new_name.take() {
+                    // 원본 FUN_00469210(0x10): 입력한 이름으로 바꾼 뒤 같은 항목을 다시 한다(그 이름도 있으면 다시 묻는다).
+                    validate_local_name(&name)?;
+                    pending.push((source, destination.with_file_name(name)));
+                    continue;
+                }
                 if choice == ConflictChoice::OverwriteNewer {
                     choice = newer_wins(entry.modified, local_seconds(&meta));
                 }
@@ -1168,8 +1176,14 @@ impl Client {
             let meta = local_regular_metadata(&source)?;
             if let Some(entry) = self.remote_entry(&destination)? {
                 let can_resume = meta.is_file() && !entry.is_dir && !entry.is_symlink && self.can_resume();
-                let info = ConflictInfo { remote: &entry, local_dir: meta.is_dir(), remote_is_source: false, can_resume };
+                let info = ConflictInfo { remote: &entry, local_dir: meta.is_dir(), remote_is_source: false, can_resume, new_name: Default::default() };
                 let mut choice = resolve(&source.to_string_lossy(), &destination, &info);
+                if choice == ConflictChoice::Rename && let Some(name) = info.new_name.take() {
+                    validate_name(&name)?;
+                    let parent = destination.rsplit_once('/').map_or("", |(parent, _)| parent).to_owned();
+                    pending.push((source, remote_child(if parent.is_empty() { "/" } else { &parent }, &name)));
+                    continue;
+                }
                 if choice == ConflictChoice::OverwriteNewer {
                     choice = newer_wins(local_seconds(&meta), entry.modified);
                 }
@@ -3733,6 +3747,21 @@ else:
                 .upload_tree_with_conflicts(&local.join("old.txt"), &remote("old.txt"), &cancel, &mut |_, _, _| ConflictChoice::OverwriteNewer, &mut |_| {})
                 .unwrap();
             assert_eq!(fs::read(fixture.root.join("old.txt")).unwrap(), b"local", "{protocol}: a newer local file overwrites");
+            // 이름 바꾸기: 묻는 쪽이 준 이름으로 받기·보내기.
+            client
+                .download_tree_with_conflicts(&remote("old.txt"), &local.join("old.txt"), &cancel, &mut |_, _, info| {
+                    *info.new_name.borrow_mut() = Some("renamed.txt".into());
+                    ConflictChoice::Rename
+                }, &mut |_| {})
+                .unwrap();
+            assert_eq!(fs::read(local.join("renamed.txt")).unwrap(), b"local", "{protocol}: download to the typed name");
+            client
+                .upload_tree_with_conflicts(&local.join("big.bin"), &remote("big.bin"), &cancel, &mut |_, _, info| {
+                    *info.new_name.borrow_mut() = Some("copy.bin".into());
+                    ConflictChoice::Rename
+                }, &mut |_| {})
+                .unwrap();
+            assert_eq!(fs::read(fixture.root.join("copy.bin")).unwrap(), content, "{protocol}: upload to the typed name");
             let _ = client.close();
         }
     }
