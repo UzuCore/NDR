@@ -890,7 +890,7 @@ impl App {
                     }
                 }
                 DialogKind::Join(form) => {
-                    if let Some(choice) = super::split_dialogs::join_ui(ui, form, &self.language_pack, ko, enter) {
+                    if let Some(choice) = super::split_dialogs::join_ui(ui, form, &self.language_pack, first_frame, enter) {
                         outcome = Outcome::Choice(choice);
                     }
                 }
@@ -1276,7 +1276,7 @@ fn bottom_label(ui: &egui::Ui, rect: egui::Rect, mut job: LayoutJob) {
     ui.painter().with_clip_rect(rect).galley(egui::pos2(rect.left(), top), galley, ui.visuals().text_color());
 }
 
-fn select_all(ui: &egui::Ui, id: egui::Id, length: usize) {
+pub(super) fn select_all(ui: &egui::Ui, id: egui::Id, length: usize) {
     if let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), id) {
         state.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(length))));
         state.store(ui.ctx(), id);

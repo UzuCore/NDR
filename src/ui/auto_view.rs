@@ -295,7 +295,7 @@ impl App {
                                         let color = pane.view.colors[row].map_or(default, |(r, g, b)| Color32::from_rgb(r, g, b));
                                         bar_state = Some((color, cursor_row, marked));
                                         let name_color = match original {
-                                            Some(o) if cursor_row && active => o.back,
+                                            Some(o) if cursor_row && bar_focus => o.back,
                                             _ => color,
                                         };
                                         let response = App::name_cell(ui, egui::vec2(name_width, row_height), icon.as_ref(), icons_shown, &texts[0], name_color, list_style);
@@ -308,7 +308,7 @@ impl App {
                                                 let text = folder_size.as_ref().unwrap_or(&texts[column.index()]);
                                                 // Original DrawListItem: an uncounted folder's RES DIR text keeps the item color (counted sizes use the size colors).
                                                 let color_column = if *column == DetailColumn::Size && entry.is_dir && folder_size.is_none() { DetailColumn::Name } else { *column };
-                                                let metric_color = original.map_or(ui.visuals().weak_text_color(), |o| o.cell(color_column, color, entry.attributes, cursor_row, active));
+                                                let metric_color = original.map_or(ui.visuals().weak_text_color(), |o| o.cell(color_column, color, entry.attributes, cursor_row, bar_focus));
                                                 ui.add_sized([w, row_height], egui::Label::new(super::list_text(text.as_str(), list_style).color(metric_color)).truncate());
                                             }
                                         }
@@ -566,7 +566,7 @@ impl App {
                             ui.painter().extend(super::skin_pane::focus_bar_shapes(cell, &bar));
                         }
                         let name_color = match original {
-                            Some(o) if cursor_row && active => o.back,
+                            Some(o) if cursor_row && bar_focus => o.back,
                             _ => color,
                         };
                         let framed = false;
@@ -604,7 +604,7 @@ impl App {
                                 let text = folder_size.as_ref().unwrap_or(&texts[column.index()]);
                                 // Original DrawListItem: an uncounted folder's RES DIR text keeps the item color (counted sizes use the size colors).
                                 let color_column = if *column == DetailColumn::Size && entry.is_dir && folder_size.is_none() { DetailColumn::Name } else { *column };
-                                let metric_color = original.map_or(ui.visuals().weak_text_color(), |o| o.cell(color_column, color, entry.attributes, cursor_row, active));
+                                let metric_color = original.map_or(ui.visuals().weak_text_color(), |o| o.cell(color_column, color, entry.attributes, cursor_row, bar_focus));
                                 let metric_rect = egui::Rect::from_min_size(egui::pos2(x, cell.top()), egui::vec2(w, item_height));
                                 match &original {
                                     // Original DrawListItem cell alignment (size right, date/time at both ends, the rest left).

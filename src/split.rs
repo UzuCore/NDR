@@ -289,7 +289,9 @@ fn metadata_file_name(first_part: &Path) -> Option<String> {
     })
 }
 
-/// C# SuggestJoinedFileName: ".partN" gives the prefix, ".NNN" the original name from the .crc or the prefix, otherwise "name.joined.ext".
+/// Original miJoinFileClick (0x43bec8): the first file with its extension renamed to ".crc" gives the "filename" value; otherwise (".001" header,
+/// FUN_0043bd20) the first file's name without its extension (PathRemoveExtension + PathFindFileName). ".partN" (C#) gives the prefix.
+/// Previously a plain file proposed the C# "name.joined.ext".
 pub fn suggest_joined_file_name(input: &Path) -> String {
     let name = input.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     match numbered_suffix(&name) {
@@ -297,7 +299,7 @@ pub fn suggest_joined_file_name(input: &Path) -> String {
         Some((prefix, _, true)) => metadata_file_name(input).unwrap_or_else(|| prefix.to_owned()),
         None => {
             let extension = crate::parity::dotnet_extension(&name);
-            if extension.is_empty() { format!("{name}.joined") } else { format!("{}.joined{extension}", &name[..name.len() - extension.len()]) }
+            name[..name.len() - extension.len()].to_owned()
         }
     }
 }
@@ -559,8 +561,8 @@ mod tests {
         assert_eq!(split_prefix(&root, ".bashrc"), root.join(".bashrc"), "an empty stem keeps the whole name");
         assert_eq!(split_prefix(&root, "movie.part 1"), root.join("movie.part 1"), "an extension with a space is kept");
         assert_eq!(suggest_joined_file_name(Path::new("C:/x/movie.mkv.part3")), "movie.mkv");
-        assert_eq!(suggest_joined_file_name(Path::new("C:/x/notes.txt")), "notes.joined.txt");
-        assert_eq!(suggest_joined_file_name(Path::new("C:/x/README")), "README.joined");
+        assert_eq!(suggest_joined_file_name(Path::new("C:/x/notes.txt")), "notes", "original: the name without its extension");
+        assert_eq!(suggest_joined_file_name(Path::new("C:/x/README")), "README");
         fs::write(root.join("a.txt"), b"one\ntwo").unwrap();
         fs::write(root.join("b.txt"), b"three\r\n").unwrap();
         let cancel = AtomicBool::new(false);

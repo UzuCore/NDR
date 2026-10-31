@@ -71,17 +71,12 @@ impl JoinForm {
         self.selected = (!self.files.is_empty()).then(|| index.min(self.files.len() - 1));
     }
 
-    /// UpdateSizeInfo.
-    fn size_info(&self, ko: bool) -> String {
+    /// Original UpdateSizeInfo (FUN_00422dd4): the sum of GetFileSize over lbFiles, FloatToStrF(ffNumber, 12, 0) + " bytes" (the same in every language).
+    /// Previously the C# "전체 크기: N바이트" text.
+    fn size_info(&self) -> String {
         let total: u64 = self.files.iter().filter_map(|(_, l)| *l).sum();
-        let unknown = self.files.iter().filter(|(_, l)| l.is_none()).count();
         let total = ndr::parity::format_size(total, "B", true).trim_end_matches(" B").to_owned();
-        match (unknown, ko) {
-            (0, true) => format!("전체 크기: {total}바이트"),
-            (0, false) => format!("Total size: {total} bytes"),
-            (n, true) => format!("전체 크기: {total}바이트 (확인 불가 {n}개)"),
-            (n, false) => format!("Total size: {total} bytes ({n} unknown)"),
-        }
+        format!("{total} bytes")
     }
 }
 
@@ -141,7 +136,7 @@ pub(super) fn split_ui(ui: &mut egui::Ui, form: &mut SplitForm, language: &compa
 }
 
 /// Draws the join window. Returns Some(0) OK, Some(1) cancel.
-pub(super) fn join_ui(ui: &mut egui::Ui, form: &mut JoinForm, language: &compat::Language, ko: bool, enter: bool) -> Option<usize> {
+pub(super) fn join_ui(ui: &mut egui::Ui, form: &mut JoinForm, language: &compat::Language, first_frame: bool, enter: bool) -> Option<usize> {
     let mut choice = None;
     // Original TfFileJoin (ClientWidth 501 x ClientHeight 346): lFileName (16,25) eFileName (127,22 323x21) btnBrowse (456,20 33x25),
     // lFiles(16,65) lbFiles(16,84 473×169), btnAdd(16,262) btnDelete(86,262) btnUp(172,262) btnDown(242,262) 64×25,
@@ -151,7 +146,12 @@ pub(super) fn join_ui(ui: &mut egui::Ui, form: &mut JoinForm, language: &compat:
     let name_id = egui::Id::new("join-file-name");
     let caption = language.raw("formFileJoin.Caption.lFileName").unwrap_or_else(|| "&File name:".into());
     super::original_dialogs::access_label(ui, at(16.0, 25.0, 108.0, 15.0), &caption, name_id);
-    ui.put(at(127.0, 22.0, 323.0, 21.0), egui::TextEdit::singleline(&mut form.name).id(name_id));
+    let name_response = ui.put(at(127.0, 22.0, 323.0, 21.0), egui::TextEdit::singleline(&mut form.name).id(name_id));
+    // eFileName is the first control in the tab order: it has the focus with its text selected when the window opens (seen in the running original).
+    if first_frame {
+        name_response.request_focus();
+        super::original_dialogs::select_all(ui, name_id, form.name.chars().count());
+    }
     if ui.put(at(456.0, 20.0, 33.0, 25.0), egui::Button::new("...")).clicked() {
         // Original btnBrowseClick (0x423444): the window's OpenDialog (no Title, Filter or InitialDir) with ofAllowMultiSelect and ofFileMustExist turned off
         // and FileName cleared, then Execute (an open box). The choice goes into eFileName. Being an open box, there is no overwrite prompt (asked separately when joining).
@@ -164,15 +164,14 @@ pub(super) fn join_ui(ui: &mut egui::Ui, form: &mut JoinForm, language: &compat:
     ui.painter().rect(list, 0.0, ui.visuals().extreme_bg_color, ui.visuals().widgets.noninteractive.bg_stroke, egui::StrokeKind::Inside);
     ui.scope_builder(egui::UiBuilder::new().max_rect(list.shrink(2.0)), |ui| {
         egui::ScrollArea::vertical().id_salt("join-files").auto_shrink([false, false]).show(ui, |ui| {
+            // Original lbFiles holds the full paths (Items.Assign of the data item paths).
             for (index, (path, _)) in form.files.iter().enumerate() {
-                let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                if ui.selectable_label(form.selected == Some(index), name).on_hover_text(path.to_string_lossy()).clicked() {
+                if ui.selectable_label(form.selected == Some(index), path.to_string_lossy()).clicked() {
                     form.selected = Some(index);
                 }
             }
         });
     });
-    let selected = form.selected;
     let raw = |key: &str, fallback: &str| language.raw(&format!("formFileJoin.{key}")).unwrap_or_else(|| fallback.to_owned());
     let button = |ui: &mut egui::Ui, x: f32, enabled: bool, label: String| super::original_dialogs::vcl_button(ui, at(x, 262.0, 64.0, 25.0), enabled, &label).1;
     if button(ui, 16.0, true, raw("Caption.btnAdd", "&Add")) {
@@ -185,17 +184,19 @@ pub(super) fn join_ui(ui: &mut egui::Ui, form: &mut JoinForm, language: &compat:
             form.selected = Some(0);
         }
     }
-    if button(ui, 86.0, selected.is_some(), raw("Caption.btnDelete", "&Delete")) {
+    // Original btnDelete/btnUp/btnDown are always enabled; their handlers (0x42332c, 0x423374, 0x4233c8) do nothing without a usable ItemIndex.
+    // Previously they were greyed out.
+    if button(ui, 86.0, true, raw("Caption.btnDelete", "&Delete")) {
         form.remove_selected();
     }
-    if button(ui, 172.0, selected.is_some_and(|i| i > 0), raw("Caption.btnUp", "&Up")) {
+    if button(ui, 172.0, true, raw("Caption.btnUp", "&Up")) {
         form.move_selected(-1);
     }
-    if button(ui, 242.0, selected.is_some_and(|i| i + 1 < form.files.len()), raw("Caption.btnDown", "Do&wn")) {
+    if button(ui, 242.0, true, raw("Caption.btnDown", "Do&wn")) {
         form.move_selected(1);
     }
     ui.scope_builder(egui::UiBuilder::new().max_rect(at(312.0, 267.0, 174.0, 15.0)).layout(egui::Layout::right_to_left(egui::Align::Min)), |ui| {
-        ui.add(egui::Label::new(form.size_info(ko)).truncate());
+        ui.add(egui::Label::new(form.size_info()).truncate());
     });
     super::original_dialogs::access_checkbox(ui, at(16.0, 317.0, 300.0, 17.0), &mut form.join_text, &raw("Caption.chkIsText", "Join &text files"));
     if ui.put(at(330.0, 313.0, 75.0, 25.0), egui::Button::new(join_text(language, "Caption.btnOk", "OK"))).clicked() {

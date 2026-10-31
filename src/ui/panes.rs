@@ -1653,8 +1653,10 @@ impl App {
                             let cursor_row = pane.cursor == row;
                             let bar_slot = original.map(|_| ui.painter().add(egui::Shape::Noop));
                             let framed = false;
+                            // The cursor row text is NXBACK only on the focused bar (DrawFocus); without list focus the bar is a faint fill and the text keeps
+                            // the item color. Previously an active pane without focus drew NXBACK text on the faint bar, which hid the name.
                             let name_color = match original {
-                                Some(o) if cursor_row && active => o.back,
+                                Some(o) if cursor_row && list_focus => o.back,
                                 _ => color,
                             };
                             let line = ui
@@ -1681,7 +1683,7 @@ impl App {
                                         } else if let Some(o) = original {
                                             // Original DrawListItem: an uncounted folder's RES DIR text keeps the item color (counted sizes use the size colors).
                                             let color_column = if *column == DetailColumn::Size && entry.is_dir && folder_size.is_none() { DetailColumn::Name } else { *column };
-                                            let cell_color = o.cell(color_column, color, entry.attributes, cursor_row, active);
+                                            let cell_color = o.cell(color_column, color, entry.attributes, cursor_row, list_focus);
                                             let (rect, _) = ui.allocate_exact_size(egui::vec2(cell, row_height), egui::Sense::hover());
                                             paint_original_cell(ui, rect, *column, text, cell_color, cursor_row, &o, list_style);
                                         } else {
