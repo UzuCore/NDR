@@ -328,8 +328,15 @@ impl App {
             .pivot(egui::Align2::CENTER_CENTER)
             .interactable(true)
             .show(ctx, |ui| {
-                egui::Frame::new().fill(Color32::from_rgba_unmultiplied(0, 0, 0, 220)).corner_radius(6.0).inner_margin(egui::Margin::symmetric(20, 20)).show(ui, |ui| {
-                    ui.label(RichText::new(&text).color(Color32::WHITE).size(17.0));
+                // Original FUN_004495ec (TfMessage paint, UpdateLayeredWindow): a rounded rectangle (20x20 arcs) filled ARGB 0xBB222222, the text in
+                // the form font (Tahoma -19 px = 14 pt) made bold, drawn black and then white one pixel up-left (a 1 px shadow).
+                // Previously a darker, less rounded box with regular 17 px text and no shadow.
+                egui::Frame::new().fill(Color32::from_rgba_unmultiplied(0x22, 0x22, 0x22, 0xBB)).corner_radius(10.0).inner_margin(egui::Margin::symmetric(20, 20)).show(ui, |ui| {
+                    let font = egui::FontId::new(14.0 * 96.0 / 72.0, egui::FontFamily::Name(super::BOLD_FONT_FAMILY.into()));
+                    let galley = ui.fonts_mut(|f| f.layout_no_wrap(text.clone(), font, Color32::WHITE));
+                    let (rect, _) = ui.allocate_exact_size(galley.size(), egui::Sense::hover());
+                    ui.painter().galley_with_override_text_color(rect.min + egui::vec2(1.0, 1.0), galley.clone(), Color32::BLACK);
+                    ui.painter().galley(rect.min, galley, Color32::WHITE);
                 })
             })
             .response;

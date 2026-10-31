@@ -86,6 +86,8 @@ impl App {
             return self.show_tab(index);
         }
         if let Some(t) = number("closeOthers:") {
+            // Original pmiCloseAllTabClick (0x4425d8): the tab under the popup point (IndexOfTabAt) is kept with its object, every other tab
+            // object is freed, the list is cleared and the kept tab added again (TabIndex 0), and the tab row stays visible only with 2+ tabs.
             let pane = &mut self.panes[index];
             if pane.tabs.len() <= 1 || t >= pane.tabs.len() {
                 return;
