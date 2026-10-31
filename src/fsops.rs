@@ -1170,8 +1170,8 @@ impl Job {
     /// C# DeleteFilteredPath: keeps items under skipped paths and does not delete their parent folders either. Links (reparse points) are not followed;
     /// only the link itself is deleted. The read-only attribute is cleared before deleting. A missing item counts as deleted.
     /// Each deleted file, folder or link increments files (C# deletedItems). Inner errors are reported at once (boundary = work remaining after).
-    /// Same rules as the original delete engine: FUN_00414884 (one file: SetFileAttributesW 0x20 when R/H/S, then DeleteFileW) and
-    /// FUN_00414b50 (a folder: a reparse point is removed with RemoveDirectoryW without entering it, otherwise its contents first,
+    /// Same rules as the original delete engine: FUN_004156c4 (loop over the chosen items), FUN_00414884 (one file: SetFileAttributesW 0x20 when R/H/S, then DeleteFileW),
+    /// FUN_00414dfc (a chosen folder) and FUN_00414b50 (its contents): a reparse point is removed with RemoveDirectoryW without entering it, otherwise the contents first,
     /// then SetFileAttributesW 0x10 and RemoveDirectoryW). The protected-item question (FUN_004150ac) is asked before the job here.
     fn delete_filtered(&mut self, p: &Path, skipped: &[PathBuf], depth: usize, boundary: bool) -> Result<Disposition, String> {
         if depth > 256 {

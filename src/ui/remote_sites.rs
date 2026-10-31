@@ -400,6 +400,7 @@ impl App {
                     // Release the editing reference before deleting (the original overwrites the next row through the stale position).
                     form.editing = None;
                     form.sites.remove(index);
+                    // Original btnDeleteClick (FUN_00427e60): ItemIndex = the same index, or the new last one; then FUN_00427b00 loads it.
                     let next = (!form.sites.is_empty()).then(|| index.min(form.sites.len() - 1));
                     form.selected = next;
                     form.load(next);

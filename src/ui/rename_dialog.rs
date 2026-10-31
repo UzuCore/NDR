@@ -301,7 +301,9 @@ pub(super) fn rename_ui(ui: &mut egui::Ui, form: &mut RenameForm, language: &com
     if super::original_dialogs::vcl_button(ui, at(371.0, 168.0, 67.0, 25.0), selected.is_some(), &r("Caption.btnDeleteAction", "< &Delete")).1 {
         if let Some(index) = selected {
             form.rules.remove(index);
-            form.selected_rule = None;
+            // Original btnDeleteActionClick (0x4187bc): after removing, select the item now at that index, or the new last one when the last was removed.
+            // Fixed (match): NDR used to clear the selection, so the next Delete or Up/Down needed another click.
+            form.selected_rule = selection_after_remove(index, form.rules.len());
         }
     }
     put_left(ui, at(448.0, 45.0, 194.0, 16.0), egui::Label::new(t("Caption.lAppliedList", "Applied Actions")));
@@ -431,6 +433,11 @@ pub(super) fn rename_ui(ui: &mut egui::Ui, form: &mut RenameForm, language: &com
         choice = Some(1);
     }
     choice
+}
+/// Original btnDeleteActionClick (0x4187bc) selection after removing the action at `index` (`remaining` actions left):
+/// the item now at that index, the new last item when the last was removed, nothing when the list is empty.
+pub(super) fn selection_after_remove(index: usize, remaining: usize) -> Option<usize> {
+    (remaining > 0).then(|| index.min(remaining - 1))
 }
 /// Checks of C# BuildPlan: overlapping results, unusable names, existing destinations. On success the list of names to change.
 pub(super) fn build_plan(form: &RenameForm, ko: bool) -> Result<Vec<String>, String> {
@@ -678,6 +685,14 @@ impl App {
 #[cfg(test)]
 mod glyph_tests {
     use super::*;
+
+    /// Original btnDeleteActionClick (0x4187bc): the item now at the removed index, the new last item, or nothing when the list is empty.
+    #[test]
+    fn deleting_an_action_selects_the_next_one() {
+        assert_eq!(selection_after_remove(1, 3), Some(1), "the next item moves into the removed slot");
+        assert_eq!(selection_after_remove(3, 3), Some(2), "the last one was removed");
+        assert_eq!(selection_after_remove(0, 0), None, "nothing left");
+    }
 
     /// Original sbtnSave and sbtnDelete Glyph.Data: 16x16, the color of the bottom-left pixel (clSilver) is transparent, the rest is the image.
     #[test]
