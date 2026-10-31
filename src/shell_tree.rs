@@ -149,6 +149,8 @@ pub fn desktop() -> Option<ShellNode> {
 
 /// TNXShellTreeView expansion: folders directly under `key` (hidden ones only with `show_hidden`), in shell order (IShellFolder::CompareIDs).
 /// Streams that are also folders, like archives (SFGAO_STREAM), are left out.
+/// Original PopulateNode (0x7ed9fc): EnumObjects with the tree's flags (hourglass cursor, BeginUpdate), InitNode for each item, then
+/// CustomSort with the shell's CompareIDs (FUN_007ed820).
 pub fn children(key: &Path, show_hidden: bool) -> Vec<ShellNode> {
     let _com = Com::init();
     // SAFETY: every identifier list is either borrowed from its owner for the duration of the call or owned by a Pidl.

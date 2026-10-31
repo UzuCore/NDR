@@ -652,7 +652,7 @@ impl App {
         let path = self.panes[index].path.clone();
         let local = self.panes[index].archive.is_none() && self.panes[index].remote.is_none() && !super::panes::is_drives(&path);
         // SetPath: when the location changes, expand from the desktop down to that folder (My Computer → drives → …) and scroll so that row is visible.
-        // Original SetPathFromID (0x7ee894): skipped while already updating or when the selected folder is that folder; otherwise expands
+        // Original SetPathFromID (0x7ee894, reached from SetPath 0x7ee768 via the Desktop's ParseDisplayName): skipped while already updating or when the selected folder is that folder; otherwise expands
         // every ancestor node that exists (FolderExists), selects the target (or the deepest ancestor found) and makes it visible.
         let mut reveal = false;
         if local && self.panes[index].tree_synced.as_ref() != Some(&path) {
@@ -738,6 +738,7 @@ impl App {
                     ui.painter().rect_filled(text_rect, 0.0, select);
                 }
                 // Expand indicator (▸/▾): only for items the shell reported as having subfolders (SFGAO_HASSUBFOLDER); removed if found empty on read.
+                // Original CanExpand (0x7ede40): a folder node with no children yet is populated, then HasChildren = child count > 0.
                 let arrow = egui::Rect::from_min_size(egui::pos2(row.left() + indent, row.top()), egui::vec2(16.0, row_height));
                 let open = self.panes[index].tree_open.iter().any(|k| same_key(k, &node.key));
                 let expandable = node.has_children && !self.tree_cache.get(&(node.key.clone(), self.panes[index].show_hidden)).is_some_and(|c| c.is_empty());
