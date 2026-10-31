@@ -320,9 +320,11 @@ impl App {
         let rows = visible.len().div_ceil(columns);
         // Original UpdateDisplayThumbnails: row height = the largest GetThumbnailTextHeight in that row (width = thumbnail size, line spacing 2, up to 4 lines) + size + 12.
         let spacing_y = if thumbnails { 0.0 } else { ui.spacing().item_spacing.y };
+        let gdi_line = self.list_text_height();
         let heights: Vec<f32> = if thumbnails {
             let font = egui::TextStyle::Body.resolve(ui.style());
-            let line_height = ui.fonts_mut(|fonts| fonts.row_height(&font));
+            // Line unit = Canvas.TextHeight (GDI tmHeight), like the list rows (App::list_text_height).
+            let line_height = gdi_line.unwrap_or_else(|| ui.fonts_mut(|fonts| fonts.row_height(&font)));
             // Fix (speed): previously the name width of every item was measured each frame (15ms per frame for 20,000 items), making the preview view slow.
             // Like the original, remeasure only when the list, column count, or size changes (keyed by item order, name, and drive label).
             let key = {
@@ -549,7 +551,7 @@ impl App {
                                                 (_, true) => {
                                                     // Original DrawThumbnailText: width = thumbnail size, up to 4 lines, each line centered, line spacing 2.
                                                     let font = egui::TextStyle::Body.resolve(ui.style());
-                                                    let (line_height, lines) = ui.fonts_mut(|fonts| (fonts.row_height(&font), thumbnail_lines(&caption, thumb, 4, &mut |c| fonts.glyph_width(&font, c))));
+                                                    let (line_height, lines) = ui.fonts_mut(|fonts| (gdi_line.unwrap_or_else(|| fonts.row_height(&font)), thumbnail_lines(&caption, thumb, 4, &mut |c| fonts.glyph_width(&font, c))));
                                                     let (rect, _) = ui.allocate_exact_size(egui::vec2(thumb, lines.len() as f32 * (line_height + 2.0)), egui::Sense::hover());
                                                     for (i, line) in lines.iter().enumerate() {
                                                         ui.painter().text(egui::pos2(rect.center().x, rect.top() + 2.0 + i as f32 * (line_height + 2.0)), egui::Align2::CENTER_TOP, line, font.clone(), name_color);
@@ -604,7 +606,7 @@ impl App {
                                 // The bar height is measured from that item's text height (GetThumbnailTextHeight).
                                 let font = egui::TextStyle::Body.resolve(ui.style());
                                 let text_height = ui.fonts_mut(|fonts| {
-                                    let line_height = fonts.row_height(&font);
+                                    let line_height = gdi_line.unwrap_or_else(|| fonts.row_height(&font));
                                     thumbnail_text_height(&caption, thumb, 4, 2.0, line_height, entry.drive, &mut |c| fonts.glyph_width(&font, c))
                                 });
                                 let (top, bottom, line) = super::skin_pane::thumbnail_focus(o.select, o.back, cursor_row, marked, false, list_focused);

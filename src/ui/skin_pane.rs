@@ -1398,7 +1398,9 @@ impl App {
     /// and fires OnHeaderClick (+0x2f0) with the column under the pointer).
     pub(super) fn skin_list_header(&self, ui: &mut egui::Ui, index: usize, columns: &[(super::list_view::DetailColumn, String, f32)], widths: &[Option<f32>], font: egui::FontId, scroll_x: f32) -> Option<&'static str> {
         let (back, fore, line) = (self.basic_list_color("NXBACK"), self.basic_list_color("NXFORE"), self.basic_list_color("NXLINE"));
-        let height = ui.fonts_mut(|f| f.row_height(&font)).ceil() + 8.0;
+        // Font height = Canvas.TextHeight (GDI tmHeight, see list_text_height): Tahoma 16 px gives 19 + 8 = 27 like the captured original (was 28).
+        let gdi = self.list_text_height().filter(|_| (font.size - self.list_font_size).abs() < 0.01);
+        let height = gdi.unwrap_or_else(|| ui.fonts_mut(|f| f.row_height(&font)).ceil()) + 8.0;
         let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), height), egui::Sense::hover());
         let painter = ui.painter().with_clip_rect(rect);
         painter.rect_filled(rect, 0.0, back);

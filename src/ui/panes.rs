@@ -1118,10 +1118,13 @@ impl App {
     /// The text height is VCL Canvas.TextHeight, i.e. the GDI tmHeight of the list font (Tahoma 16 px: 19, rows 21 px apart on the captured original);
     /// egui's own line height (19.3) is only the fallback. Previously the rounded-up egui height made every row 1 px taller (22 px).
     pub(super) fn list_item_height(&self, ui: &egui::Ui) -> f32 {
-        let face = self.settings.text("ListFont", "Segoe UI");
-        let gdi = ndr::native::gdi_text_height(&face, self.list_font_size.round() as i32, self.list_font_style);
-        let text = gdi.map_or_else(|| ui.text_style_height(&egui::TextStyle::Body).ceil(), |h| h as f32) + 2.0;
+        let text = self.list_text_height().unwrap_or_else(|| ui.text_style_height(&egui::TextStyle::Body).ceil()) + 2.0;
         if self.settings.flag("ShowIcons", true) { text.max(16.0) } else { text }
+    }
+    /// VCL Canvas.TextHeight of the list font (GDI tmHeight), the unit of the original list, header and thumbnail text layouts. None without GDI.
+    pub(super) fn list_text_height(&self) -> Option<f32> {
+        let face = self.settings.text("ListFont", "Segoe UI");
+        ndr::native::gdi_text_height(&face, self.list_font_size.round() as i32, self.list_font_style).map(|h| h as f32)
     }
     /// Original DrawListItem (+0x387): an NXLINE horizontal line (integer division, thickness 1) on the pixel row below the item (bottom + LineSpace / 2 − 1).
     /// Here the center of that pixel row (bottom + floor(LineSpace / 2) − 0.5) is aligned to a screen pixel center.
