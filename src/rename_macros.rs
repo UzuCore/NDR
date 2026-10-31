@@ -1,11 +1,11 @@
-//! C# AdvancedRenameMacroStore: NexusFile advrename.save(절 = 매크로 이름, 줄 = 동작) 읽기·쓰기.
+//! C# AdvancedRenameMacroStore: reads and writes NexusFile advrename.save (section = macro name, line = action).
 use crate::compat::RenameRule;
 use crate::split::{ansi_bytes, ansi_text};
 use std::{fs, path::Path};
 
 pub const FILE_NAME: &str = "advrename.save";
 
-/// C# RenameMacroPreset. legacy_rows: 읽었지만 동작으로 바꿀 수 없는 줄(그대로 다시 쓴다).
+/// C# RenameMacroPreset. legacy_rows: lines read but not convertible to actions (written back as is).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct RenameMacro {
     pub name: String,
@@ -55,7 +55,7 @@ fn parse_target(value: &str) -> String {
     if value.eq_ignore_ascii_case("ext") { "Extension".into() } else { "Name".into() }
 }
 
-/// TryParsePosition: first/last(/all) 또는 숫자.
+/// TryParsePosition: first/last(/all) or a number.
 fn parse_position(value: &str, allow_all: bool) -> Option<(String, i64)> {
     if value.eq_ignore_ascii_case("first") {
         Some((if allow_all { "First" } else { "Prefix" }.into(), 1))
@@ -169,7 +169,7 @@ pub fn serialize_rule(rule: &RenameRule) -> String {
     }
 }
 
-/// CanSave: 이름에 줄바꿈·제어 문자, 알 수 없는 동작, 값에 ';'·줄바꿈이 있으면 그 값과 함께 Err.
+/// CanSave: Err with the value when the name has line breaks or control characters, an action is unknown, or a value has ';' or line breaks.
 pub fn can_save(macros: &[RenameMacro]) -> Result<(), String> {
     for item in macros {
         if item.name.chars().any(char::is_control) || item.legacy_rows.iter().any(|row| row.contains(['\r', '\n'])) {
@@ -191,7 +191,7 @@ pub fn can_save(macros: &[RenameMacro]) -> Result<(), String> {
     Ok(())
 }
 
-/// Read: "[이름]" 절, 빈 줄은 건너뛰고, 읽을 수 없는 줄은 legacy_rows.
+/// Read: "[name]" sections; empty lines are skipped, unreadable lines go to legacy_rows.
 pub fn read(path: &Path) -> Result<Vec<RenameMacro>, String> {
     let text = decode(&fs::read(path).map_err(|e| e.to_string())?)?;
     let mut macros: Vec<RenameMacro> = Vec::new();
@@ -219,7 +219,7 @@ pub fn read(path: &Path) -> Result<Vec<RenameMacro>, String> {
     Ok(macros)
 }
 
-/// SaveTo: ANSI(못 쓰면 UTF-8 BOM), CRLF, 임시 파일 뒤 바꾸기.
+/// SaveTo: ANSI (UTF-8 BOM when not possible), CRLF, replace after a temp file.
 pub fn save(path: &Path, macros: &[RenameMacro]) -> Result<(), String> {
     can_save(macros).map_err(|value| format!("NexusFile's advrename.save format cannot store semicolons or line breaks in macro values ({value})."))?;
     let mut lines = Vec::new();
@@ -239,7 +239,7 @@ pub fn save(path: &Path, macros: &[RenameMacro]) -> Result<(), String> {
     result
 }
 
-/// Load: 프로필의 advrename.save, 없으면 실행 파일 옆의 것(가능하면 프로필로 복사), 없으면 설정 사본(가능하면 파일로).
+/// Load: advrename.save of the profile, otherwise the one next to the executable (copied to the profile when possible), otherwise the settings copy (written to a file when possible).
 pub fn load(profile: &Path, beside_executable: &Path, configured: Vec<RenameMacro>) -> Result<Vec<RenameMacro>, String> {
     let user = profile.join(FILE_NAME);
     if user.is_file() {

@@ -412,7 +412,7 @@ pub fn show(paths: &[PathBuf]) -> Result<(), String> {
     .map_err(|e| e.to_string())
 }
 
-/// 원본 miPropertiesClick → FUN_00458da8: 한 폴더 안의 항목들로 IContextMenu를 얻어 "properties" 동사를 부른다(여러 파일 속성 창).
+/// Original miPropertiesClick -> FUN_00458da8: gets an IContextMenu for items in one folder and invokes the "properties" verb (multi-file properties window).
 pub fn properties(paths: &[PathBuf]) -> Result<(), String> {
     let paths = prepare_paths(paths)?;
     let owner = owned_foreground()?;
@@ -431,12 +431,12 @@ pub fn properties(paths: &[PathBuf]) -> Result<(), String> {
     unsafe { selection.menu.InvokeCommand((&invoke as *const CMINVOKECOMMANDINFOEX).cast()) }.map_err(|e| e.to_string())
 }
 
-/// 원본 NexusFile은 Ctrl+V(Shift+Insert)를 단축키로 받는다. egui-winit은 클립보드에 글이 없으면(파일 목록만 있을 때)
-/// 붙여넣기 글쇠를 아무 사건으로도 보내지 않으므로, 주 창 하위 클래스로 WM_KEYDOWN을 센다(take_paste_keys).
+/// The original NexusFile takes Ctrl+V (Shift+Insert) as a shortcut. egui-winit sends no event for the paste key when the clipboard has no text
+/// (only a file list), so a main window subclass counts WM_KEYDOWN (take_paste_keys).
 static PASTE_KEYS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 static PASTE_DEFAULT: std::sync::OnceLock<DefaultSubclass> = std::sync::OnceLock::new();
-/// 원본 단축키 표의 "Num *"·"Num +"·"Num -"·"Num /"·"Num 0~9"·"Num ." 글쇠. egui에는 숫자판 글쇠가 없으므로(Num *는 사건이 아예 없고,
-/// 나머지는 보통 글쇠와 같은 이름) 하위 클래스가 (가상 키, Ctrl, Shift, Alt)를 남긴다(take_numpad_keys).
+/// The "Num *", "Num +", "Num -", "Num /", "Num 0-9" and "Num ." keys of the original shortcut table. egui has no numpad keys (Num * has no event at all,
+/// the rest share names with ordinary keys), so the subclass records (virtual key, Ctrl, Shift, Alt) (take_numpad_keys).
 static NUMPAD_KEYS: std::sync::Mutex<Vec<(u16, bool, bool, bool)>> = std::sync::Mutex::new(Vec::new());
 unsafe extern "system" fn paste_key_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM, _id: usize, _data: usize) -> LRESULT {
     if message == WM_KEYDOWN || message == WM_SYSKEYDOWN {
@@ -447,7 +447,7 @@ unsafe extern "system" fn paste_key_proc(hwnd: HWND, message: u32, wparam: WPARA
         if message == WM_KEYDOWN && !alt && ((key == b'V' as usize && ctrl && !shift) || (key == VK_INSERT as usize && shift && !ctrl)) {
             PASTE_KEYS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
-        // 원본 목록은 Apps 글쇠(VK_APPS, WM_CONTEXTMENU의 자리 -1, -1)로도 오른쪽 단추 메뉴를 띄운다(FUN_00484e8c). egui에는 그 글쇠가 없다.
+        // The original list also opens the right-click menu with the Apps key (VK_APPS, WM_CONTEXTMENU at -1, -1) (FUN_00484e8c). egui has no such key.
         if message == WM_KEYDOWN && key == 0x5d {
             CONTEXT_KEYS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
@@ -460,7 +460,7 @@ unsafe extern "system" fn paste_key_proc(hwnd: HWND, message: u32, wparam: WPARA
         None => LRESULT(0),
     }
 }
-/// 주 창에 붙여넣기 글쇠 하위 클래스를 단다(한 번). comctl32는 프로그램이 끝날 때까지 둔다.
+/// Installs the paste key subclass on the main window (once). comctl32 keeps it until the program ends.
 pub fn install_paste_key_hook(hwnd: isize) -> Result<(), String> {
     if PASTE_DEFAULT.get().is_some() {
         return Ok(());
@@ -471,19 +471,19 @@ pub fn install_paste_key_hook(hwnd: isize) -> Result<(), String> {
     std::mem::forget(api);
     if installed.as_bool() { Ok(()) } else { Err("SetWindowSubclass failed".into()) }
 }
-/// Apps 글쇠(VK_APPS) 누름 수(take_context_keys).
+/// Apps key (VK_APPS) press count (take_context_keys).
 static CONTEXT_KEYS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-/// 지난번 뒤로 눌린 Apps 글쇠 수.
+/// Apps key presses since the last call.
 pub fn take_context_keys() -> u32 {
     CONTEXT_KEYS.swap(0, std::sync::atomic::Ordering::Relaxed)
 }
 
-/// 지난번 뒤로 센 붙여넣기 글쇠 수.
+/// Paste key presses counted since the last call.
 pub fn take_paste_keys() -> u32 {
     PASTE_KEYS.swap(0, std::sync::atomic::Ordering::Relaxed)
 }
 
-/// 지난번 뒤로 눌린 숫자판 글쇠(가상 키, Ctrl, Shift, Alt).
+/// Numpad keys pressed since the last call (virtual key, Ctrl, Shift, Alt).
 pub fn take_numpad_keys() -> Vec<(u16, bool, bool, bool)> {
     std::mem::take(&mut *NUMPAD_KEYS.lock().unwrap_or_else(|e| e.into_inner()))
 }

@@ -1,9 +1,9 @@
-//! C# OriginalShortcutEditor: NexusFile 5.4.1 단축키 창(fShortcut, FUN_00455a78)과 단축키 지정 창(fEditShortCut: FormShortCut 0x4212b8,
-//! eShortCutChange 0x4216d0, lbRemainKeysClick 0x421ba4, 예약 키 FUN_00420610, 남은 키 FUN_0047cda8, 캡션 FUN_00420c84).
-//! 수식 키 상태는 Delphi TShiftState 비트: 1 = Shift, 2 = Alt, 4 = Ctrl.
+//! C# OriginalShortcutEditor: the NexusFile 5.4.1 shortcut window (fShortcut, FUN_00455a78) and the shortcut assignment window (fEditShortCut: FormShortCut 0x4212b8,
+//! eShortCutChange 0x4216d0, lbRemainKeysClick 0x421ba4, reserved keys FUN_00420610, remaining keys FUN_0047cda8, captions FUN_00420c84).
+//! Modifier state uses Delphi TShiftState bits: 1 = Shift, 2 = Alt, 4 = Ctrl.
 use crate::compat::{shortcut_to_text, text_to_shortcut};
 
-/// 목록 한 줄(지도 순서 번호, 이름, 캡션, 키 글).
+/// One list row (map order index, name, caption, key text).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Row {
     pub index: usize,
@@ -12,7 +12,7 @@ pub struct Row {
     pub key_text: String,
 }
 
-/// 지정 창 검사 결과.
+/// Check result of the assignment window.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Validation {
     pub tip: String,
@@ -20,7 +20,7 @@ pub struct Validation {
     pub ok_enabled: bool,
 }
 
-/// 캡션에 쓰는 언어 접근: 메인 폼 원래 값('&' 포함)과 [RES] 값.
+/// Language access for captions: the main form's original values (with '&') and [RES] values.
 pub struct Texts<'a> {
     pub main_form_raw: &'a dyn Fn(&str) -> Option<String>,
     pub resource: &'a dyn Fn(&str, &str) -> String,
@@ -34,7 +34,7 @@ pub fn value_of(line: &str) -> &str {
     line.split_once('=').map_or("", |(_, value)| value)
 }
 
-/// (키, 상태).
+/// (key, state).
 pub fn split(shortcut: u16) -> (u16, u8) {
     (shortcut & 0xff, u8::from(shortcut & 0x2000 != 0) | (u8::from(shortcut & 0x8000 != 0) << 1) | (u8::from(shortcut & 0x4000 != 0) << 2))
 }
@@ -64,8 +64,8 @@ fn format_s(pattern: &str, value: &str) -> String {
     }
 }
 
-/// FUN_00420c84 / FUN_00455a78의 캡션: 메인 폼 "Menu.이름"에서 "&X. " 머리, '&', "..."를 뗀다. 작업 폴더는 WFGOTO/WFSET,
-/// 메뉴가 아닌 이름은 FUNC_이름. list_variant(FUN_00455a78)는 4자보다 짧은 캡션에도 작업 폴더 형식을 쓴다.
+/// Captions of FUN_00420c84 / FUN_00455a78: strips the "&X. " head, '&' and "..." from the main form "Menu.name". Work folders use WFGOTO/WFSET,
+/// non-menu names FUNC_name. list_variant (FUN_00455a78) uses the work folder form even for captions shorter than 4 characters.
 pub fn caption(name: &str, texts: &Texts<'_>, list_variant: bool) -> String {
     let Some(raw) = (texts.main_form_raw)(&format!("Menu.{name}")) else {
         return (texts.resource)(&format!("FUNC_{}", name.to_uppercase()), name);
@@ -97,7 +97,7 @@ pub fn caption(name: &str, texts: &Texts<'_>, list_variant: bool) -> String {
     caption.to_owned()
 }
 
-/// FUN_00455a78: 지도 순서, 거르기는 캡션+키+이름(공백 뺌)을 대소문자 무시로.
+/// FUN_00455a78: map order; filtering by caption+key+name (spaces removed), case-insensitive.
 pub fn rows(lines: &[String], filter: &str, texts: &Texts<'_>) -> Vec<Row> {
     let needle = filter.replace(' ', "").to_lowercase();
     lines
@@ -113,7 +113,7 @@ pub fn rows(lines: &[String], filter: &str, texts: &Texts<'_>) -> Vec<Row> {
         .collect()
 }
 
-/// FUN_0047cc18: 값 글이 정식 글과 같은 첫 줄의 이름.
+/// FUN_0047cc18: name of the first line whose value text equals the canonical text.
 pub fn assigned_name(lines: &[String], shortcut: u16) -> Option<String> {
     let text = shortcut_to_text(shortcut);
     lines.iter().find(|line| value_of(line) == text).map(|line| name_of(line).to_owned())
@@ -129,7 +129,7 @@ fn letter_or_digit(key: u16) -> bool {
     char::from_u32(u32::from(key)).is_some_and(|c| LETTERS_AND_DIGITS.contains(c))
 }
 
-/// FUN_00420610: 지정할 수 없는 키.
+/// FUN_00420610: keys that cannot be assigned.
 pub fn is_reserved(key: u16, state: u8, main_form_raw: &dyn Fn(&str) -> Option<String>) -> bool {
     let text = shortcut_to_text(compose(key, state));
     if RESERVED_TEXTS.iter().any(|r| r.eq_ignore_ascii_case(&text)) || key == 0x09 || key == 0x1b {
@@ -178,7 +178,7 @@ const KEY_NAMES: [&str; 41] = [
 ];
 const PUNCTUATION_CHARS: &str = "`-=[]\\;',./";
 
-/// FUN_0047cda8 + FUN_00420610 거르기: 한 수식 키 상태에서 비어 있고 지정할 수 있는 키.
+/// FUN_0047cda8 + FUN_00420610 filter: keys that are free and assignable in one modifier state.
 pub fn available_keys(lines: &[String], state: u8, main_form_raw: &dyn Fn(&str) -> Option<String>) -> Vec<String> {
     let used: std::collections::HashSet<u16> = lines
         .iter()
@@ -213,12 +213,12 @@ pub fn validate(text: &str, original: &str, lines: &[String], texts: &Texts<'_>)
     Validation { tip: String::new(), tip2: String::new(), ok_enabled: true }
 }
 
-/// FormShortCut 0x4212b8: 누른 키의 글(키는 칸에 들어가지 않는다).
+/// FormShortCut 0x4212b8: text of the pressed key (the key does not enter the field).
 pub fn captured_text(virtual_key: u16, state: u8) -> String {
     shortcut_to_text(compose(virtual_key, state))
 }
 
-/// lbRemainKeysClick 0x421ba4: "Num +" 하나를 빼고 마지막 '+'까지 남긴 뒤 항목을 붙인다.
+/// lbRemainKeysClick 0x421ba4: except for "Num +", keeps the text up to the last '+' and appends the item.
 pub fn replace_key_part(text: &str, item: &str) -> String {
     let stripped = match text.find("Num +") {
         Some(at) => format!("{}{}", &text[..at], &text[at + 5..]),
@@ -230,7 +230,7 @@ pub fn replace_key_part(text: &str, item: &str) -> String {
     }
 }
 
-/// FUN_0047d288은 같은 이름의 첫 줄을 고치지만 NDR은 두 번 누른 줄을 고친다(승인된 수정: Delete처럼 이름이 겹치는 경우).
+/// FUN_0047d288 edits the first line with the same name, but NDR edits the double-clicked line (approved fix: when names overlap, as with Delete).
 pub fn set_line(lines: &[String], index: usize, text: &str) -> Vec<String> {
     let mut result = lines.to_vec();
     if let Some(line) = result.get_mut(index) {
@@ -239,7 +239,7 @@ pub fn set_line(lines: &[String], index: usize, text: &str) -> Vec<String> {
     result
 }
 
-/// 저장 글. FUN_0047cb40은 머리 없이 저장해 다음 시작에 기본값과 섞이지만, NDR은 머리를 넣어 고친 줄이 그대로 읽힌다(승인된 수정).
+/// Saved text. FUN_0047cb40 saves without a header, mixing with defaults on the next start; NDR writes the header so edited lines are read as is (approved fix).
 pub fn to_file_text(lines: &[String]) -> String {
     format!("NEXUSFILESHORTCUT1.0\r\n{}\r\n", lines.join("\r\n"))
 }

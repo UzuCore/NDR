@@ -1,5 +1,5 @@
-//! C# FileSystemService의 파일 분할·합치기(SplitFile, WriteSplitMetadata, FindNumberedParts, HasContinuousNumberedParts,
-//! SuggestJoinedFileName, JoinOrderedFiles)와 SplitFileWindow.TryParseSize / SelectDefaultSplitSize.
+//! File split and join of C# FileSystemService (SplitFile, WriteSplitMetadata, FindNumberedParts, HasContinuousNumberedParts,
+//! SuggestJoinedFileName, JoinOrderedFiles) and SplitFileWindow.TryParseSize / SelectDefaultSplitSize.
 use crate::names;
 use std::{
     fs::{self, File, OpenOptions},
@@ -20,7 +20,7 @@ fn temporary_suffix() -> String {
     format!("{:016x}{:08x}", nanos as u64, std::process::id())
 }
 
-/// SplitFileWindow.TryParseSize: "숫자[.숫자] 단위", 단위 없음·M·MB·MIB = MiB, B·BYTE(S), K·KB·KIB, G·GB·GIB. 1바이트 이상.
+/// SplitFileWindow.TryParseSize: "number[.number] unit"; no unit, M, MB, MIB = MiB; B, BYTE(S), K, KB, KIB, G, GB, GIB. At least 1 byte.
 pub fn parse_split_size(text: &str) -> Option<u64> {
     let text = text.trim();
     let split = text.find(|c: char| !(c.is_ascii_digit() || c == '.')).unwrap_or(text.len());
@@ -43,7 +43,7 @@ pub fn parse_split_size(text: &str) -> Option<u64> {
 /// SizePresets.
 pub const SPLIT_SIZE_PRESETS: [&str; 7] = ["1440 KB", "2880 KB", "5 MB", "10 MB", "20 MB", "50 MB", "100 MB"];
 
-/// SelectDefaultSplitSize: 1440 KB보다 작으면 "720 KB", 아니면 크기에 맞는 기본 조각.
+/// SelectDefaultSplitSize: "720 KB" below 1440 KB, otherwise the default piece size for the file size.
 pub fn default_split_size(length: u64) -> &'static str {
     const KIB: u64 = 1024;
     const MIB: u64 = 1024 * KIB;
@@ -60,7 +60,7 @@ pub fn default_split_size(length: u64) -> &'static str {
     }]
 }
 
-/// 조각 수(최소 1).
+/// Piece count (at least 1).
 pub fn part_count(length: u64, part_size: u64) -> u64 {
     length.div_ceil(part_size.max(1)).max(1)
 }
@@ -70,18 +70,18 @@ pub fn part_count(length: u64, part_size: u64) -> u64 {
 pub struct SplitResult {
     pub parts: Vec<PathBuf>,
     pub source_size: u64,
-    /// 대문자 16진수, 앞의 0 없음(.NET "X"). 조각을 만들지 않았으면 빈 글.
+    /// Upper-case hexadecimal without leading zeros (.NET "X"). Empty text when no pieces were made.
     pub crc32: String,
 }
 
-/// 원본 FUN_0043b8b8: 저장 폴더 + PathRemoveExtensionW(파일 이름). 결과가 비면(".bashrc") 이름 전체.
+/// Original FUN_0043b8b8: save folder + PathRemoveExtensionW(file name). The whole name when the result is empty (".bashrc").
 pub fn split_prefix(destination: &Path, file_name: &str) -> PathBuf {
     let stem = names::remove_extension(file_name);
     destination.join(if stem.is_empty() { file_name } else { &stem })
 }
 
-/// C# SplitFile: 원본이 조각 크기 이하이면 아무것도 만들지 않는다. 만들 조각("{접두}.001"…)이 하나라도 있으면 쓰기 전에 실패
-/// (승인된 수정). 조각은 임시 이름으로 쓴 뒤 옮기고, 실패하면 만든 조각을 지운다. 진행은 (끝난 조각 수, 쓴 바이트).
+/// C# SplitFile: makes nothing when the source is at most the piece size. Fails before writing if any piece to create ("{prefix}.001"...) already exists
+/// (approved fix). Pieces are written under temp names then moved; on failure created pieces are deleted. Progress is (pieces done, bytes written).
 pub fn split_file(path: &Path, part_size: u64, destination: &Path, cancel: &AtomicBool, progress: &mut dyn FnMut(u64, u64, &Path)) -> Result<SplitResult, String> {
     if part_size == 0 {
         return Err("Part size must be greater than zero".into());
@@ -150,7 +150,7 @@ pub fn split_file(path: &Path, part_size: u64, destination: &Path, cancel: &Atom
     Ok(SplitResult { parts: created, source_size: length, crc32: format!("{:X}", hasher.finalize()) })
 }
 
-/// ANSI 코드 페이지(CP_ACP)로 바꿀 수 있으면 그 바이트, 바꿀 수 없는 글자가 있으면 None.
+/// Bytes in the ANSI code page (CP_ACP) when convertible, None when some character cannot be converted.
 pub fn ansi_bytes(text: &str) -> Option<Vec<u8>> {
     use windows_sys::Win32::Globalization::{CP_ACP, WideCharToMultiByte};
     const WC_NO_BEST_FIT_CHARS: u32 = 0x400;
@@ -185,13 +185,13 @@ pub(crate) fn ansi_text(bytes: &[u8]) -> String {
     }
 }
 
-/// Path.ChangeExtension(첫 조각, ".crc").
+/// Path.ChangeExtension(first piece, ".crc").
 fn metadata_path(first_part: &Path) -> PathBuf {
     first_part.with_extension("crc")
 }
 
-/// C# WriteSplitMetadata(원본 FUN_0046431c 성공 경로): "filename=, size=, crc32=" 세 줄(CRLF)을 ANSI로, ANSI로 못 쓰는 이름이면
-/// UTF-8 BOM으로(승인된 수정). 크기는 64비트 전체(승인된 수정). .crc 경로가 원본 파일이면 쓰지 않는다. 쓴 경로 또는 None.
+/// C# WriteSplitMetadata (success path of original FUN_0046431c): three lines "filename=, size=, crc32=" (CRLF) in ANSI, or UTF-8 BOM when the name cannot be written in ANSI
+/// (approved fix). The size uses the full 64 bits (approved fix). Not written when the .crc path is the source file. Returns the written path or None.
 pub fn write_split_metadata(first_part: &Path, source: &Path, source_size: u64, crc32: &str) -> Result<Option<PathBuf>, String> {
     let path = std::path::absolute(metadata_path(first_part)).map_err(|e| e.to_string())?;
     let source_full = std::path::absolute(source).map_err(|e| e.to_string())?;
@@ -206,7 +206,7 @@ pub fn write_split_metadata(first_part: &Path, source: &Path, source_size: u64, 
 }
 
 fn numbered_suffix(name: &str) -> Option<(&str, &str, bool)> {
-    // ".partN"(대소문자 무시) 또는 ".NNN"(세 자리 이상).
+    // ".partN" (case-insensitive) or ".NNN" (three or more digits).
     let lower = name.to_ascii_lowercase();
     if let Some(at) = lower.rfind(".part") {
         let digits = &name[at + 5..];
@@ -219,8 +219,8 @@ fn numbered_suffix(name: &str) -> Option<(&str, &str, bool)> {
     (at > 0 && digits.len() >= 3 && digits.chars().all(|c| c.is_ascii_digit())).then_some((&name[..at], digits, true))
 }
 
-/// C# FindNumberedParts: "이름.partN"이면 같은 접두의 .partN 전부, "이름.001"이면 같은 접두의 세 자리 이상 번호 전부. 번호 순서.
-/// ".002"처럼 001이 아닌 옛 형식 조각에서 시작하면 찾지 않는다.
+/// C# FindNumberedParts: for "name.partN" every .partN with the same prefix, for "name.001" every number of three or more digits with the same prefix. In number order.
+/// Starting from an old-style piece other than 001, such as ".002", finds nothing.
 pub fn find_numbered_parts(part: &Path) -> Vec<PathBuf> {
     let Some(name) = part.file_name().map(|n| n.to_string_lossy().into_owned()) else { return vec![] };
     let Some((prefix, digits, legacy)) = numbered_suffix(&name) else { return vec![] };
@@ -243,7 +243,7 @@ pub fn find_numbered_parts(part: &Path) -> Vec<PathBuf> {
     found.into_iter().map(|(_, path)| path).collect()
 }
 
-/// C# HasContinuousNumberedParts: 1부터 빈틈없이 이어지는가.
+/// C# HasContinuousNumberedParts: whether the numbers run from 1 without gaps.
 pub fn has_continuous_numbered_parts(parts: &[PathBuf]) -> bool {
     !parts.is_empty()
         && parts.iter().enumerate().all(|(index, path)| {
@@ -254,7 +254,7 @@ pub fn has_continuous_numbered_parts(parts: &[PathBuf]) -> bool {
         })
 }
 
-/// TryReadSplitMetadataFileName: 첫 조각 옆 .crc의 "filename=" 값(파일 이름 부분).
+/// TryReadSplitMetadataFileName: the "filename=" value (file name part) of the .crc next to the first piece.
 fn metadata_file_name(first_part: &Path) -> Option<String> {
     let bytes = fs::read(metadata_path(first_part)).ok()?;
     let text = if let Some(rest) = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
@@ -274,7 +274,7 @@ fn metadata_file_name(first_part: &Path) -> Option<String> {
     })
 }
 
-/// C# SuggestJoinedFileName: ".partN"은 접두, ".NNN"은 .crc의 원래 이름 또는 접두, 그 밖은 "이름.joined.확장자".
+/// C# SuggestJoinedFileName: ".partN" gives the prefix, ".NNN" the original name from the .crc or the prefix, otherwise "name.joined.ext".
 pub fn suggest_joined_file_name(input: &Path) -> String {
     let name = input.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     match numbered_suffix(&name) {
@@ -295,7 +295,7 @@ enum TextKind {
     Utf16Be,
 }
 
-/// LooksLikeLegacyUtf8: 첫 NUL 앞까지에서 첫 비 ASCII가 3바이트 UTF-8이고, 그 글자가 ANSI에서 2바이트(상위 비트) 글자인가.
+/// LooksLikeLegacyUtf8: whether, before the first NUL, the first non-ASCII is a 3-byte UTF-8 character that is a 2-byte (high bit) character in ANSI.
 fn looks_like_legacy_utf8(sample: &[u8]) -> bool {
     let sample = &sample[..sample.iter().position(|b| *b == 0).unwrap_or(sample.len())];
     let first = sample.iter().position(|b| *b > 0x7F).unwrap_or(sample.len());
@@ -311,7 +311,7 @@ fn looks_like_legacy_utf8(sample: &[u8]) -> bool {
     ansi_bytes(&ch.to_string()).is_some_and(|encoded| encoded.len() == 2 && encoded[0] & 0x80 != 0 && encoded[1] & 0x80 != 0)
 }
 
-/// InspectLegacyTextFile: 앞 4096바이트로 BOM(뒤에 한 바이트 이상) 또는 UTF-8 모양을 본다. (종류, BOM 길이).
+/// InspectLegacyTextFile: looks at the first 4096 bytes for a BOM (followed by at least one byte) or a UTF-8 shape. (kind, BOM length).
 fn inspect_text(path: &Path) -> Result<(TextKind, usize), String> {
     let mut sample = vec![0u8; 4096];
     let mut file = File::open(path).map_err(|e| e.to_string())?;
@@ -354,7 +354,7 @@ fn encode(text: &str, kind: TextKind) -> Vec<u8> {
     }
 }
 
-/// StreamReader.ReadLine: "\r\n", "\r", "\n"에서 나누고 끝의 빈 줄은 없다.
+/// StreamReader.ReadLine: splits at "\r\n", "\r", "\n" with no trailing empty line.
 fn read_lines(text: &str) -> Vec<&str> {
     let mut lines = Vec::new();
     let mut rest = text;
@@ -374,9 +374,9 @@ fn read_lines(text: &str) -> Vec<&str> {
     lines
 }
 
-/// C# JoinOrderedFiles: 입력을 순서대로 이어 임시 파일에 쓴 뒤 결과 이름으로 옮긴다(덮어쓰기는 명시 동의 때만).
-/// 글 파일 합치기: 줄마다 CRLF로 다시 쓰고, 출력 인코딩은 마지막 파일의 것(UTF-16BE는 UTF-16LE), 다만 ASCII 아닌 파일이 있는데
-/// 마지막이 ASCII면 UTF-16LE. BOM은 출력 인코딩의 것(ASCII는 없음). 진행은 (끝난 파일 수, 쓴 바이트).
+/// C# JoinOrderedFiles: concatenates the inputs in order into a temp file, then moves it to the result name (overwrite only with explicit consent).
+/// Joining text files: rewrites every line with CRLF; the output encoding is the last file's (UTF-16BE becomes UTF-16LE), except that when a non-ASCII file exists
+/// and the last one is ASCII, UTF-16LE. The BOM follows the output encoding (none for ASCII). Progress is (files done, bytes written).
 pub fn join_ordered_files(inputs: &[PathBuf], output: &Path, join_text: bool, allow_overwrite: bool, cancel: &AtomicBool, progress: &mut dyn FnMut(u64, u64, &Path)) -> Result<PathBuf, String> {
     if inputs.is_empty() {
         return Err("합칠 입력 파일이 없습니다.".into());
@@ -450,7 +450,7 @@ pub fn join_ordered_files(inputs: &[PathBuf], output: &Path, join_text: bool, al
     result.map(|_| destination)
 }
 
-/// File.Move(temp, destination, allowOverwrite): MoveFileExW(REPLACE_EXISTING 여부).
+/// File.Move(temp, destination, allowOverwrite): MoveFileExW (with or without REPLACE_EXISTING).
 fn move_into_place(from: &Path, to: &Path, overwrite: bool) -> Result<(), String> {
     use windows_sys::Win32::Storage::FileSystem::{MOVEFILE_REPLACE_EXISTING, MoveFileExW};
     let wide = |p: &Path| p.as_os_str().encode_wide().chain(Some(0)).collect::<Vec<u16>>();

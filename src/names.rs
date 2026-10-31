@@ -97,7 +97,7 @@ pub fn create_empty_file(path: &str) -> u32 {
 }
 
 /// Original PathCombineW(current folder, typed name): '\' at the start means the current drive root, "x:..." stays as is, "." and ".." are resolved.
-/// MAX_PATH를 넘으면 단순 결합으로 대신한다(C# NDR과 같은 승인된 수정).
+/// Beyond MAX_PATH it falls back to a simple join (the same approved fix as C# NDR).
 pub fn combine_typed_name(directory: &str, name: &str) -> String {
     let (directory_wide, name_wide) = (wide(directory), wide(name));
     let mut buffer = vec![0u16; 260];
@@ -109,7 +109,7 @@ pub fn combine_typed_name(directory: &str, name: &str) -> String {
     from_wide_ptr(buffer.as_ptr())
 }
 
-/// PathRemoveExtensionW(이름): 마지막 확장자만 뗀다(공백이 든 확장자는 확장자가 아님).
+/// PathRemoveExtensionW(name): removes only the last extension (an extension containing a space is not an extension).
 pub fn remove_extension(name: &str) -> String {
     let mut buffer = wide(name);
     // SAFETY: NUL-terminated writable buffer; the API only shortens it.
@@ -119,8 +119,8 @@ pub fn remove_extension(name: &str) -> String {
     from_wide_ptr(buffer.as_ptr())
 }
 
-/// 원본 FUN_004351cc의 칸 나누기. 폴더는 이름 전체와 빈 확장자. 파일은 PathRemoveExtensionW(이름)과
-/// PathFindExtensionW(이름)에서 점을 뺀 것(확장자가 한 글자보다 길 때만).
+/// Field split of original FUN_004351cc. Folders get the whole name and an empty extension. Files get PathRemoveExtensionW(name) and
+/// PathFindExtensionW(name) without the dot (only when the extension is longer than one character).
 pub fn split_for_rename(file_name: &str, is_directory: bool) -> (String, String) {
     if is_directory {
         return (file_name.into(), String::new());
@@ -136,7 +136,7 @@ pub fn split_for_rename(file_name: &str, is_directory: bool) -> (String, String)
     (from_wide_ptr(stem.as_ptr()), extension)
 }
 
-/// 원본 새 폴더 기본 이름: 오늘 날짜의 사용자 짧은 날짜 형식에서 '\'와 '/'를 '-'로.
+/// Original new folder default name: today's date in the user short date format with '\' and '/' turned into '-'.
 pub fn new_folder_default_name() -> String {
     use windows_sys::Win32::Globalization::GetDateFormatW;
     const LOCALE_USER_DEFAULT: u32 = 0x400;
@@ -156,7 +156,7 @@ pub fn new_folder_default_name() -> String {
     text.replace(['\\', '/'], "-")
 }
 
-/// FormatMessageW(FROM_SYSTEM | IGNORE_INSERTS, LOCALE_USER_DEFAULT)의 글(끝 줄바꿈 포함), 없으면 None.
+/// Text of FormatMessageW(FROM_SYSTEM | IGNORE_INSERTS, LOCALE_USER_DEFAULT) (including the trailing line break), None when missing.
 pub fn system_message(error: u32) -> Option<String> {
     use windows_sys::Win32::System::Diagnostics::Debug::{FORMAT_MESSAGE_ALLOCATE_BUFFER, FORMAT_MESSAGE_FROM_SYSTEM, FORMAT_MESSAGE_IGNORE_INSERTS, FormatMessageW};
     let mut buffer: *mut u16 = std::ptr::null_mut();

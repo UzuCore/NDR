@@ -1,5 +1,5 @@
-//! C# ShortcutBindingService: NDR 단축키 정의(Id, 이름, 범위, 기본 글쇠, 동작), KeyboardShortcuts 설정이 덮는 글쇠,
-//! 글쇠 글("Ctrl+Shift+F1") 읽기와 비교. 글쇠 이름은 WPF Key 이름(D0~D9, Back, OemMinus, Left, F1 …)으로 다룬다.
+//! C# ShortcutBindingService: NDR shortcut definitions (Id, name, scope, default key, action), keys overridden by the KeyboardShortcuts setting,
+//! reading and comparing key text ("Ctrl+Shift+F1"). Key names are handled as WPF Key names (D0-D9, Back, OemMinus, Left, F1 ...).
 use crate::settings::Settings;
 
 /// ShortcutDefinition(Id, Command, Scope, DefaultGesture, ActionId).
@@ -16,7 +16,7 @@ const PANEL: &str = "파일 패널";
 const TREE: &str = "폴더 트리";
 const RENAME: &str = "고급 이름 변경";
 
-/// (Id, 이름, 범위, 기본 글쇠, 동작) — C# Definitions와 같은 순서.
+/// (Id, name, scope, default key, action), in the same order as C# Definitions.
 const TABLE: &[(&str, &str, &str, &str, &str)] = &[
     ("historyBack", "뒤로 이동", PANEL, "Alt+Left", ""),
     ("historyForward", "앞으로 이동", PANEL, "Alt+Right", ""),
@@ -143,7 +143,7 @@ const FAVORITE_ACTIONS: [&str; 20] = [
     "favoriteOpen:14", "favoriteOpen:15", "favoriteOpen:16", "favoriteOpen:17", "favoriteOpen:18", "favoriteOpen:19",
 ];
 
-/// C# Definitions(표 + 즐겨찾기 20개: Shift+F1~F10, Ctrl+Shift+F1~F10).
+/// C# Definitions (the table + 20 favorites: Shift+F1-F10, Ctrl+Shift+F1-F10).
 pub fn definitions() -> Vec<Definition> {
     let mut list: Vec<Definition> = TABLE
         .iter()
@@ -161,7 +161,7 @@ pub fn definitions() -> Vec<Definition> {
     list
 }
 
-/// 수식 키(WPF ModifierKeys: Alt 1, Control 2, Shift 4).
+/// Modifiers (WPF ModifierKeys: Alt 1, Control 2, Shift 4).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Modifiers {
     pub ctrl: bool,
@@ -169,7 +169,7 @@ pub struct Modifiers {
     pub shift: bool,
 }
 
-/// GetGesture: KeyboardShortcuts[Id]가 있으면 그것, 없으면 기본 글쇠.
+/// GetGesture: KeyboardShortcuts[Id] when present, otherwise the default key.
 pub fn gesture(settings: &Settings, id: &str) -> Option<String> {
     let configured = settings.values.get("KeyboardShortcuts").and_then(|v| v.get(id)).and_then(|v| v.as_str());
     if let Some(value) = configured {
@@ -181,7 +181,7 @@ pub fn gesture(settings: &Settings, id: &str) -> Option<String> {
     })
 }
 
-/// WPF Key 이름(대소문자 무시) 가운데 묶을 수 있는 것. Enum.TryParse처럼 이름을 정식 이름으로 돌려준다.
+/// Bindable WPF Key names (case-insensitive). Like Enum.TryParse, returns the canonical name.
 fn key_name(part: &str) -> Option<String> {
     if part.len() == 1 && part.as_bytes()[0].is_ascii_digit() {
         return Some(format!("D{part}"));
@@ -220,7 +220,7 @@ fn key_name(part: &str) -> Option<String> {
     None
 }
 
-/// C# TryParse: "Ctrl"/"Control", "Shift", "Alt"는 수식 키, "Win"이 있으면 실패, 글쇠는 하나만.
+/// C# TryParse: "Ctrl"/"Control", "Shift", "Alt" are modifiers; "Win" fails; only one key.
 pub fn parse(gesture: &str) -> Option<(String, Modifiers)> {
     let mut modifiers = Modifiers::default();
     let mut key = None;
@@ -246,12 +246,12 @@ pub fn parse(gesture: &str) -> Option<(String, Modifiers)> {
     key.map(|key| (key, modifiers))
 }
 
-/// Matches(id, settings, key, modifiers): 설정 또는 기본 글쇠가 이 글쇠와 수식 키에 꼭 맞는가.
+/// Matches(id, settings, key, modifiers): whether the setting or default key exactly matches this key and modifiers.
 pub fn matches(settings: &Settings, id: &str, key: &str, modifiers: Modifiers) -> bool {
     gesture(settings, id).and_then(|g| parse(&g)).is_some_and(|(k, m)| k == key && m == modifiers)
 }
 
-/// C# Format(key, modifiers): "Ctrl+Alt+Shift+글쇠"(D0~D9는 숫자, Back은 Backspace, OemMinus는 "-").
+/// C# Format(key, modifiers): "Ctrl+Alt+Shift+key" (D0-D9 as digits, Back as Backspace, OemMinus as "-").
 pub fn format(key: &str, modifiers: Modifiers) -> String {
     let mut parts: Vec<String> = Vec::new();
     if modifiers.ctrl {

@@ -3,15 +3,15 @@ use std::path::Path;
 
 pub const CURRENT_SCHEMA_VERSION: i64 = 4;
 
-/// 파일 목록(패널) 글꼴 크기(ListFontSize, 화소)의 처음 값.
+/// Default file list (pane) font size (ListFontSize, pixels).
 pub const DEFAULT_LIST_FONT_PIXELS: f64 = 14.;
 
-/// 원본 글꼴 크기(포인트, TFont.Size)를 화소로: 원본 FUN_00644e70 Height = MulDiv(크기, PixelsPerInch 96, 72)(반올림).
+/// Original font size (points, TFont.Size) to pixels: original FUN_00644e70 Height = MulDiv(size, PixelsPerInch 96, 72) (rounded).
 pub fn font_points_to_pixels(points: f64) -> f64 {
     (points * 96. / 72.).round()
 }
 
-/// 화소 글꼴 크기를 Windows 글꼴 상자에 넘길 포인트로(0.5 단위로 반올림).
+/// Pixel font size to points for the Windows font box (rounded to 0.5).
 pub fn font_pixels_to_points(pixels: f64) -> f64 {
     (pixels * 72. / 96. * 2.).round() / 2.
 }
@@ -161,11 +161,11 @@ impl Settings {
             self.set_flag("UseNexusFileColorMap", true);
             self.set_text("Theme", "Dark");
         }
-        // 원본 처음 값 [Window] skin=black(default\nexusfile.ini): 처음 테마는 Black. 스키마 4 전의 C# 처음 값 Dark도 한 번 Black으로 옮긴다.
+        // Original default [Window] skin=black (default\nexusfile.ini): the initial theme is Black. The C# default Dark from before schema 4 also moves to Black once.
         if original_schema < 4 && self.text("Theme", "Dark").eq_ignore_ascii_case("Dark") {
             self.set_text("Theme", "Black");
         }
-        // 테마는 원본 스킨(검정·클래식·회색)뿐이다. 예전 C# 판 테마(Dark·Light·System)나 모르는 이름은 원본 처음 값 Black.
+        // Themes are only the original skins (black, classic, gray). Old C# themes (Dark, Light, System) or unknown names become the original default Black.
         let theme = self.text("Theme", "Black");
         self.set_text(
             "Theme",
@@ -191,7 +191,7 @@ impl Settings {
             ("DefaultDestinationMode", 0, 0, 1),
             ("DefaultArchiveFormatIndex", 1, 0, 128),
             ("DefaultArchiveCompressionLevel", 2, 0, 9),
-            // 원본 TNXScrollStep(0x46f20f 처음 값 2): 1 = 줄, 2 = 쪽.
+            // Original TNXScrollStep (default 2 at 0x46f20f): 1 = line, 2 = page.
             ("ScrollStep", 2, 1, 2),
             ("LeftScrollStep", 2, 1, 2),
             ("RightScrollStep", 2, 1, 2),
@@ -222,17 +222,17 @@ impl Settings {
         {
             self.values.insert("EscapeKeyAction".into(), Value::Null);
         }
-        // 원본 처음 설정(default/nexusfile.ini esckey=0, 생성자 +0xd8 = 0): Esc = 최소화. 고른 적이 없으면 0.
+        // Original default (default/nexusfile.ini esckey=0, constructor +0xd8 = 0): Esc = minimize. 0 when never chosen.
         if !self.values.contains_key("EscapeKeyAction") {
             self.values.insert("EscapeKeyAction".into(), json!(0));
         }
         for (key, default, min, max) in [
-            // 원본 패널 폴더 트리 너비(ini treewidth1/2 처음 120, 나눔 막대 MinSize 50 — FUN_0048da38).
+            // Original pane folder tree width (ini treewidth1/2 default 120, divider MinSize 50, FUN_0048da38).
             ("LeftFolderTreeWidth", 120., 50., 600.),
             ("RightFolderTreeWidth", 120., 50., 600.),
             ("LeftPaneWidth", 50., 20., 80.),
             ("RightPaneWidth", 50., 20., 80.),
-            // 원본 TfMain Constraints.MinWidth·MinHeight 250.
+            // Original TfMain Constraints.MinWidth/MinHeight 250.
             ("WindowWidth", 800., 250., 8192.),
             ("WindowHeight", 600., 250., 8192.),
             ("WindowLeft", 10., -16384., 16384.),
@@ -318,7 +318,7 @@ impl Settings {
                 self.values.insert(key.into(), json!({}));
             }
         }
-        // 원본 처음 색상표(default\nexusfile.col [Ext]): 스키마 4 전이고 확장자 색이 하나도 없으면 한 번 채운다.
+        // Original default color table (default\nexusfile.col [Ext]): filled once before schema 4 when there are no extension colors at all.
         if original_schema < 4 && self.values.get("ExtensionColors").and_then(Value::as_object).is_some_and(|m| m.is_empty()) {
             let colors: Map<String, Value> = crate::listing::ORIGINAL_EXTENSION_COLORS
                 .iter()
@@ -564,22 +564,22 @@ mod tests {
     }
     #[test]
     fn defaults_follow_the_original_default_ini_and_color_map() {
-        // 원본 default\nexusfile.ini skin=black, default\nexusfile.col [Ext].
+        // Original default\nexusfile.ini skin=black, default\nexusfile.col [Ext].
         let fresh = Settings::default();
         assert_eq!(fresh.text("Theme", ""), "Black");
         assert_eq!(fresh.values["ExtensionColors"][".zip"], "#808000");
         assert_eq!(fresh.values["ExtensionColors"][".jpg"], "#D857EA");
         assert_eq!(fresh.values["ExtensionColors"].as_object().unwrap().len(), 85);
-        // 패널(파일 목록) 글꼴 처음 값 14화소. 원본 포인트(MulDiv(크기, 96, 72)): 12pt = 16px, 9pt = 12px.
+        // Default pane (file list) font 14 px. Original points (MulDiv(size, 96, 72)): 12pt = 16px, 9pt = 12px.
         assert_eq!(fresh.values["ListFontSize"].as_f64(), Some(14.0));
         assert_eq!((font_points_to_pixels(12.), font_points_to_pixels(9.), font_points_to_pixels(10.5)), (16., 12., 14.));
         assert_eq!((font_pixels_to_points(14.), font_pixels_to_points(16.)), (10.5, 12.));
-        // 스키마 4 전의 C# 처음 값 Dark는 한 번 Black으로, 사용자가 고른 확장자 색은 그대로.
+        // The C# default Dark from before schema 4 becomes Black once; extension colors the user chose stay.
         let mut old = Settings { values: serde_json::from_value(serde_json::json!({"SchemaVersion": 3, "Theme": "Dark", "ExtensionColors": {".txt": "#112233"}})).unwrap() };
         old.normalize();
         assert_eq!(old.text("Theme", ""), "Black");
         assert_eq!(old.values["ExtensionColors"], serde_json::json!({".txt": "#112233"}));
-        // 테마는 원본 스킨뿐: 예전에 고른 C# 판 테마 Dark도 Black. 비운 확장자 색은 그대로 둔다.
+        // Themes are only original skins: a previously chosen C# theme Dark becomes Black too. Emptied extension colors stay empty.
         let mut chosen = Settings { values: serde_json::from_value(serde_json::json!({"SchemaVersion": 4, "Theme": "Dark", "ExtensionColors": {}})).unwrap() };
         chosen.normalize();
         assert_eq!(chosen.text("Theme", ""), "Black");

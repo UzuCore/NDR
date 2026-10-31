@@ -22,16 +22,16 @@ use suppaftp::{
 const TIMEOUT: Duration = Duration::from_secs(15);
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
 
-/// 원본 패널 FTP 기록 칸(TListBox, FUN_0048d7ac)이 받는 제어 연결 줄(원본 Indy TIdLogEvent → FUN_004404c0).
-/// 받은 줄은 그대로(줄 끝 "<EOL>" 뺌), 보낸 줄은 "지금 원격 폴더 > 명령"(0x8ed8a6 "%s > %s")이고
-/// "PASS "가 들어 있으면 여섯째 글자부터 '*'로 가린다. 줄을 더할 때마다 맨 끝 줄을 고른다(ItemIndex = Count - 1).
+/// Control connection lines received by the original pane FTP log box (TListBox, FUN_0048d7ac) (original Indy TIdLogEvent -> FUN_004404c0).
+/// Received lines as is (trailing "<EOL>" removed), sent lines as "current remote folder > command" (0x8ed8a6 "%s > %s"), and
+/// with "PASS " present, masked with '*' from the sixth character. Each added line selects the last line (ItemIndex = Count - 1).
 #[derive(Debug, Default)]
 pub struct ProtocolLog {
     pub lines: Vec<String>,
-    /// 보낸 줄 앞 글(원본 FTP 엔진 +0x1c: 지금 원격 폴더).
+    /// Prefix of sent lines (original FTP engine +0x1c: current remote folder).
     pub prefix: String,
     pub selected: Option<usize>,
-    /// suppaftp가 여러 줄 응답의 첫 줄을 두 번 기록하므로 다음 받은 줄 하나를 건너뛴다.
+    /// suppaftp logs the first line of a multi-line reply twice, so the next received line is skipped.
     skip_received: bool,
 }
 
@@ -59,7 +59,7 @@ thread_local! {
     static PROTOCOL_LOG: std::cell::RefCell<Option<std::sync::Arc<std::sync::Mutex<ProtocolLog>>>> = const { std::cell::RefCell::new(None) };
 }
 
-/// 이 스레드에서 `f`가 보내고 받는 FTP 제어 줄을 `log`에 적는다(None이면 적지 않음).
+/// Records the FTP control lines `f` sends and receives on this thread into `log` (nothing with None).
 pub fn with_protocol_log<R>(log: Option<&std::sync::Arc<std::sync::Mutex<ProtocolLog>>>, f: impl FnOnce() -> R) -> R {
     install_protocol_logger();
     let previous = PROTOCOL_LOG.with(|slot| slot.replace(log.cloned()));
@@ -78,7 +78,7 @@ fn protocol_log(f: impl FnOnce(&mut ProtocolLog)) {
     });
 }
 
-/// suppaftp는 제어 줄을 log 크레이트로 남긴다("CC OUT: 명령", "CC IN: [바이트]"). 그것을 기록 칸으로 돌린다.
+/// suppaftp logs control lines through the log crate ("CC OUT: command", "CC IN: [bytes]"). They are routed to the log box.
 struct SuppaftpLog;
 impl log::Log for SuppaftpLog {
     fn enabled(&self, metadata: &log::Metadata) -> bool {
@@ -136,9 +136,9 @@ pub struct RemoteEntry {
     pub is_dir: bool,
     pub size: u64,
     pub is_symlink: bool,
-    /// 마지막 수정 시각(유닉스 초, UTC). 서버가 알려주지 않으면 None.
+    /// Last modification time (Unix seconds, UTC). None when the server does not report it.
     pub modified: Option<i64>,
-    /// 권한 비트(0o7777 안). 서버가 알려주지 않으면 None(C# RemoteEntry.PermissionMode).
+    /// Permission bits (within 0o7777). None when the server does not report them (C# RemoteEntry.PermissionMode).
     pub mode: Option<u32>,
 }
 
@@ -149,22 +149,22 @@ pub struct TransferProgress {
     pub files: u64,
 }
 
-/// 트리 전송이 같은 이름을 물을 때 넘기는 정보. 원본 FUN_00467764(TfFileExists 채우기): 원격 쪽 크기·시각을 보이고,
-/// btnResume은 FTP면 서버가 REST를 받을 때(Synapse CanResume), SFTP면 늘 켠다.
+/// Information passed when a tree transfer asks about a name conflict. Original FUN_00467764 (filling TfFileExists): shows the remote size and time,
+/// and btnResume is on for FTP when the server accepts REST (Synapse CanResume) and always for SFTP.
 pub struct ConflictInfo<'a> {
-    /// 원격 쪽 항목(받기 = 원본, 보내기 = 대상).
+    /// The remote item (download = source, upload = destination).
     pub remote: &'a RemoteEntry,
-    /// 로컬 쪽이 폴더인가.
+    /// Whether the local side is a folder.
     pub local_dir: bool,
-    /// 받기면 true(원격 = 원본), 보내기면 false(원격 = 대상).
+    /// True for downloads (remote = source), false for uploads (remote = destination).
     pub remote_is_source: bool,
     pub can_resume: bool,
-    /// "이름 바꾸기"에 묻는 쪽이 넣는 새 이름(원본 FUN_00467658 입력 창). 비면 " (1)" 식으로 빈 이름을 고른다.
+    /// New name the asking side fills in for "rename" (original FUN_00467658 input window). When empty, a free name like " (1)" is chosen.
     pub new_name: std::cell::RefCell<Option<String>>,
 }
 
-/// 원본 FUN_00467dfc·FUN_00469210: "새 파일만 덮어쓰기"는 새 것의 시각이 기존보다 늦을 때 덮어쓰고 아니면 건너뛴다.
-/// 모르는 시각은 0(원본 FILETIME 0)으로 본다.
+/// Original FUN_00467dfc and FUN_00469210: "overwrite if newer" overwrites when the new item's time is later than the existing one, otherwise skips.
+/// Unknown times count as 0 (original FILETIME 0).
 fn newer_wins(new: Option<i64>, existing: Option<i64>) -> crate::fsops::ConflictChoice {
     if new.unwrap_or(0) > existing.unwrap_or(0) {
         crate::fsops::ConflictChoice::Overwrite
@@ -594,7 +594,7 @@ impl FtpControl {
             Self::Encoded(ftp) => ftp.control.get_ref().tcp(),
         }
     }
-    /// REST n(350): 다음 RETR/STOR가 n바이트부터. Synapse TFTPSend.InternalRetr/InternalStor(RestoreAt > 0)와 같다.
+    /// REST n (350): the next RETR/STOR starts at byte n. Same as Synapse TFTPSend.InternalRetr/InternalStor (RestoreAt > 0).
     fn rest(&mut self, offset: u64) -> FtpResult<()> {
         self.custom_command(&format!("REST {offset}"), &[Status::RequestFilePending]).map(|_| ())
     }
@@ -1041,7 +1041,7 @@ impl Client {
                 let info = ConflictInfo { remote: &entry, local_dir: meta.is_dir(), remote_is_source: true, can_resume, new_name: Default::default() };
                 let mut choice = resolve(&source, &destination.to_string_lossy(), &info);
                 if choice == ConflictChoice::Rename && let Some(name) = info.new_name.take() {
-                    // 원본 FUN_00469210(0x10): 입력한 이름으로 바꾼 뒤 같은 항목을 다시 한다(그 이름도 있으면 다시 묻는다).
+                    // Original FUN_00469210 (0x10): after renaming to the typed name, the same item runs again (asking again when that name exists too).
                     validate_local_name(&name)?;
                     pending.push((source, destination.with_file_name(name)));
                     continue;
@@ -1050,7 +1050,7 @@ impl Client {
                     choice = newer_wins(entry.modified, local_seconds(&meta));
                 }
                 if choice == ConflictChoice::Resume {
-                    // 원본 FUN_00467f0c(+0x40): 로컬 부분 파일의 크기부터 받아 뒤에 붙인다. 이어 받을 수 없으면 덮어쓴다.
+                    // Original FUN_00467f0c (+0x40): receives from the size of the local partial file and appends. Overwrites when resuming is impossible.
                     if can_resume && meta.len() < entry.size {
                         self.download_resume(&source, &destination, cancel)?;
                         bytes += entry.size;
@@ -1188,7 +1188,7 @@ impl Client {
                     choice = newer_wins(local_seconds(&meta), entry.modified);
                 }
                 if choice == ConflictChoice::Resume {
-                    // 원본 FUN_0087c2f0(Synapse StoreFile Restore)·SFTP PutFile(이어서): 원격 부분 파일 뒤에 나머지를 붙인다.
+                    // Original FUN_0087c2f0 (Synapse StoreFile Restore) and SFTP PutFile (resume): appends the rest after the remote partial file.
                     if can_resume && entry.size < meta.len() {
                         self.upload_resume(&source, &destination, cancel)?;
                         bytes += meta.len();
@@ -1761,9 +1761,9 @@ impl Client {
         }
     }
 
-    /// C# RemoteWindow.NavigateAsync. FTP는 경로를 그대로 "CWD 경로"(".."이면 CDUP)로 보내고, 거절돼도 PWD로 서버가 정한
-    /// 경로를 읽는다(두 번째 값 = 거절 응답 글). SFTP는 SSH.NET ChangeDirectory처럼 현재 경로 기준으로 풀고(realpath)
-    /// 폴더로 열리는지 확인한다.
+    /// C# RemoteWindow.NavigateAsync. FTP sends the path as is as "CWD path" (CDUP for ".."), and even when refused reads the server-chosen path with PWD
+    /// (second value = the refusal reply text). SFTP resolves it relative to the current path like SSH.NET ChangeDirectory (realpath)
+    /// and checks that it opens as a folder.
     pub fn change_directory(&mut self, current: &str, path: &str) -> Result<(String, Option<String>), String> {
         validate_text(path)?;
         if matches!(self.backend()?, Backend::Ftp(_)) {
@@ -1783,7 +1783,7 @@ impl Client {
         Ok((real, None))
     }
 
-    /// C# ExecuteSshCommand(SshClient.RunCommand(명령).Result): SFTP 연결의 SSH 세션에서 명령 하나를 실행하고 표준 출력을 돌려준다.
+    /// C# ExecuteSshCommand (SshClient.RunCommand(command).Result): runs one command on the SSH session of the SFTP connection and returns standard output.
     pub fn exec(&mut self, command: &str) -> Result<String, String> {
         validate_text(command)?;
         match self.backend()? {
@@ -1836,8 +1836,8 @@ impl Client {
         }
     }
 
-    /// 원본 btnResume 켜짐: FTP는 Synapse CanResume(로그인 때 "REST 1"이 350이면 참)처럼 REST를 받는지 묻고(여기서는 "REST 0",
-    /// 다음 전송에 영향 없음), SFTP는 늘 된다.
+    /// Original btnResume enabled: FTP asks whether REST is accepted like Synapse CanResume (true when "REST 1" gives 350 at login; here "REST 0",
+    /// which does not affect the next transfer), SFTP always can.
     pub fn can_resume(&mut self) -> bool {
         match self.backend.as_mut() {
             Some(Backend::Ftp(ftp)) => ftp.stream.rest(0).is_ok(),
@@ -1846,7 +1846,7 @@ impl Client {
         }
     }
 
-    /// 원본 FUN_00467f0c(+0x40 이어 받기, 시작 = 로컬 크기): 로컬 부분 파일 뒤에 원격 파일의 나머지를 붙인다(FTP REST, SFTP seek).
+    /// Original FUN_00467f0c (+0x40 resume download, start = local size): appends the rest of the remote file after the local partial file (FTP REST, SFTP seek).
     pub fn download_resume(&mut self, remote: &str, local: &Path, cancel: &AtomicBool) -> Result<(), String> {
         validate_text(remote)?;
         check_cancel(cancel)?;
@@ -1907,8 +1907,8 @@ impl Client {
         Ok(())
     }
 
-    /// 원본 FUN_0087c2f0(FTP 이어 보내기 = Synapse StoreFile Restore: REST 원격 크기 + STOR)과 SFTP PutFile(이어서):
-    /// 원격 부분 파일 뒤에 로컬 파일의 나머지를 붙인다. 제자리에 쓰므로 임시 이름을 거치지 않는다.
+    /// Original FUN_0087c2f0 (FTP resume upload = Synapse StoreFile Restore: REST remote size + STOR) and SFTP PutFile (resume):
+    /// appends the rest of the local file after the remote partial file. It writes in place, so no temporary name is used.
     pub fn upload_resume(&mut self, local: &Path, remote: &str, cancel: &AtomicBool) -> Result<(), String> {
         validate_text(remote)?;
         check_cancel(cancel)?;
@@ -2611,7 +2611,7 @@ fn parse_posix(line: &str) -> Result<RemoteEntry, String> {
     parse_posix_at(line, now)
 }
 
-/// `ls -l` 한 줄. 시각이 "Mon DD HH:MM"이면 올해(now 기준), 그 결과가 하루 넘게 미래면 지난해다.
+/// One `ls -l` line. A time of "Mon DD HH:MM" is this year (relative to now); if that is more than a day in the future, last year.
 fn parse_posix_at(line: &str, now: i64) -> Result<RemoteEntry, String> {
     static PATTERN: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     let pattern = PATTERN.get_or_init(|| regex::Regex::new(r"^([dl-])([rwxstST-]{9})[+@.]?\s+\d+\s+\S+\s+\S+\s+(\d+)\s+(\S+)\s+(\d+)\s+(\d{2}:\d{2}|\d{4}) (.*)$").unwrap());
@@ -2638,7 +2638,7 @@ fn parse_posix_at(line: &str, now: i64) -> Result<RemoteEntry, String> {
     })
 }
 
-/// "rwxr-sr-T" → 권한 비트(s/S = setuid·setgid, t/T = sticky, 소문자는 실행 포함).
+/// "rwxr-sr-T" -> permission bits (s/S = setuid/setgid, t/T = sticky, lower case includes execute).
 fn posix_mode(text: &str) -> u32 {
     let b = text.as_bytes();
     let mut mode = 0;
@@ -2660,7 +2660,7 @@ fn posix_mode(text: &str) -> u32 {
     mode
 }
 
-/// 날짜(그레고리력, UTC) → 유닉스 초.
+/// Date (Gregorian, UTC) -> Unix seconds.
 fn unix_seconds(year: i64, month: i64, day: i64, hour: i64, minute: i64, second: i64) -> Option<i64> {
     if !(1..=12).contains(&month) || !(1..=31).contains(&day) || hour > 23 || minute > 59 || second > 60 {
         return None;
@@ -2674,7 +2674,7 @@ fn unix_seconds(year: i64, month: i64, day: i64, hour: i64, minute: i64, second:
     Some((era * 146_097 + doe - 719_468) * 86_400 + hour * 3600 + minute * 60 + second)
 }
 
-/// 유닉스 초(UTC)의 연도.
+/// Year of Unix seconds (UTC).
 fn year_of(seconds: i64) -> i64 {
     let z = seconds.div_euclid(86_400) + 719_468;
     let era = z.div_euclid(146_097);
@@ -2739,7 +2739,7 @@ mod tests {
     use std::io::{BufRead, BufReader};
     use std::process::{Child, Command, Stdio};
 
-    /// 원본 FUN_004404c0: 받은 줄 그대로, 보낸 줄 "지금 원격 폴더 > 명령", "PASS "는 여섯째 글자부터 '*', 맨 끝 줄 고름.
+    /// Original FUN_004404c0: received lines as is, sent lines "current remote folder > command", "PASS " masked with '*' from the sixth character, last line selected.
     #[test]
     fn protocol_log_follows_the_original_ftp_log() {
         let log = std::sync::Arc::new(std::sync::Mutex::new(ProtocolLog::default()));
@@ -3614,7 +3614,7 @@ else:
             let (back, _) = client.change_directory(&inside, if protocol == "ftp" { ".." } else { &home }).unwrap();
             assert_eq!(back.trim_end_matches('/'), home.trim_end_matches('/'));
             if protocol == "ftp" {
-                // C# NavigateAsync: 거절된 CWD 뒤에도 PWD를 읽고 응답 글을 상태 줄에 보인다.
+                // C# NavigateAsync: even after a refused CWD, reads PWD and shows the reply text in the status line.
                 let (still, rejected) = client.change_directory(&back, "missing").unwrap();
                 assert_eq!(still, back);
                 assert!(rejected.is_some());
@@ -3693,7 +3693,7 @@ else:
         );
     }
 
-    /// 원본 FTP 대기열 FUN_00467f0c(+0x40 이어서, REST + RETR/STOR, SFTP seek)·FUN_00467dfc(새 파일만 덮어쓰기 = 시각 비교).
+    /// Original FTP queue FUN_00467f0c (+0x40 resume, REST + RETR/STOR, SFTP seek) and FUN_00467dfc (overwrite if newer = time comparison).
     #[test]
     #[ignore = "owned localhost integration; requires Python, pyftpdlib, paramiko, cryptography and pyOpenSSL"]
     fn owned_resume_fixture() {
@@ -3713,7 +3713,7 @@ else:
             let local = fixture.root.join("local");
             fs::create_dir_all(&local).unwrap();
             assert!(client.can_resume(), "{protocol}: REST/seek must be available");
-            // 받기 이어서: 로컬에 앞 30000바이트만 있다.
+            // Resume download: only the first 30000 bytes exist locally.
             fs::write(fixture.root.join("big.bin"), &content).unwrap();
             fs::write(local.join("big.bin"), &content[..30_000]).unwrap();
             let mut asked = None;
@@ -3725,7 +3725,7 @@ else:
                 .unwrap();
             assert_eq!(asked, Some((100_000, true, true)), "{protocol}");
             assert_eq!(fs::read(local.join("big.bin")).unwrap(), content, "{protocol}: resumed download");
-            // 보내기 이어서: 원격에 앞 40000바이트만 있다.
+            // Resume upload: only the first 40000 bytes exist remotely.
             fs::write(fixture.root.join("up.bin"), &content[..40_000]).unwrap();
             fs::write(local.join("up.bin"), &content).unwrap();
             client
@@ -3735,7 +3735,7 @@ else:
                 }, &mut |_| {})
                 .unwrap();
             assert_eq!(fs::read(fixture.root.join("up.bin")).unwrap(), content, "{protocol}: resumed upload");
-            // 새 파일만 덮어쓰기: 원격이 더 오래됐으면 받기는 건너뛰고 보내기는 덮어쓴다.
+            // Overwrite if newer: with an older remote file, the download skips and the upload overwrites.
             fs::write(fixture.root.join("old.txt"), b"remote").unwrap();
             filetime::set_file_mtime(fixture.root.join("old.txt"), filetime::FileTime::from_unix_time(1_600_000_000, 0)).unwrap();
             fs::write(local.join("old.txt"), b"local").unwrap();
@@ -3747,7 +3747,7 @@ else:
                 .upload_tree_with_conflicts(&local.join("old.txt"), &remote("old.txt"), &cancel, &mut |_, _, _| ConflictChoice::OverwriteNewer, &mut |_| {})
                 .unwrap();
             assert_eq!(fs::read(fixture.root.join("old.txt")).unwrap(), b"local", "{protocol}: a newer local file overwrites");
-            // 이름 바꾸기: 묻는 쪽이 준 이름으로 받기·보내기.
+            // Rename: download and upload under the name the asking side gave.
             client
                 .download_tree_with_conflicts(&remote("old.txt"), &local.join("old.txt"), &cancel, &mut |_, _, info| {
                     *info.new_name.borrow_mut() = Some("renamed.txt".into());

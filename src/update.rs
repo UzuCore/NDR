@@ -1,7 +1,7 @@
-//! C# CheckForUpdatesAsync의 판단 부분: HTTPS JSON 피드({"version": "x.y[.z[.w]]", "url": "https://…"}), 256 KiB 한도,
-//! NexusFile 옛 피드(LegacyUpdateFeedDetector: "NXUPDATEINFO1", 12자리 숫자, 버전) 알아보기, System.Version 비교.
+//! Decision part of C# CheckForUpdatesAsync: HTTPS JSON feed ({"version": "x.y[.z[.w]]", "url": "https://..."}), 256 KiB limit,
+//! recognizing the old NexusFile feed (LegacyUpdateFeedDetector: "NXUPDATEINFO1", 12 digits, version), System.Version comparison.
 
-/// HTTPS GET 결과(상태 코드, 마지막 주소가 HTTPS였는지, 본문).
+/// HTTPS GET result (status code, whether the final address was HTTPS, body).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HttpResponse {
     pub status: u32,
@@ -11,11 +11,11 @@ pub struct HttpResponse {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HttpError {
-    /// 15초 안에 응답 없음.
+    /// No response within 15 seconds.
     Timeout,
-    /// 본문이 한도를 넘음.
+    /// The body exceeds the limit.
     TooLarge,
-    /// 연결 실패(메시지).
+    /// Connection failed (message).
     Failed(String),
 }
 

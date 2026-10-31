@@ -1,7 +1,7 @@
-//! 원본 패널 폴더 트리(FUN_0048da38의 TNXShellTreeView)의 셸 이름 공간: 뿌리 = 바탕 화면, 자식 = IShellFolder::EnumObjects(폴더).
+//! Shell namespace of the original pane folder tree (TNXShellTreeView of FUN_0048da38): root = Desktop, children = IShellFolder::EnumObjects (folders).
 //!
-//! 항목은 열쇠(key)로 가리킨다. 바탕 화면은 빈 열쇠, 그 밖은 셸 구문 이름(SHGDN_FORPARSING: 파일 시스템 폴더는 전체 경로,
-//! 내 PC·제어판·휴지통 같은 가상 폴더는 "::{CLSID}"). 열쇠는 SHParseDisplayName으로 다시 셸 항목이 된다.
+//! Items are referred to by key. The Desktop is the empty key, others are shell parsing names (SHGDN_FORPARSING: the full path for file system folders,
+//! "::{CLSID}" for virtual folders such as My PC, Control Panel and Recycle Bin). SHParseDisplayName turns a key back into a shell item.
 use std::{
     os::windows::ffi::OsStrExt,
     path::{Path, PathBuf},
@@ -20,9 +20,9 @@ use windows::{
     core::PCWSTR,
 };
 
-/// 내 PC(CLSID_MyComputer)의 구문 이름. 파일 시스템 경로는 이 아래(드라이브 → 폴더)에 놓인다.
+/// Parsing name of My PC (CLSID_MyComputer). File system paths sit below it (drive -> folders).
 pub const THIS_PC: &str = "::{20D04FE0-3AEA-1069-A2D8-08002B30309D}";
-/// 네트워크(CLSID_NetworkPlaces)의 구문 이름. UNC 경로(\\서버\공유)는 이 아래에 놓인다.
+/// Parsing name of Network (CLSID_NetworkPlaces). UNC paths (\\server\share) sit below it.
 pub const NETWORK: &str = "::{F02C1A0D-BE21-4350-88B0-7367FC96EF3C}";
 
 const SFGAO_STREAM: u32 = 0x0040_0000;
@@ -33,24 +33,24 @@ const SHCONTF_INCLUDEHIDDEN: u32 = 0x80;
 const CSIDL_CONTROLS: i32 = 3;
 const CSIDL_BITBUCKET: i32 = 10;
 
-/// 원본 FUN_0048e320이 따로 다루는 셸 폴더.
+/// Shell folders original FUN_0048e320 handles specially.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Special {
     None,
-    /// CSIDL_CONTROLS: 고르면 control.exe.
+    /// CSIDL_CONTROLS: choosing it runs control.exe.
     ControlPanel,
-    /// CSIDL_BITBUCKET: 고르면 셸로 휴지통을 연다(FUN_00432fe4).
+    /// CSIDL_BITBUCKET: choosing it opens the Recycle Bin in the shell (FUN_00432fe4).
     RecycleBin,
 }
 
 #[derive(Clone, Debug)]
 pub struct ShellNode {
     pub key: PathBuf,
-    /// 보이는 이름(SHGDN_INFOLDER | SHGDN_NORMAL).
+    /// Display name (SHGDN_INFOLDER | SHGDN_NORMAL).
     pub name: String,
-    /// 파일 시스템 폴더면 그 경로(SHGetPathFromIDListW).
+    /// The path for file system folders (SHGetPathFromIDListW).
     pub path: Option<PathBuf>,
-    /// SFGAO_HASSUBFOLDER: 펼침 표시를 그린다.
+    /// SFGAO_HASSUBFOLDER: draws the expand mark.
     pub has_children: bool,
     pub special: Special,
 }
@@ -85,7 +85,7 @@ fn wide(text: &Path) -> Vec<u16> {
     text.as_os_str().encode_wide().chain(Some(0)).collect()
 }
 
-/// 열쇠의 절대 항목 목록. 바탕 화면(빈 열쇠)은 빈 목록(null).
+/// Absolute item list of a key. The Desktop (empty key) is an empty list (null).
 fn parse(key: &Path) -> Option<Pidl> {
     if key.as_os_str().is_empty() {
         return Some(Pidl(ptr::null_mut()));
@@ -129,20 +129,20 @@ fn file_path(pidl: *const ITEMIDLIST) -> Option<PathBuf> {
     (length > 0).then(|| PathBuf::from(String::from_utf16_lossy(&buffer[..length])))
 }
 
-/// 뿌리(바탕 화면).
+/// Root (Desktop).
 pub fn desktop() -> Option<ShellNode> {
     let _com = Com::init();
     // SAFETY: plain COM calls on this thread's apartment.
     let desktop = unsafe { SHGetDesktopFolder() }.ok()?;
-    // 바탕 화면 자신 = 빈 항목 목록(끝 표시 2바이트).
+    // The Desktop itself = an empty item list (2-byte terminator).
     let mut empty = [0u16; 1];
     let pidl = empty.as_mut_ptr().cast::<ITEMIDLIST>();
     let name = strret(&desktop, pidl, SHGDN_NORMAL).unwrap_or_default();
     Some(ShellNode { key: PathBuf::new(), name, path: file_path(pidl), has_children: true, special: Special::None })
 }
 
-/// TNXShellTreeView 펼치기: `key` 바로 아래의 폴더(숨김은 `show_hidden`일 때만), 셸 순서(IShellFolder::CompareIDs).
-/// 압축 파일처럼 폴더이기도 한 스트림(SFGAO_STREAM)은 넣지 않는다.
+/// TNXShellTreeView expansion: folders directly under `key` (hidden ones only with `show_hidden`), in shell order (IShellFolder::CompareIDs).
+/// Streams that are also folders, like archives (SFGAO_STREAM), are left out.
 pub fn children(key: &Path, show_hidden: bool) -> Vec<ShellNode> {
     let _com = Com::init();
     // SAFETY: every identifier list is either borrowed from its owner for the duration of the call or owned by a Pidl.
@@ -213,8 +213,8 @@ pub fn children(key: &Path, show_hidden: bool) -> Vec<ShellNode> {
     }
 }
 
-/// SetPath(패널 위치)의 조상 열쇠: 바탕 화면(빈 열쇠)부터 `path`의 부모까지. 보통 경로는 내 PC → 드라이브 → 폴더,
-/// UNC는 네트워크 → \\서버 → \\서버\공유. 대소문자는 셸이 돌려주는 것과 다를 수 있으니 비교는 대소문자를 무시한다.
+/// Ancestor keys for SetPath (pane location): from the Desktop (empty key) to the parent of `path`. Ordinary paths go My PC -> drive -> folders,
+/// UNC goes Network -> \\server -> \\server\share. Letter case may differ from what the shell returns, so comparisons ignore case.
 pub fn ancestors(path: &Path) -> Vec<PathBuf> {
     let text = path.to_string_lossy();
     let mut keys = vec![PathBuf::new()];
@@ -233,13 +233,13 @@ pub fn ancestors(path: &Path) -> Vec<PathBuf> {
     keys
 }
 
-/// 원본 FUN_0048e320: 셸 경로 이름에 '{'가 있으면(가상 폴더) 패널을 옮기지 않고 셸로 연다.
-/// 고친 것: 이름에 '{'가 든 보통 폴더(예: "C:\a\{b}")도 셸로 열리던 것을, 구문 이름이 "::"로 시작할 때만으로 좁혔다.
+/// Original FUN_0048e320: when the shell path name contains '{' (a virtual folder), the shell opens it instead of moving the pane.
+/// Fixed: ordinary folders with '{' in the name (e.g. "C:\a\{b}") also opened in the shell; now only parsing names starting with "::" do.
 pub fn is_virtual(key: &Path) -> bool {
     key.to_string_lossy().starts_with("::")
 }
 
-/// 대소문자를 무시한 열쇠 비교(Windows 경로).
+/// Case-insensitive key comparison (Windows paths).
 pub fn same_key(a: &Path, b: &Path) -> bool {
     a.to_string_lossy().trim_end_matches('\\').to_lowercase() == b.to_string_lossy().trim_end_matches('\\').to_lowercase()
 }

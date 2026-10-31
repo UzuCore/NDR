@@ -1,10 +1,10 @@
-//! C# NDR(원본 NexusFile 이식본)의 동작 규칙 중 화면과 무관한 부분.
-//! 각 함수 주석에 원본 함수 주소와 C# NDR 쪽 이름을 적는다.
+//! Screen-independent behavior rules of C# NDR (the earlier port of the original NexusFile).
+//! Each function comment notes the original function address and the C# NDR name.
 use crate::names;
 use std::collections::BTreeSet;
 
-/// FUN_00485bbc(focusedOnly false) — C# `OpenAllSelectedItems`: 표시한 항목을 목록 순서대로, 없으면 포커스 항목.
-/// Rust 목록에는 ".."와 드라이브 줄이 없으므로 그 제외 규칙은 필요 없다.
+/// FUN_00485bbc(focusedOnly false), C# `OpenAllSelectedItems`: marked items in list order, otherwise the focused item.
+/// The Rust list has no ".." or drive rows, so their exclusion rules are not needed.
 pub fn collect_items(len: usize, marked: &BTreeSet<usize>, cursor: Option<usize>) -> Vec<usize> {
     let marked: Vec<usize> = marked.iter().copied().filter(|index| *index < len).collect();
     if !marked.is_empty() {
@@ -13,7 +13,7 @@ pub fn collect_items(len: usize, marked: &BTreeSet<usize>, cursor: Option<usize>
     cursor.filter(|index| *index < len).into_iter().collect()
 }
 
-/// CopyPathToClipboard(0x43317c)의 Tag: 0 전체 경로, 1 파일 이름, 2 경로.
+/// Tag of CopyPathToClipboard (0x43317c): 0 full path, 1 file name, 2 path.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PathPart {
     Full,
@@ -21,7 +21,7 @@ pub enum PathPart {
     Folder,
 }
 
-/// 항목이 있는 곳. 로컬은 shlwapi 규칙, 압축 파일은 C# NDR의 "archive!/entry" 형식, 원격은 '/' 경로.
+/// Where an item lives. Local uses shlwapi rules, archives the C# NDR "archive!/entry" form, remote '/' paths.
 #[derive(Clone, Debug)]
 pub enum ItemPath<'a> {
     Local(&'a str),
@@ -60,8 +60,8 @@ fn part_of(item: &ItemPath<'_>, part: PathPart) -> String {
     }
 }
 
-/// CopyPathToClipboard(0x43317c) — C# `CopyPathToClipboard`: 항목이 없으면 복사하지 않음(None). Shift면 역슬래시를 두 번.
-/// CRLF로 잇고 끝 줄바꿈 없음.
+/// CopyPathToClipboard (0x43317c), C# `CopyPathToClipboard`: nothing is copied without items (None). Shift doubles the backslashes.
+/// Joined with CRLF, no trailing line break.
 pub fn copy_path_text(items: &[ItemPath<'_>], part: PathPart, escape_backslashes: bool) -> Option<String> {
     if items.is_empty() {
         return None;
@@ -74,8 +74,8 @@ pub fn copy_path_text(items: &[ItemPath<'_>], part: PathPart, escape_backslashes
     Some(lines.join("\r\n").trim_end_matches(['\r', '\n']).to_owned())
 }
 
-/// FUN_00437828 — C# `OriginalFindInList`: 커서 다음 항목부터 끝까지, 이어서 처음부터 커서까지.
-/// prefix면 StrCmpNIW 접두 일치, 아니면 StrStrIW 부분 일치(빈 글은 찾지 못함). 커서가 없으면 첫 항목으로 본다(NDR 차이).
+/// FUN_00437828, C# `OriginalFindInList`: from the item after the cursor to the end, then from the start up to the cursor.
+/// With prefix, StrCmpNIW prefix match, otherwise StrStrIW substring match (empty text finds nothing). Without a cursor the first item is used (NDR difference).
 pub fn find_in_list(names: &[String], cursor: Option<usize>, text: &str, prefix: bool) -> Option<usize> {
     if names.is_empty() {
         return None;
@@ -90,8 +90,8 @@ pub fn find_in_list(names: &[String], cursor: Option<usize>, text: &str, prefix:
     })
 }
 
-/// miFindNextClick(0x437cd8, 내부 FindNext) — C# `FindNextQuickSearchMatch`가 고르는 검색:
-/// 입력 중인 빠른 검색 글자가 있으면 접두 검색, 없으면 마지막 찾기 문자열로 부분 검색, 둘 다 없으면 없음.
+/// miFindNextClick (0x437cd8, internal FindNext), the search C# `FindNextQuickSearchMatch` chooses:
+/// a prefix search when quick search text is being typed, otherwise a substring search with the last find string, nothing when neither exists.
 pub fn find_next_query<'a>(typed: &'a str, last_find: &'a str) -> Option<(&'a str, bool)> {
     if !typed.is_empty() {
         Some((typed, true))
@@ -102,7 +102,7 @@ pub fn find_next_query<'a>(typed: &'a str, last_find: &'a str) -> Option<(&'a st
     }
 }
 
-/// r62 내부 명령(#NAME) — C# `ExecuteFunctionKeyMacroAsync`의 표. 반환: 메뉴 명령 ID 또는 특수 동작.
+/// r62 internal commands (#NAME), the table of C# `ExecuteFunctionKeyMacroAsync`. Returns a menu command ID or a special action.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InternalCommand {
     None,
@@ -114,7 +114,7 @@ pub enum InternalCommand {
     FocusAddressBar,
     SelectAll { with_folders: bool },
     SelectCurrentAndMove,
-    /// 원본 내부 명령 0x2a "Select": 커서 항목의 선택만 뒤집는다(커서는 그대로).
+    /// Original internal command 0x2a "Select": flips only the cursor item's selection (the cursor stays).
     SelectCurrent,
     DeselectAll,
     CloseTab,
@@ -126,7 +126,7 @@ pub enum InternalCommand {
     Unknown,
 }
 
-/// "#name[:argument]"의 이름 부분으로 C# 표와 같은 동작을 고른다(대소문자 무시). 0 = 왼쪽, 1 = 오른쪽 패널.
+/// Picks the same action as the C# table from the name part of "#name[:argument]" (case-insensitive). 0 = left, 1 = right pane.
 pub fn internal_command(name: &str) -> InternalCommand {
     use InternalCommand::*;
     let name = name.split(':').next().unwrap_or("").trim().to_ascii_uppercase();
@@ -180,12 +180,12 @@ pub fn internal_command(name: &str) -> InternalCommand {
         "NETWORKDIALOG" => Menu("browseNetwork"),
         "SELECTSAMENAME" => Menu("selectSameName"),
         "SELECTSAMEEXT" => Menu("selectSameExt"),
-        // 원본 FUN_00443f14 case 0x2a: Select(ItemIndex, !선택됨). (C# 표는 advancedSelect를 열었다.)
+        // Original FUN_00443f14 case 0x2a: Select(ItemIndex, !selected). (The C# table opened advancedSelect.)
         "SELECT" => SelectCurrent,
         "FTPSITEMANAGER" => Menu("sites"),
         "OPENALLSELECTED" => Menu("openAll"),
-        // 고친 것: 원본 FUN_00443f14의 점프 표는 0x2f(OpenAllSelected)·0x30(FolderTree)을 아무것도 안 하는 칸(0x4446dc)으로 둔다.
-        // 기능키 이름(FUNC_FOLDERTREE "폴더 트리")대로 F10 폴더 선택 창(miFolderTreeClick)을 연다.
+        // Fixed: the jump table of original FUN_00443f14 maps 0x2f (OpenAllSelected) and 0x30 (FolderTree) to a do-nothing slot (0x4446dc).
+        // Following the function key name (FUNC_FOLDERTREE "folder tree"), it opens the F10 folder picker window (miFolderTreeClick).
         "FOLDERTREE" => Menu("folderTree"),
         "GOTOROOT" => Menu("goRoot"),
         "GOTOPARENT" => Menu("goParent"),
@@ -199,8 +199,8 @@ pub fn internal_command(name: &str) -> InternalCommand {
     }
 }
 
-/// C# QuickFilterAsync(도구 모음 빠른 찾기 칸·검색 칸에서 Enter): 앞뒤 공백을 떼고, 비면 필터 해제,
-/// '*'나 '?'가 있으면 그대로, 없으면 "*글자*".
+/// C# QuickFilterAsync (Enter in the toolbar quick search or search field): trims spaces; empty clears the filter,
+/// text with '*' or '?' is used as is, otherwise "*text*".
 pub fn quick_filter_pattern(query: &str) -> String {
     let query = query.trim();
     if query.is_empty() {
@@ -212,7 +212,7 @@ pub fn quick_filter_pattern(query: &str) -> String {
     }
 }
 
-/// C# RefreshPaneAsync의 FilterPattern: ';'로 나눈 마스크 중 하나라도 맞으면 보인다(빈 패턴은 모두 보임).
+/// FilterPattern of C# RefreshPaneAsync: visible when any ';'-separated mask matches (an empty pattern shows everything).
 pub fn matches_filter(pattern: &str, name: &str) -> bool {
     let masks: Vec<&str> = pattern.split(';').map(str::trim).filter(|mask| !mask.is_empty()).collect();
     masks.is_empty() || masks.iter().any(|mask| matches_simple_expression(mask, name))
@@ -225,8 +225,8 @@ enum Token {
     Char(char),
 }
 
-/// .NET FileSystemName.MatchesSimpleExpression(mask, name, ignoreCase: true): '*'는 0자 이상, '?'는 정확히 한 글자,
-/// '\'는 다음 글자를 글자 그대로. 빈 마스크나 빈 이름은 맞지 않는다. 대소문자는 서수 대문자 비교(OrdinalIgnoreCase).
+/// .NET FileSystemName.MatchesSimpleExpression(mask, name, ignoreCase: true): '*' is zero or more characters, '?' exactly one,
+/// '\' takes the next character literally. Empty masks or names do not match. Case uses ordinal upper-case comparison (OrdinalIgnoreCase).
 pub fn matches_simple_expression(mask: &str, name: &str) -> bool {
     if mask.is_empty() || name.is_empty() {
         return false;
@@ -282,10 +282,10 @@ pub fn matches_simple_expression(mask: &str, name: &str) -> bool {
     tokens[t..].iter().all(|token| *token == Token::Star)
 }
 
-/// C# 빠른 찾기 입력이 끊겼다고 보는 간격(QuickSearchSequenceTimeout).
+/// Gap after which C# quick search input counts as interrupted (QuickSearchSequenceTimeout).
 pub const QUICK_SEARCH_TIMEOUT_MS: u128 = 1100;
 
-/// 숫자에 세 자리마다 ','(ko-KR/en-US 현재 문화권의 "N" 형식).
+/// ',' every three digits ("N" format of the current ko-KR/en-US culture).
 fn group_thousands(integer: &str) -> String {
     let digits: Vec<char> = integer.chars().collect();
     let mut out = String::new();
@@ -298,7 +298,7 @@ fn group_thousands(integer: &str) -> String {
     out
 }
 
-/// .NET 숫자 형식 "N{decimals}"(thousands) 또는 "0.##…"(뒤 0 생략).
+/// .NET number format "N{decimals}" (thousands) or "0.##..." (trailing zeros omitted).
 fn format_number(value: f64, decimals: usize, thousands: bool, trim: bool) -> String {
     let text = format!("{value:.decimals$}");
     let (integer, fraction) = text.split_once('.').map_or((text.as_str(), ""), |(i, f)| (i, f));
@@ -307,16 +307,16 @@ fn format_number(value: f64, decimals: usize, thousands: bool, trim: bool) -> St
     if fraction.is_empty() { integer } else { format!("{integer}.{fraction}") }
 }
 
-/// 원본 TNXCustomFileListView::SizeToStr(0x7df870): 목록 크기 칸 글. unit = SizeUnit(Auto·B·KB·MB·GB = 원본 +0x318의 0~4),
-/// comma = UseThousandsSeparator(+0x31c, 원본 [Display] usesizecomma).
-/// - Auto(FUN_007df5a4): 1000 GB 이상 TB((크기>>30)/1024), 1000 MB(0x3e800000) 이상 GB((크기>>20)/1024),
-///   1000 KB(0xfa000) 이상 MB((크기>>10)/1024), 1024 이상 KB, 그 밖은 "%d"(단위 없음). 값이 100 이상이면 Round(v),
-///   10 이상이면 Round(v×10)/10, 그 밖은 Round(v×100)/100(Delphi Round = 짝수 쪽 반올림) → FloatToStrF(ffFixed, 10, 자릿수) + " " + 단위.
-///   단위 표 0x92d414 = "b","KB","MB","GB","TB". 쉼표는 붙이지 않는다.
-/// - 단위를 고르면 FloatToText(ffFixed 또는 쉼표면 ffNumber, 20, 자릿수): B는 소수 없이 단위 글도 없이, KB·MB·GB는 소수 둘째 자리 + " KB" 들.
+/// Original TNXCustomFileListView::SizeToStr (0x7df870): list size cell text. unit = SizeUnit (Auto, B, KB, MB, GB = 0-4 of original +0x318),
+/// comma = UseThousandsSeparator (+0x31c, original [Display] usesizecomma).
+/// - Auto (FUN_007df5a4): from 1000 GB TB ((size>>30)/1024), from 1000 MB (0x3e800000) GB ((size>>20)/1024),
+///   from 1000 KB (0xfa000) MB ((size>>10)/1024), from 1024 KB, otherwise "%d" (no unit). Values of 100 or more use Round(v),
+///   10 or more Round(v*10)/10, otherwise Round(v*100)/100 (Delphi Round = round half to even) -> FloatToStrF(ffFixed, 10, digits) + " " + unit.
+///   Unit table 0x92d414 = "b","KB","MB","GB","TB". No thousands separators.
+/// - A chosen unit uses FloatToText (ffFixed, or ffNumber with commas, 20, digits): B without decimals or unit text, KB/MB/GB two decimals + " KB" and so on.
 pub fn size_to_str(size: u64, unit: &str, comma: bool) -> String {
     const UNITS: [&str; 5] = ["b", "KB", "MB", "GB", "TB"];
-    // 정수 몫을 자릿수 digits의 고정 소수 글로(q는 값×10^digits).
+    // Integer quotient as fixed-point text with `digits` decimals (q is value x 10^digits).
     let fixed = |q: u128, digits: u32, comma: bool| {
         let factor = 10u128.pow(digits);
         let integer = (q / factor).to_string();
@@ -329,7 +329,7 @@ pub fn size_to_str(size: u64, unit: &str, comma: bool) -> String {
         if power == 0 {
             return fixed(size as u128, 0, comma);
         }
-        // FloatToText의 십진 반올림(반은 올림).
+        // Decimal rounding of FloatToText (half up).
         let divisor = 1024u128.pow(power);
         let q = (size as u128 * 100 * 2 + divisor) / (2 * divisor);
         return format!("{} {}", fixed(q, 2, comma), UNITS[requested - 1]);
@@ -346,7 +346,7 @@ pub fn size_to_str(size: u64, unit: &str, comma: bool) -> String {
         return size.to_string();
     };
     let digits = if mantissa >= 100 * 1024 { 0 } else if mantissa >= 10 * 1024 { 1 } else { 2 };
-    // Round(v × 10^digits), v = mantissa / 1024, 짝수 쪽 반올림.
+    // Round(v x 10^digits), v = mantissa / 1024, rounding half to even.
     let numerator = mantissa as u128 * 10u128.pow(digits);
     let (mut q, rest) = (numerator / 1024, numerator % 1024);
     if rest * 2 > 1024 || (rest * 2 == 1024 && q % 2 == 1) {
@@ -355,8 +355,8 @@ pub fn size_to_str(size: u64, unit: &str, comma: bool) -> String {
     format!("{} {}", fixed(q, digits, false), UNITS[index])
 }
 
-/// C# FileSystemService.FormatSize(size, SizeUnit, UseThousandsSeparator): 단위를 고르면 그 단위(B는 정수, 나머지 소수 둘째 자리),
-/// "Auto"면 1024로 나누며 B는 정수, 나머지는 소수 첫째 자리.
+/// C# FileSystemService.FormatSize(size, SizeUnit, UseThousandsSeparator): a chosen unit uses that unit (B as an integer, others two decimals);
+/// "Auto" divides by 1024 with B as an integer and others one decimal.
 pub fn format_size(size: u64, unit: &str, thousands: bool) -> String {
     const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
     if !unit.eq_ignore_ascii_case("Auto") {
@@ -382,7 +382,7 @@ pub fn format_size(size: u64, unit: &str, thousands: bool) -> String {
     format!("{} {}", format_number(value, 1, thousands, !thousands), UNITS[index])
 }
 
-/// .NET Path.GetExtension(이름): 마지막 '.'부터(점 포함). 점이 끝이면 빈 문자열.
+/// .NET Path.GetExtension(name): from the last '.' (including the dot). Empty when the dot is last.
 pub fn dotnet_extension(name: &str) -> &str {
     match name.rfind('.') {
         Some(at) if at + 1 < name.len() => &name[at..],
@@ -390,7 +390,7 @@ pub fn dotnet_extension(name: &str) -> &str {
     }
 }
 
-/// .NET Path.GetFileNameWithoutExtension(이름).
+/// .NET Path.GetFileNameWithoutExtension(name).
 pub fn dotnet_stem(name: &str) -> &str {
     match name.rfind('.') {
         Some(at) => &name[..at],
@@ -398,8 +398,8 @@ pub fn dotnet_stem(name: &str) -> &str {
     }
 }
 
-/// 파일 목록의 확장자(점 포함): `dotnet_extension`과 같되, 맨 앞 점은 확장자로 보지 않는다(".gitconfig"는 이름만).
-/// 고친 것(사용자 요청): 원본·C# 판은 ".gitconfig"를 빈 이름 + 확장자 "gitconfig"로 보였다.
+/// File list extension (with the dot): like `dotnet_extension`, but a leading dot is not an extension (".gitconfig" is a name only).
+/// Fixed (user request): the original and C# versions showed ".gitconfig" as an empty name with extension "gitconfig".
 pub fn list_extension(name: &str) -> &str {
     match name.rfind('.') {
         Some(at) if at > 0 && at + 1 < name.len() => &name[at..],
@@ -407,13 +407,13 @@ pub fn list_extension(name: &str) -> &str {
     }
 }
 
-/// 파일 목록의 확장자 없는 이름(`list_extension`과 짝).
+/// File list name without extension (pairs with `list_extension`).
 pub fn list_stem(name: &str) -> &str {
     &name[..name.len() - list_extension(name).len()]
 }
 
-/// C# SelectQuickSearchMatch: 시작은 커서 항목(커서가 없거나 마지막 항목이면 0, cycle_from_next면 다음 항목).
-/// 거기서 한 바퀴 돌며 먼저 StrCmpNIW 접두 일치, 없으면 StrStrIW 부분 일치.
+/// C# SelectQuickSearchMatch: starts at the cursor item (0 without a cursor or at the last item, the next item with cycle_from_next).
+/// Goes around once from there, first StrCmpNIW prefix matches, otherwise StrStrIW substring matches.
 pub fn quick_search_match(names: &[String], cursor: Option<usize>, query: &str, cycle_from_next: bool) -> Option<usize> {
     if query.is_empty() || names.is_empty() {
         return None;
@@ -537,7 +537,7 @@ mod tests {
 
     #[test]
     fn list_size_text_follows_the_original_sizetostr() {
-        // 자동: 1024 미만은 단위 없는 숫자, 유효 숫자 세 자리.
+        // Auto: below 1024 a number without unit, three significant digits.
         assert_eq!(size_to_str(0, "Auto", true), "0");
         assert_eq!(size_to_str(1023, "Auto", true), "1023");
         assert_eq!(size_to_str(1024, "Auto", true), "1.00 KB");
@@ -550,7 +550,7 @@ mod tests {
         assert_eq!(size_to_str(1_234_567, "Auto", true), "1.18 MB");
         assert_eq!(size_to_str(5 << 30, "Auto", true), "5.00 GB");
         assert_eq!(size_to_str(2_000_000_000_000, "Auto", true), "1.82 TB");
-        // 단위 고름: B는 단위 글이 없다, 쉼표는 ffNumber.
+        // Chosen unit: B has no unit text, commas use ffNumber.
         assert_eq!(size_to_str(1_234_567, "B", true), "1,234,567");
         assert_eq!(size_to_str(1_234_567, "B", false), "1234567");
         assert_eq!(size_to_str(1_234_567, "KB", true), "1,205.63 KB");
@@ -574,7 +574,7 @@ mod tests {
         assert_eq!((dotnet_extension("a.tar.gz"), dotnet_stem("a.tar.gz")), (".gz", "a.tar"));
         assert_eq!((dotnet_extension(".gitignore"), dotnet_stem(".gitignore")), (".gitignore", ""));
         assert_eq!((dotnet_extension("name."), dotnet_extension("noext")), ("", ""));
-        // 목록: 맨 앞 점은 이름의 일부.
+        // List: a leading dot is part of the name.
         assert_eq!((list_stem(".gitconfig"), list_extension(".gitconfig")), (".gitconfig", ""));
         assert_eq!((list_stem(".config.json"), list_extension(".config.json")), (".config", ".json"));
         assert_eq!((list_stem("a.tar.gz"), list_extension("a.tar.gz")), ("a.tar", ".gz"));

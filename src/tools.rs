@@ -10,7 +10,7 @@ use std::{
     path::{Path, PathBuf},
     sync::atomic::AtomicBool,
 };
-/// C# ChecksumService.ComputeFileAsync: 한 번 읽어 CRC32(X8), MD5, SHA1, SHA256(대문자 16진).
+/// C# ChecksumService.ComputeFileAsync: reads once for CRC32 (X8), MD5, SHA1, SHA256 (upper-case hex).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Checksums {
     pub crc32: String,
@@ -189,7 +189,7 @@ pub fn join_files(parts: &[PathBuf], output: &Path, cancel: &AtomicBool) -> Resu
     result
 }
 fn contains(path: &Path, text: &str, cancel: &AtomicBool) -> Result<bool, String> {
-    // 빈 글은 어디에나 있다(windows(0)은 panic이므로 먼저 끝낸다).
+    // Empty text is found everywhere (windows(0) panics, so return first).
     if text.is_empty() {
         return Ok(true);
     }
@@ -369,12 +369,12 @@ pub struct FolderSizeSummary {
     pub total_bytes: u64,
     pub files: u64,
     pub folders: u64,
-    /// 읽지 못한 항목(최대 100개, "경로: 메시지").
+    /// Unreadable items (up to 100, "path: message").
     pub errors: Vec<String>,
 }
 
-/// C# FolderSizeService.CalculateAsync: 루트마다 재분석 지점은 건너뛰고, 파일 루트는 파일 하나, 폴더 루트는 폴더 하나로 센 뒤
-/// 깊이 우선으로 내려간다(링크는 따라가지 않음). 오류는 100개까지 모은다. 취소되면 None.
+/// C# FolderSizeService.CalculateAsync: skips reparse points per root, counts a file root as one file and a folder root as one folder,
+/// then descends depth first (links are not followed). Collects up to 100 errors. None when cancelled.
 pub fn folder_size_summary(roots: &[PathBuf], cancel: &AtomicBool) -> Option<FolderSizeSummary> {
     use std::os::windows::fs::MetadataExt;
     const REPARSE: u32 = 0x400;
@@ -447,14 +447,14 @@ pub fn folder_size_summary(roots: &[PathBuf], cancel: &AtomicBool) -> Option<Fol
                     summary.files += 1;
                 }
             }
-            // 스택이므로 거꾸로 넣어 목록 순서대로 내려간다.
+            // It is a stack, so push in reverse to descend in list order.
             pending.extend(children.into_iter().rev());
         }
     }
     Some(summary)
 }
 
-/// C# FileAttributeChanges: 세 상태 속성(None = 그대로), 바꿀 수정 시각, 하위 폴더 포함, 폴더에도 적용.
+/// C# FileAttributeChanges: tri-state attributes (None = unchanged), modification time to set, include subfolders, apply to folders too.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct AttributeChanges {
     pub archive: Option<bool>,
@@ -466,14 +466,14 @@ pub struct AttributeChanges {
     pub apply_to_folders: bool,
 }
 
-/// C# FileSystemService.EnumerateSafeEntries: 깊이 우선(스택), 재분석 지점은 내보내지만 내려가지 않는다.
+/// C# FileSystemService.EnumerateSafeEntries: depth first (stack); reparse points are yielded but not descended into.
 fn safe_entries(root: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
     use std::os::windows::fs::MetadataExt;
     let mut pending = vec![root.to_path_buf()];
     while let Some(folder) = pending.pop() {
         for entry in fs::read_dir(&folder).map_err(|e| format!("{}: {e}", folder.display()))? {
             let entry = entry.map_err(|e| format!("{}: {e}", folder.display()))?;
-            // DirEntry::metadata(Windows: FindNextFileW 값, 링크를 따라가지 않음) = symlink_metadata와 같은 뜻이고 파일마다 열지 않는다.
+            // DirEntry::metadata (on Windows the FindNextFileW values, not following links) = same meaning as symlink_metadata, without opening each file.
             let Ok(metadata) = entry.metadata() else { continue };
             let attributes = metadata.file_attributes();
             if attributes & 0x400 != 0 {
@@ -488,8 +488,8 @@ fn safe_entries(root: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
     Ok(())
 }
 
-/// C# FileOperationService.ChangeAttributesAndTime: 대상(하위 폴더 포함이면 그 안 전부, 중복은 대소문자 무시로 한 번)마다
-/// 속성 비트를 켜고 끈 뒤 수정 시각을 바꾼다. "폴더에도 적용"이 꺼져 있으면 폴더는 건너뛴다. 오류는 "경로: 메시지"로 모은다.
+/// C# FileOperationService.ChangeAttributesAndTime: for each target (everything inside with subfolders, duplicates once case-insensitively)
+/// sets and clears attribute bits, then changes the modification time. Folders are skipped when "apply to folders" is off. Errors are collected as "path: message".
 pub fn change_attributes_and_time(paths: &[PathBuf], changes: &AttributeChanges) -> Vec<String> {
     use std::os::windows::fs::MetadataExt;
     let mut errors = Vec::new();
@@ -523,7 +523,7 @@ pub fn change_attributes_and_time(paths: &[PathBuf], changes: &AttributeChanges)
             value = update(value, 0x2, changes.hidden);
             value = update(value, 0x4, changes.system);
             value = update(value, 0x1, changes.read_only);
-            // SetFileAttributesW가 받지 않는 비트(폴더·재분석·압축·암호·희소 등)는 뺀다.
+            // Bits SetFileAttributesW does not accept (directory, reparse, compressed, encrypted, sparse etc.) are removed.
             let settable = value & !(0x10 | 0x40 | 0x200 | 0x400 | 0x800 | 0x4000 | 0x8000 | 0x40000 | 0x400000);
             set_raw_attributes(&path, if settable == 0 { 0x80 } else { settable })?;
             if let Some(modified) = changes.modified {
@@ -538,7 +538,7 @@ pub fn change_attributes_and_time(paths: &[PathBuf], changes: &AttributeChanges)
     errors
 }
 
-/// .NET File/Directory.SetLastWriteTime: FILE_WRITE_ATTRIBUTES로만 열어 SetFileTime(읽기 전용 항목과 폴더도 된다).
+/// .NET File/Directory.SetLastWriteTime: opens with FILE_WRITE_ATTRIBUTES only and calls SetFileTime (works for read-only items and folders).
 fn set_write_time(path: &Path, time: std::time::SystemTime) -> Result<(), String> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::{Foundation::{CloseHandle, FILETIME, INVALID_HANDLE_VALUE}, Storage::FileSystem::*};
