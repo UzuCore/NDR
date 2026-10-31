@@ -1789,9 +1789,13 @@ impl App {
                     map.extensions.insert(extension.clone(), color);
                 }
             }
-            map.serialize()
+            // Original SaveToFile 0x7d4194 writes the color map as Unicode (UTF-16 LE with a BOM). Previously UTF-8 was written.
+            let text = map.serialize();
+            let mut bytes = vec![0xFF, 0xFE];
+            bytes.extend(text.encode_utf16().flat_map(u16::to_le_bytes));
+            bytes
         } else {
-            serde_json::to_string_pretty(&Value::Object(colors.into_iter().map(|(k, v)| (k, Value::String(v))).collect())).unwrap_or_default()
+            serde_json::to_string_pretty(&Value::Object(colors.into_iter().map(|(k, v)| (k, Value::String(v))).collect())).unwrap_or_default().into_bytes()
         };
         if let Err(error) = std::fs::write(&path, body) {
             fail(self, error.to_string());

@@ -217,8 +217,11 @@ fn settings_window_commits_like_csharp() {
     let col = root.join("out.col");
     PICK.with(|p| *p.borrow_mut() = Some(col.clone()));
     app.settings_action(SettingsAction::ExportColors, &ctx);
-    let written = fs::read_to_string(&col).unwrap();
-    assert!(written.starts_with("[NEXUSFILECOLOR5]\r\n") && written.contains("[Ext]\r\nLOG=00FF00"), "{written}");
+    let bytes = fs::read(&col).unwrap();
+    assert!(bytes.starts_with(&[0xFF, 0xFE]), "Unicode with a BOM like the original SaveToFile");
+    let units: Vec<u16> = bytes[2..].chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+    let written = String::from_utf16(&units).unwrap();
+    assert!(written.starts_with("[NEXUSFILECOLOR5]\r\nNXBACK=") && written.contains("[Ext]\r\nLOG=00FF00"), "{written}");
     app.settings_action(SettingsAction::Cancel, &ctx);
     fs::remove_dir_all(root).unwrap();
 }

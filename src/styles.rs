@@ -71,7 +71,15 @@ pub struct ColorMap {
     pub extensions: BTreeMap<String, Rgba>,
 }
 impl ColorMap {
+    /// Original TNXFileColorMap::LoadFromFile 0x7d3aa8: a file with a "[NEXUSFILECOLOR5]" line holds the 20 basic colors as NX* = RRGGBB
+    /// (RGBStrToColor) and, after "[Ext]", extension = RRGGBB lines. A file without that line is the older format: the basic colors are
+    /// decimal TColor values under the old names of table 0x92d358 (GB shares MB, and size, time, attributes and selection share NORMAL),
+    /// and the "[Ext]" lines are decimal too (converted with ColorToRGBStr). The original then saved the file in the new format; here it is
+    /// only read. GetExtension 0x7d3894: Values[ext], else the normal text color.
     pub fn parse(text: &str) -> Result<Self, String> {
+        if !text.lines().any(|line| line.trim().eq_ignore_ascii_case("[NEXUSFILECOLOR5]")) {
+            return Self::parse_legacy(text);
+        }
         let mut map = Self::default();
         let mut section = "";
         for line in text.lines().map(str::trim) {
@@ -107,25 +115,58 @@ impl ColorMap {
         }
         Ok(map)
     }
+    /// Older color files (see `parse`): `OLD = decimal TColor` lines, then "[Ext]" with `ext = decimal TColor`.
+    fn parse_legacy(text: &str) -> Result<Self, String> {
+        const OLD_NAMES: [&str; 20] = [
+            "BACK", "NORMAL", "FOLDER", "DRIVE", "READONLY", "HIDDEN", "DESCRIPT", "MB", "MB", "NORMAL", "NORMAL", "NORMAL", "NORMAL", "LINE",
+            "TBACK", "TNORMAL", "TOPEN", "TFOCUS", "TLINE", "THINT",
+        ];
+        // TColor 0x00BBGGRR; system colors (negative) and other values keep the default.
+        let tcolor = |value: &str| -> Option<Rgba> {
+            let number = value.trim().parse::<i64>().ok().filter(|n| (0..=0xFF_FFFF).contains(n))? as u32;
+            Some([number as u8, (number >> 8) as u8, (number >> 16) as u8, 255])
+        };
+        let lines: Vec<&str> = text.lines().map(str::trim).collect();
+        let ext_at = lines.iter().position(|line| line.eq_ignore_ascii_case("[Ext]"));
+        let value_of = |name: &str| {
+            lines[..ext_at.unwrap_or(lines.len())]
+                .iter()
+                .filter_map(|line| line.split_once('='))
+                .find(|(key, _)| key.trim().eq_ignore_ascii_case(name))
+                .map(|(_, value)| value)
+        };
+        let mut map = Self::default();
+        for ((element, _), old) in DEFAULT_ELEMENTS.iter().zip(OLD_NAMES) {
+            if let Some(color) = value_of(old).and_then(tcolor) {
+                map.elements.insert((*element).to_owned(), color);
+            }
+        }
+        if let Some(at) = ext_at {
+            for (key, value) in lines[at + 1..].iter().filter_map(|line| line.split_once('=')) {
+                if let (Some(key), Some(color)) = (extension_key(key), tcolor(value)) {
+                    map.extensions.insert(key, color);
+                }
+            }
+        }
+        if map.elements.is_empty() && map.extensions.is_empty() {
+            return Err("The NexusFile color map contains no usable colors".into());
+        }
+        Ok(map)
+    }
     pub fn load(path: &Path) -> Result<Self, String> {
         Self::parse(&crate::compat::decode(
             &std::fs::read(path).map_err(|e| e.to_string())?,
             false,
         ))
     }
+    /// Original SaveToFile 0x7d4194: "[NEXUSFILECOLOR5]", the 20 basic colors "%s=%s" in table order (0x92d2c0), "[Ext]", then the
+    /// extension lines; written as Unicode. Previously the basic colors were sorted by name.
     pub fn serialize(&self) -> String {
-        let mut merged: BTreeMap<_, _> = DEFAULT_ELEMENTS
-            .iter()
-            .filter_map(|(key, value)| parse_color(value).map(|color| ((*key).to_owned(), color)))
-            .collect();
-        merged.extend(
-            self.elements
-                .iter()
-                .map(|(key, color)| (key.to_ascii_uppercase(), *color)),
-        );
         let mut text = "[NEXUSFILECOLOR5]\r\n".to_owned();
-        for (key, color) in merged {
-            text.push_str(&format!("{key}={}\r\n", rgb_hex(color)));
+        for (key, _) in DEFAULT_ELEMENTS {
+            if let Some(color) = self.element(key) {
+                text.push_str(&format!("{key}={}\r\n", rgb_hex(color)));
+            }
         }
         text.push_str("[Ext]\r\n");
         for (extension, color) in &self.extensions {
@@ -308,6 +349,20 @@ mod tests {
         assert_eq!(reloaded.extension("TXT"), map.extension("txt"));
         assert_eq!(map.element("NXSELECT"), Some([255, 255, 255, 255]));
         assert!(ColorMap::parse("[Ext]\r\nTXT=broken\r\n").is_err());
+    }
+    /// Original LoadFromFile 0x7d3aa8 without "[NEXUSFILECOLOR5]": decimal TColor (0x00BBGGRR) under the old names; MB also gives GB and
+    /// NORMAL also gives size, time, attributes and selection.
+    #[test]
+    fn legacy_color_files_use_the_old_names() {
+        let map = ColorMap::parse("BACK=0\r\nNORMAL=12632256\r\nFOLDER=2237162\r\nMB=255\r\nTFOCUS=16711680\r\nHIDDEN=-16777211\r\n[Ext]\r\nEXE=65280\r\n").unwrap();
+        assert_eq!(map.element("NXBACK"), Some([0, 0, 0, 255]));
+        assert_eq!(map.element("NXFORE"), Some([0xC0, 0xC0, 0xC0, 255]));
+        assert_eq!(map.element("NXFOLDER"), Some([0xEA, 0x22, 0x22, 255]));
+        assert_eq!(map.element("NXGB"), Some([0xFF, 0, 0, 255]), "GB reads MB");
+        assert_eq!(map.element("NXSELECT"), Some([0xC0, 0xC0, 0xC0, 255]), "selection reads NORMAL");
+        assert_eq!(map.element("NXTFOCUSED"), Some([0, 0, 0xFF, 255]));
+        assert_eq!(map.element("NXHIDDEN"), Some([0xFF, 0, 0, 255]), "a system color keeps the default");
+        assert_eq!(map.extension("exe"), Some([0, 0xFF, 0, 255]));
     }
     #[test]
     fn real_original_black_skin_values_load() {
