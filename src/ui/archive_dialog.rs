@@ -1,15 +1,15 @@
 //! C# CreateArchiveAsync / AddToArchiveAsync(move) / CreateZipAsync / ExtractArchiveAsync(Selected·CurrentFolder·NewFolder·Auto) /
-//! 압축하기 창(원본 TfAddToArc, [formAddToArchive])과 압축 풀기·압축 파일 속성. 압축과 풀기는 늘 동봉한 7-Zip으로 한다.
-//! 고친 것(사용자 요청): 원본의 외부 압축 프로그램 칸(eExternalProg)·외부 프로그램 설정은 쓰지 않는다. RAR·ARJ처럼 동봉 7-Zip이
-//! 만들 수 없는 형식은 고를 수 없다. 이름 칸은 이름만 받고 압축 파일은 늘 지금 패널 폴더에 만든다.
-//! 차이(HANDOFF): C#의 "내장" ZIP/7Z/TAR는 SharpCompress로 쓰지만 Rust는 동봉 7-Zip으로 쓴다(결과 형식은 같다). 다중 볼륨 압축 파일에
-//! 더하기(볼륨 다시 만들기)는 아직 안 된다. 진행 창은 일반 작업 창이고 일시 정지가 없다.
+//! Create Archive window (original TfAddToArc, [formAddToArchive]) plus extraction and archive properties. Creating and extracting always use the bundled 7-Zip.
+//! Changed (user request): the original external archiver field (eExternalProg) and external program settings are not used. Formats the bundled 7-Zip
+//! cannot create, such as RAR and ARJ, cannot be chosen. The name field takes a name only; the archive is always created in the current pane folder.
+//! Difference (HANDOFF): C# writes "built-in" ZIP/7Z/TAR with SharpCompress, Rust uses the bundled 7-Zip (same output format). Adding to a multi-volume
+//! archive (rebuilding the volumes) is not supported yet. Progress uses the ordinary job window without pause.
 use super::original_dialogs::{DialogKind, DialogResult};
 use super::*;
 use ndr::archive::{self, ExternalProgram};
 use ndr::msgbox::{IDYES, MB_ICONEXCLAMATION, MB_OK, MB_YESNO};
 
-/// C# ArchiveFormatOption(확장자, 표시 이름, 외부 프로그램, 내장, 최고 압축 수준).
+/// C# ArchiveFormatOption (extension, display name, external program, built-in, highest compression level).
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct ArchiveFormat {
     pub extension: String,
@@ -19,7 +19,7 @@ pub(super) struct ArchiveFormat {
     pub max_level: i32,
 }
 
-/// 압축 만들기 / 더하기 / 더한 뒤 원본 옮기기 / 빠른 ZIP.
+/// Create archive / add / move sources after adding / quick ZIP.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ArchiveKind {
     Create,
@@ -37,7 +37,7 @@ pub(super) enum ExtractMode {
     Auto,
 }
 
-/// ArchiveCreateWindow의 입력.
+/// ArchiveCreateWindow input.
 #[derive(Clone, Debug)]
 pub(super) struct ArchiveCreateForm {
     pub formats: Vec<ArchiveFormat>,
@@ -49,13 +49,13 @@ pub(super) struct ArchiveCreateForm {
     pub preset_labels: Vec<String>,
     pub volume_labels: Vec<String>,
     pub default_level: i32,
-    /// 원본 TfAddToArc cbFileName: 압축 파일 이름(지금 패널 폴더에 만든다).
+    /// Original TfAddToArc cbFileName: archive file name (created in the current pane folder).
     pub file_name: String,
-    /// 창을 열 때의 지금 패널 폴더(이름이 상대 경로면 여기에 만든다). 창이 떠 있는 동안 패널이 바뀌어도 그대로다.
+    /// Current pane folder when the window opened (relative names are created here). It stays fixed even if the pane changes while the window is open.
     pub folder: PathBuf,
 }
 
-/// 원본 rbFormatClick(0x4169d4)의 PathRenameExtensionW: 이름 끝 확장자(.tar.gz·.tar.bz2는 둘 다)를 새 확장자로.
+/// PathRenameExtensionW from original rbFormatClick (0x4169d4): replaces the trailing extension (both parts of .tar.gz/.tar.bz2) with the new one.
 pub(super) fn rename_extension(name: &str, extension: &str) -> String {
     let split = name.rfind(['\\', '/']).map(|i| i + 1).unwrap_or(0);
     let (folder, file) = name.split_at(split);
@@ -69,7 +69,7 @@ pub(super) fn rename_extension(name: &str, extension: &str) -> String {
 }
 
 impl ArchiveCreateForm {
-    /// 형식을 바꾸면 cbFileName 이름의 확장자를 그 형식으로(원본 rbFormatClick).
+    /// Changing the format changes the cbFileName extension to that format (original rbFormatClick).
     pub(super) fn set_format(&mut self, index: usize) {
         let Some(format) = self.formats.get(index) else { return };
         self.format = index;
@@ -80,7 +80,7 @@ impl ArchiveCreateForm {
     }
 }
 
-/// 창 결과(C# ArchiveCreateOptions + 고른 칸 번호).
+/// Window result (C# ArchiveCreateOptions + chosen field indices).
 #[derive(Clone, Debug)]
 pub(super) struct ArchiveChoice {
     pub format: ArchiveFormat,
@@ -90,11 +90,11 @@ pub(super) struct ArchiveChoice {
     pub password: String,
     pub volume: Option<u64>,
     pub recursive: bool,
-    /// 지금 패널 폴더 + cbFileName의 이름. None이면 저장 상자로 고른다(빠른 ZIP, 빈 이름).
+    /// Current pane folder + the cbFileName name. None means choose with a save dialog (quick ZIP, empty name).
     pub output: Option<PathBuf>,
 }
 
-/// TryGetVolumeSizeBytes: 첫 항목(분할 안 함)이나 빈 글은 None, "숫자[단위]"(b/k/m/g, 1024배), 0은 None. 틀리면 Err.
+/// TryGetVolumeSizeBytes: the first item (no split) or empty text is None, "number[unit]" (b/k/m/g, powers of 1024), 0 is None. Invalid text is Err.
 pub(super) fn parse_volume(text: &str, no_volume: &str) -> Result<Option<u64>, ()> {
     let text = text.trim();
     if text.is_empty() || text.to_lowercase() == no_volume.trim().to_lowercase() {
@@ -120,7 +120,7 @@ pub(super) fn parse_volume(text: &str, no_volume: &str) -> Result<Option<u64>, (
     Ok((size.trunc() >= 1.0).then_some(size.trunc() as u64))
 }
 
-/// CompressionPresetIndex(level): 1 이하면 빠르게, 6 이상이면 최고, 아니면 보통.
+/// CompressionPresetIndex(level): 1 or less is fast, 6 or more is maximum, otherwise normal.
 fn preset_for_level(level: i32) -> usize {
     if level <= 1 {
         2
@@ -131,7 +131,7 @@ fn preset_for_level(level: i32) -> usize {
     }
 }
 
-/// CompressionLevelForPreset. 내장 ZIP 보통(-1, 기본값)은 7-Zip 기본 5.
+/// CompressionLevelForPreset. Built-in ZIP normal (-1, the default) is 7-Zip's default 5.
 pub(super) fn level_for_preset(format: &ArchiveFormat, preset: usize, default_level: i32) -> i32 {
     let max = format.max_level.clamp(0, 9);
     match format.extension.trim_start_matches('.').to_lowercase().as_str() {
@@ -146,7 +146,7 @@ pub(super) fn level_for_preset(format: &ArchiveFormat, preset: usize, default_le
     }
 }
 
-/// GetDefaultArchiveFileName: 하나면 그 이름(확장자 뺌), 아니면 현재 폴더 이름(루트면 드라이브 글자), 그래도 없으면 archive.
+/// GetDefaultArchiveFileName: one item gives its name (without extension), otherwise the current folder name (drive letter at a root), else "archive".
 pub(super) fn default_archive_name(paths: &[PathBuf], current: &Path, extension: &str) -> String {
     let mut base = if paths.len() == 1 { paths[0].file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default() } else { String::new() };
     if base.trim().is_empty() {
@@ -163,8 +163,8 @@ pub(super) fn default_archive_name(paths: &[PathBuf], current: &Path, extension:
     format!("{base}.{extension}")
 }
 
-/// 압축 파일 경로 = 지금 패널 폴더 + cbFileName의 이름. 고친 것(사용자 요청): 원본은 경로를 적으면(PathIsRelativeW가 거짓) 그 경로에
-/// 만들었지만, 여기서는 적은 글의 파일 이름만 쓰고 늘 지금 폴더에 만든다. 빈 글이면 None.
+/// Archive path = current pane folder + the cbFileName name. Changed (user request): the original created the archive at a typed path (PathIsRelativeW false),
+/// but here only the file name of the typed text is used and the archive always goes to the current folder. Empty text is None.
 pub(super) fn archive_output_path(text: &str, current: &Path) -> Option<PathBuf> {
     let text = text.trim().trim_matches('"');
     let name = text.rsplit(['\\', '/']).next().unwrap_or("").trim();
@@ -175,7 +175,7 @@ pub(super) fn archive_output_path(text: &str, current: &Path) -> Option<PathBuf>
     Some(std::path::absolute(&combined).unwrap_or(combined))
 }
 
-/// EnsureArchiveOutputSafe: 결과가 원본 파일 자신이거나 원본 폴더 안이면 Err(글).
+/// EnsureArchiveOutputSafe: Err(text) when the output is one of the source files or inside a source folder.
 pub(super) fn output_conflict(sources: &[PathBuf], output: &Path, ko: bool) -> Option<String> {
     let full = |p: &Path| std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf()).to_string_lossy().into_owned();
     let output = full(output);
@@ -194,11 +194,11 @@ pub(super) fn output_conflict(sources: &[PathBuf], output: &Path, ko: bool) -> O
     None
 }
 
-/// 원본 TfAddToArc(ClientWidth 443 × ClientHeight 354): lSecName(20,16 굵게 파랑), lFileName(44,43) cbFileName(106,40 275×21),
-/// lSecFormat(20,76), 압축 종류 줄(104), lSecOptions(20,179), lLevel(44,209) cbCompLevel(143,206 121×21)
+/// Original TfAddToArc (ClientWidth 443 x ClientHeight 354): lSecName (20,16 bold blue), lFileName (44,43) cbFileName (106,40 275x21),
+/// lSecFormat (20,76), format row (104), lSecOptions (20,179), lLevel (44,209) cbCompLevel (143,206 121x21)
 /// chkRecursive(276,208), lVolume(44,243) cbVolume(143,240), lPassword(44,276) ePassword(143,273), Bevel1(20,310 404),
-/// btnOk(253,320) btnCancel(341,320) 83×25. 외부 프로그램 줄(lExtProg·eExternalProg·btnBrowseExtProg)·lHelp·rbRAR·rbARJ는 두지 않는다.
-/// 압축 종류는 사용자 요청대로 zip·7z·tar·tar.gz·tar.bz2 다섯 선택 단추를 한 줄(104)에 둔다(괄호 설명 없음). 0 = 압축, 1 = 취소.
+/// btnOk (253,320) btnCancel (341,320) 83x25. The external program row (lExtProg, eExternalProg, btnBrowseExtProg), lHelp, rbRAR and rbARJ are left out.
+/// Per the user request the formats are five radio buttons zip, 7z, tar, tar.gz, tar.bz2 on one row (104), without parenthesized notes. 0 = create, 1 = cancel.
 pub(super) fn archive_create_ui(ui: &mut egui::Ui, form: &mut ArchiveCreateForm, language: &compat::Language, enter: bool) -> Option<usize> {
     use super::original_dialogs::put_left;
     let text = |key: &str, fallback: &str| language.text(&format!("formAddToArchive.{key}"), fallback);
@@ -213,7 +213,7 @@ pub(super) fn archive_create_ui(ui: &mut egui::Ui, form: &mut ArchiveCreateForm,
     let name_id = egui::Id::new("archive-file-name");
     super::original_dialogs::access_label(ui, at(44.0, 43.0, 60.0, 15.0), &raw("Caption.lFileName", "&Filename:"), name_id);
     ui.put(at(106.0, 40.0, 275.0, 21.0), egui::TextEdit::singleline(&mut form.file_name).id(name_id));
-    // 형식마다 (확장자, 왼쪽, 단축 문자를 넣은 글). 원본 rbZIP처럼 zip은 굵게.
+    // Per format: (extension, left, label with the access key). zip is bold like the original rbZIP.
     let layout = [("zip", 44.0, "&zip"), ("7z", 101.0, "&7z"), ("tar", 152.0, "&tar"), ("tar.gz", 207.0, "tar.&gz"), ("tar.bz2", 280.0, "tar.&bz2")];
     let index_of = |extension: &str| form.formats.iter().position(|f| f.extension.trim_start_matches('.').eq_ignore_ascii_case(extension));
     let mut picked = form.format;
@@ -277,8 +277,8 @@ fn n0(value: usize) -> String {
 }
 
 impl App {
-    /// 원본 FUN_00404890(압축 엔진 오류 → [RES] 글): 7-Zip이 낸 오류 글이면 원본 압축 오류 글로 바꿔 보인다(보일 때만 바꾼다).
-    /// 분류하지 못한 글과 7-Zip이 아닌 글은 그대로.
+    /// Original FUN_00404890 (archive engine error -> [RES] text): a 7-Zip error text is shown as the original archive error text (only for display).
+    /// Unclassified text and non-7-Zip text stay as they are.
     pub(super) fn archive_error_text(&self, raw: &str) -> String {
         if !(raw.contains("7-Zip failed") || raw.contains("Bundled 7-Zip")) {
             return raw.to_owned();
@@ -298,8 +298,8 @@ impl App {
         };
         self.language_pack.text(&format!("RES.{key}"), fallback)
     }
-    /// 동봉 7-Zip으로 만드는 압축 종류(사용자 요청): zip, 7z, tar, tar.gz, tar.bz2. 이름은 확장자 그대로(괄호 설명 없음).
-    /// ALZ(원본 arcformat 4)·EGG 만들기와 WIM은 넣지 않는다(사용자 요청). .alz·.egg 풀기는 그대로 된다.
+    /// Formats created with the bundled 7-Zip (user request): zip, 7z, tar, tar.gz, tar.bz2. Names are the bare extensions (no parenthesized notes).
+    /// Creating ALZ (original arcformat 4), EGG and WIM is left out (user request). Extracting .alz and .egg still works.
     pub(super) fn archive_formats(&self, _include_wim: bool) -> Vec<ArchiveFormat> {
         let format = |extension: &str, max_level: i32| ArchiveFormat { extension: extension.into(), label: extension.into(), program: None, builtin: true, max_level };
         vec![format("zip", 9), format("7z", 9), format("tar", 0), format("tar.gz", 9), format("tar.bz2", 9)]
@@ -312,7 +312,7 @@ impl App {
         }
     }
 
-    /// 압축 대상(일반 폴더의 표시 항목).
+    /// Archive sources (displayed items of an ordinary folder).
     fn archive_sources(&self) -> Vec<PathBuf> {
         let p = &self.panes[self.active];
         if p.archive.is_some() {
@@ -347,8 +347,8 @@ impl App {
         let format = if !default_extension.trim().is_empty() { formats.iter().position(|f| f.extension.eq_ignore_ascii_case(&default_extension)) } else { None }.unwrap_or_else(|| ((default_index - 1).max(0) as usize).min(formats.len() - 1));
         let split = |key: &str, fallback: &str| self.language_pack.text(&format!("formAddToArchive.{key}"), fallback).split(';').map(str::to_owned).collect::<Vec<_>>();
         let volume_labels = split("ComboBox.cbVolume", "No Volume;1440 KB;2880 KB;5 MB;10 MB;20 MB;50 MB;100 MB");
-        // 원본 miArcAddToArchiveClick(0x43a7f8): cbFileName = 기본 이름(하나면 그 이름, 아니면 폴더 이름), 확장자는 고른 형식
-        // (rbFormatClick). 고친 것(사용자 요청): 다른 패널 폴더 + 이름 줄은 넣지 않는다(늘 지금 폴더에 만든다).
+        // Original miArcAddToArchiveClick (0x43a7f8): cbFileName = default name (the item name for one item, otherwise the folder name), extension from the chosen format
+        // (rbFormatClick). Changed (user request): the other pane folder + name row is not added (always created in the current folder).
         let current = self.panes[self.active].path.clone();
         let name = default_archive_name(&paths, &current, &formats[format].extension);
         let form = ArchiveCreateForm {
@@ -376,7 +376,7 @@ impl App {
         });
     }
 
-    /// 창 단추: 압축(분할 크기 검사), 취소.
+    /// Window buttons: create (checks the split size), cancel.
     pub(super) fn submit_archive_create(&mut self, choice: usize, ctx: &egui::Context) {
         let Some(form) = self.archive_form() else { return };
         match choice {
@@ -404,11 +404,11 @@ impl App {
         }
     }
 
-    /// 동봉 7-Zip으로 만들 수 있는지(외부 프로그램은 쓰지 않는다). Ok(None) = 동봉 7-Zip.
+    /// Whether the bundled 7-Zip can create it (no external programs). Ok(None) = bundled 7-Zip.
     pub(super) fn archive_program(&self, choice: &ArchiveChoice) -> Result<Option<ExternalProgram>, String> {
         let extension = choice.format.extension.as_str();
         let ko = self.language == "ko";
-        // 동봉 7zip+α는 ZIP·7Z에 암호를 넣고, ZIP·7Z·ALZ·EGG를 나눠 만든다(.001…).
+        // The bundled 7zip+ puts passwords on ZIP/7Z and splits ZIP/7Z/ALZ/EGG (.001...).
         if !choice.password.is_empty() && !matches!(extension, "zip" | "7z") {
             return Err(if ko { format!(".{extension} 형식은 암호를 넣을 수 없습니다.") } else { format!("The .{extension} format cannot be encrypted.") });
         }
@@ -418,7 +418,7 @@ impl App {
         Ok(None)
     }
 
-    /// 저장 대화 상자부터 검사·확인·실행까지.
+    /// From the save dialog through checks, confirmation and the run.
     fn archive_save_step(&mut self, kind: ArchiveKind, paths: Vec<PathBuf>, choice: ArchiveChoice, _unused: Option<()>) {
         let ko = self.language == "ko";
         let program = match self.archive_program(&choice) {
@@ -461,7 +461,7 @@ impl App {
         let all = if ko { "모든 파일 (*.*)" } else { "All files (*.*)" };
         let filters: Vec<(&str, &str)> = if kind == ArchiveKind::Zip { vec![(filter_name.as_str(), filter_spec.as_str())] } else { vec![(filter_name.as_str(), filter_spec.as_str()), (all, "*.*")] };
         let chosen = match choice.output.clone() {
-            // 원본 TfAddToArc: 창의 cbFileName이 결과 이름이다(저장 상자 없음).
+            // Original TfAddToArc: the window's cbFileName is the output name (no save dialog).
             Some(path) => path,
             None => {
                 let Some(chosen) = (self.save_dialog)(&title, Some(&folder), &name, &filters, &extension, false) else { return };
@@ -489,7 +489,7 @@ impl App {
                 }
             });
         }
-        // 더하기: 형식, 묶음, 분할 크기, 읽기 전용 검사.
+        // Add: checks the format, solid mode, split size and read-only state.
         let exists = output.is_file();
         let target_format = archive::archive_format(&output);
         if !target_format.as_deref().is_some_and(|f| f.eq_ignore_ascii_case(&extension)) {
@@ -502,7 +502,7 @@ impl App {
         }
         let mut choice = choice;
         if exists && family.len() > 1 {
-            // C# 다중 볼륨 업데이트: 내장 7-Zip(7z, zip)만. 분할 크기 = 고른 값, 없으면 가장 큰 볼륨(MiB 내림).
+            // C# multi-volume update: bundled 7-Zip only (7z, zip). Split size = chosen value, otherwise the largest volume (rounded down to MiB).
             if !matches!(extension.as_str(), "7z" | "zip") || program.is_some() {
                 let (k, e) = (
                     format!(".{extension} 다중 볼륨 파일을 업데이트하려면 설정에서 {extension}용 외부 압축 인자에 {{archive}}, {{sources}}와 볼륨 크기 자리표시자를 지정하세요."),
@@ -538,7 +538,7 @@ impl App {
         self.run_archive_task(kind, paths, output, choice, program);
     }
 
-    /// 압축 작업(일반 작업 창). 끝나면 상태 줄은 결과 글(ArchiveStatus).
+    /// Archive job (ordinary job window). When done the status bar shows the result text (ArchiveStatus).
     fn run_archive_task(&mut self, kind: ArchiveKind, paths: Vec<PathBuf>, output: PathBuf, choice: ArchiveChoice, program: Option<ExternalProgram>) {
         let ko = self.language == "ko";
         let options = ndr::commands::ArchiveOptions {
@@ -570,10 +570,10 @@ impl App {
         let focus_output = output.clone();
         let rebuild = options.append && archive::output_family(&output).len() > 1;
         let rebuild_cancelled = if ko { "분할 압축 파일 업데이트를 취소했습니다. 기존 압축 파일은 유지됩니다." } else { "The multi-volume archive update was cancelled. The existing archive was kept." }.to_owned();
-        // C# RunArchiveCreationWithProgress = FileOperationProgressWindow.Run(allowPause: true). 외부 프로그램은 일시 정지 없음.
+        // C# RunArchiveCreationWithProgress = FileOperationProgressWindow.Run(allowPause: true). External programs cannot pause.
         let external = program.is_some();
-        // 진행 창: 원본 TfProgress처럼 lFrom = 원본 폴더, lTo = 압축 파일 폴더, lFileName = 7-Zip이 지금 넣는 파일, 막대 = 7-Zip 백분율.
-        // 고친 것: 전에는 7-Zip이 끝날 때까지 "작업을 준비하고 있습니다"만 보이고 막대가 움직이지 않았다.
+        // Progress window: like the original TfProgress, lFrom = source folder, lTo = archive folder, lFileName = file 7-Zip is adding, bar = 7-Zip percentage.
+        // Fixed: previously only "preparing the job" showed until 7-Zip finished and the bar did not move.
         let source_folder = paths.first().and_then(|p| p.parent()).map(Path::to_path_buf).unwrap_or_default();
         let total_bytes = super::file_operation::flat_totals(&paths).map(|t| t.1).filter(|b| *b > 0).unwrap_or(100);
         let progress_info = super::file_operation::ProgressInfo {
@@ -599,7 +599,7 @@ impl App {
                 })
             };
             if rebuild {
-                // C# "기존 분할 압축 파일 준비": 숨긴 작업 폴더에 모두 풀고, 고른 항목을 덮어 합친 뒤, 같은 분할 크기로 다시 만든다.
+                // C# "prepare existing split archive": extract everything into a hidden work folder, overlay the chosen items, then rebuild with the same split size.
                 let result = rebuild_multivolume(&paths, &output, &options, &events, &cancel);
                 if cancel.load(Ordering::Relaxed) {
                     let _ = tx.send(AsyncResult::ArchiveStatus(rebuild_cancelled));
@@ -631,7 +631,7 @@ impl App {
                 job.custom_status = true;
                 job.chime = kind == ArchiveKind::Create;
             }
-            // 압축이 끝나면 만든 압축 파일에 커서를 둔다(사용자 요청). 그 폴더를 보이는 패널(지금 패널이 먼저).
+            // After creating, put the cursor on the new archive (user request), in a pane that shows that folder (current pane first).
             let key = |p: &Path| p.to_string_lossy().trim_end_matches(['\\', '/']).to_lowercase();
             let folder = focus_output.parent().map(key);
             let shows = |i: usize| folder.as_ref().is_some_and(|f| key(&self.panes[i].path) == *f);
@@ -640,7 +640,7 @@ impl App {
         }
     }
 
-    /// 동봉 7-Zip이 못 읽는 압축(예: .ace)을 열려고 할 때. 외부 압축 프로그램은 쓰지 않으므로 열 수 없다고 알린다.
+    /// When opening an archive the bundled 7-Zip cannot read (for example .ace). External archivers are not used, so report that it cannot be opened.
     pub(super) fn open_with_external_archive_program(&mut self, _pane: usize, archive_path: PathBuf, _ask_if_not_empty: bool) {
         let extension = archive_path.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
         self.warn(&format!("{extension} 형식은 열 수 없습니다."), &format!("The {extension} format cannot be opened."));
@@ -687,7 +687,7 @@ impl App {
         self.run_extract(archives, keys, password, parent, mode);
     }
 
-    /// 압축 파일 안 항목을 그 폴더로 복사(C# CopyToOtherAsync·CopyMoveToFolderAsync의 압축 쪽).
+    /// Copies archive items to that folder (archive side of C# CopyToOtherAsync and CopyMoveToFolderAsync).
     pub(super) fn extract_keys_to(&mut self, pane: usize, keys: Vec<PathBuf>, destination: PathBuf) {
         let Some(location) = self.panes[pane].archive.clone() else { return };
         let keys = keys.into_iter().map(|k| k.to_string_lossy().replace('\\', "/")).collect();
@@ -701,8 +701,8 @@ impl App {
         let ko = self.language == "ko";
         let done = if ko { format!("압축을 풀었습니다: {}", base.display()) } else { format!("Extracted to {}", base.display()) };
         let title = self.tr("압축 풀기", "Extract").into_owned();
-        // C# RunArchiveExtractionWithProgress: 내장 경로는 FileOperationProgressWindow.Run(원본 = 압축 파일, 대상, 일시 정지 가능),
-        // 외부 프로그램은 "외부 압축 풀기"(allowPause: false).
+        // C# RunArchiveExtractionWithProgress: the built-in path is FileOperationProgressWindow.Run (source = archive, destination, pausable),
+        // external programs are "external extraction" (allowPause: false).
         let external = programs.iter().any(Option::is_some);
         let progress = super::file_operation::ProgressInfo { from: archives.first().map(|a| a.to_string_lossy().into_owned()), to: Some(base.to_string_lossy().into_owned()), caption: Some(self.language_pack.text("RES.EXTRACTING", "Extracting...")), ..Default::default() };
         let work = move |events: Sender<Event>, cancel: Arc<AtomicBool>| -> Result<(), String> {
@@ -729,10 +729,10 @@ impl App {
                     }
                     _ => std::fs::create_dir_all(&base).map_err(|e| e.to_string())?,
                 }
-                // 진행 창: 막대 = 푼 항목 / 전체(목록을 읽은 뒤 안다), lFileName = 지금 푼 항목, lTo = 그 폴더.
-                // 고친 것: 전에는 압축 파일 이름만 보이고 막대가 움직이지 않았다.
+                // Progress window: bar = extracted items / total (known after reading the listing), lFileName = item just extracted, lTo = its folder.
+                // Fixed: previously only the archive name showed and the bar did not move.
                 let mut announced = None;
-                // 원본 0x439593: 다음 볼륨이 없으면 ARC_CHANGEVOL로 묻고, 확인이면 다시 시도한다(취소면 그 오류로 끝).
+                // Original 0x439593: when the next volume is missing, ask with ARC_CHANGEVOL and retry on OK (cancel ends with that error).
                 loop {
                     let outcome = archive::extract_entries_with_program(archive_path, &destination, &keys, known.as_deref(), &cancel, &mut conflicts, &mut passwords, program.as_ref(), &mut |done, total, key| {
                         if announced != Some(total) {
@@ -772,7 +772,7 @@ impl App {
         }
     }
 
-    /// C# ShowArchivePropertiesAsync: 글 창 "압축 파일 속성".
+    /// C# ShowArchivePropertiesAsync: text window "Archive Properties".
     pub(super) fn archive_properties_command(&mut self) {
         let i = self.active;
         let archive_path = match &self.panes[i].archive {
@@ -839,8 +839,8 @@ mod tests {
     }
 }
 
-/// 다중 볼륨 압축 파일 다시 만들기(C# UpdateMultiVolumeArchiveAsync): `<폴더>\.ndr-multivolume-update-…\existing`에 기존 항목을 모두 풀고
-/// 고른 항목을 덮어 합친 뒤 볼륨 이름의 묶음 이름("x.7z")으로 같은 분할 크기의 새 묶음을 만든다(남는 옛 볼륨은 지운다). 작업 폴더는 끝나면 지운다.
+/// Rebuilds a multi-volume archive (C# UpdateMultiVolumeArchiveAsync): extracts all existing items into `<folder>\.ndr-multivolume-update-...\existing`,
+/// overlays the chosen items, then creates a new set with the same split size under the set name ("x.7z"), deleting leftover old volumes. The work folder is removed afterwards.
 fn rebuild_multivolume(paths: &[PathBuf], first_volume: &Path, options: &ndr::commands::ArchiveOptions, events: &Sender<Event>, cancel: &Arc<AtomicBool>) -> Result<(), String> {
     let parent = first_volume.parent().ok_or("Invalid archive path")?;
     let mut random = [0u8; 16];
@@ -875,7 +875,7 @@ fn rebuild_multivolume(paths: &[PathBuf], first_volume: &Path, options: &ndr::co
         if roots.is_empty() {
             return Err("업데이트된 압축 파일에 항목이 없습니다.".into());
         }
-        // "x.7z.001" → "x.7z"(7-Zip이 .001, .002 …를 붙인다).
+        // "x.7z.001" -> "x.7z" (7-Zip appends .001, .002 ...).
         let name = first_volume.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         let base = match name.rsplit_once('.') {
             Some((stem, tail)) if tail.len() >= 3 && tail.bytes().all(|b| b.is_ascii_digit()) => parent.join(stem),
@@ -892,7 +892,7 @@ fn rebuild_multivolume(paths: &[PathBuf], first_volume: &Path, options: &ndr::co
     result
 }
 
-/// 고른 항목을 작업 폴더에 덮어 합친다(C# MergeArchiveInputSnapshot: 같은 이름 파일은 바꾸고 폴더는 합친다).
+/// Overlays the chosen items onto the work folder (C# MergeArchiveInputSnapshot: same-named files are replaced, folders are merged).
 fn merge_tree(source: &Path, target: &Path) -> Result<(), String> {
     let metadata = std::fs::symlink_metadata(source).map_err(|e| e.to_string())?;
     if ndr::fsops::is_reparse(&metadata) {

@@ -1,10 +1,10 @@
 use super::*;
 
-/// 도움말 메뉴의 홈페이지(사용자 요청: NDR 저장소).
+/// Homepage in the Help menu (user request: the NDR repository).
 pub(super) const HOMEPAGE_URL: &str = "https://github.com/UzuCore/NDR";
 
 impl App {
-    /// 원본 miSortBy의 항목들(miSortByNone … miSortByColor, 구분선, miSortDescend). 지금 정렬에 표시. 고른 명령.
+    /// Items of the original miSortBy (miSortByNone ... miSortByColor, separator, miSortDescend), checked by the current sort. Returns the chosen command.
     pub(super) fn sort_items(&mut self, ui: &mut egui::Ui, ko: bool) -> Option<String> {
         let i = self.active;
         let mut chosen = None;
@@ -37,18 +37,18 @@ impl App {
         chosen
     }
 
-    /// 원본 pmSortPopup(0x437464): 세로 막대 정렬 단추(bSort)의 pmSort는 miSortBy의 항목을 그대로 복사해(하위 메뉴 없이) 보이고,
-    /// 활성 패널의 정렬 형식(GetSortType)과 내림차순(GetSortDescend)에 표시한다. 항목을 누르면 원래 항목의 OnClick(miSortByClick 등).
+    /// Original pmSortPopup (0x437464): pmSort of the vertical bar sort button (bSort) copies the miSortBy items as they are (without submenus) and
+    /// checks the active pane's sort type (GetSortType) and descending flag (GetSortDescend). Clicking runs the original item's OnClick (miSortByClick and so on).
     pub(super) fn original_sort_popup(&mut self, ui: &mut egui::Ui, ko: bool) {
         if let Some(command) = self.sort_items(ui, ko) {
             self.sort_command(&command);
         }
     }
 
-    /// C# AddSortMenu / AddFolderSortMenu / AddGroupMenu: 활성 패널 설정에 체크 표시가 붙는 메뉴.
+    /// C# AddSortMenu / AddFolderSortMenu / AddGroupMenu: menus checked by the active pane settings.
     pub(super) fn sort_group_menus(&mut self, ui: &mut egui::Ui, ko: bool) {
         let mut chosen: Option<String> = None;
-        // 원본 miSortBy("&A. 정렬"): 항목 miSortByNone … miSortByColor, miSortDescend.
+        // Original miSortBy ("&A. Sort by"): items miSortByNone ... miSortByColor, miSortDescend.
         let raw = self.raw_menu("miSortBy", if ko { "&A. 정렬" } else { "&A. Sort by" });
         self.access_submenu(ui, &raw, |app, ui| {
             chosen = app.sort_items(ui, ko);
@@ -84,9 +84,9 @@ impl App {
     }
     /// C# CopyToOtherAsync / MoveToOtherAsync: ConfirmDragDrop asks the original TfMsgBox
     /// (TITLE_FILEOPERATION, MSG_TORIGHT / MSG_TOLEFT, MB_YESNO | MB_ICONQUESTION) when both panes are local folders.
-    /// 원본 FUN_0042d518(오른쪽으로)/FUN_0042d910(왼쪽으로) — 수직 막대 복사 단추와 단축키 명령(FUN_00443f14), 스킨 테마:
-    /// 패널이 하나면 그만. 둘 다 로컬 폴더면 설정과 상관없이 TITLE_FILEOPERATION / MSG_TORIGHT·MSG_TOLEFT(%s = COPY 또는 MOVE)로 묻고,
-    /// 로컬↔FTP는 올리기/내려받기. 원본은 압축 위치가 끼면 아무것도 하지 않았지만, 사용자 요청으로 NDR은 압축 안으로 더하기·압축에서 풀기를 한다.
+    /// Original FUN_0042d518 (to the right) / FUN_0042d910 (to the left): the vertical bar copy buttons and shortcut command (FUN_00443f14), skin theme:
+    /// nothing with a single pane. When both are local folders, always ask with TITLE_FILEOPERATION / MSG_TORIGHT or MSG_TOLEFT (%s = COPY or MOVE);
+    /// local<->FTP uploads or downloads. The original did nothing when an archive location was involved; per user request NDR adds into or extracts from archives.
     pub(super) fn original_copy_to_other(&mut self,source:usize,moving:bool,_ctx:&egui::Context){
         if !self.dual{return;}
         let target=1-source;
@@ -106,7 +106,7 @@ impl App {
         });
     }
     pub(super) fn copy_to_other(&mut self,source:usize,moving:bool,_ctx:&egui::Context){
-        // 원본 FUN_0042d518/FUN_0042d910: 한쪽이 FTP면 올리기/내려받기(이동도 복사로).
+        // Original FUN_0042d518/FUN_0042d910: when one side is FTP, upload/download (a move becomes a copy).
         if self.ftp_route_copy(source){return;}
         if self.archive_route_to_other(source,moving){return;}
         let target=1-source;
@@ -151,40 +151,40 @@ impl App {
         let ko = self.language == "ko";
         let ctx = ui.ctx().clone();
         let access = self.menu_access.take();
-        // 메뉴에는 원본 항목만 둔다(원본이 숨긴 항목도 숨긴다).
+        // The menu holds only original items (items the original hides stay hidden).
         let skin = self.current_skin();
         let shortcut_colors = skin.as_ref().map(super::skin_pane::skin_menu_shortcut_colors);
         let mut bar = egui::MenuBar::new();
         if let Some(skin) = &skin {
-            // 원본 메뉴 색(스킨 [Menu]): 메뉴 줄 단추와 펼침 메뉴.
+            // Original menu colors (skin [Menu]): menu bar buttons and drop-down menus.
             let (_, bar_style) = super::skin_pane::skin_menu_bar_style(skin);
             bar = bar.style(bar_style).config(egui::containers::menu::MenuConfig::new().style(super::skin_pane::skin_menu_style(skin)));
         }
         bar.ui(ui, |ui| {
-            // 지난 그림에 메뉴 줄의 메뉴가 열려 있었는지(마우스로 다른 메뉴로 옮겨 가기).
+            // Whether a menu bar menu was open last frame (moving to another menu by mouse).
             let bar_open_id = egui::Id::new("ndr-menubar-open");
             let bar_was_open = ui.data(|d| d.get_temp::<bool>(bar_open_id)).unwrap_or(false) && egui::Popup::is_any_open(&ctx);
             let mut any_open = false;
-            // 원본 TfMain: 메뉴 단추 tbFile … tbHelp(" 파일(&F) " 글)와 그 DropdownMenu pmFile … pmHelp.
+            // Original TfMain: menu buttons tbFile ... tbHelp (text " 파일(&F) ") and their DropdownMenu pmFile ... pmHelp.
             for (title_key, ko_title, en_title, items) in menu_data::MENUS.iter() {
                 let raw_title = self.language_pack.raw(title_key).unwrap_or_else(|| (if ko { *ko_title } else { *en_title }).to_owned());
                 let title = self.language_pack.text(title_key, if ko { ko_title } else { en_title }).trim().replace('&', "");
                 let opened = ui.menu_button(title, |ui| {
-                    // C# UpdateArchiveMenuItems(압축 메뉴를 열 때): 고른 압축 파일·지금 압축 파일에 따라 켜고/숨긴다.
+                    // C# UpdateArchiveMenuItems (when the archive menu opens): enable or hide items by the selected archive and the current archive.
                     let mut archive_state = self.archive_menu_state();
                     archive_state.original = true;
                     let shortcuts = compat::ShortcutMap::parse(self.settings.values.get("OriginalShortcutMapText").and_then(|v| v.as_str()));
-                    // 구분선은 앞뒤에 보이는 항목이 있을 때만(숨긴 항목 때문에 겹치거나 끝에 남지 않게).
+                    // Separators only when visible items are on both sides (so hidden items leave no doubled or trailing separator).
                     let (mut shown, mut pending) = (false, false);
-                    // 하위 메뉴가 열려 있으면 친 글자는 그 하위 메뉴의 항목이 받는다.
+                    // While a submenu is open, typed letters go to that submenu's items.
                     let sub_open = Self::submenu_open(ui);
-                    // 스킨 테마의 단축키 칸(원본 MenuMeasureItem: 단축키 최대 너비 + 0xe): 항목 뒤에 깔 자리와 지난 장면의 너비.
+                    // Skin theme shortcut column (original MenuMeasureItem: widest shortcut + 0xe): space reserved after items and last frame's width.
                     let width_id = egui::Id::new(("ndr-menu-shortcut-width", *title_key));
                     let previous_width = ui.data(|d| d.get_temp::<f32>(width_id)).unwrap_or(0.0);
                     let column_slot = shortcut_colors.map(|_| ui.painter().add(egui::Shape::Noop));
                     let mut widest = 0.0f32;
-                    // 원본 MenuMeasureItem(0x42df68): 항목 너비 = 글 + 0x20 + 단축키 칸(가장 넓은 단축키 + 0xe). 줄마다 그 메뉴에서 가장
-                    // 넓은 단축키 글과 빈칸 둘을 투명하게 잡아 이름 글이 단축키 칸 바탕에 물리지 않게 한다.
+                    // Original MenuMeasureItem (0x42df68): item width = text + 0x20 + shortcut column (widest shortcut + 0xe). Each row reserves that menu's widest
+                    // shortcut text plus two blanks transparently so the name text does not run into the shortcut column background.
                     let font = egui::TextStyle::Button.resolve(ui.style());
                     let reserve = items
                         .iter()
@@ -213,15 +213,15 @@ impl App {
                             self.original_submenu(submenu, ui, &ctx, ko);
                             continue;
                         }
-                        // 원본 miLanguage·miSkin은 하위 메뉴(FUN_00441830·FUN_0043e580).
+                        // Original miLanguage and miSkin are submenus (FUN_00441830, FUN_0043e580).
                         if *id == "language" || *id == "theme" {
                             self.original_submenu(if *id == "language" { "language" } else { "skin" }, ui, &ctx, ko);
                             continue;
                         }
                         let label = self.menu_label(id, if ko { ko_label } else { en_label });
-                        // 원본 pmViewPopup: 표시 전환·보기 방식은 체크 표시가 있는 항목.
+                        // Original pmViewPopup: toggles and view styles are checkable items.
                         let shortcut = Self::menu_shortcut_text(id, &shortcuts);
-                        // 원본 MenuDrawItem: 체크 항목도 보통 항목처럼 그리고 체크되면 왼쪽에 CHECK 그림(보기 형식 등 라디오 항목은 RCHECK).
+                        // Original MenuDrawItem: checkable items draw like ordinary items with a CHECK image on the left when checked (radio items like view style use RCHECK).
                         let button = if shortcut_colors.is_some() {
                             egui::Button::new(label).shortcut_text(RichText::new(reserve.clone()).color(Color32::TRANSPARENT))
                         } else {
@@ -232,7 +232,7 @@ impl App {
                             None => ui.add_enabled(enabled, button),
                         };
                         if let Some(colors) = shortcut_colors {
-                            // 고른 줄의 바탕(mhighlight)이 칸을 덮으므로 그 줄만 칸을 다시 칠한다(원본은 줄마다 칸을 칠한다).
+                            // The highlighted row background (mhighlight) covers the column, so only that row repaints the column (the original paints the column on every row).
                             if response.hovered() {
                                 let left = ui.min_rect().right() - (previous_width.max(8.0) + 14.0);
                                 ui.painter().rect_filled(egui::Rect::from_min_max(egui::pos2(left, response.rect.top()), egui::pos2(ui.min_rect().right(), response.rect.bottom())), 0.0, colors.0);
@@ -259,7 +259,7 @@ impl App {
                     egui::Popup::open_id(&ctx, egui::Popup::default_response_id(&opened.response));
                     ctx.request_repaint();
                 }
-                // Windows 메뉴 줄(원본 TToolBar 메뉴 단추): 한 메뉴가 열려 있는 동안 다른 메뉴 제목에 마우스를 올리면 그 메뉴로 바뀐다.
+                // Windows menu bar (original TToolBar menu buttons): while one menu is open, hovering another menu title switches to that menu.
                 let popup_id = egui::Popup::default_response_id(&opened.response);
                 if opened.inner.is_some() {
                     any_open = true;
@@ -270,7 +270,7 @@ impl App {
                 }
             }
             ui.data_mut(|d| d.insert_temp(bar_open_id, any_open));
-            // 원본 tbNewUpdateAvailable(조용한 업데이트 확인에서 새 버전을 찾았을 때). 원본 tbDonation(후원하기)은 사용자 요청으로 뺐다.
+            // Original tbNewUpdateAvailable (a quiet update check found a new version). Original tbDonation (donate) was removed per user request.
             if let Some(url) = self.update_available.clone() {
                 let label = self.language_pack.text("ToolButton.tbNewUpdateAvailable", if ko { "새 업데이트" } else { "New Update Available" }).trim().to_owned();
                 if ui.button(label).clicked() {
@@ -280,7 +280,7 @@ impl App {
         });
     }
 
-    /// 메뉴 명령의 원본 항목 이름(MENU_CAPTIONS, 아니면 ORIGINAL_ACTIONS). C# 판에만 있는 명령이면 없음.
+    /// Original item name of a menu command (MENU_CAPTIONS, else ORIGINAL_ACTIONS). None for commands only in the C# version.
     pub(super) fn original_menu_name(id: &str) -> Option<&'static str> {
         menu_data::MENU_CAPTIONS
             .iter()
@@ -289,41 +289,41 @@ impl App {
             .or_else(|| menu_data::ORIGINAL_ACTIONS.iter().find(|(_, action)| *action == id).map(|(name, _)| *name))
     }
 
-    /// 원본 메뉴에 없는(C# 판에만 있는) 메뉴 명령. 하위 메뉴("@…")는 원본에 있다.
+    /// Menu commands not in the original menu (only in the C# version). Submenus ("@...") exist in the original.
     pub(super) fn csharp_only_menu_item(id: &str) -> bool {
         !id.starts_with('@') && Self::original_menu_name(id).is_none()
     }
 
-    /// 메뉴 항목 글: 원본 항목 이름의 Menu.* 글, 없으면 C# 판 글. &는 뺀다.
+    /// Menu item text: the Menu.* text of the original item name, else the C# version text. & is removed.
     pub(super) fn menu_label(&self, id: &str, fallback: &str) -> String {
         Self::original_menu_name(id).map(|name| self.language_pack.text(&format!("Menu.{name}"), fallback)).unwrap_or_else(|| fallback.into()).replace('&', "")
     }
 
-    /// 메뉴 항목의 접근 글자(원본 글 "&Q. 열기"의 q). 원본 글이 없으면(C# 판 항목) 없음.
+    /// Access letter of a menu item (q in the original text "&Q. Open"). None without original text (C# version items).
     pub(super) fn menu_access_letter(&self, id: &str) -> Option<char> {
         let raw = self.language_pack.raw(&format!("Menu.{}", Self::original_menu_name(id)?))?;
         super::favorites_dialog::access_key(&raw).1.map(|c| c.to_ascii_lowercase())
     }
 
-    /// 원본 Menu.<이름> 글(& 포함), 없으면 fallback.
+    /// Original Menu.<name> text (with &), else fallback.
     pub(super) fn raw_menu(&self, name: &str, fallback: &str) -> String {
         self.language_pack.raw(&format!("Menu.{name}")).unwrap_or_else(|| fallback.to_owned())
     }
 
-    /// 메뉴가 열린 동안 친 글자가 이 원래 글(& 포함)의 접근 글자면 true. 글자는 써 버린다. `response` = 그 항목(같은 글자 항목 사이 이동용).
+    /// True when the letter typed while the menu is open is the access letter of this original text (with &). Consumes the letter. `response` = the item (to move between items sharing a letter).
     pub(super) fn take_menu_letter(&mut self, raw: &str, response: &egui::Response) -> bool {
         let letter = super::favorites_dialog::access_key(raw).1.map(|c| c.to_ascii_lowercase());
         self.menu_target(letter, response)
     }
 
-    /// 메뉴 명령 항목의 접근 글자(menu_access_letter)를 친 글자와 맞추어 본다. 맞으면 글자를 써 버린다.
+    /// Matches the typed letter against the access letter (menu_access_letter) of a menu command item. Consumes the letter on a match.
     pub(super) fn take_item_letter(&mut self, id: &str, response: &egui::Response) -> bool {
         let letter = self.menu_access_letter(id);
         self.menu_target(letter, response)
     }
 
-    /// 글자를 받을 수 있는 메뉴 항목 하나: 이번 장면 목록에 넣고(같은 글자가 둘 이상이면 keyboard가 선택만 옮긴다),
-    /// 초점 요청이 이 항목이면 초점을 주고, 친 글자가 이 항목의 글자면 써 버리고 true.
+    /// One menu item that can take letters: adds it to this frame's list (with several items on one letter, keyboard only moves the selection),
+    /// focuses it when the focus request is this item, and consumes the typed letter and returns true when it is this item's letter.
     pub(super) fn menu_target(&mut self, letter: Option<char>, response: &egui::Response) -> bool {
         let hit = self.note_menu_target(letter, response);
         if hit {
@@ -332,7 +332,7 @@ impl App {
         hit
     }
 
-    /// menu_target에서 글자를 써 버리지 않는 것(&self로 그리는 메뉴용): 목록에 넣고 초점을 주고, 친 글자와 맞는지만 돌려준다.
+    /// Like menu_target without consuming the letter (for menus drawn with &self): adds to the list, focuses, and only reports whether the typed letter matches.
     pub(super) fn note_menu_target(&self, letter: Option<char>, response: &egui::Response) -> bool {
         let Some(letter) = letter else { return false };
         self.menu_targets.borrow_mut().push((letter, response.id));
@@ -343,9 +343,9 @@ impl App {
         self.menu_letter == Some(letter)
     }
 
-    /// 원본 하위 메뉴 항목(TMenuItem의 하위 항목, 예: "&H. 체크섬"). 메뉴가 열려 있고 다른 하위 메뉴가 열려 있지 않을 때
-    /// 친 글자가 이 이름의 접근 글자면 Windows 메뉴처럼 하위 메뉴를 연다(egui MenuState.open_item). 하위 메뉴가 열린 동안에는
-    /// 그 안의 항목이 글자를 받는다(take_menu_letter / take_item_letter).
+    /// Original submenu item (sub-items of a TMenuItem, e.g. "&H. Checksum"). While the menu is open and no other submenu is open,
+    /// typing this name's access letter opens the submenu like a Windows menu (egui MenuState.open_item). While the submenu is open
+    /// its items take the letters (take_menu_letter / take_item_letter).
     pub(super) fn access_submenu(&mut self, ui: &mut egui::Ui, raw_title: &str, add: impl FnOnce(&mut Self, &mut egui::Ui)) {
         use egui::containers::menu::{MenuState, SubMenu, SubMenuButton};
         let id = SubMenu::id_from_widget_id(ui.next_auto_id());
@@ -354,30 +354,30 @@ impl App {
         let letter = super::favorites_dialog::access_key(raw_title).1.map(|c| c.to_ascii_lowercase());
         if !another_open && letter.is_some() && self.menu_letter == letter {
             self.menu_letter = None;
-            // MenuState는 한 번도 그려지지 않은 하위 메뉴를 닫힌 것으로 되돌리므로 그려진 것으로 표시한다.
+            // MenuState resets a submenu that was never drawn to closed, so mark it as drawn.
             MenuState::mark_shown(ui.ctx(), id);
             MenuState::from_ui(ui, |state, _| state.open_item = Some(id));
             ui.ctx().request_repaint();
         }
         let title = super::favorites_dialog::access_key(raw_title).0;
         let (response, _) = SubMenuButton::new(title).ui(ui, |ui| add(self, ui));
-        // 하위 메뉴 이름도 같은 글자 항목 사이 이동의 대상이다(원본 보기 메뉴의 C = 기능키 표시줄·열 보기).
+        // Submenu names are also targets for moving between items sharing a letter (C = function key bar and columns in the original View menu).
         if level_active {
             self.menu_target(letter, &response);
         }
     }
 
-    /// 지금 메뉴에서 하위 메뉴가 열려 있는가(그러면 위 단계 항목은 친 글자를 받지 않는다).
+    /// Whether a submenu is open in the current menu (then parent-level items do not take typed letters).
     pub(super) fn submenu_open(ui: &egui::Ui) -> bool {
         egui::containers::menu::MenuState::from_ui(ui, |state, _| state.open_item.is_some())
     }
 
-    /// 원본 TfMain DFM의 RadioItem = True 항목(miListStyleAuto·Names·Details·Thumbs). 체크되면 CHECK 대신 RCHECK.
+    /// Items with RadioItem = True in the original TfMain DFM (miListStyleAuto, Names, Details, Thumbs). Checked items use RCHECK instead of CHECK.
     pub(super) fn radio_menu_item(command: &str) -> bool {
         matches!(command, "viewAuto" | "viewDetails" | "viewNames" | "viewThumbnails")
     }
 
-    /// 원본 메뉴 항목 오른쪽의 단축키 글(TMenuItem.ShortCut, shortcut.ini가 바꾼 값을 Delphi ShortCutToText로). 없으면 빈 글.
+    /// Shortcut text at the right of an original menu item (TMenuItem.ShortCut, as changed by shortcut.ini, via Delphi ShortCutToText). Empty when none.
     pub(super) fn menu_shortcut_text(id: &str, shortcuts: &compat::ShortcutMap) -> String {
         Self::original_menu_name(id)
             .and_then(|name| shortcuts.menu_shortcuts.get(name).copied())
@@ -386,15 +386,15 @@ impl App {
             .unwrap_or_default()
     }
 
-    /// 원본 메뉴의 하위 메뉴: 체크섬(miChecksum), 작업 폴더(miSetWorkFolder·miGoToWorkFolder), 보기 방식(miListStyle),
-    /// 열(miColumn), 정렬(miSortBy, C# 판의 폴더 정렬·그룹 포함), 필터(miFilter).
+    /// Submenus of the original menu: checksum (miChecksum), work folders (miSetWorkFolder, miGoToWorkFolder), view style (miListStyle),
+    /// columns (miColumn), sort (miSortBy, including the C# folder sort and grouping), filter (miFilter).
     fn original_submenu(&mut self, name: &str, ui: &mut egui::Ui, ctx: &egui::Context, ko: bool) {
         match name {
             "checksum" => {
                 let raw = self.raw_menu("miChecksum", if ko { "&H. 체크섬" } else { "&H. Checksum" });
                 let mut chosen = None;
                 self.access_submenu(ui, &raw, |app, ui| {
-                    // 원본 miCRC·miMD5·miSHA1.
+                    // Original miCRC, miMD5, miSHA1.
                     for (key, fallback, algorithm) in [("miCRC", "&C. CRC", "Crc32"), ("miMD5", "&M. MD5", "Md5"), ("miSHA1", "&S. SHA1", "Sha1")] {
                         let raw = app.raw_menu(key, fallback);
                         let response = ui.button(super::favorites_dialog::access_key(&raw).0);
@@ -410,7 +410,7 @@ impl App {
             }
             "workFolders" => self.work_folder_menus(ui, ctx),
             "skin" => {
-                // 원본 FUN_0043e580: skin\ 아래 폴더마다 항목, 지금 스킨에 체크. 누르면 FUN_0043e510(그 스킨 적용).
+                // Original FUN_0043e580: one item per folder under skin\, the current skin checked. Clicking runs FUN_0043e510 (apply that skin).
                 let raw = self.raw_menu("miSkin", if ko { "&N. 스킨" } else { "&N. Skin" });
                 let names = self.skin_names();
                 let current = self.settings.text("Theme", "Black");
@@ -428,7 +428,7 @@ impl App {
                 }
             }
             "language" => {
-                // 원본 FUN_00441830: 언어마다 항목(지금 언어에 체크), 그 뒤 N23("-")와 miMoreLanguages(FUN_00445b88: xiles.app/languages).
+                // Original FUN_00441830: one item per language (current language checked), then N23 ("-") and miMoreLanguages (FUN_00445b88: xiles.app/languages).
                 let raw = self.raw_menu("miLanguage", if ko { "&O. 언어" } else { "&O. UI Language" });
                 let languages = super::settings_window::available_languages(&self.resources);
                 let current = self.language.clone();
@@ -457,7 +457,7 @@ impl App {
                 }
             }
             "ftpSites" => {
-                // 원본 miFTPConnect: FUN_00440734가 만든 사이트 줄("&1. 이름" …), N18("-"), miFTPManageSites.
+                // Original miFTPConnect: site rows built by FUN_00440734 ("&1. name" ...), N18 ("-"), miFTPManageSites.
                 let raw = self.raw_menu("miFTPConnect", if ko { "&C. FTP 연결하기" } else { "&C. FTP Connect" });
                 let items = self.ftp_site_items();
                 let mut chosen = None;
@@ -517,12 +517,12 @@ impl App {
         }
     }
     pub(super) fn dispatch(&mut self, id: &str, ctx: &egui::Context) {
-        // 원본 패널 FTP 모드: 로컬 파일을 다루는 명령은 막는다.
+        // Original pane FTP mode: commands that work on local files are blocked.
         if self.panes[self.active].remote.is_some() && !super::ftp_pane::ftp_allows(id) {
             self.status = self.tr("FTP 패널에서는 쓸 수 없는 명령입니다.", "This command is not available in an FTP pane.").into_owned();
             return;
         }
-        // 원본 pmConnect: 사이트 연결(FUN_00440734 줄 → FUN_0043e720), 빠른 연결, 끊기, 내려받기, 올리기.
+        // Original pmConnect: site connect (FUN_00440734 rows -> FUN_0043e720), quick connect, disconnect, download, upload.
         if let Some(index) = id.strip_prefix("ftpConnect:").and_then(|n| n.parse::<usize>().ok()) {
             return self.ftp_connect_site(index);
         }
@@ -542,8 +542,8 @@ impl App {
         if self.prefixed_command(id) {
             return;
         }
-        // 고친 것: 원본 단축키 표(shortcut.ini)가 팝업 항목(mipEditCopy 등)·하위 메뉴 이름에 글쇠를 걸면 그 이름의 명령 id가
-        // 어디에서도 받지 않아 "Unknown command"가 되었다. 팝업 메뉴(pane_chrome)와 같은 명령으로 보낸다.
+        // Fixed: when the original shortcut table (shortcut.ini) bound a key to a popup item (mipEditCopy etc.) or a submenu name, no one handled that name's command id
+        // and it became "Unknown command". Send it to the same command as the popup menu (pane_chrome).
         let alias = match id {
             "contextView" => Some("textView"),
             "contextEdit" => Some("textEdit"),
@@ -566,14 +566,14 @@ impl App {
         if let Some(target) = alias {
             return self.dispatch(target, ctx);
         }
-        // 하위 메뉴를 여는 항목(작업 폴더 지정·FTP 연결·스킨), 끌어 놓기 메뉴 항목(놓을 때만 뜸), 폴더 트리 창의 항목
-        // (miTreeRefresh·miSubRefresh, TfMain에는 없다)은 주 창 글쇠로는 아무것도 하지 않는다.
+        // Items that open submenus (set work folder, FTP connect, skin), drag-and-drop menu items (only shown on drop) and folder tree window items
+        // (miTreeRefresh, miSubRefresh, not in TfMain) do nothing from main window keys.
         if matches!(id, "setWorkFolder" | "ftpConnect" | "theme" | "dropCopy" | "dropMove" | "dropShortcut" | "dropCancel" | "treeRefresh" | "treeRefreshRecursive") {
             return;
         }
         let i = self.active;
-        // 원본 CopySelection(→ +0xd08): 복사·이동·삭제·완전 삭제·설명·고급 이름 바꾸기·이름 바꾸기·속성·압축 풀기·압축 더하기·
-        // 바로 가기 만들기를 시작할 때 지금 표시를 "선택 복원"용으로 남긴다(스킨 테마). 목록 저장·합치기는 확인했을 때만 남긴다.
+        // Original CopySelection (-> +0xd08): starting copy, move, delete, shred, description, advanced rename, rename, attributes, extract, add to archive or
+        // create shortcut saves the current marks for "Restore Selection" (skin theme). Save list and merge save them only when confirmed.
         const REMEMBERS: [&str; 26] = [
             "copyToOther", "moveToOther", "copyToFolder", "moveToFolder", "contextCopyTo", "contextMoveTo", "deleteRecycle", "deletePermanent", "contextDelete", "shred",
             "description", "contextDescription", "advancedRename", "rename", "contextRename", "attributes", "contextAttributes",
@@ -591,7 +591,7 @@ impl App {
         match id {
             "historyBack"=>self.dispatch("back",ctx),"historyForward"=>self.dispatch("forward",ctx),"batchRename"=>self.dispatch("advancedRename",ctx),
             "deleteToolbar"=>{
-                // 원본 휴지통 단추 FUN_0042f13c: 누를 때의 Shift·Ctrl·Alt로 고른다.
+                // Original Recycle Bin button FUN_0042f13c: chooses by Shift/Ctrl/Alt at the time of the click.
                 let Some(target)=recycle_button_target(ctx.input(|i|i.modifiers)) else { return };
                 self.dispatch(target,ctx)
             },"extractToolbar"=>self.dispatch("extractSelected",ctx),
@@ -600,7 +600,7 @@ impl App {
             "explorerMenu"=>result=ndr::shell_menu::show(&targets),
             "sortNone"|"sortName"|"sortExtension"|"sortSize"|"sortTime"|"sortAttributes"|"sortColor"|"folderSortDescending"|"groupDescending"|"groupShowName"=>{self.sort_command(id);},
             "sortDescending"=>{self.sort_command(id);},
-            // 원본 miShowFoldersClick(0x445258): 지금 패널(+0xe08)의 트리를 켜고 끄며 그 패널 설정(+0x50 + 패널 번호)에 남긴다.
+            // Original miShowFoldersClick (0x445258): toggles the current pane's (+0xe08) tree and stores it in that pane's setting (+0x50 + pane index).
             "toggleFolders"|"toggleFolderTree"=>{
                 let key=if self.active==0{"ShowLeftFolderTree"}else{"ShowRightFolderTree"};
                 let shown=!self.settings.flag(key,false);
@@ -621,25 +621,25 @@ impl App {
             "newEmpty"=>self.create_empty_file(),
             "rename"=>self.rename_items(),
             "advancedRename"=>self.advanced_rename(),
-            // 원본 miCopyToClick(0x432e68)·miMoveToClick(0x432f40): 로컬 위치면 FUN_0042bdc4(대상 없음) = TfSelectDest(경로 칸 처음 값 =
-            // 다른 패널, 고쳐서 같은 패널 안 폴더로도), 압축 위치면 FUN_00439bac(압축 풀기 대상 선택). FTP 위치는 올리기·내려받기.
+            // Original miCopyToClick (0x432e68) / miMoveToClick (0x432f40): at a local location FUN_0042bdc4 (no destination) = TfSelectDest (path field starts with
+            // the other pane, editable to a folder in the same pane); at an archive location FUN_00439bac (choose the extraction destination). FTP locations upload/download.
             "copyToOther"|"moveToOther" if self.panes[i].remote.is_none()&&self.panes[1-i].remote.is_none()=>self.copy_move_to_folder(id=="moveToOther"),
             "copyToOther"|"moveToOther"=>self.copy_to_other(i,id=="moveToOther",ctx),
             "copyToFolder"|"moveToFolder"=>self.copy_move_to_folder(id=="moveToFolder"),
             "copy"|"cut"=>{if !targets.is_empty(){self.clipboard=Some((targets.clone(),id=="cut"));if self.panes[i].archive.is_none(){result=(self.file_clipboard)(&targets,id=="cut");}
-                // 원본 0x433dd8: 로컬 위치에서 잘라내면 그 항목들(+100)을 흐린 아이콘으로 다시 그린다. 복사는 표시를 건드리지 않는다.
+                // Original 0x433dd8: cutting at a local location redraws those items (+100) with dimmed icons. Copying leaves the display alone.
                 if id=="cut"&&self.panes[i].archive.is_none()&&self.panes[i].remote.is_none(){self.panes[i].cut_marks.extend(targets.iter().cloned());}}},
             "paste"=>{let copied=native::read_clipboard_files().ok().filter(|(p,_)|!p.is_empty()).or_else(||self.clipboard.clone());if let Some((sources,moving))=copied{if self.panes[i].archive.is_some(){self.archive_add_into(i,sources,moving);}else{self.transfer_from(i,sources,path,moving,super::file_operation::TransferKind::Paste);}}},
-            // 원본 miDeleteClick(0x431c04): 고를 때 Shift(GetKeyState 0x10)가 눌려 있으면 FUN_0042c734의 마지막 인자 1 = 영구 삭제.
+            // Original miDeleteClick (0x431c04): if Shift (GetKeyState 0x10) is down when chosen, the last argument of FUN_0042c734 is 1 = permanent delete.
             "deleteRecycle"|"deletePermanent"=>self.delete_items(id=="deleteRecycle"&&!ctx.input(|i|i.modifiers.shift)),
             "shred"=>self.shred_items(),
             "copyFullPath"|"copyPathOnly"|"copyName"=>{let escape=ctx.input(|input|input.modifiers.shift);self.copy_item_paths(match id{"copyName"=>ndr::parity::PathPart::Name,"copyPathOnly"=>ndr::parity::PathPart::Folder,_=>ndr::parity::PathPart::Full},escape);},
             "copyFolder"=>{result=(self.clipboard_writer)(&path.to_string_lossy());},
             "selectAll" => {let shift=ctx.input(|i|i.modifiers.shift);self.cycle_selection(shift);},
             "invertSelection" => self.original_invert_selection(),
-            // 원본 편집 메뉴 miSelect("선택\tSpacebar"): Space와 같은 지금 항목 표시 전환.
+            // Original Edit menu miSelect ("Select\tSpacebar"): toggles the current item's mark like Space.
             "select"=>self.select_current_and_move(),
-            // 원본 miRestoreLastSelClick(0x43742c): 남긴 표시가 있을 때만 바꾼다(스킨 테마).
+            // Original miRestoreLastSelClick (0x43742c): changes only when saved marks exist (skin theme).
             "restoreSelection" if self.last_selection[i].is_empty() => {},
             "restoreSelection"=>{let last=&self.last_selection[i];self.panes[i].selected=self.panes[i].entries.iter().enumerate().filter(|(_,e)|last.contains(&e.path)).map(|(j,_)|j).collect();},
             "selectSameName"|"selectSameExt" => self.original_select_same(id=="selectSameExt"),
@@ -647,7 +647,7 @@ impl App {
             "toggleFolderInfoBar"=>self.toggle_info_bar("ShowFolderDiskInfoBar"),"toggleFileInfoBar"=>self.toggle_info_bar("ShowFileInfoBar"),"toggleExtensionInfoBar"=>self.toggle_info_bar("ShowExtensionInfoBar"),
             "toggleHidden"=>self.toggle_hidden(),"toggleDual"=>self.dual=!self.dual,
             "viewAuto"|"viewDetails"|"viewNames"|"viewThumbnails"=>self.set_view_style(&id[4..]),
-            // 원본 miFolderTreeClick 0x43c81a: 로컬 위치(FUN_00481948 == 0)면 FUN_0040ca90(지금 폴더) → 고른 경로가 있으면 FUN_0048d6e4(그 폴더로).
+            // Original miFolderTreeClick 0x43c81a: at a local location (FUN_00481948 == 0) FUN_0040ca90 (current folder) -> with a chosen path FUN_0048d6e4 (go to that folder).
             "folderTree"|"browseFolder"=>{
                 if self.panes[i].archive.is_none()&&self.panes[i].remote.is_none(){
                     let start=self.panes[i].path.clone();
@@ -658,8 +658,8 @@ impl App {
             },
             "filter"=>self.show_filter_prompt(),
             "find"=>self.find_command(),"findNext"=>self.find_next(),
-            // 원본 miFavoritesClick(0x4339d0): 도구 모음에 command가 favorites인 단추가 있으면 그 단추의 DropDown(단추 아래),
-            // 없으면 pmFavorites.Popup(GetCursorPos).
+            // Original miFavoritesClick (0x4339d0): if a toolbar button has the command favorites, drop down that button (below it),
+            // otherwise pmFavorites.Popup(GetCursorPos).
             "favorites"=>self.manage_favorites(),"favoritesMenu"=>{
                 self.show_favorites_menu();
                 let at=self.favorites_button.or_else(||ctx.input(|i|i.pointer.latest_pos()));
@@ -672,7 +672,7 @@ impl App {
             "textView"|"textEdit"=>self.text_command(id=="textEdit"),
             "properties"=>self.properties_command(),
             "attributes"=>self.change_attributes(),
-            // 원본 miFileInfoClick(0x4452bc): 커서가 파일이면 https://ext.xiles.app/?ext=확장자 를 연다.
+            // Original miFileInfoClick (0x4452bc): if the cursor is a file, opens https://ext.xiles.app/?ext=<extension>.
             "fileInfo" => self.open_extension_info(i),
             "archiveProperties"=>self.archive_properties_command(),
             "description"=>self.edit_descriptions(),
@@ -694,7 +694,7 @@ impl App {
             "shortcut"|"quickLaunchShortcut"=>self.shortcut_command(id=="quickLaunchShortcut"),
             "pasteShortcut"=>self.paste_shortcut_command(),
             "diskCopy"=>self.open_disk_copy(),
-            // 사용자 요청: 컴퓨터 청소(원본 miCleanupDisk, TfCleanup)는 뺐다.
+            // User request: Disk Cleanup (original miCleanupDisk, TfCleanup) was removed.
             "emptyTemp"=>self.empty_temp_command(),
             "desktop"|"documents"|"pictures"|"music"|"videos"|"downloads"|"temp"=>self.special_folder_command(id),
             "openRecycle"=>result=(self.system.run_verb)(Path::new("shell:RecycleBinFolder"),"open"),
@@ -702,14 +702,14 @@ impl App {
             "browseNetwork"=>self.browse_network_command(),
             "mapDrive"=>self.map_drive_command(),
             "unmapDrive"=>self.unmap_drive_command(),
-            // 원본 miControlPanelClick은 control.exe, miAddRemovePorgClick(0x432fc8)은 rundll32.exe "shell32.dll,Control_RunDLL appwiz.cpl".
+            // Original miControlPanelClick runs control.exe, miAddRemovePorgClick (0x432fc8) runs rundll32.exe "shell32.dll,Control_RunDLL appwiz.cpl".
             "controlPanel"=>result=(self.system.run_verb)(Path::new("control.exe"),"open"),"addRemovePrograms"=>result=(self.shell_runner)(Path::new("rundll32.exe"),"shell32.dll,Control_RunDLL appwiz.cpl",Path::new("")),
             "shellIntegration"=>self.explorer_integration_command(),
-            // 사용자 요청: 홈페이지는 NDR 저장소(원본 miHomepage는 xiles.app), 원본 miEmail(지원 이메일 복사)은 뺐다.
+            // User request: the homepage is the NDR repository (original miHomepage was xiles.app); the original miEmail (copy the support address) was removed.
             "homepage"=>result=(self.shell_runner)(Path::new(HOMEPAGE_URL),"",Path::new("")),
-            // 사용자 요청: 도움말도 NDR 저장소(원본 miHelpClick(0x445b60)은 "https://www.xiles.app/help/nexusfile/").
+            // User request: Help also opens the NDR repository (original miHelpClick (0x445b60) opened "https://www.xiles.app/help/nexusfile/").
             "help"=>result=(self.shell_runner)(Path::new(HOMEPAGE_URL),"",Path::new("")),
-            // 원본 miMoreLanguagesClick(FUN_00445b88): ShellExecute "open" https://www.xiles.app/languages/#NexusFile (0x8ee3bc).
+            // Original miMoreLanguagesClick (FUN_00445b88): ShellExecute "open" https://www.xiles.app/languages/#NexusFile (0x8ee3bc).
             "moreLanguages"=>result=(self.shell_runner)(Path::new("https://www.xiles.app/languages/#NexusFile"),"",Path::new("")),
             "about"=>self.about_command(),
             "update"=>self.check_for_updates(),
@@ -755,7 +755,7 @@ impl App {
             return;
         }
         if self.panes[i].archive.is_some() {
-            // 원본·C#: 압축 안 항목 복사는 그 폴더로 풀기, 이동은 안 됐다. 사용자 요청으로 고칠 수 있는 압축이면 풀고 압축에서 지운다.
+            // Original and C#: copying archive items extracted to that folder, moving was not possible. Per user request a modifiable archive is extracted and the items removed from it.
             if moving {
                 let keys = sources.iter().map(|k| k.to_string_lossy().replace('\\', "/")).collect();
                 return self.archive_transfer_out(i, keys, destination, None, true);
@@ -764,8 +764,8 @@ impl App {
         }
         self.local_transfer(sources, destination, moving, kind);
     }
-    /// 다른 패널로 복사·이동할 때 압축이 끼면(사용자 요청, 원본에는 없음): 대상이 압축 안이면 그 안 폴더에 더하고,
-    /// 원본이 압축 안이면 풀거나(대상이 압축이면 그 압축에 더하고) 이동이면 원래 압축에서 지운다. 압축이 안 끼면 false.
+    /// Copy/move to the other pane when an archive is involved (user request, not in the original): if the destination is inside an archive, add into that folder;
+    /// if the source is inside an archive, extract (or add to the destination archive) and on a move delete from the original archive. False when no archive is involved.
     pub(super) fn archive_route_to_other(&mut self, source: usize, moving: bool) -> bool {
         let target = 1 - source;
         if self.panes[source].archive.is_none() && self.panes[target].archive.is_none() {
@@ -829,7 +829,7 @@ impl App {
         self.job = Some(Job::new(rx, cancel, title));
         true
     }
-    /// start_task를 모달 진행 창으로(끝나면 저절로 닫힌다). 이미 다른 작업이 돌고 있으면 시작하지 않는다.
+    /// Runs start_task as a modal progress window (closes by itself when done). Does not start while another job is running.
     pub(super) fn start_modal_task(
         &mut self,
         title: String,
@@ -845,7 +845,7 @@ impl App {
         }
         true
     }
-    /// 원본 TfProgress(취소 단추만)를 보이며 도는 작업.
+    /// Job that runs while showing the original TfProgress (cancel button only).
     pub(super) fn start_progress_task(
         &mut self,
         title: String,
@@ -861,8 +861,8 @@ impl App {
         true
     }
 }
-/// 원본 휴지통 단추 FUN_0042f13c(GetKeyState): 아무 키 없음 = 휴지통(FUN_0042c734 형식 0), Shift만 = 삭제(1),
-/// Shift+Ctrl = 완전 삭제(2), Ctrl+Alt = 휴지통 열기(FUN_00432fe4). 다른 조합은 아무것도 하지 않는다.
+/// Original Recycle Bin button FUN_0042f13c (GetKeyState): no key = Recycle Bin (FUN_0042c734 mode 0), Shift only = delete (1),
+/// Shift+Ctrl = shred (2), Ctrl+Alt = open the Recycle Bin (FUN_00432fe4). Other combinations do nothing.
 pub(super) fn recycle_button_target(m: egui::Modifiers) -> Option<&'static str> {
     match (m.shift, m.ctrl, m.alt) {
         (false, false, false) => Some("deleteRecycle"),
@@ -872,7 +872,7 @@ pub(super) fn recycle_button_target(m: egui::Modifiers) -> Option<&'static str> 
         _ => None,
     }
 }
-/// C# FileOperationControl.WaitIfPausedAsync: 일시 정지 동안 기다린다(취소하면 바로 돌아간다).
+/// C# FileOperationControl.WaitIfPausedAsync: waits while paused (returns at once on cancel).
 pub(super) fn wait_while_paused(pause: &AtomicBool, cancel: &AtomicBool) {
     while pause.load(Ordering::Relaxed) && !cancel.load(Ordering::Relaxed) {
         thread::sleep(Duration::from_millis(50));
@@ -883,12 +883,12 @@ pub(super) fn run_nested(operation:Operation,events:&Sender<Event>,cancel:&Arc<A
 pub(super) fn ask_conflict(events:&Sender<Event>,cancel:&AtomicBool,source:&Path,destination:&Path)->ConflictChoice{
     ask_conflict_resumable(events,cancel,source,destination,false)
 }
-/// `allow_resume`: 충돌 창의 이어서 전송 단추를 보인다(원격 전송, 원본 btnResume).
+/// `allow_resume`: shows the resume button in the conflict window (remote transfers, original btnResume).
 pub(super) fn ask_conflict_resumable(events:&Sender<Event>,cancel:&AtomicBool,source:&Path,destination:&Path,allow_resume:bool)->ConflictChoice{
     let(tx,rx)=mpsc::channel();if events.send(Event::Conflict{source:source.to_path_buf(),destination:destination.to_path_buf(),allow_resume,reply:tx}).is_err(){return ConflictChoice::Cancel;}
     loop{if cancel.load(Ordering::Relaxed){return ConflictChoice::Cancel;}match rx.recv_timeout(Duration::from_millis(100)){Ok(choice)=>return choice,Err(mpsc::RecvTimeoutError::Timeout)=>{},Err(_)=>return ConflictChoice::Cancel}}
 }
-/// 원본 ARC_CHANGEVOL: 다음 볼륨을 넣고 확인하면 true(다시 시도). 취소·작업 취소면 false.
+/// Original ARC_CHANGEVOL: true when the user inserts the next volume and confirms (retry). False on cancel or job cancel.
 pub(super) fn ask_change_volume(events: &Sender<Event>, cancel: &AtomicBool, volume: &str) -> bool {
     let (tx, rx) = mpsc::channel();
     if events.send(Event::ChangeVolume { volume: volume.to_owned(), reply: tx }).is_err() {

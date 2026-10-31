@@ -1,11 +1,11 @@
-//! VCL TDateTimePicker(원본 TfChangeAttr dtpDate: dtkDate·짧은 날짜, dtpTime: dtkTime) 비슷한 칸.
-//! 칸 안 조각(연·월·일 / 시·분·초)을 누르거나 왼쪽·오른쪽 글쇠로 고르고, 위·아래 글쇠나 숫자로 바꾼다. 날짜 칸은 오른쪽 ▼로
-//! 달력(DTM_GETMONTHCAL 모양: 달 바꾸기 ◀ ▶, 요일 머리, 6주)을 열고, 시각 칸은 오른쪽 위·아래 단추(UpDown)로 바꾼다.
-//! 표시 형식은 yyyy-MM-dd·HH:mm:ss로 고정한다(원본은 사용자 로캘 형식).
+//! Field resembling VCL TDateTimePicker (original TfChangeAttr dtpDate: dtkDate with short date, dtpTime: dtkTime).
+//! Parts inside the field (year/month/day, hour/minute/second) are chosen by clicking or Left/Right and changed with Up/Down or digits. The date field opens a
+//! calendar with the right ▼ (DTM_GETMONTHCAL style: month ◀ ▶, weekday header, 6 weeks); the time field changes with the right up/down buttons (UpDown).
+//! The display format is fixed to yyyy-MM-dd and HH:mm:ss (the original uses the user locale format).
 use chrono::{Datelike, NaiveDate, NaiveTime, Timelike};
 use eframe::egui::{self, Color32};
 
-/// 조각 고르기와 입력 중인 숫자(원본 컨트롤의 숫자 누적).
+/// Chosen part and digits being typed (digit accumulation of the original control).
 #[derive(Clone, Copy, Default)]
 struct PickerState {
     segment: usize,
@@ -21,7 +21,7 @@ fn days_in_month(year: i32, month: u32) -> u32 {
     next.and_then(|n| n.pred_opt()).map_or(31, |d| d.day())
 }
 
-/// 조각 셋(값, 최소, 최대, 자릿수)을 그리고 글쇠·누르기를 처리한다. 바뀌면 true.
+/// Draws three parts (value, minimum, maximum, digits) and handles keys and clicks. True when changed.
 fn segments_ui(ui: &mut egui::Ui, rect: egui::Rect, enabled: bool, id: egui::Id, values: &mut [i64; 3], ranges: [(i64, i64); 3], digits: [usize; 3], separator: &str) -> (egui::Response, bool) {
     let response = ui.interact(rect, id, if enabled { egui::Sense::click() } else { egui::Sense::hover() });
     let mut state = ui.ctx().data(|d| d.get_temp::<PickerState>(id)).unwrap_or_default();
@@ -31,7 +31,7 @@ fn segments_ui(ui: &mut egui::Ui, rect: egui::Rect, enabled: bool, id: egui::Id,
     painter.rect(rect, 0.0, visuals.extreme_bg_color, if focused { visuals.selection.stroke } else { visuals.widgets.inactive.bg_stroke }, egui::StrokeKind::Inside);
     let font = egui::FontId::proportional(13.0);
     let text_color = if enabled { visuals.text_color() } else { visuals.weak_text_color() };
-    // 조각 자리.
+    // Part positions.
     let mut x = rect.left() + 4.0;
     let mut cells = [egui::Rect::NOTHING; 3];
     for (index, value) in values.iter().enumerate() {
@@ -88,7 +88,7 @@ fn segments_ui(ui: &mut egui::Ui, rect: egui::Rect, enabled: bool, id: egui::Id,
                             values[state.segment] = state.typed;
                             changed = true;
                         }
-                        // 자릿수를 다 채우면(또는 더 넣으면 넘치면) 다음 조각으로.
+                        // When all digits are filled (or another digit would overflow), move to the next part.
                         if state.typed_digits as usize >= digits[state.segment] || state.typed * 10 > max {
                             state.typed_digits = 0;
                             state.segment = (state.segment + 1).min(2);
@@ -103,7 +103,7 @@ fn segments_ui(ui: &mut egui::Ui, rect: egui::Rect, enabled: bool, id: egui::Id,
     (response, changed)
 }
 
-/// dtkDate 칸(짧은 날짜 + ▼ 달력).
+/// dtkDate field (short date + ▼ calendar).
 pub(super) fn date_picker(ui: &mut egui::Ui, rect: egui::Rect, enabled: bool, id_salt: &str, value: &mut NaiveDate) -> egui::Response {
     let id = egui::Id::new(("ndr-date-picker", id_salt));
     let field = egui::Rect::from_min_max(rect.min, egui::pos2(rect.right() - BUTTON_WIDTH, rect.bottom()));
@@ -117,7 +117,7 @@ pub(super) fn date_picker(ui: &mut egui::Ui, rect: egui::Rect, enabled: bool, id
             *value = date;
         }
     }
-    // ▼ 단추와 달력.
+    // ▼ button and calendar.
     let button = egui::Rect::from_min_max(egui::pos2(field.right(), rect.top()), rect.max);
     let arrow = ui.put(button, egui::Button::new(egui::RichText::new("▼").size(8.0)).corner_radius(0.0));
     let arrow = if enabled { arrow } else { arrow.on_disabled_hover_text("") };
@@ -150,7 +150,7 @@ pub(super) fn date_picker(ui: &mut egui::Ui, rect: egui::Rect, enabled: bool, id
     response
 }
 
-/// 달력 한 달(일요일부터 6주). 고른 날을 돌려준다.
+/// One calendar month (6 weeks from Sunday). Returns the chosen day.
 fn calendar_ui(ui: &mut egui::Ui, shown: &mut (i32, u32), selected: NaiveDate) -> Option<NaiveDate> {
     let mut picked = None;
     let cell = egui::vec2(26.0, 18.0);
@@ -192,13 +192,13 @@ fn calendar_ui(ui: &mut egui::Ui, shown: &mut (i32, u32), selected: NaiveDate) -
     picked
 }
 
-/// dtkTime 칸(시각 + 위·아래 단추).
+/// dtkTime field (time + up/down buttons).
 pub(super) fn time_picker(ui: &mut egui::Ui, rect: egui::Rect, enabled: bool, id_salt: &str, value: &mut NaiveTime) -> egui::Response {
     let id = egui::Id::new(("ndr-time-picker", id_salt));
     let field = egui::Rect::from_min_max(rect.min, egui::pos2(rect.right() - BUTTON_WIDTH, rect.bottom()));
     let mut values = [value.hour() as i64, value.minute() as i64, value.second() as i64];
     let (response, mut changed) = segments_ui(ui, field, enabled, id, &mut values, [(0, 23), (0, 59), (0, 59)], [2, 2, 2], ":");
-    // UpDown: 고른 조각을 하나 올리거나 내린다.
+    // UpDown: raises or lowers the chosen part by one.
     let half = rect.height() / 2.0;
     let up = egui::Rect::from_min_size(egui::pos2(field.right(), rect.top()), egui::vec2(BUTTON_WIDTH, half));
     let down = egui::Rect::from_min_size(egui::pos2(field.right(), rect.top() + half), egui::vec2(BUTTON_WIDTH, half));
@@ -255,14 +255,14 @@ mod tests {
             date_picker(ui, rect, true, "t", date);
         });
         frame(vec![], &mut date);
-        // 월 조각을 눌러 고르고 위 글쇠: 1월 31일 → 2월(29일까지라 29일).
+        // Click the month part and press Up: January 31 -> February (only 29 days, so the 29th).
         frame(click(egui::pos2(rect.left() + 44.0, rect.center().y)), &mut date);
         frame(vec![key(egui::Key::ArrowUp)], &mut date);
         assert_eq!(date, NaiveDate::from_ymd_opt(2024, 2, 29).unwrap());
-        // 오른쪽으로 일 조각, 숫자 0·5 → 5일.
+        // Right to the day part, digits 0 and 5 -> the 5th.
         frame(vec![key(egui::Key::ArrowRight), egui::Event::Text("05".into())], &mut date);
         assert_eq!(date, NaiveDate::from_ymd_opt(2024, 2, 5).unwrap());
-        // 아래 글쇠는 최소에서 최대로 돈다(연 조각은 한 해 아래로).
+        // Down wraps from the minimum to the maximum (the year part goes down one year).
         frame(vec![key(egui::Key::ArrowLeft), key(egui::Key::ArrowLeft), key(egui::Key::ArrowDown)], &mut date);
         assert_eq!(date, NaiveDate::from_ymd_opt(2023, 2, 5).unwrap());
 
@@ -275,7 +275,7 @@ mod tests {
         frame(click(egui::pos2(rect.left() + 8.0, rect.center().y)), &mut time);
         frame(vec![key(egui::Key::ArrowUp)], &mut time);
         assert_eq!(time, NaiveTime::from_hms_opt(0, 59, 0).unwrap(), "23 → 0");
-        // 위 단추(UpDown)는 고른 조각을 올린다.
+        // The up button (UpDown) raises the chosen part.
         frame(click(egui::pos2(rect.right() - 5.0, rect.top() + 4.0)), &mut time);
         assert_eq!(time, NaiveTime::from_hms_opt(1, 59, 0).unwrap());
         frame(vec![key(egui::Key::ArrowRight), egui::Event::Text("7".into())], &mut time);

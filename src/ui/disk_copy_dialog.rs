@@ -1,12 +1,12 @@
-//! C# DiskCopyWindow(디스크 복사, 610×630) + DiskImageService 호출 흐름.
-//! 방식 = 이동식 드라이브에서 이미지 만들기 / 이미지를 이동식 드라이브에 복원 / 다른 이동식 드라이브로 직접 복사(처음 선택).
-//! "파티션 테이블과 모든 파티션 포함"이면 볼륨 대신 물리 디스크 전체. 직접 복사 + 전체 디스크는 "한 드라이브로 복사(미디어 교체)"
-//! (%TEMP%\NDR-DiskCopy-{guid}.img에 읽고 → 미디어 교체 확인 → 같은 디스크 번호에 쓰기, 쓰기가 실패하면 그 이미지를 복구용으로 남기고
-//! 복원 방식으로 바꿔 둔다). 직접 복사는 "복사 후 데이터 읽기 검증".
-//! 진행은 창 안의 상태 글과 막대다. 취소는 이미지 만들기와 한 드라이브 복사의 읽기 단계만. 작업 중에는 창을 닫을 수 없고
-//! 닫으려 하면(×, Esc, 메인 창 닫기) 이미지 만들기만 취소를 요청한다(C# OnClosing). 성공하면 창이 닫힌다(C# DialogResult = true).
-//! 차이(HANDOFF): 영어 화면은 창 글이 모두 영어(C#은 ko.lang 값 역검색이라 일부만 번역되고 나머지는 한국어),
-//! 장치 오류 글은 Rust 디스크 모듈의 영어 글, Rust 디스크 모듈의 안전 검사(보호 디스크·이미지는 다른 물리 디스크·볼륨 잠금)는 C#보다 엄격하다.
+//! C# DiskCopyWindow (disk copy, 610x630) + DiskImageService call flow.
+//! Modes = create an image from a removable drive / restore an image to a removable drive / copy directly to another removable drive (initial choice).
+//! "Include partition table and all partitions" uses the whole physical disk instead of a volume. Direct copy + whole disk is "copy with one drive (swap media)"
+//! (read into %TEMP%\NDR-DiskCopy-{guid}.img -> confirm the media swap -> write to the same disk number; if writing fails, keep that image for recovery and
+//! switch to restore mode). Direct copy has "verify data after copying".
+//! Progress is the status text and bar inside the window. Cancel works only for image creation and the read phase of a one-drive copy. The window cannot close during work;
+//! trying to close it (x, Esc, closing the main window) only requests cancel for image creation (C# OnClosing). On success the window closes (C# DialogResult = true).
+//! Difference (HANDOFF): an English UI shows all window text in English (C# reverse-looks-up ko.lang values, so only part is translated and the rest stays Korean),
+//! device errors are the English text of the Rust disk module, and its safety checks (protected disks, image on another physical disk, volume locks) are stricter than C#.
 use super::original_dialogs::{DialogKind, DialogResult};
 use super::*;
 use ndr::disk::{PhysicalDisk, RemovableDrive};
@@ -14,16 +14,16 @@ use ndr::msgbox::{IDYES, MB_ICONEXCLAMATION, MB_OK, MB_YESNO};
 
 type DiskProgress<'a> = &'a mut dyn FnMut(u64, u64, bool);
 
-/// 장치를 건드리는 함수들(테스트에서 바꿔 끼운다): 목록, 이미지 읽기·쓰기, 장치 간 복사, 임시 폴더.
+/// Functions that touch devices (swapped in tests): listing, image read/write, device-to-device copy, temp folder.
 #[derive(Clone, Copy)]
 pub(super) struct DiskHooks {
     pub drives: fn() -> Vec<RemovableDrive>,
     pub physical_disks: fn() -> Vec<PhysicalDisk>,
-    /// (장치, 이미지 파일, 취소, 진행)
+    /// (device, image file, cancel, progress)
     pub read_image: fn(&str, &Path, &AtomicBool, DiskProgress) -> Result<(), String>,
-    /// (이미지 파일, 장치, 읽기 검증, 취소, 진행)
+    /// (image file, device, verify, cancel, progress)
     pub write_image: fn(&Path, &str, bool, &AtomicBool, DiskProgress) -> Result<(), String>,
-    /// (원본 장치, 대상 장치, 읽기 검증, 취소, 진행)
+    /// (source device, destination device, verify, cancel, progress)
     pub copy_device: fn(&str, &str, bool, &AtomicBool, DiskProgress) -> Result<(), String>,
     /// Path.GetTempPath().
     pub temp_dir: fn() -> PathBuf,
@@ -42,7 +42,7 @@ impl Default for DiskHooks {
     }
 }
 
-/// 세 라디오 단추.
+/// The three radio buttons.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum DiskMode {
     Create,
@@ -50,7 +50,7 @@ pub(super) enum DiskMode {
     Copy,
 }
 
-/// 진행 중인 단계. Swap은 미디어 교체 상자를 기다리는 동안(일꾼 없음).
+/// Running stage. Swap is while waiting for the media swap box (no worker).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum DiskStage {
     Create,
@@ -61,7 +61,7 @@ pub(super) enum DiskStage {
     SameWrite,
 }
 
-/// 시작 단추를 누른 때의 선택(C# StartCopyAsync가 읽어 두는 값).
+/// Choices when the start button was pressed (values C# StartCopyAsync reads up front).
 #[derive(Clone, Debug)]
 struct DiskPlan {
     create: bool,
@@ -92,16 +92,16 @@ pub(super) struct DiskRun {
     cancel: Arc<AtomicBool>,
     pub stage: DiskStage,
     plan: DiskPlan,
-    /// C# temporaryImagePath(한 드라이브 복사).
+    /// C# temporaryImagePath (one-drive copy).
     pub temp: Option<PathBuf>,
 }
 
 impl DiskRun {
-    /// 취소 단추를 쓸 수 있는 단계(C# _cancel.IsEnabled = create || samePhysicalDrive, 읽은 뒤에는 끔).
+    /// Stages where the cancel button works (C# _cancel.IsEnabled = create || samePhysicalDrive, off after reading).
     pub(super) fn cancellable(&self) -> bool {
         matches!(self.stage, DiskStage::Create | DiskStage::SameRead)
     }
-    /// C# _restoring = !create: 창을 닫으려 해도 취소를 요청하지 않는다.
+    /// C# _restoring = !create: trying to close the window does not request cancel.
     fn restoring(&self) -> bool {
         !self.plan.create
     }
@@ -118,7 +118,7 @@ pub(super) struct DiskCopyForm {
     pub destination_drive: Option<usize>,
     pub physical_disk: Option<usize>,
     pub destination_physical: Option<usize>,
-    /// 읽기 전용 칸(찾아보기로만 바뀐다).
+    /// Read-only field (changed only by browsing).
     pub image_path: String,
     pub status: String,
     pub progress: f32,
@@ -126,7 +126,7 @@ pub(super) struct DiskCopyForm {
     ko: bool,
 }
 
-/// 창 단추.
+/// Window buttons.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum DiskAction {
     Browse,
@@ -139,7 +139,7 @@ fn t(ko: bool, korean: &'static str, english: &'static str) -> &'static str {
     if ko { korean } else { english }
 }
 
-/// .NET "N0"(ko-KR·en-US 모두 쉼표 세 자리).
+/// .NET "N0" (comma every three digits in both ko-KR and en-US).
 fn grouped(value: u64) -> String {
     let digits = value.to_string();
     let mut out = String::with_capacity(digits.len() + digits.len() / 3);
@@ -152,7 +152,7 @@ fn grouped(value: u64) -> String {
     out
 }
 
-/// C# PhysicalDiskChoice.ToString: "PhysicalDrive{n} · {bytes:N0} bytes"(언어와 상관없이 같은 글).
+/// C# PhysicalDiskChoice.ToString: "PhysicalDrive{n} · {bytes:N0} bytes" (same text in every language).
 pub(super) fn physical_text(disk: &PhysicalDisk) -> String {
     format!("PhysicalDrive{} · {} bytes", disk.number, grouped(disk.bytes))
 }
@@ -168,7 +168,7 @@ fn guid_n() -> String {
 }
 
 impl DiskCopyForm {
-    /// C# 생성자: 직접 복사, 첫 드라이브, 대상은 둘 이상이면 두 번째(하나면 첫 번째).
+    /// C# constructor: direct copy, first drive, destination the second when there are two or more (else the first).
     pub(super) fn new(drives: Vec<RemovableDrive>, physical: Vec<PhysicalDisk>, ko: bool) -> Self {
         let second = |count: usize| match count {
             0 => None,
@@ -202,7 +202,7 @@ impl DiskCopyForm {
         self.whole_disk && self.direct() && self.same_drive
     }
 
-    /// DriveChoice.Label: 볼륨 이름, 없으면 "이동식 디스크".
+    /// DriveChoice.Label: volume name, otherwise "removable disk".
     fn label_of(&self, drive: &RemovableDrive) -> String {
         if drive.label.trim().is_empty() { t(self.ko, "이동식 디스크", "Removable Disk").into() } else { drive.label.clone() }
     }
@@ -237,7 +237,7 @@ impl DiskCopyForm {
         }
     }
 
-    /// C# UpdateMode의 _warning.Text.
+    /// _warning.Text of C# UpdateMode.
     pub(super) fn warning(&self) -> String {
         let ko = self.ko;
         if self.whole_disk {
@@ -295,7 +295,7 @@ impl DiskCopyForm {
         self.drive.is_some_and(|i| i < self.drives.len()) && !self.image_path.trim().is_empty()
     }
 
-    /// C# StartCopyAsync 앞부분의 선택 읽기와 빈 선택 검사.
+    /// Reading the choices and the empty-choice check at the start of C# StartCopyAsync.
     fn plan(&self) -> Option<DiskPlan> {
         let direct = self.direct();
         let plan = DiskPlan {
@@ -320,7 +320,7 @@ impl DiskCopyForm {
         Some(plan)
     }
 
-    /// 복원·직접 복사 전 확인 상자(캡션, 글).
+    /// Confirmation box before restore or direct copy (caption, text).
     fn confirmation(&self, plan: &DiskPlan) -> (String, String) {
         let ko = self.ko;
         let direct = plan.direct();
@@ -384,7 +384,7 @@ impl DiskCopyForm {
         }
     }
 
-    /// C# Progress<DiskCopyProgress>: 막대 = 복사/전체, 글 = "[읽기 검증 · ]N / M 바이트 (P0)".
+    /// C# Progress<DiskCopyProgress>: bar = copied/total, text = "[verify · ]N / M bytes (P0)".
     pub(super) fn show_progress(&mut self, copied: u64, total: u64, verifying: bool) {
         let ratio = if total == 0 { 0.0 } else { copied as f64 / total as f64 };
         self.progress = ratio as f32;
@@ -393,7 +393,7 @@ impl DiskCopyForm {
     }
 }
 
-/// 이름 칸 120 + 고르기 상자 330(C# DockPanel 줄).
+/// Name field 120 + choice box 330 (C# DockPanel row).
 fn combo_row(ui: &mut egui::Ui, id: &str, label: &str, items: &[String], selected: &mut Option<usize>, enabled: bool) {
     ui.horizontal(|ui| {
         ui.allocate_ui_with_layout(egui::vec2(120.0, 22.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
@@ -412,7 +412,7 @@ fn combo_row(ui: &mut egui::Ui, id: &str, label: &str, items: &[String], selecte
     ui.add_space(10.0);
 }
 
-/// 창 그리기. 단추를 누르면 그 동작.
+/// Draws the window. A pressed button returns its action.
 pub(super) fn disk_copy_ui(ui: &mut egui::Ui, form: &mut DiskCopyForm) -> Option<DiskAction> {
     let ko = form.ko;
     let running = form.run.is_some();
@@ -507,7 +507,7 @@ pub(super) fn disk_copy_ui(ui: &mut egui::Ui, form: &mut DiskCopyForm) -> Option
     action
 }
 
-/// 일꾼 스레드: 진행과 끝을 알린다.
+/// Worker thread: reports progress and completion.
 fn spawn(job: impl FnOnce(&AtomicBool, DiskProgress) -> Result<(), String> + Send + 'static) -> (Receiver<DiskEvent>, Arc<AtomicBool>) {
     let (tx, rx) = mpsc::channel();
     let cancel = Arc::new(AtomicBool::new(false));
@@ -523,14 +523,14 @@ fn spawn(job: impl FnOnce(&AtomicBool, DiskProgress) -> Result<(), String> + Sen
     (rx, cancel)
 }
 
-/// finally: 남기지 않을 임시 이미지를 지운다.
+/// finally: deletes temporary images that should not be kept.
 fn discard_temp(run: &DiskRun) {
     if let Some(temp) = &run.temp {
         let _ = std::fs::remove_file(temp);
     }
 }
 
-/// 끝난 뒤 할 일(창을 빌린 동안 정하고, 놓은 뒤 한다).
+/// What to do afterwards (decided while borrowing the window, done after releasing it).
 enum Follow {
     None,
     Close,
@@ -539,7 +539,7 @@ enum Follow {
 }
 
 impl App {
-    /// C# ShowDiskCopyWindow: 목록을 읽고 창을 연다.
+    /// C# ShowDiskCopyWindow: reads the lists and opens the window.
     pub(super) fn open_disk_copy(&mut self) {
         let ko = self.language == "ko";
         let form = DiskCopyForm::new((self.disk.drives)(), (self.disk.physical_disks)(), ko);
@@ -554,7 +554,7 @@ impl App {
         })
     }
 
-    /// 메인 창을 닫으려 할 때: 작업 중이면 막고(이미지 만들기는 취소 요청) true.
+    /// When the main window tries to close: blocks it during work (image creation gets a cancel request) and returns true.
     pub(super) fn disk_copy_blocks_close(&mut self) -> bool {
         let Some(run) = self.disk_copy_form().and_then(|f| f.run.as_ref()) else { return false };
         if !run.restoring() {
@@ -589,7 +589,7 @@ impl App {
         }
     }
 
-    /// C# BrowseForImage: 만들기는 저장 대화 상자(문서 폴더, 제안 이름, 덮어쓰기 확인), 아니면 열기 대화 상자.
+    /// C# BrowseForImage: create uses a save dialog (Documents folder, suggested name, overwrite prompt), otherwise an open dialog.
     fn browse_disk_image(&mut self) {
         let ko = self.language == "ko";
         let Some(form) = self.disk_copy_form() else { return };
@@ -610,7 +610,7 @@ impl App {
         }
     }
 
-    /// C# StartCopyAsync: 복원·직접 복사는 경고 확인(예/아니요) 뒤에 시작한다.
+    /// C# StartCopyAsync: restore and direct copy start after a warning confirmation (yes/no).
     fn start_disk_copy(&mut self) {
         let Some(form) = self.disk_copy_form() else { return };
         if !form.can_start() {
@@ -657,7 +657,7 @@ impl App {
         form.run = Some(DiskRun { receiver, cancel, stage, plan, temp });
     }
 
-    /// 일꾼 알림을 읽는다(App::poll에서 매번).
+    /// Reads worker notifications (every App::poll).
     pub(super) fn poll_disk_copy(&mut self, ctx: &egui::Context) {
         let Some(form) = self.disk_copy_form() else { return };
         let events: Vec<DiskEvent> = form.run.as_ref().map(|r| r.receiver.try_iter().collect()).unwrap_or_default();
@@ -673,7 +673,7 @@ impl App {
         }
     }
 
-    /// C# StartCopyAsync의 끝(성공·미디어 교체·취소·오류)과 finally.
+    /// End of C# StartCopyAsync (success, media swap, cancel, error) and finally.
     fn disk_copy_done(&mut self, result: Result<(), String>, ctx: &egui::Context) {
         let title = self.tr("디스크 복사", "Disk Copy").into_owned();
         let Some(form) = self.disk_copy_form() else { return };
@@ -698,7 +698,7 @@ impl App {
                 Follow::None
             }
             (DiskStage::SameWrite, Err(error)) => {
-                // 복구용 이미지를 남기고 복원 방식으로 바꿔 둔다.
+                // Keep the recovery image and switch to restore mode.
                 let temp = run.temp.clone().unwrap_or_default();
                 form.image_path = temp.to_string_lossy().into_owned();
                 form.mode = DiskMode::Restore;
@@ -726,7 +726,7 @@ impl App {
         }
     }
 
-    /// 미디어 교체 상자: 예면 같은 디스크 번호에 임시 이미지를 쓰고(취소 없음), 아니요면 아무것도 쓰지 않는다.
+    /// Media swap box: yes writes the temporary image to the same disk number (no cancel), no writes nothing.
     fn disk_swap_answered(&mut self, yes: bool) {
         let hooks = self.disk;
         let Some(form) = self.disk_copy_form() else { return };

@@ -1,16 +1,16 @@
-//! 원본 임시 폴더 비우기(miEmptyTempClick 0x434344)와 휴지통 비우기(miEmptyRecycleBinClick 0x433094).
-//! 휴지통 비우기는 `App::shell_recycle_emptier`를 거친다(시험은 실제 휴지통을 건드리지 않는다).
-//! 컴퓨터 청소(TfCleanup, miCleanupDisk)는 사용자 요청으로 뺐다.
+//! Original Empty Temp Folder (miEmptyTempClick 0x434344) and Empty Recycle Bin (miEmptyRecycleBinClick 0x433094).
+//! Emptying the Recycle Bin goes through `App::shell_recycle_emptier` (tests never touch the real Recycle Bin).
+//! Disk Cleanup (TfCleanup, miCleanupDisk) was removed per user request.
 use super::*;
 use ndr::msgbox::{IDYES, MB_ICONQUESTION, MB_YESNO};
 
 impl App {
-    /// 원본 miEmptyTempClick(0x434344): GetTempPathW → GetLongPathNameW(실패하면 그만), 폴더 크기(StrFormatByteSizeW)와
-    /// 파일 수로 TfMsgBox(TITLE_EMPTYTEMP, "", MSG_EMPTYTEMP, MB_YESNO | MB_ICONQUESTION). 예면 지우기 작업(종류 2,
-    /// 플래그 0xF0 = 안의 항목만, 묻지 않고, 오류는 건너뛰고 알리지 않음)을 시작하고 두 패널을 새로 읽는다.
+    /// Original miEmptyTempClick (0x434344): GetTempPathW -> GetLongPathNameW (stops on failure), then TfMsgBox(TITLE_EMPTYTEMP, "", MSG_EMPTYTEMP, MB_YESNO | MB_ICONQUESTION)
+    /// with the folder size (StrFormatByteSizeW) and file count. Yes starts a delete job (mode 2,
+    /// flags 0xF0 = contents only, no prompts, errors skipped silently) and rereads both panes.
     pub(super) fn empty_temp_command(&mut self) {
         let Some(folder) = (self.system.temp_folder)() else { return };
-        // 셈은 따로 돌린다(원본은 UI 스레드에서 세어 큰 임시 폴더면 잠시 멈춘다). 끝나면 empty_temp_counted가 묻는다.
+        // Counting runs separately (the original counts on the UI thread and stalls briefly on a large temp folder). empty_temp_counted asks when it finishes.
         self.status = self.tr("임시 폴더 크기를 세고 있습니다…", "Counting the temporary folder…").into_owned();
         let tx = self.async_tx.clone();
         thread::spawn(move || {
@@ -38,7 +38,7 @@ impl App {
         });
     }
 
-    /// 원본 miEmptyRecycleBinClick(0x433094): SHEmptyRecycleBinW(창, NULL, 0) — 확인·진행은 셸 창, NDR 글 없음.
+    /// Original miEmptyRecycleBinClick (0x433094): SHEmptyRecycleBinW(window, NULL, 0); confirmation and progress are shell windows, no NDR text.
     pub(super) fn empty_recycle_command(&mut self) {
         let emptier = self.shell_recycle_emptier;
         thread::spawn(move || {

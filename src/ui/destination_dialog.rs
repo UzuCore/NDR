@@ -1,24 +1,24 @@
-//! C# SelectDestinationFolder + DestinationPickerWindow([formNDRDestination]): 자주 쓴 대상(MostUsedDestinations, 많이·최근 순,
-//! 있는 폴더만, MaxRecentFileCount개, 오른쪽 단추 메뉴로 지우기), 작업 폴더 1~5(숫자 글쇠), 다른 폴더 찾아보기.
-//! RememberDestination(LastDestination + 사용 횟수·마지막 사용 시각)과 CopyMoveToFolderAsync.
-//! 압축 파일 안에서 복사는 원본 FUN_00439bac처럼 압축 풀기 대상 선택(EXTRACT 제목)이고, 이동은 아무것도 하지 않는다.
+//! C# SelectDestinationFolder + DestinationPickerWindow ([formNDRDestination]): most used destinations (MostUsedDestinations, by count then recency,
+//! existing folders only, MaxRecentFileCount entries, removable from the right-click menu), work folders 1-5 (number keys), browse for another folder.
+//! RememberDestination (LastDestination + use count and last use time) and CopyMoveToFolderAsync.
+//! Inside an archive, copy chooses the extraction destination (EXTRACT title) like original FUN_00439bac, and move does nothing.
 use super::original_dialogs::{DialogKind, DialogResult};
 use super::*;
 use ndr::msgbox::{IDYES, MB_ICONASTERISK, MB_ICONQUESTION, MB_OK, MB_YESNO};
 
-/// 복사·이동·압축 풀기(제목 글쇠).
+/// Copy, move or extract (title key).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum DestinationPurpose {
     Copy,
     Move,
-    /// 원본 miFTPGetClick(0x4412f8): FTP_GET + SELECTDEST.
+    /// Original miFTPGetClick (0x4412f8): FTP_GET + SELECTDEST.
     FtpGet,
-    /// 압축 풀기 흐름(ExtractArchiveAsync) 이식 때 쓴다.
+    /// Used when porting the extraction flow (ExtractArchiveAsync).
     #[allow(dead_code)]
     Extract,
 }
 
-/// 창의 글과 목록.
+/// Window text and list.
 #[derive(Clone, Debug)]
 pub(super) struct DestinationForm {
     pub most_used: Vec<(String, u64)>,
@@ -28,24 +28,24 @@ pub(super) struct DestinationForm {
     pub remove_label: String,
     pub clear_label: String,
     pub initial: PathBuf,
-    /// 원본 TfSelectDest cbPath: 고칠 수 있는 대상 경로(처음 값 = 다른 패널 폴더). 확인·Enter로 그 폴더(같은 패널 안 폴더도 됨).
+    /// Original TfSelectDest cbPath: editable destination path (initially the other pane folder). OK or Enter goes to that folder (a folder in the same pane works too).
     pub path: String,
     pub ok_label: String,
-    /// 스킨 테마: 원본 TfSelectDest 배치(목록 lbList + 아래 cbPath·단추). 아니면 C# DestinationPickerWindow 배치.
+    /// Skin theme: the original TfSelectDest layout (list lbList + cbPath and buttons below). Otherwise the C# DestinationPickerWindow layout.
     pub original: bool,
-    /// 원본 lbList의 고른 줄(ItemIndex). 고르면 cbPath에 그 경로(lbListClick 0x453b40).
+    /// Selected row of the original lbList (ItemIndex). Selecting puts its path in cbPath (lbListClick 0x453b40).
     pub selected: usize,
-    /// 원본 드라이브 줄(종류 8). 창을 열 때의 드라이브 목록.
+    /// Original drive rows (kind 8): the drive list when the window opened.
     pub drives: Vec<DestinationDrive>,
-    /// 드라이브 줄의 남은 공간 글(원본 "%10s %s"의 둘째 글, RES.DISKFREE).
+    /// Free space text of drive rows (second text of the original "%10s %s", RES.DISKFREE).
     pub free_label: String,
-    /// 원본 FormKeyDown(0x454b8c) Ctrl+D·G·Q·S·O = FUN_0040db88(0~4): 바탕 화면(CSIDL 0x10)·문서(5)·사진(0x27)·음악(0xd)·
-    /// 동영상(0xe), 1~4는 설정의 특수 폴더가 먼저. 창을 열 때 구한 경로(없으면 None).
+    /// Original FormKeyDown (0x454b8c) Ctrl+D/G/Q/S/O = FUN_0040db88(0-4): Desktop (CSIDL 0x10), Documents (5), Pictures (0x27), Music (0xd),
+    /// Videos (0xe); for 1-4 the configured special folder wins. Paths resolved when the window opened (None when missing).
     pub special_folders: [Option<String>; 5],
 }
 
-/// 원본 TfSelectDest 목록 줄(FUN_004532d4): 종류 1 = 처음 폴더(+0x420, 다른 패널), 2 = 최근(자주 쓴 폴더 +0x434), 4 = 작업 폴더(+0x438),
-/// 8 = 드라이브(TNXDriveList, CD/DVD(5)는 뺌).
+/// Original TfSelectDest list rows (FUN_004532d4): kind 1 = initial folder (+0x420, the other pane), 2 = recent (most used folders +0x434), 4 = work folder (+0x438),
+/// 8 = drive (TNXDriveList, CD/DVD (5) excluded).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum DestinationItem {
     Initial(String),
@@ -54,7 +54,7 @@ pub(super) enum DestinationItem {
     Drive(DestinationDrive),
 }
 
-/// 대상 선택 창의 드라이브 줄 자료(TNXDriveInfo: 루트, GetDriveName +0x1c, 종류 +0x18, 고정 디스크면 (여유 +0x10, 전체 +8)).
+/// Drive row data of the destination window (TNXDriveInfo: root, GetDriveName +0x1c, type +0x18, for fixed disks (free +0x10, total +8)).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct DestinationDrive {
     pub root: String,
@@ -72,8 +72,8 @@ impl DestinationItem {
     }
 }
 
-/// 원본 FUN_004532d4의 목록: 처음 폴더(있으면), 그것과 다른 최근 폴더, 비어 있지 않고 있는 작업 폴더, CD/DVD가 아닌 드라이브.
-/// (줄, 묶음의 첫 줄인지).
+/// List of original FUN_004532d4: the initial folder (if any), recent folders other than it, non-empty existing work folders, drives other than CD/DVD.
+/// Returns (row, whether it is the first row of a group).
 pub(super) fn original_items(form: &DestinationForm) -> Vec<(DestinationItem, bool)> {
     let mut items = Vec::new();
     let initial = form.initial.to_string_lossy().into_owned();
@@ -105,7 +105,7 @@ pub(super) fn original_items(form: &DestinationForm) -> Vec<(DestinationItem, bo
 }
 
 pub(super) enum DestinationAction {
-    /// 원본 btnOk: 경로 칸의 폴더.
+    /// Original btnOk: the folder in the path field.
     Accept,
     MostUsed(String),
     Work(usize),
@@ -119,8 +119,8 @@ fn documents() -> PathBuf {
     PathBuf::from(std::env::var_os("USERPROFILE").unwrap_or_default()).join("Documents")
 }
 
-/// 원본 lbListKeyDown(0x454130, 목록에 글쇠 초점): 1~9(또는 Alt+1~9) = 작업 폴더, Ctrl+1~9 = 최근 폴더 N번째(원본 +0x434는 처음 폴더를
-/// 뺀 목록), 0 = 처음 폴더(+0x420), Shift+Delete = 기록 모두 지우기. 경로 칸에 글쇠 초점이 있으면(`typing`) 글쇠는 경로 글자다.
+/// Original lbListKeyDown (0x454130, list has key focus): 1-9 (or Alt+1-9) = work folder, Ctrl+1-9 = Nth recent folder (original +0x434 excludes the initial
+/// folder), 0 = initial folder (+0x420), Shift+Delete = clear all history. When the path field has key focus (`typing`) keys are path characters.
 fn list_keys(ui: &egui::Ui, form: &DestinationForm, typing: bool) -> Option<DestinationAction> {
     enum Pick {
         Work(usize),
@@ -136,7 +136,7 @@ fn list_keys(ui: &egui::Ui, form: &DestinationForm, typing: bool) -> Option<Dest
     let typed = ui.input(|i| {
         i.events.iter().find_map(|e| match e {
             egui::Event::Key { key: egui::Key::Delete, pressed: true, modifiers, .. } if modifiers.shift && !modifiers.ctrl && !modifiers.alt => Some(Pick::Clear),
-            // 원본 lbListKeyDown: 수식 키 없이 또는 Shift와 A~Z = 그 드라이브 루트로 확인.
+            // Original lbListKeyDown: A-Z with no modifier or with Shift = confirm with that drive root.
             egui::Event::Key { key, pressed: true, modifiers, .. } if !modifiers.ctrl && !modifiers.alt && key.name().len() == 1 && key.name().chars().all(|c| c.is_ascii_uppercase()) => key.name().chars().next().map(Pick::Drive),
             egui::Event::Key { key, pressed: true, modifiers, .. } => {
                 let n = DIGITS.iter().position(|k| k == key)?;
@@ -171,14 +171,14 @@ fn list_keys(ui: &egui::Ui, form: &DestinationForm, typing: bool) -> Option<Dest
     }
 }
 
-/// 원본 TfSelectDest(DFM ClientWidth 426 × ClientHeight 428, 최소 너비 350): 위는 lbList(흰 바탕, 줄 높이 18, 묶음의 첫 줄은 + 3과
-/// 위 0xC0C0C0 선), 아래 70 높이 칸에 cbPath(4,7 너비 − 8 × 21), btnTree(4,37 138×25), btnOk(너비 − 188,37 89×25, 기본),
-/// btnCancel(너비 − 93,37 89×25, 취소). 크기는 FUN_004532d4처럼 줄 수 × 18 + 묶음 수 × 3 + 82(300 ~ 화면 − 50), 너비는 가장 긴 경로 + 28
-/// (350 ~ 800). 줄 그리기는 lbListDrawItem(0x454de8): 아이콘 16(왼쪽 + 4), 글은 왼쪽 + 24에 상위 경로(회색 0x808080, 고르면 0xC0C0C0)와
-/// 이름(검정, 고르면 흰색), 고른 줄은 0x5A5A5A→0x323232 바탕에 위 선 0x323232·0x787878. 작업 폴더 줄은 아이콘에 번호를 붙인다.
-/// 누르면 고르고 경로 칸에 그 경로(lbListClick), 두 번 누르면 확인(OnDblClick = btnOkClick), 오른쪽 단추는 최근 줄이면 pmMUFolder.
-/// 목록에 글쇠 초점이 있으면 위/아래로 고르고 Delete는 고른 최근 줄을 지운다(pmiMUFDeleteClick). btnTree(폴더 트리)는 옮기지 않아
-/// 그 자리에 C# 판의 다른 폴더 찾아보기를 둔다.
+/// Original TfSelectDest (DFM ClientWidth 426 x ClientHeight 428, minimum width 350): lbList on top (white, row height 18, a group's first row + 3 with
+/// a 0xC0C0C0 line above), below in a 70-high band cbPath (4,7 width - 8 x 21), btnTree (4,37 138x25), btnOk (width - 188,37 89x25, default),
+/// btnCancel (width - 93,37 89x25, cancel). Height like FUN_004532d4: rows x 18 + groups x 3 + 82 (300 to screen - 50); width = longest path + 28
+/// (350 to 800). Rows are drawn like lbListDrawItem (0x454de8): icon 16 (left + 4), text at left + 24 with the parent path (gray 0x808080, 0xC0C0C0 when selected) and
+/// the name (black, white when selected); the selected row has a 0x5A5A5A->0x323232 background with top lines 0x323232 and 0x787878. Work folder rows add a number to the icon.
+/// A click selects and puts that path in the path field (lbListClick), a double click confirms (OnDblClick = btnOkClick), the right button on a recent row opens pmMUFolder.
+/// With key focus in the list, Up/Down select and Delete removes the selected recent row (pmiMUFDeleteClick). btnTree (folder tree) is not ported, so
+/// the C# version's browse for another folder sits in its place.
 pub(super) fn destination_ui_original(ui: &mut egui::Ui, form: &mut DestinationForm, enter: bool, icon: Option<&egui::TextureHandle>, drive_icons: &[Option<egui::TextureHandle>], screen_height: f32) -> Option<DestinationAction> {
     let mut action = None;
     let items = original_items(form);
@@ -187,7 +187,7 @@ pub(super) fn destination_ui_original(ui: &mut egui::Ui, form: &mut DestinationF
     }
     let font = egui::TextStyle::Body.resolve(ui.style());
     let measure = |ui: &egui::Ui, text: &str| ui.fonts_mut(|f| f.layout_no_wrap(text.to_owned(), font.clone(), Color32::BLACK).size().x);
-    // 원본: 창 너비는 폴더 줄 글(+0x414)로만, 드라이브 줄의 "%C: %s" 글 너비(+0x418)는 남은 공간 글 자리에 쓴다.
+    // Original: the window width uses only the folder row text (+0x414); the drive row "%C: %s" text width (+0x418) positions the free space text.
     let drive_text = |drive: &DestinationDrive| format!("{}: {}", drive.root.chars().next().unwrap_or(' ').to_ascii_uppercase(), drive.name);
     let widest = items.iter().filter(|(item, _)| !matches!(item, DestinationItem::Drive(_))).map(|(item, _)| measure(ui, item.path())).fold(0.0f32, f32::max);
     let drive_width = items.iter().filter_map(|(item, _)| if let DestinationItem::Drive(d) = item { Some(measure(ui, &drive_text(d))) } else { None }).fold(0.0f32, f32::max);
@@ -200,17 +200,17 @@ pub(super) fn destination_ui_original(ui: &mut egui::Ui, form: &mut DestinationF
     let list_id = egui::Id::new("ndr-destination-list");
     let path_id = egui::Id::new("ndr-destination-path");
     ui.painter().rect_filled(list_rect, 0.0, Color32::WHITE);
-    // 목록 자체(빈 자리 포함)가 글쇠 초점을 받는 위젯이다. 줄보다 먼저 두어 줄 누르기를 가리지 않게 한다.
+    // The list itself (including empty space) is the widget that takes key focus. It comes before the rows so it does not hide row clicks.
     if ui.interact(list_rect, list_id, egui::Sense::click()).clicked() {
         ui.memory_mut(|m| m.request_focus(list_id));
     }
     let typing = ui.memory(|m| m.has_focus(path_id));
     let list_focused = ui.memory(|m| m.has_focus(list_id));
     if list_focused {
-        // egui가 위/아래 화살표로 초점을 옮기지 않게 한다(원본 목록 상자는 화살표로 줄을 고른다).
+        // Keep egui from moving focus with Up/Down (the original list box selects rows with the arrows).
         ui.memory_mut(|m| m.set_focus_lock_filter(list_id, egui::EventFilter { vertical_arrows: true, ..Default::default() }));
     }
-    // 목록 글쇠(위/아래, Delete).
+    // List keys (Up/Down, Delete).
     if list_focused && !items.is_empty() {
         let (up, down, delete) = ui.input(|i| (i.key_pressed(egui::Key::ArrowUp), i.key_pressed(egui::Key::ArrowDown), i.key_pressed(egui::Key::Delete) && !i.modifiers.any()));
         let before = form.selected;
@@ -267,10 +267,10 @@ pub(super) fn destination_ui_original(ui: &mut egui::Ui, form: &mut DestinationF
                 painter.image(icon.id(), icon_rect, egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)), Color32::WHITE);
             }
             if let DestinationItem::Drive(drive) = item {
-                // 원본 lbListDrawItem 종류 8: "%C: %s"(드라이브 글자, GetDriveName)를 왼쪽 + 24에, 고정 디스크(3)면 그 뒤
-                // (+0x418 가장 넓은 드라이브 글 + 4)에 "%10s %s"(여유 StrFormatByteSizeW, DISKFREE), 글 뒤 + 6부터 80(남은 자리가 80보다
-                // 좁으면 끝까지) × (줄 − 8) 막대: GRAYTEXT 테, 안쪽(1 들여) 쓴 비율만큼 채움(51% 이상 하늘, 71% 이상 주황, 91% 이상 빨강을
-                // 창 색과 섞음(FUN_004539ec, 150/255), 50% 이하는 GRAYTEXT).
+                // Original lbListDrawItem kind 8: "%C: %s" (drive letter, GetDriveName) at left + 24; for a fixed disk (3) then
+                // (at +0x418 widest drive text + 4) "%10s %s" (free space StrFormatByteSizeW, DISKFREE), and from text end + 6 a bar 80 wide (to the end when less than 80
+                // remains) x (row - 8): GRAYTEXT frame, inside (inset 1) filled by the used ratio (above 51% sky blue, above 71% orange, above 91% red, each
+                // blended with the window color (FUN_004539ec, 150/255); 50% or less is GRAYTEXT).
                 let text_color = if selected { Color32::WHITE } else { Color32::BLACK };
                 let x = content.left() + 24.0;
                 let galley = ui.fonts_mut(|f| f.layout_no_wrap(drive_text(drive), font.clone(), text_color));
@@ -318,13 +318,13 @@ pub(super) fn destination_ui_original(ui: &mut egui::Ui, form: &mut DestinationF
                 continue;
             }
             if let DestinationItem::Work(n, _) = item {
-                // 원본 +0x424 번호 그림 대신 작은 번호 칸.
+                // A small number box instead of the original +0x424 number image.
                 let badge = egui::Rect::from_min_size(icon_rect.right_bottom() - egui::vec2(8.0, 9.0), egui::vec2(9.0, 10.0));
                 painter.rect_filled(badge, 1.0, Color32::from_rgb(0x20, 0x50, 0xa0));
                 painter.text(badge.center(), egui::Align2::CENTER_CENTER, (n + 1).to_string(), egui::FontId::proportional(9.0), Color32::WHITE);
             }
             let path = item.path();
-            // 원본: DT_PATH_ELLIPSIS | DT_MODIFYSTRING으로 줄 너비(왼쪽 + 24 ~ 오른쪽)에 맞춰 줄인 글을 상위 경로와 이름으로 나눈다.
+            // Original: text shortened to the row width (left + 24 to right) with DT_PATH_ELLIPSIS | DT_MODIFYSTRING, split into parent path and name.
             let shown = super::original_dialogs::path_ellipsis(ui, path, (content.right() - content.left() - 24.0).max(0.0), &font);
             let trimmed = shown.trim_end_matches('\\');
             let (parent, name) = match trimmed.rfind('\\') {
@@ -349,7 +349,7 @@ pub(super) fn destination_ui_original(ui: &mut egui::Ui, form: &mut DestinationF
                 form.path = path.to_owned();
                 ui.memory_mut(|m| m.request_focus(list_id));
             }
-            // 원본 lbListMouseDown(0x4546ac): 오른쪽 단추는 ItemIndex만 바꾼다(OnClick이 아니라 경로 칸은 그대로).
+            // Original lbListMouseDown (0x4546ac): the right button only changes ItemIndex (not OnClick, so the path field stays).
             if response.secondary_clicked() {
                 form.selected = index;
                 ui.memory_mut(|m| m.request_focus(list_id));
@@ -372,14 +372,14 @@ pub(super) fn destination_ui_original(ui: &mut egui::Ui, form: &mut DestinationF
             }
         }
     });
-    // 아래 칸: cbPath(창이 열리면 글쇠 초점, 원본 FormShow), btnTree 자리의 찾아보기, btnOk, btnCancel.
+    // Bottom band: cbPath (key focus when the window opens, original FormShow), browse in btnTree's place, btnOk, btnCancel.
     let edit = ui.put(at(4.0, 7.0, width - 8.0, 21.0), egui::TextEdit::singleline(&mut form.path).id(path_id));
-    // 원본 cbPath Hint "Alt+D": Alt+D면 경로 칸으로 글쇠 초점.
+    // Original cbPath Hint "Alt+D": Alt+D gives the path field key focus.
     let alt_d = ui.input(|i| i.modifiers.alt && !i.modifiers.ctrl && !i.modifiers.shift && i.key_pressed(egui::Key::D));
     if alt_d || (!ui.memory(|m| m.had_focus_last_frame(path_id)) && ui.memory(|m| m.focused().is_none())) {
         edit.request_focus();
     }
-    // 원본 FormKeyDown(0x454b8c, KeyPreview): Ctrl과 D·G·Q·S·O면 바탕 화면·문서·사진·음악·동영상 경로를 cbPath에 넣고 초점·모두 고르기.
+    // Original FormKeyDown (0x454b8c, KeyPreview): Ctrl with D/G/Q/S/O puts the Desktop/Documents/Pictures/Music/Videos path in cbPath, focuses it and selects all.
     let special = [egui::Key::D, egui::Key::G, egui::Key::Q, egui::Key::S, egui::Key::O];
     if let Some(index) = ui.input(|i| if i.modifiers.ctrl { special.iter().position(|k| i.key_pressed(*k)) } else { None }) {
         if let Some(path) = form.special_folders[index].clone().filter(|p| !p.is_empty()) {
@@ -391,7 +391,7 @@ pub(super) fn destination_ui_original(ui: &mut egui::Ui, form: &mut DestinationF
             state.store(ui.ctx(), path_id);
         }
     }
-    // 원본 btnTree(4,37 138×25, "&Folder Tree") → btnTreeClick(FUN_00453de4).
+    // Original btnTree (4,37 138x25, "&Folder Tree") -> btnTreeClick (FUN_00453de4).
     if super::original_dialogs::access_button(ui, at(4.0, 37.0, 138.0, 25.0), &form.browse_label) {
         action = Some(DestinationAction::Browse);
     }
@@ -411,7 +411,7 @@ pub(super) fn destination_ui_original(ui: &mut egui::Ui, form: &mut DestinationF
 }
 
 impl App {
-    /// MostUsedDestinations: UseCount 내림차순, LastUsedUtc 내림차순, 있는 폴더만, MaxRecentFileCount개.
+    /// MostUsedDestinations: UseCount descending, LastUsedUtc descending, existing folders only, MaxRecentFileCount entries.
     fn most_used_destinations(&self) -> Vec<(String, u64)> {
         let mut entries: Vec<(String, u64, String)> = self
             .settings
@@ -432,18 +432,18 @@ impl App {
         }
     }
 
-    /// C# SelectDestinationFolder: 고른 폴더(전체 경로)를 콜백으로.
+    /// C# SelectDestinationFolder: passes the chosen folder (full path) to the callback.
     pub(super) fn select_destination(&mut self, purpose: DestinationPurpose, initial_directory: PathBuf, current_pane: Option<PathBuf>, on_result: impl FnOnce(&mut App, PathBuf) + 'static) {
         let text = |app: &App, section: &str, key: &str, fallback: &str| app.language_pack.text(&format!("{section}.{key}"), fallback);
         let ko = self.language == "ko";
-        // 원본(0x8ebad2·0x8ebb1e·0x8ed2b4 근처): 대상 선택 창 제목 = MOVE / COPY / EXTRACT + SELECTDEST(" - Select a destination").
+        // Original (near 0x8ebad2, 0x8ebb1e, 0x8ed2b4): destination window title = MOVE / COPY / EXTRACT + SELECTDEST (" - Select a destination").
         let (title_key, title_fallback) = match purpose {
             DestinationPurpose::Copy => ("RES.COPY", "Copy"),
             DestinationPurpose::Move => ("RES.MOVE", "Move"),
             DestinationPurpose::Extract => ("RES.EXTRACT", "Extract"),
             DestinationPurpose::FtpGet => ("RES.FTP_GET", "FTP Download"),
         };
-        // GetDestinationInitialDirectory: DefaultDestinationMode 1이면 현재 패널 드라이브 루트.
+        // GetDestinationInitialDirectory: DefaultDestinationMode 1 means the current pane's drive root.
         let fallback = if initial_directory.is_dir() { std::path::absolute(&initial_directory).unwrap_or(initial_directory) } else { documents() };
         let mode = self.settings.values.get("DefaultDestinationMode").and_then(|v| v.as_i64()).unwrap_or(0);
         let initial = match current_pane.filter(|_| mode == 1).and_then(|p| std::path::absolute(p).ok()).and_then(|p| p.ancestors().last().map(Path::to_path_buf)) {
@@ -451,7 +451,7 @@ impl App {
             _ => fallback,
         };
         let work = self.settings.strings("WorkingFolders");
-        // 원본 FUN_004532d4 종류 8: 전역 드라이브 목록(TNXDriveList, 목록 패널과 같은 캐시).
+        // Original FUN_004532d4 kind 8: the global drive list (TNXDriveList, the same cache as the list pane).
         let drive_items = if cfg!(test) {
             (self.system.ready_drives)().into_iter().map(|root| { let info = (self.system.drive_item)(&root); (root, info) }).collect()
         } else {
@@ -489,7 +489,7 @@ impl App {
         });
     }
 
-    /// 창 단추.
+    /// Window buttons.
     pub(super) fn destination_action(&mut self, action: DestinationAction, ctx: &egui::Context) {
         let title = self.original_dialogs.last().map(|d| d.title.clone()).unwrap_or_default();
         let Some(form) = self.destination_form() else { return };
@@ -500,13 +500,13 @@ impl App {
                 if typed.is_empty() {
                     return;
                 }
-                // 원본 btnOkClick(0x453c4c): 고른 줄이 드라이브(종류 8)이고 cbPath가 그 드라이브 루트와 같으면(lstrcmpiW) 확인 대신
-                // btnTreeClick(FUN_00453de4) = 폴더 트리로 그 드라이브 안 폴더를 고른다.
+                // Original btnOkClick (0x453c4c): when the selected row is a drive (kind 8) and cbPath equals that drive root (lstrcmpiW), instead of confirming
+                // it runs btnTreeClick (FUN_00453de4) = pick a folder in that drive with the folder tree.
                 let drive_row = original_items(form).get(form.selected).is_some_and(|(item, _)| matches!(item, DestinationItem::Drive(d) if ndr::names::equals_ignore_case(&d.root, form.path.trim())));
                 if drive_row {
                     return self.destination_action(DestinationAction::Browse, ctx);
                 }
-                // 상대 경로는 지금 패널 폴더 기준(원본 PathCombine).
+                // Relative paths are based on the current pane folder (original PathCombine).
                 let base = self.panes[self.active].path.to_string_lossy().into_owned();
                 let full = PathBuf::from(ndr::names::combine_typed_name(&base, &typed));
                 if full.is_dir() {
@@ -531,7 +531,7 @@ impl App {
                 self.answer_dialog(DialogResult::Destination(Some(full)), ctx);
             }
             DestinationAction::Browse => {
-                // FUN_00453de4: 경로 칸이 있는 폴더면 그 경로, 아니면 빈 글로 FUN_0040ca90(제목 = 이 창 제목). 고른 경로가 있으면 그 대상으로 닫는다.
+                // FUN_00453de4: FUN_0040ca90 with the path field if it is an existing folder, otherwise empty text (title = this window's title). Closes with the chosen path as the destination.
                 let typed = form.path.trim().trim_matches('"').to_owned();
                 let initial = if !typed.is_empty() && Path::new(&typed).is_dir() { PathBuf::from(typed) } else { PathBuf::new() };
                 self.folder_tree_dialog(&initial, Some(title), |app, folder, ctx| {
@@ -580,7 +580,7 @@ impl App {
         }
     }
 
-    /// C# RememberDestination: 있는 폴더면 LastDestination과 MostUsedDestinations(사용 횟수 +1, 마지막 사용 UTC)를 저장.
+    /// C# RememberDestination: for an existing folder saves LastDestination and MostUsedDestinations (use count + 1, last use UTC).
     pub(super) fn remember_destination(&mut self, destination: &Path) {
         if !destination.is_dir() {
             return;
@@ -588,7 +588,7 @@ impl App {
         let full = std::path::absolute(destination).unwrap_or_else(|_| destination.to_path_buf()).to_string_lossy().into_owned();
         let full = if full.len() > 3 { full.trim_end_matches(['\\', '/']).to_owned() } else { full };
         self.settings.set_text("LastDestination", &full);
-        // System.Text.Json DateTime(UTC): 소수 7자리.
+        // System.Text.Json DateTime (UTC): 7 fractional digits.
         let utc = chrono::Utc::now();
         let now = format!("{}.{:07}Z", utc.format("%Y-%m-%dT%H:%M:%S"), chrono::Timelike::nanosecond(&utc) / 100);
         let list = self.settings.values.entry("MostUsedDestinations").or_insert_with(|| serde_json::json!([]));
@@ -609,10 +609,10 @@ impl App {
         self.save();
     }
 
-    /// 원본 miCopyToClick(0x432e68)·miMoveToClick(0x432f40): 로컬 위치면 FUN_0042bdc4 = TfSelectDest(경로 칸 처음 값은 FUN_0043cb24).
-    /// 압축 파일 안이면 복사는 FUN_00439bac(형식 0) = 고른 항목을 TfSelectDest(EXTRACT 제목)로 고른 폴더에 풀고,
-    /// 이동은 원본에서는 아무것도 하지 않았다(FUN_0042bdc4가 로컬이 아니면 그만). 사용자 요청으로 NDR은 고칠 수 있는 압축(zip·7z·tar·wim)이면
-    /// 같은 대상 선택 창으로 고른 폴더에 풀고 압축에서 지운다.
+    /// Original miCopyToClick (0x432e68) / miMoveToClick (0x432f40): at a local location FUN_0042bdc4 = TfSelectDest (path field initial value from FUN_0043cb24).
+    /// Inside an archive, copy is FUN_00439bac (mode 0) = extract the chosen items to the folder picked with TfSelectDest (EXTRACT title);
+    /// move did nothing in the original (FUN_0042bdc4 stops when not local). Per user request NDR, for a modifiable archive (zip, 7z, tar, wim),
+    /// extracts to the folder chosen in the same destination window and deletes from the archive.
     pub(super) fn copy_move_to_folder(&mut self, moving: bool) {
         let i = self.active;
         if self.panes[i].archive.is_some() {
@@ -628,7 +628,7 @@ impl App {
             return;
         }
         let other = &self.panes[1 - i];
-        // 원본 FUN_0043cb24: 두 패널이 보이고 다른 패널이 로컬이면 그 폴더, 아니면 지금 패널 폴더.
+        // Original FUN_0043cb24: the other pane's folder when both panes show and the other pane is local, otherwise the current pane folder.
         let preferred = if !self.dual && self.panes[i].archive.is_none() {
             self.panes[i].path.clone()
         } else if other.archive.is_none() {

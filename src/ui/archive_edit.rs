@@ -1,15 +1,15 @@
-//! 사용자 요청(원본에는 없는 기능): 압축 파일 안에서 지우기·이름 바꾸기·새 폴더·빈 파일, 압축 안으로 복사·이동(더하기),
-//! 압축 밖으로 이동(풀고 지우기), 압축에서 다른 압축으로 복사·이동. 동봉 7-Zip이 고칠 수 있는 zip·7z·tar·wim만 된다
-//! (ndr::archive::can_modify). 원본 NexusFile은 압축 안 항목을 풀기만 했다.
+//! User request (not in the original): inside an archive, delete, rename, new folder, empty file, copy or move into the archive (add),
+//! move out of the archive (extract then delete), copy or move between archives. Only zip, 7z, tar and wim, which the bundled 7-Zip can modify, are supported
+//! (ndr::archive::can_modify). The original NexusFile could only extract archive items.
 use super::original_dialogs::{DeleteWarningChoice, DeleteWarningMode};
 use super::*;
 use ndr::names;
 
-/// 고칠 압축: (첫 볼륨 파일, 안 경로 "폴더/" 또는 "", 아는 암호).
+/// Archive to modify: (first volume file, inner path "folder/" or "", known password).
 pub(super) type EditableArchive = (PathBuf, String, Option<String>);
 
 impl App {
-    /// 그 패널이 고칠 수 있는 압축 안이면 그 압축.
+    /// That archive, when the pane is inside a modifiable archive.
     pub(super) fn editable_archive(&self, pane: usize) -> Option<EditableArchive> {
         let location = self.panes[pane].archive.as_ref()?;
         let file = ndr::archive::first_volume_path(&location.file);
@@ -23,18 +23,18 @@ impl App {
         );
     }
 
-    /// 고른 항목(없으면 커서 항목)의 압축 안 키("폴더/파일").
+    /// Archive keys ("folder/file") of the selected items (or the cursor item when none).
     fn archive_target_keys(&self, pane: usize) -> Vec<String> {
         self.panes[pane].targets().into_iter().map(|k| k.to_string_lossy().replace('\\', "/").trim_end_matches('/').to_owned()).filter(|k| !k.is_empty()).collect()
     }
 
-    /// 압축을 고치는 작업(진행 창, 취소 가능). 끝나면 두 패널을 다시 읽는다(report_job).
+    /// Job that modifies the archive (progress window, cancellable). Both panes are reread when done (report_job).
     fn archive_edit_task(&mut self, title: String, archive: &Path, task: impl FnOnce(&Sender<Event>, &AtomicBool) -> Result<(), String> + Send + 'static) {
         let progress = super::file_operation::ProgressInfo { from: Some(archive.to_string_lossy().into_owned()), caption: Some(title.clone()), ..Default::default() };
         self.start_progress_task(title, progress, move |events, cancel| task(&events, &cancel));
     }
 
-    /// 압축 안 항목 지우기(휴지통 없이 바로, 원본 TfDelWarning "삭제" 문구로 묻는다).
+    /// Deletes archive items (immediately, no Recycle Bin; asks with the original TfDelWarning "delete" text).
     pub(super) fn archive_delete(&mut self, pane: usize) {
         let Some((file, _, password)) = self.editable_archive(pane) else { return self.archive_read_only_notice() };
         let keys = self.archive_target_keys(pane);
@@ -48,7 +48,7 @@ impl App {
         });
     }
 
-    /// 압축 안 항목 이름 바꾸기(원본 TfRename, 항목마다 묻고 모두 정한 뒤 한 번에 바꾼다).
+    /// Renames archive items (original TfRename, asks per item and renames all at once after every name is decided).
     pub(super) fn archive_rename(&mut self, pane: usize) {
         let Some(archive) = self.editable_archive(pane) else { return self.archive_read_only_notice() };
         let items: Vec<(String, bool)> = self.target_entries(pane).into_iter().map(|e| (e.path.to_string_lossy().replace('\\', "/").trim_end_matches('/').to_owned(), e.is_dir)).filter(|(k, _)| !k.is_empty()).collect();
@@ -88,7 +88,7 @@ impl App {
         });
     }
 
-    /// 압축 안 지금 폴더에 새 폴더(원본 새 폴더 상자와 같은 글).
+    /// New folder in the current archive folder (same text as the original new folder box).
     pub(super) fn archive_new_folder(&mut self, pane: usize) {
         let Some((file, prefix, password)) = self.editable_archive(pane) else { return self.archive_read_only_notice() };
         let title = self.root_text("TITLE_NEWFOLDER", "New Folder");
@@ -101,7 +101,7 @@ impl App {
         });
     }
 
-    /// 압축 안 지금 폴더에 빈 파일.
+    /// Empty file in the current archive folder.
     pub(super) fn archive_empty_file(&mut self, pane: usize) {
         let Some((file, prefix, password)) = self.editable_archive(pane) else { return self.archive_read_only_notice() };
         let title = self.root_text("TITLE_CREATEEMPTYFILE", "Create an empty file");
@@ -120,7 +120,7 @@ impl App {
         });
     }
 
-    /// 압축 패널에 놓은 곳: 압축 안 폴더 줄(항목 경로 = 압축 안 키)이면 그 폴더("폴더/"), 아니면 None(지금 폴더).
+    /// Drop location on an archive pane: an archive folder row (item path = archive key) gives that folder ("folder/"), otherwise None (current folder).
     pub(super) fn archive_drop_prefix(&self, pane: usize, destination: &Path) -> Option<String> {
         self.panes[pane].archive.as_ref()?;
         let row = self.panes[pane].entries.iter().find(|e| e.is_dir && !e.is_parent() && !e.drive && e.path == destination)?;
@@ -128,12 +128,12 @@ impl App {
         Some(format!("{}/", key.trim_end_matches('/')))
     }
 
-    /// 로컬 파일·폴더를 압축 패널(`target`)의 지금 폴더에 더한다. 이동이면 다 더한 뒤 원본을 지운다.
+    /// Adds local files and folders to the current folder of the archive pane `target`. A move deletes the sources after everything is added.
     pub(super) fn archive_add_into(&mut self, target: usize, sources: Vec<PathBuf>, moving: bool) {
         self.archive_add_into_at(target, None, sources, moving);
     }
 
-    /// archive_add_into와 같고 `prefix`가 있으면 그 압축 안 폴더("폴더/")에 더한다(끌어 놓은 폴더 줄).
+    /// Same as archive_add_into, but with `prefix` the items go into that archive folder ("folder/") (a dropped folder row).
     pub(super) fn archive_add_into_at(&mut self, target: usize, prefix: Option<String>, sources: Vec<PathBuf>, moving: bool) {
         let Some((file, current, password)) = self.editable_archive(target) else { return self.archive_read_only_notice() };
         let prefix = prefix.unwrap_or(current);
@@ -148,7 +148,7 @@ impl App {
             let mut conflicts = |source: &Path, entry: &ndr::archive::ArchiveEntry| ask_add_conflict(events, cancel, &file, source, entry);
             let skipped = ndr::archive::add_entries_with(&file, &prefix, &sources, password.as_deref(), cancel, &mut conflicts)?;
             if moving {
-                // 같은 이름에서 건너뛴 항목은 원본을 남긴다.
+                // Sources skipped at a name conflict are kept.
                 for source in sources.iter().filter(|s| !skipped.contains(s)) {
                     let removed = if source.is_dir() { std::fs::remove_dir_all(source) } else { std::fs::remove_file(source) };
                     removed.map_err(|e| format!("{}: {e}", source.display()))?;
@@ -158,8 +158,8 @@ impl App {
         });
     }
 
-    /// 압축 패널(`source`)의 고른 항목을 다른 쪽으로 옮기거나 복사한다: 다른 쪽이 고칠 수 있는 압축이면 임시 폴더에 풀어 그 압축에
-    /// 더하고, 로컬 폴더면 그 폴더로 푼다. 이동이면 끝난 뒤 원래 압축에서 지운다(고칠 수 있는 압축일 때만).
+    /// Moves or copies the selected items of archive pane `source` to the other side: if the other side is a modifiable archive, extract to a temp folder and add
+    /// them to it; if it is a local folder, extract into that folder. A move then deletes them from the original archive (only when it is modifiable).
     pub(super) fn archive_transfer_out(&mut self, source: usize, keys: Vec<String>, destination: PathBuf, into: Option<EditableArchive>, moving: bool) {
         let Some(location) = self.panes[source].archive.clone() else { return };
         let file = ndr::archive::first_volume_path(&location.file);
@@ -172,7 +172,7 @@ impl App {
         let password = (!location.password.is_empty()).then(|| location.password.clone());
         let title = if moving { self.tr("압축에서 이동", "Move out of archive") } else { self.tr("압축에서 복사", "Copy out of archive") }.into_owned();
         self.archive_edit_task(title, &file.clone(), move |events, cancel| {
-            // 같은 이름에서 건너뛰었을 수 있는 대상(건너뛰기·새것만 덮어쓰기). 그 항목은 이동이어도 압축에서 지우지 않는다(폴더면 폴더 전체를 남긴다).
+            // Destinations that may have been skipped at a conflict (skip, overwrite older). Those items stay in the archive even on a move (a folder keeps the whole folder).
             let mut held: Vec<PathBuf> = Vec::new();
             let mut conflicts = |from: &Path, to: &Path| {
                 let choice = super::commands::ask_conflict(events, cancel, from, to);
@@ -189,7 +189,7 @@ impl App {
                     std::fs::create_dir_all(&stage).map_err(|e| e.to_string())?;
                     let result = (|| {
                         ndr::archive::extract_entries_with_program(&file, &stage, &keys, password.as_deref(), cancel, &mut conflicts, &mut passwords, None, &mut |_, _, _| {})?;
-                        // 고른 항목은 상위 경로 없이 이름만으로 풀린다.
+                        // Chosen items are extracted by name only, without their parent path.
                         let extracted: Vec<PathBuf> = keys.iter().map(|k| stage.join(name_of(k))).filter(|p| p.exists()).collect();
                         let mut add_conflicts = |source: &Path, entry: &ndr::archive::ArchiveEntry| ask_add_conflict(events, cancel, target_file, source, entry);
                         let skipped = ndr::archive::add_entries_with(target_file, target_prefix, &extracted, target_password.as_deref(), cancel, &mut add_conflicts)?;
@@ -219,8 +219,8 @@ impl App {
     }
 }
 
-/// 압축 안에 같은 이름이 있을 때(작업 스레드에서): 원본 TfFileExists로 묻는다. 대상 칸은 "압축 파일\안 경로"와 그 항목의 크기·시각.
-/// 덮어쓰기 = 바꾸기(폴더는 합치기), 폴더 바꾸기 = 지우고 더하기, 새것만 = 원본이 더 새로울 때만, 이름 바꾸기 = 새 이름을 묻는다.
+/// When the archive already has the name (on the job thread): ask with the original TfFileExists. The destination side shows "archive\inner path" with that item's size and time.
+/// Overwrite = replace (folders merge), replace folder = delete then add, newer only = only when the source is newer, rename = ask for a new name.
 fn ask_add_conflict(events: &Sender<Event>, cancel: &AtomicBool, archive: &Path, source: &Path, entry: &ndr::archive::ArchiveEntry) -> ndr::archive::AddConflict {
     use ndr::archive::AddConflict;
     let shown = archive.join(entry.key.replace('/', "\\"));

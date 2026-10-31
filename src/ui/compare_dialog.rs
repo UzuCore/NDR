@@ -1,9 +1,9 @@
-//! C# CompareAsync / SynchronizeFoldersAsync(MainWindow.ParityFeatures.cs)와 FolderComparisonOptionsWindow,
-//! 폴더 비교는 원본 TfCompareFolder 한 창(FolderCompareForm, btnOkClick 0x41d464·btnSaveClick 0x41e2d0).
-//! 동기화는 C# 판 흐름: FolderComparisonProgressWindow, FolderComparisonWindow(동기화 미리보기). 규칙은 ndr::folder_compare.
-//! 모달 진행 창(modal_progress_ui)은 검색(SearchProgressWindow)도 쓴다.
-//! 차이(HANDOFF): 한쪽에만 있는 폴더의 종류는 "폴더"(C#은 "파일/폴더 충돌"로 잘못 보임), 영어 화면에서는 창 글과 저장 결과도
-//! 영어, 동기화 진행 창에 일시 정지 단추가 없다.
+//! C# CompareAsync / SynchronizeFoldersAsync (MainWindow.ParityFeatures.cs) and FolderComparisonOptionsWindow.
+//! Folder comparison is the single original TfCompareFolder window (FolderCompareForm, btnOkClick 0x41d464, btnSaveClick 0x41e2d0).
+//! Synchronization follows the C# flow: FolderComparisonProgressWindow, FolderComparisonWindow (sync preview). Rules are in ndr::folder_compare.
+//! The modal progress window (modal_progress_ui) is also used by search (SearchProgressWindow).
+//! Difference (HANDOFF): a folder present on one side only has kind "folder" (C# wrongly shows "file/folder conflict"); on an English UI the window text and saved results
+//! are English too; the sync progress window has no pause button.
 use super::grid::{self, Column, GridState, GridView};
 use super::original_dialogs::{DialogKind, DialogResult};
 use super::*;
@@ -11,9 +11,9 @@ use ndr::folder_compare::{self as fc, Difference, DifferenceKind, ExistingBehavi
 use ndr::msgbox::{IDYES, MB_ICONASTERISK, MB_ICONEXCLAMATION, MB_ICONHAND, MB_ICONQUESTION, MB_OK, MB_YESNO};
 use std::fs;
 
-/// FolderComparisonWindow 열 너비(복사, 상태, 종류, 상대 경로(나머지), 크기 둘, 날짜 둘).
+/// FolderComparisonWindow column widths (copy, state, kind, relative path (rest), two sizes, two dates).
 const COLUMN_WIDTHS: [f32; 8] = [54.0, 120.0, 64.0, 0.0, 95.0, 95.0, 145.0, 145.0];
-/// TextWindow에 보이는 오류 줄 수(C# Take(500)).
+/// Error rows shown in the TextWindow (C# Take(500)).
 const ERROR_LINES: usize = 500;
 
 /// .NET "N0".
@@ -24,7 +24,7 @@ fn n0(value: usize) -> String {
 const DISTINCT_KO: &str = "비교하거나 동기화할 두 폴더는 서로 같거나 포함 관계일 수 없습니다.";
 const DISTINCT_EN: &str = "The two folders to compare or synchronize cannot be the same folder or contain each other.";
 
-/// 비교 서비스의 한국어 오류를 영어 화면에 맞춘다(알려진 글만).
+/// Maps Korean errors of the comparison service to an English UI (known texts only).
 fn localized_error(error: &str, ko: bool) -> String {
     if ko {
         return error.into();
@@ -38,7 +38,7 @@ fn localized_error(error: &str, ko: bool) -> String {
     error.into()
 }
 
-/// 원본 결과 번호(lvList 줄 SubItems.Objects[1], 0x41d464): 0 같음, 1 다름, 2 왼쪽에만, 3 오른쪽에만.
+/// Original result code (lvList row SubItems.Objects[1], 0x41d464): 0 same, 1 different, 2 left only, 3 right only.
 pub(super) fn original_code(kind: DifferenceKind) -> u8 {
     match kind {
         DifferenceKind::Same => 0,
@@ -48,7 +48,7 @@ pub(super) fn original_code(kind: DifferenceKind) -> u8 {
     }
 }
 
-/// 원본 비교결과 열 글(0x8de484 "=", 0x8de47c "< >", 0x8de460 "<  ", 0x8de46c·0x8de48a "  >").
+/// Original comparison result column text (0x8de484 "=", 0x8de47c "< >", 0x8de460 "<  ", 0x8de46c/0x8de48a "  >").
 pub(super) fn result_mark(kind: DifferenceKind) -> &'static str {
     match kind {
         DifferenceKind::Same => "=",
@@ -58,7 +58,7 @@ pub(super) fn result_mark(kind: DifferenceKind) -> &'static str {
     }
 }
 
-/// 원본 lvList 줄(0x41d464): 칸 1 = 왼쪽 목록 이름, 칸 2 = 결과 글, 칸 3 = 오른쪽 목록 이름. 없는 쪽은 빈 글.
+/// Original lvList row (0x41d464): cell 1 = left list name, cell 2 = result text, cell 3 = right list name. A missing side is empty.
 pub(super) fn folder_compare_cell(d: &Difference, column: usize) -> String {
     match column {
         1 if d.kind != DifferenceKind::RightOnly => d.relative.clone(),
@@ -68,49 +68,49 @@ pub(super) fn folder_compare_cell(d: &Difference, column: usize) -> String {
     }
 }
 
-/// 원본 btnSaveClick(0x41e2d0) 머리 글(0x8de604, 탭이 든 한 줄).
+/// Header text of original btnSaveClick (0x41e2d0) (0x8de604, one line with tabs).
 const REPORT_HEAD: &str = "<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//ENhttp://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd\">\t<html xmlns=\"http://www.w3.org/1999/xhtml\">\t<head>\t<meta http-equiv=\"Content-Type\" content=\"text/html; charset=utf-8\" />\t<title>NexusFile Folder Compare</title>\t<style type=\"text/css\">\tbody,td {font-family:Tahoma,Arial,Verdana;font-size:9pt}\t.onlyleft {color:#008000;padding:4px}\t.onlyright {color:#0000FF;padding:4px}\t.same {color:#666666;padding:4px}\t.diff {color:#FF0000;padding:4px}\t.line1 {background-color:#FFFFFF}\t.line2 {background-color:#F1F5FA}\t.header {background-color:#666666;color:#FFFFFF}\t.headleft {padding-top:2px;padding-bottom:2px;padding-left:12px}\t.headright {padding-top:2px;padding-bottom:2px;padding-right:12px}\t</style>\t</head>\t<body>\t<div style=\"border:1px solid silver;padding:4px;position:absolute\">\t<table border=\"0\" cellspacing=\"0\" cellpadding=\"0\">\t";
 
-/// HTML에 넣는 이름(원본은 그대로 넣지만 NDR은 &, <, >를 바꾼다).
+/// Name placed in HTML (the original inserts it as is; NDR escapes &, <, >).
 fn html_text(text: &str) -> String {
     text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
 }
 
-/// 원본 lvList 열 너비(lvListResize 0x41e210): 0열 30, 비교결과 열(DFM 100, 30보다 좁으면 80), 양쪽 이름 열은 남은 너비의 절반.
+/// Original lvList column widths (lvListResize 0x41e210): column 0 is 30, the result column (DFM 100, 80 when narrower than 30), the two name columns half of the rest each.
 pub(super) const LIST_CLIENT_WIDTH: f32 = 617.0;
 pub(super) const RESULT_COLUMN_WIDTH: f32 = 100.0;
 
-/// 비교 작업(백그라운드 스레드): 중단 요청과 진행 백분율(원본 (왼쪽 + 오른쪽 번호) × 100 / 전체).
+/// Comparison job (background thread): stop request and progress percentage (original (left + right index) x 100 / total).
 #[derive(Clone, Default)]
 pub(super) struct CompareTask {
     pub cancel: std::sync::Arc<AtomicBool>,
     pub percent: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
-/// 원본 TfCompareFolder(ClientWidth 640 × ClientHeight 505) 상태.
-/// left·right는 비교할 폴더, 머리글은 원본 FUN_0041d280처럼 끝 "\"를 뺀 경로(lvList Columns[1]·[3].Caption).
+/// State of the original TfCompareFolder (ClientWidth 640 x ClientHeight 505).
+/// left/right are the folders compared; headers are the paths without the trailing "\" like original FUN_0041d280 (lvList Columns[1]/[3].Caption).
 pub(super) struct FolderCompareForm {
     pub left: PathBuf,
     pub right: PathBuf,
     pub left_caption: String,
     pub right_caption: String,
-    /// chkRecursive(DFM 꺼짐).
+    /// chkRecursive (DFM off).
     pub recursive: bool,
-    /// chkCompareContents(DFM Checked, NDR은 C# UseContentComparison에서 처음 값).
+    /// chkCompareContents (DFM Checked; NDR takes the initial value from C# UseContentComparison).
     pub contents: bool,
-    /// lvList 줄(원본 항목 순서: 두 목록을 이름순으로 맞춘 순서).
+    /// lvList rows (original item order: the two lists aligned by name).
     pub rows: Vec<Difference>,
     pub grid: GridState,
     pub running: Option<CompareTask>,
-    /// btnSave.Enabled(DFM False, 한 번 비교하면 켬).
+    /// btnSave.Enabled (DFM False, enabled after one comparison).
     pub compared: bool,
-    /// lResult 글(FOLDERCOMPARE_RESULT). None이면 그 자리에 ProgressBar.
+    /// lResult text (FOLDERCOMPARE_RESULT). None shows the ProgressBar in its place.
     pub result: Option<String>,
-    /// 읽지 못한 항목 수(C# 판 경고, 원본에는 없음).
+    /// Number of unreadable items (C# version warning, not in the original).
     pub issues: usize,
 }
 
-/// TfCompareFolder 단추.
+/// TfCompareFolder buttons.
 pub(super) enum FolderCompareAction {
     Start,
     Stop,
@@ -140,13 +140,13 @@ impl FolderCompareForm {
         }
     }
 
-    /// lvList 칸 글: 0 빈 칸, 1 왼쪽 이름, 2 비교결과, 3 오른쪽 이름(오른쪽 목록 그대로; 없는 쪽은 빈 글).
+    /// lvList cell text: 0 empty, 1 left name, 2 comparison result, 3 right name (the right list as is; a missing side is empty).
     pub(super) fn cell(&self, row: usize, column: usize) -> String {
         folder_compare_cell(&self.rows[row], column)
     }
 
-    /// 원본 lvListColumnClick(0x41e098) → lvListCompare(0x41de00): 0열은 정렬하지 않고, 1열 왼쪽 이름, 2열 결과 번호 다음 왼쪽 이름,
-    /// 3열 오른쪽 이름(lstrcmpW). 늘 오름차순.
+    /// Original lvListColumnClick (0x41e098) -> lvListCompare (0x41de00): column 0 does not sort, column 1 left name, column 2 result code then left name,
+    /// column 3 right name (lstrcmpW). Always ascending.
     pub(super) fn sort(&mut self, column: usize) {
         if column == 0 || column > 3 {
             return;
@@ -161,7 +161,7 @@ impl FolderCompareForm {
         self.grid.sort = Some((column, false));
     }
 
-    /// 원본 FUN_0041e0b4: 결과 번호마다 센 수로 FOLDERCOMPARE_RESULT(같음, 다름, 왼쪽에만, 오른쪽에만).
+    /// Original FUN_0041e0b4: FOLDERCOMPARE_RESULT with the count per result code (same, different, left only, right only).
     pub(super) fn result_text(&self, template: &str) -> String {
         let mut counts = [0usize; 4];
         for row in &self.rows {
@@ -170,8 +170,8 @@ impl FolderCompareForm {
         counts.iter().fold(template.to_owned(), |text, n| text.replacen("%d", &n.to_string(), 1))
     }
 
-    /// 원본 btnSaveClick: 머리 글, 머리 줄(왼쪽·오른쪽 경로), 보이는 순서의 줄(짝수 line1, 홀수 line2, 결과별 class), 끝 글.
-    /// TStringList.SaveToFile(TEncoding.UTF8): 줄마다 CRLF, UTF-8 BOM은 부르는 쪽이 붙인다.
+    /// Original btnSaveClick: header text, header row (left and right paths), rows in display order (even line1, odd line2, class per result), footer.
+    /// TStringList.SaveToFile(TEncoding.UTF8): CRLF per line; the caller adds the UTF-8 BOM.
     pub(super) fn report_html(&self) -> String {
         let mut lines = vec![
             REPORT_HEAD.to_owned(),
@@ -195,15 +195,15 @@ impl FolderCompareForm {
 }
 
 
-/// 비교가 끝난 뒤 할 일(C# CompareAsync / SynchronizeFoldersAsync의 지역 변수).
+/// What to do after the comparison (locals of C# CompareAsync / SynchronizeFoldersAsync).
 pub(super) struct CompareRun {
     pub left: PathBuf,
     pub right: PathBuf,
-    /// 동기화면 Some(원본이 왼쪽인지).
+    /// For synchronization, Some(whether the source is the left side).
     pub source_is_left: Option<bool>,
 }
 
-/// FolderComparisonRow: 차이 하나, "복사" 확인란(처음 켬), 화면 글(상태, 종류, 상대 경로, 크기 둘, 날짜 둘).
+/// FolderComparisonRow: one difference, the "copy" checkbox (initially on), display texts (state, kind, relative path, two sizes, two dates).
 #[derive(Clone, Debug)]
 pub(super) struct ComparisonRow {
     pub difference: Difference,
@@ -211,8 +211,8 @@ pub(super) struct ComparisonRow {
     pub cells: [String; 7],
 }
 
-/// FolderComparisonWindow의 상태. rows는 원래 순서 그대로 두고(저장·동기화는 C#처럼 원래 순서) 보이는 순서와 선택은 grid.
-/// grid의 열 번호는 보이는 열 기준(동기화 미리보기면 0이 "복사").
+/// FolderComparisonWindow state. rows keep the original order (saving and syncing use it, like C#); display order and selection live in grid.
+/// grid column indices are visible columns (in the sync preview 0 is "copy").
 pub(super) struct ComparisonForm {
     pub left: String,
     pub right: String,
@@ -222,14 +222,14 @@ pub(super) struct ComparisonForm {
     pub grid: GridState,
 }
 
-/// 결과 창 단추와 글쇠.
+/// Result window buttons and keys.
 pub(super) enum ComparisonAction {
     SelectAll,
     SelectNone,
     Save,
     Commit,
     Close,
-    /// Ctrl+C: 선택한 줄(보이는 순서)을 탭으로 나눈 글로(DataGrid 복사, 머리글 없음).
+    /// Ctrl+C: the selected rows (display order) as tab-separated text (DataGrid copy, no header).
     Copy(String),
 }
 
@@ -254,7 +254,7 @@ impl ComparisonForm {
         Self { left, right, rows, issues, select_for_sync, grid }
     }
 
-    /// 원본 FUN_0041e0b4: wsprintf(FOLDERCOMPARE_RESULT, 같음, 다름, 왼쪽에만, 오른쪽에만).
+    /// Original FUN_0041e0b4: wsprintf(FOLDERCOMPARE_RESULT, same, different, left only, right only).
     pub(super) fn original_result(&self, language: &compat::Language) -> String {
         let count = |kind: DifferenceKind| self.rows.iter().filter(|r| r.difference.kind == kind).count().to_string();
         let mut text = language.text(
@@ -280,7 +280,7 @@ impl ComparisonForm {
         }
     }
 
-    /// 보이는 열(동기화 미리보기만 "복사" 확인란 열). 상대 경로 열은 남은 너비를 쓴다.
+    /// Visible columns (the "copy" checkbox column only in the sync preview). The relative path column takes the remaining width.
     pub(super) fn columns(&self, ko: bool, width: f32) -> Vec<Column> {
         let titles = fc::column_titles(ko);
         let range = if self.select_for_sync { 0..8 } else { 1..8 };
@@ -294,12 +294,12 @@ impl ComparisonForm {
             .collect()
     }
 
-    /// 보이는 열 번호의 글(확인란 열은 빈 글).
+    /// Text of a visible column index (empty for the checkbox column).
     fn cell(&self, row: usize, column: usize) -> String {
         cell_text(&self.rows, self.select_for_sync, row, column)
     }
 
-    /// DataGrid 머리글 정렬: 보이는 글(복사 열은 꺼짐 < 켬).
+    /// DataGrid header sort: by visible text (copy column: off < on).
     pub(super) fn sort_column(&mut self, column: usize) {
         let (rows, sync) = (&self.rows, self.select_for_sync);
         self.grid.toggle_sort(column, |a, b| match (sync, column) {
@@ -308,7 +308,7 @@ impl ComparisonForm {
         });
     }
 
-    /// Ctrl+C 글(선택한 줄, 보이는 순서, 탭, CRLF, 확인란은 True/False).
+    /// Ctrl+C text (selected rows in display order, tabs, CRLF, checkboxes as True/False).
     pub(super) fn copy_text(&self) -> String {
         self.grid.copy_text(&self.columns(true, 0.0), &|row, column| self.cell(row, column), &|row| self.rows[row].include)
     }
@@ -326,8 +326,8 @@ fn cell_text(rows: &[ComparisonRow], sync: bool, row: usize, column: usize) -> S
     }
 }
 
-/// 원본 lvListAdvancedCustomDrawItem(0x41dd6c): 결과(SubItems 1의 Data)에 따라 Font.Color.
-/// 같음 0x808080, 다름 clRed, 왼쪽에만 clGreen(0x008000), 오른쪽에만 clBlue(TColor 0xFF0000 = RGB 0000FF).
+/// Original lvListAdvancedCustomDrawItem (0x41dd6c): Font.Color by result (Data of SubItems 1).
+/// Same 0x808080, different clRed, left only clGreen (0x008000), right only clBlue (TColor 0xFF0000 = RGB 0000FF).
 pub(super) fn result_color(kind: DifferenceKind) -> Color32 {
     match kind {
         DifferenceKind::Same => Color32::from_rgb(0x80, 0x80, 0x80),
@@ -337,9 +337,9 @@ pub(super) fn result_color(kind: DifferenceKind) -> Color32 {
     }
 }
 
-/// 원본 TfCompareFolder(ClientWidth 640 × ClientHeight 505)를 원본 자리로: ProgressBar(8,12 624×16, 비교가 끝나면 숨김)와
-/// 그 자리의 lResult(12,12, FOLDERCOMPARE_RESULT), lvList(8,44 621×375, 흰 바탕, 열 30·왼쪽 경로(오른쪽 맞춤)·비교결과(가운데)·
-/// 오른쪽 경로), chkRecursive(8,425), chkCompareContents(8,448), btnOk/btnStop(390,475) btnSave(471,475) btnCancel(552,475) 75×25.
+/// Original TfCompareFolder (ClientWidth 640 x ClientHeight 505) at the original positions: ProgressBar (8,12 624x16, hidden after comparing) and
+/// lResult in its place (12,12, FOLDERCOMPARE_RESULT), lvList (8,44 621x375, white background, columns 30, left path (right aligned), result (centered),
+/// right path), chkRecursive (8,425), chkCompareContents (8,448), btnOk/btnStop (390,475) btnSave (471,475) btnCancel (552,475) 75x25.
 pub(super) fn folder_compare_ui(ui: &mut egui::Ui, form: &mut FolderCompareForm, language: &compat::Language, text_color: Color32, enter: bool) -> Option<FolderCompareAction> {
     let text = |key: &str, fallback: &str| language.text(&format!("formCompareFolder.{key}"), fallback).replace('&', "");
     let mut action = None;
@@ -374,7 +374,7 @@ pub(super) fn folder_compare_ui(ui: &mut egui::Ui, form: &mut FolderCompareForm,
     }
     super::original_dialogs::put_left(ui, at(8.0, 425.0, 609.0, 17.0), egui::Checkbox::new(&mut form.recursive, text("Caption.chkRecursive", "Include Subfolders(&R)")));
     super::original_dialogs::put_left(ui, at(8.0, 448.0, 609.0, 17.0), egui::Checkbox::new(&mut form.contents, text("Caption.chkCompareContents", "&Compare Files Contents - If you uncheck this, compare only file time")));
-    // btnOk와 btnStop은 같은 자리(둘 다 Default). 비교 중에는 btnStop만 보인다.
+    // btnOk and btnStop share one position (both Default). Only btnStop shows while comparing.
     if running.is_some() {
         if ui.put(at(390.0, 475.0, 75.0, 25.0), egui::Button::new(text("Caption.btnStop", "Stop"))).clicked() || enter {
             action = Some(FolderCompareAction::Stop);
@@ -393,7 +393,7 @@ pub(super) fn folder_compare_ui(ui: &mut egui::Ui, form: &mut FolderCompareForm,
     action
 }
 
-/// FolderComparisonWindow 그리기: 왼쪽/오른쪽 경로, 읽지 못함 주의, 상태 줄, 표(머리글 정렬, 줄 선택, 복사 확인란), 단추.
+/// Draws FolderComparisonWindow: left/right paths, unreadable warning, status line, table (header sort, row selection, copy checkboxes), buttons.
 pub(super) fn comparison_ui(ui: &mut egui::Ui, form: &mut ComparisonForm, language: &compat::Language, ko: bool, enter: bool, size: egui::Vec2) -> Option<ComparisonAction> {
     let t = |ko_text: &'static str, en: &'static str| if ko { ko_text } else { en };
     let mut action = None;
@@ -406,7 +406,7 @@ pub(super) fn comparison_ui(ui: &mut egui::Ui, form: &mut ComparisonForm, langua
         ui.add(egui::Label::new(if ko { format!("주의: {n}개 항목을 읽지 못했습니다. 비교 결과가 부분적입니다.") } else { format!("Warning: {n} items could not be read. The comparison is partial.") }).wrap());
     }
     ui.add_space(10.0);
-    // 원본 FUN_0041e0b4: 종류별 개수(같음, 다름, 왼쪽에만, 오른쪽에만)를 FOLDERCOMPARE_RESULT(NXLabel 마크업)로.
+    // Original FUN_0041e0b4: counts per kind (same, different, left only, right only) as FOLDERCOMPARE_RESULT (NXLabel markup).
     let summary = form.original_result(language);
     ui.label(super::original_dialogs::markup_job(&summary, 12.0, ui.visuals().text_color(), size.x));
     ui.label(form.status(ko));
@@ -416,7 +416,7 @@ pub(super) fn comparison_ui(ui: &mut egui::Ui, form: &mut ComparisonForm, langua
     let events = {
         let ComparisonForm { rows, grid: state, select_for_sync, .. } = form;
         let (rows, sync): (&Vec<ComparisonRow>, bool) = (rows, *select_for_sync);
-        // 비교 결과 창만 원본처럼 결과별 글자 색(동기화 미리보기는 C# 창 그대로).
+        // Only the comparison result window uses per-result text colors like the original (the sync preview keeps the C# window).
         let color = |row: usize| (!sync).then(|| result_color(rows[row].difference.kind));
         let view = GridView { row_color: Some(&color), background: (!sync).then_some(Color32::WHITE), ..view };
         grid::show(ui, &view, state, &|row, column| cell_text(rows, sync, row, column), &|row| rows[row].include)
@@ -448,7 +448,7 @@ pub(super) fn comparison_ui(ui: &mut egui::Ui, form: &mut ComparisonForm, langua
             }
         }
     });
-    // 동기화 미리보기만 기본 단추(IsDefault)가 있다.
+    // Only the sync preview has a default button (IsDefault).
     if enter && form.select_for_sync && action.is_none() {
         action = Some(ComparisonAction::Commit);
     }
@@ -463,9 +463,9 @@ impl App {
         }
     }
 
-    /// C#: 두 패널이 일반 폴더여야 하고(압축 파일 안·원격은 안 됨), 서로 같거나 포함하면 안 된다(RunSafely 경고 상자).
+    /// C#: both panes must be ordinary folders (not inside archives or remote), and must not be equal or contain each other (RunSafely warning box).
     fn compare_roots(&mut self, synchronize: bool) -> Option<(PathBuf, PathBuf)> {
-        // 원본 FUN_0043c602(폴더 비교): 두 패널 모두 로컬 모드(0)일 때만.
+        // Original FUN_0043c602 (compare folders): only when both panes are in local mode (0).
         let local = |p: &Pane| p.archive.is_none() && p.remote.is_none();
         if !local(&self.panes[0]) || !local(&self.panes[1]) {
             if synchronize {
@@ -483,7 +483,7 @@ impl App {
         Some((left, right))
     }
 
-    /// 원본 FUN_0043c602 → FUN_0041d280: 두 로컬 패널의 폴더로 TfCompareFolder를 띄운다(비교는 창 안의 비교시작 단추).
+    /// Original FUN_0043c602 -> FUN_0041d280: opens TfCompareFolder with the folders of the two local panes (comparison starts with the window's start button).
     pub(super) fn compare_command(&mut self) {
         let Some((left, right)) = self.compare_roots(false) else { return };
         let title = self.language_pack.text("formCompareFolder.Form.Caption", "Compare Folders");
@@ -495,7 +495,7 @@ impl App {
         self.original_dialogs.iter_mut().rev().find_map(|d| if let DialogKind::FolderCompare(form) = &mut d.kind { Some(form.as_mut()) } else { None })
     }
 
-    /// TfCompareFolder 단추: btnOkClick(0x41d464) 비교 시작, btnStopClick(0x41e2c4) 중단, btnSaveClick(0x41e2d0) HTML 저장, 닫기.
+    /// TfCompareFolder buttons: btnOkClick (0x41d464) starts, btnStopClick (0x41e2c4) stops, btnSaveClick (0x41e2d0) saves HTML, close.
     pub(super) fn folder_compare_action(&mut self, action: FolderCompareAction, ctx: &egui::Context) {
         match action {
             FolderCompareAction::Start => {
@@ -518,7 +518,7 @@ impl App {
                             }
                         }
                     });
-                    // 원본: 비교 루프에서 멈추면 거기까지의 줄이 남는다(Ok + 중단). 목록을 읽다 멈추면 Err.
+                    // Original: stopping inside the comparison loop keeps the rows so far (Ok + stopped). Stopping while reading the lists is Err.
                     let cancelled = task.cancel.load(Ordering::Relaxed) || matches!(outcome, Ok((_, _, true)));
                     let outcome = outcome.map(|(rows, issues, _)| (rows, issues));
                     let _ = tx.send(AsyncResult::CompareDone(CompareRun { left, right, source_is_left: None }, outcome, cancelled));
@@ -539,8 +539,8 @@ impl App {
         }
     }
 
-    /// 비교가 끝나면(원본 루프 뒤): 결과 글(FUN_0041e0b4), btnSave 켬, ProgressBar 숨김, btnOk 다시 보임.
-    /// 중단하면 원본은 거기까지 넣은 줄을 남기지만 NDR은 빈 목록이다. 창을 이미 닫았으면 상태 줄만.
+    /// After comparing (after the original loop): result text (FUN_0041e0b4), btnSave enabled, ProgressBar hidden, btnOk shown again.
+    /// On stop the original keeps the rows inserted so far but NDR shows an empty list. If the window is already closed, only the status line.
     fn folder_compare_done(&mut self, outcome: Result<(Vec<Difference>, Vec<String>), String>, cancelled: bool) {
         let ko = self.language == "ko";
         let template = self.language_pack.text(
@@ -591,8 +591,8 @@ impl App {
         self.system_box("NDR", &text, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
     }
 
-    /// 원본 btnSaveClick: SaveDialog(FileName "compare result.html", Filter "HTML File (*.html)", DefaultExt html, 덮어쓰기 확인) →
-    /// TStringList.SaveToFile(이름, TEncoding.UTF8).
+    /// Original btnSaveClick: SaveDialog (FileName "compare result.html", Filter "HTML File (*.html)", DefaultExt html, overwrite prompt) ->
+    /// TStringList.SaveToFile(name, TEncoding.UTF8).
     fn save_folder_compare(&mut self) {
         let Some(form) = self.folder_compare_form() else { return };
         if !form.compared || form.running.is_some() {
@@ -606,7 +606,7 @@ impl App {
         }
     }
 
-    /// C# SynchronizeFoldersAsync: 방향 → 내용 비교 방식 → 비교(하위 폴더 포함) → 미리보기 → 기존 항목 처리 → 확인 → 복사.
+    /// C# SynchronizeFoldersAsync: direction -> content comparison mode -> compare (with subfolders) -> preview -> existing item handling -> confirm -> copy.
     pub(super) fn synchronize_command(&mut self) {
         let Some((left, right)) = self.compare_roots(true) else { return };
         let ko = self.language == "ko";
@@ -632,7 +632,7 @@ impl App {
         });
     }
 
-    /// FolderComparisonProgressWindow(중단 단추, "폴더 비교 준비 중…").
+    /// FolderComparisonProgressWindow (stop button, "preparing folder comparison...").
     fn start_comparison(&mut self, title: String, run: CompareRun, recursive: bool, contents: bool) {
         let ko = self.language == "ko";
         let modal = ModalProgress {
@@ -678,7 +678,7 @@ impl App {
         let (left, right) = (run.left.to_string_lossy().into_owned(), run.right.to_string_lossy().into_owned());
         let Some(source_is_left) = run.source_is_left else { return };
         if !issues.is_empty() {
-            // 읽지 못한 항목이 있으면 잘못 복사하지 않도록 멈춘다.
+            // Stop when some items could not be read so nothing is copied wrongly.
             let mut text = self.tr(
                 "일부 항목을 읽지 못해 비교 결과가 완전하지 않습니다. 잘못된 파일 복사를 막기 위해 동기화를 시작하지 않았습니다.\n\n",
                 "Some items could not be read, so the comparison is incomplete. Synchronization did not start, to avoid copying the wrong files.\n\n",
@@ -710,7 +710,7 @@ impl App {
         });
     }
 
-    /// 기존 항목 처리 고르기 → "동기화 실행" 확인(예/아니요).
+    /// Choose existing item handling -> confirm "run synchronization" (yes/no).
     fn choose_existing_behavior(&mut self, run: CompareRun, source_is_left: bool, selected: Vec<Difference>) {
         let ko = self.language == "ko";
         let title = self.tr("기존 항목 처리", "Existing items").into_owned();
@@ -739,7 +739,7 @@ impl App {
         });
     }
 
-    /// FileOperationProgressWindow("폴더 동기화", 원본 쪽 파일 수 기준): CopyDifferencesAsync(UseRecycleBin).
+    /// FileOperationProgressWindow ("synchronize folders", counted by source-side files): CopyDifferencesAsync(UseRecycleBin).
     fn start_sync(&mut self, source: PathBuf, destination: PathBuf, selected: Vec<Difference>, source_is_left: bool, behavior: ExistingBehavior) {
         let files = selected.iter().filter(|d| !if source_is_left { d.left_dir } else { d.right_dir }).count() as u64;
         let progress = super::file_operation::ProgressInfo {
@@ -762,13 +762,13 @@ impl App {
         });
         if started {
             if let Some(job) = self.job.as_mut() {
-                // 끝난 뒤 글은 sync_done이 쓴다.
+                // The text after finishing is written by sync_done.
                 job.custom_status = true;
             }
         }
     }
 
-    /// 두 패널을 새로 고친 뒤: 취소, 치명적 오류(ReportFileOperationResult: "동기화 오류" 상자), 완료 상태 줄과 오류 창.
+    /// After refreshing both panes: cancel, fatal error (ReportFileOperationResult: "synchronization error" box), done status line and error window.
     pub(super) fn sync_done(&mut self, outcome: Result<fc::SyncResult, String>, cancelled: bool) {
         self.refresh(0);
         self.refresh(1);
@@ -803,7 +803,7 @@ impl App {
         }
     }
 
-    /// 결과 창 단추.
+    /// Result window buttons.
     pub(super) fn comparison_action(&mut self, action: ComparisonAction, ctx: &egui::Context) {
         match action {
             ComparisonAction::SelectAll | ComparisonAction::SelectNone => {
@@ -832,7 +832,7 @@ impl App {
         }
     }
 
-    /// SaveResults: HTML(.html, 창 제목을 제목으로) 또는 TSV(그 밖의 확장자), UTF-8 BOM. 저장 대화 상자는 C# 형식 목록 그대로.
+    /// SaveResults: HTML (.html, window title as title) or TSV (any other extension), UTF-8 BOM. The save dialog uses the C# filter list as is.
     fn save_comparison(&mut self) {
         let ko = self.language == "ko";
         let title = self.original_dialogs.last().map(|d| d.title.clone()).unwrap_or_default();
@@ -855,8 +855,8 @@ impl App {
         }
     }
 
-    /// 모달 진행 창(FolderComparisonProgressWindow / SearchProgressWindow / 동기화 FileOperationProgressWindow 자리).
-    /// 단추나 Esc(창 닫기)는 취소를 요청할 뿐이고, 작업이 끝나야 닫힌다.
+    /// Modal progress window (in place of FolderComparisonProgressWindow / SearchProgressWindow / sync FileOperationProgressWindow).
+    /// A button or Esc (close) only requests cancel; the window closes when the job ends.
     pub(super) fn modal_progress_ui(&mut self, ctx: &egui::Context) {
         let ko = self.language == "ko";
         let Some(job) = self.job.as_ref() else { return };
@@ -910,7 +910,7 @@ mod tests {
 
     #[test]
     fn result_colors_follow_lvlistadvancedcustomdrawitem() {
-        // 0x41dd6c: 0 → 0x808080, 1 → clRed(0x0000FF), 2 → clGreen(0x008000), 그 밖 → clBlue(0xFF0000). TColor는 BGR.
+        // 0x41dd6c: 0 -> 0x808080, 1 -> clRed (0x0000FF), 2 -> clGreen (0x008000), else clBlue (0xFF0000). TColor is BGR.
         assert_eq!(result_color(DifferenceKind::Same), Color32::from_rgb(128, 128, 128));
         assert_eq!(result_color(DifferenceKind::Different), Color32::from_rgb(255, 0, 0));
         assert_eq!(result_color(DifferenceKind::LeftOnly), Color32::from_rgb(0, 128, 0));
