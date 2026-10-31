@@ -1642,6 +1642,60 @@ fn show_folders_adds_a_tree_inside_the_active_pane() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// 원본 패널 트리(TNXShellTreeView = VCL TTreeView, OnChange FUN_0048e320): 트리에 초점이 있으면 ↓↑는 고른 항목을 옮기고
+/// 그때마다 패널이 그 폴더로 간다. ←는 펼친 항목을 접고, 접힌 항목에서는 부모로. 글자는 그 글자로 시작하는 다음 항목.
+/// 목록을 누르면 초점이 목록으로 돌아간다.
+#[test]
+fn pane_tree_keys_follow_the_ttreeview() {
+    use ndr::shell_tree::{ShellNode, Special};
+    let (root, ctx, mut app) = fixture("tree-keys");
+    let left = app.panes[0].path.clone();
+    for name in ["alpha", "beta"] {
+        fs::create_dir_all(left.join(name).join("inner")).unwrap();
+    }
+    let node = |path: &Path, has_children: bool| ShellNode { key: path.to_path_buf(), name: path.file_name().unwrap().to_string_lossy().into_owned(), path: Some(path.to_path_buf()), has_children, special: Special::None };
+    app.settings.set_flag("ShowLeftFolderTree", true);
+    app.active = 0;
+    app.tree_focus = Some(0);
+    app.panes[0].tree_open.insert(left.clone());
+    app.panes[0].tree_rows = vec![
+        (node(&left, true), 0, true, true),
+        (node(&left.join("alpha"), true), 1, true, false),
+        (node(&left.join("beta"), true), 1, true, false),
+    ];
+    let press = |app: &mut App, key: egui::Key, text: Option<&str>| {
+        let mut events = vec![egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }];
+        events.extend(text.map(|t| egui::Event::Text(t.into())));
+        let raw = egui::RawInput { events, screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 850.0))), ..Default::default() };
+        let _ = ctx.run(raw, |ctx| app.keyboard(ctx));
+        wait(app, &ctx);
+    };
+    press(&mut app, egui::Key::ArrowDown, None);
+    assert_eq!(app.panes[0].path, left.join("alpha"), "↓ = next item, OnChange moves the pane");
+    // 글자 b: 다음 "b…" 항목.
+    app.panes[0].tree_synced = Some(app.panes[0].path.clone());
+    press(&mut app, egui::Key::B, Some("b"));
+    assert_eq!(app.panes[0].path, left.join("beta"));
+    // ←(접힌 항목): 부모로.
+    app.panes[0].tree_synced = Some(app.panes[0].path.clone());
+    press(&mut app, egui::Key::ArrowLeft, None);
+    assert_eq!(app.panes[0].path, left, "← on a collapsed item selects its parent");
+    // ←(펼친 항목): 접는다.
+    press(&mut app, egui::Key::ArrowLeft, None);
+    assert!(!app.panes[0].tree_open.iter().any(|k| ndr::shell_tree::same_key(k, &left)), "← on an open item collapses it");
+    // 목록을 누르면 초점이 목록으로.
+    app.pane_rects[0] = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(600.0, 800.0));
+    app.panes[0].tree_rect = Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(120.0, 800.0)));
+    let click = vec![
+        egui::Event::PointerMoved(egui::pos2(300.0, 300.0)),
+        egui::Event::PointerButton { pos: egui::pos2(300.0, 300.0), button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE },
+    ];
+    let raw = egui::RawInput { events: click, screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 850.0))), ..Default::default() };
+    let _ = ctx.run(raw, |ctx| app.keyboard(ctx));
+    assert_eq!(app.tree_focus, None, "a click in the list gives the focus back to the list");
+    let _ = fs::remove_dir_all(root);
+}
+
 
 /// 원본 UpdateScrollBar·ArrowKey·AdjustPage(형식 2): 칸 너비 합이 목록보다 넓으면 가로로 넘길 수 있고, 오른쪽·왼쪽 글쇠는 20씩,
 /// 목록 크기가 바뀌면 가로 위치가 0이 된다.

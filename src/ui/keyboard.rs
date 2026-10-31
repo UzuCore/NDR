@@ -28,6 +28,17 @@ impl App {
     pub(super) fn keyboard(&mut self, ctx: &egui::Context) {
         self.menu_letter = None;
         self.menu_targets_seen = std::mem::take(self.menu_targets.get_mut());
+        // 패널 폴더 트리의 글쇠 초점: 다른 패널이 지금 패널이 되거나 패널 안의 트리 밖(목록)을 누르면 목록으로 돌아간다.
+        if self.tree_focus.is_some_and(|i| i != self.active) {
+            self.tree_focus = None;
+        }
+        if let Some(i) = self.tree_focus {
+            let (rects, tree) = (self.pane_rects, self.panes[i].tree_rect);
+            let outside = ctx.input(|input| input.pointer.primary_pressed() && input.pointer.interact_pos().is_some_and(|p| rects.iter().any(|r| r.contains(p)) && !tree.is_some_and(|t| t.contains(p))));
+            if outside {
+                self.tree_focus = None;
+            }
+        }
         if self.job.as_ref().is_some_and(|j| !j.finished && j.progress.is_some())
             || !self.msgboxes.is_empty()
             || !self.original_dialogs.is_empty()
@@ -67,6 +78,10 @@ impl App {
         }
         // 원본 FormShortCut(0x42b36c)은 파일 목록에 초점이 있을 때만 단축키를 본다: 글 입력 칸에 초점이 있으면 목록 글쇠를 받지 않는다.
         if ctx.wants_keyboard_input() {
+            return;
+        }
+        // 패널 폴더 트리에 초점이 있으면 TTreeView 글쇠가 먼저(나머지는 목록과 같은 KeyDown FUN_0048423c).
+        if self.tree_keys(ctx) {
             return;
         }
         // 원본 KeyDown(0x7d7338) → ArrowKey의 [ ]가 먼저, 그다음 WMChar의 빠른 찾기(같은 글자도 받는다).

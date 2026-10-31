@@ -158,6 +158,14 @@ struct Pane {
     /// 원본 패널 폴더 트리(TNXShellTreeView, miShowFoldersClick): 펼친 폴더와, 펼침을 맞춘 마지막 패널 위치(SetPath).
     tree_open: HashSet<PathBuf>,
     tree_synced: Option<PathBuf>,
+    /// 트리에서 고른 항목(열쇠). None이면 패널 위치의 줄(가상 폴더를 고르면 패널은 그대로라 따로 둔다).
+    tree_selected: Option<PathBuf>,
+    /// 지난 장면의 트리 줄(항목, 깊이, 펼칠 수 있음, 펼쳐짐)과 자리·한 쪽 줄 수, 고른 줄을 보이게 넘길지.
+    tree_rows: Vec<(ndr::shell_tree::ShellNode, usize, bool, bool)>,
+    tree_rect: Option<egui::Rect>,
+    tree_page: usize,
+    tree_first: usize,
+    tree_scroll_to: bool,
     /// 원본 TNXShellChangeNotify(+0x374): 지켜보는 로컬 폴더와 그 감시 스레드를 멈출 표시.
     watch: Option<(PathBuf, Arc<AtomicBool>)>,
     /// 바뀜 알림 뒤 새로 읽을 때와 그동안 늦춘 횟수(원본 Delay 1500ms, 20번까지 다시 늦춘다).
@@ -219,6 +227,12 @@ impl Pane {
             thumb_rows: None,
             tree_open: HashSet::new(),
             tree_synced: None,
+            tree_selected: None,
+            tree_rows: Vec::new(),
+            tree_rect: None,
+            tree_page: 10,
+            tree_first: 0,
+            tree_scroll_to: false,
             watch: None,
             change_due: None,
             reveal: false,
@@ -596,8 +610,10 @@ pub struct App {
     overlay_tx: Option<Sender<(PathBuf, u8)>>,
     image_requests: HashSet<PathBuf>,
     tree_cache: HashMap<PathBuf, Vec<ndr::shell_tree::ShellNode>>,
-    /// 패널 폴더 트리의 뿌리(바탕 화면, 처음 그릴 때 읽는다).
+    /// 패널 폴더 트리의 바탕 화면 뿌리(처음 그릴 때 읽는다).
     shell_desktop: Option<ndr::shell_tree::ShellNode>,
+    /// 글쇠 초점이 있는 패널 폴더 트리(그 패널 번호). 목록이나 다른 패널을 누르면 None.
+    tree_focus: Option<usize>,
     tree_requests: HashSet<PathBuf>,
     msgboxes: Vec<msgbox::MsgBox>,
     msgbox_serial: u64,
@@ -886,6 +902,7 @@ impl App {
             image_requests: HashSet::new(),
             tree_cache: HashMap::new(),
             shell_desktop: None,
+            tree_focus: None,
             tree_requests: HashSet::new(),
             msgboxes: Vec::new(),
             msgbox_serial: 0,

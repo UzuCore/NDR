@@ -624,6 +624,7 @@ impl App {
                 }
             }
             self.panes[index].tree_synced = Some(path.clone());
+            self.panes[index].tree_selected = None;
             reveal = true;
         }
         if self.shell_desktop.is_none() {
@@ -657,14 +658,25 @@ impl App {
         // 하위 폴더를 아직 읽는 중이면 고른 줄이 없으므로, 그 줄이 나올 때까지 넘기기를 미룬다.
         let reveal_id = egui::Id::new(("ndr-pane-tree-reveal", index));
         let reveal = reveal || ui.ctx().data(|d| d.get_temp::<bool>(reveal_id)).unwrap_or(false);
-        let selected_line = if local { rows.iter().position(|(node, _)| same_key(&node.key, &path)) } else { None };
+        let selected_key = self.panes[index].tree_selected.clone().or_else(|| local.then(|| path.clone()));
+        let selected_line = selected_key.as_ref().and_then(|key| rows.iter().position(|(node, _)| same_key(&node.key, key)));
         ui.ctx().data_mut(|d| d.insert_temp(reveal_id, reveal && selected_line.is_none()));
         let mut area = egui::ScrollArea::both().id_salt(("ndr-pane-tree-scroll", index)).auto_shrink([false, false]).max_height(rect.height());
         if let (true, Some(line)) = (reveal, selected_line) {
             let depth = rows[line].1 as f32;
             area = area.vertical_scroll_offset((line as f32 * row_height - rect.height() / 2.0).max(0.0)).horizontal_scroll_offset((depth * 16.0 - 16.0).max(0.0));
+        } else if let (true, Some(line)) = (std::mem::take(&mut self.panes[index].tree_scroll_to), selected_line) {
+            // 글쇠로 옮긴 줄이 보이는 범위(지난 장면) 밖이면 그 끝에 닿게만 넘긴다(TTreeView처럼).
+            let (first, page) = (self.panes[index].tree_first, self.panes[index].tree_page.max(1));
+            if line < first {
+                area = area.vertical_scroll_offset(line as f32 * row_height);
+            } else if line >= first + page {
+                area = area.vertical_scroll_offset(((line + 1) as f32 * row_height - rect.height()).max(0.0));
+            }
         }
+        let mut visible = 0..0;
         area.show_rows(&mut child, row_height, rows.len(), |ui, range| {
+            visible = range.clone();
             ui.spacing_mut().item_spacing.y = 0.0;
             for (line, (node, depth)) in rows[range.clone()].iter().enumerate() {
                 let galley = ui.painter().layout_no_wrap(node.name.clone(), font.clone(), Color32::PLACEHOLDER);
@@ -723,33 +735,154 @@ impl App {
                 self.status = error;
             }
         }
+        // 다음 장면의 글쇠 처리(tree_keys)가 쓰는 줄·자리.
+        {
+            let open = &self.panes[index].tree_open;
+            let rows: Vec<(ShellNode, usize, bool, bool)> = rows
+                .into_iter()
+                .map(|(node, depth)| {
+                    let expandable = node.has_children && !self.tree_cache.get(&node.key).is_some_and(|c| c.is_empty());
+                    let is_open = open.iter().any(|k| same_key(k, &node.key));
+                    (node, depth, expandable, is_open)
+                })
+                .collect();
+            let pane = &mut self.panes[index];
+            pane.tree_rows = rows;
+            pane.tree_rect = Some(rect);
+            pane.tree_first = visible.start;
+            pane.tree_page = ((rect.height() / row_height).floor() as usize).max(1);
+        }
+        let ctx = ui.ctx().clone();
         if let Some(key) = toggled {
-            let open = &mut self.panes[index].tree_open;
-            let before = open.len();
-            open.retain(|k| !same_key(k, &key));
-            if open.len() == before {
-                open.insert(key);
-            }
+            self.tree_focus = Some(index);
+            self.tree_toggle(index, &key, &ctx);
         }
         if let Some(node) = picked {
-            // 원본 FUN_0048e530(트리에 초점): 그 패널이 지금 패널이 된다.
-            self.active = index;
-            let ctx = ui.ctx().clone();
-            match node.special {
-                Special::ControlPanel => self.dispatch("controlPanel", &ctx),
-                Special::RecycleBin => self.dispatch("openRecycle", &ctx),
-                Special::None if ndr::shell_tree::is_virtual(&node.key) => {
-                    if let Err(error) = (self.shell_runner)(&node.key, "", Path::new("")) {
-                        self.status = error;
-                    }
+            self.tree_focus = Some(index);
+            self.tree_select(index, &node, &ctx);
+        }
+    }
+
+    /// 트리 항목 펼치기·접기. 고른 항목이 접힌 항목 안에 있으면 TTreeView처럼 접힌 항목이 골라진다(OnChange).
+    fn tree_toggle(&mut self, index: usize, key: &Path, ctx: &egui::Context) {
+        use ndr::shell_tree::same_key;
+        let open = &mut self.panes[index].tree_open;
+        let before = open.len();
+        open.retain(|k| !same_key(k, key));
+        if open.len() == before {
+            open.insert(key.to_path_buf());
+            return;
+        }
+        let rows = &self.panes[index].tree_rows;
+        let Some(at) = rows.iter().position(|(node, ..)| same_key(&node.key, key)) else { return };
+        let depth = rows[at].1;
+        let selected = self.panes[index].tree_selected.clone().unwrap_or_else(|| self.panes[index].path.clone());
+        let inside = rows[at + 1..].iter().take_while(|(_, d, ..)| *d > depth).any(|(node, ..)| same_key(&node.key, &selected));
+        if inside {
+            let node = rows[at].0.clone();
+            self.tree_select(index, &node, ctx);
+        }
+    }
+
+    /// 원본 FUN_0048e320(트리 OnChange, TCustomTreeView +0x358): 고른 항목이 바뀌면 제어판(CSIDL_CONTROLS)은 control.exe,
+    /// 휴지통(CSIDL_BITBUCKET)은 셸로 열고(FUN_00432fe4), 가상 폴더는 셸로 열고, 폴더면 그 패널을 그 폴더로 옮긴다.
+    /// 원본 FUN_0048e530(트리 OnEnter): 그 패널이 지금 패널이 된다.
+    fn tree_select(&mut self, index: usize, node: &ndr::shell_tree::ShellNode, ctx: &egui::Context) {
+        use ndr::shell_tree::{Special, same_key};
+        self.active = index;
+        self.panes[index].tree_selected = Some(node.key.clone());
+        self.panes[index].tree_scroll_to = true;
+        match node.special {
+            Special::ControlPanel => self.dispatch("controlPanel", ctx),
+            Special::RecycleBin => self.dispatch("openRecycle", ctx),
+            Special::None if ndr::shell_tree::is_virtual(&node.key) => {
+                if let Err(error) = (self.shell_runner)(&node.key, "", Path::new("")) {
+                    self.status = error;
                 }
-                Special::None => {
-                    if let Some(folder) = node.path.filter(|p| !same_key(p, &self.panes[index].path)) {
-                        self.navigate(index, folder, true);
-                    }
+            }
+            Special::None => {
+                if let Some(folder) = node.path.clone().filter(|p| !same_key(p, &self.panes[index].path)) {
+                    self.navigate(index, folder, true);
                 }
             }
         }
+    }
+
+    /// 패널 폴더 트리에 글쇠 초점이 있을 때 TTreeView 글쇠: ↑↓ Home End PgUp PgDn은 고른 항목을 옮기고(그때마다 OnChange),
+    /// ←는 접거나 부모로, →는 펼치거나 첫 자식으로, + - 는 펼치기·접기, 글자는 그 글자로 시작하는 다음 항목.
+    /// 다른 글쇠(기능키·Esc 등)는 원본처럼 목록과 같은 KeyDown(FUN_0048423c)으로 넘긴다. 처리했으면 true.
+    pub(super) fn tree_keys(&mut self, ctx: &egui::Context) -> bool {
+        use ndr::shell_tree::same_key;
+        let index = self.active;
+        if self.tree_focus != Some(index) || !self.settings.flag(if index == 0 { "ShowLeftFolderTree" } else { "ShowRightFolderTree" }, false) {
+            return false;
+        }
+        let rows = self.panes[index].tree_rows.clone();
+        if rows.is_empty() {
+            return false;
+        }
+        let selected = self.panes[index].tree_selected.clone().unwrap_or_else(|| self.panes[index].path.clone());
+        let current = rows.iter().position(|(node, ..)| same_key(&node.key, &selected));
+        let (key, typed) = ctx.input(|i| {
+            let key = i.events.iter().find_map(|e| match e {
+                egui::Event::Key { key, pressed: true, modifiers, .. } if !modifiers.ctrl && !modifiers.alt => Some(*key),
+                _ => None,
+            });
+            let typed = i.events.iter().find_map(|e| if let egui::Event::Text(t) = e { t.chars().next() } else { None });
+            (key, typed.filter(|_| !i.modifiers.ctrl && !i.modifiers.alt))
+        });
+        let last = rows.len() - 1;
+        let at = current.unwrap_or(0);
+        let page = self.panes[index].tree_page.max(1);
+        let target = match key {
+            Some(egui::Key::ArrowUp) => Some(at.saturating_sub(1)),
+            Some(egui::Key::ArrowDown) => Some((at + 1).min(last)),
+            Some(egui::Key::Home) => Some(0),
+            Some(egui::Key::End) => Some(last),
+            Some(egui::Key::PageUp) => Some(at.saturating_sub(page - 1)),
+            Some(egui::Key::PageDown) => Some((at + page - 1).min(last)),
+            Some(egui::Key::ArrowLeft) => {
+                let (node, depth, expandable, open) = &rows[at];
+                if *expandable && *open {
+                    let key = node.key.clone();
+                    self.tree_toggle(index, &key, ctx);
+                    return true;
+                }
+                rows[..at].iter().rposition(|(_, d, ..)| *d + 1 == *depth)
+            }
+            Some(egui::Key::ArrowRight) => {
+                let (node, depth, expandable, open) = &rows[at];
+                if *expandable && !*open {
+                    let key = node.key.clone();
+                    self.tree_toggle(index, &key, ctx);
+                    return true;
+                }
+                rows.get(at + 1).filter(|(_, d, ..)| *d == depth + 1).map(|_| at + 1)
+            }
+            Some(egui::Key::Plus | egui::Key::Minus) => {
+                let (node, _, expandable, open) = &rows[at];
+                if *expandable && (*open == (key == Some(egui::Key::Minus))) {
+                    let key = node.key.clone();
+                    self.tree_toggle(index, &key, ctx);
+                }
+                return true;
+            }
+            Some(_) | None => {
+                // 글자: 지금 항목 다음부터(끝이면 처음부터) 그 글자로 시작하는 항목(TTreeView 증분 찾기의 한 글자).
+                let Some(c) = typed.filter(|c| !c.is_control() && *c != ' ') else { return false };
+                let lower: String = c.to_lowercase().collect();
+                let hit = (1..=rows.len()).map(|step| (at + step) % rows.len()).find(|&i| rows[i].0.name.to_lowercase().starts_with(&lower));
+                match hit {
+                    Some(i) => Some(i),
+                    None => return true,
+                }
+            }
+        };
+        if let Some(target) = target.filter(|&t| Some(t) != current) {
+            let node = rows[target].0.clone();
+            self.tree_select(index, &node, ctx);
+        }
+        true
     }
 
     /// 트리의 하위 셸 폴더를 따로 읽는다(숨김 폴더는 그 패널의 숨김 보기를 따른다, 원본 FUN_0048da38 +0x3f8 비트 4).
