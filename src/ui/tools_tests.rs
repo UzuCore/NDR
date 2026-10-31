@@ -1594,6 +1594,46 @@ fn skin_scrollbar_thumb_follows_the_original_tnxscrollbar() {
     assert_eq!(scrollbar_thumb(40.0, 12.0, 16.0, 0.0, 1000.0, 250.0), (16.0, 8.0), "never longer than the track between the buttons");
 }
 
+/// Original TNXScrollBar MouseMove (0x7cea58) / DoScrollTimer (0x7ce734): a held arrow pauses while the pointer is off it and resumes on
+/// return; a held track stops for the rest of the press once the pointer reaches the thumb or leaves the track.
+#[test]
+fn skin_scrollbar_hold_follows_the_original_timer_rules() {
+    use super::skin_pane::{scroll_hold, HoldStep};
+    let ctx = egui::Context::default();
+    let bar = egui::Rect::from_min_size(egui::pos2(100.0, 0.0), egui::vec2(12.0, 300.0));
+    let thumb = egui::Rect::from_min_size(egui::pos2(100.0, 16.0), egui::vec2(12.0, 60.0));
+    let frame = |events: Vec<egui::Event>| {
+        let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 400.0))), events, ..Default::default() };
+        let mut step = HoldStep::None;
+        let _ = ctx.run(raw, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let id = egui::Id::new("bar");
+                let track = ui.interact(bar, id.with("track"), egui::Sense::click_and_drag());
+                let up = ui.interact(egui::Rect::from_min_size(bar.min, egui::vec2(12.0, 16.0)), id.with("up"), egui::Sense::click_and_drag());
+                let down = ui.interact(egui::Rect::from_min_size(egui::pos2(100.0, 284.0), egui::vec2(12.0, 16.0)), id.with("down"), egui::Sense::click_and_drag());
+                let _grip = ui.interact(thumb, id.with("thumb"), egui::Sense::drag());
+                step = scroll_hold(ui, id, [(&up, -1.0), (&down, 1.0)], &track, thumb, ui.input(|i| i.pointer.interact_pos()));
+            });
+        });
+        step
+    };
+    let at = |x: f32, y: f32| egui::Event::PointerMoved(egui::pos2(x, y));
+    let button = |x: f32, y: f32, pressed: bool| egui::Event::PointerButton { pos: egui::pos2(x, y), button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    // Arrow: steps while over it, pauses off it, resumes on return.
+    frame(vec![at(106.0, 290.0)]);
+    assert_eq!(frame(vec![button(106.0, 290.0, true)]), HoldStep::Step(1.0));
+    assert_eq!(frame(vec![at(200.0, 290.0)]), HoldStep::Paused);
+    assert_eq!(frame(vec![at(106.0, 290.0)]), HoldStep::Step(1.0));
+    assert_eq!(frame(vec![button(106.0, 290.0, false)]), HoldStep::None);
+    // Track: pages toward the pointer; once the pointer is on the thumb, it stays stopped for this press.
+    frame(vec![at(106.0, 200.0)]);
+    assert_eq!(frame(vec![button(106.0, 200.0, true)]), HoldStep::Track);
+    assert_eq!(frame(vec![at(106.0, 40.0)]), HoldStep::Paused, "the thumb is under the pointer");
+    assert_eq!(frame(vec![at(106.0, 200.0)]), HoldStep::Paused, "not restarted (only arrows are)");
+    assert_eq!(frame(vec![button(106.0, 200.0, false)]), HoldStep::None);
+    assert_eq!(frame(vec![button(106.0, 200.0, true)]), HoldStep::Track, "a new press pages again");
+}
+
 /// Original DrawFocus (0x7d7f54), GraphUtil HLS, InitSelMarkBitmap and size cell division.
 /// Original horizontal TNXScrollBar: draws the vertical images rotated 90 degrees (FUN_007cdfc0 clockwise, FUN_007ce0e4 counterclockwise).
 #[test]

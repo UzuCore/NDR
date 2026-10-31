@@ -495,6 +495,44 @@ pub(super) fn scrollbar_thumb(track: f32, thickness: f32, button: f32, offset: f
     (button + position, length)
 }
 
+/// What a held scroll bar press does this frame.
+#[derive(Debug, PartialEq)]
+pub(super) enum HoldStep {
+    /// Nothing is held: the repeat timing resets.
+    None,
+    /// Held, but the original timer is off (pointer away from the pressed area): no step, the timing is kept.
+    Paused,
+    /// A held arrow button: one line step.
+    Step(f32),
+    /// A held track: one page toward the pointer.
+    Track,
+}
+
+/// Original TNXScrollBar areas (GetAreaAt 0x7ceb88: 1 thumb, 2 first button, 3 second button, 4 track, 0 outside) and repeat rules:
+/// MouseDown (0x7ce8b8) steps once and starts the 300 ms timer (thumb: starts the drag instead); MouseMove (0x7cea58) turns the timer
+/// off when the area under the pointer differs from the pressed one and back on only for buttons (2, 3) when it matches again;
+/// DoScrollTimer (0x7ce734, then 80 ms) pages the track toward the pointer and stops once the thumb covers it. So a held arrow pauses
+/// while the pointer is off it and resumes on return, and a held track stops for the rest of the press once the pointer leaves the
+/// track or the thumb reaches it. Fixed earlier NDR behavior that kept repeating wherever the held pointer went.
+pub(super) fn scroll_hold(ui: &egui::Ui, id: egui::Id, buttons: [(&egui::Response, f32); 2], track: &egui::Response, thumb: egui::Rect, pointer: Option<egui::Pos2>) -> HoldStep {
+    let stopped_id = id.with("track-stopped");
+    if let Some((button, step)) = buttons.iter().find(|(r, _)| r.is_pointer_button_down_on()) {
+        return if pointer.is_some_and(|p| button.rect.contains(p)) { HoldStep::Step(*step) } else { HoldStep::Paused };
+    }
+    // The thumb is registered after the track, so a press on the thumb belongs to the thumb (drag) and never reaches here.
+    if track.is_pointer_button_down_on() {
+        let stopped = ui.data(|d| d.get_temp::<bool>(stopped_id)).unwrap_or(false);
+        let in_track = pointer.is_some_and(|p| track.rect.contains(p) && !thumb.contains(p) && !buttons.iter().any(|(b, _)| b.rect.contains(p)));
+        if stopped || !in_track {
+            ui.data_mut(|d| d.insert_temp(stopped_id, true));
+            return HoldStep::Paused;
+        }
+        return HoldStep::Track;
+    }
+    ui.data_mut(|d| d.remove::<bool>(stopped_id));
+    HoldStep::None
+}
+
 /// TNXLabel markup (skin theme): text with no color tag uses the label text color; &lt;b&gt; is a bold face of the same size (Segoe UI Bold·Malgun Gothic Bold).
 fn skin_markup_job(text: &str, base: Color32) -> egui::text::LayoutJob {
     let mut job = egui::text::LayoutJob::default();
@@ -1182,10 +1220,12 @@ impl App {
         }
         // Buttons and track: once on press, then every 80 ms after 300 ms while held. Fixed: previously every 80 ms from the start, which scrolled too fast.
         let repeat_id = id.with("repeat");
-        let held = [(&up, -line), (&down, line)].into_iter().find(|(r, _)| r.is_pointer_button_down_on()).map(|(_, step)| step).or_else(|| {
-            let p = pointer?;
-            (track.is_pointer_button_down_on() && !grip.is_pointer_button_down_on()).then(|| if p.y < thumb_rect.top() { -viewport } else if p.y > thumb_rect.bottom() { viewport } else { 0.0 }).filter(|s| *s != 0.0)
-        });
+        let held = match scroll_hold(ui, id, [(&up, -line), (&down, line)], &track, thumb_rect, pointer) {
+            HoldStep::Paused => return None,
+            HoldStep::Step(step) => Some(step),
+            HoldStep::Track => pointer.map(|p| if p.y < thumb_rect.top() { -viewport } else { viewport }),
+            HoldStep::None => None,
+        };
         let Some(step) = held else {
             ui.data_mut(|d| d.remove::<(f64, bool)>(repeat_id));
             return None;
@@ -1271,10 +1311,12 @@ impl App {
             return None;
         }
         let repeat_id = id.with("repeat");
-        let held = [(&left, -line), (&right, line)].into_iter().find(|(r, _)| r.is_pointer_button_down_on()).map(|(_, step)| step).or_else(|| {
-            let p = pointer?;
-            (track.is_pointer_button_down_on() && !grip.is_pointer_button_down_on()).then(|| if p.x < thumb_rect.left() { -viewport } else if p.x > thumb_rect.right() { viewport } else { 0.0 }).filter(|s| *s != 0.0)
-        });
+        let held = match scroll_hold(ui, id, [(&left, -line), (&right, line)], &track, thumb_rect, pointer) {
+            HoldStep::Paused => return None,
+            HoldStep::Step(step) => Some(step),
+            HoldStep::Track => pointer.map(|p| if p.x < thumb_rect.left() { -viewport } else { viewport }),
+            HoldStep::None => None,
+        };
         let Some(step) = held else {
             ui.data_mut(|d| d.remove::<(f64, bool)>(repeat_id));
             return None;
