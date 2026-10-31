@@ -203,7 +203,7 @@ pub(super) fn function_key_edit_ui(ui: &mut egui::Ui, form: &mut FunctionKeyEdit
     ui.put(at(113.0, 57.0, 141.0, 21.0), egui::TextEdit::singleline(&mut form.name));
     put_left(ui, at(20.0, 88.0, 92.0, 15.0), egui::Label::new(text("Caption.lCommand", "Command:")).truncate());
     if form.internal {
-        // C# LocalizeCommand(name) = TranslateText(name): 언어 파일 값 역검색으로 지금 언어의 글.
+        // C# LocalizeCommand(name) = TranslateText(name): text in the current language by reverse lookup of language file values.
         let names: Vec<String> = INTERNAL_COMMANDS.iter().map(|(_, name)| language.translate_pair(name, name)).collect();
         ui.scope_builder(egui::UiBuilder::new().max_rect(at(113.0, 85.0, 294.0, 22.0)), |ui| {
             egui::ComboBox::from_id_salt("function-key-command").width(286.0).selected_text(names[form.internal_command].as_str()).show_opaque(ui, |ui| {
@@ -213,17 +213,17 @@ pub(super) fn function_key_edit_ui(ui: &mut egui::Ui, form: &mut FunctionKeyEdit
             });
         });
     } else {
-        // 원본 cbCommandChange(0x41fc30): 사용자 명령(+0x3e4)이 골라져 있으면 cbCommand 글을 그대로 eName(+0x3f8)에.
+        // Original cbCommandChange (0x41fc30): when user command (+0x3e4) is chosen, copies the cbCommand text into eName (+0x3f8) as is.
         if ui.put(at(113.0, 85.0, 294.0, 21.0), egui::TextEdit::singleline(&mut form.command).id(egui::Id::new("ndr-function-key-command"))).changed() {
             form.name = form.command.clone();
         }
     }
-    // 원본 rbCommandTypeClick(0x41f5bc): 내부 명령이면 lParams(+0x3f4)·eParams(+0x400)·btnBrowse(+0x40c)·btnParam(+0x460)·
-    // lParamTip(+0x464)을 숨긴다(Visible, 끄기가 아님).
+    // Original rbCommandTypeClick (0x41f5bc): for internal commands hides lParams (+0x3f4), eParams (+0x400), btnBrowse (+0x40c), btnParam (+0x460) and
+    // lParamTip (+0x464) (Visible, not disabled).
     let user = !form.internal;
     if user {
-        // 원본 btnBrowseClick(0x41fca4): Filter = OD_PROGRAMFILTER, 처음 이름 = 앞뒤 따옴표를 뗀 명령 글. 고르면 cbCommand에 넣고
-        // 그 OnChange(cbCommandChange)가 이름 칸도 채운다.
+        // Original btnBrowseClick (0x41fca4): Filter = OD_PROGRAMFILTER, initial name = command text without surrounding quotes. The chosen file goes into cbCommand
+        // and its OnChange (cbCommandChange) fills the name field too.
         if ui.put(at(412.0, 85.0, 29.0, 21.0), egui::Button::new("...")).clicked() {
             let title = text("Form.Caption", "Edit Function Key");
             let current = form.command.trim().trim_matches('"');
@@ -237,7 +237,7 @@ pub(super) fn function_key_edit_ui(ui: &mut egui::Ui, form: &mut FunctionKeyEdit
             }
         }
         put_left(ui, at(20.0, 115.0, 92.0, 15.0), egui::Label::new(text("Caption.lParams", "Parameter(s):")).truncate());
-        // 원본 eParams + btnParam("...", PopupMenu1 → ParameterClick).
+        // Original eParams + btnParam ("...", PopupMenu1 -> ParameterClick).
         let id = ui.make_persistent_id("function-key-parameters");
         ui.put(at(113.0, 112.0, 294.0, 21.0), egui::TextEdit::singleline(&mut form.parameters).id(id));
         ui.scope_builder(egui::UiBuilder::new().max_rect(at(412.0, 112.0, 28.0, 23.0)), |ui| {
@@ -254,7 +254,7 @@ pub(super) fn function_key_edit_ui(ui: &mut egui::Ui, form: &mut FunctionKeyEdit
                 }
             });
         });
-        // 원본 lParamTip(오른쪽 맞춤, 오른쪽 끝 407).
+        // Original lParamTip (right aligned, right edge 407).
         ui.scope_builder(egui::UiBuilder::new().max_rect(at(20.0, 143.0, 387.0, 15.0)).layout(egui::Layout::right_to_left(egui::Align::Min)), |ui| {
             ui.add(egui::Label::new(text("Caption.lParamTip", "* $(???) : Active Pane, $(???1) : Left Pane, $(???2) : Right Pane")).truncate());
         });

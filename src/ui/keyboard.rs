@@ -1,17 +1,17 @@
-//! 파일 목록 글쇠 순서(원본 FormShortCut → 목록 KeyDown FUN_0048423c → WMChar):
-//! Esc(EscapeKeyAction) → 원본 단축키 표(shortcut.ini) → 즐겨찾기 Shift(+Ctrl)+F1~F10 → 기능키 표 → KeyDown의 나머지
-//! ('.' 상위 폴더, Ctrl(+Shift)+Tab 탭, Shift+글자 드라이브) → 목록 이동(위/아래/Home/End/Tab, egui에는 목록 상자가 없다).
-//! 함께: CycleFileSelection, ToggleFocusedItemSelection, ExecuteShortcutActionAsync, ExecuteMenuCommandAsync의 favoriteOpen:/workOpen:/
-//! workSet:/column:, RememberDriveFolder/RestoreLastDriveFolder, 드라이브 단추(ShowDriveButtons, 준비된 드라이브, 볼륨 이름 도움말).
-//! 차이(HANDOFF): 글 입력 칸에 초점이 있으면 목록 글쇠를 하나도 받지 않는다(C#은 뒤로·앞으로 등 몇 개를 받는다).
+//! File list key order (original FormShortCut -> list KeyDown FUN_0048423c -> WMChar):
+//! Esc (EscapeKeyAction) -> original shortcut table (shortcut.ini) -> favorites Shift(+Ctrl)+F1-F10 -> function key table -> rest of KeyDown
+//! ('.' parent folder, Ctrl(+Shift)+Tab tabs, Shift+letter drive) -> list movement (Up/Down/Home/End/Tab; egui has no list box).
+//! Also: CycleFileSelection, ToggleFocusedItemSelection, favoriteOpen:/workOpen:/ of ExecuteShortcutActionAsync and ExecuteMenuCommandAsync,
+//! workSet:/column:, RememberDriveFolder/RestoreLastDriveFolder, drive buttons (ShowDriveButtons, ready drives, volume name tooltips).
+//! Difference (HANDOFF): while a text field has focus no list key is taken (C# takes a few such as back and forward).
 use super::remote_window::wpf_key;
 use super::*;
 
 impl App {
-    /// 원본 주 창은 글쇠를 늘 목록(TNXCustomFileListView)이 받는다(단추는 TabStop 없음). egui는 Tab이나 화살표로 단추에 글쇠 초점을
-    /// 옮기고, 초점 단추에서 Enter·Space를 누르기로 바꾸며, 초점이 있는 동안 wants_keyboard_input이 참이라 목록 글쇠가 끊긴다.
-    /// 그래서 주 창(바탕 층)의 글 입력 칸이 아닌 위젯이 초점을 가지면 놓게 하고, 아무것도 초점이 없으면 egui의 초점 이동을 없앤다.
-    /// 떠 있는 창·메뉴(가운데·앞 층)의 초점은 건드리지 않는다.
+    /// In the original main window keys always go to the list (TNXCustomFileListView) (buttons have no TabStop). egui moves key focus to buttons
+    /// with Tab or arrows, turns Enter/Space on a focused button into a click, and wants_keyboard_input is true meanwhile, cutting off list keys.
+    /// So when a widget other than a text field on the main window (background layer) has focus it is released, and with no focus egui focus movement is disabled.
+    /// Focus in floating windows and menus (middle and foreground layers) is left alone.
     pub(super) fn drop_widget_focus(&mut self, ctx: &egui::Context) {
         if let Some(id) = ctx.memory(|m| m.focused()) {
             let text_edit = egui::text_edit::TextEditState::load(ctx, id).is_some();
@@ -27,7 +27,7 @@ impl App {
     pub(super) fn keyboard(&mut self, ctx: &egui::Context) {
         self.menu_letter = None;
         self.menu_targets_seen = std::mem::take(self.menu_targets.get_mut());
-        // 패널 폴더 트리의 글쇠 초점: 다른 패널이 지금 패널이 되거나 패널 안의 트리 밖(목록)을 누르면 목록으로 돌아간다.
+        // Key focus of the pane folder tree: returns to the list when another pane becomes current or the pane is clicked outside the tree (the list).
         if self.tree_focus.is_some_and(|i| i != self.active) {
             self.tree_focus = None;
         }
@@ -46,18 +46,18 @@ impl App {
         {
             return;
         }
-        // 원본 ApplicationEvents1Message(0x442984): WM_XBUTTONDOWN(0x20b)의 XBUTTON1이면 HistoryBack, XBUTTON2면 HistoryForward.
-        // (NDR은 대화 상자·진행 창이 떠 있는 동안에는 받지 않는다.)
+        // Original ApplicationEvents1Message (0x442984): WM_XBUTTONDOWN (0x20b) with XBUTTON1 is HistoryBack, XBUTTON2 is HistoryForward.
+        // (NDR ignores them while a dialog or progress window is open.)
         let (back, forward) = ctx.input(|i| (i.pointer.button_pressed(egui::PointerButton::Extra1), i.pointer.button_pressed(egui::PointerButton::Extra2)));
         if back {
             self.dispatch("back", ctx);
         } else if forward {
             self.dispatch("forward", ctx);
         }
-        // 메뉴가 열려 있으면(원본 Windows 메뉴 모드) 글쇠는 패널로 가지 않는다. 친 글자는 그 메뉴의 접근 글자 항목을 고른다.
+        // While a menu is open (original Windows menu mode) keys do not go to the pane. A typed letter picks that menu's item with the access letter.
         if egui::Popup::is_any_open(ctx) {
             self.menu_letter = ctx.input(|i| i.events.iter().find_map(|e| if let egui::Event::Text(t) = e { t.chars().next() } else { None })).map(|c| c.to_ascii_lowercase());
-            // Windows 메뉴: 같은 접근 글자의 항목이 둘 이상이면 실행하지 않고 다음 항목으로 선택만 옮긴다(Enter가 실행).
+            // Windows menus: with several items on one access letter, the selection only moves to the next one (Enter runs it).
             if let Some(letter) = self.menu_letter {
                 let same: Vec<egui::Id> = self.menu_targets_seen.iter().filter(|(c, _)| *c == letter).map(|(_, id)| *id).collect();
                 if same.len() > 1 {
@@ -71,21 +71,21 @@ impl App {
             return;
         }
         self.drop_widget_focus(ctx);
-        // 원본 단축키 표의 숫자판 글쇠(raw_input_hook이 모아 둠).
+        // Numpad keys of the original shortcut table (collected by raw_input_hook).
         for (original, shift) in std::mem::take(&mut self.pending_numpad) {
             self.run_original_shortcut(&original, shift, ctx);
         }
-        // 원본 FormShortCut(0x42b36c)은 파일 목록에 초점이 있을 때만 단축키를 본다: 글 입력 칸에 초점이 있으면 목록 글쇠를 받지 않는다.
+        // Original FormShortCut (0x42b36c) checks shortcuts only while the file list has focus: with focus in a text field no list key is taken.
         if ctx.wants_keyboard_input() {
             return;
         }
-        // 패널 폴더 트리에 초점이 있으면 TTreeView 글쇠가 먼저(나머지는 목록과 같은 KeyDown FUN_0048423c).
+        // When the pane folder tree has focus, TTreeView keys come first (the rest go to the same KeyDown FUN_0048423c as the list).
         if self.tree_keys(ctx) {
             return;
         }
-        // 원본 KeyDown(0x7d7338) → ArrowKey의 [ ]가 먼저, 그다음 WMChar의 빠른 찾기(같은 글자도 받는다).
+        // Original KeyDown (0x7d7338) -> ArrowKey handles [ ] first, then the WMChar quick search (which also takes the same letters).
         self.bracket_keys(ctx);
-        // 원본 TNXCustomFileListView 빠른 찾기(WMChar 0x7d5a18 → QuickSearch 0x7d5f9c).
+        // Original TNXCustomFileListView quick search (WMChar 0x7d5a18 -> QuickSearch 0x7d5f9c).
         if self.original_typed_search(ctx) {
             return;
         }
@@ -94,7 +94,7 @@ impl App {
             if self.shortcut_key(key, modifiers, ctx) {
                 return;
             }
-            // 원본 TToolBar(tbFile … tbHelp) CM_DIALOGCHAR: 단축키가 아닌 Alt+글자는 그 접근 글자의 메뉴 단추를 누른다.
+            // Original TToolBar (tbFile ... tbHelp) CM_DIALOGCHAR: an Alt+letter that is not a shortcut presses the menu button with that access letter.
             if modifiers.alt && !modifiers.ctrl && !modifiers.shift {
                 let name = key.name();
                 if name.len() == 1 && name.as_bytes()[0].is_ascii_alphanumeric() {
@@ -106,7 +106,7 @@ impl App {
         self.list_navigation(ctx);
     }
 
-    /// 작업 폴더 N 지정(원본 FUN_0042fa5c 자리): 지정, 저장, C# 상태 글 "작업 폴더 N 저장됨".
+    /// Sets work folder N (in place of original FUN_0042fa5c): set, save, C# status text "work folder N saved".
     pub(super) fn set_work_folder(&mut self, index: usize, path: String) {
         let mut folders = self.settings.strings("WorkingFolders");
         folders.resize(5, String::new());
@@ -116,7 +116,7 @@ impl App {
         self.status = if self.language == "ko" { format!("작업 폴더 {} 저장됨", index + 1) } else { format!("Work folder {} saved", index + 1) };
     }
 
-    /// 원본 단축키 표(shortcut.ini)로 고른 메뉴 항목·내부 명령. None이면 넘긴다.
+    /// Menu item or internal command chosen by the original shortcut table (shortcut.ini). None passes it on.
     fn original_shortcut(&mut self, key: egui::Key, modifiers: egui::Modifiers, ctx: &egui::Context) -> bool {
         let custom = self.settings.values.get("OriginalShortcutMapText").and_then(|v| v.as_str());
         let shortcuts = compat::ShortcutMap::parse(custom);
@@ -125,7 +125,7 @@ impl App {
         self.run_original_shortcut(&original, modifiers.shift, ctx)
     }
 
-    /// 원본 단축키 표에서 숫자판 글쇠(VK_NUMPAD0~9, VK_MULTIPLY·ADD·SUBTRACT·DECIMAL·DIVIDE = "Num 0"…"Num /")에 걸린 항목.
+    /// Items bound to numpad keys in the original shortcut table (VK_NUMPAD0-9, VK_MULTIPLY/ADD/SUBTRACT/DECIMAL/DIVIDE = "Num 0"..."Num /").
     pub(super) fn numpad_shortcut(&self, vk: u16, ctrl: bool, shift: bool, alt: bool) -> Option<String> {
         let name = match vk {
             0x60..=0x69 => format!("Num {}", vk - 0x60),
@@ -141,7 +141,7 @@ impl App {
         compat::ShortcutMap::parse(custom).resolve(compat::text_to_shortcut(&text))
     }
 
-    /// 글쇠를 목록이 받지 않는 상태(대화 상자·메시지 상자·진행 창·메뉴가 열려 있음). keyboard의 첫 검사와 같다.
+    /// State where the list does not take keys (a dialog, message box, progress window or menu is open). Same as the first check in keyboard.
     pub(super) fn keyboard_blocked(&self, ctx: &egui::Context) -> bool {
         self.job.as_ref().is_some_and(|j| !j.finished && j.progress.is_some())
             || !self.msgboxes.is_empty()
@@ -151,17 +151,17 @@ impl App {
             || egui::Popup::is_any_open(ctx)
     }
 
-    /// 원본 단축키 표가 고른 항목을 실행한다(메뉴 항목 또는 내부 명령).
+    /// Runs the item chosen by the original shortcut table (a menu item or an internal command).
     fn run_original_shortcut(&mut self, original: &str, shift: bool, ctx: &egui::Context) -> bool {
-        // C# OriginalMenuItemAction의 특수 항목: 모두 선택은 CycleFileSelection, 보이지 않는 항목은 글쇠만 삼킨다.
+        // Special items of C# OriginalMenuItemAction: select all is CycleFileSelection; invisible items only swallow the key.
         match original {
             "miSelectAll" => {
                 self.cycle_selection(shift);
                 return true;
             }
             "miSearchFile" | "miArcMove" | "miArcInstall" => return true,
-            // 원본 miFind(Ctrl+F) = 찾기 입력 상자(TfGetText). C# 판은 같은 글쇠로 도구 모음 빠른 찾기 칸에 초점을 주므로,
-            // 그 칸이 도구 모음에 있을 때만 C# 판처럼 하고, 없으면(원본 도구 모음) 원본 찾기 상자를 연다.
+            // Original miFind (Ctrl+F) = find input box (TfGetText). The C# version focuses the toolbar quick search field with the same key,
+            // so behave like C# only when that field is on the toolbar; otherwise (original toolbar) open the original find box.
             "miFind" if !self.toolbar.items.iter().any(|i| i.kind == ndr::commands::ToolbarKind::QuickSearch) => {
                 self.dispatch("find", ctx);
                 return true;
@@ -175,8 +175,8 @@ impl App {
         self.original_internal(original, ctx)
     }
 
-    /// 한 번 눌린 글쇠를 원본 차례로 처리한다: 원본 설정 esckey(Esc 동작)·hanshdrive(영어가 아닌 입력 언어의 Shift+글자 드라이브),
-    /// 그다음 원본 FormShortCut(단축키 표, 기능키 표). 처리했으면 true.
+    /// Handles one key press in original order: original settings esckey (Esc action) and hanshdrive (Shift+letter drive with a non-English input language),
+    /// then original FormShortCut (shortcut table, function key table). True when handled.
     pub(super) fn shortcut_key(&mut self, key: egui::Key, modifiers: egui::Modifiers, ctx: &egui::Context) -> bool {
         let Some(name) = wpf_key(key) else { return false };
         if key == egui::Key::Escape {
@@ -190,13 +190,13 @@ impl App {
             }
             return true;
         }
-        // 원본 FormShortCut(0x42b36c): 메뉴 항목·내부 명령 단축키(shortcut.ini 표, 메뉴 IsShortCut)가 먼저.
-        // (Alt+Enter는 원본처럼 miDescription "설명 붙여두기". 사용자 요청으로 한때 넣었던 전체 화면 전환은 뺐다.)
+        // Original FormShortCut (0x42b36c): menu item and internal command shortcuts (shortcut.ini table, menu IsShortCut) come first.
+        // (Alt+Enter is miDescription "attach description" like the original. The fullscreen toggle once added per user request was removed.)
         if self.original_shortcut(key, modifiers, ctx) {
             return true;
         }
-        // 원본 즐겨찾기 메뉴 항목의 단축키(FUN_0042eedc, 메뉴 IsShortCut): 0~9번 Shift+F1~F10, 10~19번 Shift+Ctrl+F1~F10.
-        // 항목은 이름이 있는 즐겨찾기만 만들어지므로 빈 칸의 글쇠는 넘긴다.
+        // Shortcuts of the original favorites menu items (FUN_0042eedc, menu IsShortCut): items 0-9 Shift+F1-F10, items 10-19 Shift+Ctrl+F1-F10.
+        // Items exist only for named favorites, so keys of empty slots pass on.
         if modifiers.shift && !modifiers.alt && name.starts_with('F') {
             if let Some(n) = name[1..].parse::<usize>().ok().filter(|n| (1..=10).contains(n)) {
                 let index = if modifiers.ctrl { n + 9 } else { n - 1 };
@@ -207,7 +207,7 @@ impl App {
                 }
             }
         }
-        // 그다음 기능키 표([FuncKey]: F1~F12와 TfPreferences 기능키 목록의 Ctrl+F1~F11 "^F1"~"^F11", FUN_0047cc18 → FUN_0044381c).
+        // Then the function key table ([FuncKey]: F1-F12 and Ctrl+F1-F11 "^F1"-"^F11" from the TfPreferences function key list, FUN_0047cc18 -> FUN_0044381c).
         if !(modifiers.ctrl || modifiers.alt || modifiers.shift) && name.starts_with('F') && name[1..].parse::<u8>().is_ok_and(|n| (1..=12).contains(&n)) && self.invoke_function_key(&name, ctx) {
             return true;
         }
@@ -217,26 +217,26 @@ impl App {
         self.original_keydown(key, modifiers, &name, ctx)
     }
 
-    /// 원본 목록·패널 트리 KeyDown(FUN_0048423c)의, 단축키 표가 받지 않은 글쇠.
+    /// Keys of the original list and pane tree KeyDown (FUN_0048423c) not taken by the shortcut table.
     fn original_keydown(&mut self, key: egui::Key, modifiers: egui::Modifiers, name: &str, ctx: &egui::Context) -> bool {
         let index = self.active;
         let plain = !(modifiers.ctrl || modifiers.alt || modifiers.shift);
-        // '.'(VK_OEM_PERIOD, 0x71 + 0x4d): 빠른 찾기 글(+0x3e0)이 비었으면 상위 폴더(FUN_00459ba8(1); 압축 파일 뿌리면 그 압축 파일이 있는 폴더).
-        // 고친 것: 전에는 받지 않았다.
+        // '.' (VK_OEM_PERIOD, 0x71 + 0x4d): parent folder when the quick search text (+0x3e0) is empty (FUN_00459ba8(1); at an archive root, the folder containing the archive).
+        // Fixed: previously not handled.
         if plain && key == egui::Key::Period && self.typed_search[index].query.is_empty() {
             self.dispatch("goParent", ctx);
             return true;
         }
-        // Ctrl+Tab·Ctrl+Shift+Tab: 탭을 쓰고(+0xf3) 탭이 둘 이상이면 다음·이전 탭(끝에서 처음으로). 고친 것: 전에는 없었다.
+        // Ctrl+Tab / Ctrl+Shift+Tab: with tabs on (+0xf3) and two or more tabs, next/previous tab (wrapping). Fixed: previously missing.
         if key == egui::Key::Tab && modifiers.ctrl && !modifiers.alt && self.settings.flag("UseTabs", true) && self.panes[index].tabs.len() > 1 {
             let (count, tab) = (self.panes[index].tabs.len(), self.panes[index].tab);
             let next = if modifiers.shift { (tab + count - 1) % count } else { (tab + 1) % count };
             self.tab_command(index, &format!("tab:{next}"), ctx);
             return true;
         }
-        // Shift+글자(Shift만): 로컬·압축 위치에서 그 드라이브(그 드라이브의 마지막 폴더가 있으면 그 폴더, FUN_0046f714).
-        // 한글 같은 영어가 아닌 입력 언어에서는 IME가 글자를 받으므로 hanshdrive(UseAlternateDriveHandling: Shift를 누르면 IME를
-        // 영문으로)를 켰을 때만. 고친 것: 전에는 영문 입력에서도 그 설정이 있어야 했다.
+        // Shift+letter (Shift only): at local and archive locations that drive (its last folder if any, FUN_0046f714).
+        // With a non-English input language such as Korean the IME takes the letter, so only when hanshdrive (UseAlternateDriveHandling: Shift switches the IME
+        // to English) is on. Fixed: previously even English input needed that setting.
         if modifiers.shift && !(modifiers.ctrl || modifiers.alt)
             && name.len() == 1
             && name.as_bytes()[0].is_ascii_uppercase()
@@ -252,9 +252,9 @@ impl App {
         false
     }
 
-    /// ExecuteMenuCommandAsync의 favoriteOpen:/workOpen:/workSet:/column:. 처리했으면 true.
+    /// favoriteOpen:/workOpen:/workSet:/column: of ExecuteMenuCommandAsync. True when handled.
     pub(super) fn prefixed_command(&mut self, id: &str) -> bool {
-        // 원본 메뉴 이름(menu_data의 openWorkFolderN/saveWorkFolderN/columnN) = C# OriginalMenuItemAction의 workOpen:/workSet:/column:.
+        // Original menu names (openWorkFolderN/saveWorkFolderN/columnN in menu_data) = workOpen:/workSet:/column: of C# OriginalMenuItemAction.
         let alias = |prefix: &str| id.strip_prefix(prefix).and_then(|n| n.parse::<usize>().ok()).filter(|n| (1..=6).contains(n));
         if let Some(n) = alias("openWorkFolder").filter(|n| *n <= 5) {
             return self.prefixed_command(&format!("workOpen:{}", n - 1));
@@ -294,8 +294,8 @@ impl App {
                     None => pane.path.clone(),
                 };
                 let path = path.to_string_lossy().into_owned();
-                // 원본 FUN_0042ff58: 이미 지정된 작업 폴더면 TfMsgBox(WORKFOLDER, "", MSG_UNSETWORKFOLDER의 %s = 지금 값,
-                // MB_YESNO | MB_ICONQUESTION), 예일 때만 바꾼다. 비어 있으면 바로 지정한다.
+                // Original FUN_0042ff58: an already set work folder asks TfMsgBox(WORKFOLDER, "", MSG_UNSETWORKFOLDER with %s = current value,
+                // MB_YESNO | MB_ICONQUESTION) and changes only on yes. An empty slot is set at once.
                 let existing = self.settings.strings("WorkingFolders").get(index).cloned().unwrap_or_default();
                 if existing.is_empty() {
                     self.set_work_folder(index, path);
@@ -323,19 +323,19 @@ impl App {
         false
     }
 
-    /// C# CycleFileSelection(원본 miSelectAllClick 0x4311c4).
+    /// C# CycleFileSelection (original miSelectAllClick 0x4311c4).
     pub(super) fn cycle_selection(&mut self, shift: bool) {
         let select_folders = self.settings.flag("SelectFolders", false);
         let pane = &mut self.panes[self.active];
         let files: Vec<usize> = (0..pane.entries.len()).filter(|&i| !pane.entries[i].is_dir).collect();
-        // 원본 SelectAll(0x7dcb00)은 종류 3(파일)과, 폴더도 고를 때 종류 1(폴더)만 고른다(드라이브 항목 제외).
+        // Original SelectAll (0x7dcb00) selects kind 3 (files) and, when folders are included, kind 1 (folders) only (no drive items).
         let folders: Vec<usize> = (0..pane.entries.len()).filter(|&i| pane.entries[i].is_dir && !pane.entries[i].drive && !pane.entries[i].is_parent()).collect();
         if pane.selected.is_empty() {
             let include_folders = files.is_empty() || (select_folders ^ shift);
             pane.selected = (0..pane.entries.len()).filter(|&i| !pane.entries[i].drive && !pane.entries[i].is_parent() && (include_folders || !pane.entries[i].is_dir)).collect();
             return;
         }
-        // ".." 줄은 원본처럼 고르지 않는다(+0x67).
+        // The ".." row is not selected, like the original (+0x67).
         let no_folder_marked = !folders.is_empty() && folders.iter().all(|i| !pane.selected.contains(i));
         let all_files_marked = files.iter().all(|i| pane.selected.contains(i));
         if no_folder_marked && all_files_marked {
@@ -345,9 +345,9 @@ impl App {
         }
     }
 
-    /// C# ToggleFocusedItemSelection: 지금 항목의 표시만 바꾼다(커서는 그대로).
-    /// 원본 패널 OnEnter(FUN_004849c8): 목록이 초점을 받으면(지금 패널) 로컬 패널(FUN_00481948 = 0)이면 그 폴더를
-    /// 프로세스의 지금 폴더로 한다(SetCurrentDirectoryW). 실행하는 프로그램이 이 폴더를 물려받는다. 시험은 프로세스 전체 값이라 건너뛴다.
+    /// C# ToggleFocusedItemSelection: toggles only the current item's mark (the cursor stays).
+    /// Original pane OnEnter (FUN_004849c8): when the list gets focus (current pane) on a local pane (FUN_00481948 = 0), its folder becomes
+    /// the process current directory (SetCurrentDirectoryW). Programs started inherit it. Tests skip it because it is process-wide.
     pub(super) fn sync_current_directory(&mut self) {
         let pane = &self.panes[self.active];
         if pane.archive.is_some() || pane.remote.is_some() || pane.loading || super::panes::is_drives(&pane.path) {
@@ -362,7 +362,7 @@ impl App {
         }
     }
 
-    /// 원본 Select(0x7dc834): 커서 항목의 선택을 뒤집는다. 드라이브 항목(종류 4)·종류 2·".."는 고르지 않는다.
+    /// Original Select (0x7dc834): flips the cursor item's selection. Drive items (kind 4), kind 2 and ".." are not selected.
     pub(super) fn toggle_focused_selection(&mut self) {
         let pane = &mut self.panes[self.active];
         let Some(entry) = pane.entries.get(pane.cursor) else { return };
@@ -374,8 +374,8 @@ impl App {
         }
     }
 
-    /// 원본 SelectCurrAndMove(0x7dca04): miSelect(Spacebar, miSelectClick 0x4311a4)와 내부 명령 SelectCurrAndMove.
-    /// 커서 항목의 선택을 뒤집고(Select), 미리 보기 형식은 오른쪽, 그 밖은 아래 글쇠(ArrowKey)로 옮긴다. 둘 다 다음 항목이다.
+    /// Original SelectCurrAndMove (0x7dca04): miSelect (Spacebar, miSelectClick 0x4311a4) and the internal command SelectCurrAndMove.
+    /// Flips the cursor item's selection (Select) and moves with the Right key in the thumbnail style, otherwise the Down key (ArrowKey). Both go to the next item.
     pub(super) fn select_current_and_move(&mut self) {
         self.toggle_focused_selection();
         let pane = &mut self.panes[self.active];
@@ -390,7 +390,7 @@ impl App {
         }
     }
 
-    /// C# BeginAddressEdit: 주소 칸에 지금 경로(압축 안이면 "압축!/접두")를 넣고 초점·전체 선택.
+    /// C# BeginAddressEdit: puts the current path in the address field ("archive!/prefix" inside an archive), focuses it and selects all.
     pub(super) fn begin_address_edit(&mut self, index: usize, ctx: &egui::Context) {
         let text = self.address_text(index);
         let pane = &mut self.panes[index];
@@ -404,7 +404,7 @@ impl App {
         state.store(ctx, id);
     }
 
-    /// C# RestoreLastDriveFolder: SaveDriveFolders이고 드라이브 루트면 그 드라이브에서 마지막으로 연 폴더(있으면).
+    /// C# RestoreLastDriveFolder: with SaveDriveFolders at a drive root, the last folder opened on that drive (if any).
     pub(super) fn restore_drive_folder(&self, path: PathBuf) -> PathBuf {
         if !self.settings.flag("SaveDriveFolders", true) {
             return path;
@@ -424,7 +424,7 @@ impl App {
         }
     }
 
-    /// C# RememberDriveFolder: SaveDriveFolders면 LastFoldersByDrive[루트] = 전체 경로.
+    /// C# RememberDriveFolder: with SaveDriveFolders, LastFoldersByDrive[root] = full path.
     pub(super) fn remember_drive_folder(&mut self, path: &Path) {
         if !self.settings.flag("SaveDriveFolders", true) || super::panes::is_drives(path) {
             return;
@@ -437,17 +437,17 @@ impl App {
         self.settings.values.insert("LastFoldersByDrive".into(), serde_json::Value::Object(map));
     }
 
-    /// 드라이브 단추·Shift+글자: 마지막 폴더를 되살려 연다(NavigateLocalAsync restoreDriveFolder).
+    /// Drive buttons and Shift+letter: restores and opens the last folder (NavigateLocalAsync restoreDriveFolder).
     pub(super) fn navigate_drive(&mut self, index: usize, root: PathBuf) {
         self.active = index;
         let target = self.restore_drive_folder(root);
         self.navigate(index, target, true);
     }
 
-    /// 원본 ArrowKey의 `[`·`]`(Ctrl·Alt·Shift 없이): 목록 끝 드라이브 항목 사이를 옮긴다(`list_keys::bracket_target`).
+    /// Original ArrowKey `[` / `]` (without Ctrl, Alt, Shift): moves between the drive items at the end of the list (`list_keys::bracket_target`).
     fn bracket_keys(&mut self, ctx: &egui::Context) {
-        // 원본 KeyDown(0x7d7338) → ArrowKey: `[`·`]`는 Ctrl(Shift 없이)만 아니면 받는다. Shift면 뒤의 범위 선택도 한다.
-        // 고친 것: 전에는 Shift를 누르면 아무 일도 없었다.
+        // Original KeyDown (0x7d7338) -> ArrowKey: `[` and `]` are taken unless Ctrl (without Shift) is down. With Shift it also does the range selection after.
+        // Fixed: previously nothing happened with Shift.
         let (open, close, shift) = ctx.input(|i| {
             let allowed = !i.modifiers.ctrl && !i.modifiers.alt && !i.modifiers.command;
             (allowed && i.key_pressed(egui::Key::OpenBracket), allowed && i.key_pressed(egui::Key::CloseBracket), i.modifiers.shift)
@@ -480,9 +480,9 @@ impl App {
         }
     }
 
-    /// 목록 커서 이동(egui에는 목록 상자가 없으므로 직접 한다). 원본 TNXCustomFileListView::ArrowKey(0x7d69dc):
-    /// 위·아래·왼쪽·오른쪽·PageUp·PageDown·Home·End를 보기 형식의 쪽 정보로 옮기고(`list_keys::arrow_target`), 옮겼으면 커서가
-    /// 보이게 넘긴다(SetItemIndex). Shift를 누르고 옮기면 원본처럼 선택을 지우고 Shift를 누른 자리(SetShiftDownIndex)부터 커서까지 고른다.
+    /// Moves the list cursor (egui has no list box, so this is done by hand). Original TNXCustomFileListView::ArrowKey (0x7d69dc):
+    /// Up, Down, Left, Right, PageUp, PageDown, Home and End move using the page info of the view style (`list_keys::arrow_target`), and after moving the cursor
+    /// is scrolled into view (SetItemIndex). Moving with Shift clears the selection and selects from where Shift was pressed (SetShiftDownIndex) to the cursor, like the original.
     fn list_navigation(&mut self, ctx: &egui::Context) {
         use list_keys::ListKey;
         ctx.input(|input| {
@@ -499,10 +499,10 @@ impl App {
                 return;
             }
             let old = pane.cursor.min(length - 1);
-            // 원본 KeyDown·ArrowKey: Ctrl만 누르면 아래 Ctrl 글쇠, Ctrl+Shift는 Shift 글쇠와 같이 옮긴다.
+            // Original KeyDown and ArrowKey: Ctrl alone uses the Ctrl keys below; Ctrl+Shift moves like the Shift keys.
             if m.ctrl && !m.shift {
-                // 원본 ArrowKey의 Ctrl(Shift 없이) 글쇠: 첫 항목·마지막 폴더·첫 파일·마지막 파일(`list_keys::ctrl_target`).
-                // 마지막 파일은 목록 끝 드라이브 항목(종류 4) 앞이다.
+                // Ctrl (without Shift) keys of original ArrowKey: first item, last folder, first file, last file (`list_keys::ctrl_target`).
+                // The last file is before the drive items (kind 4) at the end of the list.
                 let drives = pane.drive_count();
                 let folders = pane.entries.iter().filter(|e| e.is_dir && !e.drive).count();
                 let files = length - folders - drives;
@@ -537,8 +537,8 @@ impl App {
                 (egui::Key::End, ListKey::End),
             ];
             let mut cursor = old;
-            // 원본 ArrowKey(형식 2): 왼쪽·오른쪽은 커서를 옮기지 않고 가로 막대가 있으면 가로 위치를 20 줄이고(0 아래로는 안 감)
-            // 늘린다(막대 끝에서 멈춤, 다음 그림이 자른다). 고친 것: 전에는 아무 일도 없었다.
+            // Original ArrowKey (style 2): Left and Right do not move the cursor; with a horizontal bar they decrease (never below 0) or
+            // increase the horizontal position by 20 (stopping at the bar end, clipped next frame). Fixed: previously nothing happened.
             if pane.page.style == list_keys::ListStyle::Details {
                 let steps = input.num_presses(egui::Key::ArrowRight) as f32 - input.num_presses(egui::Key::ArrowLeft) as f32;
                 if steps != 0.0 {
@@ -547,7 +547,7 @@ impl App {
             }
             for (key, list_key) in keys {
                 for _ in 0..input.num_presses(key) {
-                    // 원본 ArrowKey 형식 3 PageUp·PageDown은 줄 화소로 넘긴다(줄 높이가 줄마다 다르다).
+                    // Original ArrowKey style 3 PageUp and PageDown scroll by row pixels (row heights differ per row).
                     if let (list_keys::ListStyle::Thumbnails, ListKey::PageUp | ListKey::PageDown, Some((tops, heights, offset, view, columns))) = (pane.page.style, list_key, pane.thumb_rows.as_ref()) {
                         cursor = list_keys::thumbnail_page_target(tops, heights, *columns, *offset, *view, cursor, length, list_key == ListKey::PageDown);
                         continue;
@@ -561,8 +561,8 @@ impl App {
             pane.cursor = cursor;
             pane.reveal = true;
             if m.shift {
-                // 원본 ArrowKey: Shift면 선택을 지우고 Shift를 누른 자리부터 새 자리까지, Ctrl+Shift면 지우지 않고
-                // 옮기기 전 자리부터 새 자리까지 더한다.
+                // Original ArrowKey: Shift clears the selection and selects from the Shift anchor to the new position; Ctrl+Shift keeps it and
+                // adds from the position before moving to the new one.
                 let anchor = *pane.shift_anchor.get_or_insert(old);
                 let from = if m.ctrl { old } else { anchor };
                 if !m.ctrl {
@@ -576,12 +576,12 @@ impl App {
         });
     }
 
-    /// 원본 miColumn의 항목들(miColAuto, 구분선, miCol1~6). 지금 값에 표시. 그 밖의 지정 값(7~19)도 C#처럼 보인다. 고른 명령.
+    /// Items of the original miColumn (miColAuto, separator, miCol1-6), checked by the current value. Other set values (7-19) are shown too like C#. Returns the chosen command.
     pub(super) fn column_items(&mut self, ui: &mut egui::Ui) -> Option<String> {
         let columns_title = self.language_pack.text("Menu.miColumn", "Columns").replace('&', "");
         let current = self.settings.values.get(if self.active == 0 { "LeftColumnCount" } else { "RightColumnCount" }).and_then(|v| v.as_i64()).unwrap_or(0);
         let mut chosen = None;
-        // 원본 miColAuto·miCol1~6은 RadioItem: 지금 값에 RCHECK.
+        // Original miColAuto and miCol1-6 are RadioItems: RCHECK on the current value.
         let radio = |ui: &mut egui::Ui, on: bool, text: String| super::skin_pane::menu_check_button(ui, true, on, true, egui::Button::new(text));
         let auto = self.raw_menu("miColAuto", "&A. Auto");
         let response = radio(ui, current == 0, super::favorites_dialog::access_key(&auto).0);
@@ -602,8 +602,8 @@ impl App {
         chosen
     }
 
-    /// 원본 pmColCountPopup(0x437634): 세로 막대 열 단추(bColCount)의 pmColCount는 miColumn의 항목을 그대로 복사해(하위 메뉴 없이)
-    /// 보이고, 활성 패널의 열 수(+0x388)가 0이면 첫 항목(자동), 7보다 작으면 그 수의 항목에 표시한다. 작업 폴더 메뉴는 없다.
+    /// Original pmColCountPopup (0x437634): pmColCount of the vertical bar column button (bColCount) copies the miColumn items as is (without submenus)
+    /// and checks the first item (auto) when the active pane's column count (+0x388) is 0, or the item of that number when below 7. No work folder menu.
     pub(super) fn original_column_popup(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         if let Some(command) = self.column_items(ui) {
             ui.close();
@@ -611,7 +611,7 @@ impl App {
         }
     }
 
-    /// 원본 miColumn(보기 메뉴): 자동, 1~6열(지금 값에 표시).
+    /// Original miColumn (View menu): auto, 1-6 columns (current value checked).
     pub(super) fn column_menu(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let mut chosen: Option<String> = None;
         let raw = self.raw_menu("miColumn", "&C. Columns");
@@ -624,7 +624,7 @@ impl App {
         }
     }
 
-    /// 원본 폴더 메뉴의 miSetWorkFolder(작업 폴더 1~5 지정)와 miGoToWorkFolder(작업 폴더 1~5로 가기, C#처럼 경로를 붙여 보인다).
+    /// miSetWorkFolder (set work folder 1-5) and miGoToWorkFolder (go to work folder 1-5, shown with paths like C#) of the original Folder menu.
     pub(super) fn work_folder_menus(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         let ko = self.language == "ko";
         let folders = self.settings.strings("WorkingFolders");
@@ -658,14 +658,14 @@ impl App {
         }
     }
 
-    /// 드라이브 단추 목록(루트, 도움말). 5초가 지났으면 따로 다시 읽기 시작하고, 그동안은 지난 목록.
+    /// Drive button list (root, tooltip). After 5 seconds a separate reread starts and the previous list is used meanwhile.
     pub(super) fn drive_button_list(&mut self) -> Vec<(PathBuf, String)> {
         let stale = self.drive_cache.as_ref().is_none_or(|(at, _)| at.elapsed() > Duration::from_secs(5));
         if stale && !self.drive_cache_pending {
             self.drive_cache_pending = true;
             let tx = self.async_tx.clone();
             thread::spawn(move || {
-                // 원본 TNXDriveList.Refresh: 종류가 0·1이 아니면 미디어가 없어도 단추가 있다. 고친 것: 전에는 준비된 드라이브만.
+                // Original TNXDriveList.Refresh: drives of types other than 0 and 1 get a button even without media. Fixed: previously only ready drives.
                 let drives = native::listed_drives()
                     .into_iter()
                     .map(|root| {
@@ -684,8 +684,8 @@ impl App {
     }
 }
 
-/// 이번 프레임에 눌린 글쇠와 수식 키. C# MainWindow의 HandleKeyboardAsync는 IsRepeat을 거르지 않으므로
-/// 글쇠를 누르고 있으면 반복 입력도 명령을 다시 실행한다(원격 창만 반복을 거른다).
+/// Keys and modifiers pressed this frame. C# MainWindow HandleKeyboardAsync does not filter IsRepeat, so
+/// holding a key reruns the command on repeat input too (only the remote window filters repeats).
 fn pressed_key(ctx: &egui::Context) -> Option<(egui::Key, egui::Modifiers)> {
     ctx.input(|i| {
         i.events.iter().find_map(|event| match event {
@@ -696,9 +696,9 @@ fn pressed_key(ctx: &egui::Context) -> Option<(egui::Key, egui::Modifiers)> {
 }
 
 
-/// 눌린 글쇠를 원본 단축키 글(TextToShortCut이 읽는 꼴, 예: "Ctrl+Shift+F2", "/")로.
-/// 고친 것: 문장 부호 글쇠는 egui 이름("Slash")이 아니라 글자("/")로 쓴다(원본 TextToShortCut("/") = VK_OEM_2).
-/// 전에는 shortcut.ini의 miCommandLine=/, miToRoot=\ 같은 단축키가 듣지 않았다.
+/// Turns the pressed key into original shortcut text (the form TextToShortCut reads, e.g. "Ctrl+Shift+F2", "/").
+/// Fixed: punctuation keys are written as the character ("/") instead of the egui name ("Slash") (original TextToShortCut("/") = VK_OEM_2).
+/// Previously shortcut.ini entries such as miCommandLine=/ and miToRoot=\ did not work.
 pub(super) fn original_shortcut_text(key: egui::Key, modifiers: egui::Modifiers) -> String {
     let key_name = match key {
         egui::Key::ArrowLeft => "Left",
@@ -718,8 +718,8 @@ pub(super) fn original_shortcut_text(key: egui::Key, modifiers: egui::Modifiers)
 mod tests {
     use super::*;
 
-    /// 원본 기본 단축키 표(DEFAULT_SHORTCUT_TEXT)의 모든 글쇠(숫자판 "Num" 글쇠는 raw_input_hook 갈래라 뺀다)가
-    /// egui 글쇠 사건에서 같은 단축키 값으로 바뀌는지.
+    /// Whether every key of the original default shortcut table (DEFAULT_SHORTCUT_TEXT) (except numpad "Num" keys, which go through raw_input_hook)
+    /// turns into the same shortcut value from egui key events.
     #[test]
     fn every_default_original_shortcut_is_reachable_from_egui_keys() {
         let mut checked = 0;
@@ -755,7 +755,7 @@ mod tests {
             checked += 1;
         }
         assert!(checked > 90, "{checked}");
-        // Shift가 바꾼 글자 글쇠(egui는 Shift+/를 Questionmark로 줄 수 있다)도 같은 단축키.
+        // Character keys changed by Shift (egui may report Shift+/ as Questionmark) map to the same shortcut too.
         let shift = egui::Modifiers::SHIFT;
         assert_eq!(ndr::compat::text_to_shortcut(&original_shortcut_text(egui::Key::Questionmark, shift)), ndr::compat::text_to_shortcut("Shift+/"));
         assert_eq!(ndr::compat::text_to_shortcut(&original_shortcut_text(egui::Key::Pipe, shift)), ndr::compat::text_to_shortcut("Shift+\\"));

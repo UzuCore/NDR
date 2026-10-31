@@ -1,4 +1,4 @@
-//! 원본 TfSaveList(파일 목록 저장하기)와 miSaveListClick(0x437dbc). 줄 규칙은 ndr::list_export.
+//! Original TfSaveList (Save File List) and miSaveListClick (0x437dbc). Line rules are in ndr::list_export.
 use super::original_dialogs::{DialogKind, DialogResult};
 use super::*;
 use ndr::list_export::{self as export, Columns, ExportRow};
@@ -9,10 +9,10 @@ use std::fs;
 pub(super) struct ListExportForm {
     pub rows: Vec<ExportRow>,
     pub columns: Columns,
-    /// rgDelimiter.ItemIndex: 0 탭, 1 쉼표, 2 eUserDelimiter.
+    /// rgDelimiter.ItemIndex: 0 tab, 1 comma, 2 eUserDelimiter.
     pub delimiter: usize,
     pub custom: String,
-    /// mPreview(편집할 수 있다).
+    /// mPreview (editable).
     pub preview: String,
 }
 
@@ -22,8 +22,8 @@ impl ListExportForm {
         form.rebuild();
         form
     }
-    /// FUN_004519a0: 열·구분자를 바꿀 때마다(cbShowItemClick, rgDelimiterClick, eUserDelimiterChange) 미리보기를 다시 채운다.
-    /// 고친 내용은 버려진다.
+    /// FUN_004519a0: refills the preview whenever columns or the delimiter change (cbShowItemClick, rgDelimiterClick, eUserDelimiterChange).
+    /// Edits are discarded.
     pub(super) fn rebuild(&mut self) {
         self.preview = export::preview(&self.rows, &self.columns, &export::delimiter(self.delimiter, &self.custom));
     }
@@ -33,14 +33,14 @@ fn text(language: &compat::Language, key: &str, fallback: &str) -> String {
     language.text(&format!("formSaveList.{key}"), fallback)
 }
 
-/// 창 그리기. Some(0) 저장(btnSave), Some(1) 취소(btnCancel).
+/// Draws the window. Some(0) save (btnSave), Some(1) cancel (btnCancel).
 pub(super) fn list_export_ui(ui: &mut egui::Ui, form: &mut ListExportForm, language: &compat::Language) -> Option<usize> {
     let mut choice = None;
     let mut changed = false;
-    // 원본 TfSaveList(ClientWidth 548 × ClientHeight 461): gbColumns(16,8 305×121: chkFileName(20,28, 늘 켜짐·꺼진 단추)·
+    // Original TfSaveList (ClientWidth 548 x ClientHeight 461): gbColumns (16,8 305x121: chkFileName (20,28, always on, disabled button),
     // chkExtension(141,28)·chkFileSize(20,48)·chkSizeComma(141,48)·chkDate(20,69)·chkTime(141,69)·chkAttributes(20,92)·
-    // chkDescription(141,92)), rgDelimiter(331,8 201×121: 탭·쉼표·그 밖) eUserDelimiter(403,97 101×21, 그 밖일 때만 켜짐),
-    // mPreview(16,143 516×270, 두 방향 스크롤), lHelp(16,418), btnSave(368,427) btnCancel(458,427) 75×25.
+    // chkDescription (141,92)), rgDelimiter (331,8 201x121: tab, comma, other) eUserDelimiter (403,97 101x21, enabled only for other),
+    // mPreview (16,143 516x270, scrolls both ways), lHelp (16,418), btnSave (368,427) btnCancel (458,427) 75x25.
     let (area, _) = ui.allocate_exact_size(egui::vec2(548.0, 461.0), egui::Sense::hover());
     let at = |x: f32, y: f32, w: f32, h: f32| egui::Rect::from_min_size(area.min + egui::vec2(x, y), egui::vec2(w, h));
     use super::original_dialogs::put_left;
@@ -60,7 +60,7 @@ pub(super) fn list_export_ui(ui: &mut egui::Ui, form: &mut ListExportForm, langu
         (&mut columns.attributes, 20.0, 92.0, 120.0, "Caption.chkAttributes", "&Attributes"),
         (&mut columns.description, 141.0, 92.0, 120.0, "Caption.chkDescription", "Comme&nt"),
     ] {
-        // 미리보기 메모에 초점이 있으면 글자는 메모 글이고, Alt+글자만 단축 문자다.
+        // While the preview memo has focus, letters are memo text and only Alt+letter is an access key.
         changed |= super::original_dialogs::access_checkbox(ui, inside(x, y, w), value, &raw(key, fallback));
     }
     super::original_dialogs::group_box(ui, at(331.0, 8.0, 201.0, 121.0), &text(language, "RadioGroup.rgDelimiter", "Delimiter"));
@@ -83,7 +83,7 @@ pub(super) fn list_export_ui(ui: &mut egui::Ui, form: &mut ListExportForm, langu
     ui.painter().rect(preview, 0.0, ui.visuals().extreme_bg_color, ui.visuals().widgets.noninteractive.bg_stroke, egui::StrokeKind::Inside);
     ui.scope_builder(egui::UiBuilder::new().max_rect(preview.shrink(2.0)), |ui| {
         egui::ScrollArea::both().id_salt("list-export-preview").auto_shrink([false, false]).show(ui, |ui| {
-            // ScrollBars ssBoth: 줄을 감싸지 않는다(WordWrap은 가로 스크롤 막대가 있으면 꺼진다).
+            // ScrollBars ssBoth: lines are not wrapped (WordWrap is off when there is a horizontal scroll bar).
             let mut layouter = |ui: &egui::Ui, text: &dyn egui::TextBuffer, _wrap: f32| {
                 let font = egui::TextStyle::Monospace.resolve(ui.style());
                 let job = egui::text::LayoutJob::simple(text.as_str().to_owned(), font, ui.visuals().text_color(), f32::INFINITY);
@@ -103,13 +103,13 @@ pub(super) fn list_export_ui(ui: &mut egui::Ui, form: &mut ListExportForm, langu
 }
 
 impl App {
-    /// 원본 btnSaveClick(0x452030): 미리보기에 줄이 있으면 dlgSave(DefaultExt txt, Filter "*.txt", 덮어쓰기 확인)를 열고,
-    /// 고르면 Lines.SaveToFile(TEncoding.Unicode). 대화 상자를 닫아도 창은 늘 확인(ModalResult 1)으로 닫힌다.
+    /// Original btnSaveClick (0x452030): when the preview has lines, opens dlgSave (DefaultExt txt, Filter "*.txt", overwrite prompt)
+    /// and on choice Lines.SaveToFile(TEncoding.Unicode). Closing the dialog still closes the window as confirmed (ModalResult 1).
     pub(super) fn submit_list_export(&mut self, ctx: &egui::Context) {
         let Some(dialog) = self.original_dialogs.last() else { return };
         let DialogKind::ListExport(form) = &dialog.kind else { return };
         if let Some(bytes) = export::file_bytes(&form.preview) {
-            // DFM dlgSave.Title은 한국어 "파일 목록 저장" 하나뿐이다. 고친 것: 영어에서는 창 제목(Save File List)을 쓴다.
+            // DFM dlgSave.Title is only the Korean "파일 목록 저장". Fixed: English uses the window title (Save File List).
             let title = if self.language == "ko" { "파일 목록 저장".to_owned() } else { dialog.title.clone() };
             if let Some(mut path) = (self.save_dialog)(&title, None, "", &[("*.txt", "*.txt")], "txt", true) {
                 if path.extension().is_none() {
@@ -124,9 +124,9 @@ impl App {
         self.answer_dialog(DialogResult::ListExport(Some(())), ctx);
     }
 
-    /// 원본 miSaveListClick(0x437dbc): 표시가 없으면 SelectAll(폴더 포함, 드라이브·".." 제외)한 항목, 있으면 표시한 항목을
-    /// 창에 넘긴다. 확인으로 닫히면 표시를 "마지막 선택"에 남기고 지운다(CopySelection + ClearSelection). 표시가 없었으면
-    /// 잠시 고른 것만 지운다(목록 표시는 그대로).
+    /// Original miSaveListClick (0x437dbc): without marks passes the items of SelectAll (with folders, without drives and ".."), otherwise the marked items,
+    /// to the window. When it closes confirmed, the marks are saved as the "last selection" and cleared (CopySelection + ClearSelection). Without marks
+    /// only the temporary selection is cleared (the list marks stay).
     pub(super) fn save_list_command(&mut self) {
         let i = self.active;
         let pane = &self.panes[i];

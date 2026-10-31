@@ -1,15 +1,15 @@
-//! WPF DataGrid 자리의 egui 표: 머리글(누르면 정렬), 줄 선택(Ctrl/Shift, 위/아래/Home/End, Ctrl+A), Ctrl+C(선택 줄을 탭 글로),
-//! 확인란 열. 폴더 비교 결과 창이 쓴다. 줄 데이터는 부르는 쪽이 갖고, 보이는 순서와 선택만 여기 둔다.
+//! egui table in place of a WPF DataGrid: headers (click to sort), row selection (Ctrl/Shift, Up/Down/Home/End, Ctrl+A), Ctrl+C (selected rows as tab text),
+//! checkbox columns. Used by the folder comparison result window. The caller owns the row data; only display order and selection live here.
 use super::*;
 use std::{cmp::Ordering as Order, collections::BTreeSet, ops::Range};
 
-/// 열 하나: 머리글, 너비, 오른쪽 맞춤, 확인란 열.
+/// One column: header, width, right alignment, checkbox column.
 pub(super) struct Column {
     pub title: String,
     pub width: f32,
     pub right: bool,
     pub check: bool,
-    /// 가운데 맞춤(TListColumn Alignment = taCenter).
+    /// Centered (TListColumn Alignment = taCenter).
     pub center: bool,
 }
 
@@ -28,7 +28,7 @@ impl Column {
     }
 }
 
-/// 보이는 순서(정렬), 선택한 줄(rows 번호), Shift 기준 줄, 글쇠로 움직이는 줄.
+/// Display order (sorting), selected rows (rows indices), Shift anchor row, row moved by keys.
 #[derive(Clone, Debug, Default)]
 pub(super) struct GridState {
     pub order: Vec<usize>,
@@ -40,21 +40,21 @@ pub(super) struct GridState {
     scroll_to: Option<usize>,
 }
 
-/// 한 장면에서 일어난 일. 확인란을 누른 줄은 부르는 쪽이 값을 바꾼다.
+/// What happened in one frame. For rows whose checkbox was clicked, the caller changes the value.
 #[derive(Default)]
 pub(super) struct GridEvents {
     pub sort: Option<usize>,
     pub toggled: Vec<usize>,
     pub copy: bool,
-    /// 두 번 누른 줄(MouseDoubleClick).
+    /// Double-clicked row (MouseDoubleClick).
     pub double_clicked: Option<usize>,
-    /// 줄 오른쪽 단추 메뉴에서 고른 항목(context_menu가 돌려준 값).
+    /// Item chosen from the row's right-click menu (the value returned by context_menu).
     pub menu: Option<usize>,
-    /// 표를 누름(초점이 이 표로 온다).
+    /// The table was clicked (focus comes to this table).
     pub clicked: bool,
 }
 
-/// 그리기 설정. multi_select = DataGridSelectionMode.Extended, sortable = CanUserSortColumns, enabled = IsEnabled.
+/// Drawing options. multi_select = DataGridSelectionMode.Extended, sortable = CanUserSortColumns, enabled = IsEnabled.
 pub(super) struct GridView<'a> {
     pub id: &'a str,
     pub columns: &'a [Column],
@@ -62,13 +62,13 @@ pub(super) struct GridView<'a> {
     pub enabled: bool,
     pub sortable: bool,
     pub multi_select: bool,
-    /// 글쇠(위아래·Home/End·Ctrl+A/C)를 받는가(한 창에 표가 둘이면 초점이 있는 표만).
+    /// Whether it takes keys (Up/Down, Home/End, Ctrl+A/C) (with two tables in one window, only the focused one).
     pub keyboard: bool,
-    /// 줄 오른쪽 단추 메뉴(ContextMenu). 고르면 그 값을 GridEvents::menu로 돌려준다.
+    /// Row right-click menu (ContextMenu). The chosen value is returned through GridEvents::menu.
     pub context_menu: Option<&'a dyn Fn(&mut egui::Ui) -> Option<usize>>,
-    /// 줄 글자 색(원본 OnAdvancedCustomDrawItem처럼 줄마다 Font.Color). None이면 보통 글자 색. 고른 줄은 선택 색.
+    /// Row text color (Font.Color per row like the original OnAdvancedCustomDrawItem). None uses the normal text color. Selected rows use the selection color.
     pub row_color: Option<&'a dyn Fn(usize) -> Option<Color32>>,
-    /// 줄 바탕(원본 TListView Color). None이면 테마 바탕과 번갈이 줄.
+    /// Row background (original TListView Color). None uses the theme background with striped rows.
     pub background: Option<Color32>,
 }
 
@@ -79,7 +79,7 @@ impl GridState {
         Self { order: (0..count).collect(), ..Default::default() }
     }
 
-    /// DataGrid 머리글: 다른 열이면 오름차순, 같은 열이면 방향을 바꾼다.
+    /// DataGrid header: a different column sorts ascending, the same column flips the direction.
     pub(super) fn toggle_sort(&mut self, column: usize, compare: impl Fn(usize, usize) -> Order) {
         let descending = matches!(self.sort, Some((current, false)) if current == column);
         self.sort = Some((column, descending));
@@ -92,12 +92,12 @@ impl GridState {
         self.selected = self.order.iter().copied().collect();
     }
 
-    /// 선택한 줄(보이는 순서).
+    /// Selected rows (display order).
     pub(super) fn selected_in_order(&self) -> Vec<usize> {
         self.order.iter().copied().filter(|i| self.selected.contains(i)).collect()
     }
 
-    /// 보이는 줄 하나를 고른다(Shift면 기준 줄부터, Ctrl이면 더하거나 빼기). 한 줄 선택이면 수식 키는 무시.
+    /// Selects one visible row (Shift from the anchor row, Ctrl adds or removes). With single selection modifiers are ignored.
     pub(super) fn click(&mut self, display: usize, modifiers: egui::Modifiers, multi_select: bool) {
         let index = self.order[display];
         let anchor = self.anchor.and_then(|a| self.order.iter().position(|&r| r == a));
@@ -124,7 +124,7 @@ impl GridState {
         self.cursor = Some(index);
     }
 
-    /// DataGrid 복사(머리글 없음): 선택한 줄을 보이는 순서로, 칸은 탭, 줄은 CRLF, 확인란은 True/False.
+    /// DataGrid copy (no header): selected rows in display order, cells tab-separated, rows CRLF, checkboxes True/False.
     pub(super) fn copy_text(&self, columns: &[Column], text: &dyn Fn(usize, usize) -> String, checked: &dyn Fn(usize) -> bool) -> String {
         let mut out = String::new();
         for row in self.selected_in_order() {
@@ -136,9 +136,9 @@ impl GridState {
     }
 }
 
-/// 표 그리기. text(row, column)은 글 열의 값, checked(row)는 확인란 열의 값.
+/// Draws the table. text(row, column) is a text column value, checked(row) a checkbox column value.
 pub(super) fn show(ui: &mut egui::Ui, view: &GridView, state: &mut GridState, text: &dyn Fn(usize, usize) -> String, checked: &dyn Fn(usize) -> bool) -> GridEvents {
-    // 머리글과 줄 목록은 늘 위에서 아래로(부르는 쪽이 가로 배치 안에서 allocate_ui로 불러도 옆으로 늘어서지 않게).
+    // Header and row list always go top to bottom (so they do not line up sideways when the caller uses allocate_ui inside a horizontal layout).
     ui.vertical(|ui| show_rows_top_down(ui, view, state, text, checked)).inner
 }
 

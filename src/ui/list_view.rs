@@ -1,5 +1,5 @@
-//! C# 자세히 보기 목록(ConfigureGrid 열, FileNameDisplayConverter, ExtensionColorConverter, 묶음 머리글).
-//! 열 글은 C#처럼 목록을 받거나 다시 늘어놓을 때 한 번 만들어 둔다(날짜 나이도 그때 값).
+//! C# Details list (ConfigureGrid columns, FileNameDisplayConverter, ExtensionColorConverter, group headers).
+//! Column texts are built once when the list is received or rearranged, like C# (date ages use the value at that time).
 use super::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -17,7 +17,7 @@ impl DetailColumn {
     pub(super) fn index(self) -> usize {
         self as usize
     }
-    /// 머리글을 눌렀을 때의 정렬 방식(C# SortMemberPath 중 정렬 방식이 있는 것).
+    /// Sort mode when a header is clicked (the C# SortMemberPath entries that have a sort mode).
     pub(super) fn sort_mode(self) -> Option<&'static str> {
         match self {
             DetailColumn::Name => Some("Name"),
@@ -35,7 +35,7 @@ pub(super) enum DetailRow {
     Item(usize),
 }
 
-/// 목록 줄마다 열 글(7칸, DetailColumn 순서)과 이름 색, 묶음 머리글을 끼운 줄 순서.
+/// Per list row the column texts (7 cells, DetailColumn order) and name color, plus the row order with group headers inserted.
 #[derive(Default)]
 pub(super) struct PaneView {
     pub cells: Vec<[String; 7]>,
@@ -43,9 +43,9 @@ pub(super) struct PaneView {
     pub rows: Vec<DetailRow>,
 }
 
-/// C# FileNameDisplayConverter의 CharacterCase: 0 그대로, 1 소문자, 2 대문자, 3 첫 글자만 대문자.
-/// SFTP 권한 비트를 목록 글로("drwxr-xr-x"): 원본 OnGetAttrString(FUN_00485aa0)은 FTP 패널이면 목록 줄의 권한 글(+0x74)을 그대로,
-/// 아니면 GetAttrString을 보인다(너비는 "drwxrwxrwx").
+/// CharacterCase of C# FileNameDisplayConverter: 0 as is, 1 lower, 2 upper, 3 first letter upper.
+/// SFTP permission bits as list text ("drwxr-xr-x"): original OnGetAttrString (FUN_00485aa0) shows the row's permission text (+0x74) as is on FTP panes,
+/// otherwise GetAttrString (width "drwxrwxrwx").
 pub(super) fn permission_text(is_dir: bool, mode: u32) -> String {
     let mut text = String::from(if is_dir { 'd' } else { '-' });
     for shift in [6, 3, 0] {
@@ -57,8 +57,8 @@ pub(super) fn permission_text(is_dir: bool, mode: u32) -> String {
     text
 }
 
-/// 원본 StrCharCase(0x7db714): 1 = CharLowerW, 2 = CharUpperW, 3 = FUN_007d223c(CharLowerW 뒤 맨 앞이나 빈칸 다음의 a~z만 대문자).
-/// 고친 것: 전에는 3에서 글 전체의 첫 글자만 대문자로 바꾸고 나머지는 그대로 두었다.
+/// Original StrCharCase (0x7db714): 1 = CharLowerW, 2 = CharUpperW, 3 = FUN_007d223c (after CharLowerW, only a-z at the start or after a space become upper).
+/// Fixed: previously 3 uppercased only the first character of the whole text and left the rest alone.
 pub(super) fn character_case(text: &str, mode: i64) -> String {
     match mode {
         1 => text.to_lowercase(),
@@ -90,15 +90,15 @@ mod character_case_tests {
 }
 
 impl App {
-    /// 보이는 열과 머리글, 너비 비율(C# star 너비 2.4, 0.55, 1.0, 0.8, 1.2, 0.55, 1.4).
-    /// 열 제목 = 원본 FIELD_NAME/EXT/SIZE/DATEMODIFIED/ATTR/DESC(TNXCustomFileListView 머리글). "종류" 열은 C# 판에만 있다.
+    /// Visible columns, headers and width ratios (C# star widths 2.4, 0.55, 1.0, 0.8, 1.2, 0.55, 1.4).
+    /// Column titles = original FIELD_NAME/EXT/SIZE/DATEMODIFIED/ATTR/DESC (TNXCustomFileListView headers). The "type" column exists only in the C# version.
     pub(super) fn detail_columns(&self, _ko: bool) -> Vec<(DetailColumn, String, f32)> {
         let field = |key: &str, fallback: &str| self.language_pack.text(&format!("RES.{key}"), fallback);
         let mut columns = vec![(DetailColumn::Name, field("FIELD_NAME", "Name"), 2.4)];
         if !self.settings.flag("AttachExtensionToName", false) {
             columns.push((DetailColumn::Extension, field("FIELD_EXT", "Ext"), 0.55));
         }
-        // 원본은 "종류" 열을 두지 않고, ShowFileType(원본 showfiletype)이면 빈 설명 칸에 종류를 보인다.
+        // The original has no "type" column; with ShowFileType (original showfiletype) it shows the type in an empty description cell.
         columns.extend([
             (DetailColumn::Size, field("FIELD_SIZE", "Size"), 0.8),
             (DetailColumn::Modified, field("FIELD_DATEMODIFIED", "Date modified"), 1.2),
@@ -108,8 +108,8 @@ impl App {
         columns
     }
 
-    /// C# GroupHeaderNameConverter. 차이(승인된 수정): C#은 Get("Caption", 키)가 언어 파일의 [formNDRSearch] 절을 찾지 못해
-    /// 영어 이름을 보이지만, Rust는 그 절의 번역을 쓴다.
+    /// C# GroupHeaderNameConverter. Difference (approved fix): C# Get("Caption", key) cannot find the [formNDRSearch] section of the language file and
+    /// shows English names, while Rust uses that section's translation.
     pub(super) fn group_caption(&self, key: &str) -> String {
         match ndr::listing::group_caption_key(key) {
             (label, Some("RES.FOLDERS")) => self.language_pack.text("RES.FOLDERS", label),
@@ -118,16 +118,16 @@ impl App {
         }
     }
 
-    /// 목록 글과 색, 묶음 줄을 다시 만든다(sort_pane 끝에서 부른다).
+    /// Rebuilds list texts, colors and group rows (called at the end of sort_pane).
     pub(super) fn compute_view(&mut self, index: usize) {
         let korean = self.language == "ko";
         let attach = self.settings.flag("AttachExtensionToName", false);
         let case = self.settings.values.get("CharacterCase").and_then(|v| v.as_i64()).unwrap_or(0).clamp(0, 3);
         let date_format = self.settings.text("DateFormat", "yyyy-MM-dd");
         let time_format = self.settings.text("TimeFormat", "HH:mm");
-        // 원본 처음 값 [Display] usedateage=1.
+        // Original default [Display] usedateage=1.
         let use_age = self.settings.flag("UseDateAge", true);
-        // 원본 DateToStr의 GetString(TODAY / YESTERDAY / DATEAGE).
+        // GetString of original DateToStr (TODAY / YESTERDAY / DATEAGE).
         let age_labels = [
             self.language_pack.text("RES.TODAY", "Today"),
             self.language_pack.text("RES.YESTERDAY", "Yesterday"),
@@ -139,9 +139,9 @@ impl App {
         let category_mode = self.settings.text(&Self::side_key(index, "FolderCategoryMode"), "Auto");
         let show_group_name = self.settings.flag(&Self::side_key(index, "ShowGroupName"), true);
         let now = std::time::SystemTime::now();
-        // 스킨 테마: 원본 항목 색(original_item_color). 기본 색 세 개는 한 번만 구한다.
+        // Skin theme: original item colors (original_item_color). The three base colors are resolved once.
         let skin = true;
-        // 원본 [Display] showfiletype(처음 값 1).
+        // Original [Display] showfiletype (default 1).
         let show_file_type = self.settings.flag("ShowFileType", true);
         let rgb = |key: &str| {
             let c = self.basic_list_color(key);
@@ -161,7 +161,7 @@ impl App {
         let mut item_colors: HashMap<String, (u8, u8, u8)> = HashMap::new();
         for entry in &pane.entries {
             if entry.drive {
-                // 원본 DrawListItem 종류 4: "%s:" 뒤에 드라이브 이름(item+8). 다른 칸(확장자·크기·날짜·속성·설명)은 그리지 않는다.
+                // Original DrawListItem kind 4: the drive name (item+8) after "%s:". Other cells (extension, size, date, attributes, description) are not drawn.
                 let label = pane.drive_infos.get(&entry.path).map(|(name, _, _)| name.as_str()).unwrap_or("");
                 let name = if label.is_empty() { entry.name.clone() } else { format!("{} {label}", entry.name) };
                 view.cells.push([name, String::new(), String::new(), String::new(), String::new(), String::new(), String::new()]);
@@ -171,9 +171,9 @@ impl App {
             let extension = if entry.is_dir || attach { "" } else { ndr::parity::list_extension(&entry.name) };
             let stem = &entry.name[..entry.name.len() - extension.len()];
             let description = if pane.descriptions.is_empty() { String::new() } else { pane.descriptions.get(&entry.name.to_lowercase()).cloned().unwrap_or_default() };
-            // 원본 DrawListItem 설명 칸(필드 6, 0x7da043): 설명(+0x10)이 비고 showfiletype(+0x384)이면 파일 종류 글(+0xc).
-            // 원본 GetList(0x45a34c)의 종류 글은 셸 이름(SHGetFileInfoW SHGFI_TYPENAME|USEFILEATTRIBUTES, 확장자마다 한 번,
-            // ".."는 없음). 압축·FTP 목록은 SetFileType을 부르지 않아 비어 있다.
+            // Original DrawListItem description cell (field 6, 0x7da043): when the description (+0x10) is empty and showfiletype (+0x384) is on, the file type text (+0xc).
+            // The type text of original GetList (0x45a34c) is the shell name (SHGetFileInfoW SHGFI_TYPENAME|USEFILEATTRIBUTES, once per extension,
+            // none for ".."). Archive and FTP lists never call SetFileType, so it is empty.
             let kind = if !skin && entry.is_parent() {
                 (if korean { "상위 폴더" } else { "Parent folder" }).to_owned()
             } else if !skin {
@@ -187,7 +187,7 @@ impl App {
             let description = if description.is_empty() && skin && show_file_type { kind.clone() } else { description };
             view.cells.push([
                 character_case(stem, case),
-                // 원본 확장자 칸(항목 +8 = 점 없는 확장자, 글자 꼴은 charcase를 따름). C# 테마는 C# 판처럼 ".확장자".
+                // Original extension cell (item +8 = extension without the dot, letter case follows charcase). The C# theme uses ".ext" like the C# version.
                 if entry.is_dir {
                     String::new()
                 } else if skin {
@@ -196,11 +196,11 @@ impl App {
                     ndr::parity::list_extension(&entry.name).to_owned()
                 },
                 kind,
-                // 원본 DrawListItem 필드 3 = SizeToStr(0x7df870). 고친 것: 전에는 C# FormatSize("999 B", "1.2 MB")였다.
+                // Original DrawListItem field 3 = SizeToStr (0x7df870). Fixed: previously C# FormatSize ("999 B", "1.2 MB").
                 if entry.is_dir { String::new() } else { ndr::parity::size_to_str(entry.size, &unit, thousands) },
                 ndr::listing::list_date_text(entry.modified, &date_format, &time_format, use_age.then(|| [age_labels[0].as_str(), age_labels[1].as_str(), age_labels[2].as_str()]), now),
-                // 원본 DrawListItem 필드 5: SFTP 목록 항목(+0x78)은 권한 글(+0x74), 그 밖은 GetAttrString(0x7b50a4, "____"에 A·H·R·S).
-                // 고친 것: 전에는 C# 판 글("RHSA"·"-")이었다.
+                // Original DrawListItem field 5: SFTP list items (+0x78) show the permission text (+0x74), others GetAttrString (0x7b50a4, A/H/R/S in "____").
+                // Fixed: previously the C# text ("RHSA", "-").
                 match &sftp_modes {
                     Some((directory, modes)) => modes.get(&super::ftp_pane::join_remote(directory, &entry.name)).map(|mode| permission_text(entry.is_dir, *mode)).unwrap_or_default(),
                     None => ndr::listing::attr_string(entry.attributes),
@@ -208,7 +208,7 @@ impl App {
                 description,
             ]);
             view.colors.push(if skin {
-                // 고친 것(빠르기): 확장자 색표를 항목마다 처음부터 훑던 것을 확장자마다 한 번만 찾는다.
+                // Fixed (speed): instead of scanning the extension color table from the start for every item, look it up once per extension.
                 if entry.is_dir {
                     Some(ndr::listing::original_item_color(entry, extension_colors, basic))
                 } else {
@@ -233,8 +233,8 @@ impl App {
         self.panes[index].view = view;
     }
 
-    /// 원본 UpdateDisplay(0x7e01f8)의 0x368: 드라이브 항목 이름 글 가운데 가장 넓은 너비. 항목 왼쪽 끝에서 그 글 끝까지
-    /// (머리 너비 + 5 + 글, `drive_row`와 같은 여백). 드라이브 항목이 없으면 0.
+    /// 0x368 of original UpdateDisplay (0x7e01f8): the widest drive item name text, from the item's left edge to the end of that text
+    /// (head width + 5 + text, the same margin as `drive_row`). 0 without drive items.
     pub(super) fn drive_text_extent(&self, ui: &egui::Ui, index: usize) -> f32 {
         let pane = &self.panes[index];
         if !pane.entries.iter().any(|e| e.drive) {
@@ -254,8 +254,8 @@ impl App {
     }
 }
 
-/// 원본 DrawListItem 종류 4의 한 줄(왼쪽 맞춤, DT_LEFT): 고른 줄이면 단추처럼 바탕, 아이콘(없으면 "▸ "), "C: 이름",
-/// 그 뒤 `paint_drive_space`. `label_right`는 줄 왼쪽에서 가장 넓은 드라이브 이름 끝까지(App::drive_text_extent).
+/// One row of original DrawListItem kind 4 (left aligned, DT_LEFT): a button-like background when selected, the icon ("▸ " when missing), "C: name",
+/// then `paint_drive_space`. `label_right` is from the row's left to the end of the widest drive name (App::drive_text_extent).
 #[allow(clippy::too_many_arguments)]
 pub(super) fn drive_row(ui: &mut egui::Ui, size: egui::Vec2, icon: Option<&egui::TextureHandle>, text: &str, color: Color32, selected: bool, cursor: bool, label_right: f32, info: Option<(u32, Option<(u64, u64)>)>, free_label: &str, style: u8) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
@@ -267,19 +267,19 @@ pub(super) fn drive_row(ui: &mut egui::Ui, size: egui::Vec2, icon: Option<&egui:
             ui.painter().rect_filled(rect, visuals.corner_radius, visuals.weak_bg_fill);
         }
         let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
-        // 원본 DrawListItem: 아이콘은 왼쪽 + 12, "%s:" 글은 머리 너비(GetListHeaderWidth) + 5부터(이름 칸과 같은 여백).
+        // Original DrawListItem: the icon at left + 12, the "%s:" text from the head width (GetListHeaderWidth) + 5 (same margin as the name cell).
         if let Some(texture) = icon {
             egui::Image::new((texture.id(), egui::vec2(16.0, 16.0))).paint_at(ui, egui::Rect::from_min_size(egui::pos2(rect.left() + 12.0, rect.top() + ((rect.height() - 16.0) / 2.0).floor()), egui::vec2(16.0, 16.0)));
         }
         let x = rect.left() + App::list_header_width(icon.is_some()) + 5.0;
-        // 원본 DrawListItem 종류 4: 드라이브 이름은 DT_END_ELLIPSIS(local_64 | 0x8000)라 칸보다 길면 "…"로 줄인다.
-        // 고친 것: 전에는 칸 끝에서 글자 중간이 잘렸다.
+        // Original DrawListItem kind 4: the drive name uses DT_END_ELLIPSIS (local_64 | 0x8000), so it shortens with "..." when longer than the cell.
+        // Fixed: previously characters were cut in half at the cell end.
         let mut job = egui::text::LayoutJob::simple_singleline(text.to_owned(), egui::TextStyle::Button.resolve(ui.style()), color);
         job.wrap = egui::text::TextWrapping { max_width: (rect.right() - 5.0 - x).max(0.0), max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
         let galley = ui.fonts_mut(|f| f.layout_job(job));
         let drawn = egui::Rect::from_min_size(egui::pos2(x, rect.center().y - galley.size().y / 2.0), galley.size());
         painter.galley(drawn.min, galley, color);
-        // 원본 ListFont 모양의 밑줄(4)·취소선(8).
+        // Underline (4) and strikeout (8) of the original ListFont style.
         if style & 4 != 0 {
             painter.hline(drawn.x_range(), drawn.bottom() - 1.5, egui::Stroke::new(1.0, color));
         }

@@ -1,30 +1,30 @@
-//! 원본 TNXCustomFileListView::ArrowKey(0x7d69dc)의 커서 이동. 보기 형식(0x38c)마다 다르다:
-//! 0 자동·1 이름 = 열로 흐르는 목록(위에서 아래로 한 열을 채우고 다음 열), 2 자세히, 3 미리 보기(왼쪽에서 오른쪽으로 한 줄).
-//! 그린 목록이 쪽 정보(`ListPage`)를 남기고, 글쇠 처리가 그것으로 새 커서를 고른다.
+//! Cursor movement of original TNXCustomFileListView::ArrowKey (0x7d69dc). It differs per view style (0x38c):
+//! 0 Auto and 1 Names = column-flowing list (fill one column top to bottom, then the next), 2 Details, 3 Thumbnails (one row left to right).
+//! The drawn list leaves page info (`ListPage`) and key handling picks the new cursor from it.
 
-/// 목록 그리기 형식.
+/// List drawing style.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) enum ListStyle {
-    /// 원본 2(자세히). 한 줄에 한 항목.
+    /// Original 2 (Details). One item per row.
     #[default]
     Details,
-    /// 원본 0·1(자동·이름): 항목 번호 / 한 열의 줄 수 = 열, 나머지 = 줄(GetItemRect).
+    /// Original 0 and 1 (Auto, Names): item index / rows per column = column, remainder = row (GetItemRect).
     Flow,
-    /// 원본 3(미리 보기): 한 줄에 칸 여러 개.
+    /// Original 3 (Thumbnails): several cells per row.
     Thumbnails,
 }
 
-/// 지난 그림의 쪽 정보(원본 0x338 한 열의 줄 수, 0x33c 보이는 열 수, 0xf1 맨 위 항목).
+/// Page info of the last frame (original 0x338 rows per column, 0x33c visible columns, 0xf1 top item).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct ListPage {
     pub style: ListStyle,
-    /// Flow: 한 열의 줄 수(0x338). Details: 한 쪽에 다 보이는 줄 수(0xce). Thumbnails: 다 보이는 줄 수.
+    /// Flow: rows per column (0x338). Details: rows fully visible on one page (0xce). Thumbnails: fully visible rows.
     pub rows: usize,
-    /// Flow: 보이는 열 수(0x33c). Thumbnails: 한 줄의 칸 수(0xcf). Details: 1.
+    /// Flow: visible columns (0x33c). Thumbnails: cells per row (0xcf). Details: 1.
     pub columns: usize,
-    /// 맨 위(처음) 보이는 항목(0xf1).
+    /// Top (first) visible item (0xf1).
     pub top: usize,
-    /// Details: 끝까지 다 보이는 마지막 항목.
+    /// Details: the last fully visible item.
     pub last: usize,
 }
 
@@ -40,8 +40,8 @@ pub(super) enum ListKey {
     End,
 }
 
-/// 원본 ArrowKey: 지금 커서(cursor)와 항목 수(count)에서 글쇠(key)가 고르는 새 커서. 범위 밖이면 0 ~ count - 1로 자른다.
-/// 자세히의 왼쪽·오른쪽은 원본처럼 커서를 옮기지 않는다(원본은 가로 막대가 있을 때 20만큼 가로로 넘긴다).
+/// Original ArrowKey: the new cursor chosen by key from the current cursor and the item count. Out-of-range values clamp to 0..count - 1.
+/// Left and Right in Details do not move the cursor, like the original (which scrolls horizontally by 20 when there is a horizontal bar).
 pub(super) fn arrow_target(page: &ListPage, cursor: usize, count: usize, key: ListKey) -> usize {
     if count == 0 {
         return 0;
@@ -75,7 +75,7 @@ pub(super) fn arrow_target(page: &ListPage, cursor: usize, count: usize, key: Li
             }
         }
         (ListStyle::Flow, ListKey::Right) => {
-            // 마지막 열에 든 항목 수(0이면 한 열이 꽉 참).
+            // Items in the last column (0 means a full column).
             let last_column = if n % rows == 0 { rows } else { n % rows };
             if last_column < n - current {
                 current + rows
@@ -134,12 +134,12 @@ pub(super) fn arrow_target(page: &ListPage, cursor: usize, count: usize, key: Li
     target.clamp(0, n - 1) as usize
 }
 
-/// 원본 ArrowKey(0x7d69dc) 형식 3의 PageUp·PageDown(줄마다 높이가 다른 미리 보기). `tops`·`heights` = 줄마다 위·높이(내용 좌표,
-/// 항목 +0x6c·GetThumbnailRowHeight), `offset` = 맨 위 위치(0xdd), `view` = 목록 높이(GetRealClientHeight).
-/// - PageDown: 아래 줄(커서 + 열 수)이 다 보이면 다 보이는 동안 한 줄씩 내려간 마지막 줄, 아니면 위가 커서 줄 위에서 목록 높이 안인
-///   동안 내려간 마지막 줄. 마지막 항목을 넘으면 마지막 항목. 커서 + 열 수가 마지막 항목 − 1 이상이면 마지막 항목.
-/// - PageUp: 커서 − 열 수 < 1이면 0. 위 줄이 맨 위보다 위(가려짐)면 위가 커서 줄 위에서 목록 높이 안인 동안 올라간 줄, 아니면
-///   맨 위 아래에 다 보이는 동안 올라간 줄. 고친 것: 원본은 이 비교가 "맨 위보다 큼"이라 맨 위에 딱 붙은 줄(위 = 0xdd)로는 가지 않았다.
+/// PageUp and PageDown of original ArrowKey (0x7d69dc) style 3 (thumbnails with per-row heights). `tops` and `heights` = per-row top and height (content coordinates,
+/// item +0x6c and GetThumbnailRowHeight), `offset` = top position (0xdd), `view` = list height (GetRealClientHeight).
+/// - PageDown: if the row below (cursor + columns) is fully visible, the last row reached while rows stay fully visible; otherwise the last row reached while its top stays
+///   within the list height above the cursor row. Past the last item, the last item. When cursor + columns is at least last item - 1, the last item.
+/// - PageUp: 0 when cursor - columns < 1. If the row above is above the top (hidden), the row reached going up while its top stays within the list height of the cursor row; otherwise
+///   the row reached while rows stay fully visible below the top. Fixed: the original compared "greater than the top", so it never went to a row exactly at the top (top = 0xdd).
 #[allow(clippy::too_many_arguments)]
 pub(super) fn thumbnail_page_target(tops: &[f32], heights: &[f32], columns: usize, offset: f32, view: f32, cursor: usize, count: usize, down: bool) -> usize {
     let columns = columns.max(1);
@@ -192,9 +192,9 @@ pub(super) fn thumbnail_page_target(tops: &[f32], heights: &[f32], columns: usiz
     }
 }
 
-/// 원본 ArrowKey의 Ctrl(Shift 없이) 글쇠: 항목 종류(TNXFileItem +0x3c: 1 폴더, 3 파일, 4 드라이브, FUN_007d2c54) 수로 건너뛴다.
-/// Ctrl+PageUp = 첫 항목(폴더가 있을 때), Ctrl+PageDown = 마지막 폴더, Ctrl+Home = 첫 파일, Ctrl+End = 마지막 파일(파일이 있을 때).
-/// 그 밖의 글쇠나 해당 종류가 없으면 None(커서를 옮기지 않는다).
+/// Ctrl (without Shift) keys of original ArrowKey: jump by counts of item kinds (TNXFileItem +0x3c: 1 folder, 3 file, 4 drive, FUN_007d2c54).
+/// Ctrl+PageUp = first item (when there are folders), Ctrl+PageDown = last folder, Ctrl+Home = first file, Ctrl+End = last file (when there are files).
+/// Other keys, or when that kind is missing, return None (the cursor does not move).
 pub(super) fn ctrl_target(folders: usize, files: usize, drives: usize, count: usize, key: ListKey) -> Option<usize> {
     if count == 0 {
         return None;
@@ -209,9 +209,9 @@ pub(super) fn ctrl_target(folders: usize, files: usize, drives: usize, count: us
     Some(target.min(count - 1))
 }
 
-/// 원본 ArrowKey의 `[`(0xdb)·`]`(0xdd): 목록 끝 드라이브 항목(종류 4, `drives`개) 사이를 옮긴다.
-/// `[`: 드라이브가 있으면 첫 드라이브, 커서가 드라이브이고 마지막 항목이 아니면 다음 항목. 드라이브가 없으면 None.
-/// `]`: 커서가 드라이브면 이전 항목(첫 드라이브면 마지막 항목), 아니면 마지막 항목.
+/// `[` (0xdb) and `]` (0xdd) of original ArrowKey: move between the drive items at the end of the list (kind 4, `drives` items).
+/// `[`: the first drive when there are drives, the next item when the cursor is a drive and not the last item. None without drives.
+/// `]`: the previous item when the cursor is a drive (the last item from the first drive), otherwise the last item.
 pub(super) fn bracket_target(cursor: usize, count: usize, drives: usize, on_drive: bool, open: bool) -> Option<usize> {
     if count == 0 {
         return None;
@@ -230,13 +230,13 @@ pub(super) fn bracket_target(cursor: usize, count: usize, drives: usize, on_driv
     Some(target.min(count - 1))
 }
 
-/// 원본 UpdateDisplayAuto/UpdateDisplayNames의 열 배치: (한 열의 줄 수 0x338, 보이는 열 수 0x33c, 가로 막대가 있는지).
-/// `fits`는 한 열 너비로 들어가는 열 수(자동은 이름·칸 너비, 이름은 이름 너비로 셈), `configured`는 열 수 설정(0 = 자동),
-/// `rows_full`/`rows_with_bar`는 가로 막대가 없을 때/있을 때 한 열에 들어가는 줄 수. 자동은 다 들어가면 1열(자세히처럼 그린다).
+/// Column layout of original UpdateDisplayAuto/UpdateDisplayNames: (rows per column 0x338, visible columns 0x33c, whether there is a horizontal bar).
+/// `fits` is the number of columns that fit by one column width (Auto counts name and cell widths, Names the name width), `configured` the column count setting (0 = auto),
+/// `rows_full`/`rows_with_bar` are rows per column without/with the horizontal bar. Auto uses one column when everything fits (drawn like Details).
 pub(super) fn flow_layout(count: usize, fits: usize, configured: usize, rows_full: usize, rows_with_bar: usize, auto: bool) -> (usize, usize, bool) {
     let (rows_full, rows_with_bar) = (rows_full.max(1), rows_with_bar.max(1));
     let fewer = |rows: usize, columns: usize| {
-        // 한 열 덜 써도 쪽 수가 같으면 한 열을 뺀다(열이 넓어진다).
+        // If one column fewer gives the same page count, drop a column (columns get wider).
         let total = count.div_ceil(rows);
         if columns > 1 && total.div_ceil(columns - 1) == total.div_ceil(columns) { columns - 1 } else { columns }
     };
@@ -258,8 +258,8 @@ pub(super) fn flow_layout(count: usize, fits: usize, configured: usize, rows_ful
     (rows, fewer(rows, fits), bar)
 }
 
-/// 열로 흐르는 목록에서 맨 왼쪽에 올 수 있는 마지막 열. 원본 UpdateScrollBar(형식 0·1): 줄 단위면 열 수 − 보이는 열 수,
-/// 쪽 단위면 마지막 쪽의 처음 열(쪽 번호 × 보이는 열 수, 오른쪽이 빌 수 있다).
+/// The last column that can be leftmost in a column-flowing list. Original UpdateScrollBar (styles 0/1): by line columns - visible columns,
+/// by page the first column of the last page (page index x visible columns; the right side may be empty).
 pub(super) fn flow_last_first(total_columns: usize, columns: usize, by_page: bool) -> usize {
     let (total, columns) = (total_columns.max(1), columns.max(1));
     if by_page { ((total - 1) / columns) * columns } else { total.saturating_sub(columns) }
@@ -269,10 +269,10 @@ pub(super) fn flow_last_first(total_columns: usize, columns: usize, by_page: boo
 mod tests {
     use super::*;
 
-    /// 원본 ArrowKey 형식 3 PageUp·PageDown: 아래 줄이 다 보이면 마지막으로 다 보이는 줄까지, 아니면 한 화면(위끼리 목록 높이 안).
+    /// Original ArrowKey style 3 PageUp/PageDown: to the last fully visible row when the row below is fully visible, otherwise one screen (tops within the list height).
     #[test]
     fn thumbnail_pages_follow_the_row_pixels() {
-        // 3열, 줄 높이 100·150·100·100·100(위 0, 100, 250, 350, 450), 목록 높이 300, 맨 위 0. 항목 14개(마지막 줄 2개).
+        // 3 columns, row heights 100, 150, 100, 100, 100 (tops 0, 100, 250, 350, 450), list height 300, top 0. 14 items (2 in the last row).
         let tops = [0.0, 100.0, 250.0, 350.0, 450.0];
         let heights = [100.0, 150.0, 100.0, 100.0, 100.0];
         let page = |cursor, offset, down| thumbnail_page_target(&tops, &heights, 3, offset, 300.0, cursor, 14, down);
@@ -284,7 +284,7 @@ mod tests {
         assert_eq!(page(2, 0.0, false), 0);
     }
 
-    /// 쪽 단위는 마지막 쪽(빈 열이 남아도)의 처음 열까지, 줄 단위는 마지막 열이 오른쪽 끝에 오는 데까지.
+    /// By page up to the first column of the last page (even with empty columns left), by line until the last column reaches the right edge.
     #[test]
     fn the_last_page_of_a_flow_list_is_reachable() {
         assert_eq!(flow_last_first(5, 2, true), 4, "pages start at 0, 2, 4");
@@ -298,7 +298,7 @@ mod tests {
         ListPage { style: ListStyle::Flow, rows, columns, top, last: 0 }
     }
 
-    /// 원본 ArrowKey 0·1(열로 흐르는 목록): 왼쪽·오른쪽은 한 열(한 열의 줄 수)씩, 첫 열 왼쪽은 하나 앞, 마지막 열 오른쪽은 하나 뒤.
+    /// Original ArrowKey 0/1 (column-flowing list): Left/Right move by one column (rows per column); left of the first column goes one back, right of the last column one forward.
     #[test]
     fn flow_keys_follow_the_original_column_list() {
         let page = flow(10, 3, 0);
@@ -307,10 +307,10 @@ mod tests {
         assert_eq!(arrow_target(&page, 3, 25, ListKey::Right), 13);
         assert_eq!(arrow_target(&page, 13, 25, ListKey::Left), 3);
         assert_eq!(arrow_target(&page, 3, 25, ListKey::Left), 2, "first column: one back");
-        // 마지막 열(20~24)은 5개: 남은 수가 5 이하이면 하나 뒤로.
+        // The last column (20-24) has 5 items: with 5 or fewer remaining, move one forward.
         assert_eq!(arrow_target(&page, 21, 25, ListKey::Right), 22);
         assert_eq!(arrow_target(&page, 17, 25, ListKey::Right), 24, "clamped to the last item");
-        // 쪽: 맨 위가 아니면 맨 위로, 맨 위면 한 쪽(줄 수 × 보이는 열 수) 앞.
+        // Page: to the top when not at the top; at the top, one page back (rows x visible columns).
         let page = flow(10, 2, 20);
         assert_eq!(arrow_target(&page, 25, 60, ListKey::PageUp), 20);
         assert_eq!(arrow_target(&page, 20, 60, ListKey::PageUp), 0);
@@ -320,7 +320,7 @@ mod tests {
         assert_eq!(arrow_target(&page, 25, 60, ListKey::End), 59);
     }
 
-    /// 원본 ArrowKey 2(자세히)·3(미리 보기).
+    /// Original ArrowKey 2 (Details) and 3 (Thumbnails).
     #[test]
     fn details_and_thumbnail_keys_follow_the_original() {
         let details = ListPage { style: ListStyle::Details, rows: 20, columns: 1, top: 40, last: 59 };
@@ -337,7 +337,7 @@ mod tests {
         assert_eq!(arrow_target(&thumbs, 5, 14, ListKey::Right), 6);
     }
 
-    /// 원본 ArrowKey `[`·`]`: 폴더 1·파일 2·드라이브 3(5..8) 목록.
+    /// Original ArrowKey `[` / `]`: a list of folder 1, file 2 and drives 3 (5..8).
     #[test]
     fn brackets_walk_the_drive_items() {
         assert_eq!(bracket_target(0, 6, 3, false, true), Some(3), "[ = first drive");
@@ -347,11 +347,11 @@ mod tests {
         assert_eq!(bracket_target(3, 6, 3, true, false), Some(5), "] on the first drive wraps");
         assert_eq!(bracket_target(1, 6, 3, false, false), Some(5), "] elsewhere = last item");
         assert_eq!(bracket_target(1, 3, 0, false, true), None, "[ without drives");
-        // Ctrl+End = 드라이브 앞 마지막 파일.
+        // Ctrl+End = the last file before the drives.
         assert_eq!(ctrl_target(1, 2, 3, 6, ListKey::End), Some(2));
     }
 
-    /// 원본 ArrowKey Ctrl 글쇠: 폴더 3개·파일 5개(드라이브 없음) 목록.
+    /// Original ArrowKey Ctrl keys: a list of 3 folders and 5 files (no drives).
     #[test]
     fn ctrl_keys_jump_between_folders_and_files() {
         assert_eq!(ctrl_target(3, 5, 0, 8, ListKey::PageUp), Some(0));
@@ -363,18 +363,18 @@ mod tests {
         assert_eq!(ctrl_target(3, 5, 0, 8, ListKey::Up), None);
     }
 
-    /// 원본 UpdateDisplayAuto/UpdateDisplayNames: 열 수와 한 열의 줄 수.
+    /// Original UpdateDisplayAuto/UpdateDisplayNames: column count and rows per column.
     #[test]
     fn flow_layout_follows_the_original_column_rules() {
-        // 다 들어가면 한 열.
+        // Everything fits: one column.
         assert_eq!(flow_layout(8, 4, 0, 10, 9, true), (10, 1, false));
-        // 자동: 들어가는 열이 필요한 열보다 많으면 필요한 만큼(가로 막대 없음).
+        // Auto: when more columns fit than are needed, only as many as needed (no horizontal bar).
         assert_eq!(flow_layout(25, 4, 0, 10, 9, true), (10, 3, false));
-        // 이름: 들어가는 열 수, 한 열 덜 써도 쪽 수가 같으면 한 열 뺌.
+        // Names: the columns that fit, dropping one when one fewer gives the same page count.
         assert_eq!(flow_layout(25, 4, 0, 10, 9, false), (10, 3, false));
-        // 넘치면 가로 막대(한 열의 줄 수가 줄어든다).
+        // On overflow, a horizontal bar (rows per column decrease).
         assert_eq!(flow_layout(100, 3, 0, 10, 9, true), (9, 3, true));
-        // 열 수 설정.
+        // Column count setting.
         assert_eq!(flow_layout(100, 3, 2, 10, 9, true), (9, 2, true));
         assert_eq!(flow_layout(15, 3, 2, 10, 9, false), (10, 2, false));
     }
