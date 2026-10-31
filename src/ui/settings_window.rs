@@ -1064,6 +1064,8 @@ fn original_page(ui: &mut egui::Ui, form: &mut SettingsForm, tab: usize, origin:
         }
         // tsColor: lBasicColor(12,17) lbBasicColor(12,36 165×349), lExtColor(193,17) lbExtColor(193,36 265×349),
         // btnAddColor·btnEditColor·btnDelColor(467,36/67/98) btnSaveColorMap·btnImportColor(467,281/312) 81×25, lHelp(12,399).
+        // lbExtColor items come from FUN_0044e93c ("color=ext" grouped by color) and lbExtColorDrawItem (0x450ea4) draws a 10 px swatch at
+        // (left+2, top+2)-(left+12, bottom-2) with a black frame and the extensions at left+16 in that color (selected: highlight colors).
         2 => {
             let color_text = form.tabs[tab].iter().find_map(|row| match row {
                 Row::Text { key, value, .. } if key == "ExtensionColors" => Some(value.clone()),
