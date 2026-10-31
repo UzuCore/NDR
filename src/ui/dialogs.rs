@@ -1,7 +1,7 @@
 use super::*;
 
 impl App {
-    /// 기다리는 작업에 답할 암호 상자. 확인 = 입력값, 취소 = None. 창이 답 없이 사라지면 보내는 쪽이 끊겨 작업은 취소로 본다.
+    /// Password box answering a waiting job. OK = typed value, Cancel = None. If the window vanishes without an answer the sender is dropped and the job counts as cancelled.
     pub(super) fn open_password_prompt(&mut self, request: PasswordRequest) {
         let title = self.language_pack.text("RES.TITLE_PASSWORD", "Password");
         let message = self.language_pack.text("RES.MSG_PASSWORD", "Enter a password.");
@@ -13,12 +13,12 @@ impl App {
 
     pub(super) fn dialogs(&mut self, ctx: &egui::Context) {
         let ko = self.language == "ko";
-        // 원본 FUN_004399b4 = C# RequestArchivePasswordAsync: TfGetText(TITLE_PASSWORD, MSG_PASSWORD, 빈 글, 가림).
+        // Original FUN_004399b4 = C# RequestArchivePasswordAsync: TfGetText(TITLE_PASSWORD, MSG_PASSWORD, empty text, masked).
         if let Some(request) = self.password_request.take() {
             self.open_password_prompt(request);
         }
         self.file_progress_ui(ctx);
-        // 결과 글 창(오류 목록·비교 결과·압축 파일 속성). 읽기 전용.
+        // Result text window (error lists, comparison results, archive properties). Read-only.
         if let Some(document) = &mut self.text {
             let mut close = false;
             egui::Window::new(&document.title)

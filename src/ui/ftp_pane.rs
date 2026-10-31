@@ -686,15 +686,15 @@ impl App {
         self.ftp_progress_in_results_only(started);
     }
 
-    /// 원본 FTP 전송(FTP 엔진 스레드)은 진행 창 없이 아래 결과 칸(pBottom)에만 진행을 보이고 메인 창은 그대로 쓸 수 있다.
-    /// NDR 파일 작업 진행 창(job.progress)을 감춘다. 충돌·오류 상자는 그대로 뜬다.
+    /// The original FTP transfer (the FTP engine thread) shows progress only in the bottom results pane (pBottom), with no progress window, so the main window stays usable.
+    /// Hide the NDR file-operation progress window (job.progress). Conflict and error boxes still appear.
     pub(super) fn ftp_progress_in_results_only(&mut self, started: bool) {
         if let Some(job) = self.job.as_mut().filter(|_| started) {
             job.progress = None;
         }
     }
 
-    /// 원본 miFTPPutClick(0x441168): 한쪽 FTP·한쪽 로컬이어야 올린다(아니면 FTP_PUTCRITERIA).
+    /// Original miFTPPutClick(0x441168): upload only when one pane is FTP and the other is local (otherwise FTP_PUTCRITERIA).
     pub(super) fn ftp_upload_command(&mut self) {
         let (left, right) = (self.panes[0].remote.is_some(), self.panes[1].remote.is_some());
         let local = |app: &App, i: usize| app.panes[i].remote.is_none() && app.panes[i].archive.is_none();
@@ -705,7 +705,7 @@ impl App {
         }
     }
 
-    /// 원본 FUN_0043feb0: 로컬 패널(source)의 고른 항목을 FTP 패널(target)의 지금 폴더로 올린다.
+    /// Original FUN_0043feb0: upload the selected items of the local pane (source) to the current folder of the FTP pane (target).
     pub(super) fn ftp_upload(&mut self, source: usize, target: usize) {
         let Some(remote) = self.panes[target].remote.clone() else { return };
         if remote.busy.load(Ordering::Relaxed) {
@@ -769,17 +769,17 @@ impl App {
         self.ftp_progress_in_results_only(started);
     }
 
-    /// 원본 miViewFindResultClick(0x434b20): 아래 칸(pBottom)과 나눔 막대를 보이고/숨긴다.
+    /// Original miViewFindResultClick(0x434b20): show/hide the bottom pane (pBottom) and the splitter bar.
     pub(super) fn toggle_results(&mut self) {
         self.show_results = !self.show_results;
     }
 
-    /// FTP 전송 중인가(원본 [+0xd6c]+0x14).
+    /// Whether an FTP transfer is in progress (original [+0xd6c]+0x14).
     fn ftp_transferring(&self) -> bool {
         self.panes.iter().any(|p| p.remote.as_ref().is_some_and(|r| r.busy.load(Ordering::Relaxed)))
     }
 
-    /// 원본 btnFTPPauseClick(0x440f78): 전송 중이면 잠시 중단 ↔ 계속.
+    /// Original btnFTPPauseClick(0x440f78): while transferring, toggle pause ↔ resume.
     pub(super) fn ftp_pause_toggle(&mut self) {
         if self.ftp_transferring() {
             let paused = self.ftp_pause.load(Ordering::Relaxed);
@@ -787,7 +787,7 @@ impl App {
         }
     }
 
-    /// 원본 btnFTPAbortClick(0x440f3c): 전송 중이면 중단 표시(잠시 중단이면 풀어서 끝나게 한다).
+    /// Original btnFTPAbortClick(0x440f3c): while transferring, flag an abort (if paused, release it so it can finish).
     pub(super) fn ftp_abort(&mut self) {
         if !self.ftp_transferring() {
             return;

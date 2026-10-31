@@ -1,8 +1,8 @@
-//! 원본 고급 선택 / 고급 해제(FUN_00438034, miAdvSelection): TfGetText 입력 상자 하나로 필터를 받는다.
+//! Original Advanced Select / Advanced Deselect (FUN_00438034, miAdvSelection): one TfGetText input box takes the filter.
 use super::*;
 
-/// 원본 FUN_00438034의 고르기: 글을 ';'로 나눠 필터마다 목록의 모든 항목 이름을 PathMatchSpecW로 맞추고,
-/// 맞으면서 파일(종류 3)인 항목만 고르거나(select) 푼다. 이전 선택은 그대로 둔다. 빈 필터는 아무것도 맞지 않는다.
+/// Selection in original FUN_00438034: split the text on ';', match every list item name against each filter with PathMatchSpecW,
+/// and select (or deselect) only matching files (kind 3). The previous selection is kept. An empty filter matches nothing.
 pub(super) fn advanced_select_rows(entries: &[Entry], filters: &str, matches: impl Fn(&str, &str) -> bool) -> Vec<usize> {
     let mut rows = Vec::new();
     for spec in filters.split(';') {
@@ -16,8 +16,8 @@ pub(super) fn advanced_select_rows(entries: &[Entry], filters: &str, matches: im
 }
 
 impl App {
-    /// 원본 FUN_00438034: 제목 TITLE_ADVSELECT(고르기) / TITLE_ADVDESELECT(풀기), 글 MSG_ADVSELECT, 처음 값은 빈 글.
-    /// 확인이고 글이 비어 있지 않을 때만 고른다.
+    /// Original FUN_00438034: title TITLE_ADVSELECT (select) / TITLE_ADVDESELECT (deselect), message MSG_ADVSELECT, empty initial text.
+    /// Selects only on OK with non-empty text.
     pub(super) fn advanced_select(&mut self, deselect: bool) {
         let i = self.active;
         let title = if deselect {
@@ -32,7 +32,7 @@ impl App {
         });
     }
 
-    /// 필터에 맞는 파일을 표시하거나 푼다(native::path_match_spec = PathMatchSpecW). 되돌리기(이전 선택 복원)를 위해 지금 선택을 남긴다.
+    /// Marks or unmarks files matching the filter (native::path_match_spec = PathMatchSpecW). Keeps the current selection for Restore Selection.
     pub(super) fn apply_advanced_select(&mut self, i: usize, filters: &str, select: bool) {
         self.last_selection[i] = self.panes[i].targets();
         let pane = &mut self.panes[i];

@@ -8,7 +8,7 @@ fn fixture(label:&str)->(PathBuf,egui::Context,App){
     let ctx=egui::Context::default();let options=Options{profile:Some(root.join("profile")),left:Some(left),right:Some(right),language:Some(if label=="password"{"en"}else{"ko"}.into()),..Default::default()};
     let mut app=App::from_context(&ctx,options);wait_listing(&mut app,&ctx);first_item(&mut app);(root,ctx,app)
 }
-/// 목록은 ".."에서 시작한다. 시험은 첫 실제 항목에 커서를 둔다.
+/// Listings start with "..". Tests put the cursor on the first real item.
 fn first_item(app:&mut App){for p in &mut app.panes{p.cursor=p.entries.iter().position(|e|!e.is_parent()).unwrap_or(0);}}
 fn wait_listing(app:&mut App,ctx:&egui::Context){let end=Instant::now()+Duration::from_secs(10);while app.panes.iter().any(|p|p.loading){assert!(Instant::now()<end,"listing timeout");app.poll(ctx);thread::sleep(Duration::from_millis(5));}}
 fn wait_job(app:&mut App,ctx:&egui::Context,password:Option<&str>,choice:ConflictChoice){let end=Instant::now()+Duration::from_secs(30);loop{assert!(Instant::now()<end,"job timeout");app.poll(ctx);if app.original_dialogs.last().is_some_and(|d|matches!(d.kind,original_dialogs::DialogKind::FileConflict(_))){app.answer_dialog(original_dialogs::DialogResult::FileConflict(Some((choice,false))),ctx);}if let Some(p)=app.password_request.take(){p.reply.send(password.map(str::to_owned)).unwrap();}if app.job.as_ref().is_some_and(|j|j.finished){break;}thread::sleep(Duration::from_millis(5));}let job=app.job.as_ref().unwrap();assert!(job.errors.is_empty(),"{:?}",job.errors);wait_listing(app,ctx);}

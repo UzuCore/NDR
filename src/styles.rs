@@ -22,7 +22,7 @@ pub fn parse_color(text: &str) -> Option<Rgba> {
         },
     ])
 }
-/// 원본 TNXBasicColor 순서(환경 설정 lbBasicColor의 색 줄과 같은 차례): 파일 목록 14개, 폴더 트리 6개.
+/// Original TNXBasicColor order (same order as the color rows of lbBasicColor in Preferences): 14 file list colors, 6 folder tree colors.
 pub const DEFAULT_ELEMENTS: &[(&str, &str)] = &[
     ("NXBACK", "000000"),
     ("NXFORE", "C0C0C0"),
@@ -239,8 +239,8 @@ impl Skin {
         }
     }
 }
-/// 원본 스킨의 BMP(toolbar_back.bmp, btnbar_back.bmp, btnbar_divider.bmp): 압축 없는 24·32비트 BITMAPINFOHEADER만.
-/// (너비, 높이, RGBA 위에서 아래로). 32비트에서 알파가 모두 0이면 불투명으로 본다(GDI BitBlt는 알파를 쓰지 않는다).
+/// Original skin BMPs (toolbar_back.bmp, btnbar_back.bmp, btnbar_divider.bmp): only uncompressed 24/32-bit BITMAPINFOHEADER.
+/// (width, height, RGBA top to bottom). A 32-bit image whose alpha is all 0 is treated as opaque (GDI BitBlt ignores alpha).
 pub fn decode_bmp(bytes: &[u8]) -> Result<(usize, usize, Vec<u8>), String> {
     let u16_at = |at: usize| bytes.get(at..at + 2).map(|b| u16::from_le_bytes([b[0], b[1]]));
     let u32_at = |at: usize| bytes.get(at..at + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
@@ -265,7 +265,7 @@ pub fn decode_bmp(bytes: &[u8]) -> Result<(usize, usize, Vec<u8>), String> {
     let mut rgba = vec![0u8; width * rows * 4];
     let mut any_alpha = false;
     for row in 0..rows {
-        // 높이가 양수면 아래에서 위로 저장된다.
+        // A positive height means rows are stored bottom-up.
         let source = if height > 0 { rows - 1 - row } else { row };
         for x in 0..width {
             let p = &data[source * stride + x * channels..][..channels];
