@@ -96,19 +96,38 @@ impl App {
         let (key_color, text_color, over_color) = (color("bbkeytext", Color32::from_rgb(0xE2, 0xA3, 0x1D)), color("bbtext", ui.visuals().text_color()), color("bbover", Color32::WHITE));
         let divider = skin.values.get("buttonbar.bbdividerimg").cloned().and_then(|file| self.skin_bitmap(ctx, &file));
         let font = egui::FontId::proportional(super::BASE_TEXT_SIZE);
-        let width = rect.width() / cells.len().max(1) as f32;
+        // Original constructor 0x7c0bc0: SizeGrip, ShowDivider and DrawHeader default to on (the DFM leaves them). Paint: item width =
+        // (Width - SizeGrip * 18) / count; ItemRect 0x7c1dfc: (width * i, 1) .. ((i + 1) * width - 2, Height), the last one ends at Width - 18.
+        const SIZE_GRIP: f32 = 18.0;
+        let count = cells.len().max(1);
+        let item_width = ((rect.width() - SIZE_GRIP) / count as f32).floor().max(1.0);
+        let item_rect = |index: usize| {
+            let left = rect.left() + item_width * index as f32;
+            let right = if index + 1 == count { rect.right() - SIZE_GRIP } else { rect.left() + item_width * (index + 1) as f32 - 2.0 };
+            egui::Rect::from_min_max(egui::pos2(left, rect.top() + 1.0), egui::pos2(right.max(left), rect.bottom()))
+        };
         let mut clicked = None;
         for (index, (key, name)) in cells.iter().enumerate() {
-            let cell = egui::Rect::from_min_size(egui::pos2(rect.left() + width * index as f32, rect.top()), egui::vec2(width, rect.height()));
+            let cell = item_rect(index);
+            // GetItemAt 0x7c1d74 hit-tests ItemRect, so the 2-pixel gaps and the size grip belong to no item.
             let response = ui.interact(cell, egui::Id::new(("ndr-skin-fkey", index)), egui::Sense::click());
-            let shift = if response.is_pointer_button_down_on() { egui::vec2(1.0, 1.0) } else { egui::Vec2::ZERO };
-            // Cell text runs up to the divider at the right end (- 2).
-            let painter = ui.painter().with_clip_rect(cell.with_max_x(cell.right() - 3.0));
-            let drawn = painter.text(egui::pos2(cell.left() + 5.0, cell.center().y) + shift, egui::Align2::LEFT_CENTER, key, font.clone(), key_color);
-            painter.text(egui::pos2(drawn.right() + 8.0, cell.center().y) + shift, egui::Align2::LEFT_CENTER, name, font.clone(), if response.hovered() { over_color } else { text_color });
+            // MouseDown 0x7c1b6c keeps the pressed item until MouseUp 0x7c1ebc; it is drawn hot and shifted by (1, 1).
+            let pressed = response.is_pointer_button_down_on();
+            let shift = if pressed { egui::vec2(1.0, 1.0) } else { egui::Vec2::ZERO };
+            // DrawItem 0x7c0ec0: the key (DrawHeader, HeadColor) at left + 5, the name after its width + 8 up to right - 2 with
+            // DT_END_ELLIPSIS (HotColor when hot), and the divider at right - 2, y = (Height - 2 - its height) / 2.
+            // The (1, 1) press offset is applied after the key is drawn, so only the name moves.
+            let painter = ui.painter().with_clip_rect(cell);
+            let drawn = painter.text(egui::pos2(cell.left() + 5.0, cell.center().y), egui::Align2::LEFT_CENTER, key, font.clone(), key_color);
+            let name_left = drawn.right() + 8.0;
+            let mut job = egui::text::LayoutJob::single_section(name.clone(), egui::TextFormat::simple(font.clone(), if response.hovered() || pressed { over_color } else { text_color }));
+            job.wrap = egui::text::TextWrapping { max_width: (cell.right() - 2.0 - name_left).max(0.0), max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
+            let galley = ui.painter().layout_job(job);
+            let name_top = cell.center().y - galley.size().y / 2.0;
+            ui.painter().with_clip_rect(cell.with_max_x(cell.right() - 2.0 + shift.x)).galley(egui::pos2(name_left, name_top) + shift, galley, text_color);
             if let Some(divider) = &divider {
                 let size = divider.size_vec2();
-                let at = egui::pos2(cell.right() - 2.0, cell.top() + ((cell.height() - size.y) / 2.0).floor());
+                let at = egui::pos2(cell.right() - 2.0, rect.top() + ((rect.height() - 2.0 - size.y) / 2.0).trunc());
                 ui.painter().image(divider.id(), egui::Rect::from_min_size(at, size), egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)), Color32::WHITE);
             }
             if response.clicked() {
@@ -119,6 +138,17 @@ impl App {
             if response.secondary_clicked() && !(modifiers.alt || modifiers.ctrl) {
                 clicked = Some(key.clone());
             }
+        }
+        // Size grip (MouseMove 0x7c1c24 / MouseDown 0x7c1b6c): past Width - 20 the cursor is crSizeNWSE and a left press resizes the
+        // window from its bottom-right corner (WM_NCLBUTTONDOWN HTBOTTOMRIGHT). With a back image DrawSizeGrip 0x7c1334 only repeats the
+        // background there, which the row background already covers.
+        let grip = egui::Rect::from_min_max(egui::pos2(rect.right() - 20.0, rect.top()), rect.max);
+        let grip_response = ui.interact(grip, egui::Id::new("ndr-skin-fkey-grip"), egui::Sense::drag());
+        if grip_response.hovered() || grip_response.dragged() {
+            ctx.set_cursor_icon(egui::CursorIcon::ResizeNwSe);
+        }
+        if grip_response.drag_started_by(egui::PointerButton::Primary) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::BeginResize(egui::viewport::ResizeDirection::SouthEast));
         }
         match clicked {
             Some(key) if modifiers.alt || modifiers.ctrl => {

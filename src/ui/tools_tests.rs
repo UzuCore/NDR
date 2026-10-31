@@ -1772,10 +1772,29 @@ fn skin_function_key_bar_follows_the_original_button_bar() {
         })
         .collect();
     assert_eq!(keys.iter().map(|k| k.0.as_str()).collect::<Vec<_>>(), ["F2", "F3", "F4", "F5", "F6", "F7", "F8"]);
-    assert!(keys.iter().enumerate().all(|(i, k)| (k.1.x - (100.0 * i as f32 + 5.0)).abs() < 0.01), "cells of 700 / 7, text at + 5: {keys:?}");
+    assert!(keys.iter().enumerate().all(|(i, k)| (k.1.x - (97.0 * i as f32 + 5.0)).abs() < 0.01), "cells of (700 - 18 size grip) / 7 = 97, text at + 5: {keys:?}");
     assert!(keys.iter().all(|k| k.2 == Color32::from_rgb(0xE2, 0xA3, 0x1D)), "bbkeytext");
     let tiles = output.shapes.iter().filter(|c| matches!(&c.shape, egui::Shape::Mesh(m) if m.texture_id == tile.id())).count();
     assert!(tiles >= 700 / 8, "{tiles}");
+    // Dividers at ItemRect.right - 2 (the last item ends at 700 - 18), y = (20 - 2 - 14) / 2.
+    let divider = app.skin_bitmap(&ctx, "btnbar_divider.bmp").expect("btnbar_divider.bmp");
+    let dividers: Vec<egui::Pos2> = output
+        .shapes
+        .iter()
+        .filter_map(|c| match &c.shape {
+            egui::Shape::Mesh(m) if m.texture_id == divider.id() => Some(m.calc_bounds().min),
+            _ => None,
+        })
+        .collect();
+    let expected: Vec<egui::Pos2> = (0..7).map(|i| egui::pos2(if i == 6 { 680.0 } else { 97.0 * (i + 1) as f32 - 4.0 }, 382.0)).collect();
+    assert_eq!(dividers, expected);
+    // The size grip past Width - 20 shows the resize cursor.
+    let at = egui::pos2(690.0, 390.0);
+    let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(700.0, 400.0))), events: vec![egui::Event::PointerMoved(at)], ..Default::default() };
+    let output = ctx.run(raw, |ctx| {
+        egui::TopBottomPanel::bottom("functionbar").exact_height(20.0).frame(egui::Frame::NONE).show(ctx, |ui| app.skin_function_key_bar(ui, ctx, &skin));
+    });
+    assert_eq!(output.platform_output.cursor_icon, egui::CursorIcon::ResizeNwSe);
     // Original bbFunctionsContextPopup: right-clicking a cell also runs that function key (F7 new folder -> name input window).
     let at = egui::pos2(550.0, 390.0);
     let button = |pressed: bool| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() };
