@@ -106,20 +106,7 @@ impl App {
     fn original_shortcut(&mut self, key: egui::Key, modifiers: egui::Modifiers, ctx: &egui::Context) -> bool {
         let custom = self.settings.values.get("OriginalShortcutMapText").and_then(|v| v.as_str());
         let shortcuts = compat::ShortcutMap::parse(custom);
-        let key_name = match key {
-            egui::Key::ArrowLeft => "Left",
-            egui::Key::ArrowRight => "Right",
-            egui::Key::ArrowUp => "Up",
-            egui::Key::ArrowDown => "Down",
-            egui::Key::Space => "Spacebar",
-            // 고친 것: 문장 부호 글쇠는 egui 이름("Slash")이 아니라 글자("/")로 찾는다(원본 TextToShortCut("/") = VK_OEM_2).
-            // 전에는 shortcut.ini의 miCommandLine=/ 같은 단축키가 듣지 않았다.
-            other => {
-                let symbol = other.symbol_or_name();
-                if symbol.chars().count() == 1 && symbol.chars().all(|c| c.is_ascii_punctuation()) { symbol } else { other.name() }
-            }
-        };
-        let text = format!("{}{}{}{key_name}", if modifiers.ctrl { "Ctrl+" } else { "" }, if modifiers.shift { "Shift+" } else { "" }, if modifiers.alt { "Alt+" } else { "" });
+        let text = original_shortcut_text(key, modifiers);
         let Some(original) = shortcuts.resolve(compat::text_to_shortcut(&text)) else { return false };
         self.run_original_shortcut(&original, modifiers.shift, ctx)
     }
@@ -670,4 +657,71 @@ fn pressed_key(ctx: &egui::Context) -> Option<(egui::Key, egui::Modifiers)> {
             _ => None,
         })
     })
+}
+
+
+/// 눌린 글쇠를 원본 단축키 글(TextToShortCut이 읽는 꼴, 예: "Ctrl+Shift+F2", "/")로.
+/// 고친 것: 문장 부호 글쇠는 egui 이름("Slash")이 아니라 글자("/")로 쓴다(원본 TextToShortCut("/") = VK_OEM_2).
+/// 전에는 shortcut.ini의 miCommandLine=/, miToRoot=\ 같은 단축키가 듣지 않았다.
+pub(super) fn original_shortcut_text(key: egui::Key, modifiers: egui::Modifiers) -> String {
+    let key_name = match key {
+        egui::Key::ArrowLeft => "Left",
+        egui::Key::ArrowRight => "Right",
+        egui::Key::ArrowUp => "Up",
+        egui::Key::ArrowDown => "Down",
+        egui::Key::Space => "Spacebar",
+        other => {
+            let symbol = other.symbol_or_name();
+            if symbol.chars().count() == 1 && symbol.chars().all(|c| c.is_ascii_punctuation()) { symbol } else { other.name() }
+        }
+    };
+    format!("{}{}{}{key_name}", if modifiers.ctrl { "Ctrl+" } else { "" }, if modifiers.shift { "Shift+" } else { "" }, if modifiers.alt { "Alt+" } else { "" })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 원본 기본 단축키 표(DEFAULT_SHORTCUT_TEXT)의 모든 글쇠(숫자판 "Num" 글쇠는 raw_input_hook 갈래라 뺀다)가
+    /// egui 글쇠 사건에서 같은 단축키 값으로 바뀌는지.
+    #[test]
+    fn every_default_original_shortcut_is_reachable_from_egui_keys() {
+        let mut checked = 0;
+        for line in ndr::compat::DEFAULT_SHORTCUT_TEXT.lines().skip(1) {
+            let Some((name, text)) = line.split_once('=') else { continue };
+            let text = text.trim();
+            if text.is_empty() || text.contains("Num ") {
+                continue;
+            }
+            let tokens: Vec<&str> = if let Some(head) = text.strip_suffix("++") { head.split('+').chain(["+"]).collect() } else { text.split('+').collect() };
+            let (last, mods) = tokens.split_last().unwrap();
+            let modifiers = egui::Modifiers { ctrl: mods.contains(&"Ctrl"), shift: mods.contains(&"Shift"), alt: mods.contains(&"Alt"), ..Default::default() };
+            let key = match *last {
+                "Spacebar" => egui::Key::Space,
+                "Left" => egui::Key::ArrowLeft,
+                "Right" => egui::Key::ArrowRight,
+                "Up" => egui::Key::ArrowUp,
+                "Down" => egui::Key::ArrowDown,
+                "/" => egui::Key::Slash,
+                "\\" => egui::Key::Backslash,
+                "," => egui::Key::Comma,
+                "." => egui::Key::Period,
+                "`" => egui::Key::Backtick,
+                "-" => egui::Key::Minus,
+                "=" => egui::Key::Equals,
+                ";" => egui::Key::Semicolon,
+                "'" => egui::Key::Quote,
+                "[" => egui::Key::OpenBracket,
+                "]" => egui::Key::CloseBracket,
+                other => egui::Key::from_name(other).unwrap_or_else(|| panic!("{name}={text}: no egui key for {other:?}")),
+            };
+            assert_eq!(ndr::compat::text_to_shortcut(&original_shortcut_text(key, modifiers)), ndr::compat::text_to_shortcut(text), "{name}={text}");
+            checked += 1;
+        }
+        assert!(checked > 90, "{checked}");
+        // Shift가 바꾼 글자 글쇠(egui는 Shift+/를 Questionmark로 줄 수 있다)도 같은 단축키.
+        let shift = egui::Modifiers::SHIFT;
+        assert_eq!(ndr::compat::text_to_shortcut(&original_shortcut_text(egui::Key::Questionmark, shift)), ndr::compat::text_to_shortcut("Shift+/"));
+        assert_eq!(ndr::compat::text_to_shortcut(&original_shortcut_text(egui::Key::Pipe, shift)), ndr::compat::text_to_shortcut("Shift+\\"));
+    }
 }
