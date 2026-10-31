@@ -318,8 +318,65 @@ pub fn clipboard_files(paths: &[PathBuf], cut: bool) -> Result<(), String> {
         if format == 0 {
             return Err(std::io::Error::last_os_error().to_string());
         }
-        put_clipboard(format, &effect.to_ne_bytes())
+        put_clipboard(format, &effect.to_ne_bytes())?;
+        // Original TNXDropFileSource::DoGetData 0x7b0d48 (set on the clipboard by CutOrCopyToClipboard 0x7b1440) also offers
+        // CFSTR_SHELLIDLIST, built by FUN_007b09f4 from the first item's folder and each name. Optional: skipped when it cannot be built.
+        if let Some(list) = shell_id_list(paths) {
+            let format = RegisterClipboardFormatW(wide("Shell IDList Array").as_ptr());
+            if format != 0 {
+                let _ = put_clipboard(format, &list);
+            }
+        }
+        Ok(())
     }
+}
+
+/// CIDA for "Shell IDList Array": the folder's absolute item id list, then one relative id list per item. Only when every item is in
+/// the same folder (the original took the first item's folder for all of them, which named the wrong items otherwise).
+fn shell_id_list(paths: &[PathBuf]) -> Option<Vec<u8>> {
+    use windows_sys::Win32::UI::Shell::{Common::ITEMIDLIST, ILFindLastID, ILFree, ILGetSize, SHParseDisplayName};
+    let parent = paths.first()?.parent()?;
+    if paths.iter().any(|p| p.parent() != Some(parent)) {
+        return None;
+    }
+    // SAFETY: SHParseDisplayName gets a NUL-terminated name; every returned id list is freed once with ILFree below.
+    let parse = |path: &Path| -> Option<*mut ITEMIDLIST> {
+        let name = wide(path);
+        let mut pidl: *mut ITEMIDLIST = ptr::null_mut();
+        let ok = unsafe { SHParseDisplayName(name.as_ptr(), ptr::null_mut(), &mut pidl, 0, ptr::null_mut()) } == 0;
+        (ok && !pidl.is_null()).then_some(pidl)
+    };
+    let mut owned = Vec::new();
+    let result = (|| {
+        let folder = parse(parent)?;
+        owned.push(folder);
+        let mut blocks = Vec::with_capacity(paths.len() + 1);
+        // SAFETY: the id lists are valid until freed; ILGetSize counts the terminating zero id.
+        unsafe {
+            blocks.push(std::slice::from_raw_parts(folder as *const u8, ILGetSize(folder) as usize).to_vec());
+            for path in paths {
+                let item = parse(path)?;
+                owned.push(item);
+                let last = ILFindLastID(item);
+                blocks.push(std::slice::from_raw_parts(last as *const u8, ILGetSize(last) as usize).to_vec());
+            }
+        }
+        let mut offset = 4 * (blocks.len() + 1);
+        let mut data = (paths.len() as u32).to_ne_bytes().to_vec();
+        for block in &blocks {
+            data.extend((offset as u32).to_ne_bytes());
+            offset += block.len();
+        }
+        for block in blocks {
+            data.extend(block);
+        }
+        Some(data)
+    })();
+    for pidl in owned {
+        // SAFETY: allocated by SHParseDisplayName above and freed once.
+        unsafe { ILFree(pidl) };
+    }
+    result
 }
 pub fn read_clipboard_files() -> Result<(Vec<PathBuf>, bool), String> {
     let _clipboard = Clipboard::open()?;
@@ -1977,6 +2034,32 @@ pub fn font_file(family: &str) -> Option<(PathBuf, u32)> {
 #[cfg(test)]
 mod tests {
     use super::{clamp_window_position, dos_device_unc, dotnet_attributes_text, match_font_entry, network_drive_name, original_link_path, volume_root, window_opacity};
+
+    /// Original DoGetData 0x7b0d48 CFSTR_SHELLIDLIST: count, count + 1 offsets, the folder id list, then one relative id list per item;
+    /// items from different folders give none.
+    #[test]
+    fn shell_id_list_follows_the_cida_layout() {
+        use std::path::PathBuf;
+        let root = std::env::temp_dir().join(format!("ndr-cida-{}", std::process::id()));
+        let other = root.join("sub");
+        std::fs::create_dir_all(&other).unwrap();
+        let a = root.join("a.txt");
+        let b = root.join("b.txt");
+        std::fs::write(&a, b"a").unwrap();
+        std::fs::write(&b, b"b").unwrap();
+        let list = super::shell_id_list(&[a.clone(), b.clone()]).expect("a CIDA");
+        let word = |at: usize| u32::from_ne_bytes(list[at..at + 4].try_into().unwrap()) as usize;
+        assert_eq!(word(0), 2);
+        let offsets = [word(4), word(8), word(12)];
+        assert_eq!(offsets[0], 16, "after cidl and three offsets");
+        assert!(offsets[0] < offsets[1] && offsets[1] < offsets[2] && offsets[2] < list.len(), "{offsets:?}");
+        // Each relative id list is one id (a size word, data) plus the terminating zero id.
+        let child = &list[offsets[1]..offsets[2]];
+        let first = u16::from_ne_bytes([child[0], child[1]]) as usize;
+        assert_eq!(&child[first..first + 2], &[0, 0]);
+        assert_eq!(super::shell_id_list(&[a, other.join("missing.txt"), PathBuf::from(r"C:\")]), None);
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     #[test]
     fn font_entries_match_the_regular_face_of_a_family() {
