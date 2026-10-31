@@ -732,8 +732,15 @@ impl App {
     pub(super) fn refresh(&mut self, index: usize) {
         // C# RefreshPaneAsync: 그 패널의 빠른 찾기 입력을 버린다.
         self.typed_search[index] = TypedSearch::default();
-        // 원본은 자기 작업 동안 TNXShellChangeNotify를 끄고(SetActive(0)) 작업 뒤 다시 읽는다: 그 사이의 바뀜 알림은 버려진다.
+        // 원본은 자기 작업 동안 TNXShellChangeNotify를 끄고(SetActive(0) = FreeThread) 작업 뒤 다시 읽은 다음 다시 켠다(SetActive(1) =
+        // ResetThread, 새 FindFirstChangeNotificationW). 그래서 자기 작업이 낸 바뀜은 1.5초 뒤 한 번 더 다시 읽게 하지 않는다.
+        // NDR은 다시 읽을 때마다 감시를 새로 연다: 옛 감시의 알림은 버리고(folder_changed), 밀린 바뀜도 버린다(원본 Clear).
+        // 고친 것: 전에는 새 폴더·이름 바꾸기 뒤 1.5초 지나 같은 폴더를 한 번 더 읽었다.
         self.panes[index].change_due = None;
+        if let Some(wanted) = self.watch_wanted(index) {
+            let ctx = self.egui_ctx.clone();
+            self.arm_folder_watch(index, Some(wanted), &ctx);
+        }
         // 패널 폴더 트리: 그 폴더의 하위 폴더 목록도 다시 읽는다(새로 만들거나 지운 폴더가 트리에 보이게).
         let current = self.panes[index].path.clone();
         self.tree_cache.retain(|key, _| !ndr::shell_tree::same_key(key, &current));
@@ -1093,6 +1100,13 @@ impl App {
     pub(super) fn list_item_height(&self, ui: &egui::Ui) -> f32 {
         let text = ui.text_style_height(&egui::TextStyle::Body).ceil() + 2.0;
         if self.settings.flag("ShowIcons", true) { text.max(16.0) } else { text }
+    }
+    /// 원본 DrawListItem(+0x387): 항목 아래 (bottom + LineSpace / 2 − 1) 화소 줄에 NXLINE 가로선(정수 나눗셈, 굵기 1).
+    /// 여기서는 그 화소 줄의 가운데(bottom + floor(LineSpace / 2) − 0.5)를 화면 화소 가운데에 맞춘다.
+    /// 고친 것: 줄 위치가 화소 사이에 걸리면(목록 위치·화면 배율이 정수가 아닐 때) 1화소 선이 두 줄에 흐리게 번졌다.
+    pub(super) fn row_line_y(painter: &egui::Painter, item_bottom: f32, line_space: f32) -> f32 {
+        let y = item_bottom + (line_space / 2.0).floor() - 0.5;
+        painter.round_to_pixel_center(y)
     }
     /// 원본 SetShowGridColumn(+0x386)·SetShowGridRow(+0x387) 선 색: GetBasic(13) NXLINE. 색상표를 쓰지 않으면 테마의 구분선 색.
     pub(super) fn grid_line_color(&self, ui: &egui::Ui) -> Color32 {
@@ -1583,7 +1597,7 @@ impl App {
                             }
                             // 원본 DrawListItem(+0x387): 항목 아래 (bottom + LineSpace / 2 − 1)에 NXLINE 가로선. 여기서는 줄 사이 틈 가운데.
                             if row_lines {
-                                let y = line.response.rect.bottom() + (ui.spacing().item_spacing.y / 2.0).floor() - 0.5;
+                                let y = Self::row_line_y(ui.painter(), line.response.rect.bottom(), ui.spacing().item_spacing.y);
                                 let left = line.response.rect.left();
                                 ui.painter().hline(left..=left + width, y, egui::Stroke::new(1.0, line_color));
                             }

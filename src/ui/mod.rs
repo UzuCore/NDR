@@ -465,7 +465,7 @@ enum AsyncResult {
         directories: Vec<ndr::shell_tree::ShellNode>,
     },
     /// 원본 TNXShellChangeNotify 스레드 알림(ThreadNotification 0x7b3830): 그 패널이 지켜보던 폴더가 바뀌었다.
-    FolderChanged { pane: usize, path: PathBuf },
+    FolderChanged { pane: usize, path: PathBuf, watch: Arc<AtomicBool> },
     ProtectedItems(file_commands::DeleteRun),
     AttributesApplied(pane_commands::AttributeRun),
     SplitDone { source: PathBuf, outcome: Result<ndr::split::SplitResult, String>, cancelled: bool },
@@ -546,6 +546,8 @@ pub struct App {
     favorites_button: Option<egui::Pos2>,
     /// 패널 폴더 바뀜 감시(원본 TNXShellChangeNotify). 시험에서는 끈다(시험이 만든 파일 때문에 늦게 새로 읽지 않게).
     watch_folders: bool,
+    /// 감시 스레드가 다시 그리기를 부를 egui 문맥(refresh가 감시를 다시 열 때 쓴다).
+    egui_ctx: egui::Context,
     /// 전송을 시작한 때(lFTPTransferred의 KB/s).
     ftp_started: Option<std::time::Instant>,
     ftp_results: Arc<Mutex<Vec<ftp_pane::FtpResultRow>>>,
@@ -854,6 +856,7 @@ impl App {
             results_collapsed: false,
             favorites_button: None,
             watch_folders: !cfg!(test),
+            egui_ctx: ctx.clone(),
             ftp_started: None,
             ftp_results: Arc::new(Mutex::new(Vec::new())),
             ftp_pause: Arc::new(AtomicBool::new(false)),
@@ -1107,23 +1110,9 @@ impl App {
     fn update_folder_watches(&mut self, ctx: &egui::Context) {
         let now = Instant::now();
         for index in 0..self.panes.len() {
-            let pane = &self.panes[index];
-            let wanted = (self.watch_folders && pane.archive.is_none() && pane.remote.is_none() && !panes::is_drives(&pane.path)).then(|| pane.path.clone());
-            if pane.watch.as_ref().map(|(p, _)| p) != wanted.as_ref() {
-                let pane = &mut self.panes[index];
-                if let Some((_, stop)) = pane.watch.take() {
-                    stop.store(true, Ordering::Relaxed);
-                }
-                pane.change_due = None;
-                if let Some(path) = wanted {
-                    let stop = Arc::new(AtomicBool::new(false));
-                    let (tx, watched, repaint) = (self.async_tx.clone(), path.clone(), ctx.clone());
-                    native::spawn_folder_watch(path.clone(), stop.clone(), move || {
-                        let _ = tx.send(AsyncResult::FolderChanged { pane: index, path: watched.clone() });
-                        repaint.request_repaint();
-                    });
-                    pane.watch = Some((path, stop));
-                }
+            let wanted = self.watch_wanted(index);
+            if self.panes[index].watch.as_ref().map(|(p, _)| p) != wanted.as_ref() {
+                self.arm_folder_watch(index, wanted, ctx);
             }
             if let Some((due, _)) = self.panes[index].change_due {
                 if due <= now {
@@ -1143,10 +1132,36 @@ impl App {
         }
     }
 
+    /// 지켜볼 폴더: 감시가 켜져 있고 로컬 폴더(압축·FTP·내 PC 아님)면 그 폴더.
+    fn watch_wanted(&self, index: usize) -> Option<PathBuf> {
+        let pane = &self.panes[index];
+        (self.watch_folders && pane.archive.is_none() && pane.remote.is_none() && !panes::is_drives(&pane.path)).then(|| pane.path.clone())
+    }
+
+    /// 지금 감시를 멈추고(원본 FreeThread) `wanted`가 있으면 새 감시 스레드를 연다(원본 ResetThread → FindFirstChangeNotificationW).
+    /// 새 감시는 연 뒤의 바뀜만 알린다. 밀린 바뀜(change_due)도 버린다(원본 Clear).
+    pub(super) fn arm_folder_watch(&mut self, index: usize, wanted: Option<PathBuf>, ctx: &egui::Context) {
+        let pane = &mut self.panes[index];
+        if let Some((_, stop)) = pane.watch.take() {
+            stop.store(true, Ordering::Relaxed);
+        }
+        pane.change_due = None;
+        if let Some(path) = wanted {
+            let stop = Arc::new(AtomicBool::new(false));
+            let (tx, watched, repaint, token) = (self.async_tx.clone(), path.clone(), ctx.clone(), stop.clone());
+            native::spawn_folder_watch(path.clone(), stop.clone(), move || {
+                let _ = tx.send(AsyncResult::FolderChanged { pane: index, path: watched.clone(), watch: token.clone() });
+                repaint.request_repaint();
+            });
+            pane.watch = Some((path, stop));
+        }
+    }
+
     /// 원본 ThreadNotification(0x7b3830): 처음 알림이면 Delay(1500ms) 타이머를 켜고, 타이머가 도는 동안 또 오면 20번까지 다시 늦춘다.
-    pub(super) fn folder_changed(&mut self, index: usize, path: &Path) {
+    /// 멈춘 옛 감시(다시 읽으며 새로 연 감시 앞의 것)가 보낸 알림은 버린다.
+    pub(super) fn folder_changed(&mut self, index: usize, path: &Path, watch: &Arc<AtomicBool>) {
         let Some(pane) = self.panes.get_mut(index) else { return };
-        if pane.watch.as_ref().is_none_or(|(watched, _)| watched != path) {
+        if pane.watch.as_ref().is_none_or(|(watched, current)| watched != path || !Arc::ptr_eq(current, watch)) {
             return;
         }
         let now = Instant::now();
@@ -1380,7 +1395,7 @@ impl App {
                 AsyncResult::Tree { path, directories } => {
                     self.tree_cache.insert(path, directories);
                 }
-                AsyncResult::FolderChanged { pane, path } => self.folder_changed(pane, &path),
+                AsyncResult::FolderChanged { pane, path, watch } => self.folder_changed(pane, &path, &watch),
                 AsyncResult::ProtectedItems(run) => self.protected_step(run),
                 AsyncResult::AttributesApplied(run) => self.attribute_step(run),
                 AsyncResult::SplitDone { source, outcome, cancelled } => self.split_done(source, outcome, cancelled),

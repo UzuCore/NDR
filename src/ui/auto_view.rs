@@ -322,7 +322,7 @@ impl App {
                                     }
                                 }
                                 if row_lines {
-                                    let y = response.rect.bottom() + (ui.spacing().item_spacing.y / 2.0).floor() - 0.5;
+                                    let y = Self::row_line_y(ui.painter(), response.rect.bottom(), ui.spacing().item_spacing.y);
                                     ui.painter().hline(response.rect.left()..=response.rect.left() + column_width, y, egui::Stroke::new(1.0, line_color));
                                 }
                                 // 줄 어디를 눌러도 그 항목(이름 칸만이 아니라 줄 전체, 원본 GetItemAt = 항목 칸 전체).
@@ -521,7 +521,7 @@ impl App {
                 if column_lines {
                     let stroke = egui::Stroke::new(1.0, line_color);
                     for column in shown_first.max(1)..shown_last {
-                        let x = origin.x + column as f32 * column_width - 0.5;
+                        let x = ui.painter().round_to_pixel_center(origin.x + column as f32 * column_width - 0.5);
                         ui.painter().vline(x, (origin.y + viewport.min.y + 4.0)..=(origin.y + viewport.min.y + height - 4.0), stroke);
                     }
                 }
@@ -534,7 +534,7 @@ impl App {
                         let cell = egui::Rect::from_min_size(origin + egui::vec2(column as f32 * column_width, line as f32 * pitch), egui::vec2(column_width, item_height));
                         // 원본 DrawListItem(+0x387): 항목 아래 bottom + LineSpace / 2 − 1에 가로선.
                         if row_lines {
-                            let y = cell.bottom() + ((pitch - item_height) / 2.0).floor() - 0.5;
+                            let y = Self::row_line_y(ui.painter(), cell.bottom(), pitch - item_height);
                             ui.painter().hline(cell.left()..=cell.right(), y, egui::Stroke::new(1.0, line_color));
                         }
                         self.queue_folder_size(index, row);

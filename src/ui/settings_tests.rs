@@ -412,6 +412,38 @@ fn line_space_and_grid_lines_follow_the_original_file_list() {
     let (theme, mapped) = color.unwrap();
     assert_eq!(mapped, Color32::from_rgb(0x12, 0x34, 0x56));
     assert_ne!(theme, mapped);
+    // 줄 선 자리: 원본 bottom + LineSpace / 2 − 1 화소 줄(정수 나눗셈)의 가운데이고, 늘 화면 화소 가운데에 맞는다(홀수 줄 간격이나
+    // 정수가 아닌 목록 위치·배율에서도 1화소 선이 두 줄에 번지지 않는다).
+    for ppp in [1.0f32, 1.25, 1.5, 2.0] {
+        let raw = egui::RawInput {
+            viewports: std::iter::once((egui::ViewportId::ROOT, egui::ViewportInfo { native_pixels_per_point: Some(ppp), ..Default::default() })).collect(),
+            ..Default::default()
+        };
+        let mut checked = 0;
+        let _ = ctx.run(raw, |ctx| {
+            let painter = egui::Painter::new(ctx.clone(), egui::LayerId::background(), egui::Rect::EVERYTHING);
+            assert_eq!(painter.pixels_per_point(), ppp);
+            for (bottom, space) in [(20.0f32, 0.0f32), (20.0, 1.0), (20.0, 5.0), (20.0, 6.0), (20.3, 5.0), (37.75, 3.0)] {
+                let y = App::row_line_y(&painter, bottom, space);
+                let physical = y * ppp;
+                assert!((physical - (physical.floor() + 0.5)).abs() < 1e-3, "ppp {ppp}, bottom {bottom}, space {space}: y {y} is not a pixel center");
+                let expected = bottom + (space / 2.0).floor() - 0.5;
+                assert!((y - expected).abs() <= 0.5 / ppp + 1e-3, "ppp {ppp}: y {y} stays at the original row ({expected})");
+                checked += 1;
+            }
+        });
+        assert_eq!(checked, 6);
+    }
+    let raw = egui::RawInput {
+        viewports: std::iter::once((egui::ViewportId::ROOT, egui::ViewportInfo { native_pixels_per_point: Some(1.0), ..Default::default() })).collect(),
+        ..Default::default()
+    };
+    let mut ys = None;
+    let _ = ctx.run(raw, |ctx| {
+        let painter = egui::Painter::new(ctx.clone(), egui::LayerId::background(), egui::Rect::EVERYTHING);
+        ys = Some((App::row_line_y(&painter, 20.0, 5.0), App::row_line_y(&painter, 20.0, 6.0), App::row_line_y(&painter, 20.0, 0.0)));
+    });
+    assert_eq!(ys, Some((21.5, 22.5, 19.5)));
     let _ = fs::remove_dir_all(root);
 }
 

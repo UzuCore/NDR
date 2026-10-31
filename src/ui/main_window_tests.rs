@@ -1510,6 +1510,39 @@ fn panes_refresh_after_outside_changes_like_tnxshellchangenotify() {
     let _ = fs::remove_dir_all(root);
 }
 
+/// 원본 자기 작업(새 폴더 FUN_00432378, 이름 바꾸기 FUN_004351cc, 속성 FUN_0043657c, 압축 FUN_0043a7f8 …): SetActive(0) → 작업 →
+/// 다시 읽기(FUN_00487ce8) → SetActive(1)(새 감시). 그래서 자기 작업이 낸 바뀜으로 1.5초 뒤 한 번 더 읽지 않고, 그 뒤 바깥 바뀜은 잡는다.
+#[test]
+fn own_changes_followed_by_a_refresh_do_not_relist_again() {
+    let (root, ctx, mut app) = fixture("own-change");
+    let left = app.panes[0].path.clone();
+    app.watch_folders = true;
+    app.poll(&ctx);
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    let before = app.panes[0].generation;
+    // 자기 작업: 바꾸고 바로 다시 읽기(원본 순서와 같다).
+    fs::create_dir(left.join("made-by-us")).unwrap();
+    app.refresh(0);
+    let end = std::time::Instant::now() + std::time::Duration::from_millis(2500);
+    while std::time::Instant::now() < end {
+        app.poll(&ctx);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(app.panes[0].generation, before + 1, "only our own refresh, no delayed second listing");
+    assert!(app.panes[0].entries.iter().any(|e| e.name == "made-by-us"));
+    // 그 뒤 바깥 바뀜은 새 감시가 잡는다.
+    fs::write(left.join("made-outside.txt"), b"x").unwrap();
+    let end = std::time::Instant::now() + std::time::Duration::from_secs(8);
+    while !app.panes[0].entries.iter().any(|e| e.name == "made-outside.txt") {
+        assert!(std::time::Instant::now() < end, "the re-armed watch missed an outside change");
+        app.poll(&ctx);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    app.watch_folders = false;
+    app.poll(&ctx);
+    let _ = fs::remove_dir_all(root);
+}
+
 /// 원본 TfMain DFM(pmFile … pmHelp, Visible=False 항목 뺌, 겹친·끝 구분선은 하나로/없이): 주 메뉴에 보이는 항목과 차례.
 #[test]
 fn main_menu_items_follow_the_tfmain_dfm() {
