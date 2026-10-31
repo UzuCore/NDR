@@ -355,7 +355,8 @@ fn conflict_window_progress_window_and_reports_follow_csharp() {
     wait(&mut app, &ctx, finished);
     drop(locked);
     assert_eq!(fs::read(right.join("b.txt")).unwrap(), b"bee", "yes continues with the rest");
-    // Permanent delete: counts each deleted file and folder (C# deletedItems). There is no progress window.
+    // Permanent delete: counts each deleted file and folder (C# deletedItems). The original (FUN_00411cbc) opens TfProgress for deletes too,
+    // with the total known before the work (GetFileListToWork mode 2) and no destination row.
     app.active = 1;
     app.panes[1].selected.clear();
     let folder = app.panes[1].entries.iter().position(|e| e.name == "folder").unwrap();
@@ -365,8 +366,10 @@ fn conflict_window_progress_window_and_reports_follow_csharp() {
     app.dispatch("deletePermanent", &ctx);
     app.answer_dialog(DialogResult::DeleteWarning(DeleteWarningChoice::Yes), &ctx);
     wait(&mut app, &ctx, |app| app.job.is_some());
-    assert!(app.job.as_ref().unwrap().progress.is_none());
+    let info = app.job.as_ref().unwrap().progress.clone().expect("TfProgress for delete");
+    assert_eq!((info.from.as_deref(), info.to.as_deref(), info.prefer_bytes), (Some(&*right.join("folder").to_string_lossy()), None, false));
     wait(&mut app, &ctx, finished);
+    assert_eq!(app.job.as_ref().and_then(|j| j.progress.as_ref()).and_then(|p| p.total_files), Some(2), "the folder and its file");
     assert!(!right.join("folder").exists());
     assert_eq!(app.status, "2개 항목을 삭제했습니다. 실패 0개");
     fs::remove_dir_all(root).unwrap();

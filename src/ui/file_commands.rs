@@ -357,7 +357,8 @@ impl App {
     fn delete_confirmed(&mut self, paths: Vec<PathBuf>, recycle: bool) {
         self.original_take_marks(&paths);
         if recycle {
-            return self.start_job("Delete".into(), Operation::Delete { sources: paths, recycle: true }, JobReport::Delete { recycle: true, skipped: 0 }, None);
+            let progress = super::file_operation::delete_progress(&paths, false);
+            return self.start_job("Delete".into(), Operation::Delete { sources: paths, recycle: true }, JobReport::Delete { recycle: true, skipped: 0 }, Some(progress));
         }
         // C# FindProtectedDeleteItems runs in Task.Run. Search separately so large trees do not freeze the screen, and pick up the result in poll.
         let tx = self.async_tx.clone();
@@ -404,12 +405,13 @@ impl App {
             return;
         }
         let skipped = run.skipped.len();
+        let progress = super::file_operation::delete_progress(&run.paths, false);
         let operation = if run.skipped.is_empty() {
             Operation::Delete { sources: run.paths, recycle: false }
         } else {
             Operation::DeleteSkipping { sources: run.paths, skipped: run.skipped }
         };
-        self.start_job("Delete".into(), operation, JobReport::Delete { recycle: false, skipped }, None);
+        self.start_job("Delete".into(), operation, JobReport::Delete { recycle: false, skipped }, Some(progress));
     }
 
     /// C# ShredAsync (original FUN_0042c734 mode 2): the MSG_DELWARN_SHRED warning always shows and has no Delete button. Only Yes proceeds.
@@ -431,7 +433,8 @@ impl App {
         self.delete_warning(DeleteWarningMode::Shred, paths.len(), &first, move |app, choice, _| {
             if choice == DeleteWarningChoice::Yes {
                 app.original_take_marks(&paths);
-                app.start_job("Shred".into(), Operation::Shred { sources: paths }, JobReport::Shred, None);
+                let progress = super::file_operation::delete_progress(&paths, true);
+                app.start_job("Shred".into(), Operation::Shred { sources: paths }, JobReport::Shred, Some(progress));
             }
         });
     }

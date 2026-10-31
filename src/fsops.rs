@@ -251,6 +251,10 @@ pub fn run_with_options(
                 recycle: use_bin,
             } => {
                 // C# DeleteWithResult: deleted item count (files) = the chosen items for the Recycle Bin, every deleted file and folder for permanent delete.
+                // Original GetFileListToWork (FUN_00413ac4, mode 2): the progress window knows the total before the work. NDR counts what it will
+                // report as done (chosen items for the Recycle Bin, every file, folder and link otherwise); the original counts files only.
+                let total = if use_bin { sources.iter().filter(|p| fs::symlink_metadata(p).is_ok()).count() as u64 } else { delete_totals(&sources, &[], true, &j.cancel).0 };
+                let _ = j.events.send(Event::Totals { files: Some(total), bytes: None });
                 let count = sources.len();
                 for (index, p) in sources.into_iter().enumerate() {
                     j.check()?;
@@ -259,7 +263,12 @@ pub fn run_with_options(
                         if fs::symlink_metadata(&p).is_err() {
                             continue;
                         }
-                        recycle(&p).map(|_| j.files += 1)
+                        // Original LAB_00412308 shows the current item before it is sent.
+                        j.progress(&p);
+                        recycle(&p).map(|_| {
+                            j.files += 1;
+                            j.progress(&p);
+                        })
                     } else {
                         j.delete_filtered(&p, &[], 0, boundary).map(|_| ())
                     };
@@ -275,6 +284,8 @@ pub fn run_with_options(
                 }
             }
             Operation::DeleteSkipping { sources, skipped } => {
+                let total = delete_totals(&sources, &skipped, true, &j.cancel).0;
+                let _ = j.events.send(Event::Totals { files: Some(total), bytes: None });
                 let count = sources.len();
                 for (index, p) in sources.into_iter().enumerate() {
                     j.check()?;
@@ -305,6 +316,9 @@ pub fn run_with_options(
                 }
             }
             Operation::Shred { sources } => {
+                // Original GetFileListToWork mode 2 with flag 0x8: the shred total is the file bytes.
+                let (files, bytes) = delete_totals(&sources, &[], false, &j.cancel);
+                let _ = j.events.send(Event::Totals { files: Some(files), bytes: Some(bytes) });
                 for p in sources {
                     check_cancel(&j.cancel)?;
                     if fs::symlink_metadata(&p).is_err() {
@@ -569,6 +583,12 @@ mod tests {
         assert!(!events.iter().any(|e| matches!(e, Event::Error { .. })), "{events:?}");
         assert!(!p.join("folder").exists() && !p.join("b.txt").exists());
         assert!(fs::read_dir(&p).unwrap().next().is_none(), "no temporary shred names remain");
+        // Original GetFileListToWork mode 2 + flag 0x8: the total is the file bytes; FUN_00415128 reports bytes per 0xffff block.
+        let total = 3 * 1024 * 1024 + 5 + 6;
+        assert!(events.iter().any(|e| matches!(e, Event::Totals { files: Some(2), bytes: Some(b) } if *b == total)), "{events:?}");
+        let byte_steps = events.iter().filter(|e| matches!(e, Event::Progress { .. })).count();
+        assert!(byte_steps as u64 >= (3 * 1024 * 1024) / 0xffff, "progress per block: {byte_steps}");
+        assert!(matches!(events.last(), Some(Event::Finished { bytes, files: 2, .. }) if *bytes == total));
         fs::remove_dir_all(p).unwrap();
     }
 }
@@ -619,6 +639,34 @@ fn tree_totals(sources: &[PathBuf], destination: &Path, moving: bool, descriptio
                     bytes = bytes.saturating_add(m.len());
                 }
             }
+        }
+    }
+    (files, bytes)
+}
+/// Totals for the delete progress window (original GetFileListToWork FUN_00413ac4, mode 2). `with_folders`: also count folders and links,
+/// as permanent delete reports them done; otherwise (shred) only regular files with their bytes. Links are never followed and
+/// `skipped` subtrees are left out.
+fn delete_totals(sources: &[PathBuf], skipped: &[PathBuf], with_folders: bool, cancel: &AtomicBool) -> (u64, u64) {
+    let (mut files, mut bytes) = (0u64, 0u64);
+    let mut pending: Vec<PathBuf> = sources.to_vec();
+    while let Some(path) = pending.pop() {
+        if cancel.load(Ordering::Relaxed) {
+            break;
+        }
+        if skipped.iter().any(|root| same_or_inside(&path, root)) {
+            continue;
+        }
+        let Ok(m) = fs::symlink_metadata(&path) else { continue };
+        if is_reparse(&m) {
+            files += u64::from(with_folders);
+        } else if m.is_dir() {
+            files += u64::from(with_folders);
+            if let Ok(read) = fs::read_dir(&path) {
+                pending.extend(read.flatten().map(|item| item.path()));
+            }
+        } else {
+            files += 1;
+            bytes = bytes.saturating_add(m.len());
         }
     }
     (files, bytes)
@@ -1305,7 +1353,8 @@ impl Job {
         self.progress(p);
         Ok(Disposition::Deleted)
     }
-    /// C# ShredEntry.
+    /// C# ShredEntry; overwrite and naming follow the original (see below). Folders are emptied depth first and removed; links are removed
+    /// without being followed. Each shredded file counts one in files.
     fn shred(&mut self, p: &Path, depth: usize) -> Result<(), String> {
         if depth > 256 {
             return Err("Directory nesting exceeds the safe delete limit (256)".into());
@@ -1322,35 +1371,33 @@ impl Job {
             return fs::remove_dir(p).map_err(|e| e.to_string());
         }
         clear_read_only(p, &m);
+        // Original FUN_00414884 (flag 0x8) + FUN_00415128: one pass of zeros over the whole file in 0xffff-byte blocks (memset 0) with byte
+        // progress per block (FUN_00412688), FlushFileBuffers, then reopened with TRUNCATE_EXISTING so the size is 0; FUN_00414808 then moves it
+        // to a random name in the same folder (8 letters A..Y) and DeleteFileW removes it. The cancel flag is checked after every block.
         {
             let mut file = OpenOptions::new().write(true).open(p).map_err(|e| e.to_string())?;
             let length = m.len();
-            let mut buffer = vec![0u8; 1024 * 1024];
-            for pass in 0..3 {
-                use std::io::{Seek, SeekFrom};
-                file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
-                let mut remaining = length;
-                while remaining > 0 {
-                    check_cancel(&self.cancel)?;
-                    let count = remaining.min(buffer.len() as u64) as usize;
-                    match pass {
-                        0 => crate::native::random_bytes(&mut buffer[..count])?,
-                        1 => buffer[..count].fill(0),
-                        _ => buffer[..count].fill(0xFF),
-                    }
-                    file.write_all(&buffer[..count]).map_err(|e| e.to_string())?;
-                    remaining -= count as u64;
-                }
-                file.sync_all().map_err(|e| e.to_string())?;
+            let buffer = vec![0u8; 0xffff];
+            let mut remaining = length;
+            while remaining > 0 {
+                check_cancel(&self.cancel)?;
+                let count = remaining.min(buffer.len() as u64) as usize;
+                file.write_all(&buffer[..count]).map_err(|e| e.to_string())?;
+                remaining -= count as u64;
+                self.bytes += count as u64;
+                self.progress(p);
             }
-            buffer.fill(0);
+            file.sync_all().map_err(|e| e.to_string())?;
+            file.set_len(0).map_err(|e| e.to_string())?;
+            file.sync_all().map_err(|e| e.to_string())?;
         }
         let parent = p.parent().ok_or("Cannot resolve the shredded file's parent folder")?;
         let mut randomized = None;
         for _ in 0..32 {
-            let mut bytes = [0u8; 16];
+            // Original FUN_00414808: eight letters 'A' + random(25), no extension.
+            let mut bytes = [0u8; 8];
             crate::native::random_bytes(&mut bytes)?;
-            let name = format!(".ndr-shred-{}.tmp", bytes.iter().map(|b| format!("{b:02X}")).collect::<String>());
+            let name: String = bytes.iter().map(|b| char::from(b'A' + b % 25)).collect();
             let candidate = parent.join(name);
             if fs::symlink_metadata(&candidate).is_err() {
                 randomized = Some(candidate);
@@ -1369,7 +1416,6 @@ impl Job {
             };
         }
         self.files += 1;
-        self.bytes += m.len();
         self.progress(p);
         Ok(())
     }

@@ -332,6 +332,12 @@ pub(super) fn source_folder(path: &Path) -> Option<String> {
     Some(folder.to_string_lossy().into_owned())
 }
 
+/// Original FUN_00411cbc: delete (Recycle Bin or permanent) and shred also open TfProgress (caption RECYCLING / DELETING). The totals arrive
+/// from the job (Event::Totals, GetFileListToWork mode 2); shred measures bytes (flag 0x8), the others count items. No destination row.
+pub(super) fn delete_progress(paths: &[PathBuf], shred: bool) -> ProgressInfo {
+    ProgressInfo { from: if paths.len() == 1 { source_folder(&paths[0]) } else { None }, prefer_bytes: shred, ..Default::default() }
+}
+
 /// C# TryGetFlatFileProgressTotals: (count, size) only when all are ordinary files.
 pub(super) fn flat_totals(paths: &[PathBuf]) -> Option<(u64, u64)> {
     let mut bytes = 0u64;
