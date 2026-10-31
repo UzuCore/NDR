@@ -112,7 +112,12 @@ impl App {
             egui::Key::ArrowUp => "Up",
             egui::Key::ArrowDown => "Down",
             egui::Key::Space => "Spacebar",
-            other => other.name(),
+            // 고친 것: 문장 부호 글쇠는 egui 이름("Slash")이 아니라 글자("/")로 찾는다(원본 TextToShortCut("/") = VK_OEM_2).
+            // 전에는 shortcut.ini의 miCommandLine=/ 같은 단축키가 듣지 않았다.
+            other => {
+                let symbol = other.symbol_or_name();
+                if symbol.chars().count() == 1 && symbol.chars().all(|c| c.is_ascii_punctuation()) { symbol } else { other.name() }
+            }
         };
         let text = format!("{}{}{}{key_name}", if modifiers.ctrl { "Ctrl+" } else { "" }, if modifiers.shift { "Shift+" } else { "" }, if modifiers.alt { "Alt+" } else { "" });
         let Some(original) = shortcuts.resolve(compat::text_to_shortcut(&text)) else { return false };
@@ -197,13 +202,8 @@ impl App {
                 return true;
             }
         }
-        // 사용자 요청: Alt+Enter = 전체 화면 켜고 끄기(원본 단축키 표에서 Alt+Enter인 "설명 붙여두기"보다 먼저, 메뉴로는 그대로 쓸 수 있다).
-        if key == egui::Key::Enter && modifiers.alt && !modifiers.ctrl && !modifiers.shift {
-            let fullscreen = ctx.input(|i| i.viewport().fullscreen).unwrap_or(false);
-            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!fullscreen));
-            return true;
-        }
         // 원본 FormShortCut(0x42b36c): 메뉴 항목·내부 명령 단축키(shortcut.ini 표, 메뉴 IsShortCut)가 먼저.
+        // (Alt+Enter는 원본처럼 miDescription "설명 붙여두기". 사용자 요청으로 한때 넣었던 전체 화면 전환은 뺐다.)
         if self.original_shortcut(key, modifiers, ctx) {
             return true;
         }

@@ -1565,28 +1565,30 @@ pub(super) fn list_text(text: impl Into<String>, style: u8) -> RichText {
 /// (원본 창은 모두 ParentFont라 Application DefaultFont = Segoe UI 9pt = 12화소, 한글은 Windows 글꼴 연결로 맑은 고딕).
 /// list_font(글꼴 파일, TTC 번호)가 있으면 "list" 묶음 = 그 글꼴 → 맑은 고딕 → 기본. 없으면 "list" 묶음은 보통 글꼴과 같다.
 /// list_bold(원본 ListFont 모양의 굵게)면 "list" 묶음의 한글은 맑은 고딕 Bold(malgunbd.ttf, 있으면)로 그린다.
-pub(super) fn set_app_fonts(ctx: &egui::Context, list_font: Option<(Vec<u8>, u32)>, list_bold: bool) {
+pub(super) fn set_app_fonts(ctx: &egui::Context, list_font: Option<(&'static [u8], u32)>, list_bold: bool) {
+    // 글꼴 파일은 사상해서(native::mapped_file) 'static으로 넘긴다: egui는 빌린 글꼴은 복사하지 않는다(Vec면 한 벌 더 복사).
+    let font = |path: &str| native::mapped_file(Path::new(path)).map(|bytes| Arc::new(egui::FontData::from_static(bytes)));
     let mut fonts = egui::FontDefinitions::default();
-    if let Ok(data) = std::fs::read("C:/Windows/Fonts/malgun.ttf") {
-        fonts.font_data.insert("Korean".into(), Arc::new(egui::FontData::from_owned(data)));
+    if let Some(data) = font("C:/Windows/Fonts/malgun.ttf") {
+        fonts.font_data.insert("Korean".into(), data);
         for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
             fonts.families.entry(family).or_default().insert(0, "Korean".into());
         }
     }
     let mut korean_first = fonts.families.get(&egui::FontFamily::Proportional).cloned().unwrap_or_default();
     if list_bold {
-        if let Ok(data) = std::fs::read("C:/Windows/Fonts/malgunbd.ttf") {
-            fonts.font_data.insert("KoreanBold".into(), Arc::new(egui::FontData::from_owned(data)));
+        if let Some(data) = font("C:/Windows/Fonts/malgunbd.ttf") {
+            fonts.font_data.insert("KoreanBold".into(), data);
             korean_first.insert(0, "KoreanBold".into());
         }
     }
-    if let Ok(data) = std::fs::read("C:/Windows/Fonts/segoeui.ttf") {
-        fonts.font_data.insert("UI".into(), Arc::new(egui::FontData::from_owned(data)));
+    if let Some(data) = font("C:/Windows/Fonts/segoeui.ttf") {
+        fonts.font_data.insert("UI".into(), data);
         fonts.families.entry(egui::FontFamily::Proportional).or_default().insert(0, "UI".into());
     }
     let list = match list_font {
-        Some((data, index)) => {
-            let mut data = egui::FontData::from_owned(data);
+        Some((bytes, index)) => {
+            let mut data = egui::FontData::from_static(bytes);
             data.index = index;
             fonts.font_data.insert("ListFont".into(), Arc::new(data));
             let mut list = korean_first;
@@ -1599,8 +1601,8 @@ pub(super) fn set_app_fonts(ctx: &egui::Context, list_font: Option<(Vec<u8>, u32
     // NXLabel 마크업 <b>(원본 TNXLabel: 그 글꼴의 굵은 꼴): Segoe UI Bold → 맑은 고딕 Bold → 보통 글꼴. 파일이 없으면 보통 글꼴.
     let mut bold = fonts.families.get(&egui::FontFamily::Proportional).cloned().unwrap_or_default();
     for (name, file) in [("KoreanBoldUI", "C:/Windows/Fonts/malgunbd.ttf"), ("UIBold", "C:/Windows/Fonts/segoeuib.ttf")] {
-        if let Ok(data) = std::fs::read(file) {
-            fonts.font_data.insert(name.into(), Arc::new(egui::FontData::from_owned(data)));
+        if let Some(data) = font(file) {
+            fonts.font_data.insert(name.into(), data);
             bold.insert(0, name.into());
         }
     }
@@ -1616,6 +1618,9 @@ impl eframe::App for App {
     /// 클립보드에 글이 없으면 붙여넣기는 버린다. 글 입력 칸에 초점이 없으면 원본 단축키(miEditCopy·miEditCut·miEditPaste)가
     /// 받도록 글쇠 사건으로 되돌린다.
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        // 메모리: egui 글자 그림판(font atlas)의 너비는 GPU 최대 텍스처 크기(NVIDIA 32768 → 16384)라 줄이 조금만 늘어도 수십 MB였다.
+        // 2048로 두면 쓰는 만큼만 아래로 늘어난다(화면 그리기 쪽의 실제 한계는 그대로).
+        raw_input.max_texture_side = Some(raw_input.max_texture_side.unwrap_or(2048).min(2048));
         let pastes = ndr::shell_menu::take_paste_keys();
         let numpad = ndr::shell_menu::take_numpad_keys();
         let context_keys = ndr::shell_menu::take_context_keys();

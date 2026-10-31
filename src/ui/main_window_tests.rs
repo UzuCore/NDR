@@ -1300,15 +1300,24 @@ fn back_wheel_and_dot_files_follow_the_user_requests() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// 사용자 요청: Alt+Enter = 전체 화면 켜고 끄기(창 명령 Fullscreen).
+/// 원본 shortcut.ini miDescription=Alt+Enter: Alt+Enter는 "설명 붙여두기"이고 전체 화면 전환은 없다(사용자 요청으로 되돌림).
 #[test]
-fn alt_enter_toggles_fullscreen() {
+fn alt_enter_edits_the_description_like_the_original() {
     let (root, ctx, mut app) = fixture("fullscreen");
+    let on_file = |app: &mut App| app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == "a.txt").unwrap();
+    on_file(&mut app);
     let alt_enter = egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::ALT };
     let raw = egui::RawInput { modifiers: egui::Modifiers::ALT, events: vec![alt_enter], screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 850.0))), ..Default::default() };
     let output = ctx.run(raw, |ctx| app.keyboard(ctx));
     let commands = &output.viewport_output[&egui::ViewportId::ROOT].commands;
-    assert!(commands.contains(&egui::ViewportCommand::Fullscreen(true)), "{commands:?}");
+    assert!(!commands.iter().any(|c| matches!(c, egui::ViewportCommand::Fullscreen(_))), "{commands:?}");
+    let (expected_root, _, mut expected) = fixture("fullscreen-expected");
+    on_file(&mut expected);
+    expected.dispatch("description", &ctx);
+    let kinds = |app: &App| (app.original_dialogs.len(), app.original_dialogs.last().map(|d| d.title.clone()), app.msgboxes.len());
+    assert_eq!(kinds(&app), kinds(&expected), "Alt+Enter = miDescription");
+    assert!(kinds(&app).0 + kinds(&app).2 > 0, "the description command opened something: {:?}", kinds(&app));
+    let _ = fs::remove_dir_all(expected_root);
     let _ = fs::remove_dir_all(root);
 }
 

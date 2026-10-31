@@ -846,6 +846,51 @@ pub fn shell_key_icon(key: &Path) -> Option<(usize, usize, Vec<u8>)> {
     }
 }
 
+/// 글꼴 파일처럼 프로그램이 끝날 때까지 읽기만 하는 파일을 메모리에 사상(CreateFileMappingW·MapViewOfFile)해 돌려준다.
+/// 고친 것(메모리): 전에는 글꼴 파일을 통째로 읽고(Vec), egui가 그것을 한 번 더 복사해 맑은 고딕(12.8MB)·굵게(12MB)가 두 벌씩
+/// 개인 메모리에 있었다. 사상한 파일은 운영 체제 파일 캐시와 함께 쓰는 쪽(필요한 쪽만 읽음)이 된다. 같은 파일은 한 번만 사상한다.
+pub fn mapped_file(path: &Path) -> Option<&'static [u8]> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    use windows_sys::Win32::Foundation::{CloseHandle, GENERIC_READ, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Storage::FileSystem::{CreateFileW, FILE_SHARE_READ, GetFileSizeEx, OPEN_EXISTING};
+    use windows_sys::Win32::System::Memory::{CreateFileMappingW, FILE_MAP_READ, MapViewOfFile, PAGE_READONLY};
+    static MAPPED: OnceLock<Mutex<HashMap<PathBuf, (usize, usize)>>> = OnceLock::new();
+    let cache = MAPPED.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut cache = cache.lock().unwrap_or_else(|e| e.into_inner());
+    let key = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    if let Some(&(address, length)) = cache.get(&key) {
+        // SAFETY: the view below is never unmapped, so the slice stays valid for the whole process.
+        return Some(unsafe { std::slice::from_raw_parts(address as *const u8, length) });
+    }
+    let name = wide(key.as_os_str());
+    // SAFETY: NUL-terminated path; handles are closed after mapping, the view keeps the mapping alive.
+    unsafe {
+        let file = CreateFileW(name.as_ptr(), GENERIC_READ, FILE_SHARE_READ, ptr::null(), OPEN_EXISTING, 0, ptr::null_mut());
+        if file == INVALID_HANDLE_VALUE {
+            return None;
+        }
+        let mut size = 0i64;
+        if GetFileSizeEx(file, &mut size) == 0 || size <= 0 || size > 512 * 1024 * 1024 {
+            CloseHandle(file);
+            return None;
+        }
+        let mapping = CreateFileMappingW(file, ptr::null(), PAGE_READONLY, 0, 0, ptr::null());
+        CloseHandle(file);
+        if mapping.is_null() {
+            return None;
+        }
+        let view = MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 0);
+        CloseHandle(mapping);
+        if view.Value.is_null() {
+            return None;
+        }
+        let (address, length) = (view.Value as usize, size as usize);
+        cache.insert(key, (address, length));
+        Some(std::slice::from_raw_parts(address as *const u8, length))
+    }
+}
+
 /// 이 스레드를 셸용 STA로(C# 오버레이 작업 스레드의 ApartmentState.STA). 스레드가 끝날 때까지 그대로 둔다.
 pub fn com_sta_init() {
     use windows_sys::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};

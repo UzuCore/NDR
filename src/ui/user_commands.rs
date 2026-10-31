@@ -288,7 +288,7 @@ impl App {
             let data = native::styled_font_names(&list_font, style)
                 .iter()
                 .find_map(|name| (self.system.font_file)(name))
-                .and_then(|(path, index)| std::fs::read(path).ok().map(|bytes| (bytes, index)));
+                .and_then(|(path, index)| native::mapped_file(&path).map(|bytes| (bytes, index)));
             super::set_app_fonts(ctx, data, style & 1 != 0);
             self.list_font_name = Some(key);
         }

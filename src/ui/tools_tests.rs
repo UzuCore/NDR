@@ -177,6 +177,16 @@ fn command_line_find_and_open_with_follow_the_original() {
     app.answer_dialog(DialogResult::Text(Some("someprog.exe a b".into())), &ctx);
     assert_eq!(launched(), [("someprog.exe".to_owned(), "a b".to_owned(), left.clone())], "ShellExecuteEx(name, arguments, current folder)");
     assert_eq!(app.settings.strings("CommandHistory"), ["someprog.exe a b", "old"]);
+    // 원본 shortcut.ini miCommandLine=/: 목록에서 / 글쇠(VK_OEM_2)로 같은 입력 상자.
+    let slash = vec![
+        egui::Event::Key { key: egui::Key::Slash, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE },
+        egui::Event::Text("/".into()),
+    ];
+    let raw = egui::RawInput { events: slash, screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 850.0))), ..Default::default() };
+    let _ = ctx.run(raw, |ctx| app.keyboard(ctx));
+    let (title, _, _, _) = prompt(&app);
+    assert_eq!(title, app.language_pack.text("RES.TITLE_CMD", "?"), "the / key opens the command line");
+    app.answer_dialog(DialogResult::Text(None), &ctx);
     // 실행 파일 기록: 이름이 같은 후보 하나면 그 경로를 인수 없이.
     let tool = left.join("folder1").join("tool.exe");
     fs::write(&tool, b"").unwrap();
