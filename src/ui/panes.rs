@@ -212,7 +212,10 @@ impl App {
                         fm.max[3] = fm.max[3].max(measure(&cells[3]));
                     }
                 }
-                fm.max[4] = fm.max[4].max(measure(&cells[4]));
+                // Original GetFieldMaxWidth field 4: GetTextWidth(wsprintf("%s  %s", DateToStr, TimeToStr)) (0x92dba4, two spaces). The cell keeps one
+                // LIST_DATE_TIME_GAP between them, so measure that as two spaces. Fixed: one gap left the column too narrow for the date at the left
+                // and the time at the right, and the cell fell back to "2009-06-11 05:...".
+                fm.max[4] = fm.max[4].max(measure(&cells[4].replace(ndr::listing::LIST_DATE_TIME_GAP, "  ")));
                 fm.max[6] = fm.max[6].max(measure(&cells[6]));
             }
         });
@@ -1610,7 +1613,9 @@ impl App {
                                                 }
                                             }
                                         } else if let Some(o) = original {
-                                            let cell_color = o.cell(*column, color, entry.attributes, cursor_row, active);
+                                            // Original DrawListItem: an uncounted folder's RES DIR text keeps the item color (counted sizes use the size colors).
+                                            let color_column = if *column == DetailColumn::Size && entry.is_dir && folder_size.is_none() { DetailColumn::Name } else { *column };
+                                            let cell_color = o.cell(color_column, color, entry.attributes, cursor_row, active);
                                             let (rect, _) = ui.allocate_exact_size(egui::vec2(cell, row_height), egui::Sense::hover());
                                             paint_original_cell(ui, rect, *column, text, cell_color, cursor_row, &o, list_style);
                                         } else {

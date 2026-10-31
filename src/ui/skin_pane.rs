@@ -746,7 +746,7 @@ impl App {
         segments
     }
 
-    /// Original address bar (skin theme). Left button = path history dropdown (FUN_0048ced4), right button = refresh (FUN_0048ce78),
+    /// Original address bar (skin theme). Refresh (FUN_0048ce78) then, at the right edge, the path history dropdown (FUN_0048ced4),
     /// center TNXPathLabel: background laback, a leading ▼ (DrawDivider, click for the drive list), segment text (latext, current folder lacurr,
     /// a hovered segment is laover text + lafocus background), a ">" line after each segment (ladivider, click for that folder's subfolders).
     pub(super) fn skin_address_bar(&mut self, ui: &mut egui::Ui, index: usize, ctx: &egui::Context, skin: &Skin) {
@@ -772,15 +772,16 @@ impl App {
             }
             return;
         }
-        // The two end buttons (TNXImageButton, addressbtns.png: columns = buttons, rows = normal·hovered).
-        // Original FUN_00481978: both buttons have Align = alRight(4), width 0x14. Refresh has Left = frame width, path history has Left = 0, so
-        // from the right edge it is [path history ▼][refresh] and the TNXPathLabel (alClient) fills the rest.
+        // The two end buttons (TNXImageButton, addressbtns.png: columns = buttons (0 ▼ history, 1 ↺ refresh), rows = normal·hovered).
+        // Original FUN_00481978: both buttons have Align = alRight(4), width 0x14; refresh (+0x328, OnClick FUN_0048ce78 -> FUN_00487ce8) and
+        // path history (+0x324, OnClick FUN_0048ced4). The running original (captured window) shows [refresh ↺][history ▼] at the right edge,
+        // and the TNXPathLabel (alClient) fills the rest. Fixed: NDR had the two swapped ([▼][↺]).
         // Fix (user-reported): previously the path history ▼ was placed at the left edge, so it appeared side by side with the label's drive ▼ (two ▼).
         let buttons = skin.values.get("list.labtnimgs").cloned().and_then(|file| self.toolbar_icon(ctx, &file));
         let right_button = egui::Rect::from_min_size(egui::pos2(rect.right() - ADDRESS_BUTTON_WIDTH, rect.top()), egui::vec2(ADDRESS_BUTTON_WIDTH, rect.height()));
         let left_button = egui::Rect::from_min_size(egui::pos2(right_button.left() - ADDRESS_BUTTON_WIDTH, rect.top()), egui::vec2(ADDRESS_BUTTON_WIDTH, rect.height()));
         let mut clicked_button = None;
-        for (cell, slot) in [(0usize, left_button), (1, right_button)] {
+        for (cell, slot) in [(1usize, left_button), (0, right_button)] {
             let response = ui.interact(slot, egui::Id::new(("ndr-skin-address-button", index, cell)), egui::Sense::click());
             if let Some(texture) = &buttons {
                 let row = usize::from(response.hovered());

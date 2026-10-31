@@ -304,7 +304,9 @@ impl App {
                                             if let Some(w) = widths[metric] {
                                                 let folder_size = (*column == DetailColumn::Size && entry.is_dir).then(|| pane.folder_sizes.get(&entry.path).map(|s| s.clone().unwrap_or_else(|| "…".into()))).flatten();
                                                 let text = folder_size.as_ref().unwrap_or(&texts[column.index()]);
-                                                let metric_color = original.map_or(ui.visuals().weak_text_color(), |o| o.cell(*column, color, entry.attributes, cursor_row, active));
+                                                // Original DrawListItem: an uncounted folder's RES DIR text keeps the item color (counted sizes use the size colors).
+                                                let color_column = if *column == DetailColumn::Size && entry.is_dir && folder_size.is_none() { DetailColumn::Name } else { *column };
+                                                let metric_color = original.map_or(ui.visuals().weak_text_color(), |o| o.cell(color_column, color, entry.attributes, cursor_row, active));
                                                 ui.add_sized([w, row_height], egui::Label::new(super::list_text(text.as_str(), list_style).color(metric_color)).truncate());
                                             }
                                         }
@@ -581,7 +583,9 @@ impl App {
                             if let Some(w) = widths[metric] {
                                 let folder_size = (*column == DetailColumn::Size && entry.is_dir).then(|| pane.folder_sizes.get(&entry.path).map(|s| s.clone().unwrap_or_else(|| "…".into()))).flatten();
                                 let text = folder_size.as_ref().unwrap_or(&texts[column.index()]);
-                                let metric_color = original.map_or(ui.visuals().weak_text_color(), |o| o.cell(*column, color, entry.attributes, cursor_row, active));
+                                // Original DrawListItem: an uncounted folder's RES DIR text keeps the item color (counted sizes use the size colors).
+                                let color_column = if *column == DetailColumn::Size && entry.is_dir && folder_size.is_none() { DetailColumn::Name } else { *column };
+                                let metric_color = original.map_or(ui.visuals().weak_text_color(), |o| o.cell(color_column, color, entry.attributes, cursor_row, active));
                                 let metric_rect = egui::Rect::from_min_size(egui::pos2(x, cell.top()), egui::vec2(w, item_height));
                                 match &original {
                                     // Original DrawListItem cell alignment (size right, date/time at both ends, the rest left).

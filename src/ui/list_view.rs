@@ -138,6 +138,9 @@ impl App {
         ];
         let unit = self.settings.text("SizeUnit", "Auto");
         let thousands = self.settings.flag("UseThousandsSeparator", true);
+        // Original DrawListItem field 3 for a folder whose size was not counted (+0x60 == -1): GetString RES DIR ("[폴더]", "[DIR]"), right-aligned
+        // in the folder color, ".." included.
+        let folder_size_text = self.language_pack.text("RES.DIR", "[DIR]");
         let group_mode = self.settings.text(&Self::side_key(index, "GroupMode"), "None");
         let category_mode = self.settings.text(&Self::side_key(index, "FolderCategoryMode"), "Auto");
         let show_group_name = self.settings.flag(&Self::side_key(index, "ShowGroupName"), true);
@@ -200,7 +203,8 @@ impl App {
                 },
                 kind,
                 // Original DrawListItem field 3 = SizeToStr (0x7df870). Fixed: previously C# FormatSize ("999 B", "1.2 MB").
-                if entry.is_dir { String::new() } else { ndr::parity::size_to_str(entry.size, &unit, thousands) },
+                // Folders show RES DIR (see folder_size_text). Previously the cell was empty.
+                if entry.is_dir { if skin { folder_size_text.clone() } else { String::new() } } else { ndr::parity::size_to_str(entry.size, &unit, thousands) },
                 ndr::listing::list_date_text(entry.modified, &date_format, &time_format, use_age.then(|| [age_labels[0].as_str(), age_labels[1].as_str(), age_labels[2].as_str()]), now),
                 // Original DrawListItem field 5: SFTP list items (+0x78) show the permission text (+0x74), others GetAttrString (0x7b50a4, A/H/R/S in "____").
                 // Fixed: previously the C# text ("RHSA", "-").

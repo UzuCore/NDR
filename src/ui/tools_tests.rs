@@ -1951,6 +1951,17 @@ fn vertical_bar_cells_are_square() {
     }).collect();
     assert_eq!(sizes.len(), 8, "eight strip buttons: {sizes:?}");
     assert!(sizes.iter().all(|s| (s.x - 16.0).abs() < 0.01 && (s.y - 16.0).abs() < 0.01), "{sizes:?}");
+    // FUN_0042cc2c cell table [0,1,2,3,4,5,6,8] in name order: the sync buttons at the top use cells 0 and 1, the copy buttons 4 and 5.
+    let mut cells: Vec<(i32, u32)> = output.shapes.iter().filter_map(|c| match &c.shape {
+        egui::Shape::Mesh(m) if m.texture_id == strip.id() => {
+            let top = m.vertices.iter().map(|v| v.pos.y).fold(f32::MAX, f32::min);
+            let u = m.vertices.iter().map(|v| v.uv.x).fold(f32::MAX, f32::min);
+            Some((top.round() as i32, (u * 10.0).round() as u32))
+        }
+        _ => None,
+    }).collect();
+    cells.sort();
+    assert_eq!(cells.iter().map(|c| c.1).collect::<Vec<_>>(), [0, 1, 2, 3, 4, 5, 6, 8], "{cells:?}");
     let _ = fs::remove_dir_all(root);
 }
 

@@ -171,13 +171,15 @@ impl App {
         let hint = |app: &App, name: &str, fallback: &str| app.language_pack.text(&format!("formMain.Hint.{name}"), fallback);
         // Original DFM: (name, Left, Top, Height, strip cell). The two sync buttons are 16x12 at the very top of the bar (the image is clipped from the button's top left).
         // Fixed: previously the sync buttons were 16x16 at Top 345 and 363.
+        // FUN_0042cc2c gives the cells by name order bSyncPathToRight, bSyncPathToLeft, bSelectAll, bClearSelection, bCopyToRight, bCopyToLeft,
+        // bSort, bColCount = table 0x8e69b8 [0,1,2,3,4,5,6,8]. Fixed: the sync and copy buttons had each other's cells (guessed from the images).
         let buttons: [(&str, f32, f32, f32, usize, &str, &str); 8] = [
-            ("bSyncPathToRight", 1.0, 6.0, 12.0, 4, "Left Path => Right Path", "▶"),
-            ("bSyncPathToLeft", 0.0, 17.0, 12.0, 5, "Left Path <= Right Path", "◀"),
+            ("bSyncPathToRight", 1.0, 6.0, 12.0, 0, "Left Path => Right Path", "→"),
+            ("bSyncPathToLeft", 0.0, 17.0, 12.0, 1, "Left Path <= Right Path", "←"),
             ("bSelectAll", 0.0, 157.0, 16.0, 2, "Select All", "◆"),
             ("bClearSelection", 0.0, 179.0, 16.0, 3, "Clear Selection", "◇"),
-            ("bCopyToRight", 0.0, 219.0, 16.0, 0, "Copy To Right", "→"),
-            ("bCopyToLeft", 0.0, 240.0, 16.0, 1, "Copy To Left", "←"),
+            ("bCopyToRight", 0.0, 219.0, 16.0, 4, "Copy To Right", "▶"),
+            ("bCopyToLeft", 0.0, 240.0, 16.0, 5, "Copy To Left", "◀"),
             ("bSort", 1.0, 289.0, 16.0, 6, "Arrange", "≡"),
             ("bColCount", 1.0, 311.0, 16.0, 8, "Column", "⋮"),
         ];
