@@ -269,14 +269,19 @@ impl App {
     }
 
     /// In place of C# UpdateDiskCapacityAsync: original data of a local drive (not network, ready) (drive text, free, total). Dropped when another listing arrives.
+    /// Inside an archive the original keeps the disk text of the drive that holds the archive file (only FTP hides it); previously it was hidden there.
     pub(super) fn update_disk_capacity(&mut self, index: usize) {
         let pane = &mut self.panes[index];
         pane.disk = None;
         // Original FUN_004408f8: FTP mode hides the disk info text (+0x33c, +0x340).
-        if pane.archive.is_some() || pane.remote.is_some() || super::panes::is_drives(&pane.path) {
+        if pane.remote.is_some() || super::panes::is_drives(&pane.path) {
             return;
         }
-        let (path, generation, tx, read) = (pane.path.clone(), pane.generation, self.async_tx.clone(), self.system.disk_info);
+        let path = match &pane.archive {
+            Some(archive) => archive.file.parent().map(Path::to_path_buf).unwrap_or_else(|| archive.file.clone()),
+            None => pane.path.clone(),
+        };
+        let (generation, tx, read) = (pane.generation, self.async_tx.clone(), self.system.disk_info);
         thread::spawn(move || {
             let _ = tx.send(AsyncResult::DiskCapacity { pane: index, generation, disk: read(&path) });
         });
@@ -301,7 +306,7 @@ impl App {
             return (counts, String::new(), selected, String::new());
         }
         match &pane.disk {
-            Some((drive, free, total)) if pane.archive.is_none() => {
+            Some((drive, free, total)) => {
                 let (free, total) = (native::format_byte_size(*free), native::format_byte_size(*total));
                 let short = ndr::markup::substitute(&res("DISKINFO_SHORT", "<c000000><b>%s</b></c> Free"), &[&free]);
                 let long = ndr::markup::substitute(&res("DISKINFO_LONG", "<c000000><b>%s</b></c> Free (Total <b>%s</b>)"), &[&free, &total]);
