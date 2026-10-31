@@ -296,6 +296,10 @@ pub(super) fn markup_job(text: &str, size: f32, color: Color32, wrap: f32) -> La
             format.color = if span.color.is_some() { format.color } else { Color32::WHITE };
             format.font_id = FontId::new(size, egui::FontFamily::Name(super::BOLD_FONT_FAMILY.into()));
         }
+        format.italics = span.italic;
+        if span.underline {
+            format.underline = egui::Stroke::new(1.0, format.color);
+        }
         job.append(&span.text, 0.0, format);
     }
     job
@@ -1251,6 +1255,9 @@ pub(super) fn group_box(ui: &egui::Ui, rect: egui::Rect, caption: &str) {
 }
 
 /// Original TNXLabel (AutoSize False, Layout = tlBottom): draws the text bottom-aligned within the rect (the top is clipped on overflow).
+/// TNXLabel.DoDrawText 0x7c608c: Layout tlCenter/tlBottom moves the first line to (height - text height) / 2 or height - text height;
+/// each line (empty ones too) advances by line height + LineSpace; Alignment right/center uses Width - TextWidth(line).
+/// A disabled label draws the plain text twice with DrawTextW (clBtnHighlight at +1,+1, then clBtnShadow).
 fn bottom_label(ui: &egui::Ui, rect: egui::Rect, mut job: LayoutJob) {
     job.wrap.max_width = rect.width();
     let galley = ui.painter().layout_job(job);

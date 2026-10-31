@@ -221,6 +221,8 @@ pub fn lines(text: &str) -> Vec<String> {
 }
 
 /// TNXLabel LineSpace 4: n lines of height h are n*h + (n-1)*4 high.
+/// TNXLabel.CalcTextRect 0x7c6650: width = widest line (TextExtent 0x7c5670, tags skipped), height = first line height plus
+/// LineSpace + first line height for every later line; AdjustBounds 0x7c5aa4 sizes an AutoSize label to that (right-aligned keeps its right edge).
 pub fn text_height(line_count: usize, line_height: f32) -> f32 {
     let n = line_count.max(1) as f32;
     n * line_height + (n - 1.0) * 4.0

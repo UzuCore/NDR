@@ -539,7 +539,8 @@ fn skin_markup_job(text: &str, base: Color32) -> egui::text::LayoutJob {
     for span in ndr::markup::render(text) {
         let family = if span.bold { egui::FontFamily::Name(super::BOLD_FONT_FAMILY.into()) } else { egui::FontFamily::Proportional };
         let color = span.color.map_or(base, |(r, g, b)| Color32::from_rgb(r, g, b));
-        job.append(&span.text, 0.0, egui::TextFormat { font_id: egui::FontId::new(super::BASE_TEXT_SIZE, family), color, ..Default::default() });
+        let underline = if span.underline { egui::Stroke::new(1.0, color) } else { egui::Stroke::NONE };
+        job.append(&span.text, 0.0, egui::TextFormat { font_id: egui::FontId::new(super::BASE_TEXT_SIZE, family), color, italics: span.italic, underline, ..Default::default() });
     }
     job
 }
