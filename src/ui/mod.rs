@@ -316,18 +316,21 @@ pub(super) fn strip_numpad_events(raw: &mut egui::RawInput, vk: u16) {
 }
 /// Turn egui Copy/Cut/Paste events back into the original keys (Ctrl+C/X/V, Ctrl+Insert, Shift+Delete, Shift+Insert),
 /// and append the paste keys that egui-winit discarded (pastes - number of replaced Pastes).
-pub(super) fn restore_clipboard_keys(raw: &mut egui::RawInput, pastes: u32, insert_down: bool) {
+/// egui-winit also reports Ctrl+Shift+Delete (original Shred) as Cut: Cut is Delete when the Delete key is down or Shift is held without X
+/// (Shift+Delete, Ctrl+Shift+Delete), otherwise X. Previously a Cut with Ctrl held became Ctrl+Shift+X and Ctrl+Shift+Delete did nothing.
+pub(super) fn restore_clipboard_keys(raw: &mut egui::RawInput, pastes: u32, insert_down: bool, delete_down: bool, x_down: bool) {
     let modifiers = raw.modifiers;
-    let shift_only = modifiers.shift && !modifiers.ctrl;
     let key = |key: egui::Key| egui::Event::Key { key, physical_key: Some(key), pressed: true, repeat: false, modifiers };
+    let cut_key = if delete_down || (modifiers.shift && !x_down) { egui::Key::Delete } else { egui::Key::X };
+    let paste_key = if insert_down || (modifiers.shift && !modifiers.ctrl) { egui::Key::Insert } else { egui::Key::V };
     let mut pasted = 0;
     for event in raw.events.iter_mut() {
         let replacement = match event {
             egui::Event::Copy => Some(if insert_down { egui::Key::Insert } else { egui::Key::C }),
-            egui::Event::Cut => Some(if shift_only { egui::Key::Delete } else { egui::Key::X }),
+            egui::Event::Cut => Some(cut_key),
             egui::Event::Paste(_) => {
                 pasted += 1;
-                Some(if shift_only { egui::Key::Insert } else { egui::Key::V })
+                Some(paste_key)
             }
             _ => None,
         };
@@ -336,7 +339,7 @@ pub(super) fn restore_clipboard_keys(raw: &mut egui::RawInput, pastes: u32, inse
         }
     }
     for _ in pasted..pastes {
-        raw.events.push(key(if shift_only { egui::Key::Insert } else { egui::Key::V }));
+        raw.events.push(key(paste_key));
     }
 }
 /// A panel location as a single string (local folder, archive file + inner path, FTP host + path). Used to tell whether the same location was re-read.
@@ -1773,9 +1776,9 @@ impl eframe::App for App {
         });
         let text_focus = ctx.memory(|m| m.focused()).is_some_and(|id| egui::text_edit::TextEditState::load(ctx, id).is_some());
         if !text_focus {
-            use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_INSERT};
-            let insert_down = unsafe { GetKeyState(VK_INSERT as i32) } < 0;
-            restore_clipboard_keys(raw_input, pastes, insert_down);
+            use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_DELETE, VK_INSERT};
+            let down = |vk: i32| unsafe { GetKeyState(vk) } < 0;
+            restore_clipboard_keys(raw_input, pastes, down(VK_INSERT as i32), down(VK_DELETE as i32), down(b'X' as i32));
             if !self.keyboard_blocked(ctx) {
                 for (vk, ctrl, shift, alt) in numpad {
                     if let Some(original) = self.numpad_shortcut(vk, ctrl, shift, alt) {

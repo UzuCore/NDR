@@ -798,20 +798,27 @@ fn original_listing_is_read_in_place_with_a_parent_item() {
 fn clipboard_shortcuts_reach_the_file_list() {
     let ctrl = egui::Modifiers::CTRL;
     let mut raw = egui::RawInput { modifiers: ctrl, events: vec![egui::Event::Copy, egui::Event::Cut, egui::Event::Paste("x".into())], ..Default::default() };
-    super::restore_clipboard_keys(&mut raw, 2, false);
+    super::restore_clipboard_keys(&mut raw, 2, false, false, true);
     let keys: Vec<egui::Key> = raw.events.iter().filter_map(|e| if let egui::Event::Key { key, modifiers, pressed: true, .. } = e { assert_eq!(*modifiers, ctrl); Some(*key) } else { None }).collect();
     assert_eq!(keys, [egui::Key::C, egui::Key::X, egui::Key::V, egui::Key::V], "one Paste event + one dropped paste key");
     let mut raw = egui::RawInput { modifiers: egui::Modifiers::SHIFT, events: vec![egui::Event::Cut], ..Default::default() };
-    super::restore_clipboard_keys(&mut raw, 1, false);
+    super::restore_clipboard_keys(&mut raw, 1, false, false, false);
     let keys: Vec<egui::Key> = raw.events.iter().filter_map(|e| if let egui::Event::Key { key, .. } = e { Some(*key) } else { None }).collect();
     assert_eq!(keys, [egui::Key::Delete, egui::Key::Insert], "Shift+Delete cut, Shift+Insert paste");
+    // egui-winit also reports Ctrl+Shift+Delete (original Shred) as Cut; Ctrl+Shift+X stays X.
+    for (delete_down, x_down, expected) in [(true, false, egui::Key::Delete), (false, true, egui::Key::X)] {
+        let mut raw = egui::RawInput { modifiers: ctrl | egui::Modifiers::SHIFT, events: vec![egui::Event::Cut], ..Default::default() };
+        super::restore_clipboard_keys(&mut raw, 0, false, delete_down, x_down);
+        let keys: Vec<egui::Key> = raw.events.iter().filter_map(|e| if let egui::Event::Key { key, .. } = e { Some(*key) } else { None }).collect();
+        assert_eq!(keys, [expected], "Ctrl+Shift Cut with Delete down = {delete_down}");
+    }
     // In the file list, Ctrl+C goes to the original miEditCopy (= copy command).
     let (root, ctx, mut app) = fixture("clipkeys", "ko");
     app.refresh(0);
     wait_listing(&mut app, &ctx);
     app.panes[0].cursor = index_of(&app, "alpha.txt");
     let mut raw = egui::RawInput { modifiers: ctrl, events: vec![egui::Event::Copy], ..Default::default() };
-    super::restore_clipboard_keys(&mut raw, 0, false);
+    super::restore_clipboard_keys(&mut raw, 0, false, false, false);
     let _ = ctx.run(raw, |ctx| app.keyboard(ctx));
     assert_eq!(app.clipboard.as_ref().map(|(paths, cut)| (paths.len(), *cut)), Some((1, false)), "Ctrl+C copied the cursor item");
     // Numpad keys of the original shortcut table: Num * = miInvertSelection, Num + = miAdvSelect, Num / = miSelectSameExt, Ctrl+Num / = miSelectSameName.
