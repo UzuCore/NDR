@@ -59,6 +59,8 @@ fn parse_target(value: &str) -> String {
 /// rep FUN_0046a990, del FUN_0046b488, cas FUN_0046bc7c, num FUN_0046c334, ext FUN_0046c8b8. Numbers are StrToIntDef(text, 0), so a
 /// bad number reads as 0 instead of dropping the rule; a replace position other than First/Last means all occurrences; the last field
 /// "ext" (case-insensitive) selects the extension.
+/// Each reader starts from its rule constructor (rep FUN_0046a364: all occurrences, flag +0x18 off; del FUN_0046accc: position 0, count 0,
+/// forward; ext FUN_0046c6fc), so fields the line does not set keep those defaults (`RenameRule::default`).
 pub fn parse_rule(row: &str) -> Option<RenameRule> {
     let fields: Vec<&str> = row.split(';').collect();
     let mut rule = RenameRule::default();

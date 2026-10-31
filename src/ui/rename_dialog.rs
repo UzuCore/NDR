@@ -533,25 +533,23 @@ impl App {
         form.rules.push(rule);
     }
 
-    /// SaveMacroAsync: a notice without actions, asks for a name (1-64 characters), and for the same name TfMsgBox(window title, MSG_SAMENAME, yes/no, question).
+    /// Original sbtnSaveClick (0x418c7c): TfGetText(window title, RES NAME "Name", empty text) first; then, with no rules, nothing happens; a
+    /// section "[name]" already in advrename.save (TStringList.IndexOf, case-insensitive) asks TfMsgBox(window title, MSG_SAMENAME, yes/no)
+    /// and replaces its lines, otherwise the section is appended; the file is saved and the macro combo selects the name.
+    /// Fixed: an empty name stored a nameless "[]" section; it is ignored. (The 64-character limit and the notices of the C# port are gone.)
     pub(super) fn save_rename_macro(&mut self) {
         let title = self.rename_title();
-        let Some(form) = self.rename_form() else { return };
-        if form.rules.is_empty() {
-            let text = self.language_pack.text("formAdvRename.Caption.macroRulesRequired", "Add one or more actions before saving.");
-            return self.system_box(&title, &text, MB_OK | ndr::msgbox::MB_ICONASTERISK, |_, _, _| {});
+        if self.rename_form().is_none() {
+            return;
         }
-        let initial = form.macro_name.clone().unwrap_or_default();
-        let prompt_title = self.language_pack.text("formAdvRename.Caption.macroSaveTitle", "Save Rename Macro");
-        let prompt = self.language_pack.text("formAdvRename.Caption.macroNamePrompt", "Macro name:");
-        self.prompt(&prompt_title, &prompt, &initial, None, false, move |app, value, _| {
+        let prompt = self.language_pack.text("RES.NAME", "Name");
+        self.prompt(&title, &prompt, "", None, false, move |app, value, _| {
             let Some(name) = value.map(|v| v.trim().to_owned()) else { return };
-            if name.is_empty() || name.chars().count() > 64 {
-                let text = app.language_pack.text("formAdvRename.Caption.macroNameRequired", "Enter a macro name from 1 to 64 characters.");
-                let title = app.rename_title();
-                return app.system_box(&title, &text, MB_OK | ndr::msgbox::MB_ICONASTERISK, |_, _, _| {});
+            if name.is_empty() || app.rename_form().is_none_or(|f| f.rules.is_empty()) {
+                return;
             }
-            let exists = app.rename_form().is_some_and(|f| f.macros.iter().any(|m| m.name.eq_ignore_ascii_case(&name)));
+            let lower = name.to_lowercase();
+            let exists = app.rename_form().is_some_and(|f| f.macros.iter().any(|m| m.name.to_lowercase() == lower));
             if exists {
                 let title = app.rename_title();
                 let text = app.language_pack.text("RES.MSG_SAMENAME", "Same name already exists. Do you want to replace it?");
@@ -572,7 +570,7 @@ impl App {
         let Some(form) = self.rename_form() else { return };
         let mut updated = form.macros.clone();
         let rules = form.rules.clone();
-        match updated.iter_mut().find(|m| m.name.eq_ignore_ascii_case(&name)) {
+        match updated.iter_mut().find(|m| m.name.to_lowercase() == name.to_lowercase()) {
             Some(existing) => {
                 existing.rules = rules;
                 existing.legacy_rows.clear();

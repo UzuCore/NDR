@@ -898,6 +898,12 @@ fn advanced_rename_window_builds_rules_macros_and_renames() {
     frame(&mut app, &ctx, vec![]);
     // Save the rules as a macro, then refuse to replace it.
     app.save_rename_macro();
+    // Original sbtnSaveClick: TfGetText(window title, RES NAME, empty text).
+    let window_title = app.original_dialogs[0].title.clone();
+    match (&app.original_dialogs.last().unwrap().title, &app.original_dialogs.last().unwrap().kind) {
+        (title, DialogKind::Prompt { message, value, .. }) => assert_eq!((title, message.as_str(), value.as_str()), (&window_title, app.language_pack.text("RES.NAME", "?").as_str(), "")),
+        _ => panic!("the name prompt"),
+    }
     app.answer_dialog(DialogResult::Text(Some("사진 정리".into())), &ctx);
     let saved = fs::read(root.join("profile").join(ndr::rename_macros::FILE_NAME)).unwrap();
     assert_eq!(ndr::rename_macros::read(&root.join("profile").join(ndr::rename_macros::FILE_NAME)).unwrap()[0].rules.len(), 2, "{saved:?}");
