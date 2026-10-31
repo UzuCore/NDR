@@ -54,10 +54,11 @@ pub fn parse_split_size(text: &str) -> Option<u64> {
     u64::try_from(original_size_value(text)).ok().filter(|&size| size > 0)
 }
 
-/// SizePresets.
+/// Original TfFileSplit cbSplitSize Items (DFM).
 pub const SPLIT_SIZE_PRESETS: [&str; 7] = ["1440 KB", "2880 KB", "5 MB", "10 MB", "20 MB", "50 MB", "100 MB"];
 
-/// SelectDefaultSplitSize: "720 KB" below 1440 KB, otherwise the default piece size for the file size.
+/// Original TntFormShow (0x4236e4): Text "720 KB" (0x8e2792) below 1440 KB, otherwise ItemIndex 0/2/3/4/5/6 below 5/20/50/100/200 MB and above,
+/// then cbSplitSizeChange (0x423958) fills the piece count.
 pub fn default_split_size(length: u64) -> &'static str {
     const KIB: u64 = 1024;
     const MIB: u64 = 1024 * KIB;
