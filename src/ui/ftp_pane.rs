@@ -1,28 +1,28 @@
-//! 원본 패널 안 FTP 모드(TfMain pmConnect).
-//! - 사이트 연결(miFTPConnect 하위 메뉴, FUN_00440734가 "&1. 이름" … 줄을 만들고 FUN_0043e720 → FUN_004408f8)와
-//!   빠른 연결(miFTPQuickConnectClick 0x43ee20 → FUN_0043e9f8: TfFTPQuickConnect, 포트 22면 SFTP, "사이트 목록에 추가").
-//!   연결은 지금 패널을 FTP 모드(FUN_00481948 == 2)로 바꾼다.
-//! - 끊기(miFTPDisconnectClick 0x43e8d4 → FUN_00440d24: 전송 중이면 FTP_CANNOTDISCONNECT, 아니면 끊고 로컬 폴더로).
-//! - 내려받기(miFTPGetClick 0x4412f8: FTP 패널이면 FTP_GET 대상 선택 → FUN_0043f800)와
-//!   올리기(miFTPPutClick 0x441168: 한쪽 FTP·한쪽 로컬이어야, 아니면 FTP_PUTCRITERIA → FUN_0043feb0).
-//!   전송 중에 또 전송하면 FTPENGINE_BUSY.
-//! - 다른 패널로 복사(FUN_0042d518·FUN_0042d910): 로컬→FTP면 올리기, FTP→로컬이면 내려받기(대상 묻지 않음).
-//! - FTP 패널의 새 폴더(miNewFolderClick 0x432378 → FUN_0045d0b4), 이름 바꾸기(miRenameClick 0x4351cc → TfRename, FUN_0045d214),
-//!   삭제(miDeleteClick 0x431c04 → FUN_0042c734: 늘 삭제 확인(휴지통 없음) → FUN_0045de18).
+//! The original in-pane FTP mode (TfMain pmConnect).
+//! - Site connection (the miFTPConnect submenu, where FUN_00440734 builds the "&1. name" … lines and FUN_0043e720 → FUN_004408f8) and
+//!   quick connect (miFTPQuickConnectClick 0x43ee20 → FUN_0043e9f8: TfFTPQuickConnect, SFTP when port 22, "add to site list").
+//!   Connecting switches the current pane to FTP mode (FUN_00481948 == 2).
+//! - Disconnect (miFTPDisconnectClick 0x43e8d4 → FUN_00440d24: FTP_CANNOTDISCONNECT if transferring, otherwise disconnect and go to a local folder).
+//! - Download (miFTPGetClick 0x4412f8: if the pane is FTP, choose an FTP_GET destination → FUN_0043f800) and
+//!   upload (miFTPPutClick 0x441168: one pane must be FTP and the other local, otherwise FTP_PUTCRITERIA → FUN_0043feb0).
+//!   Transferring again while a transfer is in progress gives FTPENGINE_BUSY.
+//! - Copy to the other pane (FUN_0042d518·FUN_0042d910): local→FTP uploads, FTP→local downloads (no destination prompt).
+//! - New folder in an FTP pane (miNewFolderClick 0x432378 → FUN_0045d0b4), rename (miRenameClick 0x4351cc → TfRename, FUN_0045d214),
+//!   delete (miDeleteClick 0x431c04 → FUN_0042c734: always a delete confirmation (no recycle bin) → FUN_0045de18).
 use super::original_dialogs::{DeleteWarningChoice, DeleteWarningMode, DialogKind, DialogResult};
 use super::remote_window::{PermissionAction, PermissionForm, SiteProfile, load_sites, parent_path, parse_port, prepare_host, store_sites};
 use super::*;
 use ndr::msgbox::{MB_ICONEXCLAMATION, MB_OK};
 use ndr::remote::{Client, Config, RemoteEntry, TransferProgress};
 
-/// 원본 FUN_0048d7ac: 기록 칸 처음 높이 0x3c, TSplitter MinSize 0x1e(+0x1f8), 나눔 막대 높이(TSplitter 처음 값 3).
+/// Original FUN_0048d7ac: log pane initial height 0x3c, TSplitter MinSize 0x1e (+0x1f8), splitter bar height (TSplitter default 3).
 pub(super) const FTP_LOG_HEIGHT: f32 = 60.0;
 const FTP_LOG_MIN: f32 = 30.0;
 const FTP_SPLITTER_HEIGHT: f32 = 3.0;
 
-/// 원본 FTP 대기열(FUN_00467f0c): 폴더 항목은 묻지 않고 없으면 만들고 있으면 그대로 쓴다(폴더끼리 = 합치기).
-/// 파일이 같은 이름이면 TfFileExists로 묻는다(FUN_00467764: 원격 쪽 크기·시각도 보이고, btnResume = 이어서 전송 가능할 때).
-/// 고친 것: 전에는 폴더끼리도 물었고, 원격 쪽 크기·시각이 비어 이어서 전송 단추를 쓸 수 없었고, 이름 바꾸기는 묻지 않고 " (1)"을 붙였다.
+/// Original FTP queue (FUN_00467f0c): folder items are not asked about; if absent they are created, and if present they are reused (folder vs folder = merge).
+/// A file with the same name is asked about via TfFileExists (FUN_00467764: shows the remote size and time, and btnResume when the transfer can be resumed).
+/// Fix: previously folders vs folders were also asked, the remote size and time were empty so the resume button was unusable, and renaming appended " (1)" without asking.
 pub(super) fn ask_remote_conflict(events: &Sender<Event>, cancel: &AtomicBool, source: &str, destination: &str, info: &ndr::remote::ConflictInfo) -> ConflictChoice {
     if info.remote.is_dir && info.local_dir {
         return ConflictChoice::Overwrite;
@@ -35,7 +35,7 @@ pub(super) fn ask_remote_conflict(events: &Sender<Event>, cancel: &AtomicBool, s
         if choice != ConflictChoice::Rename {
             break choice;
         }
-        // 원본 FUN_00467658(0x10 이름 바꾸기): 대상 이름을 입력 창으로 묻는다. 확인이면 그 이름으로 다시 하고, 취소면 같은 이름을 다시 묻는다.
+        // Original FUN_00467658 (0x10 rename): ask for the destination name via an input dialog. On OK, retry with that name; on Cancel, ask the same name again.
         let name = destination.rsplit(['/', '\\']).next().unwrap_or(destination).to_owned();
         let (tx, rx) = mpsc::channel();
         if events.send(Event::RenameTarget { name, reply: tx }).is_err() {
@@ -64,20 +64,20 @@ pub(super) fn ask_remote_conflict(events: &Sender<Event>, cancel: &AtomicBool, s
     choice
 }
 
-/// 패널 FTP 모드가 쓰는 원격 동작(시험에서는 가짜로 바꾼다).
+/// Remote operations used by a pane's FTP mode (replaced with a fake in tests).
 pub(super) trait PaneFs: Send {
     fn pwd(&mut self) -> Result<String, String>;
     fn change_directory(&mut self, current: &str, path: &str) -> Result<(String, Option<String>), String>;
     fn list(&mut self, path: &str) -> Result<Vec<RemoteEntry>, String>;
     fn download(&mut self, remote: &str, local: &Path, cancel: &AtomicBool, resolve: &mut dyn FnMut(&str, &str, &ndr::remote::ConflictInfo) -> ConflictChoice, progress: &mut dyn FnMut(TransferProgress)) -> Result<(), String>;
     fn upload(&mut self, local: &Path, remote: &str, cancel: &AtomicBool, resolve: &mut dyn FnMut(&str, &str, &ndr::remote::ConflictInfo) -> ConflictChoice, progress: &mut dyn FnMut(TransferProgress)) -> Result<(), String>;
-    /// 원본 FTP 엔진 FUN_0045d0b4(새 폴더), FUN_0045d214(이름 바꾸기), FUN_0045de18(폴더·파일 목록 지우기).
+    /// Original FTP engine FUN_0045d0b4 (new folder), FUN_0045d214 (rename), FUN_0045de18 (delete folder/file list).
     fn mkdir(&mut self, path: &str) -> Result<(), String>;
     fn rename(&mut self, from: &str, to: &str) -> Result<(), String>;
     fn delete(&mut self, path: &str, is_dir: bool, cancel: &AtomicBool) -> Result<(), String>;
-    /// 원본 FUN_0045e274(경로, 권한): FTP SITE CHMOD.
+    /// Original FUN_0045e274 (path, permissions): FTP SITE CHMOD.
     fn chmod(&mut self, path: &str, mode: u32) -> Result<(), String>;
-    /// 원본 FUN_0082a178(SendCmd, 응답 코드 아무것이나): FTP 제어 명령 하나.
+    /// Original FUN_0082a178 (SendCmd, any response code): a single FTP control command.
     fn command(&mut self, command: &str) -> Result<String, String>;
     fn close(&mut self);
 }
@@ -118,13 +118,13 @@ impl PaneFs for Client {
     }
 }
 
-/// 실제 연결(RemoteHooks.pane_connect 처음 값).
+/// The real connection (RemoteHooks.pane_connect default).
 pub(super) fn connect_client(config: &Config) -> Result<Box<dyn PaneFs>, String> {
     Client::connect(config).map(|client| Box::new(client) as Box<dyn PaneFs>)
 }
 
-/// 원본 FTP 엔진 +0x74(기록 칸): 이 연결이 보내고 받는 제어 줄을 기록에 적는다.
-/// 보낸 줄 앞 글(원본 엔진 +0x1c)은 PWD·CWD로 알게 된 지금 원격 폴더.
+/// Original FTP engine +0x74 (log pane): record the control lines this connection sends and receives into the log.
+/// The prefix on sent lines (original engine +0x1c) is the current remote folder learned from PWD·CWD.
 pub(super) struct LoggedFs {
     pub inner: Box<dyn PaneFs>,
     pub log: Arc<Mutex<ndr::remote::ProtocolLog>>,
@@ -159,7 +159,7 @@ impl PaneFs for LoggedFs {
         result
     }
     fn list(&mut self, path: &str) -> Result<Vec<RemoteEntry>, String> {
-        // 원본은 그 폴더로 CWD(엔진 +0x1c)한 뒤 목록을 받는다. NDR은 경로로 바로 받으므로 그 폴더를 앞 글로 쓴다.
+        // The original does CWD (engine +0x1c) into that folder before listing. NDR lists by path directly, so it uses that folder as the prefix.
         self.set_prefix(path);
         self.run(|fs| fs.list(path))
     }
@@ -189,48 +189,48 @@ impl PaneFs for LoggedFs {
     }
 }
 
-/// FTP 모드 패널의 연결과 지금 원격 폴더.
+/// An FTP-mode pane's connection and its current remote folder.
 #[derive(Clone)]
 pub(super) struct PaneRemote {
     pub fs: Arc<Mutex<Box<dyn PaneFs>>>,
     pub host: String,
     pub path: String,
-    /// 원본 [+0xd6c]+0x14(FTP 엔진 전송 중).
+    /// Original [+0xd6c]+0x14 (FTP engine transferring).
     pub busy: Arc<AtomicBool>,
-    /// 마지막 목록의 권한 비트(원격 경로 → 모드). 원본 항목 +0x74(TfFTPAttributes에 넘기는 값).
+    /// Permission bits from the last listing (remote path → mode). Original item +0x74 (the value passed to TfFTPAttributes).
     pub modes: Arc<Mutex<std::collections::HashMap<String, u32>>>,
-    /// 원본 패널 +0x358 FTP 기록 칸(FUN_0048d7ac)의 줄. SFTP 사이트로 처음 연결하면 없다.
+    /// The lines of the original pane +0x358 FTP log pane (FUN_0048d7ac). Absent on the first connection to an SFTP site.
     pub log: Option<Arc<Mutex<ndr::remote::ProtocolLog>>>,
 }
 
 impl PaneRemote {
-    /// SFTP 사이트인지(원본처럼 FTP 기록 칸이 없다).
+    /// Whether this is an SFTP site (no FTP log pane, like the original).
     pub(super) fn is_sftp(&self) -> bool {
         self.log.is_none()
     }
 
-    /// 목록 항목의 경로("ftp://호스트/폴더/이름"). 로컬 경로로는 열리지 않는다(":"가 있는 첫 조각).
+    /// Path of a list item ("ftp://host/folder/name"). It cannot be opened as a local path (the first segment contains ":").
     pub(super) fn item_path(&self, name: &str) -> PathBuf {
         PathBuf::from(format!("ftp://{}{}", self.host, join_remote(&self.path, name)))
     }
-    /// item_path의 원격 부분.
+    /// The remote part of item_path.
     pub(super) fn remote_of(&self, path: &Path) -> Option<String> {
         let text = path.to_string_lossy().replace('\\', "/");
         let rest = text.strip_prefix(&format!("ftp://{}", self.host)).or_else(|| text.strip_prefix(&format!("ftp:/{}", self.host)))?;
         Some(if rest.is_empty() { "/".to_owned() } else { rest.to_owned() })
     }
-    /// 주소 줄 글("ftp://호스트/경로").
+    /// The address bar text ("ftp://host/path").
     pub(super) fn address(&self) -> String {
         format!("ftp://{}{}", self.host, if self.path.starts_with('/') { self.path.clone() } else { format!("/{}", self.path) })
     }
 }
 
-/// 원격 경로 붙이기("/" 구분).
+/// Join a remote path ("/"-separated).
 pub(super) fn join_remote(directory: &str, name: &str) -> String {
     if directory.ends_with('/') { format!("{directory}{name}") } else { format!("{directory}/{name}") }
 }
 
-/// 원본 FUN_00440734: 사이트 메뉴 줄 글(10개까지 "&1. 이름", 35개까지 "&A. 이름", 그 뒤 "36. 이름").
+/// Original FUN_00440734: site menu line text (up to 10 as "&1. name", up to 35 as "&A. name", then "36. name").
 pub(super) fn site_menu_caption(index: usize, name: &str) -> String {
     if index < 10 {
         format!("&{}. {name}", index + 1)
@@ -241,7 +241,7 @@ pub(super) fn site_menu_caption(index: usize, name: &str) -> String {
     }
 }
 
-/// 원본 TfFTPQuickConnect(cbHost·ePort·eUser·ePassword·chkPassive·chkAddToSites).
+/// Original TfFTPQuickConnect (cbHost·ePort·eUser·ePassword·chkPassive·chkAddToSites).
 #[derive(Clone, Debug)]
 pub(super) struct FtpQuickForm {
     pub host: String,
@@ -254,9 +254,9 @@ pub(super) struct FtpQuickForm {
     pub pane: usize,
 }
 
-/// 원본 TfFTPQuickConnect(ClientWidth 424 × ClientHeight 164): lURL(13,22) cbHost(94,20 220×21), lPort(320,23) ePort(364,20 49×21 가운데),
+/// Original TfFTPQuickConnect (ClientWidth 424 × ClientHeight 164): lURL(13,22) cbHost(94,20 220×21), lPort(320,23) ePort(364,20 49×21 centered),
 /// lUser(13,59) eUser(94,57 121×21), lPassword(13,86) ePassword(94,84 121×21 '*'), chkPassive(291,88), chkAddToSites(13,132),
-/// btnOk(255,128 75×25 기본) btnCancel(338,128 75×25). 확인이면 Some(true), 취소면 Some(false).
+/// btnOk(255,128 75×25 default) btnCancel(338,128 75×25). Some(true) on OK, Some(false) on Cancel.
 pub(super) fn ftp_quick_ui(ui: &mut egui::Ui, form: &mut FtpQuickForm, language: &compat::Language, enter: bool) -> Option<bool> {
     let text = |key: &str, fallback: &str| super::favorites_dialog::access_key(&language.text(&format!("formFTPQuickConnect.{key}"), fallback)).0;
     let mut result = None;
@@ -297,7 +297,7 @@ pub(super) fn ftp_quick_ui(ui: &mut egui::Ui, form: &mut FtpQuickForm, language:
     result
 }
 
-/// 원본 lvFTPProgress 한 줄(열 " ;Local;Progress; ;Remote").
+/// A single lvFTPProgress row (columns " ;Local;Progress; ;Remote").
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct FtpResultRow {
     pub upload: bool,
@@ -317,7 +317,7 @@ pub(super) enum RowState {
     Failed(String),
 }
 
-/// 원본 FUN_0043f04c 이벤트 1: 전체 진행(받은 바이트, 전체 바이트, 백분율). 전체를 모르면(0) 100%.
+/// Original FUN_0043f04c event 1: overall progress (bytes received, total bytes, percent). 100% when the total is unknown (0).
 pub(super) fn ftp_totals(rows: &[FtpResultRow]) -> (u64, u64, u64) {
     let total: u64 = rows.iter().map(|r| r.size.unwrap_or(0)).sum();
     let done: u64 = rows

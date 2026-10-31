@@ -1,9 +1,9 @@
-//! 원본 TfFolderTree(폴더 선택 창, ClientWidth 657 × ClientHeight 627, FUN_00423e00 생성·FUN_0040ca90 열기·FUN_0042473c ShowModal)와
-//! 그 안의 TNXFolderTreeView(가로 트리: 단계마다 칸, 첫 자식은 부모와 같은 줄 오른쪽).
-//! tbMainMenu(0,0 657×22: 폴더·트리·즐겨찾기·바탕 화면·문서·그림·음악·비디오·폴더 찾기), pTop(0,22 657×29: lAddress(3,7),
-//! cbAddress(49,4 449×21), btnOk(511,4 70×22, Default), btnCancel(587,4 70×22)), pMain(0,51: pDrives(1,1 43폭), Shape1(44), TreeView(45,1)),
-//! bbFunctions(0,608 657×19).
-//! 차이(HANDOFF): 폴더·드라이브 그림은 원본 ImageList 대신 그린 모양. 드라이브 단추 그림 없음. 창 크기·위치 저장(TntFormClose)은 아직.
+//! Original TfFolderTree (folder selection window, ClientWidth 657 × ClientHeight 627, created by FUN_00423e00, opened by FUN_0040ca90, FUN_0042473c ShowModal) and
+//! the TNXFolderTreeView inside it (horizontal tree: a column per level, the first child on the same line to the right of the parent).
+//! tbMainMenu (0,0 657×22: Folder, Tree, Favorites, Desktop, Documents, Pictures, Music, Videos, Find Folder), pTop (0,22 657×29: lAddress (3,7),
+//! cbAddress (49,4 449×21), btnOk (511,4 70×22, Default), btnCancel (587,4 70×22)), pMain (0,51: pDrives (1,1 width 43), Shape1 (44), TreeView (45,1)),
+//! bbFunctions (0,608 657×19).
+//! Difference (HANDOFF): folder/drive icons are drawn shapes instead of the original ImageList. No drive-button images. Window size/position saving (TntFormClose) is not done yet.
 use super::original_dialogs::{DialogKind, DialogResult};
 use super::*;
 use ndr::folder_tree::{self, ScanOptions, Tree};
@@ -15,7 +15,7 @@ use std::sync::{
     mpsc,
 };
 
-/// 원본 nexusfile.col 폴더 트리 색(FUN_00423e00 → TreeView+0x2e8): 바탕, 줄, 글, 고른 줄, 열린 폴더, 조상 글.
+/// Original nexusfile.col folder tree colors (FUN_00423e00 → TreeView+0x2e8): background, lines, text, selected row, opened folder, ancestor text.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct TreeColors {
     pub back: Color32,
@@ -26,31 +26,31 @@ pub(super) struct TreeColors {
     pub hint: Color32,
 }
 
-/// 훑기(TfTreeScan 창): 끝나면 트리를 보낸다.
+/// Scanning (TfTreeScan window): sends the tree when done.
 pub(super) struct TreeScan {
     pub cancel: Arc<AtomicBool>,
     pub count: Arc<AtomicUsize>,
     pub current: Arc<Mutex<String>>,
     receiver: mpsc::Receiver<Tree>,
-    /// None = 드라이브 전체(Refresh), Some(경로) = 그 항목 아래만(PartRefresh·SetPath).
+    /// None = whole drive (Refresh), Some(path) = only under that item (PartRefresh, SetPath).
     part: Option<String>,
-    /// 끝나면 고를 경로.
+    /// Path to select when done.
     then_path: Option<String>,
 }
 
 pub(super) struct FolderTreeForm {
     pub tree: Tree,
-    /// 지금 드라이브 뿌리("C:\", +0x340).
+    /// Current drive root ("C:\", +0x340).
     pub drive: String,
-    /// pDrives 단추: (뿌리, 이름).
+    /// pDrives buttons: (root, name).
     pub drives: Vec<(PathBuf, String)>,
     pub focused: Option<usize>,
     pub top_row: usize,
     pub scroll_x: f32,
     pub address: String,
-    /// 빠른 찾기 글(+0x2f8).
+    /// Quick-find text (+0x2f8).
     pub find: String,
-    /// 드라이브마다 열린 폴더(+0x348, 빨간 글).
+    /// The opened folder per drive (+0x348, red text).
     pub opened: Vec<String>,
     pub scan: Option<TreeScan>,
     pub options: ScanOptions,
@@ -59,38 +59,38 @@ pub(super) struct FolderTreeForm {
     pub tree_folder: PathBuf,
     pub in_root: bool,
     pub dirty: bool,
-    /// 목록(트리)에 글쇠 초점. 경로 칸을 누르면 false.
+    /// Keyboard focus on the list (tree). false when the path field is clicked.
     pub tree_focus: bool,
     pub first_frame: bool,
-    /// 지난 화면의 보이는 줄 수(+0x2d8).
+    /// Number of visible rows from the last frame (+0x2d8).
     pub rows_visible: usize,
-    /// 경로의 트리 뿌리(드라이브 뿌리, SystemHooks.tree_root). 시험은 가짜 뿌리.
+    /// Tree root of the path (drive root, SystemHooks.tree_root). Tests use a fake root.
     pub root_of: fn(&str) -> String,
-    /// pmFavorites(FUN_004259e0): 비지 않은 즐겨찾기 칸(번호, 이름, 경로). 번호 0~9 = Shift+F1~F10, 10~19 = Shift+Ctrl+F1~F10.
+    /// pmFavorites (FUN_004259e0): non-empty favorite fields (index, name, path). Index 0~9 = Shift+F1~F10, 10~19 = Shift+Ctrl+F1~F10.
     pub favorites: Vec<(usize, String, String)>,
-    /// tbFavorites 드롭다운(F11)이 열려 있다.
+    /// The tbFavorites dropdown (F11) is open.
     pub favorites_open: bool,
-    /// TfSearchFolder(Ctrl+F, tbSearchClick 0x42621c).
+    /// TfSearchFolder (Ctrl+F, tbSearchClick 0x42621c).
     pub search: Option<SearchFolder>,
-    /// TNXFolderTreeView ImageList(+0x2f4): 셸 폴더 아이콘(0번)과 pDrives 드라이브 단추 그림(SHGetFileInfoW). 창을 처음 그릴 때 채운다.
+    /// TNXFolderTreeView ImageList (+0x2f4): the shell folder icon (index 0) and the pDrives drive-button images (SHGetFileInfoW). Filled when the window is first drawn.
     pub folder_icon: Option<egui::TextureHandle>,
     pub drive_icons: Vec<Option<egui::TextureHandle>>,
 }
 
-/// 원본 TfSearchFolder(ClientWidth 545 × ClientHeight 226): cbSearch(4,8 441×21), btnSearch(462,6 75×25), lbResult(4,37 533×181).
+/// Original TfSearchFolder (ClientWidth 545 × ClientHeight 226): cbSearch (4,8 441×21), btnSearch (462,6 75×25), lbResult (4,37 533×181).
 #[derive(Clone, Debug, Default)]
 pub(super) struct SearchFolder {
     pub query: String,
     pub results: Vec<String>,
     pub selected: Option<usize>,
-    /// 결과 목록에 초점(아니면 cbSearch).
+    /// Focus on the result list (otherwise cbSearch).
     pub list_focus: bool,
     pub first_frame: bool,
 }
 
 impl SearchFolder {
-    /// btnSearchClick 0x452204: 글이 있으면 목록을 비우고, 트리의 모든 항목(앞 순서)에서 이름에 글이 든(StrStrIW) 항목의 전체 경로를 넣는다.
-    /// 하나라도 있으면 첫 줄을 고르고 목록에 초점.
+    /// btnSearchClick 0x452204: if there is text, clear the list and add the full path of every item (in forward order) whose name contains the text (StrStrIW).
+    /// If there is at least one, select the first row and focus the list.
     pub(super) fn run(&mut self, tree: &Tree) {
         if self.query.is_empty() {
             return;

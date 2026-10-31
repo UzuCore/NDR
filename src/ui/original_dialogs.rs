@@ -1,6 +1,6 @@
-//! 원본 대화 상자: TfGetText(입력), TfRename(이름 바꾸기), TfDelWarning(삭제 경고), TfDelConfirm(보호 항목 삭제 확인).
-//! C# NDR의 InputDialog, RenameWindow, DeleteWarningWindow, DeleteConfirmationWindow와 같은 규칙.
-//! egui 모달로 그리고 결과는 콜백으로 돌려준다. 한 번에 가장 나중에 연(맨 위) 대화 상자 하나만 보인다(창 위의 입력 상자처럼 겹쳐 열 수 있다).
+//! Original dialog boxes: TfGetText (input), TfRename (rename), TfDelWarning (delete warning), TfDelConfirm (confirm deleting protected items).
+//! Same rules as C# NDR's InputDialog, RenameWindow, DeleteWarningWindow, DeleteConfirmationWindow.
+//! Drawn as egui modals; results are returned through a callback. Only the most recently opened (topmost) dialog is visible at a time (they can stack like an input box on top of a window).
 use super::*;
 use eframe::egui::{FontId, text::LayoutJob};
 
@@ -28,7 +28,7 @@ pub(super) enum DeleteConfirmChoice {
 }
 
 pub(super) enum DialogKind {
-    /// `file_name`: 원본 TfGetText 표시 FUN_0040bea0의 flags 비트 0(+0x400). 참이면 btnOKClick(0x428c64)이 금지 문자를 막는다.
+    /// `file_name`: bit 0 (+0x400) of the flags in the original TfGetText display FUN_0040bea0. If true, btnOKClick (0x428c64) blocks forbidden characters.
     Prompt { message: String, value: String, history: Option<Vec<String>>, password: bool, file_name: bool },
     Rename { message: String, name: String, extension: String },
     DeleteWarning { message: String, show_delete: bool, default_button: usize },
@@ -41,11 +41,11 @@ pub(super) enum DialogKind {
     AdvancedRename(Box<super::rename_dialog::RenameForm>),
     Search(Box<super::search_dialog::SearchForm>),
     Choice(ChoiceForm),
-    /// 원본 TfCompareFolder(640×505) 한 창: 비교·중단·결과 저장·닫기.
+    /// Original TfCompareFolder (640×505), single window: compare, abort, save results, close.
     FolderCompare(Box<super::compare_dialog::FolderCompareForm>),
     Comparison(Box<super::compare_dialog::ComparisonForm>),
     Favorites(Box<super::favorites_dialog::FavoritesForm>),
-    /// 원본 TfFolderTree(폴더 선택, F10).
+    /// Original TfFolderTree (folder selection, F10).
     FolderTree(Box<super::folder_tree_dialog::FolderTreeForm>),
     /// C# CredentialsWindow.
     Credentials { user: String, password: String },
@@ -63,7 +63,7 @@ pub(super) enum DialogKind {
     RemoteSites(Box<super::remote_sites::SitesForm>),
     /// C# RemoteSiteEditorWindow.
     SiteEditor(Box<super::remote_sites::SiteEditorForm>),
-    /// 원본 TfFTPQuickConnect(패널 FTP 모드 빠른 연결).
+    /// Original TfFTPQuickConnect (quick connect in panel FTP mode).
     FtpQuickConnect(Box<super::ftp_pane::FtpQuickForm>),
     /// C# SettingsWindow.
     Settings(Box<super::settings_window::SettingsForm>),
@@ -72,11 +72,11 @@ pub(super) enum DialogKind {
 
     /// C# FileConflictWindow.
     FileConflict(Box<super::file_operation::ConflictForm>),
-    /// 원본 TfChecksum(제목 CRC/MD5/SHA1): 결과 글(처음 CALCULATING, 실패면 ERROR)과, 결과가 나오면 켜지는 복사 단추.
+    /// Original TfChecksum (title CRC/MD5/SHA1): result text (initially CALCULATING, ERROR on failure) and a Copy button that becomes enabled once the result is ready.
     Checksum { value: String, ready: bool },
 }
 
-/// C# ChoiceDialog: 안내 글, 고르기 상자(처음 선택은 selected), 확인/취소.
+/// C# ChoiceDialog: instruction text, a selection box (initial choice is `selected`), OK/Cancel.
 #[derive(Clone, Debug)]
 pub(super) struct ChoiceForm {
     pub message: String,
@@ -92,45 +92,45 @@ pub(super) enum DialogResult {
     Attributes(AttributeAction, Option<ndr::tools::AttributeChanges>),
     Split(Option<(PathBuf, u64, u64)>),
     Join(Option<super::split_dialogs::JoinOptions>),
-    /// 파일 목록 저장 창: Some(()) 확인(btnSave, ModalResult 1), None 취소.
+    /// File list save window: Some(()) OK (btnSave, ModalResult 1), None Cancel.
     ListExport(Option<()>),
     EditShortcut(Option<String>),
     AdvancedRename(bool),
     Search(Option<ndr::tools::SearchCriteria>),
-    /// 고른 항목의 번호(취소면 None).
+    /// Index of the chosen item (None on cancel).
     Choice(Option<usize>),
-    /// (하위 폴더 포함, 파일 내용 비교).
+    /// (include subfolders, compare file contents).
     FolderCompare,
-    /// 동기화 미리보기에서 "복사"를 켠 차이(원래 순서). 비교 결과 창을 닫으면 None.
+    /// Differences whose "Copy" was enabled in the sync preview (original order). None if the comparison result window is closed.
     Comparison(Option<Vec<ndr::folder_compare::Difference>>),
-    /// (지울 파일, 휴지통도 비울지). 취소면 None.
-    /// 저장한 (이름, 경로) 칸들. 취소면 None.
+    /// (files to delete, whether to also empty the recycle bin). None on cancel.
+    /// Saved (name, path) fields. None on cancel.
     Favorites(Option<Vec<(String, String)>>),
-    /// 고른 폴더. 취소면 None.
+    /// Chosen folder. None on cancel.
     FolderTree(Option<PathBuf>),
-    /// (사용자 이름(앞뒤 공백 뺌), 비밀번호). 취소면 None.
+    /// (user name (leading/trailing whitespace trimmed), password). None on cancel.
     Credentials(Option<(String, String)>),
-    /// 고른 대상 폴더(전체 경로). 취소면 None.
+    /// Chosen destination folder (full path). None on cancel.
     Destination(Option<PathBuf>),
     ArchiveCreate(Option<super::archive_dialog::ArchiveChoice>),
-    /// 디스크 복사 창이 닫힘(C# MainWindow는 ShowDialog 결과를 쓰지 않는다).
+    /// Disk copy window was closed (C# MainWindow does not use the ShowDialog result).
     DiskCopy,
     Remote,
     RemoteTransfer,
-    /// (동작, 권한 비트). 취소면 None.
+    /// (action, permission bits). None on cancel.
     RemotePermissions(Option<(super::remote_window::PermissionAction, u32)>),
-    /// 저장한 사이트 목록과 연결할 사이트 번호. 취소면 None.
+    /// Saved site list and the index of the site to connect to. None on cancel.
     RemoteSites(Option<(Vec<super::remote_window::SiteProfile>, Option<usize>)>),
     SiteEditor(Option<super::remote_window::SiteProfile>),
-    /// 연결할 입력값. 취소면 None.
+    /// Connection input values. None on cancel.
     FtpQuickConnect(Option<super::ftp_pane::FtpQuickForm>),
-    /// 확인한 설정 사본. 취소면 None.
+    /// Confirmed copy of the settings. None on cancel.
     Settings(Option<ndr::settings::Settings>),
     FunctionKeyEdit(Option<super::function_key_editor::Binding>),
 
-    /// (고른 답, 모두 적용). 창을 닫으면 None(= 취소).
+    /// (chosen answer, apply to all). None (= cancel) if the window is closed.
     FileConflict(Option<(ndr::fsops::ConflictChoice, bool)>),
-    /// 체크섬 창이 닫힘.
+    /// Checksum window was closed.
     Checksum,
 }
 
@@ -143,7 +143,7 @@ pub(super) enum AttributeAction {
     Cancel,
 }
 
-/// C# AttributeTimeWindow의 입력 상태. 속성 칸은 세 상태(None = 그대로, 처음 상태).
+/// Input state of the C# AttributeTimeWindow. Attribute fields have three states (None = unchanged, the initial state).
 #[derive(Clone, Debug)]
 pub(super) struct AttributeForm {
     pub path: String,
@@ -159,9 +159,9 @@ pub(super) struct AttributeForm {
 }
 
 impl AttributeForm {
-    /// 원본 FUN_0043657c → FUN_0041a0e8: 항목마다 그 항목의 속성(GetFileAttributesW: 0x20 A·1 R·2 H·4 S)으로 확인란을 두 상태로
-    /// 켜고 끄며, 날짜·시각 칸은 그 항목의 수정 시각(파일 GetFileSystemTime, 폴더 GetDirSystemTime, 지역 시각)이다.
-    /// 고친 것: 원본은 파일을 열지 못하면 앞 항목의 시각(처음이면 1899-12-30)을 쓴다 → 지금 시각.
+    /// Original FUN_0043657c → FUN_0041a0e8: for each item, set the checkboxes to a two-state value from that item's attributes
+    /// (GetFileAttributesW: 0x20 A, 1 R, 2 H, 4 S), and the date/time fields to that item's modification time (files GetFileSystemTime, folders GetDirSystemTime, local time).
+    /// Changed: the original used the previous item's time (1899-12-30 for the first) when it could not open the file → now uses the current time.
     pub(super) fn new(path: &str) -> Self {
         use std::os::windows::fs::MetadataExt;
         let metadata = std::fs::metadata(path).ok();
@@ -182,7 +182,7 @@ impl AttributeForm {
         }
     }
 
-    /// 원본 FUN_0041a200(확인란 → 속성)·FUN_0041a264(날짜·시각 칸 → 지역 시각 → FILETIME). 시각은 chkChangeTime일 때만 바꾼다.
+    /// Original FUN_0041a200 (checkboxes → attributes) and FUN_0041a264 (date/time fields → local time → FILETIME). The time is changed only when chkChangeTime is set.
     pub(super) fn changes(&self) -> Result<ndr::tools::AttributeChanges, ()> {
         let modified = if self.change_time {
             let local = self.date.and_time(self.time).and_local_timezone(chrono::Local).earliest().ok_or(())?;
@@ -202,7 +202,7 @@ impl AttributeForm {
     }
 }
 
-/// 원본 TCheckBox(AllowGrayed 없음): 두 상태로 켜고 끈다.
+/// Original TCheckBox (no AllowGrayed): toggles between two states.
 fn cycle(state: &mut Option<bool>) {
     *state = Some(*state != Some(true));
 }
@@ -217,9 +217,9 @@ pub(super) struct OriginalDialog {
     on_result: Option<DialogCallback>,
 }
 
-/// Delphi TOpenDialog.Filter("이름|무늬|이름|무늬")를 (이름, 무늬) 쌍으로. 짝이 없는 끝 조각은 버린다.
-/// DFM Glyph.Data의 BMP(BI_RGB, 4·8·24비트, 아래에서 위로)를 읽는다. VCL TSpeedButton(TButtonGlyph)처럼 왼쪽 아래 점의 색을
-/// 투명으로 본다.
+/// Converts Delphi TOpenDialog.Filter ("name|pattern|name|pattern") into (name, pattern) pairs. An unpaired trailing fragment is discarded.
+/// Reads the BMP (BI_RGB, 4/8/24-bit, bottom-up) in DFM Glyph.Data. Like VCL TSpeedButton (TButtonGlyph), treats the color of the bottom-left pixel as
+/// transparent.
 pub(super) fn decode_glyph(bmp: &[u8]) -> Option<egui::ColorImage> {
     let u16_at = |at: usize| Some(u16::from_le_bytes(bmp.get(at..at + 2)?.try_into().ok()?));
     let u32_at = |at: usize| Some(u32::from_le_bytes(bmp.get(at..at + 4)?.try_into().ok()?));
@@ -262,7 +262,7 @@ pub(super) fn decode_glyph(bmp: &[u8]) -> Option<egui::ColorImage> {
     Some(egui::ColorImage { size: [width, rows], pixels, source_size: egui::vec2(width as f32, rows as f32) })
 }
 
-/// 원본 그림 단추용 텍스처(이름마다 한 번 만든다).
+/// Texture for an original image button (created once per name).
 pub(super) fn glyph_texture(ctx: &egui::Context, name: &str, bmp: &'static [u8]) -> Option<egui::TextureHandle> {
     let id = egui::Id::new(("ndr-glyph", name));
     if let Some(texture) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
@@ -278,19 +278,19 @@ pub(super) fn delphi_filter(text: &str) -> Vec<(String, String)> {
     parts.chunks_exact(2).map(|pair| (pair[0].to_owned(), pair[1].to_owned())).collect()
 }
 
-/// 원본 OD_PROGRAMFILTER(프로그램 고르기 열기 상자 FUN_00417258·FUN_0041fca4·FUN_004506c8의 Filter).
+/// Original OD_PROGRAMFILTER (Filter of the program picker open dialog FUN_00417258, FUN_0041fca4, FUN_004506c8).
 pub(super) fn program_filter(language: &compat::Language) -> Vec<(String, String)> {
     delphi_filter(&language.text("RES.OD_PROGRAMFILTER", "Program Files(*.exe)|*.exe|All Files(*.*)|*.*"))
 }
 
-/// NXLabel 마크업을 egui 글 배치로.
+/// Converts NXLabel markup into an egui text layout.
 pub(super) fn markup_job(text: &str, size: f32, color: Color32, wrap: f32) -> LayoutJob {
     let mut job = LayoutJob::default();
     job.wrap.max_width = wrap;
     for span in ndr::markup::render(text) {
         let mut format = egui::TextFormat { font_id: FontId::proportional(size), color: span.color.map_or(color, |(r, g, b)| Color32::from_rgb(r, g, b)), ..Default::default() };
         if span.bold {
-            // 굵은 꼴(Segoe UI Bold·맑은 고딕 Bold, set_app_fonts의 "bold" 묶음). 색 태그가 없으면 C# 판처럼 강조색.
+            // Bold font (Segoe UI Bold / Malgun Gothic Bold, the "bold" family in set_app_fonts). If there is no color tag, use the accent color like the C# version.
             format.color = if span.color.is_some() { format.color } else { Color32::WHITE };
             format.font_id = FontId::new(size, egui::FontFamily::Name(super::BOLD_FONT_FAMILY.into()));
         }
@@ -305,12 +305,12 @@ impl App {
         self.original_dialogs.push(OriginalDialog { title, kind, serial: self.msgbox_serial, focused: false, on_result: Some(on_result) });
     }
 
-    /// 다른 모듈의 창(분할·합치기 등)을 대화 상자 줄에 넣는다.
+    /// Puts a window from another module (split, join, etc.) into the dialog queue.
     pub(super) fn push_original_dialog(&mut self, title: String, kind: DialogKind, on_result: impl FnOnce(&mut App, DialogResult, &egui::Context) + 'static) {
         self.push_dialog(title, kind, Box::new(on_result));
     }
 
-    /// TfGetText(title, message, initial): OK면 입력값, 취소면 None. history가 있으면 기록 목록을 고를 수 있다.
+    /// TfGetText(title, message, initial): the input value on OK, None on cancel. If `history` is present, the history list can be selected from.
     pub(super) fn prompt(
         &mut self,
         title: &str,
@@ -331,8 +331,8 @@ impl App {
         );
     }
 
-    /// TfGetText를 flags 1(파일 이름)로: 새 폴더(FUN_00432378)·빈 파일(FUN_00434630). 확인 때 금지 문자가 있으면
-    /// MSG_INVALID_FILENAME을 보이고 창을 남긴다(btnOKClick 0x428c64, StrCSpnIW "\/:*?\"<>|").
+    /// TfGetText with flags 1 (file name): new folder (FUN_00432378), empty file (FUN_00434630). If a forbidden character is present on confirm,
+    /// shows MSG_INVALID_FILENAME and keeps the window open (btnOKClick 0x428c64, StrCSpnIW "\/:*?\"<>|").
     pub(super) fn prompt_file_name(&mut self, title: &str, message: &str, initial: &str, on_result: impl FnOnce(&mut App, Option<String>, &egui::Context) + 'static) {
         self.push_dialog(
             title.into(),
@@ -345,7 +345,7 @@ impl App {
         );
     }
 
-    /// TfRename: (새 이름, 새 확장자) 또는 None.
+    /// TfRename: (new name, new extension) or None.
     pub(super) fn rename_dialog(
         &mut self,
         file_name: &str,
@@ -372,7 +372,7 @@ impl App {
         );
     }
 
-    /// C# DeleteWarningWindow.BuildMessage: 하나면 MSG_DELWARNING1(방식 문구, 파일 이름), 여럿이면 MSG_DELWARNING2(방식 문구, 개수).
+    /// C# DeleteWarningWindow.BuildMessage: for one item MSG_DELWARNING1 (mode text, file name), for several MSG_DELWARNING2 (mode text, count).
     pub(super) fn delete_warning_message(&self, mode: DeleteWarningMode, count: usize, first_name: &str) -> String {
         let mode_text = match mode {
             DeleteWarningMode::Delete => self.language_pack.text("RES.MSG_DELWARN_DELETE", "<b>Delete</b>?\n\n"),
@@ -388,7 +388,7 @@ impl App {
         }
     }
 
-    /// TfDelWarning(원본 FUN_0040c5c4). Delete 단추는 휴지통 방식이고 showdelbtn일 때만 있다. defdelbtn이 기본 단추를 고른다.
+    /// TfDelWarning (original FUN_0040c5c4). The Delete button uses the recycle-bin mode and is present only when showdelbtn is set. defdelbtn selects the default button.
     pub(super) fn delete_warning(
         &mut self,
         mode: DeleteWarningMode,
@@ -411,7 +411,7 @@ impl App {
         );
     }
 
-    /// TfDelConfirm(원본 FUN_0041ea78): 보호 속성이 있는 항목 하나에 대한 Yes to All / Yes / No.
+    /// TfDelConfirm (original FUN_0041ea78): Yes to All / Yes / No for a single item that has a protected attribute.
     pub(super) fn delete_confirm(
         &mut self,
         message: &str,
@@ -430,7 +430,7 @@ impl App {
         );
     }
 
-    /// C# ChoiceDialog.Show(title, prompt, choices, selected): 고른 번호, 취소면 None. 고를 것이 없으면 열지 않는다(C#은 null).
+    /// C# ChoiceDialog.Show(title, prompt, choices, selected): the chosen index, None on cancel. If there is nothing to choose, it is not opened (C# returns null).
     pub(super) fn choice_dialog(
         &mut self,
         title: &str,
@@ -454,7 +454,7 @@ impl App {
         );
     }
 
-    /// 맨 위 대화 상자를 결과와 함께 닫는다(테스트와 버튼 공용).
+    /// Closes the topmost dialog with a result (shared by tests and buttons).
     pub(super) fn answer_dialog(&mut self, result: DialogResult, ctx: &egui::Context) {
         if self.original_dialogs.is_empty() {
             return;
@@ -465,7 +465,7 @@ impl App {
         }
     }
 
-    /// C# AttributeTimeWindow(항목 하나): 모두 적용 / 건너뛰기 / 확인 / 취소.
+    /// C# AttributeTimeWindow (single item): Apply to All / Skip / OK / Cancel.
     pub(super) fn attribute_dialog(&mut self, path: &str, on_result: impl FnOnce(&mut App, AttributeAction, Option<ndr::tools::AttributeChanges>, &egui::Context) + 'static) {
         let title = self.language_pack.text("formChangeAttr.Form.Caption", "Change Attributes");
         self.push_dialog(
@@ -479,7 +479,7 @@ impl App {
         );
     }
 
-    /// 속성 창의 단추: 확인과 모두 적용은 날짜·시간을 검사해 틀리면 경고 상자(창 제목, 경고 아이콘)를 보이고 창은 남긴다.
+    /// Attribute window buttons: OK and Apply to All check the date/time and, if invalid, show a warning box (window title, warning icon) while keeping the window open.
     pub(super) fn submit_attributes(&mut self, action: AttributeAction, ctx: &egui::Context) {
         let Some(DialogKind::Attributes(form)) = self.original_dialogs.last().map(|d| &d.kind) else { return };
         let result = match action {
@@ -496,7 +496,7 @@ impl App {
         self.answer_dialog(result, ctx);
     }
 
-    /// 지금 열린 속성 창의 입력을 바꾼다(테스트용).
+    /// Changes the input of the currently open attribute window (for tests).
     #[cfg(test)]
     pub(super) fn edit_dialog_kind(&mut self, edit: impl FnOnce(&mut DialogKind)) {
         if let Some(dialog) = self.original_dialogs.last_mut() {
@@ -504,7 +504,7 @@ impl App {
         }
     }
 
-    /// 지금 열린 속성 창의 입력을 바꾼다(테스트용).
+    /// Changes the input of the currently open attribute window (for tests).
     #[cfg(test)]
     pub(super) fn edit_attribute_form(&mut self, edit: impl FnOnce(&mut AttributeForm)) {
         if let Some(DialogKind::Attributes(form)) = self.original_dialogs.last_mut().map(|d| &mut d.kind) {
@@ -512,7 +512,7 @@ impl App {
         }
     }
 
-    /// 지금 열린 대화 상자 이름 칸의 값을 바꾼다(테스트용).
+    /// Changes the value of the name field of the currently open dialog (for tests).
     #[cfg(test)]
     pub(super) fn set_dialog_text(&mut self, first: &str, second: &str) {
         if let Some(dialog) = self.original_dialogs.last_mut() {
@@ -527,7 +527,7 @@ impl App {
         }
     }
 
-    /// TfRename OK: 이름이 비어 있지 않고 금지 문자가 없어야 한다. 아니면 MessageBoxW(MSG_INVALID_FILENAME, NULL 캡션, MB_OK)를 보이고 창은 남는다.
+    /// TfRename OK: the name must be non-empty and contain no forbidden characters. Otherwise shows MessageBoxW(MSG_INVALID_FILENAME, NULL caption, MB_OK) and keeps the window open.
     pub(super) fn submit_rename(&mut self, ctx: &egui::Context) {
         let Some(DialogKind::Rename { name, extension, .. }) = self.original_dialogs.last().map(|d| &d.kind) else { return };
         let (name, extension) = (name.clone(), extension.clone());
@@ -541,7 +541,7 @@ impl App {
     }
 
     pub(super) fn original_dialog_ui(&mut self, ctx: &egui::Context) {
-        // 메시지 상자가 위에 있으면(예: 이름 오류) 이 창은 그 뒤에 그리기만 하고 글쇠·단추·초점은 받지 않는다(Windows 모달 상자처럼).
+        // If a message box is on top (e.g. a name error), this window is only drawn behind it and does not receive keys, buttons, or focus (like a Windows modal box).
         let covered = !self.msgboxes.is_empty();
         if self.original_dialogs.is_empty() {
             return;
@@ -551,7 +551,7 @@ impl App {
             self.capture_shortcut_keys(ctx);
         }
         let shortcut_lines = if editing_shortcut { self.shortcut_lines() } else { vec![] };
-        // 그리는 동안 self를 빌려 쓰도록 맨 위 대화 상자를 잠시 꺼낸다.
+        // Temporarily pop the topmost dialog so self can be borrowed while drawing.
         let mut taken = self.original_dialogs.pop().expect("a dialog is open");
         let dialog = &mut taken;
         let serial = dialog.serial;
@@ -562,7 +562,7 @@ impl App {
         let title = dialog.title.clone();
         let text_color = if self.dark { Color32::from_rgb(0xB9, 0xC8, 0xD9) } else { Color32::from_rgb(40, 48, 60) };
         let ko = self.language == "ko";
-        // 원본 TfGetText 단추(formGetText.Caption.btnOk·btnCancel).
+        // Original TfGetText buttons (formGetText.Caption.btnOk, btnCancel).
         let get_text_buttons = (self.language_pack.text("formGetText.Caption.btnOk", if ko { "확인" } else { "OK" }), self.language_pack.text("formGetText.Caption.btnCancel", if ko { "취소" } else { "Cancel" }));
         enum Outcome {
             None,
@@ -610,9 +610,9 @@ impl App {
         };
         let shift = ctx.input(|i| i.modifiers.shift);
         let screen = ctx.content_rect();
-        // 모달 진행 창(예: 사용자 지정 정리 검색)이 위에 있으면 이 창은 그리기만 하고 글쇠·단추는 받지 않는다.
+        // If a modal progress window (e.g. a custom cleanup search) is on top, this window is only drawn and does not receive keys or buttons.
         let waiting = covered || self.job.as_ref().is_some_and(|j| j.modal.is_some());
-        // TfRename: 입력한 금지 문자는 받지 않는다(붙여 넣기는 OK에서 검사).
+        // TfRename: forbidden characters typed in are not accepted (paste is checked at OK).
         if matches!(dialog.kind, DialogKind::Rename { .. }) {
             ctx.input_mut(|input| {
                 for event in &mut input.events {
@@ -634,8 +634,8 @@ impl App {
             ui.separator();
             match &mut dialog.kind {
                 DialogKind::Prompt { message, value, history, password, .. } => {
-                    // 원본 TfGetText(ClientWidth 444 × ClientHeight 127): lMessage(18,8 411×53, 아래 맞춤), cbText(16,67 413×21),
-                    // btnOK(265,95 79×25, 기본), btnCancel(351,95 79×25, 취소).
+                    // Original TfGetText (ClientWidth 444 × ClientHeight 127): lMessage (18,8 411×53, bottom aligned), cbText (16,67 413×21),
+                    // btnOK (265,95 79×25, default), btnCancel (351,95 79×25, cancel).
                     let (area, _) = ui.allocate_exact_size(egui::vec2(444.0, 127.0), egui::Sense::hover());
                     let at = |x: f32, y: f32, w: f32, h: f32| egui::Rect::from_min_size(area.min + egui::vec2(x, y), egui::vec2(w, h));
                     bottom_label(ui, at(18.0, 8.0, 411.0, 53.0), markup_job(message, 13.0, text_color, 411.0));
@@ -669,8 +669,8 @@ impl App {
                     }
                 }
                 DialogKind::Rename { message, name, extension } => {
-                    // 원본 TfRename(444 × 132): lMessage(18,8 410×53, 아래 맞춤), cbName(16,67 334×21, 260자), Label1 "."(355,70),
-                    // cbExt(362,67 69×21), btnOK(270,100 75×25), btnCancel(357,99 75×25).
+                    // Original TfRename (444 × 132): lMessage (18,8 410×53, bottom aligned), cbName (16,67 334×21, 260 chars), Label1 "." (355,70),
+                    // cbExt (362,67 69×21), btnOK (270,100 75×25), btnCancel (357,99 75×25).
                     let (area, _) = ui.allocate_exact_size(egui::vec2(444.0, 132.0), egui::Sense::hover());
                     let at = |x: f32, y: f32, w: f32, h: f32| egui::Rect::from_min_size(area.min + egui::vec2(x, y), egui::vec2(w, h));
                     bottom_label(ui, at(18.0, 8.0, 410.0, 53.0), markup_job(message, 13.0, text_color, 410.0));
@@ -694,13 +694,13 @@ impl App {
                     }
                 }
                 DialogKind::DeleteWarning { message, show_delete, default_button } => {
-                    // 원본 TfDelWarning(443 × 119): Image1(13,16), lMsg(64,16 364×62), btnDelete(64,86 75×25, 숨김이 처음),
-                    // btnYes(272,86), btnNo(353,86). 글이 lMsg보다 길면 그만큼 창을 늘린다(넘치는 긴 목록은 스크롤).
-                    // 원본 TntFormShow(0x41f018): 창 너비 = lMsg 글 너비(CaptionWidth) + lMsg.Left(64) + 20, 화면보다 넓으면 화면 − 50,
-                    // 350보다 좁으면 350(테두리 포함 바깥 너비). lMsg는 왼·위·오른쪽, 예·아니요는 위·오른쪽에 붙는다. 높이는 그대로(NDR은
-                    // 줄이 많으면 늘리고 넘치면 스크롤한다). 고친 것: 전에는 너비가 443으로 고정이라 긴 이름이 줄바꿈됐다.
+                    // Original TfDelWarning (443 × 119): Image1 (13,16), lMsg (64,16 364×62), btnDelete (64,86 75×25, hidden initially),
+                    // btnYes (272,86), btnNo (353,86). If the text is longer than lMsg, the window grows by that much (a long overflowing list scrolls).
+                    // Original TntFormShow (0x41f018): window width = lMsg text width (CaptionWidth) + lMsg.Left (64) + 20, clamped to screen − 50 if wider than the screen,
+                    // and to 350 if narrower than 350 (outer width including the border). lMsg anchors left/top/right; Yes/No anchor top/right. Height is unchanged (NDR
+                    // grows when there are many lines and scrolls on overflow). Changed: previously the width was fixed at 443, so a long name wrapped.
                     let natural = ui.painter().layout_job(markup_job(message, 13.0, text_color, f32::INFINITY)).size().x;
-                    // 바깥 너비에서 bsDialog 테두리(2 × SM_CXDLGFRAME 3)를 빼면 안쪽 너비. (+0x50은 SetBounds 0x662c80로 본 Left.)
+                    // Subtracting the bsDialog border (2 × SM_CXDLGFRAME 3) from the outer width gives the inner width. (+0x50 is the Left seen via SetBounds 0x662c80.)
                     let width = (natural + 64.0 + 20.0).min(screen.width() - 50.0).max(350.0) - 6.0;
                     let message_width = width - 79.0;
                     let galley = ui.painter().layout_job(markup_job(message, 13.0, text_color, message_width));
@@ -715,7 +715,7 @@ impl App {
                             ui.label(markup_job(message, 13.0, text_color, message_width));
                         });
                     });
-                    // 탭 순서 btnYes, btnNo, btnDelete.
+                    // Tab order btnYes, btnNo, btnDelete.
                     let focus_slot = if *show_delete { *default_button } else if *default_button == 2 { 2 } else { 1 };
                     let raw = |key: &str, fallback: &str| self.language_pack.raw(&format!("formDelWarning.{key}")).unwrap_or_else(|| fallback.to_owned());
                     if *show_delete {
@@ -752,7 +752,7 @@ impl App {
                     search_action = super::search_dialog::search_ui(ui, form, &self.language_pack, ko, enter);
                 }
                 DialogKind::Choice(form) => {
-                    // ChoiceDialog: 440 너비, 글(14), 고르기 상자, 오른쪽 아래 확인·취소. Enter는 확인.
+                    // ChoiceDialog: 440 wide, message (14), selection box, OK/Cancel at the bottom right. Enter is OK.
                     ui.set_width(404.0);
                     ui.add(egui::Label::new(RichText::new(form.message.as_str()).size(14.0).color(text_color)).wrap());
                     ui.add_space(12.0);
@@ -814,7 +814,7 @@ impl App {
                     ftp_quick = super::ftp_pane::ftp_quick_ui(ui, form, &self.language_pack, enter);
                 }
                 DialogKind::Settings(form) => {
-                    // 원본 lvFunctionKey OnKeyDown: Delete = 삭제(메시지 상자·모달 작업 중에는 받지 않는다).
+                    // Original lvFunctionKey OnKeyDown: Delete = delete (not received during a message box or modal operation).
                     let delete = !waiting && ui.input(|i| i.key_pressed(egui::Key::Delete));
                     settings_action = super::settings_window::settings_ui(ui, form, enter, delete);
                 }
@@ -832,8 +832,8 @@ impl App {
                     }
                 }
                 DialogKind::Checksum { value, ready } => {
-                    // 원본 TfChecksum DFM(속 288×92): 가운데 맞춘 테두리 없는 읽기 전용 eChecksum(20,24, 249×17),
-                    // btnCopy(48,56, 193×25)는 결과가 나오면 켜지고 초점을 받는다(Enter = 복사). Esc = 닫기(FormKeyDown).
+                    // Original TfChecksum DFM (client 288×92): centered borderless read-only eChecksum (20,24, 249×17),
+                    // btnCopy (48,56, 193×25) becomes enabled and takes focus once the result is ready (Enter = copy). Esc = close (FormKeyDown).
                     let (area, _) = ui.allocate_exact_size(egui::vec2(288.0, 92.0), egui::Sense::hover());
                     let at = |x: f32, y: f32, w: f32, h: f32| egui::Rect::from_min_size(area.min + egui::vec2(x, y), egui::vec2(w, h));
                     ui.scope_builder(egui::UiBuilder::new().max_rect(at(20.0, 24.0, 249.0, 17.0)).layout(egui::Layout::top_down(egui::Align::Center)), |ui| {
@@ -852,7 +852,7 @@ impl App {
                     favorites_action = super::favorites_dialog::favorites_ui(ui, form, &self.language_pack);
                 }
                 DialogKind::FolderTree(form) => {
-                    // FUN_00423e00: tmainwndsize면 파일 목록 창 크기, 아니면 tmaximized면 최대화, 아니면 twidth×theight(바깥 크기).
+                    // FUN_00423e00: if tmainwndsize, use the file list window size; otherwise if tmaximized, maximize; otherwise twidth×theight (outer size).
                     let full = egui::vec2((screen.width() - 24.0).max(657.0), (screen.height() - 64.0).max(400.0));
                     let size = if self.settings.flag("TreeWindowMatchesMainSize", true) || self.settings.flag("TreeWindowMaximized", false) {
                         full
@@ -864,7 +864,7 @@ impl App {
                     folder_tree_action = super::folder_tree_dialog::folder_tree_ui(ui, form, &self.language_pack, &colors, size, !waiting, &tree_icons);
                 }
                 DialogKind::Comparison(form) => {
-                    // FolderComparisonWindow: 1120×700(작은 화면이면 줄인다).
+                    // FolderComparisonWindow: 1120×700 (shrunk on a small screen).
                     let size = egui::vec2((screen.width() - 64.0).clamp(480.0, 1096.0), (screen.height() - 300.0).clamp(140.0, 500.0));
                     comparison_action = super::compare_dialog::comparison_ui(ui, form, &self.language_pack, ko, enter, size);
                 }
@@ -892,10 +892,10 @@ impl App {
                     }
                 }
                 DialogKind::Attributes(form) => {
-                    // 원본 TfChangeAttr(ClientWidth 437 × ClientHeight 288): lFileName(16,16), gbAttributes(16,44 177×161: chkArchive(빨강)·
-                    // chkReadOnly·chkHidden·chkSystem 왼쪽 24, 위 34/59/85/111), gbTime(212,44 209×161: chkChangeTime(16,26), lDate(16,57)
-                    // dtpDate(16,76 145×21), lTime(16,103) dtpTime(16,122)), chkRecursive(16,219), chkApplyToFolder(212,219),
-                    // btnAll(95,255) btnSkip(176,255) btnOk(264,255) btnCancel(345,255) 75×25.
+                    // Original TfChangeAttr (ClientWidth 437 × ClientHeight 288): lFileName (16,16), gbAttributes (16,44 177×161: chkArchive (red),
+                    // chkReadOnly, chkHidden, chkSystem at left 24, top 34/59/85/111), gbTime (212,44 209×161: chkChangeTime (16,26), lDate (16,57)
+                    // dtpDate (16,76 145×21), lTime (16,103) dtpTime (16,122)), chkRecursive (16,219), chkApplyToFolder (212,219),
+                    // btnAll (95,255) btnSkip (176,255) btnOk (264,255) btnCancel (345,255) 75×25.
                     let text = |key: &str, fallback: &str| self.language_pack.text(&format!("formChangeAttr.{key}"), fallback).replace('_', "");
                     let raw = |key: &str, fallback: &str| self.language_pack.raw(&format!("formChangeAttr.{key}")).unwrap_or_else(|| fallback.to_owned()).replace('_', "");
                     let (area, _) = ui.allocate_exact_size(egui::vec2(437.0, 288.0), egui::Sense::hover());
@@ -920,7 +920,7 @@ impl App {
                     access_checkbox(ui, at(228.0, 70.0, 169.0, 17.0), &mut form.change_time, &raw("Caption.chkChangeTime", "Modify Date/Time (&G)"));
                     let enabled = form.change_time;
                     put_left(ui, at(228.0, 101.0, 145.0, 15.0), egui::Label::new(text("Caption.lDate", "Date")));
-                    // 원본 dtpDate(TDateTimePicker dtkDate)·dtpTime(dtkTime) 16,76·16,122 145×21, chkChangeTimeClick(0x41a1a4)이 켠다.
+                    // Original dtpDate (TDateTimePicker dtkDate) and dtpTime (dtkTime) 16,76 / 16,122 145×21, enabled by chkChangeTimeClick (0x41a1a4).
                     super::date_time_picker::date_picker(ui, at(228.0, 120.0, 145.0, 21.0), enabled, "change-attr-date", &mut form.date);
                     put_left(ui, at(228.0, 147.0, 145.0, 15.0), egui::Label::new(text("Caption.lTime", "Time")));
                     super::date_time_picker::time_picker(ui, at(228.0, 166.0, 145.0, 21.0), enabled, "change-attr-time", &mut form.time);
@@ -934,14 +934,14 @@ impl App {
                     if enter {
                         outcome = Outcome::Choice(2);
                     }
-                    // 원본 TntFormKeyDown(0x41a2f4, KeyPreview): End(0x23)면 btnAll(+0x40c).Click.
+                    // Original TntFormKeyDown (0x41a2f4, KeyPreview): End (0x23) = btnAll (+0x40c).Click.
                     if !waiting && ctx.input(|i| i.key_pressed(egui::Key::End)) {
                         outcome = Outcome::Choice(0);
                     }
                 }
                 DialogKind::DeleteConfirm { message, attributes } => {
-                    // 원본 TfDelConfirm(434 × 138): Image1(16,13), lMsg(80,13 337×58), lAttributes(80,80),
-                    // btnAll(172,101 75×25), btnYes(256,101), btnNo(342,101).
+                    // Original TfDelConfirm (434 × 138): Image1 (16,13), lMsg (80,13 337×58), lAttributes (80,80),
+                    // btnAll (172,101 75×25), btnYes (256,101), btnNo (342,101).
                     let (area, _) = ui.allocate_exact_size(egui::vec2(434.0, 138.0), egui::Sense::hover());
                     let at = |x: f32, y: f32, w: f32, h: f32| egui::Rect::from_min_size(area.min + egui::vec2(x, y), egui::vec2(w, h));
                     if let Some(icon) = warning_icon.clone() {
@@ -950,8 +950,8 @@ impl App {
                     super::original_dialogs::put_left(ui, at(80.0, 13.0, 337.0, 58.0), egui::Label::new(message.as_str()).wrap());
                     super::original_dialogs::put_left(ui, at(80.0, 80.0, 337.0, 15.0), egui::Label::new(attributes.as_str()).truncate());
                     let raw = |key: &str, fallback: &str| self.language_pack.raw(&format!("formDelConfirm.{key}")).unwrap_or_else(|| fallback.to_owned());
-                    // 원본: 탭 순서 0인 btnAll이 처음 초점(TntFormShow 0x41ea78는 SetFocus를 하지 않는다)이라 Enter = 모두 예.
-                    // 고친 것: 전에는 초점이 없어 Enter가 아무 일도 하지 않았다.
+                    // Original: btnAll with tab order 0 takes focus first (TntFormShow 0x41ea78 does not call SetFocus), so Enter = Yes to All.
+                    // Changed: previously there was no focus, so Enter did nothing.
                     for (left, slot, key, fallback) in [(172.0, 0, "Caption.btnAll", "Yes to &All"), (256.0, 1, "Caption.btnYes", "&Yes"), (342.0, 2, "Caption.btnNo", "&No")] {
                         let (button, pressed) = vcl_button(ui, at(left, 101.0, 75.0, 25.0), true, &raw(key, fallback));
                         if first_frame && slot == 0 {
@@ -1021,10 +1021,10 @@ impl App {
         if let Some(action) = folder_compare_action {
             return self.folder_compare_action(action, ctx);
         }
-        // 폴더 트리 창은 Esc를 스스로 받는다(훑는 중이면 훑기 취소).
+        // The folder tree window handles Esc itself (cancels scanning if a scan is in progress).
         let escape = escape && !self.original_dialogs.last().is_some_and(|d| matches!(d.kind, DialogKind::FolderTree(_)));
         if escape && matches!(outcome, Outcome::None) {
-            // C# AttributeTimeWindow: Esc는 건너뛰기.
+            // C# AttributeTimeWindow: Esc is Skip.
             outcome = if self.original_dialogs.last().is_some_and(|d| matches!(d.kind, DialogKind::Attributes(_))) { Outcome::Choice(1) } else { Outcome::Cancel };
         }
         let Some(kind) = self.original_dialogs.last().map(|d| &d.kind) else { return };
@@ -1056,7 +1056,7 @@ impl App {
             (_, DialogKind::Search(_)) => DialogResult::Search(None),
             (Outcome::Ok, DialogKind::Choice(form)) => DialogResult::Choice(Some(form.selected)),
             (_, DialogKind::Choice(_)) => DialogResult::Choice(None),
-            // ×·Esc = 닫기 단추(원본 btnCancel Cancel=True). 비교 중이면 멈추고 닫는다.
+            // ×/Esc = close button (original btnCancel Cancel=True). If comparing, stop and close.
             (_, DialogKind::FolderCompare(_)) => return self.folder_compare_action(super::compare_dialog::FolderCompareAction::Close, ctx),
             (_, DialogKind::Comparison(_)) => DialogResult::Comparison(None),
             (_, DialogKind::Favorites(_)) => DialogResult::Favorites(None),
@@ -1066,9 +1066,9 @@ impl App {
             (_, DialogKind::Destination(_)) => DialogResult::Destination(None),
             (Outcome::Choice(choice), DialogKind::ArchiveCreate(_)) => return self.submit_archive_create(choice, ctx),
             (_, DialogKind::ArchiveCreate(_)) => DialogResult::ArchiveCreate(None),
-            // ×·Esc = 닫기 단추(작업 중이면 닫지 않는다).
+            // ×/Esc = close button (does not close while an operation is running).
             (_, DialogKind::DiskCopy(_)) => return self.disk_copy_action(super::disk_copy_dialog::DiskAction::Close, ctx),
-            // ×·Esc: 원격 창은 닫기 단추, 전송 창은 중단 요청, 권한 창 ×는 취소, 사이트 창은 취소.
+            // ×/Esc: for the remote window the close button, for the transfer window an abort request, × on the permissions window is cancel, and the sites window cancels.
             (_, DialogKind::Remote(_)) => return self.remote_action(super::remote_window::RemoteAction::Close, ctx),
             (_, DialogKind::RemoteTransfer(_)) => return self.transfer_close_requested(),
             (_, DialogKind::RemotePermissions(_)) => DialogResult::RemotePermissions(None),
@@ -1079,7 +1079,7 @@ impl App {
             (_, DialogKind::FunctionKeyEdit(_)) => DialogResult::FunctionKeyEdit(None),
 
             (_, DialogKind::FileConflict(_)) => DialogResult::FileConflict(None),
-            // 원본 btnCopyClick: 결과 글을 클립보드로(창은 그대로).
+            // Original btnCopyClick: copy the result text to the clipboard (window stays open).
             (Outcome::Choice(0), DialogKind::Checksum { .. }) => return self.copy_checksum(),
             (_, DialogKind::Checksum { .. }) => DialogResult::Checksum,
             (Outcome::Ok, DialogKind::Prompt { value, .. }) => DialogResult::Text(Some(value.clone())),
@@ -1097,16 +1097,16 @@ impl App {
     }
 }
 
-/// 입력 칸을 열 때 전체 선택(C# SelectAll).
-/// ui.put처럼 칸에 꽉 채워 가운데 맞춤으로 놓되, 끌 수 있게(원본 Enabled = False 단추).
+/// Select all when an input field is opened (C# SelectAll).
+/// Places a widget filling and centered in the rect like ui.put, but allows it to be disabled (original Enabled = False button).
 pub(super) fn put_enabled(ui: &mut egui::Ui, rect: egui::Rect, enabled: bool, widget: impl egui::Widget) -> egui::Response {
     ui.scope_builder(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::centered_and_justified(egui::Direction::LeftToRight)), |ui| ui.add_enabled(enabled, widget)).inner
 }
 
-/// VCL CM_DIALOGCHAR: 이 프레임에 친 단축 문자. 단추 하나가 받으면 지운다.
+/// VCL CM_DIALOGCHAR: the accelerator character typed this frame. Cleared once a button accepts it.
 const DIALOG_CHAR: &str = "ndr-dialog-char";
 
-/// 이 프레임의 단축 문자를 정한다: Alt+글자는 늘, 글자만은 글 입력 칸에 초점이 없을 때(단추·확인란에 초점이 있는 VCL 창처럼).
+/// Determines this frame's accelerator character: Alt+letter always, a bare letter only when no text input field has focus (like a VCL window where a button or checkbox has focus).
 pub(super) fn set_dialog_char(ctx: &egui::Context, enabled: bool) {
     let typed = if enabled {
         ctx.input(|i| {
@@ -1125,14 +1125,14 @@ pub(super) fn set_dialog_char(ctx: &egui::Context, enabled: bool) {
     } else {
         None
     };
-    // 고친 것: egui의 wants_keyboard_input은 초점 단추에도 참이라 글자만 친 단축 문자(삭제(&D) 등)가 먹지 않았다.
-    // VCL처럼 글 입력 칸(TextEdit 상태가 있는 초점)일 때만 Alt 없는 글자를 넘긴다.
+    // Changed: egui's wants_keyboard_input is also true for a focused button, so a bare-letter accelerator (Delete (&D), etc.) did not work.
+    // Like VCL, pass an Alt-less letter through only when a text input field (focus with TextEdit state) is focused.
     let text_focus = ctx.memory(|m| m.focused()).is_some_and(|id| egui::TextEdit::load_state(ctx, id).is_some());
     let typed = typed.filter(|(_, alt)| *alt || !text_focus).map(|(c, _)| c);
     ctx.data_mut(|d| d.insert_temp(egui::Id::new(DIALOG_CHAR), typed));
 }
 
-/// 단축 문자가 `access`이면 그것을 가져간다(같은 글자 단추 둘이 함께 눌리지 않게).
+/// If the accelerator character is `access`, take it (so two buttons with the same letter are not both triggered).
 pub(super) fn take_dialog_char(ctx: &egui::Context, access: Option<char>) -> bool {
     let Some(access) = access else { return false };
     ctx.data_mut(|d| {
@@ -1145,7 +1145,7 @@ pub(super) fn take_dialog_char(ctx: &egui::Context, access: Option<char>) -> boo
     })
 }
 
-/// VCL Caption 글: '&' 다음 글자에 밑줄. (글, 단축 문자). `color`가 없으면 위젯 글 색.
+/// VCL Caption text: underline the letter after '&'. (text, accelerator character). If `color` is None, the widget text color.
 pub(super) fn access_job_colored(ui: &egui::Ui, caption: &str, color: Option<Color32>) -> (LayoutJob, Option<char>) {
     let (display, underline) = ndr::msgbox::display_caption(caption);
     let font = egui::TextStyle::Button.resolve(ui.style());
@@ -1167,7 +1167,7 @@ fn access_job(ui: &egui::Ui, caption: &str) -> (LayoutJob, Option<char>) {
     access_job_colored(ui, caption, None)
 }
 
-/// VCL TButton(Caption의 '&' 단축 문자, Enabled). (응답, 눌렸는가: 누르거나 단축 문자).
+/// VCL TButton ('&' accelerator character in Caption, Enabled). (response, whether pressed: clicked or accelerator character).
 pub(super) fn vcl_button(ui: &mut egui::Ui, rect: egui::Rect, enabled: bool, caption: &str) -> (egui::Response, bool) {
     let (job, access) = access_job(ui, caption);
     let response = put_enabled(ui, rect, enabled, egui::Button::new(job));
@@ -1175,19 +1175,19 @@ pub(super) fn vcl_button(ui: &mut egui::Ui, rect: egui::Rect, enabled: bool, cap
     (response, pressed)
 }
 
-/// VCL TButton(Caption의 '&' 단축 문자). 누르거나 단축 문자를 치면 true.
+/// VCL TButton ('&' accelerator character in Caption). true if clicked or the accelerator character is typed.
 pub(super) fn access_button(ui: &mut egui::Ui, rect: egui::Rect, caption: &str) -> bool {
     vcl_button(ui, rect, true, caption).1
 }
 
-/// VCL TRadioButton(Caption의 '&' 단축 문자). 누르거나 단축 문자를 치면 true.
+/// VCL TRadioButton ('&' accelerator character in Caption). true if clicked or the accelerator character is typed.
 pub(super) fn access_radio(ui: &mut egui::Ui, rect: egui::Rect, selected: bool, caption: &str) -> bool {
     let (job, access) = access_job(ui, caption);
     let clicked = put_left(ui, rect, egui::RadioButton::new(selected, job)).clicked();
     clicked || (ui.is_enabled() && take_dialog_char(ui.ctx(), access))
 }
 
-/// VCL TLabel(Caption의 '&' 단축 문자, FocusControl): 단축 문자를 치면 `target` 칸에 초점을 준다.
+/// VCL TLabel ('&' accelerator character in Caption, FocusControl): typing the accelerator character gives focus to the `target` field.
 pub(super) fn access_label(ui: &mut egui::Ui, rect: egui::Rect, caption: &str, target: egui::Id) {
     let (job, access) = access_job(ui, caption);
     put_left(ui, rect, egui::Label::new(job).truncate());
@@ -1196,7 +1196,7 @@ pub(super) fn access_label(ui: &mut egui::Ui, rect: egui::Rect, caption: &str, t
     }
 }
 
-/// VCL TCheckBox(Caption의 '&' 단축 문자): 단축 문자를 치면 값을 뒤집는다. 바뀌었으면 true.
+/// VCL TCheckBox ('&' accelerator character in Caption): typing the accelerator character toggles the value. true if it changed.
 pub(super) fn access_checkbox(ui: &mut egui::Ui, rect: egui::Rect, value: &mut bool, caption: &str) -> bool {
     let (job, access) = access_job(ui, caption);
     let mut changed = put_left(ui, rect, egui::Checkbox::new(value, job)).changed();
@@ -1207,13 +1207,13 @@ pub(super) fn access_checkbox(ui: &mut egui::Ui, rect: egui::Rect, value: &mut b
     changed
 }
 
-/// 원본 TLabel·TCheckBox 자리(왼쪽 위 맞춤). ui.put은 칸 가운데에 늘려 놓으므로 글과 확인란은 이것으로 놓는다.
+/// Original TLabel/TCheckBox placement (top-left aligned). Since ui.put stretches and centers in the rect, labels and checkboxes are placed with this.
 pub(super) fn put_left(ui: &mut egui::Ui, rect: egui::Rect, widget: impl egui::Widget) -> egui::Response {
     ui.scope_builder(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::left_to_right(egui::Align::Min)), |ui| ui.add(widget)).inner
 }
 
-/// 원본 TLabel EllipsisPosition = epPathEllipsis(DT_PATH_ELLIPSIS): 넓이를 넘으면 마지막 "\이름"은 남기고 그 앞을 "..."로 줄인다.
-/// 마지막 이름만으로도 넘으면 끝을 "..."로 자른다.
+/// Original TLabel EllipsisPosition = epPathEllipsis (DT_PATH_ELLIPSIS): when it exceeds the width, keep the final "\name" and shorten what precedes it to "...".
+/// If even the final name alone overflows, truncate the end with "...".
 pub(super) fn path_ellipsis(ui: &egui::Ui, text: &str, width: f32, font: &egui::FontId) -> String {
     let fits = |s: &str| ui.fonts_mut(|f| f.layout_no_wrap(s.to_owned(), font.clone(), egui::Color32::WHITE).size().x) <= width;
     if fits(text) {
@@ -1234,7 +1234,7 @@ pub(super) fn path_ellipsis(ui: &egui::Ui, text: &str, width: f32, font: &egui::
     format!("{}...", chars.iter().collect::<String>())
 }
 
-/// 원본 TGroupBox: 칸 테두리(글 높이 절반 아래에서 시작)와 왼쪽 위 8에 제목 글.
+/// Original TGroupBox: a frame border (starting half a text height down) and the title text at top-left 8.
 pub(super) fn group_box(ui: &egui::Ui, rect: egui::Rect, caption: &str) {
     let stroke = ui.visuals().widgets.noninteractive.bg_stroke;
     let frame = egui::Rect::from_min_max(rect.min + egui::vec2(0.0, 7.0), rect.max);
@@ -1245,7 +1245,7 @@ pub(super) fn group_box(ui: &egui::Ui, rect: egui::Rect, caption: &str) {
     ui.painter().galley(text_rect.min + egui::vec2(2.0, 0.0), galley, ui.visuals().text_color());
 }
 
-/// 원본 TNXLabel(AutoSize False, Layout = tlBottom): 칸 안에서 글을 아래에 맞춰 그린다(넘치면 위가 잘린다).
+/// Original TNXLabel (AutoSize False, Layout = tlBottom): draws the text bottom-aligned within the rect (the top is clipped on overflow).
 fn bottom_label(ui: &egui::Ui, rect: egui::Rect, mut job: LayoutJob) {
     job.wrap.max_width = rect.width();
     let galley = ui.painter().layout_job(job);

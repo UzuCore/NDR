@@ -1,13 +1,13 @@
 use super::*;
 
-/// 셸 아이콘이 파일마다 다른 형식(DefaultIcon이 "%1"인 실행 파일·아이콘 파일, 대상 아이콘을 쓰는 바로 가기 등).
+/// Formats whose shell icon differs per file (executables and icon files whose DefaultIcon is "%1", shortcuts that use the target's icon, etc.).
 pub(super) fn has_own_icon(path: &Path) -> bool {
     const OWN: [&str; 10] = ["exe", "lnk", "ico", "cur", "ani", "url", "scr", "cpl", "msc", "appref-ms"];
     path.extension().is_some_and(|e| OWN.iter().any(|o| e.eq_ignore_ascii_case(o)))
 }
 
-/// 원본 DrawThumbnailText(0x7e1998): 글자 단위로 폭에 들어가는 만큼(GetTextExtentExPointW nFit)씩 줄을 나눈다(최대 max_lines줄).
-/// 마지막 줄에 남은 글이 다 들어가지 않으면 들어가는 글자 수 − 1부터 줄여 가며 "..."를 붙인 글이 들어가는 첫 길이로 그린다.
+/// Original DrawThumbnailText(0x7e1998): split into lines by character, as many as fit in the width (GetTextExtentExPointW nFit) each (up to max_lines lines).
+/// If the remaining text does not fully fit on the last line, draw it at the first length that fits after appending "...", shrinking from the fitting character count − 1 downward.
 pub(super) fn thumbnail_lines(text: &str, width: f32, max_lines: usize, glyph: &mut dyn FnMut(char) -> f32) -> Vec<String> {
     let chars: Vec<char> = text.chars().collect();
     let extent = |slice: &[char], glyph: &mut dyn FnMut(char) -> f32| slice.iter().map(|&c| glyph(c)).sum::<f32>();
@@ -26,7 +26,7 @@ pub(super) fn thumbnail_lines(text: &str, width: f32, max_lines: usize, glyph: &
             break;
         }
         let rest = &chars[offset..];
-        // 고친 것: 칸이 첫 글자보다 좁으면 빈 줄만 쌓였다. 줄마다 적어도 한 글자는 넣는다.
+        // Fix: if the cell is narrower than the first character, only empty lines accumulated. Put at least one character on each line.
         let n = fit(rest, glyph).max(1);
         if (line < max_lines && offset + n < chars.len()) || extent(rest, glyph) <= width {
             lines.push(rest[..n].iter().collect());
@@ -36,7 +36,7 @@ pub(super) fn thumbnail_lines(text: &str, width: f32, max_lines: usize, glyph: &
                 let candidate: String = rest[..keep].iter().chain("...".chars().collect::<Vec<_>>().iter()).collect();
                 (extent(&candidate.chars().collect::<Vec<_>>(), glyph) <= width).then_some(candidate)
             });
-            // 고친 것: "..."를 붙일 자리가 없으면 마지막 줄이 통째로 빠졌다. 그때는 들어가는 글자만 보인다.
+            // Fix: if there was no room to append "...", the whole last line was dropped. In that case only the fitting characters are shown.
             lines.push(shortened.unwrap_or_else(|| rest[..n].iter().collect()));
             break;
         }
@@ -44,7 +44,7 @@ pub(super) fn thumbnail_lines(text: &str, width: f32, max_lines: usize, glyph: &
     lines
 }
 
-/// 원본 GetThumbnailTextHeight(0x7e1858): 필요한 줄 수(최대 max_lines) × (줄 높이 + spacing), 드라이브 항목(종류 4)이면 + 8.
+/// Original GetThumbnailTextHeight(0x7e1858): needed line count (up to max_lines) × (line height + spacing), plus 8 for a drive item (kind 4).
 pub(super) fn thumbnail_text_height(text: &str, width: f32, max_lines: usize, spacing: f32, line_height: f32, drive: bool, glyph: &mut dyn FnMut(char) -> f32) -> f32 {
     let chars: Vec<char> = text.chars().collect();
     let (mut lines, mut offset) = (0usize, 0usize);
@@ -68,8 +68,8 @@ pub(super) fn thumbnail_text_height(text: &str, width: f32, max_lines: usize, sp
 }
 
 impl App {
-    /// C# FileVisualConverter.Convert(아이콘 부분): ShowIcons가 꺼져 있으면 없음. 확장자(폴더는 "<DIR>")마다 한 번 읽어 둔다.
-    /// 셸 아이콘이 파일마다 다른 형식인가: has_own_icon 고정 목록이거나, 확장자마다 한 번 HKCR로 물은 결과(system.per_file_icon).
+    /// C# FileVisualConverter.Convert (icon part): none when ShowIcons is off. Read once per extension (folders use "<DIR>").
+    /// Is this a format whose shell icon differs per file: in the has_own_icon fixed list, or the result of asking HKCR once per extension (system.per_file_icon).
     pub(super) fn per_file_icon_type(&mut self, path: &Path) -> bool {
         if has_own_icon(path) {
             return true;
@@ -81,20 +81,20 @@ impl App {
 
     pub(super) fn file_icon(&mut self, ctx: &egui::Context, index: usize, row: usize) -> Option<egui::TextureHandle> {
         let entry = self.panes[index].entries.get(row)?;
-        // 원본 ".." 항목: GetIconIndex("A", 폴더 속성) = 보통 폴더 아이콘(상위가 드라이브 루트여도 드라이브 아이콘이 아니다).
+        // Original ".." item: GetIconIndex("A", folder attributes) = usually the folder icon (not a drive icon even when the parent is a drive root).
         if entry.is_parent() {
             return self.path_icon(ctx, Path::new("A"), true);
         }
         let (path, directory, drive, attributes) = (entry.path.clone(), entry.is_dir, entry.drive, entry.attributes);
-        // C# Convert: UseOverlayIcons면 압축 안이 아닌 전체 경로 항목은 오버레이 아이콘(경로마다, 따로 된 STA 스레드). 오기 전에는 확장자 아이콘.
-        // 원본 드라이브 항목(종류 4)은 늘 그 드라이브의 셸 아이콘(TNXShellImageList.GetIconIndex(루트))이므로 같은 경로 아이콘을 쓴다.
-        // 원본 처음 값 [Operation] overlay=1.
+        // C# Convert: when UseOverlayIcons, every full-path item not inside an archive gets an overlay icon (per path, on a separate STA thread). Before it arrives, the extension icon.
+        // The original drive item (kind 4) always uses that drive's shell icon (TNXShellImageList.GetIconIndex(root)), so it uses the same path icon.
+        // Original default value [Operation] overlay=1.
         let overlays = self.settings.flag("UseOverlayIcons", true);
         let local = self.panes[index].archive.is_none() && self.panes[index].remote.is_none() && path.is_absolute();
-        // 원본 GetIconIndex(0x7b8d54)는 파일마다 실제 경로로 셸 아이콘을 묻는다. 확장자마다 같은 아이콘인 형식은 확장자 캐시로 같고,
-        // 파일마다 아이콘이 다른 형식(고정 목록 + HKCR의 DefaultIcon "%1"·shellex\IconHandler 형식)만 실제 경로로 읽는다(오버레이 없이).
+        // The original GetIconIndex(0x7b8d54) asks the shell icon per file by its real path. Formats with the same icon per extension are grouped by the extension cache,
+        // and only formats whose icon differs per file (fixed list + HKCR DefaultIcon "%1"·shellex\IconHandler formats) are read by real path (without overlay).
         let own_icon = !directory && local && !overlays && self.per_file_icon_type(&path);
-        // 폴더는 셸이 desktop.ini를 읽는 경우(읽기 전용 또는 시스템 속성, 사용자 지정 폴더 아이콘·특수 폴더)만 실제 경로로 읽는다.
+        // A folder is read by real path only when the shell reads desktop.ini (read-only or system attribute, custom folder icon or special folder).
         const FILE_ATTRIBUTE_READONLY: u32 = 0x1;
         const FILE_ATTRIBUTE_SYSTEM: u32 = 0x4;
         let own_folder_icon = directory && local && !overlays && !drive && attributes & (FILE_ATTRIBUTE_READONLY | FILE_ATTRIBUTE_SYSTEM) != 0;
@@ -109,7 +109,7 @@ impl App {
         self.path_icon(ctx, &path, directory)
     }
 
-    /// 드라이브 루트의 셸 아이콘(원본 FUN_00483108: SHGetFileInfo(루트, SHGFI_ICON | SHGFI_SMALLICON)). 오기 전에는 폴더 아이콘.
+    /// Drive root shell icon (original FUN_00483108: SHGetFileInfo(root, SHGFI_ICON | SHGFI_SMALLICON)). Before it arrives, the folder icon.
     pub(super) fn drive_icon(&mut self, ctx: &egui::Context, root: &Path) -> Option<egui::TextureHandle> {
         if !self.settings.flag("ShowIcons", true) {
             return None;
@@ -122,13 +122,13 @@ impl App {
         self.path_icon(ctx, root, true)
     }
 
-    /// C# QueueShellOverlayIcon / EnsureShellOverlayWorker: 처음 부를 때 STA 작업 스레드를 띄우고, 같은 경로는 한 번만 보낸다.
-    /// overlay가 false면 오버레이 없이 그 파일의 셸 아이콘(native::shell_path_icon).
+    /// C# QueueShellOverlayIcon / EnsureShellOverlayWorker: start an STA worker thread on first call, and send the same path only once.
+    /// When overlay is false, the file's shell icon without overlay (native::shell_path_icon).
     fn queue_overlay_icon(&mut self, path: PathBuf, overlay: bool) {
         self.queue_icon_job(path, if overlay { 1 } else { 0 });
     }
 
-    /// 아이콘 작업: 0 = 그 파일의 셸 아이콘, 1 = 오버레이 아이콘, 2 = 셸 열쇠(패널 폴더 트리의 바탕 화면·가상 폴더).
+    /// Icon job: 0 = the file's shell icon, 1 = overlay icon, 2 = shell key (desktop or virtual folders in the pane's folder tree).
     fn queue_icon_job(&mut self, path: PathBuf, mode: u8) {
         if !self.overlay_pending.insert(path.clone()) {
             return;
@@ -156,7 +156,7 @@ impl App {
         }
     }
 
-    /// 패널 폴더 트리 항목의 아이콘(TNXShellTreeView: 셸 이미지 목록의 그 항목 아이콘). 읽기 전에는 폴더 아이콘.
+    /// Icon of a pane folder-tree item (TNXShellTreeView: that item's icon from the shell image list). Before it is read, the folder icon.
     pub(super) fn shell_node_icon(&mut self, ctx: &egui::Context, node: &ndr::shell_tree::ShellNode) -> Option<egui::TextureHandle> {
         if !self.settings.flag("ShowIcons", true) {
             return None;
@@ -171,7 +171,7 @@ impl App {
         }
     }
 
-    /// 경로 하나의 작은 셸 아이콘(확장자 캐시). 끌기 그림도 쓴다.
+    /// Small shell icon for a single path (extension cache). Also used as the drag image.
     pub(super) fn path_icon(&mut self, ctx: &egui::Context, path: &Path, directory: bool) -> Option<egui::TextureHandle> {
         if !self.settings.flag("ShowIcons", true) {
             return None;
@@ -190,7 +190,7 @@ impl App {
         texture
     }
 
-    /// 셸 아이콘 그림을 올리고, 원본 흐린 아이콘(ImageList_DrawEx ILD_BLEND50, rgbFg 흰색 = 색을 흰색과 반씩 섞고 알파는 그대로)도 함께 만든다.
+    /// Upload the shell icon image, and also build the original dimmed icon (ImageList_DrawEx ILD_BLEND50, rgbFg white = blend the color halfway with white, keeping alpha).
     pub(super) fn icon_texture(&mut self, ctx: &egui::Context, name: String, width: usize, height: usize, rgba: &[u8]) -> egui::TextureHandle {
         let texture = ctx.load_texture(name.clone(), egui::ColorImage::from_rgba_unmultiplied([width, height], rgba), egui::TextureOptions::LINEAR);
         let ghost: Vec<u8> = rgba.chunks_exact(4).flat_map(|p| [((p[0] as u16 + 255) / 2) as u8, ((p[1] as u16 + 255) / 2) as u8, ((p[2] as u16 + 255) / 2) as u8, p[3]]).collect();
@@ -199,8 +199,8 @@ impl App {
         texture
     }
 
-    /// 원본 DrawListItem(0x7d8f58)·DrawThumbnailItem: 잘라낸 항목(+100), 숨김 속성(2), SFTP 목록(+0x78)의 "."로 시작하는 이름은
-    /// 아이콘을 흐리게 그린다(스킨 테마). 흐린 그림이 있으면 그것을 돌려준다.
+    /// Original DrawListItem(0x7d8f58)·DrawThumbnailItem: cut items (+100), hidden attribute (2), and names starting with "." in an SFTP listing (+0x78)
+    /// draw the icon dimmed (skin theme). If a dimmed image exists, return it.
     pub(super) fn row_icon_for_skin(&self, index: usize, row: usize, icon: Option<egui::TextureHandle>) -> Option<egui::TextureHandle> {
         let icon = icon?;
         if self.row_ghosted(index, row) {
@@ -218,15 +218,15 @@ impl App {
         pane.cut_marks.contains(&entry.path) || entry.attributes & 2 != 0 || (sftp && entry.name.starts_with('.'))
     }
 
-    /// 원본 GetListHeaderWidth: 이름 칸 앞 머리 너비(표시 칸 12 + 아이콘 16 + 2, 아이콘을 보이지 않으면 14).
+    /// Original GetListHeaderWidth: header width before the name column (display column 12 + icon 16 + 2, or 14 when icons are hidden).
     pub(super) fn list_header_width(icons: bool) -> f32 {
         if icons { 30.0 } else { 14.0 }
     }
 
-    /// 원본 DrawListItem(0x7d8f58) 이름 칸: 아이콘은 칸 왼쪽 + 12(왼쪽 12화소는 표시 ▶ 칸), 세로 가운데((항목 높이 − 16) / 2).
-    /// 이름은 칸 왼쪽 + 머리 너비(`list_header_width`) + 5부터 오른쪽 − 5까지 한 줄(넘치면 …, DT_END_ELLIPSIS).
-    /// 고친 것(사용자 요청: 가이드선에 아이콘·글이 물리지 않게): 전에는 egui 단추 안쪽 여백(4화소)부터 그려 열 선·패널 테두리에 붙었다.
-    /// style = 원본 ListFont 모양(밑줄·취소선은 list_text로 입힌다).
+    /// Original DrawListItem(0x7d8f58) name column: the icon is at column left + 12 (the left 12 pixels are the display ▶ column), vertically centered ((item height − 16) / 2).
+    /// The name runs from column left + header width (`list_header_width`) + 5 to right − 5 as a single line (ellipsized with …, DT_END_ELLIPSIS when it overflows).
+    /// Fix (user request: keep the icon and text from touching the guide lines): previously it was drawn from the egui button inner padding (4 pixels), so it stuck to the column line and pane border.
+    /// style = original ListFont style (underline/strikethrough are applied via list_text).
     #[allow(clippy::too_many_arguments)]
     pub(super) fn name_cell(ui: &mut egui::Ui, size: egui::Vec2, icon: Option<&egui::TextureHandle>, icons: bool, text: &str, color: Color32, style: u8) -> egui::Response {
         let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
@@ -260,12 +260,12 @@ impl App {
         let command = None;
         let list_style = self.list_font_style;
         let original_click = true;
-        // 스킨 테마의 미리 보기: 원본 DrawThumbnailItem(0x7da1c4)·DrawFocus 형식 3. 이름 글색은 늘 NXFORE(Font.Color = GetBasic(1)).
+        // Skin-theme preview: original DrawThumbnailItem(0x7da1c4)·DrawFocus style 3. The name text color is always NXFORE (Font.Color = GetBasic(1)).
         let skin = self.current_skin();
         let original = Some(self.original_list_colors());
         let original_fore = original.map(|_| self.basic_list_color("NXFORE"));
         let list_focused = self.active == index;
-        // 원본 스킨 세로 막대(TNXScrollBar, 미리 보기도 같은 막대): 넘칠 때만 보이고 그 너비만큼 칸 자리가 좁아진다(자세히 보기와 같은 방식).
+        // Original skin vertical scrollbar (TNXScrollBar, same bar for the preview): shown only when content overflows, and its width narrows the cell area (same as detail view).
         let ctx = ui.ctx().clone();
         let skin_bar = match &skin {
             Some(s) => self.skin_scrollbar_width(&ctx, s),
@@ -277,11 +277,11 @@ impl App {
             _ => 0.0,
         };
         let avail = ui.available_width() - bar_reserve;
-        // 원본 UpdateDisplayThumbnails(0x7e1ba0): 칸 너비 = 썸네일 크기(+0x3b0, ini thumbsize) + 12로 열 수를 정하고,
-        // 남는 폭은 열마다 나눠 칸을 넓힌다. 칸 높이 = 크기 + 12 + 글 높이. C# 판도 그림을 ThumbnailSize로 그린다.
+        // Original UpdateDisplayThumbnails(0x7e1ba0): column width = thumbnail size (+0x3b0, ini thumbsize) + 12 determines the column count,
+        // and the leftover width is divided among the columns to widen them. Cell height = size + 12 + text height. The C# version also draws the image at ThumbnailSize.
         let thumb = self.settings.values.get("ThumbnailSize").and_then(|v| v.as_i64()).unwrap_or(120).clamp(32, 512) as f32;
         let tile_width = if thumbnails { thumb + 12.0 } else { 230.0 };
-        // C# ResolveColumnCount: 이름 목록은 Left/RightColumnCount(1~19)면 그 수, 0(자동)이면 가장 긴 이름 + 14(+ 아이콘 16) 너비로 나눈다.
+        // C# ResolveColumnCount: for the name list, if Left/RightColumnCount (1~19) use that count; if 0 (auto), divide by the widest name + 14 (+ icon 16) width.
         let configured = self.settings.values.get(if index == 0 { "LeftColumnCount" } else { "RightColumnCount" }).and_then(|v| v.as_i64()).unwrap_or(0);
         let columns = if thumbnails {
             (avail / tile_width).floor().max(1.0) as usize
@@ -298,13 +298,13 @@ impl App {
         let gap = if thumbnails { 0.0 } else { ui.spacing().item_spacing.x };
         let tile_width = ((avail - gap * columns.saturating_sub(1) as f32) / columns as f32).floor().max(if thumbnails { tile_width.min(avail) } else { 40.0 });
         let rows = visible.len().div_ceil(columns);
-        // 원본 UpdateDisplayThumbnails: 줄 높이 = 그 줄에서 가장 큰 GetThumbnailTextHeight(폭 = 썸네일 크기, 줄 간격 2, 최대 4줄) + 크기 + 12.
+        // Original UpdateDisplayThumbnails: row height = the largest GetThumbnailTextHeight in that row (width = thumbnail size, line spacing 2, up to 4 lines) + size + 12.
         let spacing_y = if thumbnails { 0.0 } else { ui.spacing().item_spacing.y };
         let heights: Vec<f32> = if thumbnails {
             let font = egui::TextStyle::Body.resolve(ui.style());
             let line_height = ui.fonts_mut(|fonts| fonts.row_height(&font));
-            // 고친 것(빠르기): 전에는 그림마다 모든 항목의 이름 폭을 재서(2만 개면 한 장면에 15ms) 미리 보기 보기가 느렸다.
-            // 원본처럼 목록·칸 수·크기가 바뀔 때만 다시 잰다(항목 차례·이름·드라이브 이름을 열쇠로).
+            // Fix (speed): previously the name width of every item was measured each frame (15ms per frame for 20,000 items), making the preview view slow.
+            // Like the original, remeasure only when the list, column count, or size changes (keyed by item order, name, and drive label).
             let key = {
                 use std::hash::{Hash, Hasher};
                 let pane = &self.panes[index];
@@ -355,13 +355,13 @@ impl App {
         }
         let content_height = (bottom_edge - spacing_y).max(0.0);
         let line_at = |offset: f32| tops.partition_point(|&t| t <= offset + 0.5).saturating_sub(1);
-        // 원본 UpdateScrollBar: 미리 보기(스타일 3)는 쪽 설정과 상관없이 한 칸에 한 줄.
+        // Original UpdateScrollBar: the preview (style 3) uses one line per step regardless of the page setting.
         let (by_page, wheel_lines) = if thumbnails { (false, 1) } else { (self.scroll_by_page(index), (self.system.wheel_lines)()) };
         let current = egui::scroll_area::State::load(ui.ctx(), ui.make_persistent_id(egui::Id::new(("tiles", index)))).map_or(0.0, |s| s.offset.y);
         let here = line_at(current);
         let stride = heights.get(here).map_or(26.0, |h| *h) + spacing_y;
         let wheel = Self::wheel_scroll(ui, egui::Id::new(("tiles", index)), height, stride, by_page, wheel_lines);
-        // 원본 DoTargetScroll: 끄는 동안 위·아래 가장자리면 한 줄(쪽 단위면 한 쪽)씩.
+        // Original DoTargetScroll: while dragging, scroll one line (one page in page mode) at the top or bottom edge.
         let dy = std::mem::take(&mut self.panes[index].drag_scroll.0);
         self.panes[index].drag_scroll.1 = 0;
         let wheel = if dy != 0 {
@@ -379,7 +379,7 @@ impl App {
         if skin_bar.is_some() {
             area = area.scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden);
         }
-        // 줄 높이가 줄마다 다르므로 바퀴는 줄 단위로 옮긴다.
+        // Since each row has a different height, the wheel moves by whole rows.
         let mut offset = match wheel {
             Some(target) if rows > 0 => {
                 let steps = ((target - current) / stride).round() as isize;
@@ -388,9 +388,9 @@ impl App {
             Some(target) => target,
             None => current,
         };
-        // 원본 SetItemIndex(형식 3)·ArrowKey: 커서 줄이 보이게 넘기고, 한 줄의 칸 수와 다 보이는 줄 수를 남긴다.
-        // 원본 AdjustPage(형식 3): 그 항목의 줄이 위로 벗어나면 맨 위, 아래로 벗어나면 맨 아래로. 다시 읽은 목록은 원본이 그 뒤
-        // SetScrollTop(옛 위치)로 되돌리므로 하지 않는다.
+        // Original SetItemIndex (style 3)·ArrowKey: scroll so the cursor row is visible, and leave the columns per row and the count of fully visible rows.
+        // Original AdjustPage (style 3): if that item's row is off the top, go to the very top; if off the bottom, to the very bottom. A re-read list is not adjusted
+        // because the original restores it afterward with SetScrollTop (old position).
         if let Some((item, false)) = self.panes[index].adjust.take() {
             let line = item / columns.max(1);
             if let (Some(&top), Some(&h)) = (tops.get(line), heights.get(line)) {
@@ -431,7 +431,7 @@ impl App {
                     let row_height = heights[tile_row];
                     let rect = egui::Rect::from_min_size(origin + egui::vec2(0.0, tops[tile_row]), egui::vec2(width, row_height));
                     ui.scope_builder(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::left_to_right(egui::Align::Min)), |ui| {
-                        // 원본 UpdateDisplayThumbnails(0x7e1ba0): 칸 너비 = 목록 너비 / 열 수, 칸 사이 틈 없음(줄 사이도).
+                        // Original UpdateDisplayThumbnails(0x7e1ba0): cell width = list width / column count, no gap between cells (or between rows).
                         if thumbnails {
                             ui.spacing_mut().item_spacing.x = 0.0;
                         }
@@ -457,15 +457,15 @@ impl App {
                                 || (self.active == index && self.panes[index].cursor == row);
                             let icon = self.file_icon(ui.ctx(), index, row);
                             let icon = self.row_icon_for_skin(index, row, icon);
-                            // 원본 DrawThumbnailItem: 흐리게 그릴 항목(잘라냄·숨김·SFTP "." 이름)이면 미리 보기 그림은 알파 0x55.
+                            // Original DrawThumbnailItem: for a dimmed item (cut·hidden·SFTP "." name), the preview image uses alpha 0x55.
                             let ghosted = self.row_ghosted(index, row);
-                            // 원본 DrawThumbnailItem(0x7da1c4) 종류 4: 이름 대신 "%s (%s:)"(볼륨 이름, 드라이브 글자), 글 밑에 남은 공간 막대.
+                            // Original DrawThumbnailItem(0x7da1c4) kind 4: instead of the name, "%s (%s:)" (volume name, drive letter), with a free-space bar below the text.
                             let drive_info = if thumbnails && entry.drive { self.panes[index].drive_infos.get(&entry.path).cloned() } else { None };
                             let caption = match &drive_info {
                                 Some((label, _, _)) => format!("{label} ({}:)", entry.name.trim_end_matches(['\\', ':'])),
                                 None => entry.name.clone(),
                             };
-                            // 스킨 테마: 커서·표시 칸은 원본 막대(DrawFocus 형식 3)를 그림·글 밑에 깐다(자리를 먼저 잡고, 칸 크기를 안 뒤 채운다).
+                            // Skin theme: for the cursor and marked cells, the original bar (DrawFocus style 3) is laid under the image and text (reserve the slot first, then fill once the cell size is known).
                             let cursor_row = self.panes[index].cursor == row;
                             let marked = self.panes[index].selected.contains(&row);
                             let focus_slot = original.filter(|_| cursor_row || marked).map(|_| ui.painter().add(egui::Shape::Noop));
@@ -482,13 +482,13 @@ impl App {
                                         egui::Layout::top_down(egui::Align::Center),
                                         |ui| {
                                             if thumbnails {
-                                                // 그림, 글 줄(원본 줄마다 높이 + 2), 드라이브 막대를 틈 없이 쌓는다(줄 높이는 위에서 셈).
+                                                // Stack the image, text lines (original each line height + 2), and drive bar with no gap (row height is computed above).
                                                 ui.spacing_mut().item_spacing.y = 0.0;
-                                                // 칸은 줄 높이 전체를 쓴다(고른 칸 바탕·누르는 자리).
+                                                // The cell uses the full row height (even cell background and clickable area).
                                                 ui.set_min_size(egui::vec2(tile_width - 10.0, row_height - 10.0));
                                             }
                                             if thumbnails {
-                                                // 원본: 흐리게 그릴 항목은 그림을 알파 0x55로(AlphaBlend SourceConstantAlpha), 아이콘은 ILD_BLEND50(흐린 아이콘 그림). 스킨 테마만.
+                                                // Original: for a dimmed item, the image uses alpha 0x55 (AlphaBlend SourceConstantAlpha), and the icon uses ILD_BLEND50 (dimmed icon image). Skin theme only.
                                                 let tint = if ghosted { Color32::from_white_alpha(0x55) } else { Color32::WHITE };
                                                 if let Some(texture) = self.images.get(&entry.path)
                                                 {
@@ -497,7 +497,7 @@ impl App {
                                                         egui::vec2(thumb, thumb),
                                                     )).tint(tint));
                                                 } else if let Some(icon) = &icon {
-                                                    // C# FileVisualConverter: 미리 보기가 없으면 아이콘.
+                                                    // C# FileVisualConverter: when there is no preview, the icon.
                                                     ui.add_sized([thumb, thumb], egui::Image::new((icon.id(), egui::vec2(32.0, 32.0))));
                                                 } else {
                                                     ui.add_sized(
@@ -510,7 +510,7 @@ impl App {
                                                     );
                                                 }
                                             }
-                                            // 스킨 테마는 원본처럼 NXFORE(종류와 상관없음), 아니면 C# 판 색.
+                                            // The skin theme uses NXFORE like the original (regardless of kind); otherwise the C# version's color.
                                             let name_color = original_fore.unwrap_or_else(|| if entry.is_dir { Color32::from_rgb(228, 188, 85) } else { ui.visuals().text_color() });
                                             let name = super::list_text(&caption, list_style).color(name_color);
                                             match (&icon, thumbnails) {
@@ -521,7 +521,7 @@ impl App {
                                                     });
                                                 }
                                                 (_, true) => {
-                                                    // 원본 DrawThumbnailText: 폭 = 썸네일 크기, 최대 4줄, 줄마다 가운데, 줄 간격 2.
+                                                    // Original DrawThumbnailText: width = thumbnail size, up to 4 lines, each line centered, line spacing 2.
                                                     let font = egui::TextStyle::Body.resolve(ui.style());
                                                     let (line_height, lines) = ui.fonts_mut(|fonts| (fonts.row_height(&font), thumbnail_lines(&caption, thumb, 4, &mut |c| fonts.glyph_width(&font, c))));
                                                     let (rect, _) = ui.allocate_exact_size(egui::vec2(thumb, lines.len() as f32 * (line_height + 2.0)), egui::Sense::hover());
@@ -533,8 +533,8 @@ impl App {
                                                     ui.add(egui::Label::new(name).truncate());
                                                 }
                                             }
-                                            // 원본: 고정 디스크(종류 3)이고 전체 크기를 알면 썸네일 크기 − 16 너비, 높이 4 막대.
-                                            // 전체는 FUN_007d7e6c(NXFORE, NXBACK, 0.3), 쓴 비율만큼은 (NXFORE, NXBACK, 0.5).
+                                            // Original: for a fixed disk (kind 3) whose total size is known, a bar of width thumbnail size − 16 and height 4.
+                                            // The total is FUN_007d7e6c(NXFORE, NXBACK, 0.3), and the used portion is (NXFORE, NXBACK, 0.5).
                                             if let Some((_, 3, Some((free, total)))) = drive_info.as_ref().map(|(l, k, s)| (l, *k, *s)) {
                                                 if total > 0 {
                                                     let (rect, _) = ui.allocate_exact_size(egui::vec2(thumb - 16.0, 8.0), egui::Sense::hover());
@@ -553,7 +553,7 @@ impl App {
                                 })
                                 .response
                                 .interact(egui::Sense::click());
-                            // 원본 DrawThumbnailItem: DrawThumbnailText가 이름을 줄였으면(+0x65) 커서가 온 뒤 ShowToolTip 형식 3이 온 이름을 보인다.
+                            // Original DrawThumbnailItem: if DrawThumbnailText shortened the name (+0x65), after the cursor arrives ShowToolTip style 3 shows the full name.
                             if thumbnails && original.is_some() && cursor_row && !entry.drive {
                                 let font = egui::TextStyle::Body.resolve(ui.style());
                                 let (shortened, galleys) = ui.fonts_mut(|fonts| {
@@ -569,13 +569,13 @@ impl App {
                                     (shortened, galleys)
                                 });
                                 if shortened {
-                                    // NDR 칸: 바깥 5, 그림 thumb, 글 첫 줄은 그 밑 2.
+                                    // NDR cell: outer margin 5, image thumb, text first line is 2 below it.
                                     let text_top = response.rect.top() + 5.0 + thumb + 2.0;
                                     *self.thumb_tip.borrow_mut() = Some((index, row, response.rect, text_top, thumb, galleys));
                                 }
                             }
                             if let (Some(slot), Some(o)) = (focus_slot, original) {
-                                // 막대 높이는 그 항목의 글 높이(GetThumbnailTextHeight)로 잰다.
+                                // The bar height is measured from that item's text height (GetThumbnailTextHeight).
                                 let font = egui::TextStyle::Body.resolve(ui.style());
                                 let text_height = ui.fonts_mut(|fonts| {
                                     let line_height = fonts.row_height(&font);
@@ -585,7 +585,7 @@ impl App {
                                 let bar = super::skin_pane::thumbnail_focus_rect(response.rect, thumb, text_height);
                                 ui.painter().set(slot, egui::Shape::Vec(super::skin_pane::rounded_gradient_shapes(bar, 4.0, top, bottom, line)));
                             }
-                            // 원본 MouseDown(형식 3): 스킨 테마는 누르는 순간 커서·Shift·Ctrl을 처리한다(표시 칸·끌어 고르기는 없다).
+                            // Original MouseDown (style 3): the skin theme handles the cursor, Shift, and Ctrl on press (no display column or drag-select).
                             if original_click && super::panes::original_thumbnail_press(&mut self.panes[index], row, response.rect, ui) {
                                 activate = true;
                             }
@@ -607,7 +607,7 @@ impl App {
                                 activate = true;
                                 open = true;
                             }
-                            // 줄 응답에 메뉴를 붙이지 않는다(패널 메뉴 skin_pane::pane_menu).
+                            // Do not attach a menu to the row response (pane menu skin_pane::pane_menu).
                             if response.secondary_clicked() {
                                 super::skin_pane::request_pane_menu(ui.ctx(), index);
                             }
@@ -622,7 +622,7 @@ impl App {
                 ui.ctx().request_repaint();
             }
             if needs {
-                // 원본 UpdateScrollBar(형식 3): 단추 한 번에 한 줄.
+                // Original UpdateScrollBar (style 3): one line per button press.
                 let inner = output.inner_rect;
                 let bar = egui::Rect::from_min_max(egui::pos2(inner.right() - bar_width, inner.top()), inner.max);
                 if let Some(next) = self.skin_vertical_scrollbar(ui, &ctx, skin, bar_flag.with("bar"), bar, output.state.offset.y, output.content_size.y, inner.height(), stride) {
@@ -635,23 +635,23 @@ impl App {
         }
         (activate, open, command)
     }
-    /// 원본 패널 폴더 트리(miShowFoldersClick 0x445258 → FUN_0048da38): 패널 안 목록 왼쪽(alLeft TNXPaintPanel 안 TNXShellTreeView).
-    /// 뿌리는 셸 바탕 화면, 그 아래는 셸 이름 공간(내 PC → 드라이브 → 폴더, 네트워크, 제어판, 휴지통 …, ndr::shell_tree).
-    /// 바탕·글꼴은 목록과 같고(FUN_0048e1ac: 목록 Color·Font, 글 색 GetBasic(1)), 패널 위치가 바뀌면 그 폴더까지 펼쳐 고른다(SetPath).
-    /// 고르면(FUN_0048e320) 제어판은 control.exe, 휴지통은 셸로 열고(FUN_00432fe4), 가상 폴더는 셸로 열고, 폴더면 그 패널을 옮긴다.
+    /// Original pane folder tree (miShowFoldersClick 0x445258 → FUN_0048da38): to the left of the list inside the pane (TNXShellTreeView inside the alLeft TNXPaintPanel).
+    /// The root is the shell desktop, and below it the shell namespace (My Computer → drives → folders, Network, Control Panel, Recycle Bin …, ndr::shell_tree).
+    /// Background and font match the list (FUN_0048e1ac: list Color·Font, text color GetBasic(1)); when the pane location changes, expand to that folder and select it (SetPath).
+    /// When selected (FUN_0048e320), Control Panel opens control.exe, the Recycle Bin opens via the shell (FUN_00432fe4), virtual folders open via the shell, and a folder navigates that pane.
     pub(super) fn pane_tree_ui(&mut self, ui: &mut egui::Ui, index: usize, rect: egui::Rect) {
         use ndr::shell_tree::{ShellNode, Special, same_key};
-        // FUN_0048e1ac: 바탕 = 목록 Color(NXBACK), 글 = GetBasic(1)(NXFORE).
-        // 고른 줄: VCL TCustomTreeView 그리기가 고른 항목(CDIS_SELECTED)의 붓을 clHighlight로 두고, FUN_006c9388(트리, 0) =
-        // HideSelection 끔(TVS_SHOWSELALWAYS)이라 초점이 없어도 그렇다. OnCustomDrawItem FUN_0048e104는 고른 항목의 글 색을 트리 바탕
-        // (Color, +0x7c)이 검정(0)이면 흰색(초점 0xFEFEFE, 아니면 0xFFFFFF), 아니면 트리 글꼴 색(NXFORE)으로 둔다.
-        // 고친 것: 전에는 NXSELECT 바탕에 NXBACK 글로 그렸다(원본은 시스템 강조 색).
+        // FUN_0048e1ac: background = list Color (NXBACK), text = GetBasic(1) (NXFORE).
+        // Selected row: VCL TCustomTreeView drawing sets the selected item's (CDIS_SELECTED) brush to clHighlight, and FUN_006c9388(tree, 0) =
+        // HideSelection off (TVS_SHOWSELALWAYS), so this holds even without focus. OnCustomDrawItem FUN_0048e104 sets the selected item's text color: if the tree background
+        // (Color, +0x7c) is black (0), white (focused 0xFEFEFE, otherwise 0xFFFFFF); otherwise the tree font color (NXFORE).
+        // Fix: previously it drew NXFORE text on an NXSELECT background (the original uses the system highlight color).
         let (background, text) = (self.basic_list_color("NXBACK"), self.basic_list_color("NXFORE"));
         let (select, selected_text) = tree_selection_colors(background, text, native::system_color(13));
         ui.painter().rect_filled(rect, 0.0, background);
         let path = self.panes[index].path.clone();
         let local = self.panes[index].archive.is_none() && self.panes[index].remote.is_none() && !super::panes::is_drives(&path);
-        // SetPath: 위치가 바뀌면 바탕 화면부터 그 폴더까지(내 PC → 드라이브 → …) 펼치고 그 줄이 보이게 넘긴다.
+        // SetPath: when the location changes, expand from the desktop down to that folder (My Computer → drives → …) and scroll so that row is visible.
         let mut reveal = false;
         if local && self.panes[index].tree_synced.as_ref() != Some(&path) {
             for key in ndr::shell_tree::ancestors(&path) {
@@ -695,7 +695,7 @@ impl App {
         let mut shell_menu: Option<PathBuf> = None;
         let mut drop_rows: Vec<(usize, egui::Rect, PathBuf)> = Vec::new();
         let mut tree_rows_for_drop: Vec<(usize, egui::Rect, PathBuf, PathBuf, bool)> = Vec::new();
-        // 하위 폴더를 아직 읽는 중이면 고른 줄이 없으므로, 그 줄이 나올 때까지 넘기기를 미룬다.
+        // While the subfolders are still being read there is no selected row, so defer scrolling until that row appears.
         let reveal_id = egui::Id::new(("ndr-pane-tree-reveal", index));
         let reveal = reveal || ui.ctx().data(|d| d.get_temp::<bool>(reveal_id)).unwrap_or(false);
         let selected_key = self.panes[index].tree_selected.clone().or_else(|| local.then(|| path.clone()));
@@ -706,7 +706,7 @@ impl App {
             let depth = rows[line].1 as f32;
             area = area.vertical_scroll_offset((line as f32 * row_height - rect.height() / 2.0).max(0.0)).horizontal_scroll_offset((depth * 16.0 - 16.0).max(0.0));
         } else if let (true, Some(line)) = (std::mem::take(&mut self.panes[index].tree_scroll_to), selected_line) {
-            // 글쇠로 옮긴 줄이 보이는 범위(지난 장면) 밖이면 그 끝에 닿게만 넘긴다(TTreeView처럼).
+            // If the keyboard-moved row is outside the visible range (last frame), scroll only enough to reach that edge (like TTreeView).
             let (first, page) = (self.panes[index].tree_first, self.panes[index].tree_page.max(1));
             if line < first {
                 area = area.vertical_scroll_offset(line as f32 * row_height);
@@ -714,7 +714,7 @@ impl App {
                 area = area.vertical_scroll_offset(((line + 1) as f32 * row_height - rect.height()).max(0.0));
             }
         } else if self.panes[index].tree_drag_scroll != 0 {
-            // 원본 트리 놓기 효과(0x48e790)의 굴리기 표시 + TNXDropTarget.DoTargetScroll(0x7b1e04): WM_VSCROLL 한 줄.
+            // Original tree drop effect (0x48e790) scroll indicator + TNXDropTarget.DoTargetScroll(0x7b1e04): WM_VSCROLL one line.
             let dy = std::mem::take(&mut self.panes[index].tree_drag_scroll) as f32;
             let current = egui::scroll_area::State::load(ui.ctx(), child.make_persistent_id(egui::Id::new(("ndr-pane-tree-scroll", index)))).map_or(self.panes[index].tree_first as f32 * row_height, |s| s.offset.y);
             area = area.vertical_scroll_offset((current + dy * row_height).max(0.0));
@@ -729,18 +729,18 @@ impl App {
                 let width = (indent + 16.0 + 18.0 + galley.size().x + 6.0).max(ui.available_width());
                 let (row, response) = ui.allocate_exact_size(egui::vec2(width, row_height), egui::Sense::click());
                 let selected = selected_line == Some(range.start + line)
-                    // 원본 FUN_0048eb0c: 끄는 동안 포인터 아래 노드를 DropTarget으로(TreeView는 고른 항목처럼 강조해 그린다).
+                    // Original FUN_0048eb0c: while dragging, the node under the pointer is the DropTarget (TreeView draws it highlighted like the selected item).
                     || (self.file_drag.is_some() && self.tree_drop_hover.as_ref().is_some_and(|(p, key, _)| *p == index && same_key(key, &node.key)));
                 let text_rect = egui::Rect::from_min_size(egui::pos2(row.left() + indent + 34.0, row.top()), egui::vec2(galley.size().x + 4.0, row_height));
                 if selected {
                     ui.painter().rect_filled(text_rect, 0.0, select);
                 }
-                // 펼침 표시(▸/▾): 셸이 하위 폴더가 있다고 한 항목(SFGAO_HASSUBFOLDER)만, 읽어 보니 비었으면 지운다.
+                // Expand indicator (▸/▾): only for items the shell reported as having subfolders (SFGAO_HASSUBFOLDER); removed if found empty on read.
                 let arrow = egui::Rect::from_min_size(egui::pos2(row.left() + indent, row.top()), egui::vec2(16.0, row_height));
                 let open = self.panes[index].tree_open.iter().any(|k| same_key(k, &node.key));
                 let expandable = node.has_children && !self.tree_cache.get(&(node.key.clone(), self.panes[index].show_hidden)).is_some_and(|c| c.is_empty());
                 if expandable {
-                    // 목록 글꼴에 ▸·▾ 글자가 없을 수 있어 세모 도형으로 그린다.
+                    // The list font may not have ▸·▾ glyphs, so draw a triangle shape.
                     let c = arrow.center();
                     let points = if open { vec![c + egui::vec2(-4.0, -2.0), c + egui::vec2(4.0, -2.0), c + egui::vec2(0.0, 3.0)] } else { vec![c + egui::vec2(-2.0, -4.0), c + egui::vec2(3.0, 0.0), c + egui::vec2(-2.0, 4.0)] };
                     ui.painter().add(egui::Shape::convex_polygon(points, text, egui::Stroke::NONE));
@@ -750,7 +750,7 @@ impl App {
                 }
                 let editing = self.panes[index].tree_edit.as_ref().is_some_and(|(folder, _)| node.path.as_ref().is_some_and(|p| same_key(p, folder)));
                 if editing {
-                    // TVN_BEGINLABELEDIT: 글 자리에 고치기 칸. Enter·다른 곳 누르기 = 확정, Esc = 취소(TreeView 이름 고치기).
+                    // TVN_BEGINLABELEDIT: an edit field in place of the text. Enter·clicking elsewhere = commit, Esc = cancel (TreeView label editing).
                     let edit_rect = egui::Rect::from_min_size(text_rect.min, egui::vec2((galley.size().x + 40.0).max(120.0), row_height));
                     let id = egui::Id::new(("ndr-pane-tree-edit", index));
                     let (escape, enter) = ui.input(|i| (i.key_pressed(egui::Key::Escape), i.key_pressed(egui::Key::Enter)));
@@ -772,7 +772,7 @@ impl App {
                     if on_arrow && expandable {
                         toggled = Some(node.key.clone());
                     } else if selected && on_label && tree_renamable(node) && !response.double_clicked() {
-                        // TreeView: 이미 고른 항목의 글을 다시 누르면 더블클릭 시간이 지난 뒤 이름 고치기를 시작한다.
+                        // TreeView: clicking the text of an already-selected item again starts label editing after the double-click interval passes.
                         label_click = Some(node.key.clone());
                     } else {
                         picked = Some(node.clone());
@@ -785,10 +785,10 @@ impl App {
                     }
                 }
                 if let Some(folder) = &node.path {
-                    // 원본 FUN_0048da38: 트리도 놓을 곳(TNXDropFileTarget.Register(트리)). 파일 시스템 폴더만.
+                    // Original FUN_0048da38: the tree is also a drop target (TNXDropFileTarget.Register(tree)). Filesystem folders only.
                     drop_rows.push((index, row.intersect(ui.clip_rect()), folder.clone()));
                     tree_rows_for_drop.push((index, row.intersect(ui.clip_rect()), folder.clone(), node.key.clone(), expandable && !open));
-                    // 원본 FUN_0048e69c(트리 OnContextPopup): 고른 폴더의 셸 메뉴(FUN_00459128).
+                    // Original FUN_0048e69c (tree OnContextPopup): the shell menu of the selected folder (FUN_00459128).
                     if response.secondary_clicked() {
                         shell_menu = Some(folder.clone());
                     }
@@ -797,7 +797,7 @@ impl App {
         });
         self.folder_rows.extend(drop_rows);
         self.tree_drop_rows.extend(tree_rows_for_drop);
-        // 원본 FUN_0048e2e0(트리 패널 그리기): 오른쪽 끝(너비 − 1)에 스킨 색(DAT_008d44c0 + 0x1c, conf.ini [List] lframetree) 세로선.
+        // Original FUN_0048e2e0 (tree panel drawing): a vertical line in the skin color (DAT_008d44c0 + 0x1c, conf.ini [List] lframetree) at the right edge (width − 1).
         if let Some(skin) = self.current_skin() {
             let color = super::skin_pane::skin_color(&skin, "lframetree", Color32::from_gray(0x3C));
             ui.painter().vline(rect.right() - 0.5, rect.y_range(), egui::Stroke::new(1.0, color));
@@ -808,7 +808,7 @@ impl App {
                 self.status = error;
             }
         }
-        // 다음 장면의 글쇠 처리(tree_keys)가 쓰는 줄·자리.
+        // Rows and positions used by the next frame's keyboard handling (tree_keys).
         {
             let open = &self.panes[index].tree_open;
             let rows: Vec<(ShellNode, usize, bool, bool)> = rows
@@ -852,7 +852,7 @@ impl App {
         }
     }
 
-    /// 트리 항목 펼치기·접기. 고른 항목이 접힌 항목 안에 있으면 TTreeView처럼 접힌 항목이 골라진다(OnChange).
+    /// Expand/collapse a tree item. If the selected item is inside a collapsed item, the collapsed item becomes selected like TTreeView (OnChange).
     fn tree_toggle(&mut self, index: usize, key: &Path, ctx: &egui::Context) {
         use ndr::shell_tree::same_key;
         let open = &mut self.panes[index].tree_open;
@@ -873,9 +873,9 @@ impl App {
         }
     }
 
-    /// 원본 FUN_0048e320(트리 OnChange, TCustomTreeView +0x358): 고른 항목이 바뀌면 제어판(CSIDL_CONTROLS)은 control.exe,
-    /// 휴지통(CSIDL_BITBUCKET)은 셸로 열고(FUN_00432fe4), 가상 폴더는 셸로 열고, 폴더면 그 패널을 그 폴더로 옮긴다.
-    /// 원본 FUN_0048e530(트리 OnEnter): 그 패널이 지금 패널이 된다.
+    /// Original FUN_0048e320 (tree OnChange, TCustomTreeView +0x358): when the selected item changes, Control Panel (CSIDL_CONTROLS) opens control.exe,
+    /// the Recycle Bin (CSIDL_BITBUCKET) opens via the shell (FUN_00432fe4), virtual folders open via the shell, and a folder navigates that pane to it.
+    /// Original FUN_0048e530 (tree OnEnter): that pane becomes the active pane.
     fn tree_select(&mut self, index: usize, node: &ndr::shell_tree::ShellNode, ctx: &egui::Context) {
         use ndr::shell_tree::{Special, same_key};
         self.active = index;
@@ -897,8 +897,8 @@ impl App {
         }
     }
 
-    /// 고른 항목의 글을 다시 누른 뒤 더블클릭 시간(GetDoubleClickTime)이 지나면 이름 고치기를 시작한다(TVN_BEGINLABELEDIT).
-    /// 아직이면 남은 시간을 돌려준다. 그 사이 다른 항목을 고르면 그만둔다.
+    /// After clicking a selected item's text again, start label editing once the double-click time (GetDoubleClickTime) passes (TVN_BEGINLABELEDIT).
+    /// If not yet, return the remaining time. Selecting another item in the meantime cancels it.
     pub(super) fn tree_edit_due(&mut self, index: usize, now: Instant) -> Option<Duration> {
         use ndr::shell_tree::same_key;
         let (key, at) = self.panes[index].tree_label_click.clone()?;
@@ -920,9 +920,9 @@ impl App {
         None
     }
 
-    /// 원본 TNXCustomShellTreeView.Edit(0x7edf70, TVN_ENDLABELEDIT): 새 이름이 있으면 TNXShellFolder.Rename(셸 SetNameOf)으로 바꾸고
-    /// 노드 글을 바꾼다. NDR은 같은 폴더 안 MoveFileW로 바꾸고(실패는 이름 작업 오류 창), 트리의 그 부분을 다시 읽고,
-    /// 그 폴더(또는 그 안)를 보던 패널은 새 경로로, 부모를 보던 패널은 새로 고친다. 빈 이름·같은 이름은 아무것도 안 한다.
+    /// Original TNXCustomShellTreeView.Edit(0x7edf70, TVN_ENDLABELEDIT): if there is a new name, change it via TNXShellFolder.Rename (shell SetNameOf) and
+    /// update the node text. NDR renames with MoveFileW within the same folder (failure shows a rename-operation error dialog), re-reads that part of the tree,
+    /// and a pane viewing that folder (or inside it) moves to the new path, while a pane viewing the parent is refreshed. An empty or identical name does nothing.
     pub(super) fn tree_rename_commit(&mut self, index: usize) {
         use ndr::shell_tree::same_key;
         let Some((folder, text)) = self.panes[index].tree_edit.take() else { return };
@@ -968,9 +968,9 @@ impl App {
         }
     }
 
-    /// 패널 폴더 트리에 글쇠 초점이 있을 때 TTreeView 글쇠: ↑↓ Home End PgUp PgDn은 고른 항목을 옮기고(그때마다 OnChange),
-    /// ←는 접거나 부모로, →는 펼치거나 첫 자식으로, + - 는 펼치기·접기, 글자는 그 글자로 시작하는 다음 항목.
-    /// 다른 글쇠(기능키·Esc 등)는 원본처럼 목록과 같은 KeyDown(FUN_0048423c)으로 넘긴다. 처리했으면 true.
+    /// TTreeView keys while keyboard focus is in the pane folder tree: ↑↓ Home End PgUp PgDn move the selected item (OnChange each time),
+    /// ← collapses or goes to the parent, → expands or goes to the first child, + - expand/collapse, a letter jumps to the next item starting with that letter.
+    /// Other keys (function keys·Esc, etc.) are passed to the same list KeyDown (FUN_0048423c) as the original. Returns true if handled.
     pub(super) fn tree_keys(&mut self, ctx: &egui::Context) -> bool {
         use ndr::shell_tree::same_key;
         let index = self.active;
@@ -1028,7 +1028,7 @@ impl App {
                 return true;
             }
             Some(_) | None => {
-                // 글자: 지금 항목 다음부터(끝이면 처음부터) 그 글자로 시작하는 항목(TTreeView 증분 찾기의 한 글자).
+                // Letter: from the item after the current one (wrapping to the start at the end), find an item starting with that letter (TTreeView single-character incremental search).
                 let Some(c) = typed.filter(|c| !c.is_control() && *c != ' ') else { return false };
                 let lower: String = c.to_lowercase().collect();
                 let hit = (1..=rows.len()).map(|step| (at + step) % rows.len()).find(|&i| rows[i].0.name.to_lowercase().starts_with(&lower));
@@ -1045,7 +1045,7 @@ impl App {
         true
     }
 
-    /// 트리의 하위 셸 폴더를 따로 읽는다(숨김 폴더는 그 패널의 숨김 보기를 따른다, 원본 FUN_0048da38 +0x3f8 비트 4).
+    /// Read the tree's child shell folders separately (hidden folders follow that pane's hidden view, original FUN_0048da38 +0x3f8 bit 4).
     pub(super) fn request_tree_children(&mut self, index: usize, key: &Path) {
         let show_hidden = self.panes[index].show_hidden;
         if !self.tree_requests.insert((key.to_path_buf(), show_hidden)) {
@@ -1060,13 +1060,13 @@ impl App {
     }
 }
 
-/// 패널 폴더 트리에서 이름을 고칠 수 있는 항목: 부모가 있는 파일 시스템 폴더(드라이브 뿌리·가상 폴더는 뺀다).
+/// Items in the pane folder tree whose name can be edited: filesystem folders that have a parent (excluding drive roots and virtual folders).
 pub(super) fn tree_renamable(node: &ndr::shell_tree::ShellNode) -> bool {
     node.special == ndr::shell_tree::Special::None && !ndr::shell_tree::is_virtual(&node.key) && node.path.as_ref().is_some_and(|p| p.parent().is_some() && p.file_name().is_some())
 }
 
-/// 패널 폴더 트리 고른 줄 (바탕, 글) 색: VCL TCustomTreeView가 고른 항목의 붓을 clHighlight(`highlight` = GetSysColor(13))로 두고,
-/// 원본 OnCustomDrawItem FUN_0048e104가 글 색을 트리 바탕이 검정이면 흰색, 아니면 트리 글꼴 색으로 둔다.
+/// Pane folder-tree selected-row (background, text) colors: VCL TCustomTreeView sets the selected item's brush to clHighlight (`highlight` = GetSysColor(13)),
+/// and the original OnCustomDrawItem FUN_0048e104 sets the text color to white if the tree background is black, otherwise the tree font color.
 pub(super) fn tree_selection_colors(background: Color32, fore: Color32, highlight: (u8, u8, u8)) -> (Color32, Color32) {
     let (r, g, b) = highlight;
     (Color32::from_rgb(r, g, b), if background == Color32::BLACK { Color32::WHITE } else { fore })
@@ -1080,21 +1080,21 @@ mod tests {
     #[test]
     fn pane_tree_selection_uses_the_system_highlight_like_the_ttreeview() {
         let highlight = (0, 120, 215);
-        // 바탕이 검정(원본 처음 값 NXBACK 000000)이면 흰 글, 아니면 트리 글꼴 색(NXFORE). 바탕은 늘 시스템 강조 색.
+        // If the background is black (original default NXBACK 000000), white text; otherwise the tree font color (NXFORE). The background is always the system highlight color.
         assert_eq!(tree_selection_colors(Color32::BLACK, Color32::from_gray(0xC0), highlight), (Color32::from_rgb(0, 120, 215), Color32::WHITE));
         assert_eq!(tree_selection_colors(Color32::WHITE, Color32::from_rgb(1, 2, 3), highlight), (Color32::from_rgb(0, 120, 215), Color32::from_rgb(1, 2, 3)));
     }
 
-    /// 글자 10px, '.'만 2px인 가짜 글꼴.
+    /// A fake font where each glyph is 10px and only '.' is 2px.
     fn glyph(c: char) -> f32 {
         if c == '.' { 2.0 } else { 10.0 }
     }
 
     #[test]
     fn thumbnail_caption_follows_drawthumbnailtext() {
-        // 폭 35: 줄마다 3글자. 4줄 안에 다 들어가면 그대로.
+        // Width 35: 3 characters per line. If it all fits within 4 lines, keep it as is.
         assert_eq!(thumbnail_lines("abcdefghij", 35.0, 4, &mut glyph), ["abc", "def", "ghi", "j"]);
-        // 넷째 줄에 남은 글이 넘치면 들어가는 글자 수 − 1부터 줄이며 "..."(여기서는 6px)를 붙인다.
+        // If the remaining text overflows the fourth line, append "..." (6px here), shrinking from the fitting character count − 1.
         assert_eq!(thumbnail_lines("abcdefghijklmnop", 35.0, 4, &mut glyph), ["abc", "def", "ghi", "jk..."]);
         assert_eq!(thumbnail_lines("ab", 35.0, 4, &mut glyph), ["ab"]);
         assert!(thumbnail_lines("", 35.0, 4, &mut glyph).is_empty());
@@ -1102,7 +1102,7 @@ mod tests {
 
     #[test]
     fn thumbnail_height_follows_getthumbnailtextheight() {
-        // 줄 수 × (줄 높이 + 2), 최대 4줄, 드라이브 항목은 + 8.
+        // Line count × (line height + 2), up to 4 lines, plus 8 for a drive item.
         assert_eq!(thumbnail_text_height("ab", 35.0, 4, 2.0, 15.0, false, &mut glyph), 17.0);
         assert_eq!(thumbnail_text_height("abcdefg", 35.0, 4, 2.0, 15.0, false, &mut glyph), 51.0);
         assert_eq!(thumbnail_text_height("abcdefghijklmnop", 35.0, 4, 2.0, 15.0, false, &mut glyph), 68.0);
@@ -1111,10 +1111,10 @@ mod tests {
 
     #[test]
     fn captions_narrower_than_one_glyph_still_end() {
-        // 칸(8px)이 글자(10px)보다 좁다: 전에는 높이 계산이 끝나지 않았고 이름이 빈 줄로 보였다.
+        // The cell (8px) is narrower than a glyph (10px): previously the height calculation never terminated and the name appeared as blank lines.
         assert_eq!(thumbnail_text_height("abcdefg", 8.0, 4, 2.0, 15.0, false, &mut glyph), 68.0);
         assert_eq!(thumbnail_lines("abcdefg", 8.0, 4, &mut glyph), ["a", "b", "c", "d"]);
-        // 넷째 줄에 "..."를 붙일 자리가 없으면 들어가는 글자만 남긴다(전에는 그 줄이 빠졌다).
+        // If there is no room to append "..." on the fourth line, only the fitting characters remain (previously that line was dropped).
         assert_eq!(thumbnail_lines("abcdefghij", 12.0, 4, &mut glyph), ["a", "b", "c", "d"]);
     }
 }

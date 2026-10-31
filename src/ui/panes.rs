@@ -1,21 +1,21 @@
 use super::*;
 
-/// 파일 목록 ScrollArea: 끌기·스크롤 막대는 그대로, 바퀴는 원본 규칙(App::wheel_scroll)으로 따로 처리한다.
-/// 목록 스크롤: 막대만(바퀴는 원본 WMMouseWheel 처리, 끌어서 굴리기는 원본에 없다 — 빈 곳 끌기는 표시한 항목 끌기).
+/// File list ScrollArea: drag and scroll bar stay as-is, the wheel is handled separately by the original rule (App::wheel_scroll).
+/// List scrolling: bar only (the wheel uses the original WMMouseWheel handling; drag-to-scroll is not in the original — dragging empty space drags the selected items).
 pub(super) const WHEEL_OFF: egui::scroll_area::ScrollSource = egui::scroll_area::ScrollSource { scroll_bar: true, drag: false, mouse_wheel: false };
 
-/// C# "::drives::"(내 PC) 보기인가.
+/// Is this the C# "::drives::" (My PC) view.
 pub(super) fn is_drives(path: &Path) -> bool {
     path.as_os_str() == super::remote_window::DRIVES
 }
 
-/// 원본 GetSelAreaAt(0x7dae7c): 미리 보기가 아닌 보기에서 항목 칸 왼쪽 12화소(GetItemRect의 left ~ left + 0xc).
+/// Original GetSelAreaAt(0x7dae7c): in non-thumbnail views, the left 12 pixels of the item cell (GetItemRect's left ~ left + 0xc).
 fn selection_area(rect: egui::Rect) -> egui::Rect {
     egui::Rect::from_min_max(rect.min, egui::pos2((rect.left() + 12.0).min(rect.right()), rect.bottom()))
 }
 
-/// 원본 DrawListItem(0x7d8f58)의 칸 글: 칸 안쪽(왼쪽 + 5, 오른쪽 − 5)에 한 줄(넘치면 …). 크기는 오른쪽 맞춤(단위 GB·MB 색),
-/// 날짜 칸은 날짜를 왼쪽·시각을 오른쪽(DateToStr·TimeToStr), 나머지는 왼쪽 맞춤. 자세히·자동·이름 보기가 함께 쓴다.
+/// Cell text of the original DrawListItem(0x7d8f58): one line inside the cell (left + 5, right − 5; ellipsis … on overflow). Size is right-aligned (GB/MB unit colored),
+/// the date cell draws the date left-aligned and the time right-aligned (DateToStr/TimeToStr), the rest left-aligned. Shared by the Details, Auto, and Names views.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn paint_original_cell(ui: &mut egui::Ui, rect: egui::Rect, column: DetailColumn, text: &str, cell_color: Color32, cursor_row: bool, o: &super::skin_pane::ListColors, list_style: u8) {
     let inner = rect.shrink2(egui::vec2(5.0, 0.0));
@@ -37,13 +37,13 @@ pub(super) fn paint_original_cell(ui: &mut egui::Ui, rect: egui::Rect, column: D
             let galley = layout(ui, &[(number, cell_color), (unit, unit_color)]);
             painter.galley(egui::pos2(inner.right() - galley.size().x, top(galley.size().y)), galley, cell_color);
         }
-        // 원본 DrawListItem 필드 4: DateToStr는 칸 왼쪽, TimeToStr는 오른쪽. 둘 사이는 listing::LIST_DATE_TIME_GAP.
-        // 고친 것: 첫 빈칸에서 나눠 "5일 전 23:19"가 "5일"과 "전 23:19"로 갈라졌다.
+        // Original DrawListItem field 4: DateToStr goes to the left of the cell, TimeToStr to the right. The gap between them is listing::LIST_DATE_TIME_GAP.
+        // Fix: splitting on the first space made "5일 전 23:19" split into "5일" and "전 23:19".
         DetailColumn::Modified if text.contains(ndr::listing::LIST_DATE_TIME_GAP) => {
             let (date, time) = text.split_once(ndr::listing::LIST_DATE_TIME_GAP).unwrap_or((text, ""));
             let date = layout(ui, &[(date, cell_color)]);
             let time = layout(ui, &[(time, cell_color)]);
-            // 칸이 좁아 날짜와 시각이 붙으면(사이 6 미만) 한 줄 글로 왼쪽에 쓴다.
+            // When the cell is narrow and the date and time touch (gap under 6), write them as one line text on the left.
             if date.size().x + time.size().x + 6.0 <= inner.width() {
                 painter.galley(egui::pos2(inner.left(), top(date.size().y)), date, cell_color);
                 painter.galley(egui::pos2(inner.right() - time.size().x, top(time.size().y)), time, cell_color);
@@ -59,29 +59,29 @@ pub(super) fn paint_original_cell(ui: &mut egui::Ui, rect: egui::Rect, column: D
     }
 }
 
-/// 원본 DrawListItem(0x7d8f58)은 이름을 DT_END_ELLIPSIS | DT_MODIFYSTRING으로 그려 줄였는지(+0x65)를 남긴다.
-/// NDR은 커서 줄 이름 칸과 보인 이름·온 이름의 글 모양을 기억해 두고, 툴팁(original_name_tip)이 쓴다.
+/// The original DrawListItem(0x7d8f58) draws the name with DT_END_ELLIPSIS | DT_MODIFYSTRING and records whether it was truncated (+0x65).
+/// NDR remembers the text layout of the cursor-row name cell, the shown name, and the full name, which the tooltip (original_name_tip) uses.
 pub(super) type NameTip = std::cell::RefCell<Option<(usize, usize, egui::Rect, std::sync::Arc<egui::Galley>, std::sync::Arc<egui::Galley>)>>;
 
-/// 원본 DrawThumbnailItem(0x7da1c4)은 DrawThumbnailText가 이름을 줄였는지(+0x65)를 남긴다. 이번 그림에서 커서 칸의 이름이 줄었으면
-/// (패널, 줄, 항목 칸, 이름 글 첫 줄 위, 썸네일 크기, DT_WORDBREAK로 나눈 온 이름 줄들).
+/// The original DrawThumbnailItem(0x7da1c4) records whether DrawThumbnailText truncated the name (+0x65). If the cursor cell's name was truncated in this paint,
+/// (pane, row, item cell, top of the first line of the name text, thumbnail size, full-name lines split by DT_WORDBREAK).
 pub(super) type ThumbTip = std::cell::RefCell<Option<(usize, usize, egui::Rect, f32, f32, Vec<std::sync::Arc<egui::Galley>>)>>;
 
-/// 드라이브 항목 정보(GetDriveName, GetDriveTypeW, 고정 디스크면 (여유, 전체)).
+/// Drive item info (GetDriveName, GetDriveTypeW, and (free, total) for fixed disks).
 pub(super) type DriveInfo = (String, u32, Option<(u64, u64)>);
 
-/// 패널 목록이 함께 쓰는 드라이브 목록 캐시(원본 TNXDriveList 자리): 읽은 때, (루트, 정보), 뒤에서 새로 읽는 중인지.
+/// Drive list cache shared by pane listings (the original TNXDriveList slot): when it was read, (root, info), and whether a background re-read is in progress.
 #[derive(Default)]
 pub(super) struct DriveListCache {
     at: Option<Instant>,
     items: Vec<(PathBuf, Option<DriveInfo>)>,
     refreshing: bool,
-    /// 채운 함수(SystemHooks ready_drives, drive_item). 바뀌면(시험의 가짜 함수 등) 새로 읽는다.
+    /// The functions that filled it (SystemHooks ready_drives, drive_item). If they change (e.g. test fakes), re-read.
     source: Option<(usize, usize)>,
 }
 
 impl DriveListCache {
-    /// 다음 목록은 드라이브를 새로 읽는다(F5, 드라이브 이름 바꾸기, 네트워크 드라이브 연결·끊기).
+    /// Have the next listing re-read the drives (F5, drive rename, network drive connect/disconnect).
     pub(super) fn invalidate(cache: &std::sync::Arc<std::sync::Mutex<DriveListCache>>) {
         if let Ok(mut guard) = cache.lock() {
             guard.at = None;
@@ -89,7 +89,7 @@ impl DriveListCache {
     }
 }
 
-/// 캐시의 드라이브 목록: 5초 안에 읽은 것이면 그대로, 지났으면 그대로 돌려주고 뒤에서 한 번 새로 읽는다. 처음이면 바로 읽는다.
+/// Cached drive list: if read within the last 5 seconds, return it as-is; if expired, return it as-is and re-read once in the background. On the first call, read immediately.
 pub(super) fn cached_drive_items(cache: &std::sync::Arc<std::sync::Mutex<DriveListCache>>, ready: fn() -> Vec<PathBuf>, item: fn(&Path) -> Option<DriveInfo>) -> Vec<(PathBuf, Option<DriveInfo>)> {
     let read = move || ready().into_iter().map(|root| { let info = item(&root); (root, info) }).collect::<Vec<_>>();
     let source = Some((ready as usize, item as usize));
@@ -127,7 +127,7 @@ pub(super) fn cached_drive_items(cache: &std::sync::Arc<std::sync::Mutex<DriveLi
     fresh
 }
 
-/// Win32 DrawTextW DT_WORDBREAK처럼 낱말(빈칸) 사이에서만 줄을 나눈다. 폭보다 긴 낱말은 그대로 한 줄(더 넓다).
+/// Break lines only at word (space) boundaries, like Win32 DrawTextW DT_WORDBREAK. A word longer than the width stays on one line (wider than the area).
 pub(super) fn word_break_lines(text: &str, width: f32, measure: &mut dyn FnMut(&str) -> f32) -> Vec<String> {
     let mut lines = Vec::new();
     let mut line = String::new();
@@ -149,8 +149,8 @@ pub(super) fn note_cursor_name(tip: &NameTip, ui: &egui::Ui, pane: usize, row: u
     *tip.borrow_mut() = Some((pane, row, cell, galley(shown), galley(full)));
 }
 
-/// 원본 GetFieldMaxWidth(0x7df9d8)가 남기는 값: 칸마다 가장 넓은 글(DetailColumn 순서 7칸, 목록 글꼴), 이름 너비 합(+0x358),
-/// 드라이브가 아닌 항목 수(목록 항목 수 − 종류 4, GetAdjustedNameWidth·GetAdjustedExtWidth의 나눗수), 확장자 평균(+0x350).
+/// Values recorded by the original GetFieldMaxWidth(0x7df9d8): the widest text per column (7 columns in DetailColumn order, list font), sum of name widths (+0x358),
+/// the count of non-drive items (list item count − kind 4, the divisor of GetAdjustedNameWidth/GetAdjustedExtWidth), and the extension average (+0x350).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(super) struct FieldMax {
     pub max: [f32; 7],
@@ -160,7 +160,7 @@ pub(super) struct FieldMax {
 }
 
 impl App {
-    /// 목록 글꼴로 잰 글 너비(원본 GetTextWidth).
+    /// Text width measured in the list font (original GetTextWidth).
     pub(super) fn list_text_width(&self, ui: &egui::Ui, text: &str) -> f32 {
         if text.is_empty() {
             return 0.0;
@@ -169,9 +169,9 @@ impl App {
         ui.fonts_mut(|f| f.layout_no_wrap(text.to_owned(), font, Color32::WHITE).size().x).ceil()
     }
 
-    /// 원본 GetFieldMaxWidth(0x7df9d8)가 남기는 값(FieldMax). 목록이 바뀔 때만 다시 잰다(원본 local_48[2] 캐시).
-    /// 이름은 폴더·파일(종류 1·3), 확장자는 파일, 크기는 크기가 0이 아닌 파일, 날짜·설명은 폴더·파일에서 잰다.
-    /// 크기 칸은 늘 머리글(FIELD_SIZE, 원본 GetString)보다 좁지 않다. 확장자 평균은 비어 있지 않은 확장자 너비의 정수 평균(+0x350).
+    /// Values recorded by the original GetFieldMaxWidth(0x7df9d8) (FieldMax). Re-measured only when the listing changes (original local_48[2] cache).
+    /// Name is measured on folders/files (kind 1/3), extension on files, size on files whose size is non-zero, and date/description on folders/files.
+    /// The size column is never narrower than its header (FIELD_SIZE, original GetString). The extension average is the integer average of non-empty extension widths (+0x350).
     pub(super) fn original_field_max(&self, ui: &egui::Ui, index: usize) -> FieldMax {
         let pane = &self.panes[index];
         let key = {
@@ -184,8 +184,8 @@ impl App {
         if let Some((_, fm)) = ui.data(|d| d.get_temp::<(u64, FieldMax)>(id)).filter(|c| c.0 == key) {
             return fm;
         }
-        // 고친 것(빠르기): 전에는 항목마다 글 배치(layout_no_wrap, 그림 조각 만들기)로 재서 파일 2만 개면 약 60ms였고, 폴더 감시로
-        // 목록이 다시 읽힐 때마다 그만큼 멈췄다. 글자 폭의 합으로 잰다(원본 GetTextWidth도 글자 폭 합이다).
+        // Fix (performance): previously each item was measured by text layout (layout_no_wrap, building paint shapes), about 60ms for 20,000 files, and the folder
+        // watcher stalled that long every time the listing was re-read. Measure by the sum of glyph widths instead (the original GetTextWidth is also a glyph-width sum).
         let font = egui::FontId::new(self.list_font_size, egui::FontFamily::Name(super::LIST_FONT_FAMILY.into()));
         let mut fm = FieldMax::default();
         let (mut ext_sum, mut ext_count) = (0f32, 0usize);
@@ -222,8 +222,8 @@ impl App {
         fm
     }
 
-    /// 원본 GetAdjustedNameWidth(0x7e00a8): 가장 긴 이름 + 10. 드라이브가 아닌 항목이 6개 이상이고 "WWWWW"가 그보다 좁으며
-    /// 이름 평균(정수 나눗셈) × 2가 가장 긴 이름보다 짧으면 Trunc(평균 × 1.5 + 10)(0x7e012c의 1.5, 10.0; 0x8c3c8c는 버림 FISTP).
+    /// Original GetAdjustedNameWidth(0x7e00a8): longest name + 10. If there are 6 or more non-drive items and "WWWWW" is narrower than that, and
+    /// the name average (integer division) × 2 is shorter than the longest name, then Trunc(average × 1.5 + 10) (the 1.5 and 10.0 at 0x7e012c; 0x8c3c8c truncates with FISTP).
     pub(super) fn original_adjusted_name_width(&self, ui: &egui::Ui, fm: &FieldMax) -> f32 {
         let base = fm.max[0] + 10.0;
         if fm.items > 5 && self.list_text_width(ui, "WWWWW") < base {
@@ -235,8 +235,8 @@ impl App {
         base
     }
 
-    /// 원본 GetAdjustedExtWidth(0x7e0134): 가장 긴 확장자 + 10. 드라이브가 아닌 항목이 6개 이상, 확장자 평균이 있고, "WAA"가 그보다
-    /// 좁으며 평균 × 2가 가장 긴 확장자보다 짧으면 Trunc(평균 × 1.5 + 10)(0x7e01b0의 1.5, 10.0).
+    /// Original GetAdjustedExtWidth(0x7e0134): longest extension + 10. If there are 6 or more non-drive items, there is an extension average, and "WAA" is
+    /// narrower than that, and the average × 2 is shorter than the longest extension, then Trunc(average × 1.5 + 10) (the 1.5 and 10.0 at 0x7e01b0).
     pub(super) fn original_adjusted_ext_width(&self, ui: &egui::Ui, fm: &FieldMax) -> f32 {
         let base = fm.max[1] + 10.0;
         if fm.items > 5 && fm.ext_average > 0.0 && self.list_text_width(ui, "WAA") < base && fm.ext_average * 2.0 < fm.max[1] {
@@ -245,10 +245,10 @@ impl App {
         base
     }
 
-    /// 원본 FitFileNameFields(0x7e0298): 이름 = max(가장 긴 이름 + 10, "WWWWAAAA" + 10), 확장자 = max(가장 긴 확장자 + 10, "WWA" + 10).
-    /// 둘의 합이 `room`보다 크면 `room` − GetAdjustedExtWidth가 21보다 작을 때 둘을 비율로(정수 나눗셈), 아니면 확장자 = GetAdjustedExtWidth,
-    /// 이름 = 나머지. (이름, 확장자). 확장자를 이름에 붙이면 확장자는 0, 이름은 min(가장 긴 이름 + 10, room)이고 그것이 "WWWWAAAA" + 10보다
-    /// 좁고 "WWWWAAAA" + 10이 room에 들어가면 "WWWWAAAA" + 10.
+    /// Original FitFileNameFields(0x7e0298): name = max(longest name + 10, "WWWWAAAA" + 10), extension = max(longest extension + 10, "WWA" + 10).
+    /// If their sum is larger than `room`, when `room` − GetAdjustedExtWidth is less than 21 split the two proportionally (integer division), otherwise extension = GetAdjustedExtWidth,
+    /// name = the remainder. (name, extension). When the extension is attached to the name, extension is 0 and name is min(longest name + 10, room); and if that is
+    /// narrower than "WWWWAAAA" + 10 and "WWWWAAAA" + 10 fits in room, use "WWWWAAAA" + 10.
     pub(super) fn original_fit_name_fields(&self, ui: &egui::Ui, fm: &FieldMax, room: f32, attach: bool) -> (f32, f32) {
         let eight = self.list_text_width(ui, "WWWWAAAA") + 10.0;
         if attach {
@@ -270,11 +270,11 @@ impl App {
         }
     }
 
-    /// 원본 UpdateDisplayDetails(0x7e1374)의 칸 너비(스킨 테마 자세히 보기). 칸마다 GetFieldMaxWidth(가장 넓은 글) + 10(글이 없으면 0),
-    /// 속성 칸은 "ARHS"(SFTP는 "drwxrwxrwx") + 10이다. 모두 합쳐 `avail`(세로 막대를 뺀 목록 너비)을 넘으면 이름을 GetAdjustedNameWidth,
-    /// 확장자를 GetAdjustedExtWidth로 줄인다. 그러고 나서 남는 자리가 있으면 FitFileNameFields(나머지 칸을 뺀 너비)로 이름·확장자를
-    /// 다시 맞추고("WWWWAAAA"·"WWA" 최소), 여전히 넘치면 그대로 둔다(가로로 넘긴다). 남는 너비는 채우지 않는다.
-    /// NDR 이름 칸은 아이콘 머리(GetListHeaderWidth)를 함께 담는다.
+    /// Column widths of the original UpdateDisplayDetails(0x7e1374) (skin theme Details view). Each column is GetFieldMaxWidth (widest text) + 10 (0 when there is no text),
+    /// and the attributes column is "ARHS" (SFTP uses "drwxrwxrwx") + 10. If their total exceeds `avail` (list width minus the vertical bar), shrink the name with GetAdjustedNameWidth
+    /// and the extension with GetAdjustedExtWidth. Then, if there is room left, re-fit name/extension with FitFileNameFields (width minus the other columns)
+    /// (with the "WWWWAAAA"/"WWA" minimums), and if it still overflows leave it (scroll horizontally). Leftover width is not filled.
+    /// The NDR name column also holds the icon header (GetListHeaderWidth).
     pub(super) fn original_detail_widths(&self, ui: &egui::Ui, index: usize, avail: f32, columns: &[(super::list_view::DetailColumn, String, f32)]) -> Vec<Option<f32>> {
         use super::list_view::DetailColumn as C;
         let fm = self.original_field_max(ui, index);
@@ -311,7 +311,7 @@ impl App {
         let sum = total(&widths);
         if sum < avail {
             let (name_w, ext_w) = (n.map_or(0.0, |n| widths[n]), e.map_or(0.0, |e| widths[e]));
-            // 원본 FitFileNameFields(목록 너비 − (0x344 − (이름 + 확장자))): 0x344는 머리를 담으므로 room = 너비 − 머리 − 나머지 칸.
+            // Original FitFileNameFields(list width − (0x344 − (name + extension))): 0x344 holds the header, so room = width − header − other columns.
             let room = avail - (sum - name_w - ext_w);
             let (name, ext) = self.original_fit_name_fields(ui, &fm, room, attach || e.is_none());
             if let Some(n) = n {
@@ -327,10 +327,10 @@ impl App {
         widths.into_iter().map(Some).collect()
     }
 
-    /// 원본 SetItemIndex(0x7dbdec): 커서가 옮겨 간 항목(드라이브 제외)의 이름이 줄여 그려졌으면 600ms(+0x408) 뒤
-    /// ShowToolTip(0x7d7454)이 TNXToolTipWnd(WS_POPUP | WS_BORDER, 바탕 clInfoBk, 글 clInfoText, 목록 글꼴)에 온 이름을
-    /// 가운데로 그린다. 자리: 항목 칸 왼쪽 + GetListHeaderWidth(아이콘이면 30, 아니면 14) − 2, 위 − 2, 너비 = 글 너비 + 10,
-    /// 높이 = 줄 높이 + 4, 화면 밖이면 안으로 민다. 3초(TIP_HIDE_MS) 뒤 숨는다. 목록에 초점이 있을 때만(활성 패널, 창 초점). 스킨 테마.
+    /// Original SetItemIndex(0x7dbdec): if the name of the item the cursor moved to (excluding drives) was drawn truncated, after 600ms (+0x408)
+    /// ShowToolTip(0x7d7454) draws the full name centered in a TNXToolTipWnd (WS_POPUP | WS_BORDER, background clInfoBk, text clInfoText, list font). Position: item cell
+    /// left + GetListHeaderWidth (30 with icons, else 14) − 2, top − 2, width = text width + 10,
+    /// height = line height + 4; if off-screen, push it inside. Hides after 3 seconds (TIP_HIDE_MS). Only when the list has focus (active pane, window focus). Skin theme.
     pub(super) fn original_name_tip(&mut self, ctx: &egui::Context, index: usize) {
         let tip = self.name_tip.borrow_mut().take_if(|(pane, ..)| *pane == index);
         let thumb_tip = self.thumb_tip.borrow_mut().take_if(|(pane, ..)| *pane == index);
@@ -344,7 +344,7 @@ impl App {
                 now
             }
         };
-        // 원본 IsHintMsg: 바퀴(WM_MOUSEWHEEL)면 숨긴다.
+        // Original IsHintMsg: hide on the wheel (WM_MOUSEWHEEL).
         if ctx.input(|i| i.raw_scroll_delta != egui::Vec2::ZERO) {
             self.tip_since[index] = Some((cursor, now - Duration::from_secs(60)));
             return;
@@ -353,9 +353,9 @@ impl App {
             let (r, g, b) = native::system_color(index);
             Color32::from_rgb(r, g, b)
         };
-        // 원본 ShowToolTip 형식 3(미리 보기): 글 자리 왼쪽 = 항목 왼쪽 + (항목 너비 − 썸네일 크기) / 2, 너비 = 썸네일 크기,
-        // DrawTextW(DT_CALCRECT | DT_WORDBREAK | DT_CENTER | DT_NOPREFIX)로 높이를 재고(더 좁으면 썸네일 크기), 사방 4를 넓혀
-        // 이름 글 위에 겹친다(+0x2cc = 0: 여러 줄 가운데). NDR은 칸 안 이름 글 첫 줄에 맞춘다.
+        // Original ShowToolTip format 3 (thumbnail view): text position left = item left + (item width − thumbnail size) / 2, width = thumbnail size,
+        // measure the height with DrawTextW(DT_CALCRECT | DT_WORDBREAK | DT_CENTER | DT_NOPREFIX) (thumbnail size if narrower), expand by 4 on all sides,
+        // and overlap it above the name text (+0x2cc = 0: multi-line centered). NDR aligns it to the first line of the name text inside the cell.
         if let Some((_, row, cell, text_top, thumb, lines)) = thumb_tip {
             let drive = self.panes[index].entries.get(row).is_none_or(|e| e.drive);
             if row != cursor || drive || self.active != index || !ctx.input(|i| i.focused) || lines.is_empty() {
@@ -444,13 +444,13 @@ impl App {
     }
 }
 
-/// 원본 TNXToolTipWnd 숨김 시간(+0x2c8): 처음 값은 5000(0x7efbd9)이지만 목록 생성자가 3000으로 바꾼다(0x7d4ef5).
-/// 고친 것: 전에는 5초였다.
+/// Original TNXToolTipWnd hide time (+0x2c8): the initial value is 5000 (0x7efbd9), but the list constructor changes it to 3000 (0x7d4ef5).
+/// Fix: it used to be 5 seconds.
 pub(super) const TIP_HIDE_MS: u64 = 3000;
 
-/// 원본 TNXToolTipWnd는 따로 뜨는 팝업 창(WS_POPUP | WS_BORDER)이라 메인 창 밖까지 나가고, 화면(Screen.Width/Height) 밖이면 안으로 민다.
-/// 툴팁이 창 안에 들어가면 false(창 안에 그린다). 넘치면 테두리 없는 egui 창(활성화하지 않음, 포인터 통과, 늘 위, 작업 표시줄 없음)을
-/// 화면 좌표에 띄우고 true. 여러 창을 그릴 수 없는 환경(시험 등)이면 false.
+/// The original TNXToolTipWnd is a separate popup window (WS_POPUP | WS_BORDER), so it can extend past the main window, and if it goes off-screen (Screen.Width/Height) it is pushed inside.
+/// If the tooltip fits inside the window, returns false (draw it inside the window). If it overflows, show a borderless egui viewport (not activated, pointer passthrough, always on top, no taskbar)
+/// at screen coordinates and return true. In environments that cannot draw multiple viewports (e.g. tests), returns false.
 pub(super) fn show_tip_window(ctx: &egui::Context, index: usize, rect: egui::Rect, paint: &dyn Fn(&egui::Painter, egui::Rect)) -> bool {
     if ctx.content_rect().contains_rect(rect) || ctx.embed_viewports() {
         return false;
@@ -458,7 +458,7 @@ pub(super) fn show_tip_window(ctx: &egui::Context, index: usize, rect: egui::Rec
     let (inner, monitor) = ctx.input(|i| (i.viewport().inner_rect, i.viewport().monitor_size));
     let Some(inner) = inner else { return false };
     let mut at = inner.min + rect.min.to_vec2();
-    // 원본은 Screen.Width/Height 안으로 민다. egui는 모니터 크기만 알고 원점은 모르므로, 메인 창이 (0, 0)부터 그 크기 안에 있을 때만 민다.
+    // The original pushes inside Screen.Width/Height. egui only knows the monitor size, not its origin, so push only when the main window is within that size starting from (0, 0).
     if let Some(monitor) = monitor.filter(|m| inner.min.x >= 0.0 && inner.min.y >= 0.0 && inner.max.x <= m.x + 1.0 && inner.max.y <= m.y + 1.0) {
         at.x = at.x.min(monitor.x - rect.width()).max(0.0);
         at.y = at.y.min(monitor.y - rect.height()).max(0.0);
@@ -482,20 +482,20 @@ pub(super) fn show_tip_window(ctx: &egui::Context, index: usize, rect: egui::Rec
     true
 }
 
-/// 포인터가 이 줄의 표시 칸 위에 있는가(누르기·두 번 누르기를 표시 칸 몫으로 돌릴 때).
+/// Is the pointer over this row's selection area (when routing a click/double-click to the selection area).
 pub(super) fn pointer_in_selection_area(rect: egui::Rect, ui: &egui::Ui) -> bool {
     ui.input(|i| i.pointer.interact_pos()).is_some_and(|pos| selection_area(rect).contains(pos) && ui.clip_rect().contains(pos))
 }
 
-/// 원본 MouseDown(0x7d63c8)·MouseMove(0x7d65f0)·MouseUp(0x7d6740)(스킨 테마). 왼쪽 단추를 이 줄에서 누른 순간에 처리하고 true.
-/// - Shift(+Ctrl): 지금 커서 줄~누른 줄을 더해 고르고, 끌기 기준(+0x3d4) = 전 커서 줄, 지난 끝(+0x3d8) = 누른 줄.
-/// - Ctrl만: 누른 줄을 뒤집는다(고른 줄이 없고 전 커서 줄이 다르면 그 줄도 고른다). 그냥 누르기는 커서만 옮긴다.
-/// - 표시 칸(왼쪽 12화소)이면 그다음 그 줄을 한 번 더 뒤집고 기준 = 끝 = 그 줄.
-/// 누른 채 다른 줄 위로 움직이면, 지난 끝 줄이 기준과 다를 때 Ctrl이 없으면 표시를 모두 지우고(Ctrl이면 기준~지난 끝 줄만 풀고)
-/// 기준~포인터 아래 줄을 고른다. 단추를 놓으면 끝(pane_ui 앞에서 range_drag를 비운다).
-/// 항목 끌기를 시작하는 그림인가. C# 테마는 egui drag_started_by. 스킨 테마는 원본 FUN_004856d8(목록 OnMouseMove):
-/// 왼쪽·오른쪽 단추를 누른 채 누른 자리에서 가로나 세로로 8화소를 넘게 움직였고, 누른 자리가 표시 칸(GetSelAreaAt)이 아니면 시작한다.
-/// 시작할지는 끌고 있지 않은 동안 매 그림 본다(App이 file_drag로 한 번만 받는다).
+/// Original MouseDown(0x7d63c8)/MouseMove(0x7d65f0)/MouseUp(0x7d6740) (skin theme). Handles the moment the left button is pressed on this row and returns true.
+/// - Shift(+Ctrl): add the range from the current cursor row to the pressed row to the selection; drag anchor (+0x3d4) = previous cursor row, last end (+0x3d8) = pressed row.
+/// - Ctrl only: toggle the pressed row (if no row is selected and the previous cursor row differs, also select that row). A plain press just moves the cursor.
+/// - If in the selection area (left 12 pixels), additionally toggle that row once more and set anchor = end = that row.
+/// While dragging the press over another row, when the last end row differs from the anchor, if Ctrl is not held clear all selection (if Ctrl, deselect only the anchor~last-end rows)
+/// and select the anchor~row-under-pointer range. The press ends on button release (range_drag is cleared before pane_ui).
+/// Is this the paint that begins an item drag. The C# theme uses egui drag_started_by. The skin theme follows the original FUN_004856d8 (list OnMouseMove):
+/// while the left or right button is held, if it moved more than 8 pixels horizontally or vertically from the press point, and the press point is not in the selection area (GetSelAreaAt), begin.
+/// Whether to begin is checked every paint while not dragging (App receives it once via file_drag).
 pub(super) fn drag_begins(response: &egui::Response, button: egui::PointerButton, skin: bool) -> bool {
     if !skin {
         return response.drag_started_by(button);
@@ -508,7 +508,7 @@ pub(super) fn drag_begins(response: &egui::Response, button: egui::PointerButton
     !selection_area(response.rect).contains(origin) && ((pos.x - origin.x).abs() > 8.0 || (pos.y - origin.y).abs() > 8.0)
 }
 
-/// 왼쪽 단추 누름 기록(windows_double_press): 이 그림 번호, 지난 누름(시각, 자리), 지난 누름이 두 번째 누름이었는가.
+/// Left button press tracking (windows_double_press): this paint number, the previous press (time, position), and whether the previous press was a second press.
 #[derive(Clone, Copy, Default)]
 struct PressTrack {
     frame: u64,
@@ -516,10 +516,10 @@ struct PressTrack {
     last_double: bool,
 }
 
-/// 지난(또는 이번 그림의) 왼쪽 단추 누름이 Windows 기준의 두 번째 누름(WM_LBUTTONDBLCLK)인가. 원본 컨트롤은 Windows가 정하는 대로
-/// 받는다: 앞 누름에서 GetDoubleClickTime 안이고, 앞 누름 자리를 가운데로 한 SM_CXDOUBLECLK × SM_CYDOUBLECLK 사각 안이면 두 번째
-/// 누름이고, 그다음 누름은 다시 보통 누름이다. egui는 시간만 보므로(다른 줄을 빨리 두 번 눌러도 두 번 누르기) 이것을 함께 본다.
-/// 그림마다 한 번 셈한다(App::update 첫머리와 목록 줄이 부른다).
+/// Is the previous (or this paint's) left button press a second press by the Windows standard (WM_LBUTTONDBLCLK). The original controls take it as Windows decides:
+/// if it is within GetDoubleClickTime of the prior press and inside an SM_CXDOUBLECLK × SM_CYDOUBLECLK rectangle centered on the prior press, it is a second
+/// press, and the press after that is a normal press again. egui looks only at time (a fast double press on different rows also counts), so this is checked alongside it.
+/// Counted once per paint (called at the top of App::update and by the list rows).
 pub(super) fn windows_double_press(ctx: &egui::Context) -> bool {
     let id = egui::Id::new("ndr-windows-double-press");
     let frame = ctx.cumulative_frame_nr() + 1;
@@ -548,9 +548,9 @@ pub(super) fn windows_double_press(ctx: &egui::Context) -> bool {
     })
 }
 
-/// Windows 기준(windows_double_press)의 두 번째 누름으로 된 누르기. egui double_clicked는 쓰지 않는다: egui는 2 × 간격 안의
-/// 세 번째 누르기를 세 번 누르기로 돌려 두 번 누르기를 숨기는데(한 항목을 누르고 1초 안에 다른 항목을 두 번 누르면 열리지 않음),
-/// Windows에는 세 번 누르기가 없다(두 번째 누름 다음은 다시 보통 누름).
+/// A click that became a second press by the Windows standard (windows_double_press). egui double_clicked is not used: egui turns a third press within 2 × the interval
+/// into a triple click and hides the double click (pressing one item and then double-clicking another within 1 second would not open it),
+/// but Windows has no triple click (the press after the second press is a normal press again).
 pub(super) fn windows_double_clicked(response: &egui::Response) -> bool {
     let double = windows_double_press(&response.ctx);
     response.clicked() && double
@@ -560,8 +560,8 @@ pub(super) fn original_press_input(pane: &mut Pane, row: usize, rect: egui::Rect
     original_press(pane, row, rect, ui, false)
 }
 
-/// original_press_input의 미리 보기(형식 3)판: 원본 MouseDown은 형식 3이면 표시 칸(GetSelAreaAt)을 보지 않고,
-/// MouseMove도 형식 3이면 끌어 고르지 않는다.
+/// The thumbnail (format 3) variant of original_press_input: the original MouseDown does not check the selection area (GetSelAreaAt) in format 3,
+/// and MouseMove does not drag-select in format 3 either.
 pub(super) fn original_thumbnail_press(pane: &mut Pane, row: usize, rect: egui::Rect, ui: &egui::Ui) -> bool {
     original_press(pane, row, rect, ui, true)
 }
@@ -570,21 +570,21 @@ fn original_press(pane: &mut Pane, row: usize, rect: egui::Rect, ui: &egui::Ui, 
     let (pressed, down, pos, moved, modifiers) = ui.input(|i| (i.pointer.primary_pressed(), i.pointer.primary_down(), i.pointer.interact_pos(), i.pointer.delta() != egui::Vec2::ZERO, i.modifiers));
     let double_press = windows_double_press(ui.ctx());
     let Some(pos) = pos.filter(|p| ui.clip_rect().contains(*p)) else { return false };
-    // 고친 것: 날 입력을 읽으므로, 위에 다른 층(대화 상자·메시지 상자·메뉴)이 있으면 그 누름은 목록 것이 아니다. 전에는 압축하기 창의
-    // 확인 단추가 다른 패널 줄 위에 있으면 그 패널이 지금 패널이 되어 압축 파일이 다른 패널 폴더에 생겼다.
+    // Fix: since raw input is read, if another layer (dialog/message box/menu) is on top, that press is not for the list. Previously the OK button
+    // of the Compress window, when sitting over another pane's row, made that pane the active pane and the archive was created in the other pane's folder.
     if ui.ctx().layer_id_at(pos).is_some_and(|layer| layer != ui.layer_id()) {
         return false;
     }
-    // 원본 MouseDown(0x7d63c8): 표시를 바꾸는 갈래만 왼쪽 단추(ssLeft 8)이고 SetItemFocused·찾는 글 지우기는 어느 단추든 한다.
-    // 고친 것: 전에는 가운데 단추로 누르면 아무 일도 없었다(오른쪽 단추는 따로 처리).
+    // Original MouseDown(0x7d63c8): only the selection-changing branch is left-button-only (ssLeft 8); SetItemFocused and clearing the search text happen for any button.
+    // Fix: previously a middle-button press did nothing (the right button is handled separately).
     if ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Middle)) && rect.contains(pos) {
         pane.item_pressed = true;
         pane.cursor = row;
         return true;
     }
     if pressed && rect.contains(pos) {
-        // 원본 MouseDown(0x7d63c8)은 두 번 누르기의 두 번째 누름(ssDouble, WM_LBUTTONDBLCLK)이면 표시·커서를 건드리지 않는다.
-        // Windows 기준(windows_double_press) 안의 두 번째 누름이 그것이다. 세 번째 누름은 다시 보통 누름.
+        // The original MouseDown(0x7d63c8) does not touch the selection/cursor on the second press of a double click (ssDouble, WM_LBUTTONDBLCLK).
+        // The second press within the Windows standard (windows_double_press) is that one. The third press is a normal press again.
         if double_press {
             return true;
         }
@@ -636,24 +636,24 @@ fn original_press(pane: &mut Pane, row: usize, rect: egui::Rect, ui: &egui::Ui, 
     false
 }
 
-/// 목록 줄을 눌렀을 때의 표시와 커서.
-/// 스킨 테마는 원본 TNXCustomFileListView.MouseDown(0x7d63c8): 그냥 누르기와 오른쪽 단추는 커서만 옮기고 표시는 그대로,
-/// Shift(+Ctrl)는 지금 커서부터 누른 줄까지 더해 고르고, Ctrl은 누른 줄을 뒤집는다(고른 줄이 없으면 전 커서 줄도 고른다).
-/// C# 테마는 C# 판(WPF 목록): 그냥 누르기는 표시를 지우고, Shift는 기준 줄부터, 오른쪽 단추는 고르지 않은 줄이면 표시를 지운다.
-/// 목록 줄을 오른쪽 단추로 눌렀을 때 띄울 것(원본 FUN_00484e8c).
+/// Selection and cursor when a list row is pressed.
+/// The skin theme follows the original TNXCustomFileListView.MouseDown(0x7d63c8): a plain press and the right button only move the cursor and leave the selection,
+/// Shift(+Ctrl) adds the range from the current cursor to the pressed row to the selection, and Ctrl toggles the pressed row (if no row is selected, also select the previous cursor row).
+/// The C# theme follows the C# version (WPF list): a plain press clears the selection, Shift selects from the anchor row, and the right button clears the selection if the row is not selected.
+/// What to show when a list row is right-clicked (original FUN_00484e8c).
 pub(super) enum ListMenu {
-    /// 띄우지 않는다(압축·FTP 패널, 커서 항목 없음).
+    /// Do not show (archive/FTP pane, no cursor item).
     None,
-    /// 원본 pmMain(`list_context_menu`).
+    /// Original pmMain (`list_context_menu`).
     Main,
-    /// 원본 FUN_00486104: 탐색기(셸) 메뉴.
+    /// Original FUN_00486104: Explorer (shell) menu.
     Shell(Vec<PathBuf>),
 }
 
 impl App {
-    /// 원본 목록 OnContextPopup(FUN_00484e8c): 로컬 패널(FUN_00481948 = 0)에서만 띄운다. "오른쪽버튼 클릭: 탐색기 메뉴 사용하기"
-    /// (chkExplorerMenu, 설정 +0xd1)가 켜져 있거나, 표시가 없고 커서 항목이 드라이브(종류 4)면 탐색기 메뉴(FUN_00486104:
-    /// 드라이브면 그 드라이브, 아니면 표시한 항목 또는 커서 항목), 그 밖은 pmMain이다.
+    /// Original list OnContextPopup(FUN_00484e8c): shown only in a local pane (FUN_00481948 = 0). If "Right-click: use Explorer menu"
+    /// (chkExplorerMenu, setting +0xd1) is on, or there is no selection and the cursor item is a drive (kind 4), use the Explorer menu (FUN_00486104:
+    /// the drive if a drive, otherwise the selected items or the cursor item); otherwise pmMain.
     pub(super) fn list_menu_kind(&self, index: usize) -> ListMenu {
         let pane = &self.panes[index];
         if pane.archive.is_some() || pane.remote.is_some() || pane.loading {
@@ -670,9 +670,9 @@ impl App {
         ListMenu::Main
     }
 
-    /// 원본 목록 OnMouseDown(FUN_00485078): 오른쪽 단추를 누른 채(Shift 상태 ssRight) 왼쪽 단추를 누르면, "탐색기 메뉴 사용하기"가
-    /// 꺼져 있거나 표시가 없고 커서 항목이 드라이브면 탐색기(셸) 메뉴(FUN_00486104: 로컬 패널만, 드라이브면 그 드라이브, 아니면
-    /// 표시한 항목 또는 커서 항목), 켜져 있으면 pmMain을 누른 자리에 띄운다(오른쪽 단추 메뉴와 반대).
+    /// Original list OnMouseDown(FUN_00485078): if the left button is pressed while the right button is held (Shift state ssRight), then if "use Explorer menu" is
+    /// off, or there is no selection and the cursor item is a drive, show the Explorer (shell) menu (FUN_00486104: local pane only; the drive if a drive, otherwise
+    /// the selected items or the cursor item); if on, show pmMain at the press point (the opposite of the right-button menu).
     pub(super) fn rocker_menu_kind(&self, index: usize) -> ListMenu {
         let pane = &self.panes[index];
         let Some(focused) = pane.entries.get(pane.cursor) else { return ListMenu::None };
@@ -730,22 +730,22 @@ pub(super) fn row_pressed(pane: &mut Pane, row: usize, modifiers: egui::Modifier
 
 impl App {
     pub(super) fn refresh(&mut self, index: usize) {
-        // C# RefreshPaneAsync: 그 패널의 빠른 찾기 입력을 버린다.
+        // C# RefreshPaneAsync: discard that pane's quick-find input.
         self.typed_search[index] = TypedSearch::default();
-        // 원본은 자기 작업 동안 TNXShellChangeNotify를 끄고(SetActive(0) = FreeThread) 작업 뒤 다시 읽은 다음 다시 켠다(SetActive(1) =
-        // ResetThread, 새 FindFirstChangeNotificationW). 그래서 자기 작업이 낸 바뀜은 1.5초 뒤 한 번 더 다시 읽게 하지 않는다.
-        // NDR은 다시 읽을 때마다 감시를 새로 연다: 옛 감시의 알림은 버리고(folder_changed), 밀린 바뀜도 버린다(원본 Clear).
-        // 고친 것: 전에는 새 폴더·이름 바꾸기 뒤 1.5초 지나 같은 폴더를 한 번 더 읽었다.
+        // The original turns off TNXShellChangeNotify during its own operation (SetActive(0) = FreeThread), re-reads after the operation, then turns it back on (SetActive(1) =
+        // ResetThread, new FindFirstChangeNotificationW). So changes caused by its own operation do not trigger another re-read 1.5 seconds later.
+        // NDR re-opens the watch every time it re-reads: it discards the old watch's notifications (folder_changed) and discards pending changes too (original Clear).
+        // Fix: previously, 1.5 seconds after a new folder or rename, the same folder was re-read once more.
         self.panes[index].change_due = None;
         if let Some(wanted) = self.watch_wanted(index) {
             let ctx = self.egui_ctx.clone();
             self.arm_folder_watch(index, Some(wanted), &ctx);
         }
-        // 패널 폴더 트리: 그 폴더의 하위 폴더 목록도 다시 읽는다(새로 만들거나 지운 폴더가 트리에 보이게).
+        // Pane folder tree: also re-read that folder's subfolder list (so newly created or deleted folders appear in the tree).
         let current = self.panes[index].path.clone();
         self.tree_cache.retain(|(key, _), _| !ndr::shell_tree::same_key(key, &current));
         self.tree_requests.retain(|(key, _)| !ndr::shell_tree::same_key(key, &current));
-        // 원본 새로 고침은 표시를 이름으로 되돌리므로(apply_listing) 새 목록이 올 때까지 표시를 둔다.
+        // The original refresh resets the selection to the name (apply_listing), so keep the current selection until the new listing arrives.
         let pane = &mut self.panes[index];
         pane.generation += 1;
         pane.loading = true;
@@ -757,26 +757,26 @@ impl App {
         let tx = self.listing_tx.clone();
         let include_legacy = self.settings.flag("UseDescriptionFile", true);
         let local = archive.is_none() && remote.is_none();
-        // C# ListLocal("::drives::"): 준비된 드라이브마다 폴더 항목(이름 = "C:\"). ShowDriveList가 꺼져 있으면 비운다.
+        // C# ListLocal("::drives::"): a folder item (name = "C:\") for each ready drive. Empty if ShowDriveList is off.
         let show_drive_list = self.settings.flag("ShowDriveList", true);
         let drives_view = local && is_drives(&path);
-        // 원본 FUN_00486474: "목록에 디스크 드라이브 목록 보기"(ini showdrivelist, 처음 값 1 = 0x46eed9)가 켜져 있으면
-        // 일반 폴더 목록 끝에 TNXDriveList의 드라이브마다 항목(속성 0x40000 → 종류 4)을 덧붙인다. 읽기는 목록 스레드에서 한다.
+        // Original FUN_00486474: if "show disk drive list in the list" (ini showdrivelist, initial value 1 = 0x46eed9) is on,
+        // append an item for each TNXDriveList drive (attribute 0x40000 → kind 4) to the end of the normal folder listing. The read happens on the listing thread.
         let append_drives = local && !drives_view && show_drive_list;
         let ready_drives = self.system.ready_drives;
         let drive_item = self.system.drive_item;
         let drive_list = self.drive_list.clone();
-        // 시험은 스레드마다 가짜 드라이브를 두므로 캐시를 거치지 않는다(캐시 자체는 cached_drive_items 시험).
+        // Tests keep fake drives per thread, so they bypass the cache (the cache itself is the cached_drive_items test).
         let drive_items = move |cache: &std::sync::Arc<std::sync::Mutex<DriveListCache>>| {
             if cfg!(test) { ready_drives().into_iter().map(|root| { let info = drive_item(&root); (root, info) }).collect() } else { cached_drive_items(cache, ready_drives, drive_item) }
         };
-        // 내 PC 보기의 드라이브는 전처럼 부른 스레드에서 읽는다(캐시가 있으면 바로). 시험은 가짜 드라이브가 스레드마다 있으므로
-        // 덧붙이는 드라이브도 부른 스레드에서 읽는다.
+        // The drives of the My PC view are read on the calling thread as before (immediately if cached). Tests have fake drives per thread, so
+        // the appended drives are also read on the calling thread.
         let this_pc: Option<Vec<(PathBuf, Option<DriveInfo>)>> = (drives_view || (cfg!(test) && append_drives)).then(|| if show_drive_list { drive_items(&drive_list) } else { Vec::new() });
         thread::spawn(move || {
-            // 원본 TNXDriveList는 시작할 때 한 번 만들어 들고 있다(목록마다 드라이브를 다시 묻지 않음). NDR은 패널 목록마다
-            // 드라이브를 읽던 것을 캐시로 바꿨다(5초 안이면 그대로, 지나면 그대로 쓰고 뒤에서 새로 읽음). 끊긴 네트워크 드라이브처럼
-            // 볼륨 정보가 늦게 오는 드라이브가 있어도 폴더를 옮길 때마다 기다리지 않는다.
+            // The original TNXDriveList is created once at startup and held (it does not re-query drives per listing). NDR changed the per-pane-listing
+            // drive read into a cache (use as-is within 5 seconds, use as-is after and re-read in the background). So even if a drive's volume info arrives late,
+            // like a disconnected network drive, you don't wait for it every time you change folders.
             let listed = match this_pc {
                 Some(items) => items,
                 None if append_drives => drive_items(&drive_list),
@@ -785,7 +785,7 @@ impl App {
             let roots: Vec<PathBuf> = listed.iter().map(|(root, _)| root.clone()).collect();
             let drives = drives_view.then(|| roots.clone());
             let appended: Vec<PathBuf> = if append_drives { roots } else { Vec::new() };
-            // 원본 내 PC 드라이브 항목의 TNXDriveInfo(이름, 종류, 고정 디스크면 크기).
+            // The original My PC drive item's TNXDriveInfo (name, kind, and size for fixed disks).
             let drive_infos = listed.into_iter().filter_map(|(root, info)| info.map(|info| (root, info))).collect();
             let result = if let Some(remote) = remote {
                 super::ftp_pane::list_remote(&remote, show_hidden)
@@ -806,7 +806,7 @@ impl App {
                 .map(|items| {
                     let mut entries = std::collections::BTreeMap::new();
                     for e in items {
-                        // 고친 것: 7-Zip은 Windows에서 "dir\sub\c.txt"처럼 \로 알려서, 압축 안 하위 폴더("dir/")에 들어가면 비어 보였다.
+                        // Fix: on Windows 7-Zip reports with \, like "dir\sub\c.txt", so entering an archive subfolder ("dir/") looked empty.
                         let key = e.key.replace('\\', "/");
                         if let Some(rest) = key.strip_prefix(&location.prefix) {
                             let mut pieces = rest.split('/');
@@ -815,8 +815,8 @@ impl App {
                                     continue;
                                 }
                                 let folder = pieces.next().is_some() || e.is_dir;
-                                // 그 항목 자신이면 그 시각. 아래 항목에서 나온 폴더(압축에 폴더 항목이 없음)는 원본 FUN_00405e60처럼
-                                // 그 폴더를 만든 첫 아래 항목의 시각(+0x414/0x418)을 쓰고, 폴더 항목이 나오면 그 시각으로 바꾼다.
+                                // If it is the item itself, use its time. A folder derived from an entry below it (the archive has no folder entry) uses, like the original FUN_00405e60,
+                                // the time (+0x414/0x418) of the first entry below that created the folder, and switches to the folder entry's time when a folder entry appears.
                                 let slot = entries.entry(name.to_owned()).or_insert(Entry {
                                     path: PathBuf::from(format!("{}{name}", location.prefix)),
                                     name: name.to_owned(),
@@ -837,7 +837,7 @@ impl App {
                 })
             } else {
                 fsops::list_dir(&path, show_hidden).map(|mut entries| {
-                    // 드라이브 항목 이름은 원본 DrawListItem처럼 "%s:"(글자 + ':').
+                    // The drive item name is "%s:" (letter + ':'), like the original DrawListItem.
                     entries.extend(appended.iter().map(|root| Entry {
                         name: root.to_string_lossy().trim_end_matches('\\').to_owned(),
                         path: root.clone(),
@@ -851,7 +851,7 @@ impl App {
                     entries
                 })
             };
-            // C# ListLocal: 설명은 목록과 함께 읽는다(descript.dat는 늘, descript.ion은 UseDescriptionFile일 때).
+            // C# ListLocal: descriptions are read together with the listing (descript.dat always, descript.ion when UseDescriptionFile).
             let descriptions = if local && result.is_ok() && !is_drives(&path) {
                 compat::read_descriptions(&path, include_legacy).map(|map| map.into_iter().map(|(k, v)| (k.to_lowercase(), v)).collect()).unwrap_or_default()
             } else {
@@ -865,8 +865,8 @@ impl App {
                 drive_infos,
             });
         });
-        // 원본 GetList(0x45a34c)는 목록을 그 자리에서 읽는다(읽는 동안 화면은 그대로, 다 읽으면 새 목록). 스킨 테마는 로컬·압축 목록을
-        // 3초까지 기다려 "읽는 중" 그림 없이 바꾼다. 더 오래 걸리면(네트워크 등) 전처럼 따로 읽고 다 되면 바꾼다. FTP는 기다리지 않는다.
+        // The original GetList(0x45a34c) reads the listing in place (the view stays as-is while reading, the new listing when done). The skin theme waits up to
+        // 3 seconds for local and archive listings to switch without a "loading" paint. If it takes longer (network, etc.) it reads separately as before and switches when done. FTP does not wait.
         if self.panes[index].remote.is_none() {
             let deadline = Instant::now() + Duration::from_secs(3);
             let mut auth = Vec::new();
@@ -884,7 +884,7 @@ impl App {
         }
     }
     pub(super) fn navigate(&mut self, index: usize, path: PathBuf, remember: bool) {
-        // 로컬 폴더로 가면 패널 FTP 모드는 끝난다(원본 FUN_0048d6e4: 끊은 뒤 로컬 폴더로).
+        // Going to a local folder ends the pane's FTP mode (original FUN_0048d6e4: disconnect, then to a local folder).
         if let Some(remote) = self.panes[index].remote.as_ref() {
             if remote.busy.load(Ordering::Relaxed) {
                 self.status = self.language_pack.text("RES.FTP_CANNOTDISCONNECT", "Cannot be disconnected while any operation is working.");
@@ -896,15 +896,15 @@ impl App {
             self.active = active;
         }
         let pane = &mut self.panes[index];
-        // 같은 위치면 건너뛴다. 고친 것: 전에는 경로만 비교해, 압축 파일 맨 위에서 ".."로 나오면(압축은 지웠지만 패널 경로는 그
-        // 압축 파일이 있는 폴더 그대로라) 다시 읽지 않아 압축 안 목록이 남았고, 그 항목을 로컬 파일로 다뤄 복사도 되지 않았다.
-        // 지금 보이는 목록(listed)이 바로 그 로컬 폴더일 때만 건너뛴다.
+        // Skip if the same location. Fix: previously only the path was compared, so leaving an archive top with ".." (the archive was dropped but the pane path
+        // stayed the folder that holds that archive file) did not re-read, so the archive listing remained and those items were treated as local files and couldn't even be copied.
+        // Skip only when the currently shown listing (listed) is exactly that local folder.
         let same_listing = pane.archive.is_none() && pane.remote.is_none() && pane.listed.as_deref() == Some(format!("dir|{}", path.display()).to_lowercase().as_str());
         if pane.path == path && !pane.loading && same_listing {
             return;
         }
-        // 원본 위치 바뀌기 전 사건(위치 +0x38 = FUN_0048631c): 그 패널의 알림 창(TfMessage, +0x30c)이 떠 있으면 닫고 표시를 지운다
-        // (표시는 새 목록에서 지운다).
+        // Original pre-location-change event (location +0x38 = FUN_0048631c): if that pane's notification window (TfMessage, +0x30c) is open, close it and clear the selection
+        // (the selection is cleared by the new listing).
         if self.pane_message.as_ref().is_some_and(|(_, pane, _)| *pane == index) {
             self.pane_message = None;
         }
@@ -912,14 +912,14 @@ impl App {
         if remember {
             pane.back.push(pane.path.clone());
             pane.forward.clear();
-            // 원본 기록 목록 용량 20(FUN_00480d58 → FUN_0045806c(…, 0x14)): 꽉 차면 가장 오래된 것을 지운다(FUN_00458348).
+            // Original history list capacity 20 (FUN_00480d58 → FUN_0045806c(…, 0x14)): when full, remove the oldest (FUN_00458348).
             if pane.back.len() > 19 {
                 let extra = pane.back.len() - 19;
                 pane.back.drain(..extra);
             }
         }
-        // 고친 것(사용자 요청): 뒤로·주소 줄 등으로 지금 폴더의 상위 폴더로 가면 떠나온 하위 폴더에 커서를 둔다(그 쪽이 보인다).
-        // 원본 FUN_00486694는 ".."(1)·"\"(2)로 갈 때만 그렇게 하고, 뒤로(FUN_0048d58c)는 첫 항목으로 돌아갔다.
+        // Fix (user request): when going to the current folder's parent via Back, the address bar, etc., place the cursor on the subfolder you came from (so it's visible).
+        // The original FUN_00486694 does this only when going with ".." (1) or "\" (2), and Back (FUN_0048d58c) returned to the first item.
         if pane.archive.is_none() && self.pending_focus[index].is_none() {
             if let Ok(rest) = pane.path.strip_prefix(&path) {
                 self.pending_focus[index] = rest.components().next().map(|c| c.as_os_str().to_string_lossy().into_owned());
@@ -941,7 +941,7 @@ impl App {
         if self.panes[i].remote.is_some() {
             return self.ftp_parent(i);
         }
-        // 원본 FUN_00443f14 0x32 · FUN_00486694(올라감 = 1): 상위로 가면 떠나온 폴더(압축 밖으로 나오면 그 압축 파일)에 커서를 둔다.
+        // Original FUN_00443f14 0x32 · FUN_00486694 (go up = 1): going up places the cursor on the folder you came from (or the archive file when leaving an archive).
         if let Some(location) = self.panes[i].archive.as_mut() {
             if location.prefix.is_empty() {
                 let file = location.file.clone();
@@ -965,7 +965,7 @@ impl App {
         if current.parent().is_some() && !is_drives(&current) {
             self.pending_focus[i] = current.file_name().map(|n| n.to_string_lossy().into_owned());
         }
-        // 원본 FUN_00459ba8: 루트면(IsRoot) 아무것도 하지 않는다.
+        // Original FUN_00459ba8: if at the root (IsRoot), do nothing.
         if current.parent().is_none() || is_drives(&current) {
             return;
         }
@@ -987,12 +987,12 @@ impl App {
         let Some(entry) = self.panes[i].entries.get(self.panes[i].cursor).cloned() else {
             return;
         };
-        // 원본 ".." 항목: 상위 위치로(로컬·압축·FTP).
+        // Original ".." item: go to the parent location (local/archive/FTP).
         if entry.is_parent() {
             return self.parent();
         }
         if self.panes[i].remote.is_some() {
-            // 패널 FTP 모드: 폴더면 그 안으로. 파일은 내려받기(F5/miFTPGet)로만 다룬다.
+            // Pane FTP mode: if a folder, go into it. Files are handled only via download (F5/miFTPGet).
             if entry.is_dir {
                 self.ftp_open_dir(i, &entry.name);
             }
@@ -1008,12 +1008,12 @@ impl App {
             return;
         }
         if self.panes[i].archive.is_some() {
-            // C# OpenItemAsync: 압축 항목은 임시 폴더에 풀어 열고, 풀린 것이 압축 파일이면 그 안으로 들어간다.
+            // C# OpenItemAsync: an archive item is extracted to a temp folder and opened, and if the extracted item is an archive, go into it.
             self.open_archive_entry(i, &entry);
             return;
         }
-        // C# OpenItemAsync: IsArchive(형식 표) → GetArchiveFirstVolumePath로 첫 볼륨을 연다.
-        // 동봉 7-Zip이 못 읽는 형식(.ace)은 C# TryGetExternalArchiveProgram처럼 외부 프로그램으로 풀고 그 폴더로.
+        // C# OpenItemAsync: IsArchive (format table) → open the first volume with GetArchiveFirstVolumePath.
+        // A format the bundled 7-Zip cannot read (.ace) is extracted with an external program like C# TryGetExternalArchiveProgram and goes to that folder.
         if ndr::archive::archive_format(&entry.path).is_some() && !ndr::archive::bundled_can_browse(&entry.path) {
             self.open_with_external_archive_program(i, ndr::archive::first_volume_path(&entry.path), true);
         } else if ndr::archive::archive_format(&entry.path).is_some() {
@@ -1024,16 +1024,16 @@ impl App {
             });
             self.refresh(i);
         } else if self.settings.flag("PlayWaveInProgram", true) && entry.path.extension().is_some_and(|e| e.eq_ignore_ascii_case("wav")) {
-            // 원본 0x483c79(playwav, 처음 값 켜짐 0x46f088): 확장자가 wav면 PlaySoundW(NULL)로 멈춘 뒤 PlaySoundW(파일, 0x22003). 셸로 열지 않는다.
+            // Original 0x483c79 (playwav, initial value on 0x46f088): if the extension is wav, stop with PlaySoundW(NULL), then PlaySoundW(file, 0x22003). Not opened via the shell.
             (self.system.play_wave)(None);
             (self.system.play_wave)(Some(&entry.path));
         } else if let Some(folder) = entry.path.extension().is_some_and(|e| e.eq_ignore_ascii_case("lnk")).then(|| (self.system.shortcut_target)(&entry.path)).flatten().filter(|(_, folder)| *folder).map(|(target, _)| target) {
-            // 원본 FUN_00483640(파일 열기): 바로 가기(.lnk)의 대상(GetShortcutTarget)이 폴더면 GetLongPathNameW 뒤 그 패널을 그 폴더로.
-            // 고친 것: 전에는 셸로 열어 탐색기 창이 새로 떴다.
+            // Original FUN_00483640 (open file): if a shortcut's (.lnk) target (GetShortcutTarget) is a folder, after GetLongPathNameW point that pane to that folder.
+            // Fix: previously it was opened via the shell and a new Explorer window popped up.
             let folder = std::path::absolute(&folder).unwrap_or(folder);
             self.navigate(i, native::long_path(&folder).unwrap_or(folder), true);
         } else {
-            // C# OpenItemAsync: RememberOpenedExecutable(.exe/.lnk) 후 실행.
+            // C# OpenItemAsync: RememberOpenedExecutable(.exe/.lnk), then run.
             let mut rows = self.settings.strings("ExecutableHistory");
             ndr::command_line::remember_opened_executable(&mut rows, &entry.path.to_string_lossy());
             self.settings.set_strings("ExecutableHistory", rows);
@@ -1042,26 +1042,26 @@ impl App {
             }
         }
     }
-    /// 패널 설정 이름("Left…"/"Right…").
+    /// Pane setting name ("Left…"/"Right…").
     pub(super) fn side_key(index: usize, name: &str) -> String {
         format!("{}{name}", if index == 0 { "Left" } else { "Right" })
     }
-    /// 원본 TNXScrollStep(scrollstep1/2, 처음 값 2 = 0x46f20f): 1 = 줄 단위, 2 = 쪽 단위("페이지 단위 스크롤").
+    /// Original TNXScrollStep (scrollstep1/2, initial value 2 = 0x46f20f): 1 = line step, 2 = page step ("page-wise scroll").
     pub(super) fn scroll_by_page(&self, index: usize) -> bool {
         self.settings.values.get(&Self::side_key(index, "ScrollStep")).and_then(|v| v.as_i64()).unwrap_or(2) != 1
     }
-    /// 원본 WMMouseWheel(0x7d5ba0)·UpdateScrollBar(0x7db270): 쪽 단위면 한 칸에 보이는 줄 수만큼, 줄 단위면 Mouse.WheelScrollLines 줄.
+    /// Original WMMouseWheel(0x7d5ba0)/UpdateScrollBar(0x7db270): page step scrolls by the number of rows visible in one page, line step by Mouse.WheelScrollLines rows.
     pub(super) fn wheel_step(by_page: bool, view_height: f32, row_height: f32, wheel_lines: u32) -> f32 {
         let rows = if by_page { (view_height / row_height).floor().max(1.0) } else { wheel_lines.max(1) as f32 };
         rows * row_height
     }
-    /// 원본 WMMouseWheel(0x7d5ba0)은 WM_MOUSEWHEEL만 보고 Shift를 가리지 않는다(Shift + 바퀴도 같은 방향). 기울이는 바퀴(WM_MOUSEHWHEEL,
-    /// WMMouseHWheel 0x7d5c94)는 받기만 하고 아무것도 옮기지 않는다. egui는 Shift + 바퀴를 가로(x)로 바꿔 주므로 Shift면 x가 바퀴다.
+    /// The original WMMouseWheel(0x7d5ba0) looks only at WM_MOUSEWHEEL and does not mask Shift (Shift + wheel scrolls the same direction). The tilt wheel (WM_MOUSEHWHEEL,
+    /// WMMouseHWheel 0x7d5c94) is only received and moves nothing. egui converts Shift + wheel to horizontal (x), so with Shift the wheel is x.
     pub(super) fn vertical_wheel(input: &egui::InputState) -> f32 {
         if input.modifiers.shift { input.raw_scroll_delta.x } else { input.raw_scroll_delta.y }
     }
-    /// 목록(높이 height, 지금 커서 자리) 위에서 이번 틀에 굴린 바퀴를 원본 규칙으로 바꾼 새 세로 위치. 굴리지 않았으면 None.
-    /// 목록 ScrollArea는 egui 바퀴를 끄고(WHEEL_OFF) 이 값을 vertical_scroll_offset으로 넣는다.
+    /// The new vertical offset after converting this frame's wheel over the list (height `height`, current cursor position) by the original rule. None if not scrolled.
+    /// The list ScrollArea turns off the egui wheel (WHEEL_OFF) and feeds this value as vertical_scroll_offset.
     pub(super) fn wheel_scroll(ui: &egui::Ui, salt: egui::Id, height: f32, row_height: f32, by_page: bool, wheel_lines: u32) -> Option<f32> {
         let area = egui::Rect::from_min_size(ui.cursor().min, egui::vec2(ui.available_width(), height));
         let (raw, zoom) = ui.input(|i| (Self::vertical_wheel(i), i.modifiers.ctrl || i.modifiers.command));
@@ -1072,8 +1072,8 @@ impl App {
         let current = egui::scroll_area::State::load(ui.ctx(), ui.make_persistent_id(salt)).map_or(0.0, |s| s.offset.y);
         Some((current - notches * Self::wheel_step(by_page, height, row_height, wheel_lines)).max(0.0))
     }
-    /// 원본 SetScrollTop(형식 2, 쪽 단위 0xc5 == 2): 세로 위치 = 쪽 번호 × 한 쪽 줄 수 × 줄 높이(0..쪽 수 − 1).
-    /// 바퀴로 옮긴 위치를 가장 가까운 쪽 경계로 맞춘다. 마지막 쪽도 쪽 경계에서 시작한다(아래가 비어 보일 수 있음).
+    /// Original SetScrollTop (format 2, page step 0xc5 == 2): vertical position = page number × rows per page × row height (0..page count − 1).
+    /// Snap the wheel-moved position to the nearest page boundary. The last page also starts at a page boundary (the bottom may look empty).
     pub(super) fn page_snap(offset: f32, page_px: f32, pages: usize) -> f32 {
         if page_px <= 0.0 {
             return offset.max(0.0);
@@ -1087,29 +1087,29 @@ impl App {
     pub(super) fn side_flag(&self, index: usize, name: &str, default: bool) -> bool {
         self.settings.flag(&Self::side_key(index, name), default)
     }
-    /// 확장자 색(ExtensionColors)과, 색상표를 쓸 때의 NexusFile 요소 색(NexusFileColorMapValues).
+    /// Extension colors (ExtensionColors) and, when using a color map, the NexusFile element colors (NexusFileColorMapValues).
     pub(super) fn color_maps(&self) -> (Option<&serde_json::Map<String, serde_json::Value>>, Option<&serde_json::Map<String, serde_json::Value>>) {
         let extension = self.settings.values.get("ExtensionColors").and_then(|v| v.as_object());
         let nexus = self.settings.flag("UseNexusFileColorMap", false).then(|| self.settings.values.get("NexusFileColorMapValues").and_then(|v| v.as_object())).flatten();
         (extension, nexus)
     }
-    /// 원본 SetLineSpace(+0x364, ini linespace 0~32): 줄과 줄 사이에 더하는 화소.
+    /// Original SetLineSpace (+0x364, ini linespace 0~32): the pixels added between rows.
     pub(super) fn list_line_space(&self) -> f32 {
         self.settings.values.get("ListLineSpace").and_then(|v| v.as_i64()).unwrap_or(0).clamp(0, 32) as f32
     }
-    /// 원본 UpdateDisplayDetails·UpdateDisplayNames(+0x340): 항목 높이 = 목록 글꼴의 글 높이 + 2, 아이콘을 보이면(+0x385) 16 이상.
+    /// Original UpdateDisplayDetails/UpdateDisplayNames (+0x340): item height = the list font's text height + 2, and at least 16 when icons are shown (+0x385).
     pub(super) fn list_item_height(&self, ui: &egui::Ui) -> f32 {
         let text = ui.text_style_height(&egui::TextStyle::Body).ceil() + 2.0;
         if self.settings.flag("ShowIcons", true) { text.max(16.0) } else { text }
     }
-    /// 원본 DrawListItem(+0x387): 항목 아래 (bottom + LineSpace / 2 − 1) 화소 줄에 NXLINE 가로선(정수 나눗셈, 굵기 1).
-    /// 여기서는 그 화소 줄의 가운데(bottom + floor(LineSpace / 2) − 0.5)를 화면 화소 가운데에 맞춘다.
-    /// 고친 것: 줄 위치가 화소 사이에 걸리면(목록 위치·화면 배율이 정수가 아닐 때) 1화소 선이 두 줄에 흐리게 번졌다.
+    /// Original DrawListItem (+0x387): an NXLINE horizontal line (integer division, thickness 1) on the pixel row below the item (bottom + LineSpace / 2 − 1).
+    /// Here the center of that pixel row (bottom + floor(LineSpace / 2) − 0.5) is aligned to a screen pixel center.
+    /// Fix: when the line position fell between pixels (non-integer list position/screen scale), the 1-pixel line blurred across two rows.
     pub(super) fn row_line_y(painter: &egui::Painter, item_bottom: f32, line_space: f32) -> f32 {
         let y = item_bottom + (line_space / 2.0).floor() - 0.5;
         painter.round_to_pixel_center(y)
     }
-    /// 원본 SetShowGridColumn(+0x386)·SetShowGridRow(+0x387) 선 색: GetBasic(13) NXLINE. 색상표를 쓰지 않으면 테마의 구분선 색.
+    /// Line color of the original SetShowGridColumn (+0x386)/SetShowGridRow (+0x387): GetBasic(13) NXLINE. When not using a color map, the theme's separator color.
     pub(super) fn grid_line_color(&self, ui: &egui::Ui) -> Color32 {
         let (_, nexus) = self.color_maps();
         nexus
@@ -1119,8 +1119,8 @@ impl App {
             .map(|[r, g, b, _]| Color32::from_rgb(r, g, b))
             .unwrap_or(ui.visuals().widgets.noninteractive.bg_stroke.color)
     }
-    /// C# SortPaneItems + ReorderPane: 패널 설정(정렬 방식·내림차순·폴더 정렬·논리 정렬·묶음)으로 다시 늘어놓고,
-    /// 표시와 커서는 같은 항목에 둔다.
+    /// C# SortPaneItems + ReorderPane: reorder by the pane settings (sort mode, descending, folder sort, logical sort, grouping),
+    /// keeping the selection and cursor on the same items.
     pub(super) fn sort_pane(&mut self, index: usize) {
         let options = ndr::listing::SortOptions {
             folder_mode: self.side_text(index, "FolderSortMode", "Name"),
@@ -1138,12 +1138,12 @@ impl App {
         let pane = &mut self.panes[index];
         let cursor = pane.entries.get(pane.cursor).map(|e| e.path.clone());
         let marked: HashSet<PathBuf> = pane.selected.iter().filter_map(|i| pane.entries.get(*i).map(|e| e.path.clone())).collect();
-        // 원본 ".." 항목은 정렬과 상관없이 맨 앞이다.
+        // The original ".." item comes first regardless of sorting.
         let (mut parents, rest): (Vec<Entry>, Vec<Entry>) = std::mem::take(&mut pane.entries).into_iter().partition(|e| e.is_parent());
         pane.entries = rest;
         ndr::listing::sort_entries(&mut pane.entries, &options, &color);
         ndr::listing::sort_groups(&mut pane.entries, &group_mode, &category_mode, group_descending);
-        // 원본 드라이브 항목(종류 4)은 정렬과 상관없이 목록 끝에 TNXDriveList 차례(글자 순)로 있다.
+        // The original drive items (kind 4) sit at the end of the list in TNXDriveList order (alphabetical), regardless of sorting.
         let (mut items, mut drives): (Vec<Entry>, Vec<Entry>) = std::mem::take(&mut pane.entries).into_iter().partition(|e| !e.drive);
         drives.sort_by(|a, b| a.path.cmp(&b.path));
         items.append(&mut drives);
@@ -1155,8 +1155,8 @@ impl App {
         }
         self.compute_view(index);
     }
-    /// 원본 SetSortType·SetSortDescend(0x7dbb28·0x7dba3c): 정렬을 바꾸면 목록의 FileListChanged → AdjustPage(옛 커서 번호)가 돌고,
-    /// 그 뒤 커서 이름의 새 자리로 SetItemIndex(보이게)한다. 고친 것: 전에는 커서 항목이 정렬로 옮겨 가도 화면이 그대로라 안 보일 수 있었다.
+    /// Original SetSortType/SetSortDescend (0x7dbb28/0x7dba3c): changing the sort runs the list's FileListChanged → AdjustPage(old cursor index),
+    /// then SetItemIndex (make visible) to the cursor name's new position. Fix: previously, if the cursor item moved due to sorting, the view stayed put and it could be off-screen.
     pub(super) fn resort_pane(&mut self, index: usize) {
         let old = self.panes[index].cursor;
         self.sort_pane(index);
@@ -1211,7 +1211,7 @@ impl App {
                         "sortColor" => "Color",
                         _ => "Name",
                     };
-                    // 원본 miSortByClick(0x431c88): 지금 정렬 종류를 다시 고르면(없음 제외) 내림차순을 뒤집는다(스킨 테마).
+                    // Original miSortByClick(0x431c88): re-choosing the current sort kind (except None) flips descending (skin theme).
                     let current = self.side_text(i, "SortMode", "Name");
                     if mode != "None" && current == mode {
                         toggle(self, "SortDescending");
@@ -1226,9 +1226,9 @@ impl App {
         true
     }
     pub(super) fn pane_ui(&mut self, ui: &mut egui::Ui, index: usize, ctx: &egui::Context) {
-        // 원본 패널(TNXFramePanel): 패널 안 어디를 눌러도(빈 곳·주소 줄·정보 표시줄 포함) 그 패널이 지금 패널이 된다.
-        // 메뉴·대화 상자 같은 위 층을 누른 것은 빼고, 자리는 이번 그림의 패널 칸(ui.max_rect)으로 잰다.
-        // 고친 것: 지난 그림의 pane_rects로 쟀는데, update가 패널을 그리기 전에 그것을 비워 빈 곳을 눌러도 패널이 바뀌지 않았다.
+        // Original pane (TNXFramePanel): pressing anywhere in the pane (including empty space, the address bar, and the info bar) makes that pane the active pane.
+        // Exclude presses on an upper layer like a menu or dialog, and measure the position with this frame's pane area (ui.max_rect).
+        // Fix: it used to measure with the previous frame's pane_rects, but update cleared those before drawing panes, so pressing empty space didn't change the pane.
         let area = ui.max_rect();
         if let Some(pos) = ctx.input(|i| if i.pointer.any_pressed() { i.pointer.interact_pos() } else { None }) {
             let on_background = ctx.layer_id_at(pos).is_none_or(|layer| layer.order == egui::Order::Background);
@@ -1237,10 +1237,10 @@ impl App {
             }
         }
         let active = self.active == index;
-        // 원본 패널: 테두리 lframe*, 주소 줄(TNXPathLabel)은 목록 위(원본 FUN_00481978). 스킨을 읽지 못하면 그리지 않는다.
+        // Original pane: border lframe*, and the address bar (TNXPathLabel) sits above the list (original FUN_00481978). If the skin cannot be read, do not draw.
         let Some(skin_now) = self.current_skin() else { return };
         let skin = Some(skin_now);
-        // 원본 MouseUp(0x7d6740): 왼쪽 단추를 놓으면 표시 칸 끌기를 끝낸다.
+        // Original MouseUp(0x7d6740): releasing the left button ends the selection-area drag.
         if !ctx.input(|i| i.pointer.primary_down()) {
             self.panes[index].range_drag = None;
         }
@@ -1248,9 +1248,9 @@ impl App {
             Some(skin) => self.skin_frame_stroke(skin, index),
             None => egui::Stroke::NONE,
         };
-        // 원본 패널 틀: 테두리(lframewidth)만 있고 둥근 모서리·안쪽 여백이 없다.
+        // Original pane frame: only a border (lframewidth), with no rounded corners or inner padding.
         let frame = egui::Frame::new().inner_margin(egui::Margin::same(stroke.width.ceil() as i8));
-        // 원본 탭 줄(TNXTabSet)은 틀 패널(+0x330) 밖, 패널 바로 위에 붙는다(FUN_00481fb8 SetParent(패널)).
+        // The original tab bar (TNXTabSet) sits outside the frame panel (+0x330), attached right above the pane (FUN_00481fb8 SetParent(pane)).
         let outer_spacing = ui.spacing().item_spacing.y;
         if let Some(skin) = &skin {
             ui.spacing_mut().item_spacing.y = 0.0;
@@ -1259,8 +1259,8 @@ impl App {
         let shown = frame
             .stroke(stroke)
             .show(ui, |ui| {
-                // 원본 틀 안 컨트롤(주소 줄·정보 줄·목록·파일 정보줄)은 Align으로 틈 없이 붙는다. 고친 것: 전에는 egui 기본 틈(3화소)이
-                // 폴더 정보줄과 목록 사이, 목록과 파일 정보줄 사이에 끼었다.
+                // The original frame's inner controls (address bar, info bar, list, file info bar) stick together with Align, no gaps. Fix: previously egui's default gap (3 pixels)
+                // slipped in between the folder info bar and the list, and between the list and the file info bar.
                 let _ = outer_spacing;
                 ui.spacing_mut().item_spacing.y = 0.0;
                 let mut activate = false;

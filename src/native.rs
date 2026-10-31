@@ -19,9 +19,9 @@ fn wide(value: impl AsRef<OsStr>) -> Vec<u16> {
     value.as_ref().encode_wide().chain(Some(0)).collect()
 }
 
-/// 원본 TNXShellChangeNotify 스레드(ResetThread 0x7b37b8 → FUN_007b3060): 폴더 하나(하위 폴더 아님, SetSubFolder 처음 값 0)를
-/// 거르개 0x0B(파일 이름·폴더 이름·크기 바뀜, 생성자 0x7b3304)로 지켜보다가 바뀌면 `on_change`를 부른다. `stop`이 켜지면 끝낸다.
-/// 감시를 시작하지 못하면(없는 폴더 등) 아무것도 하지 않는다. 핸들은 부른 스레드에서 만들므로 돌아온 뒤의 바뀜은 놓치지 않는다.
+/// Original TNXShellChangeNotify thread (ResetThread 0x7b37b8 → FUN_007b3060): watches a single folder (not subfolders, SetSubFolder default 0)
+/// with filter 0x0B (file name / folder name / size changes, constructor 0x7b3304) and calls `on_change` when something changes. Stops when `stop` is set.
+/// If the watch cannot be started (missing folder, etc.) it does nothing. The handle is created on the calling thread, so changes after it returns are not missed.
 pub fn spawn_folder_watch(path: PathBuf, stop: std::sync::Arc<std::sync::atomic::AtomicBool>, on_change: impl Fn() + Send + 'static) {
     use std::sync::atomic::Ordering;
     use windows_sys::Win32::System::Threading::WaitForSingleObject;
@@ -174,8 +174,8 @@ pub fn shell_open(path: &Path, args: Option<&str>, verb: &str) -> Result<(), Str
     }
 }
 
-/// xilesShell_ExecuteFile(원본 FUN_00431dd4가 부름): ShellExecuteExW(파일, 인수, 작업 폴더, SW_SHOWNORMAL), 동사 NULL(기본 동사).
-/// SEE_MASK_FLAG_NO_UI가 없으므로 실패는 셸이 직접 알린다.
+/// xilesShell_ExecuteFile (called by original FUN_00431dd4): ShellExecuteExW(file, arguments, working folder, SW_SHOWNORMAL), verb NULL (default verb).
+/// Without SEE_MASK_FLAG_NO_UI, the shell reports failures itself.
 pub fn shell_execute(path: &Path, parameters: &str, directory: &Path) -> Result<(), String> {
     reject_nul(&path.to_string_lossy())?;
     reject_nul(parameters)?;
@@ -204,8 +204,8 @@ pub fn completion_sound() {
     }
 }
 
-/// 원본 PlaySoundW(경로, 0, 0x22003 = SND_FILENAME|SND_NOWAIT|SND_NODEFAULT|SND_ASYNC). None이면 원본 PlaySoundW(NULL, …)처럼 지금 소리를 멈춘다.
-/// 파일 소리를 낼 수 없으면 false.
+/// Original PlaySoundW(path, 0, 0x22003 = SND_FILENAME|SND_NOWAIT|SND_NODEFAULT|SND_ASYNC). None stops the current sound like the original PlaySoundW(NULL, …).
+/// Returns false if the file sound cannot be played.
 pub fn play_wave(path: Option<&Path>) -> bool {
     use windows_sys::Win32::Media::Audio::{PlaySoundW, SND_ASYNC, SND_FILENAME, SND_NODEFAULT, SND_NOWAIT};
     let flags = SND_FILENAME | SND_NOWAIT | SND_NODEFAULT | SND_ASYNC;
@@ -218,7 +218,7 @@ pub fn play_wave(path: Option<&Path>) -> bool {
     unsafe { PlaySoundW(wide.as_ptr(), ptr::null_mut(), flags) != 0 }
 }
 
-/// Delphi Mouse.WheelScrollLines(SPI_GETWHEELSCROLLLINES). 읽지 못하면 Windows 처음 값 3.
+/// Delphi Mouse.WheelScrollLines (SPI_GETWHEELSCROLLLINES). Falls back to the Windows default of 3 if it cannot be read.
 pub fn wheel_scroll_lines() -> u32 {
     use windows_sys::Win32::UI::WindowsAndMessaging::{SPI_GETWHEELSCROLLLINES, SystemParametersInfoW};
     let mut lines: u32 = 3;
@@ -360,9 +360,9 @@ pub fn drives() -> Vec<PathBuf> {
         .map(|n| PathBuf::from(format!("{}:\\", char::from(b'A' + n))))
         .collect()
 }
-/// 원본 SHChangeNotify 처리(FUN_00442bc8: SHCNE_DRIVEADD → TNXDriveList.Add, SHCNE_DRIVEREMOVED → Delete, 미디어 넣기·빼기 → Update,
-/// 그 뒤 FUN_00442d80이 패널마다 드라이브 줄·단추·정보 줄을 새로 그림)의 자리: 따로 된 스레드가 1초마다 GetLogicalDrives 비트를 보고
-/// 바뀌면 `on_change`를 부른다(UI는 바뀔 때만 깨어난다). `stop`이 켜지면 끝낸다.
+/// Stands in for the original SHChangeNotify handling (FUN_00442bc8: SHCNE_DRIVEADD → TNXDriveList.Add, SHCNE_DRIVEREMOVED → Delete, media insert/eject → Update,
+/// after which FUN_00442d80 redraws each pane's drive bar, buttons and info bar): a separate thread checks the GetLogicalDrives bits every second and
+/// calls `on_change` when they change (the UI only wakes on a change). Stops when `stop` is set.
 pub fn spawn_drive_watch(stop: std::sync::Arc<std::sync::atomic::AtomicBool>, on_change: impl Fn() + Send + 'static) {
     use std::sync::atomic::Ordering;
     std::thread::spawn(move || {
@@ -379,12 +379,12 @@ pub fn spawn_drive_watch(stop: std::sync::Arc<std::sync::atomic::AtomicBool>, on
         }
     });
 }
-/// C# DriveInfo.GetDrives().Where(IsReady): 볼륨 정보를 읽을 수 있는 드라이브만.
+/// C# DriveInfo.GetDrives().Where(IsReady): only drives whose volume information can be read.
 pub fn ready_drives() -> Vec<PathBuf> {
     drives().into_iter().filter(|root| volume_label(root).is_some()).collect()
 }
-/// 원본 TNXDriveList.Refresh(0x7b7df0): GetLogicalDrives의 A~Z 가운데 GetDriveTypeW가 0(알 수 없음)·1(루트 없음)이 아닌 것.
-/// 미디어가 없는 CD·카드 리더도 들어간다.
+/// Original TNXDriveList.Refresh (0x7b7df0): among A~Z from GetLogicalDrives, those whose GetDriveTypeW is not 0 (unknown) or 1 (no root).
+/// CD and card readers without media are included too.
 pub fn listed_drives() -> Vec<PathBuf> {
     use windows_sys::Win32::Storage::FileSystem::GetDriveTypeW;
     drives()
@@ -393,7 +393,7 @@ pub fn listed_drives() -> Vec<PathBuf> {
         .filter(|root| unsafe { GetDriveTypeW(wide(root.as_os_str()).as_ptr()) } > 1)
         .collect()
 }
-/// 원본 FUN_004351cc: SetVolumeLabelW(루트, 새 이름). 실패하면 GetLastError.
+/// Original FUN_004351cc: SetVolumeLabelW(root, new name). Returns GetLastError on failure.
 pub fn set_volume_label(root: &Path, label: &str) -> Result<(), u32> {
     // SAFETY: both arguments are NUL-terminated UTF-16 buffers that outlive the call.
     if unsafe { SetVolumeLabelW(wide(root.as_os_str()).as_ptr(), wide(label).as_ptr()) } != 0 {
@@ -456,7 +456,7 @@ pub fn shortcut(source: &Path, output: &Path) -> Result<(), String> {
     }
 }
 
-/// C# RecycleBinService.Empty: 모든 드라이브, 확인·진행 창·소리 없이(SHERB_NOCONFIRMATION | NOPROGRESSUI | NOSOUND).
+/// C# RecycleBinService.Empty: all drives, with no confirmation, progress window or sound (SHERB_NOCONFIRMATION | NOPROGRESSUI | NOSOUND).
 pub fn empty_recycle_bin() -> Result<(), String> {
     // SAFETY: null owner and root mean every drive; no pointers are kept.
     let code = unsafe { SHEmptyRecycleBinW(ptr::null_mut(), ptr::null(), SHERB_NOCONFIRMATION | SHERB_NOPROGRESSUI | SHERB_NOSOUND) };
@@ -467,7 +467,7 @@ pub fn empty_recycle_bin() -> Result<(), String> {
     }
 }
 
-/// 원본 miEmptyRecycleBinClick(0x433094): SHEmptyRecycleBinW(창, NULL, 0) — 셸이 확인·진행 창을 띄운다.
+/// Original miEmptyRecycleBinClick (0x433094): SHEmptyRecycleBinW(window, NULL, 0) — the shell shows the confirmation/progress window.
 pub fn empty_recycle_bin_with_shell_ui() -> Result<(), String> {
     // SAFETY: null owner and root mean every drive; no pointers are kept.
     let code = unsafe { SHEmptyRecycleBinW(ptr::null_mut(), ptr::null(), 0) };
@@ -478,7 +478,7 @@ pub fn empty_recycle_bin_with_shell_ui() -> Result<(), String> {
     }
 }
 
-/// C# WNetAddConnection2(Type 1, LocalName, RemoteName, password, user, flags 0). 실패는 (Windows 오류 코드, 시스템 글).
+/// C# WNetAddConnection2(Type 1, LocalName, RemoteName, password, user, flags 0). Failure is (Windows error code, system message).
 pub fn wnet_add_connection(local: &str, remote: &str, user: Option<&str>, password: Option<&str>) -> Result<(), (u32, String)> {
     use windows_sys::Win32::NetworkManagement::WNet::*;
     if [local, remote, user.unwrap_or(""), password.unwrap_or("")].iter().any(|v| v.contains('\0')) {
@@ -503,14 +503,14 @@ pub fn wnet_cancel_connection(name: &str) -> Result<(), (u32, String)> {
     if code == 0 { Ok(()) } else { Err((code, std::io::Error::from_raw_os_error(code as i32).to_string())) }
 }
 
-/// DriveInfo.GetDrives()에서 DriveType.Network인 것("Z:" 모양, 끝 '\' 뺌).
+/// Those with DriveType.Network from DriveInfo.GetDrives() (in "Z:" form, trailing '\' removed).
 pub fn network_drives() -> Vec<String> {
     drives().into_iter().filter(|d| is_network_drive(d)).map(|d| d.to_string_lossy().trim_end_matches('\\').to_owned()).collect()
 }
 
 const EXPLORER_FOLDER_KEY: &str = "Software\\Classes\\Directory\\shell\\NDR";
 const EXPLORER_BACKGROUND_KEY: &str = "Software\\Classes\\Directory\\Background\\shell\\NDR";
-/// 예전 Rust 판이 쓰던 키(지울 때 같이 지운다).
+/// Keys used by older Rust builds (removed alongside when disabling).
 const LEGACY_EXPLORER_KEYS: [&str; 2] = ["Software\\Classes\\Directory\\shell\\NDR.Rust", "Software\\Classes\\Directory\\Background\\shell\\NDR.Rust"];
 
 fn registry_default_value(key: &str) -> Option<String> {
@@ -529,7 +529,7 @@ fn registry_default_value(key: &str) -> Option<String> {
     (status == 0).then(|| String::from_utf16_lossy(&buffer[..buffer.iter().position(|&c| c == 0).unwrap_or(buffer.len())]))
 }
 
-/// HKEY_CLASSES_ROOT\`key`의 기본값(REG_SZ·REG_EXPAND_SZ, 펼치지 않음).
+/// Default value of HKEY_CLASSES_ROOT\`key` (REG_SZ / REG_EXPAND_SZ, not expanded).
 fn classes_default(key: &str) -> Option<String> {
     use windows_sys::Win32::System::Registry::*;
     let subkey = wide(key);
@@ -547,7 +547,7 @@ fn classes_default(key: &str) -> Option<String> {
     (status == 0).then(|| String::from_utf16_lossy(&buffer[..buffer.iter().position(|&c| c == 0).unwrap_or(buffer.len())]))
 }
 
-/// HKEY_CLASSES_ROOT\`key`가 있는가.
+/// Whether HKEY_CLASSES_ROOT\`key` exists.
 fn classes_key_exists(key: &str) -> bool {
     use windows_sys::Win32::System::Registry::*;
     let subkey = wide(key);
@@ -561,13 +561,13 @@ fn classes_key_exists(key: &str) -> bool {
     true
 }
 
-/// 셸 아이콘이 파일마다 다른 형식인가: DefaultIcon이 "%1"(따옴표 포함)이거나 shellex\IconHandler가 있다.
+/// Whether the shell icon differs per file: DefaultIcon is "%1" (with the quotes) or a shellex\IconHandler exists.
 pub fn per_file_icon_rule(default_icon: Option<&str>, icon_handler: bool) -> bool {
     icon_handler || default_icon.is_some_and(|icon| icon.trim().trim_matches('"') == "%1")
 }
 
-/// 원본 GetIconIndex(0x7b8d54)는 파일마다 실제 경로로 셸 아이콘을 묻는다. 결과가 파일마다 달라지는 형식만 골라 실제 경로로 읽기 위해,
-/// HKCR\.확장자, 그 ProgID, SystemFileAssociations\.확장자 가운데 하나라도 per_file_icon_rule에 맞는지 본다.
+/// The original GetIconIndex (0x7b8d54) asks the shell for a file's icon using its actual path. To read, by actual path, only the formats
+/// whose result varies per file, this checks whether any of HKCR\.ext, its ProgID, or SystemFileAssociations\.ext matches per_file_icon_rule.
 pub fn extension_has_per_file_icon(extension: &str) -> bool {
     let extension = extension.trim().trim_start_matches('.');
     if extension.is_empty() || extension.contains(['\\', '/']) {
@@ -581,7 +581,7 @@ pub fn extension_has_per_file_icon(extension: &str) -> bool {
     keys.iter().any(|key| per_file_icon_rule(classes_default(&format!("{key}\\DefaultIcon")).as_deref(), classes_key_exists(&format!("{key}\\shellex\\IconHandler"))))
 }
 
-/// ExplorerIntegrationService.IsEnabled: 두 키 모두 command 기본값이 비어 있지 않다.
+/// ExplorerIntegrationService.IsEnabled: both keys have a non-empty command default value.
 pub fn explorer_integration_enabled() -> bool {
     [EXPLORER_FOLDER_KEY, EXPLORER_BACKGROUND_KEY].iter().all(|key| registry_default_value(key).is_some_and(|v| !v.trim().is_empty()))
 }
@@ -603,8 +603,8 @@ fn set_registry_string(key: &str, name: Option<&str>, value: &str) -> Result<(),
     if status != 0 { Err(std::io::Error::from_raw_os_error(status as i32).to_string()) } else { Ok(()) }
 }
 
-/// ExplorerIntegrationService.Enable/Disable(HKCU): 폴더 "Browse with NDR" → "\"exe\" \"/dir:%1\"", 폴더 배경 "Open folder in NDR" →
-/// "\"exe\" \"/dir:%V\"", 아이콘은 실행 파일. 끄면 두 키(와 예전 Rust 판 키)를 지운다.
+/// ExplorerIntegrationService.Enable/Disable (HKCU): folder "Browse with NDR" → "\"exe\" \"/dir:%1\"", folder background "Open folder in NDR" →
+/// "\"exe\" \"/dir:%V\"", icon is the executable. Disabling removes both keys (and the older Rust-build keys).
 pub fn set_explorer_integration(enable: bool) -> Result<(), String> {
     use windows_sys::Win32::System::Registry::*;
     if enable {
@@ -718,8 +718,8 @@ pub fn thumbnail(path: &Path, side: u32) -> Result<(usize, usize, Vec<u8>), Stri
     }
 }
 
-/// 원본 TfMsgBox의 Image1처럼 LoadIconW(NULL, id)로 시스템 아이콘을 읽어 32x32 RGBA로 돌려준다.
-/// id는 IDI_HAND 0x7f01, IDI_QUESTION 0x7f02, IDI_EXCLAMATION 0x7f03, IDI_ASTERISK 0x7f04.
+/// Like Image1 in the original TfMsgBox, reads a system icon with LoadIconW(NULL, id) and returns it as 32x32 RGBA.
+/// id is IDI_HAND 0x7f01, IDI_QUESTION 0x7f02, IDI_EXCLAMATION 0x7f03, IDI_ASTERISK 0x7f04.
 pub fn system_icon_rgba(id: u16) -> Result<(usize, usize, Vec<u8>), String> {
     if !(0x7f00..=0x7f08).contains(&id) {
         return Err("Unknown system icon".into());
@@ -734,8 +734,8 @@ pub fn system_icon_rgba(id: u16) -> Result<(usize, usize, Vec<u8>), String> {
     }
 }
 
-/// C# FileVisualConverter.LoadIcon: SHGetFileInfoW(경로, 없으면 "folder"/".", 폴더/보통 속성,
-/// SHGFI_ICON | SHGFI_SMALLICON | SHGFI_USEFILEATTRIBUTES)의 작은 아이콘을 16x16 RGBA로. 파일은 읽지 않는다(확장자·속성으로만).
+/// C# FileVisualConverter.LoadIcon: the small icon from SHGetFileInfoW(path, or "folder"/"." if missing, folder/normal attributes,
+/// SHGFI_ICON | SHGFI_SMALLICON | SHGFI_USEFILEATTRIBUTES) as 16x16 RGBA. The file is not read (by extension/attributes only).
 pub fn shell_small_icon(path: &Path, directory: bool) -> Option<(usize, usize, Vec<u8>)> {
     let text = path.to_string_lossy();
     let candidate = if text.trim().is_empty() { if directory { "folder".to_owned() } else { ".".to_owned() } } else { text.into_owned() };
@@ -754,8 +754,8 @@ pub fn shell_small_icon(path: &Path, directory: bool) -> Option<(usize, usize, V
     }
 }
 
-/// 원본 FUN_00422314(TfFileExists imgOrg·imgNew): SHGetFileInfoW(경로, 0, SHGFI_ICON, 없는 경로면 | SHGFI_USEFILEATTRIBUTES)의
-/// 큰 아이콘을 32x32 RGBA로.
+/// Original FUN_00422314 (TfFileExists imgOrg/imgNew): the large icon from SHGetFileInfoW(path, 0, SHGFI_ICON, plus | SHGFI_USEFILEATTRIBUTES for a missing path)
+/// as 32x32 RGBA.
 pub fn shell_large_icon(path: &Path) -> Option<(usize, usize, Vec<u8>)> {
     let name = wide(path);
     let mut flags = SHGFI_ICON;
@@ -775,14 +775,14 @@ pub fn shell_large_icon(path: &Path) -> Option<(usize, usize, Vec<u8>)> {
     }
 }
 
-/// "X:\"(드라이브 루트)인가.
+/// Whether this is "X:\" (a drive root).
 fn is_drive_root(path: &Path) -> bool {
     let text = path.to_string_lossy();
     let chars: Vec<char> = text.chars().collect();
     chars.len() == 3 && chars[0].is_ascii_alphabetic() && chars[1] == ':' && chars[2] == '\\'
 }
 
-/// Windows 기본 "네트워크 드라이브" 작은 아이콘(SHGetStockIconInfo SIID_DRIVENET).
+/// The Windows default "network drive" small icon (SHGetStockIconInfo SIID_DRIVENET).
 fn stock_network_drive_icon() -> Option<(usize, usize, Vec<u8>)> {
     use windows_sys::Win32::UI::Shell::{SHGSI_ICON, SHGSI_SMALLICON, SHGetStockIconInfo, SHSTOCKICONINFO, SIID_DRIVENET};
     let mut info: SHSTOCKICONINFO = unsafe { std::mem::zeroed() };
@@ -798,10 +798,10 @@ fn stock_network_drive_icon() -> Option<(usize, usize, Vec<u8>)> {
     }
 }
 
-/// C# FileVisualConverter.LoadShellOverlayIcon: SHGetFileInfoW(실제 경로, 0, SHGFI_ICON | SHGFI_SMALLICON | SHGFI_ADDOVERLAYS).
-/// 셸이 그 항목을 실제로 본다(셸 확장 포함). com_sta_init을 부른 따로 된 스레드에서 쓴다.
+/// C# FileVisualConverter.LoadShellOverlayIcon: SHGetFileInfoW(actual path, 0, SHGFI_ICON | SHGFI_SMALLICON | SHGFI_ADDOVERLAYS).
+/// The shell actually inspects the item (shell extensions included). Used on a separate thread that called com_sta_init.
 pub fn shell_overlay_icon(path: &Path) -> Option<(usize, usize, Vec<u8>)> {
-    // 고친 것: 볼륨을 읽을 수 있는 네트워크 드라이브(WSL 9P 등)에 셸이 "연결 끊김" 아이콘을 주므로 Windows 네트워크 드라이브 아이콘을 쓴다.
+    // Fix: the shell gives a "disconnected" icon to network drives whose volume can be read (WSL 9P, etc.), so use the Windows network-drive icon instead.
     if is_drive_root(path) && connected_network_drive(path)
         && let Some(icon) = stock_network_drive_icon()
     {
@@ -821,8 +821,8 @@ pub fn shell_overlay_icon(path: &Path) -> Option<(usize, usize, Vec<u8>)> {
     }
 }
 
-/// 원본 TNXShellImageList.GetIconIndex(0x7b8d54) 파일 항목: SHGetFileInfoW(실제 경로, 속성, SHGFI_SYSICONINDEX)로
-/// 그 파일 자신의 아이콘(실행 파일·바로 가기 등). 오버레이는 넣지 않는다. com_sta_init을 부른 따로 된 스레드에서 쓴다.
+/// Original TNXShellImageList.GetIconIndex (0x7b8d54) file item: SHGetFileInfoW(actual path, attributes, SHGFI_SYSICONINDEX) for
+/// the file's own icon (executable, shortcut, etc.). Overlays are not added. Used on a separate thread that called com_sta_init.
 pub fn shell_path_icon(path: &Path) -> Option<(usize, usize, Vec<u8>)> {
     let name = wide(path);
     let mut info: SHFILEINFOW = unsafe { std::mem::zeroed() };
@@ -838,8 +838,8 @@ pub fn shell_path_icon(path: &Path) -> Option<(usize, usize, Vec<u8>)> {
     }
 }
 
-/// 패널 폴더 트리(TNXShellTreeView)의 셸 항목 아이콘: 열쇠(빈 열쇠 = 바탕 화면, "::{CLSID}" 가상 폴더, 경로)를
-/// SHParseDisplayName으로 항목 목록으로 바꿔 SHGetFileInfoW(SHGFI_PIDL | SHGFI_ICON | SHGFI_SMALLICON). com_sta_init을 부른 스레드에서 쓴다.
+/// Shell item icon for a pane folder tree (TNXShellTreeView) entry: converts the key (empty key = desktop, "::{CLSID}" virtual folder, or a path)
+/// into an item id list with SHParseDisplayName, then SHGetFileInfoW(SHGFI_PIDL | SHGFI_ICON | SHGFI_SMALLICON). Used on a thread that called com_sta_init.
 pub fn shell_key_icon(key: &Path) -> Option<(usize, usize, Vec<u8>)> {
     use windows_sys::Win32::System::Com::CoTaskMemFree;
     use windows_sys::Win32::UI::Shell::{SHGFI_PIDL, SHGetSpecialFolderLocation, SHParseDisplayName};
@@ -867,9 +867,9 @@ pub fn shell_key_icon(key: &Path) -> Option<(usize, usize, Vec<u8>)> {
     }
 }
 
-/// 글꼴 파일처럼 프로그램이 끝날 때까지 읽기만 하는 파일을 메모리에 사상(CreateFileMappingW·MapViewOfFile)해 돌려준다.
-/// 고친 것(메모리): 전에는 글꼴 파일을 통째로 읽고(Vec), egui가 그것을 한 번 더 복사해 맑은 고딕(12.8MB)·굵게(12MB)가 두 벌씩
-/// 개인 메모리에 있었다. 사상한 파일은 운영 체제 파일 캐시와 함께 쓰는 쪽(필요한 쪽만 읽음)이 된다. 같은 파일은 한 번만 사상한다.
+/// Memory-maps a file that is only read until the program exits, such as a font file (CreateFileMappingW / MapViewOfFile), and returns it.
+/// Fix (memory): previously a font file was read whole (Vec) and egui copied it again, so Malgun Gothic (12.8MB) and Bold (12MB) each existed twice
+/// in private memory. A mapped file is shared with the OS file cache (only the needed parts are read). The same file is mapped only once.
 pub fn mapped_file(path: &Path) -> Option<&'static [u8]> {
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
@@ -912,7 +912,7 @@ pub fn mapped_file(path: &Path) -> Option<&'static [u8]> {
     }
 }
 
-/// 이 스레드를 셸용 STA로(C# 오버레이 작업 스레드의 ApartmentState.STA). 스레드가 끝날 때까지 그대로 둔다.
+/// Makes this thread an STA for the shell (the ApartmentState.STA of the C# overlay worker thread). Leaves it that way until the thread ends.
 pub fn com_sta_init() {
     use windows_sys::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
     // SAFETY: plain COM apartment initialisation for the calling thread.
@@ -921,8 +921,8 @@ pub fn com_sta_init() {
     }
 }
 
-/// 원본 miAddToFavoritesClick(0x43371d): 굵은 폼 글꼴로 DrawTextW(경로, 사각형 0,0,width,30,
-/// DT_PATH_ELLIPSIS | DT_MODIFYSTRING | DT_NOPREFIX | DT_SINGLELINE = 0x14820)한 뒤 바뀐 글(가운데 "...")을 쓴다. 실패하면 그대로.
+/// Original miAddToFavoritesClick (0x43371d): runs DrawTextW(path, rect 0,0,width,30, DT_PATH_ELLIPSIS | DT_MODIFYSTRING | DT_NOPREFIX | DT_SINGLELINE = 0x14820)
+/// with the bold form font, then uses the modified text (with "..." in the middle). On failure returns it unchanged.
 pub fn compact_path(path: &str, width: i32) -> String {
     use windows_sys::Win32::Foundation::RECT;
     use windows_sys::Win32::Graphics::Gdi::*;
@@ -952,7 +952,7 @@ pub fn compact_path(path: &str, width: i32) -> String {
     String::from_utf16_lossy(&buffer[..end])
 }
 
-/// HICON을 side x side로 그려 직선(비곱셈) RGBA로.
+/// Draws an HICON at side x side into straight (non-premultiplied) RGBA.
 /// SAFETY: icon must be a valid HICON for the duration of the call.
 unsafe fn icon_rgba(icon: HICON, side: i32) -> Result<(usize, usize, Vec<u8>), String> {
     use windows_sys::Win32::Graphics::Gdi::*;
@@ -999,7 +999,7 @@ unsafe fn icon_rgba(icon: HICON, side: i32) -> Result<(usize, usize, Vec<u8>), S
     }
 }
 
-/// 시스템 난수(BCryptGenRandom, 시스템 기본 RNG). C# RandomNumberGenerator와 같은 출처.
+/// System random bytes (BCryptGenRandom, system default RNG). Same source as C# RandomNumberGenerator.
 pub fn random_bytes(buffer: &mut [u8]) -> Result<(), String> {
     for chunk in buffer.chunks_mut(u32::MAX as usize) {
         // SAFETY: the buffer is valid for chunk.len() bytes.
@@ -1011,7 +1011,7 @@ pub fn random_bytes(buffer: &mut [u8]) -> Result<(), String> {
     Ok(())
 }
 
-/// Environment.ExpandEnvironmentVariables: ExpandEnvironmentStringsW(%NAME% 형식).
+/// Environment.ExpandEnvironmentVariables: ExpandEnvironmentStringsW (%NAME% form).
 pub fn expand_environment(text: &str) -> String {
     use windows_sys::Win32::System::Environment::ExpandEnvironmentStringsW;
     let source = wide(text);
@@ -1030,7 +1030,7 @@ pub fn expand_environment(text: &str) -> String {
     }
 }
 
-/// DriveInfo.DriveType 이름(GetDriveTypeW): Unknown, NoRootDirectory, Removable, Fixed, Network, CDRom, Ram.
+/// DriveInfo.DriveType name (GetDriveTypeW): Unknown, NoRootDirectory, Removable, Fixed, Network, CDRom, Ram.
 pub fn drive_type_name(root: &Path) -> &'static str {
     // SAFETY: NUL-terminated root path.
     match unsafe { GetDriveTypeW(wide(root.as_os_str()).as_ptr()) } {
@@ -1044,7 +1044,7 @@ pub fn drive_type_name(root: &Path) -> &'static str {
     }
 }
 
-/// DriveInfo.VolumeLabel(GetVolumeInformationW). 준비되지 않았으면 None.
+/// DriveInfo.VolumeLabel (GetVolumeInformationW). None if not ready.
 pub fn volume_label(root: &Path) -> Option<String> {
     let mut name = vec![0u16; 261];
     // SAFETY: NUL-terminated root and a buffer of the stated length; the other outputs are optional.
@@ -1054,7 +1054,7 @@ pub fn volume_label(root: &Path) -> Option<String> {
     ok.then(|| String::from_utf16_lossy(&name[..name.iter().position(|c| *c == 0).unwrap_or(name.len())]))
 }
 
-/// 원본 FUN_004266ac: SHFileOperationW(FO_DELETE, pFrom = 경로, 휴지통이면 FOF_ALLOWUNDO 0x40, 아니면 0) — 확인·진행은 셸 창. 0 = 성공.
+/// Original FUN_004266ac: SHFileOperationW(FO_DELETE, pFrom = path, FOF_ALLOWUNDO 0x40 for the recycle bin, else 0) — the shell shows confirmation/progress. 0 = success.
 pub fn shell_delete(path: &Path, allow_undo: bool) -> i32 {
     use windows_sys::Win32::UI::Shell::{SHFILEOPSTRUCTW, SHFileOperationW};
     let from: Vec<u16> = path.as_os_str().encode_wide().chain([0, 0]).collect();
@@ -1067,7 +1067,7 @@ pub fn shell_delete(path: &Path, allow_undo: bool) -> i32 {
     if op.fAnyOperationsAborted != 0 && result == 0 { 1223 } else { result }
 }
 
-/// 원본 xilesShell GetVolumeSerial: GetVolumeInformationW의 볼륨 일련번호(트리 파일 이름 FUN_007e3e7c에 쓴다). 읽을 수 없으면 None.
+/// Original xilesShell GetVolumeSerial: the volume serial number from GetVolumeInformationW (used in the tree file name FUN_007e3e7c). None if it cannot be read.
 pub fn volume_serial(root: &Path) -> Option<u32> {
     let mut serial = 0u32;
     // SAFETY: NUL-terminated root; only the serial output is requested.
@@ -1075,27 +1075,27 @@ pub fn volume_serial(root: &Path) -> Option<u32> {
     ok.then_some(serial)
 }
 
-/// InputLanguageManager.CurrentInputLanguage가 영어인가(GetKeyboardLayout(0)의 주 언어 = LANG_ENGLISH).
+/// Whether InputLanguageManager.CurrentInputLanguage is English (the primary language of GetKeyboardLayout(0) = LANG_ENGLISH).
 pub fn english_input_language() -> bool {
     // SAFETY: GetKeyboardLayout(0) reads the calling thread's layout.
     let layout = unsafe { windows_sys::Win32::UI::Input::KeyboardAndMouse::GetKeyboardLayout(0) } as usize;
     (layout & 0x3ff) == 0x09
 }
 
-/// shlwapi StrToIntExW(글, 0 = STIF_DEFAULT): 10진수로 읽히면 그 값.
+/// shlwapi StrToIntExW(text, 0 = STIF_DEFAULT): the value if it parses as a decimal.
 pub fn str_to_int_ex(text: &str) -> Option<i32> {
     let mut value = 0i32;
     // SAFETY: NUL-terminated input and a valid output pointer.
     (unsafe { StrToIntExW(wide(text).as_ptr(), 0, &mut value) } != 0).then_some(value)
 }
 
-/// DriveInfo.DriveType == Fixed: GetDriveTypeW(루트) == DRIVE_FIXED.
+/// DriveInfo.DriveType == Fixed: GetDriveTypeW(root) == DRIVE_FIXED.
 pub fn is_fixed_drive(root: &Path) -> bool {
     // SAFETY: NUL-terminated root path.
     unsafe { GetDriveTypeW(wide(root.as_os_str()).as_ptr()) == 3 }
 }
 
-/// Environment.GetFolderPath(SpecialFolder.InternetCache / Cookies): SHGetKnownFolderPath(플래그 0, 없으면 None).
+/// Environment.GetFolderPath(SpecialFolder.InternetCache / Cookies): SHGetKnownFolderPath(flags 0, None if absent).
 fn known_folder(id: &windows_sys::core::GUID) -> Option<PathBuf> {
     let mut raw: windows_sys::core::PWSTR = ptr::null_mut();
     // SAFETY: the out pointer receives a CoTaskMemAlloc string that is copied and freed here.
@@ -1114,13 +1114,13 @@ pub fn documents_folder() -> Option<PathBuf> {
     known_folder(&FOLDERID_Documents)
 }
 
-/// DriveInfo.DriveType == Network: GetDriveTypeW(루트) == DRIVE_REMOTE.
+/// DriveInfo.DriveType == Network: GetDriveTypeW(root) == DRIVE_REMOTE.
 pub fn is_network_drive(root: &Path) -> bool {
     // SAFETY: NUL-terminated root path.
     unsafe { windows_sys::Win32::Storage::FileSystem::GetDriveTypeW(wide(root.as_os_str()).as_ptr()) == 4 }
 }
 
-/// C# FileVersionInfo: ProductMajorPart(0이면 FileMajorPart). 버전 정보가 없으면 None.
+/// C# FileVersionInfo: ProductMajorPart (FileMajorPart if 0). None if there is no version info.
 pub fn file_major_version(path: &Path) -> Option<u32> {
     use windows_sys::Win32::Storage::FileSystem::{GetFileVersionInfoSizeW, GetFileVersionInfoW, VS_FIXEDFILEINFO, VerQueryValueW};
     let name = wide(path.as_os_str());
@@ -1147,7 +1147,7 @@ pub fn file_major_version(path: &Path) -> Option<u32> {
     }
 }
 
-/// C# UpdateDiskCapacityAsync의 DriveInfo: "X:\" 드라이브만, 네트워크 드라이브와 준비 안 된 드라이브는 None. (쓸 수 있는 여유, 전체).
+/// The DriveInfo of C# UpdateDiskCapacityAsync: only "X:\" drives, None for network and not-ready drives. (usable free, total).
 pub fn disk_capacity(path: &Path) -> Option<(u64, u64)> {
     use windows_sys::Win32::Storage::FileSystem::{GetDiskFreeSpaceExW, GetDriveTypeW};
     let text = path.to_string_lossy();
@@ -1169,8 +1169,8 @@ pub fn disk_capacity(path: &Path) -> Option<(u64, u64)> {
     Some((free, total))
 }
 
-/// 연결된 네트워크 드라이브의 이름: 연결 대상 UNC 경로 그대로("\\서버\공유\아래", 끝 '\' 뺌).
-/// 볼륨 이름이 없는 연결(9P 등)은 셸이 "연결 끊긴 네트워크 드라이브"로 보이므로 대신 쓴다. 사용자 요청: 전에는 탐색기처럼 "아래 (\\서버\공유)"였다.
+/// The name of a connected network drive: the connection's target UNC path as-is ("\\server\share\sub", trailing '\' removed).
+/// Used instead for connections without a volume label (9P, etc.) that the shell shows as a "disconnected network drive". User request: previously it was "sub (\\server\share)" like Explorer.
 pub fn network_drive_name(target: &str) -> Option<String> {
     let trimmed = target.trim_end_matches('\\');
     let rest = trimmed.strip_prefix("\\\\")?;
@@ -1181,8 +1181,8 @@ pub fn network_drive_name(target: &str) -> Option<String> {
     Some(format!("\\\\{}", parts.join("\\")))
 }
 
-/// 드라이브 글자의 연결 대상 UNC: QueryDosDeviceW("X:")의 "\??\UNC\서버\공유…" 또는
-/// "\Device\<리디렉터>\;X:<번호>\서버\공유…"를 "\\서버\공유…"로. 네트워크 연결이 아니면 None.
+/// The target UNC of a drive letter: turns QueryDosDeviceW("X:")'s "\??\UNC\server\share…" or
+/// "\Device\<redirector>\;X:<number>\server\share…" into "\\server\share…". None if it is not a network connection.
 pub fn dos_device_unc(device: &str) -> Option<String> {
     if let Some(rest) = device.strip_prefix("\\??\\UNC\\") {
         return Some(format!("\\\\{rest}"));
@@ -1193,7 +1193,7 @@ pub fn dos_device_unc(device: &str) -> Option<String> {
     (!rest.is_empty()).then(|| format!("\\\\{rest}"))
 }
 
-/// 드라이브 글자(루트 "X:\")의 네트워크 연결 대상(dos_device_unc).
+/// The network connection target (dos_device_unc) of a drive letter (root "X:\").
 fn drive_unc_target(root: &Path) -> Option<String> {
     use windows_sys::Win32::Storage::FileSystem::QueryDosDeviceW;
     let text = root.to_string_lossy();
@@ -1208,14 +1208,14 @@ fn drive_unc_target(root: &Path) -> Option<String> {
     dos_device_unc(&String::from_utf16_lossy(&buffer[..end]))
 }
 
-/// 연결된(볼륨을 읽을 수 있는) 네트워크 드라이브인가: GetDriveTypeW == DRIVE_REMOTE이고 GetVolumeInformationW가 된다.
+/// Whether this is a connected (volume-readable) network drive: GetDriveTypeW == DRIVE_REMOTE and GetVolumeInformationW succeeds.
 pub fn connected_network_drive(root: &Path) -> bool {
     is_network_drive(root) && volume_label(root).is_some()
 }
 
-/// 원본 xilesShell GetDriveName(0x7b4a74): 이동식이 아니고 준비됐으면 볼륨 이름(GetVolumeInformationW),
-/// 비었거나 이동식이면 셸 표시 이름(SHGetFileInfoW SHGFI_DISPLAYNAME)에서 마지막 '(' 앞 한 글자부터 자른 것.
-/// 고친 것: 볼륨을 읽을 수 있는 네트워크 드라이브는 셸 이름("연결 끊긴 네트워크 드라이브") 대신 연결 대상에서 만든 이름.
+/// Original xilesShell GetDriveName (0x7b4a74): if not removable and ready, the volume label (GetVolumeInformationW);
+/// if empty or removable, the shell display name (SHGetFileInfoW SHGFI_DISPLAYNAME) truncated at one character before the last '('.
+/// Fix: for a network drive whose volume can be read, the name built from the connection target instead of the shell name ("disconnected network drive").
 pub fn drive_name(root: &Path) -> String {
     let removable = drive_type_name(root) == "Removable";
     if let Some(label) = (!removable).then(|| volume_label(root)).flatten().filter(|l| !l.is_empty()) {
@@ -1239,16 +1239,16 @@ pub fn drive_name(root: &Path) -> String {
     shown
 }
 
-/// 원본 내 PC 드라이브 항목의 TNXDriveInfo(크기 읽기 = 0): (GetDriveName, GetDriveTypeW, 고정 디스크(3)면 (여유, 전체)).
-/// Refresh(0x7b7554)는 종류가 0·1이면 크기를 읽지 않고, 표시가 없으면 고정 디스크만 읽는다.
+/// The TNXDriveInfo (read size = 0) of an original This PC drive item: (GetDriveName, GetDriveTypeW, (free, total) for a fixed disk (3)).
+/// Refresh (0x7b7554) does not read the size if the type is 0 or 1, and reads only fixed disks when there is no display.
 pub fn drive_item_info(root: &Path) -> Option<(String, u32, Option<(u64, u64)>)> {
     use windows_sys::Win32::Storage::FileSystem::{GetDiskFreeSpaceExW, GetDriveTypeW};
     let name = wide(root.as_os_str());
     // SAFETY: NUL-terminated root string.
     let kind = unsafe { GetDriveTypeW(name.as_ptr()) };
     let (mut free, mut total) = (0u64, 0u64);
-    // 고친 것(사용자 요청): 원본은 고정 디스크만 크기를 읽지만, 연결된(볼륨을 읽을 수 있는) 네트워크 드라이브도 읽는다.
-    // 끊긴 네트워크 드라이브는 오래 걸릴 수 있어 원본처럼 읽지 않는다.
+    // Fix (user request): the original reads the size only for fixed disks, but connected (volume-readable) network drives are read too.
+    // Disconnected network drives can be slow, so they are not read, like the original.
     let label = drive_name(root);
     let connected = kind == 4 && connected_network_drive(root);
     // SAFETY: NUL-terminated root string; out pointers refer to live locals.
@@ -1256,7 +1256,7 @@ pub fn drive_item_info(root: &Path) -> Option<(String, u32, Option<(u64, u64)>)>
     Some((label, kind, sizes))
 }
 
-/// 원본 PathStripToRootW: "X:\" 또는 "\\서버\공유\"(그리고 드라이브 글자).
+/// Original PathStripToRootW: "X:\" or "\\server\share\" (and the drive letter).
 fn volume_root(path: &Path) -> Option<(PathBuf, Option<char>)> {
     use std::path::{Component, Prefix};
     let Some(Component::Prefix(prefix)) = path.components().next() else { return None };
@@ -1270,9 +1270,9 @@ fn volume_root(path: &Path) -> Option<(PathBuf, Option<char>)> {
     }
 }
 
-/// 원본 정보 표시줄(FUN_0048b500)의 TNXDriveInfo(루트, 크기 읽기 = 1) 재료: (드라이브 글, 여유, 전체).
-/// TNXDriveInfo.Refresh(0x7b7554): 종류(GetDriveTypeW)가 0·1이 아니면 GetDiskFreeSpaceExW. 글은 네트워크(4)면 "이름 ",
-/// 아니면 "이름 (C:) "(이름 = GetDriveName). 크기를 읽지 못하면 원본처럼 0(TNXDriveInfo는 0으로 시작한다).
+/// Material for the original info bar's (FUN_0048b500) TNXDriveInfo (root, read size = 1): (drive text, free, total).
+/// TNXDriveInfo.Refresh (0x7b7554): GetDiskFreeSpaceExW if the type (GetDriveTypeW) is not 0 or 1. The text is "name " for network (4),
+/// otherwise "name (C:) " (name = GetDriveName). If the size cannot be read it is 0 like the original (TNXDriveInfo starts at 0).
 pub fn pane_disk_info(path: &Path) -> Option<(String, u64, u64)> {
     use windows_sys::Win32::Storage::FileSystem::{GetDiskFreeSpaceExW, GetDriveTypeW};
     let (root, letter) = volume_root(path)?;
@@ -1295,7 +1295,7 @@ pub fn pane_disk_info(path: &Path) -> Option<(String, u64, u64)> {
     Some((text, free, total))
 }
 
-/// HTTPS GET(WinHTTP, 15초 시간 제한, HTTPS → HTTP 넘겨주기 막음, `max_bytes` 넘으면 TooLarge). C# UpdateHttpClient 자리.
+/// HTTPS GET (WinHTTP, 15-second timeout, blocks HTTPS → HTTP redirects, TooLarge if `max_bytes` is exceeded). Stands in for C# UpdateHttpClient.
 pub fn https_get(url: &str, max_bytes: usize) -> Result<crate::update::HttpResponse, crate::update::HttpError> {
     use crate::update::{HttpError, HttpResponse};
     use windows_sys::Win32::Networking::WinHttp::*;
@@ -1378,7 +1378,7 @@ pub fn https_get(url: &str, max_bytes: usize) -> Result<crate::update::HttpRespo
     }
 }
 
-/// Win32Exception(code).Message(끝의 " (os error N)" 없이).
+/// Win32Exception(code).Message (without the trailing " (os error N)").
 pub fn win32_message(code: u32) -> String {
     let text = std::io::Error::from_raw_os_error(code as i32).to_string();
     match text.rfind(" (os error ") {
@@ -1387,7 +1387,7 @@ pub fn win32_message(code: u32) -> String {
     }
 }
 
-/// C# GetNetworkPathErrorCode: UNC 경로를 읽지 못하면 GetLastError, 아니면 0.
+/// C# GetNetworkPathErrorCode: GetLastError if a UNC path cannot be read, otherwise 0.
 pub fn network_path_error(path: &Path) -> u32 {
     use windows_sys::Win32::Storage::FileSystem::{GetFileAttributesW, INVALID_FILE_ATTRIBUTES};
     if !path.to_string_lossy().starts_with("\\\\") {
@@ -1403,8 +1403,8 @@ pub fn network_path_error(path: &Path) -> u32 {
     }
 }
 
-/// C# PromptAndConnectNetworkShare: "\\서버\공유"에 Windows 자격 증명 창으로 임시 연결(CONNECT_TEMPORARY | INTERACTIVE | PROMPT).
-/// 공유 이름이 없으면 67(ERROR_BAD_NET_NAME). 결과는 Windows 오류 번호(0 = 성공, 1223 = 취소).
+/// C# PromptAndConnectNetworkShare: temporary connection to "\\server\share" via the Windows credential dialog (CONNECT_TEMPORARY | INTERACTIVE | PROMPT).
+/// 67 (ERROR_BAD_NET_NAME) if there is no share name. The result is the Windows error number (0 = success, 1223 = cancelled).
 pub fn connect_share_interactive(path: &str) -> u32 {
     use windows_sys::Win32::NetworkManagement::WNet::*;
     let normalized = match path.get(..8) {
@@ -1423,19 +1423,19 @@ pub fn connect_share_interactive(path: &str) -> u32 {
     unsafe { WNetAddConnection2W(&resource, ptr::null(), ptr::null(), 0x4 | 0x8 | 0x10) }
 }
 
-/// 이 창이 지금 앞 창(GetForegroundWindow)인지.
+/// Whether this window is currently the foreground window (GetForegroundWindow).
 pub fn is_foreground(hwnd: isize) -> bool {
     // SAFETY: plain system call without pointers.
     unsafe { GetForegroundWindow() as isize == hwnd }
 }
 
-/// C# WindowOpacity: 창 글 = clamp(WindowAlpha/255, 0.35, 1.0). 저장 알파(0~255)를 실제 불투명도(0.35~1.0)로.
+/// C# WindowOpacity: window alpha = clamp(WindowAlpha/255, 0.35, 1.0). Converts the stored alpha (0~255) into actual opacity (0.35~1.0).
 pub fn window_opacity(window_alpha: f64) -> f32 {
     (window_alpha / 255.0).clamp(0.35, 1.0) as f32
 }
 
-/// Windows 두 번 누르기 기준: GetDoubleClickTime(ms)과 SM_CXDOUBLECLK·SM_CYDOUBLECLK(화소, 첫 누름을 가운데로 한 사각).
-/// 원본 Delphi 컨트롤은 Windows가 이 기준으로 보낸 WM_LBUTTONDBLCLK(ssDouble)을 받는다. 처음 값은 500ms, 4×4.
+/// Windows double-click thresholds: GetDoubleClickTime (ms) and SM_CXDOUBLECLK / SM_CYDOUBLECLK (pixels, a rectangle centred on the first click).
+/// The original Delphi controls receive the WM_LBUTTONDBLCLK (ssDouble) that Windows sends by these thresholds. The defaults are 500ms and 4×4.
 pub fn double_click_metrics() -> (u32, i32, i32) {
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetDoubleClickTime;
     use windows_sys::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXDOUBLECLK, SM_CYDOUBLECLK};
@@ -1444,8 +1444,8 @@ pub fn double_click_metrics() -> (u32, i32, i32) {
     (if ms == 0 { 500 } else { ms }, if cx <= 0 { 4 } else { cx }, if cy <= 0 { 4 } else { cy })
 }
 
-/// C# SystemParameters.VirtualScreen*(DIP): 모든 모니터를 합친 화면(x, y, 너비, 높이)을 egui 점 단위로.
-/// GetSystemMetrics 화소를 시스템 DPI(LOGPIXELSX / 96)로 나눈다.
+/// C# SystemParameters.VirtualScreen* (DIP): the combined screen of all monitors (x, y, width, height) in egui points.
+/// Divides the GetSystemMetrics pixels by the system DPI (LOGPIXELSX / 96).
 pub fn virtual_screen_points() -> Option<(f32, f32, f32, f32)> {
     use windows_sys::Win32::Graphics::Gdi::{GetDC, GetDeviceCaps, LOGPIXELSX, ReleaseDC};
     use windows_sys::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN};
@@ -1478,7 +1478,7 @@ fn system_dpi_scale() -> f32 {
     }
 }
 
-/// (x, y)(egui 점) 자리 모니터의 작업 영역(작업 표시줄을 뺀 곳)을 egui 점 단위로(x, y, 너비, 높이).
+/// The work area (excluding the taskbar) of the monitor at (x, y) (egui points), in egui points (x, y, width, height).
 pub fn work_area_points(x: f32, y: f32) -> Option<(f32, f32, f32, f32)> {
     use windows_sys::Win32::Foundation::POINT;
     use windows_sys::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST};
@@ -1496,7 +1496,7 @@ pub fn work_area_points(x: f32, y: f32) -> Option<(f32, f32, f32, f32)> {
     }
 }
 
-/// 창을 최대화하고 되돌릴 크기(바깥 x, y, 너비, 높이, egui 점)를 정한다(SetWindowPlacement SW_SHOWMAXIMIZED).
+/// Maximizes the window and sets the restore size (outer x, y, width, height, egui points) (SetWindowPlacement SW_SHOWMAXIMIZED).
 pub fn maximize_with_restore(hwnd: isize, restore: (f32, f32, f32, f32)) -> bool {
     use windows_sys::Win32::Foundation::{POINT, RECT};
     use windows_sys::Win32::UI::WindowsAndMessaging::{SetWindowPlacement, SW_SHOWMAXIMIZED, WINDOWPLACEMENT};
@@ -1505,7 +1505,7 @@ pub fn maximize_with_restore(hwnd: isize, restore: (f32, f32, f32, f32)) -> bool
     }
     let scale = system_dpi_scale();
     let (x, y, w, h) = restore;
-    // rcNormalPosition은 작업 영역 기준 좌표다.
+    // rcNormalPosition is in work-area-relative coordinates.
     let (wx, wy) = work_area_points(x, y).map_or((0.0, 0.0), |(l, t, _, _)| (l, t));
     let placement = WINDOWPLACEMENT {
         length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
@@ -1519,8 +1519,8 @@ pub fn maximize_with_restore(hwnd: isize, restore: (f32, f32, f32, f32)) -> bool
     unsafe { SetWindowPlacement(hwnd as _, &placement) != 0 }
 }
 
-/// 원본 TForm.Width·Height와 C# Window.Width·Height(WindowWidth·WindowHeight)는 테두리·제목 줄을 포함한 바깥 크기다.
-/// 보통 창(WS_OVERLAPPEDWINDOW)의 바깥 크기 − 안쪽(내용) 크기를 AdjustWindowRectEx로 재서 egui 점 단위(시스템 DPI)로 돌려준다.
+/// The original TForm.Width/Height and C# Window.Width/Height (WindowWidth/WindowHeight) are the outer size including the border and title bar.
+/// Measures a normal window's (WS_OVERLAPPEDWINDOW) outer size − inner (content) size with AdjustWindowRectEx and returns it in egui points (system DPI).
 pub fn window_frame_points() -> Option<(f32, f32)> {
     use windows_sys::Win32::Graphics::Gdi::{GetDC, GetDeviceCaps, LOGPIXELSX, ReleaseDC};
     use windows_sys::Win32::UI::WindowsAndMessaging::{AdjustWindowRectEx, WS_OVERLAPPEDWINDOW};
@@ -1541,16 +1541,16 @@ pub fn window_frame_points() -> Option<(f32, f32)> {
     }
 }
 
-/// C# ApplyWindowBoundsFromSettings: Left = clamp(저장, 화면 왼쪽 − 너비 + 96, 화면 오른쪽 − 96),
-/// Top = clamp(저장, 화면 위 − 높이 + 64, 화면 아래 − 64). 창이 화면 밖으로 사라지지 않게 일부는 보이게 둔다.
+/// C# ApplyWindowBoundsFromSettings: Left = clamp(stored, screen left − width + 96, screen right − 96),
+/// Top = clamp(stored, screen top − height + 64, screen bottom − 64). Keeps part of the window visible so it does not disappear off-screen.
 pub fn clamp_window_position(left: f32, top: f32, width: f32, height: f32, screen: (f32, f32, f32, f32)) -> (f32, f32) {
     let (sx, sy, sw, sh) = screen;
     let clamp = |value: f32, low: f32, high: f32| if low > high { low } else { value.clamp(low, high) };
     (clamp(left, sx - width + 96.0, sx + sw - 96.0), clamp(top, sy - height + 64.0, sy + sh - 64.0))
 }
 
-/// C# WindowOpacity: 창 알파(0.0~1.0)를 바로 적용한다(SetLayeredWindowAttributes). egui에는 창 불투명도 명령이 없어
-/// 네이티브 HWND로 WS_EX_LAYERED를 켜고 알파를 넣는다. 1.0이면 그대로 불투명(255).
+/// C# WindowOpacity: applies the window alpha (0.0~1.0) directly (SetLayeredWindowAttributes). egui has no window-opacity command, so this
+/// turns on WS_EX_LAYERED via the native HWND and sets the alpha. 1.0 stays fully opaque (255).
 pub fn set_window_opacity(hwnd: isize, alpha: f32) {
     use windows_sys::Win32::UI::WindowsAndMessaging::{GetWindowLongPtrW, SetWindowLongPtrW, SetLayeredWindowAttributes, GWL_EXSTYLE, LWA_ALPHA, WS_EX_LAYERED};
     if hwnd == 0 {
@@ -1568,8 +1568,8 @@ pub fn set_window_opacity(hwnd: isize, alpha: f32) {
 }
 
 
-/// 원본 TColorDialog.Execute(환경 설정 색 쪽): Windows 색 고르기 상자(ChooseColorW, 처음 색 = initial). COLORREF(0x00BBGGRR).
-/// 사용자 지정 색 16칸은 프로그램이 도는 동안 기억한다(Delphi TColorDialog.CustomColors 자리). 취소면 None. 모달이다.
+/// Original TColorDialog.Execute (the preferences color side): the Windows color picker (ChooseColorW, initial color = initial). COLORREF (0x00BBGGRR).
+/// The 16 custom-color slots are remembered while the program runs (stands in for Delphi TColorDialog.CustomColors). None on cancel. It is modal.
 pub fn choose_color(initial: u32) -> Option<u32> {
     use std::sync::Mutex;
     use windows_sys::Win32::UI::Controls::Dialogs::{CC_ANYCOLOR, CC_FULLOPEN, CC_RGBINIT, CHOOSECOLORW, ChooseColorW};
@@ -1580,14 +1580,14 @@ pub fn choose_color(initial: u32) -> Option<u32> {
     choose.lStructSize = std::mem::size_of::<CHOOSECOLORW>() as u32;
     choose.rgbResult = initial & 0x00FF_FFFF;
     choose.lpCustColors = custom.as_mut_ptr();
-    // 원본 DFM: ColorDialog Options={cdFullOpen}.
+    // Original DFM: ColorDialog Options={cdFullOpen}.
     choose.Flags = CC_RGBINIT | CC_ANYCOLOR | CC_FULLOPEN;
     // SAFETY: the struct and the 16-entry custom colour array outlive the modal call.
     (unsafe { ChooseColorW(&mut choose) } != 0).then_some(choose.rgbResult & 0x00FF_FFFF)
 }
 
-/// 원본 btnFontClick(TFontDialog.Execute, 처음 Options = fdEffects): Windows 글꼴 상자(ChooseFontW).
-/// 처음 값 = (이름, 포인트, 원본 TFontStyles 바이트: 1 굵게, 2 기울임, 4 밑줄, 8 취소선). 확인이면 같은 셋. 모달이다.
+/// Original btnFontClick (TFontDialog.Execute, initial Options = fdEffects): the Windows font dialog (ChooseFontW).
+/// Initial value = (name, points, original TFontStyles byte: 1 bold, 2 italic, 4 underline, 8 strikeout). On OK the same set. It is modal.
 pub fn choose_font(name: &str, points: f32, style: u8) -> Option<(String, f32, u8)> {
     use windows_sys::Win32::Graphics::Gdi::LOGFONTW;
     use windows_sys::Win32::UI::Controls::Dialogs::{CF_EFFECTS, CF_INITTOLOGFONTSTRUCT, CF_NOVERTFONTS, CF_SCREENFONTS, CHOOSEFONTW, ChooseFontW};
@@ -1616,7 +1616,7 @@ pub fn choose_font(name: &str, points: f32, style: u8) -> Option<(String, f32, u
     Some((String::from_utf16_lossy(&font.lfFaceName[..length]), choose.iPointSize as f32 / 10.0, style))
 }
 
-/// 원본 TFontStyles(1 굵게, 2 기울임)에 맞는 글꼴 레지스트리 이름 후보: 그 꼴 이름("Segoe UI Bold Italic")부터 가까운 꼴, 마지막은 보통 꼴.
+/// Font registry name candidates matching the original TFontStyles (1 bold, 2 italic): from the styled name ("Segoe UI Bold Italic") toward nearer styles, ending with the regular face.
 pub fn styled_font_names(family: &str, style: u8) -> Vec<String> {
     let family = family.trim();
     let suffixes: &[&str] = match style & 3 {
@@ -1628,21 +1628,21 @@ pub fn styled_font_names(family: &str, style: u8) -> Vec<String> {
     suffixes.iter().map(|suffix| format!("{family}{suffix}")).chain(std::iter::once(family.to_owned())).collect()
 }
 
-/// 화면 좌표의 마우스 위치(물리 화소). 셸 끌기·탐색기에서 놓을 때 egui 포인터 위치가 낡아 있으므로 이것을 쓴다.
+/// The mouse position in screen coordinates (physical pixels). Used because the egui pointer position is stale when dropping from a shell drag / Explorer.
 pub fn cursor_position() -> Option<(i32, i32)> {
     let mut point = POINT { x: 0, y: 0 };
     // SAFETY: the out pointer refers to a live local.
     (unsafe { GetCursorPos(&mut point) } != 0).then_some((point.x, point.y))
 }
 
-/// 원본 WMChar(0x7d5a18)의 GetKeyState(VK_CAPITAL) != 0(Caps Lock이 켜졌거나 눌린 상태).
+/// GetKeyState(VK_CAPITAL) != 0 from the original WMChar (0x7d5a18) (Caps Lock is on or held).
 pub fn caps_lock_state() -> bool {
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_CAPITAL};
     // SAFETY: plain system call without pointers.
     unsafe { GetKeyState(VK_CAPITAL as i32) != 0 }
 }
 
-/// 놓을 때의 Ctrl/Shift(C# DragEventArgs.KeyStates). (ctrl, shift).
+/// The Ctrl/Shift state at drop time (C# DragEventArgs.KeyStates). (ctrl, shift).
 pub fn drop_modifiers() -> (bool, bool) {
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_CONTROL, VK_SHIFT};
     // SAFETY: plain system calls without pointers.
@@ -1669,8 +1669,8 @@ impl windows::Win32::System::Ole::IDropSource_Impl for FileDropSource_Impl {
     }
 }
 
-/// C# FileList_PreviewMouseMove의 DoDragDrop(FileDrop, Copy | Move | Link): 셸 데이터 개체로 NDR 밖(탐색기 등)에 끌어 놓는다.
-/// 놓은 쪽이 복사·이동·바로 가기를 한다. 결과 효과(DROPEFFECT 비트, 0 = 취소).
+/// C# FileList_PreviewMouseMove's DoDragDrop(FileDrop, Copy | Move | Link): drags out of NDR (to Explorer, etc.) via a shell data object.
+/// The drop target does the copy/move/shortcut. Returns the resulting effect (DROPEFFECT bits, 0 = cancelled).
 pub fn drag_files_out(paths: &[PathBuf]) -> Result<u32, String> {
     use windows::Win32::System::Com::IDataObject;
     use windows::Win32::System::Ole::{DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_LINK, DROPEFFECT_MOVE, DoDragDrop, IDropSource};
@@ -1703,8 +1703,8 @@ pub fn drag_files_out(paths: &[PathBuf]) -> Result<u32, String> {
     }
 }
 
-/// C# OriginalShortcutService.ExistingTargetFolder (원본 FUN_00441af4): SHGetSpecialFolderPathW(CSIDL_DESKTOPDIRECTORY 0x10)
-/// 또는 CSIDL_APPDATA(0x1a) + "Microsoft\Internet Explorer\Quick Launch". 폴더가 있을 때만(만들지 않는다).
+/// C# OriginalShortcutService.ExistingTargetFolder (original FUN_00441af4): SHGetSpecialFolderPathW(CSIDL_DESKTOPDIRECTORY 0x10)
+/// or CSIDL_APPDATA (0x1a) + "Microsoft\Internet Explorer\Quick Launch". Only when the folder exists (does not create it).
 pub fn shortcut_target_folder(quick_launch: bool) -> Option<PathBuf> {
     let mut buffer = [0u16; 1024];
     // SAFETY: the buffer is larger than MAX_PATH as SHGetSpecialFolderPathW requires.
@@ -1720,7 +1720,7 @@ pub fn shortcut_target_folder(quick_launch: bool) -> Option<PathBuf> {
     (!folder.as_os_str().is_empty() && folder.exists()).then_some(folder)
 }
 
-/// C# OriginalShortcutService.LinkPath: PathAppendW(folder, PathStripPathW(target)) + ".lnk" — 대상 확장자는 남긴다.
+/// C# OriginalShortcutService.LinkPath: PathAppendW(folder, PathStripPathW(target)) + ".lnk" — keeps the target's extension.
 pub fn original_link_path(target: &Path, folder: &Path) -> PathBuf {
     let name = crate::names::find_file_name(&target.to_string_lossy());
     let mut link = folder.join(name).into_os_string();
@@ -1728,7 +1728,7 @@ pub fn original_link_path(target: &Path, folder: &Path) -> PathBuf {
     PathBuf::from(link)
 }
 
-/// GetLongPathNameW(짧은 이름 "PROGRA~1"을 긴 이름으로). 실패하면 None.
+/// GetLongPathNameW (short name "PROGRA~1" to long name). None on failure.
 pub fn long_path(path: &Path) -> Option<PathBuf> {
     use windows_sys::Win32::Storage::FileSystem::GetLongPathNameW;
     let short = wide(path);
@@ -1738,8 +1738,8 @@ pub fn long_path(path: &Path) -> Option<PathBuf> {
     (length > 0 && length < long.len()).then(|| PathBuf::from(String::from_utf16_lossy(&long[..length])))
 }
 
-/// 원본 GetShortcutTarget(바로 가기, &WIN32_FIND_DATAW): IShellLinkW를 읽어(IPersistFile::Load) 대상 경로(GetPath)와 그 찾기 자료의
-/// 속성이 폴더(FILE_ATTRIBUTE_DIRECTORY)인지. 읽지 못하면 None.
+/// Original GetShortcutTarget(shortcut, &WIN32_FIND_DATAW): reads an IShellLinkW (IPersistFile::Load) and returns the target path (GetPath) and
+/// whether that find data's attributes are a folder (FILE_ATTRIBUTE_DIRECTORY). None if it cannot be read.
 pub fn shortcut_target(link: &Path) -> Option<(PathBuf, bool)> {
     use windows::{
         Win32::{
@@ -1770,9 +1770,9 @@ pub fn shortcut_target(link: &Path) -> Option<(PathBuf, bool)> {
     }
 }
 
-/// C# OriginalShortcutService.Create (원본 @CreateShortcut 0x7b3d04): SetPath(대상), SetArguments(""),
-/// SetWorkingDirectory(PathRemoveFileSpecW(대상)), SetIconLocation(NULL, 1), SetHotkey(0), SetShowCmd(0),
-/// IPersistFile::Save(링크, TRUE) — 있는 링크는 조용히 바꾼다. 원본 호출부는 결과를 보지 않는다.
+/// C# OriginalShortcutService.Create (original @CreateShortcut 0x7b3d04): SetPath(target), SetArguments(""),
+/// SetWorkingDirectory(PathRemoveFileSpecW(target)), SetIconLocation(NULL, 1), SetHotkey(0), SetShowCmd(0),
+/// IPersistFile::Save(link, TRUE) — silently replaces an existing link. The original caller does not check the result.
 pub fn create_original_shortcut(target: &Path, folder: &Path) -> Result<(), String> {
     use windows::{
         Win32::{
@@ -1809,7 +1809,7 @@ pub fn create_original_shortcut(target: &Path, folder: &Path) -> Result<(), Stri
     }
 }
 
-/// Environment.GetFolderPath(Desktop/MyDocuments/MyPictures/MyMusic/MyVideos) = 해당 알려진 폴더.
+/// Environment.GetFolderPath(Desktop/MyDocuments/MyPictures/MyMusic/MyVideos) = the corresponding known folder.
 pub fn special_folder(name: &str) -> Option<PathBuf> {
     let id = match name {
         "desktop" => &FOLDERID_Desktop,
@@ -1822,15 +1822,15 @@ pub fn special_folder(name: &str) -> Option<PathBuf> {
     known_folder(id)
 }
 
-/// Windows 시스템 색(GetSysColor, 예: 13 COLOR_HIGHLIGHT, 14 COLOR_HIGHLIGHTTEXT)을 (R, G, B)로.
+/// A Windows system color (GetSysColor, e.g. 13 COLOR_HIGHLIGHT, 14 COLOR_HIGHLIGHTTEXT) as (R, G, B).
 pub fn system_color(index: i32) -> (u8, u8, u8) {
     // SAFETY: GetSysColor only reads a colour table entry.
     let value = unsafe { windows_sys::Win32::Graphics::Gdi::GetSysColor(index as _) };
     ((value & 0xff) as u8, ((value >> 8) & 0xff) as u8, ((value >> 16) & 0xff) as u8)
 }
 
-/// C# FileInformationService.GetShellTypeName: SHGetFileInfoW("folder" | "file" | "file.ext", 폴더/보통 속성,
-/// SHGFI_TYPENAME | SHGFI_USEFILEATTRIBUTES). 실패면 빈 글.
+/// C# FileInformationService.GetShellTypeName: SHGetFileInfoW("folder" | "file" | "file.ext", folder/normal attributes,
+/// SHGFI_TYPENAME | SHGFI_USEFILEATTRIBUTES). Empty string on failure.
 pub fn shell_type_name(extension: &str, is_dir: bool) -> String {
     let lookup = if is_dir { "folder".to_owned() } else if extension.is_empty() { "file".to_owned() } else { format!("file{extension}") };
     let name = wide(&lookup);
@@ -1845,8 +1845,8 @@ pub fn shell_type_name(extension: &str, is_dir: bool) -> String {
     String::from_utf16_lossy(&info.szTypeName[..length]).trim().to_owned()
 }
 
-/// C# IsWindowsLightTheme: HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize의 AppsUseLightTheme(없으면 1) != 0.
-/// 읽지 못하면 false. (C#의 고대비 분기는 옮기지 않았다.)
+/// C# IsWindowsLightTheme: HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize's AppsUseLightTheme (1 if absent) != 0.
+/// false if it cannot be read. (C#'s high-contrast branch was not ported.)
 pub fn windows_light_theme() -> bool {
     use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};
     let key = wide(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
@@ -1857,18 +1857,18 @@ pub fn windows_light_theme() -> bool {
     let status = unsafe { RegGetValueW(HKEY_CURRENT_USER, key.as_ptr(), value.as_ptr(), RRF_RT_REG_DWORD, ptr::null_mut(), (&mut data as *mut u32).cast(), &mut size) };
     match status {
         0 => data != 0,
-        2 => true, // ERROR_FILE_NOT_FOUND: GetValue 기본값 1
+        2 => true, // ERROR_FILE_NOT_FOUND: GetValue default is 1
         _ => false,
     }
 }
 
-/// 원본 pmEditPopup: IsClipboardFormatAvailable(CF_HDROP = 15). 클립보드를 열지 않는다.
+/// Original pmEditPopup: IsClipboardFormatAvailable(CF_HDROP = 15). Does not open the clipboard.
 pub fn clipboard_has_files() -> bool {
     // SAFETY: no pointers; only queries the clipboard format list.
     unsafe { IsClipboardFormatAvailable(15) != 0 }
 }
 
-/// 원본 miEmptyTempClick: GetTempPathW(0x400) → GetLongPathNameW(0x400). 둘 중 하나라도 실패하면 None.
+/// Original miEmptyTempClick: GetTempPathW(0x400) → GetLongPathNameW(0x400). None if either one fails.
 pub fn temp_folder() -> Option<PathBuf> {
     use std::os::windows::ffi::OsStringExt;
     let mut short = [0u16; 0x400];
@@ -1885,7 +1885,7 @@ pub fn temp_folder() -> Option<PathBuf> {
     Some(PathBuf::from(std::ffi::OsString::from_wide(&long[..length])))
 }
 
-/// StrFormatByteSizeW(크기, 0x80 칸) — 원본이 크기 글에 쓰는 셸 형식("1.50 MB", "512 bytes").
+/// StrFormatByteSizeW(size, 0x80 slots) — the shell format the original uses for size text ("1.50 MB", "512 bytes").
 pub fn format_byte_size(bytes: u64) -> String {
     let mut buffer = [0u16; 0x80];
     // SAFETY: the buffer holds 0x80 UTF-16 units and the length passed matches it.
@@ -1897,14 +1897,14 @@ pub fn format_byte_size(bytes: u64) -> String {
     String::from_utf16_lossy(&buffer[..end])
 }
 
-/// 원본 고급 선택(FUN_00438034)의 PathMatchSpecW(파일 이름, 필터 하나) == 1.
+/// PathMatchSpecW(file name, single filter) == 1 from the original advanced selection (FUN_00438034).
 pub fn path_match_spec(file: &str, spec: &str) -> bool {
     let (file, spec) = (wide(file), wide(spec));
     // SAFETY: both arguments are NUL-terminated UTF-16 buffers that outlive the call.
     unsafe { PathMatchSpecW(file.as_ptr(), spec.as_ptr()) == 1 }
 }
 
-/// .NET FileAttributes.ToString(): 알려진 플래그 이름을 값이 작은 것부터 ", "로. 모르는 비트가 남으면 숫자, 0이면 "0".
+/// .NET FileAttributes.ToString(): known flag names from smallest value, joined with ", ". If unknown bits remain, the number; "0" if 0.
 pub fn dotnet_attributes_text(attributes: u32) -> String {
     const NAMES: [(u32, &str); 16] = [
         (0x1, "ReadOnly"), (0x2, "Hidden"), (0x4, "System"), (0x10, "Directory"), (0x20, "Archive"), (0x40, "Device"),
@@ -1921,8 +1921,8 @@ pub fn dotnet_attributes_text(attributes: u32) -> String {
     NAMES.iter().filter(|(bit, _)| attributes & bit != 0).map(|(_, name)| *name).collect::<Vec<_>>().join(", ")
 }
 
-/// 글꼴 레지스트리 값 이름("Segoe UI (TrueType)", "Cambria & Cambria Math (TrueType)")에서 family의 보통 꼴을 고른다.
-/// 이름 부분을 " & "로 나눈 목록에 family가 그대로 있으면 (값 이름, 그 차례 = TTC 번호). 굵게·기울임 등 다른 꼴 이름은 맞지 않는다.
+/// From a font registry value name ("Segoe UI (TrueType)", "Cambria & Cambria Math (TrueType)"), picks the regular face of `family`.
+/// If `family` appears verbatim in the list split by " & ", returns (value name, its index = TTC number). Other style names like bold/italic do not match.
 pub fn match_font_entry<'a>(names: impl IntoIterator<Item = &'a str>, family: &str) -> Option<(&'a str, u32)> {
     let family = family.trim();
     if family.is_empty() {
@@ -1934,8 +1934,8 @@ pub fn match_font_entry<'a>(names: impl IntoIterator<Item = &'a str>, family: &s
     })
 }
 
-/// 원본·C# 판 목록 글꼴(ListFont) 이름의 글꼴 파일: HKCU·HKLM "Software\Microsoft\Windows NT\CurrentVersion\Fonts"의 값에서
-/// match_font_entry로 고른 파일(상대 이름이면 %WINDIR%\Fonts)과 TTC 번호.
+/// The font file for the original/C# list font (ListFont) name: from the values of HKCU/HKLM "Software\Microsoft\Windows NT\CurrentVersion\Fonts",
+/// the file picked by match_font_entry (relative names resolve to %WINDIR%\Fonts) and the TTC number.
 pub fn font_file(family: &str) -> Option<(PathBuf, u32)> {
     use windows_sys::Win32::System::Registry::*;
     let subkey = wide("Software\\Microsoft\\Windows NT\\CurrentVersion\\Fonts");
@@ -2013,20 +2013,20 @@ mod tests {
         // C#: clamp(WindowAlpha/255, 0.35, 1.0).
         assert_eq!(window_opacity(255.0), 1.0);
         assert_eq!(window_opacity(210.0), (210.0f32 / 255.0));
-        // 아래로는 0.35에서 멈춘다(완전히 투명해지지 않음).
+        // Clamps to 0.35 at the low end (never fully transparent).
         assert_eq!(window_opacity(0.0), 0.35);
         assert_eq!(window_opacity(80.0), 0.35);
-        // 위로는 1.0에서 멈춘다.
+        // Clamps to 1.0 at the high end.
         assert_eq!(window_opacity(300.0), 1.0);
     }
 
     #[test]
     fn connected_network_drives_get_a_name_from_their_target() {
-        // "\??\UNC\…" 꼴(예: 9P·WebDAV 연결)과 SMB(LanmanRedirector) 꼴.
+        // "\??\UNC\…" form (e.g. 9P/WebDAV connections) and the SMB (LanmanRedirector) form.
         assert_eq!(dos_device_unc(r"\??\UNC\host\share\folder").as_deref(), Some(r"\\host\share\folder"));
         assert_eq!(dos_device_unc(r"\Device\LanmanRedirector\;Z:0000000000012345\server\share").as_deref(), Some(r"\\server\share"));
         assert_eq!(dos_device_unc(r"\Device\HarddiskVolume3"), None);
-        // 이름 = 연결 대상 UNC 경로(끝 '\' 뺌). 서버만 있으면 이름이 아니다.
+        // Name = the connection's target UNC path (trailing '\' removed). A server alone is not a name.
         assert_eq!(network_drive_name(r"\\host\share\folder").as_deref(), Some(r"\\host\share\folder"));
         assert_eq!(network_drive_name(r"\\server\share\").as_deref(), Some(r"\\server\share"));
         assert_eq!(network_drive_name(r"\\server"), None);
@@ -2035,13 +2035,13 @@ mod tests {
     #[test]
     fn window_position_is_clamped_onto_the_screen_like_csharp() {
         let screen = (0.0, 0.0, 1920.0, 1080.0);
-        // 화면 안이면 그대로.
+        // Unchanged if on-screen.
         assert_eq!(clamp_window_position(10.0, 10.0, 1450.0, 900.0, screen), (10.0, 10.0));
-        // 오른쪽·아래로 벗어나면 96×64는 보이게.
+        // If off the right/bottom, keep 96×64 visible.
         assert_eq!(clamp_window_position(5000.0, 5000.0, 1450.0, 900.0, screen), (1824.0, 1016.0));
-        // 왼쪽·위로 벗어나면 오른쪽 96·아래 64가 보이게.
+        // If off the left/top, keep 96 on the right / 64 on the bottom visible.
         assert_eq!(clamp_window_position(-5000.0, -5000.0, 1450.0, 900.0, screen), (-1354.0, -836.0));
-        // 왼쪽 모니터(음수 좌표)도 가상 화면 안이면 그대로.
+        // A left monitor (negative coordinates) is unchanged if inside the virtual screen.
         assert_eq!(clamp_window_position(-1500.0, 100.0, 1450.0, 900.0, (-1920.0, 0.0, 3840.0, 1080.0)), (-1500.0, 100.0));
     }
 }

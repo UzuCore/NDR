@@ -83,7 +83,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// 원본 TNXShellChangeNotify 생성자(0x7b3304): Delay(+0x40) = 0x5dc = 1500ms.
+/// Original TNXShellChangeNotify constructor (0x7b3304): Delay(+0x40) = 0x5dc = 1500ms.
 const FOLDER_CHANGE_DELAY: Duration = Duration::from_millis(1500);
 
 pub(super) fn resource_dir() -> PathBuf {
@@ -114,92 +114,92 @@ struct Pane {
     anchor: usize,
     tabs: Vec<PathBuf>,
     tab: usize,
-    /// 탭마다의 (뒤로, 앞으로) 기록(C# 탭마다 PaneState). 지금 탭의 기록은 back/forward에 있다.
+    /// (back, forward) history per tab (C# PaneState per tab). The current tab's history lives in back/forward.
     tab_history: Vec<(Vec<PathBuf>, Vec<PathBuf>)>,
     back: Vec<PathBuf>,
     forward: Vec<PathBuf>,
-    /// C# FilterPattern: ';'로 나눈 이름 마스크. 목록을 받을 때 적용한다.
+    /// C# FilterPattern: name masks split by ';'. Applied when a listing arrives.
     filter: String,
     show_hidden: bool,
     loading: bool,
     generation: u64,
     error: Option<String>,
     archive: Option<ArchiveLocation>,
-    /// 원본 패널 FTP 모드(FUN_00481948 == 2): 연결과 원격 폴더. path는 연결 전 로컬 폴더로 남는다.
+    /// Original panel FTP mode (FUN_00481948 == 2): the connection and the remote folder. path stays as the local folder from before connecting.
     remote: Option<ftp_pane::PaneRemote>,
-    /// 원본 FTP 기록 칸 높이(처음 60, 위 나눔 막대로 바꾼다).
+    /// Original FTP log pane height (starts at 60, changed via the upper splitter bar).
     ftp_log_height: f32,
     descriptions: HashMap<String, String>,
-    /// 화면에 쓰는 열 글·색·묶음 줄(sort_pane에서 다시 만든다).
+    /// Column text/color/grouping rows drawn on screen (rebuilt in sort_pane).
     view: PaneView,
-    /// 정보 표시줄의 목록 요약(C# PaneState.UpdateSummary). 새 목록이 오면 None.
+    /// Listing summary for the info bar (C# PaneState.UpdateSummary). None when a new listing arrives.
     summary: Option<main_window::PaneSummary>,
-    /// 원본 정보 표시줄의 디스크 재료(드라이브 글 "이름 (C:) ", 여유, 전체). 읽지 못했으면 None.
+    /// Original info bar disk data (drive letter "Name (C:) ", free, total). None if it could not be read.
     disk: Option<(String, u64, u64)>,
-    /// 내 PC 보기의 드라이브 항목 정보(원본 TNXDriveInfo: 이름, 종류, 고정 디스크면 크기).
+    /// Drive entry info in My PC view (original TNXDriveInfo: name, kind, size if a fixed disk).
     drive_infos: HashMap<PathBuf, (String, u32, Option<(u64, u64)>)>,
-    /// 주소 표시줄을 글 칸으로 바꿔 입력 중(C# _addressEditing).
+    /// Editing the address bar as a text field (C# _addressEditing).
     address_editing: bool,
-    /// 폴더 크기 자동 표시(경로 → None = 세는 중, Some(글)). 새 목록이 오면 비운다.
+    /// Automatic folder size display (path -> None = counting, Some(text)). Cleared when a new listing arrives.
     folder_sizes: HashMap<PathBuf, Option<String>>,
-    /// 센 폴더 크기(바이트). 원본 파일 정보 표시줄(FUN_0048a5cc)은 항목 크기를 FloatToStrF(ffNumber)로 보인다.
+    /// Counted folder sizes (bytes). The original file info bar (FUN_0048a5cc) shows the entry size via FloatToStrF(ffNumber).
     folder_bytes: HashMap<PathBuf, u64>,
-    /// 지금 목록의 폴더 크기 세기를 멈추는 표시(C# CancelFolderSizeJobs).
+    /// Flag to stop counting folder sizes for the current listing (C# CancelFolderSizeJobs).
     folder_cancel: Arc<AtomicBool>,
-    /// 이 위치에서 이미 네트워크 공유 연결 창을 띄웠는지(C# allowNetworkAuthPrompt: 한 번만).
+    /// Whether the network share connection dialog has already been shown at this location (C# allowNetworkAuthPrompt: once only).
     auth_prompted: bool,
-    /// 지난 그림의 쪽 정보(원본 ArrowKey가 쓰는 한 열의 줄 수·보이는 열 수·맨 위 항목).
+    /// Page info from the last paint (rows per column, visible column count, top item; used by the original ArrowKey).
     page: list_keys::ListPage,
-    /// 열로 흐르는 목록(자동·이름)의 처음 보이는 열(원본 가로 위치 0x378 / 열 너비).
+    /// First visible column of a column-flowing listing (auto/name) (original horizontal position 0x378 / column width).
     first_column: usize,
-    /// 자세히 보기의 가로 위치(원본 0x378, 화소). 칸 너비 합이 목록보다 넓을 때만 0보다 크다.
+    /// Horizontal position of the detail view (original 0x378, pixels). Greater than 0 only when the total column width exceeds the list width.
     detail_x: f32,
-    /// 지난 그림의 미리 보기 줄 자리(줄마다 위·높이, 맨 위 위치, 목록 높이, 열 수). 원본 형식 3 PageUp·PageDown이 쓴다.
+    /// Thumbnail row positions from the last paint (per-row top/height, top position, list height, column count). Used by the original PageUp/PageDown in style 3.
     thumb_rows: Option<(Vec<f32>, Vec<f32>, f32, f32, usize)>,
-    /// 미리 보기 줄 높이 캐시(열쇠, 높이들): 목록·칸 수·크기가 같으면 다시 재지 않는다.
+    /// Thumbnail row height cache (key, heights): not recomputed when list/column count/size are unchanged.
     thumb_heights: Option<(u64, Vec<f32>)>,
-    /// 원본 패널 폴더 트리(TNXShellTreeView, miShowFoldersClick): 펼친 폴더와, 펼침을 맞춘 마지막 패널 위치(SetPath).
+    /// Original panel folder tree (TNXShellTreeView, miShowFoldersClick): expanded folders and the last panel location whose expansion was synced (SetPath).
     tree_open: HashSet<PathBuf>,
     tree_synced: Option<PathBuf>,
-    /// 트리에서 고른 항목(열쇠). None이면 패널 위치의 줄(가상 폴더를 고르면 패널은 그대로라 따로 둔다).
+    /// Item selected in the tree (key). None means the row at the panel location (selecting a virtual folder leaves the panel unchanged, so it is kept separately).
     tree_selected: Option<PathBuf>,
-    /// 트리 이름 바꾸기(원본 TTreeView ReadOnly = False → TVS_EDITLABELS, TNXCustomShellTreeView.Edit 0x7edf70):
-    /// 고른 항목의 글을 다시 누르면 더블클릭 시간 뒤 그 자리에서 고친다. (열쇠, 누른 시각)과 고치는 중인 (폴더, 글).
+    /// Tree label rename (original TTreeView ReadOnly = False -> TVS_EDITLABELS, TNXCustomShellTreeView.Edit 0x7edf70):
+    /// clicking the selected item's text again edits it in place after the double-click interval. (key, click time) and the (folder, text) being edited.
     tree_label_click: Option<(PathBuf, Instant)>,
     tree_edit: Option<(PathBuf, String)>,
-    /// 지난 장면의 트리 줄(항목, 깊이, 펼칠 수 있음, 펼쳐짐)과 자리·한 쪽 줄 수, 고른 줄을 보이게 넘길지.
+    /// Tree rows from the last frame (item, depth, expandable, expanded) plus position/rows per page, and whether to scroll the selected row into view.
     tree_rows: Vec<(ndr::shell_tree::ShellNode, usize, bool, bool)>,
     tree_rect: Option<egui::Rect>,
     tree_page: usize,
     tree_first: usize,
     tree_scroll_to: bool,
-    /// 원본 TNXShellChangeNotify(+0x374): 지켜보는 로컬 폴더와 그 감시 스레드를 멈출 표시.
+    /// Original TNXShellChangeNotify (+0x374): the local folder being watched and the flag to stop its watcher thread.
     watch: Option<(PathBuf, Arc<AtomicBool>)>,
-    /// 바뀜 알림 뒤 새로 읽을 때와 그동안 늦춘 횟수(원본 Delay 1500ms, 20번까지 다시 늦춘다).
+    /// When to re-read after a change notification and how many times it has been deferred meanwhile (original Delay 1500ms, defers again up to 20 times).
     change_due: Option<(Instant, u32)>,
-    /// 다음 그림에서 커서가 보이게 넘긴다(원본 SetItemIndex).
+    /// Scroll the cursor into view on the next paint (original SetItemIndex).
     reveal: bool,
-    /// 원본 AdjustPage(0x7daf24): 다음 그림에서 이 항목 번호에 맞춰 위치를 다시 잡는다. 목록 크기가 바뀔 때(WMSize 0x7d5814),
-    /// 보기 형식이 바뀔 때(SetListStyle 0x7dc6d4), 같은 위치를 다시 읽었을 때(FileListChanged 0x7d79c8, 열로 흐르는 목록만).
-    /// 두 번째 값이 참이면 목록을 다시 읽어서다(자세히·미리 보기는 원본이 그 뒤 SetScrollTop(옛 위치)로 되돌리므로 무시한다).
+    /// Original AdjustPage (0x7daf24): on the next paint, reposition to this item number. When the list size changes (WMSize 0x7d5814),
+    /// when the view style changes (SetListStyle 0x7dc6d4), or when the same location is re-read (FileListChanged 0x7d79c8, column-flowing listings only).
+    /// If the second value is true it is because of a re-read (detail/thumbnail views are ignored because the original then reverts with SetScrollTop(old position)).
     adjust: Option<(usize, bool)>,
-    /// 지난 그림의 목록 크기와 보기 형식(바뀌면 adjust).
+    /// List size and view style from the last paint (adjust when changed).
     list_shape: Option<(egui::Vec2, String)>,
-    /// 지난 화면의 목록 영역(끄는 동안 가장자리 자동 굴리기에 쓴다).
+    /// List area from the last frame (used for auto edge scrolling while dragging).
     list_rect: Option<egui::Rect>,
-    /// 이번 화면에 목록을 굴릴 칸 수(세로, 가로): 원본 TNXDropTarget.DoTargetScroll이 WM_VSCROLL/WM_HSCROLL SB_LINEUP·SB_LINEDOWN을 보낸 자리.
+    /// Lines to scroll the list this frame (vertical, horizontal): where the original TNXDropTarget.DoTargetScroll sent WM_VSCROLL/WM_HSCROLL SB_LINEUP/SB_LINEDOWN.
     drag_scroll: (i8, i8),
-    /// 패널 폴더 트리를 굴릴 줄 수(끄는 동안 위·아래 가장자리).
+    /// Rows to scroll the panel folder tree (top/bottom edge while dragging).
     tree_drag_scroll: i8,
-    /// Shift를 누른 채 움직이기 시작한 자리(원본 SetShiftDownIndex 0xf4).
+    /// Where a drag started while Shift was held (original SetShiftDownIndex 0xf4).
     shift_anchor: Option<usize>,
-    /// 원본 표시 칸 끌기(+0x3d4 기준 줄, +0x3d8 지난 끝 줄). 왼쪽 단추를 놓으면 없앤다(MouseUp).
+    /// Original display column drag (+0x3d4 base row, +0x3d8 last end row). Cleared when the left button is released (MouseUp).
     range_drag: Option<(usize, usize)>,
-    /// 원본 Edit > 잘라내기(0x433dd8)가 표시한 항목(항목 +100, 아이콘을 흐리게). 새 목록이 오면 없어진다(새 항목).
+    /// Items marked by original Edit > Cut (0x433dd8) (item +100, icon dimmed). Cleared when a new listing arrives (new items).
     cut_marks: HashSet<PathBuf>,
-    /// 지난번 받은 목록의 위치(location_key). 같은 위치를 다시 읽으면 커서를 같은 이름에 둔다.
+    /// Location of the previously received listing (location_key). When the same location is re-read, the cursor stays on the same name.
     listed: Option<String>,
-    /// 원본 MouseDown이 항목을 눌렀다(두 번째 누름이 아님). 원본은 그때 찾는 글을 지우므로(가상 +0x160("")) 빠른 찾기가 받아 지운다.
+    /// Original MouseDown pressed an item (not a second press). The original clears the search text then (virtual +0x160("")), so quick search picks it up and clears.
     item_pressed: bool,
 }
 impl Pane {
@@ -281,11 +281,11 @@ impl Pane {
                 .collect()
         }
     }
-    /// 목록 끝 드라이브 항목(원본 종류 4) 수.
+    /// Number of drive entries at the end of the list (original kind 4).
     pub(super) fn drive_count(&self) -> usize {
         self.entries.iter().filter(|e| e.drive).count()
     }
-    /// 원본 Select(0x7dc834): 드라이브 항목과 ".."은 고르지 않는다(+0x67). 표시한 줄에서 뺀다.
+    /// Original Select (0x7dc834): drive entries and ".." are not selected (+0x67). Remove them from marked rows.
     pub(super) fn drop_drive_marks(&mut self) {
         if self.selected.iter().any(|i| self.entries.get(*i).is_some_and(|e| e.drive || e.is_parent())) {
             let entries = &self.entries;
@@ -293,8 +293,8 @@ impl Pane {
         }
     }
 }
-/// 원본 단축키가 받은 숫자판 글쇠 하나의 egui 사건(눌림 Key와 Text 글자)을 없앤다. Delphi IsShortCut이 처리한 글쇠는
-/// WM_CHAR가 생기지 않으므로 빠른 찾기에도 가지 않는다.
+/// Remove the egui events (pressed Key and Text character) of one numpad key received by the original shortcut. A key handled by Delphi IsShortCut
+/// produces no WM_CHAR, so it also does not reach quick search.
 pub(super) fn strip_numpad_events(raw: &mut egui::RawInput, vk: u16) {
     let (key, text) = match vk {
         0x60..=0x69 => (egui::Key::from_name(&((vk - 0x60).to_string())), char::from_digit((vk - 0x60) as u32, 10).unwrap_or('0')),
@@ -314,8 +314,8 @@ pub(super) fn strip_numpad_events(raw: &mut egui::RawInput, vk: u16) {
         raw.events.remove(i);
     }
 }
-/// egui Copy·Cut·Paste 사건을 원래 글쇠(Ctrl+C·X·V, Ctrl+Insert, Shift+Delete, Shift+Insert)로 되돌리고,
-/// egui-winit이 버린 붙여넣기 글쇠(pastes − 바꾼 Paste 수)를 덧붙인다.
+/// Turn egui Copy/Cut/Paste events back into the original keys (Ctrl+C/X/V, Ctrl+Insert, Shift+Delete, Shift+Insert),
+/// and append the paste keys that egui-winit discarded (pastes - number of replaced Pastes).
 pub(super) fn restore_clipboard_keys(raw: &mut egui::RawInput, pastes: u32, insert_down: bool) {
     let modifiers = raw.modifiers;
     let shift_only = modifiers.shift && !modifiers.ctrl;
@@ -339,7 +339,7 @@ pub(super) fn restore_clipboard_keys(raw: &mut egui::RawInput, pastes: u32, inse
         raw.events.push(key(if shift_only { egui::Key::Insert } else { egui::Key::V }));
     }
 }
-/// 패널 위치를 하나의 글로(로컬 폴더, 압축 파일 + 안 경로, FTP 호스트 + 경로). 같은 위치를 다시 읽었는지 가린다.
+/// A panel location as a single string (local folder, archive file + inner path, FTP host + path). Used to tell whether the same location was re-read.
 fn location_key(pane: &Pane) -> String {
     match (&pane.archive, &pane.remote) {
         (_, Some(remote)) => format!("ftp|{}|{}", remote.host, remote.path),
@@ -347,7 +347,7 @@ fn location_key(pane: &Pane) -> String {
         (None, None) => format!("dir|{}", pane.path.display()).to_lowercase(),
     }
 }
-/// 원본 GetList(0x45a34c): 루트가 아닌 로컬 폴더(내 PC 보기 제외), 압축 안(늘), FTP·SFTP는 "/"가 아닌 폴더에 ".." 항목.
+/// Original GetList (0x45a34c): a ".." entry for non-root local folders (except My PC view), archive interiors (always), and FTP/SFTP folders other than "/".
 fn parent_item_for(pane: &Pane) -> Option<Entry> {
     if let Some(remote) = &pane.remote {
         let path = remote.path.trim_end_matches('/');
@@ -364,13 +364,13 @@ fn parent_item_for(pane: &Pane) -> Option<Entry> {
     let modified = std::fs::metadata(&pane.path).and_then(|m| m.modified()).ok();
     Some(Entry::parent_item(parent.to_path_buf(), modified))
 }
-/// 원본 TNXCustomFileListView 빠른 찾기의 찾는 글(+0x3e0).
+/// The search text of the original TNXCustomFileListView quick search (+0x3e0).
 #[derive(Default)]
 struct TypedSearch {
     query: String,
-    /// 원본 빠른 찾기가 옮긴 커서. 다른 길(화살표·누르기)로 커서가 바뀌면 찾는 글을 지운다(원본 ArrowKey·MouseDown).
+    /// The cursor moved by the original quick search. If the cursor changes by another route (arrow/click), the search text is cleared (original ArrowKey/MouseDown).
     cursor: Option<usize>,
-    /// 원본 WMIMEComposition(0x7d584c)의 조합 중 표시(+0x3dd): 조합을 시작하기 전의 찾는 글.
+    /// Original WMIMEComposition (0x7d584c) in-composition display (+0x3dd): the search text before composition started.
     ime_base: Option<String>,
 }
 struct Listing {
@@ -378,7 +378,7 @@ struct Listing {
     generation: u64,
     result: Result<Vec<Entry>, String>,
     descriptions: HashMap<String, String>,
-    /// 내 PC 보기의 드라이브 항목 정보(루트 → (이름, 종류, 크기)).
+    /// Drive entry info in My PC view (root -> (name, kind, size)).
     drive_infos: HashMap<PathBuf, (String, u32, Option<(u64, u64)>)>,
 }
 struct Job {
@@ -390,27 +390,27 @@ struct Job {
     errors: Vec<String>,
     title: String,
     finished: bool,
-    /// C# PlayOperationCompletionSound를 부르는 작업(복사·이동·삭제·완전 삭제·압축 만들기).
+    /// Operation that calls C# PlayOperationCompletionSound (copy/move/delete/wipe/create archive).
     chime: bool,
-    /// C#의 모달 진행 창(FolderComparisonProgressWindow, SearchProgressWindow, 동기화의 FileOperationProgressWindow) 자리면 Some.
-    /// 끝나면 저절로 닫히고 상태 줄과 패널은 건드리지 않는다(결과는 AsyncResult가 처리한다).
+    /// Some when this is a C# modal progress window (FolderComparisonProgressWindow, SearchProgressWindow, or the sync's FileOperationProgressWindow).
+    /// When finished it closes itself and leaves the status bar and panels alone (the result is handled by AsyncResult).
     modal: Option<ModalProgress>,
-    /// 끝난 뒤 상태 줄은 작업이 보낸 결과 글(AsyncResult::ArchiveStatus 등)이 쓴다.
+    /// When finished, the status bar is written by the result text the job sent (AsyncResult::ArchiveStatus etc.).
     custom_status: bool,
-    /// 끝났을 때의 C# 결과 알림 방식.
+    /// The C# result-notification style when finished.
     report: file_operation::JobReport,
-    /// Some = C# FileOperationProgressWindow(삭제·완전 삭제는 None, C#도 창이 없다).
+    /// Some = C# FileOperationProgressWindow (delete/wipe are None; C# also has no window).
     progress: Option<file_operation::ProgressInfo>,
-    /// 오류 상자로 이미 보인 오류 수(C# InteractiveErrorCount).
+    /// Number of errors already shown in an error box (C# InteractiveErrorCount).
     interactive: usize,
-    /// 충돌에서 건너뛴 항목 수(C# SkippedItems).
+    /// Number of items skipped in conflicts (C# SkippedItems).
     skipped: usize,
-    /// 작업 전체가 멈춘 오류(C# FatalError).
+    /// Error that stopped the whole job (C# FatalError).
     fatal: Option<String>,
 
-    /// 원본 줄을 처음 알려 온 경로의 폴더로 정했으면 그 값.
+    /// Set when the "from" folder was decided from the folder of the first path reported by the original.
     from_seen: Option<String>,
-    /// 마지막 Event::Target(원본 파일, 실제 대상 파일). 진행 창 lTo는 지금 원본 파일의 대상 폴더.
+    /// Last Event::Target (original file, actual destination file). The progress window lTo is the destination folder of the current original file.
     target: Option<(PathBuf, PathBuf)>,
 }
 impl Job {
@@ -439,27 +439,27 @@ impl Job {
         }
     }
 }
-/// 모달 진행 창의 글과 단추.
+/// Text and buttons of the modal progress window.
 struct ModalProgress {
-    /// 단추 글(비교: formCompareFolder.Caption.btnStop, 검색·동기화: 취소).
+    /// Button text (compare: formCompareFolder.Caption.btnStop; search/sync: Cancel).
     stop: String,
-    /// 누른 뒤의 단추 글(비교: 중단 중…). None이면 그대로 두고 단추만 끈다.
+    /// Button text after pressing (compare: Stopping...). None leaves it as-is and only disables the button.
     stopping: Option<String>,
-    /// 누른 뒤의 상태 글.
+    /// Status text after pressing.
     stopping_text: String,
     kind: ModalKind,
 }
-/// Job의 path·files·bytes를 읽는 방식.
+/// How to read the Job's path/files/bytes.
 #[derive(Clone, PartialEq, Eq)]
 enum ModalKind {
-    /// 비교: 상태 글 = path, 막대 = files / bytes(bytes가 0이면 움직이는 막대).
+    /// Compare: status text = path, bar = files / bytes (a marquee bar if bytes is 0).
     Message,
-    /// 검색: "검색 항목 N · 결과 N" 다음 줄에 path(files = 확인한 항목, bytes = 결과), 막대는 늘 움직인다.
+    /// Search: "Searched N items - N results" then path on the next line (files = items checked, bytes = results); the bar is always a marquee.
     Search,
 }
 
 struct PasswordRequest {
-    /// 원본 상자는 압축 파일 이름을 보이지 않는다. 시험이 어느 압축이 물었는지 확인한다.
+    /// The original box does not show the archive file name. Tests check which archive asked.
     #[cfg_attr(not(test), allow(dead_code))]
     archive: PathBuf,
     reply: Sender<Option<String>>,
@@ -475,13 +475,13 @@ enum AsyncResult {
         image: Result<(usize, usize, Vec<u8>), String>,
     },
     Tree {
-        /// 셸 열쇠(ndr::shell_tree: 바탕 화면 = 빈 열쇠).
+        /// Shell key (ndr::shell_tree: desktop = empty key).
         path: PathBuf,
-        /// 숨김 폴더까지 읽었는가(패널마다 숨김 보기가 다를 수 있다).
+        /// Whether hidden folders were read too (hidden view may differ per panel).
         hidden: bool,
         directories: Vec<ndr::shell_tree::ShellNode>,
     },
-    /// 원본 TNXShellChangeNotify 스레드 알림(ThreadNotification 0x7b3830): 그 패널이 지켜보던 폴더가 바뀌었다.
+    /// Original TNXShellChangeNotify thread notification (ThreadNotification 0x7b3830): the folder that panel was watching changed.
     FolderChanged { pane: usize, path: PathBuf, watch: Arc<AtomicBool> },
     ProtectedItems(file_commands::DeleteRun),
     AttributesApplied(pane_commands::AttributeRun),
@@ -490,44 +490,44 @@ enum AsyncResult {
     SearchInPane { pane: usize, root: PathBuf, outcome: Result<Vec<Entry>, String>, cancelled: bool },
     CompareDone(compare_dialog::CompareRun, Result<(Vec<ndr::folder_compare::Difference>, Vec<String>), String>, bool),
     SyncDone(Result<ndr::folder_compare::SyncResult, String>, bool),
-    /// C# RunSafely 모양의 경고 상자(MessageBox(글, "NDR", 경고)).
+    /// Warning box in C# RunSafely style (MessageBox(text, "NDR", warning)).
     Warning(String),
     MergeSources(PathBuf, Result<Vec<PathBuf>, String>),
     MergeDone(usize, Result<(), String>),
-    /// 작업이 끝난 뒤 보일 상태 줄 글.
+    /// Status bar text to show after the job finishes.
     ArchiveStatus(String),
-    /// 드라이브 단추 목록(루트, 도움말).
+    /// Drive button list (root, tooltip).
     Drives(Vec<(PathBuf, String)>),
-    /// 드라이브가 생기거나 없어졌다(GetLogicalDrives 비트가 바뀜, 원본 SHCNE_DRIVEADD/DRIVEREMOVED 처리 FUN_00442bc8).
+    /// A drive was added or removed (GetLogicalDrives bits changed; original SHCNE_DRIVEADD/DRIVEREMOVED handler FUN_00442bc8).
     DrivesChanged,
-    /// 원격 명령 결과(사이트 번호, 명령, "호스트:포트", 출력 또는 오류).
+    /// Remote command result (site number, command, "host:port", output or error).
     RemoteCommand { site: String, command: String, host: String, result: Result<String, String> },
-    /// 폴더 크기 자동 표시 결과(패널, 목록 세대, 폴더, 글).
+    /// Automatic folder size display result (panel, listing generation, folder, text).
     FolderSizeRow { pane: usize, generation: u64, path: PathBuf, text: String, bytes: u64 },
-    /// 업데이트 피드를 받음.
-    /// 업데이트 피드 결과. bool = 시작할 때의 조용한 확인(원본 [+0x54], 새 버전이면 메뉴 줄 단추만).
+    /// Received an update feed.
+    /// Update feed result. bool = the silent check at startup (original [+0x54]; for a new version, only the menu bar button).
     Update(Result<ndr::update::HttpResponse, ndr::update::HttpError>, bool),
-    /// 정보 표시줄의 디스크 재료(패널, 목록 세대, (드라이브 글, 여유, 전체)).
+    /// Info bar disk data (panel, listing generation, (drive letter, free, total)).
     DiskCapacity { pane: usize, generation: u64, disk: Option<(String, u64, u64)> },
-    /// 원본 TfChecksum 계산 끝(대화 상자 번호, 결과 글. 실패면 None).
+    /// Original TfChecksum computation finished (dialog number, result text; None on failure).
     ChecksumDone { serial: u64, value: Option<String> },
-    /// 임시 폴더 비우기 전에 따로 센 파일 수와 크기(원본 miEmptyTempClick의 셈, 화면을 멈추지 않게 따로 돈다).
+    /// File count and size counted separately before emptying the temp folder (original miEmptyTempClick's count, run separately so it does not block the screen).
     TempCounted { folder: PathBuf, files: u64, bytes: u64 },
-    /// 셸 오버레이 아이콘을 읽음(C# ProcessShellOverlayIcons). None이면 확장자 아이콘을 쓴다.
+    /// Read a shell overlay icon (C# ProcessShellOverlayIcons). None means use the extension icon.
     OverlayIcon { path: PathBuf, image: Option<(usize, usize, Vec<u8>)> },
-    /// 원본 FUN_004408f8: 패널 FTP 연결이 됨 / 실패.
+    /// Original FUN_004408f8: panel FTP connection succeeded / failed.
     FtpConnected { pane: usize, remote: ftp_pane::PaneRemote },
     FtpFailed { error: String },
-    /// FTP 패널의 새 폴더·이름 바꾸기가 끝남(패널, 커서를 둘 이름, 오류).
+    /// An FTP panel new-folder/rename finished (panel, name to place the cursor on, error).
     FtpEdited { pane: usize, focus: Option<String>, error: Option<String> },
     FtpReply { result: Result<String, String> },
-    /// 외부 복사 프로그램이 끝남(결과, 끝난 뒤 상태 글, 붙여넣기 이동이면 클립보드 비우기).
+    /// An external copy program finished (result, status text afterward, clear the clipboard if this was a paste move).
     ExternalCopy { result: Result<(), String>, status: Option<String>, clear_clipboard: bool },
-    /// 압축 항목을 임시로 풀었음(패널, 압축 파일, 쓴 암호, 풀린 경로, 실패 "이름: 오류", 압축 파일이면 그 안으로 갈지).
+    /// Archive entries were temporarily extracted (panel, archive file, password used, extracted paths, failures "name: error", whether to navigate into it if it is an archive).
     ArchiveEntriesOpened { pane: usize, archive: PathBuf, password: Option<String>, opened: Vec<PathBuf>, failures: Vec<String>, navigate_archives: bool },
-    /// 작업 창 없이 도는 압축 풀기가 암호를 묻는다(답은 reply로, 취소면 None).
+    /// An archive extraction running without a job window asks for a password (reply via reply; None if cancelled).
     ArchivePassword { archive: PathBuf, reply: Sender<Option<String>> },
-    /// 텍스트 보기/편집할 파일(압축 항목은 임시로 푼 경로).
+    /// File to view/edit as text (archive entries are temporarily extracted paths).
     TextSource { path: Result<PathBuf, String>, edit: bool },
 }
 struct TextDocument {
@@ -545,31 +545,31 @@ pub struct App {
     panes: [Pane; 2],
     active: usize,
     dual: bool,
-    /// 원본 TfMessage(FUN_0040e138 → FUN_0044a1d4): 패널 가운데 잠깐 뜨는 검은 알림(글, 패널, 뜬 시각). 3초(Timer1 3000)나 누르면 닫힌다.
+    /// Original TfMessage (FUN_0040e138 -> FUN_0044a1d4): a brief black notification over the panel center (text, panel, shown time). Closes after 3 seconds (Timer1 3000) or on click.
     pane_message: Option<(String, usize, Instant)>,
-    /// 원본 pBottom("결과", miViewFindResult): FTP 전송 목록(lvFTPProgress)과 잠시 중단·취소.
+    /// Original pBottom ("Results", miViewFindResult): the FTP transfer list (lvFTPProgress) and pause/cancel.
     show_results: bool,
-    /// 지금 "list" 글꼴 묶음에 넣은 ListFont 이름과 굵게·기울임(바뀌면 글꼴을 다시 만든다).
+    /// The ListFont name and bold/italic currently in the "list" font family (fonts are rebuilt when changed).
     list_font_name: Option<String>,
-    /// 원본 ListFont 모양(TFontStyles 바이트: 1 굵게, 2 기울임, 4 밑줄, 8 취소선). 밑줄·취소선은 목록 글에 직접 입힌다.
+    /// Original ListFont style (TFontStyles byte: 1 bold, 2 italic, 4 underline, 8 strikethrough). Underline/strikethrough are applied directly to the list text.
     list_font_style: u8,
-    /// C# Closing의 WindowLeft·Top·Width·Height: 마지막으로 본 보통(최대화·최소화 아님) 창의 바깥 위치와 바깥 크기(점).
+    /// C# Closing's WindowLeft/Top/Width/Height: the outer position and outer size (points) of the last normal (not maximized/minimized) window seen.
     window_bounds: Option<(egui::Pos2, egui::Vec2)>,
-    /// C# WindowMaximized: 마지막으로 본 최대화 여부(최소화 중에는 바꾸지 않음).
+    /// C# WindowMaximized: the last maximized state seen (not changed while minimized).
     window_maximized: Option<bool>,
-    /// ListFontSize(화소, 처음 값 14): 파일 목록 글에만 쓴다. 원본 listfont 크기는 포인트라 가져올 때 바꾼다.
+    /// ListFontSize (pixels, initial 14): used only for the file list text. The original listfont size is in points, so it is converted when imported.
     list_font_size: f32,
-    /// 원본 btnFTPShowDetail(">>"): pBottom 높이가 30을 넘으면 22(단추 줄만), 아니면 100.
+    /// Original btnFTPShowDetail (">>"): if the pBottom height exceeds 30 it becomes 22 (button row only), otherwise 100.
     results_collapsed: bool,
-    /// 지난 그림의 도구 모음 즐겨찾기 단추 왼쪽 아래(원본 miFavoritesClick이 그 단추의 DropDown을 연다). 단추가 없으면 None.
+    /// Bottom-left of the toolbar favorites button from the last paint (the original miFavoritesClick opens that button's DropDown). None if there is no button.
     favorites_button: Option<egui::Pos2>,
-    /// 패널 폴더 바뀜 감시(원본 TNXShellChangeNotify). 시험에서는 끈다(시험이 만든 파일 때문에 늦게 새로 읽지 않게).
+    /// Panel folder change watch (original TNXShellChangeNotify). Disabled in tests (so files created by tests do not trigger a delayed re-read).
     watch_folders: bool,
-    /// 감시 스레드가 다시 그리기를 부를 egui 문맥(refresh가 감시를 다시 열 때 쓴다).
+    /// The egui context the watcher thread calls to repaint (used when refresh reopens the watch).
     egui_ctx: egui::Context,
-    /// 드라이브 집합 감시 스레드를 멈출 표시(native::spawn_drive_watch).
+    /// Flag to stop the drive-set watcher thread (native::spawn_drive_watch).
     drive_watch_stop: Arc<AtomicBool>,
-    /// 전송을 시작한 때(lFTPTransferred의 KB/s).
+    /// When a transfer started (for lFTPTransferred's KB/s).
     ftp_started: Option<std::time::Instant>,
     ftp_results: Arc<Mutex<Vec<ftp_pane::FtpResultRow>>>,
     ftp_pause: Arc<AtomicBool>,
@@ -593,157 +593,157 @@ pub struct App {
     lifecycle: Option<ndr::lifecycle::NativeLifecycle>,
     lifecycle_events: Option<Receiver<ndr::lifecycle::LifecycleEvent>>,
     navigation: Option<Receiver<ndr::lifecycle::NavigationRequest>>,
-    /// C# _instanceMutex/_instancePipeTask: 한 번에 하나만 실행(UseSingleInstance)일 때 잡은 사용자·프로필 뮤텍스와 이동 요청 수신.
+    /// C# _instanceMutex/_instancePipeTask: when running single-instance (UseSingleInstance), the per-user/profile mutex held and the navigation request receiver.
     instance_guard: Option<ndr::lifecycle::InstanceGuard>,
-    /// 도구 모음 그림(테마|파일 이름 → 그림, 못 읽으면 None).
+    /// Toolbar images (theme|file name -> image; None if unreadable).
     toolbar_icons: HashMap<String, Option<egui::TextureHandle>>,
     profile_load_error: bool,
     preferences_dirty: bool,
     close_when_idle: bool,
-    /// 원본 FormCloseQuery(0x42a798)의 STILL_HAVE_OPERATION 질문이 떠 있는 동안.
+    /// While the STILL_HAVE_OPERATION question of the original FormCloseQuery (0x42a798) is showing.
     close_asking: bool,
     toolbar: ndr::commands::ToolbarConfig,
-    /// 도구 모음 빠른 찾기 칸의 글(C# _toolbarQuickSearchBox). Enter에서 빠른 필터가 된다.
+    /// Text of the toolbar quick search box (C# _toolbarQuickSearchBox). Enter turns it into a quick filter.
     toolbar_query: String,
-    /// 파일 목록에서 바로 입력하는 빠른 찾기(C# _quickSearchByPane), 패널마다 하나.
+    /// Quick search typed directly in the file list (C# _quickSearchByPane), one per panel.
     typed_search: [TypedSearch; 2],
-    /// 원본 SetItemIndex(0x7dbdec) → ToolTipTimer(600ms) → ShowToolTip: 이번 그림에서 커서 줄 이름 칸(패널, 줄, 칸, 보인 이름 글, 온 이름 글).
+    /// Original SetItemIndex (0x7dbdec) -> ToolTipTimer (600ms) -> ShowToolTip: this frame's cursor row name cell (panel, row, cell, displayed name text, full name text).
     name_tip: panes::NameTip,
-    /// 원본 ShowToolTip 형식 3(미리 보기): 이번 그림에서 커서 칸 이름이 줄었으면 그 칸과 온 이름 줄들.
+    /// Original ShowToolTip style 3 (thumbnail): if the cursor cell's name was truncated this frame, that cell and the full name lines.
     thumb_tip: panes::ThumbTip,
-    /// 이번 그림에 이름 툴팁을 그린 자리(패널마다).
+    /// Where a name tooltip was drawn this frame (per panel).
     name_tip_shown: [Option<egui::Rect>; 2],
-    /// 스킨 테마 상태 글 겹침: 지금 글과 처음 보인 때(바뀌면 다시 센다).
+    /// Skin theme status text overlay: the current text and when it was first shown (recounted when changed).
     status_seen: Option<(String, Instant)>,
-    /// 패널마다 커서가 그 줄로 온 때(원본 툴팁 타이머 시작).
+    /// When the cursor arrived on that row, per panel (start of the original tooltip timer).
     tip_since: [Option<(usize, Instant)>; 2],
     images: HashMap<PathBuf, egui::TextureHandle>,
-    /// C# FileVisualConverter.IconCache: 확장자(소문자, 폴더는 "<DIR>")마다 작은 셸 아이콘. 못 읽으면 None을 기억한다.
+    /// C# FileVisualConverter.IconCache: a small shell icon per extension (lowercase, folder = "<DIR>"). None is remembered if unreadable.
     file_icons: HashMap<String, Option<egui::TextureHandle>>,
-    /// 원본 TNXShellImageList.Draw(0x7b8ebc)의 흐린 아이콘(ILD_BLEND50, 섞는 색 흰색): 아이콘 그림마다 하나.
+    /// The dimmed icon of the original TNXShellImageList.Draw (0x7b8ebc) (ILD_BLEND50, blend color white): one per icon image.
     ghost_icons: HashMap<egui::TextureId, egui::TextureHandle>,
-    /// 지금 테마의 원본 스킨(conf.ini) — (테마 이름, 스킨). 검정·클래식·회색이 아니면 None.
+    /// The original skin (conf.ini) of the current theme - (theme name, skin). None if not Black/Classic/Gray.
     skin_cache: Option<(String, Option<ndr::styles::Skin>)>,
-    /// 스킨 주소 줄에서 연 하위 폴더 목록: (패널, 폴더, 드라이브 목록인가, 위치).
+    /// Subfolder list opened from the skin address bar: (panel, folder, whether it is a drive list, position).
     skin_crumb_menu: Option<(usize, PathBuf, bool, egui::Pos2)>,
-    /// 확장자(소문자, 점 없이)마다 셸 아이콘이 파일마다 다른지(system.per_file_icon, 한 번만 묻는다).
+    /// Whether each extension (lowercase, no dot) has a per-file shell icon (system.per_file_icon, asked only once).
     per_file_icon_types: HashMap<String, bool>,
-    /// C# ShellOverlayIconCache(경로마다, 512개가 넘으면 비움)와 기다리는 경로, 오버레이 작업 스레드(STA)로 보낼 곳.
+    /// C# ShellOverlayIconCache (per path, cleared when it exceeds 512) plus the pending paths and where to send to the overlay worker thread (STA).
     overlay_icons: HashMap<PathBuf, Option<egui::TextureHandle>>,
     overlay_pending: HashSet<PathBuf>,
     overlay_tx: Option<Sender<(PathBuf, u8)>>,
     image_requests: HashSet<PathBuf>,
-    /// 패널 폴더 트리 하위 폴더: (셸 열쇠, 숨김 폴더 포함) → 자식. 원본 miShowHiddenClick(0x4348e0) → FUN_0048e564가 트리의
-    /// 숨김 보기(+0x3f8 비트 4)를 바꿔 다시 만들므로, 패널의 숨김 보기마다 따로 둔다.
+    /// Panel folder tree subfolders: (shell key, hidden folders included) -> children. Because the original miShowHiddenClick (0x4348e0) -> FUN_0048e564 changes
+    /// the tree's hidden view (+0x3f8 bit 4) and rebuilds it, this is kept separately per panel hidden view.
     tree_cache: HashMap<(PathBuf, bool), Vec<ndr::shell_tree::ShellNode>>,
-    /// 패널 폴더 트리의 바탕 화면 뿌리(처음 그릴 때 읽는다).
+    /// Desktop root of the panel folder tree (read on first paint).
     shell_desktop: Option<ndr::shell_tree::ShellNode>,
-    /// 글쇠 초점이 있는 패널 폴더 트리(그 패널 번호). 목록이나 다른 패널을 누르면 None.
+    /// The panel folder tree that has keyboard focus (that panel number). None when the list or another panel is clicked.
     tree_focus: Option<usize>,
     tree_requests: HashSet<(PathBuf, bool)>,
     msgboxes: Vec<msgbox::MsgBox>,
     msgbox_serial: u64,
     msgbox_icons: HashMap<u16, egui::TextureHandle>,
     original_dialogs: Vec<original_dialogs::OriginalDialog>,
-    /// 주소 표시줄 ⌄ 메뉴의 하위 폴더(경로, 드라이브 목록인지) → (경로, 글). 새 목록이 오면 비운다.
+    /// Subfolders of the address bar's chevron menu (path, whether it is a drive list) -> (path, text). Cleared when a new listing arrives.
     crumb_cache: HashMap<(PathBuf, bool), Vec<(PathBuf, String)>>,
-    /// 끌고 있는 패널 항목, 그 아래 폴더 줄(패널, 폴더), 이번 화면의 두 패널 영역.
+    /// The panel item being dragged, the folder row under it (panel, folder), and this frame's two panel areas.
     file_drag: Option<drag_drop::FileDrag>,
-    /// 패널 끌기를 놓은 곳에서 아직 옮기지 않은 것(끈 패널, 끈 항목). 확인 상자·놓기 메뉴로 옮길 때 끈 패널의 표시를 지운다.
+    /// Items dropped from a panel drag that have not been moved yet (source panel, dragged items). When moving via the confirm box/drop menu, clears the marks in the source panel.
     pending_drag_marks: Option<(usize, Vec<PathBuf>)>,
-    /// 이번 화면에 그린 폴더 줄(패널, 줄 영역, 폴더). 놓을 곳을 찾는다. 화면마다 비운다.
+    /// Folder rows drawn this frame (panel, row area, folder). Used to find a drop target. Cleared each frame.
     folder_rows: Vec<(usize, egui::Rect, PathBuf)>,
-    /// 이번 화면에 그린 패널 폴더 트리 줄(패널, 줄 영역, 폴더, 셸 열쇠, 펼칠 수 있음). 원본 트리 놓기 대상(TNXDropFileTarget +0x36c).
+    /// Panel folder tree rows drawn this frame (panel, row area, folder, shell key, expandable). The original tree drop target (TNXDropFileTarget +0x36c).
     tree_drop_rows: Vec<(usize, egui::Rect, PathBuf, PathBuf, bool)>,
-    /// 끄는 동안 머문 트리 노드(패널, 열쇠, 머물기 시작한 때). 원본 FUN_0048eb0c·타이머 +0x2f4(1200ms) → FUN_0048edf0 펼치기.
+    /// Tree node hovered while dragging (panel, key, when hovering started). Original FUN_0048eb0c / timer +0x2f4 (1200ms) -> FUN_0048edf0 expand.
     tree_drop_hover: Option<(usize, PathBuf, Instant)>,
-    /// 끄는 동안 가장자리 굴리기 타이머(패널, 다음 울릴 때). 원본 TNXDropTarget +0x74(100ms).
+    /// Edge scroll timer while dragging (panel, next tick time). Original TNXDropTarget +0x74 (100ms).
     drag_scroll_tick: Option<(usize, Instant)>,
     pane_rects: [egui::Rect; 2],
-    /// 창 밖으로 끌어 내기(셸 끌기). 테스트에서는 끈다(실제 끌기 고리를 돌리지 않는다).
+    /// Drag out of the window (shell drag). Disabled in tests (does not run the real drag loop).
     allow_drag_out: bool,
-    /// 이 창의 HWND(없으면 0). 시작 확인 실행이 앞 창이 됐는지 잴 때 쓴다.
+    /// This window's HWND (0 if none). Used in the startup check to measure whether the launched instance became the foreground window.
     hwnd: isize,
-    /// 시작 확인 중 한 번이라도 앞 창(GetForegroundWindow)이 됐는지. 보고서의 foreground.
+    /// Whether it ever became the foreground window (GetForegroundWindow) during the startup check. Report's foreground.
     smoke_foreground: bool,
-    /// 시작 확인(--smoke-seconds)에서 센 다시 그리기 원인(파일:줄 → 그림 수).
+    /// Repaint causes counted in the startup check (--smoke-seconds) (file:line -> paint count).
     smoke_repaint_causes: std::collections::BTreeMap<String, u32>,
-    /// 시작 확인에서 가장 오래 걸린 그림(ms).
+    /// Slowest frame in the startup check (ms).
     smoke_slowest_frame_ms: f64,
-    /// 시작 확인에서 50ms보다 오래 걸린 그림 수.
+    /// Number of frames in the startup check that took longer than 50ms.
     smoke_slow_frames: u32,
-    /// 시작 확인에서 두 패널 목록이 처음 다 읽힌 때(시작부터 ms).
+    /// When both panel listings were first fully read in the startup check (ms from start).
     smoke_loaded_ms: Option<u64>,
-    /// 진단("tipwindow" 견본): 따로 뜬 툴팁 창의 화면 자리(왼쪽, 위, 너비, 높이). 창이 실제로 만들어졌는지 본다.
+    /// Diagnostics ("tipwindow" sample): screen position of a separately shown tooltip window (left, top, width, height). Checks whether the window was actually created.
     smoke_tip_window: Option<[f32; 4]>,
-    /// 마지막으로 창에 적용한 불투명도(0.0~1.0). WindowAlpha가 바뀌면 다시 적용한다.
+    /// The opacity last applied to the window (0.0~1.0). Reapplied when WindowAlpha changes.
     applied_alpha: f32,
-    /// 폴더 크기 자동 표시 작업 줄과 일꾼(둘)을 띄웠는지.
+    /// Whether the folder size auto-display work queue and workers (two) have been started.
     folder_size_queue: pane_chrome::FolderSizeQueue,
     folder_size_workers: bool,
-    /// 업데이트 피드 받기(C# UpdateHttpClient). 테스트에서 바꿔 끼운다.
+    /// Fetch the update feed (C# UpdateHttpClient). Swapped out in tests.
     http_get: fn(&str, usize) -> Result<ndr::update::HttpResponse, ndr::update::HttpError>,
-    /// 새로 고친 목록이 오면 커서를 둘 이름(C# FocusPaneItemByName).
+    /// Name to place the cursor on when the refreshed listing arrives (C# FocusPaneItemByName).
     pending_focus: [Option<String>; 2],
-    /// 압축 작업이 끝나면 커서를 둘 (패널, 만든 압축 파일).
+    /// (panel, created archive file) to place the cursor on when an archive job finishes.
     archive_focus: Option<(usize, PathBuf)>,
-    /// 인수와 함께 열기의 ShellExecuteExW(테스트에서 실제 프로그램을 띄우지 않도록 교체 가능).
+    /// ShellExecuteExW of open-with-arguments (replaceable so tests do not launch a real program).
     shell_runner: fn(&Path, &str, &Path) -> Result<(), String>,
-    /// 프로그램을 바로 실행하고 끝 코드를 기다린다(외부 복사 프로그램). 테스트에서 바꿔 끼운다.
+    /// Run a program directly and wait for the exit code (external copy program). Swapped out in tests.
     program_runner: fn(&Path, &[String], &Path) -> Result<i32, String>,
-    /// 저장 대화 상자(제목, 처음 폴더, 이름, 형식, 기본 확장자). 테스트에서 바꿔 끼운다.
+    /// Save dialog (title, initial folder, name, format, default extension). Swapped out in tests.
     save_dialog: ndr::file_dialogs::SaveFileFn,
-    /// F12 단축키 창(원본 fShortcut), 하나만.
+    /// F12 shortcut window (original fShortcut), only one.
     shortcut_window: Option<shortcut_window::ShortcutWindow>,
     /// Clipboard text writer (replaceable so tests never touch the user's real clipboard; C# `_setClipboardText`).
     clipboard_writer: fn(&str) -> Result<(), String>,
-    /// 원본 miEmptyRecycleBinClick: SHEmptyRecycleBinW(창, NULL, 0)(셸 확인 창). 시험은 가짜.
+    /// Original miEmptyRecycleBinClick: SHEmptyRecycleBinW(window, NULL, 0) (shell confirmation dialog). Tests use a fake.
     shell_recycle_emptier: fn() -> Result<(), String>,
-    /// 복사·잘라내기의 CF_HDROP 클립보드 쓰기(native::clipboard_files). 시험은 실제 클립보드를 건드리지 않는다.
+    /// CF_HDROP clipboard write for copy/cut (native::clipboard_files). Tests do not touch the real clipboard.
     file_clipboard: fn(&[PathBuf], bool) -> Result<(), String>,
-    /// 기다리는 refresh 안에서 받은 목록의 네트워크 공유 인증 요청(다음 poll이 처리).
+    /// Network share auth requests from listings received inside a pending refresh (handled by the next poll).
     auth_pending: Vec<usize>,
-    /// 원본 단축키 표가 받은 숫자판 글쇠(원본 이름, Shift). raw_input_hook이 넣고 keyboard가 실행한다.
+    /// Numpad keys received by the original shortcut table (original name, Shift). raw_input_hook pushes them and keyboard executes them.
     pending_numpad: Vec<(String, bool)>,
-    /// Apps 글쇠를 눌렀다(지금 패널의 목록 오른쪽 단추 메뉴, 원본 FUN_00484e8c의 글쇠 경로).
+    /// The Apps key was pressed (right-click menu of the current panel's list, the key path of the original FUN_00484e8c).
     pending_context_key: bool,
-    /// 마지막으로 SetCurrentDirectoryW로 맞춘 폴더(`sync_current_directory`).
+    /// The folder last set via SetCurrentDirectoryW (`sync_current_directory`).
     current_directory: Option<PathBuf>,
-    /// 폴더 선택 대화 상자(제목, 처음 폴더). 테스트에서 바꿔 끼운다.
+    /// Folder select dialog (title, initial folder). Swapped out in tests.
     folder_picker: fn(&str, Option<&Path>) -> Option<PathBuf>,
-    /// 원본 miNetwork의 네트워크 폴더 고르기(SHBrowseForFolderW). 시험에서는 바꿔 끼운다.
+    /// Original miNetwork network folder picker (SHBrowseForFolderW). Swapped out in tests.
     network_picker: fn(&str, Option<&Path>) -> Option<PathBuf>,
-    /// 원본 TColorDialog(ChooseColorW). COLORREF를 받고 돌려준다. 테스트는 가짜로 바꾼다.
+    /// Original TColorDialog (ChooseColorW). Takes and returns a COLORREF. Tests swap in a fake.
     color_picker: fn(u32) -> Option<u32>,
-    /// 원본 TFontDialog(ChooseFontW): (이름, 포인트, 모양) → 고른 (이름, 포인트, 모양). 테스트는 가짜로 바꾼다.
+    /// Original TFontDialog (ChooseFontW): (name, points, style) -> chosen (name, points, style). Tests swap in a fake.
     font_picker: fn(&str, f32, u8) -> Option<(String, f32, u8)>,
-    /// 즐겨찾기·이동 기록 드롭다운(C# ContextMenu), 하나만.
+    /// Favorites / navigation history dropdown (C# ContextMenu), only one.
     popup: Option<favorites_dialog::PopupMenu>,
-    /// 처리되지 않은 Alt+글자(원본 TToolBar CM_DIALOGCHAR): 이번 장면에 그 접근 글자의 메뉴 단추 펼침을 연다.
+    /// Unhandled Alt+letter (original TToolBar CM_DIALOGCHAR): this frame, open the menu button dropdown for that access letter.
     menu_access: Option<char>,
-    /// 메뉴(메뉴 줄 펼침·오른쪽 단추 메뉴)가 열린 동안 친 글자: 그 접근 글자(&X)의 항목을 고른다(원본 Windows 메뉴).
+    /// Letters typed while a menu (menu bar dropdown / right-click menu) is open: select the item for that access letter (&X) (original Windows menu).
     menu_letter: Option<char>,
-    /// 이번 장면에 글자를 받을 수 있던 메뉴 항목(접근 글자, 위젯 id)과 지난 장면의 목록. 같은 글자가 둘 이상이면
-    /// Windows 메뉴처럼 글자를 칠 때마다 그 항목들 사이로 선택(초점)만 옮긴다(Enter로 실행).
+    /// Menu items that could receive a letter this frame (access letter, widget id) and the previous frame's list. If the same letter appears more than once,
+    /// like a Windows menu, typing the letter repeatedly only moves the selection (focus) among those items (Enter to execute).
     menu_targets: std::cell::RefCell<Vec<(char, egui::Id)>>,
     menu_targets_seen: Vec<(char, egui::Id)>,
-    /// 다음에 그릴 때 초점을 줄 메뉴 항목.
+    /// Menu item to focus on the next paint.
     menu_focus: std::cell::Cell<Option<egui::Id>>,
-    /// 조용한 업데이트 확인에서 찾은 새 버전의 내려받기 주소(원본 tbNewUpdateAvailable이 보이는 동안).
+    /// Download URL of the new version found by the silent update check (while the original tbNewUpdateAvailable is shown).
     update_available: Option<String>,
-    /// C# _lastCommandWorkingDirectory(명령 실행의 작업 폴더).
+    /// C# _lastCommandWorkingDirectory (working directory of command execution).
     last_command_directory: Option<PathBuf>,
-    /// 네트워크 드라이브·탐색기 메뉴·셸 동사(테스트에서 바꿔 끼운다).
+    /// Network drives, Explorer menu, and shell verbs (swapped out in tests).
     system: tools_dialog::SystemHooks,
-    /// 열기 대화 상자(제목, 처음 폴더, 이름, 형식). 테스트에서 바꿔 끼운다.
+    /// Open dialog (title, initial folder, name, format). Swapped out in tests.
     open_dialog: ndr::file_dialogs::OpenFileFn,
-    /// 디스크 복사 창의 장치 목록·읽기·쓰기·복사(테스트는 실제 장치를 건드리지 않도록 바꿔 끼운다).
+    /// Device list / read / write / copy of the disk copy window (tests swap in so real devices are not touched).
     disk: disk_copy_dialog::DiskHooks,
-    /// 원격 창의 서버 연결과 여러 파일 열기 대화 상자(테스트에서 바꿔 끼운다).
+    /// Server connection and multi-file open dialog of the remote window (swapped out in tests).
     remote_hooks: remote_window::RemoteHooks,
-    /// 드라이브 단추(읽은 때, (루트, 도움말)).
+    /// Drive buttons (read time, (root, tooltip)).
     drive_cache: Option<(Instant, Vec<(PathBuf, String)>)>,
-    /// 패널 목록의 드라이브 목록 캐시(원본 TNXDriveList 자리, 목록 스레드가 함께 씀).
+    /// Drive list cache of the panel list (original TNXDriveList slot, shared with the listing thread).
     drive_list: Arc<Mutex<panes::DriveListCache>>,
     drive_cache_pending: bool,
 }
@@ -780,7 +780,7 @@ impl App {
                         if let Some(error) = lifecycle.hotkey_error() {
                             app.status = error;
                         }
-                        // 장치 바뀜(WM_DEVICECHANGE) 같은 수명 이벤트가 오면 쉬고 있던 UI도 깨운다.
+                        // When a lifecycle event like a device change (WM_DEVICECHANGE) arrives, wake an idle UI too.
                         let repaint = cc.egui_ctx.clone();
                         let _ = lifecycle.set_wake(Box::new(move || repaint.request_repaint()));
                         app.lifecycle = Some(lifecycle);
@@ -790,16 +790,16 @@ impl App {
                 }
             }
         }
-        // C# 시작: CheckForUpdatesOnStartup이고 피드가 있으면 업데이트 확인(시작 확인 실행은 빼고).
-        // 원본 FUN_00441dd8의 조용한 확인([+0x54] == 1): 상자 없이, 새 버전이면 메뉴 줄의 "새 업데이트" 단추만 보인다.
-        // 원본 처음 값 [Operation] checkupdate=1. 피드(UpdateManifestUrl)가 없으면 확인하지 않는다.
+        // C# startup: if CheckForUpdatesOnStartup and a feed exists, check for updates (except in the startup check run).
+        // The silent check of the original FUN_00441dd8 ([+0x54] == 1): no box; for a new version, only the "New update" button on the menu bar.
+        // Original initial value [Operation] checkupdate=1. If there is no feed (UpdateManifestUrl), no check is done.
         if app.options.smoke_seconds.is_none() && app.settings.flag("CheckForUpdatesOnStartup", true) && !app.settings.text("UpdateManifestUrl", "").trim().is_empty() {
             app.start_update_check(true);
         }
         app
     }
     fn from_context(ctx: &egui::Context, options: Options) -> Self {
-        // 두 번 누르기 간격은 Windows 설정(GetDoubleClickTime, 처음 값 500ms)을 따른다(egui 처음 값 0.3초는 더 짧다).
+        // The double-click interval follows the Windows setting (GetDoubleClickTime, default 500ms) (egui's default 0.3s is shorter).
         let (double_ms, _, _) = native::double_click_metrics();
         ctx.options_mut(|o| o.input_options.max_double_click_delay = double_ms as f64 / 1000.0);
         let profile = options.profile_directory();
@@ -811,8 +811,8 @@ impl App {
             .clone()
             .unwrap_or_else(|| settings.text("Language", "ko"));
         let home = PathBuf::from(std::env::var_os("USERPROFILE").unwrap_or_else(|| "C:\\".into()));
-        // C# 시작 폴더: 명령줄 → "항상 다음 폴더로 시작"(StartPathEnabled이고 StartPath가 있으면) → 마지막 폴더(LeftPath).
-        // 두 번째 값은 명령줄·시작 폴더처럼 정해 준 폴더인지(그러면 저장한 고른 탭보다 그 폴더가 먼저).
+        // C# start folder: command line -> "Always start in the following folder" (if StartPathEnabled and StartPath exist) -> last folder (LeftPath).
+        // The second value is whether the folder was given explicitly like a command line / start folder (in which case that folder takes priority over the saved selected tab).
         let start_path = |side: &str, explicit: &Option<PathBuf>| -> (PathBuf, bool) {
             if let Some(path) = explicit {
                 return (path.clone(), true);
@@ -824,11 +824,11 @@ impl App {
             (PathBuf::from(settings.text(&format!("{side}Path"), &home.to_string_lossy())), false)
         };
         let (left, left_fixed) = start_path("Left", &options.left);
-        // 원본 FUN_004295b0: /pane:single·dual이 설정(dualview)보다 앞서고, /dir2는 두 패널 보기일 때만 오른쪽을 연다.
+        // Original FUN_004295b0: /pane:single/dual takes precedence over the setting (dualview), and /dir2 opens the right side only in dual-pane view.
         let dual = options.dual.unwrap_or_else(|| settings.flag("DualPaneMode", true));
         let right_explicit = options.right.clone().or_else(|| options.dir2.clone().filter(|_| dual));
         let (right, right_fixed) = start_path("Right", &right_explicit);
-        // C# ValidStartPath: 있는 폴더면 그대로, 아니면 사용자 폴더, 그것도 없으면 "::drives::"(내 PC).
+        // C# ValidStartPath: an existing folder as-is, otherwise the user folder, otherwise "::drives::" (My PC).
         let valid_start = |candidate: PathBuf| {
             if panes::is_drives(&candidate) || candidate.is_dir() {
                 candidate
@@ -1018,11 +1018,11 @@ impl App {
             std::borrow::Cow::Owned(self.language_pack.translate_pair(ko, en))
         }
     }
-    /// 원본·C# 판 "투명 메뉴 사용"(UseMenuAlpha, 처음 값 켜짐): 켜져 있으면 이 프레임의 메뉴 층을 MENU_ALPHA로 흐리게.
+    /// The original/C# "Use transparent menus" (UseMenuAlpha, default on): when on, dims this frame's menu layers to MENU_ALPHA.
     fn fade_menus(&self, ctx: &egui::Context) {
         fade_foreground_layers(ctx, if self.settings.flag("UseMenuAlpha", true) { MENU_ALPHA } else { 1.0 });
     }
-    /// 창 상태 기록(시험할 수 있게 따로). 최소화 중이면 아무것도 바꾸지 않고, 보통 창일 때만 위치·크기를 바꾼다.
+    /// Track window state (kept separate so it is testable). Changes nothing while minimized; updates position/size only for a normal window.
     fn track_window(&mut self, outer: Option<egui::Rect>, inner: Option<egui::Rect>, maximized: Option<bool>, minimized: Option<bool>) {
         if minimized == Some(true) {
             return;
@@ -1033,20 +1033,20 @@ impl App {
         if maximized == Some(false)
             && let (Some(outer), Some(_)) = (outer, inner)
         {
-            // 원본 TForm.Width·Height, C# Window.Width·Height: 테두리를 포함한 바깥 크기.
+            // Original TForm.Width/Height, C# Window.Width/Height: the outer size including the border.
             self.window_bounds = Some((outer.min, outer.size()));
         }
     }
     fn save(&mut self) {
         let _ = self.try_save();
     }
-    /// save와 같고 실패하면 그 글을 돌려준다(C# SettingsStore.Save의 예외처럼 부르는 쪽이 따로 알릴 때).
+    /// Same as save but returns the error text on failure (like a C# SettingsStore.Save exception, when the caller notifies separately).
     fn try_save(&mut self) -> Result<(), String> {
         if self.profile_load_error {
             self.status=self.tr("기존 설정을 읽지 못해 덮어쓰지 않았습니다. 설정 가져오기를 사용하세요.","Existing settings could not be read and were preserved. Use Import settings to recover.").into();
             return Err(self.status.clone());
         }
-        // C# Closing: WindowState가 Normal이면 WindowLeft·Top·Width·Height, 늘 WindowMaximized와 HasWindowBounds = true.
+        // C# Closing: if WindowState is Normal, WindowLeft/Top/Width/Height, and always WindowMaximized and HasWindowBounds = true.
         if let Some((position, size)) = self.window_bounds {
             for (key, value) in [("WindowLeft", position.x), ("WindowTop", position.y), ("WindowWidth", size.x), ("WindowHeight", size.y)] {
                 self.settings.values.insert(key.into(), serde_json::json!(value.round()));
@@ -1077,7 +1077,7 @@ impl App {
                 .set_flag(&format!("{name}ShowHiddenFiles"), self.panes[i].show_hidden);
         }
         self.settings.set_text("Language", &self.language);
-        // Theme은 설정 값 그대로(Dark/Light/System/Black/Classic/Gray). self.dark는 그 결과일 뿐이다.
+        // Theme stays the raw setting value (Dark/Light/System/Black/Classic/Gray). self.dark is only its result.
         self.settings.set_flag("DualPaneMode", self.dual);
         let any_tree = self.settings.flag("ShowLeftFolderTree", false) || self.settings.flag("ShowRightFolderTree", false);
         self.settings.set_flag("ShowFolderTree", any_tree);
@@ -1092,8 +1092,8 @@ impl App {
             }
         }
     }
-    /// 원본 FormCloseQuery(0x42a798): 진행 중인 작업이 있으면 MessageBoxW(STILL_HAVE_OPERATION, TITLE_INFO,
-    /// MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2 | MB_TASKMODAL). 예면 작업을 멈추고 끝나는 대로 닫는다. 아니요면 닫지 않는다.
+    /// Original FormCloseQuery (0x42a798): if an operation is in progress, MessageBoxW(STILL_HAVE_OPERATION, TITLE_INFO,
+    /// MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2 | MB_TASKMODAL). Yes stops the operation and closes once finished. No does not close.
     pub(super) fn confirm_close_while_working(&mut self) {
         if self.close_when_idle || self.close_asking {
             return;
@@ -1125,7 +1125,7 @@ impl App {
         let cancel = Arc::new(AtomicBool::new(false));
         let flag = cancel.clone();
         let mut job = Job::new(rx, cancel, title);
-        // C# ErrorResolver: 복사·이동·삭제는 오류마다 묻는다(완전 삭제는 끝에 한꺼번에).
+        // C# ErrorResolver: copy/move/delete ask on each error (wipe asks all at once at the end).
         let options = fsops::OperationOptions {
             remove_read_only: self.settings.flag("RemoveReadOnlyWhenCopying", true),
             use_descriptions: self.settings.flag("UseDescriptionFile", true),
@@ -1148,8 +1148,8 @@ impl App {
         self.update_folder_watches(ctx);
     }
 
-    /// 원본 FUN_00486694(위치 바뀜): 로컬 폴더면 TNXShellChangeNotify.SetFolder(그 폴더)·SetActive(1), 압축·FTP·내 PC면 SetActive(0).
-    /// 바뀜 알림을 받은 뒤 Delay(1500ms)가 지나면 OnChange = FUN_00487c8c → FUN_00487ce8(패널, 1, 1, "")(같은 폴더 다시 읽기).
+    /// Original FUN_00486694 (location changed): for a local folder, TNXShellChangeNotify.SetFolder(that folder)/SetActive(1); for archive/FTP/My PC, SetActive(0).
+    /// After a change notification, once Delay (1500ms) passes, OnChange = FUN_00487c8c -> FUN_00487ce8(panel, 1, 1, "") (re-read the same folder).
     fn update_folder_watches(&mut self, ctx: &egui::Context) {
         let now = Instant::now();
         for index in 0..self.panes.len() {
@@ -1163,7 +1163,7 @@ impl App {
                         self.panes[index].change_due = Some((now + FOLDER_CHANGE_DELAY, 0));
                     } else {
                         self.panes[index].change_due = None;
-                        // 바뀜 알림으로 다시 읽을 때는 친 빠른 찾기 글을 지킨다(원본 FUN_00487ce8은 찾기 글을 건드리지 않는다).
+                        // When re-reading due to a change notification, preserve the typed quick-search text (the original FUN_00487ce8 does not touch the search text).
                         let typed = std::mem::take(&mut self.typed_search[index]);
                         self.refresh(index);
                         self.typed_search[index] = typed;
@@ -1175,14 +1175,14 @@ impl App {
         }
     }
 
-    /// 지켜볼 폴더: 감시가 켜져 있고 로컬 폴더(압축·FTP·내 PC 아님)면 그 폴더.
+    /// Folder to watch: if watching is on and it is a local folder (not archive/FTP/My PC), that folder.
     fn watch_wanted(&self, index: usize) -> Option<PathBuf> {
         let pane = &self.panes[index];
         (self.watch_folders && pane.archive.is_none() && pane.remote.is_none() && !panes::is_drives(&pane.path)).then(|| pane.path.clone())
     }
 
-    /// 지금 감시를 멈추고(원본 FreeThread) `wanted`가 있으면 새 감시 스레드를 연다(원본 ResetThread → FindFirstChangeNotificationW).
-    /// 새 감시는 연 뒤의 바뀜만 알린다. 밀린 바뀜(change_due)도 버린다(원본 Clear).
+    /// Stop the current watch (original FreeThread) and, if `wanted` exists, open a new watcher thread (original ResetThread -> FindFirstChangeNotificationW).
+    /// A new watch only reports changes after it is opened. Pending changes (change_due) are also discarded (original Clear).
     pub(super) fn arm_folder_watch(&mut self, index: usize, wanted: Option<PathBuf>, ctx: &egui::Context) {
         let pane = &mut self.panes[index];
         if let Some((_, stop)) = pane.watch.take() {
@@ -1200,8 +1200,8 @@ impl App {
         }
     }
 
-    /// 원본 ThreadNotification(0x7b3830): 처음 알림이면 Delay(1500ms) 타이머를 켜고, 타이머가 도는 동안 또 오면 20번까지 다시 늦춘다.
-    /// 멈춘 옛 감시(다시 읽으며 새로 연 감시 앞의 것)가 보낸 알림은 버린다.
+    /// Original ThreadNotification (0x7b3830): on the first notification, start the Delay (1500ms) timer; if more arrive while the timer runs, defer again up to 20 times.
+    /// Notifications from a stopped old watch (the one before the new watch opened on re-read) are discarded.
     pub(super) fn folder_changed(&mut self, index: usize, path: &Path, watch: &Arc<AtomicBool>) {
         let Some(pane) = self.panes.get_mut(index) else { return };
         if pane.watch.as_ref().is_none_or(|(watched, current)| watched != path || !Arc::ptr_eq(current, watch)) {
