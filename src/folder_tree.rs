@@ -490,6 +490,30 @@ pub struct ScanOptions {
     pub max_level: Option<usize>,
 }
 
+/// RefreshFirstLevel 0x7e99e0의 FindFirstFileW(경로\*): 바로 아래 폴더 이름("."·".." 빼고, 숨김은 show_hidden일 때만).
+/// 거르개는 scan과 같다(재분석 지점·제외 경로는 뺀다).
+pub fn child_folder_names(folder: &Path, options: &ScanOptions) -> Vec<String> {
+    let Ok(read) = fs::read_dir(folder) else { return vec![] };
+    read.flatten()
+        .filter_map(|entry| {
+            let meta = entry.metadata().ok()?;
+            if !meta.is_dir() || meta.file_attributes() & 0x400 != 0 || (!options.show_hidden && hidden(&meta)) {
+                return None;
+            }
+            let text = entry.path().to_string_lossy().to_lowercase();
+            if options.excluded.iter().any(|e| e.to_lowercase().trim_end_matches('\\') == text) {
+                return None;
+            }
+            Some(entry.file_name().to_string_lossy().into_owned())
+        })
+        .collect()
+}
+
+/// SetShowHiddenFolder 0x7ea8b0: GetFileAttributesW(경로) & FILE_ATTRIBUTE_HIDDEN.
+pub fn is_hidden_folder(path: &Path) -> bool {
+    fs::metadata(path).is_ok_and(|m| hidden(&m))
+}
+
 /// ScanDirectory 0x7e988c + ScanDir 0x7e9634: `path`부터 폴더만 줄로. 첫 줄 = `path`(단계 0이면 뿌리 경로, 아니면 이름, 펼침 1).
 /// 자식 줄의 펼침 = (단계 − (시작 단계 + 1) < 2). `cancel`이 켜지면 멈춘다(+0x390). `progress`는 들어간 폴더마다(OnScan).
 pub fn scan(path: &Path, options: &ScanOptions, cancel: &AtomicBool, progress: &mut dyn FnMut(&Path)) -> Vec<Line> {

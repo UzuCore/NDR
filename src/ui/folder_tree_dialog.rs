@@ -126,6 +126,8 @@ pub(super) enum FolderTreeAction {
     Delete { recycle: bool },
     /// SpecialFolderClick·FUN_00425904(Ctrl+D/G/Q/S/O): 바탕 화면, 문서, 그림, 음악, 비디오.
     Special(&'static str),
+    /// miShowHiddenFolderClick 0x4263e0: 설정 tshowhidden(+0x8c)을 뒤집었다.
+    ShowHidden(bool),
 }
 
 fn color_of(settings: &ndr::settings::Settings, key: &str) -> Color32 {
@@ -600,6 +602,59 @@ impl FolderTreeForm {
         self.tree.assign_rows();
         self.dirty = true;
     }
+
+    /// 지울 항목 `i` 안에 초점이 있으면 초점을 그 부모로 옮긴다.
+    fn remove_item(&mut self, i: usize) {
+        if self.focused.is_some_and(|f| f == i || self.tree.has_as_parent(f, i)) {
+            self.focused = self.tree.items[i].parent;
+        }
+        self.tree.remove(i);
+        self.dirty = true;
+    }
+
+    /// miShowHiddenFolderClick 0x4263e0 → SetShowHiddenFolder 0x7ea8b0: 끄면 트리에서 숨김 폴더(와 그 자손)를 지우고,
+    /// 켜면 RefreshFirstLevel 0x7e99e0(뿌리 바로 아래를 다시 읽어 없는 폴더는 빼고 새 폴더는 넣는다).
+    pub(super) fn set_show_hidden(&mut self, on: bool) {
+        if self.options.show_hidden == on {
+            return;
+        }
+        self.options.show_hidden = on;
+        let Some(root) = self.tree.root else { return };
+        if on {
+            let names = folder_tree::child_folder_names(Path::new(&self.tree.full_path(root)), &self.options);
+            let children: Vec<usize> = self.tree.children(root).collect();
+            for child in children {
+                let gone = !Path::new(&self.tree.full_path(child)).is_dir() || !names.iter().any(|n| n.eq_ignore_ascii_case(&self.tree.items[child].name));
+                if gone {
+                    self.remove_item(child);
+                }
+            }
+            for name in &names {
+                if !self.tree.children(root).any(|c| self.tree.items[c].name.eq_ignore_ascii_case(name)) {
+                    self.tree.add_child(root, name);
+                    self.dirty = true;
+                }
+            }
+        } else {
+            let mut at = self.tree.next_any(root);
+            while let Some(i) = at {
+                if !folder_tree::is_hidden_folder(Path::new(&self.tree.full_path(i))) {
+                    at = self.tree.next_any(i);
+                    continue;
+                }
+                // 지울 항목의 자손을 건너뛴 다음 항목.
+                let mut next = self.tree.next_any(i);
+                while let Some(n) = next.filter(|&n| self.tree.has_as_parent(n, i)) {
+                    next = self.tree.next_any(n);
+                }
+                self.remove_item(i);
+                at = next;
+            }
+        }
+        self.tree.assign_rows();
+        let focused = self.focused.or(self.tree.root);
+        self.focus(focused, 1);
+    }
 }
 
 const ROW_HEIGHT: f32 = 17.0;
@@ -888,47 +943,66 @@ pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, langu
         ui.scope_builder(egui::UiBuilder::new().max_rect(at(x, 0.0, width, 22.0)), |ui| {
             ui.add_enabled_ui(!scanning, |ui| {
                 ui.menu_button(caption.as_str(), |ui| {
-                    let items: &[(&str, &str, &str)] = if id == "folder" {
+                    // DFM의 항목(ShortCut은 VCL처럼 오른쪽에 글로 보인다). "@levels" = miLevelExpand 하위 메뉴, "@hidden" = miShowHiddenFolder(확인 표시).
+                    let items: &[(&str, &str, &str, &str)] = if id == "folder" {
                         &[
-                            ("Menu.miDelete", "&D. Delete", "delete"),
-                            ("Menu.miRename", "&R. Rename", "rename"),
-                            ("Menu.miCreateNewFolder", "&F. New Folder", "newFolder"),
-                            ("-", "", ""),
-                            ("Menu.miProperties", "&E. Properties", "properties"),
-                            ("-", "", ""),
-                            ("Menu.miClose", "&C. Close", "close"),
+                            ("Menu.miDelete", "&D. Delete", "delete", "Alt+D"),
+                            ("Menu.miRename", "&R. Rename", "rename", "Alt+R"),
+                            ("Menu.miCreateNewFolder", "&F. New Folder", "newFolder", "Alt+K"),
+                            ("-", "", "", ""),
+                            ("Menu.miProperties", "&E. Properties", "properties", "Alt+Enter"),
+                            ("-", "", "", ""),
+                            ("Menu.miClose", "&C. Close", "close", ""),
                         ]
                     } else {
                         &[
-                            ("Menu.miExpand", "&E. Expand", "expand"),
-                            ("Menu.miCollapse", "&C. Collapse", "collapse"),
-                            ("-", "", ""),
-                            ("Menu.miExpandRecursive", "&X. Expand All Subfolders", "expandRecursive"),
-                            ("Menu.miCollapseRecursive", "&A. Collapse All Subfolders", "collapseRecursive"),
-                            ("-", "", ""),
-                            ("Menu.miExpandTree", "&T. Expand All", "expandTree"),
-                            ("Menu.miCollapseTree", "&P. Collapse All", "collapseTree"),
-                            ("-", "", ""),
-                            ("Menu.miLevelExpand1", "&1 Level", "level1"),
-                            ("Menu.miLevelExpand2", "&2 Level", "level2"),
-                            ("Menu.miLevelExpand3", "&3 Level", "level3"),
-                            ("Menu.miLevelExpand4", "&4 Level", "level4"),
-                            ("Menu.miLevelExpand5", "&5 Level", "level5"),
-                            ("-", "", ""),
-                            ("Menu.miSubRefresh", "&S. Refresh Subfolders", "subRefresh"),
-                            ("Menu.miTreeRefresh", "&F. Refresh All", "treeRefresh"),
-                            ("-", "", ""),
-                            ("Menu.miFindNext", "&N. Find Next", "findNext"),
+                            ("Menu.miExpand", "&E. Expand", "expand", "Shift+Right"),
+                            ("Menu.miCollapse", "&C. Collapse", "collapse", "Shift+Left"),
+                            ("-", "", "", ""),
+                            ("Menu.miExpandRecursive", "&X. Expand All Subfolders", "expandRecursive", "Ctrl+Right"),
+                            ("Menu.miCollapseRecursive", "&A. Collapse All Subfolders", "collapseRecursive", "Ctrl+Left"),
+                            ("-", "", "", ""),
+                            ("Menu.miExpandTree", "&T. Expand All", "expandTree", "Ctrl+Alt+Right"),
+                            ("Menu.miCollapseTree", "&P. Collapse All", "collapseTree", "Ctrl+Alt+Left"),
+                            ("-", "", "", ""),
+                            ("Menu.miLevelExpand", "&V. Expand by Level", "@levels", ""),
+                            ("-", "", "", ""),
+                            ("Menu.miSubRefresh", "&S. Refresh Subfolders", "subRefresh", "Alt+S"),
+                            ("Menu.miTreeRefresh", "&F. Refresh All", "treeRefresh", "Alt+F"),
+                            ("-", "", "", ""),
+                            ("Menu.miShowHiddenFolder", "&H. Show Hidden Folders", "@hidden", ""),
+                            ("Menu.miFindNext", "&N. Find Next", "findNext", "Ctrl+L"),
                         ]
                     };
-                    for (key, fallback, command) in items {
-                        if *key == "-" {
-                            ui.separator();
-                            continue;
-                        }
-                        if ui.button(plain(key, fallback)).clicked() {
-                            menu_action = Some(command);
-                            ui.close();
+                    for (key, fallback, command, shortcut) in items {
+                        match *command {
+                            "" => {
+                                ui.separator();
+                            }
+                            "@levels" => {
+                                ui.menu_button(plain(key, fallback), |ui| {
+                                    for n in 1..=5usize {
+                                        let label = plain(&format!("Menu.miLevelExpand{n}"), &format!("&{n} Level"));
+                                        if ui.add(egui::Button::new(label).shortcut_text(format!("Alt+{n}"))).clicked() {
+                                            menu_action = Some(["level1", "level2", "level3", "level4", "level5"][n - 1]);
+                                            ui.close();
+                                        }
+                                    }
+                                });
+                            }
+                            "@hidden" => {
+                                // miTreeClick 0x426668: 메뉴를 열 때 miShowHiddenFolder.Checked = tshowhidden.
+                                if super::skin_pane::menu_check_button(ui, true, form.options.show_hidden, false, egui::Button::new(plain(key, fallback))).clicked() {
+                                    menu_action = Some("showHidden");
+                                    ui.close();
+                                }
+                            }
+                            _ => {
+                                if ui.add(egui::Button::new(plain(key, fallback)).shortcut_text(*shortcut)).clicked() {
+                                    menu_action = Some(command);
+                                    ui.close();
+                                }
+                            }
                         }
                     }
                 });
@@ -1356,6 +1430,11 @@ pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, langu
             "collapseTree" => form.expand_all(false),
             "level1" | "level2" | "level3" | "level4" | "level5" => form.expand_levels(command[5..].parse().unwrap_or(1)),
             "findNext" => form.quick_search(false),
+            "showHidden" => {
+                let on = !form.options.show_hidden;
+                form.set_show_hidden(on);
+                action = Some(FolderTreeAction::ShowHidden(on));
+            }
             "treeRefresh" => {
                 let then = focused.map(|i| form.tree.full_path(i));
                 form.start_scan(None, then);
@@ -1500,6 +1579,10 @@ impl App {
             FolderTreeAction::Properties(path) => {
                 let _ = (self.system.run_verb)(Path::new(&path), "properties");
             }
+            FolderTreeAction::ShowHidden(on) => {
+                self.settings.set_flag("ShowHiddenFoldersInTree", on);
+                self.save();
+            }
             FolderTreeAction::Special(id) => {
                 // FUN_00425904: FUN_0040db88(번호)의 폴더로 SetPath.
                 if let Some(path) = self.special_folder_path(id) {
@@ -1532,5 +1615,45 @@ impl App {
                 }
             }
         }
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn show_hidden_folders_toggle_follows_setshowhiddenfolder() {
+        let root = std::env::temp_dir().join(format!("ndr-tree-hidden-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        for dir in ["a/a1", "h/h1", "b"] {
+            fs::create_dir_all(root.join(dir)).unwrap();
+        }
+        ndr::native::set_attributes(&root.join("h"), false, true).unwrap();
+        let settings = ndr::settings::Settings::default();
+        let mut form = FolderTreeForm::new(&settings, &root, vec![], vec![]);
+        form.options.show_hidden = true;
+        let text = root.to_string_lossy().into_owned();
+        form.tree = folder_tree::build(&root, &form.options, &AtomicBool::new(false), &mut |_| {});
+        let names = |form: &FolderTreeForm| {
+            let root = form.tree.root.unwrap();
+            let mut names: Vec<String> = form.tree.children(root).map(|c| form.tree.items[c].name.clone()).collect();
+            names.sort();
+            names
+        };
+        assert_eq!(names(&form), ["a", "b", "h"]);
+        form.focus(form.tree.find_path(&root.join("h").join("h1").to_string_lossy()), 1);
+        // 끄면 숨김 폴더와 그 자손을 지우고, 그 안의 초점은 부모로.
+        form.set_show_hidden(false);
+        assert_eq!(names(&form), ["a", "b"]);
+        assert_eq!(form.focused, form.tree.root);
+        assert!(form.dirty);
+        // 켜면 RefreshFirstLevel: 뿌리 바로 아래를 다시 읽어 숨김 폴더를 넣는다.
+        form.set_show_hidden(true);
+        assert_eq!(names(&form), ["a", "b", "h"]);
+        assert_eq!(form.tree.full_path(form.tree.root.unwrap()).trim_end_matches('\\'), text.trim_end_matches('\\'));
+        let _ = ndr::native::set_attributes(&root.join("h"), false, false);
+        fs::remove_dir_all(&root).unwrap();
     }
 }
