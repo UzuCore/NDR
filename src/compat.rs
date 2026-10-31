@@ -1204,6 +1204,8 @@ fn character_offset(text: &str, index: usize) -> usize {
         .unwrap_or(text.len())
 }
 fn apply_rename_rule(value: &str, rule: &RenameRule, item_index: usize) -> Result<String, String> {
+    // Original ins rule FUN_00469c48: an empty target becomes the text; last (-2) or a position past the end appends; otherwise the
+    // text goes before the 1-based position (first = 1). Fixed: position 0 wrote before the buffer; it inserts at the start here.
     let insert = |text: &str| {
         let index = match rule.position.as_str() {
             "Suffix" | "Last" => value.len(),
@@ -1220,12 +1222,9 @@ fn apply_rename_rule(value: &str, rule: &RenameRule, item_index: usize) -> Resul
                 .checked_mul(i64::try_from(item_index).map_err(|_| "Rename sequence overflow")?)
                 .and_then(|v| rule.start.checked_add(v))
                 .ok_or("Rename sequence overflow")?;
-            let text = format!(
-                "{}{:0width$}",
-                if number < 0 { "-" } else { "" },
-                number.unsigned_abs(),
-                width = rule.digits.clamp(1, 250)
-            );
+            // Original num rule FUN_0046c06c: wsprintfW("%0<digits>d", counter), counter += step per item, then inserted like ins
+            // (FUN_00469c48). The width counts the minus sign ("-0003" for width 5). Previously the sign was added outside the width.
+            let text = format!("{number:0width$}", width = rule.digits.clamp(1, 250));
             Ok(insert(&text))
         }
         "Replace" => {
@@ -1236,11 +1235,13 @@ fn apply_rename_rule(value: &str, rule: &RenameRule, item_index: usize) -> Resul
                 .case_insensitive(true)
                 .build()
                 .map_err(|e| e.to_string())?;
+            // Original rep rule FUN_0046a45c compares case-insensitively (StrCmpNIW) at every position; First and All skip past a
+            // match, Last keeps scanning from the next character, so the last match may overlap an earlier one.
             if matches!(rule.position.as_str(), "First" | "Last") {
                 let found = if rule.position == "First" {
                     regex.find(value)
                 } else {
-                    regex.find_iter(value).last()
+                    value.char_indices().rev().find_map(|(at, _)| regex.find_at(value, at).filter(|m| m.start() == at))
                 };
                 Ok(if let Some(m) = found {
                     format!(
@@ -1268,21 +1269,27 @@ fn apply_rename_rule(value: &str, rule: &RenameRule, item_index: usize) -> Resul
                     .map(|c| c.to_uppercase().collect::<String>() + &chars.as_str().to_lowercase())
                     .unwrap_or_default()
             }
-            _ => value
-                .split(' ')
-                .map(|word| {
-                    let mut chars = word.chars();
-                    chars
-                        .next()
-                        .map(|c| {
-                            c.to_uppercase().collect::<String>() + &chars.as_str().to_lowercase()
-                        })
-                        .unwrap_or_default()
-                })
-                .collect::<Vec<_>>()
-                .join(" "),
+            // Original cas rule FUN_0046ba18 upperword: CharLowerW, then CharUpperBuffW on the first character and on every character after
+            // one of " ()[]_." (StrCSpnIW). Previously only spaces started a word.
+            _ => {
+                let mut out = String::with_capacity(value.len());
+                let mut start = true;
+                for c in value.chars() {
+                    if start {
+                        out.extend(c.to_uppercase());
+                    } else {
+                        out.extend(c.to_lowercase());
+                    }
+                    start = " ()[]_.".contains(c);
+                }
+                out
+            }
         }),
         "Delete" => {
+            // Original del rule FUN_0046adcc (1-based): start = 1 / length / Pos(text) + its length (forward) or − 1 (backward) / the
+            // number; end = Pos(delimiter) − 1 (forward) or Pos(delimiter) (backward), or start ± (count − 1); the range between them,
+            // clamped to the name, is removed. Fixed: a start text that is not found left forward deletion running from its length, a
+            // count of 0 removed two characters, and a position of 0 started at 1; those now change nothing.
             let len = value.chars().count() as i64;
             if len == 0 {
                 return Ok(value.into());
@@ -2461,6 +2468,18 @@ mod tests {
         assert_eq!(map.resolve(0x202e).as_deref(), Some("Delete"));
         assert_eq!(text_to_shortcut("Ctrl+PageUp"), 0x4021);
         assert_eq!(shortcut_to_text(0x4021), "Ctrl+PageUp");
+    }
+    /// Original rule appliers: the number width counts the sign (wsprintfW "%05d"), Last replace may overlap, and upperword starts a
+    /// word after " ()[]_.".
+    #[test]
+    fn rename_rules_follow_the_original_appliers() {
+        let rule = |action: &str| RenameRule { action: action.into(), ..Default::default() };
+        let number = RenameRule { start: -3, digits: 5, position: "Suffix".into(), ..rule("Number") };
+        assert_eq!(rename_with_rules("a.txt", &[number], 0, false).unwrap(), "a-0003.txt");
+        let last = RenameRule { find: "AA".into(), replace: "x".into(), position: "Last".into(), ..rule("Replace") };
+        assert_eq!(rename_with_rules("aaa.txt", &[last], 0, false).unwrap(), "ax.txt");
+        let words = RenameRule { case_mode: "WordFirst".into(), ..rule("Case") };
+        assert_eq!(rename_with_rules("my_file(two)[X].ab cd.TXT", &[words], 0, false).unwrap(), "My_File(Two)[X].Ab Cd.TXT");
     }
     #[test]
     fn original_rename_pipeline_supports_target_order_and_delete_modes() {
