@@ -652,6 +652,8 @@ impl App {
         let path = self.panes[index].path.clone();
         let local = self.panes[index].archive.is_none() && self.panes[index].remote.is_none() && !super::panes::is_drives(&path);
         // SetPath: when the location changes, expand from the desktop down to that folder (My Computer → drives → …) and scroll so that row is visible.
+        // Original SetPathFromID (0x7ee894): skipped while already updating or when the selected folder is that folder; otherwise expands
+        // every ancestor node that exists (FolderExists), selects the target (or the deepest ancestor found) and makes it visible.
         let mut reveal = false;
         if local && self.panes[index].tree_synced.as_ref() != Some(&path) {
             for key in ndr::shell_tree::ancestors(&path) {
@@ -664,9 +666,9 @@ impl App {
             reveal = true;
         }
         if self.shell_desktop.is_none() {
-            self.shell_desktop = Some(ndr::shell_tree::desktop().unwrap_or(ShellNode { key: PathBuf::new(), name: self.tr("바탕 화면", "Desktop").into_owned(), path: None, has_children: true, special: Special::None }));
+            self.shell_desktop = Some(ndr::shell_tree::desktop().unwrap_or(ShellNode { key: PathBuf::new(), name: self.tr("바탕 화면", "Desktop").into_owned(), path: None, has_children: true, special: Special::None, ghosted: false }));
         }
-        let root = self.shell_desktop.clone().unwrap_or(ShellNode { key: PathBuf::new(), name: String::new(), path: None, has_children: true, special: Special::None });
+        let root = self.shell_desktop.clone().unwrap_or(ShellNode { key: PathBuf::new(), name: String::new(), path: None, has_children: true, special: Special::None, ghosted: false });
         let font = egui::FontId::new(self.list_font_size, egui::FontFamily::Name(super::LIST_FONT_FAMILY.into()));
         let row_height = (ui.fonts_mut(|f| f.row_height(&font)).ceil() + 2.0).max(18.0);
         let mut rows: Vec<(ShellNode, usize)> = Vec::new();
@@ -746,6 +748,8 @@ impl App {
                     ui.painter().add(egui::Shape::convex_polygon(points, text, egui::Stroke::NONE));
                 }
                 if let Some(icon) = self.shell_node_icon(ui.ctx(), node) {
+                    // Original InitNode (0x7ed85c): a ghosted folder (hidden) gets Cut = true, which TTreeView draws with the dimmed icon.
+                    let icon = if node.ghosted { self.ghost_icons.get(&icon.id()).cloned().unwrap_or(icon) } else { icon };
                     ui.painter().image(icon.id(), egui::Rect::from_center_size(egui::pos2(row.left() + indent + 25.0, row.center().y), egui::vec2(16.0, 16.0)), egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
                 }
                 let editing = self.panes[index].tree_edit.as_ref().is_some_and(|(folder, _)| node.path.as_ref().is_some_and(|p| same_key(p, folder)));

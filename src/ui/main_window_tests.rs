@@ -1741,7 +1741,7 @@ fn pane_tree_keys_follow_the_ttreeview() {
     for name in ["alpha", "beta"] {
         fs::create_dir_all(left.join(name).join("inner")).unwrap();
     }
-    let node = |path: &Path, has_children: bool| ShellNode { key: path.to_path_buf(), name: path.file_name().unwrap().to_string_lossy().into_owned(), path: Some(path.to_path_buf()), has_children, special: Special::None };
+    let node = |path: &Path, has_children: bool| ShellNode { key: path.to_path_buf(), name: path.file_name().unwrap().to_string_lossy().into_owned(), path: Some(path.to_path_buf()), has_children, special: Special::None, ghosted: false };
     app.settings.set_flag("ShowLeftFolderTree", true);
     app.active = 0;
     app.tree_focus = Some(0);
@@ -2145,6 +2145,9 @@ fn pane_tree_follows_the_hidden_toggle() {
     assert!(app.panes[0].show_hidden);
     let shown = names(&mut app, true);
     assert!(shown.iter().any(|n| n == "visible-dir") && shown.iter().any(|n| n == "hidden-dir"), "{shown:?}");
+    // Original InitNode (0x7ed85c): the hidden folder is SFGAO_GHOSTED and is drawn with the dimmed icon (Cut); the visible one is not.
+    let ghosted: Vec<(String, bool)> = app.tree_cache.iter().find(|((key, h), _)| *h && ndr::shell_tree::same_key(key, &left)).map(|(_, c)| c.iter().map(|n| (n.name.clone(), n.ghosted)).collect()).unwrap_or_default();
+    assert!(ghosted.contains(&("hidden-dir".to_owned(), true)) && ghosted.contains(&("visible-dir".to_owned(), false)), "{ghosted:?}");
     // When the right pane (hidden off) reads the same folder in its tree, it does not use the left pane's (hidden on) result.
     assert!(!app.panes[1].show_hidden);
     let end = Instant::now() + Duration::from_secs(20);
@@ -2296,9 +2299,9 @@ fn pane_tree_label_edit_renames_the_folder() {
     let left = root.join("left");
     let folder = left.join("folder");
     fs::create_dir_all(folder.join("inner")).unwrap();
-    let node = ndr::shell_tree::ShellNode { key: folder.clone(), name: "folder".into(), path: Some(folder.clone()), has_children: true, special: ndr::shell_tree::Special::None };
+    let node = ndr::shell_tree::ShellNode { key: folder.clone(), name: "folder".into(), path: Some(folder.clone()), has_children: true, special: ndr::shell_tree::Special::None, ghosted: false };
     assert!(super::views::tree_renamable(&node));
-    assert!(!super::views::tree_renamable(&ndr::shell_tree::ShellNode { key: PathBuf::from("C:\\"), name: "C:".into(), path: Some(PathBuf::from("C:\\")), has_children: true, special: ndr::shell_tree::Special::None }));
+    assert!(!super::views::tree_renamable(&ndr::shell_tree::ShellNode { key: PathBuf::from("C:\\"), name: "C:".into(), path: Some(PathBuf::from("C:\\")), has_children: true, special: ndr::shell_tree::Special::None, ghosted: false }));
     app.panes[0].tree_rows = vec![(node, 1, true, false)];
     app.panes[0].tree_selected = Some(folder.clone());
     let start = Instant::now();

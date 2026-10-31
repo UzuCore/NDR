@@ -26,6 +26,7 @@ pub const THIS_PC: &str = "::{20D04FE0-3AEA-1069-A2D8-08002B30309D}";
 pub const NETWORK: &str = "::{F02C1A0D-BE21-4350-88B0-7367FC96EF3C}";
 
 const SFGAO_STREAM: u32 = 0x0040_0000;
+const SFGAO_GHOSTED: u32 = 0x0000_8000;
 const SFGAO_FOLDER: u32 = 0x2000_0000;
 const SFGAO_HASSUBFOLDER: u32 = 0x8000_0000;
 const SHCONTF_FOLDERS: u32 = 0x20;
@@ -53,6 +54,9 @@ pub struct ShellNode {
     /// SFGAO_HASSUBFOLDER: draws the expand mark.
     pub has_children: bool,
     pub special: Special,
+    /// SFGAO_GHOSTED (hidden items): original InitNode (0x7ed85c) sets the node's Cut flag from TNXShellFolder.Properties bit 1
+    /// (SHGetItemProperties 0x7b4504 = attribute 0x8000), so the tree draws its icon dimmed.
+    pub ghosted: bool,
 }
 
 struct Pidl(*mut ITEMIDLIST);
@@ -130,6 +134,8 @@ fn file_path(pidl: *const ITEMIDLIST) -> Option<PathBuf> {
 }
 
 /// Root (Desktop).
+/// Original TNXCustomShellTreeView.CreateRoot (0x7edb64): clears the items, adds one root node for the root folder (the Desktop by
+/// default), named with SHGetDisplayName(SHGDN_NORMAL), with the shell image and the SubFolders flag, and selects it.
 pub fn desktop() -> Option<ShellNode> {
     let _com = Com::init();
     // SAFETY: plain COM calls on this thread's apartment.
@@ -138,7 +144,7 @@ pub fn desktop() -> Option<ShellNode> {
     let mut empty = [0u16; 1];
     let pidl = empty.as_mut_ptr().cast::<ITEMIDLIST>();
     let name = strret(&desktop, pidl, SHGDN_NORMAL).unwrap_or_default();
-    Some(ShellNode { key: PathBuf::new(), name, path: file_path(pidl), has_children: true, special: Special::None })
+    Some(ShellNode { key: PathBuf::new(), name, path: file_path(pidl), has_children: true, special: Special::None, ghosted: false })
 }
 
 /// TNXShellTreeView expansion: folders directly under `key` (hidden ones only with `show_hidden`), in shell order (IShellFolder::CompareIDs).
@@ -187,7 +193,7 @@ pub fn children(key: &Path, show_hidden: bool) -> Vec<ShellNode> {
         let recycle = special_key(&desktop, CSIDL_BITBUCKET);
         let mut nodes = Vec::with_capacity(items.len());
         for item in &items {
-            let mut attributes = SFGAO_FOLDER | SFGAO_HASSUBFOLDER | SFGAO_STREAM;
+            let mut attributes = SFGAO_FOLDER | SFGAO_HASSUBFOLDER | SFGAO_STREAM | SFGAO_GHOSTED;
             if folder.GetAttributesOf(&[item.0.cast_const()], &mut attributes).is_err() {
                 continue;
             }
@@ -207,7 +213,7 @@ pub fn children(key: &Path, show_hidden: bool) -> Vec<ShellNode> {
             } else {
                 Special::None
             };
-            nodes.push(ShellNode { key: PathBuf::from(&parsing), name, path: file_path(full.0), has_children: attributes & SFGAO_HASSUBFOLDER != 0, special });
+            nodes.push(ShellNode { key: PathBuf::from(&parsing), name, path: file_path(full.0), has_children: attributes & SFGAO_HASSUBFOLDER != 0, special, ghosted: attributes & SFGAO_GHOSTED != 0 });
         }
         nodes
     }

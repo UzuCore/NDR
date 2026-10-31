@@ -746,6 +746,9 @@ impl App {
             self.arm_folder_watch(index, Some(wanted), &ctx);
         }
         // Pane folder tree: also re-read that folder's subfolder list (so newly created or deleted folders appear in the tree).
+        // Original TNXCustomShellTreeView.Refresh(node) (0x7ee25c) rebuilds the node from a fresh TNXShellFolder (PopulateNode), keeps the
+        // expanded state of children that still exist (FolderExists) and restores the selected and top nodes. NDR drops the cached
+        // child list of that folder; expansion is kept by key in `tree_open`, so the same rows reopen.
         let current = self.panes[index].path.clone();
         self.tree_cache.retain(|(key, _), _| !ndr::shell_tree::same_key(key, &current));
         self.tree_requests.retain(|(key, _)| !ndr::shell_tree::same_key(key, &current));
