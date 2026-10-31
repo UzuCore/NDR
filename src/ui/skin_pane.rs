@@ -765,6 +765,8 @@ impl App {
         let buttons = skin.values.get("list.labtnimgs").cloned().and_then(|file| self.toolbar_icon(ctx, &file));
         let right_button = egui::Rect::from_min_size(egui::pos2(rect.right() - ADDRESS_BUTTON_WIDTH, rect.top()), egui::vec2(ADDRESS_BUTTON_WIDTH, rect.height()));
         let left_button = egui::Rect::from_min_size(egui::pos2(right_button.left() - ADDRESS_BUTTON_WIDTH, rect.top()), egui::vec2(ADDRESS_BUTTON_WIDTH, rect.height()));
+        // Where the history menu opens when the keyboard asks for it (ShowPathHistory, Alt+Down): under this ▼ button, like the original.
+        ui.data_mut(|d| d.insert_temp(egui::Id::new(("ndr-history-anchor", index)), right_button.left_bottom()));
         let mut clicked_button = None;
         for (cell, slot) in [(1usize, left_button), (0, right_button)] {
             let response = ui.interact(slot, egui::Id::new(("ndr-skin-address-button", index, cell)), egui::Sense::click());

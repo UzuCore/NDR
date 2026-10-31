@@ -67,7 +67,7 @@ impl App {
             C::CopyActiveToOther{moving}=>self.copy_to_other(self.active,moving,ctx),
             C::FindNext=>self.find_next(),
             C::ExchangePath=>{/* Original FUN_0043d5ec (shortcut command 0x23): the panes swap folders only when both are in local mode (0). */ if self.panes.iter().all(|p|p.archive.is_none()&&p.remote.is_none()){let paths=self.panes.each_ref().map(|p|p.path.clone());self.navigate(0,paths[1].clone(),true);self.navigate(1,paths[0].clone(),true);}},
-            C::ShowPathHistory=>self.show_history_menu(self.active,None),
+            C::ShowPathHistory=>{/* Original case 0x24: WM_LBUTTONDOWN/UP to the history button (+0x324), so the menu opens under that ▼ button. */ let at=ctx.data(|d|d.get_temp::<egui::Pos2>(egui::Id::new(("ndr-history-anchor",self.active))));self.show_history_menu(self.active,at)},
             C::FocusAddressBar=>{/* C# BeginAddressEdit(side) = original shortcut command 0x25 FUN_0048d3c8 (active pane). */ self.begin_address_edit(self.active,ctx)},
             C::SelectAll{with_folders}=>{let i=self.active;let folders=with_folders||self.settings.flag("SelectFolders",false);let pane=&mut self.panes[i];pane.selected=pane.entries.iter().enumerate().filter(|(_,e)|!e.drive&&!e.is_parent()&&(folders||!e.is_dir)).map(|(j,_)|j).collect();},
             C::SelectCurrentAndMove=>self.select_current_and_move(),
