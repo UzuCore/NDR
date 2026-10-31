@@ -442,8 +442,9 @@ enum AsyncResult {
         image: Result<(usize, usize, Vec<u8>), String>,
     },
     Tree {
+        /// 셸 열쇠(ndr::shell_tree: 바탕 화면 = 빈 열쇠).
         path: PathBuf,
-        directories: Vec<PathBuf>,
+        directories: Vec<ndr::shell_tree::ShellNode>,
     },
     /// 원본 TNXShellChangeNotify 스레드 알림(ThreadNotification 0x7b3830): 그 패널이 지켜보던 폴더가 바뀌었다.
     FolderChanged { pane: usize, path: PathBuf },
@@ -592,9 +593,11 @@ pub struct App {
     /// C# ShellOverlayIconCache(경로마다, 512개가 넘으면 비움)와 기다리는 경로, 오버레이 작업 스레드(STA)로 보낼 곳.
     overlay_icons: HashMap<PathBuf, Option<egui::TextureHandle>>,
     overlay_pending: HashSet<PathBuf>,
-    overlay_tx: Option<Sender<(PathBuf, bool)>>,
+    overlay_tx: Option<Sender<(PathBuf, u8)>>,
     image_requests: HashSet<PathBuf>,
-    tree_cache: HashMap<PathBuf, Vec<PathBuf>>,
+    tree_cache: HashMap<PathBuf, Vec<ndr::shell_tree::ShellNode>>,
+    /// 패널 폴더 트리의 뿌리(바탕 화면, 처음 그릴 때 읽는다).
+    shell_desktop: Option<ndr::shell_tree::ShellNode>,
     tree_requests: HashSet<PathBuf>,
     msgboxes: Vec<msgbox::MsgBox>,
     msgbox_serial: u64,
@@ -882,6 +885,7 @@ impl App {
             overlay_tx: None,
             image_requests: HashSet::new(),
             tree_cache: HashMap::new(),
+            shell_desktop: None,
             tree_requests: HashSet::new(),
             msgboxes: Vec::new(),
             msgbox_serial: 0,

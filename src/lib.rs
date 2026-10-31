@@ -8,6 +8,7 @@ pub mod tools;
 pub mod archive;
 pub mod disk;
 pub mod shell_menu;
+pub mod shell_tree;
 pub mod styles;
 pub mod lifecycle;
 pub mod commands;

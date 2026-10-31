@@ -125,16 +125,25 @@ impl App {
     /// C# QueueShellOverlayIcon / EnsureShellOverlayWorker: 처음 부를 때 STA 작업 스레드를 띄우고, 같은 경로는 한 번만 보낸다.
     /// overlay가 false면 오버레이 없이 그 파일의 셸 아이콘(native::shell_path_icon).
     fn queue_overlay_icon(&mut self, path: PathBuf, overlay: bool) {
+        self.queue_icon_job(path, if overlay { 1 } else { 0 });
+    }
+
+    /// 아이콘 작업: 0 = 그 파일의 셸 아이콘, 1 = 오버레이 아이콘, 2 = 셸 열쇠(패널 폴더 트리의 바탕 화면·가상 폴더).
+    fn queue_icon_job(&mut self, path: PathBuf, mode: u8) {
         if !self.overlay_pending.insert(path.clone()) {
             return;
         }
         if self.overlay_tx.is_none() {
-            let (tx, rx) = std::sync::mpsc::channel::<(PathBuf, bool)>();
+            let (tx, rx) = std::sync::mpsc::channel::<(PathBuf, u8)>();
             let (with_overlay, plain, results) = (self.system.overlay_icon, self.system.path_icon, self.async_tx.clone());
             thread::spawn(move || {
                 native::com_sta_init();
-                for (path, overlay) in rx {
-                    let image = if overlay { with_overlay(&path) } else { plain(&path) };
+                for (path, mode) in rx {
+                    let image = match mode {
+                        1 => with_overlay(&path),
+                        2 => native::shell_key_icon(&path),
+                        _ => plain(&path),
+                    };
                     if results.send(AsyncResult::OverlayIcon { path, image }).is_err() {
                         break;
                     }
@@ -143,7 +152,22 @@ impl App {
             self.overlay_tx = Some(tx);
         }
         if let Some(tx) = &self.overlay_tx {
-            let _ = tx.send((path, overlay));
+            let _ = tx.send((path, mode));
+        }
+    }
+
+    /// 패널 폴더 트리 항목의 아이콘(TNXShellTreeView: 셸 이미지 목록의 그 항목 아이콘). 읽기 전에는 폴더 아이콘.
+    pub(super) fn shell_node_icon(&mut self, ctx: &egui::Context, node: &ndr::shell_tree::ShellNode) -> Option<egui::TextureHandle> {
+        if !self.settings.flag("ShowIcons", true) {
+            return None;
+        }
+        match self.overlay_icons.get(&node.key) {
+            Some(Some(texture)) => Some(texture.clone()),
+            Some(None) => self.path_icon(ctx, &node.key, true),
+            None => {
+                self.queue_icon_job(node.key.clone(), 2);
+                self.path_icon(ctx, &node.key, true)
+            }
         }
     }
 
@@ -581,53 +605,59 @@ impl App {
         (activate, open, command)
     }
     /// 원본 패널 폴더 트리(miShowFoldersClick 0x445258 → FUN_0048da38): 패널 안 목록 왼쪽(alLeft TNXPaintPanel 안 TNXShellTreeView).
+    /// 뿌리는 셸 바탕 화면, 그 아래는 셸 이름 공간(내 PC → 드라이브 → 폴더, 네트워크, 제어판, 휴지통 …, ndr::shell_tree).
     /// 바탕·글꼴은 목록과 같고(FUN_0048e1ac: 목록 Color·Font, 글 색 GetBasic(1)), 패널 위치가 바뀌면 그 폴더까지 펼쳐 고른다(SetPath).
-    /// 고르면(FUN_0048e320) 그 패널을 그 폴더로 옮긴다. 뿌리는 드라이브(원본은 셸 바탕 화면 이름 공간; 셸 폴더는 폴더 트리 단계에서).
+    /// 고르면(FUN_0048e320) 제어판은 control.exe, 휴지통은 셸로 열고(FUN_00432fe4), 가상 폴더는 셸로 열고, 폴더면 그 패널을 옮긴다.
     pub(super) fn pane_tree_ui(&mut self, ui: &mut egui::Ui, index: usize, rect: egui::Rect) {
+        use ndr::shell_tree::{ShellNode, Special, same_key};
         // FUN_0048e1ac: 바탕 = 목록 Color(NXBACK), 글 = GetBasic(1)(NXFORE). 고른 줄은 NXSELECT 바탕에 NXBACK 글.
         let (background, text, select) = (self.basic_list_color("NXBACK"), self.basic_list_color("NXFORE"), self.basic_list_color("NXSELECT"));
         ui.painter().rect_filled(rect, 0.0, background);
         let path = self.panes[index].path.clone();
         let local = self.panes[index].archive.is_none() && self.panes[index].remote.is_none() && !super::panes::is_drives(&path);
-        // SetPath: 위치가 바뀌면 뿌리부터 그 폴더까지 펼치고 그 줄이 보이게 넘긴다.
+        // SetPath: 위치가 바뀌면 바탕 화면부터 그 폴더까지(내 PC → 드라이브 → …) 펼치고 그 줄이 보이게 넘긴다.
         let mut reveal = false;
         if local && self.panes[index].tree_synced.as_ref() != Some(&path) {
-            let ancestors: Vec<PathBuf> = path.ancestors().skip(1).map(Path::to_path_buf).collect();
-            self.panes[index].tree_open.extend(ancestors);
+            for key in ndr::shell_tree::ancestors(&path) {
+                if !self.panes[index].tree_open.iter().any(|k| same_key(k, &key)) {
+                    self.panes[index].tree_open.insert(key);
+                }
+            }
             self.panes[index].tree_synced = Some(path.clone());
             reveal = true;
         }
-        let roots: Vec<PathBuf> = ndr::native::listed_drives();
+        if self.shell_desktop.is_none() {
+            self.shell_desktop = Some(ndr::shell_tree::desktop().unwrap_or(ShellNode { key: PathBuf::new(), name: self.tr("바탕 화면", "Desktop").into_owned(), path: None, has_children: true, special: Special::None }));
+        }
+        let root = self.shell_desktop.clone().unwrap_or(ShellNode { key: PathBuf::new(), name: String::new(), path: None, has_children: true, special: Special::None });
         let font = egui::FontId::new(self.list_font_size, egui::FontFamily::Name(super::LIST_FONT_FAMILY.into()));
         let row_height = (ui.fonts_mut(|f| f.row_height(&font)).ceil() + 2.0).max(18.0);
-        let mut rows: Vec<(PathBuf, usize)> = Vec::new();
-        fn walk(app: &mut App, index: usize, path: &Path, depth: usize, rows: &mut Vec<(PathBuf, usize)>) {
-            rows.push((path.to_path_buf(), depth));
-            if depth > 32 || !app.panes[index].tree_open.contains(path) {
+        let mut rows: Vec<(ShellNode, usize)> = Vec::new();
+        fn walk(app: &mut App, index: usize, node: &ShellNode, depth: usize, rows: &mut Vec<(ShellNode, usize)>) {
+            rows.push((node.clone(), depth));
+            if depth > 32 || !app.panes[index].tree_open.iter().any(|k| ndr::shell_tree::same_key(k, &node.key)) {
                 return;
             }
-            match app.tree_cache.get(path).cloned() {
+            match app.tree_cache.get(&node.key).cloned() {
                 Some(children) => {
-                    for child in children {
-                        walk(app, index, &child, depth + 1, rows);
+                    for child in &children {
+                        walk(app, index, child, depth + 1, rows);
                     }
                 }
-                None => app.request_tree_children(index, path),
+                None => app.request_tree_children(index, &node.key),
             }
         }
-        for root in &roots {
-            walk(self, index, root, 0, &mut rows);
-        }
+        walk(self, index, &root, 0, &mut rows);
         let mut child = ui.new_child(egui::UiBuilder::new().id_salt(("ndr-pane-tree", index)).max_rect(rect).layout(egui::Layout::top_down(egui::Align::Min)));
         child.set_clip_rect(rect.intersect(ui.clip_rect()));
-        let mut picked = None;
-        let mut toggled = None;
+        let mut picked: Option<ShellNode> = None;
+        let mut toggled: Option<PathBuf> = None;
         let mut shell_menu: Option<PathBuf> = None;
         let mut drop_rows: Vec<(usize, egui::Rect, PathBuf)> = Vec::new();
         // 하위 폴더를 아직 읽는 중이면 고른 줄이 없으므로, 그 줄이 나올 때까지 넘기기를 미룬다.
         let reveal_id = egui::Id::new(("ndr-pane-tree-reveal", index));
         let reveal = reveal || ui.ctx().data(|d| d.get_temp::<bool>(reveal_id)).unwrap_or(false);
-        let selected_line = rows.iter().position(|(p, _)| *p == path);
+        let selected_line = if local { rows.iter().position(|(node, _)| same_key(&node.key, &path)) } else { None };
         ui.ctx().data_mut(|d| d.insert_temp(reveal_id, reveal && selected_line.is_none()));
         let mut area = egui::ScrollArea::both().id_salt(("ndr-pane-tree-scroll", index)).auto_shrink([false, false]).max_height(rect.height());
         if let (true, Some(line)) = (reveal, selected_line) {
@@ -636,47 +666,48 @@ impl App {
         }
         area.show_rows(&mut child, row_height, rows.len(), |ui, range| {
             ui.spacing_mut().item_spacing.y = 0.0;
-            for (path, depth) in &rows[range] {
-                let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| path.to_string_lossy().trim_end_matches('\\').to_owned());
-                let galley = ui.painter().layout_no_wrap(name, font.clone(), Color32::PLACEHOLDER);
+            for (line, (node, depth)) in rows[range.clone()].iter().enumerate() {
+                let galley = ui.painter().layout_no_wrap(node.name.clone(), font.clone(), Color32::PLACEHOLDER);
                 let indent = *depth as f32 * 16.0;
                 let width = (indent + 16.0 + 18.0 + galley.size().x + 6.0).max(ui.available_width());
                 let (row, response) = ui.allocate_exact_size(egui::vec2(width, row_height), egui::Sense::click());
-                let selected = local && *path == self.panes[index].path;
+                let selected = selected_line == Some(range.start + line);
                 let text_rect = egui::Rect::from_min_size(egui::pos2(row.left() + indent + 34.0, row.top()), egui::vec2(galley.size().x + 4.0, row_height));
                 if selected {
                     ui.painter().rect_filled(text_rect, 0.0, select);
                 }
-                // 펼침 표시(▸/▾): 자식이 없다고 알려진 폴더는 그리지 않는다.
+                // 펼침 표시(▸/▾): 셸이 하위 폴더가 있다고 한 항목(SFGAO_HASSUBFOLDER)만, 읽어 보니 비었으면 지운다.
                 let arrow = egui::Rect::from_min_size(egui::pos2(row.left() + indent, row.top()), egui::vec2(16.0, row_height));
-                let open = self.panes[index].tree_open.contains(path);
-                let empty = self.tree_cache.get(path).is_some_and(|c| c.is_empty());
-                if !empty {
+                let open = self.panes[index].tree_open.iter().any(|k| same_key(k, &node.key));
+                let expandable = node.has_children && !self.tree_cache.get(&node.key).is_some_and(|c| c.is_empty());
+                if expandable {
                     // 목록 글꼴에 ▸·▾ 글자가 없을 수 있어 세모 도형으로 그린다.
                     let c = arrow.center();
                     let points = if open { vec![c + egui::vec2(-4.0, -2.0), c + egui::vec2(4.0, -2.0), c + egui::vec2(0.0, 3.0)] } else { vec![c + egui::vec2(-2.0, -4.0), c + egui::vec2(3.0, 0.0), c + egui::vec2(-2.0, 4.0)] };
                     ui.painter().add(egui::Shape::convex_polygon(points, text, egui::Stroke::NONE));
                 }
-                if let Some(icon) = if *depth == 0 { self.drive_icon(ui.ctx(), path) } else { self.path_icon(ui.ctx(), path, true) } {
+                if let Some(icon) = self.shell_node_icon(ui.ctx(), node) {
                     ui.painter().image(icon.id(), egui::Rect::from_center_size(egui::pos2(row.left() + indent + 25.0, row.center().y), egui::vec2(16.0, 16.0)), egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
                 }
                 ui.painter().galley(egui::pos2(text_rect.left() + 2.0, row.center().y - galley.size().y / 2.0), galley, if selected { background } else { text });
                 if response.clicked() {
                     let on_arrow = response.interact_pointer_pos().is_some_and(|p| arrow.contains(p));
-                    if on_arrow && !empty {
-                        toggled = Some(path.clone());
+                    if on_arrow && expandable {
+                        toggled = Some(node.key.clone());
                     } else {
-                        picked = Some(path.clone());
+                        picked = Some(node.clone());
                     }
                 }
-                if response.double_clicked() && !empty {
-                    toggled = Some(path.clone());
+                if response.double_clicked() && expandable {
+                    toggled = Some(node.key.clone());
                 }
-                // 원본 FUN_0048da38: 트리도 놓을 곳(TNXDropFileTarget.Register(트리)).
-                drop_rows.push((index, row.intersect(ui.clip_rect()), path.clone()));
-                // 원본 FUN_0048e69c(트리 OnContextPopup): 고른 폴더의 셸 메뉴(FUN_00459128).
-                if response.secondary_clicked() {
-                    shell_menu = Some(path.clone());
+                if let Some(folder) = &node.path {
+                    // 원본 FUN_0048da38: 트리도 놓을 곳(TNXDropFileTarget.Register(트리)). 파일 시스템 폴더만.
+                    drop_rows.push((index, row.intersect(ui.clip_rect()), folder.clone()));
+                    // 원본 FUN_0048e69c(트리 OnContextPopup): 고른 폴더의 셸 메뉴(FUN_00459128).
+                    if response.secondary_clicked() {
+                        shell_menu = Some(folder.clone());
+                    }
                 }
             }
         });
@@ -692,37 +723,45 @@ impl App {
                 self.status = error;
             }
         }
-        if let Some(path) = toggled {
+        if let Some(key) = toggled {
             let open = &mut self.panes[index].tree_open;
-            if !open.remove(&path) {
-                open.insert(path);
+            let before = open.len();
+            open.retain(|k| !same_key(k, &key));
+            if open.len() == before {
+                open.insert(key);
             }
         }
-        if let Some(path) = picked {
+        if let Some(node) = picked {
             // 원본 FUN_0048e530(트리에 초점): 그 패널이 지금 패널이 된다.
             self.active = index;
-            if path != self.panes[index].path {
-                self.navigate(index, path, true);
+            let ctx = ui.ctx().clone();
+            match node.special {
+                Special::ControlPanel => self.dispatch("controlPanel", &ctx),
+                Special::RecycleBin => self.dispatch("openRecycle", &ctx),
+                Special::None if ndr::shell_tree::is_virtual(&node.key) => {
+                    if let Err(error) = (self.shell_runner)(&node.key, "", Path::new("")) {
+                        self.status = error;
+                    }
+                }
+                Special::None => {
+                    if let Some(folder) = node.path.filter(|p| !same_key(p, &self.panes[index].path)) {
+                        self.navigate(index, folder, true);
+                    }
+                }
             }
         }
     }
 
-    /// 트리의 하위 폴더 목록을 따로 읽는다(재분석 지점은 넣지 않고, 숨김 폴더는 그 패널의 숨김 보기를 따른다).
-    fn request_tree_children(&mut self, index: usize, path: &Path) {
-        if !self.tree_requests.insert(path.to_path_buf()) {
+    /// 트리의 하위 셸 폴더를 따로 읽는다(숨김 폴더는 그 패널의 숨김 보기를 따른다, 원본 FUN_0048da38 +0x3f8 비트 4).
+    fn request_tree_children(&mut self, index: usize, key: &Path) {
+        if !self.tree_requests.insert(key.to_path_buf()) {
             return;
         }
-        let path = path.to_path_buf();
+        let path = key.to_path_buf();
         let show_hidden = self.panes[index].show_hidden;
         let tx = self.async_tx.clone();
         thread::spawn(move || {
-            let mut directories: Vec<PathBuf> = fsops::list_dir(&path, show_hidden)
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|e| e.is_dir && std::fs::symlink_metadata(&e.path).is_ok_and(|m| !fsops::is_reparse(&m)))
-                .map(|e| e.path)
-                .collect();
-            directories.sort_by_key(|p| p.file_name().map(|n| n.to_string_lossy().to_uppercase()).unwrap_or_default());
+            let directories = ndr::shell_tree::children(&path, show_hidden);
             let _ = tx.send(AsyncResult::Tree { path, directories });
         });
     }

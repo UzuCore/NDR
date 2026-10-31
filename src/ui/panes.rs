@@ -729,6 +729,10 @@ impl App {
         self.typed_search[index] = TypedSearch::default();
         // 원본은 자기 작업 동안 TNXShellChangeNotify를 끄고(SetActive(0)) 작업 뒤 다시 읽는다: 그 사이의 바뀜 알림은 버려진다.
         self.panes[index].change_due = None;
+        // 패널 폴더 트리: 그 폴더의 하위 폴더 목록도 다시 읽는다(새로 만들거나 지운 폴더가 트리에 보이게).
+        let current = self.panes[index].path.clone();
+        self.tree_cache.retain(|key, _| !ndr::shell_tree::same_key(key, &current));
+        self.tree_requests.retain(|key| !ndr::shell_tree::same_key(key, &current));
         // 원본 새로 고침은 표시를 이름으로 되돌리므로(apply_listing) 새 목록이 올 때까지 표시를 둔다.
         let pane = &mut self.panes[index];
         pane.generation += 1;

@@ -817,6 +817,35 @@ pub fn shell_path_icon(path: &Path) -> Option<(usize, usize, Vec<u8>)> {
     }
 }
 
+/// 패널 폴더 트리(TNXShellTreeView)의 셸 항목 아이콘: 열쇠(빈 열쇠 = 바탕 화면, "::{CLSID}" 가상 폴더, 경로)를
+/// SHParseDisplayName으로 항목 목록으로 바꿔 SHGetFileInfoW(SHGFI_PIDL | SHGFI_ICON | SHGFI_SMALLICON). com_sta_init을 부른 스레드에서 쓴다.
+pub fn shell_key_icon(key: &Path) -> Option<(usize, usize, Vec<u8>)> {
+    use windows_sys::Win32::System::Com::CoTaskMemFree;
+    use windows_sys::Win32::UI::Shell::{SHGFI_PIDL, SHGetSpecialFolderLocation, SHParseDisplayName};
+    let mut pidl: *mut windows_sys::Win32::UI::Shell::Common::ITEMIDLIST = ptr::null_mut();
+    // SAFETY: NUL-terminated name; the identifier list is freed below; the returned icon is destroyed below.
+    unsafe {
+        let ok = if key.as_os_str().is_empty() {
+            SHGetSpecialFolderLocation(ptr::null_mut(), 0, &mut pidl) == 0
+        } else {
+            let name = wide(key);
+            SHParseDisplayName(name.as_ptr(), ptr::null_mut(), &mut pidl, 0, ptr::null_mut()) == 0
+        };
+        if !ok || pidl.is_null() {
+            return None;
+        }
+        let mut info: SHFILEINFOW = std::mem::zeroed();
+        let result = SHGetFileInfoW(pidl.cast_const().cast(), 0, &mut info, size_of::<SHFILEINFOW>() as u32, SHGFI_PIDL | SHGFI_ICON | SHGFI_SMALLICON);
+        CoTaskMemFree(pidl.cast_const().cast());
+        if result == 0 || info.hIcon.is_null() {
+            return None;
+        }
+        let pixels = icon_rgba(info.hIcon, 16).ok();
+        DestroyIcon(info.hIcon);
+        pixels
+    }
+}
+
 /// 이 스레드를 셸용 STA로(C# 오버레이 작업 스레드의 ApartmentState.STA). 스레드가 끝날 때까지 그대로 둔다.
 pub fn com_sta_init() {
     use windows_sys::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};

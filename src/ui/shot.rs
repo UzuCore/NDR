@@ -57,7 +57,11 @@ impl App {
                 ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(800.0, 480.0)));
             }
         }
-        if self.frames == SHOT_FRAME {
+        // 패널 폴더 트리는 셸 이름 공간을 따로 읽으므로, 펼친 항목을 다 읽을 때까지 찍기를 미룬다.
+        let tree_waiting = kind == "panetree" && self.tree_requests.iter().any(|key| !self.tree_cache.contains_key(key));
+        let sent_id = egui::Id::new("ndr-shot-sent");
+        if self.frames >= SHOT_FRAME && !tree_waiting && !ctx.data(|d| d.get_temp::<bool>(sent_id)).unwrap_or(false) {
+            ctx.data_mut(|d| d.insert_temp(sent_id, true));
             ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
         }
         if kind == "narrowdetails" && self.frames == SHOT_FRAME - 4 {
