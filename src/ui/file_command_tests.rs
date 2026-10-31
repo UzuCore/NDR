@@ -1,6 +1,6 @@
-//! C# NDR 이름·설명·열기·삭제·완전 삭제 흐름(원본 FUN_00432378, FUN_00434630, FUN_004351cc, FUN_0040c31c, FUN_00432958,
-//! FUN_00431dd4, FUN_0042c734)을 Rust UI에서 확인한다. 한국어와 영어만 검수한다.
-//! 격리된 임시 폴더만 쓴다. 휴지통으로 보내는 답(휴지통 방식의 예)은 고르지 않는다. 실제 프로그램도 띄우지 않는다(shell_runner 교체).
+//! Checks the C# NDR name, description, open, delete and shred flows (original FUN_00432378, FUN_00434630, FUN_004351cc, FUN_0040c31c, FUN_00432958,
+//! FUN_00431dd4, FUN_0042c734) in the Rust UI. Only Korean and English are checked.
+//! Only isolated temp folders are used. Answers that send to the Recycle Bin (Yes in Recycle Bin mode) are never chosen. No real programs start (shell_runner is replaced).
 use super::original_dialogs::{DeleteConfirmChoice, DeleteWarningChoice, DeleteWarningMode, DialogKind, DialogResult};
 use super::*;
 use ndr::msgbox::{MB_ICONHAND, MB_OK, MB_YESNO};
@@ -52,7 +52,7 @@ fn wait_job(app: &mut App, ctx: &egui::Context) {
     }
     wait_listing(app, ctx);
 }
-/// 보호 항목 검사는 따로 돌므로 대화 상자나 작업이 생길 때까지 기다린다.
+/// The protected item check runs separately, so wait until a dialog or job appears.
 fn wait_dialog_or_job(app: &mut App, ctx: &egui::Context) {
     let end = Instant::now() + Duration::from_secs(10);
     while app.original_dialogs.is_empty() && app.job.as_ref().is_none_or(|j| j.finished) {
@@ -134,7 +134,7 @@ fn new_folder_and_empty_file_follow_the_original() {
     answer_text(&mut app, &ctx, Some("a\\b\\c"));
     assert_eq!(app.msgboxes[0].text, system_error_text(3), "no intermediate folders (ERROR_PATH_NOT_FOUND)");
     app.answer_message_box(1, &ctx);
-    // 원본 TfGetText flags 1(FUN_00432378) → btnOKClick(0x428c64): 확인 때 금지 문자면 MSG_INVALID_FILENAME, 창은 남는다.
+    // Original TfGetText flags 1 (FUN_00432378) -> btnOKClick (0x428c64): forbidden characters on OK show MSG_INVALID_FILENAME and the window stays.
     app.dispatch("newFolder", &ctx);
     if let Some(DialogKind::Prompt { value, .. }) = app.original_dialogs.last_mut().map(|d| &mut d.kind) {
         *value = "a:b".into();
@@ -249,7 +249,7 @@ fn rename_asks_once_per_item_and_moves_comments() {
 
 #[test]
 fn copying_marked_items_moves_the_marks_to_restore_selection() {
-    // 원본 FUN_0042bdc4: CopySelection(+0xd08) 뒤 ClearSelection. 마지막 선택 복구가 복사한 표시를 되돌린다.
+    // Original FUN_0042bdc4: ClearSelection after CopySelection (+0xd08). Restore Selection brings back the copied marks.
     let (root, ctx, mut app) = fixture("take-marks", "ko");
     assert!(app.current_skin().is_some());
     let (left, right) = (root.join("left"), root.join("right"));
@@ -290,7 +290,7 @@ fn description_prompt_per_item_and_empty_clears() {
     let comments = compat::read_descriptions(&left, true).unwrap();
     assert_eq!(comments.get("alpha.txt").map(String::as_str), Some("새 설명"));
     assert!(!comments.contains_key("beta.txt"), "Cancel stops before the second item");
-    // 원본(스킨 테마): 새로 고침은 표시를 이름으로 되돌리므로 취소한 뒤의 항목은 표시된 채로 남는다.
+    // Original (skin theme): refreshing restores marks by name, so items after a cancel stay marked.
     assert!(app.panes[0].selected.contains(&row(&app, 0, "beta.txt")));
     app.panes[0].selected.clear();
     app.panes[0].cursor = row(&app, 0, "alpha.txt");
@@ -351,7 +351,7 @@ fn delete_warning_and_protected_item_confirmation() {
     answer_warning(&mut app, &ctx, DeleteWarningChoice::No);
     assert!(app.job.is_none() && left.join("alpha.txt").exists(), "No stops");
     app.dispatch("deleteRecycle", &ctx);
-    // 처음 초점은 아니요(DefaultDeleteButton 2). 단추에 초점이 있어도 글자 D만으로 Delete(&D)가 눌린다(VCL CM_DIALOGCHAR).
+    // Initial focus is No (DefaultDeleteButton 2). Even with focus on a button, the letter D alone presses Delete (&D) (VCL CM_DIALOGCHAR).
     frame(&mut app, &ctx, vec![]);
     frame(&mut app, &ctx, vec![key(egui::Key::D)]);
     assert!(app.original_dialogs.is_empty(), "plain D presses &Delete while a button has focus");
@@ -368,12 +368,12 @@ fn delete_warning_and_protected_item_confirmation() {
     wait_job(&mut app, &ctx);
     assert!(!left.join("alpha.txt").exists(), "the Delete button deletes permanently");
     app.settings.set_flag("ShowDeleteButton", false);
-    // 새 목록은 맨 위("..")에서 시작하므로 파일을 고른다(".."은 대상이 아니다).
+    // The new list starts at the top (".."), so pick the file (".." is not a target).
     app.panes[0].cursor = row(&app, 0, "beta.txt");
     app.dispatch("deleteRecycle", &ctx);
     assert!(matches!(&app.original_dialogs[0].kind, DialogKind::DeleteWarning { show_delete: false, .. }));
     answer_warning(&mut app, &ctx, DeleteWarningChoice::No);
-    // 원본 miDeleteClick(0x431c04): 메뉴를 고를 때 Shift가 눌려 있으면 영구 삭제(경고는 늘, ConfirmDelete를 꺼도).
+    // Original miDeleteClick (0x431c04): Shift held while choosing the menu deletes permanently (always warns, even with ConfirmDelete off).
     app.settings.set_flag("ConfirmDelete", false);
     let _ = ctx.run(egui::RawInput { modifiers: egui::Modifiers::SHIFT, ..Default::default() }, |_| {});
     app.dispatch("deleteRecycle", &ctx);
@@ -444,7 +444,7 @@ fn delete_warning_and_protected_item_confirmation() {
     app.dispatch("deletePermanent", &ctx);
     answer_warning(&mut app, &ctx, DeleteWarningChoice::Yes);
     wait_dialog_or_job(&mut app, &ctx);
-    // 원본 TfDelConfirm: 탭 순서 0인 btnAll이 처음 초점이라 Enter = 모두 예.
+    // Original TfDelConfirm: btnAll with tab order 0 has the initial focus, so Enter = yes to all.
     assert!(matches!(app.original_dialogs.first().map(|d| &d.kind), Some(DialogKind::DeleteConfirm { .. })));
     frame(&mut app, &ctx, vec![]);
     frame(&mut app, &ctx, vec![key(egui::Key::Enter)]);
@@ -544,7 +544,7 @@ fn attribute_window_asks_per_item_like_changeattributesasync() {
     app.dispatch("attributes", &ctx);
     let dialog = &app.original_dialogs[0];
     assert_eq!(dialog.title, app.language_pack.text("formChangeAttr.Form.Caption", "?"));
-    // 원본 FUN_0041a0e8: 확인란 = 그 항목의 속성(두 상태), 날짜·시각 = 그 항목의 수정 시각.
+    // Original FUN_0041a0e8: checkboxes = that item's attributes (two states), date and time = that item's modification time.
     let alpha_time = chrono::DateTime::<chrono::Local>::from(fs::metadata(left.join("alpha.txt")).unwrap().modified().unwrap());
     let archive = attributes("alpha.txt") & 0x20 != 0;
     assert!(matches!(&dialog.kind, DialogKind::Attributes(form) if form.path.ends_with("alpha.txt") && form.read_only == Some(false) && form.archive == Some(archive) && form.hidden == Some(false) && form.apply_to_folders && form.date == alpha_time.date_naive()));
@@ -567,7 +567,7 @@ fn attribute_window_asks_per_item_like_changeattributesasync() {
     frame(&mut app, &ctx, vec![key(egui::Key::Escape)]);
     assert!(matches!(&app.original_dialogs[0].kind, DialogKind::Attributes(form) if form.path.ends_with("gamma.log")));
     app.edit_attribute_form(|form| form.hidden = Some(true));
-    // 원본 TntFormKeyDown(0x41a2f4): End = btnAll.Click(남은 항목 모두).
+    // Original TntFormKeyDown (0x41a2f4): End = btnAll.Click (all remaining items).
     frame(&mut app, &ctx, vec![key(egui::Key::End)]);
     wait_dialog(&mut app, &ctx);
     wait_listing(&mut app, &ctx);
@@ -590,7 +590,7 @@ fn split_and_join_windows_follow_the_csharp_flows() {
     fs::write(left.join("big.bin"), &payload).unwrap();
     app.refresh(0);
     wait_listing(&mut app, &ctx);
-    // 원본 miSplitFileClick: 커서 항목이 파일이 아니면 아무것도 하지 않는다(알림 없음).
+    // Original miSplitFileClick: does nothing when the cursor item is not a file (no notice).
     app.panes[0].cursor = row(&app, 0, "folder1");
     app.dispatch("split", &ctx);
     assert!(app.msgboxes.is_empty() && app.original_dialogs.is_empty());
@@ -610,7 +610,7 @@ fn split_and_join_windows_follow_the_csharp_flows() {
         assert!(left.join(part).is_file(), "{part}");
     }
     assert_eq!(app.status, "3개 조각 파일을 만들었습니다.");
-    // 원본 miJoinFileClick: 표시한 항목(없으면 커서 항목)이 lbFiles. 이름은 .crc 파일의 원래 이름.
+    // Original miJoinFileClick: marked items (otherwise the cursor item) fill lbFiles. The name is the original name from the .crc file.
     let mark_parts = |app: &mut App| app.panes[0].selected = ["big.001", "big.002", "big.003"].iter().map(|n| row(app, 0, n)).collect();
     mark_parts(&mut app);
     app.dispatch("join", &ctx);
@@ -633,7 +633,7 @@ fn split_and_join_windows_follow_the_csharp_flows() {
     wait_job(&mut app, &ctx);
     assert_eq!(fs::read(left.join("joined.bin")).unwrap(), payload);
     assert_eq!(app.status, "3개 파일을 합쳤습니다.");
-    // 표시도 커서 항목도 없으면(폴더) 아무것도 하지 않는다.
+    // With no marks and no cursor item (a folder), nothing happens.
     app.panes[0].selected.clear();
     app.panes[0].cursor = row(&app, 0, "folder1");
     app.dispatch("join", &ctx);
@@ -657,7 +657,7 @@ fn list_export_window_follows_the_original_savelist() {
     wait_listing(&mut app, &ctx);
     app.save_dialog = pick_save_target;
     SAVE_TARGET.with(|t| *t.borrow_mut() = Some(root.join("list")));
-    // 표시가 없으면 SelectAll(폴더 포함): 모든 항목.
+    // With no marks, SelectAll (including folders): all items.
     app.dispatch("saveList", &ctx);
     assert_eq!(app.original_dialogs[0].title, app.language_pack.text("formSaveList.Form.Caption", "?"));
     frame(&mut app, &ctx, vec![]);
@@ -676,7 +676,7 @@ fn list_export_window_follows_the_original_savelist() {
     let text = String::from_utf16(&units).unwrap();
     assert!(text.contains("beta.txt,comma, \"quoted\"\r\n"), "no quoting: {text}");
     assert!(text.contains("folder1,\r\n"));
-    // 표시한 항목만, 확인하면 표시를 가져간다. 저장 대화 상자를 닫아도 창은 확인으로 닫힌다.
+    // Only marked items; confirming takes the marks. Closing the save dialog still closes the window as confirmed.
     app.panes[0].selected = [row(&app, 0, "beta.txt")].into_iter().collect();
     app.dispatch("saveList", &ctx);
     app.edit_dialog_kind(|kind| if let DialogKind::ListExport(form) = kind {
@@ -686,7 +686,7 @@ fn list_export_window_follows_the_original_savelist() {
     SAVE_TARGET.with(|t| *t.borrow_mut() = None);
     app.submit_list_export(&ctx);
     assert!(app.original_dialogs.is_empty() && app.panes[0].selected.is_empty(), "OK takes the marks");
-    // 고친 미리보기를 그대로 쓴다. 빈 미리보기는 저장 대화 상자를 열지 않는다.
+    // The edited preview is used as is. An empty preview does not open the save dialog.
     app.dispatch("saveList", &ctx);
     app.edit_dialog_kind(|kind| if let DialogKind::ListExport(form) = kind { form.preview = "edited".into() });
     SAVE_TARGET.with(|t| *t.borrow_mut() = Some(root.join("edited.csv")));
@@ -702,7 +702,7 @@ fn list_export_window_follows_the_original_savelist() {
 
 #[test]
 fn f12_shortcut_window_closes_on_escape_without_search_focus() {
-    // 원본 TntFormShortCut(0x455a54): 폼이 활성이면 초점과 상관없이 Esc(0x1b)로 닫는다.
+    // Original TntFormShortCut (0x455a54): while the form is active, Esc (0x1b) closes it regardless of focus.
     let (root, ctx, mut app) = fixture("shortcuts-esc", "en");
     app.dispatch("shortcuts", &ctx);
     let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 850.0));
@@ -712,7 +712,7 @@ fn f12_shortcut_window_closes_on_escape_without_search_focus() {
     run(&mut app, vec![]);
     run(&mut app, vec![]);
     let area = ctx.memory(|m| m.area_rect(egui::Id::new("ndr-shortcut-window"))).expect("window area");
-    // 검색 칸이 아닌 목록 아래쪽을 눌러 검색 칸 초점을 없앤다.
+    // Click the lower part of the list, not the search field, to remove the search field focus.
     let point = egui::pos2(area.center().x, area.bottom() - 30.0);
     let click = |pressed| egui::Event::PointerButton { pos: point, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
     run(&mut app, vec![egui::Event::PointerMoved(point), click(true)]);
@@ -755,8 +755,8 @@ fn f12_shortcut_window_edits_the_double_clicked_line() {
     fs::remove_dir_all(root).unwrap();
 }
 
-/// 원본 FUN_00438034: TfGetText(TITLE_ADVSELECT / TITLE_ADVDESELECT, MSG_ADVSELECT, 빈 글). ';'로 나눈 필터마다 PathMatchSpecW,
-/// 파일만 고르거나 푼다(폴더는 이름이 맞아도 아님). 이전 선택은 남고, 취소나 빈 글은 아무것도 하지 않는다.
+/// Original FUN_00438034: TfGetText(TITLE_ADVSELECT / TITLE_ADVDESELECT, MSG_ADVSELECT, empty text). PathMatchSpecW per ';'-separated filter,
+/// selects or deselects files only (not folders even if the name matches). The previous selection stays; cancel or empty text does nothing.
 #[test]
 fn advanced_select_follows_advancedselectasync() {
     let (root, ctx, mut app) = fixture("advselect", "ko");
@@ -771,14 +771,14 @@ fn advanced_select_follows_advancedselectasync() {
     assert_eq!(prompt_of(&app), ("고급 선택".to_owned(), app.language_pack.text("RES.MSG_ADVSELECT", "?"), String::new()), "original TITLE_ADVSELECT / MSG_ADVSELECT, empty value");
     answer_text(&mut app, &ctx, Some("*.TXT;note.*"));
     assert_eq!(marked(&app), ["alpha.txt", "beta.txt", "big.txt", "note.log"], "PathMatchSpecW per filter, files only (dir.txt is a folder)");
-    // 고급 해제: 필터에 맞는 파일만 푼다.
+    // Advanced deselect: only files matching the filter are unmarked.
     app.dispatch("advancedDeselect", &ctx);
     assert_eq!(prompt_of(&app).0, "고급 해제", "original TITLE_ADVDESELECT");
     answer_text(&mut app, &ctx, Some("b*"));
     assert_eq!(marked(&app), ["alpha.txt", "note.log"]);
     app.dispatch("restoreSelection", &ctx);
     assert_eq!(marked(&app), ["alpha.txt", "beta.txt", "big.txt", "note.log"], "the previous selection was kept");
-    // 취소·빈 글은 그대로.
+    // Cancel and empty text leave everything as is.
     app.dispatch("advancedDeselect", &ctx);
     answer_text(&mut app, &ctx, Some(""));
     app.dispatch("advancedDeselect", &ctx);
@@ -787,7 +787,7 @@ fn advanced_select_follows_advancedselectasync() {
     fs::remove_dir_all(root).unwrap();
 }
 
-/// 원본 TfAdvRename: TntFormKeyDown(0x418bd0) Alt+1~6 = pcAction 쪽, lvPreviewKeyDown(0x419a4c) Ctrl+C = 고른 줄의 원래 이름 복사.
+/// Original TfAdvRename: TntFormKeyDown (0x418bd0) Alt+1-6 = pcAction pages, lvPreviewKeyDown (0x419a4c) Ctrl+C = copy the selected row's original name.
 #[test]
 fn advanced_rename_keys_follow_the_original() {
     let (root, ctx, mut app) = fixture("advrename-keys", "en");
@@ -810,7 +810,7 @@ fn advanced_rename_keys_follow_the_original() {
     let alt = egui::Modifiers::ALT;
     run(&mut form, vec![egui::Event::Key { key: egui::Key::Num3, physical_key: None, pressed: true, repeat: false, modifiers: alt }], alt);
     assert_eq!(form.editor.action, "Delete", "Alt+3 = the third page (tsDelete)");
-    // 미리 보기 첫 줄(머리 아래 322~340)을 누르고 Ctrl+C.
+    // Click the first preview row (322-340 below the header) and press Ctrl+C.
     let at = egui::pos2(100.0, 330.0);
     let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
     run(&mut form, vec![egui::Event::PointerMoved(at)], egui::Modifiers::NONE);
@@ -849,7 +849,7 @@ fn advanced_rename_window_builds_rules_macros_and_renames() {
         _ => panic!("rename window"),
     };
     assert_eq!(preview(&app), ["new_alpha01.txt", "new_beta02.txt"]);
-    // 원본 FUN_00418b04 + FUN_00469b64: 금지 문자가 들어간 새 이름은 미리 보기에서 빨강(틀린 이름).
+    // Original FUN_00418b04 + FUN_00469b64: a new name with forbidden characters is red in the preview (invalid name).
     let valid = |app: &App| match &app.original_dialogs[0].kind {
         DialogKind::AdvancedRename(form) => (0..form.paths.len()).map(|i| super::rename_dialog::valid_new_name(form, i)).collect::<Vec<_>>(),
         _ => panic!("rename window"),
@@ -860,7 +860,7 @@ fn advanced_rename_window_builds_rules_macros_and_renames() {
     edit(&mut app, &|form| form.rules[0].text = "x".repeat(255));
     assert_eq!(valid(&app), [false, false], "0x105 characters or more");
     edit(&mut app, &|form| form.rules[0].text = "new_".into());
-    // 원본 FUN_0041830c 목록 줄: ADVRENAME_ACTIONS 이름 (영어 설명) - name/extension.
+    // Original FUN_0041830c list row: ADVRENAME_ACTIONS name (English description) - name/extension.
     let actions = app.language_pack.text("RES.ADVRENAME_ACTIONS", "?");
     let actions: Vec<&str> = actions.split(';').collect();
     let lines = match &app.original_dialogs[0].kind {
@@ -883,7 +883,7 @@ fn advanced_rename_window_builds_rules_macros_and_renames() {
     assert_eq!(app.msgboxes[0].text, app.language_pack.text("RES.MSG_SAMENAME", "?"), "same name: the original TfMsgBox");
     assert_eq!(app.msgboxes[0].flags, MB_YESNO | ndr::msgbox::MB_ICONQUESTION);
     app.answer_message_box(7, &ctx);
-    // C# SaveSelectedMacro: 원본 형식에 쓸 수 없는 값(';')이면 macroFormatUnsupported(값) 경고, 파일은 그대로.
+    // C# SaveSelectedMacro: a value the original format cannot store (';') warns with macroFormatUnsupported(value) and the file stays.
     edit(&mut app, &|form| { let mut semicolon = form.rules[0].clone(); semicolon.text = "a;b".into(); form.rules.push(semicolon); });
     app.save_rename_macro();
     app.answer_dialog(DialogResult::Text(Some("세미콜론".into())), &ctx);
@@ -892,7 +892,7 @@ fn advanced_rename_window_builds_rules_macros_and_renames() {
     assert_eq!(fs::read(root.join("profile").join(ndr::rename_macros::FILE_NAME)).unwrap(), saved, "advrename.save unchanged");
     app.answer_message_box(1, &ctx);
     edit(&mut app, &|form| { form.rules.pop(); });
-    // 원본 FUN_0046d000: 쓸 수 없는 새 이름이 있으면 REN_INVALIDNAMES(REN_TITLE, 정보 아이콘)만 보이고 바꾸지 않는다.
+    // Original FUN_0046d000: with an unusable new name, only REN_INVALIDNAMES (REN_TITLE, information icon) shows and nothing is renamed.
     edit(&mut app, &|form| { let mut bad = form.rules[0].clone(); bad.text = "x?".into(); form.rules.push(bad); });
     app.commit_advanced_rename();
     assert_eq!((app.msgboxes[0].title.clone(), app.msgboxes[0].text.clone(), app.msgboxes[0].flags), (app.language_pack.text("RES.REN_TITLE", "?"), app.language_pack.text("RES.REN_INVALIDNAMES", "?"), MB_OK | ndr::msgbox::MB_ICONASTERISK));
@@ -961,7 +961,7 @@ fn capture_clipboard(text: &str) -> Result<(), String> {
     CLIPBOARD.with(|c| *c.borrow_mut() = Some(text.to_owned()));
     Ok(())
 }
-/// 모달 진행 창도 그리는 한 장면.
+/// One frame that also draws the modal progress window.
 fn frame_with_progress(app: &mut App, ctx: &egui::Context) {
     let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 850.0))), ..Default::default() };
     let _ = ctx.run(raw, |ctx| {
@@ -983,7 +983,7 @@ fn choice(app: &App) -> (String, String, Vec<String>, usize) {
         _ => panic!("no choice dialog"),
     }
 }
-/// 왼쪽: folder1, alpha.txt, Alphabet.doc, beta.txt, gamma.log. 오른쪽: FOLDER1, beta.txt(같은 크기, 다른 내용), omega.txt.
+/// Left: folder1, alpha.txt, Alphabet.doc, beta.txt, gamma.log. Right: FOLDER1, beta.txt (same size, different content), omega.txt.
 fn compare_fixture(label: &str, language: &str) -> (PathBuf, egui::Context, App) {
     let (root, ctx, mut app) = fixture(label, language);
     fs::write(root.join("right").join("beta.txt"), b"BETA.TXT").unwrap();
@@ -1011,12 +1011,12 @@ fn folder_compare_follows_original_tfcomparefolder() {
     let (root, ctx, mut app) = compare_fixture("compare", "ko");
     app.dispatch("compare", &ctx);
     assert_eq!(app.original_dialogs[0].title, "폴더 비교", "[formCompareFolder] Form.Caption");
-    // 원본 FUN_0041d280: 열 머리글은 두 폴더(끝 "\" 뺌). 처음에는 하위 폴더 꺼짐·내용 비교 켬, 결과 저장 꺼짐, 목록 비어 있음.
+    // Original FUN_0041d280: column headers are the two folders (without the trailing "\"). Initially subfolders off, content comparison on, save off, list empty.
     let form = folder_compare(&app);
     assert_eq!((form.left_caption.as_str(), form.right_caption.as_str()), (root.join("left").to_str().unwrap(), root.join("right").to_str().unwrap()));
     assert!(!form.recursive && form.contents && !form.compared && form.rows.is_empty() && form.result.is_none());
     frame(&mut app, &ctx, vec![]);
-    // 비교시작(btnOkClick): 창 안에서 비교하고 창은 그대로 있다.
+    // Start (btnOkClick): compares inside the window and the window stays.
     app.folder_compare_action(FolderCompareAction::Start, &ctx);
     assert!(folder_compare(&app).running.is_some(), "btnStop replaces btnOk while comparing");
     frame(&mut app, &ctx, vec![]);
@@ -1025,11 +1025,11 @@ fn folder_compare_follows_original_tfcomparefolder() {
     assert_eq!(app.status, "비교 완료 · 변경 5개");
     let form = folder_compare(&app);
     assert!(form.compared, "btnSave is enabled after a comparison");
-    // 원본 FUN_0041e0b4: FOLDERCOMPARE_RESULT(같음 1, 다름 1, 왼쪽에만 3, 오른쪽에만 1).
+    // Original FUN_0041e0b4: FOLDERCOMPARE_RESULT (same 1, different 1, left only 3, right only 1).
     let template = app.language_pack.text("RES.FOLDERCOMPARE_RESULT", "?");
     let expected = ["1", "1", "3", "1"].iter().fold(template, |text, n| text.replacen("%d", n, 1));
     assert_eq!(form.result.as_deref(), Some(expected.as_str()));
-    // 원본 0x41d464 줄: 왼쪽 이름, 비교결과("=", "< >", "<  ", "  >"), 오른쪽 이름(없는 쪽은 빈 칸). 같은 크기 파일은 내용, 폴더는 같음.
+    // Original 0x41d464 rows: left name, result ("=", "< >", "<  ", "  >"), right name (empty for the missing side). Same-size files compare content, folders are equal.
     let cells: Vec<[String; 3]> = (0..form.rows.len()).map(|r| [form.cell(r, 1), form.cell(r, 2), form.cell(r, 3)]).collect();
     let row = |l: &str, m: &str, r: &str| [l.to_owned(), m.to_owned(), r.to_owned()];
     assert_eq!(
@@ -1043,7 +1043,7 @@ fn folder_compare_follows_original_tfcomparefolder() {
             row("", "  >", "omega.txt"),
         ]
     );
-    // 원본 lvListCompare: 비교결과 열은 결과 번호(같음 0 < 다름 1 < 왼쪽에만 2 < 오른쪽에만 3) 다음 왼쪽 이름, 늘 오름차순. 0열은 정렬하지 않음.
+    // Original lvListCompare: the result column sorts by result code (same 0 < different 1 < left only 2 < right only 3) then left name, always ascending. Column 0 does not sort.
     app.edit_dialog_kind(|kind| if let DialogKind::FolderCompare(form) = kind {
         form.sort(0);
         assert_eq!(form.grid.sort, None);
@@ -1056,7 +1056,7 @@ fn folder_compare_follows_original_tfcomparefolder() {
         assert_eq!(form.rows[form.grid.order[0]].relative, "alpha.txt", "left-only rows have an empty right name");
         form.sort(2);
     });
-    // 결과저장(btnSaveClick): "compare result.html", HTML 한 가지. 보이는 순서, 짝수 줄 line1·홀수 줄 line2, UTF-8 BOM, 줄마다 CRLF.
+    // Save (btnSaveClick): "compare result.html", HTML only. Display order, even rows line1, odd rows line2, UTF-8 BOM, CRLF per line.
     app.save_dialog = pick_save_target;
     SAVE_TARGET.with(|t| *t.borrow_mut() = Some(root.join("report.html")));
     app.folder_compare_action(FolderCompareAction::Save, &ctx);
@@ -1069,7 +1069,7 @@ fn folder_compare_follows_original_tfcomparefolder() {
     assert_eq!(lines[2..7], ["<tr class=\"line1\">", "<td align=\"right\" class=\"same\">folder1</td>", "<td width=\"50\" align=\"center\" class=\"same\">=</td>", "<td class=\"same\">FOLDER1</td>", "</tr>"]);
     assert_eq!(lines[7..12], ["<tr class=\"line2\">", "<td align=\"right\" class=\"diff\">beta.txt</td>", "<td width=\"50\" align=\"center\" class=\"diff\">&lt; &gt;</td>", "<td class=\"diff\">beta.txt</td>", "</tr>"]);
     assert_eq!(lines[lines.len() - 3..], ["</table></div></body>", "</html>", ""]);
-    // 하위 폴더 포함: 같은 창에서 다시 비교하면 folder1 안의 파일도 나온다.
+    // Including subfolders: comparing again in the same window also lists the files inside folder1.
     fs::write(root.join("left").join("folder1").join("inner.txt"), b"x").unwrap();
     app.edit_dialog_kind(|kind| if let DialogKind::FolderCompare(form) = kind {
         form.recursive = true;
@@ -1078,18 +1078,18 @@ fn folder_compare_follows_original_tfcomparefolder() {
     app.folder_compare_action(FolderCompareAction::Start, &ctx);
     wait_compare(&mut app, &ctx);
     assert!(folder_compare(&app).rows.iter().any(|r| r.relative == "folder1\\inner.txt" && r.kind == ndr::folder_compare::DifferenceKind::LeftOnly));
-    // 중단(btnStopClick)과 닫기. 닫으면 비교 중이어도 멈춘다.
+    // Stop (btnStopClick) and close. Closing stops a running comparison too.
     app.folder_compare_action(FolderCompareAction::Start, &ctx);
     app.folder_compare_action(FolderCompareAction::Stop, &ctx);
     wait_compare(&mut app, &ctx);
     assert!(folder_compare(&app).result.is_some() && folder_compare(&app).compared);
     app.folder_compare_action(FolderCompareAction::Close, &ctx);
     assert!(app.original_dialogs.is_empty());
-    // Esc도 닫기(btnCancel Cancel=True).
+    // Esc closes too (btnCancel Cancel=True).
     app.dispatch("compare", &ctx);
     frame(&mut app, &ctx, vec![key(egui::Key::Escape)]);
     assert!(app.original_dialogs.is_empty(), "Esc closes the window");
-    // 창이 없을 때 끝난 비교: 취소면 상태 줄만. 없는 폴더 오류는 C# RunSafely 상자.
+    // A comparison that finishes with no window: cancel shows only the status line. A missing folder error uses the C# RunSafely box.
     let run = |source_is_left| super::compare_dialog::CompareRun { left: root.join("left"), right: root.join("right"), source_is_left };
     app.compare_done(run(None), Err("Cancelled".into()), true);
     assert_eq!(app.status, "폴더 비교를 취소했습니다.");
@@ -1105,14 +1105,14 @@ fn folder_compare_follows_original_tfcomparefolder() {
     assert!(app.msgboxes[0].text.starts_with("폴더를 찾을 수 없습니다: "));
     app.answer_message_box(1, &ctx);
     app.folder_compare_action(FolderCompareAction::Close, &ctx);
-    // 같은 폴더이거나 서로 포함하면 시작하지 않는다.
+    // The same folder, or folders containing each other, do not start.
     app.navigate(1, root.join("left").join("folder1"), true);
     wait_listing(&mut app, &ctx);
     app.dispatch("compare", &ctx);
     assert!(app.original_dialogs.is_empty());
     assert_eq!(app.msgboxes[0].text, "비교하거나 동기화할 두 폴더는 서로 같거나 포함 관계일 수 없습니다.");
     app.answer_message_box(1, &ctx);
-    // 동기화의 한국어 글(방향 고르기에서 취소하면 아무것도 하지 않는다).
+    // Korean texts of synchronization (cancelling the direction choice does nothing).
     app.navigate(1, root.join("right"), true);
     wait_listing(&mut app, &ctx);
     app.dispatch("synchronize", &ctx);
@@ -1167,7 +1167,7 @@ fn folder_sync_follows_synchronizefoldersasync() {
     assert!(right.join("alpha.txt").is_file() && !right.join("gamma.log").exists(), "only the checked items");
     assert!(right.join("omega.txt").is_file(), "extra destination files are kept");
     assert!(app.panes[1].entries.iter().any(|e| e.name == "alpha.txt"), "both panes are refreshed");
-    // 오른쪽 → 왼쪽, 크기·수정 날짜: 복사한 파일은 시각을 지켰으므로 오른쪽에만 있는 omega.txt만 남는다.
+    // Right -> left, size and modification date: copied files kept their times, so only omega.txt, present only on the right, remains.
     app.dispatch("synchronize", &ctx);
     app.answer_dialog(DialogResult::Choice(Some(1)), &ctx);
     app.answer_dialog(DialogResult::Choice(Some(0)), &ctx);
@@ -1179,7 +1179,7 @@ fn folder_sync_follows_synchronizefoldersasync() {
     assert!(app.msgboxes[0].text.starts_with(&format!("Synchronize the 1 selected files from\n{}\nto\n{}\n", right.display(), left.display())));
     app.answer_message_box(7, &ctx);
     assert!(app.job.is_none() && !left.join("omega.txt").exists(), "No does nothing");
-    // 같은 흐름을 예로.
+    // The same flow answered with yes.
     app.dispatch("synchronize", &ctx);
     app.answer_dialog(DialogResult::Choice(Some(1)), &ctx);
     app.answer_dialog(DialogResult::Choice(Some(0)), &ctx);
@@ -1189,14 +1189,14 @@ fn folder_sync_follows_synchronizefoldersasync() {
     app.answer_message_box(6, &ctx);
     wait_job(&mut app, &ctx);
     assert_eq!(fs::read(left.join("omega.txt")).unwrap(), b"omega");
-    // 차이가 없으면 알리기만 한다.
+    // With no differences it only notifies.
     app.dispatch("synchronize", &ctx);
     app.answer_dialog(DialogResult::Choice(Some(1)), &ctx);
     app.answer_dialog(DialogResult::Choice(Some(0)), &ctx);
     wait_job(&mut app, &ctx);
     assert!(app.original_dialogs.is_empty());
     assert_eq!(app.status, "There are no differences to synchronize.");
-    // 읽지 못한 항목이 있으면 멈추고, 복사 결과의 오류는 글 창으로.
+    // Stops when some items could not be read; errors of the copy result go to a text window.
     let run = super::compare_dialog::CompareRun { left: left.clone(), right: right.clone(), source_is_left: Some(true) };
     app.compare_done(run, Ok((vec![], vec!["X: denied".into()])), false);
     assert_eq!(app.text.as_ref().map(|t| t.title.as_str()), Some("Folder synchronization stopped"));
@@ -1274,27 +1274,27 @@ fn favorites_window_follows_the_original_orgfavorites() {
     frame(&mut app, &ctx, vec![]);
     let act = |app: &mut App, action, ctx: &egui::Context| app.favorites_action(action, ctx);
     use super::favorites_dialog::FavoritesAction as A;
-    // 고른 줄이 없으면 이름변경·경로변경은 아무것도 하지 않는다.
+    // With no selected row, rename and change path do nothing.
     act(&mut app, A::Rename, &ctx);
     act(&mut app, A::ModifyPath, &ctx);
     assert_eq!(app.original_dialogs.len(), 1);
-    // 빈 줄 경로변경: 이름(PathFindFileNameW) + 경로.
+    // Change path on an empty row: name (PathFindFileNameW) + path.
     app.edit_dialog_kind(|kind| if let DialogKind::Favorites(form) = kind { form.selected = Some(1) });
     let folder = left.join("folder1");
     act(&mut app, A::ModifyPath, &ctx);
     assert!(matches!(app.original_dialogs.last().map(|d| &d.kind), Some(DialogKind::FolderTree(_))), "FUN_0040ca90 folder tree");
     app.answer_dialog(DialogResult::FolderTree(Some(folder.clone())), &ctx);
     assert_eq!(favorites(&app).rows[1], ["folder1".to_owned(), folder.to_string_lossy().into_owned()]);
-    // 이름변경: TfGetText(제목 RES.RENAME, 처음 값 = 이름).
+    // Rename: TfGetText(title RES.RENAME, initial value = name).
     act(&mut app, A::Rename, &ctx);
     assert_eq!(top_prompt(&app), ("이름 바꾸기".to_owned(), String::new(), "folder1".to_owned()));
     app.answer_dialog(DialogResult::Text(Some("작업".into())), &ctx);
     assert_eq!(favorites(&app).rows[1][0], "작업");
-    // 경로변경은 이름을 그대로 둔다.
+    // Change path keeps the name.
     act(&mut app, A::ModifyPath, &ctx);
     app.answer_dialog(DialogResult::FolderTree(Some(right.clone())), &ctx);
     assert_eq!(favorites(&app).rows[1], ["작업".to_owned(), right.to_string_lossy().into_owned()]);
-    // 위/아래는 SubItems를 바꾸고 고른 줄도 옮긴다. 맨 위·맨 아래에서는 그대로.
+    // Up/Down swap SubItems and move the selection too. Nothing changes at the top or bottom.
     act(&mut app, A::Up, &ctx);
     assert_eq!((favorites(&app).rows[0][0].as_str(), favorites(&app).rows[1][0].as_str(), favorites(&app).selected), ("작업", "오른쪽", Some(0)));
     act(&mut app, A::Up, &ctx);
@@ -1302,16 +1302,16 @@ fn favorites_window_follows_the_original_orgfavorites() {
     app.edit_dialog_kind(|kind| if let DialogKind::Favorites(form) = kind { form.selected = Some(19) });
     act(&mut app, A::Down, &ctx);
     assert_eq!(favorites(&app).selected, Some(19));
-    // 이름만 있는 줄은 저장되지 않는다(SubItems가 둘이어야 한다).
+    // A row with only a name is not saved (it needs two SubItems).
     app.edit_dialog_kind(|kind| if let DialogKind::Favorites(form) = kind { form.selected = Some(5) });
     act(&mut app, A::Rename, &ctx);
     app.answer_dialog(DialogResult::Text(Some("이름만".into())), &ctx);
     assert_eq!(favorites(&app).rows[5], ["이름만".to_owned()]);
-    // 삭제는 SubItems만 지운다(줄은 남는다).
+    // Delete only clears SubItems (the row stays).
     app.edit_dialog_kind(|kind| if let DialogKind::Favorites(form) = kind { form.selected = Some(2) });
     act(&mut app, A::Delete, &ctx);
     assert!(favorites(&app).rows[2].is_empty() && favorites(&app).rows.len() == 20);
-    // Enter는 저장하지 않는다(Default 단추 없음).
+    // Enter does not save (no Default button).
     frame(&mut app, &ctx, vec![key(egui::Key::Enter)]);
     assert_eq!(app.original_dialogs.len(), 1);
     act(&mut app, A::Save, &ctx);
@@ -1319,10 +1319,10 @@ fn favorites_window_follows_the_original_orgfavorites() {
     let saved = app.settings.strings("Favorites");
     assert_eq!(&saved[..3], [right.to_string_lossy().into_owned(), right.to_string_lossy().into_owned(), String::new()]);
     assert_eq!(&app.settings.strings("FavoriteNames")[..6], ["작업".to_owned(), "오른쪽".to_owned(), String::new(), String::new(), String::new(), String::new()]);
-    // 취소(Esc, btnCancel Cancel)는 바꾸지 않는다.
+    // Cancel (Esc, btnCancel Cancel) changes nothing.
     app.dispatch("favorites", &ctx);
     app.edit_dialog_kind(|kind| if let DialogKind::Favorites(form) = kind { form.selected = Some(0) });
-    // 단축 문자: 아래로(&W)는 W만 쳐도 눌린다(VCL CM_DIALOGCHAR).
+    // Access keys: Down (&W) is pressed by typing W alone (VCL CM_DIALOGCHAR).
     frame(&mut app, &ctx, vec![]);
     frame(&mut app, &ctx, vec![key(egui::Key::W)]);
     assert_eq!(favorites(&app).selected, Some(1), "W = Down");
@@ -1339,18 +1339,18 @@ fn favorites_menu_and_path_history_follow_the_context_menus() {
     let (left, right) = (root.join("left"), root.join("right"));
     app.settings.set_strings("Favorites", vec![right.to_string_lossy().into_owned(), String::new(), left.join("folder1").to_string_lossy().into_owned()]);
     app.settings.set_strings("FavoriteNames", vec!["R&ight".into(), String::new(), "&Sub".into()]);
-    // F11 = 즐겨찾기 드롭다운(관리 창이 아니다).
+    // F11 = favorites drop-down (not the organize window).
     frame_keys(&mut app, &ctx, vec![key(egui::Key::F11)]);
     let popup = app.popup.as_ref().expect("F11 opens the favorites menu");
     let labels: Vec<(String, Option<char>, String)> = popup.items.iter().filter_map(|item| match item {
         super::favorites_dialog::PopupItem::Entry { label, access, gesture, .. } => Some((label.clone(), *access, gesture.clone())),
         _ => None,
     }).collect();
-    // 원본 pmFavorites: 즐겨찾기 줄, 구분선, miAddToFavorites, miOrgFavorites.
+    // Original pmFavorites: favorite rows, separator, miAddToFavorites, miOrgFavorites.
     let add = app.language_pack.text("Menu.miAddToFavorites", "?");
     let organize = app.language_pack.text("Menu.miOrgFavorites", "?");
     assert_eq!(labels, [("Right".to_owned(), Some('i'), "Shift+F1".to_owned()), ("Sub".to_owned(), Some('S'), "Shift+F3".to_owned()), (add, None, String::new()), (organize, None, String::new())], "FUN_0042eedc: Caption = the name as stored");
-    // 원본 miAddToFavoritesClick: TfGetText(TITLE_ADDFAV, MSG_ADDFAV(%s = 폴더), 처음 값 = 폴더 이름) → 확인이면 끝(빈 칸)에 더한다.
+    // Original miAddToFavoritesClick: TfGetText(TITLE_ADDFAV, MSG_ADDFAV (%s = folder), initial value = folder name) -> on OK adds at the end (first empty slot).
     let saved_popup = app.popup.take();
     app.dispatch("addToFavorites", &ctx);
     let (title, message, value) = prompt_of(&app);
@@ -1361,19 +1361,19 @@ fn favorites_menu_and_path_history_follow_the_context_menus() {
     assert_eq!(app.settings.strings("Favorites")[1], left.to_string_lossy(), "the first empty slot");
     assert_eq!(app.settings.strings("FavoriteNames")[1], "Mine");
     app.popup = saved_popup;
-    // 단축 문자 s → 그 칸의 폴더(FUN_0048d4b4).
+    // Access key s -> that slot's folder (FUN_0048d4b4).
     popup_frame(&mut app, &ctx, vec![egui::Event::Text("s".into())]);
     assert!(app.popup.is_none());
     wait_listing(&mut app, &ctx);
     assert_eq!(app.panes[0].path, left.join("folder1"));
-    // 이동 기록: 뒤로 이동.
+    // History: go back.
     app.dispatch("favoritesMenu", &ctx);
     popup_frame(&mut app, &ctx, vec![egui::Event::Text("i".into())]);
     wait_listing(&mut app, &ctx);
     assert_eq!(app.panes[0].path, right);
     assert_eq!(app.panes[0].back, [left.clone(), left.join("folder1")]);
     app.show_history_menu(0, None);
-    // 원본 FUN_0048ced4: 기록 목록 전체(오래된 것부터), "&N. 경로", 지금 자리는 체크.
+    // Original FUN_0048ced4: the whole history list (oldest first), "&N. path", the current position checked.
     let entries: Vec<(String, Option<char>, bool)> = app.popup.as_ref().unwrap().items.iter().filter_map(|item| match item {
         super::favorites_dialog::PopupItem::Entry { label, access, checked, .. } => Some((label.clone(), *access, *checked)),
         _ => None,
@@ -1386,10 +1386,10 @@ fn favorites_menu_and_path_history_follow_the_context_menus() {
     popup_frame(&mut app, &ctx, vec![key(egui::Key::Enter)]);
     wait_listing(&mut app, &ctx);
     assert_eq!(app.panes[0].path, left.join("folder1"), "the second entry");
-    // 원본 FUN_0048d05c → FUN_00458348: 기록 이동이 아니라 새로 간 것으로 더한다(지금 자리 뒤에 붙임).
+    // Original FUN_0048d05c -> FUN_00458348: added as a new visit, not a history move (appended after the current position).
     assert_eq!(app.panes[0].back, [left.clone(), left.join("folder1"), right.clone()]);
     assert!(app.panes[0].forward.is_empty());
-    // 즐겨찾기가 없으면(원본) 안내 줄 없이 구분선과 고정 항목 둘만. Esc로 닫힌다.
+    // With no favorites (original) only the separator and the two fixed items, without a hint row. Esc closes it.
     app.settings.set_strings("FavoriteNames", vec![]);
     app.dispatch("favoritesMenu", &ctx);
     let items = &app.popup.as_ref().unwrap().items;
@@ -1409,7 +1409,7 @@ fn address_bar_menu_follows_the_original_pm_address_bar() {
     app.clipboard_writer = capture_clipboard;
     app.settings.set_strings("Favorites", vec![right.to_string_lossy().into_owned(), String::new(), left.to_string_lossy().into_owned()]);
     app.settings.set_strings("FavoriteNames", vec!["R&ight".into(), "Empty".into(), String::new()]);
-    // 원본 FUN_0048d10c: 주소 복사, 주소 편집, "-", 이름과 경로가 있는 즐겨찾기(번호 없이), "-", 즐겨찾기 추가·편집. 마우스 위치에 연다.
+    // Original FUN_0048d10c: copy address, edit address, "-", favorites with name and path (no numbers), "-", add and organize favorites. Opens at the mouse position.
     app.show_address_bar_menu(1, egui::pos2(30.0, 40.0));
     let popup = app.popup.as_ref().expect("the address bar menu");
     assert_eq!(popup.position, Some(egui::pos2(30.0, 40.0)));
@@ -1420,10 +1420,10 @@ fn address_bar_menu_follows_the_original_pm_address_bar() {
     let text = |key: &str| app.language_pack.text(key, "?");
     assert_eq!(rows, [text("Menu.mipAddressCopy"), text("Menu.mipAddressEdit"), "-".into(), "Right".into(), "-".into(), text("Menu.miAddToFavorites"), text("Menu.miOrgFavorites")]);
     assert_eq!(app.active, 1);
-    // 주소 복사 = 그 패널의 경로.
+    // Copy address = that pane's path.
     app.run_popup_action(super::favorites_dialog::PopupAction::CopyAddress(1));
     assert_eq!(CLIPBOARD.with(|c| c.borrow().clone()), Some(app.panes[1].path.to_string_lossy().into_owned()));
-    // 주소 편집 = 아래 화살표 두 번(장면마다 한 번) + Enter.
+    // Edit address = Down twice (once per frame) + Enter.
     popup_frame(&mut app, &ctx, vec![key(egui::Key::ArrowDown)]);
     popup_frame(&mut app, &ctx, vec![key(egui::Key::ArrowDown)]);
     popup_frame(&mut app, &ctx, vec![key(egui::Key::Enter)]);
@@ -1432,7 +1432,7 @@ fn address_bar_menu_follows_the_original_pm_address_bar() {
     assert_eq!(app.panes[1].address, app.panes[1].path.to_string_lossy());
     fs::remove_dir_all(root).unwrap();
 }
-/// 패널 글쇠 처리(App::keyboard)를 거치는 한 장면.
+/// One frame that goes through pane key handling (App::keyboard).
 fn frame_keys(app: &mut App, ctx: &egui::Context, events: Vec<egui::Event>) {
     let raw = egui::RawInput { events, screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 850.0))), ..Default::default() };
     let _ = ctx.run(raw, |ctx| app.keyboard(ctx));
@@ -1443,7 +1443,7 @@ fn popup_frame(app: &mut App, ctx: &egui::Context, events: Vec<egui::Event>) {
 }
 
 
-/// 원본 휴지통 단추 FUN_0042f13c: 아무 키 없음 = 휴지통(설정과 관계없이), Shift = 삭제, Shift+Ctrl = 완전 삭제, Ctrl+Alt = 휴지통 열기, 다른 조합 = 없음.
+/// Original Recycle Bin button FUN_0042f13c: no key = Recycle Bin (regardless of settings), Shift = delete, Shift+Ctrl = shred, Ctrl+Alt = open the Recycle Bin, other combinations = nothing.
 #[test]
 fn recycle_button_follows_the_original_keys() {
     use egui::Modifiers as M;
@@ -1461,15 +1461,15 @@ fn recycle_button_follows_the_original_keys() {
 thread_local! {
     static TREE_ROOT: RefCell<PathBuf> = const { RefCell::new(PathBuf::new()) };
 }
-/// 시험용 트리 뿌리: 가짜 드라이브(시험 폴더) 아래 경로만 그 뿌리.
+/// Test tree root: only paths under the fake drive (test folder) use that root.
 fn fake_tree_root(path: &str) -> String {
     let root = TREE_ROOT.with(|r| r.borrow().clone());
     let text = root.to_string_lossy().into_owned();
     if path.to_lowercase().starts_with(&text.to_lowercase()) { format!("{text}\\") } else { String::new() }
 }
 
-/// 원본 miFolderTreeClick 0x43c81a → FUN_0040ca90 → TfFolderTree: 처음 경로를 고르고(트리 파일이 없으면 드라이브를 훑는다),
-/// 화살표(ArrowKey 0x7e7c3c: ↓ = 같은 단계 다음 항목)로 옮기고, Enter(btnOk Default) = 그 경로로 지금 패널을 옮긴다. 닫을 때 트리 파일을 저장한다.
+/// Original miFolderTreeClick 0x43c81a -> FUN_0040ca90 -> TfFolderTree: selects the initial path (scans drives when there is no tree file),
+/// moves with the arrows (ArrowKey 0x7e7c3c: Down = next item on the same level), Enter (btnOk Default) = move the current pane to that path. Saves the tree file on close.
 #[test]
 fn folder_tree_window_follows_the_original_tffoldertree() {
     let (root, ctx, mut app) = fixture("foldertree", "ko");
@@ -1505,14 +1505,14 @@ fn folder_tree_window_follows_the_original_tffoldertree() {
     assert_eq!(form(&app).1.as_deref(), Some("x"), "← = parent");
     frame(&mut app, &ctx, vec![key(egui::Key::ArrowRight)]);
     assert_eq!(form(&app).1.as_deref(), Some("a"), "→ = next visible (first child, same row)");
-    // miCreateNewFolderClick 0x425b68(F7): TfGetText(TITLE_NEWFOLDER, MSG_NEWFOLDER, 오늘 날짜) → 만들고 트리에 넣어 고른다.
+    // miCreateNewFolderClick 0x425b68 (F7): TfGetText(TITLE_NEWFOLDER, MSG_NEWFOLDER, today's date) -> creates it, adds it to the tree and selects it.
     frame(&mut app, &ctx, vec![key(egui::Key::F7)]);
     let (title, message, value) = top_prompt(&app);
     assert_eq!((title, message, value), (root_text(&app, "TITLE_NEWFOLDER"), root_text(&app, "MSG_NEWFOLDER"), ndr::names::new_folder_default_name()));
     answer_text(&mut app, &ctx, Some("new"));
     assert!(start.join("new").is_dir());
     assert_eq!(form(&app), (start.join("new").to_string_lossy().into_owned(), Some("new".to_owned())));
-    // miRenameClick 0x425e6c(F2): TfGetText(RENAME, MSG_RENAME(이름, 1, 1), 이름) → MoveFileW.
+    // miRenameClick 0x425e6c (F2): TfGetText(RENAME, MSG_RENAME(name, 1, 1), name) -> MoveFileW.
     frame(&mut app, &ctx, vec![key(egui::Key::F2)]);
     let (title, message, value) = top_prompt(&app);
     assert_eq!((title, value), (root_text(&app, "RENAME"), "new".to_owned()));
@@ -1520,17 +1520,17 @@ fn folder_tree_window_follows_the_original_tffoldertree() {
     answer_text(&mut app, &ctx, Some("renamed"));
     assert!(start.join("renamed").is_dir() && !start.join("new").exists());
     assert_eq!(form(&app), (start.join("renamed").to_string_lossy().into_owned(), Some("renamed".to_owned())));
-    // FUN_004266ac(Del): 지우고 트리에서 뺀 뒤 부모를 고른다.
+    // FUN_004266ac (Del): deletes, removes it from the tree and selects the parent.
     frame(&mut app, &ctx, vec![key(egui::Key::Delete)]);
     assert!(!start.join("renamed").exists());
     assert_eq!(form(&app).1.as_deref(), Some("a"));
     frame(&mut app, &ctx, vec![key(egui::Key::ArrowRight), key(egui::Key::ArrowLeft)]);
     assert_eq!(form(&app).1.as_deref(), Some("a"));
     let with = |key: egui::Key, modifiers: egui::Modifiers| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
-    // pmFavorites(FUN_004259e0): Shift+F1 = 0번 즐겨찾기로 SetPath.
+    // pmFavorites (FUN_004259e0): Shift+F1 = SetPath to favorite 0.
     frame(&mut app, &ctx, vec![with(egui::Key::F1, egui::Modifiers::SHIFT)]);
     assert_eq!(form(&app).1.as_deref(), Some("y"), "Shift+F1 = favorite 0");
-    // tbSearchClick(Ctrl+F) → TfSearchFolder: Enter = StrStrIW 찾기(모든 항목), 목록 Enter = 그 경로로 SetPath.
+    // tbSearchClick (Ctrl+F) -> TfSearchFolder: Enter = StrStrIW search (all items), Enter in the list = SetPath to that path.
     frame(&mut app, &ctx, vec![with(egui::Key::F, egui::Modifiers::CTRL)]);
     frame(&mut app, &ctx, vec![]);
     app.edit_dialog_kind(|kind| if let DialogKind::FolderTree(form) = kind { form.search.as_mut().unwrap().query = "A2".into() });
@@ -1554,7 +1554,7 @@ fn folder_tree_window_follows_the_original_tffoldertree() {
 }
 
 
-/// 사용자 요청: 압축 파일 안에서 새 폴더·빈 파일·이름 바꾸기·삭제, 압축 안으로 복사·이동, 압축 밖으로 이동, 하위 폴더에서 복사.
+/// User request: inside an archive new folder, empty file, rename and delete; copy and move into the archive; move out of the archive; copy from a subfolder.
 #[test]
 fn archive_items_can_be_created_renamed_deleted_added_and_moved() {
     let (root, ctx, mut app) = fixture("archive-edit", "ko");
@@ -1573,30 +1573,30 @@ fn archive_items_can_be_created_renamed_deleted_added_and_moved() {
     wait_listing(&mut app, &ctx);
     assert!(app.panes[0].archive.is_some());
     let names = |app: &App| app.panes[0].entries.iter().map(|e| e.name.clone()).collect::<Vec<_>>();
-    // 새 폴더.
+    // New folder.
     app.new_folder();
     answer_text(&mut app, &ctx, Some("made"));
     wait_job(&mut app, &ctx);
     assert!(names(&app).contains(&"made".to_owned()), "{:?} / {}", names(&app), app.status);
-    // 빈 파일.
+    // Empty file.
     app.create_empty_file();
     answer_text(&mut app, &ctx, Some("empty.txt"));
     wait_job(&mut app, &ctx);
     assert!(app.panes[0].entries.iter().any(|e| e.name == "empty.txt" && e.size == 0), "{:?}", names(&app));
-    // 이름 바꾸기.
+    // Rename.
     app.panes[0].selected.clear();
     app.panes[0].cursor = row(&app, 0, "a.txt");
     app.rename_items();
     app.answer_dialog(DialogResult::Rename(Some(("b".into(), "txt".into()))), &ctx);
     wait_job(&mut app, &ctx);
     assert!(names(&app).contains(&"b.txt".to_owned()) && !names(&app).contains(&"a.txt".to_owned()), "{:?}", names(&app));
-    // 삭제(삭제 경고의 예).
+    // Delete (yes to the delete warning).
     app.panes[0].cursor = row(&app, 0, "made");
     app.delete_items(true);
     answer_warning(&mut app, &ctx, DeleteWarningChoice::Yes);
     wait_job(&mut app, &ctx);
     assert!(!names(&app).contains(&"made".to_owned()), "{:?}", names(&app));
-    // 로컬 → 압축 복사(원본은 남음)와 이동(원본은 지워짐).
+    // Local -> archive copy (source stays) and move (source removed).
     fs::write(right.join("new.txt"), b"new").unwrap();
     fs::write(right.join("moved.txt"), b"moved").unwrap();
     app.refresh(1);
@@ -1610,14 +1610,14 @@ fn archive_items_can_be_created_renamed_deleted_added_and_moved() {
     wait_job(&mut app, &ctx);
     assert!(names(&app).contains(&"new.txt".to_owned()) && names(&app).contains(&"moved.txt".to_owned()), "{:?}", names(&app));
     assert!(right.join("new.txt").is_file() && !right.join("moved.txt").exists());
-    // 압축 → 로컬 이동: 풀고 압축에서 지움.
+    // Archive -> local move: extract and delete from the archive.
     app.active = 0;
     app.panes[0].cursor = row(&app, 0, "b.txt");
     app.copy_to_other(0, true, &ctx);
     wait_job(&mut app, &ctx);
     assert_eq!(fs::read(right.join("b.txt")).unwrap(), b"a");
     assert!(!names(&app).contains(&"b.txt".to_owned()), "{:?}", names(&app));
-    // 하위 폴더에서 복사하면 그 하위 경로 없이 놓인다.
+    // Copying from a subfolder places items without that sub path.
     app.panes[0].cursor = row(&app, 0, "dir");
     app.open_current();
     wait_listing(&mut app, &ctx);
@@ -1627,7 +1627,7 @@ fn archive_items_can_be_created_renamed_deleted_added_and_moved() {
     wait_job(&mut app, &ctx);
     assert_eq!(fs::read(right.join("sub").join("c.txt")).unwrap(), b"c");
     assert!(!right.join("dir").exists(), "the archive folder path is not recreated");
-    // 압축 안으로 더한 파일은 지금 압축 안 폴더 아래에 들어간다.
+    // Files added into the archive go under the current archive folder.
     app.active = 1;
     app.refresh(1);
     wait_listing(&mut app, &ctx);
@@ -1639,8 +1639,8 @@ fn archive_items_can_be_created_renamed_deleted_added_and_moved() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// 압축 안으로 넣을 때 같은 이름이면 원본 TfFileExists로 묻고(대상 = 압축 안 항목의 크기), 건너뛴 항목은 이동이어도 원본을 남긴다.
-/// 압축 패널의 오른쪽 끌기 메뉴는 복사·이동만 켜지고, 폴더 줄에 놓으면 그 압축 안 폴더에 들어간다.
+/// Adding into an archive asks with the original TfFileExists on a name conflict (destination = the archive item's size), and skipped items keep their source even on a move.
+/// The right-drag menu of an archive pane enables only copy and move, and dropping on a folder row goes into that archive folder.
 #[test]
 fn archive_conflicts_ask_and_drops_into_archive_folders() {
     let (root, ctx, mut app) = fixture("archive-conflict", "ko");
@@ -1679,7 +1679,7 @@ fn archive_conflicts_ask_and_drops_into_archive_folders() {
         }
     };
     let answer = |app: &mut App, choice: ndr::fsops::ConflictChoice| app.answer_dialog(DialogResult::FileConflict(Some((choice, false))), &ctx);
-    // 복사: 같은 이름이면 묻는다. 대상 칸은 압축 안 항목(크기 1바이트).
+    // Copy: a name conflict asks. The destination side is the archive item (1 byte).
     app.active = 1;
     app.panes[1].cursor = row(&app, 1, "a.txt");
     app.copy_to_other(1, false, &ctx);
@@ -1690,21 +1690,21 @@ fn archive_conflicts_ask_and_drops_into_archive_folders() {
     answer(&mut app, ndr::fsops::ConflictChoice::Skip);
     wait_job(&mut app, &ctx);
     assert_eq!(read("a.txt"), "a", "skipped");
-    // 이동 + 건너뛰기: 원본이 남는다.
+    // Move + skip: the source stays.
     app.panes[1].cursor = row(&app, 1, "a.txt");
     app.copy_to_other(1, true, &ctx);
     wait_conflict(&mut app);
     answer(&mut app, ndr::fsops::ConflictChoice::Skip);
     wait_job(&mut app, &ctx);
     assert!(right.join("a.txt").is_file(), "a skipped move keeps the source");
-    // 덮어쓰기.
+    // Overwrite.
     app.panes[1].cursor = row(&app, 1, "a.txt");
     app.copy_to_other(1, false, &ctx);
     wait_conflict(&mut app);
     answer(&mut app, ndr::fsops::ConflictChoice::Overwrite);
     wait_job(&mut app, &ctx);
     assert_eq!(read("a.txt"), "newer");
-    // 압축 → 로컬 이동 + 건너뛰기: 압축 안 항목이 남는다.
+    // Archive -> local move + skip: the archive item stays.
     app.active = 0;
     app.panes[0].cursor = row(&app, 0, "keep.txt");
     app.copy_to_other(0, true, &ctx);
@@ -1713,7 +1713,7 @@ fn archive_conflicts_ask_and_drops_into_archive_folders() {
     wait_job(&mut app, &ctx);
     assert_eq!(fs::read_to_string(right.join("keep.txt")).unwrap(), "outside");
     assert_eq!(read("keep.txt"), "inside", "a skipped move out keeps the archive entry");
-    // 오른쪽 끌기 메뉴: 복사·이동 켜짐, 바로 가기 회색.
+    // Right-drag menu: copy and move enabled, shortcut gray.
     let zip_folder = app.panes[0].path.clone();
     app.show_drop_menu(0, vec![right.join("b.txt")], zip_folder.clone(), egui::pos2(10.0, 10.0));
     let states: Vec<bool> = app
@@ -1733,7 +1733,7 @@ fn archive_conflicts_ask_and_drops_into_archive_folders() {
     wait_job(&mut app, &ctx);
     assert_eq!(read("b.txt"), "b");
     assert!(!right.join("b.txt").exists(), "moved into the archive");
-    // 압축 안 폴더 줄에 놓기 = 그 폴더 안으로(끌어 놓기 확인의 예).
+    // Dropping on an archive folder row = into that folder (yes to the drag-and-drop confirmation).
     app.handle_drop(0, vec![right.join("c.txt")], PathBuf::from("dir"), egui::Modifiers::NONE);
     assert!(!app.msgboxes.is_empty(), "drag and drop confirmation");
     app.answer_message_box(6, &ctx);

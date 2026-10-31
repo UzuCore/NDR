@@ -1,13 +1,13 @@
-//! C# FunctionKeyEditorWindow(기능키, 900×560: F1~F12 표 — 키/이름/종류/명령/인자, 편집·초기화, 확인·취소)와
-//! FunctionKeyEditWindow("기능키 편집 — Fn", 660×430: 이름, 내부 명령/사용자 명령, 명령, 인자) + FunctionKeyBindingService.Get/InternalCommands.
-//! 내부 명령 이름은 C# TranslateText처럼 언어 파일 값 역검색(`Language::translate_pair`)으로 보인다.
+//! C# FunctionKeyEditorWindow (function keys, 900x560: F1-F12 table with key/name/kind/command/arguments, edit and reset, OK and cancel) and
+//! FunctionKeyEditWindow ("edit function key - Fn", 660x430: name, internal/user command, command, arguments) + FunctionKeyBindingService.Get/InternalCommands.
+//! Internal command names are shown by reverse lookup of language file values (`Language::translate_pair`) like C# TranslateText.
 use super::grid::GridState;
 use super::original_dialogs::{DialogKind, DialogResult};
 use super::*;
 use ndr::msgbox::{MB_ICONASTERISK, MB_OK};
 use serde_json::{Map, Value, json};
 
-/// FunctionKeyBindingService.InternalCommands(Id, 이름).
+/// FunctionKeyBindingService.InternalCommands (Id, name).
 pub(super) const INTERNAL_COMMANDS: &[(&str, &str)] = &[
     ("#None", "None"), ("#Open", "Open"), ("#OpenWithParam", "Open with parameters"), ("#CopyTo", "Copy To"), ("#MoveTo", "Move To"),
     ("#CopyToLeft", "Copy to left"), ("#CopyToRight", "Copy to right"), ("#MoveToLeft", "Move to left"), ("#MoveToRight", "Move to right"),
@@ -25,7 +25,7 @@ pub(super) const INTERNAL_COMMANDS: &[(&str, &str)] = &[
     ("#NewTab", "New Tab"), ("#CommandLine", "Command Line"), ("#SplitFile", "Split File"), ("#JoinFiles", "Join Files"), ("#OpenRecycleBin", "Open Recycle Bin"),
 ];
 
-/// C# FunctionKeyBinding(Normalize = 앞뒤 공백 뺌).
+/// C# FunctionKeyBinding (Normalize = trim leading and trailing spaces).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct Binding {
     pub name: String,
@@ -43,7 +43,7 @@ impl Binding {
     }
 }
 
-/// FunctionKeyBindingService.Get: FunctionKeyBindings[키](정리), 없으면 옛 FunctionKeys[키](# 시작이면 내부 명령).
+/// FunctionKeyBindingService.Get: FunctionKeyBindings[key] (normalized), otherwise the old FunctionKeys[key] (an internal command when it starts with #).
 pub(super) fn binding_for(settings: &ndr::settings::Settings, key: &str) -> Option<Binding> {
     let find = |name: &str| settings.values.get(name).and_then(Value::as_object).and_then(|m| m.iter().find(|(k, _)| k.eq_ignore_ascii_case(key)).map(|(_, v)| v.clone()));
     if let Some(value) = find("FunctionKeyBindings") {
@@ -57,14 +57,14 @@ pub(super) fn binding_for(settings: &ndr::settings::Settings, key: &str) -> Opti
 
 pub(super) struct FunctionKeyEditorForm {
     ko: bool,
-    /// F1~F12의 지금 설정(None = 기본).
+    /// Current settings of F1-F12 (None = default).
     pub bindings: Vec<(String, Option<Binding>)>,
     pub grid: GridState,
 }
 
 impl FunctionKeyEditorForm {
     pub(super) fn new(settings: &ndr::settings::Settings, ko: bool) -> Self {
-        // C# F1~F12, 그 뒤에 원본 TfPreferences 목록의 ^F1~^F11(Ctrl+F1~F11, [FuncKey] "^F%d").
+        // C# F1-F12, then ^F1-^F11 from the original TfPreferences list (Ctrl+F1-F11, [FuncKey] "^F%d").
         let keys = (1..=12).map(|n| format!("F{n}")).chain((1..=11).map(|n| format!("^F{n}")));
         let bindings: Vec<(String, Option<Binding>)> = keys.map(|key| { let b = binding_for(settings, &key); (key, b) }).collect();
         let mut grid = GridState::new(bindings.len());
@@ -72,7 +72,7 @@ impl FunctionKeyEditorForm {
         Self { ko, bindings, grid }
     }
 
-    /// CreateRow: (키, 이름, 종류, 명령, 인자).
+    /// CreateRow: (key, name, kind, command, arguments).
     pub(super) fn row(&self, index: usize) -> [String; 5] {
         let (key, binding) = &self.bindings[index];
         match binding {
@@ -87,7 +87,7 @@ impl FunctionKeyEditorForm {
         }
     }
 
-    /// Commit: 설정한 것만 정리해 FunctionKeyBindings 값으로.
+    /// Commit: only configured entries, normalized, as FunctionKeyBindings values.
     pub(super) fn result(&self) -> Value {
         let map: Map<String, Value> = self.bindings.iter().filter_map(|(key, b)| b.as_ref().map(|b| (key.clone(), b.normalized().to_json()))).collect();
         Value::Object(map)
@@ -98,7 +98,7 @@ impl FunctionKeyEditorForm {
     }
 }
 
-/// 원본 TfEditFunction의 입력.
+/// Input of the original TfEditFunction.
 pub(super) struct FunctionKeyEditForm {
     pub name: String,
     pub internal: bool,
@@ -119,8 +119,8 @@ impl FunctionKeyEditForm {
         }
     }
 
-    /// 원본 btnOkClick(0x41f73c): 사용자 명령이면 이름이 비었을 때 명령 파일 이름(PathFindFileNameW, 확장자 뺌), 내부 명령이면
-    /// "#" + 고른 명령. 원본은 빈 칸을 막지 않는다(C# 판의 "이름을 입력하세요" 안내는 없다). 명령이 비면 그 글쇠는 지정 없음.
+    /// Original btnOkClick (0x41f73c): for a user command with an empty name, the command file name (PathFindFileNameW without extension); for an internal command
+    /// "#" + the chosen command. The original does not block empty fields (no C# "enter a name" notice). An empty command leaves that key unassigned.
     pub(super) fn result(&self) -> Result<Binding, String> {
         let command = if self.internal { INTERNAL_COMMANDS[self.internal_command].0.to_owned() } else { self.command.trim().trim_matches('"').to_owned() };
         let mut name = self.name.trim().to_owned();
@@ -135,7 +135,7 @@ impl FunctionKeyEditForm {
         Ok(Binding { name, command, parameters, internal: self.internal })
     }
 
-    /// 원본 rbCommandTypeClick(0x41f5bc): 종류를 바꾸면 이름·명령·인자 칸을 비우고, 내부 명령이면 첫 명령을 고른다.
+    /// Original rbCommandTypeClick (0x41f5bc): changing the kind empties the name, command and argument fields, and selects the first command for internal commands.
     pub(super) fn set_internal(&mut self, internal: bool) {
         if self.internal == internal {
             return;
@@ -148,7 +148,7 @@ impl FunctionKeyEditForm {
     }
 }
 
-/// 원본 TfEditFunction PopupMenu1(btnParam "...")의 항목 글(DFM 그대로, 언어 파일에 없음).
+/// Item texts of the original TfEditFunction PopupMenu1 (btnParam "...") (as in the DFM, not in the language file).
 pub(super) const PARAMETER_MENU: [&str; 18] = [
     "$(SELECTED)    ex) \"c:\\folder\\file1.ext\" \"c:\\folder\\file2.exe\"",
     "$(SELECTED1)",
@@ -170,8 +170,8 @@ pub(super) const PARAMETER_MENU: [&str; 18] = [
     "$(EXTENSION2)",
 ];
 
-/// 원본 ParameterClick(0x41fed0): 항목 글을 첫 ")"까지 자르고(Pos(")") 뒤를 Delete) eParams의 커서(글자 번호) 자리에 넣는다.
-/// 돌려주는 값은 넣은 글 뒤의 새 커서(SelStart + 길이).
+/// Original ParameterClick (0x41fed0): cuts the item text at the first ")" (Delete after Pos(")")) and inserts it at the eParams cursor (character index).
+/// Returns the new cursor after the inserted text (SelStart + length).
 pub(super) fn insert_parameter(text: &mut String, caret: usize, caption: &str) -> usize {
     let token = caption.find(')').map_or(caption, |end| &caption[..=end]);
     let caret = caret.min(text.chars().count());
@@ -180,11 +180,11 @@ pub(super) fn insert_parameter(text: &mut String, caret: usize, caption: &str) -
     caret + token.chars().count()
 }
 
-/// 원본 TfEditFunction(ClientWidth 462 × ClientHeight 223): rbUserCommand(20,13) rbInternalCommand(229,13), Bevel(20,36 421),
+/// Original TfEditFunction (ClientWidth 462 x ClientHeight 223): rbUserCommand (20,13) rbInternalCommand (229,13), Bevel (20,36 421),
 /// lName(20,60) eName(113,57 141×21), lCommand(20,88) cbCommand(113,85 294×22) btnBrowse(412,85 29×21),
-/// lParams(20,115) eParams(113,112 294×21) btnParam(412,112 28×23, PopupMenu1), lParamTip(오른쪽 끝 407,143),
-/// btnOk(285,191, 기본) btnCancel(366,191) 75×25. 내부 명령이면 lParams·eParams·btnBrowse·btnParam·lParamTip을 끈다(rbCommandTypeClick).
-/// 확인이면 Some(true), 취소면 Some(false).
+/// lParams (20,115) eParams (113,112 294x21) btnParam (412,112 28x23, PopupMenu1), lParamTip (right edge 407,143),
+/// btnOk (285,191, default) btnCancel (366,191) 75x25. For internal commands lParams, eParams, btnBrowse, btnParam and lParamTip are disabled (rbCommandTypeClick).
+/// Some(true) on OK, Some(false) on cancel.
 pub(super) fn function_key_edit_ui(ui: &mut egui::Ui, form: &mut FunctionKeyEditForm, language: &compat::Language, enter: bool) -> Option<bool> {
     use super::original_dialogs::put_left;
     let text = |key: &str, fallback: &str| language.text(&format!("formEditFunction.{key}"), fallback);

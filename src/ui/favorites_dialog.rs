@@ -348,8 +348,8 @@ impl App {
     }
 
     /// Original address bar right-click (FUN_0048d10c, pmAddressBar): mipAddressCopy, mipAddressEdit, N16 ("-") then
-    /// 비어 있지 않은 즐겨찾기(최대 20개, 이름 그대로, 누르면 그 폴더로), "-", miAddToFavorites·miOrgFavorites 복제를 붙여
-    /// 마우스 위치에 연다.
+    /// adds the non-empty favorites (up to 20, names as is, clicking goes to that folder), "-", and copies of miAddToFavorites and miOrgFavorites,
+    /// and opens at the mouse position.
     pub(super) fn show_address_bar_menu(&mut self, index: usize, position: egui::Pos2) {
         let ko = self.language == "ko";
         self.active = index;
@@ -364,7 +364,7 @@ impl App {
         let names = self.settings.strings("FavoriteNames");
         for (slot, path) in self.settings.strings("Favorites").into_iter().enumerate().take(20) {
             let name = names.get(slot).cloned().unwrap_or_default();
-            // 원본 FUN_00410a44: 이름과 경로가 둘 다 있어야 항목을 만든다.
+            // Original FUN_00410a44: an item needs both a name and a path.
             if path.is_empty() || name.is_empty() {
                 continue;
             }
@@ -375,9 +375,9 @@ impl App {
         self.popup = Some(PopupMenu { items, position: Some(position), highlight: None, opened: true });
     }
 
-    /// 원본 miAddToFavoritesClick(0x433614): 로컬 패널일 때 TfGetText(TITLE_ADDFAV, MSG_ADDFAV의 %s = 지금 폴더,
-    /// 처음 값 = PathFindFileNameW(폴더)). 확인이면 (폴더, 입력한 이름)을 즐겨찾기에 더한다(같은 폴더 검사 없음).
-    /// %s는 원본처럼 굵은 글꼴 340 화소에 맞춰 DrawTextW(DT_PATH_ELLIPSIS)로 줄인 글(사각형 0x8e81e4 = 0,0,340,30).
+    /// Original miAddToFavoritesClick (0x433614): on a local pane, TfGetText(TITLE_ADDFAV, MSG_ADDFAV with %s = current folder,
+    /// initial value = PathFindFileNameW(folder)). On OK adds (folder, typed name) to the favorites (no duplicate folder check).
+    /// %s is shortened like the original with DrawTextW(DT_PATH_ELLIPSIS) to 340 px in the bold font (rectangle 0x8e81e4 = 0,0,340,30).
     pub(super) fn add_to_favorites_command(&mut self) {
         let pane = &self.panes[self.active];
         if pane.archive.is_some() {
@@ -412,9 +412,9 @@ impl App {
         });
     }
 
-    /// 원본 주소 줄 기록 단추의 메뉴(FUN_0048ced4): 패널 기록 목록(+0x37c, 오래된 것부터 마지막 번호까지) 한 줄씩,
-    /// 글 = "&%d. %s"(번호 10 미만) 또는 "&%c. %s"(번호 + 'A', 그래서 10번은 K), 지금 자리(+8)는 체크 표시. 원본 기록은 한 줄로
-    /// 늘어선 목록에 지금 자리가 있고(뒤로 = 자리 − 1, 앞으로 = + 1), NDR 기록(back·지금 폴더·forward)을 그 차례로 늘어놓는다.
+    /// Menu of the original address bar history button (FUN_0048ced4): one row per pane history entry (+0x37c, oldest first up to the last index),
+    /// text = "&%d. %s" (index below 10) or "&%c. %s" (index + 'A', so 10 is K), the current position (+8) checked. The original history is one
+    /// flat list with a current position (back = position - 1, forward = + 1); NDR lays out its history (back, current folder, forward) in that order.
     pub(super) fn show_history_menu(&mut self, pane: usize, position: Option<egui::Pos2>) {
         let list = self.history_list(pane);
         let current = self.panes[pane].back.len();
@@ -431,14 +431,14 @@ impl App {
         self.popup = Some(PopupMenu { items, position, highlight: None, opened: true });
     }
 
-    /// 원본 기록 목록 차례: 뒤로 갈 폴더들(오래된 것부터), 지금 폴더, 앞으로 갈 폴더들(가까운 것부터).
+    /// Original history list order: folders to go back to (oldest first), the current folder, folders to go forward to (nearest first).
     pub(super) fn history_list(&self, pane: usize) -> Vec<PathBuf> {
         let p = &self.panes[pane];
         p.back.iter().cloned().chain(std::iter::once(p.path.clone())).chain(p.forward.iter().rev().cloned()).collect()
     }
 
-    /// 원본 FUN_0048d4b4(즐겨찾기 메뉴 FUN_0042f078에서): 그 칸의 경로가 있으면(PathFileExistsW) 활성 패널을 그 폴더로 옮긴다.
-    /// 환경 변수나 "~"는 풀지 않는다.
+    /// Original FUN_0048d4b4 (from the favorites menu FUN_0042f078): if that slot's path exists (PathFileExistsW), moves the active pane to that folder.
+    /// Environment variables and "~" are not expanded.
     pub(super) fn open_favorite(&mut self, path: &str) {
         let target = PathBuf::from(path);
         if target.is_dir() {
@@ -446,8 +446,8 @@ impl App {
         }
     }
 
-    /// 원본 FUN_0048d05c: 고른 줄의 폴더로 간다(FUN_00459968). 기록 이동(뒤로·앞으로, +0x2e8)이 아니므로 목록 받기(FUN_00486694)가
-    /// FUN_00458348로 기록에 더한다: 지금 자리 뒤는 지우고 끝에 붙인다(지금 폴더와 같으면 그대로). NDR navigate(기억함)와 같다.
+    /// Original FUN_0048d05c: goes to the chosen row's folder (FUN_00459968). It is not a history move (back/forward, +0x2e8), so receiving the listing (FUN_00486694)
+    /// adds it to the history with FUN_00458348: entries after the current position are dropped and it is appended (unchanged when it equals the current folder). Same as NDR navigate (remembering).
     pub(super) fn navigate_history_entry(&mut self, pane: usize, index: usize) {
         let Some(location) = self.history_list(pane).get(index).cloned() else { return };
         self.active = pane;
@@ -463,17 +463,17 @@ impl App {
             PopupAction::CopyAddress(pane) => {
                 let _ = (self.clipboard_writer)(&self.address_text(pane));
             }
-            // 편집은 ctx가 필요해 popup_menu_ui에서 처리한다.
+            // Editing needs ctx, so popup_menu_ui handles it.
             PopupAction::EditAddress(pane) => self.active = pane,
             PopupAction::Drop { pane, effect, paths, destination } => self.drop_from_menu(pane, effect, paths, destination),
             PopupAction::Close => {}
             PopupAction::RunExecutable { path, directory } => self.run_cached_executable(&path, &directory),
-            // ctx가 필요해 popup_menu_ui에서 실행한다.
+            // Needs ctx, so popup_menu_ui runs it.
             PopupAction::Toolbar(_) => {}
         }
     }
 
-    /// 드롭다운 그리기: 위/아래·Enter, 단축 문자, Esc·바깥 누르기로 닫기.
+    /// Draws the drop-down: Up/Down and Enter, access keys, Esc or an outside click closes it.
     pub(super) fn popup_menu_ui(&mut self, ctx: &egui::Context) {
         let Some(mut popup) = self.popup.take() else { return };
         let entries: Vec<usize> = popup.items.iter().enumerate().filter(|(_, item)| matches!(item, PopupItem::Entry { enabled: true, .. })).map(|(i, _)| i).collect();
@@ -501,12 +501,12 @@ impl App {
         let screen = ctx.content_rect();
         let position = popup.position.unwrap_or(egui::pos2(screen.center().x - 150.0, screen.top() + 28.0));
         let area = egui::Area::new(egui::Id::new("ndr-popup-menu")).order(egui::Order::Foreground).fixed_pos(position).show(ctx, |ui| {
-            // 스킨 테마면 원본 메뉴 색(skin_menu_style).
+            // In the skin theme, the original menu colors (skin_menu_style).
             super::skin_pane::apply_menu_style(ui);
             egui::Frame::menu(ui.style()).show(ui, |ui| {
                 ui.set_min_width(300.0);
-                // VCL 메뉴(AutoLineReduction = maAutomatic)처럼 맨 앞·맨 뒤·겹친 구분선은 그리지 않는다
-                // (예: 즐겨찾기가 없을 때 pmFavorites의 N22).
+                // Like VCL menus (AutoLineReduction = maAutomatic), leading, trailing and doubled separators are not drawn
+                // (for example N22 of pmFavorites when there are no favorites).
                 let visible_separator = |index: usize| {
                     let before = popup.items[..index].iter().rev().find(|i| !matches!(i, PopupItem::Separator)).is_some_and(|i| !matches!(i, PopupItem::Separator));
                     let previous_is_separator = index > 0 && matches!(popup.items[index - 1], PopupItem::Separator);
@@ -521,10 +521,10 @@ impl App {
                             }
                         }
                         PopupItem::Entry { label, gesture, enabled, checked, .. } => {
-                            // 고른 줄 바탕(스킨이면 mhighlight): 테 없는 단추는 selected여도 바탕을 칠하지 않으므로 뒤에 깐다.
+                            // Highlighted row background (mhighlight in the skin): a frameless button paints no background even when selected, so it goes underneath.
                             let backdrop = ui.painter().add(egui::Shape::Noop);
                             let highlighted = popup.highlight == Some(index);
-                            // VCL TMenuItem.Checked: 글 앞 체크 표시 자리(글꼴에 없는 기호 대신 선 두 개로 그린다).
+                            // VCL TMenuItem.Checked: the check mark slot before the text (drawn with two lines instead of a glyph the font may lack).
                             let text = format!("     {label}");
                             let button = egui::Button::new(text).shortcut_text(gesture.as_str()).frame(false).selected(highlighted).min_size(egui::vec2(300.0, 22.0));
                             let response = ui.add_enabled(*enabled, button);

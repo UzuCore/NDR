@@ -1,5 +1,5 @@
-//! C# NDR의 이름·설명·열기·삭제 흐름을 옮긴 것. 각 함수는 원본 주소와 C# 이름을 적는다.
-//! 대화 상자는 콜백으로 결과를 돌려주므로, 항목마다 대화 상자를 띄우는 반복은 상태를 다음 단계로 넘기는 식으로 만든다.
+//! Ports the C# NDR name, description, open and delete flows. Each function notes the original address and the C# name.
+//! Dialogs return results through callbacks, so loops that show a dialog per item pass their state on to the next step.
 use super::original_dialogs::{DeleteConfirmChoice, DeleteWarningChoice, DeleteWarningMode};
 use super::*;
 use super::file_operation::JobReport;
@@ -10,7 +10,7 @@ const FILE_ATTRIBUTE_READONLY: u32 = 0x1;
 const FILE_ATTRIBUTE_HIDDEN: u32 = 0x2;
 const FILE_ATTRIBUTE_SYSTEM: u32 = 0x4;
 
-/// RenameAsync 진행 상태.
+/// RenameAsync progress state.
 struct RenameRun {
     pane: usize,
     items: Vec<Entry>,
@@ -19,7 +19,7 @@ struct RenameRun {
     focus_after: Option<String>,
 }
 
-/// DeleteAsync의 보호 항목 확인 진행 상태.
+/// Progress state of the DeleteAsync protected item checks.
 pub(super) struct DeleteRun {
     pub paths: Vec<PathBuf>,
     pub items: Vec<(PathBuf, u32)>,
@@ -28,7 +28,7 @@ pub(super) struct DeleteRun {
     pub skipped: Vec<PathBuf>,
 }
 
-/// C# DeleteWarningWindow.DisplayName: 끝 구분자를 뗀 마지막 이름, 없으면(드라이브 루트) 경로 그대로.
+/// C# DeleteWarningWindow.DisplayName: the last name without the trailing separator, otherwise (drive root) the path as is.
 pub(super) fn display_name(path: &Path) -> String {
     let text = path.to_string_lossy();
     let trimmed = text.trim_end_matches(['\\', '/']);
@@ -37,24 +37,24 @@ pub(super) fn display_name(path: &Path) -> String {
 }
 
 impl App {
-    /// [RES]/[Root] 문구(언어 파일 값, 없으면 원본 영어 리터럴).
+    /// [RES]/[Root] text (language file value, otherwise the original English literal).
     pub(super) fn root_text(&self, key: &str, fallback: &str) -> String {
         self.language_pack.text(&format!("RES.{key}"), fallback)
     }
 
-    /// C#이 MessageBox.Show(this, text)로 알리는 NDR 자체 안내(원본에 없는 경우).
+    /// NDR's own notice that C# shows with MessageBox.Show(this, text) (cases not in the original).
     pub(super) fn notice(&mut self, korean: &str, english: &str) {
         let text = self.tr(korean, english).into_owned();
         self.system_box("", &text, MB_OK, |_, _, _| {});
     }
 
-    /// C# RunSafely가 예외를 보이는 모양: MessageBox(메시지, "NDR", OK, Warning).
+    /// How C# RunSafely shows an exception: MessageBox(message, "NDR", OK, Warning).
     pub(super) fn warn(&mut self, korean: &str, english: &str) {
         let text = self.tr(korean, english).into_owned();
         self.system_box("NDR", &text, MB_OK | ndr::msgbox::MB_ICONEXCLAMATION, |_, _, _| {});
     }
 
-    /// 표시 순서의 대상 항목(원본 FUN_00485bbc: 표시한 항목, 없으면 커서 항목).
+    /// Target items in display order (original FUN_00485bbc: marked items, otherwise the cursor item).
     pub(super) fn target_entries(&self, pane: usize) -> Vec<Entry> {
         let p = &self.panes[pane];
         if p.loading {
@@ -68,14 +68,14 @@ impl App {
         (!p.loading).then(|| p.entries.get(p.cursor).map(|e| e.name.clone())).flatten()
     }
 
-    /// C# RefreshPaneAsync 후 FocusPaneItemByName: 새 목록이 오면 그 이름(대소문자 무시)에 커서를 둔다.
+    /// C# FocusPaneItemByName after RefreshPaneAsync: when the new list arrives, put the cursor on that name (case-insensitive).
     pub(super) fn refresh_and_focus(&mut self, pane: usize, name: Option<String>) {
         self.pending_focus[pane] = name;
         self.refresh(pane);
     }
 
-    /// 원본 FUN_0040c31c(C# ShowNameOperationError): 시스템 오류 문구(없으면 MSG_UNKNOWN_ERROR), TITLE_ERROR 캡션, 오류 아이콘.
-    /// ask_continue면 "\n" + MSG_WANTTOCONTINUE2와 예/아니요. 콜백은 계속할지(true) 받는다.
+    /// Original FUN_0040c31c (C# ShowNameOperationError): system error text (else MSG_UNKNOWN_ERROR), TITLE_ERROR caption, error icon.
+    /// With ask_continue, "\n" + MSG_WANTTOCONTINUE2 and yes/no. The callback receives whether to continue (true).
     pub(super) fn show_name_operation_error(
         &mut self,
         error: u32,
@@ -95,8 +95,8 @@ impl App {
         self.system_box(&title, &text, flags, move |app, result, ctx| then(app, !ask_continue || result == IDYES, ctx));
     }
 
-    /// 원본 FUN_00432378(C# NewFolderAsync): 기본값은 짧은 날짜('\','/'→'-'), 다듬기·문자 거르기 없음, 빈 입력은 아무것도 안 함,
-    /// CreateDirectoryW(중간 폴더 없음, 같은 이름은 실패). 실패는 오류 상자만, 성공은 새로 고친 뒤 새 폴더에 커서.
+    /// Original FUN_00432378 (C# NewFolderAsync): default is the short date ('\' and '/' -> '-'), no trimming or character filtering, empty input does nothing,
+    /// CreateDirectoryW (no intermediate folders, an existing name fails). Failure shows only an error box; success refreshes and puts the cursor on the new folder.
     pub(super) fn new_folder(&mut self) {
         let pane = self.active;
         if self.panes[pane].remote.is_some() {
@@ -119,8 +119,8 @@ impl App {
         });
     }
 
-    /// 원본 FUN_00434630(C# CreateEmptyFileAsync): 빈 기본값, CreateFileW(CREATE_NEW)라 있는 항목은 비우지 않는다.
-    /// 승인된 수정: 원본은 실패를 조용히 넘기지만 NDR은 알린다. 그 뒤 새로 고치고 입력한 이름에 커서.
+    /// Original FUN_00434630 (C# CreateEmptyFileAsync): empty default; CreateFileW(CREATE_NEW) never empties an existing item.
+    /// Approved fix: the original silently ignores failure, NDR reports it. Then refresh and put the cursor on the typed name.
     pub(super) fn create_empty_file(&mut self) {
         let pane = self.active;
         if self.panes[pane].archive.is_some() {
@@ -140,8 +140,8 @@ impl App {
         });
     }
 
-    /// 원본 FUN_004351cc(C# RenameAsync): 표시 순서대로 항목마다 TfRename. 취소하면 멈춘다.
-    /// 새 이름 = 확장자가 비면 이름, 아니면 이름 + "." + 확장자. 같은 폴더 안에서 MoveFileW.
+    /// Original FUN_004351cc (C# RenameAsync): TfRename for each item in display order. Cancel stops.
+    /// New name = the name when the extension is empty, else name + "." + extension. MoveFileW within the same folder.
     pub(super) fn rename_items(&mut self) {
         let pane = self.active;
         if self.panes[pane].remote.is_some() {
@@ -173,7 +173,7 @@ impl App {
             let target_name = if new_extension.is_empty() { new_name } else { format!("{new_name}.{new_extension}") };
             let error = names::move_file(&entry.path.to_string_lossy(), &directory.join(&target_name).to_string_lossy());
             if error == 0 {
-                // 원본 FUN_004361f8 → FUN_0040f7f0: 설명이 바뀐 이름을 따라간다.
+                // Original FUN_004361f8 -> FUN_0040f7f0: the description follows the new name.
                 let include_legacy = app.settings.flag("UseDescriptionFile", true);
                 if let Err(message) = compat::rename_descriptions(&directory, &[(entry.name.clone(), target_name.clone())], include_legacy) {
                     app.status = message;
@@ -184,7 +184,7 @@ impl App {
                 run.index += 1;
                 return app.rename_step(run);
             }
-            // 원본은 실패한 항목 뒤에 남은 항목이 있을 때만 계속할지 묻는다.
+            // The original asks whether to continue only when items remain after the failed one.
             let ask = count - 1 > run.index;
             app.show_name_operation_error(error, ask, move |app, go_on, _| {
                 if go_on {
@@ -201,9 +201,9 @@ impl App {
         self.refresh_and_focus(run.pane, run.focus_after);
     }
 
-    /// 원본 FUN_004351cc의 드라이브 항목 갈래: 드라이브가 준비됐으면 TfGetText(창 제목, MSG_DRIVELABEL, 지금 볼륨 이름).
-    /// 확인이고 비어 있지 않으면 SetVolumeLabelW(루트, 이름). 성공하면 새로 읽고, ERROR_ACCESS_DENIED(5)면 ACCESS_DENIED를 알리며,
-    /// 다른 실패는 조용히 넘긴다. ACCESS_DENIED는 원본처럼 그 목록 위에 잠깐 뜨는 알림 창(FUN_0040e138, TfMessage)이다.
+    /// Drive item branch of original FUN_004351cc: if the drive is ready, TfGetText(window title, MSG_DRIVELABEL, current volume name).
+    /// On OK with non-empty text, SetVolumeLabelW(root, name). Success rereads; ERROR_ACCESS_DENIED (5) shows ACCESS_DENIED;
+    /// other failures are ignored. ACCESS_DENIED is the brief notice over that list like the original (FUN_0040e138, TfMessage).
     fn rename_drive_label(&mut self, pane: usize) {
         let Some(entry) = self.panes[pane].entries.get(self.panes[pane].cursor).cloned() else { return };
         let Some(label) = (self.system.volume_label)(&entry.path) else { return };
@@ -225,8 +225,8 @@ impl App {
         });
     }
 
-    /// 원본 FUN_00432958(C# EditDescriptionAsync): 표시 순서대로 항목마다 TfGetText(TITLE_DESCRIPT, MSG_DESCRIPT의 %s = 이름).
-    /// 취소하면 멈춘다. 확인은 설명을 저장(빈 값은 지움)하고 표시를 푼다. 끝나면 descript.ion을 옮기고 새로 고친다.
+    /// Original FUN_00432958 (C# EditDescriptionAsync): TfGetText(TITLE_DESCRIPT, MSG_DESCRIPT with %s = name) for each item in display order.
+    /// Cancel stops. OK saves the description (empty removes it) and unmarks the item. At the end descript.ion is moved and the pane refreshed.
     pub(super) fn edit_descriptions(&mut self) {
         let pane = self.active;
         if self.panes[pane].archive.is_some() {
@@ -254,7 +254,7 @@ impl App {
         self.prompt(&title, &message, &current, None, false, move |app, value, _| {
             let Some(value) = value else { return app.finish_descriptions(pane, &directory, include_legacy) };
             if let Err(message) = compat::set_description(&directory, &name, &value, include_legacy) {
-                // C#은 예외로 흐름을 끝낸다(새로 고침 없음).
+                // C# ends the flow with an exception (no refresh).
                 app.status = message;
                 return;
             }
@@ -274,7 +274,7 @@ impl App {
         self.refresh(pane);
     }
 
-    /// 매크로 확장용 두 패널 상태(현재 폴더, 표시한 이름, 커서 항목).
+    /// Both pane states for macro expansion (current folder, marked names, cursor item).
     pub(super) fn macro_panes(&self) -> [compat::MacroPane; 2] {
         self.panes.each_ref().map(|p| compat::MacroPane {
             path: p.path.clone(),
@@ -283,7 +283,7 @@ impl App {
         })
     }
 
-    /// 다른 패널에서 폴더 항목에 들어간다(open_current의 폴더 분기와 같은 규칙).
+    /// Enters a folder item in the other pane (same rule as the folder branch of open_current).
     fn enter_folder(&mut self, pane: usize, entry: Entry) {
         if let Some(location) = self.panes[pane].archive.as_mut() {
             location.prefix = format!("{}/", entry.path.to_string_lossy().replace('\\', "/"));
@@ -293,10 +293,10 @@ impl App {
         }
     }
 
-    /// 원본 FUN_00431dd4(C# OpenWithParametersAsync, Ctrl+Enter): 커서 항목에만 작용한다.
-    /// 폴더: 들어가고, 다른 패널에 같은 이름의 폴더가 있으면 거기도 들어간다(승인된 수정: 같은 이름의 파일은 무시).
-    /// 압축·원격 패널의 파일: 보통 열기. 그 밖: TfGetText(OPEN_WITH_PARAM, MSG_OPEN_WITH_PARAM의 %s = 이름, 빈 기본값),
-    /// $(...) 매크로를 펼치고 ShellExecuteExW(파일, 인수, 현재 폴더). 실패는 셸이 알리고 NDR은 따로 보이지 않는다.
+    /// Original FUN_00431dd4 (C# OpenWithParametersAsync, Ctrl+Enter): acts only on the cursor item.
+    /// Folder: enter it, and if the other pane has a folder with the same name enter it there too (approved fix: a file with the same name is ignored).
+    /// Files in archive or remote panes: ordinary open. Otherwise TfGetText(OPEN_WITH_PARAM, MSG_OPEN_WITH_PARAM with %s = name, empty default),
+    /// expand $(...) macros and ShellExecuteExW(file, arguments, current folder). The shell reports failures; NDR shows nothing extra.
     pub(super) fn open_with_parameters(&mut self) {
         let pane = self.active;
         if self.panes[pane].loading {
@@ -327,8 +327,8 @@ impl App {
         });
     }
 
-    /// 원본 FUN_0042c734(C# DeleteAsync): delconfirm이 켜져 있거나 휴지통 방식이 아니면 TfDelWarning.
-    /// 아니요는 멈추고, Delete 단추는 영구 삭제로 바꾼다. 영구 삭제는 보호 속성 항목마다 TfDelConfirm을 묻는다.
+    /// Original FUN_0042c734 (C# DeleteAsync): TfDelWarning when delconfirm is on or the mode is not the Recycle Bin.
+    /// No stops; the Delete button switches to permanent delete. Permanent delete asks TfDelConfirm for each item with protected attributes.
     pub(super) fn delete_items(&mut self, recycle: bool) {
         let pane = self.active;
         if self.panes[pane].remote.is_some() {
@@ -359,7 +359,7 @@ impl App {
         if recycle {
             return self.start_job("Delete".into(), Operation::Delete { sources: paths, recycle: true }, JobReport::Delete { recycle: true, skipped: 0 }, None);
         }
-        // C# FindProtectedDeleteItems는 Task.Run으로 돈다. 큰 트리에서 화면이 멈추지 않도록 따로 찾고 poll에서 받는다.
+        // C# FindProtectedDeleteItems runs in Task.Run. Search separately so large trees do not freeze the screen, and pick up the result in poll.
         let tx = self.async_tx.clone();
         thread::spawn(move || {
             let items = fsops::find_protected_delete_items(&paths);
@@ -367,8 +367,8 @@ impl App {
         });
     }
 
-    /// 보호 항목 하나씩 TfDelConfirm(QUE_DELCONFIRM의 %s = 경로, HAS_ATTRIBUTES의 %s = 속성 이름들).
-    /// 모두 예 = 나머지 승인, 아니요 = 그 항목(폴더면 안쪽 전부)을 남긴다. 끝나면 삭제 작업을 시작한다.
+    /// TfDelConfirm for each protected item (QUE_DELCONFIRM with %s = path, HAS_ATTRIBUTES with %s = attribute names).
+    /// Yes to all approves the rest, No keeps that item (for a folder, everything inside). At the end the delete job starts.
     pub(super) fn protected_step(&mut self, mut run: DeleteRun) {
         while let Some((path, attributes)) = run.items.get(run.index).cloned() {
             if run.approve_all || run.skipped.iter().any(|root| fsops::same_or_inside(&path, root)) {
@@ -409,15 +409,15 @@ impl App {
         self.start_job("Delete".into(), operation, JobReport::Delete { recycle: false, skipped }, None);
     }
 
-    /// C# ShredAsync(원본 FUN_0042c734 방식 2): MSG_DELWARN_SHRED 경고는 늘 보이고 Delete 단추는 없다. 예만 진행한다.
+    /// C# ShredAsync (original FUN_0042c734 mode 2): the MSG_DELWARN_SHRED warning always shows and has no Delete button. Only Yes proceeds.
     pub(super) fn shred_items(&mut self) {
         let pane = self.active;
-        // 원본 miShredClick(0x431c60)도 FUN_0042c734(방식 2)로 가고, 그 함수의 FTP 모드 갈래는 방식과 상관없이 원격 삭제를 한다.
+        // Original miShredClick (0x431c60) also goes to FUN_0042c734 (mode 2), whose FTP mode branch deletes remotely regardless of the mode.
         if self.panes[pane].remote.is_some() {
             return self.ftp_delete(pane);
         }
         if self.panes[pane].archive.is_some() {
-            // 사용자 요청: 압축 안 항목은 덮어쓸 실제 파일이 없으므로 압축에서 지우기로.
+            // User request: archive items have no real file to overwrite, so they are deleted from the archive instead.
             return self.archive_delete(pane);
         }
         let paths = self.panes[pane].targets();

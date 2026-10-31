@@ -798,8 +798,8 @@ impl App {
         self.ftp_pause.store(false, Ordering::Relaxed);
     }
 
-    /// 원본 FUN_0044033c(FTP 대기열 끝, 엔진 이벤트): 끝난 항목을 대기열에서 빼고, 남은 것이 없으면 아래 칸(pBottom)을 숨긴다.
-    /// (끝 소리 FUN_0043d9fc와 FTP 패널 새로 읽기 FUN_00487ce8는 report_job이 한다.)
+    /// Original FUN_0044033c (FTP queue end, engine event): removes finished items from the queue and hides the bottom panel (pBottom) when none remain.
+    /// (The end sound FUN_0043d9fc and rereading the FTP pane FUN_00487ce8 are done by report_job.)
     pub(super) fn ftp_queue_done(&mut self) {
         let Ok(mut rows) = self.ftp_results.lock() else { return };
         if rows.is_empty() {
@@ -811,7 +811,7 @@ impl App {
         }
     }
 
-    /// 원본 FUN_0048d7ac 기록 칸이 차지할 높이(나눔 막대 3 + 기록 칸). 기록이 없으면 0.
+    /// Height taken by the log panel of original FUN_0048d7ac (splitter 3 + log panel). 0 without a log.
     pub(super) fn ftp_log_reserve(&self, index: usize, spacing: f32) -> f32 {
         match self.panes[index].remote.as_ref().and_then(|r| r.log.as_ref()) {
             Some(_) => FTP_SPLITTER_HEIGHT + self.panes[index].ftp_log_height + spacing * 2.0,
@@ -819,9 +819,9 @@ impl App {
         }
     }
 
-    /// 원본 FUN_0048d7ac(패널, 1): FTP 모드 패널 아래의 TListBox(alBottom, 높이 60, 테두리 없음,
-    /// 바탕 [FTP] ftplogback·글 ftplogtext)와 그 위 TSplitter(alBottom, MinSize 30, 패널 색).
-    /// 줄은 원본 FUN_004404c0처럼 더할 때마다 맨 끝 줄을 고르고(ItemIndex), 고른 줄은 Windows 강조 색이다.
+    /// Original FUN_0048d7ac(pane, 1): TListBox below an FTP-mode pane (alBottom, height 60, no border,
+    /// background [FTP] ftplogback, text ftplogtext) and the TSplitter above it (alBottom, MinSize 30, pane color).
+    /// Like original FUN_004404c0, each added row selects the last row (ItemIndex); the selected row uses the Windows highlight color.
     pub(super) fn ftp_log_ui(&mut self, ui: &mut egui::Ui, index: usize, max_height: f32) {
         let Some(log) = self.panes[index].remote.as_ref().and_then(|r| r.log.clone()) else { return };
         let skin = self.current_skin();
@@ -840,7 +840,7 @@ impl App {
         ui.painter().rect_filled(bar, 0.0, splitter_color);
         let response = response.on_hover_cursor(egui::CursorIcon::ResizeVertical);
         if response.dragged() {
-            // 원본 TSplitter MinSize 30: 기록 칸과 목록 모두 30보다 작아지지 않는다.
+            // Original TSplitter MinSize 30: neither the log panel nor the list gets smaller than 30.
             let limit = (max_height - FTP_LOG_MIN).max(FTP_LOG_MIN);
             let height = &mut self.panes[index].ftp_log_height;
             *height = (*height - response.drag_delta().y).clamp(FTP_LOG_MIN, limit);
@@ -890,7 +890,7 @@ impl App {
         }
     }
 
-    /// 원본 pBottom: lvFTPProgress(" ;Local;Progress; ;Remote")와 btnFTPPause·btnFTPAbort.
+    /// Original pBottom: lvFTPProgress (" ;Local;Progress; ;Remote") and btnFTPPause, btnFTPAbort.
     pub(super) fn ftp_results_ui(&mut self, ui: &mut egui::Ui) {
         let ko = self.language == "ko";
         let headers: Vec<String> = self.language_pack.text("formMain.ListViewCols.lvFTPProgress", " ;Local;Progress; ;Remote").split(';').map(str::to_owned).collect();
@@ -899,12 +899,12 @@ impl App {
         let mut action = None;
         let rows = self.ftp_results.lock().map(|r| r.clone()).unwrap_or_default();
         let transferring = self.ftp_transferring();
-        // 원본 NXPaintPanel1(높이 21): btnFTPPause(1,0 75×21) btnFTPAbort(78,0 75×21) pbFTPTransfer(159,2 150×16)
-        // lFTPTransferred(315,4), 오른쪽 끝 btnFTPShowDetail(">>", 오른쪽 − 46, 19×19) btnFTPCloseProgress("X", 오른쪽 − 21).
+        // Original NXPaintPanel1 (height 21): btnFTPPause (1,0 75x21) btnFTPAbort (78,0 75x21) pbFTPTransfer (159,2 150x16)
+        // lFTPTransferred (315,4), at the right end btnFTPShowDetail (">>", right - 46, 19x19) btnFTPCloseProgress ("X", right - 21).
         let (bar, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 21.0), egui::Sense::hover());
         let at = |x: f32, y: f32, w: f32, h: f32| egui::Rect::from_min_size(bar.min + egui::vec2(x, y), egui::vec2(w, h));
-        // 원본 btnFTPPauseClick(0x440f78): 멈추면 RES.RESUME("다시시작"), 다시 시작하면 RES.PAUSE("잠시중지").
-        // FUN_0043f04c 이벤트 4(새 전송 목록)도 RES.PAUSE로 되돌린다. 첫 전송 전에는 창 설계 글(btnFTPPause).
+        // Original btnFTPPauseClick (0x440f78): pausing shows RES.RESUME ("resume"), resuming shows RES.PAUSE ("pause").
+        // Event 4 of FUN_0043f04c (new transfer list) also resets it to RES.PAUSE. Before the first transfer, the designed caption (btnFTPPause).
         let pause = if paused {
             self.language_pack.text("RES.RESUME", "Resume")
         } else if self.ftp_started.is_some() {
@@ -918,7 +918,7 @@ impl App {
         if super::original_dialogs::put_enabled(ui, at(78.0, 0.0, 75.0, 21.0), transferring, egui::Button::new(self.language_pack.text("formMain.Caption.btnFTPAbort", "Abort"))).clicked() {
             action = Some(1);
         }
-        // 원본 FUN_0043f04c 이벤트 1: pbFTPTransfer = 백분율, lFTPTransferred = "%d %% (받음 / 전체) - 속도". 전송이 없으면 0과 빈 글.
+        // Original FUN_0043f04c event 1: pbFTPTransfer = percentage, lFTPTransferred = "%d %% (received / total) - speed". Without a transfer, 0 and empty text.
         let (done, total, percent) = ftp_totals(&rows);
         let running = transferring && !rows.is_empty();
         ui.put(at(159.0, 2.0, 150.0, 16.0), egui::ProgressBar::new(if running { percent as f32 / 100.0 } else { 0.0 }).desired_height(16.0).corner_radius(0.0));
@@ -946,8 +946,8 @@ impl App {
             }
             return;
         }
-        // 원본 lvFTPProgress는 색을 정하지 않는다(DFM에 Color 없음, 스킨 적용 0x43daf0도 건드리지 않음, [FTP] ftpprog* 열쇠는
-        // 원본 실행 파일이 읽지 않는다). 그래서 스킨 테마에서도 Windows 창 색(clWindow·clWindowText)이다.
+        // The original lvFTPProgress sets no colors (no Color in the DFM, the skin apply 0x43daf0 leaves it alone, and the [FTP] ftpprog* keys
+        // are never read by the original executable). So even the skin theme uses the Windows window colors (clWindow, clWindowText).
         let colors = self.current_skin().map(|_| {
             let rgb = |(r, g, b): (u8, u8, u8)| Color32::from_rgb(r, g, b);
             (rgb(native::system_color(5)), rgb(native::system_color(8)))
@@ -964,8 +964,8 @@ impl App {
                     ui.label(RichText::new(header(i)).strong().family(egui::FontFamily::Name(super::BOLD_FONT_FAMILY.into())));
                 }
                 ui.end_row();
-                // 원본 FUN_0043f04c 이벤트 2(항목 끝): 그 줄을 lvFTPProgress에서 지운다.
-                // 원본 이벤트 4(목록 만들기): 첫 칸 글은 비어 있고(lvFTPProgress에 그림 목록 없음), Local·Progress·(백분율)·Remote.
+                // Original FUN_0043f04c event 2 (item end): removes that row from lvFTPProgress.
+                // Original event 4 (build the list): the first cell is empty (lvFTPProgress has no image list), then Local, Progress, (percentage), Remote.
                 for row in rows.iter().filter(|r| r.state != RowState::Done) {
                     let (bar, percent_text) = row.progress_cells(percent, ko);
                     ui.label("");
@@ -978,7 +978,7 @@ impl App {
             });
         });
         });
-        // 원본 btnFTPShowDetailClick(0x441114): 높이 > 30이면 22로(단추 줄만), 아니면 100. btnFTPCloseProgressClick(0x4410f0): pBottom·splBottom 숨김.
+        // Original btnFTPShowDetailClick (0x441114): height > 30 becomes 22 (button row only), otherwise 100. btnFTPCloseProgressClick (0x4410f0): hides pBottom and splBottom.
         match action {
             Some(0) => self.ftp_pause_toggle(),
             Some(1) => self.ftp_abort(),
@@ -988,8 +988,8 @@ impl App {
         }
     }
 
-    /// 원본 miNewFolderClick(0x432378)의 FTP 갈래: TfGetText(TITLE_NEWFOLDER, MSG_NEWFOLDER, 오늘 날짜 이름) →
-    /// FUN_0045d0b4(이름) → 새로 읽고 그 이름에 커서(FUN_00487ce8(목록, 1, 1, 이름)).
+    /// FTP branch of original miNewFolderClick (0x432378): TfGetText(TITLE_NEWFOLDER, MSG_NEWFOLDER, today's date name) ->
+    /// FUN_0045d0b4(name) -> reread and put the cursor on that name (FUN_00487ce8(list, 1, 1, name)).
     pub(super) fn ftp_new_folder(&mut self, index: usize) {
         let Some(remote) = self.panes[index].remote.clone() else { return };
         if remote.busy.load(Ordering::Relaxed) {
@@ -997,7 +997,7 @@ impl App {
         }
         let title = self.language_pack.text("RES.TITLE_NEWFOLDER", "New Folder");
         let message = self.language_pack.text("RES.MSG_NEWFOLDER", "Type a folder name to be created.");
-        // 원본 FUN_00432378(패널 모드 2 갈래)도 같은 TfGetText(flags 1)를 쓴다.
+        // Original FUN_00432378 (pane mode 2 branch) uses the same TfGetText (flags 1).
         self.prompt_file_name(&title, &message, &ndr::names::new_folder_default_name(), move |app, value, _| {
             let Some(name) = value.filter(|v| !v.trim().is_empty()) else { return };
             let path = join_remote(&remote.path, &name);
@@ -1005,8 +1005,8 @@ impl App {
         });
     }
 
-    /// 원본 miRenameClick(0x4351cc)의 FTP 갈래: 고른 항목마다 TfRename(이름 칸 = 확장자를 뺀 이름, 그것이 비면 이름 전체;
-    /// 확장자가 한 글자보다 길면 확장자 칸). 취소하면 멈춘다. 확인한 것은 FUN_0045d214(옛 이름, 새 이름)로 바꾸고 새로 읽는다.
+    /// FTP branch of original miRenameClick (0x4351cc): TfRename for each chosen item (name field = name without extension, the whole name when that is empty;
+    /// extension field when the extension is longer than one character). Cancel stops. Confirmed ones are renamed with FUN_0045d214(old name, new name), then reread.
     pub(super) fn ftp_rename(&mut self, index: usize) {
         let Some(remote) = self.panes[index].remote.clone() else { return };
         if remote.busy.load(Ordering::Relaxed) {
@@ -1042,7 +1042,7 @@ impl App {
         if renames.is_empty() {
             return;
         }
-        // 커서 항목의 이름을 바꿨으면 새 이름에 커서를 둔다.
+        // If the cursor item was renamed, put the cursor on the new name.
         let focus = focused.as_ref().and_then(|f| renames.iter().find(|(source, _, _)| source.trim_end_matches('/').rsplit('/').next() == Some(f.as_str())).map(|(_, _, target)| target.clone())).or(focused);
         self.ftp_edit(index, remote, focus, move |fs| {
             for (source, target, _) in &renames {
@@ -1052,8 +1052,8 @@ impl App {
         });
     }
 
-    /// 원본 miDeleteClick(0x431c04) → FUN_0042c734의 FTP 갈래: 휴지통 없이 늘 삭제 확인(FUN_0040c5c4)을 묻고,
-    /// 폴더(+0x3c == 1)와 파일 목록을 FUN_0045de18로 지운 뒤 새로 읽는다.
+    /// Original miDeleteClick (0x431c04) -> FTP branch of FUN_0042c734: always asks the delete confirmation (FUN_0040c5c4) without the Recycle Bin,
+    /// deletes the folder (+0x3c == 1) and file lists with FUN_0045de18, then rereads.
     pub(super) fn ftp_delete(&mut self, index: usize) {
         let Some(remote) = self.panes[index].remote.clone() else { return };
         if remote.busy.load(Ordering::Relaxed) {
@@ -1089,9 +1089,9 @@ impl App {
         });
     }
 
-    /// 원본 miChangeAttributesClick(0x43657c)의 FTP 갈래 → FUN_00436b98: 고른 항목마다 TfFTPAttributes("이름 (n / 전체)", 목록의 권한).
-    /// 확인 = 그 항목, 모두 적용 = 남은 항목 모두 같은 권한, 건너뛰기 = 다음, 취소 = 멈춤. 고른 권한은 FUN_0045e274(경로, 권한)로 바꾸고 새로 읽는다.
-    /// 서버가 권한을 알려주지 않은 항목은 644에서 시작한다.
+    /// FTP branch of original miChangeAttributesClick (0x43657c) -> FUN_00436b98: TfFTPAttributes ("name (n / total)", the listed permissions) for each chosen item.
+    /// OK = that item, apply to all = same permissions for all remaining items, skip = next, cancel = stop. Chosen permissions are applied with FUN_0045e274(path, permissions), then reread.
+    /// Items whose permissions the server did not report start from 644.
     pub(super) fn ftp_change_attributes(&mut self, index: usize) {
         let Some(remote) = self.panes[index].remote.clone() else { return };
         if remote.busy.load(Ordering::Relaxed) {
@@ -1149,7 +1149,7 @@ impl App {
         });
     }
 
-    /// 짧은 FTP 동작(새 폴더·이름 바꾸기)을 따로 된 스레드에서 하고, 끝나면 AsyncResult::FtpEdited로 새로 읽는다.
+    /// Runs short FTP actions (new folder, rename) on a separate thread and rereads with AsyncResult::FtpEdited when done.
     fn ftp_edit(&mut self, index: usize, remote: PaneRemote, focus: Option<String>, work: impl FnOnce(&mut dyn PaneFs) -> Result<(), String> + Send + 'static) {
         remote.busy.store(true, Ordering::Relaxed);
         let tx = self.async_tx.clone();
@@ -1173,8 +1173,8 @@ impl App {
         }
     }
 
-    /// 원본 miCommandLineClick(0x438598)의 FTP 모드(2) 갈래: 입력한 글을 그대로 FTP 제어 명령으로 보낸다(FUN_0082a178, 응답 코드 -1 = 아무것이나).
-    /// 원본은 목록을 다시 읽지 않는다. 응답은 원본처럼 따로 창을 띄우지 않고 상태 줄에 보인다.
+    /// FTP mode (2) branch of original miCommandLineClick (0x438598): sends the typed text as an FTP control command (FUN_0082a178, reply code -1 = any).
+    /// The original does not reread the list. The reply is shown in the status line instead of a separate window, like the original.
     pub(super) fn ftp_raw_command(&mut self, index: usize, command: String) {
         let Some(remote) = self.panes[index].remote.clone() else { return };
         if command.trim().is_empty() {
@@ -1205,7 +1205,7 @@ impl App {
         }
     }
 
-    /// 원본 FUN_0042d518/FUN_0042d910(다른 패널로 복사): 로컬→FTP면 올리기, FTP→로컬이면 내려받기. 처리했으면 true.
+    /// Original FUN_0042d518/FUN_0042d910 (copy to the other pane): local -> FTP uploads, FTP -> local downloads. True when handled.
     pub(super) fn ftp_route_copy(&mut self, source: usize) -> bool {
         let target = 1 - source;
         match (self.panes[source].remote.is_some(), self.panes[target].remote.is_some()) {
@@ -1224,7 +1224,7 @@ impl App {
     }
 }
 
-/// 연결을 따로 된 스레드에서 닫는다(서버가 늦게 답해도 화면을 멈추지 않게).
+/// Closes the connection on a separate thread (so a slow server reply does not freeze the screen).
 fn close_later(remote: PaneRemote) {
     thread::spawn(move || {
         if let Ok(mut fs) = remote.fs.lock() {
@@ -1244,24 +1244,24 @@ mod tests {
 
     #[test]
     fn total_progress_follows_the_original_ftp_event() {
-        // 원본 FUN_0043f04c 이벤트 1: 받은 바이트 × 100 / 전체 바이트. 끝난 줄은 크기 전체, 기다리는 줄은 0.
+        // Original FUN_0043f04c event 1: received bytes x 100 / total bytes. Finished rows count their whole size, waiting rows 0.
         let rows = [row(Some(1000), 1000, RowState::Done), row(Some(3000), 1000, RowState::Running), row(Some(4000), 0, RowState::Waiting)];
         assert_eq!(ftp_totals(&rows), (2000, 8000, 25));
-        // 전체를 모르면 100%(원본 iVar6 = 100에서 시작).
+        // When the total is unknown, 100% (original iVar6 starts at 100).
         assert_eq!(ftp_totals(&[row(None, 10, RowState::Running)]).2, 100);
-        // lFTPTransferred: "%d %% (%s / %s) - %s"(wsprintf %% = %), 속도는 FormatFloat("0.00 KB/s").
+        // lFTPTransferred: "%d %% (%s / %s) - %s" (wsprintf %% = %), speed via FormatFloat("0.00 KB/s").
         assert_eq!(ftp_transferred_text(25, "1.95 KB", "7.81 KB", 12.345), "25 % (1.95 KB / 7.81 KB) - 12.35 KB/s");
     }
 
     #[test]
     fn row_cells_follow_the_original_lvftpprogress_text() {
-        // 원본 FUN_0043f04c 이벤트 1: Progress 칸 = 백분율/10개의 '<'(내려받기) 또는 '>'(올리기), 넷째 칸 = "%d%".
+        // Original FUN_0043f04c event 1: the Progress cell = percentage/10 '<' (download) or '>' (upload) characters, the fourth cell = "%d%".
         assert_eq!(row(Some(1000), 370, RowState::Running).progress_cells(0, true), ("<<<".to_owned(), "37%".to_owned()));
         let upload = FtpResultRow { upload: true, ..row(Some(1000), 1000, RowState::Running) };
         assert_eq!(upload.progress_cells(0, true), (">>>>>>>>>>".to_owned(), "100%".to_owned()));
-        // 항목 크기를 모르면 전체 백분율.
+        // When the item size is unknown, the overall percentage.
         assert_eq!(row(None, 5, RowState::Running).progress_cells(42, true), ("<<<<".to_owned(), "42%".to_owned()));
-        // 기다리는 줄은 빈칸, 실패한 줄은 상태 글.
+        // Waiting rows are blank, failed rows show the state text.
         assert_eq!(row(Some(10), 0, RowState::Waiting).progress_cells(0, true), (String::new(), String::new()));
         assert_eq!(row(Some(10), 0, RowState::Failed("550".into())).progress_cells(0, true), ("550".to_owned(), String::new()));
     }

@@ -1,7 +1,7 @@
-//! C# FileConflictWindow(같은 이름 확인), FileOperationProgressWindow(파일 작업 진행), FileOperationErrorDialog(오류마다 계속할지),
-//! ReportFileOperationResult(복사·이동·붙여넣기 결과), 삭제·완전 삭제 결과, TryExternalCopyAsync(외부 복사 프로그램).
-//! 차이(HANDOFF): 영어 화면은 C#이 한국어로 고정한 글(진행 창 단추·상태, 결과 알림)도 영어로 보인다.
-//! 압축·분할·합치기·폴더 크기 작업의 진행 창에는 일시 정지 단추가 없다(그 작업들은 멈춤 지점이 없다).
+//! C# FileConflictWindow (name conflict prompt), FileOperationProgressWindow (file job progress), FileOperationErrorDialog (continue after each error),
+//! ReportFileOperationResult (copy, move, paste results), delete and shred results, TryExternalCopyAsync (external copy program).
+//! Difference (HANDOFF): an English UI also shows in English the texts C# fixed to Korean (progress window buttons and states, result notices).
+//! Progress windows of archive, split, join and folder size jobs have no pause button (those jobs have no pause points).
 use super::original_dialogs::{DialogKind, DialogResult};
 use super::*;
 use ndr::msgbox::{IDYES, MB_ICONEXCLAMATION, MB_ICONHAND, MB_ICONQUESTION, MB_OK, MB_YESNO};
@@ -12,7 +12,7 @@ use std::time::SystemTime;
 const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x10;
 const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
 
-/// C# FileConflictInfo + 모두 적용 확인란.
+/// C# FileConflictInfo + the apply-to-all checkbox.
 pub(super) struct ConflictForm {
     pub source: PathBuf,
     pub destination: PathBuf,
@@ -24,12 +24,12 @@ pub(super) struct ConflictForm {
     pub destination_modified: Option<SystemTime>,
     pub allow_resume: bool,
     pub apply_all: bool,
-    /// 원본 imgOrg·imgNew(32x32 셸 아이콘): [기존, 새 것]의 RGBA와 그린 텍스처.
+    /// Original imgOrg / imgNew (32x32 shell icons): RGBA and drawn textures of [existing, new].
     pub icons: [Option<(usize, usize, Vec<u8>)>; 2],
     pub textures: [Option<egui::TextureHandle>; 2],
 }
 
-/// 실제 파일이 아닌 충돌 대상(압축 안 항목)의 정보: (보일 경로, 폴더인가, 크기, 수정 시각). 압축 작업 스레드가 묻기 전에 넣고 답을 받은 뒤 뺀다.
+/// Info about a conflict target that is not a real file (archive item): (shown path, is folder, size, modified time). The archive job thread sets it before asking and removes it after the answer.
 type VirtualEntry = (PathBuf, bool, Option<u64>, Option<SystemTime>);
 static VIRTUAL_ENTRIES: std::sync::Mutex<Vec<VirtualEntry>> = std::sync::Mutex::new(Vec::new());
 
@@ -42,7 +42,7 @@ pub(super) fn set_virtual_entry(path: &Path, info: Option<(bool, Option<u64>, Op
 }
 
 fn describe(path: &Path) -> (bool, Option<u64>, Option<SystemTime>) {
-    // 압축 안·원격 항목은 작업 스레드가 넣어 둔 정보가 먼저다("/dir/a"가 현재 드라이브의 실제 파일로 풀리지 않게).
+    // For archive and remote items, the info set by the job thread wins (so "/dir/a" is not resolved to a real file on the current drive).
     if let Some((_, directory, size, modified)) = VIRTUAL_ENTRIES.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|(p, ..)| p == path) {
         return (*directory, *size, *modified);
     }
@@ -67,7 +67,7 @@ impl ConflictForm {
     pub(super) fn can_resume(&self) -> bool {
         self.allow_resume && !self.source_dir && !self.destination_dir && matches!((self.source_size, self.destination_size), (Some(s), Some(d)) if d < s)
     }
-    /// C# ConflictPolicy.IsCompatible: 모두 적용한 답을 이 충돌에도 쓸 수 있는가.
+    /// C# ConflictPolicy.IsCompatible: whether an apply-to-all answer also fits this conflict.
     pub(super) fn compatible(&self, choice: ConflictChoice) -> bool {
         match choice {
             ConflictChoice::Resume => self.can_resume(),
@@ -77,8 +77,8 @@ impl ConflictForm {
     }
 }
 
-/// 원본 FUN_00422068: 파일 정보 글 "<b>%s</b> bytes ( 긴 날짜, 시간 )"(크기는 FloatToStrF ffNumber = 천 단위 쉼표).
-/// highlight면 FUN_00422314처럼 <c0000FF>…</c>(빨강, 더 새로운 쪽).
+/// Original FUN_00422068: file info text "<b>%s</b> bytes ( long date, time )" (size via FloatToStrF ffNumber = thousands separators).
+/// With highlight, <c0000FF>...</c> like FUN_00422314 (red, the newer side).
 pub(super) fn conflict_file_info(size: Option<u64>, modified: Option<SystemTime>, highlight: bool, ko: bool) -> String {
     let bytes = size.map(|s| format!("<b>{}</b> bytes", n0(s as usize))).unwrap_or_else(|| (if ko { "크기 확인 불가" } else { "Size unavailable" }).to_owned());
     let info = match modified.map(ndr::listing::long_date_and_time) {
@@ -88,7 +88,7 @@ pub(super) fn conflict_file_info(size: Option<u64>, modified: Option<SystemTime>
     if highlight { format!("<c0000FF>{info}</c>") } else { info }
 }
 
-/// 정수에 천 단위 쉼표(C# N0).
+/// Integer with thousands separators (C# N0).
 pub(super) fn n0(value: usize) -> String {
     let digits = value.to_string();
     let mut out = String::new();
@@ -101,7 +101,7 @@ pub(super) fn n0(value: usize) -> String {
     out
 }
 
-/// 원본 TfFileExists의 단추(DFM 오른쪽 열, 왼쪽 425, 너비 112, 높이 25).
+/// Buttons of the original TfFileExists (right column in the DFM, left 425, width 112, height 25).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ConflictButton {
     Resume,
@@ -114,7 +114,7 @@ pub(super) enum ConflictButton {
 }
 
 impl ConflictButton {
-    /// DFM Top(원본 btnResume 25, btnOverwrite 56, btnSkip 87, btnOverNewer·btnReplace 118, btnRename 149, btnAbort 220).
+    /// DFM Top (original btnResume 25, btnOverwrite 56, btnSkip 87, btnOverNewer/btnReplace 118, btnRename 149, btnAbort 220).
     pub(super) fn top(self) -> f32 {
         match self {
             Self::Resume => 25.0,
@@ -138,18 +138,18 @@ impl ConflictButton {
     }
 }
 
-/// xilesShell::IsSubFolder(parent, child)(0x7b543c): child가 parent 안(같은 경로 아님)이면 true. 대소문자 무시.
+/// xilesShell::IsSubFolder(parent, child) (0x7b543c): true when child is inside parent (not the same path). Case-insensitive.
 pub(super) fn is_sub_folder(parent: &Path, child: &Path) -> bool {
     let normal = |p: &Path| p.to_string_lossy().replace('/', "\\").trim_end_matches('\\').to_lowercase();
     let (parent, child) = (normal(parent), normal(child));
     child.len() > parent.len() && child.starts_with(&parent) && child.as_bytes().get(parent.len()) == Some(&b'\\')
 }
 
-/// 보이는 단추와 켜짐. 원본 FUN_004116dc(로컬 복사): 새 항목이 폴더면 btnReplace, 아니면 btnOverNewer를 보인다(같은 자리, Visible).
-/// FUN_00422870은 끄기만 한다(Enabled = False, 가상 SetEnabled +0x94): 기존 = 새 경로면 덮어쓰기·새 파일 덮어쓰기·폴더 교체를 끄고,
-/// 폴더 교체가 보일 때 새 항목이 기존 안이면 폴더 교체를, 기존이 새 항목 안이면 폴더 교체와 덮어쓰기를 끈다. 이어서 전송(btnResume,
-/// DFM Visible = False)은 C# 판처럼 이어 받을 수 있는 작업일 때 보이고, 원본처럼 기존이 새 파일보다 작을 때만 켠다.
-/// 고친 것(사용자 지적): 전에는 쓸 수 없는 단추를 숨겨 창이 비어 보였다.
+/// Visible buttons and their enabled state. Original FUN_004116dc (local copy): btnReplace when the new item is a folder, otherwise btnOverNewer (same position, Visible).
+/// FUN_00422870 only disables (Enabled = False, virtual SetEnabled +0x94): when existing = new path, overwrite, overwrite newer and replace folder are disabled;
+/// when replace folder is visible, it is disabled if the new item is inside the existing one, and replace folder and overwrite are disabled if the existing one is inside the new item. Resume (btnResume,
+/// DFM Visible = False) shows for resumable jobs like the C# version and is enabled only when the existing file is smaller than the new one, like the original.
+/// Fixed (user report): unusable buttons used to be hidden, which made the window look empty.
 pub(super) fn conflict_buttons(form: &ConflictForm) -> Vec<(ConflictButton, bool)> {
     let same = form.source.to_string_lossy().eq_ignore_ascii_case(&form.destination.to_string_lossy());
     let mut overwrite = !same;
@@ -179,9 +179,9 @@ pub(super) fn conflict_buttons(form: &ConflictForm) -> Vec<(ConflictButton, bool
     buttons
 }
 
-/// 원본 TfFileExists(ClientWidth 545 × ClientHeight 253) 배치: lMsg(20,13), lFileName(20,34 굵게),
+/// Original TfFileExists (ClientWidth 545 x ClientHeight 253) layout: lMsg (20,13), lFileName (20,34 bold),
 /// Panel1(17,56 396×155: lOrgLabel·imgOrg·lOrgDir·lOrgFile, Bevel1, lNewLabel·imgNew·lNewDir·lNewFile), chkApplyAll(20,221),
-/// 오른쪽 단추 열(conflict_buttons). Enter = 건너뛰기(C# 판), Esc = 취소(창 닫기).
+/// right button column (conflict_buttons). Enter = skip (C# version), Esc = cancel (close the window).
 pub(super) fn conflict_ui(ui: &mut egui::Ui, form: &mut ConflictForm, language: &compat::Language, ko: bool, enter: bool) -> Option<ConflictChoice> {
     let text = |key: &str, fallback: &str| language.text(&format!("formFileExists.{key}"), fallback);
     let (area, _) = ui.allocate_exact_size(egui::vec2(545.0, 253.0), egui::Sense::hover());
@@ -190,7 +190,7 @@ pub(super) fn conflict_ui(ui: &mut egui::Ui, form: &mut ConflictForm, language: 
     super::original_dialogs::put_left(ui, at(20.0, 13.0, 390.0, 15.0), egui::Label::new(text("Caption.lMsg", "A destination folder already contains a file/folder named")).truncate());
     let name = form.source.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     super::original_dialogs::put_left(ui, at(20.0, 34.0, 390.0, 17.0), egui::Label::new(RichText::new(name).strong().family(egui::FontFamily::Name(super::BOLD_FONT_FAMILY.into()))).truncate());
-    // Panel1(TNXPaintPanel, CustomDraw): 테두리 칸.
+    // Panel1 (TNXPaintPanel, CustomDraw): bordered box.
     let panel = at(17.0, 56.0, 396.0, 155.0);
     ui.painter().rect(panel, 4.0, ui.visuals().faint_bg_color, ui.visuals().widgets.noninteractive.bg_stroke, egui::StrokeKind::Inside);
     ui.painter().hline(panel.min.x + 11.0..=panel.min.x + 382.0, panel.min.y + 72.0, ui.visuals().widgets.noninteractive.bg_stroke);
@@ -202,7 +202,7 @@ pub(super) fn conflict_ui(ui: &mut egui::Ui, form: &mut ConflictForm, language: 
             }
         }
     }
-    // 원본 FUN_00422314: CompareFileTime(기존, 새 것) — 더 새로운 쪽의 정보 글을 <c0000FF>(빨강)로 감싼다.
+    // Original FUN_00422314: CompareFileTime(existing, new) wraps the newer side's info text in <c0000FF> (red).
     let newer = match (form.destination_modified, form.source_modified) {
         (Some(existing), Some(new)) if existing < new => Some(false),
         (Some(existing), Some(new)) if existing > new => Some(true),
@@ -218,12 +218,12 @@ pub(super) fn conflict_ui(ui: &mut egui::Ui, form: &mut ConflictForm, language: 
         if let Some(texture) = &form.textures[slot] {
             ui.painter().image(texture.id(), local(14.0, 31.0 - if slot == 1 { 1.0 } else { 0.0 }, 32.0, 32.0), egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
         }
-        // 원본 lOrgDir/lNewDir: 파일 이름을 뗀 폴더(끝 "\" 포함, FUN_00421f40), epPathEllipsis.
+        // Original lOrgDir/lNewDir: the folder without the file name (with the trailing "\", FUN_00421f40), epPathEllipsis.
         let folder = path.parent().map(|p| { let mut s = p.to_string_lossy().into_owned(); if !s.ends_with('\\') { s.push('\\'); } s }).unwrap_or_default();
         let folder_font = egui::FontId::proportional(13.0);
         let folder = super::original_dialogs::path_ellipsis(ui, &folder, 324.0, &folder_font);
         super::original_dialogs::put_left(ui, local(62.0, 30.0, 324.0, 18.0), egui::Label::new(RichText::new(folder).font(folder_font)));
-        // 원본 FUN_00422314: 폴더 충돌(+0x460)이면 정보 글이 전체 경로, 아니면 FUN_00422068 글. 더 새로운 쪽은 빨강.
+        // Original FUN_00422314: for a folder conflict (+0x460) the info text is the full path, otherwise the FUN_00422068 text. The newer side is red.
         let info = if directory {
             let full = path.to_string_lossy().into_owned();
             if highlight { format!("<c0000FF>{full}</c>") } else { full }
@@ -232,12 +232,12 @@ pub(super) fn conflict_ui(ui: &mut egui::Ui, form: &mut ConflictForm, language: 
         };
         super::original_dialogs::put_left(ui, local(62.0, if slot == 0 { 50.0 } else { 49.0 }, 324.0, 18.0), egui::Label::new(super::original_dialogs::markup_job(&info, 13.0, text_color, 324.0)).truncate());
     }
-    // 원본 TfFileExists는 단추·확인란만 있어 글자만 쳐도 단축 문자가 먹는다(VCL CM_DIALOGCHAR).
+    // The original TfFileExists has only buttons and a checkbox, so typing a letter triggers the access key (VCL CM_DIALOGCHAR).
     let raw = |key: &str, fallback: &str| language.raw(&format!("formFileExists.{key}")).unwrap_or_else(|| fallback.to_owned());
     super::original_dialogs::access_checkbox(ui, at(20.0, 221.0, 390.0, 17.0), &mut form.apply_all, &raw("Caption.chkApplyAll", "&Apply to all"));
     let mut chosen = None;
     for (button, enabled) in conflict_buttons(form) {
-        // 원본 FUN_00422314: 폴더 충돌이면 덮어쓰기 단추 글이 MERGE_FOLDER("폴더 합치기(&G)")다.
+        // Original FUN_00422314: for a folder conflict the overwrite button text is MERGE_FOLDER ("폴더 합치기(&G)").
         let label = match button {
             ConflictButton::Overwrite if form.source_dir && form.destination_dir => language.raw("RES.MERGE_FOLDER").unwrap_or_else(|| "Mer&ge".into()),
             ConflictButton::Overwrite => raw("Caption.btnOverwrite", "Over&write"),
@@ -258,20 +258,20 @@ pub(super) fn conflict_ui(ui: &mut egui::Ui, form: &mut ConflictForm, language: 
     chosen
 }
 
-/// 작업이 끝나면 쓰는 C# 결과 알림 방식.
+/// C# result notice style used when a job ends.
 #[derive(Clone, Debug)]
 pub(super) enum JobReport {
-    /// 상태 줄 요약, 오류가 있으면 오류 글 창(압축·분할·합치기·폴더 크기 등).
+    /// Status line summary, plus an error text window when there are errors (archive, split, join, folder size and so on).
     Generic,
-    /// C# ReportFileOperationResult(verb). requested = 고른 항목 수.
+    /// C# ReportFileOperationResult(verb). requested = number of chosen items.
     Transfer { verb: (&'static str, &'static str), requested: usize, clear_clipboard: bool },
-    /// C# DeleteSelectedAsync 끝: skipped = 남기기로 한 보호 항목 수.
+    /// End of C# DeleteSelectedAsync: skipped = protected items chosen to keep.
     Delete { recycle: bool, skipped: usize },
-    /// C# ShredAsync 끝.
+    /// End of C# ShredAsync.
     Shred,
 }
 
-/// C# FileOperationProgressWindow 인수.
+/// C# FileOperationProgressWindow arguments.
 #[derive(Clone, Debug, Default)]
 pub(super) struct ProgressInfo {
     pub from: Option<String>,
@@ -279,12 +279,12 @@ pub(super) struct ProgressInfo {
     pub total_files: Option<u64>,
     pub total_bytes: Option<u64>,
     pub prefer_bytes: bool,
-    /// 원본 진행 창 캡션(COMPRESSING·EXTRACTING·SPLITTING·JOINING). 없으면 작업 종류로 고르거나 작업 제목.
+    /// Original progress window caption (COMPRESSING, EXTRACTING, SPLITTING, JOINING). Otherwise chosen by the job kind, or the job title.
     pub caption: Option<String>,
 }
 
-/// 원본 0x412308 lTo: 지금 대상 파일의 폴더. 작업이 지금 원본 파일(`current`)의 대상을 알려 왔으면(Event::Target) 그 폴더,
-/// 아니면 시작 원본 폴더(`from`) 아래의 같은 상대 경로를 시작 대상 폴더(`to`)에 붙인 폴더(얻을 수 없으면 `to`).
+/// Original 0x412308 lTo: the folder of the current destination file. If the job reported the destination of the current source file (`current`) (Event::Target), that folder;
+/// otherwise the same relative path below the starting source folder (`from`) appended to the starting destination folder (`to`) (`to` when it cannot be derived).
 pub(super) fn progress_target_line(from: Option<&str>, to: Option<&str>, current: &str, target: Option<&(PathBuf, PathBuf)>) -> Option<String> {
     if let Some((_, destination)) = target.filter(|(source, _)| source.as_os_str() == std::ffi::OsStr::new(current)) {
         if let Some(folder) = destination.parent() {
@@ -304,7 +304,7 @@ pub(super) fn progress_target_line(from: Option<&str>, to: Option<&str>, current
 
 
 
-/// C# GetFileOperationSourcePath: 폴더면 그 폴더, 파일이면 들어 있는 폴더.
+/// C# GetFileOperationSourcePath: a folder itself, or the folder containing a file.
 pub(super) fn source_folder(path: &Path) -> Option<String> {
     let full = std::path::absolute(path).ok()?;
     let metadata = fs::metadata(&full).ok()?;
@@ -312,7 +312,7 @@ pub(super) fn source_folder(path: &Path) -> Option<String> {
     Some(folder.to_string_lossy().into_owned())
 }
 
-/// C# TryGetFlatFileProgressTotals: 모두 보통 파일일 때만 (개수, 크기).
+/// C# TryGetFlatFileProgressTotals: (count, size) only when all are ordinary files.
 pub(super) fn flat_totals(paths: &[PathBuf]) -> Option<(u64, u64)> {
     let mut bytes = 0u64;
     for path in paths {
@@ -325,7 +325,7 @@ pub(super) fn flat_totals(paths: &[PathBuf]) -> Option<(u64, u64)> {
     (!paths.is_empty()).then_some((paths.len() as u64, bytes))
 }
 
-/// 복사·이동을 부른 곳(C#의 상태 글이 다르다).
+/// Where copy/move was called from (the C# status texts differ).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum TransferKind {
     OtherPane,
@@ -335,8 +335,8 @@ pub(super) enum TransferKind {
 }
 
 impl App {
-    /// 원본 FUN_0042bdc4(복사·이동)·FUN_0042c734(삭제): 표시에서 작업을 만들면(끌어 놓기·붙여넣기가 아니면) 그 패널의 표시를
-    /// "마지막 선택"(+0xd08, CopySelection)에 남기고 표시를 지운다(ClearSelection). 표시가 없으면 마지막 선택도 빈다. 스킨 테마.
+    /// Original FUN_0042bdc4 (copy/move) and FUN_0042c734 (delete): when a job is made from the marks (not drag-and-drop or paste), the pane's marks are
+    /// saved to the "last selection" (+0xd08, CopySelection) and cleared (ClearSelection). Without marks the last selection becomes empty. Skin theme.
     pub(super) fn original_take_marks(&mut self, sources: &[PathBuf]) {
         let Some(parent) = sources.first().and_then(|p| p.parent()) else { return };
         let order = [self.active, 1 - self.active];
@@ -349,7 +349,7 @@ impl App {
         self.original_take_pane_marks(i);
     }
 
-    /// original_take_marks의 패널을 아는 판(끌어 놓기: 원본 FUN_004856d8이 놓기 뒤 끈 목록에 CopySelection + ClearSelection). 스킨 테마.
+    /// Variant of original_take_marks that knows the pane (drag-and-drop: original FUN_004856d8 does CopySelection + ClearSelection on the dragging list after the drop). Skin theme.
     pub(super) fn original_take_pane_marks(&mut self, i: usize) {
         if i > 1 {
             return;
@@ -359,8 +359,8 @@ impl App {
         pane.selected.clear();
     }
 
-    /// C# RunLocalFileOperationWithProgress(title, paths, destination, move): 진행 창과 결과 알림. 외부 복사 프로그램이
-    /// 설정돼 있으면 그쪽으로 넘긴다(C# TryExternalCopyAsync).
+    /// C# RunLocalFileOperationWithProgress(title, paths, destination, move): progress window and result notice. If an external copy program
+    /// is configured, hands over to it (C# TryExternalCopyAsync).
     pub(super) fn local_transfer(&mut self, sources: Vec<PathBuf>, destination: PathBuf, moving: bool, kind: TransferKind) {
         if matches!(kind, TransferKind::OtherPane | TransferKind::Folder) {
             self.original_take_marks(&sources);
@@ -388,14 +388,14 @@ impl App {
         self.start_job(title.into(), Operation::Copy { sources, destination, move_files: moving }, report, Some(progress));
     }
 
-    /// 충돌 질문: 모두 적용한 답이 맞으면 바로, 아니면 FileConflictWindow.
+    /// Conflict question: answers at once when an apply-to-all answer fits, otherwise FileConflictWindow.
     pub(super) fn ask_file_conflict(&mut self, source: PathBuf, destination: PathBuf, allow_resume: bool, reply: Sender<ConflictChoice>) {
         let mut form = ConflictForm::read(&source, &destination, allow_resume);
         if let Some(choice) = self.conflict_all.filter(|c| form.compatible(*c)) {
             let _ = reply.send(choice);
             return;
         }
-        // 원본 FUN_00422314: imgOrg = 기존 항목, imgNew = 복사하려는 항목의 셸 아이콘(SHGetFileInfoW SHGFI_ICON).
+        // Original FUN_00422314: imgOrg = the existing item, imgNew = the shell icon of the item being copied (SHGetFileInfoW SHGFI_ICON).
         form.icons = [(self.system.large_icon)(&destination), (self.system.large_icon)(&source)];
         let title = self.language_pack.text("formFileExists.Form.Caption", "Confirm File/Folder Replace");
         self.push_original_dialog(title, DialogKind::FileConflict(Box::new(form)), move |app, result, _| {
@@ -412,7 +412,7 @@ impl App {
         });
     }
 
-    /// 원본 FUN_0041190c: TfGetText 모양의 창(TITLE_RENAME_AND_COPY, MSG_RENAME_AND_COPY의 %s = 원래 이름, 처음 값 = 원래 이름).
+    /// Original FUN_0041190c: a TfGetText-style window (TITLE_RENAME_AND_COPY, MSG_RENAME_AND_COPY with %s = original name, initial value = original name).
     pub(super) fn ask_rename_target(&mut self, name: String, reply: Sender<Option<String>>) {
         let title = self.language_pack.text("RES.TITLE_RENAME_AND_COPY", "Rename and Copy");
         let message = self
@@ -424,7 +424,7 @@ impl App {
         });
     }
 
-    /// C# FileOperationErrorDialog: 오류 상자(TITLE_FILEOPERROR, 오류 아이콘), 계속할 수 있으면 MSG_WANTTOCONTINUE 예/아니요.
+    /// C# FileOperationErrorDialog: error box (TITLE_FILEOPERROR, error icon), with MSG_WANTTOCONTINUE yes/no when it can continue.
     pub(super) fn ask_file_failure(&mut self, path: PathBuf, message: String, can_continue: bool, reply: Sender<bool>) {
         let title = self.language_pack.text("RES.TITLE_FILEOPERROR", "File Operation Error");
         let detail = if message.trim().is_empty() { self.language_pack.text("RES.MSG_UNKNOWN_ERROR", "Unknown error occurred. Error number: %d").replace("%d", "0") } else { message };
@@ -443,13 +443,13 @@ impl App {
         });
     }
 
-    /// 원본 TfProgress(ClientWidth 441 × ClientHeight 143): lFrom(20,23 353×16)·lTo(20,42 353×15) 경로 줄(epPathEllipsis),
-    /// lFileName(20,71 317×17, 끝 생략), ProgressBar1(18,94 327×16), btnCancel(355,90 78×25), lRemaining(18,116), lCount(오른쪽 끝 345, 116).
-    /// 원본 FUN_00412308(파일마다): lFrom = 원본 파일의 폴더(PathRemoveFileSpecW), lTo = 대상 폴더, lFileName = 파일 이름,
-    /// lCount = "(%d)" 남은 항목 수(전체 - 끝난 것). FUN_00412558(바이트): 막대 = 백분율, 복사·이동이면 lRemaining =
-    /// StrFormatByteSizeW(남은 바이트). FUN_00411cbc(준비): lFileName = MSG_*_PREPARING, 다른 글은 빈 글.
-    /// C# 판에만 있는 것: 일시 정지 단추(btnCancel 위 355,60), 바이트 합계가 없는 작업의 남은 시간(lRemaining 자리), 전체 수를 모르면 끝난 수.
-    /// 창 닫기(×, Esc)는 취소 요청이다(C# OnClosing). 위에 다른 창이 있으면 그리기만 한다.
+    /// Original TfProgress (ClientWidth 441 x ClientHeight 143): lFrom (20,23 353x16) and lTo (20,42 353x15) path rows (epPathEllipsis),
+    /// lFileName (20,71 317x17, end ellipsis), ProgressBar1 (18,94 327x16), btnCancel (355,90 78x25), lRemaining (18,116), lCount (right edge 345, 116).
+    /// Original FUN_00412308 (per file): lFrom = the source file's folder (PathRemoveFileSpecW), lTo = destination folder, lFileName = file name,
+    /// lCount = "(%d)" remaining items (total - done). FUN_00412558 (bytes): bar = percentage; for copy/move lRemaining =
+    /// StrFormatByteSizeW(remaining bytes). FUN_00411cbc (preparing): lFileName = MSG_*_PREPARING, the other texts empty.
+    /// Only in the C# version: the pause button (355,60 above btnCancel), remaining time for jobs without a byte total (in lRemaining's place), the done count when the total is unknown.
+    /// Closing the window (x, Esc) requests cancel (C# OnClosing). With another window on top it only draws.
     pub(super) fn file_progress_ui(&mut self, ctx: &egui::Context) {
         use super::original_dialogs::{path_ellipsis, put_enabled, put_left};
         let ko = self.language == "ko";
@@ -458,14 +458,14 @@ impl App {
         let cancel_label = super::favorites_dialog::access_key(&self.language_pack.text("formProgress.Caption.btnCancel", "&Cancel")).0;
         let Some(job) = self.job.as_mut().filter(|j| !j.finished) else { return };
         let Some(info) = job.progress.clone() else { return };
-        // 원본 줄: 처음 준 경로, 없으면 처음 알려 온 경로의 폴더.
+        // Original rows: the first given path, otherwise the folder of the first reported path.
         if info.from.is_none() && job.from_seen.is_none() && !job.path.is_empty() {
             job.from_seen = Path::new(&job.path).parent().map(|p| p.to_string_lossy().into_owned());
         }
         let from = info.from.clone().or_else(|| job.from_seen.clone());
-        // 원본 0x412308: 파일마다 lFrom = 지금 원본 파일의 폴더, lTo = 지금 대상 파일의 폴더(PathRemoveFileSpecW).
-        // 파일 작업(fsops)은 대상 파일을 알려 준다(Event::Target, 충돌로 바뀐 이름 포함). 알려 주지 않는 작업은
-        // 시작 폴더 아래의 같은 상대 경로로 얻는다(얻을 수 없으면 시작 대상 폴더).
+        // Original 0x412308: per file lFrom = folder of the current source file, lTo = folder of the current destination file (PathRemoveFileSpecW).
+        // File jobs (fsops) report the destination file (Event::Target, including names changed by conflicts). For jobs that do not,
+        // it is derived from the same relative path below the starting folder (the starting destination folder when it cannot be derived).
         let current_folder = Some(Path::new(&job.path)).filter(|p| p.is_absolute()).and_then(Path::parent).map(Path::to_path_buf);
         let to_line = progress_target_line(info.from.as_deref(), info.to.as_deref(), &job.path, job.target.as_ref());
         let from = current_folder.map(|f| f.to_string_lossy().into_owned()).or(from);
@@ -476,19 +476,19 @@ impl App {
         } else {
             None
         };
-        // lRemaining: 원본 FUN_00412558 = 남은 바이트(StrFormatByteSizeW), 바이트 합계를 알 때만. 처음(FUN_00411cbc)은 빈 글.
+        // lRemaining: original FUN_00412558 = remaining bytes (StrFormatByteSizeW), only when the byte total is known. Initially (FUN_00411cbc) empty.
         let remaining = match info.total_bytes.filter(|t| *t > 0) {
             Some(total) if info.prefer_bytes => ndr::native::format_byte_size(total.saturating_sub(job.bytes)),
             _ => String::new(),
         };
-        // lCount: 원본 "(%d)" = 남은 항목 수. 전체를 모르면 C# 판처럼 끝난 수.
+        // lCount: original "(%d)" = remaining items. When the total is unknown, the done count like the C# version.
         let count = match info.total_files {
             Some(total) => format!("({})", n0(total.saturating_sub(job.files) as usize)),
             None => format!("({})", n0(job.files as usize)),
         };
-        // lFileName: 파일 이름. 준비 중이면 원본 MSG_*_PREPARING.
+        // lFileName: file name. While preparing, the original MSG_*_PREPARING.
         let file_line = if job.path.is_empty() {
-            // 원본 FUN_00411cbc: 준비 창 글 = 종류별 MSG_COPY/MOVE/DEL_PREPARING. 그 밖의 작업은 C# 글.
+            // Original FUN_00411cbc: the preparing text = MSG_COPY/MOVE/DEL_PREPARING by kind. Other jobs use the C# text.
             match &job.report {
                 JobReport::Transfer { verb: (_, "move"), .. } => self.language_pack.text("RES.MSG_MOVE_PREPARING", "Preparing for moving file/folder(s)"),
                 JobReport::Transfer { .. } => self.language_pack.text("RES.MSG_COPY_PREPARING", "Preparing for copying file/folder(s)"),
@@ -499,7 +499,7 @@ impl App {
             Path::new(&job.path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| job.path.clone())
         };
         let mut cancel = !covered && ctx.input(|i| i.key_pressed(egui::Key::Escape));
-        // 원본 진행 창 캡션(FUN_00411cbc 종류별): COPYING / MOVING / DELETING / RECYCLING. 그 밖의 작업은 C# 제목.
+        // Original progress window caption (FUN_00411cbc by kind): COPYING / MOVING / DELETING / RECYCLING. Other jobs use the C# title.
         let caption = match &job.report {
             _ if info.caption.is_some() => info.caption.clone().unwrap_or_default(),
             JobReport::Transfer { verb: (_, "move"), .. } => self.language_pack.text("RES.MOVING", "Moving..."),
@@ -531,7 +531,7 @@ impl App {
                 None => egui::ProgressBar::new(0.0).animate(true),
             };
             ui.put(at(18.0, 94.0, 327.0, 16.0), bar.desired_height(16.0));
-            // 원본 btnCancelClick(0x451528): 취소 표시만 세운다(단추·글은 그대로, 작업이 다음 확인 지점에서 멈춘다).
+            // Original btnCancelClick (0x451528): only sets the cancel flag (buttons and text stay; the job stops at its next check point).
             if put_enabled(ui, at(355.0, 90.0, 78.0, 25.0), true, egui::Button::new(&cancel_label)).clicked() {
                 cancel = true;
             }
@@ -546,7 +546,7 @@ impl App {
         }
     }
 
-    /// 작업이 끝났을 때(Event::Finished) 결과 알림. job은 끝난 채로 남는다(다음 작업을 막지 않는다).
+    /// Result notice when a job ends (Event::Finished). The job remains in its finished state (it does not block the next job).
     pub(super) fn report_job(&mut self, cancelled: bool) {
         let ko = self.language == "ko";
         let Some(job) = self.job.as_ref() else { return };
@@ -557,13 +557,13 @@ impl App {
         let (chime, custom_status, bytes) = (job.chime, job.custom_status, job.bytes);
         let unreported: Vec<String> = errors.iter().skip(interactive.min(errors.len())).cloned().collect();
         let sound = |app: &App| {
-            // 원본 0x43d9fc(completesound): PlaySoundW("<프로그램 폴더>\complete.wav", 0x22003). 낼 수 없으면 C#처럼 MessageBeep.
-            // 원본 처음 설정 completesound=1(생성자 +0xdc = 1).
+            // Original 0x43d9fc (completesound): PlaySoundW("<program folder>\complete.wav", 0x22003). If it cannot play, MessageBeep like C#.
+            // Original default completesound=1 (constructor +0xdc = 1).
             if app.settings.flag("PlayCompletionSound", true) && !(app.system.play_wave)(Some(&app.resources.join("complete.wav"))) {
                 native::completion_sound();
             }
         };
-        // 압축을 마쳤으면 만든 압축 파일이 있는 패널의 새 목록에서 그 파일에 커서를 둔다.
+        // After creating an archive, put the cursor on it in the new listing of the pane that shows it.
         if let Some((pane, output)) = self.archive_focus.take() {
             let in_pane = output.parent().is_some_and(|folder| ndr::names::equals_ignore_case(&folder.to_string_lossy(), &self.panes[pane].path.to_string_lossy()));
             if !cancelled && fatal.is_none() && output.exists() && in_pane && self.panes[pane].archive.is_none() {
@@ -673,7 +673,7 @@ impl App {
         }
     }
 
-    /// C# TextWindow(제목, 오류 500줄 + "… 나머지 N개 오류").
+    /// C# TextWindow (title, 500 error rows + "... N more errors").
     fn show_error_text(&mut self, title: &str, errors: &[String]) {
         let mut text = errors.iter().take(500).map(|e| self.archive_error_text(e)).collect::<Vec<_>>().join("\r\n");
         if errors.len() > 500 {
@@ -682,9 +682,9 @@ impl App {
         self.text = Some(TextDocument { title: title.into(), text });
     }
 
-    /// C# TryExternalCopyAsync: UseCopyHandler이고 CopyHandlerPath(환경 변수 풀기)가 있는 파일이면 그 프로그램에 넘기고 true.
-    /// KillCopy(GUI)·kc(콘솔)는 ANSI 목록 파일, TeraCopy 4 이상은 여러 항목 복사에 SendTo, 나머지는 "Copy|Move 원본|*목록 대상 /Close".
-    /// 프로그램이 끝나면 두 패널을 새로 고치고 C#처럼 상태 글을 쓴다. 실패는 경고 상자(C# RunSafely).
+    /// C# TryExternalCopyAsync: with UseCopyHandler and an existing CopyHandlerPath file (environment variables expanded), hands over to that program and returns true.
+    /// KillCopy (GUI) and kc (console) take an ANSI list file, TeraCopy 4+ uses SendTo for multi-item copies, the rest get "Copy|Move source|*list destination /Close".
+    /// When the program ends both panes refresh and a status text is written like C#. Failures show a warning box (C# RunSafely).
     fn try_external_copy(&mut self, sources: &[PathBuf], destination: &Path, moving: bool, kind: TransferKind) -> bool {
         if !self.settings.flag("UseCopyHandler", false) {
             return false;
@@ -731,7 +731,7 @@ impl App {
         let runner = self.program_runner;
         let tx = self.async_tx.clone();
         let teracopy = !moving && paths.len() >= 2 && name.contains("teracopy") && native::file_major_version(Path::new(&program)).is_some_and(|v| v >= 4) && {
-            // C#: 명령 줄 길이 어림(따옴표 포함) 30,000 미만.
+            // C#: estimated command line length (with quotes) below 30,000.
             let estimate = program.len() * 2 + target.len() * 2 + 256 + paths.iter().map(|p| p.len() * 2 + 8).sum::<usize>();
             estimate < 30_000
         };
@@ -764,7 +764,7 @@ fn capitalize(text: &str) -> String {
     chars.next().map(|c| c.to_uppercase().collect::<String>() + chars.as_str()).unwrap_or_default()
 }
 
-/// 임시 목록 파일 이름(C# ndr-copy-{Guid:N}).
+/// Temporary list file name (C# ndr-copy-{Guid:N}).
 fn list_path(extension: &str) -> PathBuf {
     let mut bytes = [0u8; 16];
     let _ = native::random_bytes(&mut bytes);
@@ -778,7 +778,7 @@ fn run_external_copy(runner: fn(&Path, &[String], &Path) -> Result<i32, String>,
     let result = (|| {
         let mut args = Vec::new();
         if kill_gui || kill_console {
-            // KillCopy는 현재 ANSI 코드 페이지로 목록을 읽는다.
+            // KillCopy reads the list in the current ANSI code page.
             let mut bytes = Vec::new();
             for path in paths {
                 bytes.extend(ndr::split::ansi_bytes(path).ok_or("KillCopy reads file lists using the current Windows ANSI code page, which cannot represent one or more selected paths. Use a Unicode-capable handler such as TeraCopy for these paths.")?);
@@ -836,7 +836,7 @@ fn run_external_copy(runner: fn(&Path, &[String], &Path) -> Result<i32, String>,
     result
 }
 
-/// 프로그램을 바로 실행하고 끝날 때까지 기다린다(C# UseShellExecute = false, WaitForExitAsync).
+/// Runs the program directly and waits until it ends (C# UseShellExecute = false, WaitForExitAsync).
 pub(super) fn run_program(program: &Path, args: &[String], directory: &Path) -> Result<i32, String> {
     let mut command = std::process::Command::new(program);
     command.args(args);

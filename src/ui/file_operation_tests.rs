@@ -1,6 +1,6 @@
-//! C# FileConflictWindow, FileOperationProgressWindow, FileOperationErrorDialog, ReportFileOperationResult, 삭제 결과,
-//! TryExternalCopyAsync를 Rust UI에서 확인한다. 한국어만(영어 글은 같은 경로). 격리된 임시 폴더만 쓰고, 외부 프로그램은
-//! 가짜 실행 함수(program_runner)로 바꾼다. 휴지통은 쓰지 않는다.
+//! Checks C# FileConflictWindow, FileOperationProgressWindow, FileOperationErrorDialog, ReportFileOperationResult, delete results
+//! and TryExternalCopyAsync in the Rust UI. Korean only (English text takes the same path). Only isolated temp folders; external programs are
+//! replaced by a fake runner (program_runner). The Recycle Bin is not used.
 use super::original_dialogs::{DeleteWarningChoice, DialogKind, DialogResult};
 use super::*;
 use ndr::msgbox::IDYES;
@@ -9,7 +9,7 @@ use std::sync::Mutex;
 
 static EXTERNAL: Mutex<Vec<(String, Vec<String>, String)>> = Mutex::new(Vec::new());
 
-/// 가짜 외부 복사 프로그램: (프로그램, 인수, 목록 파일 내용)을 남기고 0으로 끝난다.
+/// Fake external copy program: records (program, arguments, list file content) and exits with 0.
 fn fake_runner(program: &Path, args: &[String], _: &Path) -> Result<i32, String> {
     let list = args
         .iter()
@@ -90,7 +90,7 @@ fn press(key: egui::Key, modifiers: egui::Modifiers) -> Vec<egui::Event> {
     vec![egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }, egui::Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers }]
 }
 
-/// VCL CM_DIALOGCHAR: TfFileExists의 "덮어쓰기(&W)"는 W만 쳐도, "건너뛰기(&S)"는 Alt+S로도 눌린다.
+/// VCL CM_DIALOGCHAR: TfFileExists "덮어쓰기(&W)" is pressed by W alone and "건너뛰기(&S)" also by Alt+S.
 #[test]
 fn file_exists_buttons_answer_their_access_keys() {
     let (root, ctx, mut app) = fixture("accesskeys");
@@ -112,7 +112,7 @@ fn file_exists_buttons_answer_their_access_keys() {
     fs::remove_dir_all(root).unwrap();
 }
 
-/// 원본 창은 제목 줄을 끌어 옮긴다: 창 안 대화 상자·메시지 상자도 제목 줄을 끌면 그만큼 움직인다.
+/// Original windows move by dragging the title bar: in-window dialogs and message boxes also move by the dragged amount.
 #[test]
 fn in_app_windows_move_by_their_title_bar() {
     let (root, ctx, mut app) = fixture("dragtitle");
@@ -120,7 +120,7 @@ fn in_app_windows_move_by_their_title_bar() {
     draw(&mut app, &ctx);
     draw(&mut app, &ctx);
     let before = app.msgboxes[0].layout.as_ref().unwrap().origin;
-    // 제목 줄은 몸통(origin) 바로 위에 있다.
+    // The title bar is right above the body (origin).
     let grab = before + egui::vec2(40.0, -12.0);
     let moved = grab + egui::vec2(-150.0, 90.0);
     let pointer = |pos: egui::Pos2, pressed: bool| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
@@ -135,7 +135,7 @@ fn in_app_windows_move_by_their_title_bar() {
     fs::remove_dir_all(root).unwrap();
 }
 
-/// 원본 0x412308 lTo = 지금 대상 파일의 폴더: 파일 작업이 알려 준 실제 대상(충돌로 바뀐 이름)이 먼저, 없으면 상대 경로로 셈한다.
+/// Original 0x412308 lTo = folder of the current destination file: the real destination reported by the file job (name changed by a conflict) first, otherwise computed from the relative path.
 #[test]
 fn progress_target_line_uses_the_reported_destination_like_the_original() {
     use super::file_operation::progress_target_line;
@@ -144,7 +144,7 @@ fn progress_target_line_uses_the_reported_destination_like_the_original() {
     assert_eq!(progress_target_line(Some("C:\\src"), Some("D:\\dst"), "C:\\src\\sub\\b.txt", Some(&target)).as_deref(), Some("D:\\dst\\sub"), "another file: relative rule");
     assert_eq!(progress_target_line(Some("C:\\src"), Some("D:\\dst"), "C:\\src\\b.txt", None).as_deref(), Some("D:\\dst"));
     assert_eq!(progress_target_line(None, Some("D:\\dst"), "x", None).as_deref(), Some("D:\\dst"));
-    // fsops: 대상에 같은 이름이 있어 "이름 (2)"로 바꾸면 그 대상을 알린다.
+    // fsops: when the destination has the same name and it becomes "name (2)", it reports that destination.
     let root = std::env::temp_dir().join(format!("ndr-progress-target-{}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(root.join("src")).unwrap();
@@ -170,7 +170,7 @@ fn progress_target_line_uses_the_reported_destination_like_the_original() {
     fs::remove_dir_all(root).unwrap();
 }
 
-/// 원본 epPathEllipsis(TfProgress lFrom/lTo, TfFileExists lOrgDir/lNewDir): 넘치면 마지막 "\이름"을 남기고 앞을 "..."로 줄인다.
+/// Original epPathEllipsis (TfProgress lFrom/lTo, TfFileExists lOrgDir/lNewDir): on overflow keep the last "\name" and shorten the front to "...".
 #[test]
 fn path_ellipsis_keeps_the_last_name_like_the_original() {
     let ctx = egui::Context::default();
@@ -186,7 +186,7 @@ fn path_ellipsis_keeps_the_last_name_like_the_original() {
     assert!(shown[1].starts_with("C:") && shown[1].ends_with("...\\document.txt"), "{}", shown[1]);
 }
 
-/// 원본 FUN_00422068/FUN_00422314: "<b>1,234,567</b> bytes ( 긴 날짜, 시간 )", 더 새로운 쪽은 <c0000FF>(빨강).
+/// Original FUN_00422068/FUN_00422314: "<b>1,234,567</b> bytes ( long date, time )", the newer side in <c0000FF> (red).
 #[test]
 fn conflict_file_info_follows_the_original_tffileexists() {
     use super::file_operation::conflict_file_info;
@@ -199,7 +199,7 @@ fn conflict_file_info_follows_the_original_tffileexists() {
     assert_eq!(ndr::markup::plain_text(&conflict_file_info(Some(5), None, true, false)), "5 bytes");
 }
 
-/// 원본 FUN_004116dc·FUN_00422870의 TfFileExists 단추 규칙과 DFM 자리.
+/// TfFileExists button rules of original FUN_004116dc and FUN_00422870, and the DFM positions.
 #[test]
 fn conflict_buttons_follow_the_original_tffileexists() {
     use super::file_operation::{ConflictButton as B, ConflictForm, conflict_buttons, is_sub_folder};
@@ -217,20 +217,20 @@ fn conflict_buttons_follow_the_original_tffileexists() {
         icons: [None, None],
         textures: [None, None],
     };
-    // 파일: 덮어쓰기·건너뛰기·새 파일 덮어쓰기·이름 바꾸기·취소(폴더 교체 없음), 모두 켜짐.
+    // File: overwrite, skip, overwrite newer, rename, cancel (no replace folder), all enabled.
     assert_eq!(conflict_buttons(&form("c:\\a\\x.txt", "c:\\b\\x.txt", false, false)), [(B::Overwrite, true), (B::Skip, true), (B::OverwriteNewer, true), (B::Rename, true), (B::Cancel, true)]);
-    // 새 항목이 폴더: 같은 자리(118)에 새 파일 덮어쓰기 대신 폴더 교체.
+    // New item is a folder: replace folder instead of overwrite newer at the same position (118).
     assert_eq!(conflict_buttons(&form("c:\\a\\d", "c:\\b\\d", true, true)), [(B::Overwrite, true), (B::Skip, true), (B::ReplaceFolder, true), (B::Rename, true), (B::Cancel, true)]);
     assert_eq!(B::ReplaceFolder.top(), B::OverwriteNewer.top());
-    // 같은 경로: 덮어쓰기·새 파일 덮어쓰기·폴더 교체를 끈다(숨기지 않는다).
+    // Same path: overwrite, overwrite newer and replace folder are disabled (not hidden).
     assert_eq!(conflict_buttons(&form("C:\\a\\x.txt", "c:\\A\\X.TXT", false, false)), [(B::Overwrite, false), (B::Skip, true), (B::OverwriteNewer, false), (B::Rename, true), (B::Cancel, true)]);
-    // 새 항목이 기존 폴더 안이면 폴더 교체만, 기존이 새 폴더 안이면 폴더 교체와 덮어쓰기를 끈다.
+    // New item inside the existing folder disables only replace folder; the existing inside the new folder disables replace folder and overwrite.
     assert_eq!(conflict_buttons(&form("c:\\d\\d", "c:\\d", true, true)), [(B::Overwrite, true), (B::Skip, true), (B::ReplaceFolder, false), (B::Rename, true), (B::Cancel, true)]);
     assert_eq!(conflict_buttons(&form("c:\\d", "c:\\d\\d", true, true)), [(B::Overwrite, false), (B::Skip, true), (B::ReplaceFolder, false), (B::Rename, true), (B::Cancel, true)]);
     assert!(is_sub_folder(std::path::Path::new("C:\\Data\\"), std::path::Path::new("c:\\data\\x")));
     assert!(!is_sub_folder(std::path::Path::new("c:\\data"), std::path::Path::new("c:\\data2\\x")));
     assert!(!is_sub_folder(std::path::Path::new("c:\\data"), std::path::Path::new("c:\\data")));
-    // 이어서 전송: 이어 받을 수 있는 작업이면 보이고(맨 위 25), 기존이 새 파일보다 작을 때만 켜진다(원본 FUN_00422870).
+    // Resume: visible for resumable jobs (top, 25), enabled only when the existing file is smaller than the new one (original FUN_00422870).
     let mut resumable = form("c:\\a\\x.bin", "c:\\b\\x.bin", false, false);
     (resumable.source_size, resumable.destination_size, resumable.allow_resume) = (Some(20), Some(10), true);
     assert_eq!(conflict_buttons(&resumable)[0], (B::Resume, true));
@@ -243,7 +243,7 @@ fn conflict_buttons_follow_the_original_tffileexists() {
 fn conflict_window_progress_window_and_reports_follow_csharp() {
     let (root, ctx, mut app) = fixture("conflict");
     let (left, right) = (root.join("left"), root.join("right"));
-    // 이어서 전송: 기존 파일이 원본의 앞부분이면 나머지만 쓴다. 진행 창은 원본·대상·전체 파일 수를 안다.
+    // Resume: when the existing file is the front part of the source, only the rest is written. The progress window knows source, destination and total file count.
     copy_to_other(&mut app, &ctx, &["a.txt"]);
     let job = app.job.as_ref().expect("a job");
     let info = job.progress.clone().expect("FileOperationProgressWindow");
@@ -252,7 +252,7 @@ fn conflict_window_progress_window_and_reports_follow_csharp() {
     {
         let form = conflict(&app).unwrap();
         assert!(form.can_resume() && !form.source_dir && form.compatible(ConflictChoice::Resume));
-        // 원본 imgOrg·imgNew: 두 항목의 32x32 셸 아이콘(시험에서는 가짜 4x4).
+        // Original imgOrg / imgNew: 32x32 shell icons of both items (fake 4x4 in tests).
         assert!(form.icons.iter().all(|i| i.as_ref().is_some_and(|(w, h, _)| (*w, *h) == (4, 4))));
     }
     assert_eq!(app.original_dialogs.last().unwrap().title, app.language_pack.text("formFileExists.Form.Caption", "?"));
@@ -262,7 +262,7 @@ fn conflict_window_progress_window_and_reports_follow_csharp() {
     wait(&mut app, &ctx, finished);
     assert_eq!(fs::read(right.join("a.txt")).unwrap(), b"resumable payload");
     assert_eq!(app.status, "요청한 1개 항목을 복사했습니다.");
-    // 폴더 충돌: 폴더 교체 단추가 있고 이어서 전송은 없다. 모두 적용한 건너뛰기는 맞는 충돌에만 쓴다.
+    // Folder conflict: there is a replace folder button and no resume. An apply-to-all skip is used only for matching conflicts.
     copy_to_other(&mut app, &ctx, &["folder"]);
     wait(&mut app, &ctx, |app| conflict(app).is_some());
     {
@@ -273,7 +273,7 @@ fn conflict_window_progress_window_and_reports_follow_csharp() {
     wait(&mut app, &ctx, finished);
     assert_eq!(app.status, "복사 완료: 1개 항목을 건너뛰었습니다.");
     assert!(!right.join("folder").join("x.txt").exists());
-    // 새 파일 덮어쓰기: 대상이 더 새로우면 건너뛴다.
+    // Overwrite newer: skipped when the destination is newer.
     fs::write(right.join("b.txt"), b"newer").unwrap();
     let old = std::time::SystemTime::now() - Duration::from_secs(3600);
     fs::File::options().write(true).open(left.join("b.txt")).unwrap().set_modified(old).unwrap();
@@ -283,7 +283,7 @@ fn conflict_window_progress_window_and_reports_follow_csharp() {
     wait(&mut app, &ctx, finished);
     assert_eq!(fs::read(right.join("b.txt")).unwrap(), b"newer");
     assert_eq!(app.status, "복사 완료: 1개 항목을 건너뛰었습니다.");
-    // 이름 바꾸기 = 원본 FUN_00411bb4: TITLE_RENAME_AND_COPY 입력(MSG_RENAME_AND_COPY의 %s와 처음 값 = 원래 이름), 확인이면 그 이름으로 복사.
+    // Rename = original FUN_00411bb4: TITLE_RENAME_AND_COPY input (%s of MSG_RENAME_AND_COPY and the initial value = original name), on OK copies under that name.
     copy_to_other(&mut app, &ctx, &["b.txt"]);
     wait(&mut app, &ctx, |app| conflict(app).is_some());
     app.answer_dialog(DialogResult::FileConflict(Some((ConflictChoice::Rename, false))), &ctx);
@@ -299,7 +299,7 @@ fn conflict_window_progress_window_and_reports_follow_csharp() {
     app.answer_dialog(DialogResult::Text(Some("b-copy.txt".into())), &ctx);
     wait(&mut app, &ctx, finished);
     assert_eq!(fs::read(right.join("b-copy.txt")).unwrap(), b"bee");
-    // 이름 입력을 취소하면 그 항목은 건너뛴다(차이: 원본은 그대로 진행).
+    // Cancelling the name input skips that item (difference: the original proceeds as is).
     copy_to_other(&mut app, &ctx, &["b.txt"]);
     wait(&mut app, &ctx, |app| conflict(app).is_some());
     app.answer_dialog(DialogResult::FileConflict(Some((ConflictChoice::Rename, false))), &ctx);
@@ -308,13 +308,13 @@ fn conflict_window_progress_window_and_reports_follow_csharp() {
     wait(&mut app, &ctx, finished);
     assert_eq!(app.status, "복사 완료: 1개 항목을 건너뛰었습니다.");
     assert_eq!(fs::read(right.join("b.txt")).unwrap(), b"newer");
-    // 창을 닫으면(취소) 작업을 멈춘다.
+    // Closing the window (cancel) stops the job.
     copy_to_other(&mut app, &ctx, &["b.txt"]);
     wait(&mut app, &ctx, |app| conflict(app).is_some());
     app.answer_dialog(DialogResult::FileConflict(None), &ctx);
     wait(&mut app, &ctx, finished);
     assert_eq!(app.status, "복사 작업을 취소했습니다. 완료된 항목은 유지됩니다.");
-    // 오류마다 묻는다(TITLE_FILEOPERROR, 그다음 MSG_WANTTOCONTINUE 예/아니요). 예면 나머지를 계속한다.
+    // Asks on each error (TITLE_FILEOPERROR, then MSG_WANTTOCONTINUE yes/no). Yes continues with the rest.
     let locked = {
         use std::os::windows::fs::OpenOptionsExt;
         fs::File::options().read(true).share_mode(0).open(left.join("locked.txt")).unwrap()
@@ -324,7 +324,7 @@ fn conflict_window_progress_window_and_reports_follow_csharp() {
     copy_to_other(&mut app, &ctx, &["b.txt", "locked.txt"]);
     wait(&mut app, &ctx, |app| !app.msgboxes.is_empty() || finished(app));
     assert_eq!(app.msgboxes[0].title, app.language_pack.text("RES.TITLE_FILEOPERROR", "?"));
-    // locked.txt가 마지막이면 뒤에 남은 일이 없으므로 계속할지 묻지 않는다.
+    // When locked.txt is last, nothing remains after it, so it does not ask whether to continue.
     app.answer_message_box(1, &ctx);
     assert!(app.msgboxes.is_empty(), "no continue prompt for the last item");
     wait(&mut app, &ctx, finished);
@@ -332,7 +332,7 @@ fn conflict_window_progress_window_and_reports_follow_csharp() {
     assert_eq!(fs::read(right.join("b.txt")).unwrap(), b"bee");
     assert_eq!(app.status, "복사 완료: 요청 2개, 실패 1건, 건너뜀 0개");
     assert!(app.msgboxes.is_empty(), "the error was already shown");
-    // 영구 삭제: 지운 파일·폴더 하나하나를 센다(C# deletedItems). 진행 창은 없다.
+    // Permanent delete: counts each deleted file and folder (C# deletedItems). There is no progress window.
     app.active = 1;
     app.panes[1].selected.clear();
     let folder = app.panes[1].entries.iter().position(|e| e.name == "folder").unwrap();
@@ -360,7 +360,7 @@ fn external_copy_handler_follows_csharp() {
     app.settings.values.insert("UseCopyHandler".into(), serde_json::json!(true));
     app.settings.values.insert("CopyHandlerPath".into(), serde_json::json!(handler.to_string_lossy()));
     let mine = |program: &Path| EXTERNAL.lock().unwrap().iter().filter(|r| r.0 == program.to_string_lossy()).cloned().collect::<Vec<_>>();
-    // 여러 항목: "Copy *목록 대상 /Close", 목록은 UTF-8 BOM + 줄마다 CRLF.
+    // Multiple items: "Copy *list destination /Close", the list is UTF-8 BOM + CRLF per line.
     copy_to_other(&mut app, &ctx, &["a.txt", "b.txt"]);
     assert!(app.job.is_none(), "the handler replaces the internal copy");
     assert_eq!(app.status, "외부 복사 프로그램에서 2개 항목을 처리하고 있습니다.");
@@ -371,7 +371,7 @@ fn external_copy_handler_follows_csharp() {
     assert_eq!((args[0].as_str(), args[1].starts_with('*'), args[2].as_str(), args[3].as_str()), ("Copy", true, &*right.to_string_lossy(), "/Close"));
     assert_eq!(list, &format!("\u{feff}{}\r\n{}\r\n", left.join("a.txt").display(), left.join("b.txt").display()));
     assert!(!Path::new(args[1].trim_start_matches('*')).exists(), "the list file is deleted");
-    // kc(KillCopy 콘솔) 이동: ANSI 목록, 대상, -m.
+    // kc (KillCopy console) move: ANSI list, destination, -m.
     let kc = tools.join("kc.exe");
     fs::write(&kc, b"").unwrap();
     app.settings.values.insert("CopyHandlerPath".into(), serde_json::json!(kc.to_string_lossy()));
@@ -385,7 +385,7 @@ fn external_copy_handler_follows_csharp() {
     let (_, args, list) = &runs[0];
     assert_eq!((args.len(), args[1].as_str(), args[2].as_str()), (3, &*right.to_string_lossy(), "-m"));
     assert_eq!(list, &format!("{}\r\n", left.join("b.txt").display()));
-    // 꺼져 있으면 NDR이 직접 복사한다.
+    // When off, NDR copies by itself.
     app.settings.values.insert("UseCopyHandler".into(), serde_json::json!(false));
     copy_to_other(&mut app, &ctx, &["locked.txt"]);
     assert!(app.job.is_some());
@@ -405,7 +405,7 @@ fn save_to(_: &str, _: Option<&Path>, _: &str, _: &[(&str, &str)], _: &str, _: b
 fn adding_to_a_multivolume_archive_rebuilds_it_like_csharp() {
     let (root, ctx, mut app) = fixture("multivolume");
     let left = root.join("left");
-    // 압축이 잘 안 되는 1.5 MiB로 1 MiB 볼륨 두 개를 만든다.
+    // 1.5 MiB of poorly compressible data makes two 1 MiB volumes.
     let mut state = 0x1234_5678u32;
     let noise: Vec<u8> = (0..1_572_864).map(|_| { state ^= state << 13; state ^= state >> 17; state ^= state << 5; (state >> 24) as u8 }).collect();
     fs::write(left.join("noise.bin"), &noise).unwrap();
@@ -413,7 +413,7 @@ fn adding_to_a_multivolume_archive_rebuilds_it_like_csharp() {
     ndr::archive::create_with_program(&[left.join("noise.bin")], &left.join("set.7z"), &options, None, &AtomicBool::new(false)).unwrap();
     let first = left.join("set.7z.001");
     assert!(first.exists() && left.join("set.7z.002").exists());
-    // 더하기: 7z를 고르고 지금 폴더의 첫 볼륨을 대상으로(압축 파일은 늘 지금 패널 폴더).
+    // Add: choose 7z and target the first volume in the current folder (the archive always goes to the current pane folder).
     wait(&mut app, &ctx, |app| app.panes.iter().all(|p| !p.loading));
     app.save_dialog = save_to;
     SAVE_TO.with(|s| *s.borrow_mut() = Some(first.clone()));
