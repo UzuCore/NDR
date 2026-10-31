@@ -378,6 +378,52 @@ fn set_row(rows: &Mutex<Vec<FtpResultRow>>, index: usize, update: impl FnOnce(&m
     }
 }
 
+/// Original queue preparation FUN_00466e66: before the first transfer every folder item is expanded (FUN_00466168 remote, FUN_00465e6c local)
+/// and each file size is added to the queue total (+0x20/+0x24, reported as event 4). NDR keeps one row per chosen item, so a folder row
+/// gets the sum of the file sizes below it. Symbolic links and reparse points are not followed, like the transfer itself.
+pub(super) fn remote_tree_size(list: &mut dyn FnMut(&str) -> Result<Vec<RemoteEntry>, String>, folder: &str, cancel: &AtomicBool) -> Option<u64> {
+    let (mut total, mut pending) = (0u64, vec![folder.to_owned()]);
+    while let Some(directory) = pending.pop() {
+        if cancel.load(Ordering::Relaxed) {
+            return None;
+        }
+        for entry in list(&directory).ok()? {
+            if entry.is_symlink || entry.name == "." || entry.name == ".." {
+                continue;
+            }
+            if entry.is_dir {
+                pending.push(join_remote(&directory, &entry.name));
+            } else {
+                total = total.saturating_add(entry.size);
+            }
+        }
+    }
+    Some(total)
+}
+
+/// Local side of `remote_tree_size` (upload of a folder).
+pub(super) fn local_tree_size(folder: &Path, cancel: &AtomicBool) -> Option<u64> {
+    use std::os::windows::fs::MetadataExt;
+    let (mut total, mut pending) = (0u64, vec![folder.to_path_buf()]);
+    while let Some(directory) = pending.pop() {
+        if cancel.load(Ordering::Relaxed) {
+            return None;
+        }
+        for entry in std::fs::read_dir(&directory).ok()?.flatten() {
+            let Ok(meta) = entry.metadata() else { continue };
+            if meta.file_attributes() & 0x400 != 0 {
+                continue;
+            }
+            if meta.is_dir() {
+                pending.push(entry.path());
+            } else {
+                total = total.saturating_add(meta.len());
+            }
+        }
+    }
+    Some(total)
+}
+
 /// Commands usable even in a pane's FTP mode (list navigation/selection/view/FTP/help). The rest handle local files, so they are blocked.
 pub(super) fn ftp_allows(id: &str) -> bool {
     const EXACT: &[&str] = &[
@@ -628,10 +674,10 @@ impl App {
         if remote.busy.load(Ordering::Relaxed) {
             return self.ftp_box("FTPENGINE_BUSY", "Other files are still being transferred.");
         }
-        let items: Vec<(String, String, u64)> = self.target_entries(index).into_iter().filter_map(|e| {
+        let items: Vec<(String, String, u64, bool)> = self.target_entries(index).into_iter().filter_map(|e| {
             let source = remote.remote_of(&e.path)?;
             let name = source.trim_end_matches('/').rsplit('/').next()?.to_owned();
-            Some((source, name, if e.is_dir { 0 } else { e.size }))
+            Some((source, name, if e.is_dir { 0 } else { e.size }, e.is_dir))
         }).collect();
         if items.is_empty() {
             return;
@@ -639,7 +685,7 @@ impl App {
         let rows = self.ftp_results.clone();
         if let Ok(mut list) = rows.lock() {
             list.clear();
-            list.extend(items.iter().map(|(source, name, size)| FtpResultRow { upload: false, local: destination.join(name).to_string_lossy().into_owned(), remote: source.clone(), size: (*size > 0).then_some(*size), done: 0, state: RowState::Waiting }));
+            list.extend(items.iter().map(|(source, name, size, _)| FtpResultRow { upload: false, local: destination.join(name).to_string_lossy().into_owned(), remote: source.clone(), size: (*size > 0).then_some(*size), done: 0, state: RowState::Waiting }));
         }
         // End of original FUN_0043f800: show the bottom pane (pBottom).
         self.show_results = true;
@@ -652,7 +698,12 @@ impl App {
         let started = self.start_task(title, move |events, cancel| {
             let outcome = (|| {
                 let mut fs = remote.fs.lock().map_err(|_| "FTP connection is unavailable".to_owned())?;
-                for (row, (source, name, _)) in items.iter().enumerate() {
+                for (row, (source, _, _, is_dir)) in items.iter().enumerate() {
+                    if *is_dir && let Some(size) = remote_tree_size(&mut |path| fs.list(path), source, &cancel) {
+                        set_row(&rows, row, |r| r.size = Some(size));
+                    }
+                }
+                for (row, (source, name, _, _)) in items.iter().enumerate() {
                     super::commands::wait_while_paused(&pause, &cancel);
                     if cancel.load(Ordering::Relaxed) {
                         set_row(&rows, row, |r| r.state = RowState::Cancelled);
@@ -734,6 +785,11 @@ impl App {
         let started = self.start_task(title, move |events, cancel| {
             let outcome = (|| {
                 let mut fs = remote.fs.lock().map_err(|_| "FTP connection is unavailable".to_owned())?;
+                for (row, local) in items.iter().enumerate() {
+                    if local.is_dir() && let Some(size) = local_tree_size(local, &cancel) {
+                        set_row(&rows, row, |r| r.size = Some(size));
+                    }
+                }
                 for (row, local) in items.iter().enumerate() {
                     super::commands::wait_while_paused(&pause, &cancel);
                     if cancel.load(Ordering::Relaxed) {
@@ -1240,6 +1296,29 @@ mod tests {
 
     fn row(size: Option<u64>, done: u64, state: RowState) -> FtpResultRow {
         FtpResultRow { upload: false, local: String::new(), remote: String::new(), size, done, state }
+    }
+
+    #[test]
+    fn folder_rows_get_the_total_size_before_the_transfer() {
+        // Original FUN_00466e66: folder items are expanded and their file sizes added to the queue total before transferring.
+        let tree: std::collections::BTreeMap<&str, Vec<RemoteEntry>> = [
+            ("/pub", vec![RemoteEntry { name: "a.bin".into(), size: 100, ..Default::default() }, RemoteEntry { name: "sub".into(), is_dir: true, ..Default::default() }, RemoteEntry { name: "link".into(), is_symlink: true, size: 999, ..Default::default() }]),
+            ("/pub/sub", vec![RemoteEntry { name: "b.bin".into(), size: 23, ..Default::default() }]),
+        ]
+        .into_iter()
+        .collect();
+        let cancel = AtomicBool::new(false);
+        let mut list = |path: &str| tree.get(path).cloned().ok_or_else(|| "550".to_owned());
+        assert_eq!(remote_tree_size(&mut list, "/pub", &cancel), Some(123), "files below the folder, symbolic links not followed");
+        assert_eq!(remote_tree_size(&mut list, "/missing", &cancel), None, "a listing error leaves the size unknown");
+        let root = std::env::temp_dir().join(format!("ndr-ftp-tree-size-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(root.join("x.txt"), [0u8; 7]).unwrap();
+        std::fs::write(root.join("sub").join("y.txt"), [0u8; 5]).unwrap();
+        assert_eq!(local_tree_size(&root, &cancel), Some(12));
+        cancel.store(true, Ordering::Relaxed);
+        assert_eq!(local_tree_size(&root, &cancel), None, "cancelled");
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
