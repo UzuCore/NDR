@@ -780,6 +780,11 @@ impl App {
         // The drives of the My PC view are read on the calling thread as before (immediately if cached). Tests have fake drives per thread, so
         // the appended drives are also read on the calling thread.
         let this_pc: Option<Vec<(PathBuf, Option<DriveInfo>)>> = (drives_view || (cfg!(test) && append_drives)).then(|| if show_drive_list { drive_items(&drive_list) } else { Vec::new() });
+        // Original listing workers are TMJFThread (Nmjfthreads: constructor 0x462814, Execute 0x462abc = OnStart, then OnExecute while
+        // looping and not terminated, then OnFinish; SyncFunction 0x462ed0 / SyncDataFunction 0x462f6c = Synchronize, Terminate 0x462d34,
+        // SuspendIfNotTerminated 0x462e48, destructor 0x462a1c), and results reach the window through TMessageTrap (Nmjfcore: constructor
+        // 0x45ff70, RegisterMessageEvent 0x4602b0 / UnregisterMessageEvent 0x460850 keep a message → handler std::map (0x460478 / 0x460a24),
+        // Dispatch 0x46091c calls the handler, destructor 0x460204). Here a std::thread sends the listing over a channel and wakes egui.
         thread::spawn(move || {
             // The original TNXDriveList is created once at startup and held (it does not re-query drives per listing). NDR changed the per-pane-listing
             // drive read into a cache (use as-is within 5 seconds, use as-is after and re-read in the background). So even if a drive's volume info arrives late,

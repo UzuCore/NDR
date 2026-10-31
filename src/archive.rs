@@ -133,6 +133,12 @@ fn commit_artifacts(
         )
     })
 }
+/// Original archive writer FUN_00407628 picks by the archive extension: .zip → FUN_00408f14 (the bundled Ark compressor: level 9 / 5 / 0
+/// for best / normal / store, password, names relative to the first source's folder, folders always recursed by FUN_00408d5c, an
+/// existing archive rewritten through "<archive>.tmp"), .7z → FUN_004094f8 (7z.exe "u -y" for every update mode, -r, -v<n>k, -p,
+/// -mx9/5/0 and a UTF-8 list file "NXArc###.$$$" in the short temp path, removed afterwards), .arj / .rar / .alz → FUN_00407e18 /
+/// FUN_004085ec / FUN_00407714 (external ARJ, WinRAR and ALZ command lines). Changed (user request): everything goes through the
+/// bundled 7-Zip, and ARJ, RAR and ALZ cannot be created. Fixed: the original ZIP writer ignored "Include subfolders" (always recursed).
 pub fn create_with_program(
     sources: &[PathBuf],
     output: &Path,
@@ -616,6 +622,11 @@ fn parse_listing(text: &str) -> Result<Vec<ArchiveEntry>, String> {
     }
     Ok(entries)
 }
+/// Lists an archive for an archive pane. Original TNXArchiveEnumerator: SetArchive FUN_0045e8b0 re-opens only when the path changes
+/// (lstrcmpiW); an empty path closes it, a missing file or a failed open (FUN_0040442c / FUN_00405858, the Ark reader) clears the path;
+/// FUN_0045f01c closes it, the constructor FUN_0045e6b8 (enumerator kind 3) / destructor FUN_0045e7a0 create and free it, and
+/// FUN_0045ea36 looks an inner path up (FUN_00406724 / FUN_004066e4).
+/// NDR reads the whole listing with the bundled 7-Zip instead of keeping a reader open.
 pub fn list(archive: &Path, password: Option<&str>) -> Result<Vec<ArchiveEntry>, String> {
     list_cancel(archive, password, &AtomicBool::new(false))
 }

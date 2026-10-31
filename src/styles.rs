@@ -244,11 +244,13 @@ impl Skin {
             colors,
         })
     }
+    /// Original skin reader FUN_00463798: Values[key] through FUN_00463444 (exactly six hex digits RRGGBB, otherwise the default color).
     pub fn color(&self, section: &str, key: &str) -> Option<Rgba> {
         self.colors
             .get(&format!("{section}.{key}").to_lowercase())
             .copied()
     }
+    /// Original skin readers FUN_0046385c (Values[key] with StrToIntDef, default otherwise) and FUN_0046366e (the string value or default).
     pub fn positive_integer(&self, section: &str, key: &str, fallback: u32) -> u32 {
         self.values
             .get(&format!("{section}.{key}").to_lowercase())
