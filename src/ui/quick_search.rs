@@ -10,18 +10,22 @@ impl App {
     }
 
     /// C# ShowFilterAsync = original miFilterCustomClick (0x441504): TfGetText(TITLE_FILTER, MSG_FILTER, current filter),
-    /// applied with leading and trailing spaces trimmed, then reread. The status line notice is from C#.
+    /// applied with leading and trailing spaces trimmed, then reread. The original shows no status line notice (the C# one was removed).
     pub(super) fn show_filter_prompt(&mut self) {
         let pane = self.active;
         let title = self.language_pack.text("RES.TITLE_FILTER", "Filter");
         let message = self.language_pack.text("RES.MSG_FILTER", "Type a filter you want to use. You can put several filters separated with semi-colon(;)\nex) *.exe;*.txt;a??.dll");
-        let current = self.panes[pane].filter.clone();
+        // The original passes the list's current mask, which is "*.*" when no filter is set (seen in the running original); "*.*" means no filter.
+        // Previously the box started empty.
+        let current = match self.panes[pane].filter.as_str() {
+            "" => "*.*".to_owned(),
+            filter => filter.to_owned(),
+        };
         self.prompt(&title, &message, &current, None, false, move |app, value, _| {
             let Some(pattern) = value else { return };
-            app.panes[pane].filter = pattern.trim().to_owned();
+            let pattern = pattern.trim();
+            app.panes[pane].filter = if pattern == "*.*" { String::new() } else { pattern.to_owned() };
             app.refresh(pane);
-            let filter = app.panes[pane].filter.clone();
-            app.status = if filter.is_empty() { app.tr("목록 필터를 해제했습니다.", "List filter cleared.").into_owned() } else { format!("{}: {filter}", app.tr("목록 필터", "List filter")) };
         });
     }
 

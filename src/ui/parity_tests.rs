@@ -924,12 +924,12 @@ fn filters_apply_to_the_listing() {
     app.quick_filter(0, "  ALP ");
     wait_listing(&mut app, &ctx);
     assert_eq!(app.panes[0].filter, "*ALP*");
-    assert_eq!(names_of(&app, 0), ["..", "Alphabet.doc", "alpha.txt"], "the parent item stays (original GetList adds it after the filter)");
+    assert_eq!(names_of(&app, 0), ["..", "Alphabet.doc", "alpha.txt", "folder1"], "the parent item stays (original GetList adds it after the filter); folders are not filtered");
     app.dispatch("selectAll", &ctx);
-    assert_eq!(app.panes[0].targets().len(), 2, "hidden-by-filter items are not operation targets");
+    assert_eq!(app.panes[0].targets().len(), 2, "hidden-by-filter items are not operation targets (select all marks files only)");
     app.quick_filter(0, "*.log");
     wait_listing(&mut app, &ctx);
-    assert_eq!(names_of(&app, 0), ["..", "gamma.log"]);
+    assert_eq!(names_of(&app, 0), ["..", "folder1", "gamma.log"]);
     app.dispatch("filter", &ctx);
     let dialog = &app.original_dialogs[0];
     assert_eq!(dialog.title, app.language_pack.text("RES.TITLE_FILTER", "?"), "original miFilterCustomClick");
@@ -938,12 +938,17 @@ fn filters_apply_to_the_listing() {
     wait_listing(&mut app, &ctx);
     assert_eq!(app.panes[0].filter, "*.txt ; folder?");
     assert_eq!(names_of(&app, 0), ["..", "alpha.txt", "beta.txt", "folder1"]);
-    assert_eq!(app.status, "목록 필터: *.txt ; folder?");
     app.dispatch("filter", &ctx);
     app.answer_dialog(original_dialogs::DialogResult::Text(Some("".into())), &ctx);
     wait_listing(&mut app, &ctx);
     assert_eq!(app.panes[0].entries.len(), 6, "five items and \"..\"");
-    assert_eq!(app.status, "목록 필터를 해제했습니다.");
+    // With no filter the box shows the original default mask "*.*", and answering "*.*" keeps the list unfiltered.
+    app.dispatch("filter", &ctx);
+    assert!(matches!(&app.original_dialogs[0].kind, original_dialogs::DialogKind::Prompt { value, .. } if value == "*.*"), "no filter shows *.*");
+    app.answer_dialog(original_dialogs::DialogResult::Text(Some("*.*".into())), &ctx);
+    wait_listing(&mut app, &ctx);
+    assert_eq!(app.panes[0].filter, "");
+    assert_eq!(app.panes[0].entries.len(), 6);
     fs::remove_dir_all(root).unwrap();
 }
 

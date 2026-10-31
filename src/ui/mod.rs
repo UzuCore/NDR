@@ -1268,7 +1268,9 @@ impl App {
                     // An archive subfolder listing carries its own ".." with the current folder's time (panes.rs); keep that time.
                     let listed_parent_time = pane.archive.as_ref().and_then(|_| entries.iter().find(|e| e.is_parent()).map(|e| e.modified));
                     if !pane.filter.is_empty() {
-                        entries.retain(|e| e.drive || ndr::parity::matches_filter(&pane.filter, &e.name));
+                        // The original list mask (FUN_00459588) applies to files only: folders stay listed (seen in the running original with "*.txt").
+                        // Previously folders whose names did not match were hidden.
+                        entries.retain(|e| e.drive || e.is_dir || ndr::parity::matches_filter(&pane.filter, &e.name));
                     }
                     // Original GetList (0x45a34c), archive listing (0x45ecd0), SFTP listing (0x45bb0c), C# ListLocal: ".." first unless at a root.
                     if let Some(mut parent) = parent_item_for(pane) {
