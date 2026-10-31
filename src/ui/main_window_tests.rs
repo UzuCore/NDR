@@ -1268,6 +1268,18 @@ fn executables_get_their_own_icon_like_the_original_shell_image_list() {
     let plain_row = app.panes[0].entries.iter().position(|e| e.name == "plain").unwrap();
     let _ = app.file_icon(&ctx, 0, plain_row);
     assert!(!app.overlay_icons.contains_key(&app.panes[0].entries[plain_row].path));
+    // Original image thread FUN_007dd51c: a local ".." takes the parent folder's own shell icon (with overlays on); until then the folder icon.
+    app.settings.set_flag("UseOverlayIcons", true);
+    let up = app.panes[0].entries.iter().position(|e| e.is_parent()).expect("a subfolder lists \"..\"");
+    let up_path = app.panes[0].entries[up].path.clone();
+    assert_eq!(up_path.as_path(), root.as_path());
+    assert_eq!(app.file_icon(&ctx, 0, up).map(|t| t.size()), Some([2, 2]));
+    while !app.overlay_icons.contains_key(&up_path) {
+        assert!(Instant::now() < end, "parent icon timeout");
+        app.poll(&ctx);
+        thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(app.file_icon(&ctx, 0, up).map(|t| t.size()), Some([3, 3]), "the overlay shell icon (fake 3x3)");
     let mut permissions = fs::metadata(&custom).unwrap().permissions();
     #[allow(clippy::permissions_set_readonly_false)]
     permissions.set_readonly(false);

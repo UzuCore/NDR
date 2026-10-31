@@ -624,8 +624,10 @@ pub fn per_file_icon_rule(default_icon: Option<&str>, icon_handler: bool) -> boo
     icon_handler || default_icon.is_some_and(|icon| icon.trim().trim_matches('"') == "%1")
 }
 
-/// The original GetIconIndex (0x7b8d54) asks the shell for a file's icon using its actual path. To read, by actual path, only the formats
-/// whose result varies per file, this checks whether any of HKCR\.ext, its ProgID, or SystemFileAssociations\.ext matches per_file_icon_rule.
+/// The original image thread (FUN_007dd51c) asks the shell for every local item's icon by its actual path (SHGFI_SYSICONINDEX | SHGFI_ICON |
+/// SHGFI_OVERLAYINDEX); until it arrives DrawListItem draws GetIconIndex (0x7b8d54) of the bare name (SHGFI_USEFILEATTRIBUTES). Without overlays,
+/// NDR reads by actual path only the formats whose result varies per file: any of HKCR\.ext, its ProgID, or SystemFileAssociations\.ext matching
+/// per_file_icon_rule.
 pub fn extension_has_per_file_icon(extension: &str) -> bool {
     let extension = extension.trim().trim_start_matches('.');
     if extension.is_empty() || extension.contains(['\\', '/']) {
@@ -687,6 +689,12 @@ pub fn set_explorer_integration(enable: bool) -> Result<(), String> {
     Ok(())
 }
 /// Shell thumbnails/icons; called on workers and copied before releasing GDI handles.
+/// Original image thread (TNXCustomFileListView StartImageThread 0x7defc8, Execute FUN_007de870): IExtractImage through the parent folder's
+/// GetUIObjectOf (FUN_007de3b4, IEIFLAG_OFFLINE | IEIFLAG_SCREEN | IEIFLAG_ORIGSIZE, plus IEIFLAG_QUALITY above 120 px), larger results scaled
+/// down with GDI+ (FUN_007dd994), 32-bit bitmaps without any alpha made opaque, and on failure the item's shell icon drawn into the cell
+/// (FUN_007dd51c, FUN_007ddc60). Files outside .exe .lnk .ico .cur .ani .scr .jpg .jpeg .png .bmp .gif .ttc .ttf .otf (FUN_007de83c) that fell
+/// back to the icon share it per extension; here every file asks the shell, which gives the same icon for those.
+/// IShellItemImageFactory (SIIGBF_RESIZETOFIT) covers both steps.
 pub fn thumbnail(path: &Path, side: u32) -> Result<(usize, usize, Vec<u8>), String> {
     use windows::{
         Win32::{
@@ -879,8 +887,9 @@ pub fn shell_overlay_icon(path: &Path) -> Option<(usize, usize, Vec<u8>)> {
     }
 }
 
-/// Original TNXShellImageList.GetIconIndex (0x7b8d54) file item: SHGetFileInfoW(actual path, attributes, SHGFI_SYSICONINDEX) for
-/// the file's own icon (executable, shortcut, etc.). Overlays are not added. Used on a separate thread that called com_sta_init.
+/// File item icon by actual path: TNXShellImageList.GetIconIndex (0x7b8d54) with an absolute path is SHGetFileInfoW(path, attributes,
+/// SHGFI_SYSICONINDEX) (a relative name adds SHGFI_USEFILEATTRIBUTES), the file's own icon (executable, shortcut, etc.). Overlays are not added.
+/// Used on a separate thread that called com_sta_init.
 pub fn shell_path_icon(path: &Path) -> Option<(usize, usize, Vec<u8>)> {
     let name = wide(path);
     let mut info: SHFILEINFOW = unsafe { std::mem::zeroed() };

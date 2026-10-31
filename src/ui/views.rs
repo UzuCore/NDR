@@ -68,7 +68,7 @@ pub(super) fn thumbnail_text_height(text: &str, width: f32, max_lines: usize, sp
 }
 
 impl App {
-    /// C# FileVisualConverter.Convert (icon part): none when ShowIcons is off. Read once per extension (folders use "<DIR>").
+    /// Icons: none when ShowIcons is off (original SetShowIcon 0x7dc648 stops the image thread); the extension icon is read once per extension (folders use "<DIR>").
     /// Is this a format whose shell icon differs per file: in the has_own_icon fixed list, or the result of asking HKCR once per extension (system.per_file_icon).
     pub(super) fn per_file_icon_type(&mut self, path: &Path) -> bool {
         if has_own_icon(path) {
@@ -81,18 +81,31 @@ impl App {
 
     pub(super) fn file_icon(&mut self, ctx: &egui::Context, index: usize, row: usize) -> Option<egui::TextureHandle> {
         let entry = self.panes[index].entries.get(row)?;
-        // Original ".." item: GetIconIndex("A", folder attributes) = usually the folder icon (not a drive icon even when the parent is a drive root).
+        // Original ".." item: DrawListItem (0x7d8f58) first draws GetIconIndex(name, attributes) (relative name = SHGFI_USEFILEATTRIBUTES, the folder icon),
+        // then the image thread (StartImageThread 0x7defc8, Execute 0x7de870, FUN_007dd51c) replaces it in a local pane with the shell icon of the parent
+        // folder itself (PathRemoveFileSpecW of the current folder, SHGFI_SYSICONINDEX | SHGFI_ICON | SHGFI_OVERLAYINDEX), so above a drive root it is
+        // that drive's icon. Archive and FTP panes (relative paths) keep the folder icon. Previously the folder icon was used everywhere.
         if entry.is_parent() {
+            let path = entry.path.clone();
+            let local = self.panes[index].archive.is_none() && self.panes[index].remote.is_none() && path.is_absolute();
+            let real_path = self.settings.flag("UseOverlayIcons", true) || path.parent().is_none();
+            if self.settings.flag("ShowIcons", true) && local && real_path {
+                match self.overlay_icons.get(&path) {
+                    Some(Some(texture)) => return Some(texture.clone()),
+                    Some(None) => {}
+                    None => self.queue_overlay_icon(path, true),
+                }
+            }
             return self.path_icon(ctx, Path::new("A"), true);
         }
         let (path, directory, drive, attributes) = (entry.path.clone(), entry.is_dir, entry.drive, entry.attributes);
-        // C# Convert: when UseOverlayIcons, every full-path item not inside an archive gets an overlay icon (per path, on a separate STA thread). Before it arrives, the extension icon.
-        // The original drive item (kind 4) always uses that drive's shell icon (TNXShellImageList.GetIconIndex(root)), so it uses the same path icon.
+        // Original DrawListItem (0x7d8f58): GetIconIndex of the bare name (extension icon) until the image thread (FUN_007dd51c) stores the item's shell
+        // icon by actual path with its overlay index (SHGFI_SYSICONINDEX | SHGFI_ICON | SHGFI_OVERLAYINDEX) for every local item, drives included.
         // Original default value [Operation] overlay=1.
         let overlays = self.settings.flag("UseOverlayIcons", true);
         let local = self.panes[index].archive.is_none() && self.panes[index].remote.is_none() && path.is_absolute();
-        // The original GetIconIndex(0x7b8d54) asks the shell icon per file by its real path. Formats with the same icon per extension are grouped by the extension cache,
-        // and only formats whose icon differs per file (fixed list + HKCR DefaultIcon "%1"·shellex\IconHandler formats) are read by real path (without overlay).
+        // With overlays off, formats with the same icon per extension stay on the extension cache, and only formats whose icon differs per file
+        // (fixed list + HKCR DefaultIcon "%1"·shellex\IconHandler formats) are read by real path (without overlay); the result looks the same.
         let own_icon = !directory && local && !overlays && self.per_file_icon_type(&path);
         // A folder is read by real path only when the shell reads desktop.ini (read-only or system attribute, custom folder icon or special folder).
         const FILE_ATTRIBUTE_READONLY: u32 = 0x1;
