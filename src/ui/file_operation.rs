@@ -439,6 +439,8 @@ impl App {
     }
 
     /// Original FUN_0041190c: a TfGetText-style window (TITLE_RENAME_AND_COPY, MSG_RENAME_AND_COPY with %s = original name, initial value = original name).
+    /// The FTP transfer queue builds the same window for a remote conflict (FUN_0046736c: the item's PathFindFileNameW, shown from the
+    /// worker, which waits on an event for the answer).
     pub(super) fn ask_rename_target(&mut self, name: String, reply: Sender<Option<String>>) {
         let title = self.language_pack.text("RES.TITLE_RENAME_AND_COPY", "Rename and Copy");
         let message = self
