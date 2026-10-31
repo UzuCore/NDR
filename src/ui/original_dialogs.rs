@@ -906,16 +906,27 @@ impl App {
                     put_left(ui, at(16.0, 16.0, 405.0, 22.0), egui::Label::new(form.path.as_str()).truncate()).on_hover_text(form.path.as_str());
                     group_box(ui, at(16.0, 44.0, 177.0, 161.0), &text("GroupBox.gbAttributes", "Attributes"));
                     let red = Color32::from_rgb(0xff, 0x40, 0x40);
-                    for (top, state, key, fallback, color) in [
+                    // Enter is the default button (btnOk) only; it must not also toggle the focused check box.
+                    if enter {
+                        ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+                    }
+                    for (index, (top, state, key, fallback, color)) in [
                         (34.0, &mut form.archive, "Caption.chkArchive", "&Archive", Some(red)),
                         (59.0, &mut form.read_only, "Caption.chkReadOnly", "&Read Only", None),
                         (85.0, &mut form.hidden, "Caption.chkHidden", "&Hidden", None),
                         (111.0, &mut form.system, "Caption.chkSystem", "&System", None),
-                    ] {
+                    ]
+                    .into_iter()
+                    .enumerate()
+                    {
                         let mut checked = *state == Some(true);
                         let (label, access) = access_job_colored(ui, &raw(key, fallback), color);
-                        let clicked = put_left(ui, at(40.0, 44.0 + top, 130.0, 17.0), egui::Checkbox::new(&mut checked, label).indeterminate(state.is_none())).clicked();
-                        if clicked || take_dialog_char(ui.ctx(), access) {
+                        let response = put_left(ui, at(40.0, 44.0 + top, 130.0, 17.0), egui::Checkbox::new(&mut checked, label).indeterminate(state.is_none()));
+                        // Original TfChangeAttr: chkArchive (tab order 0) has the focus when the window opens, so Space toggles it and Tab moves on.
+                        if first_frame && index == 0 {
+                            response.request_focus();
+                        }
+                        if response.clicked() || take_dialog_char(ui.ctx(), access) {
                             cycle(state);
                         }
                     }
