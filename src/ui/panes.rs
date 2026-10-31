@@ -1573,7 +1573,7 @@ impl App {
                             let line = ui
                                 .horizontal(|ui| {
                                     ui.spacing_mut().item_spacing.x = 0.0;
-                                    // 원본 DrawListItem 종류 4: 드라이브 항목은 열과 상관없이 한 줄에 이름("C: 이름")과 남은 공간을 그린다.
+                                    // Original DrawListItem kind 4: a drive item draws, on one line regardless of columns, the name ("C: name") and the remaining space.
                                     if entry.drive {
                                         let info = pane.drive_infos.get(&entry.path).map(|(_, kind, sizes)| (*kind, *sizes));
                                         return super::list_view::drive_row(ui, egui::vec2(width, row_height), icon.as_ref(), &cells[0], name_color, framed, pane.cursor == row, drive_extent, info, &free_label, list_style);
@@ -1611,23 +1611,23 @@ impl App {
                                     ui.painter().extend(super::skin_pane::selection_mark_shapes(rect, o.select));
                                 }
                             }
-                            // 원본 DrawListItem(+0x387): 항목 아래 (bottom + LineSpace / 2 − 1)에 NXLINE 가로선. 여기서는 줄 사이 틈 가운데.
+                            // Original DrawListItem(+0x387): an NXLINE horizontal line below the item (bottom + LineSpace / 2 − 1). Here it is in the middle of the gap between rows.
                             if row_lines {
                                 let y = Self::row_line_y(ui.painter(), line.response.rect.bottom(), ui.spacing().item_spacing.y);
                                 let left = line.response.rect.left();
                                 ui.painter().hline(left..=left + width, y, egui::Stroke::new(1.0, line_color));
                             }
-                            // 줄 어디를 눌러도 그 항목(이름 칸만이 아니라 줄 전체). 원본 GetItemAt(형식 2): 번호 = (y + 위치 + LineSpace − 머리)
-                            // / (높이 + LineSpace)라 줄 위의 틈(LineSpace)도 그 항목이다.
+                            // Pressing anywhere on the row hits that item (the whole row, not just the name cell). Original GetItemAt(format 2): index = (y + position + LineSpace − header)
+                            // / (height + LineSpace), so the gap above the row (LineSpace) also belongs to that item.
                             let gap = ui.spacing().item_spacing.y;
                             let row_rect = egui::Rect::from_min_size(line.response.rect.left_top() - egui::vec2(0.0, gap), egui::vec2(width, row_height + gap));
                             let response = ui.interact(row_rect, ui.id().with(("ndr-detail-row", index, row)), egui::Sense::click_and_drag());
-                            // C# BeginFileDragTracking: 왼쪽 단추로 끌면 항목 끌기. 원본은 오른쪽 단추 끌기도 받아 놓을 때 pmDrop을 연다.
+                            // C# BeginFileDragTracking: dragging with the left button drags the item. The original also accepts a right-button drag and opens pmDrop on drop.
                             let folder_path = entry.is_dir.then(|| entry.path.clone());
-                            // 원본 MouseDown: 스킨 테마는 누르는 순간 처리(줄 왼쪽 12화소는 표시 칸, Shift는 범위 끌기).
+                            // Original MouseDown: the skin theme handles the moment of the press (the left 12 pixels of the row are the selection area, Shift is a range drag).
                             let in_press = skin.is_some() && original_press_input(pane, row, response.rect, ui);
                             let area_hit = skin.is_some() && pointer_in_selection_area(response.rect, ui);
-                            // 원본(스킨): Shift로 누른 뒤의 범위 끌기 중에도 8화소를 넘으면 끌기(FUN_004856d8)가 시작된다(표시 칸 범위 끌기는 아님).
+                            // Original (skin): even during a range drag after a Shift press, moving more than 8 pixels starts a drag (FUN_004856d8) (not a selection-area range drag).
                             if drag_begins(&response, egui::PointerButton::Primary, skin.is_some()) && (skin.is_some() || pane.range_drag.is_none()) {
                                 begin_drag = Some((row, false));
                             } else if drag_begins(&response, egui::PointerButton::Secondary, skin.is_some()) {
@@ -1647,24 +1647,24 @@ impl App {
                             if in_press {
                                 activate = true;
                             }
-                            // 원본 DblClick(0x7dd1ec): 표시 칸에서는 열지 않는다. 두 번 누르기는 Windows 기준(시간·자리).
+                            // Original DblClick(0x7dd1ec): does not open from the selection area. A double press follows the Windows standard (time and position).
                             if super::panes::windows_double_clicked(&response) && !area_hit {
                                 pane.cursor = row;
                                 activate = true;
                                 open = true;
                             }
-                            // WPF DataGrid: 오른쪽 단추는 그 줄을 고른다(이미 고른 줄이면 선택 유지). 스킨 테마는 원본처럼 커서만.
+                            // WPF DataGrid: the right button selects that row (keeps the selection if the row is already selected). The skin theme moves only the cursor, like the original.
                             if response.secondary_clicked() {
                                 row_pressed(pane, row, egui::Modifiers::NONE, true, skin.is_some());
                                 activate = true;
                             }
-                            // 줄 응답에 메뉴를 붙이지 않는다(패널 메뉴 skin_pane::pane_menu).
+                            // Do not attach a menu to the row response (the pane menu is skin_pane::pane_menu).
                             if response.secondary_clicked() {
                                 super::skin_pane::request_pane_menu(ui.ctx(), index);
                             }
                         }
                     });
-                // 원본 SetScrollTop(쪽 단위): 막대를 끌어 놓으면 위치는 가장 가까운 쪽 경계(쪽 번호)다.
+                // Original SetScrollTop(page step): dragging and releasing the bar lands on the nearest page boundary (page number).
                 if by_page && pages > 1 && !ui.input(|i| i.pointer.any_down()) {
                     let snapped = Self::page_snap(output.state.offset.y, page_px, pages);
                     if (snapped - output.state.offset.y).abs() > 0.5 {
@@ -1691,7 +1691,7 @@ impl App {
                         }
                     }
                 }
-                // 원본 가로 TNXScrollBar(형식 2): 목록 아래, 너비 = GetRealClientWidth, 한 칸 10, 한 쪽 = 목록 너비.
+                // Original horizontal TNXScrollBar(format 2): below the list, width = GetRealClientWidth, one step 10, one page = the list width.
                 self.panes[index].detail_x = output.state.offset.x.clamp(0.0, (detail_content - view_width).max(0.0));
                 if let (Some(bar), Some(skin)) = (detail_hbar, &skin) {
                     let (strip, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), bar), egui::Sense::hover());
@@ -1705,12 +1705,12 @@ impl App {
                 ui.spacing_mut().item_spacing.y = saved_spacing;
                 }
                 ui.style_mut().text_styles = saved_text_styles;
-                // 목록 오른쪽 단추 메뉴(줄을 그렸는지와 상관없이 그림마다). 원본 OnContextPopup(FUN_00484e8c)이 무엇을 띄울지 고른다.
-                // 글쇠(Apps, MousePos -1, -1)는 지금 패널만: 표시가 없고 커서 항목이 ".."이면 띄우지 않고, 자리는 커서 항목 칸의 왼쪽 아래.
+                // The list right-button menu (every paint, regardless of whether rows were drawn). The original OnContextPopup(FUN_00484e8c) chooses what to show.
+                // The key (Apps, MousePos -1, -1) is for the current pane only: if there is no selection and the cursor item is "..", do not show it, and the position is the bottom-left of the cursor item's cell.
                 let mouse_menu = super::skin_pane::take_pane_menu_request(ctx, index);
                 let key_menu = index == self.active && std::mem::take(&mut self.pending_context_key);
                 let parent_only = self.panes[index].selected.is_empty() && self.panes[index].entries.get(self.panes[index].cursor).is_some_and(|e| e.is_parent());
-                // 원본 FUN_00485078: 오른쪽 단추를 누른 채 왼쪽 단추(누른 줄로 커서를 옮긴 뒤)면 rocker_menu_kind.
+                // Original FUN_00485078: the left button pressed while the right button is held (after moving the cursor to the pressed row) → rocker_menu_kind.
                 let rocker = ui.rect_contains_pointer(list_rect) && ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary) && i.pointer.button_down(egui::PointerButton::Secondary));
                 let kind = if rocker {
                     self.rocker_menu_kind(index)
@@ -1742,7 +1742,7 @@ impl App {
                 });
                 self.panes[index].drop_drive_marks();
                 self.original_name_tip(ctx, index);
-                // 목록 자리를 바깥 Ui에 반영하고 그 아래(FTP 기록 칸, 파일 정보줄)는 패널 너비 전체에.
+                // Reflect the list area into the outer Ui, and place what sits below it (the FTP log box, the file info bar) across the full pane width.
                 let used = ui.min_rect();
                 let ui = outer;
                 ui.advance_cursor_after_rect(egui::Rect::from_min_max(full.min, egui::pos2(full.right(), used.bottom().max(full.top()))));
@@ -1756,7 +1756,7 @@ impl App {
                 if activate {
                     self.active = index;
                 }
-                // 원본 FUN_004856d8: 빈 곳에서 누른 채 8화소 넘게 끌어도 표시한 항목이 있으면(GetSelCount > 0) 그 항목들을 끈다(스킨 테마).
+                // Original FUN_004856d8: even when dragging more than 8 pixels from a press on empty space, if there are selected items (GetSelCount > 0) it drags those items (skin theme).
                 if begin_drag.is_none() && skin.is_some() && self.file_drag.is_none() && !self.panes[index].selected.is_empty() && ctx.dragged_id().is_none() {
                     let (origin, now, primary, secondary) = ui.input(|i| (i.pointer.press_origin(), i.pointer.latest_pos(), i.pointer.primary_down(), i.pointer.secondary_down()));
                     if let (Some(origin), Some(now)) = (origin, now) {

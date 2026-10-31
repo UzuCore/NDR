@@ -332,16 +332,16 @@ pub(super) fn ftp_totals(rows: &[FtpResultRow]) -> (u64, u64, u64) {
     (done, total, percent)
 }
 
-/// 원본 lFTPTransferred: wsprintf("%d %% (%s / %s) - %s", 백분율, 받은 크기, 전체 크기, FormatFloat("0.00 KB/s", 속도)).
-/// 크기는 StrFormatByteSizeW(format_size).
+/// Original lFTPTransferred: wsprintf("%d %% (%s / %s) - %s", percent, bytes received, total size, FormatFloat("0.00 KB/s", speed)).
+/// Sizes come from StrFormatByteSizeW (format_size).
 pub(super) fn ftp_transferred_text(percent: u64, done: &str, total: &str, kb_per_second: f64) -> String {
     format!("{percent} % ({done} / {total}) - {kb_per_second:.2} KB/s")
 }
 
 impl FtpResultRow {
-    /// 원본 FUN_0043f04c 이벤트 1의 lvFTPProgress 칸 글: Progress 칸 = 백분율/10개의 '>'(올리기, 로컬 → 원격) 또는 '<'(내려받기),
-    /// 넷째 칸(오른쪽 맞춤) = "%d%"(wsprintf "%d%%"). 항목 크기를 모르면 원본처럼 전체 백분율(`overall`)을 쓴다.
-    /// 기다리는 줄은 둘 다 빈칸, 취소·실패한 줄은 NDR 상태 글(원본은 끝난 줄을 지운다).
+    /// Original FUN_0043f04c event 1 lvFTPProgress column text: Progress column = percent/10 '>' chars (upload, local → remote) or '<' (download),
+    /// fourth column (right-aligned) = "%d%" (wsprintf "%d%%"). When the item size is unknown, use the overall percent (`overall`) like the original.
+    /// Waiting rows leave both blank; cancelled/failed rows show the NDR status text (the original removes finished rows).
     pub(super) fn progress_cells(&self, overall: u64, ko: bool) -> (String, String) {
         let percent = match self.size.filter(|s| *s > 0) {
             Some(size) => self.done.min(size) * 100 / size,
@@ -355,7 +355,7 @@ impl FtpResultRow {
             RowState::Cancelled | RowState::Failed(_) => (self.progress_text(ko), String::new()),
         }
     }
-    /// 진행 칸 글: 크기를 알면 %, 아니면 받은 바이트.
+    /// Progress column text: % if the size is known, otherwise bytes received.
     pub(super) fn progress_text(&self, ko: bool) -> String {
         match &self.state {
             RowState::Waiting => String::new(),
@@ -378,24 +378,24 @@ fn set_row(rows: &Mutex<Vec<FtpResultRow>>, index: usize, update: impl FnOnce(&m
     }
 }
 
-/// 패널 FTP 모드에서도 쓸 수 있는 명령(목록 이동·고르기·보기·FTP·도움말). 나머지는 로컬 파일을 다루므로 막는다.
+/// Commands usable even in a pane's FTP mode (list navigation/selection/view/FTP/help). The rest handle local files, so they are blocked.
 pub(super) fn ftp_allows(id: &str) -> bool {
     const EXACT: &[&str] = &[
         "refresh", "goParent", "goRoot", "open", "selectAll", "invertSelection", "select", "copyToOther", "moveToOther",
         "remote", "sites", "remoteCommand", "exit", "options", "language", "theme", "about", "help", "homepage", "checkUpdates",
         "filter", "newTab", "closeTab", "historyBack", "historyForward", "back", "forward", "favoritesMenu", "switchPane",
-        // 원본 miNewFolderClick(0x432378)·miRenameClick(0x4351cc)·miDeleteClick(0x431c04 → FUN_0042c734)의 FTP 모드(2) 갈래.
+        // The FTP mode (2) branch of the original miNewFolderClick(0x432378)·miRenameClick(0x4351cc)·miDeleteClick(0x431c04 → FUN_0042c734).
         "newFolder", "rename", "deleteRecycle", "deletePermanent", "deleteToolbar", "shred", "attributes",
-        // 원본 miCommandLineClick(0x438598): FTP 모드면 입력을 FTP 제어 명령으로 보낸다.
+        // Original miCommandLineClick(0x438598): in FTP mode, the input is sent as an FTP control command.
         "command",
-        // 원본 miMapNetworkDriveClick(0x435144)·miUnmapNetworkDriveClick(0x4350bc): 모드와 상관없이 연다(새로 읽기는 로컬일 때만).
+        // Original miMapNetworkDriveClick(0x435144)·miUnmapNetworkDriveClick(0x4350bc): open regardless of mode (re-reading happens only when local).
         "mapDrive", "unmapDrive", "browseNetwork",
     ];
     EXACT.contains(&id) || ["ftp", "toggle", "view", "sort", "column:", "folderSort", "group", "favoriteOpen:", "workOpen:", "newTabFrom:", "closeTab:"].iter().any(|prefix| id.starts_with(prefix))
 }
 
 fn to_entry(remote: &PaneRemote, item: &RemoteEntry) -> Entry {
-    // 원본 FUN_0045bb0c: 이름이 '.'으로 시작하면 숨김 속성(폴더 0x12, 파일 0x02)으로 넣는다.
+    // Original FUN_0045bb0c: if the name starts with '.', add it with the hidden attribute (folder 0x12, file 0x02).
     let dot = item.name.starts_with('.');
     Entry {
         name: item.name.clone(),
@@ -409,8 +409,8 @@ fn to_entry(remote: &PaneRemote, item: &RemoteEntry) -> Entry {
     }
 }
 
-/// 원격 목록 읽기(refresh의 FTP 쪽). "."·".."은 뺀다. 원본 FUN_0045bb0c처럼 숨김 보기가 아니면 '.'으로 시작하는 이름도 뺀다.
-/// 고친 것: 전에는 Alt+Z와 상관없이 점 파일이 늘 보였다.
+/// Read the remote listing (the FTP side of refresh). "." and ".." are dropped. Like the original FUN_0045bb0c, when hidden view is off, names starting with '.' are also dropped.
+/// Fix: previously dot files were always shown regardless of Alt+Z.
 pub(super) fn list_remote(remote: &PaneRemote, show_hidden: bool) -> Result<Vec<Entry>, String> {
     let items = remote.fs.lock().map_err(|_| "FTP connection is unavailable".to_owned())?.list(&remote.path)?;
     let items: Vec<&RemoteEntry> = items.iter().filter(|e| e.name != "." && e.name != ".." && (show_hidden || !e.name.starts_with('.'))).collect();
@@ -432,19 +432,19 @@ impl App {
         self.message_box(&title, "", &text, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
     }
 
-    /// 원본 FUN_00440734: 사이트 메뉴 항목(번호, 글).
+    /// Original FUN_00440734: site menu items (number, text).
     pub(super) fn ftp_site_items(&self) -> Vec<(usize, String)> {
         load_sites(&self.settings).iter().enumerate().map(|(i, s)| (i, site_menu_caption(i, &s.name))).collect()
     }
 
-    /// 원본 FUN_0043e720: 사이트 목록의 index번 사이트로 지금 패널을 연결한다.
+    /// Original FUN_0043e720: connect the current pane to the site at index in the site list.
     pub(super) fn ftp_connect_site(&mut self, index: usize) {
         let Some(site) = load_sites(&self.settings).get(index).cloned() else { return };
         let password = native::unprotect_secret(&site.encrypted_password).unwrap_or_default();
         self.ftp_connect(self.active, site, password);
     }
 
-    /// 원본 miFTPQuickConnectClick → FUN_0043e9f8(창, 패널, 주소): TfFTPQuickConnect. 주소는 cbHost 처음 값(명령 줄의 "ftp://…").
+    /// Original miFTPQuickConnectClick → FUN_0043e9f8(window, pane, address): TfFTPQuickConnect. The address is the first cbHost value (the command line's "ftp://…").
     pub(super) fn ftp_quick_connect(&mut self, host: String) {
         let form = FtpQuickForm {
             host,
@@ -463,7 +463,7 @@ impl App {
             if host.is_empty() {
                 return;
             }
-            // FUN_0043e9f8: 포트(StrToInt, 처음 값 21), 22면 SFTP.
+            // FUN_0043e9f8: port (StrToInt, default 21); SFTP when 22.
             let port = parse_port(&form.port);
             let site = SiteProfile {
                 name: host.clone(),
@@ -491,7 +491,7 @@ impl App {
         });
     }
 
-    /// 원본 FUN_004408f8: 패널을 FTP 모드로 연결(이미 전송 중인 FTP 패널이면 FUN_00440d24가 막는다).
+    /// Original FUN_004408f8: connect the pane in FTP mode (if it is an FTP pane already transferring, FUN_00440d24 blocks it).
     pub(super) fn ftp_connect(&mut self, index: usize, site: SiteProfile, password: String) {
         if self.panes[index].remote.as_ref().is_some_and(|r| r.busy.load(Ordering::Relaxed)) {
             return self.ftp_box("FTP_CANNOTDISCONNECT", "Cannot be disconnected while any operation is working.");
@@ -513,7 +513,7 @@ impl App {
         let initial = site.remote_directory.clone();
         let host = config.host.clone();
         let tx = self.async_tx.clone();
-        // 원본 FUN_004408f8: 사이트 종류가 "sftp"가 아니면 기록 칸을 만든다(FUN_0048d7ac(패널, 1), 이미 있으면 그대로).
+        // Original FUN_004408f8: if the site type is not "sftp", create a log pane (FUN_0048d7ac(pane, 1); keep the existing one if present).
         let existing = self.panes[index].remote.as_ref().and_then(|r| r.log.clone());
         let log = existing.or_else(|| (!site.protocol.eq_ignore_ascii_case("sftp")).then(Arc::default));
         self.status = format!("{} {host}…", self.ftp_title());
@@ -542,7 +542,7 @@ impl App {
         self.status = remote.address();
         let pane = &mut self.panes[index];
         if !same_log {
-            // 원본 FUN_0048d7ac: 새 기록 칸은 높이 60.
+            // Original FUN_0048d7ac: a new log pane has height 60.
             pane.ftp_log_height = FTP_LOG_HEIGHT;
         }
         pane.archive = None;
@@ -558,7 +558,7 @@ impl App {
         self.system_box(&title, &error, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
     }
 
-    /// 원본 miFTPDisconnectClick(0x43e8d4): 전송 중이면 FTP_CANNOTDISCONNECT, 아니면 끊고 로컬 폴더로.
+    /// Original miFTPDisconnectClick(0x43e8d4): FTP_CANNOTDISCONNECT if transferring, otherwise disconnect and go to a local folder.
     pub(super) fn ftp_disconnect(&mut self) {
         let i = self.active;
         let Some(remote) = self.panes[i].remote.clone() else { return };
@@ -572,7 +572,7 @@ impl App {
         self.refresh(i);
     }
 
-    /// FTP 패널에서 폴더 열기(목록의 폴더 줄, 원격 경로를 바꾸고 다시 읽는다).
+    /// Open a folder in an FTP pane (a folder row in the list: change the remote path and re-read).
     pub(super) fn ftp_open_dir(&mut self, index: usize, name: &str) {
         let Some(remote) = self.panes[index].remote.as_mut() else { return };
         remote.path = join_remote(&remote.path, name);
@@ -581,7 +581,7 @@ impl App {
         self.refresh(index);
     }
 
-    /// FTP 패널의 상위 폴더(루트면 그대로).
+    /// The parent folder of an FTP pane (unchanged at the root).
     pub(super) fn ftp_parent(&mut self, index: usize) {
         let Some(remote) = self.panes[index].remote.as_mut() else { return };
         let parent = parent_path(&remote.path);
@@ -592,12 +592,12 @@ impl App {
         remote.path = parent;
         let address = remote.address();
         self.panes[index].address = address;
-        // 원본 FUN_00486694(올라감): 떠나온 폴더에 커서.
+        // Original FUN_00486694 (moving up): put the cursor on the folder we left.
         self.pending_focus[index] = (!child.is_empty()).then_some(child);
         self.refresh(index);
     }
 
-    /// FTP 패널의 루트.
+    /// The root of an FTP pane.
     pub(super) fn ftp_root(&mut self, index: usize) {
         let Some(remote) = self.panes[index].remote.as_mut() else { return };
         if remote.path == "/" {
@@ -609,7 +609,7 @@ impl App {
         self.refresh(index);
     }
 
-    /// 원본 miFTPGetClick(0x4412f8): 지금 패널이 FTP면 FTP_GET 대상 선택 뒤 내려받기.
+    /// Original miFTPGetClick(0x4412f8): if the current pane is FTP, choose an FTP_GET destination and then download.
     pub(super) fn ftp_download_command(&mut self) {
         let i = self.active;
         if self.panes[i].remote.is_none() {
@@ -622,7 +622,7 @@ impl App {
         });
     }
 
-    /// 원본 FUN_0043f800: FTP 패널(index)의 고른 항목을 로컬 폴더로 내려받는다(FTPENGINE_BUSY, 이미 있으면 같은 이름 확인 창).
+    /// Original FUN_0043f800: download the selected items of the FTP pane (index) to a local folder (FTPENGINE_BUSY; a same-name confirmation dialog if it already exists).
     pub(super) fn ftp_download(&mut self, index: usize, destination: PathBuf) {
         let Some(remote) = self.panes[index].remote.clone() else { return };
         if remote.busy.load(Ordering::Relaxed) {
@@ -641,7 +641,7 @@ impl App {
             list.clear();
             list.extend(items.iter().map(|(source, name, size)| FtpResultRow { upload: false, local: destination.join(name).to_string_lossy().into_owned(), remote: source.clone(), size: (*size > 0).then_some(*size), done: 0, state: RowState::Waiting }));
         }
-        // 원본 FUN_0043f800 끝: 아래 칸(pBottom)을 보인다.
+        // End of original FUN_0043f800: show the bottom pane (pBottom).
         self.show_results = true;
         self.ftp_started = Some(std::time::Instant::now());
         self.ftp_pause.store(false, Ordering::Relaxed);
