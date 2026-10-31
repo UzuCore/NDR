@@ -99,6 +99,83 @@ pub fn gdi_text_height(face: &str, pixels: i32, style: u8) -> Option<i32> {
     height
 }
 
+/// VCL TCanvas.TextWidth (GetTextExtentPoint32W, with the font's system font links for Korean and other scripts) of each text, for the font `face`
+/// at `pixels` em height and `style` (bit 1 bold, bit 2 italic). None when GDI cannot create the font.
+/// GDI text extents do not kern, so a text's width is the sum of its characters' widths; those are measured once per font and character and
+/// cached (measuring every string took about 24 µs each with font fallback, 2.4 s for 100,000 names).
+/// The original list layout (GetFieldMaxWidth, GetAdjustedNameWidth, column counts) is built on these widths.
+pub fn gdi_text_widths<S: AsRef<str>>(face: &str, pixels: i32, style: u8, texts: &[S]) -> Option<Vec<i32>> {
+    use std::{collections::HashMap, sync::Mutex};
+    use windows_sys::Win32::Foundation::SIZE;
+    use windows_sys::Win32::Graphics::Gdi::{CreateFontW, DeleteObject, GetDC, GetTextExtentPoint32W, ReleaseDC, SelectObject, DEFAULT_CHARSET, HDC, HFONT};
+    type Widths = HashMap<char, i32>;
+    static CACHE: Mutex<Option<HashMap<(String, i32, u8), Option<Widths>>>> = Mutex::new(None);
+    if face.contains('\0') || pixels <= 0 {
+        return None;
+    }
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    let fonts = cache.get_or_insert_with(HashMap::new);
+    let widths = fonts.entry((face.to_owned(), pixels, style & 3)).or_insert_with(|| Some(HashMap::new())).as_mut()?;
+    // The screen DC with the font selected, created only when a character is missing from the cache.
+    let mut gdi: Option<(HDC, HFONT, *mut core::ffi::c_void)> = None;
+    let mut failed = false;
+    let name = wide(face);
+    let mut result = Vec::with_capacity(texts.len());
+    for text in texts {
+        let mut total = 0;
+        for ch in text.as_ref().chars() {
+            if let Some(width) = widths.get(&ch) {
+                total += width;
+                continue;
+            }
+            // SAFETY: NUL-terminated face name; the font and the screen DC are released after the loop; the character is passed with its UTF-16 length.
+            let width = unsafe {
+                if gdi.is_none() && !failed {
+                    let font = CreateFontW(-pixels, 0, 0, 0, if style & 1 != 0 { 700 } else { 400 }, (style & 2 != 0) as u32, 0, 0, DEFAULT_CHARSET as u32, 0, 0, 0, 0, name.as_ptr());
+                    if font.is_null() {
+                        failed = true;
+                    } else {
+                        let dc = GetDC(ptr::null_mut());
+                        let old = SelectObject(dc, font);
+                        gdi = Some((dc, font, old));
+                    }
+                }
+                match gdi {
+                    Some((dc, _, _)) => {
+                        let mut units = [0u16; 2];
+                        let units = ch.encode_utf16(&mut units);
+                        let mut size = SIZE { cx: 0, cy: 0 };
+                        if GetTextExtentPoint32W(dc, units.as_ptr(), units.len() as i32, &mut size) == 0 { 0 } else { size.cx }
+                    }
+                    None => 0,
+                }
+            };
+            if failed {
+                break;
+            }
+            widths.insert(ch, width);
+            total += width;
+        }
+        if failed {
+            break;
+        }
+        result.push(total);
+    }
+    if let Some((dc, font, old)) = gdi {
+        // SAFETY: restores the DC's previous font, then releases the DC and deletes the font created above.
+        unsafe {
+            SelectObject(dc, old);
+            ReleaseDC(ptr::null_mut(), dc);
+            DeleteObject(font);
+        }
+    }
+    if failed {
+        *fonts.get_mut(&(face.to_owned(), pixels, style & 3)).unwrap() = None;
+        return None;
+    }
+    Some(result)
+}
+
 /// The ".." entry the file system reports in FindFirstFileW(folder\*), as original GetList (0x45a34c) adds it: its dwFileAttributes and
 /// ftLastWriteTime (NTFS reports the parent folder there, so below a drive root it carries the root's hidden and system bits).
 /// Stops at that entry. None when the listing has no ".." (the original then adds its own ".." with attribute 0x10 and GetFolderTime).
@@ -2140,6 +2217,15 @@ mod tests {
         assert_eq!(super::gdi_text_height("Tahoma", 16, 0), Some(19));
         assert_eq!(super::gdi_text_height("Tahoma", 16, 0), Some(19), "cached");
         assert_eq!(super::gdi_text_height("Tahoma", 0, 0), None);
+    }
+    /// Canvas.TextWidth: GDI does not kern, so a text is the sum of its characters; Korean comes from the linked font; empty is 0.
+    #[test]
+    fn gdi_text_widths_sum_the_characters() {
+        let widths = super::gdi_text_widths("Tahoma", 16, 0, &["W", "WWWWW", "", "한글", "한"]).unwrap();
+        assert_eq!(widths[1], widths[0] * 5);
+        assert_eq!(widths[2], 0);
+        assert!(widths[4] > 0 && widths[3] > widths[4], "{widths:?}");
+        assert_eq!(super::gdi_text_widths("Tahoma", 0, 0, &["W"]), None);
     }
     /// Original GetList (0x45a34c): ".." comes from FindFirstFileW(folder\*); on NTFS it describes the parent folder.
     #[test]

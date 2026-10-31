@@ -1974,8 +1974,7 @@ fn big_folder_frame_time() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// Whether the fast measure of original_field_max (sum of glyph widths, no kerning like GDI GetTextExtentPoint) is never narrower than the drawn text (egui
-/// tightens kerning), so text always fits in its cell.
+/// Field widths are GDI widths (original Canvas.TextWidth); egui draws Latin text at most CELL_TEXT_SLACK wider, so it still fits its cell.
 #[test]
 fn field_widths_by_glyph_sum_match_the_laid_out_width() {
     let (root, ctx, app) = fixture("glyph-sum");
@@ -1983,10 +1982,11 @@ fn field_widths_by_glyph_sum_match_the_laid_out_width() {
     let _ = ctx.run(raw, |ctx| {
         egui::CentralPanel::default().show(ctx, |ui| {
             let font = egui::FontId::new(app.list_font_size, egui::FontFamily::Name(super::LIST_FONT_FAMILY.into()));
-            for text in ["report.txt", "AVAWAVAW To.pdf", "한글 파일 이름.hwp", "2026-10-31 13:52", "1,234,567", "WWWWAAAA.WWA"] {
-                let sum = ui.fonts_mut(|f| text.chars().map(|c| f.glyph_width(&font, c)).sum::<f32>().ceil());
-                let laid = app.list_text_width(ui, text);
-                assert!(sum + 1.0 >= laid, "{text}: sum {sum} vs layout {laid}");
+            for text in ["report.txt", "AVAWAVAW To.pdf", "2026-10-31 13:52", "1,234,567", "WWWWAAAA.WWA", "NoteBurner YouTube Music Converter"] {
+                let drawn = ui.fonts_mut(|f| f.layout_no_wrap(text.to_owned(), font.clone(), Color32::WHITE).size().x);
+                let measured = app.list_text_width(ui, text);
+                assert!(measured + super::panes::CELL_TEXT_SLACK >= drawn, "{text}: measured {measured} vs drawn {drawn}");
+                assert_eq!(Some(measured), app.gdi_list_widths(&[text]).map(|w| w[0]), "GDI width");
             }
         });
     });

@@ -871,7 +871,7 @@ impl App {
         } else {
             egui::Visuals::light()
         });
-        set_app_fonts(&ctx, None, false);
+        set_app_fonts(&ctx, None, false, 1.0);
         let (listing_tx, listing_rx) = mpsc::channel();
         let (async_tx, async_rx) = mpsc::channel();
         let active = usize::from(settings.flag("StartWithRightPaneActive", false));
@@ -1710,9 +1710,13 @@ pub(super) fn list_text(text: impl Into<String>, style: u8) -> RichText {
 /// (all original windows are ParentFont, so Application DefaultFont = Segoe UI 9pt = 12 px, and Korean uses Malgun Gothic through Windows font linking).
 /// With list_font (font file, TTC index) the "list" family = that font -> Malgun Gothic -> defaults. Without it the "list" family equals the normal font.
 /// With list_bold (bold of the original ListFont style), Korean in the "list" family is drawn with Malgun Gothic Bold (malgunbd.ttf, when present).
-pub(super) fn set_app_fonts(ctx: &egui::Context, list_font: Option<(&'static [u8], u32)>, list_bold: bool) {
+/// `list_korean_scale` scales the "list" family's Korean glyphs (the GDI linked-font size relative to Malgun Gothic, 1.0 = unchanged).
+pub(super) fn set_app_fonts(ctx: &egui::Context, list_font: Option<(&'static [u8], u32)>, list_bold: bool, list_korean_scale: f32) {
     // Font files are memory-mapped (native::mapped_file) and passed as 'static: egui does not copy borrowed fonts (a Vec would be copied once more).
     let font = |path: &str| native::mapped_file(Path::new(path)).map(|bytes| Arc::new(egui::FontData::from_static(bytes)));
+    let scaled = |path: &str| {
+        native::mapped_file(Path::new(path)).map(|bytes| Arc::new(egui::FontData::from_static(bytes).tweak(egui::FontTweak { scale: list_korean_scale, ..Default::default() })))
+    };
     let mut fonts = egui::FontDefinitions::default();
     if let Some(data) = font("C:/Windows/Fonts/malgun.ttf") {
         fonts.font_data.insert("Korean".into(), data);
@@ -1721,8 +1725,16 @@ pub(super) fn set_app_fonts(ctx: &egui::Context, list_font: Option<(&'static [u8
         }
     }
     let mut korean_first = fonts.families.get(&egui::FontFamily::Proportional).cloned().unwrap_or_default();
+    if (list_korean_scale - 1.0).abs() > 0.001 {
+        if let Some(data) = scaled("C:/Windows/Fonts/malgun.ttf") {
+            fonts.font_data.insert("ListKorean".into(), data);
+            for name in korean_first.iter_mut().filter(|n| n.as_str() == "Korean") {
+                *name = "ListKorean".into();
+            }
+        }
+    }
     if list_bold {
-        if let Some(data) = font("C:/Windows/Fonts/malgunbd.ttf") {
+        if let Some(data) = scaled("C:/Windows/Fonts/malgunbd.ttf") {
             fonts.font_data.insert("KoreanBold".into(), data);
             korean_first.insert(0, "KoreanBold".into());
         }

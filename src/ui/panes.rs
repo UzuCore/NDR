@@ -16,6 +16,10 @@ fn selection_area(rect: egui::Rect) -> egui::Rect {
     egui::Rect::from_min_max(rect.min, egui::pos2((rect.left() + 12.0).min(rect.right()), rect.bottom()))
 }
 
+/// How far cell text may run into the right padding before it is shortened. Cell widths come from GDI widths (original Canvas.TextWidth) and the
+/// text is drawn by egui, which can be a pixel or two wider; without this slack the widest date, size or extension of a column got "…".
+pub(super) const CELL_TEXT_SLACK: f32 = 4.0;
+
 /// Cell text of the original DrawListItem(0x7d8f58): one line inside the cell (left + 5, right − 5; ellipsis … on overflow). Size is right-aligned (GB/MB unit colored),
 /// the date cell draws the date left-aligned and the time right-aligned (DateToStr/TimeToStr), the rest left-aligned. Shared by the Details, Auto, and Names views.
 #[allow(clippy::too_many_arguments)]
@@ -27,7 +31,7 @@ pub(super) fn paint_original_cell(ui: &mut egui::Ui, rect: egui::Rect, column: D
         for (part, part_color) in parts.iter().filter(|(p, _)| !p.is_empty()) {
             super::list_text(*part, list_style).color(*part_color).append_to(&mut job, ui.style(), egui::FontSelection::Default, egui::Align::Center);
         }
-        job.wrap = egui::text::TextWrapping { max_width: inner.width().max(0.0), max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
+        job.wrap = egui::text::TextWrapping { max_width: (inner.width() + CELL_TEXT_SLACK).max(0.0), max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
         ui.fonts_mut(|f| f.layout_job(job))
     };
     let top = |height: f32| rect.top() + ((rect.height() - height) / 2.0).floor();
@@ -162,13 +166,23 @@ pub(super) struct FieldMax {
 }
 
 impl App {
-    /// Text width measured in the list font (original GetTextWidth).
+    /// Text width measured in the list font (original GetTextWidth = Canvas.TextWidth, GDI). egui only when GDI is unavailable.
+    /// Previously egui's shaping was used, which differs from GDI by a few pixels per name and changed the original Auto column count.
     pub(super) fn list_text_width(&self, ui: &egui::Ui, text: &str) -> f32 {
         if text.is_empty() {
             return 0.0;
         }
+        if let Some(width) = self.gdi_list_widths(&[text]).and_then(|w| w.first().copied()) {
+            return width;
+        }
         let font = egui::FontId::new(self.list_font_size, egui::FontFamily::Name(super::LIST_FONT_FAMILY.into()));
         ui.fonts_mut(|f| f.layout_no_wrap(text.to_owned(), font, Color32::WHITE).size().x).ceil()
+    }
+
+    /// GDI widths of texts in the list font (face, size, style), as the original Canvas.TextWidth measures them. None without GDI.
+    pub(super) fn gdi_list_widths<S: AsRef<str>>(&self, texts: &[S]) -> Option<Vec<f32>> {
+        let face = self.settings.text("ListFont", "Segoe UI");
+        ndr::native::gdi_text_widths(&face, self.list_font_size.round() as i32, self.list_font_style, texts).map(|w| w.into_iter().map(|w| w as f32).collect())
     }
 
     /// Values recorded by the original GetFieldMaxWidth(0x7df9d8) (FieldMax). Re-measured only when the listing changes (original local_48[2] cache).
@@ -187,38 +201,61 @@ impl App {
             return fm;
         }
         // Fix (performance): previously each item was measured by text layout (layout_no_wrap, building paint shapes), about 60ms for 20,000 files, and the folder
-        // watcher stalled that long every time the listing was re-read. Measure by the sum of glyph widths instead (the original GetTextWidth is also a glyph-width sum).
+        // watcher stalled that long every time the listing was re-read. The original GetTextWidth is Canvas.TextWidth (GDI): measure the distinct texts in one
+        // GDI pass (same font, one DC), falling back to the sum of egui glyph widths without GDI. Previously egui widths were used, a few pixels off per name,
+        // which changed the original Auto column count (Documents: two columns in the original, one in NDR).
         let font = egui::FontId::new(self.list_font_size, egui::FontFamily::Name(super::LIST_FONT_FAMILY.into()));
         let mut fm = FieldMax::default();
         let (mut ext_sum, mut ext_count) = (0f32, 0usize);
-        ui.fonts_mut(|fonts| {
-            let mut measure = |text: &str| -> f32 { text.chars().map(|c| fonts.glyph_width(&font, c)).sum::<f32>().ceil() };
-            for (entry, cells) in pane.entries.iter().zip(&pane.view.cells) {
-                if entry.drive {
-                    continue;
+        // (field, text index) per measured cell; texts are deduplicated.
+        let mut texts: Vec<String> = Vec::new();
+        let mut known: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut cells_measured: Vec<(u8, usize)> = Vec::new();
+        let mut add = |field: u8, text: String, cells_measured: &mut Vec<(u8, usize)>| {
+            let slot = *known.entry(text.clone()).or_insert_with(|| {
+                texts.push(text);
+                texts.len() - 1
+            });
+            cells_measured.push((field, slot));
+        };
+        for (entry, cells) in pane.entries.iter().zip(&pane.view.cells) {
+            if entry.drive {
+                continue;
+            }
+            add(0, cells[0].clone(), &mut cells_measured);
+            if !entry.is_dir {
+                add(1, cells[1].clone(), &mut cells_measured);
+                if entry.size > 0 {
+                    add(3, cells[3].clone(), &mut cells_measured);
                 }
-                let name = measure(&cells[0]);
-                fm.max[0] = fm.max[0].max(name);
-                fm.name_sum += name;
-                fm.items += 1;
-                if !entry.is_dir {
-                    let ext = measure(&cells[1]);
-                    fm.max[1] = fm.max[1].max(ext);
-                    if ext > 0.0 {
-                        ext_sum += ext;
+            }
+            // Original GetFieldMaxWidth field 4: GetTextWidth(wsprintf("%s  %s", DateToStr, TimeToStr)) (0x92dba4, two spaces). The cell keeps one
+            // LIST_DATE_TIME_GAP between them, so measure that as two spaces. Fixed: one gap left the column too narrow for the date at the left
+            // and the time at the right, and the cell fell back to "2009-06-11 05:...".
+            add(4, cells[4].replace(ndr::listing::LIST_DATE_TIME_GAP, "  "), &mut cells_measured);
+            add(6, cells[6].clone(), &mut cells_measured);
+        }
+        let widths = self
+            .gdi_list_widths(&texts)
+            .unwrap_or_else(|| ui.fonts_mut(|fonts| texts.iter().map(|t| t.chars().map(|c| fonts.glyph_width(&font, c)).sum::<f32>().ceil()).collect()));
+        for (field, slot) in cells_measured {
+            let width = widths[slot];
+            match field {
+                0 => {
+                    fm.max[0] = fm.max[0].max(width);
+                    fm.name_sum += width;
+                    fm.items += 1;
+                }
+                1 => {
+                    fm.max[1] = fm.max[1].max(width);
+                    if width > 0.0 {
+                        ext_sum += width;
                         ext_count += 1;
                     }
-                    if entry.size > 0 {
-                        fm.max[3] = fm.max[3].max(measure(&cells[3]));
-                    }
                 }
-                // Original GetFieldMaxWidth field 4: GetTextWidth(wsprintf("%s  %s", DateToStr, TimeToStr)) (0x92dba4, two spaces). The cell keeps one
-                // LIST_DATE_TIME_GAP between them, so measure that as two spaces. Fixed: one gap left the column too narrow for the date at the left
-                // and the time at the right, and the cell fell back to "2009-06-11 05:...".
-                fm.max[4] = fm.max[4].max(measure(&cells[4].replace(ndr::listing::LIST_DATE_TIME_GAP, "  ")));
-                fm.max[6] = fm.max[6].max(measure(&cells[6]));
+                field => fm.max[field as usize] = fm.max[field as usize].max(width),
             }
-        });
+        }
         if ext_count > 0 {
             fm.ext_average = (ext_sum / ext_count as f32).floor();
         }

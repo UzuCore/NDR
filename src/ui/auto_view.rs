@@ -571,7 +571,22 @@ impl App {
                         };
                         let framed = false;
                         // Original DrawListItem kind 4: a drive item spans the cell with its name and a free space bar.
-                        let name_rect = egui::Rect::from_min_size(cell.min, egui::vec2(if entry.drive { column_width } else { name_width.min(column_width) }, item_height));
+                        // Kind 1 (folder): the name may run across the extension cell (when not joined) and the shown size cell, up to 5 px before the
+                        // size text (RES DIR "[폴더]" or the counted size). Previously a folder name stopped at the name cell and got "…" early.
+                        let name_span = if entry.drive {
+                            column_width
+                        } else if entry.is_dir {
+                            let ext = widths[0].unwrap_or(0.0);
+                            let size = widths[2].map_or(0.0, |size_width| {
+                                let counted = pane.folder_sizes.get(&entry.path).map(|s| s.clone().unwrap_or_else(|| "…".into()));
+                                let size_text = counted.as_deref().unwrap_or(texts[DetailColumn::Size.index()].as_str());
+                                (size_width - self.list_text_width(ui, size_text) - 5.0).max(0.0)
+                            });
+                            (name_width + ext + size).min(column_width)
+                        } else {
+                            name_width.min(column_width)
+                        };
+                        let name_rect = egui::Rect::from_min_size(cell.min, egui::vec2(name_span, item_height));
                         let response = if entry.drive {
                             let info = pane.drive_infos.get(&entry.path).map(|(_, kind, sizes)| (*kind, *sizes));
                             let mut child = ui.new_child(egui::UiBuilder::new().max_rect(name_rect));
@@ -582,7 +597,7 @@ impl App {
                             }
                             App::name_cell(&mut ui.new_child(egui::UiBuilder::new().max_rect(name_rect)), name_rect.size(), icon.as_ref(), icons_shown, &label, name_color, list_style)
                         };
-                        let mut x = name_rect.right();
+                        let mut x = cell.left() + name_width.min(column_width);
                         for (metric, column) in METRICS.iter().enumerate().filter(|_| !entry.drive) {
                             if let Some(w) = widths[metric] {
                                 let folder_size = (*column == DetailColumn::Size && entry.is_dir).then(|| pane.folder_sizes.get(&entry.path).map(|s| s.clone().unwrap_or_else(|| "…".into()))).flatten();

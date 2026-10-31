@@ -332,16 +332,6 @@ impl App {
         // the font file of that face ("name Bold" etc., otherwise the nearest or regular face) is read and the "list" family rebuilt (the normal font when not found).
         let list_font = self.settings.text("ListFont", "Segoe UI");
         let style = (self.settings.values.get("ListFontStyle").and_then(|v| v.as_i64()).unwrap_or(0) & 0x0F) as u8;
-        let key = format!("{list_font}\u{0}{}", style & 3);
-        self.list_font_style = style;
-        if self.list_font_name.as_deref() != Some(key.as_str()) {
-            let data = native::styled_font_names(&list_font, style)
-                .iter()
-                .find_map(|name| (self.system.font_file)(name))
-                .and_then(|(path, index)| native::mapped_file(&path).map(|bytes| (bytes, index)));
-            super::set_app_fonts(ctx, data, style & 1 != 0);
-            self.list_font_name = Some(key);
-        }
         // C# version grid.FontSize = ListFontSize (pixels, default 14): the size applies only to the file list (panes.rs). Other text stays at the default 12 px.
         self.list_font_size = self
             .settings
@@ -350,6 +340,25 @@ impl App {
             .and_then(|v| v.as_f64())
             .unwrap_or(ndr::settings::DEFAULT_LIST_FONT_PIXELS)
             .clamp(8.0, 32.0) as f32;
+        let pixels = self.list_font_size.round() as i32;
+        let key = format!("{list_font}\u{0}{}\u{0}{pixels}", style & 3);
+        self.list_font_style = style;
+        if self.list_font_name.as_deref() != Some(key.as_str()) {
+            let data = native::styled_font_names(&list_font, style)
+                .iter()
+                .find_map(|name| (self.system.font_file)(name))
+                .and_then(|(path, index)| native::mapped_file(&path).map(|bytes| (bytes, index)));
+            // The original draws list text with GDI, which takes Korean from the face's linked font scaled to the face (Tahoma 16 px: 10 Hangul are
+            // 149 px; Malgun Gothic 16 px: 170 px). Scale the list family's Korean font by that ratio so drawn names fit the GDI-measured cells.
+            let hangul = "가".repeat(10);
+            let korean_scale = native::gdi_text_widths(&list_font, pixels, style, &[hangul.as_str()])
+                .zip(native::gdi_text_widths("Malgun Gothic", pixels, style, &[hangul.as_str()]))
+                .map(|(face, malgun)| face[0] as f32 / malgun[0].max(1) as f32)
+                .filter(|scale| (0.5..=1.5).contains(scale))
+                .unwrap_or(1.0);
+            super::set_app_fonts(ctx, data, style & 1 != 0, korean_scale);
+            self.list_font_name = Some(key);
+        }
         ctx.style_mut(|style| {
             for text_style in [
                 egui::TextStyle::Body,
