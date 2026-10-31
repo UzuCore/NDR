@@ -1555,6 +1555,8 @@ pub fn extract_entry_to_temp(archive: &Path, password: Option<&str>, key: &str, 
 }
 
 /// Temp folder where archive items are extracted one by one (%TEMP%\NDR).
+/// The original FUN_0040d9b8 uses %TEMP%\NexusFileTmp (created when missing); NDR keeps its own name so a running NexusFile
+/// and its cleanup never share the folder.
 pub fn temp_entry_root() -> PathBuf {
     std::env::temp_dir().join("NDR")
 }

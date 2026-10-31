@@ -269,6 +269,7 @@ unsafe fn put_clipboard(format: u32, bytes: &[u8]) -> Result<(), String> {
     }
     Ok(())
 }
+/// Original FUN_0040d354 (copy name/path/description and so on): OpenClipboard, EmptyClipboard, a GMEM_MOVEABLE copy as CF_UNICODETEXT.
 pub fn clipboard_text(text: &str) -> Result<(), String> {
     reject_nul(text)?;
     let data = wide(text);
