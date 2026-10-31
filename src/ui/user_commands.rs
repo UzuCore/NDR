@@ -45,7 +45,7 @@ fn original_program_part(command: &str) -> &str {
 }
 
 /// Original default function keys (default\nexusfile.ini [FuncKey]): internal commands used when nothing is assigned.
-fn original_default_function_key(key: &str) -> &'static str {
+pub(super) fn original_default_function_key(key: &str) -> &'static str {
     match key {
         "F2" => "#Rename",
         "F3" => "#CopyTo",

@@ -57,26 +57,31 @@ pub(super) fn binding_for(settings: &ndr::settings::Settings, key: &str) -> Opti
 
 pub(super) struct FunctionKeyEditorForm {
     ko: bool,
-    /// Current settings of F1-F12 (None = default).
+    /// Current settings of the listed keys (None = default).
     pub bindings: Vec<(String, Option<Binding>)>,
+    /// Bindings of keys the original list does not show (F1, F9-F12 from older NDR settings), kept unchanged when saving.
+    hidden: Vec<(String, Binding)>,
     pub grid: GridState,
 }
 
 impl FunctionKeyEditorForm {
     pub(super) fn new(settings: &ndr::settings::Settings, ko: bool) -> Self {
-        // C# F1-F12, then ^F1-^F11 from the original TfPreferences list (Ctrl+F1-F11, [FuncKey] "^F%d").
-        let keys = (1..=12).map(|n| format!("F{n}")).chain((1..=11).map(|n| format!("^F{n}")));
+        // Original TfPreferences lvFunctionKey: F2-F8 (the keys of the function key bar), then ^F1-^F11 (Ctrl+F1-F11, [FuncKey] "^F%d").
+        // Previously the C# F1-F12.
+        let keys = (2..=8).map(|n| format!("F{n}")).chain((1..=11).map(|n| format!("^F{n}")));
         let bindings: Vec<(String, Option<Binding>)> = keys.map(|key| { let b = binding_for(settings, &key); (key, b) }).collect();
+        let hidden = [1, 9, 10, 11, 12].iter().filter_map(|n| { let key = format!("F{n}"); binding_for(settings, &key).map(|b| (key, b)) }).collect();
         let mut grid = GridState::new(bindings.len());
         grid.click(0, egui::Modifiers::NONE, false);
-        Self { ko, bindings, grid }
+        Self { ko, bindings, hidden, grid }
     }
 
-    /// CreateRow: (key, name, kind, command, arguments).
+    /// CreateRow: (key, name, kind, command, arguments). An unassigned F2-F8 shows its original default command (default\nexusfile.ini [FuncKey],
+    /// "#Rename" ... "#RecycleBin") with no name, as the original list does.
     pub(super) fn row(&self, index: usize) -> [String; 5] {
         let (key, binding) = &self.bindings[index];
         match binding {
-            None => [key.clone(), String::new(), if self.ko { "기본" } else { "Default" }.into(), String::new(), String::new()],
+            None => [key.clone(), String::new(), if self.ko { "기본" } else { "Default" }.into(), super::user_commands::original_default_function_key(key).to_owned(), String::new()],
             Some(b) => [
                 key.clone(),
                 b.name.clone(),
@@ -87,9 +92,11 @@ impl FunctionKeyEditorForm {
         }
     }
 
-    /// Commit: only configured entries, normalized, as FunctionKeyBindings values.
+    /// Commit: only configured entries, normalized, as FunctionKeyBindings values (with the unlisted keys carried over).
     pub(super) fn result(&self) -> Value {
-        let map: Map<String, Value> = self.bindings.iter().filter_map(|(key, b)| b.as_ref().map(|b| (key.clone(), b.normalized().to_json()))).collect();
+        let listed = self.bindings.iter().filter_map(|(key, b)| b.as_ref().map(|b| (key.clone(), b.normalized().to_json())));
+        let hidden = self.hidden.iter().map(|(key, b)| (key.clone(), b.normalized().to_json()));
+        let map: Map<String, Value> = listed.chain(hidden).collect();
         Value::Object(map)
     }
 

@@ -248,15 +248,14 @@ fn function_key_editor_follows_csharp_in_english() {
     {
         // Original tsFunctionKey lvFunctionKey: the list inside the preferences window.
         let editor = &mut app.settings_form().unwrap().function_keys;
-        assert_eq!(editor.row(4), ["F5".to_owned(), "F5".to_owned(), "Internal".to_owned(), "#Refresh".to_owned(), String::new()], "legacy FunctionKeys are read");
-        assert_eq!(editor.row(8)[2], "User command");
-        assert_eq!(editor.row(0)[2], "Default");
-        // ^F1-^F11 (Ctrl+F1-F11) of the original TfPreferences list come after F12.
-        assert_eq!(editor.bindings.len(), 23);
-        assert_eq!(editor.row(12)[0], "^F1");
-        assert_eq!(editor.row(14)[..4], ["^F3".to_owned(), "^F3".to_owned(), "User command".to_owned(), "calc.exe".to_owned()]);
-        assert_eq!(editor.row(22)[0], "^F11");
-        editor.grid.click(1, egui::Modifiers::NONE, false);
+        assert_eq!(editor.row(3), ["F5".to_owned(), "F5".to_owned(), "Internal".to_owned(), "#Refresh".to_owned(), String::new()], "legacy FunctionKeys are read");
+        assert_eq!(editor.row(0)[..4], ["F2".to_owned(), String::new(), "Default".to_owned(), "#Rename".to_owned()], "an unassigned F2-F8 shows the original default command");
+        // Original list: F2-F8, then ^F1-^F11 (Ctrl+F1-F11). F9 (C# only) is not listed but kept.
+        assert_eq!(editor.bindings.len(), 18);
+        assert_eq!(editor.row(7)[0], "^F1");
+        assert_eq!(editor.row(9)[..4], ["^F3".to_owned(), "^F3".to_owned(), "User command".to_owned(), "calc.exe".to_owned()]);
+        assert_eq!(editor.row(17)[0], "^F11");
+        editor.grid.click(0, egui::Modifiers::NONE, false);
     }
     // Edit F2: user command. Original btnOkClick silently uses the command file name (without extension) when the name is empty.
     app.settings_action(SettingsAction::EditFunctionKey, &ctx);
@@ -292,7 +291,7 @@ fn function_key_editor_follows_csharp_in_english() {
     }
     app.function_key_edit_done(true, &ctx);
     // After resetting F5, OK -> FunctionKeyBindings of the settings copy; the old F1-F12 are removed.
-    app.settings_form().unwrap().function_keys.grid.click(4, egui::Modifiers::NONE, false);
+    app.settings_form().unwrap().function_keys.grid.click(3, egui::Modifiers::NONE, false);
     app.settings_action(SettingsAction::ResetFunctionKey, &ctx);
     app.settings_action(SettingsAction::Ok, &ctx);
     assert_eq!(app.settings.values["FunctionKeyBindings"], serde_json::json!({
