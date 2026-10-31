@@ -361,6 +361,15 @@ fn parent_item_for(pane: &Pane) -> Option<Entry> {
         return None;
     }
     let parent = pane.path.parent()?;
+    // Original GetList (0x45a34c) keeps the ".." that FindFirstFileW(folder\*) reports, with its attributes and last write time (the parent
+    // folder's on NTFS: "_H_S" below a drive root). Only when the listing has none does it add ".." with attribute 0x10 and GetFolderTime.
+    // Previously NDR always used the current folder's time and attribute 0x10.
+    if let Some((attributes, modified)) = native::dot_dot_entry(&pane.path) {
+        let mut entry = Entry::parent_item(parent.to_path_buf(), modified);
+        entry.attributes = attributes;
+        entry.hidden = attributes & ndr::listing::FILE_ATTRIBUTE_HIDDEN != 0;
+        return Some(entry);
+    }
     let modified = std::fs::metadata(&pane.path).and_then(|m| m.modified()).ok();
     Some(Entry::parent_item(parent.to_path_buf(), modified))
 }

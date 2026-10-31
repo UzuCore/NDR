@@ -63,6 +63,40 @@ pub fn reject_nul(text: &str) -> Result<(), String> {
     }
 }
 
+/// The ".." entry the file system reports in FindFirstFileW(folder\*), as original GetList (0x45a34c) adds it: its dwFileAttributes and
+/// ftLastWriteTime (NTFS reports the parent folder there, so below a drive root it carries the root's hidden and system bits).
+/// Stops at that entry. None when the listing has no ".." (the original then adds its own ".." with attribute 0x10 and GetFolderTime).
+pub fn dot_dot_entry(folder: &Path) -> Option<(u32, Option<std::time::SystemTime>)> {
+    let pattern = folder.join("*");
+    reject_nul(&pattern.to_string_lossy()).ok()?;
+    let dot_dot: Vec<u16> = "..".encode_utf16().collect();
+    // SAFETY: NUL-terminated pattern; the find handle is closed before returning.
+    unsafe {
+        let mut data: WIN32_FIND_DATAW = std::mem::zeroed();
+        let handle = FindFirstFileW(wide(&pattern).as_ptr(), &mut data);
+        if handle == INVALID_HANDLE_VALUE {
+            return None;
+        }
+        let mut found = None;
+        loop {
+            let length = data.cFileName.iter().position(|&c| c == 0).unwrap_or(data.cFileName.len());
+            if data.cFileName[..length] == dot_dot[..] {
+                let ticks = ((data.ftLastWriteTime.dwHighDateTime as u64) << 32) | data.ftLastWriteTime.dwLowDateTime as u64;
+                let time = ticks
+                    .checked_sub(116_444_736_000_000_000)
+                    .map(|since| std::time::UNIX_EPOCH + std::time::Duration::from_nanos(since.saturating_mul(100)));
+                found = Some((data.dwFileAttributes, time));
+                break;
+            }
+            if FindNextFileW(handle, &mut data) == 0 {
+                break;
+            }
+        }
+        FindClose(handle);
+        found
+    }
+}
+
 /// Windows CommandLineToArgvW quoting, including backslashes preceding quotes/end.
 pub fn quote_arg(arg: &str) -> String {
     let mut result = String::from("\"");
@@ -715,18 +749,27 @@ pub fn thumbnail(path: &Path, side: u32) -> Result<(usize, usize, Vec<u8>), Stri
     use windows_sys::Win32::Graphics::Gdi::*;
     reject_nul(&path.to_string_lossy())?;
     let side = side.clamp(16, 256) as i32;
+    // One extraction at a time, like the original's single image thread (FUN_007de870): concurrent GetImage calls from the per-item workers
+    // returned E_PENDING (0x8000000A) for executables, documents and drive roots, which then showed "[FILE]"/"[DIR]" in the thumbnail view.
+    // E_PENDING is also retried a few times.
+    static SHELL_THUMBNAILS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _one_at_a_time = SHELL_THUMBNAILS.lock().unwrap_or_else(|e| e.into_inner());
     unsafe {
         let initialized = CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_ok();
         let image = (|| -> Result<_, String> {
             let factory: IShellItemImageFactory =
                 SHCreateItemFromParsingName(PCWSTR(wide(path).as_ptr()), None)
                     .map_err(|e| e.to_string())?;
-            factory
-                .GetImage(
-                    SIZE { cx: side, cy: side },
-                    SIIGBF_BIGGERSIZEOK | SIIGBF_RESIZETOFIT,
-                )
-                .map_err(|e| e.to_string())
+            let mut tries = 0;
+            loop {
+                match factory.GetImage(SIZE { cx: side, cy: side }, SIIGBF_BIGGERSIZEOK | SIIGBF_RESIZETOFIT) {
+                    Err(e) if e.code().0 as u32 == 0x8000_000A && tries < 20 => {
+                        tries += 1;
+                        std::thread::sleep(std::time::Duration::from_millis(25));
+                    }
+                    result => break result.map_err(|e| e.to_string()),
+                }
+            }
         })();
         if initialized {
             CoUninitialize();
@@ -2055,6 +2098,36 @@ mod tests {
 
     /// Original DoGetData 0x7b0d48 CFSTR_SHELLIDLIST: count, count + 1 offsets, the folder id list, then one relative id list per item;
     /// items from different folders give none.
+    /// Original GetList (0x45a34c): ".." comes from FindFirstFileW(folder\*); on NTFS it describes the parent folder.
+    #[test]
+    fn dot_dot_entry_reports_the_parent_folder() {
+        let root = std::env::temp_dir().join(format!("ndr-dotdot-{}", std::process::id()));
+        let child = root.join("child");
+        std::fs::create_dir_all(&child).unwrap();
+        let (attributes, time) = super::dot_dot_entry(&child).expect("NTFS lists ..");
+        assert_ne!(attributes & 0x10, 0);
+        let parent_time = std::fs::metadata(&root).unwrap().modified().unwrap();
+        let gap = time.unwrap().duration_since(parent_time).unwrap_or_else(|e| e.duration());
+        assert!(gap.as_secs() < 2, "{gap:?}");
+        let _ = std::fs::remove_dir_all(root);
+    }
+    /// Thumbnails asked from several workers at once all arrive (the shell answered E_PENDING to concurrent GetImage calls before they were serialized).
+    #[test]
+    fn concurrent_thumbnails_all_arrive() {
+        let root = std::env::temp_dir().join(format!("ndr-thumbs-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("folder")).unwrap();
+        let mut paths = vec![root.join("folder"), std::path::PathBuf::from("C:\\")];
+        for name in ["a.txt", "b.json", "c.ini", "d.csv", "e.log", "f.xml"] {
+            std::fs::write(root.join(name), b"x").unwrap();
+            paths.push(root.join(name));
+        }
+        let handles: Vec<_> = paths.into_iter().map(|p| std::thread::spawn(move || (super::thumbnail(&p, 80).map(|(w, h, _)| (w, h)), p))).collect();
+        for h in handles {
+            let (result, path) = h.join().unwrap();
+            assert!(result.is_ok(), "{path:?}: {result:?}");
+        }
+        let _ = std::fs::remove_dir_all(root);
+    }
     #[test]
     fn shell_id_list_follows_the_cida_layout() {
         use std::path::PathBuf;

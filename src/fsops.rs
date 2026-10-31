@@ -29,7 +29,8 @@ impl Entry {
     pub fn is_parent(&self) -> bool {
         self.is_dir && !self.drive && self.name == ".."
     }
-    /// The ".." item. Its path is the parent location (opening goes up) and its time the current folder's time (original GetFolderTime).
+    /// The ".." item. Its path is the parent location (opening goes up). A local listing replaces the time and attributes with those of the
+    /// file system's own ".." entry (original GetList 0x45a34c); otherwise the time given here (original GetFolderTime) and attribute 0x10.
     pub fn parent_item(path: PathBuf, modified: Option<SystemTime>) -> Self {
         Self { path, name: "..".into(), is_dir: true, size: 0, modified, hidden: false, attributes: 0x10, drive: false }
     }

@@ -479,6 +479,15 @@ impl App {
                                 || (self.active == index && self.panes[index].cursor == row);
                             let icon = self.file_icon(ui.ctx(), index, row);
                             let icon = self.row_icon_for_skin(index, row, icon);
+                            // Thumbnail placeholder icon: the list icon, or the shell icon even with ShowIcons off (see DrawThumbnailItem below).
+                            let thumb_icon = if !thumbnails {
+                                None
+                            } else if icon.is_some() {
+                                icon.clone()
+                            } else {
+                                let fallback = self.any_path_icon(ui.ctx(), &entry.path, entry.is_dir);
+                                self.row_icon_for_skin(index, row, fallback)
+                            };
                             // Original DrawThumbnailItem: for a dimmed item (cut·hidden·SFTP "." name), the preview image uses alpha 0x55.
                             let ghosted = self.row_ghosted(index, row);
                             // Original DrawThumbnailItem(0x7da1c4) kind 4: instead of the name, "%s (%s:)" (volume name, drive letter), with a free-space bar below the text.
@@ -518,18 +527,13 @@ impl App {
                                                         texture.id(),
                                                         egui::vec2(thumb, thumb),
                                                     )).tint(tint));
-                                                } else if let Some(icon) = &icon {
-                                                    // C# FileVisualConverter: when there is no preview, the icon.
+                                                } else if let Some(icon) = &thumb_icon {
+                                                    // Original DrawThumbnailItem (0x7da1c4): until the item has a thumbnail (+0x54 == -1) it draws the shell
+                                                    // image list icon (GetIconIndex, size 2) centered in the image square, whatever the list's icon setting.
+                                                    // Fixed: NDR wrote "[DIR]"/"[FILE]" there when list icons were off.
                                                     ui.add_sized([thumb, thumb], egui::Image::new((icon.id(), egui::vec2(32.0, 32.0))));
                                                 } else {
-                                                    ui.add_sized(
-                                                        [thumb, thumb],
-                                                        egui::Label::new(if entry.is_dir {
-                                                            "[DIR]"
-                                                        } else {
-                                                            "[FILE]"
-                                                        }),
-                                                    );
+                                                    ui.add_space(thumb);
                                                 }
                                             }
                                             // The skin theme uses NXFORE like the original (regardless of kind); otherwise the C# version's color.
