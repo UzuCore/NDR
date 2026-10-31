@@ -632,8 +632,13 @@ impl App {
     /// 고르면(FUN_0048e320) 제어판은 control.exe, 휴지통은 셸로 열고(FUN_00432fe4), 가상 폴더는 셸로 열고, 폴더면 그 패널을 옮긴다.
     pub(super) fn pane_tree_ui(&mut self, ui: &mut egui::Ui, index: usize, rect: egui::Rect) {
         use ndr::shell_tree::{ShellNode, Special, same_key};
-        // FUN_0048e1ac: 바탕 = 목록 Color(NXBACK), 글 = GetBasic(1)(NXFORE). 고른 줄은 NXSELECT 바탕에 NXBACK 글.
-        let (background, text, select) = (self.basic_list_color("NXBACK"), self.basic_list_color("NXFORE"), self.basic_list_color("NXSELECT"));
+        // FUN_0048e1ac: 바탕 = 목록 Color(NXBACK), 글 = GetBasic(1)(NXFORE).
+        // 고른 줄: VCL TCustomTreeView 그리기가 고른 항목(CDIS_SELECTED)의 붓을 clHighlight로 두고, FUN_006c9388(트리, 0) =
+        // HideSelection 끔(TVS_SHOWSELALWAYS)이라 초점이 없어도 그렇다. OnCustomDrawItem FUN_0048e104는 고른 항목의 글 색을 트리 바탕
+        // (Color, +0x7c)이 검정(0)이면 흰색(초점 0xFEFEFE, 아니면 0xFFFFFF), 아니면 트리 글꼴 색(NXFORE)으로 둔다.
+        // 고친 것: 전에는 NXSELECT 바탕에 NXBACK 글로 그렸다(원본은 시스템 강조 색).
+        let (background, text) = (self.basic_list_color("NXBACK"), self.basic_list_color("NXFORE"));
+        let (select, selected_text) = tree_selection_colors(background, text, native::system_color(13));
         ui.painter().rect_filled(rect, 0.0, background);
         let path = self.panes[index].path.clone();
         let local = self.panes[index].archive.is_none() && self.panes[index].remote.is_none() && !super::panes::is_drives(&path);
@@ -723,7 +728,7 @@ impl App {
                 if let Some(icon) = self.shell_node_icon(ui.ctx(), node) {
                     ui.painter().image(icon.id(), egui::Rect::from_center_size(egui::pos2(row.left() + indent + 25.0, row.center().y), egui::vec2(16.0, 16.0)), egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
                 }
-                ui.painter().galley(egui::pos2(text_rect.left() + 2.0, row.center().y - galley.size().y / 2.0), galley, if selected { background } else { text });
+                ui.painter().galley(egui::pos2(text_rect.left() + 2.0, row.center().y - galley.size().y / 2.0), galley, if selected { selected_text } else { text });
                 if response.clicked() {
                     let on_arrow = response.interact_pointer_pos().is_some_and(|p| arrow.contains(p));
                     if on_arrow && expandable {
@@ -922,10 +927,25 @@ impl App {
     }
 }
 
+/// 패널 폴더 트리 고른 줄 (바탕, 글) 색: VCL TCustomTreeView가 고른 항목의 붓을 clHighlight(`highlight` = GetSysColor(13))로 두고,
+/// 원본 OnCustomDrawItem FUN_0048e104가 글 색을 트리 바탕이 검정이면 흰색, 아니면 트리 글꼴 색으로 둔다.
+pub(super) fn tree_selection_colors(background: Color32, fore: Color32, highlight: (u8, u8, u8)) -> (Color32, Color32) {
+    let (r, g, b) = highlight;
+    (Color32::from_rgb(r, g, b), if background == Color32::BLACK { Color32::WHITE } else { fore })
+}
+
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pane_tree_selection_uses_the_system_highlight_like_the_ttreeview() {
+        let highlight = (0, 120, 215);
+        // 바탕이 검정(원본 처음 값 NXBACK 000000)이면 흰 글, 아니면 트리 글꼴 색(NXFORE). 바탕은 늘 시스템 강조 색.
+        assert_eq!(tree_selection_colors(Color32::BLACK, Color32::from_gray(0xC0), highlight), (Color32::from_rgb(0, 120, 215), Color32::WHITE));
+        assert_eq!(tree_selection_colors(Color32::WHITE, Color32::from_rgb(1, 2, 3), highlight), (Color32::from_rgb(0, 120, 215), Color32::from_rgb(1, 2, 3)));
+    }
 
     /// 글자 10px, '.'만 2px인 가짜 글꼴.
     fn glyph(c: char) -> f32 {
