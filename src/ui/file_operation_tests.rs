@@ -248,7 +248,7 @@ fn conflict_buttons_follow_the_original_tffileexists() {
 fn conflict_window_progress_window_and_reports_follow_csharp() {
     let (root, ctx, mut app) = fixture("conflict");
     let (left, right) = (root.join("left"), root.join("right"));
-    // Resume: when the existing file is the front part of the source, only the rest is written. The progress window knows source, destination and total file count.
+    // Local copy (original FUN_004116dc): btnResume stays hidden; overwrite replaces the file. The progress window knows source, destination and total file count.
     copy_to_other(&mut app, &ctx, &["a.txt"]);
     let job = app.job.as_ref().expect("a job");
     let info = job.progress.clone().expect("FileOperationProgressWindow");
@@ -256,14 +256,15 @@ fn conflict_window_progress_window_and_reports_follow_csharp() {
     wait(&mut app, &ctx, |app| conflict(app).is_some());
     {
         let form = conflict(&app).unwrap();
-        assert!(form.can_resume() && !form.source_dir && form.compatible(ConflictChoice::Resume));
+        assert!(!form.allow_resume && !form.source_dir);
+        assert!(!super::file_operation::conflict_buttons(form).iter().any(|(b, _)| *b == super::file_operation::ConflictButton::Resume), "no resume button for a local copy");
         // Original imgOrg / imgNew: 32x32 shell icons of both items (fake 4x4 in tests).
         assert!(form.icons.iter().all(|i| i.as_ref().is_some_and(|(w, h, _)| (*w, *h) == (4, 4))));
     }
     assert_eq!(app.original_dialogs.last().unwrap().title, app.language_pack.text("formFileExists.Form.Caption", "?"));
     draw(&mut app, &ctx);
     assert!(conflict(&app).unwrap().textures.iter().all(|t| t.as_ref().is_some_and(|t| t.size() == [4, 4])), "icons are drawn");
-    app.answer_dialog(DialogResult::FileConflict(Some((ConflictChoice::Resume, false))), &ctx);
+    app.answer_dialog(DialogResult::FileConflict(Some((ConflictChoice::Overwrite, false))), &ctx);
     wait(&mut app, &ctx, finished);
     assert_eq!(fs::read(right.join("a.txt")).unwrap(), b"resumable payload");
     assert_eq!(app.status, "요청한 1개 항목을 복사했습니다.");

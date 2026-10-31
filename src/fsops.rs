@@ -1023,12 +1023,13 @@ impl Job {
     }
     fn conflict(&self, s: &Path, d: &Path) -> Result<ConflictChoice, String> {
         let (tx, rx) = mpsc::channel();
-        let plain = |p: &Path| fs::symlink_metadata(p).map(|m| !is_reparse(&m)).unwrap_or(false);
         self.events
             .send(Event::Conflict {
                 source: s.to_owned(),
                 destination: d.to_owned(),
-                allow_resume: plain(s) && plain(d),
+                // Original local copy (FUN_004116dc) keeps btnResume hidden (DFM Visible = False); only remote transfers offer resume.
+                // Previously the C# rule showed it for every plain file pair.
+                allow_resume: false,
                 reply: tx,
             })
             .map_err(|_| "UI disconnected".to_string())?;
