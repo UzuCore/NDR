@@ -9,27 +9,27 @@ use std::{
     path::Path,
     sync::atomic::AtomicBool,
 };
-/// C# DiskCopyWindow.DriveChoice: 준비된 이동식 드라이브(DriveInfo: Removable·IsReady, VolumeLabel, TotalSize).
-/// label은 볼륨 이름 그대로(비어 있으면 화면이 "이동식 디스크"로 보인다).
+/// C# DiskCopyWindow.DriveChoice: a ready removable drive (DriveInfo: Removable, IsReady, VolumeLabel, TotalSize).
+/// label is the volume name as is (when empty the screen shows "removable disk").
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RemovableDrive {
     pub root: String,
     pub label: String,
     pub bytes: u64,
 }
-/// C# PhysicalDiskChoice(Number, Bytes): 이동식·핫플러그이고 Windows·NDR이 없는 물리 디스크.
+/// C# PhysicalDiskChoice(Number, Bytes): a removable or hot-plug physical disk without Windows or NDR on it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PhysicalDisk {
     pub number: u32,
     pub bytes: u64,
 }
 impl PhysicalDisk {
-    /// 이 모듈의 장치 이름(\\.\PhysicalDriveN).
+    /// Device name of this module (\\.\PhysicalDriveN).
     pub fn device(&self) -> String {
         format!("\\\\.\\PhysicalDrive{}", self.number)
     }
 }
-/// 진행 알림(복사한 바이트, 전체 바이트, 읽기 검증 단계인가 = C# DiskCopyProgress.Verifying).
+/// Progress report (bytes copied, total bytes, whether in the verify phase = C# DiskCopyProgress.Verifying).
 pub type Progress<'a> = &'a mut dyn FnMut(u64, u64, bool);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DeviceId {
@@ -337,7 +337,7 @@ mod win {
         names.sort();
         Ok(names)
     }
-    /// IOCTL_STORAGE_GET_HOTPLUG_INFO: MediaRemovable 또는 DeviceHotplug.
+    /// IOCTL_STORAGE_GET_HOTPLUG_INFO: MediaRemovable or DeviceHotplug.
     fn hotplug(file: &File) -> Result<bool, String> {
         let mut info = [0; 8];
         info[..4].copy_from_slice(&8u32.to_le_bytes());
@@ -438,8 +438,8 @@ mod win {
         }
         Ok(())
     }
-    /// C# DiskCopyWindow.GetReadyRemovableDrives: DriveType Removable이고 준비된(볼륨 정보를 읽는) 드라이브,
-    /// 이름과 전체 크기(TotalSize = GetDiskFreeSpaceExW)를 읽지 못하면 뺀다. 장치는 열지 않는다.
+    /// C# DiskCopyWindow.GetReadyRemovableDrives: drives with DriveType Removable that are ready (volume info readable);
+    /// left out when the name or total size (TotalSize = GetDiskFreeSpaceExW) cannot be read. The device is not opened.
     pub(super) fn ready_drives() -> Vec<RemovableDrive> {
         let letters = unsafe { GetLogicalDrives() };
         let mut result = Vec::new();
@@ -488,8 +488,8 @@ mod win {
         }
         result
     }
-    /// C# DiskImageService.GetReadyRemovablePhysicalDisks: 0..63 중 열리고, 이동식·핫플러그이고,
-    /// 보호 디스크(Windows·NDR)가 아니고, 길이가 양수인 디스크. 보호 디스크를 못 구하면 빈 목록.
+    /// C# DiskImageService.GetReadyRemovablePhysicalDisks: disks 0..63 that open, are removable or hot-plug,
+    /// are not protected disks (Windows, NDR), and have a positive length. An empty list when the protected disks cannot be determined.
     pub(super) fn ready_physical() -> Vec<PhysicalDisk> {
         let Ok(protected) = protected_disks() else {
             return Vec::new();
@@ -588,7 +588,7 @@ mod win {
         )
         .map_err(|e| format!("{e}; the raw target may have been partially written"))?;
         validated.file.sync_all().map_err(|e| e.to_string())?;
-        // C# RestoreImage/RestoreImageToPhysicalDisk: 읽기 검증은 고른 경우만(한 드라이브 복사의 확인란).
+        // C# RestoreImage/RestoreImageToPhysicalDisk: verification only when chosen (the checkbox of the one-drive copy).
         if verify {
             input.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
             validated
@@ -661,7 +661,7 @@ pub fn ready_removable_drives() -> Vec<RemovableDrive> {
         Vec::new()
     }
 }
-/// C# DiskImageService.GetReadyRemovablePhysicalDisks(장치를 여는 데 관리자 권한이 필요할 수 있다).
+/// C# DiskImageService.GetReadyRemovablePhysicalDisks (opening devices may need administrator rights).
 pub fn ready_removable_physical_disks() -> Vec<PhysicalDisk> {
     #[cfg(windows)]
     {
@@ -688,7 +688,7 @@ pub fn read_image(
         Err("Disk imaging requires Windows".into())
     }
 }
-/// 이미지를 장치에 쓴다. verify면 쓴 뒤 처음부터 다시 읽어 비교한다(C# verify 인자).
+/// Writes an image to a device. With verify, reads it back from the start and compares after writing (C# verify argument).
 pub fn write_image(
     image: &Path,
     device: &str,

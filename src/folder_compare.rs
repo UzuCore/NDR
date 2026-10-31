@@ -1,4 +1,4 @@
-//! C# FolderComparisonService(비교·차이 복사)와 FolderComparisonWindow의 결과 글(상태·종류·크기·날짜, TSV/HTML 저장).
+//! C# FolderComparisonService (comparison and difference copy) and the result texts of FolderComparisonWindow (state, kind, size, date; TSV/HTML save).
 use crate::listing::compare_text;
 use std::{
     collections::HashMap,
@@ -18,12 +18,12 @@ pub enum DifferenceKind {
     Different,
 }
 
-/// C# FolderDifference(없는 쪽의 날짜는 None).
+/// C# FolderDifference (the date of a missing side is None).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Difference {
-    /// 왼쪽 이름(왼쪽에 없으면 오른쪽 이름). 동기화·저장은 이 경로를 쓴다.
+    /// Left name (the right name when missing on the left). Sync and save use this path.
     pub relative: String,
-    /// 오른쪽 목록의 이름 그대로(원본 lvList Columns[3]: 오른쪽 목록 항목). 오른쪽에 없으면 relative와 같다.
+    /// The name as in the right list (original lvList Columns[3]: the right list item). Equal to relative when missing on the right.
     pub right_relative: String,
     pub kind: DifferenceKind,
     pub left_size: u64,
@@ -52,18 +52,18 @@ pub struct SyncResult {
     pub errors: Vec<String>,
 }
 
-/// C# FolderComparisonProgress(Message, Completed, Total)의 세 가지 보고. 글은 [`CompareProgress::message`].
+/// The three reports of C# FolderComparisonProgress(Message, Completed, Total). Text is [`CompareProgress::message`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CompareProgress {
-    /// Index: 256개마다 "{왼쪽/오른쪽 폴더} 검색 중 · N개 확인"(전체 없음).
+    /// Index: every 256 items "searching {left/right folder} · N checked" (no total).
     Scanning { left: bool, scanned: usize },
-    /// Index 끝: "{…} 검색 완료 · N개 항목"(scanned / scanned).
+    /// Index end: "{...} search done · N items" (scanned / scanned).
     Scanned { left: bool, count: usize, scanned: usize },
-    /// 비교: "파일 비교 중"(completed / total).
+    /// Compare: "comparing files" (completed / total).
     Comparing { completed: usize, total: usize },
 }
 
-/// .NET "N0"(천 단위 구분).
+/// .NET "N0" (thousands separators).
 fn n0(value: usize) -> String {
     crate::parity::format_size(value as u64, "B", true).trim_end_matches(" B").to_owned()
 }
@@ -86,7 +86,7 @@ impl CompareProgress {
         }
     }
 
-    /// (완료, 전체). 전체가 없으면 움직이는 진행 막대.
+    /// (done, total). An indeterminate progress bar without a total.
     pub fn counts(&self) -> (usize, Option<usize>) {
         match *self {
             Self::Scanning { scanned, .. } => (scanned, None),
@@ -114,7 +114,7 @@ fn is_within(root: &str, candidate: &str) -> bool {
     candidate.to_lowercase().starts_with(&prefix.to_lowercase()) || candidate.eq_ignore_ascii_case(root.trim_end_matches('\\'))
 }
 
-/// EnsureDistinctRoots: 같거나 서로 포함하면 Err.
+/// EnsureDistinctRoots: Err when equal or nested.
 pub fn ensure_distinct_roots(first: &Path, second: &Path) -> Result<(), String> {
     let (a, b) = (trimmed(first), trimmed(second));
     if crate::names::equals_ignore_case(&a, &b) || is_within(&a, &b) || is_within(&b, &a) {
@@ -129,8 +129,8 @@ struct Item {
     dir: bool,
 }
 
-/// Index: 재분석 지점은 건너뛰고(내려가지도 않음), 하위 폴더 포함이면 깊이 우선. 상대 경로 → 항목, 읽지 못한 것은 issues.
-/// 확인한 항목(오류 포함) 256개마다와 끝에 진행을 알린다.
+/// Index: skips reparse points (not descending either), depth first when subfolders are included. Relative path -> entry, unreadable ones go to issues.
+/// Reports progress every 256 checked entries (including errors) and at the end.
 fn index(root: &Path, recursive: bool, left: bool, cancel: &AtomicBool, progress: &mut dyn FnMut(CompareProgress)) -> Result<(HashMap<String, (String, Item)>, Vec<String>), String> {
     if !root.is_dir() {
         return Err(format!("폴더를 찾을 수 없습니다: {}", root.display()));
@@ -162,7 +162,7 @@ fn index(root: &Path, recursive: bool, left: bool, cancel: &AtomicBool, progress
                 }
             };
             let path = entry.path();
-            // DirEntry::metadata(Windows: FindNextFileW 값, 링크를 따라가지 않음)는 symlink_metadata와 같은 뜻이고 파일마다 열지 않는다.
+            // DirEntry::metadata (on Windows the FindNextFileW values, not following links) means the same as symlink_metadata and does not open each file.
             let metadata = match entry.metadata() {
                 Ok(m) => m,
                 Err(error) => {
@@ -216,8 +216,8 @@ fn contents_equal(left: &Path, right: &Path, cancel: &AtomicBool) -> std::io::Re
     }
 }
 
-/// CompareAsync: 두 쪽 상대 경로의 합집합을 문화권 순서로. 폴더끼리는 같음, 파일은 크기 → (내용 또는 수정 시각).
-/// 중단하면 Err("Cancelled")(동기화는 일부 결과로 복사하지 않는다).
+/// CompareAsync: the union of both sides' relative paths in culture order. Folders compare equal, files by size -> (content or modification time).
+/// Stopping gives Err("Cancelled") (sync never copies from partial results).
 pub fn compare(left: &Path, right: &Path, recursive: bool, contents: bool, cancel: &AtomicBool, progress: &mut dyn FnMut(CompareProgress)) -> Result<(Vec<Difference>, Vec<String>), String> {
     match compare_partial(left, right, recursive, contents, cancel, progress)? {
         (_, _, true) => Err("Cancelled".into()),
@@ -225,8 +225,8 @@ pub fn compare(left: &Path, right: &Path, recursive: bool, contents: bool, cance
     }
 }
 
-/// 원본 btnOkClick(0x41d464): 비교 루프 안에서 중단(+0x410)하면 거기까지 넣은 줄은 lvList에 남는다. (결과, 읽지 못함, 중단했는지).
-/// 목록을 읽는 동안 중단하면 Err("Cancelled").
+/// Original btnOkClick (0x41d464): stopping (+0x410) inside the comparison loop keeps the rows inserted so far in lvList. (results, unreadable, whether stopped).
+/// Stopping while reading the lists gives Err("Cancelled").
 pub fn compare_partial(left: &Path, right: &Path, recursive: bool, contents: bool, cancel: &AtomicBool, progress: &mut dyn FnMut(CompareProgress)) -> Result<(Vec<Difference>, Vec<String>, bool), String> {
     let (left, right) = (full(left), full(right));
     ensure_distinct_roots(&left, &right)?;
@@ -257,7 +257,7 @@ pub fn compare_partial(left: &Path, right: &Path, recursive: bool, contents: boo
                 } else if l.dir {
                     true
                 } else if contents {
-                    // 원본 FUN_0041cd10: 크기(GetFileSize)가 다르면 다름, 같으면 0xffff 단위로 내용 비교.
+                    // Original FUN_0041cd10: different when the size (GetFileSize) differs, otherwise compares content in 0xffff chunks.
                     if l.length != r.length {
                         false
                     } else {
@@ -273,7 +273,7 @@ pub fn compare_partial(left: &Path, right: &Path, recursive: bool, contents: boo
                         }
                     }
                 } else {
-                    // 원본 0x41d464: 내용 비교를 끄면 xilesShell CompareFileTime(마지막 수정 시각) == 0만 본다(크기는 보지 않음).
+                    // Original 0x41d464: with content comparison off, only xilesShell CompareFileTime (last modification time) == 0 is checked (size is not).
                     l.modified == r.modified
                 };
                 Difference { relative: name.clone(), right_relative: right_name, kind: if same { DifferenceKind::Same } else { DifferenceKind::Different }, left_size: l.length, right_size: r.length, left_modified: Some(l.modified), right_modified: Some(r.modified), left_dir: l.dir, right_dir: r.dir }
@@ -288,7 +288,7 @@ pub fn compare_partial(left: &Path, right: &Path, recursive: bool, contents: boo
     Ok((results, issues, false))
 }
 
-/// 결과 창 글(FolderComparisonRow).
+/// Result window text (FolderComparisonRow).
 pub fn status_text(kind: DifferenceKind, korean: bool) -> &'static str {
     match (kind, korean) {
         (DifferenceKind::Same, true) => "같음",
@@ -333,8 +333,8 @@ fn html(value: &str) -> String {
     value.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&#39;")
 }
 
-/// 결과 글의 머리글: (선택/복사, 상태, 종류, 상대 경로, 왼쪽 크기, 오른쪽 크기, 왼쪽 수정 날짜, 오른쪽 수정 날짜).
-/// C#은 언제나 한국어 글이다. 영어 화면에서는 영어로 쓴다(인계 문서의 차이 목록).
+/// Headers of the result text: (select/copy, state, kind, relative path, left size, right size, left modified date, right modified date).
+/// C# always uses Korean text. An English UI writes English (difference list of the handoff document).
 pub fn column_titles(korean: bool) -> [&'static str; 8] {
     if korean {
         ["복사", "상태", "종류", "상대 경로", "왼쪽 크기", "오른쪽 크기", "왼쪽 수정 날짜", "오른쪽 수정 날짜"]
@@ -356,7 +356,7 @@ fn unreadable_heading(korean: bool) -> &'static str {
     if korean { "읽지 못한 항목" } else { "Unreadable items" }
 }
 
-/// SaveResults의 TSV(.html이 아닌 모든 확장자). 첫 열은 "선택"(예/아니요).
+/// TSV of SaveResults (every extension other than .html). The first column is "select" (yes/no).
 pub fn report_tsv(rows: &[(Difference, bool)], issues: &[String], korean: bool) -> String {
     let titles = column_titles(korean);
     let mut out = format!("{}\t{}\r\n", if korean { "선택" } else { "Selected" }, titles[1..].join("\t"));
@@ -384,7 +384,7 @@ pub fn report_tsv(rows: &[(Difference, bool)], issues: &[String], korean: bool) 
     out
 }
 
-/// SaveResults의 HTML.
+/// HTML of SaveResults.
 pub fn report_html(title: &str, left: &str, right: &str, rows: &[(Difference, bool)], issues: &[String], select_for_sync: bool, korean: bool) -> String {
     let titles = column_titles(korean);
     let mut out = String::new();
@@ -436,7 +436,7 @@ pub fn report_html(title: &str, left: &str, right: &str, rows: &[(Difference, bo
     out
 }
 
-/// EnsureNoReparseTraversal: 루트 안이고, 지나가는(대상 포함) 경로에 재분석 지점이 없어야 한다.
+/// EnsureNoReparseTraversal: inside the root, and the traversed path (including the destination) has no reparse points.
 fn ensure_no_reparse(root: &Path, candidate: &Path, include_target: bool) -> Result<(), String> {
     let root = full(root);
     let candidate = full(candidate);
@@ -455,7 +455,7 @@ fn ensure_no_reparse(root: &Path, candidate: &Path, include_target: bool) -> Res
     Ok(())
 }
 
-/// 바꿔 놓은 항목(.ndr-sync-replaced-…)을 지운다(휴지통 설정을 따름).
+/// Removes replaced items (.ndr-sync-replaced-...) (following the Recycle Bin setting).
 fn delete_backup(path: &Path, recycle: bool) -> Vec<String> {
     let (tx, rx) = std::sync::mpsc::channel();
     crate::fsops::run(crate::fsops::Operation::Delete { sources: vec![path.to_path_buf()], recycle }, tx, std::sync::Arc::new(AtomicBool::new(false)));
@@ -470,7 +470,7 @@ fn unique(directory: &Path, prefix: &str) -> PathBuf {
     directory.join(format!("{prefix}{nanos:x}{:x}", std::process::id()))
 }
 
-/// CreateDirectoriesWithoutReparse: 루트에서 대상 폴더까지 만들고(파일이 막으면 교체 허용일 때만 바꿈) 만든 수.
+/// CreateDirectoriesWithoutReparse: creates folders from the root to the destination folder (a blocking file is replaced only when replacement is allowed) and returns the count created.
 fn create_directories(root: &Path, destination: &Path, replace_files: bool, recycle: bool, errors: &mut Vec<String>) -> Result<u64, String> {
     let root = full(root);
     let destination = full(destination);
@@ -502,7 +502,7 @@ fn create_directories(root: &Path, destination: &Path, replace_files: bool, recy
     Ok(created)
 }
 
-/// CopyDifferencesAsync: 다름과 원본 쪽에만 있는 항목을 복사(임시 파일 → 이름 바꾸기, 수정 시각 유지). 대상의 추가 파일은 지우지 않는다.
+/// CopyDifferencesAsync: copies differing items and items only on the source side (temp file -> rename, modification time kept). Extra files in the destination are not deleted.
 pub fn copy_differences(source_root: &Path, destination_root: &Path, differences: &[Difference], source_is_left: bool, behavior: ExistingBehavior, recycle: bool, cancel: &AtomicBool, progress: &mut dyn FnMut(u64, u64, &Path)) -> Result<SyncResult, String> {
     let (source_root, destination_root) = (full(source_root), full(destination_root));
     ensure_distinct_roots(&source_root, &destination_root)?;
@@ -714,14 +714,14 @@ mod tests {
             fs::write(left.join(name), name).unwrap();
         }
         fs::write(right.join("B.TXT"), "b.txt").unwrap();
-        // 원본 lvList 칸 3은 오른쪽 목록 이름 그대로("B.TXT"), 칸 1은 왼쪽 이름.
+        // Original lvList cell 3 is the right list name as is ("B.TXT"), cell 1 the left name.
         let cancel = AtomicBool::new(false);
         let (rows, _, stopped) = compare_partial(&left, &right, false, true, &cancel, &mut |_| {}).unwrap();
         assert!(!stopped);
         let b = rows.iter().find(|d| d.relative == "b.txt").unwrap();
         assert_eq!((b.right_relative.as_str(), b.kind), ("B.TXT", DifferenceKind::Same));
         assert_eq!(rows.iter().find(|d| d.relative == "a.txt").unwrap().right_relative, "a.txt", "left-only rows keep the left name");
-        // 원본 btnStopClick(+0x410): 비교 루프에서 멈추면 거기까지 넣은 줄이 남는다. 동기화용 compare는 Err.
+        // Original btnStopClick (+0x410): stopping in the comparison loop keeps the rows so far. The sync compare returns Err.
         let mut seen = 0;
         let (rows, _, stopped) = compare_partial(&left, &right, false, true, &cancel, &mut |report| {
             if let CompareProgress::Comparing { completed, .. } = report {

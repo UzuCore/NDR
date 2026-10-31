@@ -84,7 +84,7 @@ mod tests {
 
     #[test]
     fn toolbar_parses_the_original_user_command_and_container_items() {
-        // 원본 FUN_0047d98c 형식: InternalCommand 0, UserCommand 1, Separator 2, Container 3(<subitems>, FUN_0047da78).
+        // Original FUN_0047d98c kinds: InternalCommand 0, UserCommand 1, Separator 2, Container 3 (<subitems>, FUN_0047da78).
         let xml = br#"<toolbar>
 <item type="UserCommand"><name>Note</name><icon>$(SKINDIR)\tb_x.png</icon><command>notepad.exe %F</command></item>
 <item type="Container"><name>More</name><icon>tb_more.png</icon>
@@ -108,7 +108,7 @@ mod tests {
 
     #[test]
     fn toolbar_recycle_bin_sends_to_the_recycle_bin_like_the_original() {
-        // 원본 FUN_00444710: RecycleBin 단추의 클릭은 FUN_0042f13c(수식 키에 따라 휴지통·영구·완전 삭제, Ctrl+Alt면 휴지통 열기).
+        // Original FUN_00444710: a RecycleBin button click is FUN_0042f13c (Recycle Bin, permanent or shred delete by modifiers, Ctrl+Alt opens the Recycle Bin).
         assert_eq!(toolbar_action("RecycleBin").as_deref(), Some("deleteToolbar"));
         assert_ne!(toolbar_action("OpenRecycleBin").as_deref(), Some("deleteToolbar"));
     }
@@ -276,8 +276,8 @@ pub fn resolve_function_key(settings: &Settings, key: &str) -> Option<FunctionBi
 pub enum PreparedCommand {
     Disabled,
     Internal(String),
-    /// C# ExecuteFunctionKeyMacroAsync의 바깥 명령: 프로그램, 매크로를 푼 인수 글, `%p`/`%P`가 있었는지(있으면 인수 편집 창을 먼저 연다).
-    /// 빈 프로그램·폴더 열기·ShellExecuteEx는 부르는 쪽이 인수 편집 뒤에 C# 순서대로 처리한다.
+    /// External command of C# ExecuteFunctionKeyMacroAsync: program, argument text with macros expanded, and whether `%p`/`%P` was present (then the argument edit window opens first).
+    /// The caller handles empty programs, opening folders and ShellExecuteEx in the C# order after editing arguments.
     External {
         program: String,
         arguments: String,
@@ -312,7 +312,7 @@ pub fn prepare_function_key(
             PreparedCommand::Internal(name.to_owned())
         };
     }
-    // 있는 프로그램 경로면 그대로, 아니면 원본처럼 PathRemoveArgsW/PathGetArgsW로 나눈다.
+    // An existing program path is used as is, otherwise it is split with PathRemoveArgsW/PathGetArgsW like the original.
     let (program, mut arguments) = if !binding.legacy && Path::new(command).exists() {
         (command.to_owned(), binding.parameters.clone())
     } else {
@@ -323,7 +323,7 @@ pub fn prepare_function_key(
         };
         split_program(&line)
     };
-    // FUN_0040df28(프로그램·인수) → 인수에만 패널 매크로(FUN_00442dd4) → TakeParameterPrompt.
+    // FUN_0040df28 (program, arguments) -> pane macros only in the arguments (FUN_00442dd4) -> TakeParameterPrompt.
     let program = compat::expand_program_macros(program.trim_matches('"'), program_dir);
     let mut prompt = false;
     if !arguments.is_empty() {
@@ -417,7 +417,7 @@ pub struct ToolbarItem {
     pub caption: String,
     pub align_right: bool,
     pub width: f64,
-    /// 원본 Container(형식 3)의 하위 항목(<subitems>): InternalCommand·UserCommand·Separator. 다른 항목은 비어 있다.
+    /// Sub-items of the original Container (kind 3) (<subitems>): InternalCommand, UserCommand, Separator. Other items are empty.
     pub children: Vec<ToolbarItem>,
 }
 #[derive(Clone, Debug, PartialEq)]
@@ -462,9 +462,9 @@ fn toolbar_action(command: &str) -> Option<String> {
         ("GoToMusic", "music"),
         ("GoToVideos", "videos"),
         ("Favorites", "favorites"),
-        // 원본 FUN_00444710: command가 RecycleBin인 단추는 클릭 처리기를 FUN_0042f13c로 바꾼다(삭제 단추):
-        // 수식 키 없음 = 휴지통으로, Shift = 영구 삭제, Shift+Ctrl = 완전 삭제, Ctrl+Alt = 휴지통 열기. NDR deleteToolbar와 같다.
-        // C# 판은 휴지통을 열었다.
+        // Original FUN_00444710: a button whose command is RecycleBin gets FUN_0042f13c as its click handler (delete button):
+        // no modifier = to the Recycle Bin, Shift = permanent delete, Shift+Ctrl = shred, Ctrl+Alt = open the Recycle Bin. Same as NDR deleteToolbar.
+        // The C# version opened the Recycle Bin.
         ("RecycleBin", "deleteToolbar"),
         ("Search", "search"),
         ("BrowseFolder", "browseFolder"),
@@ -572,7 +572,7 @@ pub fn parse_toolbar(xml: &[u8]) -> Result<ToolbarConfig, String> {
                 if depth == 0 && name != "toolbar" {
                     return Err("Expected <toolbar>".into());
                 }
-                // 원본 FUN_0047ef08: <item>마다 FUN_0047e4e0, Container(형식 3)면 <subitems>의 <item>마다 FUN_0047da78.
+                // Original FUN_0047ef08: FUN_0047e4e0 per <item>, and for a Container (kind 3) FUN_0047da78 per <item> of <subitems>.
                 let child_item = depth == 3 && name == "item" && current.as_ref().is_some_and(|c| c.2 == "subitems");
                 if (depth == 1 && name == "item") || child_item {
                     source_items += 1;
@@ -677,7 +677,7 @@ pub fn parse_toolbar(xml: &[u8]) -> Result<ToolbarConfig, String> {
     if items.is_empty() {
         return Err("No usable toolbar items".into());
     }
-    // Container 단추의 명령 = "container:<차례>"(누르면 그 하위 항목 메뉴).
+    // Command of a Container button = "container:<index>" (clicking shows its sub-item menu).
     for (index, item) in items.iter_mut().enumerate() {
         if item.action == "container:" {
             item.action = format!("container:{index}");
@@ -689,7 +689,7 @@ pub fn parse_toolbar(xml: &[u8]) -> Result<ToolbarConfig, String> {
     })
 }
 
-/// Container의 하위 <item>을 끝낸다: InternalCommand·UserCommand·Separator만 받는다(원본 FUN_0047da78).
+/// Finishes a sub-<item> of a Container: only InternalCommand, UserCommand and Separator are accepted (original FUN_0047da78).
 fn finish_toolbar_child(child: &mut Option<(String, ToolbarItem, String)>, current: &mut Option<(String, ToolbarItem, String)>, warning: &mut bool) {
     let kind = child.as_ref().map(|c| c.0.to_ascii_lowercase()).unwrap_or_default();
     if !matches!(kind.as_str(), "internalcommand" | "usercommand" | "separator") {
@@ -741,7 +741,7 @@ fn finish_toolbar_item(
             *warning = true;
         }
     } else if kind.eq_ignore_ascii_case("usercommand") {
-        // 원본 형식 1(UserCommand): 클릭은 FUN_0044381c(폼, 명령, 내부 명령 아님) = 기능키의 사용자 명령과 같은 실행.
+        // Original kind 1 (UserCommand): the click is FUN_0044381c(form, command, not internal), run like a function key user command.
         let command = item.action.trim().to_owned();
         if command.is_empty() {
             *warning = true;
@@ -752,7 +752,7 @@ fn finish_toolbar_item(
             items.push(item);
         }
     } else if kind.eq_ignore_ascii_case("container") {
-        // 원본 형식 3(Container): DropDownMenu = pmToolBar(+0x874), 펼칠 때 pmToolBarPopup이 하위 항목으로 메뉴를 만든다.
+        // Original kind 3 (Container): DropDownMenu = pmToolBar (+0x874); when it drops down, pmToolBarPopup builds the menu from the sub-items.
         item.action = "container:".into();
         item.icon = normalize_icon(&item.icon);
         item.caption = item.caption.trim().to_owned();
@@ -765,7 +765,7 @@ fn append_toolbar_text(current: &mut Option<(String, ToolbarItem, String)>, valu
     if let Some((_, item, field)) = current.as_mut() {
         match field.as_str() {
             "icon" => item.icon.push_str(value),
-            // 원본 FUN_0047e4e0·FUN_0047da78의 글 요소는 <name>, C# 판은 <caption>.
+            // The text element of original FUN_0047e4e0 and FUN_0047da78 is <name>; the C# version uses <caption>.
             "caption" | "name" | "width" => item.caption.push_str(value),
             "command" => item.action.push_str(value),
             _ => {}
@@ -789,7 +789,7 @@ pub struct ArchiveOptions {
     pub password: String,
     pub volume_bytes: Option<u64>,
     pub recursive: bool,
-    /// 있는 압축 파일(한 파일)에 더한다(C# AddToArchiveAsync). 아니면 새로 만들어 교체한다.
+    /// Adds to an existing archive (single file) (C# AddToArchiveAsync). Otherwise creates a new one and replaces.
     pub append: bool,
 }
 

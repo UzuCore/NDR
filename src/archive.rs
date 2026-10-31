@@ -1293,21 +1293,21 @@ pub fn rename_entry(archive: &Path, from: &str, to: &str, password: Option<&str>
 pub enum AddConflict {
     /// Adds as is (files are replaced, folders merge).
     Merge,
-    /// 있는 항목(폴더면 안까지)을 지우고 더한다.
+    /// Deletes the existing item (a folder with its contents) and adds.
     Replace,
     Skip,
-    /// 이 이름으로 더한다(그 이름도 있으면 다시 묻는다).
+    /// Adds under this name (asks again if that name exists too).
     Rename(String),
     Cancel,
 }
 
-/// 파일·폴더를 압축 안 `prefix`("폴더/아래/" 또는 맨 위 "") 아래에 더한다(7-Zip a). 같은 이름은 바꾼다.
+/// Adds files and folders under the archive `prefix` ("folder/below/" or "" for the top) (7-Zip a). Existing names are replaced.
 pub fn add_entries(archive: &Path, prefix: &str, sources: &[PathBuf], password: Option<&str>, cancel: &AtomicBool) -> Result<(), String> {
     add_entries_with(archive, prefix, sources, password, cancel, &mut |_, _| AddConflict::Merge).map(|_| ())
 }
 
-/// add_entries에 같은 이름 처리(`conflicts(원본, 있는 항목)`)를 더한 것.
-/// 준비 폴더에 그 경로 모양을 만들어 복사한 뒤(원본 파일은 건드리지 않는다) 맨 위 이름만 넘긴다.
+/// add_entries plus name conflict handling (`conflicts(source, existing item)`).
+/// Builds that path shape in a staging folder and copies into it (source files are not touched), then passes only the top names.
 pub fn add_entries_with(
     archive: &Path,
     prefix: &str,
@@ -1323,7 +1323,7 @@ pub fn add_entries_with(
     if !prefix.is_empty() {
         validate_key(prefix)?;
     }
-    // 있는 항목(폴더 항목이 따로 없어도 그 아래 항목이 있으면 폴더로 본다).
+    // Existing items (a folder counts even without a separate folder entry when items below it exist).
     let existing = list_cancel(archive, password, cancel)?;
     let find = |key: &str| -> Option<ArchiveEntry> {
         let wanted = key.to_lowercase();
@@ -1405,7 +1405,7 @@ pub fn add_entries_with(
     result
 }
 
-/// 폴더 바로 아래 이름들.
+/// Names directly under a folder.
 fn names_in(folder: &Path) -> Result<Vec<String>, String> {
     let mut names = Vec::new();
     for item in fs::read_dir(folder).map_err(|e| e.to_string())? {
@@ -1414,7 +1414,7 @@ fn names_in(folder: &Path) -> Result<Vec<String>, String> {
     Ok(names)
 }
 
-/// 압축 안 `prefix` 아래에 빈 폴더 `name`을 만든다.
+/// Creates an empty folder `name` under the archive `prefix`.
 pub fn add_folder(archive: &Path, prefix: &str, name: &str, password: Option<&str>, cancel: &AtomicBool) -> Result<(), String> {
     validate_key(name)?;
     let holder = unique_path(&std::env::temp_dir(), "archive-folder");
@@ -1424,7 +1424,7 @@ pub fn add_folder(archive: &Path, prefix: &str, name: &str, password: Option<&st
     result
 }
 
-/// C# GetArchiveFirstVolumePath: .partN.rar → .part1.rar, .rNN → .rar, .zNN → .zip, .aNN → .arj, .NNN → .00…1(있을 때만).
+/// C# GetArchiveFirstVolumePath: .partN.rar -> .part1.rar, .rNN -> .rar, .zNN -> .zip, .aNN -> .arj, .NNN -> .00...1 (only when it exists).
 pub fn first_volume_path(path: &Path) -> PathBuf {
     let full = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
     let name = full.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -1454,7 +1454,7 @@ pub fn first_volume_path(path: &Path) -> PathBuf {
     }
 }
 
-/// 목록(머리글 암호가 필요하면 passwords로 묻는다). 고른 암호도 돌려준다.
+/// Listing (asks through passwords when the header needs a password). Also returns the chosen password.
 pub fn list_with_passwords(archive: &Path, initial: Option<&str>, cancel: &AtomicBool, passwords: &mut dyn FnMut(&Path, Option<&str>) -> Option<String>) -> Result<(Vec<ArchiveEntry>, Option<String>), String> {
     let mut password = initial.map(str::to_owned);
     loop {
@@ -1469,7 +1469,7 @@ pub fn list_with_passwords(archive: &Path, initial: Option<&str>, cancel: &Atomi
     }
 }
 
-/// C# GetAutoExtractLayoutAsync의 판단: 맨 위 항목이 하나이고 그것이 폴더인가.
+/// Decision of C# GetAutoExtractLayoutAsync: whether there is a single top item and it is a folder.
 pub fn has_single_root_folder(entries: &[ArchiveEntry]) -> bool {
     let mut roots: Vec<(String, bool)> = vec![];
     for entry in entries {
@@ -1490,7 +1490,7 @@ pub fn has_single_root_folder(entries: &[ArchiveEntry]) -> bool {
     roots.len() == 1 && roots[0].1
 }
 
-/// C# GetArchiveSummary: (파일 수, 폴더 수(암시된 폴더 포함), 풀린 크기).
+/// C# GetArchiveSummary: (file count, folder count (including implied folders), unpacked size).
 pub fn summary(entries: &[ArchiveEntry]) -> (usize, usize, u64) {
     let mut folders = HashSet::new();
     let mut files = 0;
@@ -1511,7 +1511,7 @@ pub fn summary(entries: &[ArchiveEntry]) -> (usize, usize, u64) {
     }
     (files, folders.len(), bytes)
 }
-/// C# ExtractEntryToTempAsync: %TEMP%\NDR\<새 이름>에 항목 하나만 풀고(와일드카드 없이) 그 파일 경로를 돌려준다.
+/// C# ExtractEntryToTempAsync: extracts a single item (no wildcards) into %TEMP%\NDR\<new name> and returns that file path.
 pub fn extract_entry_to_temp(archive: &Path, password: Option<&str>, key: &str, cancel: &AtomicBool) -> Result<PathBuf, String> {
     check_cancel(cancel)?;
     ensure_plain_path(archive)?;
@@ -1522,7 +1522,7 @@ pub fn extract_entry_to_temp(archive: &Path, password: Option<&str>, key: &str, 
     fs::create_dir_all(&root).map_err(|e| e.to_string())?;
     let folder = unique_path(&root, "entry");
     fs::create_dir(&folder).map_err(|e| e.to_string())?;
-    // 고친 것: 풀기에 실패하면(암호 오류·취소 등) 만든 폴더를 지운다. 예전에는 실패한 시도마다 폴더가 남았다.
+    // Fixed: when extraction fails (wrong password, cancel etc.) the created folder is removed. Previously a folder was left behind for every failed attempt.
     let result = (|| {
         let archive = fs::canonicalize(archive).map_err(|e| e.to_string())?;
         let mut cmd = command()?;
@@ -1543,14 +1543,14 @@ pub fn extract_entry_to_temp(archive: &Path, password: Option<&str>, key: &str, 
     result
 }
 
-/// 압축 안 항목을 하나씩 푸는 임시 폴더(%TEMP%\NDR).
+/// Temp folder where archive items are extracted one by one (%TEMP%\NDR).
 pub fn temp_entry_root() -> PathBuf {
     std::env::temp_dir().join("NDR")
 }
 
-/// 고친 것(C# 판·예전 Rust 판은 지우지 않아 쌓였다): `root` 아래 ".ndr-entry-*" 폴더 가운데 안의 모든 항목이
-/// `max_age`보다 오래된 것을 지운다. 먼저 ".ndr-trash-*"로 이름을 바꿔 보고(열린 파일이 있으면 실패하므로 건너뜀),
-/// 바뀐 것만 지운다. 지난번에 지우다 만 ".ndr-trash-*"도 지운다. 지운 폴더 수를 돌려준다.
+/// Fixed (the C# version and earlier Rust versions never removed them, so they piled up): removes ".ndr-entry-*" folders under `root` whose contents are all
+/// older than `max_age`. Each is first renamed to ".ndr-trash-*" (skipped when it fails because of an open file),
+/// and only renamed ones are deleted. Leftover ".ndr-trash-*" from a previous run are deleted too. Returns the number of folders removed.
 pub fn clean_stale_temp_entries(root: &Path, max_age: std::time::Duration, now: std::time::SystemTime) -> usize {
     fn newest(path: &Path) -> Option<std::time::SystemTime> {
         let meta = fs::symlink_metadata(path).ok()?;
@@ -1580,7 +1580,7 @@ pub fn clean_stale_temp_entries(root: &Path, max_age: std::time::Duration, now: 
         if !name.starts_with(".ndr-entry-") {
             continue;
         }
-        // 읽지 못한 항목이 있으면 나이를 모르므로 남긴다.
+        // With an unreadable item the age is unknown, so it is kept.
         let Some(latest) = newest(&path) else { continue };
         if now.duration_since(latest).map_or(true, |age| age < max_age) {
             continue;
@@ -1593,8 +1593,8 @@ pub fn clean_stale_temp_entries(root: &Path, max_age: std::time::Duration, now: 
     removed
 }
 
-/// C# ExtractExternalWithPasswordPromptAsync 모양: 암호 오류면 `passwords`로 다시 묻고(취소면 None) 다시 푼다.
-/// 돌려주는 값은 (풀린 경로, 실제로 쓴 암호).
+/// Shaped like C# ExtractExternalWithPasswordPromptAsync: on a password error asks again through `passwords` (None on cancel) and extracts again.
+/// Returns (extracted path, password actually used).
 pub fn extract_entry_to_temp_with_passwords(
     archive: &Path,
     password: Option<&str>,
@@ -1666,9 +1666,9 @@ pub fn extract_interactive_with_program(
     extract_entries_with_program(archive, destination, &[], initial_password, cancel, conflicts, passwords, program, &mut |_, _, _| {})
 }
 
-/// C# ExtractExternalWithPasswordPromptAsync(외부 프로그램, 압축 파일, 대상): 목록을 읽지 않고 압축 파일 전체를 외부 프로그램으로 푼다
-/// (동봉 7-Zip이 못 읽는 형식, 예: .ace). 같은 폴더의 단계 폴더에 풀어 검사(inspect_tree)한 뒤 대상 폴더로 옮긴다.
-/// 대상에 같은 이름이 있으면 덮어쓰지 않고 오류로 끝난다.
+/// C# ExtractExternalWithPasswordPromptAsync(external program, archive, destination): extracts the whole archive with an external program without reading the listing
+/// (formats the bundled 7-Zip cannot read, e.g. .ace). Extracts into a staging folder in the same folder, checks it (inspect_tree), then moves it to the destination.
+/// When the destination already has the name, it does not overwrite and ends with an error.
 pub fn extract_whole_with_program(archive: &Path, destination: &Path, password: Option<&str>, program: &ExternalProgram, cancel: &AtomicBool) -> Result<(), String> {
     check_cancel(cancel)?;
     ensure_plain_path(destination)?;
@@ -1696,11 +1696,11 @@ pub fn extract_whole_with_program(archive: &Path, destination: &Path, password: 
     result
 }
 
-/// 외부 압축 프로그램이 암호를 물을 때 표준 출력에 찍는 줄(7-Zip 문법).
+/// Line printed on standard output when an external archiver asks for a password (7-Zip syntax).
 const EXTERNAL_PASSWORD_PROMPT: &str = "Enter password (will not be echoed):";
 
-/// C# HasExternalArchivePasswordDiagnostic: 표준 출력의 암호 묻기 줄, 또는 "ERROR: Wrong password"·
-/// "ERROR: Data Error in encrypted file. Wrong password?"로 시작하거나 "ERROR: Can not open encrypted archive. Wrong password?"인 줄.
+/// C# HasExternalArchivePasswordDiagnostic: the password prompt line on standard output, or a line starting with "ERROR: Wrong password" /
+/// "ERROR: Data Error in encrypted file. Wrong password?", or exactly "ERROR: Can not open encrypted archive. Wrong password?".
 fn external_password_failure(message: &str) -> bool {
     message.lines().any(|line| {
         let line = line.split_once("): ").map_or(line, |(_, rest)| rest);
@@ -1712,7 +1712,7 @@ fn external_password_failure(message: &str) -> bool {
     })
 }
 
-/// C# RunExternalExtractWithPasswordPromptAsync: 외부 프로그램이 암호 진단을 내면 `passwords`로 묻고(빈 값·취소면 끝) 그 암호로 다시 푼다.
+/// C# RunExternalExtractWithPasswordPromptAsync: when the external program emits a password diagnostic, asks through `passwords` (empty or cancel ends) and extracts again with it.
 pub fn extract_whole_with_program_with_passwords(
     archive: &Path,
     destination: &Path,
@@ -1733,8 +1733,8 @@ pub fn extract_whole_with_program_with_passwords(
     }
 }
 
-/// C# ExtractArchiveWithProgress(requestedKeys): keys가 비면 모두, 아니면 같은 키이거나 그 폴더 안의 항목만(대소문자 무시, 전체 경로 유지).
-/// 진행은 (끝낸 항목 수, 고른 항목 수, 키).
+/// C# ExtractArchiveWithProgress(requestedKeys): everything when keys is empty, otherwise only items with the same key or inside that folder (case-insensitive, full paths kept).
+/// Progress is (items done, items chosen, key).
 #[allow(clippy::too_many_arguments)]
 pub fn extract_entries_with_program(
     archive: &Path,
@@ -1799,8 +1799,8 @@ pub fn extract_entries_with_program(
             break;
         }
         let relative = entry.key.replace('\\', "/");
-        // 고친 것: 압축 안 하위 폴더에서 고른 항목을 풀면 그 하위 폴더 경로까지 만들어졌다("dir/sub/c.txt" → 대상\dir\sub\c.txt).
-        // 이제 고른 항목의 상위 경로를 떼어 대상 바로 아래에 둔다(대상\c.txt). 전체 풀기(키 없음)는 그대로.
+        // Fixed: extracting items chosen in an archive subfolder recreated that subfolder path ("dir/sub/c.txt" -> destination\dir\sub\c.txt).
+        // Now the parent path of chosen items is removed so they land directly under the destination (destination\c.txt). Full extraction (no keys) is unchanged.
         let placed = parents
             .iter()
             .filter(|p| !p.is_empty())
@@ -1939,8 +1939,8 @@ pub fn extract_entries_with_program(
     result
 }
 
-/// 원본 FUN_00404890(압축 엔진 오류 번호 → [RES] 키)에 맞춘 7-Zip 진단 분류. 원본 엔진 번호 대신 7-Zip 글을 본다.
-/// 알 수 없으면 None(7-Zip 글 그대로).
+/// 7-Zip diagnostic classification matching original FUN_00404890 (archive engine error number -> [RES] key). It reads 7-Zip text instead of the original engine number.
+/// None when unknown (the 7-Zip text as is).
 pub fn original_error_key(message: &str) -> Option<&'static str> {
     if password_failure(message) {
         return Some("INVALID_PASSWORD");
@@ -1970,7 +1970,7 @@ pub fn original_error_key(message: &str) -> Option<&'static str> {
     })
 }
 
-/// 7-Zip "ERROR: Missing volume : 이름" 줄의 이름(원본 ARC_CHANGEVOL의 %s). 없으면 None.
+/// The name in a 7-Zip "ERROR: Missing volume : name" line (%s of the original ARC_CHANGEVOL). None when absent.
 pub fn missing_volume(message: &str) -> Option<String> {
     message.lines().find_map(|line| {
         let lower = line.to_lowercase();
@@ -2114,7 +2114,7 @@ mod interactive_tests {
             keys.sort();
             keys
         };
-        // 더하기: 맨 위와 안쪽 폴더 아래.
+        // Add: at the top and under an inner folder.
         fs::write(p.join("new.txt"), b"new").unwrap();
         add_entries(&zip, "", &[p.join("new.txt")], None, &cancel).unwrap();
         add_entries(&zip, "dir/sub/", &[p.join("new.txt")], None, &cancel).unwrap();
@@ -2124,7 +2124,7 @@ mod interactive_tests {
             assert!(after_add.iter().any(|k| k == key), "{key} in {after_add:?}");
         }
         assert!(p.join("new.txt").is_file(), "the source stays");
-        // 같은 이름: 콜백이 받는 항목, 건너뛰기·새 이름·바꾸기.
+        // Same name: the item the callback receives, skip, new name, replace.
         fs::write(p.join("new.txt"), b"second").unwrap();
         let mut seen = Vec::new();
         add_entries_with(&zip, "", &[p.join("new.txt")], None, &cancel, &mut |source, entry| {
@@ -2136,7 +2136,7 @@ mod interactive_tests {
         let mut asked = 0;
         add_entries_with(&zip, "", &[p.join("new.txt")], None, &cancel, &mut |_, entry| {
             asked += 1;
-            // 첫 새 이름도 있으면 다시 묻는다.
+            // If the first new name exists too, it asks again.
             if asked == 1 { AddConflict::Rename("a.txt".into()) } else { assert_eq!(entry.key, "a.txt"); AddConflict::Rename("new (2).txt".into()) }
         })
         .unwrap();
@@ -2149,7 +2149,7 @@ mod interactive_tests {
         };
         assert_eq!(read("new.txt"), b"new", "skipped");
         assert_eq!(read("new (2).txt"), b"second");
-        // 폴더 바꾸기: 있는 폴더 안 항목은 없어지고 새 폴더 내용만.
+        // Replace folder: items inside the existing folder disappear, only the new folder's contents remain.
         fs::create_dir_all(p.join("other/dir")).unwrap();
         fs::write(p.join("other/dir/only.txt"), b"only").unwrap();
         add_entries_with(&zip, "", &[p.join("other/dir")], None, &cancel, &mut |_, entry| {
@@ -2160,20 +2160,20 @@ mod interactive_tests {
         let replaced = keys(&zip);
         assert!(replaced.iter().any(|k| k == "dir/only.txt") && !replaced.iter().any(|k| k.starts_with("dir/sub")), "{replaced:?}");
         assert!(add_entries_with(&zip, "", &[p.join("new.txt")], None, &cancel, &mut |_, _| AddConflict::Cancel).is_err());
-        // 다시 앞 상태로(아래 시험은 dir/sub가 있다고 본다).
+        // Back to the earlier state (the tests below assume dir/sub exists).
         add_entries_with(&zip, "", &[p.join("src/dir")], None, &cancel, &mut |_, _| AddConflict::Replace).unwrap();
         add_entries(&zip, "dir/sub/", &[p.join("new.txt")], None, &cancel).unwrap();
         add_folder(&zip, "dir/", "empty", None, &cancel).unwrap();
-        // 이름 바꾸기: 폴더면 안 항목도.
+        // Rename: for a folder, the items inside too.
         rename_entry(&zip, "dir/sub", "dir/moved", None, &cancel).unwrap();
         let after_rename = keys(&zip);
         assert!(after_rename.iter().any(|k| k == "dir/moved/c.txt") && !after_rename.iter().any(|k| k.starts_with("dir/sub")), "{after_rename:?}");
-        // 지우기: 폴더면 안까지, 이름이 비슷한 다른 항목은 그대로.
+        // Delete: a folder with its contents; other items with similar names stay.
         delete_entries(&zip, &["dir/moved".into(), "a.txt".into()], None, &cancel).unwrap();
         let after_delete = keys(&zip);
         assert!(!after_delete.iter().any(|k| k.starts_with("dir/moved") || k == "a.txt"), "{after_delete:?}");
         assert!(after_delete.iter().any(|k| k == "new.txt") && after_delete.iter().any(|k| k == "dir/empty"), "{after_delete:?}");
-        // 고칠 수 없는 형식·나쁜 이름은 원본을 건드리지 않고 오류.
+        // Unmodifiable formats and bad names fail without touching the original.
         assert!(delete_entries(&zip, &["../x".into()], None, &cancel).is_err());
         assert_eq!(keys(&zip), after_delete);
         fs::remove_dir_all(p).unwrap();
@@ -2287,7 +2287,7 @@ mod tests {
     use super::*;
     use std::{fs, time::SystemTime};
     pub(super) fn fixture() -> PathBuf {
-        // 병렬 시험이 같은 시각 값을 받아 한 폴더를 함께 쓰지 않게 차례 번호를 붙인다.
+        // Add a sequence number so parallel tests that get the same time value do not share a folder.
         static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let p = std::env::temp_dir().join(format!(
             "ndr-archive-{}-{}-{}",
@@ -2301,7 +2301,7 @@ mod tests {
         fs::create_dir_all(&p).unwrap();
         p
     }
-    /// 7-Zip -bsp1 진행 글: 백분율과 파일 이름. 동봉 7-Zip 압축은 끝나기 전에 진행을 알린다.
+    /// 7-Zip -bsp1 progress text: percentage and file name. Bundled 7-Zip archiving reports progress before it finishes.
     #[test]
     fn seven_zip_progress_is_parsed_and_reported() {
         assert_eq!(parse_seven_zip_progress("  23% 4 + folder\\a.bin"), Some((23, "folder\\a.bin".to_owned())));
@@ -2637,7 +2637,7 @@ mod entry_tests {
         assert_eq!(fs::read(&wild).unwrap(), b"wild", "-spd: brackets are not wildcards");
         fs::remove_dir_all(wild.parent().unwrap()).unwrap();
         assert!(extract_entry_to_temp(&output, None, "../x", &cancel).is_err());
-        // 고친 것: 없는 항목처럼 풀기에 실패하면 만든 폴더를 남기지 않는다.
+        // Fixed: when extraction fails, as for a missing item, the created folder is not left behind.
         let before: Vec<_> = fs::read_dir(temp_entry_root()).unwrap().flatten().map(|e| e.file_name()).collect();
         assert!(extract_entry_to_temp(&output, None, "missing.txt", &cancel).is_err());
         let after: Vec<_> = fs::read_dir(temp_entry_root()).unwrap().flatten().map(|e| e.file_name()).filter(|n| !before.contains(n)).collect();
@@ -2645,7 +2645,7 @@ mod entry_tests {
         fs::remove_dir_all(root).unwrap();
     }
 
-    /// 고친 것: 오래된 ".ndr-entry-*"만 지우고, 최근 것·다른 이름·열려 있어 이름을 못 바꾸는 것은 남긴다.
+    /// Fixed: only old ".ndr-entry-*" are removed; recent ones, other names and ones that cannot be renamed because they are open stay.
     #[test]
     fn stale_temp_entry_folders_are_removed() {
         use std::os::windows::fs::OpenOptionsExt;
@@ -2657,10 +2657,10 @@ mod entry_tests {
         }
         fs::create_dir_all(root.join(".ndr-trash-9-0")).unwrap();
         let week = Duration::from_secs(7 * 24 * 3600);
-        // 지금 기준으로는 모두 최근 것: 남은 휴지 폴더만 지운다.
+        // By the current time everything is recent: only the leftover trash folders are removed.
         assert_eq!(clean_stale_temp_entries(&root, week, SystemTime::now()), 1);
         assert!(root.join(".ndr-entry-1-0").is_dir() && !root.join(".ndr-trash-9-0").exists());
-        // 8일 뒤: 열린 파일(삭제 공유 없음)이 있는 폴더와 다른 이름의 폴더는 남는다.
+        // 8 days later: the folder with an open file (no delete sharing) and the folder with another name stay.
         let locked = fs::OpenOptions::new().read(true).share_mode(1).open(root.join(".ndr-entry-3-0").join("sub").join("a.txt")).unwrap();
         let later = SystemTime::now() + Duration::from_secs(8 * 24 * 3600);
         assert_eq!(clean_stale_temp_entries(&root, week, later), 2);
@@ -2672,7 +2672,7 @@ mod entry_tests {
         fs::remove_dir_all(root).unwrap();
     }
 
-    /// 동봉 7-Zip(UzuCore 7zip+α 26.05): ALZ·EGG 만들기·목록·풀기(한글 이름 포함). 더하기는 7-Zip이 거절하고 원본은 그대로.
+    /// Bundled 7-Zip (UzuCore 7zip+α 26.05): ALZ/EGG create, list and extract (including Korean names). 7-Zip refuses adding and the original stays.
     #[test]
     fn bundled_seven_zip_creates_lists_and_extracts_alz_and_egg() {
         let root = std::env::temp_dir().join(format!("ndr-alzegg-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
@@ -2712,14 +2712,14 @@ mod entry_tests {
             keys.sort();
             keys
         };
-        // ZIP: 새로 만들고, 더하기는 있던 항목을 남긴다.
+        // ZIP: create anew; adding keeps existing items.
         let zip = root.join("out.zip");
         create_configured(&[root.join("src/a.txt")], &zip, &options("zip", false), &cancel).unwrap();
         create_configured(&[root.join("src/b.txt"), root.join("src/dir")], &zip, &options("zip", true), &cancel).unwrap();
         assert_eq!(keys(&zip), ["a.txt", "b.txt", "dir/deep/c.txt"]);
         create_configured(&[root.join("src/b.txt")], &zip, &options("zip", false), &cancel).unwrap();
         assert_eq!(keys(&zip), ["b.txt"], "without append the archive is replaced");
-        // TAR.GZ: 만들기와 더하기.
+        // TAR.GZ: create and add.
         let tgz = root.join("out.tar.gz");
         create_configured(&[root.join("src/a.txt")], &tgz, &options("tar.gz", false), &cancel).unwrap();
         create_configured(&[root.join("src/dir")], &tgz, &options("tar.gz", true), &cancel).unwrap();
@@ -2727,7 +2727,7 @@ mod entry_tests {
         extract(&tgz, &unpacked, None, &cancel).unwrap();
         let inner = fs::read_dir(&unpacked).unwrap().filter_map(Result::ok).map(|e| e.path()).next().unwrap();
         assert_eq!(keys(&inner), ["a.txt", "dir/deep/c.txt"]);
-        // 고른 키만 풀기(폴더면 그 안 전부, 전체 경로 유지), 진행.
+        // Extract only chosen keys (a folder with everything inside, full paths kept), with progress.
         let full = root.join("full.zip");
         create_configured(&[root.join("src/a.txt"), root.join("src/dir")], &full, &options("zip", false), &cancel).unwrap();
         let destination = root.join("picked");
@@ -2741,7 +2741,7 @@ mod entry_tests {
         create_configured(&[root.join("src/dir")], &single, &options("zip", false), &cancel).unwrap();
         assert!(has_single_root_folder(&list(&single, None).unwrap()));
         assert_eq!(summary(&entries), (2, 2, 4), "a.txt + c.txt, dir + dir/deep");
-        // 이름 규칙.
+        // Naming rules.
         assert_eq!(extract_folder_name(Path::new("C:\\x\\sample.7z.001")), "sample.7z");
         assert_eq!(extract_folder_name(Path::new("C:\\x\\sample.zip")), "sample");
         let first = create_unique_extract_folder(&root, "sample").unwrap();
@@ -2756,7 +2756,7 @@ mod entry_tests {
         assert_eq!(output_family(&root.join("vol.7z.001")), [root.join("vol.7z.001"), root.join("vol.7z.002")]);
         assert!(can_read_internally(Path::new("a.zip")) && !can_read_internally(Path::new("a.iso")) && !can_read_internally(Path::new("a.part2.rar")));
         assert!(can_read_internally(Path::new("a.alz")) && can_read_internally(Path::new("a.egg")));
-        // 동봉 7-Zip은 ACE를 못 읽는다(형식 목록에 없음): 내부 읽기·안으로 들어가기 모두 아님.
+        // The bundled 7-Zip cannot read ACE (not in its format list): neither internal reading nor entering.
         assert!(!can_read_internally(Path::new("a.ace")) && !bundled_can_browse(Path::new("a.ace")) && bundled_can_browse(Path::new("a.iso")));
         fs::remove_dir_all(root).unwrap();
     }
@@ -2770,18 +2770,18 @@ mod entry_tests {
         let cancel = AtomicBool::new(false);
         let archive = root.join("pack.zip");
         create(&[root.join("src/inner"), root.join("src/a.txt")], &archive, None, &cancel).unwrap();
-        // 목록 없이 통째로(C# ExtractExternalWithPasswordPromptAsync): 외부 프로그램 자리에 동봉 7-Zip과 풀기 형식.
+        // Whole extraction without a listing (C# ExtractExternalWithPasswordPromptAsync): the bundled 7-Zip and an extract format in place of the external program.
         let program = ExternalProgram { program: seven_zip_path().unwrap(), create_template: None, extract_template: Some("x {archive} -o{destination} -y {keys}".into()) };
         let destination = root.join("pack");
         extract_whole_with_program(&archive, &destination, None, &program, &cancel).unwrap();
         assert_eq!(fs::read(destination.join("a.txt")).unwrap(), b"top");
         assert_eq!(fs::read(destination.join("inner/b.txt")).unwrap(), b"inside");
-        // 단계 폴더는 남지 않는다.
+        // No staging folder is left behind.
         assert!(!fs::read_dir(&root).unwrap().any(|e| e.unwrap().file_name().to_string_lossy().starts_with(".ndr-whole-")));
-        // 같은 이름이 이미 있으면 덮어쓰지 않고 오류.
+        // When the name already exists, it does not overwrite and fails.
         assert!(extract_whole_with_program(&archive, &destination, None, &program, &cancel).is_err());
         assert_eq!(fs::read(destination.join("a.txt")).unwrap(), b"top");
-        // C# RunExternalExtractWithPasswordPromptAsync: 암호 진단(7-Zip 문법)이면 묻고 그 암호로 다시 푼다. 틀리면 또 묻고, 취소면 끝.
+        // C# RunExternalExtractWithPasswordPromptAsync: on a password diagnostic (7-Zip syntax) asks and extracts again with that password. Wrong asks again, cancel ends.
         let secret = root.join("secret.zip");
         create(&[root.join("src/a.txt")], &secret, Some("s3cret"), &cancel).unwrap();
         let program = ExternalProgram { extract_template: Some("x {archive} -o{destination} -y -p{password} {keys}".into()), ..program };

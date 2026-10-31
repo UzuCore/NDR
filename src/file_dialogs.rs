@@ -1,8 +1,8 @@
-//! Windows 공용 파일 대화 상자(IFileOpenDialog / IFileSaveDialog). C# OpenFolderDialog, OpenFileDialog, SaveFileDialog 자리.
-//! 모달이라 닫힐 때까지 호출한 스레드를 막는다. 취소하거나 실패하면 None(빈 목록).
+//! Windows common file dialogs (IFileOpenDialog / IFileSaveDialog). In place of C# OpenFolderDialog, OpenFileDialog, SaveFileDialog.
+//! Modal, so they block the calling thread until closed. Cancel or failure gives None (an empty list).
 use std::path::{Path, PathBuf};
 
-/// 저장 대화 상자 함수 모양(제목, 처음 폴더, 이름, (형식 이름, 패턴) 목록, 기본 확장자). 앱은 테스트에서 이것을 바꿔 끼운다.
+/// Save dialog function shape (title, initial folder, name, list of (type name, pattern), default extension). The app swaps it in tests.
 pub type SaveFileFn = fn(&str, Option<&Path>, &str, &[(&str, &str)], &str, bool) -> Option<PathBuf>;
 use windows::{
     Win32::{
@@ -15,7 +15,7 @@ use windows::{
     core::{HSTRING, Interface, PCWSTR},
 };
 
-/// CoInitializeEx가 성공했을 때만 CoUninitialize.
+/// CoUninitialize only when CoInitializeEx succeeded.
 struct Com(bool);
 impl Com {
     fn new() -> Self {
@@ -45,7 +45,7 @@ fn item_path(item: &IShellItem) -> Option<PathBuf> {
 fn prepare(dialog: &IFileDialog, title: &str, folder: Option<&Path>) {
     // SAFETY: COM calls on a live dialog object; failures only leave defaults.
     unsafe {
-        // 빈 제목이면 Windows 기본 제목(원본 TSaveDialog처럼 Title이 없는 상자).
+        // An empty title uses the Windows default title (a box without Title, like the original TSaveDialog).
         if !title.is_empty() {
             let _ = dialog.SetTitle(&HSTRING::from(title));
         }
@@ -88,12 +88,12 @@ pub fn open_files(title: &str, initial: Option<&Path>) -> Vec<PathBuf> {
     result.unwrap_or_default()
 }
 
-/// C# OpenFileDialog(파일 하나, 형식 목록, 처음 이름).
+/// C# OpenFileDialog (one file, type list, initial name).
 pub fn open_file(title: &str, initial: Option<&Path>, file_name: &str, filters: &[(&str, &str)]) -> Option<PathBuf> {
     open_one(title, initial, file_name, filters, true)
 }
 
-/// VCL TOpenDialog에서 ofFileMustExist를 끈 것(원본 TfFileJoin btnBrowseClick 0x423444): 열기 상자지만 없는 이름도 입력할 수 있다.
+/// VCL TOpenDialog with ofFileMustExist off (original TfFileJoin btnBrowseClick 0x423444): an open box that also accepts names that do not exist.
 pub fn open_any_file(title: &str, initial: Option<&Path>, file_name: &str, filters: &[(&str, &str)]) -> Option<PathBuf> {
     open_one(title, initial, file_name, filters, false)
 }
@@ -118,17 +118,17 @@ fn open_one(title: &str, initial: Option<&Path>, file_name: &str, filters: &[(&s
     }
 }
 
-/// 열기 대화 상자 함수 모양(제목, 처음 폴더, 이름, 형식 목록).
+/// Open dialog function shape (title, initial folder, name, type list).
 pub type OpenFileFn = fn(&str, Option<&Path>, &str, &[(&str, &str)]) -> Option<PathBuf>;
-/// C# SaveFileDialog: 고른 전체 경로. overwrite_prompt = OverwritePrompt. filters는 (이름, 패턴) 목록으로 첫 항목이 처음 선택이고,
-/// default_extension이 있으면 확장자 없이 입력한 이름에 고른 형식의 확장자를 붙인다(AddExtension, DefaultExt).
+/// C# SaveFileDialog: the chosen full path. overwrite_prompt = OverwritePrompt. filters are a list of (name, pattern) with the first item initially chosen;
+/// with default_extension, a name typed without an extension gets the chosen type's extension (AddExtension, DefaultExt).
 pub fn save_file(title: &str, initial: Option<&Path>, file_name: &str, filters: &[(&str, &str)], default_extension: &str, overwrite_prompt: bool) -> Option<PathBuf> {
     let _com = Com::new();
     // SAFETY: as above. The filter strings outlive the SetFileTypes call.
     unsafe {
         let dialog: IFileSaveDialog = CoCreateInstance(&FileSaveDialog, None, CLSCTX_INPROC_SERVER).ok()?;
         let options = dialog.GetOptions().ok()? | FOS_FORCEFILESYSTEM;
-        // C# OverwritePrompt(압축에 더하기는 false: 있는 파일을 골라도 묻지 않는다).
+        // C# OverwritePrompt (false when adding to an archive: choosing an existing file does not ask).
         dialog.SetOptions(if overwrite_prompt { options | FOS_OVERWRITEPROMPT } else { options & !FOS_OVERWRITEPROMPT }).ok()?;
         prepare(&dialog.cast().ok()?, title, initial);
         let names: Vec<(HSTRING, HSTRING)> = filters.iter().map(|(name, spec)| (HSTRING::from(*name), HSTRING::from(*spec))).collect();
@@ -147,8 +147,8 @@ pub fn save_file(title: &str, initial: Option<&Path>, file_name: &str, filters: 
 }
 
 
-/// 원본 miNetwork(0x4416ec → FUN_0040d040): SHBrowseForFolderW(뿌리 SHGetFolderLocation(CSIDL_NETWORK 0x12), 제목, 0x249,
-/// 콜백 FUN_0040cf90이 BFFM_INITIALIZED에서 처음 폴더를 고른다). 고른 파일 시스템 경로, 취소하거나 경로가 없으면 None.
+/// Original miNetwork (0x4416ec -> FUN_0040d040): SHBrowseForFolderW (root SHGetFolderLocation(CSIDL_NETWORK 0x12), title, 0x249,
+/// callback FUN_0040cf90 selects the initial folder on BFFM_INITIALIZED). The chosen file system path; None on cancel or when there is no path.
 pub fn browse_network(title: &str, initial: Option<&Path>) -> Option<PathBuf> {
     use std::os::windows::ffi::{OsStrExt, OsStringExt};
     use windows_sys::Win32::{

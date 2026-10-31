@@ -1,5 +1,5 @@
-//! C# NexusFileCommandService(명령 해석, cd 폴더 찾기), NexusFileCommandHistoryService(명령 기록),
-//! NexusFileExecutableHistoryService(실행 파일 기록 "이름=경로"). shlwapi/kernel32 함수를 그대로 부른다.
+//! C# NexusFileCommandService (command parsing, cd folder lookup), NexusFileCommandHistoryService (command history),
+//! NexusFileExecutableHistoryService (executable history "name=path"). Calls the shlwapi/kernel32 functions directly.
 use std::path::Path;
 
 fn wide(text: &str) -> Vec<u16> {
@@ -34,7 +34,7 @@ pub fn lstrcmpi(a: &str, b: &str) -> i32 {
     unsafe { windows_sys::Win32::Globalization::lstrcmpiW(wide(a).as_ptr(), wide(b).as_ptr()) }
 }
 
-/// Parse: PathGetArgsW가 인수, PathRemoveArgsW가 프로그램 이름. "ftp://"·"http://"(대소문자 구분)이면 FTP/HTTP, 이름이 "cd"면 폴더 바꾸기.
+/// Parse: PathGetArgsW gives the arguments, PathRemoveArgsW the program name. "ftp://" or "http://" (case-sensitive) means FTP/HTTP, the name "cd" changes folder.
 pub fn parse(command: &str) -> ParsedCommand {
     let mut buffer = wide(command);
     // SAFETY: PathGetArgsW returns a pointer into the NUL-terminated buffer; PathRemoveArgsW edits it in place.
@@ -58,7 +58,7 @@ pub fn parse(command: &str) -> ParsedCommand {
     ParsedCommand { file_name, arguments, kind }
 }
 
-/// TryResolveDirectory: 인수 전체(따옴표를 벗기지 않음)를 작업 폴더 기준 전체 경로로, 있는 폴더일 때만.
+/// TryResolveDirectory: the whole argument (quotes not stripped) as a full path relative to the working folder, only when it is an existing folder.
 pub fn resolve_directory(argument: &str, working_directory: &Path) -> Option<std::path::PathBuf> {
     if argument.is_empty() || argument.contains('\0') {
         return None;
@@ -74,8 +74,8 @@ fn same_text(a: &str, b: &str) -> bool {
     unsafe { windows_sys::Win32::Globalization::CompareStringW(0x400, 1, x.as_ptr(), x.len() as i32, y.as_ptr(), y.len() as i32) == 2 }
 }
 
-/// RememberLocalCommand: 맨 위와 같지 않으면(lstrcmpiW) 같은 길이·같은 글(대소문자 무시)인 기존 줄을 빼고 맨 위에 넣는다.
-/// 로컬 명령이면 20줄을 넘을 때 가장 오래된 한 줄만 지운다.
+/// RememberLocalCommand: unless equal to the top line (lstrcmpiW), removes existing lines of the same length and text (case-insensitive) and puts it on top.
+/// For local commands, when over 20 lines only the oldest line is removed.
 pub fn remember_local_command(history: &mut Vec<String>, command: &str, apply_local_limit: bool) {
     if !command.is_empty() && (history.is_empty() || lstrcmpi(&history[0], command) != 0) {
         let length = command.encode_utf16().count();
@@ -89,7 +89,7 @@ pub fn remember_local_command(history: &mut Vec<String>, command: &str, apply_lo
     }
 }
 
-/// NexusFileExecutableHistoryService.Exists: PathFileExistsW(작업 폴더 기준 전체 경로).
+/// NexusFileExecutableHistoryService.Exists: PathFileExistsW (full path relative to the working folder).
 pub fn executable_exists(path: &str, working_directory: Option<&Path>) -> bool {
     if path.is_empty() || path.contains('\0') {
         return false;
@@ -105,7 +105,7 @@ pub fn executable_exists(path: &str, working_directory: Option<&Path>) -> bool {
     unsafe { windows_sys::Win32::UI::Shell::PathFileExistsW(wide(&full).as_ptr()) != 0 }
 }
 
-/// FindCandidates: 로컬 명령일 때만, "이름=경로" 줄 중 이름이 같고(lstrcmpiW) 경로가 있는 것들(순서 그대로).
+/// FindCandidates: only for local commands, the "name=path" lines with the same name (lstrcmpiW) and an existing path (in order).
 pub fn find_candidates(rows: &[String], command: &str, working_directory: Option<&Path>) -> Vec<String> {
     let parsed = parse(command);
     if parsed.kind != CommandKind::Local {
@@ -119,12 +119,12 @@ pub fn find_candidates(rows: &[String], command: &str, working_directory: Option
         .collect()
 }
 
-/// PruneMissing: '='가 없거나 경로가 없는 줄을 지운다.
+/// PruneMissing: removes lines without '=' or with a missing path.
 pub fn prune_missing(rows: &mut Vec<String>, working_directory: Option<&Path>) {
     rows.retain(|row| row.split_once('=').is_some_and(|(_, path)| executable_exists(path, working_directory)));
 }
 
-/// RememberOpenedExecutable: .exe/.lnk만. 같은 경로(lstrcmpiW)가 있으면 맨 위로, 없으면 "확장자 뺀 이름=경로"를 끝에 붙인다.
+/// RememberOpenedExecutable: .exe/.lnk only. An existing same path (lstrcmpiW) moves to the top, otherwise "name without extension=path" is appended.
 pub fn remember_opened_executable(rows: &mut Vec<String>, path: &str) {
     let buffer = wide(path);
     // SAFETY: both functions return pointers into the NUL-terminated buffer.
@@ -148,7 +148,7 @@ pub fn remember_opened_executable(rows: &mut Vec<String>, path: &str) {
     rows.push(format!("{}={path}", from_wide(&name)));
 }
 
-/// C# ExternalOpenTemplateToken + QuoteArgument: {files}(모두), {file}, {name}, {dir}(대소문자 무시)을 따옴표 친 값으로.
+/// C# ExternalOpenTemplateToken + QuoteArgument: {files} (all), {file}, {name}, {dir} (case-insensitive) become quoted values.
 pub fn expand_open_template(template: &str, paths: &[String]) -> String {
     let first = paths.first().map(String::as_str).unwrap_or("");
     let first_path = Path::new(first);
@@ -179,7 +179,7 @@ pub fn expand_open_template(template: &str, paths: &[String]) -> String {
     out
 }
 
-/// QuoteArgument(CommandLineToArgvW 규칙).
+/// QuoteArgument (CommandLineToArgvW rules).
 pub fn quote_argument(value: &str) -> String {
     let mut result = String::from("\"");
     let mut slashes = 0;
@@ -202,7 +202,7 @@ pub fn quote_argument(value: &str) -> String {
     result
 }
 
-/// NexusFileMacroService.ExpandSetting: 환경 변수, 그다음 $(PROGRAMDIR)·$(PROGRAMDRIVE)(대소문자 무시). 모르는 $(이름)은 그대로.
+/// NexusFileMacroService.ExpandSetting: environment variables, then $(PROGRAMDIR) and $(PROGRAMDRIVE) (case-insensitive). Unknown $(name) stays.
 pub fn expand_setting(value: &str) -> String {
     let expanded = crate::native::expand_environment(value);
     let program = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf())).unwrap_or_default();

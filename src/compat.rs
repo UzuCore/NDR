@@ -315,7 +315,7 @@ pub fn take_parameter_prompt(arguments: &mut String) -> bool {
     }
 }
 
-/// C# NexusFileMacroService.ExpandSetting: %환경 변수%와 $(PROGRAMDIR)/$(PROGRAMDRIVE).
+/// C# NexusFileMacroService.ExpandSetting: %environment variables% and $(PROGRAMDIR)/$(PROGRAMDRIVE).
 pub fn expand_setting(value: &str) -> String {
     let env = regex::Regex::new(r"%([^%]+)%").expect("constant regex");
     let value = env.replace_all(value, |capture: &regex::Captures<'_>| {
@@ -603,7 +603,7 @@ pub fn import_ini(path: &Path) -> Result<Settings, String> {
             };
             settings.set_text(&format!("{side}{property}"), mode);
         }
-        // 원본 ReadInteger(View, viewstyleN, 0): 없으면 0(자동).
+        // Original ReadInteger(View, viewstyleN, 0): 0 (auto) when missing.
         let mode = match get(section, &format!("viewstyle{index}")).unwrap_or("0") {
             "1" => "Names",
             "2" => "Details",
@@ -612,8 +612,8 @@ pub fn import_ini(path: &Path) -> Result<Settings, String> {
         };
         settings.set_text(&format!("{side}ViewStyle"), mode);
     }
-    // 원본 listfont·treefont "\"이름\",크기,모양"의 크기는 포인트(TFont.Size). ListFontSize는 화소라 바꿔 넣는다
-    // (값이 없으면 NDR 처음 값 14화소). FolderTreeFontSize는 포인트 그대로.
+    // The size in the original listfont/treefont "\"name\",size,style" is in points (TFont.Size). ListFontSize is pixels, so it is converted
+    // (NDR default 14 px when missing). FolderTreeFontSize stays in points.
     for (property, section, key, default_size, pixels) in [
         ("List", "Display", "listfont", crate::settings::DEFAULT_LIST_FONT_PIXELS, true),
         ("FolderTree", "Tree", "treefont", 9., false),
@@ -639,7 +639,7 @@ pub fn import_ini(path: &Path) -> Result<Settings, String> {
         settings
             .values
             .insert(format!("{property}FontSize"), json!(size));
-        // 원본 "\"이름\",크기,모양": 모양 = TFontStyles 바이트(1 굵게, 2 기울임, 4 밑줄, 8 취소선).
+        // Original "\"name\",size,style": style = TFontStyles byte (1 bold, 2 italic, 4 underline, 8 strikeout).
         let style = pieces
             .next()
             .and_then(|v| v.trim().parse::<i64>().ok())
@@ -686,8 +686,8 @@ pub fn import_ini(path: &Path) -> Result<Settings, String> {
             .any(|k| get("Tree", k).is_some()),
     );
     settings.set_flag("ShowDeleteToolbarButton", true);
-    // 원본 [Operation] completesound(설정 +0xdc, 0x43d9fc 완료 소리)와 playwav(+0xf0, 0x483c79 .wav를 프로그램 안에서 재생)는
-    // 서로 다른 값이다. 둘 다 처음 값은 켜짐(0x46f03a, 0x46f088).
+    // Original [Operation] completesound (setting +0xdc, completion sound 0x43d9fc) and playwav (+0xf0, 0x483c79 plays .wav inside the program)
+    // are separate values. Both default to on (0x46f03a, 0x46f088).
     let on = |key: &str| get("Operation", key).map(|v| v == "1" || v.eq_ignore_ascii_case("true")).unwrap_or(true);
     settings.set_flag("PlayCompletionSound", on("completesound"));
     settings.set_flag("PlayWaveInProgram", on("playwav"));
@@ -2170,7 +2170,7 @@ impl ShortcutMap {
 #[cfg(test)]
 mod tests {
     use super::*;
-    /// 원본 default/nexusfile.ini를 가져온 설정을 NDR_DEFAULT_INI_DUMP 파일로 쓴다(기본값 대조용, 손으로만 돌린다).
+    /// Writes the settings imported from the original default/nexusfile.ini to the NDR_DEFAULT_INI_DUMP file (for default comparisons; run by hand only).
     #[test]
     #[ignore]
     fn dump_original_default_ini() {
@@ -2256,7 +2256,7 @@ mod tests {
         let file = root.join("nexusfile.ini");
         fs::write(&file, "[Window]\ndualview=0\nlastfocus=1\nskin=black\n[View1]\nlastpath1=C:\\한글\nshowhidden1=1\nsort1=3\n[Operation]\nuseion=0\n[Display]\nlistfont=\"Tahoma\",10,3\n[Tree]\ntreefont=Gulim,9\n[Future]\nunknown=keep\n").unwrap();
         let settings = import_ini(&file).unwrap();
-        // 원본 "\"이름\",크기,모양"(FUN_0044cd58 wsprintfW): 모양 = TFontStyles 바이트. 크기는 포인트 → ListFontSize 화소(10 × 96 / 72 = 13).
+        // Original "\"name\",size,style" (FUN_0044cd58 wsprintfW): style = TFontStyles byte. Size in points -> ListFontSize pixels (10 x 96 / 72 = 13).
         assert_eq!((settings.text("ListFont", ""), settings.values["ListFontSize"].as_f64(), settings.values["ListFontStyle"].as_i64()), ("Tahoma".to_owned(), Some(13.0), Some(3)));
         assert_eq!(settings.values["FolderTreeFontSize"].as_f64(), Some(9.0), "the folder tree size stays in points");
         assert_eq!((settings.text("FolderTreeFont", ""), settings.values["FolderTreeFontStyle"].as_i64()), ("Gulim".to_owned(), Some(0)));

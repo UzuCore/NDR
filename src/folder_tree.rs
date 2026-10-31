@@ -1,9 +1,9 @@
-//! 원본 NexusFile 폴더 트리 자료(Nxfoldertreeview: TNXTreeItem, TNXTreeItems, TNXFolderTreeView의 훑기·트리 파일).
+//! Original NexusFile folder tree data (Nxfoldertreeview: TNXTreeItem, TNXTreeItems, scanning and tree files of TNXFolderTreeView).
 //!
-//! 항목(TNXTreeItem): 이름(+8), 펼침(+0xc, 처음 1), 부모(+0x10), 첫 자식(+0x14), 다음 형제(+0x18), 단계(+0x1c, 뿌리 0), 줄(+0x20).
-//! 형제는 이름 순(lstrcmpiW)으로 넣고 같은 이름은 넣지 않는다(FUN_007e48a0·FUN_007e47d4).
-//! 줄 번호(ItemsChanged 0x7e8fcc): 보이는 항목을 앞 순서로 걸으며 단계가 앞 항목보다 깊지 않을 때만 다음 줄로 — 첫 자식은 부모와 같은 줄에
-//! 오른쪽 칸으로 그려진다.
+//! Item (TNXTreeItem): name (+8), expanded (+0xc, initially 1), parent (+0x10), first child (+0x14), next sibling (+0x18), level (+0x1c, root 0), row (+0x20).
+//! Siblings are inserted in name order (lstrcmpiW) and duplicate names are not inserted (FUN_007e48a0, FUN_007e47d4).
+//! Row numbers (ItemsChanged 0x7e8fcc): walking visible items in preorder, a new row starts only when the level is not deeper than the previous item, so the first child is drawn
+//! on the parent's row in the cell to the right.
 use std::{
     fs,
     os::windows::fs::MetadataExt,
@@ -11,7 +11,7 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
-/// FILE_ATTRIBUTE_HIDDEN(ScanDir의 `local_290 & 2`).
+/// FILE_ATTRIBUTE_HIDDEN (`local_290 & 2` of ScanDir).
 fn hidden(meta: &fs::Metadata) -> bool {
     meta.file_attributes() & crate::listing::FILE_ATTRIBUTE_HIDDEN != 0
 }
@@ -31,20 +31,20 @@ pub struct Item {
 pub struct Tree {
     pub items: Vec<Item>,
     pub root: Option<usize>,
-    /// ItemsChanged가 센 가장 깊은 보이는 단계(+0x300).
+    /// Deepest visible level counted by ItemsChanged (+0x300).
     pub max_level: usize,
-    /// 마지막 보이는 항목(+0x338).
+    /// Last visible item (+0x338).
     pub last: Option<usize>,
-    /// 줄마다 그 줄의 맨 왼쪽(앞 순서 첫) 항목. 그리기·누르기는 이 항목부터 첫 자식 사슬을 따른다.
+    /// Per row the leftmost (first in preorder) item of that row. Drawing and clicking follow the first-child chain from this item.
     pub row_starts: Vec<usize>,
-    /// 지운 항목(자리는 남긴다).
+    /// Deleted items (their slots remain).
     removed: Vec<bool>,
 }
 
-/// 트리 파일 한 줄(ScanDir 0x7e9634·FUN_007e5330 "%d%2d%s"): (펼침, 단계, 이름).
+/// One tree file line (ScanDir 0x7e9634, FUN_007e5330 "%d%2d%s"): (expanded, level, name).
 pub type Line = (bool, usize, String);
 
-/// FUN_007e3e38: 경로 단계 = 끝 글자를 뺀 '\' 수(3글자 이하면 0). "\\"로 시작하면(UNC) 3을 뺀다.
+/// FUN_007e3e38: path level = number of '\' excluding the last character (0 for 3 characters or fewer). Paths starting with "\\" (UNC) subtract 3.
 pub fn path_level(path: &str) -> usize {
     let chars: Vec<char> = path.chars().collect();
     if chars.len() <= 3 {
@@ -55,7 +55,7 @@ pub fn path_level(path: &str) -> usize {
     count.max(0) as usize
 }
 
-/// FUN_007e4ba4가 읽는 줄: 첫 글자 = 펼침(StrToIntExW), 다음 두 글자 = 단계("%2d"), 넷째 글자부터 이름. 숫자가 아니면 None.
+/// Line read by FUN_007e4ba4: first character = expanded (StrToIntExW), next two = level ("%2d"), name from the fourth character. None when not numeric.
 pub fn parse_line(text: &str) -> Option<Line> {
     let chars: Vec<char> = text.chars().collect();
     if chars.len() < 4 {
@@ -66,7 +66,7 @@ pub fn parse_line(text: &str) -> Option<Line> {
     Some((expanded != 0, level, chars[3..].iter().collect()))
 }
 
-/// FUN_007e5330의 한 줄: "%d%2d%s"와 줄바꿈.
+/// One line of FUN_007e5330: "%d%2d%s" and a line break.
 pub fn format_line(expanded: bool, level: usize, name: &str) -> String {
     format!("{}{:>2}{}\r\n", u8::from(expanded), level, name)
 }
@@ -75,13 +75,13 @@ fn same_name(a: &str, b: &str) -> bool {
     a.to_lowercase() == b.to_lowercase()
 }
 
-/// lstrcmpiW 순서(대소문자 무시).
+/// lstrcmpiW order (case-insensitive).
 fn name_order(a: &str, b: &str) -> std::cmp::Ordering {
     a.to_lowercase().cmp(&b.to_lowercase())
 }
 
 impl Tree {
-    /// 뿌리 하나(Refresh 0x7e9d94: 단계 0, 펼침, 이름 = 드라이브 뿌리 경로).
+    /// A single root (Refresh 0x7e9d94: level 0, expanded, name = drive root path).
     pub fn with_root(name: &str) -> Self {
         let mut tree = Tree::default();
         let root = tree.push(name, 0, true);
@@ -99,12 +99,12 @@ impl Tree {
         self.root.is_none()
     }
 
-    /// 살아 있는 항목 수(TNXTreeItems +8).
+    /// Number of live items (TNXTreeItems +8).
     pub fn count(&self) -> usize {
         self.removed.iter().filter(|r| !**r).count()
     }
 
-    /// FUN_007e47d4: `sibling`의 부모 아래에 이름 순으로 넣는다(같은 이름이 있어도 넣는다 — 부르는 쪽이 거른다).
+    /// FUN_007e47d4: inserts under `sibling`'s parent in name order (even when the same name exists; the caller filters).
     fn insert_beside(&mut self, sibling: usize, item: usize) -> Option<usize> {
         let parent = self.items[sibling].parent?;
         let first = self.items[parent].child?;
@@ -133,7 +133,7 @@ impl Tree {
         Some(item)
     }
 
-    /// FUN_007e48a0: 자식이 없으면 첫 자식으로, 있으면 같은 이름이 없을 때만 이름 순으로.
+    /// FUN_007e48a0: as the first child when there are no children, otherwise in name order only when the name does not exist yet.
     fn insert_child(&mut self, parent: usize, item: usize) -> Option<usize> {
         match self.items[parent].child {
             None => {
@@ -152,7 +152,7 @@ impl Tree {
         }
     }
 
-    /// FUN_007e4904: 새 이름을 `parent` 아래에 넣는다(단계 = 부모 + 1). 같은 이름이 있으면 None.
+    /// FUN_007e4904: inserts a new name under `parent` (level = parent + 1). None when the name exists.
     pub fn add_child(&mut self, parent: usize, name: &str) -> Option<usize> {
         let level = self.items[parent].level + 1;
         let item = self.push(name, level, true);
@@ -163,13 +163,13 @@ impl Tree {
         added
     }
 
-    /// 자식들(첫 자식부터 형제 사슬).
+    /// Children (from the first child along the sibling chain).
     pub fn children(&self, parent: usize) -> impl Iterator<Item = usize> + '_ {
         std::iter::successors(self.items[parent].child, move |&c| self.items[c].next)
     }
 
-    /// FUN_007e4d30/FUN_007e4ba4: 줄들로 트리를 만든다. 첫 줄이 뿌리. 같은 단계면 앞 항목의 형제, 깊으면 앞 항목의 자식,
-    /// 얕으면 그만큼 부모로 올라가 형제로. 줄이 틀리거나 넣을 수 없으면 거기서 멈추고 None(원본은 오류 상자).
+    /// FUN_007e4d30/FUN_007e4ba4: builds the tree from lines. The first line is the root. The same level makes a sibling of the previous item, deeper a child of it,
+    /// shallower climbs that many parents and makes a sibling. On a bad line or failed insert it stops there with None (the original shows an error box).
     pub fn from_lines(lines: &[Line]) -> Option<Tree> {
         let mut tree = Tree::default();
         let mut previous: Option<usize> = None;
@@ -206,7 +206,7 @@ impl Tree {
         Some(tree)
     }
 
-    /// FUN_007e5330·FUN_007e5230: 모든 항목을 앞 순서로(보임과 관계없이) 줄로.
+    /// FUN_007e5330 and FUN_007e5230: all items in preorder (regardless of visibility) as lines.
     pub fn to_lines(&self) -> Vec<Line> {
         let mut out = vec![];
         let mut at = self.root;
@@ -218,7 +218,7 @@ impl Tree {
         out
     }
 
-    /// FUN_007e5230: 앞 순서 다음 항목(첫 자식, 다음 형제, 조상의 다음 형제).
+    /// FUN_007e5230: next item in preorder (first child, next sibling, an ancestor's next sibling).
     pub fn next_any(&self, i: usize) -> Option<usize> {
         if let Some(c) = self.items[i].child {
             return Some(c);
@@ -236,7 +236,7 @@ impl Tree {
         None
     }
 
-    /// FUN_007e4466: 조상이 모두 펼쳐져 있으면 보인다.
+    /// FUN_007e4466: visible when all ancestors are expanded.
     pub fn is_visible(&self, i: usize) -> bool {
         let mut at = self.items[i].parent;
         while let Some(p) = at {
@@ -248,7 +248,7 @@ impl Tree {
         true
     }
 
-    /// FUN_007e5264: 다음 보이는 항목.
+    /// FUN_007e5264: next visible item.
     pub fn next_visible(&self, i: usize) -> Option<usize> {
         let mut at = self.next_any(i);
         while let Some(c) = at {
@@ -263,7 +263,7 @@ impl Tree {
         None
     }
 
-    /// FUN_007e52a0: 앞 순서 앞 항목(첫 자식이면 부모, 아니면 앞 형제의 마지막 자손).
+    /// FUN_007e52a0: previous item in preorder (the parent for a first child, otherwise the last descendant of the previous sibling).
     fn prev_any(&self, i: usize) -> Option<usize> {
         let parent = self.items[i].parent?;
         if self.items[parent].child == Some(i) {
@@ -279,7 +279,7 @@ impl Tree {
         Some(at)
     }
 
-    /// FUN_007e52e4: 앞 보이는 항목.
+    /// FUN_007e52e4: previous visible item.
     pub fn prev_visible(&self, i: usize) -> Option<usize> {
         let mut at = self.prev_any(i);
         while let Some(c) = at {
@@ -294,7 +294,7 @@ impl Tree {
         None
     }
 
-    /// GetBefore 0x7e43d8: 앞 형제.
+    /// GetBefore 0x7e43d8: previous sibling.
     pub fn before(&self, i: usize) -> Option<usize> {
         let parent = self.items[i].parent?;
         let mut at = self.items[parent].child?;
@@ -315,7 +315,7 @@ impl Tree {
         self.items[i].parent.is_some_and(|p| self.items[p].child == Some(i))
     }
 
-    /// HasAsParent 0x7e4644: `ancestor`가 `i`의 조상인가.
+    /// HasAsParent 0x7e4644: whether `ancestor` is an ancestor of `i`.
     pub fn has_as_parent(&self, i: usize, ancestor: usize) -> bool {
         let mut at = self.items[i].parent;
         while let Some(p) = at {
@@ -327,7 +327,7 @@ impl Tree {
         false
     }
 
-    /// ItemsChanged 0x7e8fcc: 뿌리 줄 0. 뿌리의 첫 자식부터 보이는 항목을 걸으며, 단계가 앞 항목 단계 이하면 다음 줄.
+    /// ItemsChanged 0x7e8fcc: the root on row 0. Walks visible items from the root's first child; a level at or below the previous item's level starts the next row.
     pub fn assign_rows(&mut self) {
         let Some(root) = self.root else { return };
         self.items[root].row = 0;
@@ -349,7 +349,7 @@ impl Tree {
         self.last = Some(last);
     }
 
-    /// GetFullPath 0x7e42bc: 뿌리는 이름(':'가 있거나 '/'·'\'로 시작하면 끝에 '\'), 아니면 조상 이름을 PathCombine.
+    /// GetFullPath 0x7e42bc: the root is its name (with a trailing '\' when it has ':' or starts with '/' or '\'), otherwise PathCombine of the ancestor names.
     pub fn full_path(&self, i: usize) -> String {
         let item = &self.items[i];
         if item.level == 0 && item.parent.is_none() {
@@ -370,7 +370,7 @@ impl Tree {
         path.to_string_lossy().into_owned()
     }
 
-    /// FUN_007e5594: 경로의 항목. 뿌리보다 길지 않으면 뿌리. 이름은 대소문자 무시.
+    /// FUN_007e5594: the item for a path. The root when the path is not longer than the root. Names are case-insensitive.
     pub fn find_path(&self, path: &str) -> Option<usize> {
         let root = self.root?;
         let trimmed = path.trim_end_matches('\\');
@@ -390,7 +390,7 @@ impl Tree {
         Some(at)
     }
 
-    /// Expand 0x7e4544 / Collapse 0x7e4498 (recurse면 모든 자손도). 줄을 다시 센다.
+    /// Expand 0x7e4544 / Collapse 0x7e4498 (all descendants too with recurse). Recounts rows.
     pub fn set_expanded(&mut self, i: usize, expanded: bool, recurse: bool) {
         self.items[i].expanded = expanded;
         if recurse {
@@ -403,7 +403,7 @@ impl Tree {
         self.assign_rows();
     }
 
-    /// MakeVisible 0x7e45c8: 조상을 모두 펼친다.
+    /// MakeVisible 0x7e45c8: expands all ancestors.
     pub fn make_visible(&mut self, i: usize) {
         let mut at = self.items[i].parent;
         while let Some(p) = at {
@@ -413,7 +413,7 @@ impl Tree {
         self.assign_rows();
     }
 
-    /// FUN_007e4a24(초점 처리는 부르는 쪽): 형제 사슬에서 빼고 자손까지 지운다.
+    /// FUN_007e4a24 (focus handling is the caller's): removes it from the sibling chain and deletes its descendants.
     pub fn remove(&mut self, i: usize) {
         if let Some(parent) = self.items[i].parent {
             if self.items[parent].child == Some(i) {
@@ -434,7 +434,7 @@ impl Tree {
         self.assign_rows();
     }
 
-    /// FUN_007e5754: `other`(다른 트리)의 뿌리를 `parent` 아래에 이름 그대로 붙이고 그 자손을 옮긴다(FUN_007e57fc).
+    /// FUN_007e5754: attaches the root of `other` (another tree) under `parent` with its name as is and moves its descendants (FUN_007e57fc).
     pub fn graft(&mut self, parent: usize, other: &Tree) -> Option<usize> {
         let other_root = other.root?;
         let top = self.add_child(parent, &other.items[other_root].name)?;
@@ -452,8 +452,8 @@ impl Tree {
         Some(top)
     }
 
-    /// QuickSearch 0x7e885c: `from` 다음부터(`include_from`이면 `from`부터) 이름이 `prefix`로 시작하는(StrCmpNIW) 항목. 끝까지 없으면
-    /// 뿌리 첫 항목부터 `from` 앞까지 돈다. `all`이면 접힌 항목도 본다(+0x34c).
+    /// QuickSearch 0x7e885c: the item after `from` (or `from` itself with `include_from`) whose name starts with `prefix` (StrCmpNIW). When none to the end,
+    /// continues from the root's first item up to before `from`. With `all` collapsed items are checked too (+0x34c).
     pub fn quick_search(&self, from: usize, prefix: &str, include_from: bool, all: bool) -> Option<usize> {
         let root = self.root?;
         let step = |i: usize| if all { self.next_any(i) } else { self.next_visible(i) };
@@ -479,19 +479,19 @@ impl Tree {
     }
 }
 
-/// TNXFolderTreeView 훑기 설정.
+/// TNXFolderTreeView scan settings.
 #[derive(Clone, Debug, Default)]
 pub struct ScanOptions {
-    /// 숨김 폴더도(+0x355 ShowHiddenFolder).
+    /// Hidden folders too (+0x355 ShowHiddenFolder).
     pub show_hidden: bool,
-    /// 건너뛸 경로(+0x35c, 대소문자 무시).
+    /// Paths to skip (+0x35c, case-insensitive).
     pub excluded: Vec<String>,
-    /// 깊이 제한(+0x360 켬, +0x394 단계). None = 제한 없음(PartRefresh).
+    /// Depth limit (+0x360 on, +0x394 level). None = no limit (PartRefresh).
     pub max_level: Option<usize>,
 }
 
-/// RefreshFirstLevel 0x7e99e0의 FindFirstFileW(경로\*): 바로 아래 폴더 이름("."·".." 빼고, 숨김은 show_hidden일 때만).
-/// 거르개는 scan과 같다(재분석 지점·제외 경로는 뺀다).
+/// FindFirstFileW(path\*) of RefreshFirstLevel 0x7e99e0: folder names directly below (without "." and "..", hidden ones only with show_hidden).
+/// Same filter as scan (reparse points and excluded paths are left out).
 pub fn child_folder_names(folder: &Path, options: &ScanOptions) -> Vec<String> {
     let Ok(read) = fs::read_dir(folder) else { return vec![] };
     read.flatten()
@@ -509,13 +509,13 @@ pub fn child_folder_names(folder: &Path, options: &ScanOptions) -> Vec<String> {
         .collect()
 }
 
-/// SetShowHiddenFolder 0x7ea8b0: GetFileAttributesW(경로) & FILE_ATTRIBUTE_HIDDEN.
+/// SetShowHiddenFolder 0x7ea8b0: GetFileAttributesW(path) & FILE_ATTRIBUTE_HIDDEN.
 pub fn is_hidden_folder(path: &Path) -> bool {
     fs::metadata(path).is_ok_and(|m| hidden(&m))
 }
 
-/// ScanDirectory 0x7e988c + ScanDir 0x7e9634: `path`부터 폴더만 줄로. 첫 줄 = `path`(단계 0이면 뿌리 경로, 아니면 이름, 펼침 1).
-/// 자식 줄의 펼침 = (단계 − (시작 단계 + 1) < 2). `cancel`이 켜지면 멈춘다(+0x390). `progress`는 들어간 폴더마다(OnScan).
+/// ScanDirectory 0x7e988c + ScanDir 0x7e9634: folders only, from `path`, as lines. First line = `path` (the root path at level 0, otherwise the name, expanded 1).
+/// Child line expanded = (level - (start level + 1) < 2). Stops when `cancel` is set (+0x390). `progress` fires for each folder entered (OnScan).
 pub fn scan(path: &Path, options: &ScanOptions, cancel: &AtomicBool, progress: &mut dyn FnMut(&Path)) -> Vec<Line> {
     let text = path.to_string_lossy().into_owned();
     let level = path_level(&text);
@@ -548,7 +548,7 @@ fn scan_dir(folder: &Path, level: usize, base: usize, options: &ScanOptions, can
             return;
         }
         let Ok(meta) = entry.metadata() else { continue };
-        // 고친 것: 연결 지점·바로 가기 폴더(재분석 지점)는 따라가지 않는다(원본은 들어가 같은 폴더를 거듭 훑을 수 있다).
+        // Fixed: junctions and shortcut folders (reparse points) are not followed (the original enters them and can scan the same folder repeatedly).
         if !meta.is_dir() || meta.file_attributes() & 0x400 != 0 {
             continue;
         }
@@ -566,7 +566,7 @@ fn scan_dir(folder: &Path, level: usize, base: usize, options: &ScanOptions, can
         if cancel.load(Ordering::Relaxed) {
             return;
         }
-        // SetCurrentDirectoryW로 들어갈 수 있는 폴더만.
+        // Only folders that SetCurrentDirectoryW can enter.
         if fs::read_dir(&path).is_err() {
             continue;
         }
@@ -578,7 +578,7 @@ fn scan_dir(folder: &Path, level: usize, base: usize, options: &ScanOptions, can
     }
 }
 
-/// Refresh 0x7e9d94: 뿌리(`root`, 펼침) + RefreshFirstLevel(첫 단계 폴더) + 첫 단계 폴더마다 Refresh(항목)(그 폴더부터 훑어 붙인다).
+/// Refresh 0x7e9d94: root (`root`, expanded) + RefreshFirstLevel (first-level folders) + Refresh(item) for each first-level folder (scans from that folder and attaches).
 pub fn build(root: &Path, options: &ScanOptions, cancel: &AtomicBool, progress: &mut dyn FnMut(&Path)) -> Tree {
     let root_text = root.to_string_lossy().into_owned();
     let mut tree = Tree::with_root(&root_text);
@@ -615,7 +615,7 @@ pub fn build(root: &Path, options: &ScanOptions, cancel: &AtomicBool, progress: 
     tree
 }
 
-/// FUN_007e3e7c: 트리 파일. 뿌리에 두기(tfileinroot)이고 CD·이동식이 아니면 "뿌리\treeinfo.xcd", 아니면 `folder`\볼륨 일련번호.xcd.
+/// FUN_007e3e7c: the tree file. With tfileinroot and not CD or removable, "root\treeinfo.xcd", otherwise `folder`\<volume serial>.xcd.
 pub fn tree_file_name(root: &Path, in_root: bool, removable_or_cd: bool, serial: &str, folder: &Path) -> PathBuf {
     if in_root && !removable_or_cd {
         root.join("treeinfo.xcd")
@@ -624,7 +624,7 @@ pub fn tree_file_name(root: &Path, in_root: bool, removable_or_cd: bool, serial:
     }
 }
 
-/// FUN_007e4f64: 트리 파일(UTF-16LE, BOM 없음)을 읽는다. 틀린 줄이 있으면 None.
+/// FUN_007e4f64: reads a tree file (UTF-16LE, no BOM). None when a line is invalid.
 pub fn load_file(path: &Path) -> Option<Tree> {
     let bytes = fs::read(path).ok()?;
     let units: Vec<u16> = bytes.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
@@ -636,7 +636,7 @@ pub fn load_file(path: &Path) -> Option<Tree> {
     Tree::from_lines(&lines)
 }
 
-/// FUN_007e5330: 트리 파일로 쓴다(UTF-16LE, BOM 없음, 줄마다 "%d%2d%s\r\n").
+/// FUN_007e5330: writes a tree file (UTF-16LE, no BOM, "%d%2d%s\r\n" per line).
 pub fn save_file(tree: &Tree, path: &Path) -> Result<(), String> {
     let mut bytes = vec![];
     for (expanded, level, name) in tree.to_lines() {
@@ -682,10 +682,10 @@ mod tests {
     fn rows_put_the_first_child_on_its_parent_row() {
         let tree = sample();
         let id = |name: &str| tree.items.iter().position(|i| i.name == name).unwrap();
-        // C:\ a        (row 0: 뿌리, 첫 자식 a)
+        // C:\ a        (row 0: root, first child a)
         //     b  b1    (row 1)
         //        b2    (row 2)
-        //     c        (row 3, 접힘: c1은 보이지 않는다)
+        //     c        (row 3, collapsed: c1 is not visible)
         assert_eq!([0, 0, 1, 1, 2, 3].to_vec(), ["C:\\", "a", "b", "b1", "b2", "c"].iter().map(|n| tree.items[id(n)].row).collect::<Vec<_>>());
         assert!(!tree.is_visible(id("c1")));
         assert_eq!(tree.last, Some(id("c")));

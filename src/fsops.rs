@@ -18,18 +18,18 @@ pub struct Entry {
     pub size: u64,
     pub modified: Option<SystemTime>,
     pub hidden: bool,
-    /// Windows 속성 비트(FILE_ATTRIBUTE_*). 원격·압축 항목은 0.
+    /// Windows attribute bits (FILE_ATTRIBUTE_*). 0 for remote and archive items.
     pub attributes: u32,
-    /// 원본 TNXFileItem 종류 4(속성 0x40000, FUN_007d2c54): 목록 끝에 덧붙인 드라이브 항목(경로 = "C:\").
-    /// 고르거나 작업 대상이 되지 않고, 열면 그 드라이브로 간다.
+    /// Original TNXFileItem kind 4 (attribute 0x40000, FUN_007d2c54): drive items appended at the end of the list (path = "C:\").
+    /// Never selected or a job target; opening one goes to that drive.
     pub drive: bool,
 }
 impl Entry {
-    /// 원본 GetList(0x45a34c)·압축(0x45ecd0)·SFTP(0x45bb0c)가 루트가 아닌 위치의 맨 앞에 넣는 ".."(종류 1, 속성 0x10).
+    /// ".." (kind 1, attribute 0x10) that original GetList (0x45a34c), archive (0x45ecd0) and SFTP (0x45bb0c) put first at non-root locations.
     pub fn is_parent(&self) -> bool {
         self.is_dir && !self.drive && self.name == ".."
     }
-    /// ".." 항목. 경로는 상위 위치(열면 상위로 간다), 시각은 지금 폴더의 시각(원본 GetFolderTime).
+    /// The ".." item. Its path is the parent location (opening goes up) and its time the current folder's time (original GetFolderTime).
     pub fn parent_item(path: PathBuf, modified: Option<SystemTime>) -> Self {
         Self { path, name: "..".into(), is_dir: true, size: 0, modified, hidden: false, attributes: 0x10, drive: false }
     }
@@ -45,16 +45,16 @@ pub enum Operation {
         sources: Vec<PathBuf>,
         recycle: bool,
     },
-    /// C# DeleteWithSkippedPaths: 영구 삭제, `skipped` 아래의 항목과 그 상위 폴더는 남긴다.
+    /// C# DeleteWithSkippedPaths: permanent delete, keeping items under `skipped` and their parent folders.
     DeleteSkipping {
         sources: Vec<PathBuf>,
         skipped: Vec<PathBuf>,
     },
-    /// C# FileOperationService.Shred: 파일은 임의 값, 0, 0xFF로 세 번 덮어쓴 뒤 임의 이름으로 바꿔 삭제한다.
+    /// C# FileOperationService.Shred: overwrites files three times with random values, 0 and 0xFF, then renames them to random names and deletes them.
     Shred {
         sources: Vec<PathBuf>,
     },
-    /// 원본 miEmptyTempClick(0x434344)의 지우기 작업(종류 2, 플래그 0xF0): 폴더 안의 항목만 영구 삭제하고 폴더는 남긴다(0x10),
+    /// The delete job of original miEmptyTempClick (0x434344) (mode 2, flags 0xF0): permanently deletes only the items inside the folder and keeps the folder (0x10),
     /// 속성 확인을 묻지 않고(0x20), 오류가 나도 묻지 않고 계속하며(0x40) 알리지 않는다(0x80).
     EmptyFolder {
         folder: PathBuf,
