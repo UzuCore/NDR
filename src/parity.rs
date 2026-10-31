@@ -399,6 +399,8 @@ pub fn dotnet_stem(name: &str) -> &str {
 }
 
 /// File list extension (with the dot): like `dotnet_extension`, but a leading dot is not an extension (".gitconfig" is a name only).
+/// Original TNXFileItem::SetFileName 0x7d27d4 splits a file with xilesShell ParseFileName 0x7b4e54 (at the last '.', anywhere) and
+/// GetFileName 0x7d25dc joins it back ("%s.%s" when there is an extension; folders and drives keep the whole name).
 /// Fixed (user request): the original and C# versions showed ".gitconfig" as an empty name with extension "gitconfig".
 pub fn list_extension(name: &str) -> &str {
     match name.rfind('.') {

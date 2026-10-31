@@ -2,6 +2,10 @@
 //!
 //! Items are referred to by key. The Desktop is the empty key, others are shell parsing names (SHGDN_FORPARSING: the full path for file system folders,
 //! "::{CLSID}" for virtual folders such as My PC, Control Panel and Recycle Bin). SHParseDisplayName turns a key back into a shell item.
+//! Original items are xilesShell TNXShellFolder objects: the constructor 0x7b6074 keeps the relative id list and its absolute form (parent's
+//! + relative, desktop items under SHGetFolderLocation) and the depth; DisplayName 0x7b6d38 asks the parent folder, PathName 0x7b6cb0 the
+//! desktop for the parsing name; Rename 0x7b6dd0 calls SetNameOf only when SFGAO_CANRENAME; ExecuteDefault 0x7b6f44 runs ShellExecuteExW
+//! (SEE_MASK_INVOKEIDLIST, SW_SHOW) on the absolute id list. NDR keeps the parsing name instead of the id lists.
 use std::{
     os::windows::ffi::OsStrExt,
     path::{Path, PathBuf},
