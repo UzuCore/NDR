@@ -174,7 +174,8 @@ pub fn shell_open(path: &Path, args: Option<&str>, verb: &str) -> Result<(), Str
     }
 }
 
-/// xilesShell_ExecuteFile (called by original FUN_00431dd4): ShellExecuteExW(file, arguments, working folder, SW_SHOWNORMAL), verb NULL (default verb).
+/// xilesShell_ExecuteFile 0x7b4394 (called by original FUN_00431dd4): ShellExecuteExW(file, arguments, working folder, SW_SHOWNORMAL), verb NULL
+/// (default verb), fMask SEE_MASK_UNICODE (0x4000; with the wait flag also SEE_MASK_NOCLOSEPROCESS and a message loop until the process ends).
 /// Without SEE_MASK_FLAG_NO_UI, the shell reports failures itself.
 pub fn shell_execute(path: &Path, parameters: &str, directory: &Path) -> Result<(), String> {
     reject_nul(&path.to_string_lossy())?;
