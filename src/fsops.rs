@@ -191,6 +191,11 @@ pub fn run_with_options(
             } => {
                 ensure_plain_path(&destination)?;
                 fs::create_dir_all(&destination).map_err(|e| e.to_string())?;
+                // Original GetFileListToWork (FUN_00413ac4, +0x868 0 copy / 1 move): before the work, folders are walked (FUN_004138d4)
+                // so the progress window knows every file and byte. A move inside one drive renames, so the original counts it as one item
+                // (4000 bytes) unless the destination folder already exists. NDR always counts the files below (the rename is quick anyway).
+                let (files, bytes) = tree_totals(&sources, &destination, move_files, j.options.use_descriptions, &j.cancel);
+                let _ = j.events.send(Event::Totals { files: Some(files), bytes: Some(bytes) });
                 let count = sources.len();
                 for (index, s) in sources.into_iter().enumerate() {
                     j.check()?;
@@ -367,6 +372,24 @@ mod tests {
         ));
         fs::create_dir_all(&p).unwrap();
         p
+    }
+    /// Original GetFileListToWork (FUN_00413ac4) + FUN_004138d4: the totals of a folder copy are known before the first file.
+    /// A move inside the same drive whose destination name is free counts as one item (renamed as a whole).
+    #[test]
+    fn copy_reports_tree_totals_before_the_first_file() {
+        let p = fixture();
+        fs::create_dir_all(p.join("in/a/sub")).unwrap();
+        fs::write(p.join("in/a/x.txt"), [0u8; 5]).unwrap();
+        fs::write(p.join("in/a/sub/y.txt"), [0u8; 7]).unwrap();
+        let events = copy(&p, false, false, ConflictChoice::Overwrite);
+        let totals = events.iter().position(|e| matches!(e, Event::Totals { .. })).expect("totals");
+        let first_progress = events.iter().position(|e| matches!(e, Event::Progress { .. })).expect("progress");
+        assert!(totals < first_progress, "totals come first");
+        assert!(matches!(events[totals], Event::Totals { files: Some(2), bytes: Some(12) }));
+        let cancel = AtomicBool::new(false);
+        assert_eq!(tree_totals(&[p.join("out/a")], &p.join("other"), true, false, &cancel), (1, 0), "a same-drive move renames the folder");
+        assert_eq!(tree_totals(&[p.join("out/a")], &p.join("in"), true, false, &cancel), (2, 12), "the destination name exists, so its files are moved one by one");
+        fs::remove_dir_all(&p).unwrap();
     }
     #[test]
     fn unique_path_skips_names_left_by_an_earlier_process_with_the_same_pid() {
@@ -555,6 +578,51 @@ use std::{
     sync::mpsc,
     time::Duration,
 };
+/// Original FUN_004138d4 (inside GetFileListToWork FUN_00413ac4): files and bytes below the chosen items, so the progress window
+/// knows the totals before copying. Reparse points and (with descriptions on) description files are not counted because the copy
+/// does not take them. For a move, an item that can be renamed as a whole (same root, destination name free) counts as one item,
+/// like the original's same-drive branch.
+fn tree_totals(sources: &[PathBuf], destination: &Path, moving: bool, descriptions: bool, cancel: &AtomicBool) -> (u64, u64) {
+    let root = |p: &Path| p.components().next().map(|c| c.as_os_str().to_string_lossy().to_lowercase());
+    let (mut files, mut bytes) = (0u64, 0u64);
+    for source in sources {
+        let Ok(meta) = fs::symlink_metadata(source) else {
+            files += 1;
+            continue;
+        };
+        let target = source.file_name().map(|name| destination.join(name));
+        if moving && root(source) == root(destination) && target.as_ref().is_some_and(|t| fs::symlink_metadata(t).is_err()) {
+            files += 1;
+            continue;
+        }
+        if !meta.is_dir() || is_reparse(&meta) {
+            files += 1;
+            bytes = bytes.saturating_add(meta.len());
+            continue;
+        }
+        let mut pending = vec![source.clone()];
+        while let Some(directory) = pending.pop() {
+            if cancel.load(Ordering::Relaxed) {
+                return (files, bytes);
+            }
+            let Ok(read) = fs::read_dir(&directory) else { continue };
+            for item in read.flatten() {
+                // DirEntry::metadata on Windows does not follow links (FindNextFileW values).
+                let Ok(m) = item.metadata() else { continue };
+                if is_reparse(&m) || (descriptions && compat::is_description_file(&item.file_name().to_string_lossy())) {
+                    continue;
+                }
+                if m.is_dir() {
+                    pending.push(item.path());
+                } else {
+                    files += 1;
+                    bytes = bytes.saturating_add(m.len());
+                }
+            }
+        }
+    }
+    (files, bytes)
+}
 /// Reject reparse points in every existing component, including destination ancestors.
 pub fn ensure_plain_path(path: &Path) -> Result<(), String> {
     for p in path.ancestors() {
@@ -1930,7 +1998,8 @@ mod safety_tests {
                 worker_cancel,
             )
         });
-        let first = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        // The totals (GetFileListToWork) come before the conflict question.
+        let first = std::iter::from_fn(|| rx.recv_timeout(Duration::from_secs(2)).ok()).find(|e| !matches!(e, Event::Totals { .. })).unwrap();
         assert!(matches!(first, Event::Conflict { .. }));
         cancel.store(true, Ordering::Relaxed);
         let mut finished = false;
