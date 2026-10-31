@@ -666,7 +666,7 @@ impl App {
             if depth > 32 || !app.panes[index].tree_open.iter().any(|k| ndr::shell_tree::same_key(k, &node.key)) {
                 return;
             }
-            match app.tree_cache.get(&node.key).cloned() {
+            match app.tree_cache.get(&(node.key.clone(), app.panes[index].show_hidden)).cloned() {
                 Some(children) => {
                     for child in &children {
                         walk(app, index, child, depth + 1, rows);
@@ -721,7 +721,7 @@ impl App {
                 // 펼침 표시(▸/▾): 셸이 하위 폴더가 있다고 한 항목(SFGAO_HASSUBFOLDER)만, 읽어 보니 비었으면 지운다.
                 let arrow = egui::Rect::from_min_size(egui::pos2(row.left() + indent, row.top()), egui::vec2(16.0, row_height));
                 let open = self.panes[index].tree_open.iter().any(|k| same_key(k, &node.key));
-                let expandable = node.has_children && !self.tree_cache.get(&node.key).is_some_and(|c| c.is_empty());
+                let expandable = node.has_children && !self.tree_cache.get(&(node.key.clone(), self.panes[index].show_hidden)).is_some_and(|c| c.is_empty());
                 if expandable {
                     // 목록 글꼴에 ▸·▾ 글자가 없을 수 있어 세모 도형으로 그린다.
                     let c = arrow.center();
@@ -773,7 +773,7 @@ impl App {
             let rows: Vec<(ShellNode, usize, bool, bool)> = rows
                 .into_iter()
                 .map(|(node, depth)| {
-                    let expandable = node.has_children && !self.tree_cache.get(&node.key).is_some_and(|c| c.is_empty());
+                    let expandable = node.has_children && !self.tree_cache.get(&(node.key.clone(), self.panes[index].show_hidden)).is_some_and(|c| c.is_empty());
                     let is_open = open.iter().any(|k| same_key(k, &node.key));
                     (node, depth, expandable, is_open)
                 })
@@ -918,16 +918,16 @@ impl App {
     }
 
     /// 트리의 하위 셸 폴더를 따로 읽는다(숨김 폴더는 그 패널의 숨김 보기를 따른다, 원본 FUN_0048da38 +0x3f8 비트 4).
-    fn request_tree_children(&mut self, index: usize, key: &Path) {
-        if !self.tree_requests.insert(key.to_path_buf()) {
+    pub(super) fn request_tree_children(&mut self, index: usize, key: &Path) {
+        let show_hidden = self.panes[index].show_hidden;
+        if !self.tree_requests.insert((key.to_path_buf(), show_hidden)) {
             return;
         }
         let path = key.to_path_buf();
-        let show_hidden = self.panes[index].show_hidden;
         let tx = self.async_tx.clone();
         thread::spawn(move || {
             let directories = ndr::shell_tree::children(&path, show_hidden);
-            let _ = tx.send(AsyncResult::Tree { path, directories });
+            let _ = tx.send(AsyncResult::Tree { path, hidden: show_hidden, directories });
         });
     }
 }

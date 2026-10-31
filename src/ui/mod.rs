@@ -462,6 +462,8 @@ enum AsyncResult {
     Tree {
         /// 셸 열쇠(ndr::shell_tree: 바탕 화면 = 빈 열쇠).
         path: PathBuf,
+        /// 숨김 폴더까지 읽었는가(패널마다 숨김 보기가 다를 수 있다).
+        hidden: bool,
         directories: Vec<ndr::shell_tree::ShellNode>,
     },
     /// 원본 TNXShellChangeNotify 스레드 알림(ThreadNotification 0x7b3830): 그 패널이 지켜보던 폴더가 바뀌었다.
@@ -612,12 +614,14 @@ pub struct App {
     overlay_pending: HashSet<PathBuf>,
     overlay_tx: Option<Sender<(PathBuf, u8)>>,
     image_requests: HashSet<PathBuf>,
-    tree_cache: HashMap<PathBuf, Vec<ndr::shell_tree::ShellNode>>,
+    /// 패널 폴더 트리 하위 폴더: (셸 열쇠, 숨김 폴더 포함) → 자식. 원본 miShowHiddenClick(0x4348e0) → FUN_0048e564가 트리의
+    /// 숨김 보기(+0x3f8 비트 4)를 바꿔 다시 만들므로, 패널의 숨김 보기마다 따로 둔다.
+    tree_cache: HashMap<(PathBuf, bool), Vec<ndr::shell_tree::ShellNode>>,
     /// 패널 폴더 트리의 바탕 화면 뿌리(처음 그릴 때 읽는다).
     shell_desktop: Option<ndr::shell_tree::ShellNode>,
     /// 글쇠 초점이 있는 패널 폴더 트리(그 패널 번호). 목록이나 다른 패널을 누르면 None.
     tree_focus: Option<usize>,
-    tree_requests: HashSet<PathBuf>,
+    tree_requests: HashSet<(PathBuf, bool)>,
     msgboxes: Vec<msgbox::MsgBox>,
     msgbox_serial: u64,
     msgbox_icons: HashMap<u16, egui::TextureHandle>,
@@ -1398,8 +1402,8 @@ impl App {
                         self.images.insert(path, texture);
                     }
                 }
-                AsyncResult::Tree { path, directories } => {
-                    self.tree_cache.insert(path, directories);
+                AsyncResult::Tree { path, hidden, directories } => {
+                    self.tree_cache.insert((path, hidden), directories);
                 }
                 AsyncResult::FolderChanged { pane, path, watch } => self.folder_changed(pane, &path, &watch),
                 AsyncResult::ProtectedItems(run) => self.protected_step(run),

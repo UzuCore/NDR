@@ -2055,3 +2055,62 @@ fn dropping_on_the_pane_tree_expands_on_hover_and_skips_the_confirmation() {
     assert!(!left.join("a.txt").exists(), "same root: moved");
     let _ = fs::remove_dir_all(root);
 }
+
+
+/// 원본 miShowHiddenClick(0x4348e0) → FUN_0048e564: 숨김 보기를 바꾸면 패널 폴더 트리도 숨김 폴더를 보이거나 감춘다
+/// (+0x3f8 비트 4, 트리를 다시 만듦). 트리 하위 폴더 캐시는 숨김 보기마다 따로라 다른 패널의 설정과 섞이지 않는다.
+#[test]
+fn pane_tree_follows_the_hidden_toggle() {
+    let (root, ctx, mut app) = fixture("tree-hidden");
+    let left = app.panes[0].path.clone();
+    fs::create_dir_all(left.join("visible-dir")).unwrap();
+    fs::create_dir_all(left.join("hidden-dir")).unwrap();
+    let status = std::process::Command::new("attrib").arg("+h").arg(left.join("hidden-dir")).status().unwrap();
+    assert!(status.success());
+    let draw = |app: &mut App| {
+        let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 850.0))), ..Default::default() };
+        let _ = ctx.run(raw, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(300.0, 800.0));
+                app.pane_tree_ui(ui, 0, rect);
+            });
+        });
+    };
+    let names = |app: &mut App, hidden: bool| -> Vec<String> {
+        let end = Instant::now() + Duration::from_secs(20);
+        // 시험 폴더는 숨김 폴더(AppData) 아래라 숨김을 끈 트리에서는 바탕 화면부터 이어지지 않는다. 그 폴더의 하위 읽기를 직접 요청한다.
+        app.request_tree_children(0, &left);
+        loop {
+            draw(app);
+            app.poll(&ctx);
+            if let Some(children) = app.tree_cache.iter().find(|((key, h), _)| *h == hidden && ndr::shell_tree::same_key(key, &left)).map(|(_, c)| c.clone()) {
+                return children.into_iter().map(|n| n.name).collect();
+            }
+            assert!(Instant::now() < end, "the tree did not read the folder (hidden {hidden})");
+            thread::sleep(Duration::from_millis(20));
+        }
+    };
+    app.panes[0].show_hidden = false;
+    let shown = names(&mut app, false);
+    assert!(shown.iter().any(|n| n == "visible-dir") && !shown.iter().any(|n| n == "hidden-dir"), "{shown:?}");
+    app.active = 0;
+    app.toggle_hidden();
+    assert!(app.panes[0].show_hidden);
+    let shown = names(&mut app, true);
+    assert!(shown.iter().any(|n| n == "visible-dir") && shown.iter().any(|n| n == "hidden-dir"), "{shown:?}");
+    // 오른쪽 패널(숨김 보기 끔)이 같은 폴더를 트리에서 읽으면 왼쪽(켬)의 결과를 쓰지 않는다.
+    assert!(!app.panes[1].show_hidden);
+    let end = Instant::now() + Duration::from_secs(20);
+    app.request_tree_children(1, &left);
+    let right_side = loop {
+        app.poll(&ctx);
+        if let Some(children) = app.tree_cache.get(&(left.clone(), false)) {
+            break children.iter().map(|n| n.name.clone()).collect::<Vec<_>>();
+        }
+        assert!(Instant::now() < end, "the right pane tree did not read the folder");
+        thread::sleep(Duration::from_millis(20));
+    };
+    assert!(right_side.iter().any(|n| n == "visible-dir") && !right_side.iter().any(|n| n == "hidden-dir"), "{right_side:?}");
+    let _ = std::process::Command::new("attrib").arg("-h").arg(left.join("hidden-dir")).status();
+    let _ = fs::remove_dir_all(root);
+}
