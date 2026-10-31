@@ -820,6 +820,8 @@ impl App {
         let (top, height) = (label.top(), label.height());
         let mut action: Option<(Option<CrumbTarget>, Option<(PathBuf, bool, egui::Pos2)>)> = None;
         // DrawDivider: a ▼ made of 4 rows (8, 6, 4, 2 pixels) starting at x + 4. Click for the drive list.
+        // GetDividerIndexAt (0x7c8b30): the lead divider is the 16 px after the optional icon/caption, then one 16 px divider after each segment.
+        // (AdjustBounds 0x7ca068 sizes the label to the same sum only when AutoSize is on; the panel label fills its panel instead.)
         let mut x = label.left();
         let lead = egui::Rect::from_min_size(egui::pos2(x, top), egui::vec2(16.0, height));
         let lead_hot = pointer.is_some_and(|p| lead.contains(p));

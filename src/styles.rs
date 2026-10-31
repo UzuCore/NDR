@@ -5,6 +5,8 @@ use std::{
 };
 pub type Rgba = [u8; 4];
 /// Six-digit RGB or WPF-compatible eight-digit ARGB, returned as RGBA.
+/// Original RGBStrToColor (0x7d1fa8): only a 6-character value is read, each pair through StrToIntExW hex (FUN_007d21b4); anything else keeps
+/// the default. ColorToRGBStr (0x7d2100) writes "%02X%02X%02X" (`rgb_hex`).
 pub fn parse_color(text: &str) -> Option<Rgba> {
     let text = text.trim().trim_start_matches('#');
     if !matches!(text.len(), 6 | 8) || !text.bytes().all(|b| b.is_ascii_hexdigit()) {

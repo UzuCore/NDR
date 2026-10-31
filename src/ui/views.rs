@@ -335,6 +335,8 @@ impl App {
                 Some((cached_key, cached)) if *cached_key == key => cached.clone(),
                 _ => {
                     let pane = &self.panes[index];
+                    // Original GetThumbnailRowHeight (0x7d6920): the tallest GetThumbnailTextHeight (cell width, 2, 4) of the row's items plus the
+                    // fixed item height; rows before the last read it from the stored item tops, which come from the same sum.
                     let heights: Vec<f32> = ui.fonts_mut(|fonts| {
                         (0..rows)
                             .map(|r| {
