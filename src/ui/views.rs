@@ -716,8 +716,10 @@ impl App {
             }
         }
         walk(self, index, &root, 0, &mut rows);
-        let mut child = ui.new_child(egui::UiBuilder::new().id_salt(("ndr-pane-tree", index)).max_rect(rect).layout(egui::Layout::top_down(egui::Align::Min)));
-        child.set_clip_rect(rect.intersect(ui.clip_rect()));
+        // The tree's own area stops 1 px before the right edge, where FUN_0048e2e0 draws the lframetree line (width - 1); the scroll bar ends next to it.
+        let inner_rect = rect.with_max_x(rect.right() - 1.0);
+        let mut child = ui.new_child(egui::UiBuilder::new().id_salt(("ndr-pane-tree", index)).max_rect(inner_rect).layout(egui::Layout::top_down(egui::Align::Min)));
+        child.set_clip_rect(inner_rect.intersect(ui.clip_rect()));
         let mut picked: Option<ShellNode> = None;
         let mut toggled: Option<PathBuf> = None;
         let mut label_click: Option<PathBuf> = None;
@@ -771,7 +773,22 @@ impl App {
             area = area.vertical_scroll_offset((current + dy * row_height).max(0.0));
         }
         let mut visible = 0..0;
-        area.show_rows(&mut child, row_height, rows.len(), |ui, range| {
+        // Original TNXShellTreeView is a Windows TreeView with system scroll bars. Captured on Windows 11: a 17 px 0xF0F0F0 track with a 1 px white
+        // edge toward the items and a 2 px 0x858585 thumb line 8 px in (7 px from the outer edge), horizontal bar alike. egui solid bars give the
+        // thumb and the reserved width; the track is painted behind them below. Previously the tree used egui's floating bars (hidden until hovered).
+        const TREE_TRACK: Color32 = Color32::from_rgb(0xF0, 0xF0, 0xF0);
+        const TREE_THUMB: Color32 = Color32::from_rgb(0x85, 0x85, 0x85);
+        {
+            let style = child.style_mut();
+            style.spacing.scroll = egui::style::ScrollStyle { floating: false, bar_width: 2.0, bar_inner_margin: 8.0, bar_outer_margin: 7.0, handle_min_length: 17.0, ..egui::style::ScrollStyle::solid() };
+            style.visuals.extreme_bg_color = TREE_TRACK;
+            for state in [&mut style.visuals.widgets.inactive, &mut style.visuals.widgets.hovered, &mut style.visuals.widgets.active] {
+                state.bg_fill = TREE_THUMB;
+                state.corner_radius = egui::CornerRadius::same(1);
+            }
+        }
+        let track_slot = child.painter().add(egui::Shape::Noop);
+        let scrolled = area.show_rows(&mut child, row_height, rows.len(), |ui, range| {
             visible = range.clone();
             ui.spacing_mut().item_spacing.y = 0.0;
             for (line, (node, depth)) in rows[range.clone()].iter().enumerate() {
@@ -856,6 +873,24 @@ impl App {
                 }
             }
         });
+        {
+            let inner = scrolled.inner_rect;
+            let (vertical, horizontal) = (scrolled.content_size.y > inner.height() + 0.5, scrolled.content_size.x > inner.width() + 0.5);
+            let bar = 17.0;
+            let mut shapes = Vec::new();
+            if vertical {
+                shapes.push(egui::Shape::rect_filled(egui::Rect::from_min_max(egui::pos2(inner.right(), inner.top()), egui::pos2(inner.right() + bar, inner.bottom())), 0.0, TREE_TRACK));
+                shapes.push(egui::Shape::rect_filled(egui::Rect::from_min_max(egui::pos2(inner.right(), inner.top()), egui::pos2(inner.right() + 1.0, inner.bottom())), 0.0, Color32::WHITE));
+            }
+            if horizontal {
+                shapes.push(egui::Shape::rect_filled(egui::Rect::from_min_max(egui::pos2(inner.left(), inner.bottom()), egui::pos2(inner.right(), inner.bottom() + bar)), 0.0, TREE_TRACK));
+                shapes.push(egui::Shape::rect_filled(egui::Rect::from_min_max(egui::pos2(inner.left(), inner.bottom()), egui::pos2(inner.right(), inner.bottom() + 1.0)), 0.0, Color32::WHITE));
+            }
+            if vertical && horizontal {
+                shapes.push(egui::Shape::rect_filled(egui::Rect::from_min_size(inner.right_bottom(), egui::vec2(bar, bar)), 0.0, TREE_TRACK));
+            }
+            child.painter().set(track_slot, egui::Shape::Vec(shapes));
+        }
         self.folder_rows.extend(drop_rows);
         self.tree_drop_rows.extend(tree_rows_for_drop);
         // Original FUN_0048e2e0 (tree panel drawing): a vertical line in the skin color (DAT_008d44c0 + 0x1c, conf.ini [List] lframetree) at the right edge (width − 1).
