@@ -1,5 +1,5 @@
-//! 원본이 쓰는 shlwapi 이름·문자열 함수(PathFindFileNameW, PathRemoveFileSpecW, StrStrIW, StrCmpNIW).
-//! 원본과 같은 대소문자 무시 규칙을 얻으려고 Rust의 to_lowercase 대신 같은 API를 그대로 부른다.
+//! The shlwapi name and string functions the original uses (PathFindFileNameW, PathRemoveFileSpecW, StrStrIW, StrCmpNIW).
+//! The same APIs are called directly instead of Rust to_lowercase to get the same case-insensitive rules as the original.
 use std::{ffi::OsStr, os::windows::ffi::OsStrExt};
 use windows_sys::Win32::UI::Shell::{PathFindFileNameW, PathRemoveFileSpecW, StrCmpNIW, StrStrIW};
 
@@ -21,14 +21,14 @@ fn from_wide_ptr(start: *const u16) -> String {
     }
 }
 
-/// PathFindFileNameW (원본 CopyPathToClipboard Tag 1).
+/// PathFindFileNameW (original CopyPathToClipboard Tag 1).
 pub fn find_file_name(path: &str) -> String {
     let buffer = wide(path);
     // SAFETY: buffer is NUL-terminated and outlives the call; the result points into it.
     from_wide_ptr(unsafe { PathFindFileNameW(buffer.as_ptr()) })
 }
 
-/// PathRemoveFileSpecW (원본 CopyPathToClipboard Tag 2): "C:\dir\file" -> "C:\dir", "C:\file" -> "C:\".
+/// PathRemoveFileSpecW (original CopyPathToClipboard Tag 2): "C:\dir\file" -> "C:\dir", "C:\file" -> "C:\".
 pub fn remove_file_spec(path: &str) -> String {
     let mut buffer = wide(path);
     // SAFETY: the buffer is writable, NUL-terminated and the API only shortens it.
@@ -38,14 +38,14 @@ pub fn remove_file_spec(path: &str) -> String {
     from_wide_ptr(buffer.as_ptr())
 }
 
-/// StrStrIW(value, search) != NULL. 빈 검색어는 NULL(찾지 못함)이다.
+/// StrStrIW(value, search) != NULL. An empty search string gives NULL (not found).
 pub fn contains_ignore_case(value: &str, search: &str) -> bool {
     let (value, search) = (wide(value), wide(search));
     // SAFETY: both buffers are NUL-terminated and live through the call.
     !unsafe { StrStrIW(value.as_ptr(), search.as_ptr()) }.is_null()
 }
 
-/// StrCmpNIW(prefix, value, len(prefix)) == 0 (UTF-16 길이 기준).
+/// StrCmpNIW(prefix, value, len(prefix)) == 0 (by UTF-16 length).
 pub fn starts_with_ignore_case(value: &str, prefix: &str) -> bool {
     let (value, prefix_wide) = (wide(value), wide(prefix));
     let count = (prefix_wide.len() - 1) as i32;
@@ -53,7 +53,7 @@ pub fn starts_with_ignore_case(value: &str, prefix: &str) -> bool {
     unsafe { StrCmpNIW(prefix_wide.as_ptr(), value.as_ptr(), count) == 0 }
 }
 
-/// CompareStringOrdinal(a, b, TRUE) == CSTR_EQUAL: 파일 시스템과 같은 서수 대소문자 무시 비교(C# OrdinalIgnoreCase 자리).
+/// CompareStringOrdinal(a, b, TRUE) == CSTR_EQUAL: the same ordinal case-insensitive comparison as the file system (in place of C# OrdinalIgnoreCase).
 pub fn equals_ignore_case(a: &str, b: &str) -> bool {
     use windows_sys::Win32::Globalization::{CSTR_EQUAL, CompareStringOrdinal};
     let (a, b) = (wide(a), wide(b));
@@ -66,22 +66,22 @@ fn last_error() -> u32 {
     unsafe { windows_sys::Win32::Foundation::GetLastError() }
 }
 
-/// CreateDirectoryW: 중간 폴더를 만들지 않고, 같은 이름이 있으면 실패. 0 = 성공, 그 밖은 Win32 오류 코드.
+/// CreateDirectoryW: no intermediate folders, fails when the name exists. 0 = success, otherwise a Win32 error code.
 pub fn create_directory(path: &str) -> u32 {
     let path = wide(path);
     // SAFETY: NUL-terminated path, no security attributes.
     if unsafe { windows_sys::Win32::Storage::FileSystem::CreateDirectoryW(path.as_ptr(), std::ptr::null()) } != 0 { 0 } else { last_error() }
 }
 
-/// MoveFileW: 이미 있는 항목을 바꾸지 않고, 대소문자만 바꾸는 것은 허용. 0 = 성공.
+/// MoveFileW: does not replace an existing item, but changing only the letter case is allowed. 0 = success.
 pub fn move_file(source: &str, destination: &str) -> u32 {
     let (source, destination) = (wide(source), wide(destination));
     // SAFETY: both NUL-terminated.
     if unsafe { windows_sys::Win32::Storage::FileSystem::MoveFileW(source.as_ptr(), destination.as_ptr()) } != 0 { 0 } else { last_error() }
 }
 
-/// 원본 FUN_00434630: CreateFileW(GENERIC_READ, FILE_SHARE_READ, CREATE_NEW, FILE_ATTRIBUTE_ARCHIVE) 후 CloseHandle.
-/// 있는 항목은 절대 비우지 않는다. 0 = 성공.
+/// Original FUN_00434630: CreateFileW(GENERIC_READ, FILE_SHARE_READ, CREATE_NEW, FILE_ATTRIBUTE_ARCHIVE) then CloseHandle.
+/// Never empties an existing item. 0 = success.
 pub fn create_empty_file(path: &str) -> u32 {
     use windows_sys::Win32::{Foundation::{CloseHandle, INVALID_HANDLE_VALUE}, Storage::FileSystem::*};
     let path = wide(path);
@@ -96,7 +96,7 @@ pub fn create_empty_file(path: &str) -> u32 {
     0
 }
 
-/// 원본 PathCombineW(현재 폴더, 입력한 이름): '\'로 시작하면 현재 드라이브의 루트, "x:..."는 그대로, "."/".."는 정리.
+/// Original PathCombineW(current folder, typed name): '\' at the start means the current drive root, "x:..." stays as is, "." and ".." are resolved.
 /// MAX_PATH를 넘으면 단순 결합으로 대신한다(C# NDR과 같은 승인된 수정).
 pub fn combine_typed_name(directory: &str, name: &str) -> String {
     let (directory_wide, name_wide) = (wide(directory), wide(name));

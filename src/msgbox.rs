@@ -1,8 +1,8 @@
-//! 원본 TfMsgBox 이식 (래퍼 FUN_0040bb38 -> FUN_0044ae58).
+//! Port of the original TfMsgBox (wrapper FUN_0040bb38 -> FUN_0044ae58).
 //!
-//! 원본의 모든 호출은 `FUN_0040bb38(title, summary, text, flags)`를 거친다. 빈 제목은 제품 이름으로 바뀌고,
-//! 폼을 만든 뒤 FUN_0044ae58이 배치해서 모달로 보여 주며, 모달 결과를 Win32 방식의 ID로 바꿔 돌려준다.
-//! 플래그는 원본이 넘기는 MB_* 값을 그대로 쓴다. 이 모듈은 화면과 무관한 규칙만 담는다(UI는 `ui::msgbox`).
+//! Every original call goes through `FUN_0040bb38(title, summary, text, flags)`. An empty title becomes the product name,
+//! and after creating the form FUN_0044ae58 lays it out, shows it modally and returns the modal result as a Win32-style ID.
+//! Flags are the MB_* values the original passes. This module holds only screen-independent rules (the UI is `ui::msgbox`).
 
 pub const MB_OK: u32 = 0x0;
 pub const MB_OKCANCEL: u32 = 0x1;
@@ -25,15 +25,15 @@ pub const IDYES: i32 = 6;
 pub const IDNO: i32 = 7;
 pub const IDCONTINUE: i32 = 11;
 
-/// FUN_0040bb38은 빈 제목을 L"nexusfile"(0x8d58f8)로 바꾼다. NDR은 자기 제품 이름을 쓴다(문서화된 차이).
+/// FUN_0040bb38 turns an empty title into L"nexusfile" (0x8d58f8). NDR uses its own product name (documented difference).
 pub const DEFAULT_TITLE: &str = "NDR";
-/// fMsgBox DFM Caption("NexusFile", 언어 항목 없음). NDR은 자기 제품 이름을 쓴다(문서화된 차이).
+/// fMsgBox DFM Caption ("NexusFile", no language item). NDR uses its own product name (documented difference).
 pub const FORM_CAPTION: &str = "NDR";
-/// 원본은 바깥 Width를 계산한다(Delphi TControl). Windows 10/11의 bsDialog 테두리 두께
-/// 2 x (SM_CXFIXEDFRAME 3 + SM_CXPADDEDBORDER 4) = 14를 빼서 클라이언트 폭으로 바꾼다. egui 창에는 OS 테두리가 없다.
+/// The original computes the outer Width (Delphi TControl). The Windows 10/11 bsDialog frame thickness
+/// 2 x (SM_CXFIXEDFRAME 3 + SM_CXPADDEDBORDER 4) = 14 is subtracted to get the client width. egui windows have no OS frame.
 pub const FRAME_WIDTH: f32 = 14.0;
 
-/// 버튼 하나: [RES] 캡션 키와 원본 기본값('&' 포함), Delphi ModalResult, Default, Cancel.
+/// One button: [RES] caption key and original default (with '&'), Delphi ModalResult, Default, Cancel.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ButtonSpec {
     pub key: &'static str,
@@ -47,11 +47,11 @@ const fn spec(key: &'static str, fallback: &'static str, modal_result: i32, is_d
     Some(ButtonSpec { key, fallback, modal_result, is_default, is_cancel })
 }
 
-/// 원본이 처리하지 않는 종류는 DFM 버튼을 그대로 둔다: 보이고, 캡션 없음, ModalResult 0.
+/// Kinds the original does not handle leave the DFM buttons as is: visible, no caption, ModalResult 0.
 pub const BLANK: ButtonSpec = ButtonSpec { key: "", fallback: "", modal_result: 0, is_default: false, is_cancel: false };
 
-/// FUN_0044ae58의 flags & 0xf 표. 칸 순서는 DFM과 같다:
-/// [0] btn3(왼쪽, TabOrder 1), [1] btn2, [2] btn1(오른쪽). None = 숨김.
+/// The flags & 0xf table of FUN_0044ae58. Slot order matches the DFM:
+/// [0] btn3 (left, TabOrder 1), [1] btn2, [2] btn1 (right). None = hidden.
 pub fn buttons(flags: u32) -> [Option<ButtonSpec>; 3] {
     match flags & 0xf {
         MB_OK => [None, None, spec("OK", "&Ok", 1, true, true)],
@@ -65,7 +65,7 @@ pub fn buttons(flags: u32) -> [Option<ButtonSpec>; 3] {
     }
 }
 
-/// FUN_0044ae58 끝의 ShowModal 결과 변환(mrContinue 14는 IDCONTINUE 11, 나머지는 IDCANCEL).
+/// ShowModal result conversion at the end of FUN_0044ae58 (mrContinue 14 becomes IDCONTINUE 11, the rest IDCANCEL).
 pub fn map_result(modal_result: i32) -> i32 {
     match modal_result {
         3 => IDABORT,
@@ -79,7 +79,7 @@ pub fn map_result(modal_result: i32) -> i32 {
     }
 }
 
-/// flags & 0xf0에 따른 LoadIconW(NULL, id). 그 밖의 값은 원본에서 아이콘 변수가 초기화되지 않으므로 아이콘 없음.
+/// LoadIconW(NULL, id) by flags & 0xf0. Other values leave the icon variable uninitialized in the original, so no icon.
 pub fn icon_id(flags: u32) -> u16 {
     match flags & 0xf0 {
         MB_ICONEXCLAMATION => 0x7f03,
@@ -90,7 +90,7 @@ pub fn icon_id(flags: u32) -> u16 {
     }
 }
 
-/// FUN_0044ae58이 DFM에서 계산하는 위치와 크기(클라이언트 좌표, 바깥 폭).
+/// Position and size FUN_0044ae58 computes from the DFM (client coordinates, outer width).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Geometry {
     pub image_top: f32,
@@ -101,8 +101,8 @@ pub struct Geometry {
 }
 
 pub fn layout(has_title: bool, has_summary: bool, title_width: f32, summary_width: f32, text_width: f32, text_height: f32) -> Geometry {
-    // 제목 없음: pTitle 숨김, Height -= 24, Image1/lSummary/lText를 24 위로.
-    // 요약 없음: lSummary 숨김, lText가 lSummary의 Top을 받고 Height -= 20.
+    // No title: pTitle hidden, Height -= 24, Image1/lSummary/lText move up by 24.
+    // No summary: lSummary hidden, lText takes lSummary's Top and Height -= 20.
     let shift = if has_title { 0.0 } else { 24.0 };
     let width = (if has_title { title_width } else { 0.0 })
         .max(if has_summary { summary_width } else { 0.0 })
@@ -116,8 +116,8 @@ pub fn layout(has_title: bool, has_summary: bool, title_width: f32, summary_widt
     }
 }
 
-/// 승인된 수정: 원본은 버튼 때문에 폼을 넓히지 않아서 글이 짧으면 오른쪽에 붙은 버튼이 왼쪽 끝 밖으로 밀린다.
-/// NDR은 가장 왼쪽 버튼 앞에 그림 여백(8)을 남긴다.
+/// Approved fix: the original does not widen the form for buttons, so with short text the right-anchored buttons are pushed past the left edge.
+/// NDR keeps the image margin (8) before the leftmost button.
 pub fn minimum_client_width(visible_buttons: usize) -> f32 {
     if visible_buttons == 0 { 0.0 } else { 8.0 + visible_buttons as f32 * 81.0 - 3.0 + 15.0 }
 }
@@ -126,7 +126,7 @@ pub fn client_width(geometry: &Geometry, visible_buttons: usize) -> f32 {
     (geometry.outer_width - FRAME_WIDTH).max(minimum_client_width(visible_buttons))
 }
 
-/// akRight/akBottom: btn1은 오른쪽 15, 아래 8 여백을 유지하고 btn2/btn3은 81씩 왼쪽.
+/// akRight/akBottom: btn1 keeps a right margin of 15 and bottom margin of 8, btn2/btn3 are 81 further left each.
 pub fn button_left(client_width: f32, slot: usize) -> f32 {
     client_width - 15.0 - 78.0 - 81.0 * (2 - slot.min(2)) as f32
 }
@@ -135,7 +135,7 @@ pub fn button_top(client_height: f32) -> f32 {
     client_height - 8.0 - 25.0
 }
 
-/// TabOrder(btn3, btn2, btn1)에서 처음 보이는 버튼이 포커스를 받는다.
+/// The first visible button in TabOrder (btn3, btn2, btn1) gets focus.
 pub fn first_visible(buttons: &[Option<ButtonSpec>; 3]) -> Option<usize> {
     buttons.iter().position(Option::is_some)
 }
@@ -148,8 +148,8 @@ pub fn default_slot(buttons: &[Option<ButtonSpec>; 3]) -> Option<usize> {
     buttons.iter().position(|b| b.is_some_and(|b| b.is_default))
 }
 
-/// USER32 MessageBoxW의 MB_DEFBUTTON1..3(flags & 0xf00 = 0, 0x100, 0x200): 보이는 버튼 가운데 그 차례(왼쪽부터)의 칸.
-/// 그런 버튼이 없으면 첫 버튼. (원본 TfMsgBox FUN_0044ae58은 이 값을 보지 않는다.)
+/// MB_DEFBUTTON1..3 of USER32 MessageBoxW (flags & 0xf00 = 0, 0x100, 0x200): the slot at that position (from the left) among visible buttons.
+/// The first button when there is no such button. (The original TfMsgBox FUN_0044ae58 ignores this value.)
 pub fn system_default_slot(buttons: &[Option<ButtonSpec>; 3], flags: u32) -> Option<usize> {
     let wanted = ((flags >> 8) & 0xf) as usize;
     let visible: Vec<usize> = (0..3).filter(|&slot| buttons[slot].is_some()).collect();
@@ -169,7 +169,7 @@ mod default_button_tests {
     }
 }
 
-/// Delphi 캡션의 단축 문자(대문자). '&&'는 문자 그대로의 '&'.
+/// Access key of a Delphi caption (upper case). '&&' is a literal '&'.
 pub fn access_key(caption: &str) -> Option<char> {
     let mut chars = caption.chars().peekable();
     while let Some(c) = chars.next() {
@@ -185,7 +185,7 @@ pub fn access_key(caption: &str) -> Option<char> {
     None
 }
 
-/// 표시할 캡션('&' 제거, '&&'는 '&')과 밑줄 칠 문자의 위치(문자 단위).
+/// Caption to display ('&' removed, '&&' as '&') and the position (in characters) of the underlined character.
 pub fn display_caption(caption: &str) -> (String, Option<usize>) {
     let mut text = String::new();
     let mut underline = None;
@@ -215,12 +215,12 @@ pub fn display_caption(caption: &str) -> (String, Option<usize>) {
     (text, underline)
 }
 
-/// lText의 줄(CR LF, LF, CR 모두 줄바꿈). 빈 글은 빈 줄 하나.
+/// Lines of lText (CR LF, LF and CR all break lines). Empty text is one empty line.
 pub fn lines(text: &str) -> Vec<String> {
     text.replace("\r\n", "\n").replace('\r', "\n").split('\n').map(str::to_owned).collect()
 }
 
-/// TNXLabel LineSpace 4: 줄 높이 h인 n줄의 높이는 n*h + (n-1)*4.
+/// TNXLabel LineSpace 4: n lines of height h are n*h + (n-1)*4 high.
 pub fn text_height(line_count: usize, line_height: f32) -> f32 {
     let n = line_count.max(1) as f32;
     n * line_height + (n - 1.0) * 4.0
@@ -231,7 +231,7 @@ mod tests {
     use super::*;
 
     type Expected = Option<(&'static str, i32, bool, bool)>;
-    // FUN_0044ae58 디컴파일 표(칸 0 = btn3, 1 = btn2, 2 = btn1)와 0x8f7f38 리터럴.
+    // FUN_0044ae58 decompiled table (slot 0 = btn3, 1 = btn2, 2 = btn1) and the 0x8f7f38 literals.
     const TABLE: [(u32, [Expected; 3]); 7] = [
         (0, [None, None, Some(("OK", 1, true, true))]),
         (1, [None, Some(("OK", 1, true, false)), Some(("CANCEL", 2, false, true))]),

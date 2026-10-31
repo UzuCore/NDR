@@ -1,5 +1,5 @@
-//! C# 파일 목록 규칙: FileSystemService.ListLocal의 열 글(종류, 속성, 날짜), MainWindow.SortPaneItems의 정렬,
-//! FileGroupingService의 묶음 키, FileTypeCatalog의 묶음 분류, ExtensionColorConverter의 글자 색.
+//! C# file list rules: column texts of FileSystemService.ListLocal (type, attributes, date), sorting of MainWindow.SortPaneItems,
+//! group keys of FileGroupingService, group categories of FileTypeCatalog, text colors of ExtensionColorConverter.
 use crate::fsops::Entry;
 use crate::parity::{list_extension, list_stem};
 use serde_json::Value;
@@ -16,7 +16,7 @@ fn wide(value: &str) -> Vec<u16> {
     OsStr::new(value).encode_wide().chain(Some(0)).collect()
 }
 
-/// C# AttributeText: R/H/S/A 자리마다 글자, 없으면 '-'.
+/// C# AttributeText: a letter per R/H/S/A slot, '-' when absent.
 pub fn attribute_text(attributes: u32) -> String {
     [(FILE_ATTRIBUTE_READONLY, 'R'), (FILE_ATTRIBUTE_HIDDEN, 'H'), (FILE_ATTRIBUTE_SYSTEM, 'S'), (FILE_ATTRIBUTE_ARCHIVE, 'A')]
         .iter()
@@ -24,7 +24,7 @@ pub fn attribute_text(attributes: u32) -> String {
         .collect()
 }
 
-/// 원본 GetAttrString: "____"의 0번 A(보관), 1번 H(숨김), 2번 R(읽기 전용), 3번 S(시스템).
+/// Original GetAttrString: in "____", position 0 A (archive), 1 H (hidden), 2 R (read-only), 3 S (system).
 pub fn attr_string(attributes: u32) -> String {
     let mut text = ['_'; 4];
     for (bit, slot, letter) in [(FILE_ATTRIBUTE_ARCHIVE, 0, 'A'), (FILE_ATTRIBUTE_HIDDEN, 1, 'H'), (FILE_ATTRIBUTE_READONLY, 2, 'R'), (FILE_ATTRIBUTE_SYSTEM, 3, 'S')] {
@@ -35,7 +35,7 @@ pub fn attr_string(attributes: u32) -> String {
     text.iter().collect()
 }
 
-/// C# ListLocal의 Kind: 폴더는 "폴더", 확장자가 없으면 "파일", 있으면 "{EXT} 파일"(대문자). 영어는 같은 모양의 영어.
+/// Kind of C# ListLocal: folders are "folder", "file" without an extension, otherwise "{EXT} file" (upper case). English uses the same form.
 pub fn type_name(name: &str, is_dir: bool, korean: bool) -> String {
     if is_dir {
         return if korean { "폴더" } else { "Folder" }.into();
@@ -48,7 +48,7 @@ pub fn type_name(name: &str, is_dir: bool, korean: bool) -> String {
     if korean { format!("{upper} 파일") } else { format!("{upper} File") }
 }
 
-/// SYSTEMTIME(현지 시각).
+/// SYSTEMTIME (local time).
 fn local_systemtime(time: SystemTime) -> windows_sys::Win32::Foundation::SYSTEMTIME {
     systemtime_of(&chrono::DateTime::<chrono::Local>::from(time))
 }
@@ -67,7 +67,7 @@ fn systemtime_of(local: &chrono::DateTime<chrono::Local>) -> windows_sys::Win32:
     }
 }
 
-/// 사용자 지역 설정 값(GetLocaleInfoW).
+/// User locale value (GetLocaleInfoW).
 fn locale_info(kind: u32) -> Option<String> {
     let mut buffer = vec![0u16; 16];
     // SAFETY: the buffer length is passed with the buffer.
@@ -75,12 +75,12 @@ fn locale_info(kind: u32) -> Option<String> {
     (written > 1).then(|| String::from_utf16_lossy(&buffer[..written as usize - 1]))
 }
 
-/// .NET 현재 문화권의 날짜 구분 기호('/' 자리, LOCALE_SDATE)와 시간 구분 기호(':' 자리, LOCALE_STIME).
+/// Date separator ('/' slot, LOCALE_SDATE) and time separator (':' slot, LOCALE_STIME) of the current .NET culture.
 pub fn date_separators() -> (String, String) {
     (locale_info(0x1D).unwrap_or_else(|| "/".into()), locale_info(0x1E).unwrap_or_else(|| ":".into()))
 }
 
-/// .NET 사용자 지정 형식을 Win32 그림 문자열로: '/'·':'는 문화권 구분 기호, "…"와 '\x'는 글자 그대로(작은따옴표로 감쌈).
+/// Turns a .NET custom format into a Win32 picture string: '/' and ':' are culture separators, "..." and '\x' are literal (wrapped in single quotes).
 fn dotnet_to_picture(format: &str) -> String {
     let (date_separator, time_separator) = date_separators();
     let quote = |text: &str| format!("'{}'", text.replace('\'', "''"));
@@ -111,9 +111,9 @@ fn dotnet_to_picture(format: &str) -> String {
     out
 }
 
-/// GetDateFormatW / GetTimeFormatW(LOCALE_USER_DEFAULT, 그림 문자열). .NET 사용자 지정 형식과 같은 글자(yyyy, MM, dd, HH, mm, ss, tt…)를 쓴다.
-/// 고친 것(빠르기): 전에는 항목마다 지역 설정 구분 기호를 두 번씩 읽고(GetLocaleInfoW) 그림 문자열을 다시 만들어, 파일 2만 개 목록의
-/// 칸 글 만들기가 70ms 가까이 걸렸다. 그림 문자열은 몇 초 동안 다시 쓰고(지역 설정을 바꾸면 곧 따른다), 같은 날·같은 시각의 글도 다시 쓴다.
+/// GetDateFormatW / GetTimeFormatW (LOCALE_USER_DEFAULT, picture string). Uses the same letters as .NET custom formats (yyyy, MM, dd, HH, mm, ss, tt...).
+/// Fixed (speed): previously each item read the locale separators twice (GetLocaleInfoW) and rebuilt the picture string, so building cell texts for a 20,000-file list
+/// took nearly 70 ms. The picture string is reused for a few seconds (locale changes are picked up soon), and texts for the same day and time are reused too.
 fn win32_format(time: SystemTime, format: &str, date: bool) -> Option<String> {
     win32_format_st(&local_systemtime(time), format, date)
 }
@@ -129,7 +129,7 @@ fn win32_format_st(st: &windows_sys::Win32::Foundation::SYSTEMTIME, format: &str
     if format.is_empty() {
         return Some(String::new());
     }
-    // 날짜 글은 그 날, 시각 글은 그 초에만 달렸다.
+    // Date text depends only on the day, time text only on the second.
     let slot = if date { (st.wYear as i64) * 10_000 + (st.wMonth as i64) * 100 + st.wDay as i64 } else { (st.wHour as i64) * 3600 + (st.wMinute as i64) * 60 + st.wSecond as i64 };
     let fresh = PICTURES.with(|p| {
         let mut p = p.borrow_mut();
@@ -174,8 +174,8 @@ fn win32_format_with(st: &windows_sys::Win32::Foundation::SYSTEMTIME, picture: &
     (written > 0).then(|| String::from_utf16_lossy(&buffer[..written as usize - 1]))
 }
 
-/// 원본 FUN_00422068(같은 이름 확인 창): GetDateFormatW(LOCALE_SYSTEM_DEFAULT 0x800, DATE_LONGDATE 2)와
-/// GetTimeFormatW(0x800, LOCALE_NOUSEROVERRIDE 0x80000000) — 시스템 긴 날짜와 시간. 읽지 못하면 "yyyy-MM-dd", "HH:mm:ss".
+/// Original FUN_00422068 (name conflict window): GetDateFormatW(LOCALE_SYSTEM_DEFAULT 0x800, DATE_LONGDATE 2) and
+/// GetTimeFormatW(0x800, LOCALE_NOUSEROVERRIDE 0x80000000), the system long date and time. "yyyy-MM-dd", "HH:mm:ss" when unreadable.
 pub fn long_date_and_time(time: SystemTime) -> (String, String) {
     use windows_sys::Win32::Globalization::{GetDateFormatW, GetTimeFormatW};
     let st = local_systemtime(time);
@@ -195,7 +195,7 @@ pub fn long_date_and_time(time: SystemTime) -> (String, String) {
     )
 }
 
-/// .NET DateTime.ToString("g", CurrentCulture): 짧은 날짜 + 짧은 시간(GetDateFormatW DATE_SHORTDATE, GetTimeFormatW TIME_NOSECONDS).
+/// .NET DateTime.ToString("g", CurrentCulture): short date + short time (GetDateFormatW DATE_SHORTDATE, GetTimeFormatW TIME_NOSECONDS).
 pub fn general_date_text(time: SystemTime) -> String {
     use windows_sys::Win32::Globalization::{GetDateFormatW, GetTimeFormatW};
     const LOCALE_USER_DEFAULT: u32 = 0x400;
@@ -216,8 +216,8 @@ pub fn general_date_text(time: SystemTime) -> String {
     }
 }
 
-/// FormatDate(value, DateFormat, TimeFormat, UseDateAge): 날짜 없음은 빈 글. 날짜 나이는 원본 형식(`age_date_text`,
-/// 한국어/영어 기본 글). 그 밖은 "날짜형식 시간형식", 형식이 틀리면 "yyyy-MM-dd HH:mm".
+/// FormatDate(value, DateFormat, TimeFormat, UseDateAge): empty text without a date. Date ages use the original form (`age_date_text`,
+/// Korean/English defaults). Otherwise "date format time format", "yyyy-MM-dd HH:mm" when a format is invalid.
 pub fn date_text(modified: Option<SystemTime>, date_format: &str, time_format: &str, use_age: bool, korean: bool, now: SystemTime) -> String {
     if use_age {
         let labels = if korean { ["오늘", "어제", "%d일 전"] } else { ["Today", "Yesterday", "%d days ago"] };
@@ -230,26 +230,26 @@ pub fn date_text(modified: Option<SystemTime>, date_format: &str, time_format: &
     }
 }
 
-/// 원본 TNXCustomFileListView::DateToStr(0x7df294)의 날짜 나이: 달력 날짜 차이(FUN_007df08c, 앞날이면 -1)가 0이면
-/// labels[0](TODAY), 1이면 labels[1](YESTERDAY), 2~30이면 labels[2](DATEAGE의 %d = 날수), 그 밖은 날짜 형식.
-/// 열 글은 GetFieldMaxWidth처럼 "날짜 시간"(TimeToStr = 시간 형식).
+/// Date age of original TNXCustomFileListView::DateToStr (0x7df294): when the calendar day difference (FUN_007df08c, -1 for a future date) is 0,
+/// labels[0] (TODAY); 1 gives labels[1] (YESTERDAY), 2-30 labels[2] (DATEAGE with %d = days), otherwise the date format.
+/// The column text is "date time" like GetFieldMaxWidth (TimeToStr = time format).
 pub fn age_date_text(modified: Option<SystemTime>, date_format: &str, time_format: &str, labels: [&str; 3], now: SystemTime) -> String {
     date_time_parts(modified, date_format, time_format, Some(labels), now).map(|(date, clock)| format!("{date} {clock}")).unwrap_or_default()
 }
 
-/// 목록 날짜 칸에서 날짜 글과 시각 글 사이. 원본 DrawListItem(필드 4)은 DateToStr를 칸 왼쪽에, TimeToStr를 오른쪽
-/// (DT_RIGHT)에 따로 그린다. 날짜 나이("5일 전", "5 days ago")나 형식 글의 보통 빈칸과 헷갈리지 않게 U+00A0을 쓴다.
+/// Between date text and time text in the list date cell. Original DrawListItem (field 4) draws DateToStr at the cell left and TimeToStr at the right
+/// (DT_RIGHT) separately. U+00A0 is used so it is not confused with ordinary spaces of date ages ("5일 전", "5 days ago") or format text.
 pub const LIST_DATE_TIME_GAP: char = '\u{a0}';
 
-/// 목록 날짜 칸 글: (날짜 글)U+00A0(시각 글). labels가 있으면 날짜 나이(UseDateAge, `age_date_text`와 같은 규칙).
+/// List date cell text: (date text)U+00A0(time text). With labels, date ages (UseDateAge, same rule as `age_date_text`).
 pub fn list_date_text(modified: Option<SystemTime>, date_format: &str, time_format: &str, labels: Option<[&str; 3]>, now: SystemTime) -> String {
     date_time_parts(modified, date_format, time_format, labels, now).map(|(date, clock)| format!("{date}{LIST_DATE_TIME_GAP}{clock}")).unwrap_or_default()
 }
 
-/// 원본 DateToStr(0x7df294)와 TimeToStr(0x7df550)의 (날짜 글, 시각 글). 형식이 틀리면 ("yyyy-MM-dd", "HH:mm").
+/// (date text, time text) of original DateToStr (0x7df294) and TimeToStr (0x7df550). ("yyyy-MM-dd", "HH:mm") when a format is invalid.
 fn date_time_parts(modified: Option<SystemTime>, date_format: &str, time_format: &str, labels: Option<[&str; 3]>, now: SystemTime) -> Option<(String, String)> {
     let time = modified?;
-    // 고친 것(빠르기): 현지 시각 바꾸기(chrono Local)를 항목마다 네 번 하던 것을 한 번으로, 오늘 날짜는 같은 now면 다시 쓴다.
+    // Fixed (speed): the local time conversion (chrono Local) done four times per item is now done once, and today's date is reused for the same now.
     let local = chrono::DateTime::<chrono::Local>::from(time);
     let age = labels.and_then(|labels| {
         let file_day = local.date_naive();
@@ -269,7 +269,7 @@ fn date_time_parts(modified: Option<SystemTime>, date_format: &str, time_format:
     }
 }
 
-/// `now`의 현지 날짜(같은 now를 거듭 물으면 한 번만 바꾼다).
+/// Local date of `now` (converted once when the same now is asked repeatedly).
 fn today_of(now: SystemTime) -> chrono::NaiveDate {
     use std::cell::Cell;
     thread_local! {
@@ -285,12 +285,12 @@ fn today_of(now: SystemTime) -> chrono::NaiveDate {
     })
 }
 
-/// StrCmpLogicalW(UseLogicalSort) 또는 현재 문화권 대소문자 무시 비교(CompareStringW NORM_IGNORECASE).
+/// StrCmpLogicalW (UseLogicalSort) or a case-insensitive comparison in the current culture (CompareStringW NORM_IGNORECASE).
 pub fn compare_text(a: &str, b: &str, logical: bool) -> Ordering {
     compare_wide(&wide(a), &wide(b), logical)
 }
 
-/// compare_text의 바탕: 이미 NUL로 끝나는 UTF-16 글끼리.
+/// Base of compare_text: between UTF-16 texts already ending with NUL.
 fn compare_wide(a: &[u16], b: &[u16], logical: bool) -> Ordering {
     // SAFETY: both buffers are NUL-terminated and live through the call.
     let result = unsafe {
@@ -300,7 +300,7 @@ fn compare_wide(a: &[u16], b: &[u16], logical: bool) -> Ordering {
             const LOCALE_USER_DEFAULT: u32 = 0x400;
             const NORM_IGNORECASE: u32 = 0x1;
             match windows_sys::Win32::Globalization::CompareStringW(LOCALE_USER_DEFAULT, NORM_IGNORECASE, a.as_ptr(), -1, b.as_ptr(), -1) {
-                // 실패(0)면 전에는 늘 "작다"가 되어 정렬 순서가 깨질 수 있었다(Rust sort는 그때 panic할 수 있다). UTF-16 값 순서로 비교한다.
+                // On failure (0) the result used to be always "less", which could break the sort order (Rust sort may panic then). Compares by UTF-16 value order.
                 0 => return a.cmp(b),
                 raw => raw - 2,
             }
@@ -309,7 +309,7 @@ fn compare_wide(a: &[u16], b: &[u16], logical: bool) -> Ordering {
     result.cmp(&0)
 }
 
-/// SortPaneItems의 설정(패널마다): 폴더·파일 정렬 방식과 내림차순, 논리 정렬.
+/// Settings of SortPaneItems (per pane): folder and file sort modes with descending flags, logical sort.
 #[derive(Clone, Debug)]
 pub struct SortOptions {
     pub folder_mode: String,
@@ -327,7 +327,7 @@ fn sort_extension(entry: &Entry) -> &str {
     if entry.is_dir { "" } else { list_extension(&entry.name) }
 }
 
-/// LegacyPriorityRank: 폴더 1, 고정(Pinned) 2, 보통 3, 열 때 받기(RecallOnOpen) 4.
+/// LegacyPriorityRank: folders 1, pinned 2, normal 3, recall on open 4.
 fn priority_rank(entry: &Entry) -> u8 {
     if entry.is_dir {
         1
@@ -340,8 +340,8 @@ fn priority_rank(entry: &Entry) -> u8 {
     }
 }
 
-/// C# SortPaneItems(묶음 전): 폴더(폴더 방식) 다음 파일(우선순위 순위 오름차순, 그 안에서 파일 방식). 안정 정렬이라
-/// "None"은 목록을 받은 순서. 내림차순은 순위를 뺀 열쇠 전체를 거꾸로(OrderByDescending.ThenByDescending).
+/// C# SortPaneItems (before grouping): folders (folder mode) then files (priority rank ascending, then the file mode within). The sort is stable, so
+/// "None" is the received order. Descending reverses the whole key except the rank (OrderByDescending.ThenByDescending).
 pub fn sort_entries(entries: &mut Vec<Entry>, options: &SortOptions, color: &dyn Fn(&Entry) -> u32) {
     let (mut folders, mut files): (Vec<Entry>, Vec<Entry>) = std::mem::take(entries).into_iter().partition(|e| e.is_dir);
     sort_group(&mut folders, &options.folder_mode, options.folder_descending, options.logical, color, false);
@@ -350,8 +350,8 @@ pub fn sort_entries(entries: &mut Vec<Entry>, options: &SortOptions, color: &dyn
     entries.extend(files);
 }
 
-/// sort_entries의 한 무리(폴더 또는 파일). compare_by_mode와 같은 차례지만, 고친 것(빠르기): 비교 글(UTF-16)과 색을 항목마다
-/// 한 번만 만든다. 전에는 비교할 때마다 두 이름을 UTF-16으로 바꿔(2만 개면 약 30만 번) 정렬이 화면을 70ms 넘게 멈췄다.
+/// One group of sort_entries (folders or files). Same order as compare_by_mode, but fixed (speed): comparison texts (UTF-16) and colors are built once
+/// per item. Previously each comparison converted both names to UTF-16 (about 300,000 times for 20,000 items) and sorting froze the screen for over 70 ms.
 fn sort_group(list: &mut Vec<Entry>, mode: &str, descending: bool, logical: bool, color: &dyn Fn(&Entry) -> u32, priority: bool) {
     struct Key {
         base: Vec<u16>,
@@ -383,7 +383,7 @@ fn sort_group(list: &mut Vec<Entry>, mode: &str, descending: bool, logical: bool
     *list = order.into_iter().filter_map(|i| taken[i].take()).collect();
 }
 
-/// FileTypeCatalog의 묶음 분류(확장자는 점 포함, 대소문자 무시).
+/// Group categories of FileTypeCatalog (extensions with the dot, case-insensitive).
 pub fn group_category(extension: &str) -> &'static str {
     const TABLE: &[(&str, &[&str])] = &[
         ("Archives", &[".7z", ".ace", ".alz", ".arj", ".br", ".bz2", ".cab", ".deb", ".dmg", ".egg", ".esd", ".gz", ".iso", ".lz", ".lz4", ".lzh", ".lzma", ".lzo", ".pkg", ".rar", ".rpm", ".tar", ".tgz", ".wim", ".xar", ".xz", ".z", ".zip", ".zst", ".zstd"]),
@@ -396,12 +396,12 @@ pub fn group_category(extension: &str) -> &'static str {
         ("Spreadsheets", &[".csv", ".numbers", ".ods", ".xls", ".xlsb", ".xlsm", ".xlsx", ".xlt", ".xltm", ".xltx"]),
         ("Presentations", &[".key", ".odp", ".pot", ".potm", ".potx", ".pps", ".ppsm", ".ppsx", ".ppt", ".pptm", ".pptx"]),
     ];
-    // C#은 나중에 더한 분류가 이긴다(.ts는 Video 뒤 Code, .html은 Code).
+    // In C# a later category wins (.ts is Code after Video, .html is Code).
     let lower = extension.to_ascii_lowercase();
     TABLE.iter().rev().find(|(_, list)| list.contains(&lower.as_str())).map_or("Other", |(name, _)| name)
 }
 
-/// FileGroupingService.GetGroupKey: "순서|이름". 폴더는 "01|Folders"(분류 묶음에서 폴더 분류가 Auto가 아니면 "05|Folders").
+/// FileGroupingService.GetGroupKey: "order|name". Folders are "01|Folders" ("05|Folders" when the folder category is not Auto in category grouping).
 pub fn group_key(entry: &Entry, mode: &str, folder_category_mode: &str) -> String {
     if entry.is_dir {
         return if mode != "Category" || folder_category_mode == "Auto" { "01|Folders".into() } else { "05|Folders".into() };
@@ -453,7 +453,7 @@ fn group_rank(key: &str) -> u8 {
     }
 }
 
-/// SortPaneItems 끝: 묶음이 있으면 묶음 키 순서(순위, 그다음 문화권 비교, 묶음 내림차순이면 거꾸로)로 다시 안정 정렬한다.
+/// End of SortPaneItems: with grouping, sorts stably again by group key order (rank, then culture comparison, reversed for descending groups).
 pub fn sort_groups(entries: &mut Vec<Entry>, mode: &str, folder_category_mode: &str, descending: bool) {
     if mode == "None" {
         return;
@@ -468,7 +468,7 @@ pub fn sort_groups(entries: &mut Vec<Entry>, mode: &str, folder_category_mode: &
     entries.extend(keyed.into_iter().map(|(_, e)| e));
 }
 
-/// GroupHeaderNameConverter의 머리 글: "Folders"는 [RES] FOLDERS, 알려진 이름은 언어 항목 키, 나머지는 이름 그대로.
+/// Header text of GroupHeaderNameConverter: "Folders" is [RES] FOLDERS, known names use language item keys, others the name as is.
 pub fn group_caption_key(key: &str) -> (&str, Option<&'static str>) {
     let label = key.split_once('|').map_or(key, |(_, label)| label);
     let caption = match label {
@@ -496,7 +496,7 @@ pub fn group_caption_key(key: &str) -> (&str, Option<&'static str>) {
     (label, caption)
 }
 
-/// NexusFileColorMapService의 기본 요소 색.
+/// Base element colors of NexusFileColorMapService.
 pub fn default_element_color(key: &str) -> Option<&'static str> {
     Some(match key.to_ascii_uppercase().as_str() {
         "NXBACK" => "000000",
@@ -522,13 +522,13 @@ fn hex_color(value: &str) -> Option<(u8, u8, u8)> {
     Some(((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8))
 }
 
-/// 색상표 값 찾기(대소문자 무시).
+/// Looks up a color table value (case-insensitive).
 fn lookup<'a>(map: Option<&'a serde_json::Map<String, Value>>, key: &str) -> Option<&'a str> {
     map?.iter().find(|(k, _)| k.eq_ignore_ascii_case(key)).and_then(|(_, v)| v.as_str())
 }
 
-/// ExtensionColorConverter: 폴더는 NXFOLDER, 숨김은 NXHIDDEN, 읽기 전용은 NXREADONLY(색상표를 쓸 때),
-/// 그 밖은 확장자 색, 없으면 NXFORE. 색상표를 쓰지 않으면 확장자 색만. 결과 없음은 기본 글자 색.
+/// ExtensionColorConverter: folders NXFOLDER, hidden NXHIDDEN, read-only NXREADONLY (when the color table is used),
+/// others the extension color, NXFORE when none. Without the color table only extension colors. No result means the default text color.
 pub fn entry_color(entry: &Entry, extension_colors: Option<&serde_json::Map<String, Value>>, nexus_colors: Option<&serde_json::Map<String, Value>>) -> Option<(u8, u8, u8)> {
     let color = if entry.is_dir {
         lookup(nexus_colors, "NXFOLDER")
@@ -543,9 +543,9 @@ pub fn entry_color(entry: &Entry, extension_colors: Option<&serde_json::Map<Stri
     color.and_then(hex_color)
 }
 
-/// 원본 FileListChangedBeforeSort(0x7d7924)의 항목 색(+0x34, 이름 칸 글색): 폴더(종류 1)는 GetBasic(2) NXFOLDER,
-/// 파일(종류 3)은 확장자 색(GetExtension 0x7d3894, 없으면 GetBasic(1) NXFORE), 그 밖(드라이브 종류 4·종류 2)은 GetBasic(3) NXDRIVE.
-/// 숨김·읽기 전용은 이름 색을 바꾸지 않는다(크기 칸만 NXHIDDEN·NXREADONLY).
+/// Item color of original FileListChangedBeforeSort (0x7d7924) (+0x34, name cell text color): folders (kind 1) GetBasic(2) NXFOLDER,
+/// files (kind 3) the extension color (GetExtension 0x7d3894, otherwise GetBasic(1) NXFORE), others (drives kind 4, kind 2) GetBasic(3) NXDRIVE.
+/// Hidden and read-only do not change the name color (only the size cell uses NXHIDDEN and NXREADONLY).
 pub fn original_item_color(entry: &Entry, extension_colors: Option<&serde_json::Map<String, Value>>, basic: impl Fn(&str) -> (u8, u8, u8)) -> (u8, u8, u8) {
     if entry.drive {
         basic("NXDRIVE")
@@ -556,7 +556,7 @@ pub fn original_item_color(entry: &Entry, extension_colors: Option<&serde_json::
     }
 }
 
-/// 원본 기본 색상표(default\nexusfile.col [Ext])의 확장자 색. 확장자 색이 하나도 없을 때의 처음 값(settings.rs).
+/// Extension colors of the original default color table (default\nexusfile.col [Ext]). The initial value when there are no extension colors at all (settings.rs).
 pub const ORIGINAL_EXTENSION_COLORS: &[(&str, &[&str])] = &[
     ("#E10000", &["bak", "tmp"]),
     ("#D857EA", &["bmp", "gif", "jpeg", "jpg", "png", "psd", "psp", "tif", "wmf"]),
@@ -574,7 +574,7 @@ pub const ORIGINAL_EXTENSION_COLORS: &[(&str, &[&str])] = &[
     ("#808000", &["ace", "alz", "arj", "cab", "gz", "lzh", "rar", "tar", "zip", "7z", "iso", "egg"]),
 ];
 
-/// TryGetTColorSortKey: "RRGGBB" → Delphi TColor(0x00BBGGRR). 색 정렬은 기본 글자 색과 같거나 색이 없으면 맨 뒤.
+/// TryGetTColorSortKey: "RRGGBB" -> Delphi TColor (0x00BBGGRR). Color sorting puts colors equal to the default text color, or missing colors, last.
 pub fn color_sort_key(entry: &Entry, extension_colors: Option<&serde_json::Map<String, Value>>, nexus_colors: Option<&serde_json::Map<String, Value>>) -> u32 {
     let tcolor = |value: Option<&str>| value.and_then(hex_color).map(|(r, g, b)| (u32::from(b) << 16) | (u32::from(g) << 8) | u32::from(r));
     let element = |key: &str| lookup(nexus_colors, key).filter(|v| hex_color(v).is_some()).or_else(|| default_element_color(key));
@@ -610,7 +610,7 @@ mod tests {
         assert_eq!(type_name("a.tar.GZ", false, false), "GZ File");
         let now = SystemTime::now();
         assert_eq!(date_text(None, "yyyy-MM-dd", "HH:mm", false, true, now), "");
-        // 원본 DateToStr: 달력 날짜 차이 0/1/2~30 → TODAY/YESTERDAY/DATEAGE, 뒤에 시간. 31일부터와 앞날은 날짜 형식.
+        // Original DateToStr: calendar day difference 0/1/2-30 -> TODAY/YESTERDAY/DATEAGE, followed by the time. From 31 days and future dates the date format.
         let clock = |t: SystemTime| chrono::DateTime::<chrono::Local>::from(t).format("%H:%M").to_string();
         let midday = chrono::Local::now().date_naive().and_hms_opt(12, 0, 0).unwrap().and_local_timezone(chrono::Local).unwrap();
         let noon: SystemTime = midday.into();
@@ -619,7 +619,7 @@ mod tests {
         let five = noon - Duration::from_secs(5 * 86_400);
         assert_eq!(date_text(Some(five), "yyyy-MM-dd", "HH:mm", true, true, noon), format!("5일 전 {}", clock(five)));
         assert_eq!(age_date_text(Some(five), "yyyy-MM-dd", "HH:mm", ["T", "Y", "%d ago"], noon), format!("5 ago {}", clock(five)));
-        // 목록 칸: 날짜 글(빈칸이 든 날짜 나이도)과 시각 글 사이는 U+00A0(칸 왼쪽·오른쪽에 따로 그린다).
+        // List cell: U+00A0 between date text (including date ages with spaces) and time text (drawn separately at the cell left and right).
         assert_eq!(list_date_text(Some(five), "yyyy-MM-dd", "HH:mm", Some(["T", "Y", "%d days ago"]), noon), format!("5 days ago\u{a0}{}", clock(five)));
         assert_eq!(list_date_text(None, "yyyy-MM-dd", "HH:mm", None, noon), "");
         let local = chrono::DateTime::<chrono::Local>::from(five);
@@ -686,7 +686,7 @@ mod tests {
 
     #[test]
     fn original_item_colors_follow_file_list_changed_before_sort() {
-        // 원본 0x7d7924: 폴더 NXFOLDER, 파일은 확장자 색(없으면 NXFORE), 드라이브 NXDRIVE. 숨김·읽기 전용은 이름 색을 안 바꾼다.
+        // Original 0x7d7924: folders NXFOLDER, files the extension color (otherwise NXFORE), drives NXDRIVE. Hidden and read-only do not change the name color.
         let basic = |key: &str| match key {
             "NXFOLDER" => (234, 34, 34),
             "NXDRIVE" => (128, 128, 255),

@@ -20,12 +20,12 @@ pub enum InstanceOutcome {
 pub enum LifecycleEvent {
     Restore,
     Exit,
-    /// 볼륨 장치나 미디어가 들어오거나 나갔다(WM_DEVICECHANGE DBT_DEVICEARRIVAL/DBT_DEVICEREMOVECOMPLETE, DBT_DEVTYP_VOLUME).
-    /// 원본은 SHChangeNotify(SHCNE_DRIVEADD/DRIVEREMOVED/MEDIAINSERTED/MEDIAREMOVED)로 받는다(FUN_00442bc8).
+    /// A volume device or media arrived or left (WM_DEVICECHANGE DBT_DEVICEARRIVAL/DBT_DEVICEREMOVECOMPLETE, DBT_DEVTYP_VOLUME).
+    /// The original receives it through SHChangeNotify (SHCNE_DRIVEADD/DRIVEREMOVED/MEDIAINSERTED/MEDIAREMOVED) (FUN_00442bc8).
     DevicesChanged,
 }
 
-/// WM_DEVICECHANGE의 (wparam, 장치 종류)가 볼륨 장치·미디어 들어옴/나감인가.
+/// Whether a WM_DEVICECHANGE (wparam, device type) is a volume device or media arriving or leaving.
 pub fn is_volume_change(event: usize, device_type: u32) -> bool {
     (event == 0x8000 || event == 0x8004) && device_type == 2
 }
@@ -567,15 +567,15 @@ mod win {
             encode_request(&request)?;
             Self::open(profile, Some(request)).map(|outcome| outcome.unwrap_or(InstanceOutcome::Forwarded))
         }
-        /// C# ApplySingleInstanceModeAsync(true): 실행 중에 켤 때. 다른 NDR이 이미 이 사용자·프로필을 쓰면 None이고
-        /// 그쪽에 아무것도 보내지 않는다.
+        /// C# ApplySingleInstanceModeAsync(true): turning it on while running. None when another NDR already uses this user and profile,
+        /// and nothing is sent to it.
         pub fn try_acquire(profile: &Path) -> Result<Option<(Self, Receiver<NavigationRequest>)>, String> {
             match Self::open(profile, None)? {
                 Some(InstanceOutcome::Primary { guard, requests }) => Ok(Some((guard, requests))),
                 _ => Ok(None),
             }
         }
-        /// 뮤텍스를 잡으면 Primary. 이미 잡혀 있으면 request가 있을 때만 그쪽으로 보내고 Forwarded, 없으면 None.
+        /// Primary when the mutex is taken. When it is already held, Forwarded after sending the request there (only when there is one), otherwise None.
         fn open(profile: &Path, request: Option<NavigationRequest>) -> Result<Option<InstanceOutcome>, String> {
             let sid = user_sid(unsafe { GetCurrentProcess() })?;
             let profile = profile_identity(profile)?;
@@ -653,7 +653,7 @@ mod win {
     }
     struct WindowState {
         events: Sender<LifecycleEvent>,
-        /// 이벤트를 보낸 뒤 UI를 깨우는 함수(egui request_repaint).
+        /// Function that wakes the UI after sending an event (egui request_repaint).
         wake: Option<Box<dyn Fn() + Send>>,
         commands: Receiver<UiCommand>,
         status: Arc<Status>,
@@ -702,8 +702,8 @@ mod win {
                 } else {
                     0x4e44
                 };
-                // 원본 FormShow(0x42a5cc): RegisterHotKey(hWnd, atom, MOD_WIN(8), vk) 한 번. 실패해도 다른 조합으로 다시 하지 않고
-                // MOD_NOREPEAT도 없다. 고친 것: 전에는 Win+Ctrl로 바꿔 등록해 조합이 몰래 달라졌다.
+                // Original FormShow (0x42a5cc): RegisterHotKey(hWnd, atom, MOD_WIN(8), vk) once. On failure it does not retry with another combination,
+                // and there is no MOD_NOREPEAT. Fixed: previously it registered Win+Ctrl instead, silently changing the combination.
                 let fallback = false;
                 if unsafe { RegisterHotKey(hwnd, next, 8, key) } == 0 {
                     return Err(error("Activation hotkey is already in use"));
@@ -882,7 +882,7 @@ mod win {
                 0
             }
             WM_DEVICECHANGE => {
-                // lparam = DEV_BROADCAST_HDR(dbch_size, dbch_devicetype, …). 볼륨(2)만 본다.
+                // lparam = DEV_BROADCAST_HDR(dbch_size, dbch_devicetype, ...). Only volumes (2) are considered.
                 let device_type = if lparam != 0 { unsafe { *((lparam as *const u32).add(1)) } } else { 0 };
                 if is_volume_change(wparam, device_type) {
                     let _ = state.events.send(LifecycleEvent::DevicesChanged);
@@ -1098,7 +1098,7 @@ mod win {
         pub fn tray_available(&self) -> bool {
             self.status.tray.load(Ordering::Relaxed)
         }
-        /// 수명 이벤트(장치 바뀜 등)를 보낸 뒤 부를 깨우기 함수(UI 다시 그리기).
+        /// Wake function called after sending lifecycle events (device changes etc.) (redraws the UI).
         pub fn set_wake(&self, wake: Box<dyn Fn() + Send>) -> Result<(), String> {
             self.commands.send(UiCommand::Wake(wake)).map_err(|_| "Lifecycle worker stopped".to_string())?;
             self.wake()
@@ -1299,7 +1299,7 @@ mod tests {
         lifecycle
             .set_tray_labels("\u{C5F4}\u{AE30}", "\u{C885}\u{B8CC}", "NDR")
             .unwrap();
-        // WM_DEVICECHANGE: 볼륨(DBT_DEVTYP_VOLUME = 2) 들어옴/나감이면 DevicesChanged를 보내고 깨우기 함수를 부른다. 다른 장치는 무시.
+        // WM_DEVICECHANGE: a volume (DBT_DEVTYP_VOLUME = 2) arriving or leaving sends DevicesChanged and calls the wake function. Other devices are ignored.
         let woke = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let counter = woke.clone();
         lifecycle.set_wake(Box::new(move || { counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst); })).unwrap();

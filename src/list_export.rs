@@ -1,10 +1,10 @@
-//! 원본 TfSaveList(파일 목록 저장하기) 규칙. 미리보기 줄은 FUN_004519a0, 저장은 btnSaveClick(0x452030)의
-//! mPreview.Lines.SaveToFile(이름, TEncoding.Unicode) = BOM FF FE + UTF-16LE, 줄마다 CRLF.
+//! Rules of the original TfSaveList (Save File List). Preview lines follow FUN_004519a0; saving is btnSaveClick (0x452030)
+//! mPreview.Lines.SaveToFile(name, TEncoding.Unicode) = BOM FF FE + UTF-16LE, CRLF per line.
 use crate::parity::{dotnet_extension, dotnet_stem};
 use std::time::SystemTime;
 
-/// 원본 TNXFileItem에서 쓰는 값: 이름(+4, 파일은 확장자 뺀 이름, 폴더는 전체), 확장자(+8, 점 없음), 크기(+0x20),
-/// 시각(+0x28), 속성, 설명(+0x10).
+/// Values used from the original TNXFileItem: name (+4, the name without extension for files, whole for folders), extension (+8, no dot), size (+0x20),
+/// time (+0x28), attributes, description (+0x10).
 #[derive(Clone, Debug, Default)]
 pub struct ExportRow {
     pub name: String,
@@ -17,7 +17,7 @@ pub struct ExportRow {
 }
 
 impl ExportRow {
-    /// 목록 이름을 목록의 이름·확장자 열처럼 나눈다(폴더는 나누지 않는다).
+    /// Splits a list name like the list's name and extension columns (folders are not split).
     pub fn new(file_name: &str, is_dir: bool, size: u64, modified: Option<SystemTime>, attributes: u32, description: String) -> Self {
         let (name, extension) = if is_dir {
             (file_name.to_owned(), String::new())
@@ -26,13 +26,13 @@ impl ExportRow {
         };
         Self { name, extension, is_dir, size, modified, attributes, description }
     }
-    /// 원본 TNXFileItem.GetFileName(0x7d25dc): 폴더는 이름 그대로, 그 밖은 확장자가 있으면 "%s.%s".
+    /// Original TNXFileItem.GetFileName (0x7d25dc): folders keep the name, others "%s.%s" when there is an extension.
     pub fn file_name(&self) -> String {
         if self.is_dir || self.extension.is_empty() { self.name.clone() } else { format!("{}.{}", self.name, self.extension) }
     }
 }
 
-/// 저장할 열(gbColumns). chkFileName은 늘 켜져 있어 따로 두지 않는다. 처음 값은 DFM 그대로.
+/// Columns to save (gbColumns). chkFileName is always on and not stored. Defaults as in the DFM.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Columns {
     pub extension: bool,
@@ -50,7 +50,7 @@ impl Default for Columns {
     }
 }
 
-/// rgDelimiter: 0 탭, 1 쉼표, 2 eUserDelimiter. 결과가 비면 탭(0x8fbeee).
+/// rgDelimiter: 0 tab, 1 comma, 2 eUserDelimiter. A tab when the result is empty (0x8fbeee).
 pub fn delimiter(index: usize, custom: &str) -> String {
     let text = match index {
         0 => "\t",
@@ -60,7 +60,7 @@ pub fn delimiter(index: usize, custom: &str) -> String {
     if text.is_empty() { "\t".into() } else { text.into() }
 }
 
-/// FloatToStrF(크기, ffNumber, 15, 0): 천 단위 쉼표.
+/// FloatToStrF(size, ffNumber, 15, 0): thousands separators.
 fn grouped(value: u64) -> String {
     let digits = value.to_string();
     let mut out = String::new();
@@ -73,9 +73,9 @@ fn grouped(value: u64) -> String {
     out
 }
 
-/// 시각의 (년, 월, 일, 시, 분, 초). 시각이 없으면 FILETIME 0 = 1601-01-01 00:00:00.
-/// 고친 것: 원본은 UTC FILETIME(+0x28)을 FileTimeToSystemTime으로 바로 바꿔 목록 표시(DateToStr, 지역 시각)와
-/// 다른 UTC 날짜·시간을 썼다. 여기서는 목록처럼 지역 시각을 쓴다.
+/// (year, month, day, hour, minute, second) of the time. Without a time, FILETIME 0 = 1601-01-01 00:00:00.
+/// Fixed: the original converted the UTC FILETIME (+0x28) directly with FileTimeToSystemTime and wrote UTC date and time
+/// that differed from the list display (DateToStr, local time). Here local time is used like the list.
 fn parts(time: Option<SystemTime>) -> (i32, u32, u32, u32, u32, u32) {
     use chrono::{Datelike, Timelike};
     match time {
@@ -87,9 +87,9 @@ fn parts(time: Option<SystemTime>) -> (i32, u32, u32, u32, u32, u32) {
     }
 }
 
-/// FUN_004519a0의 한 줄: 이름(chkExtension이면 GetFileName, 아니면 +4 이름) 뒤에 켠 열마다 구분자 + 값.
-/// 크기는 chkSizeComma면 천 단위 쉼표, 아니면 숫자. 날짜 "%d/%02d/%02d", 시간 "%02d:%02d:%02d", 속성 GetAttrString, 설명.
-/// 값을 따옴표로 감싸지 않는다.
+/// One line of FUN_004519a0: the name (GetFileName with chkExtension, otherwise the +4 name), then delimiter + value for each enabled column.
+/// Size with thousands separators when chkSizeComma, otherwise a number. Date "%d/%02d/%02d", time "%02d:%02d:%02d", attributes GetAttrString, description.
+/// Values are not quoted.
 pub fn line(row: &ExportRow, columns: &Columns, delimiter: &str) -> String {
     let mut text = if columns.extension { row.file_name() } else { row.name.clone() };
     let (year, month, day, hour, minute, second) = parts(row.modified);
@@ -114,12 +114,12 @@ pub fn line(row: &ExportRow, columns: &Columns, delimiter: &str) -> String {
     text
 }
 
-/// 미리보기(mPreview.Lines): 항목마다 한 줄.
+/// Preview (mPreview.Lines): one line per item.
 pub fn preview(rows: &[ExportRow], columns: &Columns, delimiter: &str) -> String {
     rows.iter().map(|row| line(row, columns, delimiter)).collect::<Vec<_>>().join("\n")
 }
 
-/// 메모 글의 줄(TMemo Lines): CR·LF·CRLF로 나누고, 끝 줄바꿈 뒤의 빈 줄은 줄로 치지 않는다.
+/// Lines of memo text (TMemo Lines): split on CR, LF and CRLF; an empty line after the final line break does not count.
 pub fn memo_lines(text: &str) -> Vec<&str> {
     let mut lines: Vec<&str> = text.split("\r\n").flat_map(|part| part.split(['\r', '\n'])).collect();
     if lines.last().is_some_and(|l| l.is_empty()) {
@@ -128,8 +128,8 @@ pub fn memo_lines(text: &str) -> Vec<&str> {
     lines
 }
 
-/// Lines.SaveToFile(TEncoding.Unicode)의 바이트: BOM FF FE, 줄마다 CRLF를 붙인 UTF-16LE. 줄이 없으면 None
-/// (btnSaveClick은 Lines.Count > 0일 때만 저장 대화 상자를 연다).
+/// Bytes of Lines.SaveToFile(TEncoding.Unicode): BOM FF FE and UTF-16LE with CRLF after each line. None without lines
+/// (btnSaveClick opens the save dialog only when Lines.Count > 0).
 pub fn file_bytes(text: &str) -> Option<Vec<u8>> {
     let lines = memo_lines(text);
     if lines.is_empty() {

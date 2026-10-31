@@ -55,7 +55,7 @@ pub enum Operation {
         sources: Vec<PathBuf>,
     },
     /// The delete job of original miEmptyTempClick (0x434344) (mode 2, flags 0xF0): permanently deletes only the items inside the folder and keeps the folder (0x10),
-    /// 속성 확인을 묻지 않고(0x20), 오류가 나도 묻지 않고 계속하며(0x40) 알리지 않는다(0x80).
+    /// without asking about attributes (0x20), continuing without asking on errors (0x40) and without notices (0x80).
     EmptyFolder {
         folder: PathBuf,
     },
@@ -71,13 +71,13 @@ pub enum Operation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConflictChoice {
     Overwrite,
-    /// 원본이 더 새로울 때만 덮어쓴다(아니면 건너뜀).
+    /// Overwrites only when the source is newer (otherwise skips).
     OverwriteNewer,
     ReplaceFolder,
     Skip,
-    /// C# GetAvailableTarget: "이름 (2).확장자"부터 빈 이름.
+    /// C# GetAvailableTarget: the first free name from "name (2).ext".
     Rename,
-    /// 기존 파일이 원본의 앞부분과 같으면 나머지만 이어 쓴다(파일끼리, 대상이 더 작을 때).
+    /// When the existing file equals the front of the source, writes only the rest (file to file, when the destination is smaller).
     Resume,
     Cancel,
 }
@@ -86,9 +86,9 @@ pub struct OperationOptions {
     pub remove_read_only: bool,
     pub use_descriptions: bool,
 
-    /// C# FileOperationControl.ErrorResolver: 오류마다 Event::Failure로 묻는다(아니면 Event::Error).
+    /// C# FileOperationControl.ErrorResolver: asks on each error with Event::Failure (otherwise Event::Error).
     pub interactive_errors: bool,
-    /// 원본 충돌 0x10(이름 바꾸기): 자동 이름(C# GetAvailableTarget) 대신 Event::RenameTarget으로 새 이름을 묻는다.
+    /// Original conflict 0x10 (rename): asks for a new name with Event::RenameTarget instead of an automatic name (C# GetAvailableTarget).
     pub prompt_rename: bool,
 }
 impl Default for OperationOptions {
@@ -111,7 +111,7 @@ pub enum Event {
         bytes: u64,
         files: u64,
     },
-    /// 원본 진행 창 lTo(0x412308): 지금 복사하는 파일(source)의 실제 대상 경로(충돌로 바뀐 이름 포함).
+    /// Original progress window lTo (0x412308): the real destination path of the file being copied (source) (including names changed by conflicts).
     Target {
         source: PathBuf,
         destination: PathBuf,
@@ -119,11 +119,11 @@ pub enum Event {
     Conflict {
         source: PathBuf,
         destination: PathBuf,
-        /// C# FileConflictInfo.AllowResume(압축 풀기·원격은 false).
+        /// C# FileConflictInfo.AllowResume (false for extraction and remote).
         allow_resume: bool,
         reply: Sender<ConflictChoice>,
     },
-    /// 작업 전체가 멈춘 오류(C# FatalError). 취소로 멈춘 것은 보내지 않는다.
+    /// An error that stopped the whole job (C# FatalError). Not sent when stopped by cancel.
     Fatal(String),
     Password {
         archive: PathBuf,
@@ -133,28 +133,28 @@ pub enum Event {
         path: PathBuf,
         message: String,
     },
-    /// C# FileOperationControl.ReportError(ErrorResolver가 있을 때): 답 true = 계속. can_continue가 false면 알리기만 한다.
+    /// C# FileOperationControl.ReportError (with an ErrorResolver): answer true = continue. With can_continue false it only notifies.
     Failure {
         path: PathBuf,
         message: String,
         can_continue: bool,
         reply: Sender<bool>,
     },
-    /// 충돌에서 건너뛴 항목(C# SkippedItems).
+    /// Items skipped at conflicts (C# SkippedItems).
     Skipped {
         path: PathBuf,
     },
-    /// 작업 중에 알게 된 전체 수·바이트(압축 풀기는 목록을 읽은 뒤 안다). 진행 창 막대와 lCount에 쓴다.
+    /// Total counts and bytes learned during the job (extraction learns them after reading the listing). Used by the progress bar and lCount.
     Totals {
         files: Option<u64>,
         bytes: Option<u64>,
     },
-    /// 원본 FUN_00411bb4(충돌에서 "이름 바꾸기"): 새 이름을 묻는다(TITLE_RENAME_AND_COPY). None = 취소.
+    /// Original FUN_00411bb4 ("rename" at a conflict): asks for a new name (TITLE_RENAME_AND_COPY). None = cancel.
     RenameTarget {
         name: String,
         reply: Sender<Option<String>>,
     },
-    /// 원본 0x439593: 다음 볼륨(이름)이 없음 → TfMsgBox(TITLE_ERROR, ARC_CHANGEVOL %s, MB_OKCANCEL | MB_ICONEXCLAMATION). 답 true(확인) = 다시 시도.
+    /// Original 0x439593: the next volume (name) is missing -> TfMsgBox(TITLE_ERROR, ARC_CHANGEVOL %s, MB_OKCANCEL | MB_ICONEXCLAMATION). Answer true (OK) = retry.
     ChangeVolume {
         volume: String,
         reply: Sender<bool>,
@@ -194,19 +194,19 @@ pub fn run_with_options(
                 let count = sources.len();
                 for (index, s) in sources.into_iter().enumerate() {
                     j.check()?;
-                    // C# CanContinueAfterError: 뒤에 남은 원본이 있을 때만 "계속할까요?"를 묻는다.
+                    // C# CanContinueAfterError: asks "continue?" only when sources remain after this one.
                     let boundary = index + 1 < count;
                     let result = (|| {
                         let name = s.file_name().ok_or("A filesystem root cannot be copied")?;
                         let mut target = destination.join(name);
                         if absolute(&s)?.to_string_lossy().eq_ignore_ascii_case(&absolute(&target)?.to_string_lossy()) {
-                            // 이동은 제자리라 할 일이 없다.
+                            // A move in place has nothing to do.
                             if move_files {
                                 return Ok(());
                             }
-                            // 원본 FUN_004134e0: 같은 폴더로 복사하면 대상(자기 자신)이 있으므로 TfFileExists를 묻고, 이름 바꾸기(0x10)면
-                            // FUN_00411bb4로 새 이름을 받아 그 이름으로 복사한다. 고친 것: 덮어쓰기 등 다른 답은 원본을 망가뜨릴 수 있어
-                            // 건너뛴다(원본은 자기 자신 위에 CopyFileW를 시도한다).
+                            // Original FUN_004134e0: copying into the same folder finds the destination (itself), so it asks TfFileExists, and for rename (0x10)
+                            // gets a new name from FUN_00411bb4 and copies under it. Fixed: other answers such as overwrite could destroy the source, so they
+                            // skip (the original tries CopyFileW onto itself).
                             let is_dir = fs::symlink_metadata(&s).map(|m| m.is_dir()).map_err(|e| e.to_string())?;
                             match j.conflict(&s, &target)? {
                                 ConflictChoice::Rename if j.options.prompt_rename => match j.ask_rename(name.to_string_lossy().into_owned())? {
@@ -245,7 +245,7 @@ pub fn run_with_options(
                 sources,
                 recycle: use_bin,
             } => {
-                // C# DeleteWithResult: 지운 항목 수(files) = 휴지통은 고른 항목, 영구 삭제는 지운 파일·폴더 하나하나.
+                // C# DeleteWithResult: deleted item count (files) = the chosen items for the Recycle Bin, every deleted file and folder for permanent delete.
                 let count = sources.len();
                 for (index, p) in sources.into_iter().enumerate() {
                     j.check()?;
@@ -373,7 +373,7 @@ mod tests {
         let p = fixture();
         let first = unique_path(&p, "probe");
         let id: u64 = first.file_name().unwrap().to_string_lossy().rsplit('-').next().unwrap().parse().unwrap();
-        // 같은 PID의 예전 프로세스가 남긴 다음 번호 이름들.
+        // Next-number names left by an earlier process with the same PID.
         let left: Vec<PathBuf> = (1..=3).map(|n| p.join(format!(".ndr-probe-{}-{}", std::process::id(), id + n))).collect();
         for path in &left {
             fs::create_dir(path).unwrap();
@@ -430,7 +430,7 @@ mod tests {
                     reply.send(ConflictChoice::Resume).unwrap();
                     resumed = true;
                 }
-                // 이어 쓴 첫 조각 뒤에 취소한다.
+                // Cancel after the first resumed chunk.
                 Event::Progress { bytes, .. } if resumed && bytes > 0 => flag.store(true, Ordering::SeqCst),
                 _ => {}
             }
@@ -585,8 +585,8 @@ pub fn list_dir(path: &Path, show_hidden: bool) -> Result<Vec<Entry>, String> {
     let mut entries = Vec::new();
     for item in fs::read_dir(path).map_err(|e| e.to_string())? {
         let item = item.map_err(|e| e.to_string())?;
-        // Windows의 DirEntry::metadata는 FindNextFileW가 준 값(속성·크기·시각)을 그대로 쓰고 링크를 따라가지 않는다
-        // (symlink_metadata와 같은 뜻). 파일마다 따로 여는 symlink_metadata보다 큰 폴더에서 훨씬 빠르다.
+        // On Windows DirEntry::metadata uses the values FindNextFileW gave (attributes, size, times) as is and does not follow links
+        // (same meaning as symlink_metadata). Much faster on large folders than symlink_metadata, which opens each file.
         let m = item.metadata().map_err(|e| e.to_string())?;
         let name = item.file_name().to_string_lossy().into_owned();
         #[cfg(windows)]
@@ -597,7 +597,7 @@ pub fn list_dir(path: &Path, show_hidden: bool) -> Result<Vec<Entry>, String> {
         #[cfg(not(windows))]
         let attributes = if name.starts_with('.') { 2 } else { 0 };
         let hidden = attributes & 2 != 0;
-        // C# ListLocal: 숨김 표시가 꺼져 있으면 숨김·시스템 속성 항목을 건너뛴다(AttributesToSkip Hidden | System).
+        // C# ListLocal: with hidden display off, items with hidden or system attributes are skipped (AttributesToSkip Hidden | System).
         if show_hidden || attributes & (2 | 4) == 0 {
             entries.push(Entry {
                 path: item.path(),
@@ -634,8 +634,8 @@ pub(crate) fn open_read(path: &Path) -> Result<File, String> {
 pub(crate) fn unique_path(parent: &Path, prefix: &str) -> PathBuf {
     use std::sync::atomic::AtomicU64;
     static ID: AtomicU64 = AtomicU64::new(0);
-    // 같은 번호(PID)를 쓰던 예전 프로세스가 남긴 이름(예: %TEMP%\NDR\.ndr-entry-PID-0)은 건너뛴다.
-    // 같은 프로세스 안에서는 번호가 겹치지 않고, 같은 PID의 프로세스는 동시에 있을 수 없다.
+    // Skip names left by an earlier process that used the same number (PID) (e.g. %TEMP%\NDR\.ndr-entry-PID-0).
+    // Numbers never collide within one process, and two processes with the same PID cannot exist at once.
     loop {
         let candidate = parent.join(format!(
             ".ndr-{}-{}-{}",
@@ -760,12 +760,12 @@ struct Job {
     descriptions: std::collections::BTreeMap<PathBuf, std::collections::BTreeMap<String, String>>,
     transfers: Vec<DescriptionTransfer>,
     options: OperationOptions,
-    /// 원본 플래그 0x40|0x80(EmptyFolder): 오류를 묻지도 알리지도 않는다.
+    /// Original flags 0x40|0x80 (EmptyFolder): errors are neither asked about nor reported.
     quiet: bool,
 }
 impl Job {
-    /// 원본 FUN_00412b00: 복사한 대상의 읽기 전용은 설정(remreadonly)이 켜져 있고 원본이 CD/DVD에 있을 때만 뗀다.
-    /// 고친 것: 전에는 설정이 켜져 있으면 어느 드라이브에서 복사하든 읽기 전용을 뗐다.
+    /// Original FUN_00412b00: the read-only flag of a copied destination is cleared only when the setting (remreadonly) is on and the source is on a CD/DVD.
+    /// Fixed: previously, with the setting on, read-only was cleared when copying from any drive.
     fn clear_copied_read_only(&self, source: &Path) -> bool {
         self.options.remove_read_only && on_optical_drive(source)
     }
@@ -854,11 +854,11 @@ impl Job {
             files: self.files,
         });
     }
-    /// 확인 지점: 취소면 Err.
+    /// Check point: Err on cancel.
     fn check(&self) -> Result<(), String> {
         check_cancel(&self.cancel)
     }
-    /// C# FileOperationControl.ReportError: 오류를 알린다. 묻는 방식이면 답을 기다리고, 계속하지 않으면 취소(Err).
+    /// C# FileOperationControl.ReportError: reports the error. In ask mode waits for the answer; not continuing cancels (Err).
     fn report(&self, path: PathBuf, message: String, can_continue: bool) -> Result<(), String> {
         if self.quiet {
             return Ok(());
@@ -929,7 +929,7 @@ impl Job {
     fn copy(&mut self, s: &Path, d: &Path, moving: bool, boundary: bool) -> Result<bool, String> {
         self.copy_depth(s, d, moving, 0, boundary)
     }
-    /// `boundary`: 이 항목 뒤에 (어느 단계에서든) 남은 일이 있으면 true(C# CanContinueAfterError).
+    /// `boundary`: true when work remains after this item (at any level) (C# CanContinueAfterError).
     fn copy_depth(
         &mut self,
         s: &Path,
@@ -955,7 +955,7 @@ impl Job {
                     return Ok(false);
                 }
                 ConflictChoice::Rename if self.options.prompt_rename => {
-                    // 원본 FUN_00411bb4: 대상 경로의 파일 이름만 입력한 이름으로 바꾼다. 취소면 건너뜀(원본은 그대로 진행).
+                    // Original FUN_00411bb4: only the file name of the destination path becomes the typed name. Cancel skips (the original proceeds as is).
                     let name = d.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                     match self.ask_rename(name)? {
                         Some(new) if !new.trim().is_empty() && !new.contains(['\\', '/']) => d = d.with_file_name(new),
@@ -964,14 +964,14 @@ impl Job {
                             return Ok(false);
                         }
                     }
-                    // 새 이름도 이미 있으면 덮어쓰지 않고 C# 방식 빈 이름으로(차이: 원본은 그대로 덮어쓴다).
+                    // If the new name exists too, use a free C#-style name instead of overwriting (difference: the original overwrites).
                     if fs::symlink_metadata(&d).is_ok() {
                         d = available_target(&d, m.is_dir())?;
                     }
                 }
                 ConflictChoice::Rename => d = available_target(&d, m.is_dir())?,
                 ConflictChoice::OverwriteNewer => {
-                    // C#: File.GetLastWriteTimeUtc(원본) <= 대상이면 건너뜀.
+                    // C#: skip when File.GetLastWriteTimeUtc(source) <= destination.
                     if m.modified().ok() <= existing.modified().ok() {
                         self.skipped(s);
                         return Ok(false);
@@ -994,7 +994,7 @@ impl Job {
                 ConflictChoice::Cancel => unreachable!(),
             }
         } else if moving && depth == 0 {
-            // C# MoveAsync/MoveFileAsync: 대상이 없으면 먼저 이름만 옮겨 본다(같은 볼륨). 안 되면 복사한 뒤 원본을 지운다.
+            // C# MoveAsync/MoveFileAsync: without a destination, first try a rename only (same volume). If that fails, copy then delete the source.
             if rename_new(s, &d).is_ok() {
                 let _ = self.events.send(Event::Target { source: s.to_path_buf(), destination: d.to_path_buf() });
                 self.files += 1;
@@ -1009,7 +1009,7 @@ impl Job {
             }
             fs::create_dir_all(&d).map_err(|e| e.to_string())?;
             let mut all = true;
-            // C# CopyDirectoryAsync: 하위 폴더를 먼저, 그다음 파일.
+            // C# CopyDirectoryAsync: subfolders first, then files.
             let mut children = Vec::new();
             for item in fs::read_dir(s).map_err(|e| e.to_string())? {
                 let item = item.map_err(|e| e.to_string())?;
@@ -1076,7 +1076,7 @@ impl Job {
         if d.is_dir() {
             return Err("Cannot replace a directory with a file".into());
         }
-        // 원본 0x412308: 진행 창 lTo = 지금 대상 파일의 폴더. 충돌 처리로 바뀐 이름까지 정해진 대상을 알린다.
+        // Original 0x412308: progress window lTo = folder of the current destination file. Report the destination as settled by conflict handling, including changed names.
         let _ = self.events.send(Event::Target { source: s.to_path_buf(), destination: d.to_path_buf() });
         let stage = unique_path(d.parent().ok_or("No destination parent")?, "copy");
         let result = (|| {
@@ -1116,8 +1116,8 @@ impl Job {
             out.sync_all().map_err(|e| e.to_string())?;
             drop(out);
             check_cancel(&self.cancel)?;
-            // 원본 FUN_004134e0(덮어쓰기): 설정과 상관없이 있는 대상의 속성을 지우고(SetFileAttributesW 0x20) 바꾼다.
-            // 고친 것: 전에는 읽기 전용 해제 설정이 꺼져 있으면 읽기 전용 대상을 덮어쓰지 못했다.
+            // Original FUN_004134e0 (overwrite): clears the existing destination's attributes (SetFileAttributesW 0x20) and replaces it regardless of the setting.
+            // Fixed: previously a read-only destination could not be overwritten when the read-only clearing setting was off.
             let original_permissions = if overwrite {
                 fs::metadata(&d)
                     .ok()
@@ -1165,9 +1165,9 @@ impl Job {
         }
         result
     }
-    /// C# DeleteFilteredPath: 건너뛸 경로 아래는 남기고, 그 상위 폴더도 지우지 않는다. 링크(재분석 지점)는 따라가지 않고
-    /// 링크 자체만 지운다. 읽기 전용 속성은 지우기 전에 해제한다. 없는 항목은 지운 것으로 본다.
-    /// 지운 파일·폴더·링크마다 files를 하나 올린다(C# deletedItems). 안쪽 오류는 바로 알린다(boundary = 뒤에 남은 일).
+    /// C# DeleteFilteredPath: keeps items under skipped paths and does not delete their parent folders either. Links (reparse points) are not followed;
+    /// only the link itself is deleted. The read-only attribute is cleared before deleting. A missing item counts as deleted.
+    /// Each deleted file, folder or link increments files (C# deletedItems). Inner errors are reported at once (boundary = work remaining after).
     fn delete_filtered(&mut self, p: &Path, skipped: &[PathBuf], depth: usize, boundary: bool) -> Result<Disposition, String> {
         if depth > 256 {
             return Err("Directory nesting exceeds the safe delete limit (256)".into());
@@ -1296,8 +1296,8 @@ impl Job {
         self.progress(p);
         Ok(())
     }
-    /// C# ResumeFileAsync: 기존 파일이 원본보다 크거나 앞부분이 다르면 오류, 같으면 나머지를 이어 쓰고 시간·속성을 맞춘다.
-    /// 옮기기면 끝난 뒤 원본을 지운다.
+    /// C# ResumeFileAsync: an error when the existing file is larger than the source or its front differs; otherwise writes the rest and matches times and attributes.
+    /// A move deletes the source afterwards.
     fn resume_file(&mut self, s: &Path, d: &Path, m: &fs::Metadata, moving: bool, description: Option<String>) -> Result<bool, String> {
         let existing = fs::metadata(d).map_err(|e| e.to_string())?.len();
         if existing > m.len() {
@@ -1343,7 +1343,7 @@ impl Job {
             out.sync_all().map_err(|e| e.to_string())
         })();
         if let Err(error) = written {
-            // 고친 것: 이어 쓰다 취소하거나 실패하면 대상이 중간 크기로 남았다. 이어 쓰기 전 크기로 잘라 되돌린다.
+            // Fixed: cancelling or failing during a resume left the destination at an intermediate size. It is truncated back to its size before resuming.
             let restored = out.set_len(existing).and_then(|()| out.sync_all());
             drop(out);
             if original.readonly() {
@@ -1516,14 +1516,14 @@ impl Job {
         Ok(())
     }
 }
-/// C# GetAvailableTarget: 파일은 "이름 (2).확장자", 폴더는 "이름 (2)"부터 처음 비어 있는 이름.
+/// C# GetAvailableTarget: the first free name from "name (2).ext" for files and "name (2)" for folders.
 fn available_target(path: &Path, directory: bool) -> Result<PathBuf, String> {
     let parent = path.parent().ok_or("No destination parent")?;
     let name = path.file_name().ok_or("Invalid target name")?.to_string_lossy().into_owned();
     let extension = if directory {
         ""
     } else {
-        // Path.GetExtension: 마지막 점부터(점이 맨 앞뿐이면 이름 전체가 확장자).
+        // Path.GetExtension: from the last dot (if the only dot is at the start, the whole name is the extension).
         name.rfind('.').map_or("", |i| &name[i..])
     };
     let stem = &name[..name.len() - extension.len()];
@@ -1650,7 +1650,7 @@ mod safety_tests {
     }
     #[test]
     fn configured_copy_can_replace_readonly_target() {
-        // 원본 FUN_004134e0: 덮어쓰기는 설정(remreadonly)과 상관없이 대상 속성을 지우고(0x20) 바꾼다.
+        // Original FUN_004134e0: overwrite clears the destination attributes (0x20) and replaces it regardless of the setting (remreadonly).
         let p = tests::prepared();
         let mut permissions = fs::metadata(p.join("out/a")).unwrap().permissions();
         permissions.set_readonly(true);
@@ -1721,7 +1721,7 @@ mod safety_tests {
             !events.iter().any(|e| matches!(e, Event::Error { .. })),
             "{events:?}"
         );
-        // 원본 FUN_00412b00: 읽기 전용 해제는 원본이 CD/DVD(GetDriveTypeW 5)일 때만이라, 고정 디스크에서 복사하면 남는다.
+        // Original FUN_00412b00: read-only clearing applies only when the source is a CD/DVD (GetDriveTypeW 5), so copying from a fixed disk keeps it.
         assert!(!on_optical_drive(&p.join("in/a")));
         assert!(
             fs::metadata(p.join("out/a"))
@@ -1988,15 +1988,15 @@ enum Disposition {
     Failed,
 }
 
-/// C# IsUnderSkippedPath: Path.GetFullPath로 정규화한 뒤 대소문자 무시 비교.
+/// C# IsUnderSkippedPath: case-insensitive comparison after normalizing with Path.GetFullPath.
 pub fn same_or_inside(path: &Path, root: &Path) -> bool {
     let normal = |p: &Path| std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf()).to_string_lossy().replace('/', "\\").trim_end_matches('\\').to_lowercase();
     let (path, root) = (normal(path), normal(root));
     path == root || path.starts_with(&(root + "\\"))
 }
 
-/// 원본 FUN_00412b00: 복사·이동이 끝나면 "CD/DVD에서 복사할 때 읽기 전용 해제"(remreadonly, +0xd4)가 켜져 있고 원본의 루트
-/// (PathStripToRootW)가 CD-ROM 드라이브(GetDriveTypeW == 5)일 때만 대상의 읽기 전용(0x1)을 뗀다.
+/// Original FUN_00412b00: after copy or move, clears the destination's read-only flag (0x1) only when "clear read-only when copying from CD/DVD" (remreadonly, +0xd4) is on and the source root
+/// (PathStripToRootW) is a CD-ROM drive (GetDriveTypeW == 5).
 #[cfg(windows)]
 pub fn on_optical_drive(path: &Path) -> bool {
     use std::os::windows::ffi::OsStrExt;
@@ -2018,7 +2018,7 @@ pub fn on_optical_drive(_path: &Path) -> bool {
     false
 }
 
-/// RemoveDirectoryW / DeleteFileW: 링크(재분석 지점)를 따라가지 않고 링크 자체를 지운다(C# Directory.Delete / File.Delete).
+/// RemoveDirectoryW / DeleteFileW: deletes a link (reparse point) itself without following it (C# Directory.Delete / File.Delete).
 fn remove_link(path: &Path, is_dir: bool) -> Result<(), String> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Storage::FileSystem::{DeleteFileW, RemoveDirectoryW};
@@ -2037,8 +2037,8 @@ fn clear_read_only(path: &Path, metadata: &fs::Metadata) {
     }
 }
 
-/// C# FindProtectedDeleteItems: 읽기 전용·시스템·숨김 속성이 있는 항목을 깊이 우선(선택 순서)으로 찾는다.
-/// 링크는 따라가지 않는다. 결과는 (경로, 해당 속성 비트).
+/// C# FindProtectedDeleteItems: finds items with read-only, system or hidden attributes depth first (selection order).
+/// Links are not followed. Results are (path, those attribute bits).
 pub fn find_protected_delete_items(paths: &[PathBuf]) -> Vec<(PathBuf, u32)> {
     #[cfg(windows)]
     use std::os::windows::fs::MetadataExt;
@@ -2077,7 +2077,7 @@ pub fn find_protected_delete_items(paths: &[PathBuf]) -> Vec<(PathBuf, u32)> {
     result
 }
 
-/// 링크의 Metadata::is_dir()는 false이므로 디렉터리 링크 여부는 FILE_ATTRIBUTE_DIRECTORY로 판단한다.
+/// Metadata::is_dir() of a link is false, so whether a link is a directory is decided by FILE_ATTRIBUTE_DIRECTORY.
 fn attribute_directory(m: &fs::Metadata) -> bool {
     #[cfg(windows)]
     {

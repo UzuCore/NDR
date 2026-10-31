@@ -1,11 +1,11 @@
-//! 원본 언어 문자열이 쓰는 NXLabel 마크업 일부(&lt;b&gt;, &lt;cRRGGBB&gt;와 닫는 태그). C# `NxLabelMarkup`과 같은 규칙.
-//! 원본의 파랑·빨강·회색·검정은 어두운 배경에서 읽히도록 밝게 바꾼다(C#과 같은 값).
+//! Part of the NXLabel markup used by original language strings (&lt;b&gt;, &lt;cRRGGBB&gt; and closing tags). Same rules as C# `NxLabelMarkup`.
+//! The original blue, red, gray and black are brightened so they stay readable on dark backgrounds (same values as C#).
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Span {
     pub text: String,
     pub bold: bool,
-    /// RGB. None = 기본 글자색.
+    /// RGB. None = default text color.
     pub color: Option<(u8, u8, u8)>,
 }
 
@@ -24,7 +24,7 @@ fn theme_color(rgb: &str) -> Option<(u8, u8, u8)> {
     Some(value)
 }
 
-/// 태그 하나의 길이와 종류. 인식하지 못하면 None(글자 그대로).
+/// Length and kind of one tag. None when unrecognized (literal text).
 fn tag_at(text: &str) -> Option<(usize, &str)> {
     let rest = text.strip_prefix('<')?;
     let end = rest.find('>')?;
@@ -34,7 +34,7 @@ fn tag_at(text: &str) -> Option<(usize, &str)> {
     known.then_some((end + 2, tag))
 }
 
-/// 마크업을 서식 조각으로 나눈다. CR LF는 LF로 바꾼다.
+/// Splits markup into styled pieces. CR LF becomes LF.
 pub fn render(text: &str) -> Vec<Span> {
     let mut spans = Vec::new();
     let mut bold = false;
@@ -73,12 +73,12 @@ pub fn render(text: &str) -> Vec<Span> {
     spans
 }
 
-/// 태그를 뺀 글.
+/// Text without tags.
 pub fn plain_text(text: &str) -> String {
     render(text).into_iter().map(|span| span.text).collect()
 }
 
-/// Delphi 방식 %s/%d 치환(나타나는 순서대로). 값이 모자라면 나머지 자리는 그대로 둔다.
+/// Delphi-style %s/%d substitution (in order of appearance). With too few values, the remaining slots stay as they are.
 pub fn substitute(template: &str, values: &[&str]) -> String {
     let mut result = String::with_capacity(template.len());
     let mut values = values.iter();

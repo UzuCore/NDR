@@ -4,7 +4,7 @@ mod ui;
 
 use std::path::PathBuf;
 
-/// 폴더를 통째로 복사한다(예전 설정 폴더 옮겨 오기). 이미 있는 파일은 건드리지 않는다.
+/// Copies a whole folder (moving an old settings folder over). Existing files are not touched.
 fn copy_tree(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
     std::fs::create_dir_all(to)?;
     for entry in std::fs::read_dir(from)? {
@@ -24,31 +24,31 @@ pub struct Options {
     profile: Option<PathBuf>,
     left: Option<PathBuf>,
     right: Option<PathBuf>,
-    /// 원본 /dir2:(있는 경로). 원본은 두 패널 보기일 때만 오른쪽 패널을 그리로 연다.
+    /// Original /dir2: (an existing path). The original opens the right pane there only in dual-pane view.
     dir2: Option<PathBuf>,
-    /// 원본 /pane:single(false)·/pane:dual(true). 없으면 설정(DualPaneMode).
+    /// Original /pane:single (false) / /pane:dual (true). Otherwise the setting (DualPaneMode).
     dual: Option<bool>,
     language: Option<String>,
     smoke_seconds: Option<u64>,
     report: Option<PathBuf>,
-    /// 시험용: 시작 확인(화면 밖) 중에 이 종류의 원본 창 견본을 열고 그 화면을 PNG로 저장한다(`--shot 종류 파일`).
+    /// For tests: during the (off-screen) startup check, opens a sample of this kind of original window and saves that screen as PNG (`--shot kind file`).
     shot: Option<(String, PathBuf)>,
-    /// 최대화로 시작: (되돌릴 바깥 x, y, 너비, 높이(egui 점), 첫 그림이 끝났는지). App이 첫 그림 뒤에 최대화한다.
+    /// Start maximized: (restore outer x, y, width, height (egui points), whether the first frame finished). App maximizes after the first frame.
     maximize_restore: Option<((f32, f32, f32, f32), bool)>,
 }
-/// 설정 파일 이름. 설정 파일은 이것 하나만 쓴다.
+/// Settings file name. This is the only settings file.
 const SETTINGS_FILE: &str = "settings.json";
-/// 예전 설정 폴더에서 실행 파일 폴더로 옮겨 오는 것(설정 파일은 마지막에 옮긴다: 도중에 멈추면 다음 시작에 다시 한다).
+/// Items moved from an old settings folder to the executable folder (the settings file moves last, so an interrupted move is redone on the next start).
 const PROFILE_ITEMS: [&str; 4] = ["toolbar.xml", "advrename.save", "treedata", SETTINGS_FILE];
 
-/// 그 폴더에 파일을 만들 수 있는가(만들어 보고 바로 지운다).
+/// Whether files can be created in that folder (creates one and deletes it at once).
 fn writable(directory: &std::path::Path) -> bool {
     let probe = directory.join(format!(".ndr-write-probe-{}", std::process::id()));
     let made = std::fs::OpenOptions::new().write(true).create_new(true).open(&probe).is_ok();
     made && std::fs::remove_file(&probe).is_ok()
 }
 
-/// 파일·폴더 하나를 옮긴다(다른 드라이브면 복사한 뒤 원래 것을 지운다). 대상이 이미 있으면 그대로 둔다.
+/// Moves one file or folder (copy then delete the original across drives). Leaves it alone when the destination already exists.
 fn move_item(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
     if to.exists() || std::fs::rename(from, to).is_ok() {
         return Ok(());
@@ -65,10 +65,10 @@ fn move_item(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()
     }
 }
 
-/// 설정 폴더 = 실행 파일 폴더(`beside`). 설정 파일은 그 폴더의 settings.json 하나뿐이다.
-/// 그 파일이 아직 없으면 예전 설정 폴더(`old` 차례, %LOCALAPPDATA%\NDR → NDIR-Rust) 가운데 설정 파일이 있는 첫 폴더의
-/// 설정(PROFILE_ITEMS)을 실행 파일 폴더로 옮긴다. 두 곳에 설정이 남지 않게 예전 것은 지우고, 빈 예전 폴더도 지운다.
-/// 실행 파일 폴더에 쓸 수 없으면(예: Program Files) 옮기지 않고 예전 폴더를 그대로 쓴다.
+/// Settings folder = the executable folder (`beside`). The only settings file is settings.json in that folder.
+/// When it does not exist yet, the settings (PROFILE_ITEMS) of the first old settings folder (`old` order, %LOCALAPPDATA%\NDR -> NDIR-Rust) that has a settings file
+/// move to the executable folder. The old ones are deleted so settings do not remain in two places, and an empty old folder is removed too.
+/// When the executable folder is not writable (e.g. Program Files), nothing moves and the old folder is used as is.
 fn beside_profile(beside: &std::path::Path, old: &[PathBuf]) -> PathBuf {
     if beside.join(SETTINGS_FILE).is_file() {
         return beside.to_path_buf();
@@ -81,7 +81,7 @@ fn beside_profile(beside: &std::path::Path, old: &[PathBuf]) -> PathBuf {
         for name in PROFILE_ITEMS {
             let from = source.join(name);
             if from.exists() && move_item(&from, &beside.join(name)).is_err() && name == SETTINGS_FILE {
-                // 설정 파일을 옮기지 못했으면 예전 폴더를 쓴다(설정을 잃지 않게).
+                // If the settings file could not be moved, use the old folder (so settings are not lost).
                 return source.clone();
             }
         }
@@ -96,7 +96,7 @@ impl Options {
             return profile.clone();
         }
         let local = PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap_or_else(|| ".".into()));
-        // 프로그램 이름을 NDIR에서 NDR로 바꾸기 전의 설정 폴더는 NDIR-Rust였다.
+        // Before the program was renamed from NDIR to NDR, the settings folder was NDIR-Rust.
         let old = [local.join("NDR"), local.join("NDIR-Rust")];
         match std::env::current_exe().ok().and_then(|exe| exe.parent().map(std::path::Path::to_path_buf)) {
             Some(beside) => beside_profile(&beside, &old),
@@ -142,9 +142,9 @@ impl Options {
                     result.shot = Some((kind, path));
                 }
                 _ => {
-                    // 원본 FUN_004295b0: 인자마다 첫 ':' 앞을 열쇠로 본다(대소문자 무시). 값의 앞뒤 따옴표를 떼고,
-                    // /dir:·/dir1: = 왼쪽 패널, /dir2: = 오른쪽 패널(둘 다 있는 경로일 때만), /userdir: = 사용자 폴더,
-                    // /pane:single·dual = 한/두 패널. 모르는 인자는 무시한다.
+                    // Original FUN_004295b0: the part before each argument's first ':' is the key (case-insensitive). Quotes around values are removed,
+                    // /dir: and /dir1: = left pane, /dir2: = right pane (only existing paths), /userdir: = user folder,
+                    // /pane:single and dual = one or two panes. Unknown arguments are ignored.
                     let Some((key, value)) = arg.split_once(':') else { continue };
                     let value = value.strip_prefix('"').unwrap_or(value);
                     let value = value.strip_suffix('"').unwrap_or(value);
@@ -170,8 +170,8 @@ impl Options {
     }
 }
 
-/// 원본 /userdir:(FUN_004295b0): 상대 경로면 실행 파일 폴더 기준. 없는 폴더면 MessageBoxW("\"%s\"\n%s", 경로와
-/// FormatMessage(3 = ERROR_PATH_NOT_FOUND), MB_ICONHAND)를 보이고 끝낸다.
+/// Original /userdir: (FUN_004295b0): a relative path is based on the executable folder. A missing folder shows MessageBoxW("\"%s\"\n%s", the path and
+/// FormatMessage(3 = ERROR_PATH_NOT_FOUND), MB_ICONHAND) and exits.
 fn user_directory(value: &str) -> Result<PathBuf, String> {
     let path = PathBuf::from(value);
     let path = if path.is_relative() {
@@ -217,10 +217,10 @@ fn main() {
         let mut viewport = eframe::egui::ViewportBuilder::default()
             .with_title("NDR")
             .with_inner_size([1400.0, 850.0])
-            // 원본 TfMain DFM Constraints.MinWidth·MinHeight = 250(바깥 크기). 고친 것: 전에는 800×480보다 작게 줄일 수 없었다.
+            // Original TfMain DFM Constraints.MinWidth/MinHeight = 250 (outer size). Fixed: previously the window could not shrink below 800x480.
             .with_min_inner_size([250.0, 250.0]);
-        // C# ApplyWindowBoundsFromSettings: 저장한 창이 있으면(HasWindowBounds) 그 크기·위치(화면 안으로)·최대화. 없으면 원본 처음 설정
-        // (default/nexusfile.ini [Window] left=10 top=10 width=800 height=600 maximized=0). 고친 것: 전에는 처음 실행이 1400×850이었다.
+        // C# ApplyWindowBoundsFromSettings: with a saved window (HasWindowBounds), its size, position (kept on screen) and maximized state. Otherwise the original default settings
+        // (default/nexusfile.ini [Window] left=10 top=10 width=800 height=600 maximized=0). Fixed: previously the first run was 1400x850.
         if options.smoke_seconds.is_none() {
             let saved = settings.flag("HasWindowBounds", false);
             let number = |key: &str, default: f64| if saved { settings.values.get(key).and_then(|v| v.as_f64()).unwrap_or(default) as f32 } else { default as f32 };
@@ -229,12 +229,12 @@ fn main() {
             if let Some(screen) = ndr::native::virtual_screen_points() {
                 (left, top) = ndr::native::clamp_window_position(left, top, width, height, screen);
             }
-            // 저장 값은 원본·C# 판처럼 테두리를 포함한 바깥 크기이므로, 테두리·제목 줄 크기를 빼서 안쪽 크기로 연다.
+            // Saved values are outer sizes including the frame like the original and C# version, so the frame and title bar are subtracted to open with the inner size.
             let (frame_width, frame_height) = ndr::native::window_frame_points().unwrap_or((16.0, 39.0));
             let maximized = saved && settings.flag("WindowMaximized", false);
             let work = maximized.then(|| ndr::native::work_area_points(left + width / 2.0, top + height / 2.0)).flatten();
             if let Some((work_left, work_top, work_width, work_height)) = work {
-                // 최대화로 시작: winit with_maximized는 첫 그림 전에 창을 보여 깜박였다. 작업 영역 크기의 숨은 창으로 그린 뒤 최대화한다.
+                // Start maximized: winit with_maximized showed the window before the first frame and flickered. Draw into a hidden window of work area size, then maximize.
                 viewport = viewport.with_inner_size([(work_width - frame_width).max(250.0), (work_height - frame_height).max(250.0)]).with_position([work_left, work_top]);
                 options.maximize_restore = Some(((left, top, width, height), false));
             } else {
@@ -245,10 +245,10 @@ fn main() {
             }
         }
         if options.smoke_seconds.is_some() {
-            // 시작 확인은 화면 밖에서, 초점을 뺏지 않고, 작업 표시줄에도 안 보이게 띄운다(사용자 화면을 가리지 않는다).
+            // The startup check opens off screen, without taking focus and without a taskbar entry (it does not cover the user's screen).
             viewport = viewport.with_position([-30000.0, -30000.0]).with_active(false).with_taskbar(false);
         } else {
-            // 고친 것: 압축 안 항목을 열 때 %TEMP%\NDR에 푼 폴더가 쌓이지 않게, 7일 넘게 바뀌지 않았고 쓰는 중이 아닌 것을 지운다.
+            // Fixed: so folders extracted to %TEMP%\NDR when opening archive items do not pile up, ones unchanged for over 7 days and not in use are deleted.
             std::thread::spawn(|| {
                 ndr::archive::clean_stale_temp_entries(&ndr::archive::temp_entry_root(), std::time::Duration::from_secs(7 * 24 * 3600), std::time::SystemTime::now());
             });
@@ -281,7 +281,7 @@ fn main() {
 mod options_tests {
     use super::Options;
 
-    /// 원본 FUN_004295b0 명령줄: /dir·/dir1 = 왼쪽, /dir2(따로 둠), 있는 경로만, 따옴표 뗌, /pane, 모르는 인자 무시.
+    /// Original FUN_004295b0 command line: /dir and /dir1 = left, /dir2 (kept separately), existing paths only, quotes removed, /pane, unknown arguments ignored.
     #[test]
     fn original_command_line_switches() {
         let root = std::env::temp_dir().join(format!("ndr-options-{}", std::process::id()));
@@ -302,7 +302,7 @@ mod options_tests {
         std::fs::remove_dir_all(&root).unwrap();
     }
 
-    /// 설정 파일은 실행 파일 옆 settings.json 하나: 없으면 예전 설정 폴더의 설정을 옮기고(예전 것은 지움), 있으면 그대로 쓴다.
+    /// The only settings file is settings.json next to the executable: when missing, settings of an old settings folder are moved over (the old ones deleted); when present it is used as is.
     #[test]
     fn settings_live_beside_the_executable_and_old_settings_move_there() {
         let root = std::env::temp_dir().join(format!("ndr-beside-{}", std::process::id()));
@@ -324,12 +324,12 @@ mod options_tests {
         assert!(older.join("settings.json").is_file(), "other old folders are left alone");
         let leftovers: Vec<_> = std::fs::read_dir(&beside).unwrap().flatten().map(|e| e.file_name()).collect();
         assert_eq!(leftovers.len(), 3, "no write probe is left behind: {leftovers:?}");
-        // 실행 파일 옆에 설정이 있으면 그대로 쓴다(예전 폴더를 다시 보지 않는다).
+        // Settings next to the executable are used as is (old folders are not checked again).
         std::fs::write(beside.join("settings.json"), "{}").unwrap();
         assert_eq!(super::beside_profile(&beside, &folders), beside);
         assert_eq!(std::fs::read_to_string(beside.join("settings.json")).unwrap(), "{}");
         assert!(older.join("settings.json").is_file());
-        // 아무 설정도 없으면 실행 파일 폴더(처음 저장할 때 만든다).
+        // With no settings at all, the executable folder (created on the first save).
         let fresh = root.join("fresh");
         std::fs::create_dir_all(&fresh).unwrap();
         assert_eq!(super::beside_profile(&fresh, &[root.join("none")]), fresh);
