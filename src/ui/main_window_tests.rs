@@ -1911,3 +1911,26 @@ fn opening_a_folder_shortcut_moves_the_pane_into_the_target() {
     assert_eq!(app.panes[0].path.to_string_lossy().to_lowercase(), target.to_string_lossy().to_lowercase());
     let _ = fs::remove_dir_all(root);
 }
+
+
+/// 원본 FUN_00489d20(탭 바꿈): 탭의 폴더가 없어졌으면 있는 상위 폴더로, 위치가 하나도 없으면 그 탭을 지운다.
+#[test]
+fn switching_to_a_tab_whose_folder_is_gone_follows_the_original() {
+    let (root, ctx, mut app) = fixture("tab-gone");
+    let left = app.panes[0].path.clone();
+    let gone = left.join("folder").join("deep");
+    fs::create_dir_all(&gone).unwrap();
+    app.active = 0;
+    app.navigate(0, gone.clone(), true);
+    wait(&mut app, &ctx);
+    app.dispatch("newTab", &ctx);
+    wait(&mut app, &ctx);
+    app.navigate(0, left.clone(), true);
+    wait(&mut app, &ctx);
+    assert_eq!((app.panes[0].tabs.len(), app.panes[0].tab), (2, 1));
+    fs::remove_dir_all(&gone).unwrap();
+    app.tab_command(0, "tab:0", &ctx);
+    wait(&mut app, &ctx);
+    assert_eq!(app.panes[0].path, left.join("folder"), "the nearest existing parent of the vanished tab folder");
+    let _ = fs::remove_dir_all(root);
+}

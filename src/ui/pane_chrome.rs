@@ -123,14 +123,38 @@ impl App {
         self.show_tab(index);
     }
 
-    /// 고른 탭의 위치를 연다(기록에 넣지 않는다).
+    /// 고른 탭의 위치를 연다(기록에 넣지 않는다). 원본 FUN_00489d20(탭 바꿈): 위치가 있으면 폴더로(파일이면 그 폴더로 가서 그 파일에
+    /// 커서), 없으면 있는 상위 폴더로, 그것도 없으면 그 탭을 지운다. 고친 것: 전에는 없는 위치를 그대로 열려 했고, 같은 위치를 두 번 읽었다.
     fn show_tab(&mut self, index: usize) {
         let pane = &mut self.panes[index];
         let Some(path) = pane.tabs.get(pane.tab).cloned() else { return };
         pane.archive = None;
         self.active = index;
-        self.navigate(index, path, false);
-        self.refresh(index);
+        let special = super::panes::is_drives(&path) || path.to_string_lossy().starts_with("ftp://") || path.to_string_lossy().starts_with("sftp://");
+        let mut target = path.clone();
+        if !special {
+            while !target.exists() {
+                match target.parent() {
+                    Some(parent) if parent != target && !parent.as_os_str().is_empty() => target = parent.to_path_buf(),
+                    _ => break,
+                }
+            }
+            if !target.exists() {
+                let tab = self.panes[index].tab;
+                if self.panes[index].tabs.len() > 1 {
+                    let ctx = egui::Context::default();
+                    return self.tab_command(index, &format!("closeTab:{tab}"), &ctx);
+                }
+            } else if target.is_file() {
+                self.pending_focus[index] = target.file_name().map(|n| n.to_string_lossy().into_owned());
+                target = target.parent().map(Path::to_path_buf).unwrap_or(target);
+            }
+        }
+        if target == self.panes[index].path {
+            self.refresh(index);
+        } else {
+            self.navigate(index, target, false);
+        }
     }
 
     /// C# 주소 표시줄(ShowAddressBar).
