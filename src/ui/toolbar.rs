@@ -295,6 +295,8 @@ impl App {
                 };
                 let sense = if enabled { egui::Sense::click() } else { egui::Sense::hover() };
                 let response = ui.interact(slot, egui::Id::new(("ndr-skin-toolbar", item.action.as_str(), slot.left() as i32)), sense);
+                let drop_down = item.action == "favorites" || item.action.starts_with("container:");
+                let pressed = enabled && (response.is_pointer_button_down_on() || response.clicked()) && ui.input(|i| i.pointer.primary_pressed());
                 match icon {
                     Some(texture) => {
                         // Original TNXImageButton.Paint (0x7c3adc): with a single image cell (toolbar image) hovering changes nothing,
@@ -312,7 +314,12 @@ impl App {
                         ui.painter().text(slot.center(), egui::Align2::CENTER_CENTER, &label, egui::FontId::proportional(11.0), ui.visuals().text_color());
                     }
                 }
-                if response.on_hover_text(self.toolbar_hint(&item.action, &label)).clicked() {
+                if response.on_hover_text(self.toolbar_hint(&item.action, &label)).clicked() && !drop_down {
+                    *clicked = Some(item.action.clone());
+                }
+                // Original TNXImageButton with a DropDownMenu (Favorites, Container): MouseDown 0x7c45b8 → DropDown 0x7c49ac → Click 0x7c4860
+                // pops the menu up at the button's bottom left on the press itself. While another menu is open that press only closes it.
+                if drop_down && pressed && self.popup.is_none() {
                     *clicked = Some(item.action.clone());
                 }
             }

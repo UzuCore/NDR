@@ -1893,8 +1893,19 @@ fn skin_toolbar_favorites_drops_down_the_favorites_menu() {
     let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
     frame(&mut app, vec![egui::Event::PointerMoved(at)]);
     frame(&mut app, vec![button(true)]);
-    frame(&mut app, vec![button(false)]);
-    let popup = app.popup.as_ref().expect("the favorites menu");
+    // TNXImageButton MouseDown → DropDown: the menu is already open on the press.
+    assert_eq!(app.popup.as_ref().and_then(|p| p.position), Some(egui::pos2(296.0, 42.0)), "opened on the press");
+    let popup_frame = |app: &mut App, events: Vec<egui::Event>| {
+        let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 700.0))), events, ..Default::default() };
+        ctx.run(raw, |ctx| {
+            egui::TopBottomPanel::top("toolbar").exact_height(51.0).frame(egui::Frame::NONE).show(ctx, |ui| app.skin_toolbar(ui, ctx, &skin));
+            app.popup_menu_ui(ctx);
+        })
+    };
+    popup_frame(&mut app, vec![]);
+    popup_frame(&mut app, vec![button(false)]);
+    popup_frame(&mut app, vec![]);
+    let popup = app.popup.as_ref().expect("the release of the opening press keeps the favorites menu");
     assert_eq!(popup.position, Some(egui::pos2(296.0, 42.0)), "under the button");
     assert!(app.original_dialogs.is_empty(), "not the organize dialog");
     let _ = fs::remove_dir_all(root);

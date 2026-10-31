@@ -549,7 +549,9 @@ impl App {
             });
         });
         let outside = !popup.opened && area.response.clicked_elsewhere();
-        popup.opened = false;
+        // A drop-down button opens its menu on the press (TNXImageButton/TNXPngButton MouseDown), so the release of that press,
+        // possibly a frame later, is not a click outside the new menu.
+        popup.opened = popup.opened && ctx.input(|i| i.pointer.any_down() || i.pointer.any_released());
         if let Some(index) = chosen {
             if let Some(PopupItem::Entry { action, enabled: true, .. }) = popup.items.get(index) {
                 let action = action.clone();
