@@ -998,6 +998,10 @@ impl Job {
         self.copy_depth(s, d, moving, 0, boundary)
     }
     /// `boundary`: true when work remains after this item (at any level) (C# CanContinueAfterError).
+    /// Original FUN_00412b00 (file) asks MSG_WANTTOCONTINUE when top-level items remain after it; FUN_00412fbc (folder item) also asks when the
+    /// last item's folder still has files after the failed one. Together that is "work remains after", as here. FUN_00412fbc first asks
+    /// TfFileExists for an existing destination folder (skip 0x20 skips the whole folder, rename 0x10 repeats until the name is free), creates
+    /// the folders and copies each file; the progress form's cancel stops with ERROR_CANCELLED (0x4d3).
     fn copy_depth(
         &mut self,
         s: &Path,

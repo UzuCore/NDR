@@ -296,6 +296,7 @@ enum TextKind {
 }
 
 /// LooksLikeLegacyUtf8: whether, before the first NUL, the first non-ASCII is a 3-byte UTF-8 character that is a 2-byte (high bit) character in ANSI.
+/// Original FUN_00465338 (lstrlenA, 0xE0/0x80 masks, WideCharToMultiByte CP_ACP, & 0x8080).
 fn looks_like_legacy_utf8(sample: &[u8]) -> bool {
     let sample = &sample[..sample.iter().position(|b| *b == 0).unwrap_or(sample.len())];
     let first = sample.iter().position(|b| *b > 0x7F).unwrap_or(sample.len());
@@ -312,6 +313,8 @@ fn looks_like_legacy_utf8(sample: &[u8]) -> bool {
 }
 
 /// InspectLegacyTextFile: looks at the first 4096 bytes for a BOM (followed by at least one byte) or a UTF-8 shape. (kind, BOM length).
+/// Original FUN_0046541c: at most 0x1000 bytes; FF FE / FE FF with 3+ bytes = Unicode, EF BB BF with 4+ bytes = UTF-8, otherwise FUN_00465338 (the
+/// legacy UTF-8 shape) = UTF-8, else the default code page.
 fn inspect_text(path: &Path) -> Result<(TextKind, usize), String> {
     let mut sample = vec![0u8; 4096];
     let mut file = File::open(path).map_err(|e| e.to_string())?;
@@ -377,6 +380,9 @@ fn read_lines(text: &str) -> Vec<&str> {
 /// C# JoinOrderedFiles: concatenates the inputs in order into a temp file, then moves it to the result name (overwrite only with explicit consent).
 /// Joining text files: rewrites every line with CRLF; the output encoding is the last file's (UTF-16BE becomes UTF-16LE), except that when a non-ASCII file exists
 /// and the last one is ASCII, UTF-16LE. The BOM follows the output encoding (none for ASCII). Progress is (files done, bytes written).
+/// Original text join FUN_00465588: each file goes through TStringList.LoadFromFile with the encoding from FUN_0046541c and AddStrings, then
+/// SaveToFile with the last encoding, or TEncoding.Unicode when some file was not the default and the last one is. Fixed: FUN_0046541c gives
+/// FF FE and FE FF the same encoding (FUN_00523990, little-endian Unicode), so a big-endian file comes out garbled; NDR decodes it as UTF-16BE.
 pub fn join_ordered_files(inputs: &[PathBuf], output: &Path, join_text: bool, allow_overwrite: bool, cancel: &AtomicBool, progress: &mut dyn FnMut(u64, u64, &Path)) -> Result<PathBuf, String> {
     if inputs.is_empty() {
         return Err("합칠 입력 파일이 없습니다.".into());
@@ -423,6 +429,11 @@ pub fn join_ordered_files(inputs: &[PathBuf], output: &Path, join_text: bool, al
                 progress(index as u64 + 1, written, source);
             }
         } else {
+            // Original join engine FUN_00464d2c: opens the result with CREATE_ALWAYS and copies each piece in order (progress kinds 4/3 = totals,
+            // 0 = next piece, 1 = bytes, 2 = done; cancel = 0x4c7). Fixed: when the first piece ends in ".001" it reads its first 256 bytes and,
+            // if the first '/' there follows a digit, skips every byte up to and including that '/' (FUN_008bc5a5 strchr 0x2f, SetFilePointer).
+            // The original splitter (FUN_0046431c) writes no such header, so this cut real data (for example a text starting "2024/01/01");
+            // NDR copies every byte.
             let mut buffer = vec![0u8; BUFFER];
             for (index, source) in sources.iter().enumerate() {
                 let mut input = File::open(source).map_err(|e| e.to_string())?;

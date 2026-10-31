@@ -337,6 +337,24 @@ fn conflict_window_progress_window_and_reports_follow_csharp() {
     assert_eq!(fs::read(right.join("b.txt")).unwrap(), b"bee");
     assert_eq!(app.status, "복사 완료: 요청 2개, 실패 1건, 건너뜀 0개");
     assert!(app.msgboxes.is_empty(), "the error was already shown");
+    // When work remains after the failed file, MSG_WANTTOCONTINUE follows with a NULL caption (original FUN_00414590) and yes continues.
+    // The selection runs in list order, so the first file (a.txt) is the locked one here.
+    let _ = fs::remove_file(right.join("a.txt"));
+    let locked = {
+        use std::os::windows::fs::OpenOptionsExt;
+        fs::File::options().read(true).share_mode(0).open(left.join("a.txt")).unwrap()
+    };
+    fs::remove_file(right.join("b.txt")).unwrap();
+    app.job = None;
+    copy_to_other(&mut app, &ctx, &["a.txt", "b.txt"]);
+    wait(&mut app, &ctx, |app| !app.msgboxes.is_empty() || finished(app));
+    assert_eq!(app.msgboxes.first().map(|m| m.title.clone()), Some(app.language_pack.text("RES.TITLE_FILEOPERROR", "?")), "status {}", app.status);
+    app.answer_message_box(1, &ctx);
+    assert_eq!((app.msgboxes.len(), app.msgboxes.first().map(|m| (m.title.as_str(), m.flags))), (1, Some(("", ndr::msgbox::MB_YESNO | ndr::msgbox::MB_ICONQUESTION))));
+    app.answer_message_box(6, &ctx);
+    wait(&mut app, &ctx, finished);
+    drop(locked);
+    assert_eq!(fs::read(right.join("b.txt")).unwrap(), b"bee", "yes continues with the rest");
     // Permanent delete: counts each deleted file and folder (C# deletedItems). There is no progress window.
     app.active = 1;
     app.panes[1].selected.clear();

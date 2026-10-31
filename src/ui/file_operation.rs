@@ -445,6 +445,9 @@ impl App {
     }
 
     /// C# FileOperationErrorDialog: error box (TITLE_FILEOPERROR, error icon), with MSG_WANTTOCONTINUE yes/no when it can continue.
+    /// Original FUN_0041468c: MessageBoxW(TITLE_FILEOPERROR, FormatMessageW text or MSG_UNKNOWN_ERROR, 0x42010 = MB_ICONHAND | topmost).
+    /// Original FUN_00414590: MessageBoxW(wsprintf(MSG_WANTTOCONTINUE, path), NULL caption, 0x24 = MB_YESNO | MB_ICONQUESTION); IDYES continues.
+    /// Callers FUN_00412b00 (file) and FUN_00412fbc (folder item) ask only when work remains after the failed file (fsops `boundary`).
     pub(super) fn ask_file_failure(&mut self, path: PathBuf, message: String, can_continue: bool, reply: Sender<bool>) {
         let title = self.language_pack.text("RES.TITLE_FILEOPERROR", "File Operation Error");
         let detail = if message.trim().is_empty() { self.language_pack.text("RES.MSG_UNKNOWN_ERROR", "Unknown error occurred. Error number: %d").replace("%d", "0") } else { message };
@@ -457,7 +460,7 @@ impl App {
                 .language_pack
                 .text("RES.MSG_WANTTOCONTINUE", "%s\nError occurred while doing operation for this file. Do you want to keep working on the rest of the file/folder(s)?")
                 .replace("%s", &path.to_string_lossy());
-            app.system_box(&title, &prompt, MB_YESNO | MB_ICONQUESTION, move |_, answer, _| {
+            app.system_box("", &prompt, MB_YESNO | MB_ICONQUESTION, move |_, answer, _| {
                 let _ = reply.send(answer == IDYES);
             });
         });
