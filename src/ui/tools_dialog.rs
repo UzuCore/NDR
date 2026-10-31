@@ -367,6 +367,8 @@ impl App {
     /// Original ChecksumClick (0x445bbc) + TfChecksum (FormShow 0x41af0c, end 0x41b164): only when the focused item is a file on a local or archive pane.
     /// Title = "CRC"/"MD5"/"SHA1"; the text starts as CALCULATING and when the worker ends becomes the result (CRC = IntToHex(8 chars, upper case),
     /// MD5/SHA1 = CryptoAPI hash in "0123456789abcdef" lower case) or ERROR. Archive items are extracted temporarily for the computation.
+    /// Worker (FUN_0041ac48 by +0x2c): 0 = CRC32 (FUN_0041a900 → FUN_0041a506, 64 KB ReadFile chunks, result ~crc), 1 = MD5 (FUN_0041a9c8, CALG 0x8003),
+    /// 2 = SHA1 (FUN_0041ab08, CALG 0x8004), both through FUN_0041a5c4.
     fn original_checksum(&mut self, algorithm: ChecksumAlgorithm) {
         let pane = &self.panes[self.active];
         if super::panes::is_drives(&pane.path) {
