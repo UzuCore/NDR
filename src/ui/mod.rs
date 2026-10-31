@@ -1651,6 +1651,13 @@ impl eframe::App for App {
                     if let Some(original) = self.numpad_shortcut(vk, ctrl, shift, alt) {
                         strip_numpad_events(raw_input, vk);
                         self.pending_numpad.push((original, shift));
+                    } else if matches!(vk, 0x6e | 0x6f) {
+                        // 고친 것: egui는 숫자판 '.'(VK_DECIMAL)·'/'(VK_DIVIDE)를 본 글쇠 '.'·'/'와 같은 Key로 준다. 원본에서는 다른 글쇠라
+                        // '.'(상위 폴더)·'/'(miCommandLine)로 듣지 않는다. 눌림 사건만 빼고 글자(빠른 찾기)는 남긴다.
+                        let key = if vk == 0x6e { egui::Key::Period } else { egui::Key::Slash };
+                        if let Some(i) = raw_input.events.iter().position(|e| matches!(e, egui::Event::Key { key: k, pressed: true, .. } if *k == key)) {
+                            raw_input.events.remove(i);
+                        }
                     }
                 }
                 if context_keys > 0 {
