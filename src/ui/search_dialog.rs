@@ -1,6 +1,6 @@
-//! C# SearchWindow + SearchAsync(파일 및 폴더 검색): 검색 위치 목록(사전 설정·찾아보기·추가·위/아래/제거·저장), 이름 기록,
-//! 범주, 확장자, 내용, 크기 범위, 날짜 범위, 날짜 기준, 옵션. 결과는 C#처럼 활성 패널 목록이 된다(F5로 원래 목록).
-//! 규칙은 ndr::tools::search_advanced. 차이: 날짜는 달력 대신 "yyyy-MM-dd" 글자 입력.
+//! C# SearchWindow + SearchAsync (find files and folders): search location list (presets, browse, add, up/down/remove, save), name history,
+//! category, extension, content, size range, date range, date basis, options. Results become the active pane list like C# (F5 returns to the original list).
+//! Rules are ndr::tools::search_advanced. Difference: dates are typed as "yyyy-MM-dd" text instead of a calendar.
 use super::original_dialogs::{DialogKind, DialogResult};
 use super::*;
 use super::tools_dialog::network_share_code;
@@ -36,7 +36,7 @@ pub(super) struct SearchForm {
     pub custom2: Option<String>,
 }
 
-/// SearchWindow 버튼과 사전 설정의 동작.
+/// SearchWindow buttons and preset actions.
 pub(super) enum SearchAction {
     Search,
     Cancel,
@@ -49,7 +49,7 @@ pub(super) enum SearchAction {
     SaveLocations,
 }
 
-/// NormalizeLocation: 따옴표·공백을 떼고 환경 변수를 풀어 전체 경로로.
+/// NormalizeLocation: strips quotes and spaces and expands environment variables into a full path.
 fn normalize_location(value: &str) -> Option<String> {
     let value = value.trim().trim_matches('"');
     if value.is_empty() {
@@ -59,7 +59,7 @@ fn normalize_location(value: &str) -> Option<String> {
     std::path::absolute(expanded).ok().map(|p| p.to_string_lossy().into_owned())
 }
 
-/// TrySize: 비면 None, 0 이상 소수 × 단위(bytes, KiB, MiB, GiB).
+/// TrySize: None when empty, a non-negative decimal x unit (bytes, KiB, MiB, GiB).
 fn size(value: &str, unit: usize) -> Result<Option<u64>, ()> {
     if value.trim().is_empty() {
         return Ok(None);
@@ -76,7 +76,7 @@ fn size(value: &str, unit: usize) -> Result<Option<u64>, ()> {
     Ok(Some(bytes as u64))
 }
 
-/// TryDateTime: 날짜가 없으면(시간도 없어야) None. 시간이 없으면 시작은 0시, 끝은 그날 마지막 순간. 끝은 분/초 끝까지 포함.
+/// TryDateTime: None without a date (the time must be empty too). Without a time the start is midnight and the end the last moment of that day. The end includes up to the end of the minute/second.
 fn date_time(date: &str, time: &str, inclusive_end: bool) -> Result<Option<std::time::SystemTime>, ()> {
     let (date, time) = (date.trim(), time.trim());
     if date.is_empty() {
@@ -144,7 +144,7 @@ impl SearchForm {
         form
     }
 
-    /// AddLocation: 있는 폴더(또는 UNC)만, 칸에도 그 경로를 넣는다. 없으면 Err.
+    /// AddLocation: only existing folders (or UNC), putting that path in the field too. Err when missing.
     pub(super) fn add_location(&mut self, value: &str) -> Result<(), ()> {
         let path = normalize_location(value).filter(|p| Path::new(p).is_dir() || p.starts_with("\\\\")).ok_or(())?;
         self.root = path.clone();
@@ -153,7 +153,7 @@ impl SearchForm {
         Ok(())
     }
 
-    /// AddAllDrives: 네트워크가 아닌 드라이브 전부.
+    /// AddAllDrives: all non-network drives.
     pub(super) fn add_all_drives(&mut self) {
         let drives: Vec<String> = native::drives().into_iter().map(|d| d.to_string_lossy().into_owned()).filter(|d| Path::new(d).is_dir() && !native::is_network_drive(Path::new(d))).collect();
         for drive in &drives {
@@ -165,8 +165,8 @@ impl SearchForm {
         }
     }
 
-    /// Commit의 검사 순서와 글(위치 → 없는 위치 → 파일/폴더 → 크기 → 날짜). 맞으면 검색 조건.
-    /// `connect`: C# connectNetworkShare(UNC면 오류 번호, 자격 증명 실패면 연결 창 결과). 연결 창 취소(1223)면 Err("") = 아무것도 안 함.
+    /// Check order and texts of Commit (locations -> missing locations -> files/folders -> size -> date). On success the search criteria.
+    /// `connect`: C# connectNetworkShare (an error number for UNC, the connect window result on credential failure). Cancelling the connect window (1223) is Err("") = do nothing.
     pub(super) fn criteria(&mut self, ko: bool, connect: &dyn Fn(&str) -> u32) -> Result<SearchCriteria, String> {
         if self.locations.is_empty() {
             let _ = self.add_location(&self.root.clone());
@@ -240,9 +240,9 @@ impl SearchForm {
     }
 }
 
-/// 창 그리기.
+/// Draws the window.
 pub(super) fn search_ui(ui: &mut egui::Ui, form: &mut SearchForm, language: &compat::Language, ko: bool, enter: bool) -> Option<SearchAction> {
-    // C# LanguageService.TranslateControls: 창 글(한국어)을 ko.lang에서 찾아 그 키의 지금 언어 글로([formNDRSearch] 등). 없으면 그대로.
+    // C# LanguageService.TranslateControls: looks up the (Korean) window text in ko.lang and uses that key's text in the current language ([formNDRSearch] etc.). Otherwise as is.
     let _ = ko;
     let t = |ko_text: &str, en: &str| language.translate_pair(ko_text, en);
     let mut action = None;
@@ -395,7 +395,7 @@ impl App {
         }
     }
 
-    /// C# SearchAsync: 압축 파일 안은 안 됨. 저장한 위치·이름 기록·작업 폴더 2를 넘긴다.
+    /// C# SearchAsync: not inside archives. Passes the saved locations, name history and work folder 2.
     pub(super) fn search_command(&mut self) {
         let i = self.active;
         if self.panes[i].archive.is_some() {
@@ -427,7 +427,7 @@ impl App {
         });
     }
 
-    /// SearchProgressWindow 제목: 위치가 여럿이면 "검색 중 · N 개 위치", 하나면 "검색 중 · 폴더 이름"(드라이브 루트는 빈 이름).
+    /// SearchProgressWindow title: "searching · N locations" for several locations, "searching · folder name" for one (an empty name for a drive root).
     pub(super) fn search_progress_title(&self, roots: &[PathBuf]) -> String {
         let mut distinct: Vec<String> = vec![];
         for root in roots {
@@ -447,7 +447,7 @@ impl App {
         format!("{searching} · {name}")
     }
 
-    /// 창의 단추 처리.
+    /// Handles the window's buttons.
     pub(super) fn search_action(&mut self, action: SearchAction, ctx: &egui::Context) {
         let ko = self.language == "ko";
         let title = self.search_title();
@@ -537,7 +537,7 @@ impl App {
         }
     }
 
-    /// 결과를 활성 패널 목록으로(필터는 비우고, 위치가 다르면 그 폴더로 바꾼 뒤 결과를 넣는다).
+    /// Puts the results in the active pane list (clearing the filter; for a different location, switch to that folder first, then insert the results).
     pub(super) fn search_done(&mut self, pane: usize, root: PathBuf, outcome: Result<Vec<Entry>, String>, cancelled: bool) {
         let results = match outcome {
             Err(_) if cancelled => {
@@ -545,7 +545,7 @@ impl App {
                 return;
             }
             Err(error) => {
-                // SearchProgressWindow.Run: MessageBox(오류, "검색", OK, Warning).
+                // SearchProgressWindow.Run: MessageBox(error, "search", OK, Warning).
                 let title = self.tr("검색", "Search").into_owned();
                 return self.system_box(&title, &error, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
             }

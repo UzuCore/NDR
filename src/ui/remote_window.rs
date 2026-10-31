@@ -1,10 +1,10 @@
-//! C# RemoteWindow(NDR 원격 연결, 1060×720) + RemoteTransferProgressWindow + RemotePermissionsWindow + NexusFileFtpHostService.
-//! 연결 줄(프로토콜 FTP/FTPS(처음)/SFTP, 호스트(최근 호스트 목록), 포트, 사용자, 비밀번호, 연결/연결 끊기, 빠른 연결이면 "FTP 사이트 목록에 추가"·
-//! 수동 모드), 로컬(뒤로/앞으로/위/경로/이동/새로 고침, "Computer" = 드라이브 목록)과 원격(뒤로/위/경로/이동/새로 고침) 목록, 가운데 ▲▼(ShowVerticalBar),
-//! 아래 상태 글과 내려받기/올리기/폴더 선택 업로드…/닫기. 원격 목록 오른쪽 단추 메뉴 = 새 원격 폴더, 이름 바꾸기, 삭제, 권한 바꾸기.
-//! 전송은 진행 창(일시 중지/계속, 자세히 보기/간단히 보기, 중단). 창을 닫으면 연결을 끊고, 내려받은 것이 있으면 연 패널을 그 로컬 폴더로 옮긴다.
-//! 차이(HANDOFF): 전송은 Rust remote 모듈(임시 이름에 받은 뒤 바꾸기, 이름 검사)로 하고, 진행 막대는 파일 크기를 모르면 움직이는 막대다.
-//! FTP 원격 명령은 Rust의 안전한 제어 명령 목록만 보낸다. 영어 화면은 창 글이 모두 영어다(C#은 일부 한국어).
+//! C# RemoteWindow (NDR remote connection, 1060x720) + RemoteTransferProgressWindow + RemotePermissionsWindow + NexusFileFtpHostService.
+//! Connection row (protocol FTP/FTPS (initial)/SFTP, host (recent hosts list), port, user, password, connect/disconnect, for quick connect "add to FTP site list" and
+//! passive mode), local (back/forward/up/path/go/refresh, "Computer" = drive list) and remote (back/up/path/go/refresh) lists, ▲▼ in the middle (ShowVerticalBar),
+//! status text and download/upload/upload chosen folder.../close at the bottom. Remote list right-click menu = new remote folder, rename, delete, change permissions.
+//! Transfers use a progress window (pause/resume, details/brief, abort). Closing the window disconnects, and if something was downloaded the opening pane moves to that local folder.
+//! Difference (HANDOFF): transfers use the Rust remote module (download to a temp name then rename, name checks), and the progress bar is indeterminate when the file size is unknown.
+//! FTP remote commands send only the Rust safe control command list. An English UI shows all window text in English (C# is partly Korean).
 use super::grid::{self, Column, GridState, GridView};
 use super::original_dialogs::{DialogKind, DialogResult};
 use super::*;
@@ -15,7 +15,7 @@ use ndr::shortcut_bindings::{self as bindings, Modifiers as KeyMods};
 use serde_json::{Value, json};
 use std::collections::VecDeque;
 
-/// C# FileSystemService의 컴퓨터(드라이브 목록) 경로.
+/// Computer (drive list) path of C# FileSystemService.
 pub(super) const DRIVES: &str = "::drives::";
 /// PaneState.HistoryCapacity.
 const HISTORY_CAPACITY: usize = 20;
@@ -37,7 +37,7 @@ pub(super) fn grouped(value: u64) -> String {
     out
 }
 
-/// C# RemoteSiteProfile(설정 RemoteSites의 한 항목).
+/// C# RemoteSiteProfile (one entry of the RemoteSites setting).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct SiteProfile {
     pub name: String,
@@ -111,7 +111,7 @@ pub(super) fn store_sites(settings: &mut ndr::settings::Settings, sites: &[SiteP
     settings.values.insert("RemoteSites".into(), Value::Array(sites.iter().map(SiteProfile::to_json).collect()));
 }
 
-/// NexusFileFtpHostService.PrepareHost: "ftp://"가 어디든 있으면 UTF-16 위치 6부터 최대 256자(URL은 풀지 않는다).
+/// NexusFileFtpHostService.PrepareHost: if "ftp://" appears anywhere, up to 256 characters from UTF-16 position 6 (the URL is not decoded).
 pub(super) fn prepare_host(host: &str) -> String {
     if !host.contains("ftp://") {
         return host.to_owned();
@@ -121,12 +121,12 @@ pub(super) fn prepare_host(host: &str) -> String {
     String::from_utf16_lossy(&units[6..6 + length])
 }
 
-/// NexusFileFtpHostService.ParsePort: StrToIntExW(글, 0), 못 읽으면 21.
+/// NexusFileFtpHostService.ParsePort: StrToIntExW(text, 0), 21 when unreadable.
 pub(super) fn parse_port(text: &str) -> i64 {
     native::str_to_int_ex(text).map_or(21, i64::from)
 }
 
-/// QuickConnectProtocol: FTP를 고르고 포트가 정확히 22면 SFTP.
+/// QuickConnectProtocol: SFTP when FTP is chosen and the port is exactly 22.
 fn quick_connect_protocol(selected: &str, port: i64) -> String {
     if selected == "FTP" && port == 22 { "SFTP".into() } else { selected.into() }
 }
@@ -140,7 +140,7 @@ pub(super) fn parent_path(path: &str) -> String {
     }
 }
 
-/// SafeLocalName: 마지막 이름 부분만, "", ".", ".."는 거부.
+/// SafeLocalName: only the last name part; "", "." and ".." are rejected.
 fn safe_local_name(name: &str) -> Result<String, String> {
     let safe = name.rsplit(['/', '\\']).next().unwrap_or("");
     if safe.is_empty() || safe == "." || safe == ".." {
@@ -149,7 +149,7 @@ fn safe_local_name(name: &str) -> Result<String, String> {
     Ok(safe.to_owned())
 }
 
-/// egui 글쇠 → WPF Key 이름(ShortcutBindingService 비교용).
+/// egui key -> WPF Key name (for ShortcutBindingService comparisons).
 pub(super) fn wpf_key(key: egui::Key) -> Option<String> {
     use egui::Key;
     Some(match key {
@@ -169,7 +169,7 @@ pub(super) fn wpf_key(key: egui::Key) -> Option<String> {
     })
 }
 
-/// 이번 장면에 눌린 글쇠 가운데 정의(id)에 맞는 것이 있는가.
+/// Whether any key pressed this frame matches the definition (id).
 pub(super) fn pressed(ctx: &egui::Context, settings: &ndr::settings::Settings, id: &str) -> bool {
     ctx.input(|i| {
         i.events.iter().any(|event| match event {
@@ -182,7 +182,7 @@ pub(super) fn pressed(ctx: &egui::Context, settings: &ndr::settings::Settings, i
     })
 }
 
-/// 로컬 목록 한 줄(C# FileItem 중 이 창이 쓰는 것).
+/// One local list row (the parts of C# FileItem this window uses).
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct LocalRow {
     pub name: String,
@@ -209,7 +209,7 @@ pub(super) struct RemoteRow {
     pub is_parent: bool,
 }
 
-/// C# FileSystemService.ListLocal(경로, 숨김, 설명 없음): 드라이브 목록 또는 ".." + 폴더 + 파일.
+/// C# FileSystemService.ListLocal(path, hidden, no descriptions): the drive list, or ".." + folders + files.
 pub(super) fn list_local(path: &str, show_hidden: bool, ko: bool) -> Result<Vec<LocalRow>, String> {
     if path == DRIVES {
         return Ok(native::drives()
@@ -261,7 +261,7 @@ pub(super) fn list_local(path: &str, show_hidden: bool, ko: bool) -> Result<Vec<
     Ok(rows)
 }
 
-/// C# LoadListingAsync의 줄: 폴더 먼저, 이름(대소문자 무시) 순, "/"가 아니면 맨 위에 "..".
+/// Rows of C# LoadListingAsync: folders first, by name (case-insensitive), ".." at the top unless at "/".
 pub(super) fn remote_rows(directory: &str, entries: &[RemoteEntry], ko: bool) -> Vec<RemoteRow> {
     let now = std::time::SystemTime::now();
     let mut rows: Vec<RemoteRow> = entries
@@ -298,13 +298,13 @@ pub(super) fn remote_rows(directory: &str, entries: &[RemoteEntry], ko: bool) ->
     rows
 }
 
-/// 바깥(서버·파일 대화 상자)을 건드리는 함수들(테스트에서 바꿔 끼운다).
+/// Functions that touch the outside (servers, file dialogs) (swapped in tests).
 #[derive(Clone, Copy)]
 pub(super) struct RemoteHooks {
     pub connect: fn(&Config) -> Result<Client, String>,
-    /// 여러 파일 열기 대화 상자(제목, 처음 폴더).
+    /// Multi-file open dialog (title, initial folder).
     pub open_files: fn(&str, Option<&Path>) -> Vec<PathBuf>,
-    /// 원본 패널 FTP 모드의 연결(ftp_pane::PaneFs). 시험에서는 가짜 원격 폴더.
+    /// Connection of the original pane FTP mode (ftp_pane::PaneFs). A fake remote folder in tests.
     pub pane_connect: fn(&Config) -> Result<Box<dyn super::ftp_pane::PaneFs>, String>,
 }
 
@@ -322,13 +322,13 @@ pub(super) enum Busy {
     Working,
 }
 
-/// 원격 목록 오른쪽 단추 메뉴의 동작 뒤에 할 일.
+/// What to do after an action from the remote list right-click menu.
 #[derive(Clone, Debug)]
 enum RemoteOp {
     Refresh,
-    /// 삭제 뒤: 다시 읽고 남은 항목을 고른다.
+    /// After delete: reread and select the remaining items.
     Delete { remaining: HashSet<String> },
-    /// 권한 뒤: 다시 읽고 남은 항목을 고르고 상태 글.
+    /// After permissions: reread, select the remaining items and show the status text.
     Permissions { remaining: HashSet<String>, status: String, failures: Vec<String> },
 }
 
@@ -339,7 +339,7 @@ enum TransferKind {
     UploadFolder { name: String },
 }
 
-/// ▲(선택한 로컬 항목 올리기)는 폴더마다 폴더 업로드, 그 뒤 파일들을 차례로 한다.
+/// ▲ (upload the chosen local items) does a folder upload per folder, then the files in order.
 #[derive(Clone, Debug)]
 enum UploadStep {
     Folder(PathBuf),
@@ -368,7 +368,7 @@ pub(super) struct RemoteForm {
     pub add_to_sites: bool,
     pub passive: bool,
     pub profile: Option<SiteProfile>,
-    /// 연 패널(닫을 때 내려받은 로컬 폴더로 옮긴다).
+    /// The opening pane (moved to the downloaded local folder on close).
     pub pane: usize,
     client: Option<Arc<Mutex<Client>>>,
     pub connected: bool,
@@ -400,7 +400,7 @@ pub(super) struct RemoteForm {
     tx: Sender<RemoteEvent>,
     rx: Receiver<RemoteEvent>,
     uploads: VecDeque<UploadStep>,
-    /// 이번 연결에서 신뢰한다고 답한 SFTP 서버 키.
+    /// SFTP server keys the user chose to trust in this connection.
     accepted_fingerprint: Option<String>,
 }
 
@@ -410,7 +410,7 @@ impl RemoteForm {
     fn protocol_name(&self) -> &'static str {
         PROTOCOLS[self.protocol.min(2)]
     }
-    /// 빠른 연결 선택(사이트 목록에 추가, 수동 모드, 알림)이 보이는가.
+    /// Whether the quick connect options (add to site list, passive mode, notice) are visible.
     pub(super) fn quick_options_visible(&self) -> bool {
         self.profile.is_none() && self.protocol < 2
     }
@@ -420,7 +420,7 @@ impl RemoteForm {
     pub(super) fn selected_local(&self) -> Vec<LocalRow> {
         self.local_grid.selected_in_order().into_iter().filter_map(|i| self.local_items.get(i)).filter(|r| !r.is_parent).cloned().collect()
     }
-    /// SelectedItem(커서 줄, 없으면 첫 선택 줄).
+    /// SelectedItem (cursor row, otherwise the first selected row).
     fn current_remote(&self) -> Option<RemoteRow> {
         let index = self.remote_grid.cursor.filter(|c| self.remote_grid.selected.contains(c)).or_else(|| self.remote_grid.selected_in_order().first().copied())?;
         self.items.get(index).cloned()
@@ -434,7 +434,7 @@ impl RemoteForm {
     }
 }
 
-/// 창 단추·글쇠.
+/// Window buttons and keys.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum RemoteAction {
     Protocol(usize),
@@ -462,7 +462,7 @@ pub(super) enum RemoteAction {
     Permissions,
 }
 
-/// 창 그리기(이름표는 부르는 쪽이 언어 파일에서 넘긴다).
+/// Draws the window (labels are passed by the caller from the language file).
 pub(super) struct RemoteLabels {
     pub connect: String,
     pub disconnect: String,
@@ -474,9 +474,9 @@ pub(super) struct RemoteLabels {
     pub back: String,
     pub forward: String,
     pub menu: [String; 4],
-    /// 원본 TfFTPQuickConnect lURL·lPort·lUser·lPassword("A&ddress:" 등, & 없이).
+    /// Original TfFTPQuickConnect lURL, lPort, lUser, lPassword ("A&ddress:" and so on, without &).
     pub fields: [String; 4],
-    /// C# ApplyLegacyVerticalTransferIcons: 스킨 [VertBar] vbbtnimgs·vbbtnoverimgs(vertbarbtns.png·_over) 띠. 0칸 = 올리기, 1칸 = 내려받기.
+    /// C# ApplyLegacyVerticalTransferIcons: the skin [VertBar] vbbtnimgs/vbbtnoverimgs (vertbarbtns.png / _over) strips. Cell 0 = upload, cell 1 = download.
     pub transfer_icons: [Option<egui::TextureHandle>; 2],
 }
 
@@ -487,7 +487,7 @@ pub(super) fn remote_ui(ui: &mut egui::Ui, form: &mut RemoteForm, labels: &Remot
         ui.ctx().request_repaint_after(Duration::from_millis(100));
     }
     ui.set_width(1024.0);
-    // 연결 줄.
+    // Connection row.
     egui::Frame::group(ui.style()).show(ui, |ui| {
         ui.horizontal_wrapped(|ui| {
             egui::ComboBox::from_id_salt("remote-protocol").width(90.0).selected_text(form.protocol_name()).show_opaque(ui, |ui| {
@@ -530,7 +530,7 @@ pub(super) fn remote_ui(ui: &mut egui::Ui, form: &mut RemoteForm, labels: &Remot
     });
     ui.add_space(6.0);
     let half = 488.0;
-    // 경로 줄.
+    // Path row.
     ui.horizontal(|ui| {
         ui.allocate_ui_with_layout(egui::vec2(half, 26.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
             let back = form.local_index.is_some_and(|i| i > 0) && !form.local_loading;
@@ -578,7 +578,7 @@ pub(super) fn remote_ui(ui: &mut egui::Ui, form: &mut RemoteForm, labels: &Remot
         });
     });
     ui.add_space(6.0);
-    // 목록 둘.
+    // The two lists.
     let height = 470.0;
     let typing = ui.ctx().wants_keyboard_input();
     let local_columns = [
@@ -620,12 +620,12 @@ pub(super) fn remote_ui(ui: &mut egui::Ui, form: &mut RemoteForm, labels: &Remot
         ui.allocate_ui_with_layout(egui::vec2(36.0, height), egui::Layout::top_down(egui::Align::Center), |ui| {
             if form.show_vertical_bar {
                 ui.add_space(height / 2.0 - 40.0);
-                // C# ApplyLegacyVerticalTransferIcons: 스킨 띠의 0칸(올리기)·1칸(내려받기), 포인터가 올라가면 over 띠. 도움말 = miFTPPut·miFTPGet.
+                // C# ApplyLegacyVerticalTransferIcons: cell 0 (upload) and cell 1 (download) of the skin strip, the over strip when hovered. Tooltips = miFTPPut, miFTPGet.
                 let [normal, over] = &labels.transfer_icons;
                 let transfer_button = |ui: &mut egui::Ui, index: usize, glyph: &str, tip: &str| {
                     let (rect, _) = ui.allocate_exact_size(egui::vec2(32.0, 32.0), egui::Sense::hover());
                     let texture = if ui.rect_contains_pointer(rect) { over.as_ref().or(normal.as_ref()) } else { normal.as_ref() };
-                    // egui Image는 띠 전체 비로 맞춘 뒤 uv를 써서 칸이 납작해지므로, 단추 틀 위에 칸(16×16)을 바로 그린다.
+                    // egui Image fits the whole strip ratio before applying uv, squashing the cell, so the cell (16x16) is painted directly over the button frame.
                     let response = match texture {
                         Some(_) => ui.put(rect, egui::Button::new("").min_size(rect.size())),
                         None => ui.put(rect, egui::Button::new(glyph)),
@@ -670,7 +670,7 @@ pub(super) fn remote_ui(ui: &mut egui::Ui, form: &mut RemoteForm, labels: &Remot
             }
         });
     });
-    // 목록 글쇠(C# LocalGrid/RemoteGrid PreviewKeyDown).
+    // List keys (C# LocalGrid/RemoteGrid PreviewKeyDown).
     if !typing && action.is_none() {
         let ctx = ui.ctx().clone();
         if form.focus_remote {
@@ -716,11 +716,11 @@ pub(super) fn remote_ui(ui: &mut egui::Ui, form: &mut RemoteForm, labels: &Remot
     action
 }
 
-/// RemoteTransferProgressWindow(600×250, 자세히 보기면 400).
+/// RemoteTransferProgressWindow (600x250, 400 with details).
 pub(super) struct TransferForm {
     ko: bool,
     pub status: String,
-    /// 0..1, 전체 크기를 모르면 None(움직이는 막대).
+    /// 0..1, None when the total size is unknown (indeterminate bar).
     pub progress: Option<f32>,
     pub details: Vec<String>,
     current_detail: Option<String>,
@@ -738,7 +738,7 @@ pub(super) enum TransferAction {
     Cancel,
 }
 
-/// C# FormatBytes: N1 단위.
+/// C# FormatBytes: N1 units.
 fn format_bytes(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
     let mut value = bytes as f64;
@@ -851,7 +851,7 @@ pub(super) fn transfer_ui(ui: &mut egui::Ui, form: &mut TransferForm) -> Option<
 pub(super) struct PermissionForm {
     pub name: String,
     pub path: String,
-    /// 소유자·그룹·나머지 × 읽기·쓰기·실행.
+    /// Owner, group, others x read, write, execute.
     pub bits: [[bool; 3]; 3],
     pub mode_text: String,
 }
@@ -864,7 +864,7 @@ pub(super) enum PermissionAction {
     SkipCurrent,
 }
 
-/// GetNumericValue: 권한 비트를 "644" 같은 10진 숫자로.
+/// GetNumericValue: permission bits as a decimal number like "644".
 pub(super) fn numeric_value(mode: u32) -> u32 {
     ((mode >> 6) & 7) * 100 + ((mode >> 3) & 7) * 10 + (mode & 7)
 }
@@ -894,7 +894,7 @@ impl PermissionForm {
         }
         mode
     }
-    /// Mode_TextChanged: 세 자리이고 778보다 작으면 확인란을 맞춘다(각 자리 & (4 >> 칸)).
+    /// Mode_TextChanged: for three digits below 778, sets the checkboxes (each digit & (4 >> cell)).
     pub(super) fn text_changed(&mut self) {
         self.mode_text.retain(|c| c.is_ascii_digit());
         self.mode_text.truncate(3);
@@ -906,7 +906,7 @@ impl PermissionForm {
             return;
         }
         let digits = [value / 100, value / 10 % 10, value % 10];
-        // 고친 것: 778 미만이라도 "689"처럼 8·9가 든 값은 8진수가 아니다. 전에는 그 자리를 0으로 읽어 다른 권한을 보냈다.
+        // Fixed: even below 778, a value with 8 or 9 such as "689" is not octal. Previously that digit read as 0 and other permissions were sent.
         if digits.iter().any(|&d| d > 7) {
             return;
         }
@@ -918,12 +918,12 @@ impl PermissionForm {
     }
 }
 
-/// 이름표: [formFTPAttributes].
+/// Labels: [formFTPAttributes].
 pub(super) fn permission_ui(ui: &mut egui::Ui, form: &mut PermissionForm, language: &compat::Language, enter: bool, shift_enter: bool, escape: bool) -> Option<Option<PermissionAction>> {
     let text = |key: &str, fallback: &str| language.text(&format!("formFTPAttributes.{key}"), fallback);
     let mut result = None;
-    // 원본 TfFTPAttributes(ClientWidth 355 × ClientHeight 242): lFileName(8,12 굵게), gbOwner(8,39)·gbGroup(123,39)·gbUser(237,39) 110×110
-    // (확인란 위 28/51/74), lEdit(10,167) eAttr(131,164 57×21 세 자리), TntBevel1(8,197 339), btnAll(10,207) btnSkip(90,207)
+    // Original TfFTPAttributes (ClientWidth 355 x ClientHeight 242): lFileName (8,12 bold), gbOwner (8,39), gbGroup (123,39), gbUser (237,39) 110x110
+    // (checkboxes at 28/51/74), lEdit (10,167) eAttr (131,164 57x21, three digits), TntBevel1 (8,197 339), btnAll (10,207) btnSkip (90,207)
     // btnOk(192,207) btnCancel(272,207) 75×25.
     let (area, _) = ui.allocate_exact_size(egui::vec2(355.0, 242.0), egui::Sense::hover());
     let at = |x: f32, y: f32, w: f32, h: f32| egui::Rect::from_min_size(area.min + egui::vec2(x, y), egui::vec2(w, h));
@@ -951,7 +951,7 @@ pub(super) fn permission_ui(ui: &mut egui::Ui, form: &mut PermissionForm, langua
     if attr.changed() {
         form.text_changed();
     }
-    // 원본 FormKeyDown(0x427334, KeyPreview): End(0x23)이고 eAttr(+0x414)에 초점이 없으면 ModalResult = mrAll(btnAll).
+    // Original FormKeyDown (0x427334, KeyPreview): End (0x23) while eAttr (+0x414) has no focus sets ModalResult = mrAll (btnAll).
     let end = !attr.has_focus() && ui.input(|i| i.key_pressed(egui::Key::End));
     ui.painter().hline(area.min.x + 8.0..=area.min.x + 347.0, area.min.y + 197.0, ui.visuals().widgets.noninteractive.bg_stroke);
     let buttons = [
@@ -968,7 +968,7 @@ pub(super) fn permission_ui(ui: &mut egui::Ui, form: &mut PermissionForm, langua
         }
     }
     if result.is_none() {
-        // Esc = 건너뛰기, Shift+Enter·End = 모두(원본 FormKeyDown), Enter = 확인(IsDefault).
+        // Esc = skip, Shift+Enter or End = all (original FormKeyDown), Enter = OK (IsDefault).
         if escape {
             result = Some(Some(PermissionAction::SkipCurrent));
         } else if shift_enter || end {
@@ -980,7 +980,7 @@ pub(super) fn permission_ui(ui: &mut egui::Ui, form: &mut PermissionForm, langua
     result
 }
 
-/// 권한 바꾸기 진행 상태(C# ChangeRemotePermissionsAsync의 지역 변수).
+/// Permission change progress state (locals of C# ChangeRemotePermissionsAsync).
 struct PermissionRun {
     entries: Vec<RemoteRow>,
     index: usize,
@@ -997,12 +997,12 @@ fn spawn_event(tx: &Sender<RemoteEvent>, job: impl FnOnce() -> RemoteEvent + Sen
     });
 }
 
-/// 중단을 눌렀으면 "Cancelled"(Rust remote 모듈과 같은 글).
+/// "Cancelled" when abort was pressed (same text as the Rust remote module).
 fn check(cancel: &AtomicBool) -> Result<(), String> {
     if cancel.load(Ordering::SeqCst) { Err("Cancelled".into()) } else { Ok(()) }
 }
 
-/// 일시 중지면 기다린다(중단하면 바로 돌아온다).
+/// Waits while paused (returns at once on abort).
 fn wait_if_paused(pause: &AtomicBool, cancel: &AtomicBool) {
     while pause.load(Ordering::SeqCst) && !cancel.load(Ordering::SeqCst) {
         thread::sleep(Duration::from_millis(50));
@@ -1053,7 +1053,7 @@ impl App {
         }
     }
 
-    /// C# OpenRemoteWindow(profile, initialHost): 활성 패널의 폴더(압축 안이면 압축 파일 폴더)에서 연다.
+    /// C# OpenRemoteWindow(profile, initialHost): opens from the active pane folder (inside an archive, the archive's folder).
     pub(super) fn open_remote_window(&mut self, profile: Option<SiteProfile>, initial_host: Option<String>) {
         let ko = self.language == "ko";
         let pane = self.active;
@@ -1238,7 +1238,7 @@ impl App {
         self.system_box(caption, text, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
     }
 
-    /// MessageBox.Show(this, 글): 캡션·아이콘 없음.
+    /// MessageBox.Show(this, text): no caption or icon.
     fn remote_notice(&mut self, korean: &str, english: &str) {
         let text = self.tr(korean, english).into_owned();
         self.system_box("", &text, MB_OK, |_, _, _| {});
@@ -1256,7 +1256,7 @@ impl App {
         });
     }
 
-    /// C# NavigateLocalAsync: 환경 변수를 풀고 전체 경로로, 없는 폴더면 알림.
+    /// C# NavigateLocalAsync: expands environment variables into a full path; a missing folder gives a notice.
     fn remote_navigate_local(&mut self, path: String) {
         if path == DRIVES {
             return self.remote_read_local(path, None);
@@ -1276,7 +1276,7 @@ impl App {
         }
     }
 
-    /// C# OpenSelectedLocalAsync: 폴더는 들어가고 파일은 연다(작업 폴더 = 지금 로컬 폴더).
+    /// C# OpenSelectedLocalAsync: enters folders and opens files (working folder = current local folder).
     fn remote_open_local(&mut self) {
         let Some(form) = self.remote_form() else { return };
         if form.local_loading {
@@ -1336,7 +1336,7 @@ impl App {
         } else {
             parse_port(&form.port)
         };
-        // 고친 것: FTP·FTPS는 포트를 16비트로 잘라(99999 → 34463) 다른 포트에 연결했다. 범위 밖이면 SFTP처럼 알린다(0은 연결 단계의 알림).
+        // Fixed: FTP and FTPS truncated the port to 16 bits (99999 -> 34463) and connected to another port. Out of range now warns like SFTP (0 is reported at the connect step).
         if !(0..=65535).contains(&port) {
             return self.remote_box_plain(t(ko, "호스트, 사용자 이름, 올바른 포트를 입력하세요.", "Enter a host, a user name and a valid port."), t(ko, "원격 연결", "Remote connection"));
         }
@@ -1347,7 +1347,7 @@ impl App {
         form.status = format!("{protocol} {}", t(ko, "서버에 연결하는 중…", "connecting to the server…"));
         let mut quick_site = None;
         if form.profile.is_none() && form.add_to_sites && protocol != "SFTP" {
-            // 원본은 연결 전에 입력값을 사이트로 쓴다(인증이 실패해도). 호스트는 입력 그대로, 처음 폴더는 빈 값.
+            // The original writes the input as a site before connecting (even if authentication fails). The host as typed, the initial folder empty.
             quick_site = Some(SiteProfile {
                 name: form.host.clone(),
                 protocol: connection_protocol.clone(),
@@ -1413,13 +1413,13 @@ impl App {
         self.system_box(caption, text, MB_OK, |_, _, _| {});
     }
 
-    /// C# SaveQuickConnectSite: 목록 끝에 더하고(같은 이름도 따로) 저장, 상태 줄.
+    /// C# SaveQuickConnectSite: appends to the list (a duplicate name is a separate entry), saves, status line.
     pub(super) fn save_quick_connect_site(&mut self, site: SiteProfile) {
         let mut sites = load_sites(&self.settings);
         let name = site.name.clone();
         sites.push(site);
         store_sites(&mut self.settings, &sites);
-        // C# SaveQuickConnectSite: 저장에 실패하면 경고 상자(제목 SaveFailedTitle, 내용 = 오류), 성공하면 상태 줄.
+        // C# SaveQuickConnectSite: a failed save shows a warning box (title SaveFailedTitle, content = error), success writes the status line.
         match self.try_save() {
             Ok(()) => self.status = self.language_pack.text("NDRRemoteSites.QuickConnectSaved", "Saved FTP site: {0}").replace("{0}", &name),
             Err(error) => {
@@ -1429,7 +1429,7 @@ impl App {
         }
     }
 
-    /// C# RecordRemoteHost: 같은 것(대소문자 무시)을 빼고 맨 앞에, 20개까지.
+    /// C# RecordRemoteHost: removes the same host (case-insensitive) and puts it first, up to 20.
     fn record_remote_host(&mut self, host: &str) {
         let value = host.trim();
         if value.is_empty() {
@@ -1440,7 +1440,7 @@ impl App {
         hosts.insert(0, value.to_owned());
         hosts.truncate(20);
         self.settings.set_strings("RecentRemoteHosts", hosts);
-        // C# RecordRemoteHost: 저장에 실패하면 상태 줄에 HostHistorySaveFailed.
+        // C# RecordRemoteHost: a failed save writes HostHistorySaveFailed to the status line.
         if let Err(error) = self.try_save() {
             self.status = self.language_pack.text("NDRRemoteSites.HostHistorySaveFailed", "Could not save recent remote host history: {0}").replace("{0}", &error);
         }
@@ -1483,7 +1483,7 @@ impl App {
         });
     }
 
-    /// 창의 일꾼 알림(App::poll에서 매번).
+    /// Worker notifications of the window (every App::poll).
     pub(super) fn poll_remote_window(&mut self, ctx: &egui::Context) {
         let Some(form) = self.remote_form() else { return };
         let events: Vec<RemoteEvent> = form.rx.try_iter().collect();
@@ -1681,7 +1681,7 @@ impl App {
         self.remote_box(t(ko, "원격 연결 실패", "Remote connection failed"), error);
     }
 
-    /// SFTP HostKeyReceived 상자의 답: 예면 이 키로 다시 연결(사이트면 KnownHostFingerprint에 저장), 아니요면 연결 실패.
+    /// Answer to the SFTP HostKeyReceived box: yes reconnects with this key (a site stores it in KnownHostFingerprint), no fails the connection.
     fn remote_host_key_answered(&mut self, trust: bool, fingerprint: String) {
         if !trust {
             return self.remote_connect_failed("Key exchange negotiation failed.");
@@ -1695,7 +1695,7 @@ impl App {
         }
         form.accepted_fingerprint = Some(fingerprint);
         if let Some((before, after)) = saved {
-            // C#: 창을 닫은 뒤 그 사이트가 RemoteSites에 있으면 지문을 저장한다.
+            // C#: after the window closes, the fingerprint is saved if that site is in RemoteSites.
             let mut sites = load_sites(&self.settings);
             if let Some(site) = sites.iter_mut().find(|s| **s == before) {
                 *site = after;
@@ -1706,7 +1706,7 @@ impl App {
         self.remote_connect();
     }
 
-    /// 닫기(×·Esc·닫기 단추): 연결을 끊고 창을 닫는다. 내려받았으면 연 패널을 그 로컬 폴더로.
+    /// Close (×, Esc, close button): disconnects and closes the window. After downloads, the opening pane goes to that local folder.
     fn remote_close(&mut self, ctx: &egui::Context) {
         self.remote_disconnect();
         let Some(form) = self.remote_form() else { return };
@@ -1721,7 +1721,7 @@ impl App {
         }
     }
 
-    /// 전송 진행 창을 열고 일꾼을 돌린다.
+    /// Opens the transfer progress window and runs the worker.
     fn remote_start_transfer(&mut self, title: String, kind: TransferKind, job: impl FnOnce(&mut Client, &AtomicBool, &AtomicBool, &dyn Fn(String, u64, Option<u64>, usize)) -> (Result<(), String>, usize, usize) + Send + 'static) {
         let ko = self.language == "ko";
         let Some(form) = self.remote_form() else { return };
@@ -1763,14 +1763,14 @@ impl App {
         }
     }
 
-    /// 진행 창을 닫으려 하면(×·Esc) 중단을 요청한다(OnClosing).
+    /// Trying to close the progress window (×, Esc) requests abort (OnClosing).
     pub(super) fn transfer_close_requested(&mut self) {
         if let Some(form) = self.transfer_form() {
             form.request_cancel();
         }
     }
 
-    /// 전송이 끝난 뒤(C# Download/Upload/UploadFolder의 끝).
+    /// After a transfer ends (end of C# Download/Upload/UploadFolder).
     #[allow(clippy::too_many_arguments)]
     fn remote_transfer_done(&mut self, session: u64, kind: TransferKind, result: Result<(), String>, cancelled: bool, completed: usize, transferred: usize, warnings: usize) {
         let ko = self.language == "ko";
@@ -1837,7 +1837,7 @@ impl App {
         }
     }
 
-    /// C# UploadSelectedLocalAsync: 폴더는 하나씩 폴더 업로드, 그 뒤 파일들.
+    /// C# UploadSelectedLocalAsync: folders one by one as folder uploads, then the files.
     fn remote_upload_selected_local(&mut self) {
         let Some(form) = self.remote_form() else { return };
         if form.busy.is_some() {
@@ -2072,7 +2072,7 @@ impl App {
                 completed = p.files as usize;
                 report(p.path.clone(), p.bytes, None, completed);
             });
-            // 원격 폴더를 만들었거나 파일을 하나라도 올렸으면 목록을 다시 읽는다.
+            // Reread the list when a remote folder was created or at least one file was uploaded.
             let transferred = usize::from(result.is_ok() || completed > 0);
             (result, completed.max(transferred), transferred)
         });
@@ -2088,7 +2088,7 @@ impl App {
         });
     }
 
-    /// 원격 동작 하나를 일꾼에서(끝나면 다시 읽기). caption = 실패 상자 캡션(메뉴 이름).
+    /// Runs one remote action on the worker (rereads when done). caption = failure box caption (menu name).
     fn remote_run(&mut self, caption: String, op: RemoteOp, job: impl FnOnce(&mut Client, &str) -> Result<(), String> + Send + 'static) {
         let Some(form) = self.remote_form() else { return };
         let Some(client) = form.client.clone() else { return };
@@ -2156,7 +2156,7 @@ impl App {
         });
     }
 
-    /// C# ChangeRemotePermissionsAsync: 항목마다 권한 창(모두/건너뛰기/확인/취소), 알 수 없으면 한 번 "기본값 644" 확인.
+    /// C# ChangeRemotePermissionsAsync: a permission window per item (all/skip/OK/cancel); when unknown, a one-time "default 644" confirmation.
     fn remote_permissions(&mut self) {
         let ko = self.language == "ko";
         let caption = self.remote_labels().menu[3].clone();
@@ -2227,7 +2227,7 @@ impl App {
         });
     }
 
-    /// 고른 권한을 적용하고 다시 읽은 뒤 "N/M개 항목 권한 변경, 건너뜀 K개( (중단))".
+    /// Applies the chosen permissions, rereads, then "changed permissions of N/M items, skipped K( (aborted))".
     fn permission_finish(&mut self, run: PermissionRun, stopped: bool) {
         let ko = self.language == "ko";
         if run.plan.is_empty() && run.skipped == 0 {

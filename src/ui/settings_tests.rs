@@ -1,5 +1,5 @@
-//! C# SettingsWindow(Commit 규칙·확장자 색 가져오기/내보내기)와 FunctionKeyEditorWindow/FunctionKeyEditWindow를 Rust UI에서 확인한다.
-//! 한국어와 영어만. 격리 프로필과 격리 폴더만 쓰고, 파일 대화 상자는 가짜 함수다.
+//! Checks C# SettingsWindow (Commit rules, extension color import/export) and FunctionKeyEditorWindow/FunctionKeyEditWindow in the Rust UI.
+//! Korean and English only. Only an isolated profile and isolated folders are used; file dialogs are fakes.
 use super::original_dialogs::{DialogKind, DialogResult};
 use super::settings_window::{Row, SettingsAction};
 use super::*;
@@ -58,9 +58,9 @@ fn extension_colors_follow_the_original_color_page() {
     set_text(&mut app, "ExtensionColors", ".txt=#FF0000; .doc=#FF0000; .zip=#00FF00");
     let groups = |app: &mut App| super::settings_window::color_groups(&text_of(app, "ExtensionColors"));
     let row = |color: &str, names: &[&str]| (color.to_owned(), names.iter().map(|n| (*n).to_owned()).collect::<Vec<_>>());
-    // 원본 lbExtColor: 같은 색의 확장자를 한 줄("TXT;DOC")로.
+    // Original lbExtColor: extensions of the same color on one row ("TXT;DOC").
     assert_eq!(groups(&mut app), vec![row("#FF0000", &["TXT", "DOC"]), row("#00FF00", &["ZIP"])]);
-    // 추가(0x44f360): PREF_TITLE_ADDEXTS → 색 고르기 → 이미 쓰는 색이면 PREF_SETCOLOR / PREF_COLOREXISTS, 예면 합친다.
+    // Add (0x44f360): PREF_TITLE_ADDEXTS -> choose color -> for a color already in use PREF_SETCOLOR / PREF_COLOREXISTS; yes merges them.
     COLOR.with(|c| *c.borrow_mut() = Some(0x0000FF));
     app.settings_action(SettingsAction::AddColor, &ctx);
     assert_eq!(app.original_dialogs.last().unwrap().title, app.language_pack.text("RES.PREF_TITLE_ADDEXTS", "?"));
@@ -69,24 +69,24 @@ fn extension_colors_follow_the_original_color_page() {
     assert_eq!(question, (app.language_pack.text("RES.PREF_SETCOLOR", "?"), app.language_pack.text("RES.PREF_COLOREXISTS", "?")));
     app.answer_message_box(ndr::msgbox::IDYES, &ctx);
     assert_eq!(groups(&mut app)[0], row("#FF0000", &["TXT", "DOC", "LOG", "INI"]));
-    // 편집(0x44f7c0): PREF_TITLE_EDITEXTS, 옛 확장자를 지우고 새 확장자를 같은 색으로.
+    // Edit (0x44f7c0): PREF_TITLE_EDITEXTS removes the old extensions and adds the new ones with the same color.
     app.settings_form().unwrap().color_selected = Some(1);
     app.settings_action(SettingsAction::EditColor, &ctx);
     assert_eq!(app.original_dialogs.last().unwrap().title, app.language_pack.text("RES.PREF_TITLE_EDITEXTS", "?"));
     app.answer_dialog(DialogResult::Text(Some("ZIP;7Z".into())), &ctx);
     assert_eq!(groups(&mut app)[1], row("#00FF00", &["ZIP", "7Z"]));
-    // 두 번 누르기(0x44ef68): 쓰지 않는 색이면 묻지 않고 바꾼다.
+    // Double click (0x44ef68): an unused color changes without asking.
     COLOR.with(|c| *c.borrow_mut() = Some(0xFF0000));
     app.settings_form().unwrap().color_selected = Some(1);
     app.settings_action(SettingsAction::ChangeColor, &ctx);
     assert!(app.msgboxes.is_empty());
     assert_eq!(groups(&mut app)[1], row("#0000FF", &["ZIP", "7Z"]));
-    // 삭제(0x44fb98): 묻지 않고 그 줄의 확장자를 모두 지운다. 확인하면 ExtensionColors로 저장.
+    // Delete (0x44fb98): removes all extensions of that row without asking. OK saves to ExtensionColors.
     app.settings_form().unwrap().color_selected = Some(0);
     app.settings_action(SettingsAction::DeleteColor, &ctx);
     assert_eq!(groups(&mut app), vec![row("#0000FF", &["ZIP", "7Z"])]);
     draw_settings(&mut app, &ctx);
-    // 기본 색(lbBasicColor 0x44ed5c): 줄 1 = 파일 목록 배경(NXBACK), 줄 17 = 폴더 트리 배경(NXTBACK). 0·15·16은 색이 없다.
+    // Base colors (lbBasicColor 0x44ed5c): row 1 = file list background (NXBACK), row 17 = folder tree background (NXTBACK). Rows 0, 15, 16 have no color.
     assert_eq!([0, 1, 14, 15, 16, 17, 22].map(super::settings_window::basic_color_index), [None, Some(0), Some(13), None, None, Some(14), Some(19)]);
     COLOR.with(|c| *c.borrow_mut() = Some(0x00336699));
     app.settings_action(SettingsAction::ChangeBasicColor(14), &ctx);
@@ -116,11 +116,11 @@ fn settings_window_commits_like_csharp() {
     let (root, ctx, mut app) = fixture("ko", "ko");
     app.dispatch("options", &ctx);
     assert_eq!(app.original_dialogs.last().unwrap().title, "옵션", "original [formPreferences] Form.Caption");
-    // 원본 btnApply: 적용해도 창은 그대로.
+    // Original btnApply: applying keeps the window open.
     app.settings_action(SettingsAction::Apply, &ctx);
     assert!(app.settings_form().is_some());
-    // 원본 btnListFont(글꼴 변경): 글꼴 상자에서 고른 이름·크기가 줄에, 모양(TFontStyles 바이트)이 ListFontStyle에 들어간다.
-    // 목록 크기 칸은 화소(처음 값 14 = 10.5포인트), 글꼴 상자는 포인트: 10.5포인트를 고르면 14화소.
+    // Original btnListFont (change font): the name and size chosen in the font box go to the row, the style (TFontStyles byte) to ListFontStyle.
+    // The list size field is pixels (initially 14 = 10.5 points), the font box points: choosing 10.5 points gives 14 pixels.
     app.font_picker = |name, size, style| { assert_eq!((name, size, style), ("Segoe UI", 10.5, 0), "the current font goes in as points"); Some(("Tahoma".into(), 12.0, 3)) };
     app.settings_action(SettingsAction::ChooseFont(false), &ctx);
     assert_eq!((text_of(&mut app, "ListFont"), text_of(&mut app, "ListFontSize")), ("Tahoma".to_owned(), "16".to_owned()), "12 points = 16 pixels");
@@ -132,7 +132,7 @@ fn settings_window_commits_like_csharp() {
     app.settings_action(SettingsAction::ChooseFont(false), &ctx);
     {
         let form = app.settings_form().unwrap();
-        // 원본 TfPreferences 쪽(파일목록 … 기타) + C# 판에만 있는 줄의 "NDR" 쪽.
+        // Original TfPreferences pages (file list ... other) + the "NDR" page for rows only in the C# version.
         assert_eq!(form.tab_titles, ["파일목록", "폴더트리", "색", "옵션", "프로그램", "경로", "기능키", "기타", "NDR"]);
         assert_eq!(form.tabs.len(), 9);
         assert!(matches!(&form.tabs[0][1], Row::Text { key, label, .. } if key == "ListFont" && label == "파일 목록:"));
@@ -140,12 +140,12 @@ fn settings_window_commits_like_csharp() {
         assert!(form.tabs[2].iter().any(|row| matches!(row, Row::ColorButtons)));
         assert!(form.tabs[6].iter().any(|row| matches!(row, Row::FunctionKeys)));
         assert!(matches!(&form.tabs[8][0], Row::Check { key, label, .. } if key == "DualPaneMode" && label == "두 패널 표시"));
-        // 원본 ComboBox 글(값은 그대로): cbSort1.
+        // Original ComboBox text (values unchanged): cbSort1.
         assert!(form.tabs[0].iter().any(|row| matches!(row, Row::Combo { key, choices, .. } if key == "LeftSortMode" && choices[1] == ("Name".to_owned(), "이름순".to_owned()))));
-        // 원본 cbColumn1: "자동;1열;…;6열", NDR만의 7~19열은 같은 꼴.
+        // Original cbColumn1: "자동;1열;...;6열", and the NDR-only 7-19 columns use the same form.
         assert!(form.tabs[0].iter().any(|row| matches!(row, Row::Combo { key, choices, .. } if key == "LeftColumnCount"
             && choices[0] == ("Auto".to_owned(), "자동".to_owned()) && choices[6] == ("6".to_owned(), "6열".to_owned()) && choices[19] == ("19".to_owned(), "19열".to_owned()))));
-        // 모든 줄이 한 번씩만 있다.
+        // Every row appears exactly once.
         let mut keys: Vec<String> = form.tabs.iter().flatten().filter_map(|row| match row {
             Row::Check { key, .. } | Row::Text { key, .. } | Row::Folder { key, .. } | Row::Program { key, .. } | Row::Combo { key, .. } | Row::Slider { key, .. } => Some(key.clone()),
             _ => None,
@@ -155,17 +155,17 @@ fn settings_window_commits_like_csharp() {
         keys.dedup();
         assert_eq!(keys.len(), count, "no duplicated rows");
     }
-    // 활성화 단축키: 한 글자 영문/숫자만.
+    // Activation hotkey: one English letter or digit only.
     set_text(&mut app, "ExplorerShortcutKey", "ab");
     app.settings_action(SettingsAction::Ok, &ctx);
     assert_eq!(app.msgboxes.first().map(|m| (m.title.clone(), m.text.clone())), Some(("환경 설정".to_owned(), "활성화 단축키에는 영문자 또는 숫자 한 글자만 입력하세요.".to_owned())));
     app.answer_message_box(1, &ctx);
     assert!(app.settings_form().is_some(), "an invalid value keeps the window open");
     set_text(&mut app, "ExplorerShortcutKey", "w");
-    // 범위·변환 규칙.
+    // Range and conversion rules.
     set_text(&mut app, "ListLineSpace", "99");
     set_text(&mut app, "MaxRecentFileCount", "5000");
-    // 원본 chkScrollStep1: "페이지 단위 스크롤"을 끄면 1(줄 단위), 켜져 있으면 2.
+    // Original chkScrollStep1: turning "scroll by page" off gives 1 (by line), on gives 2.
     let scroll_label = app.language_pack.text("formPreferences.Caption.chkScrollStep1", "?");
     match app.settings_form().unwrap().row_mut("LeftScrollStep") {
         Some(Row::Check { value, label, .. }) => {
@@ -178,9 +178,9 @@ fn settings_window_commits_like_csharp() {
     set_text(&mut app, "FolderTreeDepth", "abc");
     set_text(&mut app, "ExtensionColors", "zip=#abcdef; *.TXT=#112233");
     set_text(&mut app, "SpecialFolder:Music", "D:\\Music");
-    // 외부 압축 프로그램 줄은 없다(사용자 요청).
+    // There is no external archiver row (user request).
     assert!(app.settings_form().unwrap().row_mut("Archive:zip").is_none() && app.settings_form().unwrap().row_mut("UseExternalArchivePrograms").is_none());
-    // 컴퓨터 청소 칸도 없다(사용자 요청으로 컴퓨터 청소를 뺐다).
+    // There is no Disk Cleanup field either (Disk Cleanup was removed per user request).
     assert!(app.settings_form().unwrap().row_mut("CleanupLocations").is_none() && app.settings_form().unwrap().row_mut("UserDefinedCleanupExtensions").is_none());
     set_text(&mut app, "WF0", "  C:\\work  ");
     set_combo(&mut app, "LeftColumnCount", "3");
@@ -198,7 +198,7 @@ fn settings_window_commits_like_csharp() {
     assert_eq!(s.strings("WorkingFolders")[0], "C:\\work");
     assert_eq!((s.values["LeftColumnCount"].as_i64(), s.values["EscapeKeyAction"].as_i64(), s.values["PathClickMode"].as_i64()), (Some(3), Some(3), Some(1)));
     assert_eq!(s.values["NavigateOnPathClick"], true);
-    // 잘못된 확장자 색은 경고 상자, 취소는 아무것도 바꾸지 않는다.
+    // An invalid extension color shows a warning box; cancel changes nothing.
     app.dispatch("options", &ctx);
     set_text(&mut app, "ExtensionColors", "zip=red");
     app.settings_action(SettingsAction::Ok, &ctx);

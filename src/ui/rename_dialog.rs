@@ -1,12 +1,12 @@
-//! C# AdvancedRenameWindow(고급 이름 바꾸기): 동작 고르기 → 적용 대상·값 → 추가, 적용 목록(지우기/위/아래), 매크로(advrename.save),
-//! 미리보기(처음 500개), 확인 상자 뒤 이름 바꾸기. 규칙은 compat::rename_with_rules(C# AdvancedRenameService.Preview).
+//! C# AdvancedRenameWindow (advanced rename): choose an action -> target and values -> add, the applied list (delete/up/down), macros (advrename.save),
+//! preview (first 500), rename after a confirmation box. Rules are compat::rename_with_rules (C# AdvancedRenameService.Preview).
 use super::original_dialogs::{DialogKind, DialogResult, glyph_texture};
 use super::*;
 use compat::RenameRule;
 use ndr::msgbox::{IDYES, MB_ICONEXCLAMATION, MB_ICONQUESTION, MB_OK, MB_YESNO};
 use ndr::rename_macros::{self as macros, RenameMacro};
 
-/// 원본 TfAdvRename DFM sbtnSave·sbtnDelete의 Glyph.Data(TBitmap 스트림의 BMP 부분, 16×16 8비트).
+/// Glyph.Data of sbtnSave and sbtnDelete in the original TfAdvRename DFM (the BMP part of a TBitmap stream, 16x16, 8-bit).
 const SAVE_GLYPH: &[u8] = include_bytes!("glyphs/advrename-save.bmp");
 const DELETE_GLYPH: &[u8] = include_bytes!("glyphs/advrename-delete.bmp");
 
@@ -17,12 +17,12 @@ pub(super) struct RenameForm {
     pub rules: Vec<RenameRule>,
     pub selected_rule: Option<usize>,
     pub editor: RenameRule,
-    /// 위치, 개수, 시작, 간격, 자릿수 칸의 글.
+    /// Text of the position, count, start, step and digits fields.
     pub numbers: [String; 5],
     pub macros: Vec<RenameMacro>,
     /// None = "Custom".
     pub macro_name: Option<String>,
-    /// lvPreview에서 고른 줄(원본 lvPreviewKeyDown: Ctrl+C = 그 줄의 원래 이름을 클립보드로).
+    /// Row chosen in lvPreview (original lvPreviewKeyDown: Ctrl+C = that row's original name to the clipboard).
     pub preview_selected: Option<usize>,
 }
 
@@ -67,9 +67,9 @@ fn combo(ui: &mut egui::Ui, id: &str, value: &mut String, options: &[(&'static s
     changed
 }
 
-/// 원본 FUN_0041830c(규칙 목록 줄): "동작 (설명)" + " - extension"/" - name". 동작 이름은 ADVRENAME_ACTIONS를 ';'로 나눈 것,
-/// 설명은 규칙 클래스마다의 글(영어 그대로): Insert 0x469e10, Replace 0x46a784, Delete 0x46b030, Case 0x46bb68,
-/// Numbering 0x46c170, ChangeExtension 0x46c7ec. 긴 글은 lstrcpynW로 자르고 기준보다 길면 "..."를 붙인다.
+/// Original FUN_0041830c (rule list row): "action (description)" + " - extension"/" - name". Action names are ADVRENAME_ACTIONS split on ';',
+/// descriptions are per rule class (English as is): Insert 0x469e10, Replace 0x46a784, Delete 0x46b030, Case 0x46bb68,
+/// Numbering 0x46c170, ChangeExtension 0x46c7ec. Long text is cut with lstrcpynW and gets "..." when longer than the limit.
 pub(super) fn rule_display(rule: &RenameRule, language: &compat::Language) -> String {
     let actions = language.text("RES.ADVRENAME_ACTIONS", "Insert;Find/Replace;Delete;Case;Numbering;Change Extension");
     let actions: Vec<&str> = actions.split(';').collect();
@@ -82,7 +82,7 @@ pub(super) fn rule_display(rule: &RenameRule, language: &compat::Language) -> St
         _ => 5,
     };
     let action = actions.get(slot).copied().unwrap_or(rule.action.as_str());
-    // lstrcpynW(버퍼, 글, n)은 n-1자까지, 원래 글이 limit자보다 길면 "...".
+    // lstrcpynW(buffer, text, n) copies up to n-1 characters; "..." when the original text is longer than limit characters.
     let clip = |value: &str, keep: usize, limit: usize| {
         let mut shown: String = value.chars().take(keep).collect();
         if value.chars().count() > limit {
@@ -134,13 +134,13 @@ pub(super) fn rule_display(rule: &RenameRule, language: &compat::Language) -> St
     format!("{action} ({detail}){target}")
 }
 
-/// Preview: 규칙이 틀려도 원래 이름을 보인다.
+/// Preview: shows the original name even when a rule fails.
 pub(super) fn preview_name(form: &RenameForm, index: usize) -> String {
     let name = form.paths[index].file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     compat::rename_with_rules(&name, &form.rules, index, form.dirs[index]).unwrap_or(name)
 }
 
-/// 원본 FUN_00469b64: 새 이름이 0x105(261)자보다 짧고 금지 문자가 없어야 한다. 규칙을 적용하지 못하면 틀린 이름으로 본다.
+/// Original FUN_00469b64: the new name must be shorter than 0x105 (261) characters with no forbidden characters. A name whose rules fail counts as invalid.
 pub(super) fn valid_new_name(form: &RenameForm, index: usize) -> bool {
     let name = form.paths[index].file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     match compat::rename_with_rules(&name, &form.rules, index, form.dirs[index]) {
@@ -149,12 +149,12 @@ pub(super) fn valid_new_name(form: &RenameForm, index: usize) -> bool {
     }
 }
 
-/// 원본 TfAdvRename(ClientWidth 650 × ClientHeight 555): lAction "1. 동작 선택"(16,17), pcAction(12,45 353×220: tsInsert·tsReplace·
+/// Original TfAdvRename (ClientWidth 650 x ClientHeight 555): lAction "1. choose action" (16,17), pcAction (12,45 353x220: tsInsert, tsReplace,
 /// tsDelete·tsCase·tsNumbering·tsExtension), lApplyDest "2. 동작 적용"(371,17) rbApplyToName(371,69)·rbApplyToExt(371,97),
 /// btnAddAction(371,129 67×25) btnDeleteAction(371,168), lAppliedList(448,45) lbActions(448,64 194×145) btnUp(448,215)·btnDown(549,215) 93×25,
 /// cbMacroList(448,248 141×21) sbtnSave(593,248)·sbtnDelete(619,248) 23×22, lPreview "3. 미리보기"(12,277) lvPreview(12,300 630×213:
-/// 번호·원래 이름 250·새 이름 250), btnRun(409,522)·btnCancel(529,522) 114×25. 각 쪽의 그림(Image1~6)은 그리지 않는다.
-/// 돌려주는 값: 0 이름 바꾸기, 1 취소, 2 동작 더하기, 3 매크로 저장, 4 매크로 지우기.
+/// number, original name 250, new name 250), btnRun (409,522), btnCancel (529,522) 114x25. Each page's image (Image1-6) is not drawn.
+/// Returns 0 rename, 1 cancel, 2 add action, 3 save macro, 4 delete macro.
 pub(super) fn rename_ui(ui: &mut egui::Ui, form: &mut RenameForm, language: &compat::Language, ko: bool) -> Option<usize> {
     use super::original_dialogs::{put_enabled, put_left};
     let mut choice = None;
@@ -163,14 +163,14 @@ pub(super) fn rename_ui(ui: &mut egui::Ui, form: &mut RenameForm, language: &com
     let stroke = ui.visuals().widgets.noninteractive.bg_stroke;
     let blue = Color32::from_rgb(0x3a, 0x8a, 0xde);
     let t = |key: &str, fallback: &str| text(language, key, fallback).replace('&', "");
-    // VCL Caption 洹몃?濡?'&' ?⑥텞 臾몄옄).
+    // VCL Caption as is (with the '&' access key).
     let r = |key: &str, fallback: &str| language.raw(&format!("formAdvRename.{key}")).unwrap_or_else(|| fallback.to_owned());
     for (x, y, key, fallback) in [(16.0, 17.0, "Caption.lAction", "1. Choose Action"), (371.0, 17.0, "Caption.lApplyDest", "2. Apply Action"), (12.0, 277.0, "Caption.lPreview", "3. Preview")] {
         put_left(ui, at(x, y, 260.0, 16.0), egui::Label::new(RichText::new(t(key, fallback)).strong().family(egui::FontFamily::Name(super::BOLD_FONT_FAMILY.into())).color(blue)));
     }
-    // pcAction 탭 줄과 쪽.
+    // pcAction tab row and pages.
     let before = form.editor.action.clone();
-    // 원본 TntFormKeyDown(0x418bd0): Alt + '1'~'6'이면 pcAction의 그 쪽(0~5)으로.
+    // Original TntFormKeyDown (0x418bd0): Alt + '1'-'6' goes to that page (0-5) of pcAction.
     let digit_keys = [egui::Key::Num1, egui::Key::Num2, egui::Key::Num3, egui::Key::Num4, egui::Key::Num5, egui::Key::Num6];
     if let Some(page) = ui.input(|i| if i.modifiers.alt { digit_keys.iter().position(|k| i.key_pressed(*k)) } else { None }) {
         if let Some((value, _)) = action_choices(language).get(page) {
@@ -186,7 +186,7 @@ pub(super) fn rename_ui(ui: &mut egui::Ui, form: &mut RenameForm, language: &com
         }
     });
     if before != form.editor.action {
-        // UpdateEditor: 위치 선택은 새 동작에 있는 값이면 유지, 아니면 기본(바꾸기는 All, 나머지 Prefix).
+        // UpdateEditor: the position choice stays when the new action has that value, otherwise the default (All for replace, Prefix for the rest).
         let positions = position_choices(language, &form.editor.action);
         if !positions.iter().any(|(v, _)| *v == form.editor.position) {
             form.editor.position = if form.editor.action == "Replace" { "All" } else { "Prefix" }.into();
@@ -209,7 +209,7 @@ pub(super) fn rename_ui(ui: &mut egui::Ui, form: &mut RenameForm, language: &com
             ui.put(page(48.0, 70.0, 241.0, 21.0), egui::TextEdit::singleline(&mut editor.text));
             put_left(ui, page(18.0, 105.0, 300.0, 15.0), egui::Label::new(t("Caption.lInsLoc", "B. Insert Location:")));
             radio(ui, page(48.0, 126.0, 137.0, 17.0), &mut editor.position, "Position", r("Caption.rbInsertLocPos", "Position"));
-            // 원본 0x41888c: seInsertPos는 rbInsertLocPos가 골라졌을 때만 켜진다.
+            // Original 0x41888c: seInsertPos is enabled only when rbInsertLocPos is chosen.
             put_enabled(ui, page(191.0, 124.0, 64.0, 22.0), editor.position == "Position", egui::TextEdit::singleline(&mut numbers[0]));
             radio(ui, page(48.0, 147.0, 137.0, 17.0), &mut editor.position, "Prefix", r("Caption.rbInsertLocFirst", "Prefix"));
             radio(ui, page(48.0, 168.0, 137.0, 17.0), &mut editor.position, "Suffix", r("Caption.rbInsertLocLast", "Suffix"));
@@ -229,7 +229,7 @@ pub(super) fn rename_ui(ui: &mut egui::Ui, form: &mut RenameForm, language: &com
             ui.scope_builder(egui::UiBuilder::new().max_rect(page(28.0, 74.0, 106.0, 21.0)), |ui| {
                 combo(ui, "rename-delete-from", &mut editor.delete_from_mode, &choices(language, "ComboBox.cbDelFrom", "Position;From Start;From End;Delimiter", &["Position", "FromStart", "FromEnd", "Delimiter"]), 98.0);
             });
-            // HandleDeleteFromModeChanged: 처음부터는 왼쪽→오른쪽, 끝부터는 오른쪽→왼쪽.
+            // HandleDeleteFromModeChanged: from the start is left -> right, from the end right -> left.
             if from_before != editor.delete_from_mode {
                 match editor.delete_from_mode.as_str() {
                     "FromStart" => editor.delete_direction = "LeftToRight".into(),
@@ -252,7 +252,7 @@ pub(super) fn rename_ui(ui: &mut egui::Ui, form: &mut RenameForm, language: &com
             });
             put_left(ui, page(16.0, 110.0, 190.0, 15.0), egui::Label::new(t("Caption.lDelTo", "C. To")));
             radio(ui, page(28.0, 133.0, 120.0, 17.0), &mut editor.delete_to_mode, "Count", r("Caption.rbDelCount", "Count:"));
-            // 원본 0x418954: seDelCount는 rbDelCount, eDelToDelimiter는 rbToDelimiter가 골라졌을 때만 켜진다.
+            // Original 0x418954: seDelCount is enabled only with rbDelCount, eDelToDelimiter only with rbToDelimiter.
             let by_count = editor.delete_to_mode == "Count";
             put_enabled(ui, page(151.0, 130.0, 57.0, 21.0), by_count, egui::TextEdit::singleline(&mut numbers[1]));
             put_left(ui, page(214.0, 133.0, 120.0, 15.0), egui::Label::new(t("Caption.lUnit", "character(s)")));
@@ -279,7 +279,7 @@ pub(super) fn rename_ui(ui: &mut egui::Ui, form: &mut RenameForm, language: &com
             ui.put(page(166.0, 85.0, 51.0, 21.0), egui::TextEdit::singleline(&mut numbers[4]));
             put_left(ui, page(12.0, 124.0, 90.0, 15.0), egui::Label::new(t("Caption.lNumLoc", "B. Location")));
             radio(ui, page(104.0, 123.0, 149.0, 17.0), &mut editor.position, "Position", r("Caption.rbNumLocPos", "Position"));
-            // 원본 0x4189a8: seNumLocPos는 rbNumLocPos가 골라졌을 때만 켜진다.
+            // Original 0x4189a8: seNumLocPos is enabled only when rbNumLocPos is chosen.
             put_enabled(ui, page(259.0, 121.0, 64.0, 21.0), editor.position == "Position", egui::TextEdit::singleline(&mut numbers[0]));
             radio(ui, page(104.0, 144.0, 149.0, 17.0), &mut editor.position, "Prefix", r("Caption.rbNumLocFirst", "Prefix"));
             radio(ui, page(104.0, 164.0, 149.0, 17.0), &mut editor.position, "Suffix", r("Caption.rbNumLocLast", "Suffix"));
@@ -289,7 +289,7 @@ pub(super) fn rename_ui(ui: &mut egui::Ui, form: &mut RenameForm, language: &com
             ui.put(page(56.0, 96.0, 217.0, 21.0), egui::TextEdit::singleline(&mut editor.text));
         }
     }
-    // 2. 동작 적용(확장자 바꾸기에는 쓰지 않는다).
+    // 2. Apply to (not used by change extension).
     ui.add_enabled_ui(action != "Extension", |ui| {
         radio(ui, at(371.0, 69.0, 75.0, 17.0), &mut editor.target, "Name", r("Caption.rbApplyToName", "Name"));
         radio(ui, at(371.0, 97.0, 75.0, 17.0), &mut editor.target, "Extension", r("Caption.rbApplyToExt", "Extension"));
@@ -342,15 +342,15 @@ pub(super) fn rename_ui(ui: &mut egui::Ui, form: &mut RenameForm, language: &com
         });
     });
     if let Some(name) = picked {
-        // HandleMacroSelection: 매크로를 고르면 그 동작들로 바꾼다.
+        // HandleMacroSelection: choosing a macro replaces the actions with its actions.
         if let Some(found) = name.as_ref().and_then(|n| form.macros.iter().find(|m| m.name.eq_ignore_ascii_case(n))) {
             form.rules = found.rules.clone();
             form.selected_rule = None;
         }
         form.macro_name = name;
     }
-    // 원본 sbtnSave·sbtnDelete(TSpeedButton 23×22, Glyph.Data 16×16 비트맵, Hint 없음). sbtnDeleteClick(0x419420)은 늘 켜져 있고
-    // 고른 매크로가 없으면(cbMacroList.ItemIndex < 1) 아무것도 하지 않는다.
+    // Original sbtnSave and sbtnDelete (TSpeedButton 23x22, Glyph.Data 16x16 bitmaps, no Hint). sbtnDeleteClick (0x419420) is always enabled and
+    // does nothing without a chosen macro (cbMacroList.ItemIndex < 1).
     let ctx = ui.ctx().clone();
     let glyph = |name: &str, bmp: &'static [u8]| glyph_texture(&ctx, name, bmp).map(|t| egui::Image::new(&t).fit_to_exact_size(egui::vec2(16.0, 16.0)));
     let save = glyph("advrename-save", SAVE_GLYPH).map_or_else(|| egui::Button::new("S"), egui::Button::image);
@@ -361,7 +361,7 @@ pub(super) fn rename_ui(ui: &mut egui::Ui, form: &mut RenameForm, language: &com
     if ui.put(at(619.0, 248.0, 23.0, 22.0), delete).clicked() {
         choice = Some(4);
     }
-    // lvPreview(번호·원래 이름·새 이름, 줄 선).
+    // lvPreview (number, original name, new name, row lines).
     let headers = text(language, "ListViewCols.lvPreview", "Num;Original Name;New Name");
     let headers: Vec<&str> = headers.split(';').collect();
     let preview = at(12.0, 300.0, 630.0, 213.0);
@@ -380,7 +380,7 @@ pub(super) fn rename_ui(ui: &mut egui::Ui, form: &mut RenameForm, language: &com
     let more = form.paths.len() - shown;
     let rows = egui::Rect::from_min_max(egui::pos2(preview.left() + 2.0, header.bottom()), preview.max - egui::vec2(2.0, 2.0));
     let text_color = ui.visuals().text_color();
-    // 원본 lvPreviewKeyDown(0x419a4c): Ctrl + C면 고른 줄의 SubItems[0](원래 이름)을 클립보드로(글 칸에 초점이 있으면 그 칸의 복사).
+    // Original lvPreviewKeyDown (0x419a4c): Ctrl + C copies the chosen row's SubItems[0] (original name) to the clipboard (a focused text field copies its own text).
     if let Some(row) = form.preview_selected.filter(|r| *r < shown && ui.ctx().memory(|m| m.focused().is_none())) {
         if ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::C)) || ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Copy))) {
             if let Some(name) = form.paths[row].file_name() {
@@ -407,8 +407,8 @@ pub(super) fn rename_ui(ui: &mut egui::Ui, form: &mut RenameForm, language: &com
                     [String::new(), if ko { format!("외 {more}개") } else { format!("{more} more items") }, "…".into()]
                 };
                 let mut x = rect.left();
-                // 원본 lvPreviewAdvancedCustomDrawSubItem(FUN_00418b04): 새 이름 칸(SubItem 2)이 FUN_00469b64(길이 < 0x105이고 금지 문자
-                // "\/:*?\"<>|" 없음)를 못 넘으면 글을 빨강(clRed)으로. 고친 것: 전에는 모두 같은 색이라 REN_INVALIDNAMES 안내가 가리키는 줄이 없었다.
+                // Original lvPreviewAdvancedCustomDrawSubItem (FUN_00418b04): the new name cell (SubItem 2) turns red (clRed) when it fails FUN_00469b64 (length < 0x105 and no forbidden characters
+                // "\/:*?\"<>|"). Fixed: previously all rows had the same color, so no row matched the REN_INVALIDNAMES notice.
                 let invalid = row < shown && !valid_new_name(form, row);
                 for (index, cell_text) in cells.iter().enumerate() {
                     let cell = egui::Rect::from_min_size(egui::pos2(x, rect.top()), egui::vec2(widths[index], 18.0));
@@ -432,7 +432,7 @@ pub(super) fn rename_ui(ui: &mut egui::Ui, form: &mut RenameForm, language: &com
     }
     choice
 }
-/// C# BuildPlan의 검사: 겹치는 결과, 쓸 수 없는 이름, 이미 있는 대상. 맞으면 바뀔 이름 목록.
+/// Checks of C# BuildPlan: overlapping results, unusable names, existing destinations. On success the list of names to change.
 pub(super) fn build_plan(form: &RenameForm, ko: bool) -> Result<Vec<String>, String> {
     let mut raw: Vec<String> = Vec::new();
     for (i, path) in form.paths.iter().enumerate() {
@@ -476,7 +476,7 @@ impl App {
         }
     }
 
-    /// C# ShowAdvancedRenameAsync: 고른 항목(없으면 커서 항목)으로 창을 연다. 매크로는 advrename.save에서 읽는다.
+    /// C# ShowAdvancedRenameAsync: opens the window with the chosen items (otherwise the cursor item). Macros are read from advrename.save.
     pub(super) fn advanced_rename(&mut self) {
         let i = self.active;
         if self.panes[i].archive.is_some() {
@@ -497,7 +497,7 @@ impl App {
             }
         };
         let dirs = paths.iter().map(|p| p.is_dir()).collect();
-        // 원본 DFM: pcAction.ActivePage = tsInsert, rbInsertLocPos.Checked(바꾸기 쪽으로 가면 UpdateEditor가 rbReplaceAll 기본으로 돌린다).
+        // Original DFM: pcAction.ActivePage = tsInsert, rbInsertLocPos.Checked (going to the replace page, UpdateEditor resets to the rbReplaceAll default).
         let editor = RenameRule { action: "Insert".into(), position: "Position".into(), ..RenameRule::default() };
         let form = RenameForm { paths, dirs, rules: vec![], selected_rule: None, editor, numbers: ["1".into(), "0".into(), "1".into(), "1".into(), "1".into()], macros: loaded, macro_name: None, preview_selected: None };
         self.push_original_dialog(title, DialogKind::AdvancedRename(Box::new(form)), move |app, result, _| {
@@ -507,7 +507,7 @@ impl App {
         });
     }
 
-    /// AddRule: 정수와 범위를 검사한 뒤 지금 입력으로 동작을 만든다.
+    /// AddRule: checks integers and ranges, then builds the action from the current input.
     pub(super) fn add_rename_rule(&mut self) {
         let ko = self.language == "ko";
         let title = self.rename_title();
@@ -526,7 +526,7 @@ impl App {
         form.rules.push(rule);
     }
 
-    /// SaveMacroAsync: 동작이 없으면 안내, 이름을 묻고(1~64자), 같은 이름이면 TfMsgBox(창 제목, MSG_SAMENAME, 예/아니요·질문).
+    /// SaveMacroAsync: a notice without actions, asks for a name (1-64 characters), and for the same name TfMsgBox(window title, MSG_SAMENAME, yes/no, question).
     pub(super) fn save_rename_macro(&mut self) {
         let title = self.rename_title();
         let Some(form) = self.rename_form() else { return };
@@ -572,7 +572,7 @@ impl App {
             }
             None => updated.push(RenameMacro { name: name.clone(), rules, legacy_rows: vec![] }),
         }
-        // C# SaveSelectedMacro: CanSave가 아니면 macroFormatUnsupported(값) 경고, 파일 저장 뒤 설정 저장이 안 되면 macroSettingsSyncFailed.
+        // C# SaveSelectedMacro: warns macroFormatUnsupported(value) when not CanSave, and macroSettingsSyncFailed when the settings save fails after the file save.
         if let Err(value) = macros::can_save(&updated) {
             let text = self.language_pack.text("formAdvRename.Caption.macroFormatUnsupported", "NexusFile macros cannot store semicolons or line breaks in action values: {0}").replace("{0}", &value);
             return self.system_box(&title, &text, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
@@ -589,7 +589,7 @@ impl App {
         }
     }
 
-    /// DeleteSelectedMacro: TfMsgBox(창 제목, MSG_DELETEITEM, 예/아니요·질문) 뒤 지운다.
+    /// DeleteSelectedMacro: deletes after TfMsgBox(window title, MSG_DELETEITEM, yes/no, question).
     pub(super) fn delete_rename_macro(&mut self) {
         let title = self.rename_title();
         let Some(name) = self.rename_form().and_then(|f| f.macro_name.clone()) else { return };
@@ -602,7 +602,7 @@ impl App {
             let Some(form) = app.rename_form() else { return };
             let updated: Vec<RenameMacro> = form.macros.iter().filter(|m| !m.name.eq_ignore_ascii_case(&name)).cloned().collect();
             let title = app.language_pack.text("formAdvRename.Caption.macroDeleteTitle", "Delete Rename Macro");
-            // C# DeleteSelectedMacro: 남은 매크로를 원본 형식에 쓸 수 없으면 macroFormatUnsupported 경고.
+            // C# DeleteSelectedMacro: warns macroFormatUnsupported when the remaining macros cannot be written in the original format.
             if let Err(value) = macros::can_save(&updated) {
                 let text = app.language_pack.text("formAdvRename.Caption.macroFormatUnsupported", "NexusFile macros cannot store semicolons or line breaks in action values: {0}").replace("{0}", &value);
                 return app.system_box(&title, &text, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
@@ -622,7 +622,7 @@ impl App {
         });
     }
 
-    /// 설정 사본(AdvancedRenameMacros)도 맞추고 저장한다. 저장에 실패하면 C# 판처럼 macroSettingsSyncFailed(오류) 경고(제목 = 저장·삭제 창 제목).
+    /// Keeps the settings copy (AdvancedRenameMacros) in sync and saves. A failed save warns macroSettingsSyncFailed(error) like the C# version (title = the save/delete window title).
     fn sync_rename_macros(&mut self, list: &[RenameMacro], title: &str) {
         let presets: Vec<compat::RenamePreset> = list.iter().map(|m| compat::RenamePreset { name: m.name.clone(), rules: m.rules.clone() }).collect();
         self.settings.values.insert("AdvancedRenameMacros".into(), serde_json::to_value(presets).unwrap_or_default());
@@ -632,7 +632,7 @@ impl App {
         }
     }
 
-    /// Commit: 동작이 없으면 안내, 계획 검사, 처음 12개를 보이는 예/아니요 상자, 예면 이름을 바꾸고 닫는다.
+    /// Commit: a notice without actions, plan checks, a yes/no box showing the first 12, and on yes renames and closes.
     pub(super) fn commit_advanced_rename(&mut self) {
         let ko = self.language == "ko";
         let title = self.rename_title();
@@ -641,8 +641,8 @@ impl App {
             let message = if ko { "적용할 이름 변경 작업을 추가하세요." } else { "Add at least one rename action." };
             return self.system_box(&title, message, MB_OK, |_, _, _| {});
         }
-        // 원본 FUN_0046d000: 새 이름 하나라도 쓸 수 없으면(FUN_00469b64) MessageBoxW(REN_INVALIDNAMES, REN_TITLE,
-        // MB_ICONASTERISK)만 보이고 아무것도 바꾸지 않는다.
+        // Original FUN_0046d000: if any new name is unusable (FUN_00469b64), only MessageBoxW(REN_INVALIDNAMES, REN_TITLE,
+        // MB_ICONASTERISK) shows and nothing is renamed.
         let invalid = form.paths.iter().enumerate().any(|(i, path)| {
             let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             compat::rename_with_rules(&name, &form.rules, i, form.dirs[i]).is_err()
@@ -679,7 +679,7 @@ impl App {
 mod glyph_tests {
     use super::*;
 
-    /// 원본 sbtnSave·sbtnDelete Glyph.Data: 16×16, 왼쪽 아래 점의 색(clSilver)은 투명, 나머지는 그림.
+    /// Original sbtnSave and sbtnDelete Glyph.Data: 16x16, the color of the bottom-left pixel (clSilver) is transparent, the rest is the image.
     #[test]
     fn macro_buttons_use_the_original_glyph_bitmaps() {
         for bmp in [SAVE_GLYPH, DELETE_GLYPH] {

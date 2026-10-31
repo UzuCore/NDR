@@ -559,7 +559,7 @@ impl App {
                     if answer != IDYES {
                         return app.system_box("NDR", "Key exchange negotiation failed.", MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
                     }
-                    // C#: 사이트의 KnownHostFingerprint가 바뀌면 저장한다.
+                    // C#: saves the site's KnownHostFingerprint when it changed.
                     let mut sites = load_sites(&app.settings);
                     if let Some(site) = sites.iter_mut().find(|s| s.name == site_name) {
                         site.known_host_fingerprint = candidate.clone();

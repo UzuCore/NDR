@@ -1,6 +1,6 @@
-//! C# RemoteWindow, RemoteSitesWindow, RemoteSiteEditorWindow, RemotePermissionsWindow, RunRemoteCommandAsync를 Rust UI에서 확인한다.
-//! 한국어와 영어만. 서버 연결은 가짜 함수(설정만 적어 두고 실패를 돌려준다), 실제 전송은 맨 아래 무시된 시험이 이 시험이 띄운
-//! 127.0.0.1 전용 pyftpdlib 서버(격리 폴더)로만 한다.
+//! Checks C# RemoteWindow, RemoteSitesWindow, RemoteSiteEditorWindow, RemotePermissionsWindow and RunRemoteCommandAsync in the Rust UI.
+//! Korean and English only. Server connections use a fake function (records the settings and returns failure); real transfers run only in the ignored test at the bottom,
+//! against a 127.0.0.1-only pyftpdlib server (isolated folder) started by that test.
 use super::original_dialogs::{DialogKind, DialogResult};
 use super::remote_window::{self as rw, RemoteAction};
 use super::remote_sites::SitesAction;
@@ -14,7 +14,7 @@ static CONNECTS: Mutex<Vec<Config>> = Mutex::new(Vec::new());
 fn connects() -> Vec<Config> {
     std::mem::take(&mut *CONNECTS.lock().unwrap_or_else(|e| e.into_inner()))
 }
-/// 가짜 연결: 설정을 적어 두고, 호스트에 따라 서버 키 확인 또는 실패를 돌려준다.
+/// Fake connect: records the settings and, depending on the host, returns a server key confirmation or a failure.
 fn fake_connect(config: &Config) -> Result<Client, String> {
     CONNECTS.lock().unwrap_or_else(|e| e.into_inner()).push(config.clone());
     if config.host == "key.invalid" && config.fingerprint.is_empty() {
@@ -26,7 +26,7 @@ fn no_files(_: &str, _: Option<&Path>) -> Vec<PathBuf> {
     vec![]
 }
 
-/// 원본 TfFTPAttributes FormKeyDown(0x427334): End(숫자 칸 eAttr에 초점이 없을 때) = mrAll(모두).
+/// Original TfFTPAttributes FormKeyDown (0x427334): End (when the number field eAttr has no focus) = mrAll (all).
 #[test]
 fn ftp_attributes_end_key_applies_to_all() {
     let (root, ctx, app) = fixture("ftp-attr-end", "ko");
@@ -109,7 +109,7 @@ fn remote_window_follows_the_csharp_connection_and_local_flows() {
         assert!(f.quick_options_visible(), "quick-connect options for FTP/FTPS without a site");
     }
     frame(&mut app, &ctx);
-    // 로컬: 폴더 열기, 뒤로/앞으로, 위로, "Computer" = 드라이브 목록.
+    // Local: open folder, back/forward, up, "Computer" = drive list.
     select_local(&mut app, "folder1");
     app.remote_action(RemoteAction::LocalOpen, &ctx);
     wait_local(&mut app, &ctx);
@@ -138,14 +138,14 @@ fn remote_window_follows_the_csharp_connection_and_local_flows() {
     assert_eq!(form(&mut app).local_path_box, "Computer", "a missing folder keeps the current path");
     app.remote_action(RemoteAction::LocalBack, &ctx);
     wait_local(&mut app, &ctx);
-    // 연결 전 내려받기·올리기.
+    // Download and upload before connecting.
     app.remote_action(RemoteAction::Download, &ctx);
     assert_eq!(boxed(&app), (String::new(), "먼저 원격 서버에 연결하세요.".to_owned()));
     app.answer_message_box(1, &ctx);
     app.remote_action(RemoteAction::UploadSelected, &ctx);
     assert_eq!(boxed(&app).1, "먼저 원격 서버에 연결하세요.");
     app.answer_message_box(1, &ctx);
-    // SFTP는 호스트·사용자·포트를 검사한다.
+    // SFTP checks host, user and port.
     app.remote_action(RemoteAction::Protocol(2), &ctx);
     assert_eq!(form(&mut app).port, "22");
     form(&mut app).host = "sftp.invalid".into();
@@ -153,7 +153,7 @@ fn remote_window_follows_the_csharp_connection_and_local_flows() {
     assert_eq!(boxed(&app), ("원격 연결".to_owned(), "호스트, 사용자 이름, 올바른 포트를 입력하세요.".to_owned()));
     app.answer_message_box(1, &ctx);
     assert!(connects().is_empty());
-    // 빠른 FTP 연결 + 사이트 목록에 추가: 연결 전에 입력값을 사이트로 저장한다.
+    // Quick FTP connect + add to the site list: the input is saved as a site before connecting.
     app.remote_action(RemoteAction::Protocol(0), &ctx);
     {
         let f = form(&mut app);
@@ -171,7 +171,7 @@ fn remote_window_follows_the_csharp_connection_and_local_flows() {
     assert_eq!(form(&mut app).status, "연결하지 못했습니다.");
     let config = connects().pop().unwrap();
     assert_eq!((config.protocol.as_str(), config.host.as_str(), config.port, config.user.as_str(), config.passive), ("FTP", "deny.invalid", 2121, "me", false), "PrepareHost strips ftp://");
-    // FTP를 골라도 포트가 22면 SFTP로 빠른 연결, 포트 0은 연결하지 않는다.
+    // Even with FTP chosen, port 22 quick-connects as SFTP; port 0 does not connect.
     form(&mut app).add_to_sites = false;
     form(&mut app).port = "22".into();
     app.remote_action(RemoteAction::Connect, &ctx);
@@ -184,13 +184,13 @@ fn remote_window_follows_the_csharp_connection_and_local_flows() {
     assert_eq!(boxed(&app), ("원격 연결 실패".to_owned(), "포트 0에는 연결할 수 없습니다.".to_owned()));
     app.answer_message_box(1, &ctx);
     assert!(connects().is_empty());
-    // 범위 밖 포트는 16비트로 잘라 연결하지 않는다.
+    // Out-of-range ports are not truncated to 16 bits and do not connect.
     form(&mut app).port = "99999".into();
     app.remote_action(RemoteAction::Connect, &ctx);
     assert!(!app.msgboxes.is_empty(), "an out-of-range FTP port is refused at once");
     app.answer_message_box(1, &ctx);
     assert!(connects().is_empty());
-    // SFTP 서버 키: 처음 보는 키면 묻고, 예면 그 키로 다시 연결한다.
+    // SFTP server key: an unknown key asks, and yes reconnects with that key.
     app.remote_action(RemoteAction::Protocol(2), &ctx);
     {
         let f = form(&mut app);
@@ -225,7 +225,7 @@ fn remote_helpers_follow_nexusfile_rules() {
     assert_eq!(rows.iter().map(|r| (r.name.as_str(), r.kind.as_str(), r.remote_path.as_str())).collect::<Vec<_>>(), [("..", "상위 폴더", ""), ("A", "폴더", "/srv/A"), ("b.txt", "파일", "/srv/b.txt")]);
     assert_eq!((rows[2].size_text.as_str(), rows[2].mode), ("2.0 KB", Some(0o644)));
     assert!(rw::remote_rows("/", &entries, false).iter().all(|r| !r.is_parent), "no parent row at /");
-    // RemotePermissionsWindow: 비트 ↔ 숫자, 세 자리이고 778보다 작을 때만 확인란을 맞춘다.
+    // RemotePermissionsWindow: bits <-> number; checkboxes follow only for three digits below 778.
     let mut permissions = rw::PermissionForm::new(0o4754, "a", "/a");
     assert_eq!((permissions.mode_text.as_str(), permissions.mode()), ("754", 0o754));
     permissions.mode_text = "640".into();
@@ -247,13 +247,13 @@ fn remote_helpers_follow_nexusfile_rules() {
 fn remote_sites_editor_and_command_follow_the_csharp_flows() {
     let _serial = REMOTE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let (root, ctx, mut app) = fixture("sites", "en");
-    // 원격 명령: 사이트가 없으면 RunSafely 경고.
+    // Remote command: without sites, the RunSafely warning.
     app.dispatch("remoteCommand", &ctx);
     assert_eq!(boxed(&app), ("NDR".to_owned(), "Save a remote site from the Network menu first.".to_owned()));
     app.answer_message_box(1, &ctx);
     app.dispatch("sites", &ctx);
     assert_eq!(app.original_dialogs.last().unwrap().title, "FTP Site Manager");
-    // 추가: TfGetText(FTPSITE_ADD) → 새 줄(FTP, 21, 수동 모드).
+    // Add: TfGetText(FTPSITE_ADD) -> a new row (FTP, 21, passive mode).
     app.sites_action(SitesAction::Add, &ctx);
     let dialog = app.original_dialogs.last().unwrap();
     assert!(matches!(&dialog.kind, DialogKind::Prompt { message, .. } if message == "Type a FTP site name."));
@@ -262,7 +262,7 @@ fn remote_sites_editor_and_command_follow_the_csharp_flows() {
         let f = app.sites_form().unwrap();
         assert_eq!((f.sites.len(), f.selected, f.protocol.as_str(), f.port.as_str(), f.passive), (1, Some(0), "FTP", "21", true));
     }
-    // 이름이나 주소가 비면 FTPSITE_INVALIDINFO(TfMsgBox, 별표 아이콘).
+    // An empty name or address gives FTPSITE_INVALIDINFO (TfMsgBox, asterisk icon).
     app.sites_action(SitesAction::Save, &ctx);
     assert_eq!(boxed(&app), ("FTP Site Manager".to_owned(), "Site name or address is empty.".to_owned()));
     assert_eq!(app.msgboxes[0].flags, ndr::msgbox::MB_OK | ndr::msgbox::MB_ICONASTERISK);
@@ -275,7 +275,7 @@ fn remote_sites_editor_and_command_follow_the_csharp_flows() {
     app.answer_dialog(DialogResult::Text(Some("ALPHA".into())), &ctx);
     assert_eq!(boxed(&app).1, "A site has same name already exists.");
     app.answer_message_box(1, &ctx);
-    // 추가 설정(편집 창): SFTP로 바꾸면 포트 22, 저장한 키는 같은 SFTP·호스트·포트일 때만 남는다.
+    // Advanced settings (editor window): switching to SFTP sets port 22; the saved key stays only for the same SFTP host and port.
     app.sites_action(SitesAction::Advanced, &ctx);
     assert_eq!(app.original_dialogs.last().unwrap().title, "Remote site");
     if let Some(DialogKind::SiteEditor(editor)) = app.original_dialogs.last_mut().map(|d| &mut d.kind) {
@@ -303,7 +303,7 @@ fn remote_sites_editor_and_command_follow_the_csharp_flows() {
     assert!(app.original_dialogs.is_empty());
     let sites = rw::load_sites(&app.settings);
     assert_eq!((sites.len(), sites[0].name.as_str(), sites[0].user.as_str()), (1, "alpha", "me"));
-    // 연결: 저장하고 그 사이트로 원격 창을 열어 바로 연결한다.
+    // Connect: saves and opens the remote window with that site, connecting at once.
     app.dispatch("sites", &ctx);
     app.sites_action(SitesAction::Connect, &ctx);
     let dialog = app.original_dialogs.last().unwrap();
@@ -314,14 +314,14 @@ fn remote_sites_editor_and_command_follow_the_csharp_flows() {
     let config = connects().pop().unwrap();
     assert_eq!((config.protocol.as_str(), config.port, config.name.as_str()), ("SFTP", 22, "alpha"));
     app.remote_action(RemoteAction::Close, &ctx);
-    // 삭제: FTPSITE_DELCONFIRM 예/아니요.
+    // Delete: FTPSITE_DELCONFIRM yes/no.
     app.dispatch("sites", &ctx);
     app.sites_action(SitesAction::Delete, &ctx);
     assert_eq!(boxed(&app).1, "Are you sure you want to delete a selected site?");
     app.answer_message_box(7, &ctx);
     assert_eq!(app.sites_form().unwrap().sites.len(), 1);
     app.sites_action(SitesAction::Cancel, &ctx);
-    // 원격 명령: 사이트 고르기 → 명령(처음 값 pwd) → 연결 실패는 경고 상자.
+    // Remote command: choose a site -> command (initially pwd) -> a connection failure shows a warning box.
     app.dispatch("remoteCommand", &ctx);
     let dialog = app.original_dialogs.last().unwrap();
     assert!(matches!(&dialog.kind, DialogKind::Choice(c) if c.options == ["alpha — SFTP ftp.example.invalid:22"]));
@@ -335,7 +335,7 @@ fn remote_sites_editor_and_command_follow_the_csharp_flows() {
     fs::remove_dir_all(root).unwrap();
 }
 
-/// 시험 전용 FTP 서버(127.0.0.1, 격리 폴더, 사용자 user/pass).
+/// Test-only FTP server (127.0.0.1, isolated folder, user user/pass).
 const FTP_SERVER: &str = r#"
 import sys
 from pyftpdlib.authorizers import DummyAuthorizer
@@ -384,11 +384,11 @@ fn remote_window_transfers_against_an_owned_ftp_server() {
             f.remote_grid.cursor = Some(0);
             f.focus_remote = true;
         }
-        // 폴더 열기 → 뒤로.
+        // Open folder -> back.
         app.remote_action(RemoteAction::RemoteOpen, &ctx);
         wait_until(&mut app, &ctx, |app| app.remote_form().is_some_and(|f| f.busy.is_none() && f.remote_path == "/docs" && f.listing_valid));
         assert_eq!(form(&mut app).items.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(), ["..", "readme.txt"]);
-        // 내려받기: 같은 이름이 없으면 묻지 않고 받는다.
+        // Download: with no existing name it downloads without asking.
         {
             let f = form(&mut app);
             f.remote_grid.selected = [1].into_iter().collect();
@@ -400,20 +400,20 @@ fn remote_window_transfers_against_an_owned_ftp_server() {
         let left = root.join("left");
         assert_eq!(fs::read(left.join("readme.txt")).unwrap(), b"hello");
         assert_eq!(form(&mut app).status, "1개 항목을 다운로드했습니다.");
-        // 다시 받으면 이름 충돌(예/아니요/취소), 아니요면 건너뛴다.
+        // Downloading again is a name conflict (yes/no/cancel); no skips.
         app.remote_action(RemoteAction::Download, &ctx);
         assert_eq!(boxed(&app), ("이름 충돌".to_owned(), "로컬 폴더에 같은 이름의 파일 1개가 있습니다. 덮어쓸까요?".to_owned()));
         app.answer_message_box(7, &ctx);
         wait_until(&mut app, &ctx, |app| app.remote_form().is_some_and(|f| f.busy.is_none()) && !app.original_dialogs.iter().any(|d| matches!(d.kind, DialogKind::RemoteTransfer(_))));
         assert_eq!(form(&mut app).status, "1개 항목을 다운로드했습니다.", "skipped items count as completed");
-        // 올리기(▲): 로컬 alpha.txt.
+        // Upload (▲): local alpha.txt.
         wait_local(&mut app, &ctx);
         select_local(&mut app, "alpha.txt");
         app.remote_action(RemoteAction::UploadSelected, &ctx);
         wait_until(&mut app, &ctx, |app| app.remote_form().is_some_and(|f| f.busy.is_none() && f.listing_valid) && !app.original_dialogs.iter().any(|d| matches!(d.kind, DialogKind::RemoteTransfer(_))));
         assert_eq!(fs::read(served.join("docs").join("alpha.txt")).unwrap(), b"alpha");
         assert_eq!(form(&mut app).status, "1개 파일을 업로드했습니다.");
-        // 새 원격 폴더, 이름 바꾸기, 삭제.
+        // New remote folder, rename, delete.
         app.remote_action(RemoteAction::NewFolder, &ctx);
         app.answer_dialog(DialogResult::Text(Some("made".into())), &ctx);
         wait_until(&mut app, &ctx, |app| app.remote_form().is_some_and(|f| f.busy.is_none() && f.items.iter().any(|r| r.name == "made")));
@@ -434,7 +434,7 @@ fn remote_window_transfers_against_an_owned_ftp_server() {
         app.answer_message_box(6, &ctx);
         wait_until(&mut app, &ctx, |app| app.remote_form().is_some_and(|f| f.busy.is_none() && f.listing_valid && !f.items.iter().any(|r| r.name == "renamed")));
         assert!(!served.join("docs").join("renamed").exists());
-        // 권한: 권한 창(확인) → "1/1개 항목 권한 변경, 건너뜀 0개".
+        // Permissions: permission window (OK) -> "changed permissions of 1/1 items, skipped 0".
         let index = form(&mut app).items.iter().position(|r| r.name == "alpha.txt").unwrap();
         form(&mut app).remote_grid.selected = [index].into_iter().collect();
         app.remote_action(RemoteAction::Permissions, &ctx);
@@ -447,7 +447,7 @@ fn remote_window_transfers_against_an_owned_ftp_server() {
         app.answer_dialog(DialogResult::RemotePermissions(Some((rw::PermissionAction::ApplyCurrent, 0o644))), &ctx);
         wait_until(&mut app, &ctx, |app| app.remote_form().is_some_and(|f| f.busy.is_none() && f.listing_valid) && app.msgboxes.is_empty());
         assert_eq!(form(&mut app).status, "1/1개 항목 권한 변경, 건너뜀 0개");
-        // 닫기: 내려받은 것이 있으므로 연 패널을 그 로컬 폴더로.
+        // Close: something was downloaded, so the opening pane goes to that local folder.
         app.remote_action(RemoteAction::Close, &ctx);
         assert!(app.original_dialogs.is_empty());
     }));
@@ -460,7 +460,7 @@ fn remote_window_transfers_against_an_owned_ftp_server() {
 }
 
 
-/// 시험용 메모리 FTP(경로 → (폴더인가, 내용)). 패널 FTP 모드 시험만 쓴다.
+/// In-memory FTP for tests (path -> (is folder, content)). Used only by the pane FTP mode tests.
 static FAKE_FTP: Mutex<std::collections::BTreeMap<String, (bool, Vec<u8>)>> = Mutex::new(std::collections::BTreeMap::new());
 static FAKE_FTP_CONFIGS: Mutex<Vec<Config>> = Mutex::new(Vec::new());
 static FAKE_CHMODS: Mutex<Vec<(String, u32)>> = Mutex::new(Vec::new());
@@ -538,8 +538,8 @@ fn fake_pane_connect(config: &Config) -> Result<Box<dyn super::ftp_pane::PaneFs>
     Ok(Box::new(FakeFtp))
 }
 
-/// 원본 패널 FTP 모드: 사이트 메뉴(FUN_00440734 "&1. 이름")로 지금 패널을 FTP로, 폴더 열기, 다른 패널로 복사 = 내려받기/올리기
-/// (FUN_0042d518), FTP 패널에서 로컬 명령 막기, 끊기(FUN_0043e8d4)로 로컬 폴더, 양쪽 로컬이면 올리기는 FTP_PUTCRITERIA.
+/// Original pane FTP mode: the site menu (FUN_00440734 "&1. name") turns the current pane into FTP, open folder, copy to the other pane = download/upload
+/// (FUN_0042d518), local commands blocked on the FTP pane, disconnect (FUN_0043e8d4) returns to a local folder, and with both panes local, upload shows FTP_PUTCRITERIA.
 #[test]
 fn ftp_pane_mode_connects_lists_transfers_and_disconnects_like_the_original() {
     let _guard = REMOTE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -566,7 +566,7 @@ fn ftp_pane_mode_connects_lists_transfers_and_disconnects_like_the_original() {
     assert_eq!((config.host.as_str(), config.user.as_str(), config.password.as_str()), ("ftp.example", "u", "pw"));
     let names = |app: &App, i: usize| app.panes[i].entries.iter().map(|e| e.name.clone()).collect::<Vec<_>>();
     assert_eq!(names(&app, 0), ["pub", "readme.txt"]);
-    // 원본 FUN_0045bb0c: 숨김 보기가 아니면 '.'으로 시작하는 원격 이름을 넣지 않고, 숨김 보기면 숨김 속성으로 넣는다.
+    // Original FUN_0045bb0c: without the hidden view, remote names starting with '.' are left out; with it, they get the hidden attribute.
     app.panes[0].show_hidden = true;
     app.refresh(0);
     wait_until(&mut app, &ctx, |app| !app.panes[0].loading);
@@ -579,29 +579,29 @@ fn ftp_pane_mode_connects_lists_transfers_and_disconnects_like_the_original() {
     assert_eq!(names(&app, 0), ["pub", "readme.txt"]);
     assert_eq!(app.address_text(0), "ftp://ftp.example/");
     assert!(app.panes[0].disk.is_none(), "the original hides the disk info in FTP mode");
-    // 원본 FUN_004408f8: SFTP가 아니면 패널 아래 FTP 기록 칸(FUN_0048d7ac, 높이 60)을 만들고 제어 줄을 적는다.
+    // Original FUN_004408f8: for non-SFTP connections, an FTP log box below the pane (FUN_0048d7ac, height 60) records control lines.
     let log_lines = |app: &App| app.panes[0].remote.as_ref().and_then(|r| r.log.as_ref()).map(|l| l.lock().unwrap().lines.clone()).unwrap_or_default();
     assert_eq!(app.panes[0].ftp_log_height, 60.0);
     assert!(app.ftp_log_reserve(0, 0.0) > 60.0);
     assert_eq!(log_lines(&app).first().map(String::as_str), Some(" > PWD"));
     assert_eq!(log_lines(&app).last().map(String::as_str), Some("/ > LIST"));
-    // 폴더 열기.
+    // Open folder.
     app.panes[0].cursor = 0;
     app.open_current();
     wait_until(&mut app, &ctx, |app| !app.panes[0].loading);
     assert_eq!(names(&app, 0), ["..", "a.txt"], "a remote subfolder starts with \"..\"");
     assert_eq!(app.address_text(0), "ftp://ftp.example/pub");
     assert_eq!(log_lines(&app).last().map(String::as_str), Some("/pub > LIST"), "sent lines start with the current remote folder");
-    // 원본 miShredClick(0x431c60) → FUN_0042c734: FTP 모드 갈래는 방식과 상관없이 FTP 삭제 확인(휴지통 단추 없음)을 띄운다.
+    // Original miShredClick (0x431c60) -> FUN_0042c734: the FTP mode branch shows the FTP delete confirmation (no Recycle Bin button) regardless of the mode.
     app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == "a.txt").unwrap();
     app.dispatch("shred", &ctx);
     assert!(matches!(app.original_dialogs.last().map(|d| &d.kind), Some(DialogKind::DeleteWarning { show_delete: false, .. })), "shred goes to the FTP delete");
     app.answer_dialog(DialogResult::DeleteWarning(super::original_dialogs::DeleteWarningChoice::No), &ctx);
     assert!(app.job.is_none() && app.original_dialogs.is_empty() && app.msgboxes.is_empty());
-    // 로컬 파일만 다루는 명령은 여전히 막는다.
+    // Commands that only work on local files are still blocked.
     app.dispatch("compare", &ctx);
     assert!(app.job.is_none() && app.original_dialogs.is_empty() && app.msgboxes.is_empty());
-    // 원본 miNewFolderClick의 FTP 갈래: TfGetText(TITLE_NEWFOLDER) → FTP 새 폴더 → 새로 읽고 그 이름에 커서.
+    // FTP branch of original miNewFolderClick: TfGetText(TITLE_NEWFOLDER) -> FTP new folder -> reread with the cursor on that name.
     app.dispatch("newFolder", &ctx);
     assert!(matches!(app.original_dialogs.last().map(|d| &d.kind), Some(DialogKind::Prompt { .. })));
     assert_eq!(app.original_dialogs.last().unwrap().title, app.language_pack.text("RES.TITLE_NEWFOLDER", "?"));
@@ -609,7 +609,7 @@ fn ftp_pane_mode_connects_lists_transfers_and_disconnects_like_the_original() {
     wait_until(&mut app, &ctx, |app| !app.panes[0].loading && app.panes[0].entries.iter().any(|e| e.name == "made"));
     assert!(FAKE_FTP.lock().unwrap().get("/pub/made").is_some_and(|(dir, _)| *dir));
     assert_eq!(app.panes[0].entries[app.panes[0].cursor].name, "made", "the cursor goes to the new folder");
-    // 원본 miRenameClick의 FTP 갈래: TfRename(이름·확장자 칸) → FTP 이름 바꾸기.
+    // FTP branch of original miRenameClick: TfRename (name and extension fields) -> FTP rename.
     app.panes[0].selected.clear();
     app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == "a.txt").unwrap();
     app.dispatch("rename", &ctx);
@@ -618,7 +618,7 @@ fn ftp_pane_mode_connects_lists_transfers_and_disconnects_like_the_original() {
     wait_until(&mut app, &ctx, |app| !app.panes[0].loading && app.panes[0].entries.iter().any(|e| e.name == "b.txt"));
     assert!(FAKE_FTP.lock().unwrap().contains_key("/pub/b.txt") && !FAKE_FTP.lock().unwrap().contains_key("/pub/a.txt"));
     assert_eq!(app.panes[0].entries[app.panes[0].cursor].name, "b.txt");
-    // 원본 FUN_00436b98: TfFTPAttributes("이름 (1 / 1)", 목록의 권한 644) → FTP 권한 바꾸기 → 새로 읽기.
+    // Original FUN_00436b98: TfFTPAttributes ("name (1 / 1)", listed permissions 644) -> change FTP permissions -> reread.
     FAKE_CHMODS.lock().unwrap().clear();
     app.dispatch("attributes", &ctx);
     match app.original_dialogs.last().map(|d| (&d.title, &d.kind)) {
@@ -631,33 +631,33 @@ fn ftp_pane_mode_connects_lists_transfers_and_disconnects_like_the_original() {
     app.answer_dialog(DialogResult::RemotePermissions(Some((rw::PermissionAction::ApplyCurrent, 0o600))), &ctx);
     wait_until(&mut app, &ctx, |app| !app.panes[0].loading && !FAKE_CHMODS.lock().unwrap().is_empty() && app.panes[0].remote.as_ref().is_some_and(|r| !r.busy.load(std::sync::atomic::Ordering::Relaxed)));
     assert_eq!(FAKE_CHMODS.lock().unwrap().clone(), vec![("/pub/b.txt".to_owned(), 0o600)]);
-    // 원본 FUN_0042c734의 FTP 갈래: 휴지통 없이 삭제 확인 → FTP 삭제.
+    // FTP branch of original FUN_0042c734: delete confirmation without the Recycle Bin -> FTP delete.
     app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == "made").unwrap();
     app.dispatch("deleteRecycle", &ctx);
     assert!(matches!(app.original_dialogs.last().map(|d| &d.kind), Some(DialogKind::DeleteWarning { show_delete: false, .. })), "no recycle bin on FTP");
     app.answer_dialog(DialogResult::DeleteWarning(super::original_dialogs::DeleteWarningChoice::Yes), &ctx);
     wait_until(&mut app, &ctx, |app| app.job.as_ref().is_none_or(|j| j.finished) && !app.panes[0].loading && !app.panes[0].entries.iter().any(|e| e.name == "made"));
     assert!(!FAKE_FTP.lock().unwrap().contains_key("/pub/made"));
-    // 이름을 되돌려 아래 단계(a.txt 내려받기)를 그대로 쓴다.
+    // Rename back so the step below (download a.txt) works unchanged.
     FAKE_FTP.lock().unwrap().remove("/pub/b.txt");
     FAKE_FTP.lock().unwrap().insert("/pub/a.txt".into(), (false, b"hello".to_vec()));
     app.refresh(0);
     wait_until(&mut app, &ctx, |app| !app.panes[0].loading);
     app.job = None;
-    // 다른 패널로 복사 = 내려받기(오른쪽 로컬 폴더로, 대상 묻지 않음).
+    // Copy to the other pane = download (to the right local folder, no destination prompt).
     let right = app.panes[1].path.clone();
     app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == "a.txt").unwrap();
     app.dispatch("copyToOther", &ctx);
-    // 원본 FTP 엔진: 진행 창 없이 아래 결과 칸에만 진행을 보이고 메인 창은 그대로 쓸 수 있다.
+    // Original FTP engine: no progress window, progress shows only in the result area below and the main window stays usable.
     assert!(app.job.as_ref().is_some_and(|j| j.progress.is_none()), "no NDR progress window for panel FTP transfers");
     wait_until(&mut app, &ctx, |app| app.job.as_ref().is_none_or(|j| j.finished) && app.panes.iter().all(|p| !p.loading));
     assert_eq!(fs::read(right.join("a.txt")).unwrap(), b"hello");
-    // 원본 FUN_0043f800은 결과창(pBottom)을 보이고, 항목이 끝나면 줄을 지우며(FUN_0043f04c 이벤트 2),
-    // 대기열이 비면 FUN_0044033c가 결과창을 숨긴다.
+    // Original FUN_0043f800 shows the result area (pBottom), removes rows as items finish (FUN_0043f04c event 2),
+    // and FUN_0044033c hides the result area when the queue is empty.
     assert!(!app.show_results);
     assert_eq!(app.menu_checked("toggleResults"), Some(false));
     assert!(app.ftp_results.lock().unwrap().is_empty());
-    // 실패한 줄은 남고 결과창도 그대로다.
+    // Failed rows stay and the result area stays too.
     app.show_results = true;
     app.ftp_results.lock().unwrap().extend([
         super::ftp_pane::FtpResultRow { upload: false, local: "x".into(), remote: "/pub/x".into(), size: Some(5), done: 5, state: super::ftp_pane::RowState::Done },
@@ -668,10 +668,10 @@ fn ftp_pane_mode_connects_lists_transfers_and_disconnects_like_the_original() {
     let rows = app.ftp_results.lock().unwrap().clone();
     assert_eq!((rows.len(), rows[0].remote.as_str(), rows[0].progress_text(true)), (1, "/pub/y", "550".to_owned()));
     assert_eq!(super::ftp_pane::FtpResultRow { state: super::ftp_pane::RowState::Done, ..rows[0].clone() }.progress_text(true), "100%");
-    // 전송 중이 아니면 잠시 중단·취소는 아무것도 하지 않는다.
+    // Without a transfer, pause and cancel do nothing.
     app.ftp_pause_toggle();
     assert!(!app.ftp_pause.load(std::sync::atomic::Ordering::Relaxed));
-    // 로컬 → FTP 복사 = 올리기(FTP 패널의 지금 폴더로).
+    // Local -> FTP copy = upload (to the FTP pane's current folder).
     fs::write(right.join("up.txt"), b"up").unwrap();
     app.refresh(1);
     wait_until(&mut app, &ctx, |app| !app.panes[1].loading);
@@ -682,31 +682,31 @@ fn ftp_pane_mode_connects_lists_transfers_and_disconnects_like_the_original() {
     wait_until(&mut app, &ctx, |app| app.job.as_ref().is_none_or(|j| j.finished) && app.panes.iter().all(|p| !p.loading));
     assert_eq!(FAKE_FTP.lock().unwrap().get("/pub/up.txt").map(|(_, d)| d.clone()), Some(b"up".to_vec()));
     assert!(names(&app, 0).contains(&"up.txt".to_owned()), "the FTP pane is listed again");
-    // 올리기가 끝나면 끝난 줄이 빠지고(실패한 줄은 새 전송이 비웠다) 결과창이 숨는다.
+    // When the upload ends, finished rows are removed (the new transfer cleared the failed row) and the result area hides.
     assert!(app.ftp_results.lock().unwrap().is_empty());
     assert!(!app.show_results);
     app.dispatch("toggleResults", &ctx);
     assert!(app.show_results);
     app.dispatch("toggleResults", &ctx);
     assert!(!app.show_results);
-    // 상위 폴더, 끊기.
+    // Parent folder, disconnect.
     app.active = 0;
     app.dispatch("goParent", &ctx);
     wait_until(&mut app, &ctx, |app| !app.panes[0].loading);
     assert_eq!(app.address_text(0), "ftp://ftp.example/");
     assert_eq!(app.panes[0].entries[app.panes[0].cursor].name, "pub", "the cursor is on the folder we came from");
-    // 원본 bSyncAddressClick: FTP 쪽에서 보내면 아무것도 안 한다.
+    // Original bSyncAddressClick: does nothing when sent from the FTP side.
     let right_before = app.panes[1].path.clone();
     app.vertical_bar_click("bSyncPathToRight", &ctx);
     assert_eq!(app.panes[1].path, right_before);
     assert!(app.panes[0].remote.is_some());
-    // 원본 miNewTabClick/pmiNewTabClick: FTP 모드의 새 탭은 "c:\".
+    // Original miNewTabClick/pmiNewTabClick: a new tab in FTP mode is "c:\".
     assert_eq!(app.new_tab_location(0, app.panes[0].tab), std::path::PathBuf::from("c:\\"));
-    // 원본 miCommandLineClick의 FTP 갈래: 입력을 FTP 제어 명령으로 보낸다.
+    // FTP branch of original miCommandLineClick: the input goes out as an FTP control command.
     app.run_command("NOOP".into());
     wait_until(&mut app, &ctx, |app| app.status == "200 NOOP ok");
     assert!(app.panes[0].remote.is_some());
-    // 원본 FUN_0043c602: 폴더 비교는 두 패널 모두 로컬일 때만(로컬 쪽에서 시작해도).
+    // Original FUN_0043c602: folder comparison only when both panes are local (even when started from the local side).
     app.active = 1;
     let before = app.original_dialogs.len();
     app.dispatch("compare", &ctx);
@@ -714,12 +714,12 @@ fn ftp_pane_mode_connects_lists_transfers_and_disconnects_like_the_original() {
     app.original_dialogs.truncate(before);
     app.msgboxes.clear();
     app.active = 0;
-    // 원본 FUN_0043d5ec(경로 바꾸기): 두 패널 모두 로컬일 때만.
+    // Original FUN_0043d5ec (swap paths): only when both panes are local.
     let right_path = app.panes[1].path.clone();
     assert!(app.original_internal("EXCHANGEPATH", &ctx));
     assert_eq!(app.panes[1].path, right_path);
     assert!(app.panes[0].remote.is_some());
-    // 원본 miUnmapNetworkDriveClick: FTP 모드에서도 연다(가짜 시스템에는 연결된 드라이브가 없어 알림 상자).
+    // Original miUnmapNetworkDriveClick: opens in FTP mode too (the fake system has no mapped drives, so a notice box).
     let (boxes, dialogs) = (app.msgboxes.len(), app.original_dialogs.len());
     app.system.network_drives = Vec::new;
     app.dispatch("unmapDrive", &ctx);
@@ -731,13 +731,13 @@ fn ftp_pane_mode_connects_lists_transfers_and_disconnects_like_the_original() {
     assert!(app.panes[0].remote.is_none());
     assert_eq!(app.panes[0].path, left);
     assert!(names(&app, 0).contains(&"alpha.txt".to_owned()), "back to the local folder");
-    // 양쪽 로컬이면 올리기는 원본 FTP_PUTCRITERIA.
+    // With both panes local, upload shows the original FTP_PUTCRITERIA.
     app.dispatch("ftpUpload", &ctx);
     assert_eq!(app.msgboxes.first().map(|m| m.text.clone()), Some(app.language_pack.text("RES.FTP_PUTCRITERIA", "?")));
     let _ = fs::remove_dir_all(&root);
 }
 
-/// 원본 FUN_0043e9f8(TfFTPQuickConnect): 포트 22면 SFTP, "사이트 목록에 추가"면 사이트 저장, 최근 주소 기록.
+/// Original FUN_0043e9f8 (TfFTPQuickConnect): port 22 means SFTP, "add to site list" saves the site, recent addresses are recorded.
 #[test]
 fn ftp_quick_connect_follows_the_original_tfftpquickconnect() {
     let _guard = REMOTE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -765,7 +765,7 @@ fn ftp_quick_connect_follows_the_original_tfftpquickconnect() {
     assert_eq!(app.ftp_site_items(), vec![(0, "&1. sftp.example".to_owned())]);
     assert_eq!(app.settings.strings("RecentRemoteHosts"), ["sftp.example"]);
     assert_eq!(app.address_text(1), "ftp://sftp.example/");
-    // 취소는 아무것도 하지 않는다.
+    // Cancel does nothing.
     app.active = 0;
     app.dispatch("ftpQuickConnect", &ctx);
     app.answer_dialog(DialogResult::FtpQuickConnect(None), &ctx);
@@ -775,11 +775,11 @@ fn ftp_quick_connect_follows_the_original_tfftpquickconnect() {
 #[test]
 fn quick_connect_site_save_failure_shows_the_csharp_warning() {
     let (root, _ctx, mut app) = fixture("site-save-failure", "en");
-    // 설정을 읽지 못한 프로필은 덮어쓰지 않으므로 저장이 실패한다(디스크는 건드리지 않음).
+    // A profile whose settings could not be read is not overwritten, so saving fails (the disk is not touched).
     app.profile_load_error = true;
     app.status.clear();
     app.save_quick_connect_site(rw::SiteProfile { name: "Example".into(), host: "ftp.example.invalid".into(), ..Default::default() });
-    // C# SaveQuickConnectSite catch: MessageBox(오류, SaveFailedTitle, 경고). 성공 상태 글("Saved FTP site")은 쓰지 않는다.
+    // C# SaveQuickConnectSite catch: MessageBox(error, SaveFailedTitle, warning). The success status text ("Saved FTP site") is not written.
     let title = app.language_pack.text("NDRRemoteSites.SaveFailedTitle", "FTP site save failed");
     let warning = app.msgboxes.last().expect("save failure warning");
     assert_eq!(warning.title, title);
