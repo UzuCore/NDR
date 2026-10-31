@@ -1308,8 +1308,14 @@ mod tests {
         lifecycle.send_device_change(0x8000, &volume).unwrap();
         lifecycle.send_device_change(0x8000, &port).unwrap();
         lifecycle.send_device_change(0x8004, &volume).unwrap();
-        let got: Vec<_> = std::iter::from_fn(|| _events.recv_timeout(Duration::from_millis(500)).ok()).collect();
+        // The window thread can be slow while other tests run in parallel: wait up to 5 s for each expected event, then briefly for an unexpected third.
+        let mut got: Vec<_> = (0..2).filter_map(|_| _events.recv_timeout(Duration::from_secs(5)).ok()).collect();
+        got.extend(_events.recv_timeout(Duration::from_millis(300)).ok());
         assert_eq!(got, vec![LifecycleEvent::DevicesChanged, LifecycleEvent::DevicesChanged]);
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while woke.load(std::sync::atomic::Ordering::SeqCst) < 2 && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
         assert_eq!(woke.load(std::sync::atomic::Ordering::SeqCst), 2);
         assert!(is_volume_change(0x8000, 2) && is_volume_change(0x8004, 2) && !is_volume_change(0x8000, 3) && !is_volume_change(0x0007, 2));
         drop(lifecycle);
