@@ -111,22 +111,22 @@ impl SearchFolder {
     }
 }
 
-/// 창이 App에 맡기는 일.
+/// Work the window hands off to App.
 pub(super) enum FolderTreeAction {
-    /// btnOkClick·TreeViewDblClick → FUN_00424a68(경로).
+    /// btnOkClick·TreeViewDblClick → FUN_00424a68(path).
     Accept(String),
     Cancel,
-    /// miPropertiesClick 0x4253ac: ShowFileProperties(고른 폴더).
+    /// miPropertiesClick 0x4253ac: ShowFileProperties(selected folder).
     Properties(String),
     /// miRenameClick 0x425e6c(F2, Alt+R).
     Rename,
     /// miCreateNewFolderClick 0x425b68(F7, Insert, Alt+K).
     NewFolder,
-    /// FUN_004266ac: Del = 바로 삭제(FOF_ALLOWUNDO 없음), miDeleteClick(Alt+D) = Shift가 없으면 휴지통.
+    /// FUN_004266ac: Del = delete immediately (no FOF_ALLOWUNDO), miDeleteClick(Alt+D) = recycle bin unless Shift is held.
     Delete { recycle: bool },
-    /// SpecialFolderClick·FUN_00425904(Ctrl+D/G/Q/S/O): 바탕 화면, 문서, 그림, 음악, 비디오.
+    /// SpecialFolderClick·FUN_00425904(Ctrl+D/G/Q/S/O): Desktop, Documents, Pictures, Music, Videos.
     Special(&'static str),
-    /// miShowHiddenFolderClick 0x4263e0: 설정 tshowhidden(+0x8c)을 뒤집었다.
+    /// miShowHiddenFolderClick 0x4263e0: toggles the tshowhidden setting (+0x8c).
     ShowHidden(bool),
 }
 
@@ -157,8 +157,8 @@ pub(super) fn drive_root(path: &str) -> String {
 }
 
 impl FolderTreeForm {
-    /// FUN_00423e00: 설정(숨김 폴더 tshowhidden, 칸 너비 titemwidth, 아이콘 tshowicon, 깊이 tfullrefreshlevel, 제외 경로 +
-    /// Windows\winsxs·assembly·boot, 트리 파일 폴더 = 설정 폴더\treedata).
+    /// FUN_00423e00: settings (hidden folders tshowhidden, column width titemwidth, icons tshowicon, depth tfullrefreshlevel, excluded paths +
+    /// Windows\winsxs·assembly·boot, tree-file folder = settings folder\treedata).
     pub(super) fn new(settings: &ndr::settings::Settings, profile: &Path, drives: Vec<(PathBuf, String)>, opened: Vec<String>) -> Self {
         let mut excluded = settings.strings("FolderTreeExcludedPaths");
         if let Some(windows) = std::env::var_os("SystemRoot").map(PathBuf::from) {
@@ -203,7 +203,7 @@ impl FolderTreeForm {
         folder_tree::tree_file_name(path, self.in_root, matches!(kind, "Removable" | "CDRom"), &serial, &self.tree_folder)
     }
 
-    /// SaveTree 0x7ea380(FUN_007e5330). 실패는 조용히 넘긴다(원본 CreateFileW 실패).
+    /// SaveTree 0x7ea380(FUN_007e5330). Failures are ignored silently (original CreateFileW failure).
     pub(super) fn save(&mut self) {
         if self.tree.is_empty() || !self.dirty {
             return;
@@ -217,7 +217,7 @@ impl FolderTreeForm {
         }
     }
 
-    /// 지금 드라이브의 셸 아이콘.
+    /// Shell icon of the current drive.
     fn drive_icon(&self) -> Option<&egui::TextureHandle> {
         let n = self.drives.iter().position(|(r, _)| (self.root_of)(&r.to_string_lossy()).eq_ignore_ascii_case(&self.drive))?;
         self.drive_icons.get(n)?.as_ref()
@@ -227,8 +227,8 @@ impl FolderTreeForm {
         self.opened.iter().find(|p| (self.root_of)(p).eq_ignore_ascii_case(&self.drive)).cloned()
     }
 
-    /// SetDrive 0x7ea418: 다른 드라이브면 트리 파일이 있으면 읽고(뿌리 이름이 다르면 고쳐 저장), 없으면 전체 훑기(Refresh).
-    /// 읽었으면 그 드라이브의 열린 폴더(없으면 뿌리)를 고른다.
+    /// SetDrive 0x7ea418: on a different drive, read the tree file if present (fixing and resaving the root name if it differs), otherwise do a full scan (Refresh).
+    /// If it was read, select that drive's opened folder (or the root if none).
     pub(super) fn set_drive(&mut self, root: &str) {
         let root = (self.root_of)(root);
         if root.eq_ignore_ascii_case(&self.drive) || !Path::new(&root).exists() {
@@ -257,7 +257,7 @@ impl FolderTreeForm {
         }
     }
 
-    /// Refresh 0x7e9d94(part None) / PartRefresh 0x7ea044·SetPath의 훑기(part Some): TfTreeScan 창을 띄우고 따로 훑는다.
+    /// Refresh 0x7e9d94(part None) / PartRefresh 0x7ea044·SetPath scan (part Some): shows the TfTreeScan window and scans on a separate thread.
     fn start_scan(&mut self, part: Option<String>, then_path: Option<String>) {
         let cancel = Arc::new(AtomicBool::new(false));
         let count = Arc::new(AtomicUsize::new(0));
@@ -268,7 +268,7 @@ impl FolderTreeForm {
         let root = PathBuf::from(&self.drive);
         let target = part.clone();
         if part.is_some() {
-            // PartRefresh: +0x360 = 0(깊이 제한 없음).
+            // PartRefresh: +0x360 = 0 (no depth limit).
             options.max_level = None;
         }
         thread::spawn(move || {
@@ -287,7 +287,7 @@ impl FolderTreeForm {
         self.scan = Some(TreeScan { cancel, count, current, receiver: rx, part, then_path });
     }
 
-    /// 훑기가 끝났으면 트리에 넣는다. 끝났으면 true.
+    /// If the scan finished, insert it into the tree. Returns true when done.
     pub(super) fn poll_scan(&mut self) -> bool {
         let Some(scan) = &self.scan else { return false };
         let Ok(result) = scan.receiver.try_recv() else { return false };
@@ -300,7 +300,7 @@ impl FolderTreeForm {
                 }
             }
             Some(path) => {
-                // Refresh(항목) 0x7ea140: 항목을 지우고 훑은 트리를 그 부모 아래에 붙인다.
+                // Refresh(item) 0x7ea140: remove the item and graft the scanned tree under its parent.
                 if let Some(item) = self.tree.find_path(&path).filter(|i| Some(*i) != self.tree.root) {
                     let parent = self.tree.items[item].parent;
                     self.tree.remove(item);
@@ -329,7 +329,7 @@ impl FolderTreeForm {
         true
     }
 
-    /// SetPath 0x7e91dc: 폴더가 있으면 드라이브를 맞추고, 트리에 있으면 고른다. 없으면 트리에 있는 가장 가까운 조상부터 훑어 붙인 뒤 고른다.
+    /// SetPath 0x7e91dc: if the folder exists, switch to its drive and, if it is in the tree, select it. Otherwise scan from the nearest ancestor present in the tree, graft, then select it.
     pub(super) fn set_path(&mut self, path: &str) {
         let path = path.trim_end_matches('\\');
         let path = if path.len() == 2 && path.ends_with(':') { format!("{path}\\") } else { path.to_owned() };
@@ -349,7 +349,7 @@ impl FolderTreeForm {
                 return self.focus(Some(item), 1);
             }
         }
-        // 트리에 없는 폴더: 단계를 하나씩 올라 찾은 조상(없으면 뿌리) 경로부터 훑는다.
+        // Folder not in the tree: walk up one level at a time and scan from the ancestor found (or the root if none).
         let mut at = PathBuf::from(&path);
         let mut found = None;
         while let Some(parent) = at.parent().map(Path::to_path_buf) {
@@ -367,7 +367,7 @@ impl FolderTreeForm {
                 self.start_scan(Some(from), Some(path));
             }
             _ => {
-                // 뿌리 아래 첫 단계 폴더부터 훑는다.
+                // Scan from the first-level folder under the root.
                 let first = Path::new(&path).ancestors().find(|a| a.parent().is_some_and(|p| p.parent().is_none())).map(|a| a.to_string_lossy().into_owned());
                 match first {
                     Some(first) => self.start_scan(Some(first), Some(path)),
@@ -380,7 +380,7 @@ impl FolderTreeForm {
         }
     }
 
-    /// SetFocused 0x7e77a8 + AlignFocused(mode): 보이게 펼치고, 줄을 맞추고(0 위, 1 가운데, 2 아래), 경로 칸(TreeViewChange) = 그 경로.
+    /// SetFocused 0x7e77a8 + AlignFocused(mode): expand so it is visible, align the row (0 top, 1 center, 2 bottom), and set the path field (TreeViewChange) to that path.
     pub(super) fn focus(&mut self, item: Option<usize>, mode: u8) {
         let Some(item) = item else { return };
         if !self.tree.is_visible(item) {
@@ -414,14 +414,14 @@ impl FolderTreeForm {
         }
     }
 
-    /// ArrowKey 0x7e7c3c(+ KeyDown 0x7e8284: Alt가 없을 때 0x21~0x28, '\').
+    /// ArrowKey 0x7e7c3c(+ KeyDown 0x7e8284: 0x21~0x28 and '\' when Alt is not held).
     pub(super) fn arrow_key(&mut self, key: egui::Key, shift: bool, ctrl: bool) {
         let (Some(focused), Some(root)) = (self.focused, self.tree.root) else { return };
         let visible = self.rows_visible.max(1);
         let tree = &self.tree;
         let row_of = |i: usize| tree.items[i].row;
         let last = tree.last.unwrap_or(root);
-        // 고른 줄이 화면 밖이면 가운데로 맞추기만 한다.
+        // If the selected row is off-screen, just center it.
         if row_of(focused) < self.top_row || row_of(focused) > self.top_row + visible {
             self.align(1);
             return;
@@ -554,7 +554,7 @@ impl FolderTreeForm {
         self.after_move(before);
     }
 
-    /// QuickSearch(글) 0x7e8b3c/FindNext 0x7e8ab4: 접힌 항목도(+0x34c = 1) 찾아 고른다.
+    /// QuickSearch(text) 0x7e8b3c/FindNext 0x7e8ab4: find and select matching items, including collapsed ones (+0x34c = 1).
     pub(super) fn quick_search(&mut self, include_current: bool) {
         let (Some(focused), false) = (self.focused, self.find.is_empty()) else { return };
         if let Some(found) = self.tree.quick_search(focused, &self.find, include_current, true) {
@@ -564,8 +564,8 @@ impl FolderTreeForm {
         }
     }
 
-    /// Expand/Collapse(+ 재귀) 0x7e4544/0x7e4498 — OneLevelExpandClick·RecurseExpandClick·숫자판 +/−. 접어서 고른 항목이 숨으면
-    /// 그 항목을 고른다(MouseDown의 HasAsParent).
+    /// Expand/Collapse (+ recursive) 0x7e4544/0x7e4498 — OneLevelExpandClick·RecurseExpandClick·numpad +/−. If collapsing hides the selected item,
+    /// select that item (MouseDown's HasAsParent).
     pub(super) fn expand(&mut self, item: usize, expanded: bool, recurse: bool) {
         self.tree.set_expanded(item, expanded, recurse);
         if let Some(focused) = self.focused {
@@ -576,7 +576,7 @@ impl FolderTreeForm {
         self.dirty = true;
     }
 
-    /// TreeExpandClick 0x4254f0: 항목이 셋 이상이면 뿌리의 자식마다 재귀로 펼치거나 접는다. 접으면 뿌리를 고르고, 펼치면 가운데로.
+    /// TreeExpandClick 0x4254f0: if there are three or more items, recursively expand or collapse each child of the root. When collapsing, select the root; when expanding, center it.
     pub(super) fn expand_all(&mut self, expanded: bool) {
         let Some(root) = self.tree.root else { return };
         if self.tree.count() < 3 {
@@ -590,7 +590,7 @@ impl FolderTreeForm {
         self.dirty = true;
     }
 
-    /// LevelExpandClick 0x425604: 고른 항목과 그 자손을, 단계가 (고른 단계 + n)보다 얕으면 펼치고 아니면 접는다.
+    /// LevelExpandClick 0x425604: for the selected item and its descendants, expand those shallower than (selected level + n) and collapse the rest.
     pub(super) fn expand_levels(&mut self, levels: usize) {
         let Some(focused) = self.focused else { return };
         let base = self.tree.items[focused].level;
@@ -603,7 +603,7 @@ impl FolderTreeForm {
         self.dirty = true;
     }
 
-    /// 지울 항목 `i` 안에 초점이 있으면 초점을 그 부모로 옮긴다.
+    /// If focus is inside the item `i` being removed, move focus to its parent.
     fn remove_item(&mut self, i: usize) {
         if self.focused.is_some_and(|f| f == i || self.tree.has_as_parent(f, i)) {
             self.focused = self.tree.items[i].parent;
@@ -612,8 +612,8 @@ impl FolderTreeForm {
         self.dirty = true;
     }
 
-    /// miShowHiddenFolderClick 0x4263e0 → SetShowHiddenFolder 0x7ea8b0: 끄면 트리에서 숨김 폴더(와 그 자손)를 지우고,
-    /// 켜면 RefreshFirstLevel 0x7e99e0(뿌리 바로 아래를 다시 읽어 없는 폴더는 빼고 새 폴더는 넣는다).
+    /// miShowHiddenFolderClick 0x4263e0 → SetShowHiddenFolder 0x7ea8b0: when turned off, remove hidden folders (and their descendants) from the tree;
+    /// when turned on, RefreshFirstLevel 0x7e99e0 (reread the level just under the root, dropping missing folders and adding new ones).
     pub(super) fn set_show_hidden(&mut self, on: bool) {
         if self.options.show_hidden == on {
             return;
@@ -642,7 +642,7 @@ impl FolderTreeForm {
                     at = self.tree.next_any(i);
                     continue;
                 }
-                // 지울 항목의 자손을 건너뛴 다음 항목.
+                // The next item after skipping the descendants of the item being removed.
                 let mut next = self.tree.next_any(i);
                 while let Some(n) = next.filter(|&n| self.tree.has_as_parent(n, i)) {
                     next = self.tree.next_any(n);
@@ -659,7 +659,7 @@ impl FolderTreeForm {
 
 const ROW_HEIGHT: f32 = 17.0;
 
-/// 그리기 치수(CalculateParams 0x7e61e4): 줄 높이(+0x2c4), 칸 너비(+0x2d0), 이름 칸(+0x2c8 = 칸 − 12), 뿌리 칸(+0x2cc = 뿌리 이름 + 0x24, 빈 이름 0x32).
+/// Drawing metrics (CalculateParams 0x7e61e4): row height (+0x2c4), column width (+0x2d0), name column (+0x2c8 = column − 12), root column (+0x2cc = root name + 0x24, empty name 0x32).
 struct Metrics {
     row: f32,
     column: f32,
@@ -671,7 +671,7 @@ fn text_width(ui: &egui::Ui, text: &str, font: &egui::FontId) -> f32 {
     ui.painter().layout_no_wrap(text.to_owned(), font.clone(), Color32::WHITE).size().x
 }
 
-/// FUN_007e6544: `max` 안에 드는 글자까지 자르고 마지막 글자를 '~'로.
+/// FUN_007e6544: truncate to the characters that fit within `max` and replace the last character with '~'.
 fn fit_with_tilde(ui: &egui::Ui, text: &str, max: f32, font: &egui::FontId) -> String {
     let chars: Vec<char> = text.chars().collect();
     let mut fit = 0;
@@ -694,7 +694,7 @@ fn item_x(form: &FolderTreeForm, metrics: &Metrics, item: usize) -> f32 {
     if Some(item) == form.tree.root { -form.scroll_x } else { (level as f32 - 1.0) * metrics.column + metrics.root - form.scroll_x }
 }
 
-/// 원본 그림 대신 그리는 16×16 폴더(ImageList 0번).
+/// A 16×16 folder drawn in place of the original image (ImageList index 0).
 fn draw_folder_icon(painter: &egui::Painter, at: egui::Pos2, selected: bool) {
     let body = egui::Rect::from_min_size(at + egui::vec2(1.0, 4.0), egui::vec2(14.0, 10.0));
     let tab = egui::Rect::from_min_size(at + egui::vec2(1.0, 2.0), egui::vec2(6.0, 3.0));
@@ -716,7 +716,7 @@ fn paint_tree(ui: &egui::Ui, rect: egui::Rect, form: &FolderTreeForm, colors: &T
     let painter = ui.painter().with_clip_rect(rect);
     painter.rect_filled(rect, 0.0, colors.back);
     let Some(root) = form.tree.root else { return };
-    // 바탕 글: 드라이브 이름(100) 오른쪽 위 + 볼륨 이름(30), 바탕과 줄 색 사이 색.
+    // Background text: drive name (100) top-right + volume name (30), in a color between the background and line colors.
     let mark = colors.back.lerp_to_gamma(colors.line, 0.25);
     let drive_text = form.tree.items[root].name.trim_end_matches('\\').to_owned();
     let big = egui::FontId::proportional(110.0);
@@ -732,7 +732,7 @@ fn paint_tree(ui: &egui::Ui, rect: egui::Rect, form: &FolderTreeForm, colors: &T
     let y_of = |i: usize| (form.tree.items[i].row as f32 - form.top_row as f32) * metrics.row;
     let half = (metrics.row / 2.0).floor();
     let Some(&top) = form.tree.row_starts.get(form.top_row) else { return };
-    // 위 줄보다 위에서 내려오는 조상 형제 줄.
+    // Ancestor-sibling line descending from above the top row.
     let mut ancestor = top;
     while form.tree.items[ancestor].level > 1 {
         let Some(parent) = form.tree.items[ancestor].parent else { break };
@@ -775,7 +775,7 @@ fn draw_item(ui: &egui::Ui, painter: &egui::Painter, rect: egui::Rect, form: &Fo
             painter.line_segment([at(x - 8.0, y + half), at(x - 8.0, end)], line);
         }
         if item.child.is_some() {
-            // 9×9 단추(+0x308 접힘 "+", +0x310 펼침 "−").
+            // 9×9 button (+0x308 collapsed "+", +0x310 expanded "−").
             let top = ((metrics.row - 9.0) / 2.0).floor();
             let button = egui::Rect::from_min_size(at(x - 12.0, y + top), egui::vec2(9.0, 9.0));
             painter.rect_filled(button, 0.0, colors.back);
@@ -822,13 +822,13 @@ fn draw_item(ui: &egui::Ui, painter: &egui::Painter, rect: egui::Rect, form: &Fo
         text_rect = text_rect.translate(egui::vec2(2.0, 0.0));
     }
     if form.focused == Some(i) {
-        // 고른 줄: 바탕(열린 폴더면 NXTOPENED, 아니면 NXTFOCUSED) + 바탕 글(NXTBACK) + 어두운 테두리.
+        // Selected row: background (NXTOPENED if an opened folder, otherwise NXTFOCUSED) + text (NXTBACK) + dark border.
         let fill = if opened { colors.opened } else { colors.focused };
         painter.rect_filled(text_rect, 0.0, fill);
         painter.text(text_rect.left_center(), egui::Align2::LEFT_CENTER, &text, font.clone(), colors.back);
         let frame = Color32::from_rgb(fill.r().saturating_sub(0x46), fill.g().saturating_sub(0x46), fill.b().saturating_sub(0x46));
         painter.rect_stroke(text_rect.expand2(egui::vec2(1.0, 1.0)), 0.0, egui::Stroke::new(1.0, frame), egui::StrokeKind::Inside);
-        // 이 줄에 없는 조상 이름을 제 칸에(NXTHINT) — 고른 줄이 경로처럼 읽힌다.
+        // Ancestor names not shown on this row are drawn in their columns (NXTHINT) — so the selected row reads like a path.
         let mut ancestor = i;
         while tree.items[ancestor].level > 0 {
             let Some(parent) = tree.items[ancestor].parent else { break };
@@ -855,7 +855,7 @@ fn draw_item(ui: &egui::Ui, painter: &egui::Painter, rect: egui::Rect, form: &Fo
     }
 }
 
-/// GetItemAt 0x7e8e84 / GetButtonAt 0x7e8de4: 누른 줄의 맨 왼쪽 항목부터 첫 자식 사슬을 본다.
+/// GetItemAt 0x7e8e84 / GetButtonAt 0x7e8de4: follow the first-child chain starting from the leftmost item of the clicked row.
 fn hit(ui: &egui::Ui, form: &FolderTreeForm, metrics: &Metrics, font: &egui::FontId, local: egui::Vec2) -> (Option<usize>, Option<usize>) {
     let row = (local.y / metrics.row).floor() as isize + form.top_row as isize;
     if row < 0 {
@@ -888,13 +888,13 @@ fn hit(ui: &egui::Ui, form: &FolderTreeForm, metrics: &Metrics, font: &egui::Fon
     (item_hit, button_hit)
 }
 
-/// F1~F10의 번호.
+/// The number for F1~F10.
 fn function_number(key: egui::Key) -> Option<usize> {
     use egui::Key::*;
     [F1, F2, F3, F4, F5, F6, F7, F8, F9, F10].iter().position(|k| *k == key).map(|i| i + 1)
 }
 
-/// TNXButtonBar bbFunctions: "F2=이름 바꾸기;…" 칸(HeadColor 파랑 = 글쇠, 글 = 기능).
+/// TNXButtonBar bbFunctions: "F2=이름 바꾸기;…" cells (HeadColor blue = key, text = function).
 fn function_bar(ui: &mut egui::Ui, rect: egui::Rect, items: &[(String, String)]) -> Option<usize> {
     let mut clicked = None;
     if items.is_empty() {
@@ -917,7 +917,7 @@ fn function_bar(ui: &mut egui::Ui, rect: egui::Rect, items: &[(String, String)])
     clicked
 }
 
-/// 원본 TfFolderTree 창. 돌려준 일은 App이 처리한다. 창 안의 트리 움직임은 여기서 끝낸다.
+/// The original TfFolderTree window. Returned actions are handled by App. Tree navigation inside the window is handled here.
 pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, language: &compat::Language, colors: &TreeColors, size: egui::Vec2, input: bool, icons: &[Option<egui::TextureHandle>]) -> Option<FolderTreeAction> {
     let text = |key: &str, fallback: &str| language.raw(&format!("formFolderTree.{key}")).unwrap_or_else(|| fallback.to_owned());
     let plain = |key: &str, fallback: &str| super::favorites_dialog::access_key(&text(key, fallback)).0;
@@ -933,7 +933,7 @@ pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, langu
     let at = |x: f32, y: f32, w: f32, h: f32| egui::Rect::from_min_size(area.min + egui::vec2(x, y), egui::vec2(w, h));
     let (w, h) = (size.x, size.y);
     let visuals = ui.visuals().clone();
-    // tbMainMenu: 메뉴 단추(글).
+    // tbMainMenu: menu buttons (text).
     let menu_font = egui::FontId::proportional(12.0);
     let mut x = 2.0;
     let mut menu_action: Option<&'static str> = None;
@@ -943,7 +943,7 @@ pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, langu
         ui.scope_builder(egui::UiBuilder::new().max_rect(at(x, 0.0, width, 22.0)), |ui| {
             ui.add_enabled_ui(!scanning, |ui| {
                 ui.menu_button(caption.as_str(), |ui| {
-                    // DFM의 항목(ShortCut은 VCL처럼 오른쪽에 글로 보인다). "@levels" = miLevelExpand 하위 메뉴, "@hidden" = miShowHiddenFolder(확인 표시).
+                    // DFM items (ShortCut shown as text on the right, like VCL). "@levels" = miLevelExpand submenu, "@hidden" = miShowHiddenFolder (checkmark).
                     let items: &[(&str, &str, &str, &str)] = if id == "folder" {
                         &[
                             ("Menu.miDelete", "&D. Delete", "delete", "Alt+D"),
@@ -991,7 +991,7 @@ pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, langu
                                 });
                             }
                             "@hidden" => {
-                                // miTreeClick 0x426668: 메뉴를 열 때 miShowHiddenFolder.Checked = tshowhidden.
+                                // miTreeClick 0x426668: on opening the menu, miShowHiddenFolder.Checked = tshowhidden.
                                 if super::skin_pane::menu_check_button(ui, true, form.options.show_hidden, false, egui::Button::new(plain(key, fallback))).clicked() {
                                     menu_action = Some("showHidden");
                                     ui.close();
@@ -1012,7 +1012,7 @@ pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, langu
     }
     // tbFavorites(82, DropdownMenu pmFavorites, Hint F11).
     let favorites_caption = plain("ToolButton.tbFavorites", "Fa&vorites");
-    // 원본 자리(82·166·344)보다 글이 넓으면 그만큼 오른쪽으로 민다.
+    // If the text is wider than the original positions (82·166·344), push it right by that much.
     let favorites_left = x.max(82.0);
     let favorites_button = at(favorites_left, 0.0, text_width(ui, &favorites_caption, &menu_font) + 22.0, 22.0);
     let shift = (favorites_button.right() - area.min.x + 8.0 - 166.0).max(0.0);
@@ -1033,7 +1033,7 @@ pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, langu
     }
     ui.painter().text(search_button.center(), egui::Align2::CENTER_CENTER, &search_caption, menu_font.clone(), visuals.text_color());
     let mut open_search = search_response.clicked() && !scanning && input;
-    // tbDesktop·tbMyDoc·tbMyPic·tbMyMusic·tbMyVideo(Left 166~302, 34 간격): SpecialFolderClick.
+    // tbDesktop·tbMyDoc·tbMyPic·tbMyMusic·tbMyVideo (Left 166~302, 34 spacing): SpecialFolderClick.
     let special = [("Hint.tbDesktop", "Desktop (Ctrl+D)", "desktop"), ("Hint.tbMyDoc", "Documents (Ctrl+G)", "documents"), ("Hint.tbMyPic", "Pictures (Ctrl+Q)", "pictures"), ("Hint.tbMyMusic", "Music (Ctrl+S)", "music"), ("Hint.tbMyVideo", "Videos (Ctrl+O)", "videos")];
     let mut special_click = None;
     for (n, (key, fallback, id)) in special.iter().enumerate() {
@@ -1055,7 +1055,7 @@ pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, langu
         }
     }
     ui.painter().hline(area.min.x..=area.max.x, area.min.y + 22.0, visuals.widgets.noninteractive.bg_stroke);
-    // pTop: 경로 칸과 단추.
+    // pTop: path field and buttons.
     ui.painter().text(at(3.0, 29.0, 40.0, 13.0).left_top(), egui::Align2::LEFT_TOP, plain("Caption.lAddress", "Path:"), egui::FontId::proportional(12.0), visuals.text_color());
     let address_id = egui::Id::new("ndr-folder-tree-address");
     let address = ui.put(at(49.0, 26.0, (w - 208.0).max(80.0), 21.0), egui::TextEdit::singleline(&mut form.address).id(address_id));
@@ -1069,7 +1069,7 @@ pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, langu
     let main = at(0.0, 51.0, w, (h - 51.0 - 19.0).max(40.0));
     ui.painter().rect_stroke(main, 0.0, visuals.widgets.noninteractive.bg_stroke, egui::StrokeKind::Inside);
     let drives_rect = egui::Rect::from_min_size(main.min + egui::vec2(1.0, 1.0), egui::vec2(43.0, main.height() - 2.0));
-    // pDrivesPaint 0x426800: 흰색 → F0F0F0 바탕.
+    // pDrivesPaint 0x426800: white → F0F0F0 background.
     ui.painter().rect_filled(drives_rect, 0.0, Color32::from_rgb(0xF6, 0xF6, 0xF6));
     ui.painter().vline(drives_rect.right() + 0.5, drives_rect.y_range(), egui::Stroke::new(1.0, Color32::from_rgb(0xE4, 0xE4, 0xE4)));
     let mut picked_drive = None;
@@ -1081,7 +1081,7 @@ pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, langu
         if down || response.hovered() {
             ui.painter().rect(button, 2.0, if down { Color32::from_rgb(0xD8, 0xE6, 0xF8) } else { Color32::from_rgb(0xEC, 0xF2, 0xFB) }, egui::Stroke::new(1.0, Color32::from_rgb(0x9C, 0xB4, 0xD8)), egui::StrokeKind::Inside);
         }
-        // FUN_00424ec4: 단추마다 글(드라이브)과 16×16 셸 아이콘.
+        // FUN_00424ec4: each button has text (drive) and a 16×16 shell icon.
         match form.drive_icons.get(n).cloned().flatten() {
             Some(icon) => {
                 let icon_rect = egui::Rect::from_min_size(egui::pos2(button.left() + 3.0, button.center().y - 8.0), egui::vec2(16.0, 16.0));
@@ -1145,7 +1145,7 @@ pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, langu
         .collect();
     let bar = at(0.0, h - 19.0, w, 19.0);
     let bar_click = function_bar(ui, bar, &entries).filter(|_| !scanning && input);
-    // TfTreeScan(547×102): lPath(8,19 531, 경로 줄임), lCount(8,43), btnCancel(244,70 75×25).
+    // TfTreeScan(547×102): lPath(8,19 531, path elided), lCount(8,43), btnCancel(244,70 75×25).
     let mut scan_cancel = false;
     if let Some(scan) = &form.scan {
         let window = egui::Rect::from_center_size(tree_rect.center(), egui::vec2(547.0, 128.0));
@@ -1162,7 +1162,7 @@ pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, langu
             scan_cancel = true;
         }
     }
-    // 글쇠(창 KeyPreview → TntFormShortCut 0x425704 → TreeViewKeyDown 0x424c54 → ArrowKey).
+    // Keys (window KeyPreview → TntFormShortCut 0x425704 → TreeViewKeyDown 0x424c54 → ArrowKey).
     let mut keys: Vec<(egui::Key, egui::Modifiers)> = vec![];
     let mut typed = String::new();
     if input {
@@ -1176,7 +1176,7 @@ pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, langu
             }
         });
     }
-    // pmFavorites: 이름과 단축키(오른쪽). 고르면 FUN_00425b54 = SetPath(경로).
+    // pmFavorites: name and shortcut (on the right). Selecting one calls FUN_00425b54 = SetPath(path).
     let mut picked_favorite = None;
     if form.favorites_open {
         let menu = egui::Area::new(egui::Id::new("ndr-tree-favorites-menu")).order(egui::Order::Foreground).fixed_pos(favorites_button.left_bottom()).show(ui.ctx(), |ui| {
@@ -1198,7 +1198,7 @@ pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, langu
             form.favorites_open = false;
         }
     }
-    // TfSearchFolder 창(트리 창 위).
+    // TfSearchFolder window (on top of the tree window).
     let mut search_accept = None;
     if let Some(search) = form.search.as_mut() {
         let window = egui::Rect::from_center_size(tree_rect.center(), egui::vec2(545.0, 226.0 + 24.0));
@@ -1216,11 +1216,11 @@ pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, langu
         if edit.has_focus() {
             search.list_focus = false;
         }
-        // 목록 글쇠는 이 화면 시작부터 목록에 초점이 있을 때만(찾기를 부른 Enter·목록으로 옮긴 ↓를 목록이 다시 받지 않게).
+        // List keys only when the list has focus from the start of this frame (so the list does not re-receive the Enter that ran the search or the ↓ that moved focus to it).
         let list_keys = search.list_focus && !edit.has_focus() && !edit.lost_focus();
         let search_label = super::favorites_dialog::access_key(&language.raw("formSearchFolder.Caption.btnSearch").unwrap_or_else(|| "Search".into())).0;
         let mut run = ui.put(put(462.0, 6.0, 75.0, 25.0), egui::Button::new(search_label)).clicked();
-        // cbSearchKeyPress 0x4523bc: Enter = 찾기. cbSearchKeyDown 0x452bcc: ↓ = 목록으로.
+        // cbSearchKeyPress 0x4523bc: Enter = search. cbSearchKeyDown 0x452bcc: ↓ = move to the list.
         if edit.has_focus() || edit.lost_focus() {
             if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 run = true;
@@ -1239,7 +1239,7 @@ pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, langu
                 ui.memory_mut(|m| m.surrender_focus(edit_id));
             }
         }
-        // lbResultDrawItem 0x452660: 줄 높이 = 글 높이 + 6, 부모 폴더(회색) + 이름(검정), 고른 줄은 짙은 바탕에 밝은 글.
+        // lbResultDrawItem 0x452660: row height = text height + 6, parent folder (gray) + name (black); the selected row is light text on a dark background.
         let list = put(4.0, 37.0, 533.0, 181.0);
         ui.painter().rect(list, 0.0, Color32::WHITE, egui::Stroke::new(1.0, Color32::from_gray(0x90)), egui::StrokeKind::Inside);
         let row_height = 19.0;
@@ -1276,7 +1276,7 @@ pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, langu
                 }
             }
         }
-        // lbResultKeyDown 0x4523d8: Enter = 그 경로로 닫기, ↑↓ 이동.
+        // lbResultKeyDown 0x4523d8: Enter = close with that path, ↑↓ to move.
         if list_keys {
             for (key, _) in &keys {
                 match key {
@@ -1293,7 +1293,7 @@ pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, langu
                 }
             }
         }
-        // FormKeyDown 0x4523a0: Esc = 닫기.
+        // FormKeyDown 0x4523a0: Esc = close.
         let close = keys.iter().any(|(k, _)| *k == egui::Key::Escape);
         if close || search_accept.is_some() {
             form.search = None;
@@ -1323,10 +1323,10 @@ pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, langu
         match key {
             egui::Key::Escape if form.favorites_open => form.favorites_open = false,
             egui::Key::Escape => action = Some(FolderTreeAction::Cancel),
-            // TntFormShortCut 0x425704: F11 = tbFavorites 아래에 pmFavorites, Ctrl+F = tbSearchClick.
+            // TntFormShortCut 0x425704: F11 = pmFavorites below tbFavorites, Ctrl+F = tbSearchClick.
             egui::Key::F11 if plain_key && !m.shift => form.favorites_open = !form.favorites_open,
             egui::Key::F if m.ctrl && !m.alt => open_search = true,
-            // pmFavorites 단축키(FUN_004259e0): Shift+F1~F10 = 0~9번, Shift+Ctrl+F1~F10 = 10~19번.
+            // pmFavorites shortcuts (FUN_004259e0): Shift+F1~F10 = indexes 0~9, Shift+Ctrl+F1~F10 = indexes 10~19.
             k if m.shift && !m.alt && function_number(k).is_some() => {
                 let n = function_number(k).unwrap_or(1) - 1 + if m.ctrl { 10 } else { 0 };
                 if let Some((_, _, path)) = form.favorites.iter().find(|(slot, _, _)| *slot == n).cloned() {
@@ -1352,7 +1352,7 @@ pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, langu
                 let n = match key { egui::Key::Num1 => "level1", egui::Key::Num2 => "level2", egui::Key::Num3 => "level3", egui::Key::Num4 => "level4", _ => "level5" };
                 menu_action = Some(n);
             }
-            // Alt+`: 경로 칸에 초점·모두 고르기.
+            // Alt+`: focus the path field and select all.
             egui::Key::Backtick if m.alt => {
                 ui.memory_mut(|mem| mem.request_focus(address_id));
                 form.tree_focus = false;
@@ -1370,7 +1370,7 @@ pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, langu
             egui::Key::Delete if plain_key => menu_action = Some("deletePermanent"),
             egui::Key::Plus if plain_key => menu_action = Some("expand"),
             egui::Key::Minus if plain_key => menu_action = Some("collapse"),
-            // Shift+글자: 그 드라이브(SetDrive("%C:\")).
+            // Shift+letter: that drive (SetDrive("%C:\")).
             k if m.shift && !m.ctrl && !m.alt && k.name().len() == 1 && k.name().chars().all(|c| c.is_ascii_alphabetic()) => {
                 form.set_drive(&format!("{}:\\", k.name()));
                 typed.clear();
@@ -1378,7 +1378,7 @@ pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, langu
             _ => {}
         }
     }
-    // WMChar 0x7e86d0: 빠른 찾기(대문자는 Shift+글자 = 드라이브라 받지 않는다).
+    // WMChar 0x7e86d0: quick find (uppercase is not accepted because Shift+letter = drive).
     if tree_keys && !typed.is_empty() {
         for c in typed.chars() {
             if c.is_ascii_uppercase() {
@@ -1402,7 +1402,7 @@ pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, langu
         form.search = Some(SearchFolder { first_frame: true, ..Default::default() });
     }
     if let Some(n) = bar_click {
-        // bbFunctionsClick 0x4258a0: 0 이름 바꾸기, 1 다음 찾기, 2 전체 최신, 3 하위만, 4 새 폴더, 5 등록정보.
+        // bbFunctionsClick 0x4258a0: 0 rename, 1 find next, 2 full refresh, 3 part refresh, 4 new folder, 5 properties.
         menu_action = match n { 0 => Some("rename"), 1 => Some("findNext"), 2 => Some("treeRefresh"), 3 => Some("subRefresh"), 4 => Some("newFolder"), 5 => Some("properties"), _ => None };
     }
     if let Some(id) = special_click {
@@ -1462,7 +1462,7 @@ pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, langu
 }
 
 impl App {
-    /// 원본 FUN_0040ca90(결과, 처음 경로, 제목): TfFolderTree를 만들어 SetPath(처음 경로) 뒤 ShowModal. 고른 경로(취소면 None).
+    /// Original FUN_0040ca90(result, initial path, title): create TfFolderTree, call SetPath(initial path), then ShowModal. The selected path (None if canceled).
     pub(super) fn folder_tree_dialog(&mut self, initial: &Path, caption: Option<String>, on_result: impl FnOnce(&mut App, Option<PathBuf>, &egui::Context) + 'static) {
         let drives: Vec<(PathBuf, String)> = (self.system.ready_drives)().into_iter().map(|root| {
             let label = ndr::native::drive_name(&root);
@@ -1477,7 +1477,7 @@ impl App {
         }
         let mut form = FolderTreeForm::new(&self.settings, &self.profile, drives, opened);
         form.root_of = self.system.tree_root;
-        // FUN_004259e0: 비지 않은 칸(이름·경로가 다 있는 칸)만.
+        // FUN_004259e0: only non-empty slots (slots that have both a name and a path).
         let names = self.settings.strings("FavoriteNames");
         form.favorites = self.settings.strings("Favorites").into_iter().enumerate().take(20)
             .filter_map(|(i, path)| names.get(i).filter(|n| !n.is_empty() && !path.is_empty()).map(|n| (i, n.clone(), path)))
@@ -1490,7 +1490,7 @@ impl App {
         });
     }
 
-    /// 맨 위(또는 입력 상자 아래) 폴더 트리 창.
+    /// The folder tree window at the top (or below the input box).
     fn folder_tree_form(&mut self) -> Option<&mut FolderTreeForm> {
         self.original_dialogs.iter_mut().rev().find_map(|d| match &mut d.kind {
             DialogKind::FolderTree(form) => Some(&mut **form),
@@ -1498,8 +1498,8 @@ impl App {
         })
     }
 
-    /// miCreateNewFolderClick 0x425b68: 고른 폴더가 있으면 TfGetText(TITLE_NEWFOLDER, MSG_NEWFOLDER, 오늘 짧은 날짜) → 확인이고 비지 않으면
-    /// CreateDirectoryW(고른 폴더\이름). 실패는 오류 상자(FUN_0040c31c), 성공은 트리에 넣고(FUN_007e4904) 그 항목을 고른다.
+    /// miCreateNewFolderClick 0x425b68: if a folder is selected, TfGetText(TITLE_NEWFOLDER, MSG_NEWFOLDER, today's short date) → if OK and not empty,
+    /// CreateDirectoryW(selected folder\name). On failure, an error box (FUN_0040c31c); on success, add it to the tree (FUN_007e4904) and select that item.
     fn folder_tree_new_folder(&mut self) {
         let Some(form) = self.folder_tree_form() else { return };
         let Some(item) = form.focused else { return };
@@ -1523,8 +1523,8 @@ impl App {
         });
     }
 
-    /// miRenameClick 0x425e6c: 뿌리가 아니면 TfGetText(RENAME, MSG_RENAME(이름, 1, 1), 이름) → 확인이고 비지 않으면 MoveFileW(경로, 부모\새 이름).
-    /// 실패는 오류 상자, 성공은 이름을 바꾸고(SetName) 트리를 저장하고 경로 칸을 고친다.
+    /// miRenameClick 0x425e6c: if not the root, TfGetText(RENAME, MSG_RENAME(name, 1, 1), name) → if OK and not empty, MoveFileW(path, parent\new name).
+    /// On failure, an error box; on success, rename (SetName), save the tree, and update the path field.
     fn folder_tree_rename(&mut self) {
         let Some(form) = self.folder_tree_form() else { return };
         let Some(item) = form.focused.filter(|i| form.tree.items[*i].level != 0) else { return };
@@ -1548,8 +1548,8 @@ impl App {
         });
     }
 
-    /// FUN_004266ac: 고른 폴더가 드라이브 뿌리가 아니면 SHFileOperationW(FO_DELETE, 휴지통이면 FOF_ALLOWUNDO). 성공하고 폴더가 없어졌으면
-    /// 트리에서 지운다(FUN_007e4a24: 고른 항목이 지운 폴더 안이면 다음 형제, 없으면 부모를 고른다).
+    /// FUN_004266ac: if the selected folder is not the drive root, SHFileOperationW(FO_DELETE, FOF_ALLOWUNDO when recycling). On success, if the folder is gone,
+    /// remove it from the tree (FUN_007e4a24: if the selected item was inside the deleted folder, select the next sibling, or the parent if none).
     fn folder_tree_delete(&mut self, recycle: bool) {
         let shell_delete = self.system.shell_delete;
         let Some(form) = self.folder_tree_form() else { return };
@@ -1566,11 +1566,11 @@ impl App {
         }
     }
 
-    /// 창이 돌려준 일.
+    /// The action returned by the window.
     pub(super) fn folder_tree_action(&mut self, action: FolderTreeAction, ctx: &egui::Context) {
         match action {
             FolderTreeAction::Cancel => {
-                // TntFormClose 0x42643c: 트리를 저장하고 닫는다.
+                // TntFormClose 0x42643c: save the tree and close.
                 if let Some(DialogKind::FolderTree(form)) = self.original_dialogs.last_mut().map(|d| &mut d.kind) {
                     form.save();
                 }
@@ -1584,7 +1584,7 @@ impl App {
                 self.save();
             }
             FolderTreeAction::Special(id) => {
-                // FUN_00425904: FUN_0040db88(번호)의 폴더로 SetPath.
+                // FUN_00425904: SetPath to the folder from FUN_0040db88(number).
                 if let Some(path) = self.special_folder_path(id) {
                     if let Some(form) = self.folder_tree_form() {
                         form.set_path(&path.to_string_lossy());
@@ -1595,7 +1595,7 @@ impl App {
             FolderTreeAction::Rename => self.folder_tree_rename(),
             FolderTreeAction::Delete { recycle } => self.folder_tree_delete(recycle),
             FolderTreeAction::Accept(path) => {
-                // FUN_00424a68: PathFileExistsW면 그 경로로 닫고, 아니면 NXSTR_TREE_INVALIDPATH를 알리고 고른 항목을 트리에서 지운다.
+                // FUN_00424a68: if PathFileExistsW, close with that path; otherwise report NXSTR_TREE_INVALIDPATH and remove the selected item from the tree.
                 if !path.is_empty() && Path::new(&path).exists() {
                     if let Some(DialogKind::FolderTree(form)) = self.original_dialogs.last_mut().map(|d| &mut d.kind) {
                         form.save();
@@ -1644,12 +1644,12 @@ mod tests {
         };
         assert_eq!(names(&form), ["a", "b", "h"]);
         form.focus(form.tree.find_path(&root.join("h").join("h1").to_string_lossy()), 1);
-        // 끄면 숨김 폴더와 그 자손을 지우고, 그 안의 초점은 부모로.
+        // When turned off, remove hidden folders and their descendants, moving any focus inside them to the parent.
         form.set_show_hidden(false);
         assert_eq!(names(&form), ["a", "b"]);
         assert_eq!(form.focused, form.tree.root);
         assert!(form.dirty);
-        // 켜면 RefreshFirstLevel: 뿌리 바로 아래를 다시 읽어 숨김 폴더를 넣는다.
+        // When turned on, RefreshFirstLevel: reread the level just under the root to add hidden folders.
         form.set_show_hidden(true);
         assert_eq!(names(&form), ["a", "b", "h"]);
         assert_eq!(form.tree.full_path(form.tree.root.unwrap()).trim_end_matches('\\'), text.trim_end_matches('\\'));

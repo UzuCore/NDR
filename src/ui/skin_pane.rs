@@ -1,38 +1,38 @@
-//! 원본 스킨 테마(검정·클래식·회색)의 패널 부품.
-//! - 주소 줄: 원본 FUN_00481978(TNXPaintPanel 높이 19 안에 TNXPathLabel + addressbtns.png 단추 둘, 너비 20)과
-//!   TNXPathLabel.Paint(0x7c9714)·DrawDivider(0x7c9694)·UpdateDisplayInfo(0x7c8c20, 조각 너비 = 글 너비 + 4).
-//! - 패널 테두리: 스킨 [List] lframelocal·lframenet·lframearc·lframeftp·lframeinactive, lframewidth.
+//! Panel parts of the original skin themes (black, classic, gray).
+//! - Address bar: original FUN_00481978 (a TNXPaintPanel of height 19 holding a TNXPathLabel plus two addressbtns.png buttons, width 20) and
+//!   TNXPathLabel.Paint(0x7c9714)·DrawDivider(0x7c9694)·UpdateDisplayInfo(0x7c8c20, segment width = text width + 4).
+//! - Panel border: skin [List] lframelocal·lframenet·lframearc·lframeftp·lframeinactive, lframewidth.
 use super::pane_chrome::CrumbTarget;
 use super::*;
 use ndr::styles::Skin;
 
-/// 주소 줄 조각 하나: 보이는 글, 누르면 갈 곳, 갈매기(>)를 누르면 하위 폴더를 보일 로컬 폴더(없으면 None).
+/// One address-bar segment: the visible text, where clicking it goes, and the local folder whose subfolders the chevron (>) shows (None if there is none).
 pub(super) struct CrumbSegment {
     pub label: String,
     pub target: CrumbTarget,
     pub folder: Option<PathBuf>,
 }
 
-/// 원본 주소 줄 높이(FUN_00481978 SetHeight 0x13)와 양끝 단추 너비(0x14).
+/// Original address-bar height (FUN_00481978 SetHeight 0x13) and end-button width (0x14).
 pub(super) const ADDRESS_BAR_HEIGHT: f32 = 19.0;
 const ADDRESS_BUTTON_WIDTH: f32 = 20.0;
 
-/// 스킨 conf.ini [List] 색. 키가 없을 때의 값(fallback)은 원본이 FUN_00463798에 넘기는 기본 TColor를 따른다(예: lback·laback 141414,
-/// latext 646464, lfolderdivider 3C3C3C, ldrivesframe 1A1A1A, lframetree 3C3C3C). 원본 기본값이 0(검정)인 글·바탕 키
-/// (lfileback, lfiletext, lfolderback, 메뉴 색)는 검정 바탕에 검은 글이 되므로 읽을 수 있는 값으로 둔다(고친 것). 동봉 스킨 셋은 모든 키가 있다.
+/// Skin conf.ini [List] colors. The fallback used when a key is missing follows the default TColor the original passes to FUN_00463798 (e.g. lback·laback 141414,
+/// latext 646464, lfolderdivider 3C3C3C, ldrivesframe 1A1A1A, lframetree 3C3C3C). Text/background keys whose original default is 0 (black)
+/// (lfileback, lfiletext, lfolderback, menu colors) would make black text on a black background, so they are set to readable values (fixed). The bundled skin set has every key.
 pub(super) fn skin_color(skin: &Skin, key: &str, fallback: Color32) -> Color32 {
     skin.color("List", key).map(|c| Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3])).unwrap_or(fallback)
 }
 
-/// 스킨 [Menu] 색(원본 FUN_00463914가 읽는 차례: mmainback +0x20, mmaintext +0x24, mmainover +0x28, mmainoverback +0x2c,
+/// Skin [Menu] colors (the order original FUN_00463914 reads: mmainback +0x20, mmaintext +0x24, mmainover +0x28, mmainoverback +0x2c,
 /// mback +0x30, mtext +0x34, mborder +0x38, mdisabled +0x3c, mhighlight +0x40, mover +0x44, mrback +0x48, mrtext +0x4c,
 /// mrover +0x50, mdivider +0x54).
 fn menu_color(skin: &Skin, key: &str, fallback: Color32) -> Color32 {
     skin.color("Menu", key).map(|c| Color32::from_rgb(c[0], c[1], c[2])).unwrap_or(fallback)
 }
 
-/// 원본 펼침 메뉴 그리기(MenuDrawItem 0x42e518): 바탕 mback, 글 mtext, 고른 줄은 바탕 mhighlight·글 mover, 꺼진 글 mdisabled,
-/// 구분선 mdivider, 단축키 글 mrtext(고른 줄 mrover), 테두리 mborder. 모서리는 각지게.
+/// Original dropdown menu drawing (MenuDrawItem 0x42e518): background mback, text mtext, the selected row uses background mhighlight and text mover, disabled text mdisabled,
+/// divider mdivider, shortcut text mrtext (selected row mrover), border mborder. Corners are square.
 pub(super) fn skin_menu_style(skin: &Skin) -> egui::style::StyleModifier {
     let back = menu_color(skin, "mback", Color32::from_gray(0x14));
     let text = menu_color(skin, "mtext", Color32::from_gray(0xB4));
@@ -44,8 +44,8 @@ pub(super) fn skin_menu_style(skin: &Skin) -> egui::style::StyleModifier {
     let shortcut = menu_color(skin, "mrtext", Color32::from_gray(0xC8));
     egui::style::StyleModifier::new(move |style| {
         egui::containers::menu::menu_style(style);
-        // 원본 MenuDrawItem: 글은 줄 왼쪽 + 0x10에서 시작한다(그 앞 16화소는 체크 그림 자리). MenuMeasureItem의 너비도 글 + 0x20이라
-        // 오른쪽에도 16. 고친 것: 전에는 egui 메뉴 여백 2화소라 글이 왼쪽에 붙고 체크 항목만 네모 상자만큼 밀렸다.
+        // Original MenuDrawItem: text starts at the row's left + 0x10 (the 16 pixels before it are the checkmark slot). MenuMeasureItem's width is also text + 0x20,
+        // so there is 16 on the right too. Fix: previously the egui menu padding was 2 pixels, so text hugged the left and only check items were pushed by the box width.
         style.spacing.button_padding.x = MENU_GUTTER;
         let v = &mut style.visuals;
         v.override_text_color = None;
@@ -64,7 +64,7 @@ pub(super) fn skin_menu_style(skin: &Skin) -> egui::style::StyleModifier {
             state.corner_radius = egui::CornerRadius::ZERO;
         }
         v.widgets.inactive.corner_radius = egui::CornerRadius::ZERO;
-        // NDR 메뉴(PopupMenu)의 글쇠로 고른 줄(Button::selected)도 원본 고른 줄 색.
+        // The NDR menu (PopupMenu) row chosen with the keyboard (Button::selected) also uses the original selected-row color.
         v.selection.bg_fill = high;
         v.selection.stroke.color = over;
     })
@@ -72,24 +72,24 @@ pub(super) fn skin_menu_style(skin: &Skin) -> egui::style::StyleModifier {
 
 const MENU_STYLE_ID: &str = "ndr-skin-menu-style";
 
-/// 원본 펼침 메뉴 줄의 왼쪽 여백(MenuDrawItem: 글 = 줄 왼쪽 + 0x10).
+/// Left padding of the original dropdown menu row (MenuDrawItem: text = row left + 0x10).
 pub(super) const MENU_GUTTER: f32 = 16.0;
 
-/// 원본 비트맵 CHECK(16×16, 체크 항목)에서 흰 점(글 색으로 바뀌는 점)의 (x, y).
+/// In the original bitmap CHECK (16×16, check item), the (x, y) of the white dots (the dots recolored to the text color).
 const MENU_CHECK_DOTS: [(u8, u8); 21] = [
     (10, 4), (9, 5), (10, 5), (4, 6), (8, 6), (9, 6), (10, 6), (4, 7), (5, 7), (7, 7), (8, 7), (9, 7),
     (4, 8), (5, 8), (6, 8), (7, 8), (8, 8), (5, 9), (6, 9), (7, 9), (6, 10),
 ];
-/// 원본 비트맵 RCHECK(16×16, 라디오 항목)의 흰 점.
+/// White dots of the original bitmap RCHECK (16×16, radio item).
 const MENU_RADIO_DOTS: [(u8, u8); 12] = [(7, 6), (8, 6), (6, 7), (7, 7), (8, 7), (9, 7), (6, 8), (7, 8), (8, 8), (9, 8), (7, 9), (8, 9)];
 
-/// 원본 MenuDrawItem(0x42e518): 체크된 항목(TMenuItem +0x44)은 줄 왼쪽, 줄 높이 가운데에 CHECK(라디오 항목 +0x49는 RCHECK)를 그린다.
-/// 흰 점은 글 색(고른 줄은 mover, 아니면 mtext; 꺼진 항목도 같은 색), 나머지는 투명. 체크되지 않은 줄은 그 자리를 비운다.
+/// Original MenuDrawItem(0x42e518): a checked item (TMenuItem +0x44) draws CHECK (a radio item +0x49 draws RCHECK) at the row's left, vertically centered in the row.
+/// The white dots take the text color (selected row mover, otherwise mtext; a disabled item is the same color), the rest is transparent. An unchecked row leaves that slot empty.
 pub(super) fn paint_menu_check(ui: &egui::Ui, item: egui::Rect, radio: bool, selected: bool) {
     let color = if selected { ui.visuals().widgets.hovered.fg_stroke.color } else { ui.visuals().widgets.inactive.fg_stroke.color };
     let origin = egui::pos2(item.left().round(), (item.top() + ((item.height() - 16.0) / 2.0).trunc()).round());
     let dots: &[(u8, u8)] = if radio { &MENU_RADIO_DOTS } else { &MENU_CHECK_DOTS };
-    // 화소 하나씩: 다듬기(feathering) 없는 메시 사각형으로 그린다(1×1 rect_filled는 선으로 바뀌어 보이지 않았다).
+    // One pixel at a time: drawn as mesh rectangles with no feathering (a 1×1 rect_filled turned into a line and was invisible).
     let mut mesh = egui::Mesh::default();
     for &(x, y) in dots {
         mesh.add_colored_rect(egui::Rect::from_min_size(origin + egui::vec2(x as f32, y as f32), egui::vec2(1.0, 1.0)), color);
@@ -97,7 +97,7 @@ pub(super) fn paint_menu_check(ui: &egui::Ui, item: egui::Rect, radio: bool, sel
     ui.painter().add(egui::Shape::mesh(mesh));
 }
 
-/// 체크·라디오 메뉴 항목(원본 TMenuItem Checked·RadioItem): 보통 항목과 같은 단추에 체크 그림만 더한다.
+/// Check/radio menu item (original TMenuItem Checked·RadioItem): the same button as a normal item, just with the check graphic added.
 pub(super) fn menu_check_button(ui: &mut egui::Ui, enabled: bool, checked: bool, radio: bool, button: egui::Button<'_>) -> egui::Response {
     let response = ui.add_enabled(enabled, button);
     if checked {
@@ -106,12 +106,12 @@ pub(super) fn menu_check_button(ui: &mut egui::Ui, enabled: bool, checked: bool,
     response
 }
 
-/// 원본 MenuDrawItem의 단축키 칸: 바탕 mrback(+0x48, 너비 = 단축키 글 너비), 글 mrtext(+0x4c), 고른 줄은 mrover(+0x50).
+/// The shortcut cell of the original MenuDrawItem: background mrback (+0x48, width = shortcut text width), text mrtext (+0x4c), selected row mrover (+0x50).
 pub(super) fn skin_menu_shortcut_colors(skin: &Skin) -> (Color32, Color32, Color32) {
     (menu_color(skin, "mrback", Color32::BLACK), menu_color(skin, "mrtext", Color32::from_gray(0xC8)), menu_color(skin, "mrover", Color32::from_rgb(0x55, 0x77, 0xEE)))
 }
 
-/// 스킨 메뉴 항목의 단축키 글(원본 DrawTextW DT_RIGHT, 칸 오른쪽 − 4): 보통 mrtext, 고른 줄 mrover. 돌려주는 값은 글 너비.
+/// Shortcut text of a skin menu item (original DrawTextW DT_RIGHT, cell right − 4): normal mrtext, selected row mrover. Returns the text width.
 pub(super) fn paint_menu_shortcut(ui: &egui::Ui, item: egui::Rect, shortcut: &str, colors: (Color32, Color32, Color32), selected: bool) -> f32 {
     if shortcut.is_empty() {
         return 0.0;
@@ -124,27 +124,27 @@ pub(super) fn paint_menu_shortcut(ui: &egui::Ui, item: egui::Rect, shortcut: &st
     width
 }
 
-/// 원본 MenuMeasureItem(0x42df68)·MenuDrawItem: 단축키 칸 너비 = 그 메뉴 단축키 글의 최대 너비(처음 8) + 0xe, 모든 줄(구분선 포함)
-/// 오른쪽에 mrback으로 칠한다. `slot`은 메뉴를 그리기 전에 잡은 자리(항목 뒤에 그려지도록).
+/// Original MenuMeasureItem(0x42df68)·MenuDrawItem: shortcut cell width = the widest shortcut text in that menu (first 8) + 0xe, and every row (dividers included)
+/// is filled with mrback on the right. `slot` is the space reserved before drawing the menu (so it is drawn behind the items).
 pub(super) fn fill_menu_shortcut_column(ui: &egui::Ui, slot: egui::layers::ShapeIdx, widest: f32, colors: (Color32, Color32, Color32)) {
     let area = ui.min_rect();
     let column = egui::Rect::from_min_max(egui::pos2(area.right() - (widest.max(8.0) + 14.0), area.top()), area.max);
     ui.painter().set(slot, egui::Shape::rect_filled(column, 0.0, colors.0));
 }
 
-/// 이 장면의 펼침 메뉴 모양(스킨 테마면 skin_menu_style, 아니면 없음)을 ctx에 둔다. 오른쪽 단추 메뉴·NDR 메뉴가 읽는다.
+/// Store this scene's dropdown menu appearance (skin_menu_style for a skin theme, otherwise none) in ctx. The right-click menu and NDR menu read it.
 pub(super) fn set_menu_style(ctx: &egui::Context, style: Option<egui::style::StyleModifier>) {
     ctx.data_mut(|d| d.insert_temp(egui::Id::new(MENU_STYLE_ID), style));
 }
 
-/// 이 장면의 펼침 메뉴 모양을 `ui`에 입힌다(없으면 그대로).
+/// Apply this scene's dropdown menu appearance to `ui` (leaves it as-is if none).
 pub(super) fn apply_menu_style(ui: &mut egui::Ui) {
     if let Some(style) = ui.ctx().data(|d| d.get_temp::<Option<egui::style::StyleModifier>>(egui::Id::new(MENU_STYLE_ID))).flatten() {
         style.apply(ui.style_mut());
     }
 }
 
-/// `Response::context_menu`과 같고, 스킨 테마면 원본 메뉴 색(skin_menu_style)을 쓴다.
+/// Same as `Response::context_menu`, but uses the original menu colors (skin_menu_style) for a skin theme.
 pub(super) fn context_menu(response: &egui::Response, add: impl FnOnce(&mut egui::Ui)) -> Option<egui::InnerResponse<()>> {
     let style = response.ctx.data(|d| d.get_temp::<Option<egui::style::StyleModifier>>(egui::Id::new(MENU_STYLE_ID))).flatten();
     let popup = egui::Popup::context_menu(response);
@@ -155,20 +155,20 @@ pub(super) fn context_menu(response: &egui::Response, add: impl FnOnce(&mut egui
     .show(add)
 }
 
-/// 목록 오른쪽 단추 메뉴(원본 pmMain, TPopupMenu.Popup)를 이번 그림에서 연다. 열기는 `pane_menu`가 한다.
+/// Open the list right-click menu (original pmMain, TPopupMenu.Popup) on this frame. `pane_menu` does the opening.
 pub(super) fn request_pane_menu(ctx: &egui::Context, index: usize) {
     ctx.data_mut(|d| d.insert_temp(egui::Id::new(("ndr-list-menu-open", index)), true));
 }
 
-/// 이번 그림에서 목록 오른쪽 단추 메뉴를 열라고 했는지(한 번 읽으면 지운다).
+/// Whether this frame requested the list right-click menu to open (reading it once clears it).
 pub(super) fn take_pane_menu_request(ctx: &egui::Context, index: usize) -> bool {
     ctx.data_mut(|d| d.remove_temp::<bool>(egui::Id::new(("ndr-list-menu-open", index)))).unwrap_or(false)
 }
 
-/// 목록 오른쪽 단추 메뉴: 패널마다 하나(스킨 테마면 원본 메뉴 색). open_at이 있으면 이번 그림에서 그 자리에 연다
-/// (누른 자리, 글쇠면 커서 항목 칸의 왼쪽 아래). 자리는 열린 동안 기억한다.
-/// 고친 것: 메뉴를 누른 줄의 응답에 붙였더니, 그 줄을 그리지 않은 그림(쪽 맞춤·목록 다시 읽기 등)에서 egui가
-/// 버려진 메뉴로 보고 닫아 바로 사라졌다. 이제 패널이 그림마다 메뉴를 그린다.
+/// List right-click menu: one per panel (original menu colors for a skin theme). If open_at is set, it opens at that position on this frame
+/// (the click position, or the bottom-left of the cursor item's cell for the keyboard). The position is remembered while open.
+/// Fix: when the menu was attached to the response of the clicked row, on a frame that did not draw that row (layout fit, list reload, etc.) egui
+/// treated it as a discarded menu and closed it, so it vanished at once. Now the panel draws the menu every frame.
 pub(super) fn pane_menu(ui: &egui::Ui, index: usize, open_at: Option<egui::Pos2>, add: impl FnOnce(&mut egui::Ui)) -> Option<egui::InnerResponse<()>> {
     let ctx = ui.ctx().clone();
     let at_id = egui::Id::new(("ndr-list-menu-at", index));
@@ -189,7 +189,7 @@ pub(super) fn pane_menu(ui: &egui::Ui, index: usize, open_at: Option<egui::Pos2>
     .show(add)
 }
 
-/// `Popup::menu`(단추 아래 펼침)과 같고, 스킨 테마면 원본 메뉴 색을 쓴다.
+/// Same as `Popup::menu` (dropdown below a button), but uses the original menu colors for a skin theme.
 pub(super) fn menu_popup(response: &egui::Response) -> egui::Popup<'_> {
     let style = response.ctx.data(|d| d.get_temp::<Option<egui::style::StyleModifier>>(egui::Id::new(MENU_STYLE_ID))).flatten();
     let popup = egui::Popup::menu(response);
@@ -199,8 +199,8 @@ pub(super) fn menu_popup(response: &egui::Response) -> egui::Popup<'_> {
     }
 }
 
-/// 원본 메뉴 줄(tbMainMenuAdvancedCustomDraw·…DrawButton 0x430e74·0x430cb4): 바탕 mmainback, 글 mmaintext,
-/// 포인터·펼친 단추는 바탕 mmainoverback·글 mmainover. 돌려주는 값은 (바탕 색, 단추 모양).
+/// Original menu bar row (tbMainMenuAdvancedCustomDraw·…DrawButton 0x430e74·0x430cb4): background mmainback, text mmaintext,
+/// the hovered/opened button uses background mmainoverback and text mmainover. Returns (background color, button style).
 pub(super) fn skin_menu_bar_style(skin: &Skin) -> (Color32, egui::style::StyleModifier) {
     let back = menu_color(skin, "mmainback", Color32::from_gray(0x2A));
     let text = menu_color(skin, "mmaintext", Color32::from_gray(0x9F));
@@ -221,15 +221,15 @@ pub(super) fn skin_menu_bar_style(skin: &Skin) -> (Color32, egui::style::StyleMo
     (back, style)
 }
 
-/// 원본 탭 줄 높이(FUN_00481fb8 SetHeight 0x18)와 탭 단추(TNXPngButton) 너비 12.
+/// Original tab bar height (FUN_00481fb8 SetHeight 0x18) and tab button (TNXPngButton) width 12.
 pub(super) const TAB_SET_HEIGHT: f32 = 24.0;
 const TAB_BUTTON_WIDTH: f32 = 12.0;
-/// 원본 폴더 정보 표시줄 높이(FUN_00482700 SetHeight 0x14).
+/// Original folder info bar height (FUN_00482700 SetHeight 0x14).
 pub(super) const FOLDER_INFO_HEIGHT: f32 = 20.0;
-/// 원본 드라이브 단추 줄 높이(FUN_004825d8 SetHeight 0x16).
+/// Original drive button bar height (FUN_004825d8 SetHeight 0x16).
 pub(super) const DRIVE_BAR_HEIGHT: f32 = 22.0;
 
-/// 원본 FUN_007d7e6c(a, b, t): 채널마다 Round(a × t + b × (1 − t)). t는 원본의 single 상수(0.3·0.4·0.6).
+/// Original FUN_007d7e6c(a, b, t): per channel Round(a × t + b × (1 − t)). t is the original's single constant (0.3·0.4·0.6).
 pub(super) fn mix_color(a: Color32, b: Color32, t: f32) -> Color32 {
     let t = f64::from(t);
     let channel = |x: u8, y: u8| (f64::from(x) * t + f64::from(y) * (1.0 - t)).round_ties_even().clamp(0.0, 255.0) as u8;
@@ -239,7 +239,7 @@ pub(super) fn mix_color(a: Color32, b: Color32, t: f32) -> Color32 {
 const HLSMAX: f64 = 240.0;
 const RGBMAX: f64 = 255.0;
 
-/// VCL GraphUtil.ColorRGBToHLS(원본 FUN_00652150, HLSMAX 240): (색상, 밝기, 채도). 무채색은 색상 160·채도 0.
+/// VCL GraphUtil.ColorRGBToHLS (original FUN_00652150, HLSMAX 240): (hue, luminance, saturation). An achromatic color is hue 160, saturation 0.
 pub(super) fn rgb_to_hls(color: Color32) -> (u16, u16, u16) {
     let (r, g, b) = (f64::from(color.r()), f64::from(color.g()), f64::from(color.b()));
     let (max, min) = (r.max(g).max(b), r.min(g).min(b));
@@ -270,7 +270,7 @@ pub(super) fn rgb_to_hls(color: Color32) -> (u16, u16, u16) {
     (hue.round_ties_even() as u16, luminance, saturation.trunc() as u16)
 }
 
-/// VCL GraphUtil.ColorHLSToRGB(원본 FUN_006525c4).
+/// VCL GraphUtil.ColorHLSToRGB (original FUN_006525c4).
 pub(super) fn hls_to_rgb(hue: u16, luminance: u16, saturation: u16) -> Color32 {
     let round = |v: f64| if v > 255.0 { 255 } else { v.round_ties_even().max(0.0) as u8 };
     let (h, l, s) = (f64::from(hue), f64::from(luminance), f64::from(saturation));
@@ -302,7 +302,7 @@ pub(super) fn hls_to_rgb(hue: u16, luminance: u16, saturation: u16) -> Color32 {
     Color32::from_rgb(channel(HLSMAX / 3.0), channel(0.0), channel(-HLSMAX / 3.0))
 }
 
-/// 원본 커서·표시 막대 색(DrawFocus): 위→아래 세로 그러데이션과, 커서 줄이면 위끝·아래끝 1화소 선.
+/// Original cursor/selection bar colors (DrawFocus): a top-to-bottom vertical gradient, plus a 1-pixel line at the top and bottom edges for the cursor row.
 #[derive(Debug, PartialEq)]
 pub(super) struct FocusBar {
     pub top: Color32,
@@ -310,10 +310,10 @@ pub(super) struct FocusBar {
     pub lines: Option<Color32>,
 }
 
-/// 원본 TNXFileListView.DrawFocus(0x7d7f54, 자세히·목록 보기)와 SetCanvasColor(0x7d8e80).
-/// 바탕 색: 커서가 아닌 표시 항목은 NXSELECT, 커서 항목은 그 항목 색. 밝기(HLS 0~240)가 20보다 작으면 위를 +20, 아니면 아래를 −20,
-/// 선은 30보다 작으면 +30 아니면 −30. 목록에 초점이 있으면 커서 줄은 그대로(글은 NXBACK), 표시 줄은 NXBACK과 섞어 0.15·0.15·선 0.2.
-/// 초점이 없으면 커서 줄은 0.06 단색에 선은 항목 색 0.25, 표시 줄은 0.1·0.1·0.15.
+/// Original TNXFileListView.DrawFocus(0x7d7f54, Details/List view) and SetCanvasColor(0x7d8e80).
+/// Background color: a selected non-cursor item is NXSELECT, the cursor item is its own item color. If luminance (HLS 0~240) is below 20, raise the top by +20, otherwise lower the bottom by −20;
+/// the line is +30 below 30, otherwise −30. If the list has focus, the cursor row stays as-is (text NXBACK) and a selected row is mixed with NXBACK at 0.15·0.15·line 0.2.
+/// Without focus, the cursor row is a 0.06 flat fill with the line at item color 0.25, and a selected row is 0.1·0.1·0.15.
 pub(super) fn focus_bar(item: Color32, back: Color32, select: Color32, cursor: bool, selected: bool, list_focused: bool) -> FocusBar {
     let base = if !cursor && selected { select } else { item };
     let (h, l, s) = rgb_to_hls(base);
@@ -336,7 +336,7 @@ pub(super) fn focus_bar(item: Color32, back: Color32, select: Color32, cursor: b
     FocusBar { top, bottom, lines: cursor.then_some(line) }
 }
 
-/// 막대 모양: GDI+ 세로 그러데이션 채우기(위 = top, 아래 = bottom)와 커서 줄의 위끝·아래끝 선(왼쪽 ~ 오른쪽 − 1).
+/// Bar shape: a GDI+ vertical gradient fill (top = top, bottom = bottom) plus the top-edge/bottom-edge lines of the cursor row (left ~ right − 1).
 pub(super) fn focus_bar_shapes(rect: egui::Rect, bar: &FocusBar) -> Vec<egui::Shape> {
     let mut mesh = egui::Mesh::default();
     mesh.colored_vertex(rect.left_top(), bar.top);
@@ -354,10 +354,10 @@ pub(super) fn focus_bar_shapes(rect: egui::Rect, bar: &FocusBar) -> Vec<egui::Sh
     shapes
 }
 
-/// 원본 FUN_007cdfc0(시계 방향)·FUN_007ce0e4(반시계 방향) 90° 돌린 그림: `uv` 부분을 돌려 `dest`에 그린다(dest 너비 = 원래 높이).
+/// Original FUN_007cdfc0 (clockwise)·FUN_007ce0e4 (counterclockwise) 90°-rotated image: rotates the `uv` region and draws it into `dest` (dest width = original height).
 pub(super) fn rotated_image(painter: &egui::Painter, texture: egui::TextureId, dest: egui::Rect, uv: egui::Rect, clockwise: bool) {
     let (l, t, r, b) = (uv.min.x, uv.min.y, uv.max.x, uv.max.y);
-    // 꼭짓점 차례: 왼쪽 위, 오른쪽 위, 오른쪽 아래, 왼쪽 아래.
+    // Corner order: top-left, top-right, bottom-right, bottom-left.
     let corners = if clockwise { [(l, b), (l, t), (r, t), (r, b)] } else { [(r, t), (r, b), (l, b), (l, t)] };
     let mut mesh = egui::Mesh::with_texture(texture);
     for (pos, (u, v)) in [dest.left_top(), dest.right_top(), dest.right_bottom(), dest.left_bottom()].into_iter().zip(corners) {
@@ -368,10 +368,10 @@ pub(super) fn rotated_image(painter: &egui::Painter, texture: egui::TextureId, d
     painter.add(egui::Shape::mesh(mesh));
 }
 
-/// 원본 DrawFocus 형식 3(미리 보기, 0x7d87a1). 바탕·선 색은 DrawThumbnailItem이 펜·붓에 넣은 NXSELECT이고,
-/// 밝기(HLS 0~240)가 50보다 작으면 위를 +50, 아니면 아래를 −50 한다. 그다음 NXBACK과 섞는다(위·아래, 선):
-/// 끌어 놓을 자리 0.5·1.0, 초점 있음이면 커서 0.4·(표시도 하면 0.9, 아니면 0.6), 표시만 0.2·0.4,
-/// 초점 없음이면 커서 0.2·(표시 0.7, 아니면 0.4), 표시만 0.1·0.3. 돌려주는 값은 (위, 아래, 선).
+/// Original DrawFocus style 3 (thumbnail preview, 0x7d87a1). The background/line color is the NXSELECT that DrawThumbnailItem put in the pen/brush, and
+/// if luminance (HLS 0~240) is below 50 the top is raised by +50, otherwise the bottom is lowered by −50. Then it is mixed with NXBACK (top·bottom, line):
+/// drop target 0.5·1.0; with focus, cursor 0.4·(0.9 if also marked, otherwise 0.6), marked only 0.2·0.4;
+/// without focus, cursor 0.2·(0.7 if marked, otherwise 0.4), marked only 0.1·0.3. Returns (top, bottom, line).
 pub(super) fn thumbnail_focus(select: Color32, back: Color32, cursor: bool, marked: bool, drop: bool, list_focused: bool) -> (Color32, Color32, Color32) {
     let (h, l, s) = rgb_to_hls(select);
     let (mut top, mut bottom) = (select, select);
@@ -393,15 +393,15 @@ pub(super) fn thumbnail_focus(select: Color32, back: Color32, cursor: bool, mark
     (mix_color(top, back, fill), mix_color(bottom, back, fill), mix_color(select, back, line))
 }
 
-/// 원본 DrawThumbnailItem(0x7da1c4)의 막대 자리: 왼쪽 = 칸 왼쪽 + (칸 너비 − 크기 − 12) div 2 + 1, 위 = 칸 위 + 1,
-/// 너비 = 크기 + 10, 높이 = 크기 + 12(항목 높이 +0x340) + 그 항목의 글 높이(GetThumbnailTextHeight) − 2.
+/// The bar position of the original DrawThumbnailItem(0x7da1c4): left = cell left + (cell width − size − 12) div 2 + 1, top = cell top + 1,
+/// width = size + 10, height = size + 12 (item height +0x340) + that item's text height (GetThumbnailTextHeight) − 2.
 pub(super) fn thumbnail_focus_rect(cell: egui::Rect, thumb: f32, text_height: f32) -> egui::Rect {
     let left = cell.left() + ((cell.width() - thumb - 12.0) / 2.0).trunc() + 1.0;
     let top = cell.top() + 1.0;
     egui::Rect::from_min_size(egui::pos2(left, top), egui::vec2(thumb + 10.0, thumb + 12.0 + text_height - 2.0))
 }
 
-/// 원본 FUN_007d7b3c(반지름 4의 둥근 사각형 경로)를 세로 그러데이션 붓으로 채우고 1화소 펜으로 그린다(GDI+ 안티에일리어싱).
+/// Fills the original FUN_007d7b3c (a rounded rectangle path with radius 4) with a vertical gradient brush and strokes it with a 1-pixel pen (GDI+ anti-aliasing).
 pub(super) fn rounded_gradient_shapes(rect: egui::Rect, radius: f32, top: Color32, bottom: Color32, line: Color32) -> Vec<egui::Shape> {
     let lerp = |y: f32| {
         let t = if rect.height() > 0.0 { ((y - rect.top()) / rect.height()).clamp(0.0, 1.0) } else { 0.0 };
@@ -431,7 +431,7 @@ pub(super) fn rounded_gradient_shapes(rect: egui::Rect, radius: f32, top: Color3
     vec![egui::Shape::mesh(mesh), egui::Shape::rect_stroke(rect, egui::CornerRadius::same(radius as u8), egui::Stroke::new(1.0, line), egui::StrokeKind::Inside)]
 }
 
-/// 원본 InitSelMarkBitmap(0x7db878, 6×10, 색 NXSELECT)의 ▶: 열 x(1~4)마다 x ~ 8 − x 줄. 줄 왼쪽 + 2, 세로 가운데에 그린다.
+/// The ▶ of the original InitSelMarkBitmap(0x7db878, 6×10, color NXSELECT): for each column x (1~4), rows x ~ 8 − x. Drawn at row left + 2, vertically centered.
 pub(super) fn selection_mark_shapes(rect: egui::Rect, color: Color32) -> Vec<egui::Shape> {
     let origin = egui::pos2(rect.left() + 2.0, rect.top() + ((rect.height() - 10.0) / 2.0).floor());
     (1..=4)
@@ -442,7 +442,7 @@ pub(super) fn selection_mark_shapes(rect: egui::Rect, color: Color32) -> Vec<egu
         .collect()
 }
 
-/// 원본 목록 줄 색(스킨 테마, DrawListItem·DrawFocus·InitSelMarkBitmap): NX 기본 색.
+/// Original list row colors (skin theme, DrawListItem·DrawFocus·InitSelMarkBitmap): NX default colors.
 #[derive(Clone, Copy)]
 pub(super) struct ListColors {
     pub back: Color32,
@@ -458,8 +458,8 @@ pub(super) struct ListColors {
 }
 
 impl ListColors {
-    /// 원본 DrawListItem의 칸 글색: 커서 줄은 초점이 있으면 NXBACK(SetCanvasColor가 뒤집음), 없으면 항목 색.
-    /// 그 밖에는 크기 NXSIZE(읽기 전용 NXREADONLY, 숨김 NXHIDDEN), 날짜 NXTIME, 속성 NXATTR, 설명 NXDESC, 나머지는 항목 색.
+    /// Cell text color of the original DrawListItem: for the cursor row, NXBACK if focused (SetCanvasColor inverts it), otherwise the item color.
+    /// Otherwise size NXSIZE (read-only NXREADONLY, hidden NXHIDDEN), date NXTIME, attributes NXATTR, description NXDESC, and the rest the item color.
     pub(super) fn cell(&self, column: super::list_view::DetailColumn, item: Color32, attributes: u32, cursor: bool, focused: bool) -> Color32 {
         use super::list_view::DetailColumn as C;
         if cursor {
@@ -477,15 +477,15 @@ impl ListColors {
     }
 }
 
-/// 원본 크기 칸(DrawListItem 칸 3): 앞의 숫자(0~9 . ,)와 나머지(단위). 나머지는 글 전체에 G가 있으면 NXGB, M이 있으면 NXMB 색.
+/// Original size cell (DrawListItem cell 3): the leading number (0~9 . ,) and the rest (the unit). The rest is NXGB if the whole text has a G, or NXMB if it has an M.
 pub(super) fn split_size_text(text: &str) -> (&str, &str) {
     let end = text.char_indices().find(|(_, c)| !(c.is_ascii_digit() || *c == '.' || *c == ',')).map_or(text.len(), |(i, _)| i);
     text.split_at(end)
 }
 
-/// 원본 TNXScrollBar.UpdateThumbWidth·RecalcThumbPos(0x7cfdf0·0x7cfe90): 쓸 길이 = 막대 길이 − 단추 × 2,
-/// 엄지 길이 = 쓸 길이 × 보이는 양 / 전체(막대 두께·20보다 작지 않고 쓸 길이보다 크지 않게), 위치 = 단추 + (쓸 길이 − 엄지) × 지금 / (전체 − 보이는 양).
-/// 돌려주는 값은 (막대 위에서 엄지 위까지, 엄지 길이).
+/// Original TNXScrollBar.UpdateThumbWidth·RecalcThumbPos(0x7cfdf0·0x7cfe90): usable length = track length − button × 2,
+/// thumb length = usable length × visible amount / total (not below the track thickness or 20, and not above the usable length), position = button + (usable length − thumb) × current / (total − visible amount).
+/// Returns (top of track to top of thumb, thumb length).
 pub(super) fn scrollbar_thumb(track: f32, thickness: f32, button: f32, offset: f32, content: f32, viewport: f32) -> (f32, f32) {
     let usable = (track - 2.0 * button).max(0.0);
     let mut length = if content > 0.0 { (usable * viewport / content).floor() } else { usable };
@@ -495,7 +495,7 @@ pub(super) fn scrollbar_thumb(track: f32, thickness: f32, button: f32, offset: f
     (button + position, length)
 }
 
-/// TNXLabel 마크업(스킨 테마): 색 태그가 없는 글은 라벨 글색, &lt;b&gt;는 같은 크기의 굵은 꼴(Segoe UI Bold·맑은 고딕 Bold).
+/// TNXLabel markup (skin theme): text with no color tag uses the label text color; &lt;b&gt; is a bold face of the same size (Segoe UI Bold·Malgun Gothic Bold).
 fn skin_markup_job(text: &str, base: Color32) -> egui::text::LayoutJob {
     let mut job = egui::text::LayoutJob::default();
     for span in ndr::markup::render(text) {
@@ -506,18 +506,18 @@ fn skin_markup_job(text: &str, base: Color32) -> egui::text::LayoutJob {
     job
 }
 
-/// 원본 TNXTabSet.CalcTabWidth(0x7d0858)의 결과.
+/// Result of the original TNXTabSet.CalcTabWidth(0x7d0858).
 #[derive(Debug, PartialEq)]
 pub(super) struct TabSetLayout {
     pub tab_width: i32,
-    /// 한 번에 보이는 탭 수(+0x2cc).
+    /// Visible tabs at once (+0x2cc).
     pub visible: usize,
-    /// 다 들어가지 않아 스크롤 단추(《 》)를 보인다. 그때 탭은 32부터(아니면 16부터).
+    /// They do not all fit, so scroll buttons (《 》) are shown. Then tabs start at 32 (otherwise at 16).
     pub scroll: bool,
 }
 
-/// 원본 CalcTabWidth: 쓸 너비 = 너비 − 16, 탭 너비 = 가장 긴 글 + 28. 넘치면 + 14, 그래도 넘치면
-/// 최소 너비(SetMinTabWidth 60)보다 넓게 나눌 수 있으면 똑같이 나누고, 아니면 스크롤 단추 자리 32를 빼고 60씩 들어가는 수로 나눈다.
+/// Original CalcTabWidth: usable width = width − 16, tab width = longest text + 28. If it overflows, use + 14; if it still overflows,
+/// split evenly if that can be wider than the minimum width (SetMinTabWidth 60), otherwise subtract 32 for the scroll buttons and split into as many 60-wide tabs as fit.
 pub(super) fn tab_set_layout(text_widths: &[i32], width: i32) -> TabSetLayout {
     const MIN_TAB_WIDTH: i32 = 60;
     let count = text_widths.len() as i32;
@@ -539,7 +539,7 @@ pub(super) fn tab_set_layout(text_widths: &[i32], width: i32) -> TabSetLayout {
     TabSetLayout { tab_width: tab, visible: (available / tab).max(0) as usize, scroll: available < count * tab }
 }
 
-/// 원본 SetTabIndex·TabsChanged의 첫 탭 맞춤: 지금 탭이 보이게, 끝에 빈자리가 남지 않게.
+/// Original SetTabIndex·TabsChanged first-tab alignment: keep the current tab visible and leave no empty space at the end.
 pub(super) fn tab_first_index(first: usize, active: usize, visible: usize, count: usize) -> usize {
     let visible = visible.max(1);
     let mut first = first.min(active);
@@ -549,10 +549,10 @@ pub(super) fn tab_first_index(first: usize, active: usize, visible: usize, count
     first.min(count.saturating_sub(visible))
 }
 
-/// 원본 TNXPathLabel.UpdateDisplayInfo(0x7c8c20): 조각 너비 = 글 너비 + 4. 쓸 폭 = 이름표 너비 − 16, 첫 조각 몫 = 첫 글 + 20.
-/// 조각 1개: 쓸 폭보다 넓으면 이름표 너비 − 32. 2개: 마지막을 쓸 폭 − (첫 글 + 36)으로. 3개 이상: 첫·마지막은 그대로 두고
-/// 가운데 조각들이 (쓸 폭 − 마지막 글 − 20 − 첫 몫 − (개수 × 16 − 32))를 나눠 쓴다. 몫보다 좁은 조각은 그대로, 나머지는 같은 몫으로 줄인다.
-/// 가운데를 모두 "..."(글 + 4)로 줄여도 모자라면 마지막을 (쓸 폭 − 첫 몫 − ("..." + 20) × 가운데 수 − 16)으로 줄인다. 나눗셈은 Delphi div.
+/// Original TNXPathLabel.UpdateDisplayInfo(0x7c8c20): segment width = text width + 4. Usable width = label width − 16, first-segment share = first text + 20.
+/// 1 segment: if wider than the usable width, label width − 32. 2 segments: set the last to usable width − (first text + 36). 3 or more: keep the first and last, and
+/// the middle segments share (usable width − last text − 20 − first share − (count × 16 − 32)). Segments narrower than their share stay, the rest shrink to the same share.
+/// If shrinking all middle segments to "..." (text + 4) still does not fit, shrink the last to (usable width − first share − ("..." + 20) × middle count − 16). Division is Delphi div.
 pub(super) fn path_label_widths(text: &[i32], dots: i32, width: i32) -> Vec<i32> {
     let mut w: Vec<i32> = text.iter().map(|t| t + 4).collect();
     let n = w.len();
@@ -603,9 +603,9 @@ pub(super) fn path_label_widths(text: &[i32], dots: i32, width: i32) -> Vec<i32>
 }
 
 impl App {
-    /// 원본 패널 테두리(FUN_00483300, 틀 패널 +0x330 그리기): 색은 위치 종류(로컬 lframelocal, "\\"로 시작하면 lframenet, 압축 lframearc,
-    /// FTP lframeftp). 목록에 초점이 있으면 그 색 그대로(안쪽 고리 비율 0), 없으면 틀 바탕(lback)과 섞는다(바탕 40% + 테두리 60%, 정수 나눗셈).
-    /// 굵기는 lframewidth(기본 스킨 셋 모두 1이라 안쪽 고리 하나).
+    /// Original panel border (FUN_00483300, drawing the frame panel +0x330): the color depends on the location kind (local lframelocal, lframenet if it starts with "\\", archive lframearc,
+    /// FTP lframeftp). If the list has focus, use that color as-is (inner-ring ratio 0); otherwise mix it with the frame background (lback) (background 40% + border 60%, integer division).
+    /// The width is lframewidth (every bundled skin set uses 1, so a single inner ring).
     pub(super) fn skin_frame_stroke(&self, skin: &Skin, index: usize) -> egui::Stroke {
         let pane = &self.panes[index];
         let key = if pane.remote.is_some() {
@@ -629,8 +629,8 @@ impl App {
         egui::Stroke::new(width, color)
     }
 
-    /// 주소 줄 조각(원본 TNXPathLabel.SetPath): FTP = "ftp://호스트" + 폴더들, 압축 = 압축 파일 폴더들 + 압축 이름 + 안 폴더들,
-    /// 내 PC = MYCOMPUTER 하나, 로컬 = 루트부터 지금 폴더까지.
+    /// Address-bar segments (original TNXPathLabel.SetPath): FTP = "ftp://host" + folders, archive = archive file folders + archive name + inner folders,
+    /// My Computer = a single MYCOMPUTER, local = from the root down to the current folder.
     pub(super) fn crumb_segments(&self, index: usize) -> Vec<CrumbSegment> {
         let pane = &self.panes[index];
         let mut segments = Vec::new();
@@ -644,7 +644,7 @@ impl App {
             }
             return segments;
         }
-        // 첫 조각(루트)은 원본 TNXPathLabel처럼 끝 '\' 없이("C:\" → "C:").
+        // The first segment (root) drops the trailing '\' like the original TNXPathLabel ("C:\" → "C:").
         let local = |path: &Path, first: bool| CrumbSegment {
             label: if first {
                 let root = path.to_string_lossy();
@@ -682,16 +682,16 @@ impl App {
         segments
     }
 
-    /// 원본 주소 줄(스킨 테마). 왼쪽 단추 = 경로 기록 드롭다운(FUN_0048ced4), 오른쪽 단추 = 다시 읽기(FUN_0048ce78),
-    /// 가운데 TNXPathLabel: 배경 laback, 맨 앞 ▼(DrawDivider, 누르면 드라이브 목록), 조각 글(latext, 지금 폴더 lacurr,
-    /// 포인터가 있는 조각은 laover 글 + lafocus 배경), 조각 뒤 ">" 선(ladivider, 누르면 그 폴더의 하위 폴더).
+    /// Original address bar (skin theme). Left button = path history dropdown (FUN_0048ced4), right button = refresh (FUN_0048ce78),
+    /// center TNXPathLabel: background laback, a leading ▼ (DrawDivider, click for the drive list), segment text (latext, current folder lacurr,
+    /// a hovered segment is laover text + lafocus background), a ">" line after each segment (ladivider, click for that folder's subfolders).
     pub(super) fn skin_address_bar(&mut self, ui: &mut egui::Ui, index: usize, ctx: &egui::Context, skin: &Skin) {
         if !self.settings.flag("ShowAddressBar", true) {
             return;
         }
         let (rect, background) = ui.allocate_exact_size(egui::vec2(ui.available_width(), ADDRESS_BAR_HEIGHT), egui::Sense::click());
         let painter = ui.painter().with_clip_rect(rect);
-        // 원본 FUN_004896d8: laback(없으면 0x141414)을 틀(TNXPaintPanel)과 이름표 바탕에 쓴다.
+        // Original FUN_004896d8: laback (0x141414 if missing) is used for the frame (TNXPaintPanel) and the label background.
         painter.rect_filled(rect, 0.0, skin_color(skin, "laback", Color32::from_gray(0x14)));
         if self.panes[index].address_editing {
             let id = egui::Id::new(("ndr-address", index));
@@ -708,10 +708,10 @@ impl App {
             }
             return;
         }
-        // 양끝 단추(TNXImageButton, addressbtns.png: 칸 = 단추, 줄 = 보통·포인터).
-        // 원본 FUN_00481978: 두 단추 모두 Align = alRight(4), 너비 0x14. 다시 읽기는 Left = 틀 너비, 경로 기록은 Left = 0이라
-        // 오른쪽 끝부터 [경로 기록 ▼][다시 읽기]이고 TNXPathLabel(alClient)이 나머지를 채운다.
-        // 고친 것(사용자 지적): 전에는 경로 기록 ▼를 왼쪽 끝에 두어 이름표의 드라이브 ▼와 ▼가 둘 나란히 보였다.
+        // The two end buttons (TNXImageButton, addressbtns.png: columns = buttons, rows = normal·hovered).
+        // Original FUN_00481978: both buttons have Align = alRight(4), width 0x14. Refresh has Left = frame width, path history has Left = 0, so
+        // from the right edge it is [path history ▼][refresh] and the TNXPathLabel (alClient) fills the rest.
+        // Fix (user-reported): previously the path history ▼ was placed at the left edge, so it appeared side by side with the label's drive ▼ (two ▼).
         let buttons = skin.values.get("list.labtnimgs").cloned().and_then(|file| self.toolbar_icon(ctx, &file));
         let right_button = egui::Rect::from_min_size(egui::pos2(rect.right() - ADDRESS_BUTTON_WIDTH, rect.top()), egui::vec2(ADDRESS_BUTTON_WIDTH, rect.height()));
         let left_button = egui::Rect::from_min_size(egui::pos2(right_button.left() - ADDRESS_BUTTON_WIDTH, rect.top()), egui::vec2(ADDRESS_BUTTON_WIDTH, rect.height()));
@@ -722,7 +722,7 @@ impl App {
                 let row = usize::from(response.hovered());
                 let uv = egui::Rect::from_min_max(egui::pos2(cell as f32 / 2.0, row as f32 / 2.0), egui::pos2((cell + 1) as f32 / 2.0, (row + 1) as f32 / 2.0));
                 let size = texture.size_vec2() / 2.0;
-                // 원본 TNXImageButton: 칸이 4개보다 적으면 누른 동안 색 × 0.6(FUN_007c39e4).
+                // Original TNXImageButton: if there are fewer than 4 columns, color × 0.6 while held (FUN_007c39e4).
                 let tint = if response.is_pointer_button_down_on() && response.hovered() { Color32::from_gray(153) } else { Color32::WHITE };
                 painter.image(texture.id(), egui::Rect::from_center_size(slot.center(), size), uv, tint);
             }
@@ -731,13 +731,13 @@ impl App {
                 clicked_button = Some((cell, slot.left_bottom()));
             }
         }
-        // 가운데 경로 글(TNXPathLabel).
+        // The center path text (TNXPathLabel).
         let label = egui::Rect::from_min_max(egui::pos2(rect.left(), rect.top()), egui::pos2(left_button.left(), rect.bottom()));
         let painter = ui.painter().with_clip_rect(label);
         let font = egui::FontId::proportional(super::BASE_TEXT_SIZE);
-        // 원본 FUN_004896d8(스킨 conf.ini [List]에 없을 때의 값): latext → Font.Color 0x646464, lacurr → SetLastFolderColor
-        // TColor 0x9696B4(= RGB B4 96 96), laover → SetHighlightColor 0x969696, lafocus → SetFocusBackColor 0x323232,
-        // ladivider → SetDividerColor 0x141414. 고친 것: 전에는 검정 스킨 값을 기본값으로 써서 키가 없는 스킨에서 색이 달랐다.
+        // Original FUN_004896d8 (the values used when a skin conf.ini [List] key is missing): latext → Font.Color 0x646464, lacurr → SetLastFolderColor
+        // TColor 0x9696B4 (= RGB B4 96 96), laover → SetHighlightColor 0x969696, lafocus → SetFocusBackColor 0x323232,
+        // ladivider → SetDividerColor 0x141414. Fix: previously the black-skin values were used as defaults, so a skin without these keys got different colors.
         let (text, current, over, focus, divider) = (
             skin_color(skin, "latext", Color32::from_gray(0x64)),
             skin_color(skin, "lacurr", Color32::from_rgb(0xB4, 0x96, 0x96)),
@@ -749,7 +749,7 @@ impl App {
         let clicked = ui.input(|i| i.pointer.primary_clicked());
         let (top, height) = (label.top(), label.height());
         let mut action: Option<(Option<CrumbTarget>, Option<(PathBuf, bool, egui::Pos2)>)> = None;
-        // DrawDivider: x + 4부터 4줄(8, 6, 4, 2화소)로 된 ▼. 누르면 드라이브 목록.
+        // DrawDivider: a ▼ made of 4 rows (8, 6, 4, 2 pixels) starting at x + 4. Click for the drive list.
         let mut x = label.left();
         let lead = egui::Rect::from_min_size(egui::pos2(x, top), egui::vec2(16.0, height));
         let lead_hot = pointer.is_some_and(|p| lead.contains(p));
@@ -764,7 +764,7 @@ impl App {
         x += 16.0;
         let segments = self.crumb_segments(index);
         let count = segments.len();
-        // 원본 UpdateDisplayInfo: 이름표 폭에 맞춰 조각 너비를 정하고, 줄어든 조각은 DrawTextW(DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS)로 그린다.
+        // Original UpdateDisplayInfo: segment widths are set to fit the label width, and shrunken segments are drawn with DrawTextW(DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS).
         let (naturals, dots) = ui.fonts_mut(|f| {
             let mut measure = |s: &str| f.layout_no_wrap(s.to_owned(), font.clone(), text).size().x.round() as i32;
             let naturals = segments.iter().map(|s| measure(&s.label)).collect::<Vec<_>>();
@@ -784,7 +784,7 @@ impl App {
             let hot = pointer.is_some_and(|p| cell.contains(p));
             if hot {
                 painter.rect_filled(cell, 0.0, focus);
-                // 원본 MouseMove(0x7c9e30): 조각 위에 오면 Hint = PathOfLevel(그 조각까지 구분자로 이은 경로)로 도움말을 띄운다.
+                // Original MouseMove(0x7c9e30): hovering a segment shows a tooltip with Hint = PathOfLevel (the path joined by separators up to that segment).
                 let path_of_level = match &segment.target {
                     CrumbTarget::Local(path) => {
                         let text = path.to_string_lossy().into_owned();
@@ -798,7 +798,7 @@ impl App {
             let pressed = hot && ui.input(|i| i.pointer.primary_down());
             let offset = if pressed && i + 1 != count { 1.0 } else { 0.0 };
             painter.galley_with_override_text_color(egui::pos2(x + 2.0 + offset, top + ((height - galley.size().y) / 2.0).floor() + offset), galley, color);
-            // 조각 뒤 ">": 위끝·아래끝에서 가운데(오른쪽 + 10)로 모이는 선.
+            // The ">" after a segment: lines converging from the top and bottom edges to the center (right + 10).
             let right = cell.right();
             let middle = top + (height / 2.0).floor();
             let arrow = egui::Rect::from_min_max(egui::pos2(right, top), egui::pos2(right + 16.0, top + height));
@@ -816,7 +816,7 @@ impl App {
             }
             x = right + 16.0;
         }
-        // 원본 pmAddressBar: 오른쪽 단추로 누르면 주소 복사·편집과 즐겨찾기 메뉴. 빈 곳을 두 번 누르면 경로 직접 입력.
+        // Original pmAddressBar: right-clicking shows the copy/edit address and favorites menu. Double-clicking empty space enters the path directly.
         if let Some(position) = ui.input(|i| i.pointer.secondary_clicked().then(|| i.pointer.interact_pos()).flatten()).filter(|p| label.contains(*p)) {
             return self.show_address_bar_menu(index, position);
         }

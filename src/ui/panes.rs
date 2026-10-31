@@ -38,7 +38,7 @@ pub(super) fn paint_original_cell(ui: &mut egui::Ui, rect: egui::Rect, column: D
             painter.galley(egui::pos2(inner.right() - galley.size().x, top(galley.size().y)), galley, cell_color);
         }
         // Original DrawListItem field 4: DateToStr goes to the left of the cell, TimeToStr to the right. The gap between them is listing::LIST_DATE_TIME_GAP.
-        // Fix: splitting on the first space made "5일 전 23:19" split into "5일" and "전 23:19".
+        // Fix: splitting on the first space made "5일 전 23:19" split into "5일" and "전 23:19" (date "5 days ago" + time).
         DetailColumn::Modified if text.contains(ndr::listing::LIST_DATE_TIME_GAP) => {
             let (date, time) = text.split_once(ndr::listing::LIST_DATE_TIME_GAP).unwrap_or((text, ""));
             let date = layout(ui, &[(date, cell_color)]);
@@ -1268,7 +1268,7 @@ impl App {
                 let mut command = None;
                 let mut begin_drag = None;
                 let mut folder_rows: Vec<(usize, egui::Rect, PathBuf)> = Vec::new();
-                // 원본 틀 패널 안: 위에서부터 드라이브 단추 줄(켰을 때), 주소 줄, 폴더 정보 표시줄, 목록(사이 틈 없음).
+                // Inside the original frame panel, top to bottom: the drive button row (when on), the address bar, the folder info bar, the list (no gaps between them).
                 if let Some(skin) = &skin {
                     ui.scope(|ui| {
                         ui.spacing_mut().item_spacing.y = 0.0;
@@ -1277,9 +1277,9 @@ impl App {
                         self.skin_folder_info_bar(ui, index, skin);
                     });
                 }
-                // 원본 FUN_0048da38(miShowFoldersClick 0x445258, Alt+F3): 패널마다 목록 왼쪽(alLeft, 위 주소 줄·폴더 정보줄과 아래 파일 정보줄
-                // 사이)에 폴더 트리(너비 = 설정 +0x48 + 패널 × 4, ini treewidth1/2), 그 오른쪽에 3화소 나눔 막대(MinSize 50, 끌어 놓으면
-                // FUN_0048e2c0이 너비를 남긴다). 목록은 그 오른쪽 나머지.
+                // Original FUN_0048da38 (miShowFoldersClick 0x445258, Alt+F3): per pane, to the left of the list (alLeft, between the address/folder-info bars above and the file info bar
+                // below) a folder tree (width = setting +0x48 + pane × 4, ini treewidth1/2), with a 3-pixel splitter bar to its right (MinSize 50; when dragged,
+                // FUN_0048e2c0 keeps the width). The list takes the rest to the right.
                 let outer: &mut egui::Ui = ui;
                 let full = outer.available_rect_before_wrap();
                 let tree_shown = self.settings.flag(if index == 0 { "ShowLeftFolderTree" } else { "ShowRightFolderTree" }, false);
@@ -1309,15 +1309,15 @@ impl App {
                 }
                 let mut list_ui = outer.new_child(egui::UiBuilder::new().id_salt("ndr-pane-list").max_rect(egui::Rect::from_min_max(egui::pos2(full.left() + tree_width + splitter, full.top()), full.max)).layout(egui::Layout::top_down(egui::Align::Min)));
                 let ui = &mut list_ui;
-                // C# ConfigureGrid 열: 이름, 확장자(이름에 붙이지 않을 때), 종류(ShowFileType), 크기, 수정한 날짜, 속성, 설명.
+                // C# ConfigureGrid columns: Name, Extension (when not attached to the name), Kind (ShowFileType), Size, Modified date, Attributes, Description.
                 let columns = self.detail_columns(self.language == "ko");
-                // 원본 처음 값 viewstyle1/2=0(자동 보기).
+                // Original initial value viewstyle1/2 = 0 (Auto view).
                 let view = self.settings.text(if index == 0 { "LeftViewStyle" } else { "RightViewStyle" }, "Auto");
                 let tiles = matches!(view.as_str(), "Thumbnails" | "viewThumbnails");
                 let names = matches!(view.as_str(), "Names" | "viewNames");
                 let grouped = self.side_text(index, "GroupMode", "None") != "None";
-                // 원본 UpdateDisplayAuto: 열이 둘 이상이거나 한 열에 다 들어가지 않으면(가로 막대) 열로 흐르는 목록(머리글 없음),
-                // 다 들어가는 한 열이면 자세히처럼 한 열. 묶음 보기(C# 판에만 있음)는 C# RebuildAutoColumns(열마다 따로 스크롤)를 그대로 쓴다.
+                // Original UpdateDisplayAuto: if there is more than one column or a single column does not fit (horizontal bar), a column-flowing list (no header);
+                // if one column fits, a single column like Details. Group view (C# version only) uses C# RebuildAutoColumns (per-column scrolling) as-is.
                 let (auto_columns, auto_bar) = if matches!(view.as_str(), "Auto" | "viewAuto") {
                     if grouped {
                         (self.auto_column_count(ui, index, ui.available_width()), false)
@@ -1328,11 +1328,11 @@ impl App {
                 } else {
                     (1, false)
                 };
-                // 원본 DrawItems(0x7da82c): 자동(0)·이름(1) 보기는 늘 열로 흐르는 목록이고 머리글(DrawListHeader)은 자세히(2)만 그린다.
-                // 스킨 테마는 그래서 한 열에 다 들어가도 흐르는 목록(머리글 없음, UpdateDisplayAuto의 칸 너비)이다.
+                // Original DrawItems(0x7da82c): Auto(0) and Names(1) views are always column-flowing lists, and the header (DrawListHeader) is drawn only in Details(2).
+                // So in the skin theme, even when it fits one column it is a flowing list (no header, with the UpdateDisplayAuto cell width).
                 let auto_view = matches!(view.as_str(), "Auto" | "viewAuto");
                 let auto_flow = !grouped && (auto_columns > 1 || auto_bar || (auto_view && skin.is_some()));
-                // 원본 스킨 세로 막대(TNXScrollBar): 넘칠 때만 보이고 그 너비만큼 목록이 좁아진다. 넘치는지는 지난 그림에서 잰다.
+                // Original skin vertical bar (TNXScrollBar): shown only when overflowing, and the list shrinks by its width. Whether it overflows is measured from the last paint.
                 let skin_bar = match &skin {
                     Some(s) => self.skin_scrollbar_width(ctx, s),
                     None => None,
@@ -1342,15 +1342,15 @@ impl App {
                     Some(w) if ui.data(|d| d.get_temp::<bool>(bar_flag)).unwrap_or(false) => w,
                     _ => 0.0,
                 };
-                // 칸 너비: 자세히 보기는 C# star 비율, 한 열 자동 보기는 C# ApplyAutoDetailColumns(이름 = 나머지, 칸은 내용 너비, 모자라면 숨김).
+                // Cell widths: Details view uses the C# star ratio; single-column Auto view uses C# ApplyAutoDetailColumns (name = the rest, cells are content width, hidden when there is not enough room).
                 let cell_widths: Vec<Option<f32>> = if tiles || names || auto_columns > 1 || auto_flow {
                     Vec::new()
                 } else {
                     self.original_detail_widths(ui, index, ui.available_width() - bar_reserve, &columns)
                 };
-                // 원본 UpdateScrollBar(형식 2, 0x7db270): 칸 너비 합(0x370)이 목록 너비(GetRealClientWidth, 세로 막대를 뺀 너비)보다 크면
-                // 가로 막대(0x334, 두께 12)를 보이고 가로 위치(0x378)는 0..합 − 너비, 아니면 가로 위치 = 0. AdjustPage(형식 2)도 0으로 둔다.
-                // 고친 것: 전에는 가로로 넘기지 못해 오른쪽 칸이 잘린 채 볼 수 없었다.
+                // Original UpdateScrollBar(format 2, 0x7db270): if the sum of cell widths (0x370) is larger than the list width (GetRealClientWidth, width minus the vertical bar),
+                // show the horizontal bar (0x334, thickness 12) and the horizontal position (0x378) is 0..sum − width; otherwise the horizontal position = 0. AdjustPage(format 2) also leaves it at 0.
+                // Fix: previously you could not scroll horizontally, so the right columns stayed cut off and could not be seen.
                 let detail_content: f32 = cell_widths.iter().flatten().sum();
                 let detail_avail = ui.available_width() - bar_reserve;
                 let detail_hbar = skin_bar.filter(|_| !cell_widths.is_empty() && detail_content > detail_avail + 0.5);
@@ -1368,7 +1368,7 @@ impl App {
                     let font = egui::FontId::new(self.list_font_size, egui::FontFamily::Name(super::LIST_FONT_FAMILY.into()));
                     let clicked = self.skin_list_header(ui, index, &columns, &cell_widths, font, detail_x);
                     if let Some(mode) = clicked {
-                        // 원본 머리글(0x484d88): 같은 방식이면 내림차순 전환, 다른 방식이면 SetSortType만(내림차순 그대로).
+                        // Original header(0x484d88): the same mode flips descending; a different mode only sets the sort type (descending stays).
                         let descending = Self::side_key(index, "SortDescending");
                         let old = self.settings.flag(&descending, false);
                         let flip = if current == mode { !old } else { old };
@@ -1383,14 +1383,14 @@ impl App {
                 if self.panes[index].loading {
                     ui.spinner();
                 }
-                // C#처럼 필터는 목록을 받을 때 적용하므로 보이는 줄 = 목록 전체(선택·작업 대상과 일치).
+                // Like C#, the filter is applied when the listing arrives, so the visible rows = the whole list (matching the selection and operation targets).
                 let visible: Vec<usize> = (0..self.panes[index].entries.len()).collect();
                 let reserve = self.skin_file_info_height() + ui.spacing().item_spacing.y;
-                // 원본 FTP 모드 패널: 목록 아래 나눔 막대와 기록 칸(FUN_0048d7ac).
+                // Original FTP-mode pane: a splitter bar and a log box below the list (FUN_0048d7ac).
                 let reserve = reserve + self.ftp_log_reserve(index, ui.spacing().item_spacing.y);
                 let height = (ui.available_height() - reserve).max(80.0);
                 let ftp_log_room = height + self.panes[index].ftp_log_height;
-                // 원본·C# 판 ListFont·ListFontSize: 목록(이름·칸 글, 줄 높이 셈)만 그 글꼴·크기. 머리글·주소 줄 등은 보통 글꼴.
+                // Original/C# version ListFont/ListFontSize: only the list (name/cell text, row-height calculation) uses that font and size. The header, address bar, etc. use the normal font.
                 let saved_text_styles = ui.style().text_styles.clone();
                 let list_font_size = self.list_font_size;
                 let list_style = self.list_font_style;
@@ -1402,7 +1402,7 @@ impl App {
                 }
                 let row_height = self.list_item_height(ui);
                 let list_rect = egui::Rect::from_min_size(ui.cursor().min, egui::vec2(ui.available_width(), height));
-                // 원본 WMSize(0x7d5814)·SetListStyle(0x7dc6d4) → AdjustPage: 목록 크기나 보기 형식이 바뀌면 커서에 맞춰 위치를 다시 잡는다.
+                // Original WMSize(0x7d5814)/SetListStyle(0x7dc6d4) → AdjustPage: when the list size or view style changes, reposition to follow the cursor.
                 let shape = (list_rect.size(), view.clone());
                 let pane = &mut self.panes[index];
                 if pane.list_shape.as_ref().is_some_and(|old| (old.0 - shape.0).length() > 0.5 || old.1 != shape.1) && !pane.entries.is_empty() {
@@ -1410,8 +1410,8 @@ impl App {
                 }
                 pane.list_shape = Some(shape);
                 pane.list_rect = Some(list_rect);
-                // 사용자 요청(2026-10-31 16:49): 바퀴는 원본 WMMouseWheel(0x7d5ba0)처럼 목록을 넘긴다(쪽 단위 설정이면 한 쪽씩).
-                // r138~r160의 "바퀴 = 커서 위·아래"는 되돌렸다. 각 보기의 wheel_scroll이 처리한다.
+                // User request (2026-10-31 16:49): the wheel scrolls the list like the original WMMouseWheel(0x7d5ba0) (one page at a time when set to page step).
+                // The "wheel = move cursor up/down" from r138~r160 was reverted. Each view's wheel_scroll handles it.
                 if tiles {
                     let(a,o,c)=self.tile_rows(ui,index,&visible,height,view.contains("humb"));activate|=a;open|=o;if c.is_some(){command=c;}
                 } else if names || auto_flow {
@@ -1432,36 +1432,36 @@ impl App {
                 if self.panes[index].view.cells.len() != self.panes[index].entries.len() {
                     self.compute_view(index);
                 }
-                // 원본 드라이브 항목(종류 4): 이름 칸 끝(가장 넓은 드라이브 이름)과 DISKFREE 글.
+                // Original drive item (kind 4): the end of the name cell (the widest drive name) and the DISKFREE text.
                 let drive_extent = self.drive_text_extent(ui, index);
                 let free_label = self.language_pack.text("RES.DISKFREE", "Free");
                 let icons_shown = self.settings.flag("ShowIcons", true);
                 let view_cache = std::mem::take(&mut self.panes[index].view);
                 let (rows, texts) = (&view_cache.rows, &view_cache);
                 let width = ui.available_width() - bar_reserve;
-                // 원본 GetItemRect(형식 2): 줄은 −가로 위치에서 시작하고 너비는 칸 너비 합(목록보다 좁으면 목록 너비). 가로 막대가 보이면
-                // 그 두께만큼 줄 자리가 낮아진다.
+                // Original GetItemRect(format 2): the row starts at −horizontal position and its width is the sum of cell widths (the list width when narrower than the list). When the horizontal bar is shown,
+                // the row area is lowered by its thickness.
                 let view_width = width;
                 let width = width.max(detail_content);
                 let height = match detail_hbar {
                     Some(bar) => (height - bar).max(row_height),
                     None => height,
                 };
-                // 원본 UpdateDisplayDetails: 줄 간격 = 항목 높이 + LineSpace(+0x364). egui는 줄마다 item_spacing.y를 더하므로 그것을 LineSpace로 둔다.
-                // 고친 것: 전에는 egui 기본 틈(3화소)이 더해져 줄이 원본보다 성겼고 그 틈을 누르면 아무 항목도 아니었다.
+                // Original UpdateDisplayDetails: row stride = item height + LineSpace(+0x364). egui adds item_spacing.y per row, so use that as LineSpace.
+                // Fix: previously egui's default gap (3 pixels) was added, so rows were sparser than the original and pressing that gap hit no item.
                 let line_space = self.list_line_space();
                 let saved_spacing = ui.spacing().item_spacing.y;
                 ui.spacing_mut().item_spacing.y = line_space;
                 let (row_lines, line_color) = (self.settings.flag("ShowRowLines", false), self.grid_line_color(ui));
-                // show_rows는 줄마다 item_spacing.y를 더해 쌓으므로 위치 계산도 그 간격(stride)으로 한다.
+                // show_rows stacks rows adding item_spacing.y each, so position math uses that stride too.
                 let stride = row_height + ui.spacing().item_spacing.y;
                 let by_page = self.scroll_by_page(index);
                 let page_rows = ((height / stride).floor() as usize).max(1);
                 let pages = rows.len().div_ceil(page_rows).max(1);
                 let page_px = page_rows as f32 * stride;
-                // 원본 SetScrollTop(쪽 단위): 바퀴로 옮긴 위치는 쪽 경계(쪽 번호 × 한 쪽)다.
+                // Original SetScrollTop(page step): a wheel-moved position is a page boundary (page number × one page).
                 let wheel = Self::wheel_scroll(ui, egui::Id::new(("files", index)), height, stride, by_page, (self.system.wheel_lines)()).map(|o| if by_page { Self::page_snap(o, page_px, pages) } else { o });
-                // 원본 DoTargetScroll: 끄는 동안 위·아래 가장자리면 한 칸(쪽 단위면 한 쪽)씩.
+                // Original DoTargetScroll: while dragging, at the top/bottom edge scroll one line (one page in page step) at a time.
                 let dy = std::mem::take(&mut self.panes[index].drag_scroll.0);
                 self.panes[index].drag_scroll.1 = 0;
                 let wheel = if dy != 0 {
@@ -1481,13 +1481,13 @@ impl App {
                 if skin_bar.is_some() {
                     area = area.scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden);
                 }
-                // 원본 SetItemIndex(형식 2): 글쇠로 옮긴 커서 줄이 위로 벗어나면 그 줄을 맨 위로, 아래로 벗어나면 맨 아래로 넘긴다.
-                // 쪽 단위면 커서가 든 쪽의 처음 줄을 맨 위로 둔다((커서 / 한 쪽 줄 수) × 한 쪽 줄 수).
-                // 쪽 정보(다 보이는 줄 수, 맨 위·끝까지 보이는 항목)는 ArrowKey의 PageUp·PageDown이 쓴다.
+                // Original SetItemIndex(format 2): when the cursor row moved by a key goes off the top, bring it to the top; off the bottom, bring it to the bottom.
+                // In page step, bring the first row of the page the cursor is on to the top ((cursor / rows per page) × rows per page).
+                // The page info (visible row count, the top/bottom visible items) is used by ArrowKey's PageUp/PageDown.
                 let current = egui::scroll_area::State::load(ui.ctx(), ui.make_persistent_id(egui::Id::new(("files", index)))).map_or(0.0, |s| s.offset.y);
                 let mut offset = wheel.unwrap_or(current);
-                // 원본 AdjustPage(형식 2): 가로 위치 = 0. 쪽 단위면 그 항목이 든 쪽의 처음 줄을 맨 위로, 아니면 위로 벗어날 때 맨 위,
-                // 아래로 벗어날 때 맨 아래로. 다시 읽은 목록은 원본이 그 뒤 SetScrollTop(옛 위치)로 되돌리므로 세로는 하지 않는다.
+                // Original AdjustPage(format 2): horizontal position = 0. In page step, bring the first row of the page that item is on to the top; otherwise top when it goes off the top,
+                // bottom when it goes off the bottom. A re-read listing is not scrolled vertically because the original then reverts with SetScrollTop(old position).
                 if let Some((item, reload)) = self.panes[index].adjust.take() {
                     if self.panes[index].detail_x != 0.0 {
                         self.panes[index].detail_x = 0.0;
@@ -1529,14 +1529,14 @@ impl App {
                     area = area.vertical_scroll_offset(offset);
                 }
                 area = area.horizontal_scroll_offset(self.panes[index].detail_x);
-                // 쪽 단위로 여러 쪽이면 마지막 쪽도 쪽 경계에서 시작하도록 빈 줄을 덧댄다(원본은 마지막 쪽 아래가 빈다).
+                // In page step with multiple pages, pad empty rows so the last page also starts at a page boundary (the original leaves the area below the last page empty).
                 let drawn = if by_page && pages > 1 { rows.len().max(pages * page_rows + 2) } else { rows.len() };
-                // 원본 스킨 테마: 커서·표시 막대(DrawFocus)와 칸 색(DrawListItem), 표시 ▶(InitSelMarkBitmap).
+                // Original skin theme: the cursor/selection bar (DrawFocus), the cell colors (DrawListItem), and the selection mark ▶ (InitSelMarkBitmap).
                 let original = Some(self.original_list_colors());
                 let output = area
                     .show_rows(ui, row_height, drawn, |ui, range| {
-                        // 가로로 넘길 수 있게 내용 너비 = 줄 너비(칸 너비 합 또는 목록 너비). egui 안쪽 너비는 세로 막대 자리를 담으므로
-                        // 그만큼 더해 마지막 칸이 세로 막대 앞까지 오게 한다.
+                        // So it can scroll horizontally, the content width = the row width (sum of cell widths or the list width). egui's inner width includes the vertical bar area,
+                        // so add that much to bring the last cell up to just before the vertical bar.
                         ui.set_min_width(width + bar_reserve);
                         for visible_index in range {
                             let Some(detail_row) = rows.get(visible_index) else { continue };
@@ -1547,7 +1547,7 @@ impl App {
                                 }
                                 DetailRow::Item(row) => *row,
                             };
-                            // C# QueueFolderSizeCalculation: 보이는 폴더 줄이 생길 때.
+                            // C# QueueFolderSizeCalculation: when a visible folder row appears.
                             self.queue_folder_size(index, row);
                             let icon = self.file_icon(ui.ctx(), index, row);
                             let icon = self.row_icon_for_skin(index, row, icon);
