@@ -1697,3 +1697,89 @@ fn cleanup_location_keys_follow_the_original() {
     assert!(press(&mut form, egui::Key::Delete).is_none(), "no selected location: nothing");
     let _ = fs::remove_dir_all(root);
 }
+
+
+/// 사용자 요청: 압축 파일 안에서 새 폴더·빈 파일·이름 바꾸기·삭제, 압축 안으로 복사·이동, 압축 밖으로 이동, 하위 폴더에서 복사.
+#[test]
+fn archive_items_can_be_created_renamed_deleted_added_and_moved() {
+    let (root, ctx, mut app) = fixture("archive-edit", "ko");
+    let (left, right) = (root.join("left"), root.join("right"));
+    let source = root.join("src");
+    fs::create_dir_all(source.join("dir/sub")).unwrap();
+    fs::write(source.join("a.txt"), b"a").unwrap();
+    fs::write(source.join("dir/sub/c.txt"), b"c").unwrap();
+    let zip = left.join("pack.zip");
+    ndr::archive::create(&[source.join("a.txt"), source.join("dir")], &zip, None, &std::sync::atomic::AtomicBool::new(false)).unwrap();
+    app.refresh(0);
+    wait_listing(&mut app, &ctx);
+    app.active = 0;
+    app.panes[0].cursor = row(&app, 0, "pack.zip");
+    app.open_current();
+    wait_listing(&mut app, &ctx);
+    assert!(app.panes[0].archive.is_some());
+    let names = |app: &App| app.panes[0].entries.iter().map(|e| e.name.clone()).collect::<Vec<_>>();
+    // 새 폴더.
+    app.new_folder();
+    answer_text(&mut app, &ctx, Some("made"));
+    wait_job(&mut app, &ctx);
+    assert!(names(&app).contains(&"made".to_owned()), "{:?} / {}", names(&app), app.status);
+    // 빈 파일.
+    app.create_empty_file();
+    answer_text(&mut app, &ctx, Some("empty.txt"));
+    wait_job(&mut app, &ctx);
+    assert!(app.panes[0].entries.iter().any(|e| e.name == "empty.txt" && e.size == 0), "{:?}", names(&app));
+    // 이름 바꾸기.
+    app.panes[0].selected.clear();
+    app.panes[0].cursor = row(&app, 0, "a.txt");
+    app.rename_items();
+    app.answer_dialog(DialogResult::Rename(Some(("b".into(), "txt".into()))), &ctx);
+    wait_job(&mut app, &ctx);
+    assert!(names(&app).contains(&"b.txt".to_owned()) && !names(&app).contains(&"a.txt".to_owned()), "{:?}", names(&app));
+    // 삭제(삭제 경고의 예).
+    app.panes[0].cursor = row(&app, 0, "made");
+    app.delete_items(true);
+    answer_warning(&mut app, &ctx, DeleteWarningChoice::Yes);
+    wait_job(&mut app, &ctx);
+    assert!(!names(&app).contains(&"made".to_owned()), "{:?}", names(&app));
+    // 로컬 → 압축 복사(원본은 남음)와 이동(원본은 지워짐).
+    fs::write(right.join("new.txt"), b"new").unwrap();
+    fs::write(right.join("moved.txt"), b"moved").unwrap();
+    app.refresh(1);
+    wait_listing(&mut app, &ctx);
+    app.active = 1;
+    app.panes[1].cursor = row(&app, 1, "new.txt");
+    app.copy_to_other(1, false, &ctx);
+    wait_job(&mut app, &ctx);
+    app.panes[1].cursor = row(&app, 1, "moved.txt");
+    app.copy_to_other(1, true, &ctx);
+    wait_job(&mut app, &ctx);
+    assert!(names(&app).contains(&"new.txt".to_owned()) && names(&app).contains(&"moved.txt".to_owned()), "{:?}", names(&app));
+    assert!(right.join("new.txt").is_file() && !right.join("moved.txt").exists());
+    // 압축 → 로컬 이동: 풀고 압축에서 지움.
+    app.active = 0;
+    app.panes[0].cursor = row(&app, 0, "b.txt");
+    app.copy_to_other(0, true, &ctx);
+    wait_job(&mut app, &ctx);
+    assert_eq!(fs::read(right.join("b.txt")).unwrap(), b"a");
+    assert!(!names(&app).contains(&"b.txt".to_owned()), "{:?}", names(&app));
+    // 하위 폴더에서 복사하면 그 하위 경로 없이 놓인다.
+    app.panes[0].cursor = row(&app, 0, "dir");
+    app.open_current();
+    wait_listing(&mut app, &ctx);
+    assert!(app.panes[0].entries.iter().any(|e| e.name == "sub"), "{:?} {:?} {:?}", names(&app), app.panes[0].archive.as_ref().map(|a| a.prefix.clone()), ndr::archive::list(&zip, None).unwrap().into_iter().map(|e| (e.key, e.is_dir)).collect::<Vec<_>>());
+    app.panes[0].cursor = row(&app, 0, "sub");
+    app.copy_to_other(0, false, &ctx);
+    wait_job(&mut app, &ctx);
+    assert_eq!(fs::read(right.join("sub").join("c.txt")).unwrap(), b"c");
+    assert!(!right.join("dir").exists(), "the archive folder path is not recreated");
+    // 압축 안으로 더한 파일은 지금 압축 안 폴더 아래에 들어간다.
+    app.active = 1;
+    app.refresh(1);
+    wait_listing(&mut app, &ctx);
+    app.panes[1].cursor = row(&app, 1, "new.txt");
+    app.copy_to_other(1, false, &ctx);
+    wait_job(&mut app, &ctx);
+    let keys: Vec<String> = ndr::archive::list(&zip, None).unwrap().into_iter().map(|e| e.key.replace('\\', "/")).collect();
+    assert!(keys.iter().any(|k| k == "dir/new.txt") && keys.iter().any(|k| k == "dir/sub/c.txt"), "{keys:?}");
+    let _ = fs::remove_dir_all(root);
+}

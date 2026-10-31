@@ -86,11 +86,11 @@ impl App {
     /// (TITLE_FILEOPERATION, MSG_TORIGHT / MSG_TOLEFT, MB_YESNO | MB_ICONQUESTION) when both panes are local folders.
     /// 원본 FUN_0042d518(오른쪽으로)/FUN_0042d910(왼쪽으로) — 수직 막대 복사 단추와 단축키 명령(FUN_00443f14), 스킨 테마:
     /// 패널이 하나면 그만. 둘 다 로컬 폴더면 설정과 상관없이 TITLE_FILEOPERATION / MSG_TORIGHT·MSG_TOLEFT(%s = COPY 또는 MOVE)로 묻고,
-    /// 로컬↔FTP는 올리기/내려받기, 압축 위치가 끼면 아무것도 하지 않는다.
+    /// 로컬↔FTP는 올리기/내려받기. 원본은 압축 위치가 끼면 아무것도 하지 않았지만, 사용자 요청으로 NDR은 압축 안으로 더하기·압축에서 풀기를 한다.
     pub(super) fn original_copy_to_other(&mut self,source:usize,moving:bool,_ctx:&egui::Context){
         if !self.dual{return;}
         let target=1-source;
-        if self.panes[source].archive.is_some()||self.panes[target].archive.is_some(){return;}
+        if self.panes[source].archive.is_some()||self.panes[target].archive.is_some(){self.archive_route_to_other(source,moving);return;}
         if self.ftp_route_copy(source){return;}
         let sources=self.panes[source].targets();
         if sources.is_empty(){return;}
@@ -108,6 +108,7 @@ impl App {
     pub(super) fn copy_to_other(&mut self,source:usize,moving:bool,_ctx:&egui::Context){
         // 원본 FUN_0042d518/FUN_0042d910: 한쪽이 FTP면 올리기/내려받기(이동도 복사로).
         if self.ftp_route_copy(source){return;}
+        if self.archive_route_to_other(source,moving){return;}
         let target=1-source;
         let sources=self.panes[source].targets();
         if sources.is_empty(){return;}
@@ -627,7 +628,7 @@ impl App {
             "copy"|"cut"=>{if !targets.is_empty(){self.clipboard=Some((targets.clone(),id=="cut"));if self.panes[i].archive.is_none(){result=(self.file_clipboard)(&targets,id=="cut");}
                 // 원본 0x433dd8: 로컬 위치에서 잘라내면 그 항목들(+100)을 흐린 아이콘으로 다시 그린다. 복사는 표시를 건드리지 않는다.
                 if id=="cut"&&self.panes[i].archive.is_none()&&self.panes[i].remote.is_none(){self.panes[i].cut_marks.extend(targets.iter().cloned());}}},
-            "paste"=>{let copied=native::read_clipboard_files().ok().filter(|(p,_)|!p.is_empty()).or_else(||self.clipboard.clone());if let Some((sources,moving))=copied{self.transfer_from(i,sources,path,moving,super::file_operation::TransferKind::Paste);}},
+            "paste"=>{let copied=native::read_clipboard_files().ok().filter(|(p,_)|!p.is_empty()).or_else(||self.clipboard.clone());if let Some((sources,moving))=copied{if self.panes[i].archive.is_some(){self.archive_add_into(i,sources,moving);}else{self.transfer_from(i,sources,path,moving,super::file_operation::TransferKind::Paste);}}},
             // 원본 miDeleteClick(0x431c04): 고를 때 Shift(GetKeyState 0x10)가 눌려 있으면 FUN_0042c734의 마지막 인자 1 = 영구 삭제.
             "deleteRecycle"|"deletePermanent"=>self.delete_items(id=="deleteRecycle"&&!ctx.input(|i|i.modifiers.shift)),
             "shred"=>self.shred_items(),
@@ -752,13 +753,51 @@ impl App {
             return;
         }
         if self.panes[i].archive.is_some() {
-            // C# MoveToOtherAsync / CopyMoveToFolderAsync: 압축 안 항목은 옮길 수 없고, 복사는 그 폴더로 풀기.
+            // 원본·C#: 압축 안 항목 복사는 그 폴더로 풀기, 이동은 안 됐다. 사용자 요청으로 고칠 수 있는 압축이면 풀고 압축에서 지운다.
             if moving {
-                return self.notice("압축 파일 안의 항목은 이동할 수 없습니다. 복사를 사용하세요.", "Items inside an archive cannot be moved. Use copy instead.");
+                let keys = sources.iter().map(|k| k.to_string_lossy().replace('\\', "/")).collect();
+                return self.archive_transfer_out(i, keys, destination, None, true);
             }
             return self.extract_keys_to(i, sources, destination);
         }
         self.local_transfer(sources, destination, moving, kind);
+    }
+    /// 다른 패널로 복사·이동할 때 압축이 끼면(사용자 요청, 원본에는 없음): 대상이 압축 안이면 그 안 폴더에 더하고,
+    /// 원본이 압축 안이면 풀거나(대상이 압축이면 그 압축에 더하고) 이동이면 원래 압축에서 지운다. 압축이 안 끼면 false.
+    pub(super) fn archive_route_to_other(&mut self, source: usize, moving: bool) -> bool {
+        let target = 1 - source;
+        if self.panes[source].archive.is_none() && self.panes[target].archive.is_none() {
+            return false;
+        }
+        if self.panes[source].remote.is_some() || self.panes[target].remote.is_some() {
+            return false;
+        }
+        let sources = self.panes[source].targets();
+        if sources.is_empty() {
+            return true;
+        }
+        if self.panes[target].archive.is_some() {
+            let Some(into) = self.editable_archive(target) else {
+                self.archive_read_only_notice();
+                return true;
+            };
+            if self.panes[source].archive.is_some() {
+                let same = self.panes[source].archive.as_ref().is_some_and(|a| ndr::names::equals_ignore_case(&ndr::archive::first_volume_path(&a.file).to_string_lossy(), &into.0.to_string_lossy()));
+                if same && moving {
+                    self.notice("같은 압축 파일 안에서는 이동할 수 없습니다. 이름 바꾸기를 사용하세요.", "Items cannot be moved within the same archive. Use rename instead.");
+                    return true;
+                }
+                let keys = sources.iter().map(|k| k.to_string_lossy().replace('\\', "/")).collect();
+                let destination = self.panes[target].path.clone();
+                self.archive_transfer_out(source, keys, destination, Some(into), moving);
+            } else {
+                self.archive_add_into(target, sources, moving);
+            }
+            return true;
+        }
+        let destination = self.panes[target].path.clone();
+        self.transfer_from(source, sources, destination, moving, super::file_operation::TransferKind::OtherPane);
+        true
     }
     pub(super) fn start_task(
         &mut self,

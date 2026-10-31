@@ -1195,6 +1195,137 @@ pub fn output_family(path: &Path) -> Vec<PathBuf> {
     files
 }
 
+/// 사용자 요청(원본에는 없는 기능): 압축 파일 안의 항목을 그 자리에서 더하기·지우기·이름 바꾸기. 동봉 7-Zip이 고칠 수 있는
+/// 한 볼륨의 zip·7z·tar·wim만 된다(rar·alz·egg·iso·나눈 압축·gz처럼 한 파일만 감싼 것은 안 된다).
+pub fn can_modify(path: &Path) -> bool {
+    let extension = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).unwrap_or_default();
+    if !matches!(extension.as_str(), "zip" | "7z" | "tar" | "wim") || !path.is_file() {
+        return false;
+    }
+    // 나눈 zip(.z01 …)은 고치지 않는다.
+    !(extension == "zip" && path.with_extension("z01").is_file())
+}
+
+/// 압축 파일을 같은 폴더의 준비 폴더에 복사해 그 사본을 7-Zip으로 고친 뒤, 다 되면 원본과 바꾼다(실패·취소면 원본 그대로).
+fn modify_archive(archive: &Path, cancel: &AtomicBool, run: impl FnOnce(&Path) -> Result<(), String>) -> Result<(), String> {
+    check_cancel(cancel)?;
+    if !can_modify(archive) {
+        return Err("This archive format cannot be changed in place".into());
+    }
+    let archive = fs::canonicalize(archive).map_err(|e| e.to_string())?;
+    ensure_plain_path(&archive)?;
+    let parent = archive.parent().ok_or("Archive has no folder")?.to_path_buf();
+    let name = archive.file_name().ok_or("Archive has no name")?.to_owned();
+    let stage = unique_path(&parent, "archive-edit");
+    fs::create_dir(&stage).map_err(|e| e.to_string())?;
+    let result = (|| {
+        let copy = stage.join(&name);
+        fs::copy(&archive, &copy).map_err(|e| e.to_string())?;
+        let mut permissions = fs::metadata(&copy).map_err(|e| e.to_string())?.permissions();
+        #[allow(clippy::permissions_set_readonly_false)]
+        permissions.set_readonly(false);
+        fs::set_permissions(&copy, permissions).map_err(|e| e.to_string())?;
+        run(&copy)?;
+        check_cancel(cancel)?;
+        fs::rename(&copy, &archive).map_err(|e| e.to_string())
+    })();
+    let _ = fs::remove_dir_all(&stage);
+    result
+}
+
+fn edit_command(verb: &str, archive: &Path, password: Option<&str>) -> Result<Command, String> {
+    let mut command = command()?;
+    command.args([verb, "-y", "-sccUTF-8"]);
+    if let Some(p) = password.filter(|p| !p.is_empty()) {
+        if p.contains('\0') || p.contains('\n') || p.contains('\r') {
+            return Err("Invalid archive password".into());
+        }
+        command.arg(format!("-p{p}"));
+    }
+    command.arg("--").arg(archive);
+    Ok(command)
+}
+
+fn entry_arg(key: &str) -> Result<String, String> {
+    let key = key.trim_end_matches('/');
+    validate_key(key)?;
+    Ok(key.replace('/', "\\"))
+}
+
+/// 압축 안 항목(폴더면 그 안까지) 지우기(7-Zip d).
+pub fn delete_entries(archive: &Path, keys: &[String], password: Option<&str>, cancel: &AtomicBool) -> Result<(), String> {
+    if keys.is_empty() {
+        return Ok(());
+    }
+    let arguments = keys.iter().map(|k| entry_arg(k)).collect::<Result<Vec<_>, _>>()?;
+    modify_archive(archive, cancel, |copy| {
+        let mut command = edit_command("d", copy, password)?;
+        command.args(&arguments);
+        execute(command, cancel).map(|_| ())
+    })
+}
+
+/// 압축 안 항목 이름 바꾸기(7-Zip rn, 폴더면 그 안 항목의 경로도 바뀐다).
+pub fn rename_entry(archive: &Path, from: &str, to: &str, password: Option<&str>, cancel: &AtomicBool) -> Result<(), String> {
+    let (from, to) = (entry_arg(from)?, entry_arg(to)?);
+    modify_archive(archive, cancel, |copy| {
+        let mut command = edit_command("rn", copy, password)?;
+        command.arg(&from).arg(&to);
+        execute(command, cancel).map(|_| ())
+    })
+}
+
+/// 파일·폴더를 압축 안 `prefix`("폴더/아래/" 또는 맨 위 "") 아래에 더한다(7-Zip a). 같은 이름은 바꾼다.
+/// 준비 폴더에 그 경로 모양을 만들어 복사한 뒤(원본 파일은 건드리지 않는다) 맨 위 이름만 넘긴다.
+pub fn add_entries(archive: &Path, prefix: &str, sources: &[PathBuf], password: Option<&str>, cancel: &AtomicBool) -> Result<(), String> {
+    if sources.is_empty() {
+        return Ok(());
+    }
+    let prefix = prefix.trim_matches('/');
+    if !prefix.is_empty() {
+        validate_key(prefix)?;
+    }
+    let snapshot = unique_path(&std::env::temp_dir(), "archive-add");
+    fs::create_dir(&snapshot).map_err(|e| e.to_string())?;
+    let result = (|| {
+        let base = if prefix.is_empty() { snapshot.clone() } else { snapshot.join(prefix.replace('/', "\\")) };
+        fs::create_dir_all(&base).map_err(|e| e.to_string())?;
+        let mut names = HashSet::new();
+        for source in sources {
+            let name = source.file_name().ok_or("Cannot add a filesystem root")?;
+            let text = name.to_str().ok_or("Archive source filename must be Unicode")?;
+            validate_key(text)?;
+            if !names.insert(text.to_lowercase()) {
+                return Err("Duplicate archive source names".into());
+            }
+            copy_tree(source, &base.join(name), cancel)?;
+        }
+        let tops: Vec<String> = if prefix.is_empty() {
+            sources.iter().filter_map(|s| s.file_name().map(|n| n.to_string_lossy().into_owned())).collect()
+        } else {
+            vec![prefix.split('/').next().unwrap_or(prefix).to_owned()]
+        };
+        let snapshot_abs = fs::canonicalize(&snapshot).map_err(|e| e.to_string())?;
+        modify_archive(archive, cancel, |copy| {
+            let mut command = edit_command("a", copy, password)?;
+            command.current_dir(&snapshot_abs).args(&tops);
+            execute(command, cancel).map(|_| ())
+        })
+    })();
+    let _ = fs::remove_dir_all(&snapshot);
+    result
+}
+
+/// 압축 안 `prefix` 아래에 빈 폴더 `name`을 만든다.
+pub fn add_folder(archive: &Path, prefix: &str, name: &str, password: Option<&str>, cancel: &AtomicBool) -> Result<(), String> {
+    validate_key(name)?;
+    let holder = unique_path(&std::env::temp_dir(), "archive-folder");
+    fs::create_dir_all(holder.join(name)).map_err(|e| e.to_string())?;
+    let result = add_entries(archive, prefix, &[holder.join(name)], password, cancel);
+    let _ = fs::remove_dir_all(&holder);
+    result
+}
+
 /// C# GetArchiveFirstVolumePath: .partN.rar → .part1.rar, .rNN → .rar, .zNN → .zip, .aNN → .arj, .NNN → .00…1(있을 때만).
 pub fn first_volume_path(path: &Path) -> PathBuf {
     let full = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
@@ -1537,6 +1668,14 @@ pub fn extract_entries_with_program(
         }
     };
     let wanted: Vec<String> = keys.iter().map(|k| k.replace('\\', "/").trim_end_matches('/').to_lowercase()).filter(|k| !k.is_empty()).collect();
+    let parents: Vec<String> = keys
+        .iter()
+        .map(|k| {
+            let k = k.replace('\\', "/");
+            let k = k.trim_end_matches('/');
+            k.rfind('/').map(|i| k[..=i].to_owned()).unwrap_or_default()
+        })
+        .collect();
     let entries: Vec<ArchiveEntry> = entries
         .into_iter()
         .filter(|e| {
@@ -1562,7 +1701,15 @@ pub fn extract_entries_with_program(
             break;
         }
         let relative = entry.key.replace('\\', "/");
-        let target = aggregate.join(&relative);
+        // 고친 것: 압축 안 하위 폴더에서 고른 항목을 풀면 그 하위 폴더 경로까지 만들어졌다("dir/sub/c.txt" → 대상\dir\sub\c.txt).
+        // 이제 고른 항목의 상위 경로를 떼어 대상 바로 아래에 둔다(대상\c.txt). 전체 풀기(키 없음)는 그대로.
+        let placed = parents
+            .iter()
+            .filter(|p| !p.is_empty())
+            .find_map(|p| relative.strip_prefix(p.as_str()))
+            .unwrap_or(&relative)
+            .to_owned();
+        let target = aggregate.join(&placed);
         if entry.is_dir {
             if let Err(e) = fs::create_dir_all(&target) {
                 stopped = Some(e.to_string());
@@ -1852,6 +1999,45 @@ mod interactive_tests {
             .is_err()
         );
         assert!(!p.join("not-created").exists());
+        fs::remove_dir_all(p).unwrap();
+    }
+    #[test]
+    fn archive_entries_can_be_added_renamed_and_deleted_in_place() {
+        let p = super::tests::fixture();
+        fs::create_dir_all(p.join("src/dir/sub")).unwrap();
+        fs::write(p.join("src/a.txt"), b"a").unwrap();
+        fs::write(p.join("src/dir/sub/c.txt"), b"c").unwrap();
+        let cancel = AtomicBool::new(false);
+        let zip = p.join("t.zip");
+        create(&[p.join("src/a.txt"), p.join("src/dir")], &zip, None, &cancel).unwrap();
+        assert!(can_modify(&zip) && !can_modify(&p.join("x.rar")));
+        let keys = |zip: &Path| {
+            let mut keys: Vec<String> = list(zip, None).unwrap().into_iter().map(|e| e.key.replace('\\', "/")).collect();
+            keys.sort();
+            keys
+        };
+        // 더하기: 맨 위와 안쪽 폴더 아래.
+        fs::write(p.join("new.txt"), b"new").unwrap();
+        add_entries(&zip, "", &[p.join("new.txt")], None, &cancel).unwrap();
+        add_entries(&zip, "dir/sub/", &[p.join("new.txt")], None, &cancel).unwrap();
+        add_folder(&zip, "dir/", "empty", None, &cancel).unwrap();
+        let after_add = keys(&zip);
+        for key in ["new.txt", "dir/sub/new.txt", "dir/empty", "a.txt", "dir/sub/c.txt"] {
+            assert!(after_add.iter().any(|k| k == key), "{key} in {after_add:?}");
+        }
+        assert!(p.join("new.txt").is_file(), "the source stays");
+        // 이름 바꾸기: 폴더면 안 항목도.
+        rename_entry(&zip, "dir/sub", "dir/moved", None, &cancel).unwrap();
+        let after_rename = keys(&zip);
+        assert!(after_rename.iter().any(|k| k == "dir/moved/c.txt") && !after_rename.iter().any(|k| k.starts_with("dir/sub")), "{after_rename:?}");
+        // 지우기: 폴더면 안까지, 이름이 비슷한 다른 항목은 그대로.
+        delete_entries(&zip, &["dir/moved".into(), "a.txt".into()], None, &cancel).unwrap();
+        let after_delete = keys(&zip);
+        assert!(!after_delete.iter().any(|k| k.starts_with("dir/moved") || k == "a.txt"), "{after_delete:?}");
+        assert!(after_delete.iter().any(|k| k == "new.txt") && after_delete.iter().any(|k| k == "dir/empty"), "{after_delete:?}");
+        // 고칠 수 없는 형식·나쁜 이름은 원본을 건드리지 않고 오류.
+        assert!(delete_entries(&zip, &["../x".into()], None, &cancel).is_err());
+        assert_eq!(keys(&zip), after_delete);
         fs::remove_dir_all(p).unwrap();
     }
     #[test]

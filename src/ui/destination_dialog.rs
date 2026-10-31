@@ -611,14 +611,17 @@ impl App {
 
     /// 원본 miCopyToClick(0x432e68)·miMoveToClick(0x432f40): 로컬 위치면 FUN_0042bdc4 = TfSelectDest(경로 칸 처음 값은 FUN_0043cb24).
     /// 압축 파일 안이면 복사는 FUN_00439bac(형식 0) = 고른 항목을 TfSelectDest(EXTRACT 제목)로 고른 폴더에 풀고,
-    /// 이동은 FUN_0042bdc4가 로컬이 아니면 그만이므로 아무것도 하지 않는다(C# 판의 "이동할 수 없습니다" 알림은 없다).
+    /// 이동은 원본에서는 아무것도 하지 않았다(FUN_0042bdc4가 로컬이 아니면 그만). 사용자 요청으로 NDR은 고칠 수 있는 압축(zip·7z·tar·wim)이면
+    /// 같은 대상 선택 창으로 고른 폴더에 풀고 압축에서 지운다.
     pub(super) fn copy_move_to_folder(&mut self, moving: bool) {
         let i = self.active;
         if self.panes[i].archive.is_some() {
             if !moving {
-                self.extract_command(super::archive_dialog::ExtractMode::Selected);
+                return self.extract_command(super::archive_dialog::ExtractMode::Selected);
             }
-            return;
+            if self.editable_archive(i).is_none() {
+                return;
+            }
         }
         let targets = self.panes[i].targets();
         if targets.is_empty() {

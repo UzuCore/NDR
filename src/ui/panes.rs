@@ -799,7 +799,9 @@ impl App {
                 .map(|items| {
                     let mut entries = std::collections::BTreeMap::new();
                     for e in items {
-                        if let Some(rest) = e.key.strip_prefix(&location.prefix) {
+                        // 고친 것: 7-Zip은 Windows에서 "dir\sub\c.txt"처럼 \로 알려서, 압축 안 하위 폴더("dir/")에 들어가면 비어 보였다.
+                        let key = e.key.replace('\\', "/");
+                        if let Some(rest) = key.strip_prefix(&location.prefix) {
                             let mut pieces = rest.split('/');
                             if let Some(name) = pieces.next() {
                                 if name.is_empty() {

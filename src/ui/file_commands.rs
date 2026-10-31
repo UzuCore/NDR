@@ -38,7 +38,7 @@ pub(super) fn display_name(path: &Path) -> String {
 
 impl App {
     /// [RES]/[Root] 문구(언어 파일 값, 없으면 원본 영어 리터럴).
-    fn root_text(&self, key: &str, fallback: &str) -> String {
+    pub(super) fn root_text(&self, key: &str, fallback: &str) -> String {
         self.language_pack.text(&format!("RES.{key}"), fallback)
     }
 
@@ -103,7 +103,7 @@ impl App {
             return self.ftp_new_folder(pane);
         }
         if self.panes[pane].archive.is_some() {
-            return self.notice("압축 파일 안에는 새 폴더를 만들 수 없습니다.", "A folder cannot be created inside an archive.");
+            return self.archive_new_folder(pane);
         }
         let directory = self.panes[pane].path.to_string_lossy().into_owned();
         let title = self.root_text("TITLE_NEWFOLDER", "New Folder");
@@ -124,7 +124,7 @@ impl App {
     pub(super) fn create_empty_file(&mut self) {
         let pane = self.active;
         if self.panes[pane].archive.is_some() {
-            return self.warn("압축 파일이나 원격 폴더 안에는 새 파일을 만들 수 없습니다.", "An empty file cannot be created inside an archive or a remote folder.");
+            return self.archive_empty_file(pane);
         }
         let directory = self.panes[pane].path.to_string_lossy().into_owned();
         let title = self.root_text("TITLE_CREATEEMPTYFILE", "Create an empty file");
@@ -148,7 +148,7 @@ impl App {
             return self.ftp_rename(pane);
         }
         if self.panes[pane].archive.is_some() {
-            return self.notice("압축 파일 안의 항목은 바로 이름을 바꿀 수 없습니다.", "Items inside an archive cannot be renamed directly.");
+            return self.archive_rename(pane);
         }
         let on_drive_item = self.panes[pane].entries.get(self.panes[pane].cursor).is_some_and(|e| e.drive);
         if super::panes::is_drives(&self.panes[pane].path) || on_drive_item {
@@ -335,7 +335,7 @@ impl App {
             return self.ftp_delete(pane);
         }
         if self.panes[pane].archive.is_some() {
-            return self.notice("압축 파일 안의 항목은 삭제할 수 없습니다.", "Items inside an archive cannot be deleted.");
+            return self.archive_delete(pane);
         }
         let paths = self.panes[pane].targets();
         if paths.is_empty() {
@@ -417,7 +417,8 @@ impl App {
             return self.ftp_delete(pane);
         }
         if self.panes[pane].archive.is_some() {
-            return self.warn("압축 파일 안의 항목은 삭제할 수 없습니다.", "Items inside an archive cannot be deleted.");
+            // 사용자 요청: 압축 안 항목은 덮어쓸 실제 파일이 없으므로 압축에서 지우기로.
+            return self.archive_delete(pane);
         }
         let paths = self.panes[pane].targets();
         if paths.is_empty() {

@@ -268,7 +268,27 @@ impl App {
 
     /// handle_drop에 끌기를 시작할 때 허용한 효과(allowed)를 더한 것. 스킨 테마는 original_drop, C# 테마는 C# HandleDropAsync.
     pub(super) fn handle_drop_with(&mut self, pane: usize, candidates: Vec<PathBuf>, destination: PathBuf, modifiers: egui::Modifiers, allowed: u8) {
-        if self.panes[pane].archive.is_some() || !destination.is_dir() || candidates.is_empty() {
+        if self.panes[pane].archive.is_some() {
+            // 사용자 요청(원본에는 없음): 압축 패널에 로컬 파일·폴더를 놓으면 그 안 지금 폴더에 더한다(Shift = 이동).
+            let local: Vec<PathBuf> = candidates.into_iter().filter(|p| p.is_absolute() && p.exists()).collect();
+            if local.is_empty() {
+                return;
+            }
+            self.active = pane;
+            let moving = modifiers.shift && !modifiers.ctrl;
+            if !self.settings.flag("ConfirmDragDrop", true) {
+                return self.archive_add_into(pane, local, moving);
+            }
+            let (key, fallback) = if moving { ("RES.DROPMOVE_CONFIRM", "You want to move %d obejct(s)?") } else { ("RES.DROPCOPY_CONFIRM", "You want to copy %d object(s)?") };
+            let text = self.language_pack.text(key, fallback).replace("%d", &local.len().to_string());
+            let title = self.language_pack.text("RES.DRAGDROP", "Drag and Drop");
+            return self.message_box(&title, "", &text, ndr::msgbox::MB_YESNO | ndr::msgbox::MB_ICONQUESTION, move |app, answer, _| {
+                if answer == ndr::msgbox::IDYES {
+                    app.archive_add_into(pane, local, moving);
+                }
+            });
+        }
+        if !destination.is_dir() || candidates.is_empty() {
             return;
         }
         return self.original_drop(pane, candidates, destination, modifiers, allowed);

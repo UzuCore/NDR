@@ -652,7 +652,7 @@ fn archive_create_add_move_and_extract_follow_the_csharp_flows() {
     wait_job(&mut app, &ctx);
     assert!(PathBuf::from(format!("{}\\pack(3)", left.display())).join("alpha.txt").is_file());
     // 압축 파일 안: 원본 miCopyToClick = FUN_00439bac(형식 0) — 압축 풀기 대상 선택 창(처음 값 다른 패널), 확인하면 그 항목 풀기.
-    // 이동(miMoveToClick → FUN_0042bdc4)은 로컬이 아니면 아무것도 하지 않는다.
+    // 이동은 아래(사용자 요청으로 바뀜).
     app.panes[0].archive = Some(ArchiveLocation { file: pack.clone(), prefix: String::new(), password: String::new() });
     app.refresh(0);
     wait_until(&mut app, &ctx, |app| !app.panes[0].loading);
@@ -667,8 +667,11 @@ fn archive_create_add_move_and_extract_follow_the_csharp_flows() {
     wait_job(&mut app, &ctx);
     assert!(right.join("folder1").join("inner.txt").is_file() && !right.join("alpha.txt").exists());
     app.panes[0].cursor = row(&app, "folder1");
+    // 원본은 압축 안 이동(miMoveToClick)이 아무것도 하지 않았다. 사용자 요청으로 고칠 수 있는 zip이면 대상 선택 창을 연다(여기서는 취소).
     app.dispatch("moveToOther", &ctx);
-    assert!(app.msgboxes.is_empty() && app.original_dialogs.is_empty() && app.job.as_ref().is_none_or(|j| j.finished), "move inside an archive does nothing");
+    assert!(app.msgboxes.is_empty() && app.original_dialogs.len() == 1 && app.job.as_ref().is_none_or(|j| j.finished), "move inside a zip asks for a destination");
+    app.destination_action(super::destination_dialog::DestinationAction::Cancel, &ctx);
+    assert!(app.original_dialogs.is_empty() && app.job.as_ref().is_none_or(|j| j.finished), "cancelling the destination does nothing");
     app.dispatch("archiveProperties", &ctx);
     wait_until(&mut app, &ctx, |app| app.text.is_some());
     let text = app.text.take().unwrap();

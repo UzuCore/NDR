@@ -1,4 +1,5 @@
 mod archive_dialog;
+mod archive_edit;
 mod auto_view;
 mod skin_pane;
 mod cleanup_dialog;
