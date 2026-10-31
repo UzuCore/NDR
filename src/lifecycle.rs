@@ -20,6 +20,14 @@ pub enum InstanceOutcome {
 pub enum LifecycleEvent {
     Restore,
     Exit,
+    /// 볼륨 장치나 미디어가 들어오거나 나갔다(WM_DEVICECHANGE DBT_DEVICEARRIVAL/DBT_DEVICEREMOVECOMPLETE, DBT_DEVTYP_VOLUME).
+    /// 원본은 SHChangeNotify(SHCNE_DRIVEADD/DRIVEREMOVED/MEDIAINSERTED/MEDIAREMOVED)로 받는다(FUN_00442bc8).
+    DevicesChanged,
+}
+
+/// WM_DEVICECHANGE의 (wparam, 장치 종류)가 볼륨 장치·미디어 들어옴/나감인가.
+pub fn is_volume_change(event: usize, device_type: u32) -> bool {
+    (event == 0x8000 || event == 0x8004) && device_type == 2
 }
 const MAX_REQUEST: usize = 64 * 1024;
 fn parse_hotkey(value: &str) -> Result<Option<u32>, String> {
@@ -640,10 +648,13 @@ mod win {
         Hotkey(Option<u32>, Sender<Result<bool, String>>),
         Tray(bool, Sender<Result<(), String>>),
         Labels(String, String, String, Sender<Result<(), String>>),
+        Wake(Box<dyn Fn() + Send>),
         Shutdown,
     }
     struct WindowState {
         events: Sender<LifecycleEvent>,
+        /// 이벤트를 보낸 뒤 UI를 깨우는 함수(egui request_repaint).
+        wake: Option<Box<dyn Fn() + Send>>,
         commands: Receiver<UiCommand>,
         status: Arc<Status>,
         tray_wanted: bool,
@@ -795,6 +806,7 @@ mod win {
                             };
                             let _ = reply.send(result);
                         }
+                        UiCommand::Wake(wake) => state.wake = Some(wake),
                         UiCommand::Shutdown => {
                             unsafe {
                                 PostMessageW(hwnd, WM_CLOSE, 0, 0);
@@ -869,6 +881,17 @@ mod win {
                 }
                 0
             }
+            WM_DEVICECHANGE => {
+                // lparam = DEV_BROADCAST_HDR(dbch_size, dbch_devicetype, …). 볼륨(2)만 본다.
+                let device_type = if lparam != 0 { unsafe { *((lparam as *const u32).add(1)) } } else { 0 };
+                if is_volume_change(wparam, device_type) {
+                    let _ = state.events.send(LifecycleEvent::DevicesChanged);
+                    if let Some(wake) = &state.wake {
+                        wake();
+                    }
+                }
+                1
+            }
             _ => unsafe { DefWindowProcW(hwnd, message, wparam, lparam) },
         }
     }
@@ -912,6 +935,7 @@ mod win {
         }
         let mut state = Box::new(WindowState {
             events,
+            wake: None,
             commands,
             status,
             tray_wanted: false,
@@ -1073,6 +1097,19 @@ mod win {
         }
         pub fn tray_available(&self) -> bool {
             self.status.tray.load(Ordering::Relaxed)
+        }
+        /// 수명 이벤트(장치 바뀜 등)를 보낸 뒤 부를 깨우기 함수(UI 다시 그리기).
+        pub fn set_wake(&self, wake: Box<dyn Fn() + Send>) -> Result<(), String> {
+            self.commands.send(UiCommand::Wake(wake)).map_err(|_| "Lifecycle worker stopped".to_string())?;
+            self.wake()
+        }
+        #[cfg(test)]
+        pub(crate) fn send_device_change(&self, event: usize, header: &[u32]) -> Result<(), String> {
+            let hwnd = own_window(self.window)?;
+            unsafe {
+                SendMessageW(hwnd, WM_DEVICECHANGE, event, header.as_ptr() as isize);
+            }
+            Ok(())
         }
         pub fn uses_shift_fallback(&self) -> bool {
             self.status.fallback.load(Ordering::Relaxed)
@@ -1262,6 +1299,19 @@ mod tests {
         lifecycle
             .set_tray_labels("\u{C5F4}\u{AE30}", "\u{C885}\u{B8CC}", "NDR")
             .unwrap();
+        // WM_DEVICECHANGE: 볼륨(DBT_DEVTYP_VOLUME = 2) 들어옴/나감이면 DevicesChanged를 보내고 깨우기 함수를 부른다. 다른 장치는 무시.
+        let woke = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = woke.clone();
+        lifecycle.set_wake(Box::new(move || { counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst); })).unwrap();
+        let volume: [u32; 5] = [20, 2, 0, 1 << 3, 0x0001];
+        let port: [u32; 5] = [20, 3, 0, 0, 0];
+        lifecycle.send_device_change(0x8000, &volume).unwrap();
+        lifecycle.send_device_change(0x8000, &port).unwrap();
+        lifecycle.send_device_change(0x8004, &volume).unwrap();
+        let got: Vec<_> = std::iter::from_fn(|| _events.recv_timeout(Duration::from_millis(500)).ok()).collect();
+        assert_eq!(got, vec![LifecycleEvent::DevicesChanged, LifecycleEvent::DevicesChanged]);
+        assert_eq!(woke.load(std::sync::atomic::Ordering::SeqCst), 2);
+        assert!(is_volume_change(0x8000, 2) && is_volume_change(0x8004, 2) && !is_volume_change(0x8000, 3) && !is_volume_change(0x0007, 2));
         drop(lifecycle);
         assert!(NativeLifecycle::attach(0, None, false).is_err());
         assert_ne!(unsafe { DestroyWindow(hwnd) }, 0);

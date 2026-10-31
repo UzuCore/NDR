@@ -774,6 +774,9 @@ impl App {
                         if let Some(error) = lifecycle.hotkey_error() {
                             app.status = error;
                         }
+                        // 장치 바뀜(WM_DEVICECHANGE) 같은 수명 이벤트가 오면 쉬고 있던 UI도 깨운다.
+                        let repaint = cc.egui_ctx.clone();
+                        let _ = lifecycle.set_wake(Box::new(move || repaint.request_repaint()));
                         app.lifecycle = Some(lifecycle);
                         app.lifecycle_events = Some(events);
                     }
@@ -1811,6 +1814,9 @@ impl eframe::App for App {
                 ndr::lifecycle::LifecycleEvent::Exit => {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Close)
                 }
+                // 원본 FUN_00442bc8(SHCNE_MEDIAINSERTED/MEDIAREMOVED·DRIVEADD/REMOVED): CD 넣기·빼기처럼 드라이브 글자는 그대로이고
+                // 미디어만 바뀌어도 드라이브 줄·단추·정보 줄을 새로 만든다.
+                ndr::lifecycle::LifecycleEvent::DevicesChanged => self.drives_changed(),
             }
         }
         if let Some(lifecycle) = &self.lifecycle {
