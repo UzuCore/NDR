@@ -1,14 +1,14 @@
-//! C# ChecksumAsync(+ 체크섬 하위 메뉴), MergeTextFilesAsync, OpenWithAsync, RunCommandAsync(실행 파일 기록), OriginalFindAsync,
+//! C# ChecksumAsync (+ checksum submenu), MergeTextFilesAsync, OpenWithAsync, RunCommandAsync (run history), OriginalFindAsync,
 //! MapNetworkDriveAsync/UnmapNetworkDriveAsync(+ CredentialsWindow), ToggleExplorerIntegrationAsync, ImportLegacySettingsAsync,
-//! InstallSelectedArchive. C#이 RunSafely로 보이는 예외는 `warn`(MessageBox(글, "NDR", 경고))이다.
-//! 차이(HANDOFF): 원격 패널에서는 체크섬·합치기·다른 프로그램으로 열기 대상이 없다(C#에는 원격 패널이 없다).
-//! ftp:// 명령은 원격 창 이식 전까지 옛 원격 연결 창을 연다.
+//! InstallSelectedArchive. Exceptions C# shows with RunSafely become `warn` (MessageBox(text, "NDR", warning)).
+//! Difference (HANDOFF): remote panes have no targets for checksum, merge or open with (C# has no remote panes).
+//! ftp:// commands open the old remote connection window until the remote window is ported.
 use super::original_dialogs::{DialogKind, DialogResult};
 use super::*;
 use ndr::command_line::{self as cmdline, CommandKind};
 use ndr::msgbox::{IDNO, IDYES, MB_ICONQUESTION, MB_OK, MB_YESNO, MB_YESNOCANCEL};
 
-/// 바깥 시스템을 건드리는 함수들(테스트에서 바꿔 끼운다): 네트워크 드라이브, 탐색기 메뉴 등록, 동사 실행.
+/// Functions that touch the outside system (swapped in tests): network drives, Explorer menu registration, verb execution.
 #[derive(Clone, Copy)]
 pub(super) struct SystemHooks {
     pub network_drives: fn() -> Vec<String>,
@@ -17,56 +17,56 @@ pub(super) struct SystemHooks {
     pub explorer_enabled: fn() -> bool,
     pub set_explorer: fn(bool) -> Result<(), String>,
     pub run_verb: fn(&Path, &str) -> Result<(), String>,
-    /// 원본 miPropertiesClick → FUN_00458da8: 고른 항목 전부의 IContextMenu "properties"(여러 파일 속성 창).
+    /// Original miPropertiesClick -> FUN_00458da8: IContextMenu "properties" of all chosen items (multi-file properties window).
     pub properties: fn(&[PathBuf]) -> Result<(), String>,
-    /// C# GetNetworkPathErrorCode / PromptAndConnectNetworkShare(Windows 자격 증명 창).
+    /// C# GetNetworkPathErrorCode / PromptAndConnectNetworkShare (Windows credentials window).
     pub network_path_error: fn(&Path) -> u32,
     pub connect_share: fn(&str) -> u32,
-    /// C# OriginalShortcutService.ExistingTargetFolder(빠른 실행이면 true) / Create(대상, 폴더).
+    /// C# OriginalShortcutService.ExistingTargetFolder (true for Quick Launch) / Create(target, folder).
     pub shortcut_folder: fn(bool) -> Option<PathBuf>,
     pub create_shortcut: fn(&Path, &Path) -> Result<(), String>,
-    /// C# _readClipboardFileDropList(CF_HDROP 목록). 테스트는 실제 클립보드를 건드리지 않는다.
+    /// C# _readClipboardFileDropList (CF_HDROP list). Tests do not touch the real clipboard.
     pub clipboard_files: fn() -> Vec<PathBuf>,
-    /// 원본 miEmptyTempClick의 GetTempPathW + GetLongPathNameW. 시험에서는 실제 임시 폴더를 건드리지 않도록 늘 가짜.
+    /// GetTempPathW + GetLongPathNameW of original miEmptyTempClick. Always a fake in tests so the real temp folder is not touched.
     pub temp_folder: fn() -> Option<PathBuf>,
-    /// C# ListLocal("::drives::"): 준비된 드라이브 루트들.
+    /// C# ListLocal("::drives::"): ready drive roots.
     pub ready_drives: fn() -> Vec<PathBuf>,
-    /// 드라이브 볼륨 이름 읽기(GetVolumeInformationW)와 바꾸기(원본 FUN_004351cc의 SetVolumeLabelW, 실패 = GetLastError).
+    /// Reading (GetVolumeInformationW) and changing the drive volume name (SetVolumeLabelW of original FUN_004351cc, failure = GetLastError).
     pub volume_label: fn(&Path) -> Option<String>,
     pub set_volume_label: fn(&Path, &str) -> Result<(), u32>,
-    /// 원본 정보 표시줄의 드라이브 글·여유·전체(native::pane_disk_info). 시험에서는 늘 None.
+    /// Drive text, free and total of the original info bar (native::pane_disk_info). Always None in tests.
     pub disk_info: fn(&Path) -> Option<(String, u64, u64)>,
-    /// 원본 내 PC 드라이브 항목 정보(native::drive_item_info). 시험에서는 늘 None.
+    /// Original My PC drive item info (native::drive_item_info). Always None in tests.
     pub drive_item: fn(&Path) -> Option<(String, u32, Option<(u64, u64)>)>,
-    /// C# FileVisualConverter.LoadIcon(작은 셸 아이콘, 확장자·속성만): (너비, 높이, RGBA). 시험에서는 셸을 부르지 않는 가짜.
+    /// C# FileVisualConverter.LoadIcon (small shell icon, extension and attributes only): (width, height, RGBA). A fake that does not call the shell in tests.
     pub file_icon: fn(&Path, bool) -> Option<(usize, usize, Vec<u8>)>,
-    /// C# LoadShellOverlayIcon(실제 경로, 오버레이 포함). 따로 된 STA 스레드에서 부른다. 시험에서는 셸을 부르지 않는 가짜.
+    /// C# LoadShellOverlayIcon (real path, with overlays). Called on a separate STA thread. A fake that does not call the shell in tests.
     pub overlay_icon: fn(&Path) -> Option<(usize, usize, Vec<u8>)>,
-    /// 원본 GetIconIndex(실제 경로) 파일 아이콘(native::shell_path_icon, 오버레이 없음). 시험에서는 셸을 부르지 않는 가짜.
+    /// Original GetIconIndex (real path) file icon (native::shell_path_icon, no overlays). A fake that does not call the shell in tests.
     pub path_icon: fn(&Path) -> Option<(usize, usize, Vec<u8>)>,
-    /// 확장자(점 없이)의 셸 아이콘이 파일마다 다른가(native::extension_has_per_file_icon, HKCR). 시험에서는 늘 false(고정 목록만).
+    /// Whether the shell icon of an extension (without the dot) differs per file (native::extension_has_per_file_icon, HKCR). Always false in tests (fixed list only).
     pub per_file_icon: fn(&str) -> bool,
-    /// 목록 글꼴(ListFont) 이름의 글꼴 파일(native::font_file). 시험에서는 늘 None(기본 글꼴).
+    /// Font file of the list font (ListFont) name (native::font_file). Always None in tests (default font).
     pub font_file: fn(&str) -> Option<(PathBuf, u32)>,
-    /// 원본 TfFileExists imgOrg·imgNew(native::shell_large_icon, 32x32). 시험에서는 셸을 부르지 않는 가짜.
+    /// Original TfFileExists imgOrg / imgNew (native::shell_large_icon, 32x32). A fake that does not call the shell in tests.
     pub large_icon: fn(&Path) -> Option<(usize, usize, Vec<u8>)>,
-    /// 원본 DrawTextW(DT_PATH_ELLIPSIS) 경로 줄임(native::compact_path). 시험에서는 그대로 돌려준다.
+    /// Path shortening with original DrawTextW(DT_PATH_ELLIPSIS) (native::compact_path). Returns the input as is in tests.
     pub compact_path: fn(&str, i32) -> String,
-    /// Delphi Mouse.WheelScrollLines(native::wheel_scroll_lines). 시험에서는 3.
+    /// Delphi Mouse.WheelScrollLines (native::wheel_scroll_lines). 3 in tests.
     pub wheel_lines: fn() -> u32,
-    /// 원본 PlaySoundW(파일, 0x22003)(native::play_wave). 시험에서는 소리를 내지 않고 PLAYED에 남긴다.
+    /// Original PlaySoundW(file, 0x22003) (native::play_wave). In tests it records to PLAYED instead of playing.
     pub play_wave: fn(Option<&Path>) -> bool,
-    /// 폴더 트리 창의 뿌리(드라이브 뿌리 "C:\"). 시험에서는 빈 글(실제 드라이브를 훑지 않는다)이고, 트리 시험은 가짜 뿌리를 끼운다.
+    /// Roots of the folder tree window (drive roots "C:\"). Empty text in tests (real drives are not scanned); tree tests plug in fake roots.
     pub tree_root: fn(&str) -> String,
-    /// 원본 폴더 트리 삭제 FUN_004266ac의 SHFileOperationW(FO_DELETE)(native::shell_delete). 0 = 성공. 시험에서는 셸 창 없이 지운다.
+    /// SHFileOperationW(FO_DELETE) of original folder tree delete FUN_004266ac (native::shell_delete). 0 = success. In tests it deletes without a shell window.
     pub shell_delete: fn(&Path, bool) -> i32,
-    /// 원본 GetShortcutTarget(바로 가기의 대상, 폴더인지)(native::shortcut_target).
+    /// Original GetShortcutTarget (shortcut target, and whether it is a folder) (native::shortcut_target).
     pub shortcut_target: fn(&Path) -> Option<(PathBuf, bool)>,
 }
 
 #[cfg(test)]
 thread_local! {
-    /// 시험용 play_wave가 받은 경로(None = 멈추기).
+    /// Paths received by the test play_wave (None = stop).
     pub(super) static PLAYED: std::cell::RefCell<Vec<Option<PathBuf>>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
@@ -134,7 +134,7 @@ fn system_clipboard_files() -> Vec<PathBuf> {
     native::read_clipboard_files().map(|(paths, _)| paths).unwrap_or_default()
 }
 
-/// C# connectNetworkShare: UNC 경로의 오류가 자격 증명 실패(5, 65, 86, 1326)면 연결 창, 아니면 그 오류 번호.
+/// C# connectNetworkShare: when a UNC path error is a credential failure (5, 65, 86, 1326), the connect window; otherwise that error number.
 pub(super) fn network_share_code(path: &str, path_error: fn(&Path) -> u32, connect: fn(&str) -> u32) -> u32 {
     let code = path_error(Path::new(path));
     if matches!(code, 5 | 65 | 86 | 1326) { connect(path) } else { code }
@@ -235,7 +235,7 @@ impl Default for SystemHooks {
     }
 }
 
-/// C# ChecksumAlgorithm(하위 메뉴 checksum:Crc32 등). None이면 네 가지 모두.
+/// C# ChecksumAlgorithm (submenu checksum:Crc32 etc.). None means all four.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ChecksumAlgorithm {
     Crc32,
@@ -264,7 +264,7 @@ impl ChecksumAlgorithm {
     }
 }
 
-/// 체크섬 창 글: "이름\r\n결과"를 빈 줄로 잇는다.
+/// Checksum window text: "name\r\nresult" entries joined by blank lines.
 pub(super) fn checksum_text(items: &[(String, ndr::tools::Checksums)], algorithm: Option<ChecksumAlgorithm>) -> String {
     items
         .iter()
@@ -282,14 +282,14 @@ pub(super) fn checksum_text(items: &[(String, ndr::tools::Checksums)], algorithm
         .join("\r\n\r\n")
 }
 
-/// 대상 파일(압축 파일 안이면 항목 키): (보이는 이름, 경로 또는 키).
+/// Target files (item keys inside an archive): (shown name, path or key).
 struct SourceFiles {
     archive: Option<ArchiveLocation>,
     files: Vec<(String, PathBuf)>,
 }
 
 impl SourceFiles {
-    /// 압축 파일 안이면 임시 폴더에 하나씩 풀어 실제 경로로(C# ExtractEntryToTempAsync).
+    /// Inside an archive, extracts each to a temp folder one at a time and returns real paths (C# ExtractEntryToTempAsync).
     fn resolve(&self, cancel: &AtomicBool) -> Result<Vec<PathBuf>, String> {
         match &self.archive {
             None => Ok(self.files.iter().map(|(_, p)| p.clone()).collect()),
@@ -301,8 +301,8 @@ impl SourceFiles {
     }
 }
 
-/// 원본 TfPassword("인증", ClientWidth 249 × ClientHeight 142): lUser(12,24) eUser(82,21 145×21), lPassword(12,64) ePassword(82,61 145×21, '*'),
-/// btnOk(46,105)·btnCancel(135,105) 75×25. NDR은 C# CredentialsWindow(네트워크 드라이브 다른 계정) 자리에 쓴다. 확인은 사용자 이름이 있을 때만.
+/// Original TfPassword ("authentication", ClientWidth 249 x ClientHeight 142): lUser (12,24) eUser (82,21 145x21), lPassword (12,64) ePassword (82,61 145x21, '*'),
+/// btnOk (46,105) and btnCancel (135,105) 75x25. NDR uses it in place of C# CredentialsWindow (network drive with another account). OK only with a user name.
 pub(super) fn credentials_ui(ui: &mut egui::Ui, user: &mut String, password: &mut String, language: &compat::Language, enter: bool, first_frame: bool) -> Option<bool> {
     use super::original_dialogs::put_left;
     let text = |key: &str, fallback: &str| language.text(&format!("formPassword.{key}"), fallback).replace('&', "");
@@ -329,15 +329,15 @@ pub(super) fn credentials_ui(ui: &mut egui::Ui, user: &mut String, password: &mu
 }
 
 impl App {
-    /// C# SelectedItems에서 폴더를 뺀 파일들(원격 패널은 없음).
+    /// Files of C# SelectedItems without folders (none on remote panes).
     fn selected_files(&self) -> SourceFiles {
         let pane = &self.panes[self.active];
         let files = self.target_entries(self.active).into_iter().filter(|e| !e.is_dir).map(|e| (e.name.clone(), e.path.clone())).collect();
         SourceFiles { archive: pane.archive.clone(), files }
     }
 
-    /// C# ChecksumAsync: 파일마다 네 가지(또는 고른 하나)를 계산해 글 창("체크섬" 또는 "CRC 체크섬" 등).
-    /// 원본 하위 메뉴에 있는 CRC·MD5·SHA1은 원본 TfChecksum(`original_checksum`)으로, SHA-256과 네 가지 모두는 C# 글 창으로.
+    /// C# ChecksumAsync: computes all four (or the chosen one) per file into a text window ("checksum" or "CRC checksum" etc.).
+    /// CRC, MD5 and SHA1 from the original submenu use the original TfChecksum (`original_checksum`); SHA-256 and all four use the C# text window.
     pub(super) fn checksum_command(&mut self, algorithm: Option<ChecksumAlgorithm>) {
         if let Some(algorithm) = algorithm.filter(|a| *a != ChecksumAlgorithm::Sha256) {
             return self.original_checksum(algorithm);
@@ -364,9 +364,9 @@ impl App {
         });
     }
 
-    /// 원본 ChecksumClick(0x445bbc) + TfChecksum(FormShow 0x41af0c, 끝 0x41b164): 초점 항목이 파일이고 로컬·압축 패널일 때만.
-    /// 제목 = "CRC"/"MD5"/"SHA1", 글은 CALCULATING으로 시작해 계산 스레드가 끝나면 결과(CRC = IntToHex(8자, 대문자),
-    /// MD5/SHA1 = CryptoAPI 해시의 "0123456789abcdef" 소문자)나 ERROR. 압축 안 항목은 임시로 풀어 계산한다.
+    /// Original ChecksumClick (0x445bbc) + TfChecksum (FormShow 0x41af0c, end 0x41b164): only when the focused item is a file on a local or archive pane.
+    /// Title = "CRC"/"MD5"/"SHA1"; the text starts as CALCULATING and when the worker ends becomes the result (CRC = IntToHex(8 chars, upper case),
+    /// MD5/SHA1 = CryptoAPI hash in "0123456789abcdef" lower case) or ERROR. Archive items are extracted temporarily for the computation.
     fn original_checksum(&mut self, algorithm: ChecksumAlgorithm) {
         let pane = &self.panes[self.active];
         if super::panes::is_drives(&pane.path) {
@@ -391,7 +391,7 @@ impl App {
         });
     }
 
-    /// 원본 FUN_0041b164: 결과가 비면 ERROR와 꺼진 복사 단추, 아니면 결과와 켜진 복사 단추. 이미 닫힌 창이면 버린다.
+    /// Original FUN_0041b164: an empty result shows ERROR with a disabled copy button, otherwise the result with an enabled copy button. Dropped when the window is already closed.
     pub(super) fn checksum_done(&mut self, serial: u64, value: Option<String>) {
         let error = self.language_pack.text("RES.ERROR", "ERROR");
         let Some(dialog) = self.original_dialogs.iter_mut().find(|d| d.serial == serial) else { return };
@@ -401,7 +401,7 @@ impl App {
         }
     }
 
-    /// 원본 btnCopyClick(0x41b0ec): 맨 위 체크섬 창의 글을 클립보드로.
+    /// Original btnCopyClick (0x41b0ec): copies the text of the top checksum window to the clipboard.
     pub(super) fn copy_checksum(&mut self) {
         let Some(DialogKind::Checksum { value, ready: true }) = self.original_dialogs.last().map(|d| &d.kind) else { return };
         let text = value.clone();
@@ -410,7 +410,7 @@ impl App {
         }
     }
 
-    /// C# MergeTextFilesAsync: 파일 둘 이상 → 저장 대화 상자 → (압축 안이면 임시로 풀기) → 같은 경로 검사 → 구분 고르기 → 이어 쓰기.
+    /// C# MergeTextFilesAsync: two or more files -> save dialog -> (extract temporarily inside an archive) -> same path check -> choose a separator -> concatenate.
     pub(super) fn merge_text_files_command(&mut self) {
         let sources = self.selected_files();
         if sources.files.len() < 2 {
@@ -477,9 +477,9 @@ impl App {
         }
     }
 
-    /// C# OpenWithAsync: 프로그램(처음 값 TextViewerPath, 환경 변수·$(PROGRAMDIR) 풀기) → 인수 템플릿 → {files}면 한 번, 아니면 파일마다 실행.
-    /// 스킨 테마는 원본 mipOpenWithClick(0x43da54): 커서 항목(FUN_0042d3b8 = 지금 폴더 + 이름)을
-    /// ExecuteFile("rundll32.exe", "shell32.dll,OpenAs_RunDLL 경로")로 Windows "연결 프로그램" 창에 넘긴다.
+    /// C# OpenWithAsync: program (initially TextViewerPath, with environment variables and $(PROGRAMDIR) expanded) -> argument template -> one run for {files}, otherwise one per file.
+    /// The skin theme follows original mipOpenWithClick (0x43da54): hands the cursor item (FUN_0042d3b8 = current folder + name) to the Windows "Open with" window
+    /// via ExecuteFile("rundll32.exe", "shell32.dll,OpenAs_RunDLL path").
     pub(super) fn open_with_command(&mut self) {
         let pane = &self.panes[self.active];
         if pane.archive.is_some() || pane.remote.is_some() {
@@ -493,7 +493,7 @@ impl App {
         }
     }
 
-    /// C# RunCommandAsync의 입력 상자 = 원본 miCommandLineClick(0x438598): TfGetText(TITLE_CMD, MSG_CMD, 빈 글, 기록).
+    /// Input box of C# RunCommandAsync = original miCommandLineClick (0x438598): TfGetText(TITLE_CMD, MSG_CMD, empty text, history).
     pub(super) fn command_prompt(&mut self) {
         let title = self.language_pack.text("RES.TITLE_CMD", "Command Line");
         let message = self.language_pack.text("RES.MSG_CMD", "Type a command to execute.");
@@ -505,8 +505,8 @@ impl App {
         });
     }
 
-    /// C# RunCommandAsync(입력 뒤): 기록(로컬 명령이면 20줄), ftp:// → 원격, http:// → 열기, 압축 안이면 그만, cd → 폴더 이동,
-    /// 실행 파일 기록에 같은 이름이 하나면 그 경로(인수 없이), 여럿이면 고르는 메뉴, 아니면 ShellExecuteEx(이름, 인수, 작업 폴더).
+    /// C# RunCommandAsync (after input): history (20 lines for local commands), ftp:// -> remote, http:// -> open, stop inside archives, cd -> change folder,
+    /// one matching name in the executable history runs that path (without arguments), several show a choice menu, otherwise ShellExecuteEx(name, arguments, working folder).
     pub(super) fn run_command(&mut self, command: String) {
         let i = self.active;
         let parsed = cmdline::parse(&command);
@@ -517,8 +517,8 @@ impl App {
         self.save();
         match parsed.kind {
             CommandKind::Ftp => {
-                // 원본 miCommandLineClick: "ftp://"로 시작하면 FUN_0043e9f8(창, 0 = 지금 패널, 명령) = TfFTPQuickConnect(cbHost = 명령).
-                // (C# OpenRemoteWindow(initialHost: 명령) 대신 원본처럼 패널 FTP 연결 창.)
+                // Original miCommandLineClick: text starting with "ftp://" runs FUN_0043e9f8(window, 0 = current pane, command) = TfFTPQuickConnect(cbHost = command).
+                // (Instead of C# OpenRemoteWindow(initialHost: command), the pane FTP connect window like the original.)
                 self.ftp_quick_connect(command);
                 return;
             }
@@ -565,13 +565,13 @@ impl App {
                     .into_iter()
                     .map(|path| super::favorites_dialog::PopupItem::Entry { label: path.clone(), access: None, gesture: String::new(), enabled: true, checked: false, action: super::favorites_dialog::PopupAction::RunExecutable { path, directory: directory.clone() } })
                     .collect();
-                // 원본 pmTemp(+0x870): OnPopup = pmTempPopup(0x442b78)이 아래 화살표 하나를 보내 첫 줄을 골라 둔다.
+                // Original pmTemp (+0x870): OnPopup = pmTempPopup (0x442b78) sends one Down key so the first row is selected.
                 self.popup = Some(super::favorites_dialog::PopupMenu { items, position: Some(egui::pos2(4.0, 4.0)), highlight: Some(0), opened: true });
             }
         }
     }
 
-    /// RunCachedExecutable: 경로가 있으면 인수 없이 실행.
+    /// RunCachedExecutable: runs the path without arguments when it exists.
     pub(super) fn run_cached_executable(&mut self, path: &str, directory: &Path) {
         if !cmdline::executable_exists(path, Some(directory)) {
             return;
@@ -581,7 +581,7 @@ impl App {
         }
     }
 
-    /// C# OriginalFindAsync(miFindClick 0x437b2c): TfGetText(TITLE_FIND, MSG_FIND, 빈 글). OK면 찾기.
+    /// C# OriginalFindAsync (miFindClick 0x437b2c): TfGetText(TITLE_FIND, MSG_FIND, empty text). OK searches.
     pub(super) fn find_command(&mut self) {
         let title = self.language_pack.text("RES.TITLE_FIND", "Find");
         let message = self.language_pack.text("RES.MSG_FIND", "Find a file containing following text and move a select bar to that file.");
@@ -635,9 +635,9 @@ impl App {
         });
     }
 
-    /// 원본 miNetwork(0x4416ec, 내부 명령 0x26 NetworkDialog): 네트워크를 뿌리로 한 폴더 고르기(SHBrowseForFolderW, 제목 [RES] NETWORK).
-    /// 로컬 패널이면 지금 폴더를 고른 채 열고, 고르면 활성 패널을 그 폴더로 옮긴다(FUN_0048d6e4, FTP 패널이면 끊고 간다).
-    /// (C# 판은 탐색기 shell:NetworkPlacesFolder를 열었다.)
+    /// Original miNetwork (0x4416ec, internal command 0x26 NetworkDialog): a folder picker rooted at the network (SHBrowseForFolderW, title [RES] NETWORK).
+    /// On a local pane it opens with the current folder selected, and a choice moves the active pane to that folder (FUN_0048d6e4; an FTP pane disconnects first).
+    /// (The C# version opened Explorer shell:NetworkPlacesFolder.)
     pub(super) fn browse_network_command(&mut self) {
         let i = self.active;
         let local = self.panes[i].archive.is_none() && self.panes[i].remote.is_none();
@@ -658,7 +658,7 @@ impl App {
             let (k, e) = (format!("네트워크 드라이브 연결에 실패했습니다. Windows 오류 {code}: {message}"), format!("Could not connect the network drive. Windows error {code}: {message}"));
             return self.warn(&k, &e);
         }
-        // 원본 FUN_00435144: 활성 패널이 로컬 모드(0)일 때만 새로 읽는다.
+        // Original FUN_00435144: rereads only when the active pane is in local mode (0).
         super::panes::DriveListCache::invalidate(&self.drive_list);
         if self.panes[self.active].archive.is_none() && self.panes[self.active].remote.is_none() {
             self.refresh(self.active);
@@ -666,7 +666,7 @@ impl App {
         self.status = if self.language == "ko" { format!("{letter} → {remote} 연결됨") } else { format!("{letter} → {remote} connected") };
     }
 
-    /// CredentialsWindow를 연다.
+    /// Opens CredentialsWindow.
     pub(super) fn credentials_dialog(&mut self, title: &str, on_result: impl FnOnce(&mut App, Option<(String, String)>) + 'static) {
         self.push_original_dialog(title.into(), DialogKind::Credentials { user: String::new(), password: String::new() }, move |app, result, _| {
             if let DialogResult::Credentials(value) = result {
@@ -675,7 +675,7 @@ impl App {
         });
     }
 
-    /// C# UnmapNetworkDriveAsync: 연결된 네트워크 드라이브 고르기 → 연결 해제 → 활성 패널 새로 고침.
+    /// C# UnmapNetworkDriveAsync: choose a connected network drive -> disconnect -> refresh the active pane.
     pub(super) fn unmap_drive_command(&mut self) {
         let mapped = (self.system.network_drives)();
         if mapped.is_empty() {

@@ -1,9 +1,9 @@
-//! C# MainWindow.Toolbar: BuildMainToolbar(왼쪽 묶음 + 오른쪽 묶음, 구분선, 빠른 찾기 칸, 명령 단추), GetToolbarLabel,
-//! RefreshMainToolbarIcons(스킨 그림 18×18, 없으면 글), ApplyMainToolbarButtonVisibility, ExecuteToolbarCommandAsync.
+//! C# MainWindow.Toolbar: BuildMainToolbar (left group + right group, separators, quick search field, command buttons), GetToolbarLabel,
+//! RefreshMainToolbarIcons (skin images 18x18, text when missing), ApplyMainToolbarButtonVisibility, ExecuteToolbarCommandAsync.
 use super::*;
 use ndr::commands::{ToolbarItem, ToolbarKind};
 
-/// C# LanguageService.MenuKeys 가운데 도구 모음 명령이 쓰는 것(createZip은 C# 표에 없다).
+/// Entries of C# LanguageService.MenuKeys used by toolbar commands (createZip is not in the C# table).
 fn menu_key(action: &str) -> Option<&'static str> {
     Some(match action {
         "historyBack" => "Menu.miHistoryBack",
@@ -34,7 +34,7 @@ fn menu_key(action: &str) -> Option<&'static str> {
     })
 }
 
-/// C# LanguageService.ToAccessText: "&&" → '&', '&' → '_'(접근 키), '_' → "__".
+/// C# LanguageService.ToAccessText: "&&" -> '&', '&' -> '_' (access key), '_' -> "__".
 pub(super) fn to_access_text(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     let mut chars = value.chars().peekable();
@@ -52,7 +52,7 @@ pub(super) fn to_access_text(value: &str) -> String {
     out
 }
 
-/// WPF 접근 키 글이 보이는 모양: 처음 나오는 '_' 하나는 표시만 하고, "__"는 '_' 하나.
+/// How WPF access key text looks: the first '_' is only a marker, and "__" is one '_'.
 pub(super) fn access_display(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     let mut chars = value.chars().peekable();
@@ -75,19 +75,19 @@ pub(super) fn access_display(value: &str) -> String {
 }
 
 impl App {
-    /// C# LanguageService.MenuText(section 생략): 언어 값(없으면 대체 글)을 ToAccessText로.
+    /// C# LanguageService.MenuText (section omitted): the language value (otherwise the fallback text) through ToAccessText.
     fn menu_access_text(&self, key: &str, fallback: &str) -> String {
         to_access_text(&self.language_pack.raw(key).unwrap_or_else(|| fallback.to_owned()))
     }
 
-    /// C# GetToolbarLabel. 돌려주는 글은 C#의 단추 글(접근 키 '_' 포함) 그대로다.
+    /// C# GetToolbarLabel. The returned text is the C# button text as is (including the '_' access key).
     pub(super) fn toolbar_label(&self, item: &ToolbarItem) -> String {
         let language = &self.language_pack;
         if !item.caption.is_empty() {
             return language.translate_pair(&item.caption, &item.caption);
         }
         if let Some(command) = item.action.strip_prefix("user:") {
-            // 이름(<name>)이 없는 UserCommand는 기능키 칸과 같은 규칙(FUN_00479970: "[이름]명령"의 이름, 프로그램은 확장자 뺀 파일 이름).
+            // A UserCommand without a name (<name>) follows the function key cell rule (FUN_00479970: the name of "[name]command", for a program the file name without extension).
             let resource = |name: &str| language.raw(&format!("RES.{name}"));
             return super::user_commands::original_function_key_caption(command, &resource);
         }
@@ -140,7 +140,7 @@ impl App {
             "closeTab" => self.menu_access_text("Menu.pmiCloseTab", fallback),
             other => {
                 let translated = language.translate_pair(fallback, fallback);
-                // C# Menu(): MenuKeys에 없으면 대체 글 그대로(ToAccessText 없음).
+                // C# Menu(): the fallback text as is when not in MenuKeys (no ToAccessText).
                 match menu_key(other) {
                     Some(key) => self.menu_access_text(key, &translated),
                     None => translated,
@@ -164,7 +164,7 @@ impl App {
         }
     }
 
-    /// C# RefreshMainToolbarIcons: 지금 테마의 스킨에서 그림(NexusFileSkinService.LoadImage), 없거나 못 읽으면 None(글 단추).
+    /// C# RefreshMainToolbarIcons: images from the current theme's skin (NexusFileSkinService.LoadImage); None when missing or unreadable (text button).
     pub(super) fn toolbar_icon(&mut self, ctx: &egui::Context, icon: &str) -> Option<egui::TextureHandle> {
         if icon.is_empty() {
             return None;
@@ -183,8 +183,8 @@ impl App {
         texture
     }
 
-    /// 지금 테마의 원본 스킨(검정·클래식·회색). 테마가 바뀔 때만 conf.ini를 다시 읽는다. 원본 스킨이 아닌 이름이나 읽지 못한 스킨이면
-    /// 원본 처음 값 검정(Black)을 쓴다.
+    /// Original skin of the current theme (black, classic, gray). conf.ini is reread only when the theme changes. For names that are not original skins or unreadable skins,
+    /// the original default black (Black) is used.
     pub(super) fn current_skin(&mut self) -> Option<ndr::styles::Skin> {
         let theme = self.settings.text("Theme", "Black");
         if self.skin_cache.as_ref().map(|(name, _)| name.as_str()) != Some(theme.as_str()) {
@@ -195,7 +195,7 @@ impl App {
         self.skin_cache.as_ref().and_then(|(_, skin)| skin.clone())
     }
 
-    /// 원본 스킨의 BMP 그림(tbbackimg, bbbackimg, bbdividerimg). 없거나 못 읽으면 None.
+    /// BMP images of the original skin (tbbackimg, bbbackimg, bbdividerimg). None when missing or unreadable.
     pub(super) fn skin_bitmap(&mut self, ctx: &egui::Context, file: &str) -> Option<egui::TextureHandle> {
         let theme = self.settings.text("Theme", "Black");
         let key = format!("bmp|{theme}|{file}");
@@ -212,8 +212,8 @@ impl App {
         texture
     }
 
-    /// 원본 pToolbar(스킨 테마, FUN_00444710): 배경 tbbackimg를 가로로 이어 그리고, 단추(TNXImageButton, Stretch)는
-    /// tbbtnwidth × tbbtnheight로 위 tbtopoffset(처음 값 4)에 놓는다. 구분선 칸은 15. 그림이 없는 항목은 스킨 tb_noimage.png.
+    /// Original pToolbar (skin theme, FUN_00444710): tiles the background tbbackimg horizontally, and places buttons (TNXImageButton, Stretch)
+    /// as tbbtnwidth x tbbtnheight at top tbtopoffset (default 4). Separator cells are 15. Items without an image use the skin tb_noimage.png.
     pub(super) fn skin_toolbar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, skin: &ndr::styles::Skin) {
         let rect = ui.max_rect();
         if let Some(back) = skin.values.get("toolbar.tbbackimg").cloned().and_then(|file| self.skin_bitmap(ctx, &file)) {
@@ -255,11 +255,11 @@ impl App {
                 }
             }
         }
-        // 원본 FUN_00444710: 형식 3(Container)은 DropDownMenu = pmToolBar(+0x874). 단추 아래에 하위 항목 메뉴.
+        // Original FUN_00444710: kind 3 (Container) has DropDownMenu = pmToolBar (+0x874). A sub-item menu below the button.
         if let Some((index, position)) = container_at {
             return self.show_toolbar_container(index, Some(position));
         }
-        // 원본 FUN_00444710: command가 Favorites인 단추는 DropDownMenu = pmFavorites(+0x404). 누르면 단추 아래에 즐겨찾기 메뉴가 열린다.
+        // Original FUN_00444710: a button whose command is Favorites has DropDownMenu = pmFavorites (+0x404). Clicking opens the favorites menu below the button.
         if let Some(position) = favorites_at {
             self.show_favorites_menu();
             if let Some(popup) = self.popup.as_mut() {
@@ -286,8 +286,8 @@ impl App {
             ToolbarKind::Command => {
                 let label = access_display(&self.toolbar_label(item));
                 let icon = self.toolbar_icon(ctx, &item.icon).or_else(|| self.toolbar_icon(ctx, "tb_noimage.png"));
-                // 원본 FUN_00444710: Back·Forward 단추(+0xd70·+0xd74)는 기록이 없으면 Enabled = False. TNXImageButton.Paint는
-                // 꺼진 단추를 상수 알파 0x82로 그리고(칸이 셋 이상이면 칸 2), 누를 수 없다.
+                // Original FUN_00444710: Back and Forward buttons (+0xd70, +0xd74) have Enabled = False without history. TNXImageButton.Paint
+                // draws a disabled button with constant alpha 0x82 (cell 2 when there are three or more cells), and it cannot be clicked.
                 let enabled = match item.action.as_str() {
                     "historyBack" => !self.panes[self.active].back.is_empty(),
                     "historyForward" => !self.panes[self.active].forward.is_empty(),
@@ -297,8 +297,8 @@ impl App {
                 let response = ui.interact(slot, egui::Id::new(("ndr-skin-toolbar", item.action.as_str(), slot.left() as i32)), sense);
                 match icon {
                     Some(texture) => {
-                        // 원본 TNXImageButton.Paint(0x7c3adc): 그림 칸이 하나(도구 모음 그림)면 포인터를 올려도 그대로이고,
-                        // 누르면 FUN_007c39e4로 칸마다 색 × 6 / 10 + 검정 × 4 / 10(어둡게).
+                        // Original TNXImageButton.Paint (0x7c3adc): with a single image cell (toolbar image) hovering changes nothing,
+                        // and pressing darkens each cell color via FUN_007c39e4: color x 6 / 10 + black x 4 / 10.
                         let tint = if !enabled {
                             Color32::WHITE.gamma_multiply(130.0 / 255.0)
                         } else if response.is_pointer_button_down_on() && response.hovered() {
@@ -319,7 +319,7 @@ impl App {
         }
     }
 
-    /// 단추 도움말: 원본 FUN_00486694의 BACKHINT / FORWARDHINT("뒤로 (%s)", %s = 그 단추가 열 경로). 그 밖은 단추 글.
+    /// Button tooltips: BACKHINT / FORWARDHINT of original FUN_00486694 ("Back (%s)", %s = the path the button opens). Others use the button text.
     pub(super) fn toolbar_hint(&self, action: &str, label: &str) -> String {
         let pane = &self.panes[self.active];
         let (key, fallback, target) = match action {
@@ -334,7 +334,7 @@ impl App {
         }
     }
 
-    /// C# ExecuteToolbarCommandAsync: "function:이름"은 내부 명령(ExecuteFunctionKeyMacroAsync), 나머지는 메뉴 명령.
+    /// C# ExecuteToolbarCommandAsync: "function:name" is an internal command (ExecuteFunctionKeyMacroAsync), the rest are menu commands.
     pub(super) fn toolbar_command(&mut self, action: &str, ctx: &egui::Context) {
         if let Some(name) = action.strip_prefix("function:") {
             let id = format!("#{name}");
@@ -344,7 +344,7 @@ impl App {
             return;
         }
         if let Some(command) = action.strip_prefix("user:") {
-            // 원본 FUN_0044381c(폼, 명령, 내부 명령 아님): 기능키의 사용자 명령("[이름]프로그램 인수", 매크로)과 같은 실행.
+            // Original FUN_0044381c (form, command, not internal): runs like a function key user command ("[name]program arguments", macros).
             let binding = ndr::commands::FunctionBinding { name: String::new(), command: command.to_owned(), parameters: String::new(), internal: false, legacy: true };
             self.run_binding(&binding, ctx);
             return;
@@ -355,8 +355,8 @@ impl App {
         self.dispatch(action, ctx);
     }
 
-    /// 원본 pmToolBarPopup(FUN_00444e60): Container 단추의 하위 항목마다 메뉴 줄(이름), Separator는 구분선.
-    /// 누르면 FUN_00444e04 = FUN_0044381c(폼, 명령, 형식 == InternalCommand). 단추 아래(`position`)에 펼친다.
+    /// Original pmToolBarPopup (FUN_00444e60): one menu row (name) per sub-item of a Container button, Separator as a separator.
+    /// Clicking runs FUN_00444e04 = FUN_0044381c(form, command, kind == InternalCommand). Opens below the button (`position`).
     pub(super) fn show_toolbar_container(&mut self, index: usize, position: Option<egui::Pos2>) {
         let Some(container) = self.toolbar.items.get(index) else { return };
         let mut items = Vec::new();
@@ -375,8 +375,8 @@ impl App {
     }
 }
 
-/// 원본 FUN_00444710(생성자 0x47d7ac: 왼쪽 여백 4, 오른쪽 여백 6): 왼쪽 항목은 4부터, 오른쪽(align=right) 항목은
-/// (너비 − 6 − Σ(폭 + 4))부터, 둘 다 다음 항목은 폭 + 4 뒤. 돌려주는 값은 각 항목의 왼쪽 x(도구 모음 기준).
+/// Original FUN_00444710 (constructor 0x47d7ac: left margin 4, right margin 6): left items start at 4, right (align=right) items at
+/// (width - 6 - sum(width + 4)); in both, the next item comes width + 4 later. Returns each item's left x (relative to the toolbar).
 pub(super) fn toolbar_slots(left: &[f32], right: &[f32], width: f32) -> (Vec<f32>, Vec<f32>) {
     let place = |widths: &[f32], start: f32| {
         let mut x = start;
@@ -392,7 +392,7 @@ pub(super) fn toolbar_slots(left: &[f32], right: &[f32], width: f32) -> (Vec<f32
     (place(left, 4.0), place(right, width - 6.0 - right.iter().map(|w| w + 4.0).sum::<f32>()))
 }
 
-/// 도구 모음 그림(PNG) → (너비, 높이, RGBA).
+/// Toolbar image (PNG) -> (width, height, RGBA).
 fn decode_png(path: &Path) -> Result<(usize, usize, Vec<u8>), String> {
     let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
     let mut decoder = png::Decoder::new(std::io::BufReader::new(file));

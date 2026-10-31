@@ -1,14 +1,14 @@
-//! C# MainWindow.CoreFeatures / ParityFeatures의 작은 시스템 명령들:
-//! OpenAllSelectedFilesAsync(원본 FUN_004459d0), OpenItemAsync의 압축 항목 열기, CreateOriginalShortcuts(원본 FUN_00441af4),
-//! PasteShortcutAsync(원본 0x4340d4), GoToSystemFolderAsync/GoToDownloadsAsync, ShowProperties, ShowFileInformation
+//! Small system commands of C# MainWindow.CoreFeatures / ParityFeatures:
+//! OpenAllSelectedFilesAsync (original FUN_004459d0), opening archive items in OpenItemAsync, CreateOriginalShortcuts (original FUN_00441af4),
+//! PasteShortcutAsync (original 0x4340d4), GoToSystemFolderAsync/GoToDownloadsAsync, ShowProperties, ShowFileInformation
 //! (FileInformationService), SelectThemeAsync/ApplyTheme, SelectLanguageAsync, ShowAbout, OpenNexusFileHelp, OpenProgramHomepage.
 use super::*;
 use ndr::msgbox::{MB_ICONASTERISK, MB_ICONEXCLAMATION, MB_OK};
 
-/// 원본 스킨(skin\ 폴더 이름): 검정·클래식·회색.
+/// Original skins (skin\ folder names): black, classic, gray.
 pub(super) const THEMES: [&str; 3] = ["Black", "Classic", "Gray"];
 
-/// C# ApplyTheme의 색 표(스킨이 없을 때). (앱 배경, 패널 배경, 돋운 칸, 테두리, 글자, 흐린 글자, 강조).
+/// Color table of C# ApplyTheme (when there is no skin). (app background, pane background, raised cell, border, text, faint text, accent).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct ThemePalette {
     pub app: [u8; 3],
@@ -21,14 +21,14 @@ pub(super) struct ThemePalette {
 }
 
 impl ThemePalette {
-    /// 패널 배경이 어두우면 egui 어두운 바탕을 쓴다.
+    /// A dark pane background uses the egui dark visuals.
     pub fn dark(&self) -> bool {
         let [r, g, b] = self.panel;
         (u32::from(r) * 299 + u32::from(g) * 587 + u32::from(b) * 114) / 1000 < 128
     }
 }
 
-/// 스킨마다 egui 바탕 색(대화 상자 등 스킨이 칠하지 않는 곳). 모르는 이름은 검정.
+/// egui base colors per skin (places the skin does not paint, such as dialogs). Unknown names are black.
 pub(super) fn theme_palette(theme: &str) -> ThemePalette {
     match theme {
         "Classic" => ThemePalette { app: [0xDE, 0xDE, 0xDE], panel: [0xF0, 0xF0, 0xF0], raised: [0xFF, 0xFF, 0xFF], border: [0xAA, 0xAA, 0xAA], text: [0, 0, 0], muted: [0x66, 0x66, 0x66], accent: [0x17, 0x69, 0xAA] },
@@ -37,7 +37,7 @@ pub(super) fn theme_palette(theme: &str) -> ThemePalette {
     }
 }
 
-/// C# ApplyTheme의 색 표를 egui 바탕에 옮긴다(스킨·색상표는 그 뒤에 덮는다).
+/// Moves the C# ApplyTheme color table onto the egui base (skins and color tables are applied over it).
 pub(super) fn palette_visuals(palette: &ThemePalette) -> egui::Visuals {
     let c = |[r, g, b]: [u8; 3]| Color32::from_rgb(r, g, b);
     let mut visuals = if palette.dark() { egui::Visuals::dark() } else { egui::Visuals::light() };
@@ -54,40 +54,40 @@ pub(super) fn palette_visuals(palette: &ThemePalette) -> egui::Visuals {
     visuals
 }
 
-/// 메뉴를 열 때의 항목 상태: C# UpdateArchiveMenuItems(압축 메뉴) + 원본 pmEditPopup(0x43727c)·pmFolderPopup(0x437210).
+/// Item states when a menu opens: C# UpdateArchiveMenuItems (archive menu) + original pmEditPopup (0x43727c) and pmFolderPopup (0x437210).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub(super) struct ArchiveMenuState {
     pub selected: bool,
     pub current: bool,
-    /// 원본 pmEditPopup: miEditPaste.Enabled = IsClipboardFormatAvailable(CF_HDROP).
+    /// Original pmEditPopup: miEditPaste.Enabled = IsClipboardFormatAvailable(CF_HDROP).
     pub paste: bool,
-    /// 원본 pmEditPopup: miRestoreLastSel.Enabled = 저장한 선택 수 > 0.
+    /// Original pmEditPopup: miRestoreLastSel.Enabled = saved selection count > 0.
     pub restore: bool,
-    /// 원본 pmFolderPopup: miToLastDest.Enabled = 마지막 대상이 있음.
+    /// Original pmFolderPopup: miToLastDest.Enabled = there is a last destination.
     pub last_destination: bool,
-    /// 원본 pmFolderPopup(0x437210): miHistoryBack(+0x4ac)·miHistoryForward(+0x4a8).Enabled = 기록에 뒤·앞이 있음.
+    /// Original pmFolderPopup (0x437210): miHistoryBack (+0x4ac) / miHistoryForward (+0x4a8).Enabled = history has back/forward entries.
     pub history_back: bool,
     pub history_forward: bool,
-    /// 원본 pmEditPopup(0x43727c): miFindNext(+0x4cc).Enabled = 마지막 찾기 글(+0xd0c) 길이 > 0.
+    /// Original pmEditPopup (0x43727c): miFindNext (+0x4cc).Enabled = last find text (+0xd0c) length > 0.
     pub find_next: bool,
-    /// 원본 miViewFileInfoBarClick(0x434bc4): miViewExtensionInfo(+0x7e0).Enabled = 파일 정보 표시줄이 보임(+0x58).
+    /// Original miViewFileInfoBarClick (0x434bc4): miViewExtensionInfo (+0x7e0).Enabled = the file info bar is visible (+0x58).
     pub file_info_bar: bool,
-    /// 원본 pmConnectPopup(0x43ee78): 지금 패널이 FTP 모드(연결됨).
+    /// Original pmConnectPopup (0x43ee78): the current pane is in FTP mode (connected).
     pub ftp_active: bool,
-    /// 두 패널 가운데 하나가 FTP 모드.
+    /// One of the two panes is in FTP mode.
     pub ftp_any: bool,
-    /// 지금 패널이 압축 파일 안(원본 패널 모드 1).
+    /// The current pane is inside an archive (original pane mode 1).
     pub in_archive: bool,
-    /// 스킨 테마(원본 모양): 원본 pmArchivePopup 규칙을 쓴다.
+    /// Skin theme (original look): uses the original pmArchivePopup rules.
     pub original: bool,
 }
 
 impl ArchiveMenuState {
-    /// (보임, 켜짐). extractCurrent/extractAuto는 고른 압축 파일이 있을 때만 켜짐(C# 판). 스킨 테마는 원본 pmArchivePopup(0x43a4e4)처럼
-    /// miArcExtractToCurr(+0x5c0)·miArcExtractToFolder(+0x7bc)·miArcExtractAuto(+0x72c)를 패널 모드가 1(압축 안)이 아니면 켠다.
-    /// archiveInstall은 고른 압축 파일이 있을 때만,
-    /// archiveProperties는 고른 압축 파일이나 지금 압축 파일이 있을 때만 보이고 켜짐. 붙여넣기·마지막 선택 복구·마지막 대상 위치는
-    /// 원본처럼 쓸 것이 있을 때만 켜짐. 나머지는 그대로.
+    /// (visible, enabled). extractCurrent/extractAuto are enabled only with a chosen archive (C# version). The skin theme, like the original pmArchivePopup (0x43a4e4),
+    /// enables miArcExtractToCurr (+0x5c0), miArcExtractToFolder (+0x7bc) and miArcExtractAuto (+0x72c) unless the pane mode is 1 (inside an archive).
+    /// archiveInstall only with a chosen archive,
+    /// archiveProperties visible and enabled only with a chosen or current archive. Paste, restore last selection and last destination are
+    /// enabled only when there is something to use, like the original. The rest stay as is.
     pub fn item(&self, command: &str) -> (bool, bool) {
         match command {
             "extractCurrent" | "extractAuto" | "extractNewFolder" if self.original => (true, !self.in_archive),
@@ -112,13 +112,13 @@ impl ArchiveMenuState {
 }
 
 impl App {
-    /// C# UpdateArchiveMenuItems: hasSelectedArchive = 로컬 패널에서 고른 파일 중 압축 파일이 있음,
-    /// hasCurrentArchive = 지금 압축 파일 안이고 그 파일이 있음.
+    /// C# UpdateArchiveMenuItems: hasSelectedArchive = an archive among the files chosen on a local pane,
+    /// hasCurrentArchive = inside an archive that exists.
     pub(super) fn archive_menu_state(&self) -> ArchiveMenuState {
         let i = self.active;
         let selected = self.panes[i].archive.is_none() && self.target_entries(i).iter().any(|e| !e.is_dir && ndr::archive::archive_format(&e.path).is_some());
         let current = self.panes[i].archive.as_ref().is_some_and(|l| l.file.is_file());
-        // Rust는 압축 안 항목을 NDR 내부 클립보드로도 붙여넣으므로 그것도 붙여넣을 것으로 센다.
+        // Rust also pastes archive items through the NDR internal clipboard, so those count as pasteable too.
         let paste = self.clipboard.is_some() || native::clipboard_has_files();
         let restore = !self.last_selection[i].is_empty();
         let last_destination = !self.settings.text("LastDestination", "").trim().is_empty();
@@ -130,7 +130,7 @@ impl App {
         ArchiveMenuState { selected, current, paste, restore, last_destination, history_back, history_forward, find_next, file_info_bar, ftp_active, ftp_any, in_archive: self.panes[i].archive.is_some(), original: false }
     }
 
-    /// 보기 메뉴의 체크 표시(원본 pmViewPopup 0x436fb8의 Checked, C# AddToggleMenuItem): None이면 일반 항목.
+    /// Check marks of the View menu (Checked of original pmViewPopup 0x436fb8, C# AddToggleMenuItem): None is an ordinary item.
     pub(super) fn menu_checked(&self, command: &str) -> Option<bool> {
         let view = self.settings.text(if self.active == 0 { "LeftViewStyle" } else { "RightViewStyle" }, "Auto");
         Some(match command {
@@ -150,8 +150,8 @@ impl App {
         })
     }
 
-    /// C# ApplySingleInstanceModeAsync(enabled): 이미 그 상태면 성공. 켤 때는 사용자·프로필 뮤텍스를 잡고 이동 요청을 받기 시작한다
-    /// (다른 NDR이 이미 잡았으면 실패, 그쪽에 아무것도 보내지 않음). 끌 때는 놓는다.
+    /// C# ApplySingleInstanceModeAsync(enabled): success when already in that state. Turning on takes the user/profile mutex and starts receiving navigation requests
+    /// (fails when another NDR already holds it, sending it nothing). Turning off releases it.
     pub(super) fn apply_single_instance(&mut self, enabled: bool) -> bool {
         if enabled == self.instance_guard.is_some() {
             return true;
@@ -171,8 +171,8 @@ impl App {
         }
     }
 
-    /// C# OpenAllSelectedFilesAsync(원본 FUN_004459d0): 모은 항목(FUN_00485bbc)마다 .exe/.lnk는 실행 기록에 남기고
-    /// ShellExecute(작업 폴더 = 지금 폴더). 실패는 셸이 직접 알린다. 압축 안이면(승인된 수정) 파일만 임시로 풀어 연다.
+    /// C# OpenAllSelectedFilesAsync (original FUN_004459d0): for each collected item (FUN_00485bbc), records .exe/.lnk in the run history and
+    /// ShellExecute (working folder = current folder). The shell reports failures itself. Inside an archive (approved fix) only files are extracted temporarily and opened.
     pub(super) fn open_all_command(&mut self) {
         let i = self.active;
         let items = self.target_entries(i);
@@ -192,8 +192,8 @@ impl App {
         self.settings.set_strings("ExecutableHistory", rows);
     }
 
-    /// C# OpenItemAsync의 압축 패널 분기: 항목을 %TEMP%\NDR\…에 풀고, 풀린 것이 읽을 수 있는 압축 파일이면 그 안으로,
-    /// 아니면 셸로 연다.
+    /// Archive pane branch of C# OpenItemAsync: extracts the item into %TEMP%\NDR\...; if the result is a readable archive, goes inside it,
+    /// otherwise opens it with the shell.
     pub(super) fn open_archive_entry(&mut self, pane: usize, entry: &Entry) {
         let Some(location) = self.panes[pane].archive.clone() else { return };
         let key = entry.path.to_string_lossy().into_owned();
@@ -210,7 +210,7 @@ impl App {
             let mut password = (!location.password.is_empty()).then(|| location.password.clone());
             let mut opened = Vec::new();
             let mut failures = Vec::new();
-            // C# ExtractExternalWithPasswordPromptAsync: 암호 오류면 암호를 묻고 다시 푼다. 취소면 그 항목은 건너뛴다.
+            // C# ExtractExternalWithPasswordPromptAsync: on a password error asks for the password and extracts again. Cancel skips that item.
             let ask = tx.clone();
             let mut passwords = |archive: &Path| {
                 let (reply, answer) = mpsc::channel();
@@ -232,16 +232,16 @@ impl App {
     }
 
     pub(super) fn archive_entries_opened(&mut self, pane: usize, archive: PathBuf, password: Option<String>, opened: Vec<PathBuf>, failures: Vec<String>, navigate_archives: bool) {
-        // 물어서 맞힌 암호는 그 패널의 압축 위치에 남긴다(다음 열기·풀기에서 다시 묻지 않는다).
+        // A password found by asking is kept in that pane's archive location (no asking again on the next open or extract).
         if let (Some(location), Some(password)) = (self.panes[pane].archive.as_mut(), password) {
             if location.file == archive {
                 location.password = password;
             }
         }
         for path in opened {
-            // C# OpenItemAsync: CanReadArchiveInternally이거나 동봉 7-Zip(GetExternalArchiveListingProgram, BundledSevenZipExtractFormats)이
-            // 읽는 형식이면 그 안으로. NDR은 동봉 7-Zip(UzuCore 7zip+α, ALZ·EGG 포함)으로 읽으므로 7-Zip이 못 읽는 ACE만 뺀다.
-            // ACE는 C# TryGetExternalArchiveProgram처럼 외부 압축 프로그램으로 임시 폴더 옆에 풀고 그 폴더로(프로그램이 없으면 C# 오류 글).
+            // C# OpenItemAsync: goes inside formats that CanReadArchiveInternally or the bundled 7-Zip (GetExternalArchiveListingProgram, BundledSevenZipExtractFormats)
+            // can read. NDR reads with the bundled 7-Zip (UzuCore 7zip+, including ALZ and EGG), so only ACE, which 7-Zip cannot read, is excluded.
+            // ACE is extracted next to a temp folder with an external archiver like C# TryGetExternalArchiveProgram, then that folder opens (the C# error text without the program).
             let is_archive = ndr::archive::archive_format(&path).is_some();
             if navigate_archives && is_archive && !ndr::archive::bundled_can_browse(&path) {
                 self.open_with_external_archive_program(pane, path, false);
@@ -265,8 +265,8 @@ impl App {
         }
     }
 
-    /// C# CreateOriginalShortcuts(원본 FUN_00441af4): 압축 안은 경고(승인된 수정). 모은 항목마다 "이름.확장자.lnk"를
-    /// 바탕 화면(또는 빠른 실행) 폴더에, 폴더가 없으면 아무것도 하지 않는다. 끝나면 선택 해제, 알림 없음.
+    /// C# CreateOriginalShortcuts (original FUN_00441af4): warns inside archives (approved fix). Creates "name.ext.lnk" for each collected item
+    /// in the Desktop (or Quick Launch) folder; does nothing when the folder is missing. Clears the selection afterwards, no notice.
     pub(super) fn shortcut_command(&mut self, quick_launch: bool) {
         let i = self.active;
         if self.panes[i].archive.is_some() {
@@ -283,8 +283,8 @@ impl App {
         self.panes[i].selected.clear();
     }
 
-    /// C# PasteShortcutAsync(원본 miPasteAsShortcutClick 0x4340d4): 로컬 패널이고 지금 폴더가 있을 때 클립보드 파일 목록
-    /// 순서대로 "이름.확장자.lnk"(대상 검사 없음, 조용히 바꿈), 그 뒤 다시 나열. 알림 없음.
+    /// C# PasteShortcutAsync (original miPasteAsShortcutClick 0x4340d4): on a local pane with an existing current folder, creates "name.ext.lnk" in clipboard file list
+    /// order (no target check, silently replaced), then relists. No notice.
     pub(super) fn paste_shortcut_command(&mut self) {
         let i = self.active;
         let folder = self.panes[i].path.clone();
@@ -301,15 +301,15 @@ impl App {
         self.refresh(i);
     }
 
-    /// C# GoToSystemFolderAsync/GoToDownloadsAsync: 문서·사진·음악·동영상·다운로드는 SpecialFolderPaths 설정(ExpandSetting)을
-    /// 먼저, 아니면 Windows 폴더. 폴더가 있을 때만 이동한다. temp = Path.GetTempPath().
+    /// C# GoToSystemFolderAsync/GoToDownloadsAsync: documents, pictures, music, videos and downloads use the SpecialFolderPaths setting (ExpandSetting)
+    /// first, otherwise the Windows folder. Moves only when the folder exists. temp = Path.GetTempPath().
     pub(super) fn special_folder_command(&mut self, id: &str) {
         if let Some(path) = self.special_folder_path(id) {
             self.navigate(self.active, path, true);
         }
     }
 
-    /// special_folder_command와 폴더 트리 창(FUN_0040db88)의 특수 폴더 경로. 있는 폴더일 때만.
+    /// Special folder paths for special_folder_command and the folder tree window (FUN_0040db88). Only existing folders.
     pub(super) fn special_folder_path(&mut self, id: &str) -> Option<PathBuf> {
         let key = match id {
             "documents" => "Documents",
@@ -324,7 +324,7 @@ impl App {
             .flatten();
         let path = match (configured, id) {
             (Some(value), _) => PathBuf::from(ndr::command_line::expand_setting(&value)),
-            // 원본 miToTempClick(0x4330b0): GetTempPathW → GetLongPathNameW, 둘 중 하나라도 실패하면 그만.
+            // Original miToTempClick (0x4330b0): GetTempPathW -> GetLongPathNameW; stops if either fails.
             (None, "temp") => (self.system.temp_folder)()?,
             (None, "downloads") => PathBuf::from(std::env::var_os("USERPROFILE").unwrap_or_default()).join("Downloads"),
             (None, other) => native::special_folder(other).unwrap_or_default(),
@@ -332,11 +332,11 @@ impl App {
         (!path.as_os_str().is_empty() && path.is_dir()).then_some(path)
     }
 
-    /// C# ShowProperties: 고른 첫 항목, 없으면 지금 폴더의 셸 속성 창.
+    /// C# ShowProperties: the shell properties window of the first chosen item, otherwise of the current folder.
     pub(super) fn properties_command(&mut self) {
         let i = self.active;
-        // 원본 miPropertiesClick(0x432208): 커서 항목이 있고 FTP·압축 위치가 아닐 때. 표시가 없고 커서가 드라이브(종류 4)면
-        // 그 드라이브의 속성, 아니면 모은 항목(표시, 없으면 커서) 전부의 여러 파일 속성 창(스킨 테마).
+        // Original miPropertiesClick (0x432208): when there is a cursor item and the location is not FTP or an archive. Without marks and with the cursor on a drive (kind 4),
+        // that drive's properties; otherwise the multi-file properties window of all collected items (marks, otherwise the cursor) (skin theme).
         let pane = &self.panes[i];
         if pane.archive.is_some() || pane.remote.is_some() {
             return;
@@ -356,7 +356,7 @@ impl App {
         }
     }
 
-    /// 테마를 저장하고 바로 적용한다(C# SelectThemeAsync 끝, 원본 스킨 메뉴 FUN_0043e510).
+    /// Saves the theme and applies it at once (end of C# SelectThemeAsync, original skin menu FUN_0043e510).
     pub(super) fn apply_theme(&mut self, theme: &str) {
         self.settings.set_text("Theme", theme);
         self.dark = theme_palette(theme).dark();
@@ -364,7 +364,7 @@ impl App {
         self.save();
     }
 
-    /// 원본 스킨 메뉴(FUN_0043e580): skin\ 아래 폴더(".", ".." 빼고) 차례. NDR가 아는 테마 이름(대소문자 무시)만.
+    /// Original skin menu (FUN_0043e580): the folders under skin\ (without "." and "..") in order. Only theme names NDR knows (case-insensitive).
     pub(super) fn skin_names(&self) -> Vec<&'static str> {
         let mut names: Vec<String> = std::fs::read_dir(self.resources.join("Skins"))
             .map(|dir| dir.filter_map(Result::ok).filter(|e| e.path().is_dir()).map(|e| e.file_name().to_string_lossy().into_owned()).collect())
@@ -373,18 +373,18 @@ impl App {
         names.iter().filter_map(|n| THEMES.iter().find(|t| t.eq_ignore_ascii_case(n)).copied()).collect()
     }
 
-    /// 언어를 저장하고 바로 적용한다(C# SelectLanguageAsync 끝, 원본 언어 메뉴 FUN_0044193c).
+    /// Saves the language and applies it at once (end of C# SelectLanguageAsync, original language menu FUN_0044193c).
     pub(super) fn apply_language(&mut self, code: &str) {
         self.settings.set_text("Language", code);
         self.language = code.to_owned();
         self.save();
     }
 
-    /// 원본 miTextViewerClick/miTextEditorClick → FUN_00430304: 커서 항목이 파일일 때만, 압축 안이면 임시 폴더에 풀어서,
-    /// TextViewerPath/TextEditorPath(비면 notepad.exe)에 "\"경로\""를 넘겨 xilesShell.ExecuteFile로 연다.
+    /// Original miTextViewerClick/miTextEditorClick -> FUN_00430304: only when the cursor item is a file; inside an archive it is extracted to a temp folder first;
+    /// passes "\"path\"" to TextViewerPath/TextEditorPath (notepad.exe when empty) via xilesShell.ExecuteFile.
     pub(super) fn text_command(&mut self, edit: bool) {
         let i = self.active;
-        // 원본 miTextViewerClick/miTextEditorClick → FUN_00430304: 커서 항목이 파일(종류 3)일 때만, 로컬·압축 패널에서.
+        // Original miTextViewerClick/miTextEditorClick -> FUN_00430304: only when the cursor item is a file (kind 3), on local and archive panes.
         let pane = &self.panes[i];
         if pane.remote.is_some() {
             return;
@@ -410,7 +410,7 @@ impl App {
             Err(error) => return self.system_box("NDR", &error, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {}),
         };
         let mut program = ndr::command_line::expand_setting(&self.settings.text(if edit { "TextEditorPath" } else { "TextViewerPath" }, ""));
-        // 원본 FUN_00430304: 설정이 비면 "notepad.exe"에 "\"경로\"".
+        // Original FUN_00430304: when the setting is empty, "\"path\"" goes to "notepad.exe".
         if program.trim().is_empty() {
             program = "notepad.exe".into();
         }
@@ -420,7 +420,7 @@ impl App {
         }
     }
 
-    /// C# ShowAbout: "NDR {버전}\nWindows 10/11 · 64-bit\n사용자 설정: {프로필}", 캡션 "NDR 정보", 정보 아이콘.
+    /// C# ShowAbout: "NDR {version}\nWindows 10/11 · 64-bit\nUser settings: {profile}", caption "About NDR", information icon.
     pub(super) fn about_command(&mut self) {
         let text = format!(
             "NDR {}\nWindows 10/11 · 64-bit\n{}: {}",
@@ -451,11 +451,11 @@ mod tests {
         assert_eq!(none.item("goLastDestination"), (true, false));
         let ready = ArchiveMenuState { paste: true, restore: true, last_destination: true, ..Default::default() };
         assert_eq!((ready.item("paste"), ready.item("restoreSelection"), ready.item("goLastDestination")), ((true, true), (true, true), (true, true)));
-        // 원본 pmFolderPopup(0x437210)·pmEditPopup(0x43727c): 기록이 없으면 뒤로·앞으로, 찾은 글이 없으면 다음 찾기가 회색.
+        // Original pmFolderPopup (0x437210) and pmEditPopup (0x43727c): back/forward are gray without history, find next is gray without find text.
         assert_eq!((none.item("historyBack"), none.item("historyForward"), none.item("findNext")), ((true, false), (true, false), (true, false)));
         let history = ArchiveMenuState { history_back: true, history_forward: true, find_next: true, ..Default::default() };
         assert_eq!((history.item("historyBack"), history.item("historyForward"), history.item("findNext")), ((true, true), (true, true), (true, true)));
-        // 원본 miViewFileInfoBarClick(0x434bc4): 파일 정보 표시줄이 꺼지면 확장자 정보 항목도 회색.
+        // Original miViewFileInfoBarClick (0x434bc4): when the file info bar is off, the extension info item is gray too.
         assert_eq!(none.item("toggleExtensionInfoBar"), (true, false));
         assert_eq!(ArchiveMenuState { file_info_bar: true, ..Default::default() }.item("toggleExtensionInfoBar"), (true, true));
         let inside = ArchiveMenuState { current: true, ..Default::default() };
@@ -466,7 +466,7 @@ mod tests {
         assert_eq!(picked.item("extractCurrent"), (true, true));
         assert_eq!(picked.item("archiveInstall"), (true, true));
         assert_eq!(picked.item("archiveProperties"), (true, true));
-        // 원본 pmArchivePopup(스킨 테마): 고른 것과 상관없이 압축 안이 아니면 켜짐.
+        // Original pmArchivePopup (skin theme): enabled outside archives regardless of the selection.
         let original = ArchiveMenuState { original: true, ..Default::default() };
         assert_eq!((original.item("extractCurrent"), original.item("extractAuto")), ((true, true), (true, true)));
         let original_inside = ArchiveMenuState { original: true, in_archive: true, current: true, ..Default::default() };
@@ -480,7 +480,7 @@ mod tests {
         assert!(!theme_palette("Gray").dark());
         assert_eq!(theme_palette("Black").text, [0xC0, 0xC0, 0xC0]);
         assert!(theme_palette("Black").dark());
-        // 모르는 이름은 검정.
+        // Unknown names are black.
         assert_eq!(theme_palette("Dark"), theme_palette("Black"));
     }
 

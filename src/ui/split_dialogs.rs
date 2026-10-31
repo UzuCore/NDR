@@ -1,10 +1,10 @@
-//! C# SplitFileWindow / JoinFilesWindow와 SplitFileAsync / JoinPartsAsync 흐름. 규칙은 ndr::split.
+//! C# SplitFileWindow / JoinFilesWindow and the SplitFileAsync / JoinPartsAsync flows. Rules are in ndr::split.
 use super::original_dialogs::{DialogKind, DialogResult};
 use super::*;
 use ndr::msgbox::{MB_ICONEXCLAMATION, MB_OK};
 use std::fs;
 
-/// SplitFileWindow 입력.
+/// SplitFileWindow input.
 #[derive(Clone, Debug)]
 pub(super) struct SplitForm {
     pub source: PathBuf,
@@ -13,7 +13,7 @@ pub(super) struct SplitForm {
     pub size: String,
 }
 
-/// 원본 TfFileJoin 입력.
+/// Original TfFileJoin input.
 #[derive(Clone, Debug)]
 pub(super) struct JoinForm {
     pub files: Vec<(PathBuf, Option<u64>)>,
@@ -40,7 +40,7 @@ fn join_text(language: &compat::Language, key: &str, fallback: &str) -> String {
 }
 
 impl JoinForm {
-    /// AddPath: 있는 파일만, 같은 경로(대소문자 무시)는 한 번.
+    /// AddPath: existing files only, the same path (case-insensitive) once.
     pub(super) fn add(&mut self, path: &Path) {
         if !path.is_file() {
             return;
@@ -85,14 +85,14 @@ impl JoinForm {
     }
 }
 
-/// 분할 창 그리기. 돌려주는 값: Some(0) 확인, Some(1) 취소.
+/// Draws the split window. Returns Some(0) OK, Some(1) cancel.
 pub(super) fn split_ui(ui: &mut egui::Ui, form: &mut SplitForm, language: &compat::Language, enter: bool) -> Option<usize> {
     let mut choice = None;
-    // 원본 TfFileSplit(ClientWidth 469 × ClientHeight 187): lFileName(16,16), lPath(16,59) ePath(103,56 311×21) bBrowse(420,54 41×25),
-    // lSplitSize(16,99) cbSplitSize(103,96 138×21, 목록 1440 KB…100 MB) lSplitCount(260,99), btnOk(303,151) btnCancel(384,151) 75×25.
+    // Original TfFileSplit (ClientWidth 469 x ClientHeight 187): lFileName (16,16), lPath (16,59) ePath (103,56 311x21) bBrowse (420,54 41x25),
+    // lSplitSize (16,99) cbSplitSize (103,96 138x21, list 1440 KB...100 MB) lSplitCount (260,99), btnOk (303,151) btnCancel (384,151) 75x25.
     let (area, _) = ui.allocate_exact_size(egui::vec2(469.0, 187.0), egui::Sense::hover());
     let at = |x: f32, y: f32, w: f32, h: f32| egui::Rect::from_min_size(area.min + egui::vec2(x, y), egui::vec2(w, h));
-    // 원본 TntFormShow(0x4236e4): lFileName = "<b>이름</b> (크기 bytes)"(크기는 자리 나눔 쉼표, FloatToStrF ffNumber 0).
+    // Original TntFormShow (0x4236e4): lFileName = "<b>name</b> (size bytes)" (size with thousands separators, FloatToStrF ffNumber 0).
     let name = form.source.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let bytes = ndr::parity::format_size(form.length, "B", true).trim_end_matches(" B").to_owned();
     let mut job = egui::text::LayoutJob::default();
@@ -105,7 +105,7 @@ pub(super) fn split_ui(ui: &mut egui::Ui, form: &mut SplitForm, language: &compa
     super::original_dialogs::access_label(ui, at(16.0, 59.0, 85.0, 15.0), &raw("Caption.lPath", "&Path to Save:"), path_id);
     ui.put(at(103.0, 56.0, 311.0, 21.0), egui::TextEdit::singleline(&mut form.path).id(path_id));
     if ui.put(at(420.0, 54.0, 41.0, 25.0), egui::Button::new("...")).clicked() {
-        // 원본(0x423b8e): FILESPLIT + SELECTDEST.
+        // Original (0x423b8e): FILESPLIT + SELECTDEST.
         let title = format!("{}{}", language.text("RES.FILESPLIT", "Split File"), language.text("RES.SELECTDEST", " - Select a destination"));
         let initial = Path::new(&form.path).is_dir().then(|| PathBuf::from(&form.path)).or_else(|| form.source.parent().map(Path::to_path_buf));
         if let Some(folder) = ndr::file_dialogs::browse_folder(&title, initial.as_deref()) {
@@ -140,12 +140,12 @@ pub(super) fn split_ui(ui: &mut egui::Ui, form: &mut SplitForm, language: &compa
     choice
 }
 
-/// 합치기 창 그리기. 돌려주는 값: Some(0) 확인, Some(1) 취소.
+/// Draws the join window. Returns Some(0) OK, Some(1) cancel.
 pub(super) fn join_ui(ui: &mut egui::Ui, form: &mut JoinForm, language: &compat::Language, ko: bool, enter: bool) -> Option<usize> {
     let mut choice = None;
-    // 원본 TfFileJoin(ClientWidth 501 × ClientHeight 346): lFileName(16,25) eFileName(127,22 323×21) btnBrowse(456,20 33×25),
+    // Original TfFileJoin (ClientWidth 501 x ClientHeight 346): lFileName (16,25) eFileName (127,22 323x21) btnBrowse (456,20 33x25),
     // lFiles(16,65) lbFiles(16,84 473×169), btnAdd(16,262) btnDelete(86,262) btnUp(172,262) btnDown(242,262) 64×25,
-    // lSizeInfo(오른쪽 끝 486,267), chkIsText(16,317), btnOk(330,313) btnCancel(411,313) 75×25.
+    // lSizeInfo (right edge 486,267), chkIsText (16,317), btnOk (330,313) btnCancel (411,313) 75x25.
     let (area, _) = ui.allocate_exact_size(egui::vec2(501.0, 346.0), egui::Sense::hover());
     let at = |x: f32, y: f32, w: f32, h: f32| egui::Rect::from_min_size(area.min + egui::vec2(x, y), egui::vec2(w, h));
     let name_id = egui::Id::new("join-file-name");
@@ -153,8 +153,8 @@ pub(super) fn join_ui(ui: &mut egui::Ui, form: &mut JoinForm, language: &compat:
     super::original_dialogs::access_label(ui, at(16.0, 25.0, 108.0, 15.0), &caption, name_id);
     ui.put(at(127.0, 22.0, 323.0, 21.0), egui::TextEdit::singleline(&mut form.name).id(name_id));
     if ui.put(at(456.0, 20.0, 33.0, 25.0), egui::Button::new("...")).clicked() {
-        // 원본 btnBrowseClick(0x423444): 창의 OpenDialog(Title·Filter·InitialDir 없음)에서 ofAllowMultiSelect·ofFileMustExist를 끄고
-        // FileName을 비운 뒤 Execute(열기 상자). 고르면 eFileName에 넣는다. 열기 상자라 덮어쓰기 확인은 없다(합칠 때 따로 묻는다).
+        // Original btnBrowseClick (0x423444): the window's OpenDialog (no Title, Filter or InitialDir) with ofAllowMultiSelect and ofFileMustExist turned off
+        // and FileName cleared, then Execute (an open box). The choice goes into eFileName. Being an open box, there is no overwrite prompt (asked separately when joining).
         if let Some(chosen) = ndr::file_dialogs::open_any_file("", None, "", &[]) {
             form.name = chosen.to_string_lossy().into_owned();
         }
@@ -210,13 +210,13 @@ pub(super) fn join_ui(ui: &mut egui::Ui, form: &mut JoinForm, language: &compat:
     choice
 }
 
-/// Path.GetInvalidFileNameChars 중 이름에 들어갈 수 있는 글자(제어 문자 포함).
+/// Characters of Path.GetInvalidFileNameChars that may appear in a name (including control characters).
 fn invalid_file_name(name: &str) -> bool {
     name.chars().any(|c| c < ' ' || "\"<>|:*?\\/".contains(c))
 }
 
 impl App {
-    /// SplitFileWindow.Confirm / JoinFilesWindow.Commit: 맞으면 결과로 닫고, 틀리면 창 제목의 경고 상자를 띄우고 남긴다.
+    /// SplitFileWindow.Confirm / JoinFilesWindow.Commit: closes with the result when valid, otherwise shows a warning box with the window title and stays.
     pub(super) fn submit_split_or_join(&mut self, ctx: &egui::Context) {
         let ko = self.language == "ko";
         let Some(dialog) = self.original_dialogs.last() else { return };
@@ -249,8 +249,8 @@ impl App {
         }
     }
 
-    /// 원본 miSplitFileClick(0x43b8b8): 활성 패널이 로컬 모드이고 커서 항목이 파일(종류 3)일 때만 TfFileSplit을 연다(아니면 아무것도
-    /// 하지 않는다). 확인하면 진행 창으로 나누고 첫 조각 옆에 .crc를 쓴다.
+    /// Original miSplitFileClick (0x43b8b8): opens TfFileSplit only when the active pane is in local mode and the cursor item is a file (kind 3) (otherwise nothing
+    /// happens). On OK, splits with a progress window and writes a .crc next to the first piece.
     pub(super) fn split_command(&mut self) {
         let i = self.active;
         let title = self.language_pack.text("formFileSplit.Form.Caption", "Split File");
@@ -270,7 +270,7 @@ impl App {
             let DialogResult::Split(Some((destination, size, _))) = result else { return };
             let tx = app.async_tx.clone();
             let source = file.clone();
-            // C# Run(sourcePath: 원본 폴더, destinationPath: 출력 폴더, totalFiles: 조각 수, totalBytes: 원본 크기).
+            // C# Run(sourcePath: source folder, destinationPath: output folder, totalFiles: piece count, totalBytes: source size).
             let parts = if size == 0 { None } else { Some(length.div_ceil(size).max(1)) };
             let progress = super::file_operation::ProgressInfo {
                 from: source.parent().map(|p| p.to_string_lossy().into_owned()),
@@ -287,7 +287,7 @@ impl App {
                 let _ = tx.send(AsyncResult::SplitDone { source, outcome, cancelled: cancel.load(Ordering::Relaxed) });
                 Ok(())
             });
-            // split_done이 상태 글을 쓴다. 끝 알림(Finished)이 SplitDone보다 늦게 와도 일반 "제목: N files" 글로 덮지 않는다.
+            // split_done writes the status text. Even if the end notice (Finished) arrives after SplitDone, it does not overwrite it with the generic "title: N files" text.
             if let Some(job) = app.job.as_mut().filter(|_| started) {
                 job.custom_status = true;
             }
@@ -314,10 +314,10 @@ impl App {
         self.refresh(self.active);
     }
 
-    /// C# JoinPartsAsync: 선택한 파일들(하나면 번호 조각 전체). 이름이 상대 경로면 현재 폴더에 붙인다. 같은 이름이 있으면
-    /// (덮어쓰기에 동의하지 않았으면) 합치지 않고 알린다.
-    /// 원본 miJoinFileClick(0x43bec8): 활성 패널이 로컬 모드이고 데이터 항목(표시, 없으면 커서 항목, FUN_00485bbc)이 있을 때만
-    /// TfFileJoin을 연다(아니면 아무것도 하지 않는다). lbFiles는 그 항목 그대로, 확인하면 표시를 마지막 선택에 남기고 지운다.
+    /// C# JoinPartsAsync: the chosen files (with one, all numbered pieces). A relative name is joined to the current folder. When the name exists
+    /// (and overwriting was not agreed), it reports instead of joining.
+    /// Original miJoinFileClick (0x43bec8): opens TfFileJoin only when the active pane is in local mode and there are data items (marks, otherwise the cursor item, FUN_00485bbc)
+    /// (otherwise nothing happens). lbFiles holds those items as is; on OK the marks are saved as the last selection and cleared.
     pub(super) fn join_command(&mut self) {
         let i = self.active;
         if self.panes[i].archive.is_some() || self.panes[i].remote.is_some() {
@@ -335,7 +335,7 @@ impl App {
         let title = self.language_pack.text("formFileJoin.Form.Caption", "Join Files");
         self.push_original_dialog(title.clone(), DialogKind::Join(form), move |app, result, _| {
             let DialogResult::Join(Some(options)) = result else { return };
-            // 원본: 확인하면 CopySelection(마지막 선택) + ClearSelection.
+            // Original: on OK, CopySelection (last selection) + ClearSelection.
             app.original_take_pane_marks(i);
             let typed = Path::new(&options.name);
             let destination = std::path::absolute(if typed.is_absolute() { typed.to_path_buf() } else { base.join(typed) }).unwrap_or_else(|_| base.join(typed));
@@ -366,7 +366,7 @@ impl App {
                 let _ = tx.send(AsyncResult::JoinDone { count, outcome: outcome.map(|_| ()), cancelled: cancel.load(Ordering::Relaxed) });
                 Ok(())
             });
-            // join_done이 상태 글을 쓴다(위의 분할과 같은 까닭).
+            // join_done writes the status text (same reason as the split above).
             if let Some(job) = app.job.as_mut().filter(|_| started) {
                 job.custom_status = true;
             }

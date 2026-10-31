@@ -1018,12 +1018,12 @@ impl App {
     /// Original folder info bar (skin theme, FUN_00482700 + colors FUN_00489b24 + drawing FUN_0048bb74). Height 20, below the address bar (right above the list),
     /// background lfolderback, bottom line lfolderdivider, inner left/right margin 6. FOLDERINFO on the left (text lfoldertext, the &lt;c000000&gt; spots in lfoldersubtext1),
     /// at the right end the free disk space (&lt;c000000&gt; = ldisksubtext1) or selection info (lselinfotext), with the drive text before it (emptied when short of room, FUN_0048b500).
-    /// FOLDERINFO를 누르면 지금 폴더, 드라이브 글·여유를 누르면 드라이브 루트의 셸 속성 창(FUN_0048bc24·FUN_0048bca8, 로컬만).
+    /// Clicking FOLDERINFO opens the shell properties of the current folder, clicking the drive text or free space those of the drive root (FUN_0048bc24, FUN_0048bca8, local only).
     pub(super) fn skin_folder_info_bar(&mut self, ui: &mut egui::Ui, index: usize, skin: &Skin) {
         if !self.settings.flag("ShowFolderDiskInfoBar", true) {
             return;
         }
-        // info_texts가 요약(폴더·파일 수)을 채운다.
+        // info_texts fills in the summary (folder and file counts).
         let _ = self.info_texts(index);
         let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), FOLDER_INFO_HEIGHT), egui::Sense::hover());
         let painter = ui.painter().with_clip_rect(rect);
@@ -1032,8 +1032,8 @@ impl App {
         let base = skin_color(skin, "lfoldertext", Color32::from_gray(0xC0));
         let hex = |key: &str| skin.color("List", key).map(|c| format!("<c{:02X}{:02X}{:02X}>", c[0], c[1], c[2])).unwrap_or_else(|| "<c000000>".into());
         let drives = super::panes::is_drives(&self.panes[index].path);
-        // 원본 FUN_0048aa30: 내 PC도 FOLDERINFO(폴더 = 종류 1, 파일 = 종류 3 개수와 크기 합)이고, 드라이브 항목(종류 4)은 세지 않으며
-        // FUN_0048b500은 루트를 못 구해 디스크 글을 비운다. 고친 것: 전에는 C# 판 글 "::drives:: · 드라이브 N개"가 보였다.
+        // Original FUN_0048aa30: My PC also uses FOLDERINFO (folders = kind 1, files = kind 3 counts and size sum) without counting drive items (kind 4), and
+        // FUN_0048b500 cannot find a root, so the disk text is empty. Fixed: previously the C# text "::drives:: · N drives" showed.
         let (counts, drive, right, hint) = if drives { (self.folder_info(index).0, String::new(), String::new(), String::new()) } else { self.folder_info(index) };
         let selected = !self.panes[index].selected.is_empty();
         let counts = counts.replace("<c000000>", &hex("lfoldersubtext1"));
@@ -1053,13 +1053,13 @@ impl App {
         let right_rect = egui::Rect::from_min_size(egui::pos2(inner.right() - 3.0 - right.size().x, middle(right.size().y)), right.size());
         let drive_rect = egui::Rect::from_min_size(egui::pos2(right_rect.left() - 6.0 - drive_galley.size().x, middle(drive_galley.size().y)), drive_galley.size());
         let left_rect = egui::Rect::from_min_size(egui::pos2(inner.left(), middle(left.size().y)), left.size());
-        // 고친 것: 패널이 좁으면 FOLDERINFO가 오른쪽 여유 글 위로 겹쳐 그려졌다. 오른쪽 글(드라이브 글이 있으면 그 앞) 앞에서 자른다.
+        // Fixed: on a narrow pane FOLDERINFO was drawn over the free space text on the right. It is clipped before the right text (before the drive text when present).
         let left_limit = if drive_galley.size().x > 0.0 { drive_rect.left() } else { right_rect.left() } - 6.0;
         let left_clip = egui::Rect::from_min_max(rect.min, egui::pos2(left_limit.max(rect.left()), rect.bottom())).intersect(rect);
         let left_rect = left_rect.intersect(left_clip);
         painter.with_clip_rect(left_clip).galley(egui::pos2(inner.left(), middle(left.size().y)), left, base);
-        // 원본 +0x344(FUN_00482700 빨강 굵게, FUN_00487588): 이 패널이 숨김 파일을 보이면(설정 +0x130 + 쪽) "H", 아니면 빈 글.
-        // 자리 = FOLDERINFO 왼쪽 + 너비 + 1. 굵은 꼴("bold" 묶음, Segoe UI Bold).
+        // Original +0x344 (FUN_00482700 red bold, FUN_00487588): "H" when this pane shows hidden files (setting +0x130 + side), otherwise empty.
+        // Position = FOLDERINFO left + width + 1. Bold face ("bold" family, Segoe UI Bold).
         if self.panes[index].show_hidden {
             let galley = ui.fonts_mut(|fonts| fonts.layout_no_wrap("H".into(), egui::FontId::new(super::BASE_TEXT_SIZE, egui::FontFamily::Name(super::BOLD_FONT_FAMILY.into())), Color32::from_rgb(0xFF, 0, 0)));
             painter.galley(egui::pos2(left_rect.right() + 1.0, middle(galley.size().y)), galley, Color32::from_rgb(0xFF, 0, 0));
@@ -1086,7 +1086,7 @@ impl App {
         }
     }
 
-    /// 스킨 세로 막대 너비(원본 FUN_00486eec: 막대 너비 = scrollbg 그림 너비). 세 그림(scrollbg·scrollbtn·scrollthumb)이 다 있어야 쓴다.
+    /// Width of the skin vertical bar (original FUN_00486eec: bar width = scrollbg image width). Used only when all three images (scrollbg, scrollbtn, scrollthumb) exist.
     pub(super) fn skin_scrollbar_width(&mut self, ctx: &egui::Context, skin: &Skin) -> Option<f32> {
         let file = |key: &str| skin.values.get(&format!("list.{key}")).cloned();
         let background = self.toolbar_icon(ctx, &file("scrollbg")?)?;
@@ -1095,9 +1095,9 @@ impl App {
         Some(background.size_vec2().x)
     }
 
-    /// 원본 TNXScrollBar.Paint(0x7cec0c, 세로): 바탕 scrollbg를 막대 전체에 늘려 그리고, 위·아래 단추는 scrollbtn(왼쪽 반 보통, 오른쪽 반 누름,
-    /// 아래 단추는 뒤집음, 길이 = 그림 높이), 엄지는 scrollthumb의 위 8·가운데 8씩·아래 8. 단추는 한 줄씩, 엄지 밖 바탕은 한 쪽씩 옮기고
-    /// 누르고 있으면 80ms마다 되풀이(DoScrollTimer), 엄지는 끌어 옮긴다. 바뀐 위치를 돌려준다.
+    /// Original TNXScrollBar.Paint (0x7cec0c, vertical): stretches the scrollbg background over the whole bar; the up/down buttons are scrollbtn (left half normal, right half pressed,
+    /// flipped for the down button, length = image height); the thumb is scrollthumb top 8, middle 8 repeated, bottom 8. Buttons move one line, the track outside the thumb one page,
+    /// repeating every 80 ms while held (DoScrollTimer), and the thumb is dragged. Returns the changed position.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn skin_vertical_scrollbar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, skin: &Skin, id: egui::Id, rect: egui::Rect, offset: f32, content: f32, viewport: f32, line: f32) -> Option<f32> {
         let file = |key: &str| skin.values.get(&format!("list.{key}")).cloned();
@@ -1112,7 +1112,7 @@ impl App {
         let max = (content - viewport).max(0.0);
         let (thumb_top, length) = scrollbar_thumb(rect.height(), rect.width(), button, offset, content, viewport);
         let thumb_rect = egui::Rect::from_min_size(egui::pos2(rect.left(), rect.top() + thumb_top), egui::vec2(rect.width(), length));
-        // 바탕을 먼저 등록하고 단추·엄지를 나중에 등록해 그쪽이 먼저 포인터를 받는다.
+        // Register the track first and the buttons and thumb later so they take the pointer first.
         let track = ui.interact(rect, id.with("track"), egui::Sense::click_and_drag());
         let up = ui.interact(egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), button)), id.with("up"), egui::Sense::click_and_drag());
         let down = ui.interact(egui::Rect::from_min_size(egui::pos2(rect.left(), rect.bottom() - button), egui::vec2(rect.width(), button)), id.with("down"), egui::Sense::click_and_drag());
@@ -1142,7 +1142,7 @@ impl App {
         }
         piece(0.0, 8.0, 0.0);
         piece(size.y - 8.0, 8.0, length - 8.0);
-        // 끌기: 잡은 자리(엄지 위에서 포인터까지)를 두고 엄지 위치를 옮긴다.
+        // Drag: keeps the grab offset (from the thumb top to the pointer) and moves the thumb position.
         let grab_id = id.with("grab");
         let pointer = ui.input(|i| i.pointer.interact_pos());
         if grip.drag_started() {
@@ -1159,7 +1159,7 @@ impl App {
             }
             return None;
         }
-        // 단추·바탕: 누르는 순간 한 번, 누르고 있으면 300ms 뒤부터 80ms마다. 고친 것: 전에는 처음부터 80ms마다라 너무 빨리 넘어갔다.
+        // Buttons and track: once on press, then every 80 ms after 300 ms while held. Fixed: previously every 80 ms from the start, which scrolled too fast.
         let repeat_id = id.with("repeat");
         let held = [(&up, -line), (&down, line)].into_iter().find(|(r, _)| r.is_pointer_button_down_on()).map(|(_, step)| step).or_else(|| {
             let p = pointer?;
@@ -1183,9 +1183,9 @@ impl App {
         (next != offset).then_some(next)
     }
 
-    /// 원본 TNXScrollBar.Paint(0x7cec0c, 가로): 바탕은 시계 방향으로 돌린 scrollbg를 가로로 이어 붙이고(FUN_007cdfc0),
-    /// 왼쪽 단추는 scrollbtn 반을 반시계 방향(FUN_007ce0e4), 오른쪽 단추는 시계 방향으로 돌린다(누르면 오른쪽 반).
-    /// 엄지도 시계 방향이라 그림의 위 8은 오른쪽 끝, 아래 8은 왼쪽 끝에 온다. 단추 한 번에 `line`, 바탕은 `viewport`씩, 엄지는 끌기.
+    /// Original TNXScrollBar.Paint (0x7cec0c, horizontal): the background tiles scrollbg rotated clockwise along the bar (FUN_007cdfc0),
+    /// the left button rotates half of scrollbtn counterclockwise (FUN_007ce0e4) and the right button clockwise (pressed uses the right half).
+    /// The thumb is rotated clockwise too, so the image top 8 ends up at the right end and the bottom 8 at the left end. One button press = `line`, the track = `viewport`, the thumb drags.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn skin_horizontal_scrollbar(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, skin: &Skin, id: egui::Id, rect: egui::Rect, offset: f32, content: f32, viewport: f32, line: f32) -> Option<f32> {
         let file = |key: &str| skin.values.get(&format!("list.{key}")).cloned();
@@ -1272,7 +1272,7 @@ impl App {
         (next != offset).then_some(next)
     }
 
-    /// 원본 목록 줄 색 묶음(스킨 테마).
+    /// Original list row color set (skin theme).
     pub(super) fn original_list_colors(&self) -> ListColors {
         let c = |key: &str| self.basic_list_color(key);
         ListColors {
@@ -1289,7 +1289,7 @@ impl App {
         }
     }
 
-    /// 원본 색상표 기본 색(TNXFileColorMap.GetBasic): 색상표 값이 있으면 그 값, 없으면 원본 기본값(styles::DEFAULT_ELEMENTS).
+    /// Original color table base color (TNXFileColorMap.GetBasic): the color table value when present, otherwise the original default (styles::DEFAULT_ELEMENTS).
     pub(super) fn basic_list_color(&self, key: &str) -> Color32 {
         let (_, nexus) = self.color_maps();
         nexus
@@ -1301,9 +1301,9 @@ impl App {
             .unwrap_or(Color32::BLACK)
     }
 
-    /// 원본 TNXFileListView.DrawListHeader(0x7e2274, 자세히 보기): 높이 = 목록 글꼴 높이 + 8(CMFontChanged), 바탕은 목록 색,
-    /// 칸 이름은 왼쪽 + 5부터(한 줄, 넘치면 …) NXFORE × 0.4 + NXBACK × 0.6, 정렬 칸은 × 0.6에 맨 위 가운데 5×3 삼각형
-    /// (내림차순 ▼, 오름차순 ▲, × 0.3). 칸 오른쪽 끝에 세로선 NXLINE × 0.3 + NXBACK × 0.7. 누른 칸의 정렬 방식을 돌려준다.
+    /// Original TNXFileListView.DrawListHeader (0x7e2274, Details): height = list font height + 8 (CMFontChanged), background is the list color,
+    /// column names from left + 5 (one line, ellipsis on overflow) in NXFORE x 0.4 + NXBACK x 0.6; the sort column uses x 0.6 with a 5x3 triangle at the top center
+    /// (descending ▼, ascending ▲, x 0.3). A vertical line NXLINE x 0.3 + NXBACK x 0.7 at each column's right end. Returns the sort mode of the clicked column.
     pub(super) fn skin_list_header(&self, ui: &mut egui::Ui, index: usize, columns: &[(super::list_view::DetailColumn, String, f32)], widths: &[Option<f32>], font: egui::FontId, scroll_x: f32) -> Option<&'static str> {
         let (back, fore, line) = (self.basic_list_color("NXBACK"), self.basic_list_color("NXFORE"), self.basic_list_color("NXLINE"));
         let height = ui.fonts_mut(|f| f.row_height(&font)).ceil() + 8.0;
@@ -1312,10 +1312,10 @@ impl App {
         painter.rect_filled(rect, 0.0, back);
         let current = self.side_text(index, "SortMode", "Name");
         let descending = self.side_flag(index, "SortDescending", false);
-        // 원본 DrawListHeader(0x7e2274): 칸은 GetListHeaderWidth − 가로 위치(0x378)부터.
+        // Original DrawListHeader (0x7e2274): columns start at GetListHeaderWidth - horizontal position (0x378).
         let mut x = rect.left() - scroll_x;
         let mut clicked = None;
-        // 원본은 머리글을 GetListHeaderWidth부터 그린다. NDR 이름 칸은 그 머리를 담으므로 이름 칸 글은 머리 너비 뒤 + 5(이름 글과 같은 자리).
+        // The original draws the header from GetListHeaderWidth. The NDR name cell contains that head, so the name cell text goes after the head width + 5 (same spot as the name text).
         let lead = Self::list_header_width(self.settings.flag("ShowIcons", true));
         for (i, ((column, title, _), width)) in columns.iter().zip(widths).enumerate() {
             let Some(width) = *width else { continue };
@@ -1348,9 +1348,9 @@ impl App {
         clicked
     }
 
-    /// 원본 드라이브 단추 줄(스킨 테마, sdrivebtns: FUN_004825d8 높이 22, 단추 FUN_00483108, 색 FUN_004895fc, 그리기 FUN_0048bbcc).
-    /// 바탕 ldrivesback, 아래끝 선 ldrivesframe, 드라이브마다 TNXImageButton(왼쪽 = 순서 × 36, 너비 36·높이 20)에 셸 작은 아이콘과 "C:",
-    /// 글 ldrivestext, 포인터 ldriveshot. 누르면 이 패널을 그 드라이브로(FUN_0048bdb4).
+    /// Original drive button row (skin theme, sdrivebtns: FUN_004825d8 height 22, buttons FUN_00483108, colors FUN_004895fc, drawing FUN_0048bbcc).
+    /// Background ldrivesback, bottom line ldrivesframe, per drive a TNXImageButton (left = index x 36, width 36, height 20) with the small shell icon and "C:",
+    /// text ldrivestext, hover ldriveshot. A click moves this pane to that drive (FUN_0048bdb4).
     pub(super) fn skin_drive_bar(&mut self, ui: &mut egui::Ui, index: usize, ctx: &egui::Context, skin: &Skin) {
         if !self.settings.flag("ShowDriveButtons", false) {
             return;
@@ -1369,14 +1369,14 @@ impl App {
             let font = egui::FontId::proportional(super::BASE_TEXT_SIZE);
             let label_color = if response.hovered() { hot } else { text };
             let caption = ui.fonts_mut(|f| f.layout_no_wrap(label.clone(), font.clone(), label_color));
-            // 원본 TNXImageButton.Paint(글 배치 1, 간격 +0x1f4 = 2, 그림 16×16): 그림 x = (너비 − (간격 + 글 너비 + 그림 너비)) div 2,
-            // 글 x = 그림 x + 그림 너비 + 간격, 둘 다 세로 가운데((높이 − 높이) div 2). 그림이 없으면 그림 너비 0.
+            // Original TNXImageButton.Paint (text layout 1, spacing +0x1f4 = 2, image 16x16): image x = (width - (spacing + text width + image width)) div 2,
+            // text x = image x + image width + spacing, both vertically centered ((height - height) div 2). Without an image the image width is 0.
             let icon = self.drive_icon(ctx, root);
             let icon_width = if icon.is_some() { 16.0 } else { 0.0 };
             let image_x = button.left() + ((button.width() - (2.0 + caption.size().x.round() + icon_width)) / 2.0).trunc();
             if let Some(icon) = icon {
                 let whole = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0));
-                // 원본 TNXImageButton: 누른 동안 그림만 × 0.6(글은 그 뒤에 그린다).
+                // Original TNXImageButton: while pressed only the image is x 0.6 (the text is drawn after it).
                 let tint = if response.is_pointer_button_down_on() && response.hovered() { Color32::from_gray(153) } else { Color32::WHITE };
                 painter.image(icon.id(), egui::Rect::from_min_size(egui::pos2(image_x, button.top() + ((button.height() - 16.0) / 2.0).trunc()), egui::vec2(16.0, 16.0)), whole, tint);
             }
@@ -1392,7 +1392,7 @@ impl App {
         }
     }
 
-    /// 원본 파일 정보 표시줄 높이(FUN_00482d44): 보이지 않으면 0, 확장자 정보 줄(sextinfobar)까지면 40, 아니면 20.
+    /// Height of the original file info bar (FUN_00482d44): 0 when hidden, 40 with the extension info row (sextinfobar), otherwise 20.
     pub(super) fn skin_file_info_height(&self) -> f32 {
         if !self.settings.flag("ShowFileInfoBar", true) {
             0.0
@@ -1403,8 +1403,8 @@ impl App {
         }
     }
 
-    /// 원본 파일 정보 표시줄(스킨 테마, FUN_00482d44 + 색 FUN_00489c54): 목록 아래, 배경 lfileback, 글 lfiletext,
-    /// 첫 줄 라벨(0x34c)은 왼쪽 6·위 3·높이 14, 둘째 줄(0x350)은 위 22.
+    /// Original file info bar (skin theme, FUN_00482d44 + colors FUN_00489c54): below the list, background lfileback, text lfiletext,
+    /// first row label (0x34c) at left 6, top 3, height 14; second row (0x350) at top 22.
     pub(super) fn skin_file_info_bar(&mut self, ui: &mut egui::Ui, index: usize, skin: &Skin) {
         let height = self.skin_file_info_height();
         if height == 0.0 {
@@ -1416,8 +1416,8 @@ impl App {
         painter.rect_filled(rect, 0.0, skin_color(skin, "lfileback", Color32::from_gray(0x3C)));
         let base = skin_color(skin, "lfiletext", Color32::from_gray(0xA2));
         let width = (rect.width() - 12.0).max(0.0);
-        // 원본 둘째 줄(라벨 0x350, 확장자 정보)은 글이 비어 있고, 누르면 FUN_0048bd50: 초점 항목이 파일(종류 3)이면
-        // ShellExecute "open" https://ext.xiles.app/?ext=<항목 +8 = 확장자>.
+        // The original second row (label 0x350, extension info) has empty text; clicking it runs FUN_0048bd50: when the focused item is a file (kind 3),
+        // ShellExecute "open" https://ext.xiles.app/?ext=<item +8 = extension>.
         let empty = String::new();
         let lines: &[(&String, f32)] = if height > 20.0 { &[(&texts[1], 3.0), (&empty, 22.0)] } else { &[(&texts[1], 3.0)] };
         let mut open_extension = false;
@@ -1439,8 +1439,8 @@ impl App {
         }
     }
 
-    /// 원본 FUN_0048bd50(확장자 정보 줄 누르기): 초점 항목이 파일이면 https://ext.xiles.app/?ext=%s(0x913242)를 연다.
-    /// %s = 항목 +8(색상표 GetExtension이 찾는 확장자, 점 없이).
+    /// Original FUN_0048bd50 (extension info row click): when the focused item is a file, opens https://ext.xiles.app/?ext=%s (0x913242).
+    /// %s = item +8 (the extension the color table GetExtension looks up, without the dot).
     pub(super) fn open_extension_info(&mut self, index: usize) {
         let pane = &self.panes[index];
         let Some(entry) = pane.entries.get(pane.cursor).filter(|e| !e.is_dir && !e.drive) else { return };
@@ -1451,26 +1451,26 @@ impl App {
         }
     }
 
-    /// 주소 줄 ">"·맨 앞 ▼를 누른 뒤의 하위 폴더(또는 드라이브) 목록. 연 뒤 밖을 누르거나 Esc면 닫는다.
+    /// Subfolder (or drive) list after clicking an address bar ">" or the leading ▼. An outside click or Esc closes it.
     fn skin_crumb_menu_ui(&mut self, ctx: &egui::Context, index: usize, just_opened: bool) {
         let Some((pane, folder, drives, position)) = self.skin_crumb_menu.clone() else { return };
         if pane != index {
             return;
         }
         let children = self.crumb_children(index, &folder, drives);
-        // 원본 DropDownMenu(0x7c91d8): 항목이 없으면 메뉴를 띄우지 않는다(빈 TPopupMenu). 고친 것: 전에는 "하위 폴더 없음"을 보였다.
+        // Original DropDownMenu (0x7c91d8): with no items the menu does not appear (empty TPopupMenu). Fixed: previously it showed "no subfolders".
         if children.is_empty() {
             self.skin_crumb_menu = None;
             return;
         }
         let icons: Vec<Option<egui::TextureHandle>> = children.iter().map(|(child, _)| if drives { self.drive_icon(ctx, child) } else { self.path_icon(ctx, child, true) }).collect();
         let mut chosen = None;
-        // 원본 경로 라벨 메뉴는 TfMain 메뉴의 반투명(MenuDrawItem 0x42e518의 WS_EX_LAYERED)을 쓰지 않는다.
+        // The original path label menu does not use the translucency of the TfMain menus (WS_EX_LAYERED in MenuDrawItem 0x42e518).
         super::keep_opaque(ctx, egui::Id::new(("ndr-skin-crumb-menu", index)));
         let area = egui::Area::new(egui::Id::new(("ndr-skin-crumb-menu", index))).order(egui::Order::Foreground).fixed_pos(position).show(ctx, |ui| {
-            // 원본 MenuMeasureItem(0x7ca4dc)·MenuDrawItem(0x7ca540): 스킨과 상관없이 흰 바탕(0xFFFFFF)에 글 0x0A0A0A, 고른 줄은
-            // 회색(0x808080) 바탕에 흰 글. 아이콘(작은 셸 아이콘)은 왼쪽 + 4, 글은 왼쪽 + 4 + 0x14(DT_SINGLELINE | DT_VCENTER),
-            // 너비 = 글 너비 + 0x1C. 테두리는 Windows 메뉴 테두리.
+            // Original MenuMeasureItem (0x7ca4dc) and MenuDrawItem (0x7ca540): regardless of the skin, white background (0xFFFFFF) with text 0x0A0A0A; the selected row
+            // has a gray (0x808080) background with white text. The icon (small shell icon) at left + 4, text at left + 4 + 0x14 (DT_SINGLELINE | DT_VCENTER),
+            // width = text width + 0x1C. The border is the Windows menu border.
             let font = egui::TextStyle::Button.resolve(ui.style());
             let widest = ui.fonts_mut(|f| children.iter().map(|(_, h)| f.layout_no_wrap(h.clone(), font.clone(), Color32::BLACK).size().x).fold(0.0f32, f32::max));
             let item_width = (widest + 28.0).ceil();
