@@ -1,21 +1,21 @@
-//! C# OriginalShortcutKeysWindow(F12, miShortcutClick 0x43c964)와 OriginalEditShortcutDialog(fEditShortCut).
-//! 차이: 원본·C#은 메인 창 오른쪽의 따로 떠 있는 도구 창이지만, Rust는 메인 창 안 오른쪽에 붙은 창이다.
-//! 수식 키만 누를 때는 글을 바꾸지 않고 남은 키 목록만 새로 고친다(원본은 수식 키 자체도 키로 받는다).
+//! C# OriginalShortcutKeysWindow (F12, miShortcutClick 0x43c964) and OriginalEditShortcutDialog (fEditShortCut).
+//! Difference: in the original and C# it is a separate floating tool window right of the main window; in Rust it is a window docked inside the main window on the right.
+//! Pressing only modifiers does not change the text and only refreshes the remaining key list (the original also takes modifiers themselves as keys).
 use super::original_dialogs::{DialogKind, DialogResult};
 use super::*;
 use ndr::shortcut_editor as editor;
 
-/// F12 창 상태(하나만 열린다).
+/// F12 window state (only one opens).
 #[derive(Default)]
 pub(super) struct ShortcutWindow {
     pub filter: String,
     pub selected: Option<usize>,
     pub focus_search: bool,
-    /// 이 창이 활성인가(마지막 누르기가 창 안이었는가). 원본 TfShortcut은 따로 된 폼이라 활성일 때만 FormShortCut이 Esc를 받는다.
+    /// Whether this window is active (the last click was inside it). The original TfShortcut is a separate form, so FormShortCut takes Esc only while it is active.
     pub active: bool,
 }
 
-/// fEditShortCut 입력.
+/// fEditShortCut input.
 #[derive(Clone, Debug)]
 pub(super) struct EditShortcutForm {
     pub caption: String,
@@ -26,7 +26,7 @@ pub(super) struct EditShortcutForm {
     pub chosen: Option<usize>,
 }
 
-/// egui 키 → Windows 가상 키 코드.
+/// egui key -> Windows virtual key code.
 pub(super) fn virtual_key(key: egui::Key) -> Option<u16> {
     use egui::Key::*;
     Some(match key {
@@ -75,7 +75,7 @@ pub(super) fn virtual_key(key: egui::Key) -> Option<u16> {
     })
 }
 
-/// TShiftState 비트(1 Shift, 2 Alt, 4 Ctrl).
+/// TShiftState bits (1 Shift, 2 Alt, 4 Ctrl).
 pub(super) fn shift_state(modifiers: egui::Modifiers) -> u8 {
     u8::from(modifiers.shift) | (u8::from(modifiers.alt) << 1) | (u8::from(modifiers.ctrl) << 2)
 }
@@ -93,14 +93,14 @@ impl App {
         move |key: &str, fallback: &str| language.text(&format!("RES.{key}"), fallback)
     }
 
-    /// miShortcutClick: 이미 열려 있으면 아무것도 하지 않는다.
+    /// miShortcutClick: does nothing when already open.
     pub(super) fn show_shortcut_window(&mut self) {
         if self.shortcut_window.is_none() {
             self.shortcut_window = Some(ShortcutWindow { focus_search: true, ..Default::default() });
         }
     }
 
-    /// 목록 줄(거르기 적용).
+    /// List rows (filter applied).
     pub(super) fn shortcut_rows(&self, filter: &str) -> Vec<editor::Row> {
         let raw = Self::main_form_raw(&self.language_pack);
         let resource = Self::resource_text(&self.language_pack);
@@ -133,8 +133,8 @@ impl App {
                     state.focus_search = false;
                     state.active = true;
                 }
-                // 원본 TntFormShortCut(0x455a54): Esc(0x1b)면 초점과 상관없이 닫는다(Handled). NDR은 창이 메인 창 안에 붙어 있으므로
-                // 마지막 누르기가 이 창 안이었을 때(= 원본에서 이 폼이 활성일 때)만 받는다. 고친 것: 전에는 검색 칸에 초점이 있어야 했다.
+                // Original TntFormShortCut (0x455a54): Esc (0x1b) closes regardless of focus (Handled). NDR docks the window inside the main window, so it takes Esc
+                // only when the last click was inside this window (= when this form is active in the original). Fixed: previously the search field needed focus.
                 if ui.input(|i| i.pointer.any_pressed()) {
                     state.active = ui.ctx().pointer_interact_pos().is_some_and(|p| ui.ctx().layer_id_at(p) == Some(ui.layer_id()));
                 }
@@ -174,7 +174,7 @@ impl App {
         }
     }
 
-    /// lvShortCutDblClick: fEditShortCut을 띄우고, 확인이면 그 줄을 바꿔 저장한다.
+    /// lvShortCutDblClick: shows fEditShortCut and on OK changes and saves that row.
     pub(super) fn edit_shortcut(&mut self, row: editor::Row) {
         let title = self.language_pack.text("formEditShortCut.Form.Caption", "Edit Shortcut Key");
         let form = EditShortcutForm { caption: row.caption.clone(), original: row.key_text.clone(), text: row.key_text.clone(), last_state: None, available: vec![], chosen: None };
@@ -186,7 +186,7 @@ impl App {
         });
     }
 
-    /// FormShortCut: 수식 키 상태가 바뀌면 남은 키를 새로 고치고, 키를 누르면 그 글을 칸에 넣는다.
+    /// FormShortCut: refreshes the remaining keys when the modifier state changes, and puts the text of a pressed key in the field.
     pub(super) fn capture_shortcut_keys(&mut self, ctx: &egui::Context) {
         let lines = self.shortcut_lines();
         let raw = Self::main_form_raw(&self.language_pack);
@@ -214,19 +214,19 @@ impl App {
                 form.text = editor::captured_text(vk, state);
             }
         }
-        // 눌린 키가 대화 상자의 다른 칸이나 단추로 가지 않게 지운다(원본: 키는 칸에 들어가지 않는다).
+        // Remove the pressed key so it does not go to other fields or buttons of the dialog (original: keys do not enter the field).
         ctx.input_mut(|input| input.events.retain(|event| !matches!(event, egui::Event::Key { .. } | egui::Event::Text(_))));
     }
 }
 
-/// 지정 창 그리기. Some(0) 확인, Some(1) 취소.
+/// Draws the assignment window. Some(0) OK, Some(1) cancel.
 pub(super) fn edit_shortcut_ui(ui: &mut egui::Ui, form: &mut EditShortcutForm, language: &compat::Language, lines: &[String]) -> Option<usize> {
     let raw = |key: &str| language.raw(&format!("formMain.{key}"));
     let resource = |key: &str, fallback: &str| language.text(&format!("RES.{key}"), fallback);
     let validation = editor::validate(&form.text, &form.original, lines, &editor::Texts { main_form_raw: &raw, resource: &resource });
     let text = |key: &str, fallback: &str| language.text(&format!("formEditShortCut.{key}"), fallback);
     let mut choice = None;
-    // 원본 TfEditShortCut(ClientWidth 290 × ClientHeight 383): lCommandName(8,8 굵게), eShortCut(8,27 193×21), lTip(8,54 빨강),
+    // Original TfEditShortCut (ClientWidth 290 x ClientHeight 383): lCommandName (8,8 bold), eShortCut (8,27 193x21), lTip (8,54 red),
     // lTip2(24,70 174×21), lAvailableKeys(8,99), lbRemainKeys(8,118 193×251), btnOk(207,25) btnCancel(207,56) btnRemove(207,87) 75×25.
     let (area, _) = ui.allocate_exact_size(egui::vec2(290.0, 383.0), egui::Sense::hover());
     let at = |x: f32, y: f32, w: f32, h: f32| egui::Rect::from_min_size(area.min + egui::vec2(x, y), egui::vec2(w, h));

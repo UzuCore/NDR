@@ -1,5 +1,5 @@
-//! C# HandleKeyboardAsync 순서(원본 단축키 표 → NDR 단축키 → 동작 정의), 사용자 단축키 우선, CycleFileSelection, 작업 폴더,
-//! 즐겨찾기 글쇠, Esc 동작, 열 개수, 드라이브 마지막 폴더를 Rust UI에서 확인한다. 한국어와 영어만, 격리 폴더만 쓴다.
+//! Checks in the Rust UI the C# HandleKeyboardAsync order (original shortcut table -> NDR shortcuts -> action definitions), user shortcuts first, CycleFileSelection, work folders,
+//! favorites keys, the Esc action, column count and the last drive folder. Korean and English only, isolated folders only.
 use super::*;
 use std::fs;
 
@@ -26,9 +26,9 @@ fn wait(app: &mut App, ctx: &egui::Context) {
         thread::sleep(Duration::from_millis(5));
     }
 }
-/// 글쇠 하나를 누른 장면에서 목록 글쇠 처리만 돌린다.
+/// Runs only the list key handling on a frame where one key is pressed.
 fn press(app: &mut App, ctx: &egui::Context, key: egui::Key, modifiers: egui::Modifiers) {
-    // 같은 장면에서 떼어야 다음 누름이 반복(repeat)으로 보이지 않는다.
+    // Release in the same frame so the next press is not seen as a repeat.
     let down = egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
     let up = egui::Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers };
     let raw = egui::RawInput { events: vec![down, up], modifiers, ..Default::default() };
@@ -37,9 +37,9 @@ fn press(app: &mut App, ctx: &egui::Context, key: egui::Key, modifiers: egui::Mo
 }
 const NONE: egui::Modifiers = egui::Modifiers::NONE;
 
-/// 원본 miSelect(Spacebar, miSelectClick 0x4311a4) = SelectCurrAndMove(0x7dca04): 폴더·파일 모두 커서 항목을 고르거나 풀고
-/// 다음 항목으로 간다. ".."(Select 0x7dc834)는 고르지 않는다. Ctrl+Shift+화살표는 원본 ArrowKey처럼 선택을 지우지 않고
-/// 옮기기 전 자리부터 새 자리까지 더하고, Shift만 누르면 선택을 지우고 Shift를 누른 자리부터 고른다.
+/// Original miSelect (Spacebar, miSelectClick 0x4311a4) = SelectCurrAndMove (0x7dca04): marks or unmarks the cursor item, folders and files alike, and
+/// moves to the next item. ".." (Select 0x7dc834) is never marked. Ctrl+Shift+arrows, like the original ArrowKey, keep the selection and add from the position
+/// before moving to the new one; Shift alone clears the selection and selects from where Shift was pressed.
 #[test]
 fn space_marks_and_moves_like_the_original() {
     let (root, ctx, mut app) = fixture("space", "ko");
@@ -59,12 +59,12 @@ fn space_marks_and_moves_like_the_original() {
     assert_eq!((marks(&app), app.panes[0].cursor), (vec![1, 2, 3], 3), "files are marked, the last item keeps the cursor");
     press(&mut app, &ctx, egui::Key::Space, NONE);
     assert_eq!((marks(&app), app.panes[0].cursor), (vec![1, 2], 3), "Space again unmarks");
-    // 메뉴 항목(편집 메뉴 "선택")도 같은 동작.
+    // The menu item (Edit menu "select") does the same.
     app.panes[0].selected.clear();
     app.panes[0].cursor = 1;
     app.dispatch("select", &ctx);
     assert_eq!((marks(&app), app.panes[0].cursor), (vec![1], 2));
-    // Ctrl+Shift: 지우지 않고 더한다. 그다음 Shift만: Shift를 누른 자리(2)부터 다시.
+    // Ctrl+Shift adds without clearing. Then Shift alone: again from where Shift was pressed (2).
     let ctrl_shift = egui::Modifiers { ctrl: true, shift: true, ..Default::default() };
     app.panes[0].selected = [3].into_iter().collect();
     app.panes[0].cursor = 2;
@@ -75,7 +75,7 @@ fn space_marks_and_moves_like_the_original() {
     fs::remove_dir_all(root).unwrap();
 }
 
-/// 두 패널을 한 번 그린다(그린 목록이 쪽 정보를 남긴다).
+/// Draws both panes once (the drawn list leaves its page info).
 fn draw_panes(app: &mut App, ctx: &egui::Context) {
     let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 850.0))), ..Default::default() };
     let _ = ctx.run(raw, |ctx| {
@@ -88,9 +88,9 @@ fn draw_panes(app: &mut App, ctx: &egui::Context) {
     });
 }
 
-/// 원본 ArrowKey·UpdateDisplayNames·SetItemIndex: 이름 보기는 열로 흐르는 목록이라 오른쪽·왼쪽이 한 열(한 열의 줄 수)씩,
-/// PageDown은 보이는 쪽의 끝 항목. Shift로 옮기면 Shift를 누른 자리부터 다시 고른다(되돌아오면 줄어든다).
-/// 자세히 보기에서 End로 옮기면 끝 항목이 보이게 넘긴다.
+/// Original ArrowKey, UpdateDisplayNames and SetItemIndex: the Names view is a column-flowing list, so Right/Left move by one column (rows per column),
+/// PageDown goes to the last item of the visible page. Moving with Shift selects again from where Shift was pressed (moving back shrinks it).
+/// In Details, End scrolls so the last item is visible.
 #[test]
 fn list_keys_follow_the_original_arrowkey() {
     let (root, ctx, mut app) = fixture("arrowkeys", "ko");
@@ -113,7 +113,7 @@ fn list_keys_follow_the_original_arrowkey() {
     assert_eq!(app.panes[0].cursor, 0, "Left moves one column back");
     press(&mut app, &ctx, egui::Key::PageDown, NONE);
     assert_eq!(app.panes[0].cursor, super::list_keys::arrow_target(&page, 0, count, super::list_keys::ListKey::PageDown));
-    // Shift: Shift를 누른 자리(지금 커서)부터 커서까지.
+    // Shift: from where Shift was pressed (the current cursor) to the cursor.
     press(&mut app, &ctx, egui::Key::Home, NONE);
     let start = app.panes[0].cursor;
     press(&mut app, &ctx, egui::Key::ArrowDown, SHIFT);
@@ -121,7 +121,7 @@ fn list_keys_follow_the_original_arrowkey() {
     press(&mut app, &ctx, egui::Key::ArrowUp, SHIFT);
     let expected: Vec<usize> = [start, start + 1].into_iter().filter(|&i| !app.panes[0].entries[i].is_parent()).collect();
     assert_eq!(app.panes[0].selected.iter().copied().collect::<Vec<_>>(), expected, "the range shrinks back (\"..\" is never marked)");
-    // 자세히: End 뒤 그리면 끝 항목까지 보인다.
+    // Details: after End and drawing, the list shows down to the last item.
     app.settings.set_text("LeftViewStyle", "Details");
     draw_panes(&mut app, &ctx);
     press(&mut app, &ctx, egui::Key::End, NONE);
@@ -130,11 +130,11 @@ fn list_keys_follow_the_original_arrowkey() {
     draw_panes(&mut app, &ctx);
     let page = app.panes[0].page;
     assert_eq!((page.style, page.last), (super::list_keys::ListStyle::Details, count - 1), "End reveals the last item: {page:?}");
-    // 원본 SetItemIndex(형식 2, 쪽 단위 = 처음 값): 맨 위 항목은 커서가 든 쪽의 처음 줄.
+    // Original SetItemIndex (style 2, by page = default): the top item is the first row of the page that holds the cursor.
     assert_eq!(page.top, ((count - 1) / page.rows) * page.rows, "page-unit reveal starts the page on a boundary: {page:?}");
     fs::remove_dir_all(root).unwrap();
 }
-/// 원본 ArrowKey Ctrl 글쇠: Ctrl+PageUp 첫 항목, Ctrl+PageDown 마지막 폴더, Ctrl+Home 첫 파일, Ctrl+End 마지막 파일.
+/// Original ArrowKey Ctrl keys: Ctrl+PageUp first item, Ctrl+PageDown last folder, Ctrl+Home first file, Ctrl+End last file.
 #[test]
 fn ctrl_list_keys_jump_between_folders_and_files() {
     let (root, ctx, mut app) = fixture("ctrljump", "ko");
@@ -157,7 +157,7 @@ fn ctrl_list_keys_jump_between_folders_and_files() {
     assert!(app.panes[0].selected.is_empty(), "Ctrl jumps do not select");
     fs::remove_dir_all(root).unwrap();
 }
-/// 원본 UpdateDisplayAuto: 좁아서 한 열만 들어가도 한 열에 다 들어가지 않으면 한 열 너비로 가로로 넘기는 목록이다.
+/// Original UpdateDisplayAuto: even when only one column fits because it is narrow, a list that does not fit in one column scrolls horizontally by one column width.
 #[test]
 fn narrow_auto_view_flows_one_column_at_a_time() {
     let (root, ctx, mut app) = fixture("narrowauto", "ko");
@@ -188,8 +188,8 @@ fn narrow_auto_view_flows_one_column_at_a_time() {
     assert_eq!(app.panes[0].cursor, page.rows, "Right moves one column");
     fs::remove_dir_all(root).unwrap();
 }
-/// 원본 목록 OnContextPopup(FUN_00484e8c): 로컬 항목은 pmMain, 표시가 없고 커서가 드라이브 항목이면 그 드라이브의 탐색기 메뉴,
-/// "오른쪽버튼 클릭: 탐색기 메뉴 사용하기"면 표시한 항목(없으면 커서 항목)의 탐색기 메뉴. pmMain에는 탐색기 메뉴 항목이 늘 있다.
+/// Original list OnContextPopup (FUN_00484e8c): local items get pmMain; without marks and with the cursor on a drive item, that drive's Explorer menu;
+/// with "right click: use the Explorer menu", the Explorer menu of the marked items (otherwise the cursor item). pmMain always has the Explorer menu item.
 #[test]
 fn list_right_click_menu_follows_the_original_context_popup() {
     use super::panes::ListMenu;
@@ -214,7 +214,7 @@ fn list_right_click_menu_follows_the_original_context_popup() {
     app.settings.set_flag("UseExplorerMenu", true);
     let a = app.panes[0].entries[file].path.clone();
     assert!(matches!(app.list_menu_kind(0), ListMenu::Shell(ref p) if *p == [a.clone()]), "explorer menu setting: the marked items");
-    // 원본 FUN_00485078(오른쪽 단추를 누른 채 왼쪽 단추): 탐색기 메뉴 설정과 반대.
+    // Original FUN_00485078 (left button while holding the right button): the opposite of the Explorer menu setting.
     assert!(matches!(app.rocker_menu_kind(0), ListMenu::Main), "explorer menu setting on: the rocker gesture gives pmMain");
     app.settings.set_flag("UseExplorerMenu", false);
     assert!(matches!(app.rocker_menu_kind(0), ListMenu::Shell(ref p) if *p == [a.clone()]), "setting off: the shell menu of the marked items");
@@ -222,7 +222,7 @@ fn list_right_click_menu_follows_the_original_context_popup() {
     assert!(matches!(app.rocker_menu_kind(0), ListMenu::Shell(ref p) if *p == [drive_path.clone()]), "an unmarked drive cursor: its shell menu");
     app.panes[0].selected.insert(file);
     app.settings.set_flag("UseExplorerMenu", false);
-    // pmMain: 탐색기 메뉴가 맨 위에 늘 있고, 붙여넣기 밖의 항목은 켜져 있다(여기 클립보드 파일은 없다고 보지 않는다).
+    // pmMain: the Explorer menu is always at the top and items other than paste are enabled (clipboard files are not assumed absent here).
     app.panes[0].selected.clear();
     app.panes[0].cursor = file;
     let items = app.list_menu_items(0);
@@ -243,7 +243,7 @@ fn list_right_click_menu_follows_the_original_context_popup() {
     }
 }
 
-/// 원본 패널 OnEnter(FUN_004849c8): 지금 패널이 로컬 폴더면 그 폴더가 프로세스의 지금 폴더(시험은 기록만 본다).
+/// Original pane OnEnter (FUN_004849c8): when the current pane is a local folder, that folder is the process current directory (the test checks only the record).
 #[test]
 fn active_local_pane_becomes_the_current_directory() {
     let (root, _ctx, mut app) = fixture("cwd", "ko");
@@ -256,7 +256,7 @@ fn active_local_pane_becomes_the_current_directory() {
     fs::remove_dir_all(root).unwrap();
 }
 
-/// 가짜 드라이브 루트(격리 임시 폴더 둘).
+/// Fake drive roots (two isolated temp folders).
 fn fake_drive_roots() -> Vec<PathBuf> {
     ["A", "B"].iter().map(|l| std::env::temp_dir().join(format!("ndr-keys-fake-drive-{l}"))).collect()
 }
@@ -264,9 +264,9 @@ fn fake_drive_info(_: &std::path::Path) -> Option<(String, u32, Option<(u64, u64
     Some(("Disk".into(), 3, Some((25, 100))))
 }
 
-/// 원본 FUN_00486474·ArrowKey·Select·SelectAll: "목록에 디스크 드라이브 목록 보기"가 켜져 있으면 일반 폴더 목록 끝에 드라이브 항목.
-/// 정렬과 상관없이 끝에 있고, 폴더·파일 수에 들지 않으며 고르거나 작업 대상이 되지 않는다. Ctrl+End는 드라이브 앞 마지막 파일,
-/// [ ]는 드라이브 사이를 옮기고, 열면 그 드라이브로 간다. 설정을 끄면 덧붙이지 않는다.
+/// Original FUN_00486474, ArrowKey, Select and SelectAll: with "show disk drives in the list" on, drive items follow the ordinary folder list.
+/// They stay at the end regardless of sorting, are not counted as folders or files, and are never selected or job targets. Ctrl+End is the last file before the drives,
+/// [ ] move between drives, and opening one goes to that drive. Turning the setting off does not append them.
 #[test]
 fn drive_items_follow_the_original_list_end() {
     let (root, ctx, mut app) = fixture("drives", "ko");
@@ -328,25 +328,25 @@ fn names(app: &App, pane: usize) -> Vec<String> {
 fn keyboard_follows_the_csharp_shortcut_engine() {
     let (root, ctx, mut app) = fixture("ko", "ko");
     let left = root.join("left");
-    // Alt+U(원본 miSelectAll = CycleFileSelection): 없으면 파일만(SelectFolders 끔), 파일이 다 표시되고 폴더가 하나도 없으면 폴더도, 그다음은 모두 해제.
+    // Alt+U (original miSelectAll = CycleFileSelection): with nothing, files only (SelectFolders off); with all files marked and no folder, folders too; then clear all.
     press(&mut app, &ctx, egui::Key::U, ALT);
     assert_eq!(names(&app, 0), ["a.txt", "b.txt"]);
     press(&mut app, &ctx, egui::Key::U, ALT);
     assert_eq!(names(&app, 0), ["a.txt", "b.txt", "folder1"]);
     press(&mut app, &ctx, egui::Key::U, ALT);
     assert!(app.panes[0].selected.is_empty());
-    // Esc: EscapeKeyAction이 없으면 아무것도 하지 않고, 3이면 모두 해제.
+    // Esc: nothing without EscapeKeyAction, clear all with 3.
     app.panes[0].selected.insert(0);
     press(&mut app, &ctx, egui::Key::Escape, NONE);
     assert_eq!(app.panes[0].selected.len(), 1, "no EscapeKeyAction: Esc does nothing");
     app.settings.values.insert("EscapeKeyAction".into(), serde_json::json!(3));
     press(&mut app, &ctx, egui::Key::Escape, NONE);
     assert!(app.panes[0].selected.is_empty());
-    // 작업 폴더: Ctrl+1 저장(원본 miWorkFolder1), Alt+1 이동, 저장 안 한 Alt+2는 알림.
+    // Work folders: Ctrl+1 saves (original miWorkFolder1), Alt+1 goes there, Alt+2 without a saved folder notifies.
     press(&mut app, &ctx, egui::Key::Num1, CTRL);
     assert_eq!(app.status, "작업 폴더 1 저장됨");
     assert_eq!(app.settings.strings("WorkingFolders")[0], left.to_string_lossy());
-    // 원본 FUN_0042fff58: 이미 지정된 작업 폴더면 MSG_UNSETWORKFOLDER(지금 값) 예/아니요. 아니요면 그대로, 예면 바꾼다.
+    // Original FUN_0042fff58: an already set work folder asks MSG_UNSETWORKFOLDER (current value) yes/no. No keeps it, yes changes it.
     app.navigate(0, left.join("folder1"), true);
     wait(&mut app, &ctx);
     press(&mut app, &ctx, egui::Key::Num1, CTRL);
@@ -368,15 +368,15 @@ fn keyboard_follows_the_csharp_shortcut_engine() {
     press(&mut app, &ctx, egui::Key::Num2, ALT);
     assert_eq!(app.msgboxes.first().map(|m| (m.title.clone(), m.text.clone())), Some(("NDR".to_owned(), "작업 폴더 2이 설정되지 않았습니다.".to_owned())));
     app.answer_message_box(1, &ctx);
-    // Alt+Left = 뒤로(원본 miHistoryBack): 작업 폴더로 옮기기 전 폴더.
+    // Alt+Left = back (original miHistoryBack): the folder before moving to the work folder.
     press(&mut app, &ctx, egui::Key::ArrowLeft, ALT);
     assert_eq!(app.panes[0].path, left.join("folder1"));
-    // 마지막 드라이브 폴더(SaveDriveFolders): 이동하면 기억하고, 드라이브 루트로 가면 되살린다.
+    // Last drive folder (SaveDriveFolders): remembered on navigation, restored when going to the drive root.
     let drive_root = PathBuf::from(left.to_string_lossy()[..3].to_owned());
     assert_eq!(app.restore_drive_folder(drive_root.clone()), left.join("folder1"));
     app.settings.set_flag("SaveDriveFolders", false);
     assert_eq!(app.restore_drive_folder(drive_root.clone()), drive_root);
-    // 열 개수: column:N(0~19로 자름), 원본 이름 column3도 같다.
+    // Column count: column:N (clamped to 0-19); the original name column3 works the same.
     app.dispatch("column:25", &ctx);
     assert_eq!(app.settings.values["LeftColumnCount"], 19);
     app.dispatch("column3", &ctx);
@@ -384,7 +384,7 @@ fn keyboard_follows_the_csharp_shortcut_engine() {
     fs::remove_dir_all(root).unwrap();
 }
 
-/// 원본 즐겨찾기 메뉴(FUN_0042eedc): 0~9번 Shift+F1~F10, 10~19번 Shift+Ctrl+F1~F10. 빈 칸의 글쇠는 아무것도 하지 않는다.
+/// Original favorites menu (FUN_0042eedc): items 0-9 Shift+F1-F10, items 10-19 Shift+Ctrl+F1-F10. Keys of empty slots do nothing.
 #[test]
 fn favorites_menu_shortcuts_follow_the_original() {
     let (root, ctx, mut app) = fixture("favkeys", "ko");
@@ -406,7 +406,7 @@ fn favorites_menu_shortcuts_follow_the_original() {
     fs::remove_dir_all(root).unwrap();
 }
 
-/// 원본 [FuncKey] F3=#CopyTo, F4=#MoveTo → TfSelectDest. 글쇠만으로(F3, Enter) 복사·이동이 끝나야 한다.
+/// Original [FuncKey] F3=#CopyTo, F4=#MoveTo -> TfSelectDest. Copy and move must finish with keys alone (F3, Enter).
 #[test]
 fn f3_and_f4_copy_and_move_with_keys_only() {
     let (root, ctx, mut app) = fixture("f3copy", "ko");
@@ -448,7 +448,7 @@ fn f3_and_f4_copy_and_move_with_keys_only() {
     draw(&mut app, &ctx, key(egui::Key::Enter));
     settle(&mut app, &ctx);
     assert!(right.join("b.txt").is_file() && !left.join("b.txt").exists(), "F4 + Enter moves to the other pane");
-    // 현재 패널: 경로 칸에 "." → 같은 폴더.
+    // Current pane: "." in the path field -> the same folder.
     cursor_on(&mut app, "a.txt");
     draw(&mut app, &ctx, key(egui::Key::F3));
     app.edit_dialog_kind(|kind| if let super::original_dialogs::DialogKind::Destination(form) = kind { form.path = ".".into() });
@@ -463,14 +463,14 @@ fn f3_and_f4_copy_and_move_with_keys_only() {
             thread::sleep(Duration::from_millis(5));
         }
     };
-    // 원본 FUN_004134e0: 대상(자기 자신)이 있으므로 TfFileExists. 이름 바꾸기 → 새 이름으로 복사.
+    // Original FUN_004134e0: the destination (itself) exists, so TfFileExists. Rename -> copy under the new name.
     wait_for(&mut app, &ctx, &|app| app.original_dialogs.last().is_some_and(|d| matches!(d.kind, DialogKind::FileConflict(_))));
     app.answer_dialog(DialogResult::FileConflict(Some((ndr::fsops::ConflictChoice::Rename, false))), &ctx);
     wait_for(&mut app, &ctx, &|app| app.original_dialogs.last().is_some_and(|d| matches!(d.kind, DialogKind::Prompt { .. })));
     app.answer_dialog(DialogResult::Text(Some("a2.txt".into())), &ctx);
     settle(&mut app, &ctx);
     assert_eq!(fs::read(left.join("a2.txt")).unwrap(), b"a", "copied in the current pane under the new name");
-    // 덮어쓰기는 자기 자신을 망가뜨리지 않고 건너뛴다(고친 것).
+    // Overwrite skips without destroying the item itself (fixed).
     cursor_on(&mut app, "a.txt");
     draw(&mut app, &ctx, key(egui::Key::F3));
     app.edit_dialog_kind(|kind| if let DialogKind::Destination(form) = kind { form.path = left.to_string_lossy().into_owned() });
@@ -486,7 +486,7 @@ fn f3_and_f4_copy_and_move_with_keys_only() {
 #[test]
 fn work_folder_messages_in_english() {
     let (root, ctx, mut app) = fixture("en", "en");
-    // workSet은 영어 상태 글, 작업 폴더 메뉴의 원본 이름 saveWorkFolder2/openWorkFolder2도 같다.
+    // workSet uses the English status text; the original names saveWorkFolder2/openWorkFolder2 of the work folder menu work the same.
     app.dispatch("saveWorkFolder2", &ctx);
     assert_eq!(app.status, "Work folder 2 saved");
     app.navigate(0, root.join("right"), true);
@@ -500,7 +500,7 @@ fn work_folder_messages_in_english() {
 }
 
 
-/// C# HandleKeyboardAsync는 IsRepeat을 거르지 않는다: 누르고 있는 글쇠의 반복 입력도 명령을 다시 실행한다.
+/// C# HandleKeyboardAsync does not filter IsRepeat: repeat input of a held key reruns the command.
 #[test]
 fn held_keys_repeat_commands_like_csharp() {
     let (root, ctx, mut app) = fixture("repeat", "en");
@@ -514,12 +514,12 @@ fn held_keys_repeat_commands_like_csharp() {
     let _ = fs::remove_dir_all(&root);
 }
 
-/// 원본 단축키 표(shortcut.ini 기본 114줄)의 모든 대상이 NDR 동작으로 이어지는가: 메뉴 항목은 ORIGINAL_ACTIONS(또는 C# 특수 항목),
-/// 내부 명령은 parity::internal_command 표.
+/// Whether every target of the original shortcut table (the default 114 lines of shortcut.ini) leads to an NDR action: menu items via ORIGINAL_ACTIONS (or C# special items),
+/// internal commands via the parity::internal_command table.
 #[test]
 fn every_original_shortcut_target_has_an_ndr_action() {
     let shortcuts = compat::ShortcutMap::parse(None);
-    // C# 특수 항목, miFind(original_shortcut이 찾기 상자 또는 C# 빠른 찾기 칸), miSelect(Space: NDR 표시 전환 = 원본 miSelectClick).
+    // C# special items, miFind (original_shortcut opens the find box or the C# quick search field), miSelect (Space: NDR mark toggle = original miSelectClick).
     let special = ["miSelectAll", "miSearchFile", "miArcMove", "miArcInstall", "miFind", "miSelect"];
     let missing_menus: Vec<(&String, String)> = shortcuts
         .menu_shortcuts
@@ -538,7 +538,7 @@ fn every_original_shortcut_target_has_an_ndr_action() {
     assert!(missing_internal.is_empty(), "internal commands without an action: {missing_internal:?}");
 }
 
-/// 원본 miFind(Ctrl+F): 원본 도구 모음(빠른 찾기 칸 없음)이면 찾기 상자(TfGetText TITLE_FIND). miColAuto(Ctrl+Alt+0): 열 수 자동(0).
+/// Original miFind (Ctrl+F): with the original toolbar (no quick search field) the find box (TfGetText TITLE_FIND). miColAuto (Ctrl+Alt+0): automatic column count (0).
 #[test]
 fn ctrl_f_and_ctrl_alt_0_follow_the_original_menu() {
     let (root, ctx, mut app) = fixture("find-keys", "ko");
@@ -554,12 +554,12 @@ fn ctrl_f_and_ctrl_alt_0_follow_the_original_menu() {
 }
 
 
-/// 메뉴는 원본 항목만: 원본 이름(MENU_CAPTIONS·ORIGINAL_ACTIONS)이 없는 명령(C# 판에만 있던 것)은 메뉴 표에 없다.
+/// Menus have original items only: commands without an original name (MENU_CAPTIONS, ORIGINAL_ACTIONS), which existed only in the C# version, are not in the menu table.
 #[test]
 fn menus_have_only_original_commands() {
     let foreign: Vec<&str> = menu_data::MENUS.iter().flat_map(|(_, _, _, items)| items.iter().map(|(id, _, _)| *id)).filter(|id| *id != "-" && App::csharp_only_menu_item(id)).collect();
     assert!(foreign.is_empty(), "{foreign:?}");
-    // ORIGINAL_HIDDEN = 원본 DFM에서 Visible=False인 항목 가운데 NDR 메뉴에 있는 것, 빠짐없이.
+    // ORIGINAL_HIDDEN = every item with Visible=False in the original DFM that is in the NDR menu, none missing.
     let dfm = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/original-menus.txt")).unwrap();
     let invisible: Vec<&str> = dfm.lines().filter(|l| l.contains("Visible=False")).filter_map(|l| l.trim().strip_prefix("TMenuItem ")?.split(' ').next()).collect();
     let menu_ids: Vec<&str> = menu_data::MENUS.iter().flat_map(|(_, _, _, items)| items.iter().map(|(id, _, _)| *id)).collect();
@@ -571,7 +571,7 @@ fn menus_have_only_original_commands() {
     assert_eq!(from_dfm, listed);
 }
 
-/// 원본 miSkin(FUN_0043e580: skin\ 폴더마다 항목)·miLanguage(FUN_00441830, 끝에 miMoreLanguages).
+/// Original miSkin (FUN_0043e580: one item per skin\ folder) and miLanguage (FUN_00441830, miMoreLanguages at the end).
 #[test]
 fn original_skin_and_language_submenus() {
     let (root, ctx, mut app) = fixture("skin-language-menu", "ko");
@@ -592,7 +592,7 @@ fn original_skin_and_language_submenus() {
     fs::remove_dir_all(root).unwrap();
 }
 
-/// 원본 ApplicationEvents1Message(0x442984): 마우스 XBUTTON1(뒤로)·XBUTTON2(앞으로) = HistoryBack·HistoryForward.
+/// Original ApplicationEvents1Message (0x442984): mouse XBUTTON1 (back) and XBUTTON2 (forward) = HistoryBack and HistoryForward.
 #[test]
 fn mouse_side_buttons_go_back_and_forward() {
     let (root, ctx, mut app) = fixture("xbuttons", "en");

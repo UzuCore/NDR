@@ -1,14 +1,14 @@
-//! 시험용 화면 찍기(`--smoke-seconds N --shot 종류 파일.png`): 화면 밖 시작 확인 창에 원본 창 견본을 열고 그 화면을 PNG로 저장한다.
-//! 원본 DFM 자리로 옮긴 창들이 실제로 그렇게 그려지는지 사람 눈으로 확인하는 데만 쓴다. 사용자 파일·설정은 건드리지 않는다
-//! (견본 파일은 --profile 격리 폴더의 shot 폴더에만 만든다).
+//! Test screenshots (`--smoke-seconds N --shot kind file.png`): opens a sample of an original window in the off-screen startup check window and saves that screen as PNG.
+//! Used only to check by eye that windows moved to original DFM positions are really drawn that way. User files and settings are not touched
+//! (sample files are created only in the shot folder of the isolated --profile folder).
 use super::original_dialogs::DialogKind;
 use super::*;
 
-/// 견본을 여는 그림 번호와 찍는 그림 번호.
+/// Frame number that opens the sample and frame number that takes the shot.
 const OPEN_FRAME: u64 = 3;
 const SHOT_FRAME: u64 = 20;
 
-/// "ftplog" 견본의 가짜 FTP(목록 두 줄, 다른 동작은 거절).
+/// Fake FTP of the "ftplog" sample (two list rows, other actions refused).
 struct ShotFtp;
 impl super::ftp_pane::PaneFs for ShotFtp {
     fn pwd(&mut self) -> Result<String, String> {
@@ -57,7 +57,7 @@ impl App {
                 ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(800.0, 480.0)));
             }
         }
-        // 패널 폴더 트리는 셸 이름 공간을 따로 읽으므로, 펼친 항목을 다 읽을 때까지 찍기를 미룬다.
+        // The pane folder tree reads the shell namespace separately, so the shot waits until expanded items are read.
         let tree_waiting = kind == "panetree" && self.tree_requests.iter().any(|key| !self.tree_cache.contains_key(key));
         let sent_id = egui::Id::new("ndr-shot-sent");
         if self.frames >= SHOT_FRAME && !tree_waiting && !ctx.data(|d| d.get_temp::<bool>(sent_id)).unwrap_or(false) {
@@ -67,7 +67,7 @@ impl App {
         if kind == "narrowdetails" && self.frames == SHOT_FRAME - 4 {
             self.panes[0].detail_x = 40.0;
         }
-        // 따로 뜨는 툴팁 창(panes::show_tip_window) 확인: 메인 창 오른쪽 끝을 넘는 사각을 그리고, 만들어진 창의 화면 자리를 보고서에 남긴다.
+        // Check of the separate tooltip window (panes::show_tip_window): draws a rectangle past the main window's right edge and records the created window's screen position in the report.
         if kind == "tipwindow" && self.frames >= OPEN_FRAME {
             let screen = ctx.content_rect();
             let rect = egui::Rect::from_min_size(egui::pos2(screen.right() - 60.0, screen.top() + 80.0), egui::vec2(180.0, 22.0));
@@ -119,7 +119,7 @@ impl App {
                 self.push_original_dialog(text(self, "formFileExists.Form.Caption"), DialogKind::FileConflict(Box::new(form)), |_, _, _| {});
             }
             "ftpquick" => self.ftp_quick_connect("ftp://ftp.example.com".into()),
-            // 원본 TfSelectDest 배치 눈 확인용: 최근 폴더 하나, 작업 폴더 하나.
+            // For checking the original TfSelectDest layout by eye: one recent folder, one work folder.
             "destination" => {
                 self.remember_destination(&folder.join("a"));
                 let mut work = vec![folder.join("b").to_string_lossy().into_owned()];
@@ -128,13 +128,13 @@ impl App {
                 let (initial, current) = (self.panes[1].path.clone(), self.panes[0].path.clone());
                 self.select_destination(super::destination_dialog::DestinationPurpose::Copy, initial, Some(current), |_, _| {});
             }
-            // 원본 메뉴 줄 오른쪽 끝의 빠른 찾기 글(tbMainMenuAdvancedCustomDraw) 눈 확인용.
+            // For checking by eye the quick search text at the right end of the original menu bar (tbMainMenuAdvancedCustomDraw).
             "quicksearch" => {
                 let active = self.active;
                 self.typed_search[active].query = "read".into();
                 self.typed_search[active].cursor = Some(self.panes[active].cursor);
             }
-            // 패널 FTP 모드의 기록 칸(원본 FUN_0048d7ac) 눈 확인용: 오른쪽 패널을 가짜 FTP 연결로.
+            // For checking by eye the log box of the pane FTP mode (original FUN_0048d7ac): the right pane uses a fake FTP connection.
             "ftplog" => {
                 let log = std::sync::Arc::new(std::sync::Mutex::new(ndr::remote::ProtocolLog::default()));
                 if let Ok(mut log) = log.lock() {
@@ -151,13 +151,13 @@ impl App {
                 let remote = super::ftp_pane::PaneRemote { fs: std::sync::Arc::new(std::sync::Mutex::new(Box::new(ShotFtp) as Box<dyn super::ftp_pane::PaneFs>)), host: "ftp.example.com".into(), path: "/pub".into(), busy: Default::default(), modes: Default::default(), log: Some(log) };
                 self.ftp_connected(1, remote);
             }
-            // 메뉴 줄 펼침(Alt+F와 같은 길): 스킨 메뉴 색·단추 칸 눈 확인용.
+            // Opening the menu bar (same path as Alt+F): for checking skin menu colors and button cells by eye.
             "mainmenu" => self.menu_access = Some('f'),
             "editmenu" => self.menu_access = Some('e'),
             "foldermenu" => self.menu_access = Some('o'),
             "viewmenu" => self.menu_access = Some('w'),
             "popupmenu" => {
-                // 스킨 메뉴 색(skin_menu_style) 눈 확인용: 즐겨찾기 메뉴(머리·구분선·꺼진 줄 포함)를 왼쪽 위에 연다.
+                // For checking skin menu colors (skin_menu_style) by eye: opens the favorites menu (with header, separator and disabled rows) at the top left.
                 self.show_favorites_menu();
                 if let Some(popup) = self.popup.as_mut() {
                     popup.position = Some(egui::pos2(40.0, 60.0));
@@ -211,12 +211,12 @@ impl App {
                 self.settings.values.insert("RightPaneWidth".into(), serde_json::json!(80));
             }
             "crumbmenu" => {
-                // 원본 TNXPathLabel.DropDownMenu: 왼쪽 패널 폴더의 하위 폴더 목록.
+                // Original TNXPathLabel.DropDownMenu: the subfolder list of the left pane folder.
                 let folder = self.panes[0].path.clone();
                 self.skin_crumb_menu = Some((0, folder, false, egui::pos2(120.0, 104.0)));
             }
             "narrowdetails" => {
-                // 원본 UpdateScrollBar(형식 2): 칸 너비 합이 목록보다 넓으면 가로 막대. 왼쪽 패널을 좁히고 자세히 보기, 가로 위치 40.
+                // Original UpdateScrollBar (style 2): a horizontal bar when the total cell width exceeds the list. Narrows the left pane, Details view, horizontal position 40.
                 self.settings.values.insert("LeftPaneWidth".into(), serde_json::json!(25));
                 self.settings.values.insert("RightPaneWidth".into(), serde_json::json!(75));
                 self.settings.set_text("LeftViewStyle", "Details");
@@ -234,7 +234,7 @@ impl App {
             }
             "archive" => {
                 self.active = 0;
-                // ".."가 아닌 첫 항목(".."는 압축 대상이 아니다).
+                // The first item other than ".." (".." is not an archive target).
                 self.panes[0].cursor = self.panes[0].entries.iter().position(|e| !e.is_parent() && !e.drive).unwrap_or(0);
                 self.archive_command(super::archive_dialog::ArchiveKind::Create);
             }
@@ -253,7 +253,7 @@ impl App {
             }
             "advrename" | "advrename-delete" => {
                 self.active = 0;
-                // 0번은 ".."(r106부터)라 이름 바꿀 수 없다. 첫 보통 항목.
+                // Item 0 is ".." (since r106) and cannot be renamed. The first ordinary item.
                 self.panes[0].cursor = self.panes[0].entries.iter().position(|e| !e.is_parent() && !e.drive).unwrap_or(0);
                 self.advanced_rename();
                 if let Some(DialogKind::AdvancedRename(form)) = self.original_dialogs.last_mut().map(|d| &mut d.kind) {
@@ -275,7 +275,7 @@ impl App {
                 self.push_original_dialog(text(self, "formFTPSiteManager.Form.Caption"), DialogKind::RemoteSites(Box::new(form)), |_, _, _| {});
             }
             "credentials" => self.credentials_dialog("Network drive credentials", |_, _| {}),
-            // C# 원격 창(연결하지 않음): 가운데 올리기·내려받기 단추의 스킨 그림 확인용.
+            // C# remote window (not connected): for checking the skin images of the upload/download buttons in the middle.
             "remote" => self.open_remote_window(None, None),
             "search" => self.search_command(),
             "advselect" => self.advanced_select(false),
@@ -318,12 +318,12 @@ impl App {
                 self.show_results = true;
             }
             "panetree" => {
-                // 원본 miShowFoldersClick(Alt+F3): 왼쪽 패널 안 목록 왼쪽에 폴더 트리.
+                // Original miShowFoldersClick (Alt+F3): the folder tree left of the list inside the left pane.
                 self.settings.set_flag("ShowLeftFolderTree", true);
                 self.refresh(0);
             }
             "gridlines" | "rowlines" => {
-                // 원본 ShowGridColumn·ShowGridRow·LineSpace 확인: 이름 보기(열 선·줄 선)와 자세히 보기(줄 선).
+                // Check of original ShowGridColumn, ShowGridRow and LineSpace: Names view (column and row lines) and Details view (row lines).
                 self.settings.set_flag("ShowRowLines", true);
                 self.settings.set_flag("ShowColumnLines", true);
                 self.settings.values.insert("ListLineSpace".into(), serde_json::json!(6));

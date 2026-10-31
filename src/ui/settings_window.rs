@@ -1,8 +1,8 @@
-//! 원본 TfPreferences("옵션") 쪽 차례(파일목록·폴더트리·색·옵션·프로그램·경로·기능키·기타)와 [formPreferences] 글로 C# SettingsWindow의 줄을 옮기고,
-//! C# 판에만 있는 줄은 마지막 "NDR" 쪽에 둔다. 각 줄은 C#과 같은 키·처음 값,
-//! 확인 = Commit(키마다 같은 변환·범위, 틀리면 "환경 설정" 경고 상자), 취소. 확장자 색 가져오기/내보내기(.col/.json), 기능키 편집 단추.
-//! 확인한 뒤의 적용은 C# ShowOptionsAsync(언어·메뉴·테마·두 패널·보기·새로 고침, 저장).
-//! 차이(HANDOFF): 영어 화면은 줄 이름이 모두 영어(C#은 언어 파일에 있는 것만), 한 번에 하나만 실행·활성화 단축키·창 투명도 바꾸기는 다음 시작부터.
+//! Moves the rows of C# SettingsWindow into the original TfPreferences ("options") page order (file list, folder tree, color, options, programs, paths, function keys, other) with [formPreferences] text,
+//! and puts rows only in the C# version on a final "NDR" page. Each row keeps the C# key and default,
+//! OK = Commit (the same conversion and range per key, a "preferences" warning box when invalid), cancel. Extension color import/export (.col/.json), function key edit button.
+//! Applying after OK follows C# ShowOptionsAsync (language, menus, theme, both panes, view, refresh, save).
+//! Difference (HANDOFF): an English UI shows all row names in English (C# only those in the language file); single instance, activation hotkey and window transparency changes take effect from the next start.
 use super::original_dialogs::{DialogKind, DialogResult};
 use super::*;
 use ndr::msgbox::{IDYES, MB_ICONEXCLAMATION, MB_ICONQUESTION, MB_OK, MB_YESNO};
@@ -12,7 +12,7 @@ fn t(ko: bool, korean: &str, english: &str) -> String {
     if ko { korean.into() } else { english.into() }
 }
 
-/// 한 줄(C# AddCheck/AddText/AddFolderPath/AddProgramPath/AddCombo/AddSlider/AddSection과 안내 글).
+/// One row (C# AddCheck/AddText/AddFolderPath/AddProgramPath/AddCombo/AddSlider/AddSection and notice text).
 #[derive(Clone, Debug)]
 pub(super) enum Row {
     Section(String),
@@ -21,12 +21,12 @@ pub(super) enum Row {
     Text { key: String, label: String, value: String, read_only: bool, max: usize, upper: bool },
     Folder { key: String, label: String, value: String, default: PathBuf },
     Program { key: String, label: String, value: String },
-    /// (값, 보이는 글) 목록과 고른 줄. 값이 목록에 없으면 None(C# SelectedValue = null → 빈 값).
+    /// (value, shown text) list and the chosen row. None when the value is not in the list (C# SelectedValue = null -> empty value).
     Combo { key: String, label: String, choices: Vec<(String, String)>, selected: Option<usize> },
     Slider { key: String, label: String, value: f32 },
     ColorButtons,
     FunctionKeys,
-    /// 원본 btnListFont / btnTreeFont("글꼴 변경", TFontDialog). tree = 폴더 트리 글꼴.
+    /// Original btnListFont / btnTreeFont ("change font", TFontDialog). tree = folder tree font.
     FontButton { tree: bool, label: String },
 }
 
@@ -34,27 +34,27 @@ pub(super) struct SettingsForm {
     ko: bool,
     pub tab: usize,
     pub tabs: Vec<Vec<Row>>,
-    /// 쪽 이름(원본 TabSheet.ts* 8개 + "NDR").
+    /// Page names (the 8 original TabSheet.ts* + "NDR").
     pub tab_titles: Vec<String>,
-    /// C# _draft(원래 설정의 사본). 기능키 편집·색상표 가져오기가 바로 고친다.
+    /// C# _draft (a copy of the original settings). Function key editing and color table import change it directly.
     pub draft: ndr::settings::Settings,
-    /// 원본 lbExtColor에서 고른 색 묶음(색이 같은 확장자들).
+    /// Color group chosen in the original lbExtColor (extensions sharing a color).
     pub color_selected: Option<usize>,
-    /// 원본 TColorDialog.Color(마지막으로 고른 색, COLORREF). 추가할 때 처음 색.
+    /// Original TColorDialog.Color (last chosen color, COLORREF). Initial color when adding.
     pub last_color: u32,
-    /// 원본 tsColor 글: lExtColor, btnAddColor, btnEditColor, btnDelColor, btnSaveColorMap, btnImportColor, lHelp, lBasicColor.
+    /// Original tsColor texts: lExtColor, btnAddColor, btnEditColor, btnDelColor, btnSaveColorMap, btnImportColor, lHelp, lBasicColor.
     color_captions: [String; 8],
-    /// 원본 lbBasicColor 줄(ListBox.lbBasicColor, ';' 구분 23줄: 0·16 머리, 15 빈 줄).
+    /// Original lbBasicColor rows (ListBox.lbBasicColor, 23 rows separated by ';': 0 and 16 headers, 15 an empty row).
     basic_items: Vec<String>,
-    /// 원본 btnOk, btnCancel, btnApply 글.
+    /// Original btnOk, btnCancel, btnApply texts.
     button_captions: [String; 3],
-    /// 원본 TfPreferences의 그룹·안내 글(쪽을 원본 자리로 그릴 때 쓴다).
+    /// Group and notice texts of the original TfPreferences (used when drawing pages at original positions).
     captions: std::collections::HashMap<&'static str, String>,
-    /// 원본 tsFunctionKey lvFunctionKey(F1~F12, ^F1~^F11).
+    /// Original tsFunctionKey lvFunctionKey (F1-F12, ^F1-^F11).
     pub function_keys: super::function_key_editor::FunctionKeyEditorForm,
 }
 
-/// 원본 FUN_00450b94/0x44ed5c: lbBasicColor 줄 번호 → TNXBasicColor 번호(머리 0·16과 빈 줄 15는 없음).
+/// Original FUN_00450b94/0x44ed5c: lbBasicColor row index -> TNXBasicColor index (none for headers 0, 16 and the empty row 15).
 pub(super) fn basic_color_index(row: usize) -> Option<usize> {
     match row {
         0 | 15 | 16 => None,
@@ -63,14 +63,14 @@ pub(super) fn basic_color_index(row: usize) -> Option<usize> {
     }
 }
 
-/// 설정의 기본 색(NexusFileColorMapValues, 없으면 .col 기본값). "RRGGBB".
+/// Base colors from the settings (NexusFileColorMapValues, otherwise the .col defaults). "RRGGBB".
 pub(super) fn basic_color(draft: &ndr::settings::Settings, index: usize) -> Option<String> {
     let (key, default) = ndr::styles::DEFAULT_ELEMENTS.get(index)?;
     let stored = object(draft, "NexusFileColorMapValues").get(*key).and_then(|v| v.as_str()).map(|v| v.trim_start_matches('#').to_owned());
     Some(stored.filter(|v| v.len() == 6).unwrap_or_else(|| (*default).to_owned()))
 }
 
-/// 원본 TNXFileColorMap의 lbExtColor 항목: 같은 색의 확장자를 한 줄로("TXT;DOC", 색). ExtensionColors 글(".txt=#RRGGBB; …")에서 처음 나온 색 순서로.
+/// lbExtColor entries of the original TNXFileColorMap: extensions of one color on one row ("TXT;DOC", color), in first-appearance color order of the ExtensionColors text (".txt=#RRGGBB; ...").
 pub(super) fn color_groups(text: &str) -> Vec<(String, Vec<String>)> {
     let mut groups: Vec<(String, Vec<String>)> = Vec::new();
     for (extension, color) in parse_extension_colors(text).unwrap_or_default() {
@@ -83,12 +83,12 @@ pub(super) fn color_groups(text: &str) -> Vec<(String, Vec<String>)> {
     groups
 }
 
-/// 묶음을 다시 ExtensionColors 글로.
+/// Turns the groups back into ExtensionColors text.
 fn groups_text(groups: &[(String, Vec<String>)]) -> String {
     groups.iter().flat_map(|(color, names)| names.iter().map(move |n| format!(".{}={color}", n.to_lowercase()))).collect::<Vec<_>>().join("; ")
 }
 
-/// 원본 FUN_0044ee6c(';'로 나눔, 빈 조각 빼기). 앞의 점은 뺀다.
+/// Original FUN_0044ee6c (split on ';', drop empty pieces). A leading dot is removed.
 fn split_extensions(text: &str) -> Vec<String> {
     text.split(';').map(|s| s.trim().trim_start_matches('.').to_uppercase()).filter(|s| !s.is_empty()).collect()
 }
@@ -108,35 +108,35 @@ pub(super) enum SettingsAction {
     BrowseProgram(usize),
     ImportColors,
     ExportColors,
-    /// 원본 btnAddColor·btnEditColor·btnDelColor·lbExtColor 두 번 누르기.
+    /// Original btnAddColor, btnEditColor, btnDelColor and lbExtColor double click.
     AddColor,
     EditColor,
     DeleteColor,
     ChangeColor,
-    /// 원본 lbBasicColorDblClick(0x44ed5c): 기본 색(TNXBasicColor 번호) 바꾸기.
+    /// Original lbBasicColorDblClick (0x44ed5c): change a base color (TNXBasicColor index).
     ChangeBasicColor(usize),
-    /// 원본 btnFontClick(Tag 0 = 파일 목록, 1 = 폴더 트리).
+    /// Original btnFontClick (Tag 0 = file list, 1 = folder tree).
     ChooseFont(bool),
-    /// 원본 btnBrowse1/2(시작 폴더 "..."): 글 줄에 폴더를 고른다.
+    /// Original btnBrowse1/2 (start folder "..."): picks a folder for the text row.
     BrowseText(usize),
-    /// 원본 btnEditFunc(lvFunctionKey 두 번 누르기도): 고른 키를 TfEditFunction으로 고친다.
+    /// Original btnEditFunc (also lvFunctionKey double click): edits the chosen key with TfEditFunction.
     EditFunctionKey,
-    /// 원본 btnFuncDelete: 고른 키를 기본으로.
+    /// Original btnFuncDelete: resets the chosen key to default.
     ResetFunctionKey,
-    /// 원본 btnApplyClick: 확인처럼 검사·적용하되 창은 그대로.
+    /// Original btnApplyClick: checks and applies like OK but keeps the window.
     Apply,
     Ok,
     Cancel,
 }
 
-/// C# LanguageService.Names(21개 언어).
+/// C# LanguageService.Names (21 languages).
 const LANGUAGE_NAMES: [(&str, &str); 21] = [
     ("ca", "Català"), ("cs", "Čeština"), ("de", "Deutsch"), ("en", "English"), ("es", "Español"), ("fi", "Suomi"), ("fr", "Français"),
     ("hu", "Magyar"), ("it", "Italiano"), ("ja", "日本語"), ("ko", "한국어"), ("nl", "Nederlands"), ("pl", "Polski"), ("pt-BR", "Português (Brasil)"),
     ("ru", "Русский"), ("sk", "Slovenčina"), ("sv", "Svenska"), ("tr", "Türkçe"), ("uk", "Українська"), ("zh-CN", "简体中文"), ("zh-TW", "繁體中文"),
 ];
 
-/// C# AvailableLanguages: Languages\*.lang 가운데 이름을 아는 것, 이름 순.
+/// C# AvailableLanguages: the Languages\*.lang files with known names, sorted by name.
 pub(super) fn available_languages(resources: &Path) -> Vec<(String, String)> {
     let mut list: Vec<(String, String)> = std::fs::read_dir(resources.join("Languages"))
         .map(|dir| {
@@ -153,7 +153,7 @@ pub(super) fn available_languages(resources: &Path) -> Vec<(String, String)> {
     list
 }
 
-/// C# ParseExtensionColors: ".확장자=#RRGGBB"를 세미콜론으로, 확장자는 소문자, 색은 대문자.
+/// C# ParseExtensionColors: ".ext=#RRGGBB" separated by semicolons, extensions lower case, colors upper case.
 pub(super) fn parse_extension_colors(text: &str) -> Result<Vec<(String, String)>, String> {
     let mut result: Vec<(String, String)> = Vec::new();
     for entry in text.split(';').map(str::trim).filter(|e| !e.is_empty()) {
@@ -190,9 +190,9 @@ fn relabel(mut row: Row, text: String) -> Row {
     row
 }
 
-/// 원본 TfPreferences(DFM -Tree) 쪽 차례: tsDisplay, tsTree, tsColor, tsOption, tsExtProgram, tsPath, tsFunctionKey, tsEtc.
-/// 원본에 같은 설정이 있는 줄은 그 쪽·차례·글([formPreferences] Caption.*, ComboBox.*)로 옮기고, C# 판에만 있는 줄은 마지막 "NDR" 쪽에
-/// 원래 차례로 남긴다(그 줄이 하나도 남지 않은 머리·안내 글은 뺀다).
+/// Page order of the original TfPreferences (DFM -Tree): tsDisplay, tsTree, tsColor, tsOption, tsExtProgram, tsPath, tsFunctionKey, tsEtc.
+/// Rows with the same setting in the original move to that page, order and text ([formPreferences] Caption.*, ComboBox.*); rows only in the C# version stay on the final "NDR" page
+/// in their original order (headers and notices with no remaining rows are dropped).
 fn original_pages(built: Vec<Vec<Row>>, language: &compat::Language, ko: bool) -> (Vec<String>, Vec<Vec<Row>>) {
     let lang = |key: &str, fallback: &str| language.text(&format!("formPreferences.{key}"), fallback);
     let mut pool: Vec<Option<Row>> = built.into_iter().flatten().map(Some).collect();
@@ -204,7 +204,7 @@ fn original_pages(built: Vec<Vec<Row>>, language: &compat::Language, ko: bool) -
             None => row,
         })
     };
-    // 원본 ComboBox 글이 같은 개수면 보이는 글만 원본으로(값은 그대로).
+    // When the original ComboBox has the same number of entries, only the shown text becomes the original (values unchanged).
     let combo_texts = |row: Option<Row>, key: &str| -> Option<Row> {
         let mut row = row?;
         if let Row::Combo { choices, .. } = &mut row {
@@ -218,7 +218,7 @@ fn original_pages(built: Vec<Vec<Row>>, language: &compat::Language, ko: bool) -
         Some(row)
     };
     let section = |key: &str, fallback: &str| Some(Row::Section(lang(key, fallback).replace('&', "")));
-    // 줄 이름은 VCL Caption 그대로('&' 단축 문자). 확인란은 그 글자로 눌리고, 글로 보일 때는 '&'를 뺀다.
+    // Row names are the VCL Caption as is ('&' access key). Checkboxes are pressed with that letter, and '&' is removed when shown as text.
     let l = |key: &str, fallback: &str| Some(language.raw(&format!("formPreferences.{key}")).unwrap_or_else(|| fallback.to_owned()));
     let mut file_list = vec![
         section("GroupBox.gbFont", "Font"),
@@ -246,7 +246,7 @@ fn original_pages(built: Vec<Vec<Row>>, language: &compat::Language, ko: bool) -
         file_list.push(combo_texts(sort, &format!("ComboBox.cbSort{n}")));
         file_list.push(take(&format!("{side}SortDescending"), l(&format!("Caption.chkSortDesc{n}"), "Descend")));
         file_list.push(take(&format!("{side}ShowHiddenFiles"), l(&format!("Caption.chkShowHidden{n}"), "Show Hidden Files")));
-        // 원본 cbColumn1/2("자동;1열;…;6열"): 앞 7칸은 원본 글, NDR만의 7~19열은 같은 꼴("6열"의 6을 바꾼 글).
+        // Original cbColumn1/2 ("자동;1열;...;6열"): the first 7 entries use the original text; NDR's own 7-19 columns use the same form (the "6" of "6열" replaced).
         let mut columns = take(&format!("{side}ColumnCount"), l(&format!("Caption.lColumn{n}"), "Column"));
         if let Some(Row::Combo { choices, .. }) = columns.as_mut() {
             let texts: Vec<String> = lang(&format!("ComboBox.cbColumn{n}"), "").split(';').map(str::to_owned).collect();
@@ -294,7 +294,7 @@ fn original_pages(built: Vec<Vec<Row>>, language: &compat::Language, ko: bool) -
         take("DefaultDeleteButton", l("Caption.lDefDelBtn", "Default Button :")),
         take("EscapeKeyAction", l("Caption.lESC", "ESC function:")),
     ];
-    // 원본 gbArchive(외부 압축 프로그램 ARJ·RAR·7Z·ALZ)는 없앴다(사용자 요청: 압축은 늘 동봉 7-Zip).
+    // The original gbArchive (external archivers ARJ, RAR, 7Z, ALZ) was removed (user request: archives always use the bundled 7-Zip).
     let programs = vec![
         section("GroupBox.gbPrograms", "External Program"),
         take("TextViewerPath", l("Caption.lView", "View:")),
@@ -338,7 +338,7 @@ fn original_pages(built: Vec<Vec<Row>>, language: &compat::Language, ko: bool) -
         let index = pool.iter().position(|r| matches!(r, Some(Row::FunctionKeys)));
         vec![index.and_then(|i| pool[i].take())]
     };
-    // 남은 줄(C# 판에만 있는 것). 머리·안내 글은 그 묶음에 남은 줄이 있을 때만.
+    // Remaining rows (only in the C# version). Headers and notices only when their group still has rows.
     let mut rest = Vec::new();
     for (i, row) in pool.iter().enumerate() {
         let Some(row) = row else { continue };
@@ -408,7 +408,7 @@ impl SettingsForm {
             let selected = choices.iter().position(|(v, _)| v == selected);
             Row::Combo { key: key.into(), label, choices, selected }
         };
-        // 일반.
+        // General.
         let mut general = vec![
             check("DualPaneMode", t(ko, "두 패널 표시", "Show two panes"), true),
             check("StartWithRightPaneActive", t(ko, "시작할 때 오른쪽 패널 활성화", "Activate the right pane at startup"), false),
@@ -466,7 +466,7 @@ impl SettingsForm {
         let languages: Vec<(String, String)> = available_languages(resources).into_iter().map(|(code, name)| (code.clone(), format!("{code} — {name}"))).collect();
         general.push(choice_row("Language", t(ko, "언어", "Language"), languages, &draft.text("Language", "ko")));
 
-        // 표시.
+        // Display.
         let mut cases: Vec<String> = lang("RadioGroupItems.rgCharCase", "Normal;Lower Case;Upper Case;Capitalize First Letter").split(';').map(str::to_owned).collect();
         if cases.len() != 4 {
             cases = ["Normal", "Lower Case", "Upper Case", "Capitalize First Letter"].map(String::from).to_vec();
@@ -508,7 +508,7 @@ impl SettingsForm {
         ] {
             display.push(check(key, t(ko, korean, english), default));
         }
-        // 원본 chkScrollStep1/2(0x44cfa2: 값 2면 켜짐, 0x44da08: 켜짐 = 2, 꺼짐 = 1).
+        // Original chkScrollStep1/2 (0x44cfa2: on when the value is 2; 0x44da08: on = 2, off = 1).
         for (key, korean, english) in [("LeftScrollStep", "왼쪽 페이지 단위 스크롤", "Left: scroll by page"), ("RightScrollStep", "오른쪽 페이지 단위 스크롤", "Right: scroll by page")] {
             let by_page = draft.values.get(key).and_then(Value::as_i64).unwrap_or(2) != 1;
             display.push(Row::Check { key: key.into(), label: t(ko, korean, english), value: by_page });
@@ -549,7 +549,7 @@ impl SettingsForm {
         display.push(text("ExtensionColors", t(ko, "확장자 글자색 (.zip=#F59E0B; .txt=#60A5FA)", "Extension text colors (.zip=#F59E0B; .txt=#60A5FA)"), colors));
         display.push(Row::ColorButtons);
 
-        // 경로.
+        // Paths.
         let profile = PathBuf::from(std::env::var_os("USERPROFILE").unwrap_or_default());
         let special = object(&draft, "SpecialFolderPaths");
         let special_value = |name: &str| special.get(name).and_then(Value::as_str).unwrap_or("").to_owned();
@@ -605,8 +605,8 @@ impl SettingsForm {
             text("TreeExcludedPaths", t(ko, "폴더 트리 제외 경로 (세미콜론 구분)", "Folder tree excluded paths (semicolon separated)"), draft.strings("FolderTreeExcludedPaths").join(";")),
         ]);
 
-        // 외부 프로그램.
-        // 외부 압축 프로그램(원본 chkUseExtArcProgram, C# 판 압축 형식별 프로그램·인자)은 쓰지 않는다(사용자 요청).
+        // External programs.
+        // External archivers (original chkUseExtArcProgram, the C# per-format programs and arguments) are not used (user request).
         let mut programs = vec![
             check("UseCopyHandler", t(ko, "등록한 외부 복사 프로그램 사용", "Use the registered external copy program"), false),
             Row::Program { key: "TextViewerPath".into(), label: t(ko, "텍스트 보기 프로그램", "Text viewer program"), value: text_of(&draft, "TextViewerPath") },
@@ -673,7 +673,7 @@ impl SettingsForm {
         Self { ko, tab: 0, tabs, tab_titles, draft, color_selected: None, last_color: 0, color_captions, basic_items, button_captions, captions, function_keys }
     }
 
-    /// 기능키 목록을 고친 뒤(원본 btnEditFunc·btnFuncDelete): C# 판처럼 설정 사본의 FunctionKeyBindings를 바꾸고 옛 FunctionKeys의 F1~F12·^F1~^F11은 지운다.
+    /// After editing the function key list (original btnEditFunc, btnFuncDelete): like the C# version, changes FunctionKeyBindings of the settings copy and removes F1-F12 and ^F1-^F11 of the old FunctionKeys.
     pub(super) fn sync_function_keys(&mut self) {
         self.draft.values.insert("FunctionKeyBindings".into(), self.function_keys.result());
         let mut legacy = object(&self.draft, "FunctionKeys");
@@ -688,7 +688,7 @@ impl SettingsForm {
         })
     }
 
-    /// C# Commit: 키마다 같은 변환을 해 사본을 돌려준다. 틀린 값이면 그 글(경고 상자).
+    /// C# Commit: returns the copy after the same conversion per key. An invalid value returns its text (warning box).
     pub(super) fn commit(&self) -> Result<ndr::settings::Settings, String> {
         let mut draft = self.draft.clone();
         let values = &mut draft.values;
@@ -827,7 +827,7 @@ impl SettingsForm {
                 _ => {}
             }
         }
-        // 작업 폴더 1~5(앞뒤 공백 뺌).
+        // Work folders 1-5 (leading and trailing spaces trimmed).
         let mut work = draft.strings("WorkingFolders");
         work.resize(5, String::new());
         for row in self.tabs.iter().flatten() {
@@ -853,7 +853,7 @@ fn label_of(rows: &[Row], key: &str) -> String {
     }
 }
 
-/// 글 줄의 지금 값(글꼴 이름·크기 표시용).
+/// Current value of a text row (for showing the font name and size).
 fn label_value(rows: &[Row], key: &str) -> String {
     match index_of(rows, key).map(|i| &rows[i]) {
         Some(Row::Text { value, .. }) => value.trim().to_owned(),
@@ -861,7 +861,7 @@ fn label_value(rows: &[Row], key: &str) -> String {
     }
 }
 
-/// 고르기 줄에서 지금 고른 값의 키.
+/// Key of the value currently chosen in a choice row.
 fn combo_key(rows: &[Row], key: &str) -> Option<String> {
     match index_of(rows, key).map(|i| &rows[i]) {
         Some(Row::Combo { choices, selected, .. }) => selected.and_then(|i| choices.get(i)).map(|(value, _)| value.clone()),
@@ -869,7 +869,7 @@ fn combo_key(rows: &[Row], key: &str) -> Option<String> {
     }
 }
 
-/// (ShowDeleteButton 켬, DefaultDeleteButton 고른 번호).
+/// (ShowDeleteButton on, DefaultDeleteButton chosen index).
 fn delete_button_state(rows: &[Row]) -> (bool, Option<usize>) {
     let shown = matches!(index_of(rows, "ShowDeleteButton").map(|i| &rows[i]), Some(Row::Check { value: true, .. }));
     let selected = match index_of(rows, "DefaultDeleteButton").map(|i| &rows[i]) {
@@ -879,8 +879,8 @@ fn delete_button_state(rows: &[Row]) -> (bool, Option<usize>) {
     (shown, selected)
 }
 
-/// 원본 chkShowDeleteButtonClick(0x450b54)·cbDefDelBtnChange(0x450b14): 'Delete' 단추를 보이지 않는데(+0x660 꺼짐) 기본 단추가
-/// Delete(+0x668 ItemIndex 0)면 Yes(1)로 바꾼다(숨은 단추가 기본이 되지 않게).
+/// Original chkShowDeleteButtonClick (0x450b54) and cbDefDelBtnChange (0x450b14): when the 'Delete' button is hidden (+0x660 off) and the default button
+/// is Delete (+0x668 ItemIndex 0), it becomes Yes (1) (so a hidden button is never the default).
 pub(super) fn delete_button_rule(rows: &mut [Row]) {
     let shown = matches!(index_of(rows, "ShowDeleteButton").map(|i| &rows[i]), Some(Row::Check { value: true, .. }));
     if let (false, Some(Row::Combo { selected, .. })) = (shown, index_of(rows, "DefaultDeleteButton").map(|i| &mut rows[i])) {
@@ -900,7 +900,7 @@ fn put_check(ui: &mut egui::Ui, rows: &mut [Row], key: &str, rect: egui::Rect) {
     }
 }
 
-/// 원본 TEdit 자리(글 줄, 폴더·프로그램 경로 칸).
+/// In place of the original TEdit (text rows, folder and program path fields).
 fn put_edit(ui: &mut egui::Ui, rows: &mut [Row], key: &str, rect: egui::Rect) {
     match index_of(rows, key).map(|i| &mut rows[i]) {
         Some(Row::Text { value, read_only: false, max, upper, .. }) => {
@@ -915,7 +915,7 @@ fn put_edit(ui: &mut egui::Ui, rows: &mut [Row], key: &str, rect: egui::Rect) {
     }
 }
 
-/// 원본 TComboBox(csDropDownList) 자리.
+/// In place of the original TComboBox (csDropDownList).
 fn put_combo(ui: &mut egui::Ui, rows: &mut [Row], key: &str, rect: egui::Rect) {
     if let Some(Row::Combo { key: id, choices, selected, .. }) = index_of(rows, key).map(|i| &mut rows[i]) {
         let text = selected.and_then(|i| choices.get(i)).map(|(_, d)| d.clone()).unwrap_or_default();
@@ -929,7 +929,7 @@ fn put_combo(ui: &mut egui::Ui, rows: &mut [Row], key: &str, rect: egui::Rect) {
     }
 }
 
-/// 원본 TComboBox(csDropDown, 글을 쳐 넣을 수 있음) 자리: 글 칸과 원본 Items 목록 단추.
+/// In place of the original TComboBox (csDropDown, text can be typed): a text field plus a button for the original Items list.
 fn put_dropdown_edit(ui: &mut egui::Ui, rows: &mut [Row], key: &str, rect: egui::Rect, items: &[&str]) {
     let Some(Row::Text { value, .. }) = index_of(rows, key).map(|i| &mut rows[i]) else { return };
     ui.put(egui::Rect::from_min_size(rect.min, egui::vec2(rect.width() - 18.0, rect.height())), egui::TextEdit::singleline(value));
@@ -945,7 +945,7 @@ fn put_dropdown_edit(ui: &mut egui::Ui, rows: &mut [Row], key: &str, rect: egui:
     });
 }
 
-/// 원본 TEdit + TUpDown(Associate) 자리: 글 칸 오른쪽에 16 너비 위·아래 단추(Min~Max, 1씩).
+/// In place of the original TEdit + TUpDown (Associate): 16-wide up/down buttons right of the text field (Min-Max, step 1).
 fn put_updown(ui: &mut egui::Ui, rows: &mut [Row], key: &str, edit: egui::Rect, min: i64, max: i64) {
     let Some(Row::Text { value, .. }) = index_of(rows, key).map(|i| &mut rows[i]) else { return };
     ui.put(edit, egui::TextEdit::singleline(value));
@@ -965,12 +965,12 @@ fn put_updown(ui: &mut egui::Ui, rows: &mut [Row], key: &str, edit: egui::Rect, 
     }
 }
 
-/// 원본 TListBox 칸: 바탕과 테두리.
+/// Original TListBox box: background and border.
 fn list_frame(ui: &egui::Ui, rect: egui::Rect) {
     ui.painter().rect(rect, 0.0, ui.visuals().extreme_bg_color, ui.visuals().widgets.noninteractive.bg_stroke, egui::StrokeKind::Inside);
 }
 
-/// 원본 쪽 하나(TabSheet 바탕 = origin). DFM 자리 그대로이고, 그룹 안 자리는 그룹 Left/Top을 더한다.
+/// One original page (TabSheet background = origin). Positions as in the DFM; positions inside a group add the group's Left/Top.
 fn original_page(ui: &mut egui::Ui, form: &mut SettingsForm, tab: usize, origin: egui::Pos2, enter: bool, delete: bool) -> Option<SettingsAction> {
     use super::original_dialogs::{group_box, put_left};
     let at = |x: f32, y: f32, w: f32, h: f32| egui::Rect::from_min_size(origin + egui::vec2(x, y), egui::vec2(w, h));
@@ -983,8 +983,8 @@ fn original_page(ui: &mut egui::Ui, form: &mut SettingsForm, tab: usize, origin:
         // tsDisplay: gbFont(10,7 208×94), rgCharCase(7,107 208×112), gbFormat(10,225 208×199), gbViewStyle(224,8 320×415).
         0 => {
             group_box(ui, at(10.0, 7.0, 208.0, 94.0), &cap("GroupBox.gbFont", "Font"));
-            // lListFont(34,29) + lListFontValue(81,29) 그룹 안 자리: 한국어 글은 원본 칸보다 넓어 한 줄로 잇는다.
-            // 원본 FUN_0044cd58: wsprintfW("\"%s\",%d,%d", 이름, 크기, 모양(TFontStyles 바이트)).
+            // lListFont (34,29) + lListFontValue (81,29) positions inside the group: Korean text is wider than the original cells, so they join on one line.
+            // Original FUN_0044cd58: wsprintfW("\"%s\",%d,%d", name, size, style (TFontStyles byte)).
             let style = form.draft.values.get("ListFontStyle").and_then(Value::as_i64).unwrap_or(0) & 0x0F;
             let rows = &mut form.tabs[tab];
             let font = format!("{} \"{}\",{},{style}", label_of(rows, "ListFont"), label_value(rows, "ListFont"), label_value(rows, "ListFontSize"));
@@ -994,7 +994,7 @@ fn original_page(ui: &mut egui::Ui, form: &mut SettingsForm, tab: usize, origin:
                     action = Some(SettingsAction::ChooseFont(false));
                 }
             }
-            // 원본 TRadioGroup: 제목 아래로 항목을 고르게 나눈다(112 - 16 = 96, 항목마다 24).
+            // Original TRadioGroup: items spread evenly below the caption (112 - 16 = 96, 24 per item).
             group_box(ui, at(7.0, 107.0, 208.0, 112.0), &cap("RadioGroup.rgCharCase", "Charcase"));
             if let Some(Row::Combo { choices, selected, .. }) = index_of(rows, "CharacterCase").map(|i| &mut rows[i]) {
                 for (i, (_, display)) in choices.iter().enumerate() {
@@ -1030,8 +1030,8 @@ fn original_page(ui: &mut egui::Ui, form: &mut SettingsForm, tab: usize, origin:
                 put_left(ui, at(vx + x, vy + 164.0, 140.0, 16.0), egui::Label::new(RichText::new(title).strong().family(egui::FontFamily::Name(super::BOLD_FONT_FAMILY.into())).color(blue)));
                 put_label(ui, at(vx + x, vy + 184.0, 140.0, 15.0), &label_of(rows, &format!("{side}ViewStyle")));
                 put_combo(ui, rows, &format!("{side}ViewStyle"), at(vx + x, vy + 203.0, 126.0, 21.0));
-                // 원본 cbViewStyle1/2 OnChange(0x451118·0x45116c): chkAlwaysShowSize는 자동(0)일 때만, chkScrollStep은 미리 보기(3)가
-                // 아닐 때만 켜진다.
+                // Original cbViewStyle1/2 OnChange (0x451118, 0x45116c): chkAlwaysShowSize is enabled only for Auto (0), chkScrollStep only when not
+                // Thumbnails (3).
                 let view = combo_key(rows, &format!("{side}ViewStyle")).unwrap_or_default();
                 ui.add_enabled_ui(view == "Auto", |ui| put_check(ui, rows, &format!("{side}AlwaysShowFolderSize"), at(vx + x, vy + 230.0, 146.0, 17.0)));
                 ui.add_enabled_ui(view != "Thumbnails", |ui| put_check(ui, rows, &format!("{side}ScrollStep"), at(vx + x, vy + 253.0, 146.0, 17.0)));
@@ -1043,7 +1043,7 @@ fn original_page(ui: &mut egui::Ui, form: &mut SettingsForm, tab: usize, origin:
                 put_combo(ui, rows, &format!("{side}ColumnCount"), at(vx + x, vy + 381.0, 126.0, 21.0));
             }
         }
-        // tsTree: 확인란(32, 24/47/70/93), lItemWidth(32,138) eTreeItemWidth(169,135 65)+udTreeItemWidth, "pixel"(257,138), gbTreeFont(32,173 225×96).
+        // tsTree: checkboxes (32, 24/47/70/93), lItemWidth (32,138) eTreeItemWidth (169,135 65) + udTreeItemWidth, "pixel" (257,138), gbTreeFont (32,173 225x96).
         1 => {
             let rows = &mut form.tabs[tab];
             for (top, key) in [(24.0, "TreeWindowMatchesMainSize"), (47.0, "SaveFolderTreeState"), (70.0, "ShowHiddenFoldersInTree"), (93.0, "ShowFolderTreeIcons")] {
@@ -1095,7 +1095,7 @@ fn original_page(ui: &mut egui::Ui, form: &mut SettingsForm, tab: usize, origin:
                                     action = Some(SettingsAction::ChangeBasicColor(index));
                                 }
                             }
-                            // 원본: 줄 0·16(머리)은 파란 글(0xFF0000 BGR), 15는 빈 줄. 어두운 바탕에서도 읽히게 NDR 파랑으로.
+                            // Original: rows 0 and 16 (headers) are blue text (0xFF0000 BGR), 15 is an empty row. NDR blue so it stays readable on dark backgrounds.
                             None => {
                                 ui.label(RichText::new(text.as_str()).color(blue));
                             }
@@ -1142,11 +1142,11 @@ fn original_page(ui: &mut egui::Ui, form: &mut SettingsForm, tab: usize, origin:
                 }
             }
             put_left(ui, at(12.0, 395.0, 175.0, 36.0), egui::Label::new(captions[6].replace('&', "")).wrap());
-            // C# 판에만 있는 "NexusFile .col 색상표 적용"(원본은 늘 적용): 확장자 목록 아래.
+            // "Apply NexusFile .col color table", only in the C# version (the original always applies it): below the extension list.
             put_check(ui, &mut form.tabs[tab], "UseNexusFileColorMap", at(193.0, 397.0, 265.0, 17.0));
             form.color_selected = color_selected;
         }
-        // tsOption: 확인란(24, 16/38/61/84/107/129/152/175, 198/224), lDefDelBtn(46,253) cbDefDelBtn(46,270 101), lESC(24,310) cbESC(24,327 145).
+        // tsOption: checkboxes (24, 16/38/61/84/107/129/152/175, 198/224), lDefDelBtn (46,253) cbDefDelBtn (46,270 101), lESC (24,310) cbESC (24,327 145).
         3 => {
             let rows = &mut form.tabs[tab];
             let before_delete = delete_button_state(rows);
@@ -1166,7 +1166,7 @@ fn original_page(ui: &mut egui::Ui, form: &mut SettingsForm, tab: usize, origin:
             }
             put_label(ui, at(46.0, 253.0, 300.0, 15.0), &label_of(rows, "DefaultDeleteButton"));
             put_combo(ui, rows, "DefaultDeleteButton", at(46.0, 270.0, 101.0, 21.0));
-            // 원본은 두 컨트롤의 OnClick·OnChange에서만 고친다.
+            // The original changes these only in the OnClick/OnChange of the two controls.
             let after = delete_button_state(rows);
             if after != before_delete {
                 delete_button_rule(rows);
@@ -1174,7 +1174,7 @@ fn original_page(ui: &mut egui::Ui, form: &mut SettingsForm, tab: usize, origin:
             put_label(ui, at(24.0, 310.0, 300.0, 15.0), &label_of(rows, "EscapeKeyAction"));
             put_combo(ui, rows, "EscapeKeyAction", at(24.0, 327.0, 145.0, 21.0));
         }
-        // tsExtProgram: gbPrograms(32,208 481×101) 보기·편집(칸 123 316). 원본 gbArchive(32,24 481×170, 외부 압축 프로그램)는 두지 않는다.
+        // tsExtProgram: gbPrograms (32,208 481x101) view and edit (fields 123 316). The original gbArchive (32,24 481x170, external archivers) is left out.
         4 => {
             let rows = &mut form.tabs[tab];
             group_box(ui, at(32.0, 208.0, 481.0, 101.0), &cap("GroupBox.gbPrograms", "External Program"));
@@ -1188,7 +1188,7 @@ fn original_page(ui: &mut egui::Ui, form: &mut SettingsForm, tab: usize, origin:
                 }
             }
         }
-        // tsPath: gbMyFolders(24,16 501×209) lHelpPath(16,28), 문서·그림·음악·비디오·다운로드 줄(칸 133 327, "..." 463 30×25),
+        // tsPath: gbMyFolders (24,16 501x209) lHelpPath (16,28), documents/pictures/music/videos/downloads rows (fields 133 327, "..." 463 30x25),
         // gbStartPath(24,240 501×125) lHelpStartPath(17,24), chkStartPath1/2(17,55/91) eStartPath1/2(124,53/89 336) btnBrowse1/2(463,52/88).
         5 => {
             let rows = &mut form.tabs[tab];
@@ -1216,7 +1216,7 @@ fn original_page(ui: &mut egui::Ui, form: &mut SettingsForm, tab: usize, origin:
                 }
             }
         }
-        // tsFunctionKey: lvFunctionKey(20,31 504×360: 키·이름 120·명령 300), TntLabel66 "^F1 = Ctrl + F1"(20,399), btnEditFunc(368,399)·btnFuncDelete(449,399) 75×25.
+        // tsFunctionKey: lvFunctionKey (20,31 504x360: key, name 120, command 300), TntLabel66 "^F1 = Ctrl + F1" (20,399), btnEditFunc (368,399) and btnFuncDelete (449,399) 75x25.
         6 => {
             let headers: Vec<String> = cap("ListViewCols.lvFunctionKey", "Key;Name;Command").split(';').map(str::to_owned).collect();
             let header = |i: usize, fallback: &str| headers.get(i).cloned().unwrap_or_else(|| fallback.into());
@@ -1232,7 +1232,7 @@ fn original_page(ui: &mut egui::Ui, form: &mut SettingsForm, tab: usize, origin:
             if double_clicked {
                 action = Some(SettingsAction::EditFunctionKey);
             }
-            // 원본 lvFunctionKey OnKeyDown: Enter = 편집, Delete = 삭제(이 쪽에는 글 칸이 없어 목록이 글쇠를 받는다).
+            // Original lvFunctionKey OnKeyDown: Enter = edit, Delete = delete (this page has no text field, so the list takes keys).
             if !ui.ctx().wants_keyboard_input() {
                 if enter {
                     action = Some(SettingsAction::EditFunctionKey);
@@ -1249,7 +1249,7 @@ fn original_page(ui: &mut egui::Ui, form: &mut SettingsForm, tab: usize, origin:
             }
         }
         // tsEtc: lMostUsedFolder(24,21) eMostUsedFolder(377,18 49)+ud, lActivateKey(24,56) lWinKey(221,56) eActivateKey(293,51 25) lApplyAfterRestart(324,54),
-        // 확인란(24, 84/104/125/145/166), gbAlpha(24,210 211×157): chkAlphaWindow(16,34) tbAlphaValue(11,60 189×36) lTransMin(19,96) lTransMax(153,96) chkMenuAlpha(16,126).
+        // Checkboxes (24, 84/104/125/145/166), gbAlpha (24,210 211x157): chkAlphaWindow (16,34) tbAlphaValue (11,60 189x36) lTransMin (19,96) lTransMax (153,96) chkMenuAlpha (16,126).
         _ => {
             let rows = &mut form.tabs[tab];
             put_label(ui, at(24.0, 21.0, 350.0, 15.0), &label_of(rows, "MaxRecentFileCount"));
@@ -1277,7 +1277,7 @@ fn original_page(ui: &mut egui::Ui, form: &mut SettingsForm, tab: usize, origin:
     action
 }
 
-/// C# 판에만 있는 줄의 "NDR" 쪽: 위에서 아래로 늘어놓는다(C# OptionsWindow).
+/// The "NDR" page of rows only in the C# version: laid out top to bottom (C# OptionsWindow).
 fn list_page(ui: &mut egui::Ui, form: &mut SettingsForm) -> Option<SettingsAction> {
     let ko = form.ko;
     let mut action = None;
@@ -1356,8 +1356,8 @@ fn list_page(ui: &mut egui::Ui, form: &mut SettingsForm) -> Option<SettingsActio
     action
 }
 
-/// 원본 TfPreferences(ClientWidth 577 × ClientHeight 512): TntPageControl(7,8 561×465, 쪽 8개 + C# 판에만 있는 줄의 "NDR" 쪽),
-/// btnApply(321,480)·btnOk(405,480)·btnCancel(488,480) 79×25. 쪽 바탕은 PageControl 안쪽(4,24)이고 쪽 안 자리는 DFM 그대로.
+/// Original TfPreferences (ClientWidth 577 x ClientHeight 512): TntPageControl (7,8 561x465, 8 pages + the "NDR" page of C#-only rows),
+/// btnApply (321,480), btnOk (405,480), btnCancel (488,480) 79x25. The page background is inside the PageControl (4,24) and positions within a page follow the DFM.
 pub(super) fn settings_ui(ui: &mut egui::Ui, form: &mut SettingsForm, enter: bool, delete: bool) -> Option<SettingsAction> {
     let mut action = None;
     let (area, _) = ui.allocate_exact_size(egui::vec2(577.0, 512.0), egui::Sense::hover());
@@ -1397,12 +1397,12 @@ impl App {
         })
     }
 
-    /// C# ShowOptionsAsync: 환경 설정 창.
+    /// C# ShowOptionsAsync: the preferences window.
     pub(super) fn open_settings_window(&mut self) {
         let mut form = SettingsForm::new(&self.settings, &self.language_pack, &self.resources);
-        // 기능키 목록의 "기본/내부 명령/사용자 명령" 글은 지금 화면 언어(C# FunctionKeyEditorWindow처럼).
+        // The "default/internal command/user command" texts of the function key list use the current UI language (like C# FunctionKeyEditorWindow).
         form.function_keys = super::function_key_editor::FunctionKeyEditorForm::new(&self.settings, self.language == "ko");
-        // 원본 TfPreferences 제목([formPreferences] Form.Caption, 한국어 "옵션").
+        // Original TfPreferences title ([formPreferences] Form.Caption, Korean "옵션").
         let title = self.language_pack.text("formPreferences.Form.Caption", "Options");
         self.push_original_dialog(title, DialogKind::Settings(Box::new(form)), |app, result, _| {
             if let DialogResult::Settings(Some(settings)) = result {
@@ -1411,12 +1411,12 @@ impl App {
         });
     }
 
-    /// 확인한 뒤(C# ShowOptionsAsync의 나머지): 정규화, 언어·테마·두 패널·숨김 표시·보기, 저장, 두 패널 새로 고침.
+    /// After OK (the rest of C# ShowOptionsAsync): normalize, language, theme, both panes, hidden display, view, save, refresh both panes.
     pub(super) fn apply_settings(&mut self, settings: ndr::settings::Settings) {
         let previous_single = self.settings.flag("UseSingleInstance", false);
         self.settings = settings;
         self.settings.normalize();
-        // C# ShowOptionsAsync: UseSingleInstance가 바뀌면 ApplySingleInstanceModeAsync. 실패면 이전 값으로 되돌리고 알린다.
+        // C# ShowOptionsAsync: when UseSingleInstance changes, ApplySingleInstanceModeAsync. On failure revert to the previous value and notify.
         let wanted_single = self.settings.flag("UseSingleInstance", false);
         if wanted_single != previous_single && !self.apply_single_instance(wanted_single) {
             self.settings.set_flag("UseSingleInstance", previous_single);
@@ -1457,7 +1457,7 @@ impl App {
                 match form.commit() {
                     Ok(settings) => {
                         self.apply_settings(settings);
-                        // 창은 그대로 두고, 다음 확인·적용의 바탕(_draft)을 적용한 설정으로.
+                        // Keep the window, and use the applied settings as the base (_draft) of the next OK or apply.
                         let applied = self.settings.clone();
                         if let Some(form) = self.settings_form() {
                             form.draft = applied;
@@ -1507,7 +1507,7 @@ impl App {
             SettingsAction::AddColor => self.add_extension_color(),
             SettingsAction::EditColor => self.edit_extension_color(),
             SettingsAction::DeleteColor => self.change_color_groups(|groups, selected| {
-                // 원본 btnDelColorClick(0x44fb98): 고른 줄의 확장자를 모두 지운다(묻지 않음).
+                // Original btnDelColorClick (0x44fb98): removes all extensions of the chosen row (without asking).
                 if selected < groups.len() {
                     groups.remove(selected);
                 }
@@ -1553,7 +1553,7 @@ impl App {
         }
     }
 
-    /// 설정 창의 확장자 색 묶음(lbExtColor)과 고른 줄.
+    /// Extension color groups (lbExtColor) of the settings window and the chosen row.
     fn color_state(&mut self) -> Option<(Vec<(String, Vec<String>)>, Option<usize>)> {
         let form = self.settings_form()?;
         let selected = form.color_selected;
@@ -1561,7 +1561,7 @@ impl App {
         Some((color_groups(value), selected))
     }
 
-    /// 고른 줄이 있으면 묶음을 고치고 ExtensionColors 글로 되돌린다(원본 FUN_0044fd48: 목록을 다시 채움, 고른 줄 없음).
+    /// With a chosen row, edits the groups and writes them back to the ExtensionColors text (original FUN_0044fd48: refills the list, no chosen row).
     fn change_color_groups(&mut self, change: impl FnOnce(&mut Vec<(String, Vec<String>)>, usize)) {
         let Some((mut groups, Some(selected))) = self.color_state() else { return };
         change(&mut groups, selected);
@@ -1577,7 +1577,7 @@ impl App {
         form.color_selected = None;
     }
 
-    /// TNXFileColorMap.Add/SetExtension: 그 확장자를 다른 색 묶음에서 빼고 이 색 묶음(없으면 새 줄)에 넣는다.
+    /// TNXFileColorMap.Add/SetExtension: removes that extension from other color groups and puts it in this color group (a new row when none).
     fn put_extensions(groups: &mut Vec<(String, Vec<String>)>, names: &[String], color: &str) {
         for name in names {
             for (_, existing) in groups.iter_mut() {
@@ -1590,8 +1590,8 @@ impl App {
         }
     }
 
-    /// 원본 PREF_COLOREXISTS: 그 색을 이미 쓰는 확장자가 있으면 TfMsgBox(PREF_SETCOLOR, PREF_COLOREXISTS, 예/아니요)로 합칠지 묻는다.
-    /// 예이거나 쓰는 확장자가 없으면 apply.
+    /// Original PREF_COLOREXISTS: when extensions already use that color, asks with TfMsgBox(PREF_SETCOLOR, PREF_COLOREXISTS, yes/no) whether to merge.
+    /// apply on yes or when no extension uses it.
     fn confirm_color_merge(&mut self, groups: &[(String, Vec<String>)], color: &str, apply: impl FnOnce(&mut App) + 'static) {
         if !groups.iter().any(|(c, names)| c.eq_ignore_ascii_case(color) && !names.is_empty()) {
             return apply(self);
@@ -1605,8 +1605,8 @@ impl App {
         });
     }
 
-    /// 원본 btnAddColorClick(0x44f360): TfGetText(PREF_TITLE_ADDEXTS, PREF_MSG_ADDEXTS)로 확장자(';' 구분)를 받고, 비어 있지 않으면
-    /// 색 고르기(TColorDialog, 처음 색 = 마지막 색). 그 색을 쓰는 확장자가 있으면 합칠지 묻고, 예일 때만 더한다.
+    /// Original btnAddColorClick (0x44f360): takes extensions (';'-separated) with TfGetText(PREF_TITLE_ADDEXTS, PREF_MSG_ADDEXTS) and, when not empty,
+    /// opens the color picker (TColorDialog, initial color = last color). If extensions use that color, asks whether to merge and adds only on yes.
     fn add_extension_color(&mut self) {
         let title = self.language_pack.text("RES.PREF_TITLE_ADDEXTS", "Add Extentions");
         let message = self.language_pack.text("RES.PREF_MSG_ADDEXTS", "Type extensions to add with semi-colon separator.\n(ex: TXT;DOC;XLS)");
@@ -1629,8 +1629,8 @@ impl App {
         });
     }
 
-    /// 원본 btnEditColorClick(0x44f7c0): 고른 줄의 확장자 글을 TfGetText(PREF_TITLE_EDITEXTS, PREF_MSG_EDITEXTS, 처음 값 = 그 글)로 고치고,
-    /// 확인이면 옛 확장자를 지우고 새 확장자를 같은 색으로 넣는다.
+    /// Original btnEditColorClick (0x44f7c0): edits the chosen row's extension text with TfGetText(PREF_TITLE_EDITEXTS, PREF_MSG_EDITEXTS, initial value = that text),
+    /// and on OK removes the old extensions and adds the new ones with the same color.
     fn edit_extension_color(&mut self) {
         let Some((groups, Some(selected))) = self.color_state() else { return };
         let Some((color, names)) = groups.get(selected).cloned() else { return };
@@ -1647,7 +1647,7 @@ impl App {
         });
     }
 
-    /// 원본 lbExtColorDblClick(0x44ef68): 고른 줄의 색으로 색 고르기를 열고, 확인이면(그 색을 쓰는 확장자가 있으면 합칠지 물은 뒤) 그 줄의 확장자 색을 바꾼다.
+    /// Original lbExtColorDblClick (0x44ef68): opens the color picker with the chosen row's color and on OK (after asking to merge when extensions use that color) changes that row's color.
     fn change_extension_color(&mut self) {
         let Some((groups, Some(selected))) = self.color_state() else { return };
         let Some((color, names)) = groups.get(selected).cloned() else { return };
@@ -1664,8 +1664,8 @@ impl App {
         });
     }
 
-    /// 원본 lbBasicColorDblClick(0x44ed5c): 그 기본 색으로 색 고르기를 열고, 확인이면 SetBasic. NDR은 NexusFileColorMapValues에 넣고
-    /// 색상표 적용(UseNexusFileColorMap)을 켠다(원본은 기본 색을 늘 쓴다).
+    /// Original lbBasicColorDblClick (0x44ed5c): opens the color picker with that base color and on OK does SetBasic. NDR stores it in NexusFileColorMapValues and
+    /// turns on the color table (UseNexusFileColorMap) (the original always uses base colors).
     fn change_basic_color(&mut self, index: usize) {
         let Some((key, _)) = ndr::styles::DEFAULT_ELEMENTS.get(index) else { return };
         let Some(current) = self.settings_form().and_then(|f| basic_color(&f.draft, index)) else { return };
@@ -1683,7 +1683,7 @@ impl App {
         }
     }
 
-    /// 원본 btnFontClick: 글꼴 상자(처음 값 = 지금 이름·크기·모양)를 열고 확인이면 이름·크기 줄과 모양(원본 TFontStyles 바이트)을 바꾼다.
+    /// Original btnFontClick: opens the font box (initially the current name, size and style) and on OK changes the name/size row and the style (original TFontStyles byte).
     fn choose_settings_font(&mut self, tree: bool) {
         let (name_key, size_key, style_key) = if tree { ("FolderTreeFont", "FolderTreeFontSize", "FolderTreeFontStyle") } else { ("ListFont", "ListFontSize", "ListFontStyle") };
         let Some(form) = self.settings_form() else { return };
@@ -1693,7 +1693,7 @@ impl App {
         };
         let name = read(form, name_key);
         let size = read(form, size_key).trim().parse::<f32>().unwrap_or(0.0);
-        // 목록 글꼴 크기(ListFontSize)는 화소, 글꼴 상자는 포인트다. 폴더 트리 글꼴 크기는 포인트 그대로.
+        // The list font size (ListFontSize) is in pixels, the font box in points. The folder tree font size stays in points.
         let size = if tree || size <= 0.0 { size } else { ndr::settings::font_pixels_to_points(size as f64) as f32 };
         let style = (form.draft.values.get(style_key).and_then(Value::as_i64).unwrap_or(0) & 0x0F) as u8;
         let Some((name, size, style)) = (self.font_picker)(name.trim(), size, style) else { return };
@@ -1804,7 +1804,7 @@ impl App {
 mod delete_button_tests {
     use super::*;
 
-    /// 원본 chkShowDeleteButtonClick(0x450b54)·cbDefDelBtnChange(0x450b14).
+    /// Original chkShowDeleteButtonClick (0x450b54) and cbDefDelBtnChange (0x450b14).
     #[test]
     fn hiding_the_delete_button_moves_the_default_to_yes() {
         let choices: Vec<(String, String)> = ["0", "1", "2"].iter().map(|v| (v.to_string(), v.to_string())).collect();

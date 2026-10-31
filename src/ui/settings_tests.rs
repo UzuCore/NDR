@@ -207,7 +207,7 @@ fn settings_window_commits_like_csharp() {
     set_combo(&mut app, "EscapeKeyAction", "Disabled");
     app.settings_action(SettingsAction::Cancel, &ctx);
     assert_eq!(app.settings.values["EscapeKeyAction"].as_i64(), Some(3), "Cancel keeps the settings");
-    // 색상표 가져오기(.json)와 내보내기(.col).
+    // Import a color table (.json) and export it (.col).
     app.dispatch("options", &ctx);
     let json = root.join("colors.json");
     fs::write(&json, r##"{".log": "#00FF00"}"##).unwrap();
@@ -223,7 +223,7 @@ fn settings_window_commits_like_csharp() {
     fs::remove_dir_all(root).unwrap();
 }
 
-/// 원본 ParameterClick(0x41fed0): 항목 글의 첫 ")"까지를 커서 자리에 넣고 커서를 그 뒤로 옮긴다.
+/// Original ParameterClick (0x41fed0): inserts the item text up to its first ")" at the cursor and moves the cursor after it.
 #[test]
 fn function_key_parameter_menu_inserts_macros_like_the_original() {
     use super::function_key_editor::{PARAMETER_MENU, insert_parameter};
@@ -243,19 +243,19 @@ fn function_key_editor_follows_csharp_in_english() {
     app.settings.values.insert("FunctionKeys".into(), serde_json::json!({"F5": "#Refresh", "F9": "notepad.exe", "^F3": "calc.exe"}));
     app.dispatch("options", &ctx);
     {
-        // 원본 tsFunctionKey lvFunctionKey: 환경 설정 창 안의 목록.
+        // Original tsFunctionKey lvFunctionKey: the list inside the preferences window.
         let editor = &mut app.settings_form().unwrap().function_keys;
         assert_eq!(editor.row(4), ["F5".to_owned(), "F5".to_owned(), "Internal".to_owned(), "#Refresh".to_owned(), String::new()], "legacy FunctionKeys are read");
         assert_eq!(editor.row(8)[2], "User command");
         assert_eq!(editor.row(0)[2], "Default");
-        // 원본 TfPreferences 목록의 ^F1~^F11(Ctrl+F1~F11)이 F12 뒤에 온다.
+        // ^F1-^F11 (Ctrl+F1-F11) of the original TfPreferences list come after F12.
         assert_eq!(editor.bindings.len(), 23);
         assert_eq!(editor.row(12)[0], "^F1");
         assert_eq!(editor.row(14)[..4], ["^F3".to_owned(), "^F3".to_owned(), "User command".to_owned(), "calc.exe".to_owned()]);
         assert_eq!(editor.row(22)[0], "^F11");
         editor.grid.click(1, egui::Modifiers::NONE, false);
     }
-    // F2 편집: 사용자 명령. 원본 btnOkClick은 이름이 비면 알리지 않고 명령 파일 이름(확장자 뺌)을 쓴다.
+    // Edit F2: user command. Original btnOkClick silently uses the command file name (without extension) when the name is empty.
     app.settings_action(SettingsAction::EditFunctionKey, &ctx);
     assert_eq!(app.original_dialogs.last().unwrap().title, "Edit Function Key — F2");
     if let Some(DialogKind::FunctionKeyEdit(edit)) = app.original_dialogs.last_mut().map(|d| &mut d.kind) {
@@ -267,7 +267,7 @@ fn function_key_editor_follows_csharp_in_english() {
         assert_eq!(edit.result().unwrap().name, "Notes");
     }
     assert!(app.msgboxes.is_empty());
-    // 원본 cbCommandChange(0x41fc30): 사용자 명령이면 명령 칸에 친 글이 그대로 이름 칸에 들어간다.
+    // Original cbCommandChange (0x41fc30): for a user command, text typed in the command field goes into the name field as is.
     {
         let mut form = super::function_key_editor::FunctionKeyEditForm::new("F9", &Default::default(), false);
         form.internal = false;
@@ -288,7 +288,7 @@ fn function_key_editor_follows_csharp_in_english() {
         (edit.name, edit.internal, edit.command, edit.parameters) = (" Notes ".into(), false, " notepad.exe ".into(), " %P ".into());
     }
     app.function_key_edit_done(true, &ctx);
-    // F5 초기화 후 확인 → 설정 사본의 FunctionKeyBindings, 옛 F1~F12는 지운다.
+    // After resetting F5, OK -> FunctionKeyBindings of the settings copy; the old F1-F12 are removed.
     app.settings_form().unwrap().function_keys.grid.click(4, egui::Modifiers::NONE, false);
     app.settings_action(SettingsAction::ResetFunctionKey, &ctx);
     app.settings_action(SettingsAction::Ok, &ctx);
@@ -301,7 +301,7 @@ fn function_key_editor_follows_csharp_in_english() {
     fs::remove_dir_all(root).unwrap();
 }
 
-/// 원본 tsFunctionKey lvFunctionKey OnKeyDown: Enter = 편집(확인이 아니다), Delete = 삭제.
+/// Original tsFunctionKey lvFunctionKey OnKeyDown: Enter = edit (not OK), Delete = delete.
 #[test]
 fn function_key_tab_keys_follow_the_original_list() {
     let (root, ctx, mut app) = fixture("ko", "ko");
@@ -329,7 +329,7 @@ fn record_caret_run(path: &Path, arguments: &str, _: &Path) -> Result<(), String
     Ok(())
 }
 
-/// 원본 [FuncKey] "^F1"~"^F11"(TfPreferences 목록 0x44cd58의 "^F%d"): Ctrl+F3이 "^F3" 지정을 실행한다. F3만 누르면 실행하지 않는다.
+/// Original [FuncKey] "^F1"-"^F11" ("^F%d" of the TfPreferences list 0x44cd58): Ctrl+F3 runs the "^F3" assignment. F3 alone does not.
 #[test]
 fn ctrl_function_keys_run_the_original_caret_bindings() {
     let (root, ctx, mut app) = fixture("ctrl-f", "ko");
@@ -348,7 +348,7 @@ fn ctrl_function_keys_run_the_original_caret_bindings() {
 #[test]
 fn list_font_size_only_sizes_the_file_list_like_csharp() {
     let (root, ctx, mut app) = fixture("list-font-size", "en");
-    // C# 판 grid.FontSize = ListFontSize: 목록에만. 메뉴·창 등 나머지 글은 12화소 그대로.
+    // C# version grid.FontSize = ListFontSize: lists only. Other text such as menus and windows stays at 12 px.
     app.settings.values.insert("ListFontSize".into(), serde_json::json!(20));
     app.apply_preferences(&ctx);
     assert_eq!(app.list_font_size, 20.0);
@@ -364,7 +364,7 @@ thread_local! {
     static FONT_LOOKUPS: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
-/// 원본 ListFont "\"이름\",크기,모양": 모양(TFontStyles 바이트)의 굵게·기울임은 그 꼴의 글꼴 파일, 밑줄·취소선은 목록 글에 입힌다.
+/// Original ListFont "\"name\",size,style": bold and italic of the style (TFontStyles byte) pick that face's font file, underline and strikeout are applied to list text.
 #[test]
 fn list_font_style_picks_the_styled_font_file_like_the_original() {
     let (root, ctx, mut app) = fixture("list-font-style", "en");
@@ -377,7 +377,7 @@ fn list_font_style_picks_the_styled_font_file_like_the_original() {
     app.apply_preferences(&ctx);
     assert_eq!(FONT_LOOKUPS.with(|l| l.take()), ["Tahoma Bold Italic", "Tahoma Bold", "Tahoma Italic", "Tahoma"]);
     assert_eq!(app.list_font_style, 7);
-    // 밑줄만 바뀌면 글꼴 파일은 다시 찾지 않는다.
+    // When only the underline changes, the font file is not looked up again.
     app.settings.values.insert("ListFontStyle".into(), serde_json::json!(3 | 8));
     app.apply_preferences(&ctx);
     assert!(FONT_LOOKUPS.with(|l| l.take()).is_empty());
@@ -393,13 +393,13 @@ fn list_font_style_picks_the_styled_font_file_like_the_original() {
 #[test]
 fn line_space_and_grid_lines_follow_the_original_file_list() {
     let (root, ctx, mut app) = fixture("grid-lines", "en");
-    // 원본 SetLineSpace(+0x364): 0~32화소.
+    // Original SetLineSpace (+0x364): 0-32 px.
     assert_eq!(app.list_line_space(), 0.0);
     app.settings.values.insert("ListLineSpace".into(), serde_json::json!(6));
     assert_eq!(app.list_line_space(), 6.0);
     app.settings.values.insert("ListLineSpace".into(), serde_json::json!(99));
     assert_eq!(app.list_line_space(), 32.0);
-    // 선 색은 GetBasic(13) NXLINE(색상표를 쓸 때).
+    // The line color is GetBasic(13) NXLINE (when the color table is used).
     let mut color = None;
     let _ = ctx.run(egui::RawInput::default(), |ctx| {
         egui::CentralPanel::default().show(ctx, |ui| {
@@ -412,8 +412,8 @@ fn line_space_and_grid_lines_follow_the_original_file_list() {
     let (theme, mapped) = color.unwrap();
     assert_eq!(mapped, Color32::from_rgb(0x12, 0x34, 0x56));
     assert_ne!(theme, mapped);
-    // 줄 선 자리: 원본 bottom + LineSpace / 2 − 1 화소 줄(정수 나눗셈)의 가운데이고, 늘 화면 화소 가운데에 맞는다(홀수 줄 간격이나
-    // 정수가 아닌 목록 위치·배율에서도 1화소 선이 두 줄에 번지지 않는다).
+    // Row line position: the center of the original bottom + LineSpace / 2 - 1 pixel row (integer division), always aligned to a screen pixel center (so a 1 px line never smears over two rows
+    // with odd line spacing or fractional list positions and scales).
     for ppp in [1.0f32, 1.25, 1.5, 2.0] {
         let raw = egui::RawInput {
             viewports: std::iter::once((egui::ViewportId::ROOT, egui::ViewportInfo { native_pixels_per_point: Some(ppp), ..Default::default() })).collect(),
@@ -451,7 +451,7 @@ fn line_space_and_grid_lines_follow_the_original_file_list() {
 #[test]
 fn applying_options_on_a_fresh_profile_keeps_default_on_settings() {
     let (root, ctx, mut app) = fixture("fresh-defaults", "ko");
-    // C# NdrSettings·원본 ini 처음 값이 켬인 설정은 창에서 그대로 적용해도 켬으로 남는다(전에는 창의 처음 값이 꺼짐이라 적용하면 꺼졌다).
+    // Settings whose C# NdrSettings and original ini default is on stay on when the window is applied unchanged (previously the window default was off, so applying turned them off).
     let keys = ["UseTabs", "ShowFolderDiskInfoBar", "ShowFileInfoBar", "ShowFavoritesBar", "RemoveReadOnlyWhenCopying", "ShowColumnLines", "ShowDeleteButton"];
     for key in keys {
         app.settings.values.remove(key);

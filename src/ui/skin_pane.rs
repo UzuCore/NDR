@@ -820,14 +820,14 @@ impl App {
         if let Some(position) = ui.input(|i| i.pointer.secondary_clicked().then(|| i.pointer.interact_pos()).flatten()).filter(|p| label.contains(*p)) {
             return self.show_address_bar_menu(index, position);
         }
-        // 원본 pathclick(ini [Operation], 설정 +0xf8, 환경 설정 창에는 없다): 2면 조각·">"·▼를 눌러도(FUN_0048bfa8·FUN_0048c548),
-        // 1·2면 빈 곳을 눌러도(FUN_0048c9b8) 누른 자리에 주소 표시줄 메뉴(FUN_0048d10c). 0이면 아래 동작.
+        // Original pathclick (ini [Operation], setting +0xf8, not in the preferences window): with 2, clicking a segment, ">" or ▼ (FUN_0048bfa8, FUN_0048c548),
+        // and with 1 or 2, clicking empty space (FUN_0048c9b8), opens the address bar menu (FUN_0048d10c) at the click. With 0, the behavior below.
         let path_click = self.settings.values.get("PathClickMode").and_then(|v| v.as_i64()).unwrap_or(0);
         let menu_at = pointer.unwrap_or(label.left_bottom());
         if path_click == 2 && action.is_some() {
             return self.show_address_bar_menu(index, menu_at);
         }
-        // 경로 조각 옆 빈 곳을 누르면(한 번) 경로 직접 입력. 조각·">"·▼·양끝 단추를 누른 것은 그 동작.
+        // One click on empty space beside the path segments starts typing a path. Clicks on segments, ">", ▼ or the end buttons do their own action.
         if (background.clicked() || super::panes::windows_double_clicked(&background)) && action.is_none() && clicked_button.is_none() {
             self.active = index;
             if matches!(path_click, 1 | 2) {
@@ -859,11 +859,11 @@ impl App {
         self.skin_crumb_menu_ui(ctx, index, just_opened);
     }
 
-    /// 원본 탭 줄(스킨 테마, FUN_00481fb8 + TNXTabSet). 탭이 둘 이상일 때만 보인다(Visible = 탭 수 > 1).
-    /// 색은 FUN_00489048: 배경 tabback, 글 tabtext, 포인터 tabhot, 지금 탭 tabactive. 탭 그림 tabimgs(세 줄: 지금·보통·포인터),
-    /// 단추 그림 tabbtnimgs(12×12 칸: ≡ 《 》 ×, 아래 줄은 포인터).
-    /// Paint(0x7d0c28): 탭마다 왼쪽 5 + 가운데 10씩 + 오른쪽 5 그림, 글은 왼쪽 + 7부터 오른쪽 − 7까지(지금 탭은 위 0, 오른쪽 − 17, 아니면 위 + 3).
-    /// 왼쪽 단추로 누르면 그 탭으로(MouseDown), 포인터를 올리면 전체 경로 풍선 도움말, 오른쪽 단추는 pmTab(FUN_0048a534).
+    /// Original tab row (skin theme, FUN_00481fb8 + TNXTabSet). Visible only with two or more tabs (Visible = tab count > 1).
+    /// Colors from FUN_00489048: background tabback, text tabtext, hover tabhot, current tab tabactive. Tab image tabimgs (three rows: current, normal, hover),
+    /// button image tabbtnimgs (12x12 cells: ≡ 《 》 ×, the lower row for hover).
+    /// Paint (0x7d0c28): per tab a left 5 + middle 10 each + right 5 image; text from left + 7 to right - 7 (the current tab at top 0 and right - 17, others top + 3).
+    /// A left click goes to that tab (MouseDown), hovering shows a balloon tooltip with the full path, the right button opens pmTab (FUN_0048a534).
     pub(super) fn skin_tab_set(&mut self, ui: &mut egui::Ui, index: usize, ctx: &egui::Context, skin: &Skin) {
         let count = self.panes[index].tabs.len();
         if !self.settings.flag("UseTabs", true) || count < 2 {
@@ -884,16 +884,16 @@ impl App {
         let lead = if layout.scroll { 32.0 } else { 16.0 };
         let tab_width = layout.tab_width as f32;
         let shown = layout.visible.min(count - first);
-        // 단추(나중에 등록해 탭 줄보다 먼저 포인터를 받는다).
+        // Buttons (registered later so they take the pointer before the tab row).
         let buttons = skin.values.get("list.tabbtnimgs").cloned().and_then(|file| self.toolbar_icon(ctx, &file));
-        // 고친 것: 단추 그림은 탭 그림 뒤에 그린다(전에는 지금 탭 그림이 닫기 단추 ×를 덮어 보이지 않았다). 원본 단추는 탭 위의 자식 창이다.
+        // Fixed: button images are drawn after the tab images (previously the current tab image covered the close button × so it was invisible). Original buttons are child windows above the tabs.
         let button_paints = std::cell::RefCell::new(Vec::<(egui::TextureId, egui::Rect, egui::Rect, Color32)>::new());
         let button = |ui: &mut egui::Ui, column: usize, slot: egui::Rect, enabled: bool, salt: &str| {
             let response = ui.interact(slot, egui::Id::new(("ndr-skin-tab-button", index, salt)), if enabled { egui::Sense::click() } else { egui::Sense::hover() });
             if let Some(texture) = &buttons {
                 let row = usize::from(enabled && response.hovered());
                 let uv = egui::Rect::from_min_max(egui::pos2(column as f32 / 4.0, row as f32 / 2.0), egui::pos2((column + 1) as f32 / 4.0, (row + 1) as f32 / 2.0));
-                // 원본 TNXPngButton.Paint(0x7cb700): 꺼진 단추는 그림 알파를 반으로(FUN_007cb3ec).
+                // Original TNXPngButton.Paint (0x7cb700): a disabled button draws its image at half alpha (FUN_007cb3ec).
                 let tint = if enabled { Color32::WHITE } else { Color32::WHITE.gamma_multiply(0.5) };
                 button_paints.borrow_mut().push((texture.id(), egui::Rect::from_center_size(slot.center(), egui::vec2(12.0, 12.0)), uv, tint));
             }
@@ -904,7 +904,7 @@ impl App {
         let mut new_first = None;
         let menu = button(ui, 0, slot(rect.left(), rect.top()), true, "menu");
         let mut over_button = menu.hovered();
-        // 원본 UpdateMenu: "&%d. %s"(1~9), 그다음 "&%c. %s"(A~), 지금 탭에 표시. 메뉴가 열린 동안 그 글자를 치면 그 탭으로(Windows 메뉴 접근 글자).
+        // Original UpdateMenu: "&%d. %s" (1-9), then "&%c. %s" (A-), the current tab checked. Typing that letter while the menu is open goes to that tab (Windows menu access letter).
         menu_popup(&menu).show(|ui| {
             for (t, name) in names.iter().enumerate() {
                 let key = if t < 9 { char::from(b'1' + t as u8) } else { char::from(b'A' + (t - 9) as u8) };
@@ -916,7 +916,7 @@ impl App {
             }
         });
         if layout.scroll {
-            // 원본 LeftScroll/RightScroll: 첫 탭을 하나 옮기고 그 끝 탭으로 바꾼다.
+            // Original LeftScroll/RightScroll: shifts the first tab by one and switches to the tab at that end.
             let left = button(ui, 1, slot(rect.left() + 16.0, rect.top()), first > 0, "left");
             let right = button(ui, 2, slot(rect.right() - TAB_BUTTON_WIDTH - 2.0, rect.top()), first + layout.visible < count, "right");
             over_button |= left.hovered() || right.hovered();
@@ -928,7 +928,7 @@ impl App {
                 command = Some(format!("tab:{}", (first + layout.visible).min(count - 1)));
             }
         }
-        // 지금 탭의 닫기 단추(SetTabIndex: 왼쪽 = 끝 − 12 − 4, 위 = 1).
+        // Close button of the current tab (SetTabIndex: left = end - 12 - 4, top = 1).
         if active >= first && active < first + shown {
             let x = rect.left() + lead + ((active - first + 1) as f32) * tab_width - TAB_BUTTON_WIDTH - 4.0;
             let close_tip = self.language_pack.text("formMain.Menu.pmiCloseTab", if self.language == "ko" { "탭 닫기" } else { "Close Tab" });
@@ -938,7 +938,7 @@ impl App {
                 command = Some(format!("closeTab:{active}"));
             }
         }
-        // IndexOfTabAt: 앞자리(16 또는 32) 밖에서 (x − 앞자리) / 탭 너비 + 첫 탭.
+        // IndexOfTabAt: outside the leading area (16 or 32), (x - leading area) / tab width + first tab.
         let tab_at = |p: egui::Pos2| -> Option<usize> {
             let x = p.x - rect.left();
             if !rect.contains(p) || x < lead {
@@ -1015,9 +1015,9 @@ impl App {
         }
     }
 
-    /// 원본 폴더 정보 표시줄(스킨 테마, FUN_00482700 + 색 FUN_00489b24 + 그리기 FUN_0048bb74). 높이 20, 주소 줄 아래(목록 바로 위),
-    /// 배경 lfolderback, 아래끝 선 lfolderdivider, 안쪽 여백 좌우 6. 왼쪽 FOLDERINFO(글 lfoldertext, &lt;c000000&gt; 자리는 lfoldersubtext1),
-    /// 오른쪽 끝 디스크 여유(&lt;c000000&gt; = ldisksubtext1) 또는 선택 정보(lselinfotext), 그 앞 드라이브 글(모자라면 비운다, FUN_0048b500).
+    /// Original folder info bar (skin theme, FUN_00482700 + colors FUN_00489b24 + drawing FUN_0048bb74). Height 20, below the address bar (right above the list),
+    /// background lfolderback, bottom line lfolderdivider, inner left/right margin 6. FOLDERINFO on the left (text lfoldertext, the &lt;c000000&gt; spots in lfoldersubtext1),
+    /// at the right end the free disk space (&lt;c000000&gt; = ldisksubtext1) or selection info (lselinfotext), with the drive text before it (emptied when short of room, FUN_0048b500).
     /// FOLDERINFO를 누르면 지금 폴더, 드라이브 글·여유를 누르면 드라이브 루트의 셸 속성 창(FUN_0048bc24·FUN_0048bca8, 로컬만).
     pub(super) fn skin_folder_info_bar(&mut self, ui: &mut egui::Ui, index: usize, skin: &Skin) {
         if !self.settings.flag("ShowFolderDiskInfoBar", true) {
