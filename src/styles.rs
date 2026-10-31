@@ -155,11 +155,16 @@ impl ColorMap {
         }
         Ok(map)
     }
+    /// Original LoadFromFile 0x7d3aa8: TStringList.LoadFromFile(path, TEncoding.Unicode) (FUN_00523990: a BOM wins, otherwise UTF-16LE), and
+    /// without "[NEXUSFILECOLOR5]" again with the ANSI default (FUN_005222e0) for the older format. Previously a BOM-less UTF-16 file such as
+    /// the bundled nocolor.col could not be read.
     pub fn load(path: &Path) -> Result<Self, String> {
-        Self::parse(&crate::compat::decode(
-            &std::fs::read(path).map_err(|e| e.to_string())?,
-            false,
-        ))
+        let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+        let unicode = crate::compat::decode(&bytes, true);
+        if unicode.lines().any(|line| line.trim().eq_ignore_ascii_case("[NEXUSFILECOLOR5]")) {
+            return Self::parse(&unicode);
+        }
+        Self::parse(&crate::compat::decode(&bytes, false))
     }
     /// Original SaveToFile 0x7d4194: "[NEXUSFILECOLOR5]", the 20 basic colors "%s=%s" in table order (0x92d2c0), "[Ext]", then the
     /// extension lines; written as Unicode. Previously the basic colors were sorted by name.
@@ -353,6 +358,18 @@ mod tests {
         assert_eq!(reloaded.extension("TXT"), map.extension("txt"));
         assert_eq!(map.element("NXSELECT"), Some([255, 255, 255, 255]));
         assert!(ColorMap::parse("[Ext]\r\nTXT=broken\r\n").is_err());
+    }
+    /// The color maps bundled like the original <program folder>\colors (black, blue, brown, nocolor, white1-3) all load with their base colors.
+    #[test]
+    fn bundled_color_maps_load() {
+        let folder = Path::new(env!("CARGO_MANIFEST_DIR")).join("Resources").join("Colors");
+        let mut names: Vec<String> = std::fs::read_dir(&folder).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        names.sort();
+        assert_eq!(names, ["black.col", "blue.col", "brown.col", "nocolor.col", "white1.col", "white2.col", "white3.col"]);
+        for name in names {
+            let map = ColorMap::load(&folder.join(&name)).unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert!(map.elements.contains_key("NXBACK") && map.elements.contains_key("NXFORE"), "{name}: {:?}", map.elements.keys().collect::<Vec<_>>());
+        }
     }
     /// Original LoadFromFile 0x7d3aa8 without "[NEXUSFILECOLOR5]": decimal TColor (0x00BBGGRR) under the old names; MB also gives GB and
     /// NORMAL also gives size, time, attributes and selection.

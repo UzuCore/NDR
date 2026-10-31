@@ -1709,6 +1709,8 @@ impl App {
     }
 
     /// C# ImportExtensionColors.
+    /// Original btnImportColorClick (0x44fe94): OpenDialog with InitialDir = <program folder>\colors (the bundled color maps), then
+    /// TNXFileColorMap.LoadFromFile.
     fn import_extension_colors(&mut self) {
         let ko = self.language == "ko";
         let filters = if ko {
@@ -1716,7 +1718,8 @@ impl App {
         } else {
             [("NexusFile color map (*.col)", "*.col"), ("NDR color map (*.json)", "*.json"), ("All files (*.*)", "*.*")]
         };
-        let Some(path) = (self.open_dialog)("", None, "", &filters) else { return };
+        let colors_dir = super::resource_dir().join("Colors");
+        let Some(path) = (self.open_dialog)("", Some(colors_dir.as_path()).filter(|d| d.is_dir()), "", &filters) else { return };
         let result: Result<(), String> = (|| {
             let Some(form) = self.settings_form() else { return Ok(()) };
             let colors: Vec<(String, String)> = if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("col")) {
@@ -1776,7 +1779,9 @@ impl App {
         };
         let elements = object(&form.draft, "NexusFileColorMapValues");
         let filters = if ko { [("NexusFile 색상표 (*.col)", "*.col"), ("NDR 색상표 (*.json)", "*.json")] } else { [("NexusFile color map (*.col)", "*.col"), ("NDR color map (*.json)", "*.json")] };
-        let Some(path) = (self.save_dialog)("", None, "NDR-extension-colors.col", &filters, "col", true) else { return };
+        let colors_dir = super::resource_dir().join("Colors");
+        // Original btnSaveColorMapClick (0x44fd68): SaveDialog (DefaultExt col, ofOverwritePrompt) with InitialDir = <program folder>\colors.
+        let Some(path) = (self.save_dialog)("", Some(colors_dir.as_path()).filter(|d| d.is_dir()), "NDR-extension-colors.col", &filters, "col", true) else { return };
         let body = if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("col")) {
             let mut map = ndr::styles::ColorMap::default();
             for (key, value) in &elements {

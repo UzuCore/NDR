@@ -1662,7 +1662,7 @@ pub fn choose_color(initial: u32) -> Option<u32> {
 /// Initial value = (name, points, original TFontStyles byte: 1 bold, 2 italic, 4 underline, 8 strikeout). On OK the same set. It is modal.
 pub fn choose_font(name: &str, points: f32, style: u8) -> Option<(String, f32, u8)> {
     use windows_sys::Win32::Graphics::Gdi::LOGFONTW;
-    use windows_sys::Win32::UI::Controls::Dialogs::{CF_EFFECTS, CF_INITTOLOGFONTSTRUCT, CF_NOVERTFONTS, CF_SCREENFONTS, CHOOSEFONTW, ChooseFontW};
+    use windows_sys::Win32::UI::Controls::Dialogs::{CF_EFFECTS, CF_FORCEFONTEXIST, CF_INITTOLOGFONTSTRUCT, CF_LIMITSIZE, CF_NOVERTFONTS, CF_SCREENFONTS, CHOOSEFONTW, ChooseFontW};
     // SAFETY: both structs are plain data; zeroed is their documented Default.
     let mut font: LOGFONTW = unsafe { std::mem::zeroed() };
     for (slot, unit) in font.lfFaceName.iter_mut().zip(name.encode_utf16().take(31)) {
@@ -1678,7 +1678,11 @@ pub fn choose_font(name: &str, points: f32, style: u8) -> Option<(String, f32, u
     choose.lStructSize = std::mem::size_of::<CHOOSEFONTW>() as u32;
     choose.lpLogFont = &mut font;
     choose.iPointSize = (points * 10.0).round() as i32;
-    choose.Flags = CF_INITTOLOGFONTSTRUCT | CF_SCREENFONTS | CF_NOVERTFONTS | CF_EFFECTS;
+    // Original btnFontClick (0x44e668): MinFontSize 6, MaxFontSize 30, Options + fdForceFontExist + fdLimitSize (CF_FORCEFONTEXIST, CF_LIMITSIZE).
+    // Previously any size could be chosen.
+    choose.nSizeMin = 6;
+    choose.nSizeMax = 30;
+    choose.Flags = CF_INITTOLOGFONTSTRUCT | CF_SCREENFONTS | CF_NOVERTFONTS | CF_EFFECTS | CF_FORCEFONTEXIST | CF_LIMITSIZE;
     // SAFETY: the LOGFONTW lives across the modal call.
     if unsafe { ChooseFontW(&mut choose) } == 0 {
         return None;

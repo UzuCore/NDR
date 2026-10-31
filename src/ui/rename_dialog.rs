@@ -345,6 +345,9 @@ pub(super) fn rename_ui(ui: &mut egui::Ui, form: &mut RenameForm, language: &com
     });
     if let Some(name) = picked {
         // HandleMacroSelection: choosing a macro replaces the actions with its actions.
+        // Original cbMacroListChange (0x419644): with ItemIndex >= 1 the rules are cleared (FUN_0046cd94), the section's lines read (FUN_00417718)
+        // and each line of 4+ characters goes to the reader named by its first three characters (lstrcmpW "ins"/"rep"/"del"/"cas"/"num"/"ext");
+        // the first item changes nothing.
         if let Some(found) = name.as_ref().and_then(|n| form.macros.iter().find(|m| m.name.eq_ignore_ascii_case(n))) {
             form.rules = found.rules.clone();
             form.selected_rule = None;
