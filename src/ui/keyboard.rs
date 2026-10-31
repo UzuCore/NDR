@@ -1,7 +1,6 @@
-//! C# MainWindow.HandleKeyboardAsync(파일 목록 글쇠) 순서:
-//! Esc(EscapeKeyAction) → Shift+글자 드라이브(UseAlternateDriveHandling, 영어가 아닌 입력 언어) → 원본 단축키 표(shortcut.ini,
-//! 사용자가 KeyboardShortcuts로 바꾼 NDR 글쇠가 맞으면 건너뜀) → NDR 단축키(ShortcutBindingService) → 기능키 → 나머지 NDR 단축키 →
-//! Space(지금 항목 표시 전환) → 동작이 있는 정의(legacy*, favoriteOpenN). 그 뒤 목록 이동(위/아래/Home/End/Tab, egui에는 목록 상자가 없다).
+//! 파일 목록 글쇠 순서(원본 FormShortCut → 목록 KeyDown FUN_0048423c → WMChar):
+//! Esc(EscapeKeyAction) → 원본 단축키 표(shortcut.ini) → 즐겨찾기 Shift(+Ctrl)+F1~F10 → 기능키 표 → KeyDown의 나머지
+//! ('.' 상위 폴더, Ctrl(+Shift)+Tab 탭, Shift+글자 드라이브) → 목록 이동(위/아래/Home/End/Tab, egui에는 목록 상자가 없다).
 //! 함께: CycleFileSelection, ToggleFocusedItemSelection, ExecuteShortcutActionAsync, ExecuteMenuCommandAsync의 favoriteOpen:/workOpen:/
 //! workSet:/column:, RememberDriveFolder/RestoreLastDriveFolder, 드라이브 단추(ShowDriveButtons, 준비된 드라이브, 볼륨 이름 도움말).
 //! 차이(HANDOFF): 글 입력 칸에 초점이 있으면 목록 글쇠를 하나도 받지 않는다(C#은 뒤로·앞으로 등 몇 개를 받는다).
@@ -191,19 +190,6 @@ impl App {
             }
             return true;
         }
-        // UseAlternateDriveHandling: 영어가 아닌 입력 언어에서 Shift+글자 = 그 드라이브(마지막 폴더 복원).
-        if modifiers.shift && !(modifiers.ctrl || modifiers.alt)
-            && self.settings.flag("UseAlternateDriveHandling", false)
-            && name.len() == 1
-            && name.as_bytes()[0].is_ascii_uppercase()
-            && !native::english_input_language()
-        {
-            let root = PathBuf::from(format!("{name}:\\"));
-            if root.is_dir() {
-                self.navigate_drive(self.active, root);
-                return true;
-            }
-        }
         // 원본 FormShortCut(0x42b36c): 메뉴 항목·내부 명령 단축키(shortcut.ini 표, 메뉴 IsShortCut)가 먼저.
         // (Alt+Enter는 원본처럼 miDescription "설명 붙여두기". 사용자 요청으로 한때 넣었던 전체 화면 전환은 뺐다.)
         if self.original_shortcut(key, modifiers, ctx) {
@@ -227,6 +213,41 @@ impl App {
         }
         if modifiers.ctrl && !(modifiers.alt || modifiers.shift) && name.starts_with('F') && name[1..].parse::<u8>().is_ok_and(|n| (1..=11).contains(&n)) && self.invoke_function_key(&format!("^{name}"), ctx) {
             return true;
+        }
+        self.original_keydown(key, modifiers, &name, ctx)
+    }
+
+    /// 원본 목록·패널 트리 KeyDown(FUN_0048423c)의, 단축키 표가 받지 않은 글쇠.
+    fn original_keydown(&mut self, key: egui::Key, modifiers: egui::Modifiers, name: &str, ctx: &egui::Context) -> bool {
+        let index = self.active;
+        let plain = !(modifiers.ctrl || modifiers.alt || modifiers.shift);
+        // '.'(VK_OEM_PERIOD, 0x71 + 0x4d): 빠른 찾기 글(+0x3e0)이 비었으면 상위 폴더(FUN_00459ba8(1); 압축 파일 뿌리면 그 압축 파일이 있는 폴더).
+        // 고친 것: 전에는 받지 않았다.
+        if plain && key == egui::Key::Period && self.typed_search[index].query.is_empty() {
+            self.dispatch("goParent", ctx);
+            return true;
+        }
+        // Ctrl+Tab·Ctrl+Shift+Tab: 탭을 쓰고(+0xf3) 탭이 둘 이상이면 다음·이전 탭(끝에서 처음으로). 고친 것: 전에는 없었다.
+        if key == egui::Key::Tab && modifiers.ctrl && !modifiers.alt && self.settings.flag("UseTabs", true) && self.panes[index].tabs.len() > 1 {
+            let (count, tab) = (self.panes[index].tabs.len(), self.panes[index].tab);
+            let next = if modifiers.shift { (tab + count - 1) % count } else { (tab + 1) % count };
+            self.tab_command(index, &format!("tab:{next}"), ctx);
+            return true;
+        }
+        // Shift+글자(Shift만): 로컬·압축 위치에서 그 드라이브(그 드라이브의 마지막 폴더가 있으면 그 폴더, FUN_0046f714).
+        // 한글 같은 영어가 아닌 입력 언어에서는 IME가 글자를 받으므로 hanshdrive(UseAlternateDriveHandling: Shift를 누르면 IME를
+        // 영문으로)를 켰을 때만. 고친 것: 전에는 영문 입력에서도 그 설정이 있어야 했다.
+        if modifiers.shift && !(modifiers.ctrl || modifiers.alt)
+            && name.len() == 1
+            && name.as_bytes()[0].is_ascii_uppercase()
+            && self.panes[index].remote.is_none()
+            && (native::english_input_language() || self.settings.flag("UseAlternateDriveHandling", false))
+        {
+            let root = PathBuf::from(format!("{name}:\\"));
+            if root.is_dir() {
+                self.navigate_drive(index, root);
+                return true;
+            }
         }
         false
     }

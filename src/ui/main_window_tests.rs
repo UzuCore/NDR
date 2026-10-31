@@ -1758,3 +1758,40 @@ fn shortcut_names_of_popup_and_submenu_items_are_known_commands() {
     }
     let _ = fs::remove_dir_all(root);
 }
+
+
+/// 원본 KeyDown(FUN_0048423c)의 단축키가 아닌 글쇠: '.' = 상위 폴더(빠른 찾기 글이 비었을 때), Ctrl+Tab·Ctrl+Shift+Tab = 다음·이전 탭,
+/// Shift+글자 = 그 드라이브(영문 입력이거나 hanshdrive를 켰을 때).
+#[test]
+fn keydown_period_ctrl_tab_and_shift_drive_follow_the_original() {
+    let (root, ctx, mut app) = fixture("keydown");
+    let left = app.panes[0].path.clone();
+    let press = |app: &mut App, key: egui::Key, modifiers: egui::Modifiers, text: Option<&str>| {
+        let mut events = vec![egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }];
+        events.extend(text.map(|t| egui::Event::Text(t.into())));
+        let raw = egui::RawInput { modifiers, events, screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 850.0))), ..Default::default() };
+        let _ = ctx.run(raw, |ctx| app.keyboard(ctx));
+        wait(app, &ctx);
+    };
+    app.active = 0;
+    app.navigate(0, left.join("folder"), true);
+    wait(&mut app, &ctx);
+    press(&mut app, egui::Key::Period, egui::Modifiers::NONE, Some("."));
+    assert_eq!(app.panes[0].path, left, "'.' = parent folder");
+    app.dispatch("newTab", &ctx);
+    wait(&mut app, &ctx);
+    assert_eq!((app.panes[0].tabs.len(), app.panes[0].tab), (2, 1));
+    press(&mut app, egui::Key::Tab, egui::Modifiers::CTRL, None);
+    assert_eq!(app.panes[0].tab, 0, "Ctrl+Tab wraps to the first tab");
+    press(&mut app, egui::Key::Tab, egui::Modifiers::CTRL | egui::Modifiers::SHIFT, None);
+    assert_eq!(app.panes[0].tab, 1, "Ctrl+Shift+Tab = previous tab");
+    app.settings.set_flag("UseAlternateDriveHandling", true);
+    app.settings.set_flag("SaveDriveFolders", false);
+    app.settings.values.remove("LastFoldersByDrive");
+    let system = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".into());
+    let letter = system.chars().next().unwrap().to_ascii_uppercase();
+    let key = egui::Key::from_name(&letter.to_string()).unwrap();
+    press(&mut app, key, egui::Modifiers::SHIFT, Some(&letter.to_string()));
+    assert_eq!(app.panes[0].path, PathBuf::from(format!("{letter}:\\")), "Shift+{letter} = that drive's root (no remembered folder)");
+    let _ = fs::remove_dir_all(root);
+}
