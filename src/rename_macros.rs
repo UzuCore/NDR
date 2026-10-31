@@ -55,35 +55,44 @@ fn parse_target(value: &str) -> String {
     if value.eq_ignore_ascii_case("ext") { "Extension".into() } else { "Name".into() }
 }
 
-/// TryParsePosition: first/last(/all) or a number.
-fn parse_position(value: &str, allow_all: bool) -> Option<(String, i64)> {
-    if value.eq_ignore_ascii_case("first") {
-        Some((if allow_all { "First" } else { "Prefix" }.into(), 1))
-    } else if value.eq_ignore_ascii_case("last") {
-        Some((if allow_all { "Last" } else { "Suffix" }.into(), 1))
-    } else if allow_all && value.eq_ignore_ascii_case("all") {
-        Some(("All".into(), 1))
-    } else {
-        parse_int(value).map(|index| ("Position".into(), index))
-    }
-}
-
-/// TryParseRule.
+/// Original rule readers (each splits the line with FUN_0040da68 and needs an exact field count and keyword): ins FUN_0046a028,
+/// rep FUN_0046a990, del FUN_0046b488, cas FUN_0046bc7c, num FUN_0046c334, ext FUN_0046c8b8. Numbers are StrToIntDef(text, 0), so a
+/// bad number reads as 0 instead of dropping the rule; a replace position other than First/Last means all occurrences; the last field
+/// "ext" (case-insensitive) selects the extension.
 pub fn parse_rule(row: &str) -> Option<RenameRule> {
     let fields: Vec<&str> = row.split(';').collect();
     let mut rule = RenameRule::default();
-    match (fields[0].to_lowercase().as_str(), fields.len()) {
+    let number = |text: &str| parse_int(text).unwrap_or(0);
+    // ins / num position: "first" (-1), "last" (-2), otherwise a number.
+    let position = |text: &str| -> (String, i64) {
+        if text.eq_ignore_ascii_case("first") {
+            ("Prefix".into(), 1)
+        } else if text.eq_ignore_ascii_case("last") {
+            ("Suffix".into(), 1)
+        } else {
+            ("Position".into(), number(text))
+        }
+    };
+    match (fields[0], fields.len()) {
         ("ins", 4) => {
             rule.action = "Insert".into();
             rule.text = fields[1].into();
-            (rule.position, rule.index) = parse_position(fields[2], false)?;
+            (rule.position, rule.index) = position(fields[2]);
             rule.target = parse_target(fields[3]);
         }
         ("rep", 5) => {
             rule.action = "Replace".into();
             rule.find = fields[1].into();
             rule.replace = fields[2].into();
-            (rule.position, rule.index) = parse_position(fields[3], true)?;
+            rule.position = if fields[3].eq_ignore_ascii_case("first") {
+                "First"
+            } else if fields[3].eq_ignore_ascii_case("last") {
+                "Last"
+            } else {
+                "All"
+            }
+            .into();
+            rule.index = 1;
             rule.target = parse_target(fields[4]);
         }
         ("del", 6) => {
@@ -97,12 +106,14 @@ pub fn parse_rule(row: &str) -> Option<RenameRule> {
                 rule.delete_from_mode = "Position".into();
                 rule.index = index;
             } else {
+                // The original drops a leading '"' and then a trailing '"' separately.
                 rule.delete_from_mode = "Delimiter".into();
-                rule.find = if from.len() >= 2 && from.starts_with('"') && from.ends_with('"') { from[1..from.len() - 1].into() } else { from.into() };
+                let text = from.strip_prefix('"').unwrap_or(from);
+                rule.find = text.strip_suffix('"').unwrap_or(text).into();
             }
             rule.delete_to_delimiter = fields[2].into();
             rule.delete_to_mode = if fields[2].is_empty() { "Count" } else { "Delimiter" }.into();
-            rule.count = parse_int(fields[3])?;
+            rule.count = number(fields[3]);
             rule.delete_direction = if fields[4].eq_ignore_ascii_case("forward") { "LeftToRight" } else { "RightToLeft" }.into();
             rule.target = parse_target(fields[5]);
         }
@@ -119,10 +130,10 @@ pub fn parse_rule(row: &str) -> Option<RenameRule> {
         }
         ("num", 6) => {
             rule.action = "Number".into();
-            rule.start = parse_int(fields[1])?;
-            rule.step = parse_int(fields[2])?;
-            rule.digits = usize::try_from(parse_int(fields[3])?).ok()?;
-            (rule.position, rule.index) = parse_position(fields[4], false)?;
+            rule.start = number(fields[1]);
+            rule.step = number(fields[2]);
+            rule.digits = usize::try_from(number(fields[3])).unwrap_or(0);
+            (rule.position, rule.index) = position(fields[4]);
             rule.target = parse_target(fields[5]);
         }
         ("ext", 2) => {
@@ -262,6 +273,24 @@ pub fn load(profile: &Path, beside_executable: &Path, configured: Vec<RenameMacr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Original rule readers: StrToIntDef(text, 0) numbers, replace positions other than First/Last are all occurrences, the delete
+    /// delimiter loses a leading and a trailing quote separately, and the keyword and field count must match exactly.
+    #[test]
+    fn rules_follow_the_original_readers() {
+        let ins = parse_rule("ins;x;abc;name").expect("a bad position reads as 0");
+        assert_eq!((ins.position.as_str(), ins.index), ("Position", 0));
+        let rep = parse_rule("rep;a;b;3;ext").expect("rep");
+        assert_eq!((rep.position.as_str(), rep.target.as_str()), ("All", "Extension"));
+        assert_eq!(parse_rule("rep;a;b;LAST;name").unwrap().position, "Last");
+        let del = parse_rule("del;\"ab;;x;forward;name").expect("a bad count reads as 0");
+        assert_eq!((del.delete_from_mode.as_str(), del.find.as_str(), del.count), ("Delimiter", "ab", 0));
+        assert_eq!(parse_rule("del;<LAST>;;2;backward;name").unwrap().delete_from_mode, "FromEnd");
+        let num = parse_rule("num;s;1;3;last;name").expect("num");
+        assert_eq!((num.start, num.step, num.digits, num.position.as_str()), (0, 1, 3, "Suffix"));
+        assert!(parse_rule("INS;x;first;name").is_none(), "the keyword is compared exactly");
+        assert!(parse_rule("ins;x;first").is_none(), "the field count must match");
+    }
 
     #[test]
     fn advrename_save_round_trip() {
