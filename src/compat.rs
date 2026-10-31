@@ -339,6 +339,9 @@ pub fn expand_setting(value: &str) -> String {
 }
 
 /// Imports only the explicitly supplied source; never saves or touches a default profile.
+/// The keys are the ones the original reads at startup in FUN_00474dac (nexusfile.ini [Window] maximized, dualview, … looked up by name)
+/// and writes back in FUN_0046ff1c (one "%s=%d" / "%s=%s" line per key, FUN_0046fd54 / FUN_0046fe1c); its default shortcut list
+/// (miOpen=Enter, …) is built by FUN_0047a788 at startup. NDR keeps one settings.json and only imports the ini.
 pub fn import_ini(path: &Path) -> Result<Settings, String> {
     use serde_json::json;
     let bytes = fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -1029,8 +1032,19 @@ pub fn decode_legacy_password(encoded: &str) -> String {
     let end = data.iter().position(|v| *v == 0).unwrap_or(data.len());
     String::from_utf16_lossy(&data[..end])
 }
+/// Original FUN_0046ddf0: the date is read by position (Copy of characters 1-4, 6-7, 9-10, 12-13, 15-16, 18-19 + StrToInt), so the
+/// separators written by the locale do not matter. Fixed: NDR accepted only "-" and ":" and dropped every entry written with "/" or ".".
+fn positional_date_time(text: &str) -> Option<chrono::NaiveDateTime> {
+    let chars: Vec<char> = text.trim().chars().collect();
+    let number = |from: usize, to: usize| -> Option<u32> { chars.get(from..to)?.iter().collect::<String>().parse().ok() };
+    chrono::NaiveDate::from_ymd_opt(number(0, 4)? as i32, number(5, 7)?, number(8, 10)?)?.and_hms_opt(number(11, 13)?, number(14, 16)?, number(17, 19)?)
+}
+
+/// Original destination history (dest file): FUN_0046e008 reads it (Unicode; "NEXUSFILEDEST.VER1", then tab-separated path, count, date,
+/// kept only when newer than the age limit; an older "path=count" file is converted and saved again), FUN_0046e4dc writes it ("%s\t%d\t%s",
+/// skipping folders that no longer exist, date = FormatDateTime("yyyy/mm/dd hh:nn:ss"), whose '/' and ':' become the locale separators).
 fn import_destination_history(text: &str) -> Vec<serde_json::Value> {
-    use chrono::{Local, NaiveDateTime, SecondsFormat, TimeZone, Utc};
+    use chrono::{Local, SecondsFormat, TimeZone, Utc};
     let mut lines = text.lines();
     let Some(first) = lines.next() else {
         return Vec::new();
@@ -1040,7 +1054,7 @@ fn import_destination_history(text: &str) -> Vec<serde_json::Value> {
     if first == "NEXUSFILEDEST.VER1" {
         lines.filter_map(|line|{
             let fields:Vec<_>=line.split('\t').collect();if fields.len()!=3{return None;}
-            let count=fields[1].trim().parse::<i32>().ok()?;let used=NaiveDateTime::parse_from_str(fields[2],"%Y-%m-%d %H:%M:%S").ok()?;
+            let count=fields[1].trim().parse::<i32>().ok()?;let used=positional_date_time(fields[2])?;
             if used<=cutoff{return None;}
             let utc=Local.from_local_datetime(&used).latest()?.with_timezone(&Utc);
             Some(serde_json::json!({"Path":fields[0],"UseCount":count,"LastUsedUtc":utc.to_rfc3339_opts(SecondsFormat::Secs,true)}))
@@ -2502,6 +2516,11 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0]["Path"], r"C:\new");
         assert!(entries[0]["LastUsedUtc"].as_str().unwrap().ends_with('Z'));
+        // Original FUN_0046ddf0 reads the date by position, so other locale separators work too.
+        let recent = (chrono::Local::now() - chrono::Duration::days(1)).format("%Y/%m/%d %H.%M.%S").to_string();
+        let entries = import_destination_history(&format!("NEXUSFILEDEST.VER1\r\nD:\\slash\t2\t{recent}\r\n"));
+        assert_eq!(entries.iter().map(|e| e["Path"].as_str().unwrap_or("")).collect::<Vec<_>>(), [r"D:\slash"]);
+        assert!(positional_date_time("2026.10.31 22:05:09").is_some() && positional_date_time("2026-10-3").is_none());
     }
     #[test]
     fn description_transfers_preserve_unrelated_entries_and_migrate_legacy() {
