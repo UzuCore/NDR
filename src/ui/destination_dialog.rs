@@ -581,6 +581,8 @@ impl App {
     }
 
     /// C# RememberDestination: for an existing folder saves LastDestination and MostUsedDestinations (use count + 1, last use UTC).
+    /// Original FUN_0046e6ec: ignores an empty path, drops a trailing '\' except at a root, then raises the count and sets the date of the
+    /// entry with the same path (case-insensitive) or adds one with count 1. Folders that no longer exist are dropped when saving (FUN_0046e4dc).
     pub(super) fn remember_destination(&mut self, destination: &Path) {
         if !destination.is_dir() {
             return;

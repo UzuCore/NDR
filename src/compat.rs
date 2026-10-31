@@ -617,6 +617,7 @@ pub fn import_ini(path: &Path) -> Result<Settings, String> {
     }
     // The size in the original listfont/treefont "\"name\",size,style" is in points (TFont.Size). ListFontSize is pixels, so it is converted
     // (NDR default 14 px when missing). FolderTreeFontSize stays in points.
+    // Original FUN_0046fb30 splits it with CommaText and uses it only with exactly 3 parts: name, StrToIntDef(size, 8), StrToIntDef(style, 0).
     for (property, section, key, default_size, pixels) in [
         ("List", "Display", "listfont", crate::settings::DEFAULT_LIST_FONT_PIXELS, true),
         ("FolderTree", "Tree", "treefont", 9., false),

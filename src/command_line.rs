@@ -125,6 +125,8 @@ pub fn prune_missing(rows: &mut Vec<String>, working_directory: Option<&Path>) {
 }
 
 /// RememberOpenedExecutable: .exe/.lnk only. An existing same path (lstrcmpiW) moves to the top, otherwise "name without extension=path" is appended.
+/// Original FUN_00479db0: compares each row's value (ValueFromIndex, lstrcmpiW); found = Delete + Insert(0), else Add("name=path") with the
+/// name from PathFindFileNameW + PathRemoveExtensionW.
 pub fn remember_opened_executable(rows: &mut Vec<String>, path: &str) {
     let buffer = wide(path);
     // SAFETY: both functions return pointers into the NUL-terminated buffer.
