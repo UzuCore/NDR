@@ -709,9 +709,12 @@ impl App {
             return;
         }
         // 양끝 단추(TNXImageButton, addressbtns.png: 칸 = 단추, 줄 = 보통·포인터).
+        // 원본 FUN_00481978: 두 단추 모두 Align = alRight(4), 너비 0x14. 다시 읽기는 Left = 틀 너비, 경로 기록은 Left = 0이라
+        // 오른쪽 끝부터 [경로 기록 ▼][다시 읽기]이고 TNXPathLabel(alClient)이 나머지를 채운다.
+        // 고친 것(사용자 지적): 전에는 경로 기록 ▼를 왼쪽 끝에 두어 이름표의 드라이브 ▼와 ▼가 둘 나란히 보였다.
         let buttons = skin.values.get("list.labtnimgs").cloned().and_then(|file| self.toolbar_icon(ctx, &file));
-        let left_button = egui::Rect::from_min_size(rect.min, egui::vec2(ADDRESS_BUTTON_WIDTH, rect.height()));
         let right_button = egui::Rect::from_min_size(egui::pos2(rect.right() - ADDRESS_BUTTON_WIDTH, rect.top()), egui::vec2(ADDRESS_BUTTON_WIDTH, rect.height()));
+        let left_button = egui::Rect::from_min_size(egui::pos2(right_button.left() - ADDRESS_BUTTON_WIDTH, rect.top()), egui::vec2(ADDRESS_BUTTON_WIDTH, rect.height()));
         let mut clicked_button = None;
         for (cell, slot) in [(0usize, left_button), (1, right_button)] {
             let response = ui.interact(slot, egui::Id::new(("ndr-skin-address-button", index, cell)), egui::Sense::click());
@@ -729,7 +732,7 @@ impl App {
             }
         }
         // 가운데 경로 글(TNXPathLabel).
-        let label = egui::Rect::from_min_max(egui::pos2(left_button.right(), rect.top()), egui::pos2(right_button.left(), rect.bottom()));
+        let label = egui::Rect::from_min_max(egui::pos2(rect.left(), rect.top()), egui::pos2(left_button.left(), rect.bottom()));
         let painter = ui.painter().with_clip_rect(label);
         let font = egui::FontId::proportional(super::BASE_TEXT_SIZE);
         // 원본 FUN_004896d8(스킨 conf.ini [List]에 없을 때의 값): latext → Font.Color 0x646464, lacurr → SetLastFolderColor

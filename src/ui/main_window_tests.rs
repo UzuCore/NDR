@@ -863,9 +863,10 @@ fn path_click_mode_follows_the_original_path_label() {
     run(&mut app, vec![]);
     run(&mut app, vec![]);
     let pane = app.pane_rects[0];
-    // 주소 표시줄 = 틀 안 첫 줄(높이 19): 왼쪽 단추 20, ▼ 16 뒤에 첫 조각, 오른쪽 단추 20 앞까지 이름표.
+    // Address bar = first row inside the frame (height 19): the leading ▼ (16) then the first segment; the label ends
+    // before the right-hand [history 20][refresh 20] buttons (FUN_00481978, both alRight).
     let bar_y = pane.top() + 2.0 + super::skin_pane::ADDRESS_BAR_HEIGHT / 2.0;
-    let empty = egui::pos2(pane.right() - 26.0, bar_y);
+    let empty = egui::pos2(pane.right() - 46.0, bar_y);
     click(&mut app, empty);
     assert!(app.panes[0].address_editing, "mode 0: an empty click starts editing");
     app.end_address_edit(0);
@@ -878,7 +879,7 @@ fn path_click_mode_follows_the_original_path_label() {
     // 2: 조각(첫 조각)을 눌러도 메뉴, 그 폴더로 가지 않는다.
     app.settings.values.insert("PathClickMode".into(), serde_json::json!(2));
     let path = app.panes[0].path.clone();
-    click(&mut app, egui::pos2(pane.left() + 2.0 + 20.0 + 16.0 + 6.0, bar_y));
+    click(&mut app, egui::pos2(pane.left() + 2.0 + 16.0 + 6.0, bar_y));
     assert!(app.popup.is_some(), "mode 2: a segment click opens the menu");
     assert!(!app.panes[0].loading);
     assert_eq!(app.panes[0].path, path);
@@ -2238,5 +2239,39 @@ fn dragging_near_the_list_edge_scrolls_like_the_drop_target() {
     assert!(!app.drag_edge_scroll(Some(near), t, &ctx), "a new place starts the timer again");
     assert!(app.drag_edge_scroll(Some(near), t + Duration::from_millis(100), &ctx));
     assert_eq!((app.panes[0].tree_drag_scroll, app.panes[0].drag_scroll), (1, (0, 0)), "the tree scrolls, not the list");
+    let _ = fs::remove_dir_all(root);
+}
+
+/// TNXCustomShellTreeView.Edit (0x7edf70): clicking the selected folder label again starts an in-place rename after the
+/// double-click time; committing renames the folder and moves panes that showed it.
+#[test]
+fn pane_tree_label_edit_renames_the_folder() {
+    let (root, ctx, mut app) = fixture("tree-rename");
+    let left = root.join("left");
+    let folder = left.join("folder");
+    fs::create_dir_all(folder.join("inner")).unwrap();
+    let node = ndr::shell_tree::ShellNode { key: folder.clone(), name: "folder".into(), path: Some(folder.clone()), has_children: true, special: ndr::shell_tree::Special::None };
+    assert!(super::views::tree_renamable(&node));
+    assert!(!super::views::tree_renamable(&ndr::shell_tree::ShellNode { key: PathBuf::from("C:\\"), name: "C:".into(), path: Some(PathBuf::from("C:\\")), has_children: true, special: ndr::shell_tree::Special::None }));
+    app.panes[0].tree_rows = vec![(node, 1, true, false)];
+    app.panes[0].tree_selected = Some(folder.clone());
+    let start = Instant::now();
+    app.panes[0].tree_label_click = Some((folder.clone(), start));
+    assert!(app.tree_edit_due(0, start).is_some(), "waits for the double-click time");
+    assert!(app.panes[0].tree_edit.is_none());
+    assert!(app.tree_edit_due(0, start + Duration::from_secs(5)).is_none());
+    assert_eq!(app.panes[0].tree_edit, Some((folder.clone(), "folder".into())));
+    // A pane inside the renamed folder follows it.
+    app.navigate(1, folder.join("inner"), false);
+    wait(&mut app, &ctx);
+    app.panes[0].tree_edit = Some((folder.clone(), "renamed".into()));
+    app.tree_rename_commit(0);
+    wait(&mut app, &ctx);
+    assert!(left.join("renamed").join("inner").is_dir() && !folder.exists());
+    assert!(app.panes[1].path.ends_with("renamed\\inner"), "{}", app.panes[1].path.display());
+    // Choosing another node cancels a pending edit.
+    app.panes[0].tree_label_click = Some((folder.clone(), start));
+    app.panes[0].tree_selected = Some(left.clone());
+    assert!(app.tree_edit_due(0, start + Duration::from_secs(5)).is_none() && app.panes[0].tree_edit.is_none());
     let _ = fs::remove_dir_all(root);
 }

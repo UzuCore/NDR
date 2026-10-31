@@ -163,6 +163,10 @@ struct Pane {
     tree_synced: Option<PathBuf>,
     /// 트리에서 고른 항목(열쇠). None이면 패널 위치의 줄(가상 폴더를 고르면 패널은 그대로라 따로 둔다).
     tree_selected: Option<PathBuf>,
+    /// 트리 이름 바꾸기(원본 TTreeView ReadOnly = False → TVS_EDITLABELS, TNXCustomShellTreeView.Edit 0x7edf70):
+    /// 고른 항목의 글을 다시 누르면 더블클릭 시간 뒤 그 자리에서 고친다. (열쇠, 누른 시각)과 고치는 중인 (폴더, 글).
+    tree_label_click: Option<(PathBuf, Instant)>,
+    tree_edit: Option<(PathBuf, String)>,
     /// 지난 장면의 트리 줄(항목, 깊이, 펼칠 수 있음, 펼쳐짐)과 자리·한 쪽 줄 수, 고른 줄을 보이게 넘길지.
     tree_rows: Vec<(ndr::shell_tree::ShellNode, usize, bool, bool)>,
     tree_rect: Option<egui::Rect>,
@@ -238,6 +242,8 @@ impl Pane {
             tree_open: HashSet::new(),
             tree_synced: None,
             tree_selected: None,
+            tree_label_click: None,
+            tree_edit: None,
             tree_rows: Vec::new(),
             tree_rect: None,
             tree_page: 10,

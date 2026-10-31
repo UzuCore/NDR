@@ -689,6 +689,9 @@ impl App {
         child.set_clip_rect(rect.intersect(ui.clip_rect()));
         let mut picked: Option<ShellNode> = None;
         let mut toggled: Option<PathBuf> = None;
+        let mut label_click: Option<PathBuf> = None;
+        let mut label_double = false;
+        let mut tree_edit_end: Option<bool> = None;
         let mut shell_menu: Option<PathBuf> = None;
         let mut drop_rows: Vec<(usize, egui::Rect, PathBuf)> = Vec::new();
         let mut tree_rows_for_drop: Vec<(usize, egui::Rect, PathBuf, PathBuf, bool)> = Vec::new();
@@ -745,17 +748,41 @@ impl App {
                 if let Some(icon) = self.shell_node_icon(ui.ctx(), node) {
                     ui.painter().image(icon.id(), egui::Rect::from_center_size(egui::pos2(row.left() + indent + 25.0, row.center().y), egui::vec2(16.0, 16.0)), egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
                 }
-                ui.painter().galley(egui::pos2(text_rect.left() + 2.0, row.center().y - galley.size().y / 2.0), galley, if selected { selected_text } else { text });
-                if response.clicked() {
+                let editing = self.panes[index].tree_edit.as_ref().is_some_and(|(folder, _)| node.path.as_ref().is_some_and(|p| same_key(p, folder)));
+                if editing {
+                    // TVN_BEGINLABELEDIT: 글 자리에 고치기 칸. Enter·다른 곳 누르기 = 확정, Esc = 취소(TreeView 이름 고치기).
+                    let edit_rect = egui::Rect::from_min_size(text_rect.min, egui::vec2((galley.size().x + 40.0).max(120.0), row_height));
+                    let id = egui::Id::new(("ndr-pane-tree-edit", index));
+                    let (escape, enter) = ui.input(|i| (i.key_pressed(egui::Key::Escape), i.key_pressed(egui::Key::Enter)));
+                    if let Some((_, text)) = self.panes[index].tree_edit.as_mut() {
+                        let edit = ui.put(edit_rect, egui::TextEdit::singleline(text).id(id).font(font.clone()).margin(egui::vec2(2.0, 0.0)));
+                        if !edit.has_focus() && !edit.lost_focus() && ui.ctx().memory(|m| m.focused().is_none()) {
+                            edit.request_focus();
+                        }
+                        if edit.lost_focus() {
+                            tree_edit_end = Some(!escape || enter);
+                        }
+                    }
+                } else {
+                    ui.painter().galley(egui::pos2(text_rect.left() + 2.0, row.center().y - galley.size().y / 2.0), galley, if selected { selected_text } else { text });
+                }
+                if response.clicked() && !editing {
                     let on_arrow = response.interact_pointer_pos().is_some_and(|p| arrow.contains(p));
+                    let on_label = response.interact_pointer_pos().is_some_and(|p| text_rect.contains(p));
                     if on_arrow && expandable {
                         toggled = Some(node.key.clone());
+                    } else if selected && on_label && tree_renamable(node) && !response.double_clicked() {
+                        // TreeView: 이미 고른 항목의 글을 다시 누르면 더블클릭 시간이 지난 뒤 이름 고치기를 시작한다.
+                        label_click = Some(node.key.clone());
                     } else {
                         picked = Some(node.clone());
                     }
                 }
-                if response.double_clicked() && expandable {
-                    toggled = Some(node.key.clone());
+                if response.double_clicked() {
+                    label_double = true;
+                    if expandable {
+                        toggled = Some(node.key.clone());
+                    }
                 }
                 if let Some(folder) = &node.path {
                     // 원본 FUN_0048da38: 트리도 놓을 곳(TNXDropFileTarget.Register(트리)). 파일 시스템 폴더만.
@@ -799,6 +826,22 @@ impl App {
             pane.tree_page = ((rect.height() / row_height).floor() as usize).max(1);
         }
         let ctx = ui.ctx().clone();
+        if let Some(commit) = tree_edit_end {
+            if commit {
+                self.tree_rename_commit(index);
+            } else {
+                self.panes[index].tree_edit = None;
+            }
+        }
+        if label_double {
+            self.panes[index].tree_label_click = None;
+        } else if let Some(key) = label_click {
+            self.tree_focus = Some(index);
+            self.panes[index].tree_label_click = Some((key, Instant::now()));
+        }
+        if let Some(wait) = self.tree_edit_due(index, Instant::now()) {
+            ctx.request_repaint_after(wait);
+        }
         if let Some(key) = toggled {
             self.tree_focus = Some(index);
             self.tree_toggle(index, &key, &ctx);
@@ -850,6 +893,77 @@ impl App {
                 if let Some(folder) = node.path.clone().filter(|p| !same_key(p, &self.panes[index].path)) {
                     self.navigate(index, folder, true);
                 }
+            }
+        }
+    }
+
+    /// 고른 항목의 글을 다시 누른 뒤 더블클릭 시간(GetDoubleClickTime)이 지나면 이름 고치기를 시작한다(TVN_BEGINLABELEDIT).
+    /// 아직이면 남은 시간을 돌려준다. 그 사이 다른 항목을 고르면 그만둔다.
+    pub(super) fn tree_edit_due(&mut self, index: usize, now: Instant) -> Option<Duration> {
+        use ndr::shell_tree::same_key;
+        let (key, at) = self.panes[index].tree_label_click.clone()?;
+        let selected = self.panes[index].tree_selected.clone().unwrap_or_else(|| self.panes[index].path.clone());
+        let node = self.panes[index].tree_rows.iter().map(|(node, ..)| node).find(|node| same_key(&node.key, &key)).cloned();
+        let Some(node) = node.filter(|n| same_key(&n.key, &selected) && tree_renamable(n)) else {
+            self.panes[index].tree_label_click = None;
+            return None;
+        };
+        let wait = Duration::from_millis(native::double_click_metrics().0.max(1) as u64);
+        let elapsed = now.saturating_duration_since(at);
+        if elapsed < wait {
+            return Some(wait - elapsed);
+        }
+        self.panes[index].tree_label_click = None;
+        if let Some(folder) = node.path {
+            self.panes[index].tree_edit = Some((folder, node.name));
+        }
+        None
+    }
+
+    /// 원본 TNXCustomShellTreeView.Edit(0x7edf70, TVN_ENDLABELEDIT): 새 이름이 있으면 TNXShellFolder.Rename(셸 SetNameOf)으로 바꾸고
+    /// 노드 글을 바꾼다. NDR은 같은 폴더 안 MoveFileW로 바꾸고(실패는 이름 작업 오류 창), 트리의 그 부분을 다시 읽고,
+    /// 그 폴더(또는 그 안)를 보던 패널은 새 경로로, 부모를 보던 패널은 새로 고친다. 빈 이름·같은 이름은 아무것도 안 한다.
+    pub(super) fn tree_rename_commit(&mut self, index: usize) {
+        use ndr::shell_tree::same_key;
+        let Some((folder, text)) = self.panes[index].tree_edit.take() else { return };
+        let old = folder.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let Some(parent) = folder.parent().map(Path::to_path_buf) else { return };
+        if text.is_empty() || text == old {
+            return;
+        }
+        let target = parent.join(&text);
+        let error = ndr::names::move_file(&folder.to_string_lossy(), &target.to_string_lossy());
+        if error != 0 {
+            return self.show_name_operation_error(error, false, |_, _, _| {});
+        }
+        let moved = |path: &Path| -> Option<PathBuf> {
+            let text = path.to_string_lossy();
+            let base = folder.to_string_lossy();
+            let cut = base.len();
+            if text.len() < cut || !text.is_char_boundary(cut) || !ndr::names::equals_ignore_case(&text[..cut], &base) {
+                return None;
+            }
+            let rest = &text[cut..];
+            (rest.is_empty() || rest.starts_with('\\')).then(|| PathBuf::from(format!("{}{rest}", target.to_string_lossy())))
+        };
+        self.tree_cache.retain(|(key, _), _| !same_key(key, &parent) && moved(key).is_none());
+        self.tree_requests.retain(|(key, _)| !same_key(key, &parent) && moved(key).is_none());
+        for i in 0..self.panes.len() {
+            let open: Vec<PathBuf> = self.panes[i].tree_open.iter().cloned().collect();
+            self.panes[i].tree_open = open.into_iter().map(|k| moved(&k).unwrap_or(k)).collect();
+            if let Some(selected) = self.panes[i].tree_selected.clone().and_then(|k| moved(&k)) {
+                self.panes[i].tree_selected = Some(selected);
+            }
+            let local = self.panes[i].archive.is_none() && self.panes[i].remote.is_none();
+            if !local {
+                continue;
+            }
+            let path = self.panes[i].path.clone();
+            if let Some(new) = moved(&path) {
+                self.panes[i].tree_synced = Some(new.clone());
+                self.navigate(i, new, false);
+            } else if same_key(&path, &parent) {
+                self.refresh(i);
             }
         }
     }
@@ -944,6 +1058,11 @@ impl App {
             let _ = tx.send(AsyncResult::Tree { path, hidden: show_hidden, directories });
         });
     }
+}
+
+/// 패널 폴더 트리에서 이름을 고칠 수 있는 항목: 부모가 있는 파일 시스템 폴더(드라이브 뿌리·가상 폴더는 뺀다).
+pub(super) fn tree_renamable(node: &ndr::shell_tree::ShellNode) -> bool {
+    node.special == ndr::shell_tree::Special::None && !ndr::shell_tree::is_virtual(&node.key) && node.path.as_ref().is_some_and(|p| p.parent().is_some() && p.file_name().is_some())
 }
 
 /// 패널 폴더 트리 고른 줄 (바탕, 글) 색: VCL TCustomTreeView가 고른 항목의 붓을 clHighlight(`highlight` = GetSysColor(13))로 두고,
