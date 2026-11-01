@@ -630,6 +630,51 @@ fn parse_listing(text: &str) -> Result<Vec<ArchiveEntry>, String> {
     }
     Ok(entries)
 }
+/// Some single-stream 7zip+ handlers emit `Size = ...` without `Path =`
+/// under `l -slt -ba`, although extraction produces one real file.
+/// Derive that one output file's name using the same wrapper suffix as 7z x.
+fn stream_member_name(path: &Path) -> Option<String> {
+    let filename = path.file_name()?.to_str()?;
+    let lower = filename.to_ascii_lowercase();
+    let suffixes = [
+        (".tar.bzip2", ".tar"), (".tar.bz2", ".tar"),
+        (".tar.zstd", ".tar"), (".tar.zst", ".tar"),
+        (".tar.gzip", ".tar"), (".tar.gz", ".tar"),
+        (".tar.xz", ".tar"), (".tar.z", ".tar"),
+        (".tgz", ".tar"), (".tpz", ".tar"),
+        (".tbz2", ".tar"), (".tbz", ".tar"),
+        (".txz", ".tar"), (".tzst", ".tar"),
+        (".taz", ".tar"),
+        (".bzip2", ""), (".bz2", ""),
+        (".gzip", ""), (".gz", ""),
+        (".zstd", ""), (".zst", ""),
+        (".lzma86", ""), (".lzma", ""),
+        (".xz", ""), (".z", ""),
+    ];
+    let (suffix, append) = suffixes.into_iter().find(|(suffix, _)| lower.ends_with(suffix))?;
+    let stem = &filename[..filename.len().checked_sub(suffix.len())?];
+    if stem.is_empty() { return None }
+    let member = format!("{stem}{append}");
+    validate_key(&member).ok()?;
+    Some(member)
+}
+/// For RPM with a bzip2-wrapped cpio member, `-ba` omits the only Path.
+/// A regular 7zip+ listing exposes the nested filename. The decoder removes
+/// the trailing `.bz2` when extracting; the outer .rpm name is unrelated.
+fn rpm_member_name(archive: &Path, password: Option<&str>, cancel: &AtomicBool) -> Result<String, String> {
+    let mut cmd = command()?;
+    cmd.args(["l", "-slt", "-sccUTF-8"]);
+    password_arg(&mut cmd, password)?;
+    cmd.arg("--").arg(archive);
+    let listing = execute(cmd, cancel)?;
+    let archive_name = archive.to_string_lossy();
+    let inner = listing.lines().filter_map(|line| line.strip_prefix("Path = "))
+        .filter(|name| !name.is_empty() && !name.eq_ignore_ascii_case(&archive_name))
+        .last().ok_or("RPM payload has no named member")?;
+    let name = inner.strip_suffix(".bz2").or_else(|| inner.strip_suffix(".BZ2")).unwrap_or(inner);
+    validate_key(name)?;
+    Ok(name.to_owned())
+}
 /// Lists an archive for an archive pane. Original TNXArchiveEnumerator: SetArchive FUN_0045e8b0 re-opens only when the path changes
 /// (lstrcmpiW); an empty path closes it, a missing file or a failed open (FUN_0040442c / FUN_00405858, the Ark reader) clears the path;
 /// FUN_0045f01c closes it, the constructor FUN_0045e6b8 (enumerator kind 3) / destructor FUN_0045e7a0 create and free it, and
@@ -662,21 +707,23 @@ fn list_details(
     let text = execute(cmd, cancel)?;
     reject_unavailable_archive_methods(&archive, &text)?;
     let mut entries = parse_listing(&text)?;
-    // 7zip+ bzip2 streams return no Path and an empty Size field in
-    // `l -slt -ba`, yet `x` produces one file using the archive's basename.
-    if entries.is_empty() && archive_format(&archive).is_some_and(|f| matches!(f.as_str(), "bz2" | "bzip2" | "tar.bz2" | "tar.bzip2" | "tbz" | "tbz2")) {
-        let name = archive.file_name().and_then(|s| s.to_str()).ok_or("Invalid bzip2 filename")?;
-        let lowered = name.to_ascii_lowercase();
-        let suffix = [".tar.bzip2", ".tar.bz2", ".bzip2", ".bz2", ".tbz2", ".tbz"]
-            .into_iter().find(|ext| lowered.ends_with(ext)).ok_or("Invalid bzip2 extension")?;
-        let base = &name[..name.len() - suffix.len()];
-        let inner = if matches!(suffix, ".tbz" | ".tbz2") || suffix.starts_with(".tar.") {
-            format!("{base}.tar")
-        } else {
-            base.to_owned()
-        };
-        validate_key(&inner)?;
-        entries.push(ArchiveEntry { key: inner, is_dir: false, size: 0, size_known: false, modified: None });
+    // 7zip+ omits Path for many single-member wrapper streams (bzip2, xz,
+    // Zstandard, compress .Z), despite being able to extract them normally.
+    if entries.is_empty() {
+        if archive_format(&archive).as_deref() == Some("rpm") {
+            let inner = rpm_member_name(&archive, password, cancel)?;
+            entries.push(ArchiveEntry { key: inner, is_dir: false, size: 0, size_known: false, modified: None });
+        } else if let Some(inner) = stream_member_name(&archive) {
+            entries.push(ArchiveEntry { key: inner, is_dir: false, size: 0, size_known: false, modified: None });
+        }
+    }
+    // Concatenated GZip streams can report only the first member's ISIZE to
+    // `l -slt -ba` (real tgz fixture: 168 bytes reported, 7168 extracted).
+    // That Size is not reliable enough for the output-size assertion.
+    if archive_format(&archive).is_some_and(|f| matches!(f.as_str(), "gz" | "gzip" | "tar.gz" | "tgz" | "tpz")) {
+        for entry in &mut entries {
+            if !entry.is_dir { entry.size_known = false; }
+        }
     }
     let mut encrypted = HashSet::new();
     for block in text.replace("\r\n", "\n").split("\n\n") {
@@ -3029,6 +3076,39 @@ mod entry_tests {
             if archive.is_file() {
                 assert!(!list(&archive, None).unwrap_or_else(|e| panic!("{name}: {e}")).is_empty());
             }
+        }
+    }
+
+    #[test]
+    fn single_stream_archives_expose_real_member_names_for_selective_copy() {
+        for (name, expected) in [
+            ("data.tar.zst", "data.tar"), ("data.tar.xz", "data.tar"),
+            ("data.tar.bz2", "data.tar"), ("data.txz", "data.tar"),
+            ("data.tbz", "data.tar"), ("data.tgz", "data.tar"),
+            ("image.iso.Z", "image.iso"), ("plain.xz", "plain"),
+            ("plain.zstd", "plain"),
+        ] {
+            assert_eq!(stream_member_name(Path::new(name)).as_deref(), Some(expected), "{name}");
+        }
+        assert!(stream_member_name(Path::new("invalid.7z")).is_none());
+        let corpus = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/archive-web-corpus/samples");
+        for (name, expected) in [
+            ("test_compat_xz_1.txz", "test_compat_xz_1.tar"),
+            ("test_compat_zstd_1.tar.zst", "test_compat_zstd_1.tar"),
+            ("test_read_format_iso.iso.Z", "test_read_format_iso.iso"),
+            ("test_read_format_cpio_svr4_bzip2_rpm.rpm", "rpmsample-1.0.0-1.noarch.cpio"),
+        ] {
+            let sample = corpus.join(name);
+            if sample.is_file() {
+                assert!(list(&sample, None).unwrap_or_else(|e| panic!("{name}: {e}"))
+                    .iter().any(|e| e.key == expected), "{name}: missing {expected}");
+            }
+        }
+        let concatenated = corpus.join("test_compat_gzip_1.tgz");
+        if concatenated.is_file() {
+            let items = list(&concatenated, None).unwrap();
+            assert!(items.iter().any(|e| e.key == "test-split.taraa" && !e.size_known),
+                "7zip+ can underreport concatenated GZip uncompressed sizes");
         }
     }
 

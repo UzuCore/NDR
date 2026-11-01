@@ -9,6 +9,7 @@
 !/scripts/archive_web_corpus.ps1
 /tests/*
 !/tests/archive_web_corpus.rs
+!/tests/archive_web_corpus_operations.rs
 /.cargo/
 /THIRD-PARTY-NOTICES.txt
 /Resources/*

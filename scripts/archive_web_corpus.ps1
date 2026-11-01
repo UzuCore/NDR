@@ -181,7 +181,7 @@ $sharpFiles = @(
     'Arj.store.arj', 'Arj.method1.arj', 'Arj.method2.arj', 'Arj.method4.arj',
     'WinZip26.nocomp.multi.zipx', 'WinZip26_BZip2.zipx', 'WinZip26_LZMA.zipx',
     'WinZip27_XZ.zipx', 'WinZip27_ZSTD.zipx',
-    '7Zip.ZSTD.7z', 'Tar.tar.zst', 'Tar.tar.lz', 'Tar.tar.Z',
+    '7Zip.ZSTD.7z', 'Tar.tar', 'Tar.tar.zst', 'Tar.tar.lz', 'Tar.tar.Z',
     'Tar.tar.xz', 'Tar.tar.gz', 'Tar.tar.bz2'
 )
 $sharpDir = Join-Path $out 'sharpcompress'
