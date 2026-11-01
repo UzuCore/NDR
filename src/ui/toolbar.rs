@@ -176,8 +176,30 @@ impl App {
         }
         let texture = ndr::styles::Skin::load(&self.resources.join("Skins"), &theme)
             .ok()
-            .and_then(|skin| skin.image_path(icon))
-            .and_then(|path| decode_png(&path).ok())
+            .and_then(|skin| {
+                // One transparent atlas per theme. Each has ten native-size icons.
+                // Keep the original individual PNGs as a compatibility fallback.
+                let names = ["tb_back.png", "tb_forward.png", "tb_desktop.png",
+                    "tb_documents.png", "tb_pictures.png", "tb_music.png",
+                    "tb_videos.png", "tb_favorites.png", "tb_recyclebin.png",
+                    "tb_noimage.png"];
+                let atlas_icon = icon.replace('\\', "/");
+                let atlas_icon = atlas_icon.rsplit('/').next().unwrap_or("");
+                let from_atlas = names.iter().position(|name| *name == atlas_icon)
+                    .and_then(|index| skin.image_path("toolbar-icons.png")
+                        .and_then(|path| decode_png(&path).ok())
+                        .and_then(|(width, height, rgba)| {
+                            if width == 0 || height == 0 || width % names.len() != 0 { return None; }
+                            let cell_width = width / names.len();
+                            let mut icon_rgba = Vec::with_capacity(cell_width * height * 4);
+                            for y in 0..height {
+                                let start = (y * width + index * cell_width) * 4;
+                                icon_rgba.extend_from_slice(&rgba[start..start + cell_width * 4]);
+                            }
+                            Some((cell_width, height, icon_rgba))
+                        }));
+                from_atlas.or_else(|| skin.image_path(icon).and_then(|path| decode_png(&path).ok()))
+            })
             .map(|(width, height, rgba)| ctx.load_texture(format!("toolbar:{key}"), egui::ColorImage::from_rgba_unmultiplied([width, height], &rgba), egui::TextureOptions::LINEAR));
         self.toolbar_icons.insert(key, texture.clone());
         texture
