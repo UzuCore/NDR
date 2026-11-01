@@ -1139,6 +1139,9 @@ fn system_commands_follow_csharp() {
     assert!(about.starts_with(&format!("NDR {}", env!("CARGO_PKG_VERSION"))) && about.contains(&app.profile.display().to_string()), "{about}");
     // User request: version 1.0.0, homepage = the NDR repository.
     assert_eq!(env!("CARGO_PKG_VERSION"), "1.0.0");
+    assert_eq!(app.menu_label("homepage", "Homepage"), "W. GitHub Repository");
+    let korean = ndr::compat::Language::load(&app.resources.join("Languages"), "ko");
+    assert_eq!(korean.text("Menu.miHomepage", ""), "W. GitHub 저장소");
     app.dispatch("homepage", &ctx);
     assert_eq!(launched().first().map(|(program, _, _)| program.clone()), Some("https://github.com/UzuCore/NDR".to_owned()));
     // User request: Help also opens the NDR repository.
