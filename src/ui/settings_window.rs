@@ -644,18 +644,17 @@ impl SettingsForm {
         let (tab_titles, mut tabs) = original_pages(vec![general, display, paths, programs], language, ko);
         if let Some(rows) = tabs.get_mut(8) {
             rows.push(Row::Section(t(ko, "암호화 폴더 (.ndr)", "Encrypted Folder (.ndr)")));
-            rows.push(choice_row("VaultSessionPolicy", t(ko, "세션 잠금 정책", "Vault session policy"), vec![
-                ("close".into(), t(ko, "닫을 때 즉시 잠금", "Lock immediately on close")),
-                ("inactive".into(), t(ko, "비활동 시간 경과 시 잠금", "Lock after inactivity")),
-                ("elapsed".into(), t(ko, "잠금 해제 후 설정 시간 경과 시 잠금", "Lock after elapsed time")),
-                ("exit".into(), t(ko, "NDR 종료 시 잠금", "Lock when NDR exits")),
-            ], &draft.text("VaultSessionPolicy", "close")));
-            rows.push(choice_row("VaultSessionMinutes", t(ko, "세션 유지 시간", "Session duration"),
-                ["5", "15", "30", "60", "120"].into_iter().map(|v| (v.into(), format!("{v} min"))).collect(),
-                &draft.values.get("VaultSessionMinutes").and_then(Value::as_i64).unwrap_or(15).to_string()));
-            rows.push(check("VaultLockOnExit", t(ko, "NDR 종료 시 잠금", "Lock when NDR exits"), true));
-            rows.push(check("VaultLockOnMinimize", t(ko, "최소화 시 잠금", "Lock when minimized"), false));
-            rows.push(Row::Note(t(ko, "세션 만료 후에는 반드시 비밀번호를 다시 입력해야 합니다. 비밀번호 복구 기능은 없습니다.", "A password is required after every expiration. There is no password recovery.")));
+            rows.push(choice_row("VaultSessionPolicy", t(ko, "세션 유지 방식", "Session retention"), vec![
+                ("exit".into(), t(ko, "NDR 종료 시까지 세션 유지", "Keep session until NDR exits")),
+                ("elapsed".into(), t(ko, "지정한 시간 동안 세션 유지", "Keep session for a specified duration")),
+            ], if draft.text("VaultSessionPolicy", "elapsed") == "exit" { "exit" } else { "elapsed" }));
+            rows.push(Row::Text {
+                key: "VaultSessionMinutes".into(),
+                label: t(ko, "세션 유지 시간 (분, 1~1440)", "Session duration (minutes, 1-1440)"),
+                value: draft.values.get("VaultSessionMinutes").and_then(Value::as_i64).unwrap_or(10).to_string(),
+                read_only: false, max: 4, upper: false,
+            });            rows.push(check("VaultLockOnMinimize", t(ko, "최소화 시 잠금", "Lock when minimized"), false));
+            rows.push(Row::Note(t(ko, "세션 만료 후에는 반드시 비밀번호를 다시 입력해야 합니다. 비밀번호 복구 기능은 없습니다.", "Returning to the folder during the session requires no password. On expiry or NDR exit, authentication is required.")));
         }
         let button_captions = [pref("Caption.btnOk", "확인(&O)", "&OK"), pref("Caption.btnCancel", "취소", "Cancel"), pref("Caption.btnApply", "적용(&A)", "&Apply")];
         let captions = [
@@ -800,6 +799,13 @@ impl SettingsForm {
                                 values.insert(key.clone(), json!(v.clamp(0, 1000)));
                             }
                         }
+                        "VaultSessionMinutes" => {
+                            let minutes = int(value).filter(|n| (1..=1440).contains(n)).ok_or_else(|| {
+                                if self.ko { "암호화 폴더 세션 시간은 1~1440분으로 입력하세요.".to_owned() }
+                                else { "Enter a session duration from 1 to 1440 minutes.".to_owned() }
+                            })?;
+                            values.insert(key.clone(), json!(minutes));
+                        }
                         "FolderTreeDepth" => {
                             if let Some(v) = int(value) {
                                 values.insert(key.clone(), json!(v.clamp(1, 64)));
@@ -818,9 +824,6 @@ impl SettingsForm {
                         "Theme" | "LeftViewStyle" | "RightViewStyle" | "LeftSortMode" | "RightSortMode" | "LeftFolderSortMode" | "RightFolderSortMode" | "LeftGroupMode" | "RightGroupMode"
                         | "LeftFolderCategoryMode" | "RightFolderCategoryMode" | "SizeUnit" | "Language" | "VaultSessionPolicy" => {
                             values.insert(key.clone(), Value::String(value));
-                        }
-                        "VaultSessionMinutes" => {
-                            values.insert(key.clone(), json!(value.parse::<i64>().unwrap_or(15).clamp(1, 1440)));
                         }
                         "LeftColumnCount" | "RightColumnCount" => {
                             let count = if value == "Auto" { 0 } else { value.parse::<i64>().unwrap_or(0).clamp(1, 19) };

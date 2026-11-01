@@ -709,6 +709,8 @@ pub struct App {
     msgbox_icons: HashMap<u16, egui::TextureHandle>,
     original_dialogs: Vec<original_dialogs::OriginalDialog>,
     vault_dialog: Option<vault_window::VaultDialog>,
+    /// Authenticated SQLCipher connections retained in memory between visits.
+    vault_sessions: HashMap<PathBuf, ndr::vault::Vault>,
     vault_text_editor: Option<vault_window::VaultTextEditor>,
     /// Subfolders of the address bar's chevron menu (path, whether it is a drive list) -> (path, text). Cleared when a new listing arrives.
     crumb_cache: HashMap<(PathBuf, bool), Vec<(PathBuf, String)>>,
@@ -1024,6 +1026,7 @@ impl App {
             msgbox_icons: HashMap::new(),
             original_dialogs: Vec::new(),
             vault_dialog: None,
+            vault_sessions: HashMap::new(),
             vault_text_editor: None,
             crumb_cache: HashMap::new(),
             folder_size_queue: Arc::new((Mutex::new(std::collections::VecDeque::new()), std::sync::Condvar::new())),
@@ -2238,7 +2241,8 @@ impl eframe::App for App {
     fn on_exit(&mut self, _: Option<&eframe::glow::Context>) {
         self.vault_dialog = None;
         self.vault_text_editor = None;
-        for pane in &mut self.panes { pane.vault = None; }
+        for index in 0..2 { self.discard_vault(index); }
+        self.vault_sessions.clear();
         if let Some(job) = &self.job {
             job.cancel.store(true, Ordering::Relaxed);
         }

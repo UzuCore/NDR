@@ -18,12 +18,12 @@ pub enum SessionPolicy {
 
 impl SessionPolicy {
     pub fn from_settings(settings: &crate::settings::Settings) -> Self {
-        let minutes = settings.values.get("VaultSessionMinutes").and_then(|v| v.as_i64()).unwrap_or(15).clamp(1, 1440) as u64;
-        match settings.text("VaultSessionPolicy", "close").as_str() {
-            "inactive" => Self::Inactive(Duration::from_secs(minutes * 60)),
-            "elapsed" => Self::Elapsed(Duration::from_secs(minutes * 60)),
+        let minutes = settings.values.get("VaultSessionMinutes").and_then(|v| v.as_i64()).unwrap_or(10).clamp(1, 1440) as u64;
+        match settings.text("VaultSessionPolicy", "elapsed").as_str() {
             "exit" => Self::UntilExit,
-            _ => Self::CloseOnLeave,
+            // Legacy close/inactivity settings migrate to the time-limited
+            // policy. Sessions no longer expire simply by leaving the folder.
+            _ => Self::Elapsed(Duration::from_secs(minutes * 60)),
         }
     }
 

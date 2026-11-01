@@ -114,19 +114,24 @@ fn draw_settings(app: &mut App, ctx: &egui::Context) {
 #[test]
 fn encrypted_folder_options_persist_with_required_password_reauthentication() {
     let (root, ctx, mut app) = fixture("vault-options", "ko");
-    assert_eq!(ndr::vault::SessionPolicy::from_settings(&app.settings), ndr::vault::SessionPolicy::CloseOnLeave);
+    assert_eq!(ndr::vault::SessionPolicy::from_settings(&app.settings),
+        ndr::vault::SessionPolicy::Elapsed(Duration::from_secs(600)));
     app.dispatch("options", &ctx);
-    assert!(matches!(app.settings_form().unwrap().row_mut("VaultLockOnExit"), Some(Row::Check { value: true, .. })));
     assert!(matches!(app.settings_form().unwrap().row_mut("VaultLockOnMinimize"), Some(Row::Check { value: false, .. })));
-    set_combo(&mut app, "VaultSessionPolicy", "inactive");
-    set_combo(&mut app, "VaultSessionMinutes", "30");
+    assert!(matches!(app.settings_form().unwrap().row_mut("VaultSessionMinutes"), Some(Row::Text { value, .. }) if value == "10"));
+    assert!(matches!(app.settings_form().unwrap().row_mut("VaultSessionPolicy"), Some(Row::Combo { choices, .. }) if choices.len() == 2));
+    set_combo(&mut app, "VaultSessionPolicy", "elapsed");
+    set_text(&mut app, "VaultSessionMinutes", "30");
     app.settings_action(SettingsAction::Ok, &ctx);
-    assert_eq!(app.settings.text("VaultSessionPolicy", ""), "inactive");
+    assert_eq!(app.settings.text("VaultSessionPolicy", ""), "elapsed");
     assert_eq!(app.settings.values.get("VaultSessionMinutes"), Some(&serde_json::json!(30)));
     assert_eq!(ndr::vault::SessionPolicy::from_settings(&app.settings),
-        ndr::vault::SessionPolicy::Inactive(Duration::from_secs(1800)));
-    assert!(app.settings.flag("VaultLockOnExit", true));
+        ndr::vault::SessionPolicy::Elapsed(Duration::from_secs(1800)));
     assert!(!app.settings.flag("VaultLockOnMinimize", false));
+    app.dispatch("options", &ctx);
+    set_combo(&mut app, "VaultSessionPolicy", "exit");
+    app.settings_action(SettingsAction::Ok, &ctx);
+    assert_eq!(ndr::vault::SessionPolicy::from_settings(&app.settings), ndr::vault::SessionPolicy::UntilExit);
     drop(app);
     std::fs::remove_dir_all(root).unwrap();
 }

@@ -94,24 +94,26 @@ the name generator is independent from SQLCipher keys and passwords.
 - The per-file size limit is 64 MiB; an import/export batch is limited to
   512 MiB, 10,000 entries and 64 nested levels. These synchronous operations
   are not intended for huge datasets or external editing workflows.
-- Navigating away, switching tabs or a session lock discards the SQLCipher
-  connection and clears decrypted pane text, filenames and editor buffers.
-- Closing the container or an enabled timeout/minimize lock ends the in-memory
-  session. No password is saved in settings or the local filesystem.
+- Navigating away or switching tabs clears decrypted pane text, filenames and
+  editor buffers, while the authenticated SQLCipher connection is retained
+  only in process memory until the selected session deadline.
+- Expiration, NDR exit or the optional minimize lock drops the connection and
+  all retained authentication. No password is saved to settings or disk.
 
 ## Session policy
 
 Configured in Options > NDR > Encrypted Folder:
 
-- Default policy: lock immediately when leaving the encrypted folder pane.
-- Default period: 15 minutes (used only for inactivity/timed policies).
-- Always lock on NDR exit: enabled; minimize lock: disabled by default.
-- Expiration or explicit lock drops the SQLCipher connection and destroys
-  the displayed plaintext editor buffer. **Every subsequent unlock requires
-  the password again**, regardless of earlier session settings.
-- Optional modes: lock after inactivity, lock after elapsed time, or on NDR
-  exit. The 15-minute value is configurable when one of the timed modes is
-  selected.
+- **Until NDR exits:** one authentication per container is valid throughout
+  the current NDR process, including after leaving the folder and returning.
+- **For a specified duration:** one authentication is valid for a fixed number
+  of minutes measured from login. The default is **10 minutes**, editable as
+  an integer between 1 and 1440 minutes. Reopening does not reset the timer.
+- The default is the timed 10-minute mode. Existing `close`/`inactive` policies
+  are migrated to elapsed-time behavior, instead of immediately locking on
+  folder leave. Expired sessions always ask for the password again.
+- Optional minimize lock is disabled by default, but when enabled it also
+  invalidates sessions retained from previously closed folders.
 
 ## Durability and plaintext exposure
 

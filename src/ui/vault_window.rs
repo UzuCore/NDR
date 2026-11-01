@@ -20,12 +20,6 @@ impl Drop for VaultTextEditor {
     fn drop(&mut self) { self.body.zeroize(); self.name.zeroize(); }
 }
 
-impl Drop for PaneVault {
-    fn drop(&mut self) {
-        for (_, name) in &mut self.stack { name.zeroize(); }
-    }
-}
-
 impl PaneVault {
     fn new(file: PathBuf, database: Vault) -> Self {
         Self { file, database, stack: vec![(1, String::new())] }
@@ -61,7 +55,15 @@ impl App {
     /// Discard the in-memory connection AND all decrypted pane presentation
     /// buffers, including on tab switches and direct address navigation.
     pub(super) fn discard_vault(&mut self, pane: usize) {
-        if self.panes[pane].vault.take().is_none() { return; }
+        let Some(mut container) = self.panes[pane].vault.take() else { return };
+        for (_, name) in &mut container.stack { name.zeroize(); }
+        // Keep only the authenticated SQLCipher connection, never the
+        // decrypted pane view or editor text. No password is stored on disk.
+        let policy = SessionPolicy::from_settings(&self.settings);
+        if !container.database.expired(policy) {
+            let key = std::fs::canonicalize(&container.file).unwrap_or(container.file.clone());
+            self.vault_sessions.insert(key, container.database);
+        }
         let state = &mut self.panes[pane];
         for entry in &mut state.entries { entry.name.zeroize(); }
         state.entries.clear();
@@ -93,6 +95,7 @@ impl App {
         let policy = SessionPolicy::from_settings(&self.settings);
         let minimized = self.settings.flag("VaultLockOnMinimize", false)
             && ctx.input(|i| i.viewport().minimized.unwrap_or(false));
+        self.vault_sessions.retain(|_, database| !minimized && !database.expired(policy));
         for pane in 0..2 {
             let expired = self.panes[pane].vault.as_ref().is_some_and(|state|
                 minimized || state.database.expired(policy));
@@ -102,6 +105,9 @@ impl App {
                 self.status = "암호화 폴더가 잠겼습니다. 다시 열어 인증하세요.".into();
             }
         }
+        // Even if exiting an active pane temporarily cached its session,
+        // minimize-lock must invalidate every retained authentication.
+        if minimized { self.vault_sessions.clear(); }
     }
 
     fn attach_vault(&mut self, pane: usize, container: PaneVault) {
@@ -366,6 +372,55 @@ mod tests {
     use super::*;
 
     #[test]
+    fn elapsed_session_is_reused_after_leaving_and_reentering_without_password() {
+        let (root, _ctx, mut app) = super::super::tools_tests::fixture("vault-session-ten", "ko");
+        let file = root.join("left/stay.ndr");
+        let database = Vault::create(&file, "passphrase 123456".into()).unwrap();
+        assert_eq!(SessionPolicy::from_settings(&app.settings),
+            SessionPolicy::Elapsed(std::time::Duration::from_secs(600)));
+        app.attach_vault(0, PaneVault::new(file.clone(), database));
+        app.active = 0;
+        app.parent();
+        assert!(app.panes[0].vault.is_none());
+        assert_eq!(app.vault_sessions.len(), 1, "leaving the folder caches authenticated SQLCipher");
+        app.open_vault(file.clone(), false);
+        assert!(app.vault_dialog.is_none(), "reentry must skip the password dialog");
+        assert!(app.panes[0].vault.is_some());
+        assert!(app.vault_sessions.is_empty(), "a reused session is now owned by the pane");
+        app.parent();
+        assert_eq!(app.vault_sessions.len(), 1);
+        app.vault_sessions.clear();
+        app.open_vault(file, false);
+        assert!(app.vault_dialog.is_some(), "after the cached session is invalidated a password is required");
+        drop(app);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn session_until_exit_keeps_unlock_across_several_visits() {
+        let (root, _ctx, mut app) = super::super::tools_tests::fixture("vault-session-exit", "ko");
+        app.active = 1;
+        app.settings.values.insert("VaultSessionPolicy".into(), serde_json::json!("exit"));
+        assert_eq!(SessionPolicy::from_settings(&app.settings), SessionPolicy::UntilExit);
+        let file = root.join("right/remember.ndr");
+        let database = Vault::create(&file, "passphrase 123456".into()).unwrap();
+        app.attach_vault(1, PaneVault::new(file.clone(), database));
+        for _ in 0..3 {
+            app.discard_vault(1);
+            assert_eq!(app.vault_sessions.len(), 1);
+            app.open_vault(file.clone(), false);
+            assert!(app.vault_dialog.is_none());
+            assert!(app.panes[1].vault.is_some());
+        }
+        app.discard_vault(1);
+        app.vault_sessions.clear(); // Shutdown removes all retained auth.
+        app.open_vault(file, false);
+        assert!(app.vault_dialog.is_some());
+        drop(app);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn f3_copies_regular_files_and_folders_into_vault_and_exports_with_confirmation() {
         let (root, ctx, mut app) = super::super::tools_tests::fixture("vault-f5", "ko");
         let vault_file = root.join("right/safe.ndr");
@@ -496,9 +551,12 @@ mod tests {
         assert!(app.panes[0].vault.is_some(), "leaving subfolder does not require reauthentication");
         assert!(app.panes[0].entries.iter().any(|e| e.name == "notes.txt"));
         app.parent();
-        assert!(app.panes[0].vault.is_none(), "leaving the container closes the session");
+        assert!(app.panes[0].vault.is_none(), "leaving the container clears the pane view");
+        assert_eq!(app.vault_sessions.len(), 1, "a valid login persists across navigation");
         assert!(file.is_file());
         assert!(!parent.join("스테고사우루스").exists(), "no plaintext folder was created");
+        app.vault_sessions.clear();
+        drop(app);
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -846,6 +904,16 @@ impl VaultDialog {
 
 impl App {
     pub(super) fn open_vault(&mut self, path: PathBuf, creating: bool) {
+        if !creating {
+            let key = std::fs::canonicalize(&path).unwrap_or(path.clone());
+            if let Some(database) = self.vault_sessions.remove(&key) {
+                if !database.expired(SessionPolicy::from_settings(&self.settings)) {
+                    self.vault_dialog = None;
+                    self.attach_vault(self.active, PaneVault::new(path, database));
+                    return;
+                }
+            }
+        }
         self.vault_dialog = Some(VaultDialog::new(path, creating));
     }
 
