@@ -612,6 +612,25 @@ impl App {
         }
     }
     pub(super) fn dispatch(&mut self, id: &str, ctx: &egui::Context) {
+        if matches!(id, "copyToOther" | "moveToOther" | "contextCopyTo" | "contextMoveTo")
+            && self.panes.iter().any(|pane| pane.vault.is_some()) {
+            let source = self.active;
+            let target = 1 - source;
+            if id.contains("move") || id.contains("Move") {
+                self.status = "암호화 폴더로의 이동은 지원하지 않습니다. 복사 후 원본을 확인하세요.".into();
+                return;
+            }
+            if self.panes[target].vault.is_some() && self.panes[source].vault.is_none()
+                && self.panes[source].archive.is_none() && self.panes[source].remote.is_none() {
+                let sources = self.panes[source].targets();
+                return self.vault_import_paths(target, sources);
+            }
+            if self.panes[source].vault.is_some() {
+                return self.vault_export_to_other(source);
+            }
+            self.status = "이 조합의 암호화 폴더 복사 작업은 지원하지 않습니다.".into();
+            return;
+        }
         if self.panes[self.active].vault.is_some() {
             match id {
                 "newFolder" => return self.vault_new_item(true),

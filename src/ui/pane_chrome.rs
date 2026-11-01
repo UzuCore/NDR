@@ -156,13 +156,10 @@ impl App {
     /// Opens the chosen tab's location (without adding to history). Original FUN_00489d20 (tab switch): an existing location goes to the folder (for a file, its folder with the cursor
     /// on the file); otherwise an existing parent; if none exists, the tab is removed. Fixed: previously it tried to open missing locations as is and read the same location twice.
     fn show_tab(&mut self, index: usize) {
-        if self.panes[index].vault.is_some() {
-            self.vault_text_editor = None;
-        }
+        self.discard_vault(index);
         let pane = &mut self.panes[index];
         let Some(path) = pane.tabs.get(pane.tab).cloned() else { return };
         pane.archive = None;
-        pane.vault = None;
         self.active = index;
         let special = super::panes::is_drives(&path) || path.to_string_lossy().starts_with("ftp://") || path.to_string_lossy().starts_with("sftp://");
         let mut target = path.clone();

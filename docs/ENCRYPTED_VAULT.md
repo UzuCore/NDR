@@ -75,14 +75,27 @@ the name generator is independent from SQLCipher keys and passwords.
 - Double-click subfolders to enter. The `..` entry returns to the parent;
   leaving the container closes the SQLCipher session. File names and content
   are not extracted to an unencrypted working directory.
-- Supported in-pane operations: create internal folders/files, rename, delete,
-  paste local files directly into SQLCipher (64 MiB maximum), and edit UTF-8
-  text files up to 1 MiB using a memory-only editor. Binary files remain
-  encrypted but cannot be edited with an external application in this mode.
-- Conventional shell copy, cut, move, drag-and-drop and external program
-  opening are blocked while browsing the virtual pane to prevent accidental
-  operations on synthetic filesystem paths. Support for transparent external
-  editing and arbitrarily large files requires a separate design.
+- Supported in-pane operations: create internal folders/files, rename, atomic
+  multi-item delete, paste local files and full directory trees directly into
+  SQLCipher, and edit UTF-8 text files up to 1 MiB in a memory-only editor.
+- F3 (Copy to Other Pane) copies selected regular files/directories from the other local pane into
+  an open encrypted folder, preserving subfolder structure. Import runs in a
+  single SQLCipher transaction: a conflict, invalid name or failed read rolls
+  back the entire batch. No plaintext staging files are created. Reparse
+  points, symbolic links and junctions are rejected.
+- F3 in the reverse direction exports selected items to the other local pane.
+  It always requests confirmation because this writes **unencrypted plaintext**.
+  Export never overwrites existing targets; on failure it attempts to remove
+  only the entries created by that export, preserving prior user files.
+- Ctrl+V accepts regular files or whole folder trees from the filesystem. A
+  cut/move clipboard is rejected: use copy instead. F4 move, shell drag-and-drop
+  and external program opening remain unsupported for vault contents to avoid
+  unsafe operations on synthetic filesystem paths.
+- The per-file size limit is 64 MiB; an import/export batch is limited to
+  512 MiB, 10,000 entries and 64 nested levels. These synchronous operations
+  are not intended for huge datasets or external editing workflows.
+- Navigating away, switching tabs or a session lock discards the SQLCipher
+  connection and clears decrypted pane text, filenames and editor buffers.
 - Closing the container or an enabled timeout/minimize lock ends the in-memory
   session. No password is saved in settings or the local filesystem.
 
@@ -113,9 +126,8 @@ Configured in Options > NDR > Encrypted Folder:
   original**. Exporting deliberately writes plaintext to the specified path.
   External editors are intentionally not launched automatically because they
   commonly leave sensitive plaintext on disk.
-- The pane integration supports creating vaults, opening via double-click,
-  browsing nested folders, creating folders/files, renaming/deleting, and
-  editing UTF-8 text in memory. It does **not** yet integrate every native pane
+- The pane integration now supports folder-tree import/export, atomic deletion,
+  and F3 panel-to-panel copy. It does **not** yet integrate every native pane
   operation, shell drag-and-drop, multi-gigabyte streaming, or password changes.
 - Imported file limit is 64 MiB and in-memory text editing limit is 1 MiB.
 
