@@ -1,0 +1,296 @@
+﻿CTRL TToolButton tbFile Caption=" &File " DropdownMenu=pmFile
+CTRL TToolButton tbFolder Caption=" F&older " DropdownMenu=pmFolder
+CTRL TToolButton tbEdit Caption=" &Edit " DropdownMenu=pmEdit
+CTRL TToolButton tbView Caption=" Vie&w " DropdownMenu=pmView
+CTRL TToolButton tbSystem Caption=" &System " DropdownMenu=pmSystem
+CTRL TToolButton tbArchive Caption=" &Archive " DropdownMenu=pmArchive
+CTRL TToolButton tbConnect Caption=" &Network " DropdownMenu=pmConnect
+CTRL TToolButton tbTools Caption=" &Tools " DropdownMenu=pmTools
+CTRL TToolButton tbHelp Caption=" &Help " DropdownMenu=pmHelp
+CTRL TNXPngButton bSort DropdownMenu=pmSort Hint="Sort"
+CTRL TNXPngButton bColCount DropdownMenu=pmColCount Hint="Columns"
+TPopupMenu pmFavorites OnPopup=pmFavoritesPopup
+  TMenuItem N22 Caption="-"
+  TMenuItem miAddToFavorites Caption="Add to Favorites" OnClick=miAddToFavoritesClick
+  TMenuItem miOrgFavorites Caption="Organize Favorites" OnClick=miOrgFavoritesClick
+TPopupMenu pmFile OnPopup=MainMenuPopup
+  TMenuItem miOpen Caption="&Q. Open/Execute\tEnter" OnClick=miOpenClick
+  TMenuItem miParameterOpen Caption="&W. Open with Parameters..." OnClick=miParameterOpenClick ShortCut=16397
+  TMenuItem miOpenAllSelectedFiles Caption="&L. Open All Selected Files" OnClick=miOpenAllSelectedFilesClick
+  TMenuItem N26 Caption="-"
+  TMenuItem miCopyTo Caption="&C. Copy To..." OnClick=miCopyToClick ShortCut=32835
+  TMenuItem miMoveTo Caption="&V. Move To..." OnClick=miMoveToClick ShortCut=32845
+  TMenuItem N8 Caption="-"
+  TMenuItem miDelete Caption="&D. Send to RecycleBin..." OnClick=miDeleteClick ShortCut=32836
+  TMenuItem miShred Caption="&S. Shred and Delete..." OnClick=miShredClick ShortCut=24644
+  TMenuItem N27 Caption="-"
+  TMenuItem miRename Caption="&R. Rename..." OnClick=miRenameClick ShortCut=32850
+  TMenuItem miAdvRename Caption="&A. Advanced Rename..." OnClick=miAdvRenameClick ShortCut=41042
+  TMenuItem miChangeAttributes Caption="&Z. Change Attributes/Time..." OnClick=miChangeAttributesClick ShortCut=16474
+  TMenuItem N21 Caption="-"
+  TMenuItem miCalculateSelectedFolderSize Caption="&L. Calculate Selected Folder Size" OnClick=miCalculateSelectedFolderSizeClick
+  TMenuItem N31 Caption="-"
+  TMenuItem miProperties Caption="&E. Properties" OnClick=miPropertiesClick ShortCut=120
+  TMenuItem miDescription Caption="&T. Add/Edit Comment..." OnClick=miDescriptionClick ShortCut=32781
+  TMenuItem miFileInfo Caption="&O. What is this file?" OnClick=miFileInfoClick ShortCut=8205
+  TMenuItem N1 Caption="-"
+  TMenuItem miCreateEmptyFile Caption="&B. Create an empty file..." OnClick=miCreateEmptyFileClick ShortCut=16462
+  TMenuItem miShortcutOnDesktop Caption="&K. Create shortcut(s) on Desktop" OnClick=miCreateShortcutClick ShortCut=16459
+  TMenuItem miShortcutOnQuickLaunch Caption="&U. Create shortcut(s) on Quick Launch" Tag=1 OnClick=miCreateShortcutClick ShortCut=16469
+  TMenuItem N6 Caption="-"
+  TMenuItem miChecksum Caption="&H. Checksum"
+    TMenuItem miCRC Caption="&C. CRC" OnClick=ChecksumClick
+    TMenuItem miMD5 Caption="&M. MD5" Tag=1 OnClick=ChecksumClick
+    TMenuItem miSHA1 Caption="&S. SHA1" Tag=2 OnClick=ChecksumClick
+  TMenuItem N33 Caption="-"
+  TMenuItem miExit Caption="&X. Exit" OnClick=miExitClick ShortCut=32856
+TPopupMenu pmFolder Tag=1 OnPopup=pmFolderPopup
+  TMenuItem miFolderTree Caption="&T. Folder Tree..." OnClick=miFolderTreeClick ShortCut=121
+  TMenuItem miFavorites Caption="&V. Favorites" OnClick=miFavoritesClick ShortCut=122
+  TMenuItem N37 Caption="-"
+  TMenuItem miNewFolder Caption="&C. New Folder..." OnClick=miNewFolderClick ShortCut=32843
+  TMenuItem N39 Caption="-"
+  TMenuItem miHistoryBack Caption="&B. Back" OnClick=HistoryBack ShortCut=32805
+  TMenuItem miHistoryForward Caption="&F. Forward" OnClick=HistoryForward ShortCut=32807
+  TMenuItem N43 Caption="-"
+  TMenuItem miToParent Caption="&X. Go to Parent\tBackspace" OnClick=miToParentClick
+  TMenuItem miToRoot Caption="&Z. Go to Root\t\" OnClick=miToRootClick
+  TMenuItem miToLastDest Caption="&D. Go to Last Destination" OnClick=miToLastDestClick ShortCut=16392
+  TMenuItem N46 Caption="-"
+  TMenuItem miNetwork Caption="&E. Network" OnClick=miNetworkClick
+  TMenuItem N49 Caption="-"
+  TMenuItem miSetWorkFolder Caption="&W. Set Work Folder"
+    TMenuItem miWorkFolder1 Caption="Work Folder &1" OnClick=SetWorkFolderClick ShortCut=16433
+    TMenuItem miWorkFolder2 Caption="Work Folder &2" Tag=1 OnClick=SetWorkFolderClick ShortCut=16434
+    TMenuItem miWorkFolder3 Caption="Work Folder &3" Tag=2 OnClick=SetWorkFolderClick ShortCut=16435
+    TMenuItem miWorkFolder4 Caption="Work Folder &4" Tag=3 OnClick=SetWorkFolderClick ShortCut=16436
+    TMenuItem miWorkFolder5 Caption="Work Folder &5" Tag=4 OnClick=SetWorkFolderClick ShortCut=16437
+  TMenuItem miGoToWorkFolder Caption="&G. Go to Work Folder"
+    TMenuItem miGoToWorkFolder1 Caption="Work Folder &1" OnClick=GoToWorkFolderClick ShortCut=32817
+    TMenuItem miGoToWorkFolder2 Caption="Work Folder &2" Tag=1 OnClick=GoToWorkFolderClick ShortCut=32818
+    TMenuItem miGoToWorkFolder3 Caption="Work Folder &3" Tag=2 OnClick=GoToWorkFolderClick ShortCut=32819
+    TMenuItem miGoToWorkFolder4 Caption="Work Folder &4" Tag=3 OnClick=GoToWorkFolderClick ShortCut=32820
+    TMenuItem miGoToWorkFolder5 Caption="Work Folder &5" Tag=4 OnClick=GoToWorkFolderClick ShortCut=32821
+  TMenuItem N52 Caption="-"
+  TMenuItem miRefresh Caption="&R. Refresh" OnClick=miRefreshClick ShortCut=16466
+TPopupMenu pmEdit Tag=2 OnPopup=pmEditPopup
+  TMenuItem miEditCopy Caption="&C. Copy" OnClick=miEditCopyClick ShortCut=16451
+  TMenuItem miEditCut Caption="&X. Cut" Tag=1 OnClick=miEditCopyClick ShortCut=16472
+  TMenuItem miEditPaste Caption="&V. Paste" OnClick=miEditPasteClick ShortCut=16470
+  TMenuItem miPasteAsShortcut Caption="&S. Paste as Shortcut" OnClick=miPasteAsShortcutClick ShortCut=24662
+  TMenuItem miPasteFolderStructure Caption="&O. Paste Folder Structure" Visible=False
+  TMenuItem N62 Caption="-"
+  TMenuItem miCopyFullPath Caption="&F. Copy Full Path Name" OnClick=CopyPathToClipboard ShortCut=49222
+  TMenuItem miCopyFileName Caption="&A. Copy File Name" Tag=1 OnClick=CopyPathToClipboard ShortCut=49217
+  TMenuItem miCopyPath Caption="&R. Copy Path" Tag=2 OnClick=CopyPathToClipboard ShortCut=49234
+  TMenuItem N68 Caption="-"
+  TMenuItem miSelect Caption="&B. Select\tSpacebar" OnClick=miSelectClick
+  TMenuItem miSelectAll Caption="&U. Select All" OnClick=miSelectAllClick ShortCut=32853
+  TMenuItem miInvertSelection Caption="&I. Invert Selection\tNum *" OnClick=miInvertSelectionClick
+  TMenuItem miAdvSelect Caption="&G. Advanced Selection...\tNum +" Tag=1 OnClick=miAdvSelectionClick
+  TMenuItem miAdvDeselect Caption="&W. Advanced Deselection...\tNum -" OnClick=miAdvSelectionClick
+  TMenuItem N50 Caption="-"
+  TMenuItem miRestoreLastSel Caption="&Q. Restore Last Selection" OnClick=miRestoreLastSelClick ShortCut=8200
+  TMenuItem miSelectSameExt Caption="&T. Select All Same File Type\tNum /" OnClick=miSelectSameExtClick
+  TMenuItem miSelectSameName Caption="&N. Select All Same Name\tCtrl+Num /" OnClick=miSelectSameNameClick
+  TMenuItem N77 Caption="-"
+  TMenuItem miFind Caption="&D. Find..." OnClick=miFindClick ShortCut=16454
+  TMenuItem miFindNext Caption="&N. Find Next" OnClick=miFindNextClick ShortCut=24646
+  TMenuItem N81 Caption="-"
+  TMenuItem miSearchFile Caption="&E. Search..." ShortCut=16456 Visible=False Enabled=False
+TPopupMenu pmView Tag=3 OnPopup=pmViewPopup
+  TMenuItem miLanguage Caption="&O. UI Language"
+    TMenuItem N23 Caption="-"
+    TMenuItem miMoreLanguages Caption="&M. More Languages..." OnClick=miMoreLanguagesClick
+  TMenuItem miSkin Caption="&N. Skin"
+  TMenuItem N11 Caption="-"
+  TMenuItem miDualView Caption="&U. Dual Pane" OnClick=miDualViewClick
+  TMenuItem miShowFolders Caption="&O. Show Folders" OnClick=miShowFoldersClick
+  TMenuItem miViewWorkWnd Caption="&W. Show Work Window" Visible=False Enabled=False
+  TMenuItem N4 Caption="-"
+  TMenuItem miViewToolbar Caption="&T. Toolbar" OnClick=miViewToolbarClick
+  TMenuItem miViewFindResult Caption="&R. Results" OnClick=miViewFindResultClick
+  TMenuItem miViewVertBar Caption="&V. Vertical Toolbar" OnClick=miViewVertBarClick
+  TMenuItem miViewButtonBar Caption="&C. Function Bar" OnClick=miViewButtonBarClick
+  TMenuItem N25 Caption="-"
+  TMenuItem miShowDriveButtons Caption="&I. Show Drive Buttons" OnClick=miShowDriveButtonsClick
+  TMenuItem miViewFolderInfoBar Caption="&D. Show Folder/Disk Info" OnClick=miViewFolderInfoBarClick
+  TMenuItem miViewFileInfoBar Caption="&E. Show File Info" OnClick=miViewFileInfoBarClick
+  TMenuItem miViewExtensionInfo Caption="&X. Show File Type Info" OnClick=miViewExtensionInfoClick Visible=False
+  TMenuItem N20 Caption="-"
+  TMenuItem miNewTab Caption="&B. New Tab" OnClick=miNewTabClick ShortCut=16468
+  TMenuItem N98 Caption="-"
+  TMenuItem miListStyle Caption="&S. List Style"
+    TMenuItem miListStyleAuto Caption="&A. Auto" OnClick=ListStyleClick RadioItem=True GroupIndex=1
+    TMenuItem miListStyleNames Caption="&E. Names" Tag=1 OnClick=ListStyleClick RadioItem=True GroupIndex=1
+    TMenuItem miListStyleDetails Caption="&T. Details" Tag=2 OnClick=ListStyleClick RadioItem=True GroupIndex=1
+    TMenuItem miListStyleThumbs Caption="&B. Thumbnails" Tag=3 OnClick=ListStyleClick RadioItem=True GroupIndex=1
+  TMenuItem miColumn Caption="&C. Columns"
+    TMenuItem miColAuto Caption="&A. Auto" OnClick=miColCountClick ShortCut=49200 RadioItem=True
+    TMenuItem N17 Caption="-"
+    TMenuItem miCol1 Caption="&1  Column" Tag=1 OnClick=miColCountClick ShortCut=49201 RadioItem=True
+    TMenuItem miCol2 Caption="&2  Columns" Tag=2 OnClick=miColCountClick ShortCut=49202 RadioItem=True
+    TMenuItem miCol3 Caption="&3  Columns" Tag=3 OnClick=miColCountClick ShortCut=49203 RadioItem=True
+    TMenuItem miCol4 Caption="&4  Columns" Tag=4 OnClick=miColCountClick ShortCut=49204 RadioItem=True
+    TMenuItem miCol5 Caption="&5  Columns" Tag=5 OnClick=miColCountClick ShortCut=49205 RadioItem=True
+    TMenuItem miCol6 Caption="&6  Columns" Tag=6 OnClick=miColCountClick ShortCut=49206 RadioItem=True
+  TMenuItem N100 Caption="-"
+  TMenuItem miSortBy Caption="&A. Sort by" OnClick=miSortByPopup
+    TMenuItem miSortByNone Caption="&O. None" OnClick=miSortByClick ShortCut=49231 RadioItem=True GroupIndex=1
+    TMenuItem N3 Caption="-" GroupIndex=1
+    TMenuItem miSortByName Caption="&A. Name" Tag=1 OnClick=miSortByClick ShortCut=49230 RadioItem=True GroupIndex=1
+    TMenuItem miSortByExt Caption="&E. Type" Tag=2 OnClick=miSortByClick ShortCut=49221 RadioItem=True GroupIndex=1
+    TMenuItem miSortBySize Caption="&S. Size" Tag=3 OnClick=miSortByClick ShortCut=49235 RadioItem=True GroupIndex=1
+    TMenuItem miSortByTime Caption="&T. Time" Tag=4 OnClick=miSortByClick ShortCut=49236 RadioItem=True GroupIndex=1
+    TMenuItem miSortByAttr Caption="&R. Attributes" Tag=5 OnClick=miSortByClick ShortCut=49218 RadioItem=True GroupIndex=1
+    TMenuItem miSortByColor Caption="&C. Color" Tag=6 OnClick=miSortByClick ShortCut=49219 RadioItem=True GroupIndex=1
+    TMenuItem N7 Caption="-" GroupIndex=1
+    TMenuItem N106 Caption="-" Visible=False GroupIndex=1
+    TMenuItem miSortDescend Caption="&D. Descend" OnClick=miSortDescendClick ShortCut=49341 GroupIndex=1
+  TMenuItem miGroupBy Caption="&G. Group by" Visible=False Enabled=False
+    TMenuItem miUngroup Caption="&G. Ungroup" GroupIndex=1
+    TMenuItem N14 Caption="-" GroupIndex=1
+    TMenuItem miGroupByExt Caption="&E. Type" Tag=2 GroupIndex=1
+    TMenuItem miGroupBySize Caption="&S. Size" Tag=3 GroupIndex=1
+    TMenuItem miGroupByTime Caption="&T. Time" Tag=4 GroupIndex=1
+    TMenuItem miGroupByCategory Caption="&C. Category" Tag=5 GroupIndex=1
+    TMenuItem N119 Caption="-" GroupIndex=1
+    TMenuItem N12 Caption="-" GroupIndex=1
+    TMenuItem miGroupByDescend Caption="&D. Descend" GroupIndex=1
+    TMenuItem miShowGroupName Caption="&V. Show Group Name" GroupIndex=1
+  TMenuItem miFilter Caption="&F. Filter"
+    TMenuItem N19 Caption="-"
+    TMenuItem miFilterCustom Caption="&C. Custom..." OnClick=miFilterCustomClick ShortCut=16457
+  TMenuItem miFolderCategory Caption="&Q. Category" Visible=False Enabled=False
+    TMenuItem miAutoFolderCategory Caption="Auto"
+    TMenuItem N30 Caption="-"
+    TMenuItem miCategoryNormal Caption="Default" Tag=-1
+  TMenuItem N126 Caption="-"
+  TMenuItem miShowHidden Caption="&Z. Show Hidden Files" OnClick=miShowHiddenClick ShortCut=32858
+TPopupMenu pmSystem Tag=4 OnPopup=MainMenuPopup
+  TMenuItem miToDesktop Caption="&D. Desktop" OnClick=GoToSpecialFolderClick ShortCut=16452
+  TMenuItem miToDocuments Caption="&W. Documents" Tag=1 OnClick=GoToSpecialFolderClick ShortCut=16471
+  TMenuItem miToPictures Caption="&P. Pictures" Tag=2 OnClick=GoToSpecialFolderClick ShortCut=16465
+  TMenuItem miToMusic Caption="&M. Music" Tag=3 OnClick=GoToSpecialFolderClick ShortCut=16467
+  TMenuItem miToVideos Caption="&V. Videos" Tag=4 OnClick=GoToSpecialFolderClick ShortCut=16463
+  TMenuItem miToDownloads Caption="&S. Downloads" Tag=5 OnClick=GoToSpecialFolderClick
+  TMenuItem N128 Caption="-"
+  TMenuItem miControlPanel Caption="&C. Control Panel..." OnClick=miControlPanelClick ShortCut=32891
+  TMenuItem miAddRemoveProg Caption="&A. Add/Remove Programs..." OnClick=miAddRemovePorgClick ShortCut=32890
+  TMenuItem N131 Caption="-"
+  TMenuItem miRecycleBin Caption="&R. Recycle Bin..." OnClick=miRecycleBinClick ShortCut=16450
+  TMenuItem miEmptyRecycleBin Caption="&E. Empty Recycle Bin..." OnClick=miEmptyRecycleBinClick ShortCut=24642
+  TMenuItem N134 Caption="-"
+  TMenuItem miToTemp Caption="&T. Go to Temp Folder" OnClick=miToTempClick ShortCut=16464
+  TMenuItem miEmptyTemp Caption="&W. Empty Temp Folder..." OnClick=miEmptyTempClick ShortCut=24656
+  TMenuItem N137 Caption="-"
+  TMenuItem miCommandLine Caption="&F. Command Line\t/" OnClick=miCommandLineClick
+TPopupMenu pmArchive Tag=5 OnPopup=pmArchivePopup
+  TMenuItem miArcAdd Caption="&A. Add to Archive(Copy)..." OnClick=miArcAddToArchiveClick ShortCut=16449
+  TMenuItem miArcMove Caption="&V. Add to Archive(Move)..." Tag=1 OnClick=miArcAddToArchiveClick ShortCut=24641 Visible=False Enabled=False
+  TMenuItem N141 Caption="-"
+  TMenuItem miArcExtract Caption="&E. Extract..." OnClick=miArcExtractClick ShortCut=16453
+  TMenuItem miArcExtractToCurr Caption="&C. Extract into Current Folder" Tag=1 OnClick=miArcExtractClick ShortCut=24645
+  TMenuItem miArcExtractToFolder Caption="&F. Extract into New Folder" Tag=2 OnClick=miArcExtractClick Visible=False
+  TMenuItem miArcExtractAuto Caption="&X. Auto Extract" Tag=3 OnClick=miArcExtractClick ShortCut=32849
+  TMenuItem N144 Caption="-"
+  TMenuItem miArcInstall Caption="&S. Install..." ShortCut=16457 Visible=False Enabled=False
+  TMenuItem N36 Caption="-"
+  TMenuItem miArcProperties Caption="&R. Properties" Visible=False Enabled=False
+TPopupMenu pmConnect Tag=6 OnPopup=pmConnectPopup
+  TMenuItem miFTPQuickConnect Caption="&Q. FTP Quick Connect..." OnClick=miFTPQuickConnectClick
+  TMenuItem N149 Caption="-"
+  TMenuItem miFTPConnect Caption="&C. FTP Connect"
+    TMenuItem N18 Caption="-"
+    TMenuItem miFTPManageSites Caption="&Z. FTP Site Manager..." OnClick=miFTPManageSitesClick
+  TMenuItem miFTPDisconnect Caption="&D. FTP Disconnect" OnClick=miFTPDisconnectClick
+  TMenuItem N01 Caption="-"
+  TMenuItem N38 Caption="&T. FTP Transfer Mode" Visible=False
+    TMenuItem N40 Caption="&T. ASCII"
+    TMenuItem N44 Caption="&B. BINARY"
+    TMenuItem N45 Caption="-" Visible=False
+    TMenuItem N47 Caption="A. Auto" Visible=False
+  TMenuItem miFTPGet Caption="&G. FTP Download" OnClick=miFTPGetClick
+  TMenuItem miFTPPut Caption="&T. FTP Upload" OnClick=miFTPPutClick
+  TMenuItem N10 Caption="-"
+  TMenuItem miMapNetworkDrive Caption="&N. Connect Network Drive..." OnClick=miMapNetworkDriveClick
+  TMenuItem miUnmapNetworkDrive Caption="&U. Disconnect Network Drive..." OnClick=miUnmapNetworkDriveClick
+TPopupMenu pmTools Tag=7 OnPopup=MainMenuPopup
+  TMenuItem miTextViewer Caption="&V. View" OnClick=miTextViewerClick ShortCut=32854
+  TMenuItem miTextEditor Caption="&E. Edit" OnClick=miTextEditorClick ShortCut=32834
+  TMenuItem N152 Caption="-"
+  TMenuItem miClearDescriptions Caption="&C. Clear All Comments" OnClick=miClearDescriptionsClick
+  TMenuItem N154 Caption="-"
+  TMenuItem miSaveList Caption="&Z. Save File List..." OnClick=miSaveListClick
+  TMenuItem N156 Caption="-"
+  TMenuItem miSplitFile Caption="&S. Split File..." OnClick=miSplitFileClick ShortCut=49228
+  TMenuItem miJoinFile Caption="&A. Join Files..." OnClick=miJoinFileClick ShortCut=49226
+  TMenuItem N162 Caption="-"
+  TMenuItem miDiskCopy Caption="&D. Disk Copy..." OnClick=miDiskCopyClick Visible=False
+  TMenuItem N164 Caption="-"
+  TMenuItem miCleanupDisk Caption="&X. Disk Clean-up..." OnClick=miCleanupDiskClick
+  TMenuItem N169 Caption="-"
+  TMenuItem miSynchronizeFolder Caption="&W. Synchronize..." Visible=False Enabled=False
+  TMenuItem miCompareFolder Caption="&R. Compare Folders..." OnClick=miCompareFolderClick
+  TMenuItem N171 Caption="-"
+  TMenuItem miOptions Caption="&O. Options..." OnClick=miOptionsClick ShortCut=16507
+TPopupMenu pmHelp Tag=8 OnPopup=MainMenuPopup
+  TMenuItem miHelp Caption="&H. Help" OnClick=miHelpClick ShortCut=112
+  TMenuItem miShortcut Caption="&S. Shortcut Keys" OnClick=miShortcutClick ShortCut=123
+  TMenuItem N175 Caption="-"
+  TMenuItem miHomepage Caption="&W. Homepage (https://www.xiles.app)" OnClick=miHomepageClick
+  TMenuItem miEmail Caption="&E. Email (xiles@xiles.net)" OnClick=miEmailClick
+  TMenuItem N178 Caption="-"
+  TMenuItem miCheckUpdate Caption="&U. Check Update" OnClick=miCheckUpdateClick
+  TMenuItem N13 Caption="-"
+  TMenuItem miAbout Caption="&A. About" OnClick=miAboutClick
+  TMenuItem miTest Caption="Test" Visible=False
+TPopupMenu pmDrop OnPopup=pmFavoritesPopup
+  TMenuItem miDropCopy Caption="&Copy Here" Tag=1 OnClick=DropMenuClick
+  TMenuItem miDropMove Caption="&Move Here" Tag=2 OnClick=DropMenuClick
+  TMenuItem miDropShortcut Caption="Create &Shortcut Here" Tag=3 OnClick=DropMenuClick
+  TMenuItem N2 Caption="-"
+  TMenuItem miDropCancel Caption="Canc&el" OnClick=DropMenuClick
+TPopupMenu pmSort OnPopup=pmSortPopup
+TPopupMenu pmColCount OnPopup=pmColCountPopup
+TPopupMenu pmMain OnPopup=pmMainPopup
+  TMenuItem mipExplorerMenu Caption="&E. Explorer Menu" OnClick=mipExplorerMenuClick
+  TMenuItem N5 Caption="-"
+  TMenuItem mipOpenInNewTab Caption="&N. Open in New Tab" OnClick=mipOpenInNewTabClick
+  TMenuItem N15 Caption="-"
+  TMenuItem mipOpenWith Caption="&W. Open With" OnClick=mipOpenWithClick
+  TMenuItem mipView Caption="&F. View" OnClick=miTextViewerClick
+  TMenuItem mipEdit Caption="&B. Edit" OnClick=miTextEditorClick
+  TMenuItem N58 Caption="-"
+  TMenuItem mipEditCopy Caption="&C. Copy" OnClick=miEditCopyClick
+  TMenuItem mipEditCut Caption="&X. Cut" Tag=1 OnClick=miEditCopyClick
+  TMenuItem mipEditPaste Caption="&V. Paste" OnClick=miEditPasteClick
+  TMenuItem N24 Caption="-"
+  TMenuItem mipCopyTo Caption="&Y. Copy To..." OnClick=miCopyToClick
+  TMenuItem mipMoveTo Caption="&M. Move To..." OnClick=miMoveToClick
+  TMenuItem N9 Caption="-"
+  TMenuItem mipDelete Caption="&D. Delete" OnClick=miDeleteClick
+  TMenuItem mipRename Caption="&R. Rename..." OnClick=miRenameClick
+  TMenuItem mipChangeAttr Caption="&Z. Change Time/Attr..." OnClick=miChangeAttributesClick
+  TMenuItem mipDescription Caption="&G. Edit Comment..." OnClick=miDescriptionClick
+  TMenuItem N42 Caption="-"
+  TMenuItem mipAddToArchive Caption="&A. Add To Archive..." OnClick=miArcAddToArchiveClick
+  TMenuItem mipArcExtractAuto Caption="&Q. Auto Extract" Tag=3 OnClick=miArcExtractClick Enabled=False
+  TMenuItem N55 Caption="-"
+  TMenuItem mipProperties Caption="&T. Properties" OnClick=miPropertiesClick
+TPopupMenu pmAddressBar
+  TMenuItem mipAddressCopy Caption="Copy Address" OnClick=mipAddressCopyClick
+  TMenuItem mipAddressEdit Caption="Edit Address" OnClick=mipAddressEditClick
+  TMenuItem N16 Caption="-"
+TPopupMenu pmVertBar
+  TMenuItem pmiFrameWidthSame Caption="Equalize Width" OnClick=pmiFrameWidthSameClick
+  TMenuItem pmiFrameWidthLeftToRight Caption="Left Width => Right Width" OnClick=pmiFrameWidth
+  TMenuItem pmiFrameWidthRightToLeft Caption="Left Width <= Right Width" Tag=1 OnClick=pmiFrameWidth
+TPopupMenu pmTab
+  TMenuItem pmiCloseTab Caption="&Close Tab" OnClick=pmiCloseTabClick
+  TMenuItem pmiCloseAllTab Caption="Close &All Other Tabs" OnClick=pmiCloseAllTabClick
+  TMenuItem N02 Caption="-"
+  TMenuItem pmiNewTab Caption="New &Tab" OnClick=pmiNewTabClick
+TPopupMenu pmTemp OnPopup=pmTempPopup
+TPopupMenu pmToolBar OnPopup=pmToolBarPopup
+OK 295 lines

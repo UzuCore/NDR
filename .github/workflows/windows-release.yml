@@ -66,7 +66,8 @@ jobs:
             'Resources/Tools/7zip/Full/7z.dll',
             'Resources/Tools/7zip/License.txt',
             'Resources/complete.wav',
-            'THIRD-PARTY-NOTICES.txt'
+            'THIRD-PARTY-NOTICES.txt',
+            'docs/original-menus.txt'
           )
           foreach ($file in $required) {
             if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {

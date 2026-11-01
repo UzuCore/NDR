@@ -45,3 +45,6 @@ be run by GitHub Actions, because it manages local release directories.
 Runtime assets and third-party license notices are retained under `Resources/`
 and `THIRD-PARTY-NOTICES.txt`. The bundled 7zip+ upstream source reference is
 in `Resources/Tools/7zip/SOURCE.txt`.
+
+The original menu metadata in `docs/original-menus.txt` is also tracked; UI
+regression tests compare the implemented menu items against this fixture.

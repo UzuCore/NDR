@@ -2170,7 +2170,12 @@ fn opening_a_folder_shortcut_moves_the_pane_into_the_target() {
     app.panes[0].cursor = link;
     app.open_current();
     wait(&mut app, &ctx);
-    assert_eq!(app.panes[0].path.to_string_lossy().to_lowercase(), target.to_string_lossy().to_lowercase());
+    // Windows ShellLink::GetPath may return an 8.3 short pathname on a fresh
+    // runner (e.g. RUNNER~1) even though the shortcut opens the correct
+    // directory. Compare the resolved filesystem targets, not spellings.
+    let opened = fs::canonicalize(&app.panes[0].path).unwrap();
+    let expected = fs::canonicalize(&target).unwrap();
+    assert_eq!(opened.to_string_lossy().to_lowercase(), expected.to_string_lossy().to_lowercase());
     let _ = fs::remove_dir_all(root);
 }
 
