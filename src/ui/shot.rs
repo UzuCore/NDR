@@ -148,7 +148,7 @@ impl App {
                     log.received("227 Entering Passive Mode (127,0,0,1,195,80).");
                     log.sent("LIST");
                 }
-                let remote = super::ftp_pane::PaneRemote { fs: std::sync::Arc::new(std::sync::Mutex::new(Box::new(ShotFtp) as Box<dyn super::ftp_pane::PaneFs>)), host: "ftp.example.com".into(), path: "/pub".into(), busy: Default::default(), modes: Default::default(), log: Some(log) };
+                let remote = super::ftp_pane::PaneRemote { fs: std::sync::Arc::new(std::sync::Mutex::new(Box::new(ShotFtp) as Box<dyn super::ftp_pane::PaneFs>)), host: "ftp.example.com".into(), path: "/pub".into(), busy: Default::default(), modes: Default::default(), permissions: Default::default(), log: Some(log) };
                 self.ftp_connected(1, remote);
             }
             // Opening the menu bar (same path as Alt+F): for checking skin menu colors and button cells by eye.

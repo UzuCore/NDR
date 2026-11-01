@@ -61,7 +61,8 @@ impl App {
         let header = if self.settings.flag("ShowIcons", true) { 30.0 } else { 14.0 };
         let attach = self.settings.flag("AttachExtensionToName", false);
         let always = self.side_flag(index, "AlwaysShowFolderSize", false);
-        let sftp = self.panes[index].remote.as_ref().is_some_and(|r| r.is_sftp());
+        // Original OnGetFieldMaxWidth (FUN_00485ae8): "drwxrwxrwx" on any FTP-mode pane (FTP lists show permission texts too).
+        let sftp = self.panes[index].remote.is_some();
         let size = max[3] + 10.0;
         let name0 = self.original_adjusted_name_width(ui, &fm);
         let ext0 = if attach { 0.0 } else { self.original_adjusted_ext_width(ui, &fm) };

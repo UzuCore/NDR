@@ -140,6 +140,9 @@ pub struct RemoteEntry {
     pub modified: Option<i64>,
     /// Permission bits (within 0o7777). None when the server does not report them (C# RemoteEntry.PermissionMode).
     pub mode: Option<u32>,
+    /// The listing's own permission text: the MLSD "perm" fact ("eldfmcp", "radfw") or the LIST mode column ("drwxr-xr-x").
+    /// The original FTP list shows it in the attribute cell (Synapse TFTPListRec.Permission, item +0x74). None for SFTP and DOS listings.
+    pub permission: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -1614,6 +1617,7 @@ impl Client {
                     is_symlink: stat.file_type().is_symlink(),
                     modified: stat.mtime.and_then(|t| i64::try_from(t).ok()),
                     mode: stat.perm.map(|p| p & 0o7777),
+                    permission: None,
                 })),
                 Err(e) if matches!(e.code(), ssh2::ErrorCode::SFTP(2 | 10)) => Ok(None),
                 Err(e) => Err(err(e)),
@@ -1827,6 +1831,7 @@ impl Client {
                                 is_symlink: stat.file_type().is_symlink(),
                                 modified: stat.mtime.and_then(|t| i64::try_from(t).ok()),
                                 mode: stat.perm.map(|p| p & 0o7777),
+                                permission: None,
                             });
                         }
                         Err(e) if e.code() == ssh2::ErrorCode::Session(-16) => break, // libssh2's readdir EOF.
@@ -2473,6 +2478,7 @@ impl Ftp {
                                     .ok()
                                     .and_then(|d| i64::try_from(d.as_secs()).ok()),
                                 mode: None,
+                                permission: None,
                             })
                         })
                         .collect()
@@ -2576,6 +2582,7 @@ fn parse_mlsd(line: &str) -> Result<Option<RemoteEntry>, String> {
     let mut size = 0;
     let mut modified = None;
     let mut mode = None;
+    let mut permission = None;
     for fact in facts.split(';') {
         if let Some((key, value)) = fact.split_once('=') {
             if key.eq_ignore_ascii_case("type") {
@@ -2590,6 +2597,9 @@ fn parse_mlsd(line: &str) -> Result<Option<RemoteEntry>, String> {
             if key.eq_ignore_ascii_case("unix.mode") {
                 mode = u32::from_str_radix(value, 8).ok().map(|m| m & 0o7777);
             }
+            if key.eq_ignore_ascii_case("perm") {
+                permission = Some(value.to_owned());
+            }
         }
     }
     match kind.as_deref() {
@@ -2603,6 +2613,7 @@ fn parse_mlsd(line: &str) -> Result<Option<RemoteEntry>, String> {
                 is_symlink: kind == "link" || kind.contains("slink"),
                 modified,
                 mode,
+                permission,
             }))
         }
         None => Err("MLSD entry has no type".into()),
@@ -2638,6 +2649,7 @@ fn parse_posix_at(line: &str, now: i64) -> Result<RemoteEntry, String> {
         is_symlink: link,
         modified: posix_listing_time(&caps[4], &caps[5], &caps[6], now),
         mode: Some(posix_mode(&caps[2])),
+        permission: Some(format!("{}{}", &caps[1], &caps[2])),
     })
 }
 
@@ -2721,10 +2733,14 @@ mod listing_tests {
         let entry = parse_mlsd("type=file;size=12;modify=20240229123456.789;UNIX.mode=0754; data.bin").unwrap().unwrap();
         assert_eq!((entry.name.as_str(), entry.size, entry.modified, entry.mode), ("data.bin", 12, Some(1_709_210_096), Some(0o754)));
         assert_eq!(parse_mlsd("type=dir; folder").unwrap().unwrap().modified, None);
+        // The listing's own permission text (original attribute cell on FTP panes): MLSD "perm" fact, LIST mode column.
+        assert_eq!(parse_mlsd("type=dir;perm=eldfmcp; pub").unwrap().unwrap().permission.as_deref(), Some("eldfmcp"));
+        assert_eq!(parse_mlsd("type=file;size=1; plain").unwrap().unwrap().permission, None);
         // 2024-06-01 00:00:00 UTC
         let now = unix_seconds(2024, 6, 1, 0, 0, 0).unwrap();
         let file = parse_posix_at("-rwsr-xr-T 1 user group 42 Mar 05 13:07 report.txt", now).unwrap();
         assert_eq!((file.mode, file.modified), (Some(0o5754), unix_seconds(2024, 3, 5, 13, 7, 0)));
+        assert_eq!(file.permission.as_deref(), Some("-rwsr-xr-T"));
         let older = parse_posix_at("drwxr-x--- 2 user group 4096 Dec 24 08:00 archive", now).unwrap();
         assert_eq!((older.is_dir, older.mode, older.modified), (true, Some(0o750), unix_seconds(2023, 12, 24, 8, 0, 0)), "a future clock date is last year");
         let dated = parse_posix_at("-rw-r--r-- 1 u g 0 Jan 02 2001 old.txt", now).unwrap();

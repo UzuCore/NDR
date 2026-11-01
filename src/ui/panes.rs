@@ -322,7 +322,8 @@ impl App {
         let fm = self.original_field_max(ui, index);
         let max = fm.max;
         let pane = &self.panes[index];
-        let sftp = pane.remote.as_ref().is_some_and(|r| r.is_sftp());
+        // Original OnGetFieldMaxWidth (FUN_00485ae8): "drwxrwxrwx" on any FTP-mode pane (FTP lists show permission texts too).
+        let sftp = pane.remote.is_some();
         let header = if self.settings.flag("ShowIcons", true) { 30.0 } else { 14.0 };
         let attach = self.settings.flag("AttachExtensionToName", false);
         let natural = |w: f32| if w >= 1.0 { w + 10.0 } else { 0.0 };

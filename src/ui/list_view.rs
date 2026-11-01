@@ -162,6 +162,7 @@ impl App {
         let (extension_colors, nexus_colors) = self.color_maps();
         let pane = &self.panes[index];
         let sftp_modes = pane.remote.as_ref().filter(|r| r.is_sftp()).and_then(|r| r.modes.lock().ok().map(|m| (r.path.clone(), m.clone())));
+        let ftp_permissions = pane.remote.as_ref().filter(|r| !r.is_sftp()).and_then(|r| r.permissions.lock().ok().map(|m| (r.path.clone(), m.clone())));
         let mut view = PaneView::default();
         let mut shell_types: HashMap<Option<String>, String> = HashMap::new();
         let mut item_colors: HashMap<String, (u8, u8, u8)> = HashMap::new();
@@ -206,11 +207,13 @@ impl App {
                 // Folders show RES DIR (see folder_size_text). Previously the cell was empty.
                 if entry.is_dir { if skin { folder_size_text.clone() } else { String::new() } } else { ndr::parity::size_to_str(entry.size, &unit, thousands) },
                 ndr::listing::list_date_text(entry.modified, &date_format, &time_format, use_age.then(|| [age_labels[0].as_str(), age_labels[1].as_str(), age_labels[2].as_str()]), now),
-                // Original DrawListItem field 5: SFTP list items (+0x78) show the permission text (+0x74), others GetAttrString (0x7b50a4, A/H/R/S in "____").
-                // Fixed: previously the C# text ("RHSA", "-").
-                match &sftp_modes {
-                    Some((directory, modes)) => modes.get(&super::ftp_pane::join_remote(directory, &entry.name)).map(|mode| permission_text(entry.is_dir, *mode)).unwrap_or_default(),
-                    None => ndr::listing::attr_string(entry.attributes),
+                // Original DrawListItem field 5: FTP and SFTP list items (+0x78) show the permission text (+0x74), others GetAttrString (0x7b50a4, A/H/R/S in "____").
+                // FTP keeps the listing's own text (MLSD "perm" fact, e.g. "eldfmcp"; LIST "drwxr-xr-x"), as seen in the running original.
+                // Fixed: previously the C# text ("RHSA", "-"); FTP panes showed "____".
+                match (&sftp_modes, &ftp_permissions) {
+                    (Some((directory, modes)), _) => modes.get(&super::ftp_pane::join_remote(directory, &entry.name)).map(|mode| permission_text(entry.is_dir, *mode)).unwrap_or_default(),
+                    (None, Some((directory, texts))) => texts.get(&super::ftp_pane::join_remote(directory, &entry.name)).cloned().unwrap_or_default(),
+                    (None, None) => ndr::listing::attr_string(entry.attributes),
                 },
                 description,
             ]);

@@ -199,6 +199,8 @@ pub(super) struct PaneRemote {
     pub busy: Arc<AtomicBool>,
     /// Permission bits from the last listing (remote path → mode). Original item +0x74 (the value passed to TfFTPAttributes).
     pub modes: Arc<Mutex<std::collections::HashMap<String, u32>>>,
+    /// Permission texts from the last FTP listing (remote path → MLSD "perm" fact or LIST mode column), shown in the attribute cell.
+    pub permissions: Arc<Mutex<std::collections::HashMap<String, String>>>,
     /// The lines of the original pane +0x358 FTP log pane (FUN_0048d7ac). Absent on the first connection to an SFTP site.
     /// The adapter's client setup FUN_0045adac attaches an IO handler whose sent (FUN_0045afd0, direction 1) and received
     /// (FUN_0045b0b4, direction 0) callbacks forward each control line to the adapter's OnLog event (+0x48), which fills this pane.
@@ -260,14 +262,17 @@ pub(super) struct FtpQuickForm {
 /// lUser(13,59) eUser(94,57 121×21), lPassword(13,86) ePassword(94,84 121×21 '*'), chkPassive(291,88), chkAddToSites(13,132),
 /// btnOk(255,128 75×25 default) btnCancel(338,128 75×25). Some(true) on OK, Some(false) on Cancel.
 pub(super) fn ftp_quick_ui(ui: &mut egui::Ui, form: &mut FtpQuickForm, language: &compat::Language, first_frame: bool, enter: bool) -> Option<bool> {
-    let text = |key: &str, fallback: &str| super::favorites_dialog::access_key(&language.text(&format!("formFTPQuickConnect.{key}"), fallback)).0;
+    // Captions keep their '&' so Alt+letter works like the original (lURL &D → cbHost, lPort &P, lUser &U, lPassword &W, chkPassive &S,
+    // chkAddToSites &A, btnOk &C). Previously the labels had no access keys, so Alt+U typed into the host box.
+    let raw = |key: &str, fallback: &str| language.raw(&format!("formFTPQuickConnect.{key}")).unwrap_or_else(|| fallback.to_owned());
     let mut result = None;
     let (area, _) = ui.allocate_exact_size(egui::vec2(424.0, 164.0), egui::Sense::hover());
     let at = |x: f32, y: f32, w: f32, h: f32| egui::Rect::from_min_size(area.min + egui::vec2(x, y), egui::vec2(w, h));
-    super::original_dialogs::put_left(ui, at(13.0, 22.0, 80.0, 15.0), egui::Label::new(text("Caption.lURL", "A&ddress:")).truncate());
+    let (host_id, port_id, user_id, password_id) = (egui::Id::new("ftp-quick-host"), egui::Id::new("ftp-quick-port"), egui::Id::new("ftp-quick-user"), egui::Id::new("ftp-quick-password"));
+    super::original_dialogs::access_label(ui, at(13.0, 22.0, 80.0, 15.0), &raw("Caption.lURL", "A&ddress:"), host_id);
     // Original cbHost is a drop-down combo (▼ even with no recent hosts) and is the first control: it has the focus when the window opens.
     // Previously the ▼ showed only with recent hosts and nothing had the focus.
-    let host = ui.put(at(94.0, 20.0, 198.0, 21.0), egui::TextEdit::singleline(&mut form.host));
+    let host = ui.put(at(94.0, 20.0, 198.0, 21.0), egui::TextEdit::singleline(&mut form.host).id(host_id));
     if first_frame {
         host.request_focus();
     }
@@ -283,18 +288,18 @@ pub(super) fn ftp_quick_ui(ui: &mut egui::Ui, form: &mut FtpQuickForm, language:
             });
         });
     }
-    super::original_dialogs::put_left(ui, at(320.0, 23.0, 42.0, 15.0), egui::Label::new(text("Caption.lPort", "&Port:")).truncate());
-    ui.put(at(364.0, 20.0, 49.0, 21.0), egui::TextEdit::singleline(&mut form.port).horizontal_align(egui::Align::Center));
-    super::original_dialogs::put_left(ui, at(13.0, 59.0, 80.0, 15.0), egui::Label::new(text("Caption.lUser", "&User:")).truncate());
-    ui.put(at(94.0, 57.0, 121.0, 21.0), egui::TextEdit::singleline(&mut form.user));
-    super::original_dialogs::put_left(ui, at(13.0, 86.0, 80.0, 15.0), egui::Label::new(text("Caption.lPassword", "&Password:")).truncate());
-    ui.put(at(94.0, 84.0, 121.0, 21.0), egui::TextEdit::singleline(&mut form.password).password(true));
-    super::original_dialogs::put_left(ui, at(291.0, 88.0, 122.0, 17.0), egui::Checkbox::new(&mut form.passive, text("Caption.chkPassive", "Passive Mode(&S)")));
-    super::original_dialogs::put_left(ui, at(13.0, 132.0, 220.0, 17.0), egui::Checkbox::new(&mut form.add_to_sites, text("Caption.chkAddToSites", "&Add to the FTP site list")));
-    if ui.put(at(255.0, 128.0, 75.0, 25.0), egui::Button::new(text("Caption.btnOk", "&Connect"))).clicked() {
+    super::original_dialogs::access_label(ui, at(320.0, 23.0, 42.0, 15.0), &raw("Caption.lPort", "&Port:"), port_id);
+    ui.put(at(364.0, 20.0, 49.0, 21.0), egui::TextEdit::singleline(&mut form.port).id(port_id).horizontal_align(egui::Align::Center));
+    super::original_dialogs::access_label(ui, at(13.0, 59.0, 80.0, 15.0), &raw("Caption.lUser", "&User:"), user_id);
+    ui.put(at(94.0, 57.0, 121.0, 21.0), egui::TextEdit::singleline(&mut form.user).id(user_id));
+    super::original_dialogs::access_label(ui, at(13.0, 86.0, 80.0, 15.0), &raw("Caption.lPassword", "&Password:"), password_id);
+    ui.put(at(94.0, 84.0, 121.0, 21.0), egui::TextEdit::singleline(&mut form.password).id(password_id).password(true));
+    super::original_dialogs::access_checkbox(ui, at(291.0, 88.0, 122.0, 17.0), &mut form.passive, &raw("Caption.chkPassive", "Passive Mode(&S)"));
+    super::original_dialogs::access_checkbox(ui, at(13.0, 132.0, 220.0, 17.0), &mut form.add_to_sites, &raw("Caption.chkAddToSites", "&Add to the FTP site list"));
+    if super::original_dialogs::access_button(ui, at(255.0, 128.0, 75.0, 25.0), &raw("Caption.btnOk", "&Connect")) {
         result = Some(true);
     }
-    if ui.put(at(338.0, 128.0, 75.0, 25.0), egui::Button::new(text("Caption.btnCancel", "Cancel"))).clicked() {
+    if super::original_dialogs::access_button(ui, at(338.0, 128.0, 75.0, 25.0), &raw("Caption.btnCancel", "Cancel")) {
         result = Some(false);
     }
     if enter && result.is_none() {
@@ -484,6 +489,10 @@ pub(super) fn list_remote(remote: &PaneRemote, show_hidden: bool) -> Result<Vec<
         modes.clear();
         modes.extend(items.iter().filter_map(|e| Some((join_remote(&remote.path, &e.name), e.mode?))));
     }
+    if let Ok(mut permissions) = remote.permissions.lock() {
+        permissions.clear();
+        permissions.extend(items.iter().filter_map(|e| Some((join_remote(&remote.path, &e.name), e.permission.clone()?))));
+    }
     Ok(items.into_iter().map(|e| to_entry(remote, e)).collect())
 }
 
@@ -594,7 +603,7 @@ impl App {
                 Ok((fs, path))
             });
             let _ = tx.send(match result {
-                Ok((fs, path)) => AsyncResult::FtpConnected { pane: index, remote: PaneRemote { fs: Arc::new(Mutex::new(fs)), host, path, busy: Arc::new(AtomicBool::new(false)), modes: Arc::default(), log } },
+                Ok((fs, path)) => AsyncResult::FtpConnected { pane: index, remote: PaneRemote { fs: Arc::new(Mutex::new(fs)), host, path, busy: Arc::new(AtomicBool::new(false)), modes: Arc::default(), permissions: Arc::default(), log } },
                 Err(error) => AsyncResult::FtpFailed { error },
             });
         });
