@@ -5,6 +5,7 @@
 # 빌드에 쓰지 않는 파일(디스크에는 남김: 배포 스크립트·실행 자원·시험)
 /docs/
 /scripts/*
+!/scripts/package-ci.ps1
 !/scripts/release.ps1
 !/scripts/archive_web_corpus.ps1
 /tests/*

@@ -6,6 +6,11 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: Publish GitHub Release after successful build
+        type: boolean
+        default: false
 
 # GitHub Releases use the built-in GITHUB_TOKEN; no personal token or secret is needed.
 permissions:
@@ -66,7 +71,8 @@ jobs:
             'Resources/Tools/7zip/License.txt',
             'Resources/complete.wav',
             'THIRD-PARTY-NOTICES.txt',
-            'docs/original-menus.txt'
+            'docs/original-menus.txt',
+            'scripts/package-ci.ps1'
           )
           foreach ($file in $required) {
             if (-not (Test-Path -LiteralPath $file -PathType Leaf)) {
@@ -104,7 +110,7 @@ jobs:
           retention-days: 30
 
       - name: Automatically create or update GitHub Release
-        if: github.event_name != 'pull_request'
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish_release)
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
