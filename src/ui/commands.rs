@@ -290,7 +290,7 @@ impl App {
                             self.menu_target(letter, &response)
                         };
                         if response.clicked() || letter_hit {
-                            ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+                            Self::drop_menu_keys(ui);
                             self.menu_letter = None;
                             self.dispatch(id, &ctx);
                             ui.close();
@@ -299,8 +299,7 @@ impl App {
                     if any_focus {
                         highlight = None;
                     } else if let Some(id) = highlighted_command.filter(|_| enter_key) {
-                        // Consume Enter so the window the command opens does not take it as its own OK in the same frame.
-                        ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+                        Self::drop_menu_keys(ui);
                         self.menu_letter = None;
                         self.dispatch(id, &ctx);
                         ui.close();
@@ -438,6 +437,13 @@ impl App {
     /// Whether a submenu is open in the current menu (then parent-level items do not take typed letters).
     pub(super) fn submenu_open(ui: &egui::Ui) -> bool {
         egui::containers::menu::MenuState::from_ui(ui, |state, _| state.open_item.is_some())
+    }
+
+    /// A menu item has run from the keyboard or the mouse: this frame's key presses and typed text belong to the menu, so they are removed before
+    /// the window the command opens reads them. Previously the Enter (or the access letter) that picked the item also reached that window: Enter
+    /// pressed its OK (FTP quick connect closed at once, the FTP download destination box picked its first row).
+    pub(super) fn drop_menu_keys(ui: &egui::Ui) {
+        ui.input_mut(|i| i.events.retain(|e| !matches!(e, egui::Event::Key { pressed: true, .. } | egui::Event::Text(_))));
     }
 
     /// Items with RadioItem = True in the original TfMain DFM (miListStyleAuto, Names, Details, Thumbs). Checked items use RCHECK instead of CHECK.
@@ -585,9 +591,9 @@ impl App {
         }
     }
     pub(super) fn dispatch(&mut self, id: &str, ctx: &egui::Context) {
-        // Original pane FTP mode: commands that work on local files are blocked.
+        // Original pane FTP mode: commands that work on local files do nothing (seen in the running original: Insert on an FTP pane sends nothing
+        // and shows nothing). Previously a C# status notice appeared.
         if self.panes[self.active].remote.is_some() && !super::ftp_pane::ftp_allows(id) {
-            self.status = self.tr("FTP 패널에서는 쓸 수 없는 명령입니다.", "This command is not available in an FTP pane.").into_owned();
             return;
         }
         // Original pmConnect: site connect (FUN_00440734 rows -> FUN_0043e720), quick connect, disconnect, download, upload.
