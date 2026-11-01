@@ -360,8 +360,17 @@ impl App {
                 caption: Some(app.language_pack.text("RES.JOINING", "Joining files...")),
             };
             let started = app.start_progress_task(task_title, progress, move |events, cancel| {
-                let count = options.files.len();
-                let outcome = ndr::split::join_ordered_files(&options.files, &destination, options.join_text, options.overwrite_confirmed, &cancel, &mut |files, bytes, path| {
+                // A single numbered piece (".001", ".part1") joins all of its pieces in order, as the original does (joining big.001 alone
+                // rebuilt the whole big.bin). Previously only that one piece was copied.
+                let files = match options.files.as_slice() {
+                    [only] => {
+                        let parts = ndr::split::find_numbered_parts(only);
+                        if parts.len() > 1 && ndr::split::has_continuous_numbered_parts(&parts) { parts } else { options.files.clone() }
+                    }
+                    _ => options.files.clone(),
+                };
+                let count = files.len();
+                let outcome = ndr::split::join_ordered_files(&files, &destination, options.join_text, options.overwrite_confirmed, &cancel, &mut |files, bytes, path| {
                     let _ = events.send(Event::Progress { path: path.to_path_buf(), bytes, files });
                 });
                 let _ = tx.send(AsyncResult::JoinDone { count, outcome: outcome.map(|_| ()), cancelled: cancel.load(Ordering::Relaxed) });

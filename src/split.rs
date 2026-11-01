@@ -297,10 +297,11 @@ pub fn suggest_joined_file_name(input: &Path) -> String {
     match numbered_suffix(&name) {
         Some((prefix, _, false)) => prefix.to_owned(),
         Some((prefix, _, true)) => metadata_file_name(input).unwrap_or_else(|| prefix.to_owned()),
-        None => {
+        // The original reads "<first file>.crc" for any first file (PathRenameExtension + PathFileExists), not only for ".NNN" pieces.
+        None => metadata_file_name(input).unwrap_or_else(|| {
             let extension = crate::parity::dotnet_extension(&name);
             name[..name.len() - extension.len()].to_owned()
-        }
+        }),
     }
 }
 
@@ -545,6 +546,8 @@ mod tests {
         assert!(has_continuous_numbered_parts(&parts));
         assert!(find_numbered_parts(&root.join("data.002")).is_empty(), "legacy parts must start at 001");
         assert_eq!(suggest_joined_file_name(&root.join("data.001")), "data.bin", "the .crc name");
+        // The original reads "<first>.crc" for any first file: joining data.crc itself proposes data.bin, not "data".
+        assert_eq!(suggest_joined_file_name(&root.join("data.crc")), "data.bin", "a first file with a .crc next to it");
         let joined = join_ordered_files(&parts, &root.join("out.bin"), false, false, &cancel, &mut |_, _, _| {}).unwrap();
         assert_eq!(fs::read(joined).unwrap(), payload);
         assert!(join_ordered_files(&parts, &root.join("out.bin"), false, false, &cancel, &mut |_, _, _| {}).is_err(), "never replaces without consent");
