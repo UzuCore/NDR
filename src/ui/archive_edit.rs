@@ -1,5 +1,5 @@
 //! User request (not in the original): inside an archive, delete, rename, new folder, empty file, copy or move into the archive (add),
-//! move out of the archive (extract then delete), copy or move between archives. Only zip, 7z, tar and wim, which the bundled 7-Zip can modify, are supported
+//! move out of the archive (extract then delete), copy or move between archives. Only zip, 7z, tar, which the bundled 7-Zip can modify, are supported
 //! (ndr::archive::can_modify). The original NexusFile could only extract archive items.
 use super::original_dialogs::{DeleteWarningChoice, DeleteWarningMode};
 use super::*;
@@ -40,8 +40,8 @@ impl App {
 
     pub(super) fn archive_read_only_notice(&mut self) {
         self.notice(
-            "이 압축 형식은 고칠 수 없습니다(zip·7z·tar·wim 압축만 항목을 더하고 지우고 이름을 바꿀 수 있습니다).",
-            "This archive format cannot be changed (only zip, 7z, tar and wim archives can have items added, deleted or renamed).",
+            "이 압축 형식은 고칠 수 없습니다. 항목 추가·삭제·이름 변경은 단일 ZIP·7z·TAR에서만 지원합니다.",
+            "This archive format cannot be changed. Only single-volume ZIP, 7z and TAR support adding, deleting or renaming entries.",
         );
     }
 
@@ -54,8 +54,12 @@ impl App {
     /// CF_HDROP, and retain the archive origin for a later paste inside NDR.
     /// The work runs off the UI thread, so large archives don't freeze the UI.
     pub(super) fn copy_archive_to_clipboard(&mut self, pane: usize, moving: bool) {
+        self.archive_clipboard_notice = None;
         let Some(location) = self.panes[pane].archive.clone() else { return };
         let file = ndr::archive::first_volume_path(&location.file);
+        if !ndr::archive::bundled_can_browse(&file) {
+            return self.warn("이 압축 형식은 지원하지 않아 복사할 수 없습니다.", "This archive format is unsupported; clipboard copy cannot start.");
+        }
         if moving && !ndr::archive::can_modify(&file) {
             return self.archive_read_only_notice();
         }
@@ -78,8 +82,17 @@ impl App {
                 // file. Treat duplicate archive entries as a failure instead.
                 let mut conflicts = |_: &Path, _: &Path| ConflictChoice::Cancel;
                 let mut passwords = |archive: &Path, _: Option<&str>| super::commands::ask_password(events, cancel, archive);
+                let mut announced_total = false;
                 ndr::archive::extract_entries_with_program(&file, &stage, &keys, password.as_deref(), cancel,
-                    &mut conflicts, &mut passwords, None, &mut |_, _, _| {})?;
+                    &mut conflicts, &mut passwords, None, &mut |done, total, name| {
+                        if !announced_total {
+                            announced_total = true;
+                            let _ = events.send(Event::Totals { files: Some(total as u64), bytes: None });
+                        }
+                        if done > 0 {
+                            let _ = events.send(Event::Progress { path: PathBuf::from(name), files: done as u64, bytes: 0 });
+                        }
+                    })?;
                 if let Some(missing) = keys.iter().find(|key| !stage.join(key.rsplit('/').next().unwrap_or(key)).exists()) {
                     return Err(format!("Archive clipboard entry was not extracted: {missing}"));
                 }
@@ -91,6 +104,9 @@ impl App {
             }
             prepared
         });
+        if let Some(job) = self.job.as_mut().filter(|job| !job.finished) {
+            job.archive_clipboard_started = Some(Instant::now());
+        }
     }
 
     /// Finishing an extraction is not permission to clobber a clipboard that
@@ -121,6 +137,8 @@ impl App {
         } else {
             self.tr("압축파일의 선택 항목을 복사했습니다.", "Archive items copied to the clipboard.")
         }.into_owned();
+        self.archive_clipboard_notice = Some((Instant::now(), moving));
+        self.egui_ctx.request_repaint();
     }
 
     pub(super) fn archive_clipboard_move_done(&mut self, archive: &Path, sequence: u32, remaining: Vec<String>) {

@@ -645,6 +645,10 @@ impl App {
         if archives.is_empty() {
             return self.warn("압축 파일을 선택하거나 압축 파일 안으로 이동하세요.", "Select an archive or open one first.");
         }
+        if let Some(unsupported) = archives.iter().find(|path| !archive::bundled_can_browse(path)) {
+            let name = unsupported.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            return self.warn(&format!("지원하지 않는 압축 형식입니다: {name}"), &format!("Unsupported archive format: {name}"));
+        }
         if in_archive.is_some() && selected.is_empty() {
             return;
         }
@@ -670,6 +674,10 @@ impl App {
     }
 
     fn run_extract(&mut self, archives: Vec<PathBuf>, keys: Vec<String>, password: String, base: PathBuf, mode: ExtractMode) {
+        if let Some(unsupported) = archives.iter().find(|path| !archive::bundled_can_browse(path)) {
+            let name = unsupported.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            return self.warn(&format!("지원하지 않는 압축 형식입니다: {name}"), &format!("Unsupported archive format: {name}"));
+        }
         self.remember_destination(&base);
         let programs: Vec<Option<ExternalProgram>> = archives.iter().map(|_| None).collect();
         let tx = self.async_tx.clone();

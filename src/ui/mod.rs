@@ -412,6 +412,8 @@ struct Job {
     errors: Vec<String>,
     title: String,
     finished: bool,
+    /// Clipboard extraction displays a delayed, compact progress panel.
+    archive_clipboard_started: Option<Instant>,
     /// Operation that calls C# PlayOperationCompletionSound (copy/move/delete/wipe/create archive).
     chime: bool,
     /// Some when this is a C# modal progress window (FolderComparisonProgressWindow, SearchProgressWindow, or the sync's FileOperationProgressWindow).
@@ -446,6 +448,7 @@ impl Job {
             errors: vec![],
             title,
             finished: false,
+            archive_clipboard_started: None,
             chime: false,
             modal: None,
             custom_status: false,
@@ -622,6 +625,8 @@ pub struct App {
     /// Prevent stale NDR paths being pasted after another application copies text.
     clipboard_sequence: Option<u32>,
     archive_clipboard: Option<ArchiveClipboard>,
+    /// Brief, self-closing success notice after clipboard preparation.
+    archive_clipboard_notice: Option<(Instant, bool)>,
     last_selection: [Vec<PathBuf>; 2],
     saved: bool,
     tool_cancel: Arc<AtomicBool>,
@@ -950,6 +955,7 @@ impl App {
             clipboard: None,
             clipboard_sequence: None,
             archive_clipboard: None,
+            archive_clipboard_notice: None,
             last_selection: [vec![], vec![]],
             saved: false,
             tool_cancel: Arc::new(AtomicBool::new(false)),

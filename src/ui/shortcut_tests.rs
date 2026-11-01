@@ -77,6 +77,10 @@ fn ctrl_c_in_archive_copies_file_to_the_other_pane_after_leaving_the_archive() {
     press(&mut app, &ctx, egui::Key::C, egui::Modifiers::CTRL);
     finish_archive_clipboard_job(&mut app, &ctx);
     let clipboard = app.archive_clipboard.as_ref().expect("Ctrl+C should prepare an archive clipboard");
+    let job = app.job.as_ref().expect("clipboard extraction should have a completed progress job");
+    assert!(job.archive_clipboard_started.is_some() && job.files > 0);
+    assert_eq!(job.progress.as_ref().and_then(|p| p.total_files), Some(job.files), "clipboard progress should receive real extracted entry counts");
+    assert!(app.archive_clipboard_notice.is_some(), "completed clipboard preparation shows a brief completion cue");
     assert!(!clipboard.moving);
     assert_eq!(fs::read(clipboard.stage.join("a.txt")).unwrap(), b"a", "Windows must receive a real file, not a virtual archive key");
     app.navigate(0, root.join("left"), false);
@@ -88,6 +92,56 @@ fn ctrl_c_in_archive_copies_file_to_the_other_pane_after_leaving_the_archive() {
     assert!(ndr::archive::list(&zip, None).unwrap().iter().any(|e| e.key == "a.txt"), "copy must preserve source");
     let stage = app.archive_clipboard.take().unwrap().stage;
     fs::remove_dir_all(stage).unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// The clipboard UI has an animated progress indicator only after its delay;
+/// it uses a real per-entry total and dismisses its completion cue by itself.
+#[test]
+fn archive_clipboard_progress_and_completion_notice_have_bounded_lifetimes() {
+    let (root, ctx, mut app) = fixture("clipboard-dialog-timing", "ko");
+    let (_tx, rx) = std::sync::mpsc::channel();
+    let mut job = Job::new(rx, Arc::new(AtomicBool::new(false)), "압축에서 복사".to_owned());
+    job.archive_clipboard_started = Some(Instant::now());
+    job.files = 1;
+    job.path = "folder/one.txt".into();
+    job.progress.as_mut().unwrap().total_files = Some(3);
+    app.job = Some(job);
+    let _ = ctx.run(egui::RawInput::default(), |ctx| app.file_progress_ui(ctx));
+    app.job.as_mut().unwrap().archive_clipboard_started = Some(Instant::now() - Duration::from_millis(400));
+    let output = ctx.run(egui::RawInput::default(), |ctx| app.file_progress_ui(ctx));
+    assert!(!output.shapes.is_empty(), "visible clipboard progress shows a real UI rather than only a status line");
+    app.job = None;
+    app.archive_clipboard_notice = Some((Instant::now(), false));
+    let output = ctx.run(egui::RawInput::default(), |ctx| app.archive_clipboard_notice_ui(ctx));
+    assert!(!output.shapes.is_empty(), "success cue is visible immediately after completion");
+    app.archive_clipboard_notice = Some((Instant::now() - Duration::from_millis(1200), false));
+    let _ = ctx.run(egui::RawInput::default(), |ctx| app.archive_clipboard_notice_ui(ctx));
+    assert!(app.archive_clipboard_notice.is_none(), "completion cue closes without a user click");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn unsupported_archive_formats_do_not_enter_panes_or_open_extract_dialogs() {
+    let (root, ctx, mut app) = fixture("unsupported-formats", "ko");
+    for extension in ["ace", "tar.lz", "tlz", "uefi"] {
+        let file = root.join(format!("left/unsupported.{extension}"));
+        fs::write(&file, b"unsupported format marker").unwrap();
+    }
+    app.refresh(0);
+    wait(&mut app, &ctx);
+    for extension in ["ace", "tar.lz", "tlz", "uefi"] {
+        let name = format!("unsupported.{extension}");
+        app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == name).unwrap();
+        app.open_current();
+        assert!(app.panes[0].archive.is_none(), "{extension}: should remain in local folder");
+        assert!(!app.msgboxes.is_empty(), "{extension}: unsupported action should explain why");
+        app.msgboxes.clear();
+        app.dispatch("extractAuto", &ctx);
+        assert!(app.job.is_none() && app.original_dialogs.is_empty(), "{extension}: extraction must not start");
+        assert!(!app.msgboxes.is_empty(), "{extension}: extraction refusal should be visible");
+        app.msgboxes.clear();
+    }
     fs::remove_dir_all(root).unwrap();
 }
 

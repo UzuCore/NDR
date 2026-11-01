@@ -18,6 +18,7 @@ impl App {
             self.open_password_prompt(request);
         }
         self.file_progress_ui(ctx);
+        self.archive_clipboard_notice_ui(ctx);
         // Result text window (error lists, comparison results, archive properties). Read-only.
         if let Some(document) = &mut self.text {
             let mut close = false;

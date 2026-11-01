@@ -363,6 +363,98 @@ pub(super) enum TransferKind {
 }
 
 impl App {
+    /// Archive Ctrl+C/X: don't flash a full-size, empty "Preparing" dialog for
+    /// fast extracts. For long jobs show genuine per-entry progress and a
+    /// cancel action. The area animates in and disappears when the job ends.
+    pub(super) fn archive_clipboard_progress_ui(&mut self, ctx: &egui::Context) {
+        let Some(job) = self.job.as_ref().filter(|j| !j.finished) else { return };
+        let Some(started) = job.archive_clipboard_started else { return };
+        let elapsed = started.elapsed();
+        let show_after = Duration::from_millis(180);
+        if elapsed < show_after {
+            ctx.request_repaint_after(show_after - elapsed);
+            return;
+        }
+        let title = job.title.clone();
+        let current = job.path.clone();
+        let completed = job.files;
+        let total = job.progress.as_ref().and_then(|p| p.total_files);
+        let cancel_flag = job.cancel.clone();
+        let covered = !self.msgboxes.is_empty() || !self.original_dialogs.is_empty();
+        // Password and conflict dialogs must remain on top and fully usable.
+        if covered { return; }
+        let ko = self.language == "ko";
+        let cancel_text = if ko { "취소" } else { "Cancel" };
+        let status = if current.is_empty() {
+            if ko { "압축파일의 항목을 클립보드에 준비하고 있습니다…" } else { "Preparing archive items for the clipboard…" }.to_owned()
+        } else {
+            Path::new(&current).file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or(current)
+        };
+        let count = match total {
+            Some(n) => format!("{} / {}", n0(completed as usize), n0(n as usize)),
+            None => if ko { "압축파일 확인 중".into() } else { "Scanning archive".into() },
+        };
+        let fraction = total.filter(|n| *n > 0).map(|n| (completed as f32 / n as f32).clamp(0.0, 1.0));
+        let mut cancel = !covered && ctx.input(|i| i.key_pressed(egui::Key::Escape));
+        egui::Area::new(egui::Id::new("ndr-archive-clipboard-progress"))
+            .order(egui::Order::Foreground)
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .fade_in(true)
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.set_min_width(390.0);
+                    ui.set_max_width(460.0);
+                    ui.heading(&title);
+                    ui.add_space(9.0);
+                    ui.label(egui::RichText::new(&status).size(12.0));
+                    ui.add_space(6.0);
+                    let bar = match fraction {
+                        Some(n) => egui::ProgressBar::new(n).show_percentage(),
+                        None => egui::ProgressBar::new(0.0).animate(true),
+                    };
+                    ui.add_sized([ui.available_width(), 15.0], bar);
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(&count).weak().small());
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.add_enabled(!covered, egui::Button::new(cancel_text)).clicked() {
+                                cancel = true;
+                            }
+                        });
+                    });
+                });
+            });
+        if cancel { cancel_flag.store(true, Ordering::Relaxed); }
+        ctx.request_repaint_after(Duration::from_millis(33));
+    }
+
+    /// Brief, automatically dismissed completion cue instead of a dialog that
+    /// needs another OK. Its last part fades out rather than abruptly blinking.
+    pub(super) fn archive_clipboard_notice_ui(&mut self, ctx: &egui::Context) {
+        let Some((since, moving)) = self.archive_clipboard_notice else { return };
+        let elapsed = since.elapsed();
+        let lifetime = Duration::from_millis(1100);
+        if elapsed >= lifetime {
+            self.archive_clipboard_notice = None;
+            return;
+        }
+        let message = match (self.language.as_str(), moving) {
+            ("ko", true) => "잘라내기 준비 완료 · 붙여넣으면 이동합니다",
+            ("ko", false) => "클립보드에 복사했습니다",
+            (_, true) => "Ready to move · paste to finish",
+            (_, false) => "Copied to the clipboard",
+        };
+        egui::Area::new(egui::Id::new("ndr-archive-clipboard-completed"))
+            .order(egui::Order::Foreground)
+            .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -56.0))
+            .fade_in(true)
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.label(egui::RichText::new(format!("✓  {message}")).strong());
+                });
+            });
+        ctx.request_repaint_after(Duration::from_millis(33));
+    }
     /// Original FUN_0042bdc4 (copy/move) and FUN_0042c734 (delete): when a job is made from the marks (not drag-and-drop or paste), the pane's marks are
     /// saved to the "last selection" (+0xd08, CopySelection) and cleared (ClearSelection). Without marks the last selection becomes empty. Skin theme.
     pub(super) fn original_take_marks(&mut self, sources: &[PathBuf]) {
@@ -484,6 +576,10 @@ impl App {
     /// Only in the C# version: the pause button (355,60 above btnCancel), remaining time for jobs without a byte total (in lRemaining's place), the done count when the total is unknown.
     /// Closing the window (x, Esc) requests cancel (C# OnClosing). With another window on top it only draws.
     pub(super) fn file_progress_ui(&mut self, ctx: &egui::Context) {
+        if self.job.as_ref().is_some_and(|j| !j.finished && j.archive_clipboard_started.is_some()) {
+            self.archive_clipboard_progress_ui(ctx);
+            return;
+        }
         use super::original_dialogs::{path_ellipsis, put_enabled, put_left};
         let ko = self.language == "ko";
         let covered = !self.msgboxes.is_empty() || !self.original_dialogs.is_empty();

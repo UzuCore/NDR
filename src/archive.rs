@@ -19,6 +19,8 @@ pub struct ArchiveEntry {
     pub key: String,
     pub is_dir: bool,
     pub size: u64,
+    /// Some raw streams do not report the uncompressed size in `7z l`.
+    pub size_known: bool,
     /// "Modified = YYYY-MM-DD HH:MM:SS[.fffffff]" of a 7-Zip listing (local time). None when missing.
     pub modified: Option<std::time::SystemTime>,
 }
@@ -580,6 +582,7 @@ fn parse_listing(text: &str) -> Result<Vec<ArchiveEntry>, String> {
         let mut key = None;
         let mut dir = false;
         let mut size = 0;
+        let mut size_known = true;
         let mut modified = None;
         for line in block.lines() {
             if let Some(v) = line.strip_prefix("Path = ") {
@@ -589,7 +592,11 @@ fn parse_listing(text: &str) -> Result<Vec<ArchiveEntry>, String> {
             } else if line == "Folder = +" {
                 dir = true
             } else if let Some(v) = line.strip_prefix("Size = ") {
-                size = v.parse().map_err(|_| "Invalid archive entry size")?
+                if v.trim().is_empty() {
+                    size_known = false;
+                } else {
+                    size = v.parse().map_err(|_| "Invalid archive entry size")?;
+                }
             } else if let Some(v) = line.strip_prefix("Attributes = ") {
                 dir |= v.starts_with('D');
                 if v.contains('L') || v.contains("Reparse") {
@@ -616,6 +623,7 @@ fn parse_listing(text: &str) -> Result<Vec<ArchiveEntry>, String> {
                 key,
                 is_dir: dir,
                 size,
+                size_known,
                 modified,
             })
         }
@@ -642,14 +650,33 @@ fn list_details(
     password: Option<&str>,
     cancel: &AtomicBool,
 ) -> Result<(Vec<ArchiveEntry>, HashSet<String>), String> {
+    if !bundled_can_browse(archive) {
+        return Err(format!("Archive format not supported by bundled 7-Zip: {}", archive.display()));
+    }
     ensure_plain_path(archive)?;
     let archive = fs::canonicalize(archive).map_err(|e| e.to_string())?;
     let mut cmd = command()?;
     cmd.args(["l", "-slt", "-ba", "-sccUTF-8"]);
     password_arg(&mut cmd, password)?;
-    cmd.arg("--").arg(archive);
+    cmd.arg("--").arg(&archive);
     let text = execute(cmd, cancel)?;
-    let entries = parse_listing(&text)?;
+    let mut entries = parse_listing(&text)?;
+    // 7zip+ bzip2 streams return no Path and an empty Size field in
+    // `l -slt -ba`, yet `x` produces one file using the archive's basename.
+    if entries.is_empty() && archive_format(&archive).is_some_and(|f| matches!(f.as_str(), "bz2" | "bzip2" | "tar.bz2" | "tar.bzip2" | "tbz" | "tbz2")) {
+        let name = archive.file_name().and_then(|s| s.to_str()).ok_or("Invalid bzip2 filename")?;
+        let lowered = name.to_ascii_lowercase();
+        let suffix = [".tar.bzip2", ".tar.bz2", ".bzip2", ".bz2", ".tbz2", ".tbz"]
+            .into_iter().find(|ext| lowered.ends_with(ext)).ok_or("Invalid bzip2 extension")?;
+        let base = &name[..name.len() - suffix.len()];
+        let inner = if matches!(suffix, ".tbz" | ".tbz2") || suffix.starts_with(".tar.") {
+            format!("{base}.tar")
+        } else {
+            base.to_owned()
+        };
+        validate_key(&inner)?;
+        entries.push(ArchiveEntry { key: inner, is_dir: false, size: 0, size_known: false, modified: None });
+    }
     let mut encrypted = HashSet::new();
     for block in text.replace("\r\n", "\n").split("\n\n") {
         if block.lines().any(|l| l == "Encrypted = +") {
@@ -1022,7 +1049,7 @@ pub fn extract_with_conflicts(
             ensure_plain_path(&target)?;
             let m = fs::symlink_metadata(&target)
                 .map_err(|e| format!("Missing extracted entry {}: {e}", entry.key))?;
-            if m.is_dir() != entry.is_dir || (!entry.is_dir && m.len() != entry.size) {
+            if m.is_dir() != entry.is_dir || (!entry.is_dir && entry.size_known && m.len() != entry.size) {
                 return Err(format!("Extracted entry mismatch: {}", entry.key));
             }
         }
@@ -1120,6 +1147,7 @@ pub fn archive_format(path: &Path) -> Option<String> {
 /// ALZ and EGG are added here because the bundled 7-Zip (UzuCore 7zip+) reads them. ACE is read by the C# version (SharpCompress sequential reading) but not by the bundled 7-Zip,
 /// whose format list lacks it, so it is left out (extracted whole with an external archiver, `extract_whole_with_program`).
 pub fn can_read_internally(path: &Path) -> bool {
+    if !bundled_can_browse(path) { return false; }
     const BUILT_IN: &[&str] = &["zip", "7z", "rar", "arj", "alz", "egg", "tar", "gz", "bz2", "bzip2", "z", "tar.gz", "tar.bz2", "tar.bzip2", "tar.xz", "tar.lz", "tar.zst", "tgz", "tbz", "tbz2", "txz", "tlz", "tzst"];
     let Some(format) = archive_format(path) else { return false };
     if !BUILT_IN.contains(&format.as_str()) {
@@ -1138,10 +1166,12 @@ pub fn can_read_internally(path: &Path) -> bool {
     true
 }
 
-/// C# CanReadArchiveInternally || GetExternalArchiveListingProgram (bundled 7-Zip): whether NDR can enter the archive format and list it.
-/// The bundled 7-Zip cannot read only ACE.
+/// Formats advertised by the original file-extension list are not necessarily
+/// handlers in the shipped 7zip+ 26.05. `7z i` has no ACE, Lzip or `.uefi`
+/// handler (UEFIc is `.scap`, UEFIf is `.uefif`, not `.uefi`). Refuse these
+/// *before* opening a pane or an extraction destination dialog.
 pub fn bundled_can_browse(path: &Path) -> bool {
-    archive_format(path).is_some_and(|format| format != "ace")
+    archive_format(path).is_some_and(|format| !matches!(format.as_str(), "ace" | "tar.lz" | "tlz" | "uefi"))
 }
 
 /// C# GetExtractFolderName: PathRemoveExtensionW(file name), removing only the last extension (sample.7z.001 -> sample.7z).
@@ -1219,11 +1249,11 @@ pub fn output_family(path: &Path) -> Vec<PathBuf> {
     files
 }
 
-/// User request (not in the original): add, delete and rename items inside an archive in place. Only single-volume zip, 7z, tar and wim, which the bundled 7-Zip can modify, work
+/// User request (not in the original): add, delete and rename items inside an archive in place. Only single-volume zip, 7z, tar. The shipped 7zip+ can *create and list* WIM but `7z d` fails on it (exit code 2): don't advertise write support.
 /// (not rar, alz, egg, iso, split archives, or single-file wrappers like gz).
 pub fn can_modify(path: &Path) -> bool {
     let extension = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).unwrap_or_default();
-    if !matches!(extension.as_str(), "zip" | "7z" | "tar" | "wim") || !path.is_file() {
+    if !matches!(extension.as_str(), "zip" | "7z" | "tar") || !path.is_file() {
         return false;
     }
     // Split zips (.z01 ...) are not modified.
@@ -1325,7 +1355,7 @@ fn existing_archive_entry(entries: &[ArchiveEntry], key: &str) -> Option<Archive
     entries.iter().find(|e| normal(&e.key) == wanted).cloned().or_else(|| {
         let prefix = format!("{wanted}/");
         entries.iter().any(|e| normal(&e.key).starts_with(&prefix)).then(|| ArchiveEntry {
-            key: key.to_owned(), is_dir: true, size: 0, modified: None,
+            key: key.to_owned(), is_dir: true, size: 0, size_known: true, modified: None,
         })
     })
 }
@@ -1610,7 +1640,7 @@ pub fn summary(entries: &[ArchiveEntry]) -> (usize, usize, u64) {
             folders.insert(key.clone());
         } else {
             files += 1;
-            bytes += entry.size;
+            if entry.size_known { bytes += entry.size; }
         }
     }
     (files, folders.len(), bytes)
@@ -1855,6 +1885,9 @@ pub fn extract_entries_with_program(
 ) -> Result<(), String> {
     use std::sync::atomic::Ordering;
     check_cancel(cancel)?;
+    if program.is_none() && !bundled_can_browse(archive) {
+        return Err(format!("Archive format not supported by bundled 7-Zip: {}", archive.display()));
+    }
     ensure_plain_path(destination)?;
     let archive = fs::canonicalize(archive).map_err(|e| e.to_string())?;
     let mut header_password = initial_password.map(str::to_owned);
@@ -1888,6 +1921,7 @@ pub fn extract_entries_with_program(
         })
         .collect();
     let total = entries.len();
+    progress(0, total, "");
     let parent = destination
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
@@ -1983,7 +2017,7 @@ pub fn extract_entries_with_program(
                 let source = attempt.join(&relative);
                 let metadata = fs::symlink_metadata(&source)
                     .map_err(|e| format!("Missing decoded entry {}: {e}", entry.key))?;
-                if !metadata.is_file() || metadata.len() != entry.size {
+                if !metadata.is_file() || (entry.size_known && metadata.len() != entry.size) {
                     return Err(format!("Decoded entry mismatch: {}", entry.key));
                 }
                 let target_parent = target.parent().ok_or("Decoded target parent missing")?;
@@ -2897,6 +2931,69 @@ mod entry_tests {
         assert!(can_read_internally(Path::new("a.alz")) && can_read_internally(Path::new("a.egg")));
         // The bundled 7-Zip cannot read ACE (not in its format list): neither internal reading nor entering.
         assert!(!can_read_internally(Path::new("a.ace")) && !bundled_can_browse(Path::new("a.ace")) && bundled_can_browse(Path::new("a.iso")));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Exercise every format exposed by NDR's create dialog plus the two
+    /// additional bundled ALZ/EGG writers and WIM (browse-only). These are
+    /// real archives created, listed, and decoded by the shipped 7zip+.
+    #[test]
+    fn supported_archive_formats_round_trip_and_wim_is_not_editable() {
+        let root = super::tests::fixture();
+        let source = root.join("fixture.txt");
+        fs::write(&source, b"ndr-format-verified").unwrap();
+        let cancel = AtomicBool::new(false);
+        for extension in ["zip", "7z", "tar", "tar.gz", "tar.bz2", "alz", "egg", "wim"] {
+            let archive = root.join(format!("fixture.{extension}"));
+            let options = crate::commands::ArchiveOptions {
+                extension: extension.into(), level: 5, password: String::new(), volume_bytes: None,
+                recursive: true, append: false,
+            };
+            create_configured(&[source.clone()], &archive, &options, &cancel).unwrap_or_else(|e| panic!("{extension} creation: {e}"));
+            assert!(bundled_can_browse(&archive), "{extension} browse should be advertised");
+            assert!(!list(&archive, None).unwrap_or_else(|e| panic!("{extension} list: {e}")).is_empty(), "{extension} listing");
+            let dest = root.join(format!("extracted-{extension}"));
+            extract(&archive, &dest, None, &cancel).unwrap_or_else(|e| panic!("{extension} extract: {e}"));
+            assert!(dest.is_dir() && fs::read_dir(&dest).unwrap().next().is_some(), "{extension} extraction should materialize at least one member");
+            assert_eq!(can_modify(&archive), matches!(extension, "zip" | "7z" | "tar"), "{extension} edit support");
+        }
+        let renamed_zipx = root.join("fixture.zipx");
+        fs::copy(root.join("fixture.zip"), &renamed_zipx).unwrap();
+        assert_eq!(list(&renamed_zipx, None).unwrap()[0].key, "fixture.txt");
+        assert!(!can_modify(&renamed_zipx));
+        // BZip2 has neither Path nor Size in `7z l -slt -ba`. Give the stream
+        // its derived name, then actually decode it (including .tbz2 alias).
+        let alias = root.join("aliased.tbz2");
+        fs::copy(root.join("fixture.tar.bz2"), &alias).unwrap();
+        let streamed = list(&alias, None).unwrap();
+        assert_eq!(streamed[0].key, "aliased.tar");
+        assert!(!streamed[0].size_known && streamed[0].size == 0);
+        let extracted = root.join("alias-extracted");
+        extract(&alias, &extracted, None, &cancel).unwrap();
+        assert!(extracted.join("aliased.tar").is_file());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// All original advertised file extensions get a decision, but archive
+    /// names absent from `7z i` must not start a job or write a destination.
+    #[test]
+    fn every_declared_archive_extension_has_a_capability_and_unsupported_formats_stop_early() {
+        let unsupported = ["ace", "tar.lz", "tlz", "uefi"];
+        for extension in ARCHIVE_EXTENSIONS {
+            let sample = PathBuf::from(format!("sample{extension}"));
+            assert_eq!(archive_format(&sample).as_deref(), Some(&extension[1..]), "recognized extension: {extension}");
+            assert_eq!(bundled_can_browse(&sample), !unsupported.contains(&&extension[1..]), "7zip+ support: {extension}");
+        }
+        let root = super::tests::fixture();
+        for extension in unsupported {
+            let source = root.join(format!("invalid.{extension}"));
+            fs::write(&source, b"not a supported archive").unwrap();
+            assert!(!can_read_internally(&source));
+            let dest = root.join(format!("no-output-{extension}"));
+            assert!(list(&source, None).unwrap_err().contains("not supported"));
+            assert!(extract(&source, &dest, None, &AtomicBool::new(false)).is_err());
+            assert!(!dest.exists(), "{extension}: failed archive must not create output directory");
+        }
         fs::remove_dir_all(root).unwrap();
     }
 
