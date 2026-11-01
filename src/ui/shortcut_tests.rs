@@ -95,6 +95,111 @@ fn alt_c_inside_archive_with_ftp_on_other_side_opens_extraction_destination() {
     fs::remove_dir_all(root).unwrap();
 }
 
+/// The FTP pane on the other side must not turn Alt+M inside an archive into
+/// an FTP transfer. The move destination must remain a local folder picker.
+#[test]
+fn alt_m_inside_archive_with_ftp_on_other_side_opens_local_move_destination() {
+    let (root, ctx, mut app) = fixture("alt-m-ftp", "ko");
+    let left = root.join("left");
+    let archive = left.join("alt-m.zip");
+    ndr::archive::create(&[left.join("a.txt")], &archive, None, &AtomicBool::new(false)).unwrap();
+    app.refresh(0);
+    wait(&mut app, &ctx);
+    app.active = 0;
+    app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == "alt-m.zip").unwrap();
+    app.open_current();
+    wait(&mut app, &ctx);
+    app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == "a.txt").unwrap();
+    app.panes[1].remote = Some(super::ftp_pane::PaneRemote {
+        fs: Arc::new(Mutex::new(Box::new(super::shot::ShotFtp))),
+        host: "ftp.example.invalid".into(), path: "/pub".into(),
+        busy: Default::default(), modes: Default::default(), permissions: Default::default(), log: None,
+    });
+    press(&mut app, &ctx, egui::Key::M, egui::Modifiers::ALT);
+    assert!(matches!(app.original_dialogs.last().map(|d| &d.kind), Some(super::original_dialogs::DialogKind::Destination(_))),
+        "Alt+M should open a destination picker, not FTP: dialogs={}, status={}", app.original_dialogs.len(), app.status);
+    assert!(app.original_dialogs.last().unwrap().title.starts_with(&app.language_pack.text("RES.MOVE", "Move")));
+    app.destination_action(super::destination_dialog::DestinationAction::Cancel, &ctx);
+    assert!(ndr::archive::list(&archive, None).unwrap().iter().any(|e| e.key == "a.txt"),
+        "cancelling Alt+M must leave the archived file untouched");
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// A confirmed Alt+M must really move the file out, not just extract a copy.
+#[test]
+fn alt_m_inside_archive_moves_file_after_destination_is_accepted() {
+    let (root, ctx, mut app) = fixture("alt-m-move", "ko");
+    let left = root.join("left");
+    let archive = left.join("alt-m.zip");
+    ndr::archive::create(&[left.join("a.txt")], &archive, None, &AtomicBool::new(false)).unwrap();
+    app.refresh(0);
+    wait(&mut app, &ctx);
+    app.active = 0;
+    app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == "alt-m.zip").unwrap();
+    app.open_current();
+    wait(&mut app, &ctx);
+    app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == "a.txt").unwrap();
+    press(&mut app, &ctx, egui::Key::M, egui::Modifiers::ALT);
+    assert!(matches!(app.original_dialogs.last().map(|d| &d.kind), Some(super::original_dialogs::DialogKind::Destination(_))));
+    app.destination_action(super::destination_dialog::DestinationAction::Accept, &ctx);
+    let until = Instant::now() + Duration::from_secs(20);
+    while !app.job.as_ref().is_some_and(|j| j.finished) {
+        assert!(Instant::now() < until, "Alt+M archive move did not finish: {}", app.status);
+        app.poll(&ctx);
+        thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(fs::read(root.join("right/a.txt")).unwrap(), b"a");
+    assert!(!ndr::archive::list(&archive, None).unwrap().iter().any(|e| e.key == "a.txt"),
+        "Alt+M must remove the moved item from the source archive");
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Every default binding with Alt, Ctrl+Alt or Shift+Alt must resolve without
+/// an unintended higher-priority shortcut shadowing the configured action.
+#[test]
+fn every_default_alt_shortcut_resolves_to_its_configured_command() {
+    let map = ndr::compat::ShortcutMap::parse(None);
+    let mut checked = 0;
+    for line in ndr::compat::DEFAULT_SHORTCUT_TEXT.lines().skip(1) {
+        let Some((command, key)) = line.split_once('=') else { continue };
+        if !key.contains("Alt+") { continue; }
+        assert_eq!(map.resolve(ndr::compat::text_to_shortcut(key)).as_deref(), Some(command),
+            "shortcut {line} is shadowed or not resolved");
+        checked += 1;
+    }
+    assert_eq!(checked, 49);
+}
+
+/// Alt+X must request closing the application in a folder and inside a ZIP.
+#[test]
+fn alt_x_requests_close_from_local_and_archive_panes() {
+    let (root, ctx, mut app) = fixture("alt-x-close", "ko");
+    let left = root.join("left");
+    let archive = left.join("close.zip");
+    ndr::archive::create(&[left.join("a.txt")], &archive, None, &AtomicBool::new(false)).unwrap();
+    for inside in [false, true] {
+        if inside {
+            app.refresh(0);
+            wait(&mut app, &ctx);
+            app.active = 0;
+            app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == "close.zip").unwrap();
+            app.open_current();
+            wait(&mut app, &ctx);
+            assert!(app.panes[0].archive.is_some());
+        }
+        let raw = egui::RawInput {
+            modifiers: egui::Modifiers::ALT,
+            events: vec![egui::Event::Key { key: egui::Key::X, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::ALT }],
+            ..Default::default()
+        };
+        let output = ctx.run(raw, |ctx| app.keyboard(ctx));
+        assert!(output.viewport_output[&egui::ViewportId::ROOT].commands.iter().any(|c| matches!(c, egui::ViewportCommand::Close)),
+            "Alt+X must close the app (inside archive={inside})");
+        assert!(app.original_dialogs.is_empty());
+    }
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// Original miSelect (Spacebar, miSelectClick 0x4311a4) = SelectCurrAndMove (0x7dca04): marks or unmarks the cursor item, folders and files alike, and
 /// moves to the next item. ".." (Select 0x7dc834) is never marked. Ctrl+Shift+arrows, like the original ArrowKey, keep the selection and add from the position
 /// before moving to the new one; Shift alone clears the selection and selects from where Shift was pressed.

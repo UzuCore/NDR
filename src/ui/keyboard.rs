@@ -171,13 +171,16 @@ impl App {
                 self.cycle_selection(shift);
                 return true;
             }
-            // miCopyTo occurs twice in ORIGINAL_ACTIONS (a historical alias for
-            // "copy to other pane" and the actual "copy to folder" menu item).
-            // Inside archives, Alt+C must always open an extraction destination
-            // instead of attempting a pane-to-pane transfer. In particular the
-            // latter silently fails when the opposite pane is an FTP location.
+            // miCopyTo and miMoveTo each occur twice in ORIGINAL_ACTIONS:
+            // the first match routes to the other pane (including FTP), while
+            // the second opens a destination picker. Archive entries must not
+            // accidentally be sent to the FTP transfer route by Alt+C/Alt+M.
             "miCopyTo" if self.panes[self.active].archive.is_some() => {
                 self.dispatch("copyToFolder", ctx);
+                return true;
+            }
+            "miMoveTo" if self.panes[self.active].archive.is_some() => {
+                self.dispatch("moveToFolder", ctx);
                 return true;
             }
             "miSearchFile" | "miArcMove" | "miArcInstall" => return true,
