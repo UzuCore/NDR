@@ -339,7 +339,7 @@ impl App {
             // Vault actions are intentionally separate from the historical
             // NexusFile menu table, which is verified against the original DFM.
             let vault_open = ui.menu_button(if ko { "암호화 폴더" } else { "Encrypted Folder" }, |ui| {
-                if ui.button(if ko { "새 암호화 폴더 (.ndr)..." } else { "New encrypted folder (.ndr)..." }).clicked() {
+                if ui.button(if ko { "새 암호화 폴더..." } else { "New encrypted folder..." }).clicked() {
                     self.dispatch("newVault", &ctx);
                     ui.close();
                 }

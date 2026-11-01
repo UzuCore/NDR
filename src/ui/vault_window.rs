@@ -7,6 +7,8 @@ use zeroize::Zeroize;
 pub(super) struct VaultDialog {
     path: PathBuf,
     creating: bool,
+    folder_name: String,
+    created_path: Option<PathBuf>,
     password: String,
     confirmation: String,
     vault: Option<Vault>,
@@ -22,20 +24,85 @@ pub(super) struct VaultDialog {
 
 impl Drop for VaultDialog {
     fn drop(&mut self) {
+        self.folder_name.zeroize();
         self.password.zeroize();
         self.confirmation.zeroize();
         if let Some((_, body)) = &mut self.text { body.zeroize(); }
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn encrypted_folder_dialog_accepts_plain_name_and_keeps_extension_internal() {
+        let root = std::env::temp_dir().join(format!("ndr-vault-create-ui-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut dialog = VaultDialog::new(root.join("새 암호화 폴더.ndr"), true);
+        assert_eq!(dialog.folder_name, "새 암호화 폴더");
+        dialog.folder_name = "비밀 문서".into();
+        dialog.password = "long secure passphrase 12345!".into();
+        dialog.confirmation = dialog.password.clone();
+        dialog.authenticate();
+        assert!(dialog.error.is_empty(), "{}", dialog.error);
+        assert_eq!(dialog.created_path.as_deref(), Some(root.join("비밀 문서.ndr").as_path()));
+        assert!(root.join("비밀 문서.ndr").is_file());
+        assert!(dialog.vault.is_none(), "the created folder should close the dialog");
+        assert!(Vault::unlock(&root.join("비밀 문서.ndr"), "wrong password 123456".into()).is_err());
+        assert!(Vault::unlock(&root.join("비밀 문서.ndr"), "long secure passphrase 12345!".into()).is_ok());
+        drop(dialog);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn encrypted_folder_name_cannot_escape_parent_or_overwrite() {
+        let root = Path::new("C:\\Users\\example");
+        for name in ["", "..", "../outside", "sub\\outside", "CON", "bad:name", "trailing."] {
+            assert!(VaultDialog::container_path(root, name).is_err(), "{name}");
+        }
+        assert_eq!(VaultDialog::container_path(root, "자료.ndr").unwrap(), root.join("자료.ndr"));
+    }
+}
+
 impl VaultDialog {
     fn new(path: PathBuf, creating: bool) -> Self {
-        Self { path, creating, password: String::new(), confirmation: String::new(), vault: None,
+        let folder_name = if creating { path.file_stem().unwrap_or_default().to_string_lossy().into_owned() }
+            else { String::new() };
+        Self { path, creating, folder_name, created_path: None, password: String::new(), confirmation: String::new(), vault: None,
             folder: 1, folder_stack: vec![(1, String::from("/"))], selected: None,
             name: String::new(), import_path: String::new(), export_path: String::new(), text: None, error: String::new() }
     }
 
+    /// Store .ndr only on disk; the name shown in the creation dialog is
+    /// exactly the same kind of plain folder name the New Folder dialog uses.
+    fn container_path(parent: &Path, name: &str) -> Result<PathBuf, String> {
+        let name = name.trim();
+        if name.is_empty() || name == "." || name == ".." || name.len() > 240
+            || name.ends_with('.') || name.ends_with(' ')
+            || name.chars().any(|c| c.is_control() || "\\/:*?\"<>|".contains(c)) {
+            return Err("올바른 폴더 이름을 입력해 주세요.".into());
+        }
+        let base = name.strip_suffix(".ndr").or_else(|| name.strip_suffix(".NDR")).unwrap_or(name);
+        if base.is_empty() || base.ends_with('.') || base.ends_with(' ') {
+            return Err("올바른 폴더 이름을 입력해 주세요.".into());
+        }
+        let device = base.split('.').next().unwrap_or("").to_ascii_uppercase();
+        if matches!(device.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "COM1" | "COM2" | "COM3" | "COM4" | "COM5" | "COM6" | "COM7" | "COM8" | "COM9" | "LPT1" | "LPT2" | "LPT3" | "LPT4" | "LPT5" | "LPT6" | "LPT7" | "LPT8" | "LPT9") {
+            return Err("Windows에서 사용할 수 없는 폴더 이름입니다.".into());
+        }
+        Ok(parent.join(format!("{base}.ndr")))
+    }
+
     fn authenticate(&mut self) {
+        if self.creating {
+            let parent = self.path.parent().unwrap_or_else(|| Path::new(""));
+            match Self::container_path(parent, &self.folder_name) {
+                Ok(path) => self.path = path,
+                Err(message) => { self.error = message; return; }
+            }
+        }
         if self.creating && self.password != self.confirmation {
             self.error = "비밀번호가 일치하지 않습니다.".into();
             return;
@@ -47,6 +114,14 @@ impl VaultDialog {
             else { Vault::unlock(&self.path, secret) };
         match outcome {
             Ok(vault) => {
+                if self.creating {
+                    self.created_path = Some(self.path.clone());
+                    drop(vault);
+                    self.password.zeroize();
+                    self.confirmation.zeroize();
+                    self.error.clear();
+                    return;
+                }
                 self.vault = Some(vault);
                 self.creating = false;
                 self.folder = 1;
@@ -88,30 +163,58 @@ impl VaultDialog {
             self.lock();
             self.error = "세션이 만료되었습니다. 비밀번호를 다시 입력해야 합니다.".into();
         }
-        ui.label(format!("컨테이너: {}", self.path.display()));
         if self.vault.is_none() {
-            ui.label(if self.creating { "새 SQLCipher 암호화 컨테이너" } else { "잠긴 암호화 폴더" });
             if self.creating {
+                ui.heading("새 암호화 폴더");
+                ui.add_space(9.0);
+                egui::Grid::new("ndr-vault-create-fields").num_columns(2)
+                    .spacing([15.0, 12.0]).show(ui, |ui| {
+                        ui.label("폴더 이름");
+                        ui.add(egui::TextEdit::singleline(&mut self.folder_name)
+                            .desired_width(270.0).hint_text("폴더 이름 입력"));
+                        ui.end_row();
+                        ui.label("비밀번호");
+                        ui.add(egui::TextEdit::singleline(&mut self.password)
+                            .password(true).desired_width(270.0));
+                        ui.end_row();
+                        ui.label("비밀번호 확인");
+                        ui.add(egui::TextEdit::singleline(&mut self.confirmation)
+                            .password(true).desired_width(270.0));
+                        ui.end_row();
+                    });
+                ui.add_space(10.0);
+                ui.separator();
+                ui.label(egui::RichText::new(
+                    "폴더 안의 파일과 이름이 암호화됩니다. 비밀번호는 16자 이상으로 설정하세요."
+                ).small().weak());
+                ui.label(egui::RichText::new(
+                    "※ 비밀번호를 잊으면 복구할 수 없습니다. 안전한 곳에 보관하세요."
+                ).small().weak());
+                ui.add_space(12.0);
+                let mut cancel = false;
                 ui.horizontal(|ui| {
-                    ui.label("파일명");
-                    let mut path = self.path.to_string_lossy().to_string();
-                    if ui.add(egui::TextEdit::singleline(&mut path).desired_width(390.0)).changed() {
-                        self.path = PathBuf::from(path);
+                    ui.add_space(ui.available_width().max(200.0) - 190.0);
+                    if ui.add_sized([88.0, 30.0], egui::Button::new("만들기")).clicked() {
+                        self.authenticate();
+                    }
+                    if ui.add_sized([88.0, 30.0], egui::Button::new("취소")).clicked() {
+                        cancel = true;
                     }
                 });
+                if !self.error.is_empty() {
+                    ui.colored_label(ui.visuals().error_fg_color, &self.error);
+                }
+                return cancel || self.created_path.is_some();
             }
+            ui.heading("암호화 폴더 잠금 해제");
+            ui.add_space(8.0);
+            ui.label(self.path.file_stem().unwrap_or_default().to_string_lossy());
             ui.horizontal(|ui| {
-                ui.label("비밀번호 (16자 이상)");
+                ui.label("비밀번호");
                 ui.add(egui::TextEdit::singleline(&mut self.password).password(true));
             });
-            if self.creating {
-                ui.horizontal(|ui| {
-                    ui.label("비밀번호 확인");
-                    ui.add(egui::TextEdit::singleline(&mut self.confirmation).password(true));
-                });
-            }
-            if ui.button(if self.creating { "암호화 폴더 생성" } else { "잠금 해제" }).clicked() { self.authenticate(); }
-            ui.label("비밀번호 복구 기능은 없습니다. 비밀번호를 잊으면 데이터를 복원할 수 없습니다.");
+            if ui.button("잠금 해제").clicked() { self.authenticate(); }
+            ui.label(egui::RichText::new("비밀번호는 저장되지 않습니다.").small().weak());
         } else {
             ui.horizontal(|ui| {
                 if ui.button("⬅ 상위 폴더").clicked() && self.folder_stack.len() > 1 {
@@ -256,10 +359,15 @@ impl App {
         let policy = SessionPolicy::from_settings(&self.settings);
         let mut open = true;
         let mut close = false;
-        egui::Window::new("NDR 암호화 폴더 (.ndr)")
+        egui::Window::new(if dialog.creating { "새 암호화 폴더" } else { "암호화 폴더" })
             .id(egui::Id::new("ndr-sqlcipher-vault"))
-            .open(&mut open).resizable(true).default_width(700.0)
+            .open(&mut open).resizable(!dialog.creating)
+            .default_width(if dialog.creating { 440.0 } else { 700.0 })
             .show(ctx, |ui| { close = dialog.draw(ui, policy); });
+        if let Some(path) = dialog.created_path.take() {
+            let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+            self.refresh_and_focus(self.active, Some(name));
+        }
         if open && !close { self.vault_dialog = Some(dialog); }
         // Otherwise the connection and all plaintext/password UI buffers drop.
     }
