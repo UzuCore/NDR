@@ -115,6 +115,7 @@ impl App {
             let _ = std::fs::remove_dir_all(previous.stage);
         }
         self.clipboard = None;
+        self.clipboard_sequence = None;
         self.status = if moving {
             self.tr("압축파일의 선택 항목을 잘라냈습니다. 붙여넣으면 원본에서 제거합니다.", "Archive items cut. Pasting in NDR moves them from the archive.")
         } else {

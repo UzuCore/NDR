@@ -674,8 +674,9 @@ fn held_keys_repeat_commands_like_csharp() {
 #[test]
 fn every_original_shortcut_target_has_an_ndr_action() {
     let shortcuts = compat::ShortcutMap::parse(None);
-    // C# special items, miFind (original_shortcut opens the find box or the C# quick search field), miSelect (Space: NDR mark toggle = original miSelectClick).
-    let special = ["miSelectAll", "miSearchFile", "miArcMove", "miArcInstall", "miFind", "miSelect"];
+    // Only genuinely special dispatch behavior belongs here. The hidden
+    // Search / Move Archive / Install Archive commands now dispatch normally.
+    let special = ["miSelectAll", "miFind", "miSelect"];
     let missing_menus: Vec<(&String, String)> = shortcuts
         .menu_shortcuts
         .iter()
@@ -708,6 +709,64 @@ fn ctrl_f_and_ctrl_alt_0_follow_the_original_menu() {
     fs::remove_dir_all(root).unwrap();
 }
 
+
+/// A newer Windows clipboard (including text from another program) must not
+/// fall back to paths that NDR copied earlier.
+#[test]
+fn paste_ignores_stale_local_clipboard_when_windows_sequence_has_changed() {
+    let (root, ctx, mut app) = fixture("stale-file-clipboard", "ko");
+    app.active = 0;
+    app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == "a.txt").unwrap();
+    app.dispatch("copy", &ctx);
+    assert!(app.clipboard.is_some());
+    app.clipboard_sequence = Some(native::clipboard_sequence_number().wrapping_add(1));
+    app.active = 1;
+    app.dispatch("paste", &ctx);
+    assert!(!root.join("right/a.txt").exists(), "stale local clipboard paths must not be pasted");
+    assert!(app.clipboard.is_none() && app.clipboard_sequence.is_none());
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Hidden menu entries previously swallowed their shortcuts without reaching
+/// their real handlers. Exercise their actual dialogs / OS verb routing.
+#[test]
+fn previously_swallowed_search_and_archive_move_shortcuts_open_their_dialogs() {
+    let (root, ctx, mut app) = fixture("hidden-menu-shortcuts", "ko");
+    app.active = 0;
+    press(&mut app, &ctx, egui::Key::H, CTRL);
+    assert!(matches!(app.original_dialogs.last().map(|d| &d.kind), Some(original_dialogs::DialogKind::Search(_))),
+        "Ctrl+H must open file search, not silently swallow the key");
+    app.answer_dialog(original_dialogs::DialogResult::Search(None), &ctx);
+    app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == "a.txt").unwrap();
+    press(&mut app, &ctx, egui::Key::A, CTRL | egui::Modifiers::SHIFT);
+    assert!(matches!(app.original_dialogs.last().map(|d| &d.kind), Some(original_dialogs::DialogKind::ArchiveCreate(_))),
+        "Ctrl+Shift+A must open Move to Archive settings");
+    app.answer_dialog(original_dialogs::DialogResult::ArchiveCreate(None), &ctx);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn custom_archive_install_shortcut_calls_install_shell_verb() {
+    static CAPTURED: std::sync::Mutex<Vec<(PathBuf, String)>> = std::sync::Mutex::new(Vec::new());
+    fn capture(path: &Path, verb: &str) -> Result<(), String> {
+        CAPTURED.lock().unwrap().push((path.to_path_buf(), verb.to_owned()));
+        Ok(())
+    }
+    let (root, ctx, mut app) = fixture("install-shortcut", "ko");
+    let zip = root.join("left/selected.zip");
+    ndr::archive::create(&[root.join("left/a.txt")], &zip, None, &AtomicBool::new(false)).unwrap();
+    app.refresh(0);
+    wait(&mut app, &ctx);
+    app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == "selected.zip").unwrap();
+    app.system.run_verb = capture;
+    CAPTURED.lock().unwrap().clear();
+    let mut keys = compat::ShortcutMap::parse(None);
+    keys.set_binding("miArcInstall", "Ctrl+Shift+I").unwrap();
+    app.settings.set_text("OriginalShortcutMapText", &keys.to_text());
+    press(&mut app, &ctx, egui::Key::I, CTRL | egui::Modifiers::SHIFT);
+    assert_eq!(CAPTURED.lock().unwrap().as_slice(), &[(zip.clone(), "install".to_owned())]);
+    fs::remove_dir_all(root).unwrap();
+}
 
 /// Menus have original items only: commands without an original name (MENU_CAPTIONS, ORIGINAL_ACTIONS), which existed only in the C# version, are not in the menu table.
 #[test]

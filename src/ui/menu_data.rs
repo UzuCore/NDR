@@ -333,6 +333,7 @@ pub const ORIGINAL_ACTIONS: &[(&str,&str)] = &[
 ("miCommandLine","command"),
 ("miArcAdd","archiveAdd"),
 ("miArcMove","archiveMove"),
+("miArcInstall","archiveInstall"),
 ("miArcExtract","extractSelected"),
 ("miArcExtractToCurr","extractCurrent"),
 ("miArcExtractToFolder","extractNewFolder"),

@@ -666,6 +666,7 @@ impl App {
                 }
                 if clear_clipboard {
                     self.clipboard = None;
+                    self.clipboard_sequence = None;
                 }
                 self.status = if ko { format!("요청한 {}개 항목을 {v}했습니다.", n0(requested)) } else { format!("Finished: {v} {} requested item(s).", n0(requested)) };
                 sound(self);
@@ -782,6 +783,7 @@ impl App {
             Ok(()) => {
                 if clear_clipboard {
                     self.clipboard = None;
+                    self.clipboard_sequence = None;
                 }
                 if let Some(status) = status {
                     self.status = status;

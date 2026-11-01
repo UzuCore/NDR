@@ -487,6 +487,7 @@ struct PasswordRequest {
     reply: Sender<Option<String>>,
 }
 enum AsyncResult {
+    FtpPasteMovedLocal { sequence: u32 },
     ArchiveClipboardReady {
         location: ArchiveLocation,
         keys: Vec<String>,
@@ -617,6 +618,9 @@ pub struct App {
     started: Instant,
     frames: u64,
     clipboard: Option<(Vec<PathBuf>, bool)>,
+    /// Win32 clipboard sequence when a local Ctrl+C/X was last successful.
+    /// Prevent stale NDR paths being pasted after another application copies text.
+    clipboard_sequence: Option<u32>,
     archive_clipboard: Option<ArchiveClipboard>,
     last_selection: [Vec<PathBuf>; 2],
     saved: bool,
@@ -735,6 +739,9 @@ pub struct App {
     shell_recycle_emptier: fn() -> Result<(), String>,
     /// CF_HDROP clipboard write for copy/cut (native::clipboard_files). Tests do not touch the real clipboard.
     file_clipboard: fn(&[PathBuf], bool) -> Result<(), String>,
+    /// OS clipboard reads are injectable: regression tests must never consume
+    /// arbitrary CF_HDROP files from the user's live Windows clipboard.
+    clipboard_files_reader: fn() -> Result<(Vec<PathBuf>, bool), String>,
     /// Network share auth requests from listings received inside a pending refresh (handled by the next poll).
     auth_pending: Vec<usize>,
     /// Numpad keys received by the original shortcut table (original name, Shift). raw_input_hook pushes them and keyboard executes them.
@@ -941,6 +948,7 @@ impl App {
             started: Instant::now(),
             frames: 0,
             clipboard: None,
+            clipboard_sequence: None,
             archive_clipboard: None,
             last_selection: [vec![], vec![]],
             saved: false,
@@ -1010,6 +1018,7 @@ impl App {
             clipboard_writer: native::clipboard_text,
             shell_recycle_emptier: if cfg!(test) { || Err("not in tests".into()) } else { native::empty_recycle_bin_with_shell_ui },
             file_clipboard: if cfg!(test) { |_, _| Ok(()) } else { native::clipboard_files },
+            clipboard_files_reader: if cfg!(test) { || Ok((vec![], false)) } else { native::read_clipboard_files },
             auth_pending: Vec::new(),
             pending_numpad: Vec::new(),
             pending_context_key: false,
@@ -1463,6 +1472,15 @@ impl App {
         self.poll_remote_window(ctx);
         while let Ok(result) = self.async_rx.try_recv() {
             match result {
+                AsyncResult::FtpPasteMovedLocal { sequence } => {
+                    if self.clipboard_sequence == Some(sequence) {
+                        self.clipboard = None;
+                        self.clipboard_sequence = None;
+                    }
+                    if !cfg!(test) && native::clipboard_sequence_number() == sequence {
+                        let _ = native::clipboard_text("");
+                    }
+                }
                 AsyncResult::ArchiveClipboardReady { location, keys, stage, sequence_before, moving } => {
                     self.archive_clipboard_ready(location, keys, stage, sequence_before, moving);
                 }

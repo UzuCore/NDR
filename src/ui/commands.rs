@@ -710,6 +710,7 @@ impl App {
                         result=(self.file_clipboard)(&targets,id=="cut");
                         if result.is_ok() {
                             self.clipboard=Some((targets.clone(),id=="cut"));
+                            self.clipboard_sequence=Some(native::clipboard_sequence_number());
                             if let Some(previous)=self.archive_clipboard.take(){let _=std::fs::remove_dir_all(previous.stage);}
                             // Original 0x433dd8: cut items have dimmed icons until a new listing.
                             if id=="cut"&&self.panes[i].remote.is_none(){self.panes[i].cut_marks.extend(targets.iter().cloned());}
@@ -720,12 +721,23 @@ impl App {
             "paste"=>{
                 let archive_copy = self.archive_clipboard.clone().filter(|c| cfg!(test) || native::clipboard_sequence_number()==c.sequence);
                 if let Some(clip) = archive_copy {
-                    self.paste_archive_clipboard(i,clip);
+                    if self.panes[i].remote.is_some() {
+                        let files=clip.keys.iter().map(|key|clip.stage.join(key.rsplit('/').next().unwrap_or(key))).collect();
+                        let paste=super::ftp_pane::PasteUpload { moving:clip.moving, sequence:clip.sequence, archive:Some(clip) };
+                        self.ftp_upload_paths(i,files,Some(paste));
+                    } else {
+                        self.paste_archive_clipboard(i,clip);
+                    }
                 } else {
                     if let Some(stale)=self.archive_clipboard.take(){let _=std::fs::remove_dir_all(stale.stage);}
-                    let copied=native::read_clipboard_files().ok().filter(|(p,_)|!p.is_empty()).or_else(||self.clipboard.clone());
+                    let now=native::clipboard_sequence_number();
+                    let internal=self.clipboard.clone().filter(|_|self.clipboard_sequence==Some(now));
+                    let copied=(self.clipboard_files_reader)().ok().filter(|(p,_)|!p.is_empty()).or(internal);
+                    if self.clipboard_sequence!=Some(now){self.clipboard=None;self.clipboard_sequence=None;}
                     if let Some((sources,moving))=copied{
-                        if self.panes[i].archive.is_some(){self.archive_add_into(i,sources,moving);}
+                        if self.panes[i].remote.is_some(){
+                            self.ftp_upload_paths(i,sources,Some(super::ftp_pane::PasteUpload{moving,archive:None,sequence:now}));
+                        }else if self.panes[i].archive.is_some(){self.archive_add_into(i,sources,moving);}
                         else{self.transfer_from(i,sources,path,moving,super::file_operation::TransferKind::Paste);}
                     }
                 }

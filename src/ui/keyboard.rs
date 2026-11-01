@@ -165,13 +165,13 @@ impl App {
 
     /// Runs the item chosen by the original shortcut table (a menu item or an internal command).
     fn run_original_shortcut(&mut self, original: &str, shift: bool, ctx: &egui::Context) -> bool {
-        // Special items of C# OriginalMenuItemAction: select all is CycleFileSelection; invisible items only swallow the key.
+        // Special item of C# OriginalMenuItemAction: select all cycles selection.
+        // Hidden menu items still have valid shortcuts: don't swallow them.
         match original {
             "miSelectAll" => {
                 self.cycle_selection(shift);
                 return true;
             }
-            "miSearchFile" | "miArcMove" | "miArcInstall" => return true,
             // Original miFind (Ctrl+F) = find input box (TfGetText). The C# version focuses the toolbar quick search field with the same key,
             // so behave like C# only when that field is on the toolbar; otherwise (original toolbar) open the original find box.
             "miFind" if !self.toolbar.items.iter().any(|i| i.kind == ndr::commands::ToolbarKind::QuickSearch) => {

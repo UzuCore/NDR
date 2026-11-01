@@ -496,6 +496,9 @@ impl super::ftp_pane::PaneFs for FakeFtp {
         Ok(())
     }
     fn upload(&mut self, local: &Path, remote: &str, _cancel: &AtomicBool, _resolve: &mut dyn FnMut(&str, &str, &ndr::remote::ConflictInfo) -> ConflictChoice, _progress: &mut dyn FnMut(ndr::remote::TransferProgress)) -> Result<(), String> {
+        if remote.ends_with("/reject-cut.txt") {
+            return Err("Fixture intentionally rejected FTP clipboard upload".into());
+        }
         let data = fs::read(local).map_err(|e| e.to_string())?;
         FAKE_FTP.lock().unwrap().insert(remote.to_owned(), (false, data));
         Ok(())
@@ -536,6 +539,114 @@ impl super::ftp_pane::PaneFs for FakeFtp {
 fn fake_pane_connect(config: &Config) -> Result<Box<dyn super::ftp_pane::PaneFs>, String> {
     FAKE_FTP_CONFIGS.lock().unwrap().push(config.clone());
     Ok(Box::new(FakeFtp))
+}
+
+fn ftp_clipboard_fixture(label: &str) -> (PathBuf, egui::Context, App) {
+    let (root, ctx, mut app) = fixture(label, "ko");
+    {
+        let mut store = FAKE_FTP.lock().unwrap();
+        store.clear();
+        store.insert("/pub".into(), (true, Vec::new()));
+    }
+    app.panes[1].remote = Some(super::ftp_pane::PaneRemote {
+        fs: Arc::new(Mutex::new(Box::new(FakeFtp))),
+        host: "ftp.example.invalid".into(), path: "/pub".into(),
+        busy: Default::default(), modes: Default::default(), permissions: Default::default(), log: None,
+    });
+    (root, ctx, app)
+}
+
+fn wait_ftp_clipboard(app: &mut App, ctx: &egui::Context) {
+    wait_until(app, ctx, |app| {
+        app.job.as_ref().is_some_and(|j| j.finished)
+            && !app.panes[1].remote.as_ref().unwrap().busy.load(Ordering::Relaxed)
+            && !app.panes[1].loading
+    });
+    for _ in 0..4 { app.poll(ctx); }
+}
+
+#[test]
+fn ctrl_v_to_ftp_uploads_clipboard_file_and_moves_only_after_success() {
+    let _guard = REMOTE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (root, ctx, mut app) = ftp_clipboard_fixture("ftp-clipboard-local");
+    let source = root.join("left/alpha.txt");
+    app.active = 0;
+    app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == "alpha.txt").unwrap();
+    app.dispatch("copy", &ctx);
+    app.active = 1;
+    app.dispatch("paste", &ctx);
+    wait_ftp_clipboard(&mut app, &ctx);
+    assert_eq!(FAKE_FTP.lock().unwrap()["/pub/alpha.txt"].1, b"alpha");
+    assert_eq!(fs::read(&source).unwrap(), b"alpha", "Ctrl+C must keep the source");
+
+    let cut = root.join("left/cut.txt");
+    fs::write(&cut, b"cut-data").unwrap();
+    app.active = 0;
+    app.refresh(0);
+    wait_until(&mut app, &ctx, |app| !app.panes[0].loading);
+    app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == "cut.txt").unwrap();
+    app.dispatch("cut", &ctx);
+    assert!(cut.exists(), "cut without paste must preserve the source");
+    app.active = 1;
+    app.dispatch("paste", &ctx);
+    wait_ftp_clipboard(&mut app, &ctx);
+    assert_eq!(FAKE_FTP.lock().unwrap()["/pub/cut.txt"].1, b"cut-data");
+    assert!(!cut.exists(), "successful FTP cut paste removes only the uploaded source");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn archive_ctrl_c_and_ctrl_x_paste_into_ftp_preserve_then_move_archive_entries() {
+    let _guard = REMOTE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (root, ctx, mut app) = ftp_clipboard_fixture("ftp-clipboard-archive");
+    let zip = root.join("left/source.zip");
+    ndr::archive::create(&[root.join("left/alpha.txt")], &zip, None, &AtomicBool::new(false)).unwrap();
+    app.refresh(0);
+    wait_until(&mut app, &ctx, |app| !app.panes[0].loading);
+    app.active = 0;
+    app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == "source.zip").unwrap();
+    app.open_current();
+    wait_until(&mut app, &ctx, |app| !app.panes[0].loading);
+    app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == "alpha.txt").unwrap();
+    app.dispatch("copy", &ctx);
+    wait_until(&mut app, &ctx, |app| app.archive_clipboard.is_some());
+    app.active = 1;
+    app.dispatch("paste", &ctx);
+    wait_ftp_clipboard(&mut app, &ctx);
+    assert_eq!(FAKE_FTP.lock().unwrap()["/pub/alpha.txt"].1, b"alpha");
+    assert!(ndr::archive::list(&zip, None).unwrap().iter().any(|e| e.key == "alpha.txt"));
+
+    app.active = 0;
+    app.dispatch("cut", &ctx);
+    wait_until(&mut app, &ctx, |app| app.archive_clipboard.as_ref().is_some_and(|c| c.moving));
+    // Remove the remote copy so the cut is an unambiguous successful upload.
+    FAKE_FTP.lock().unwrap().remove("/pub/alpha.txt");
+    app.active = 1;
+    app.dispatch("paste", &ctx);
+    wait_ftp_clipboard(&mut app, &ctx);
+    assert_eq!(FAKE_FTP.lock().unwrap()["/pub/alpha.txt"].1, b"alpha");
+    assert!(!ndr::archive::list(&zip, None).unwrap().iter().any(|e| e.key == "alpha.txt"));
+    assert!(app.archive_clipboard.is_none());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn rejected_ftp_cut_paste_keeps_local_file() {
+    let _guard = REMOTE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let (root, ctx, mut app) = ftp_clipboard_fixture("ftp-clipboard-rejected");
+    let source = root.join("left/reject-cut.txt");
+    fs::write(&source, b"keep-me").unwrap();
+    app.active = 0;
+    app.refresh(0);
+    wait_until(&mut app, &ctx, |app| !app.panes[0].loading);
+    app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == "reject-cut.txt").unwrap();
+    app.dispatch("cut", &ctx);
+    app.active = 1;
+    app.dispatch("paste", &ctx);
+    wait_ftp_clipboard(&mut app, &ctx);
+    assert_eq!(fs::read(&source).unwrap(), b"keep-me");
+    assert!(!FAKE_FTP.lock().unwrap().contains_key("/pub/reject-cut.txt"));
+    fs::remove_dir_all(root).unwrap();
 }
 
 /// Original pane FTP mode: the site menu (FUN_00440734 "&1. name") turns the current pane into FTP, open folder, copy to the other pane = download/upload

@@ -20,6 +20,15 @@ pub(super) const FTP_LOG_HEIGHT: f32 = 60.0;
 const FTP_LOG_MIN: f32 = 30.0;
 const FTP_SPLITTER_HEIGHT: f32 = 3.0;
 
+/// A clipboard upload may be a move. Keep archive origin separately from the
+/// extracted CF_HDROP staging paths; never delete on a skipped/failed upload.
+#[derive(Clone)]
+pub(super) struct PasteUpload {
+    pub moving: bool,
+    pub archive: Option<ArchiveClipboard>,
+    pub sequence: u32,
+}
+
 /// Original FTP queue (FUN_00467f0c): folder items are not asked about; if absent they are created, and if present they are reused (folder vs folder = merge).
 /// A file with the same name is asked about via TfFileExists (FUN_00467764: shows the remote size and time, and btnResume when the transfer can be resumed).
 /// Fix: previously folders vs folders were also asked, the remote size and time were empty so the resume button was unusable, and renaming appended " (1)" without asking.
@@ -452,7 +461,7 @@ pub(super) fn local_tree_size(folder: &Path, cancel: &AtomicBool) -> Option<u64>
 /// Commands usable even in a pane's FTP mode (list navigation/selection/view/FTP/help). The rest handle local files, so they are blocked.
 pub(super) fn ftp_allows(id: &str) -> bool {
     const EXACT: &[&str] = &[
-        "refresh", "goParent", "goRoot", "open", "selectAll", "invertSelection", "select", "copyToOther", "moveToOther",
+        "refresh", "goParent", "goRoot", "open", "selectAll", "invertSelection", "select", "copyToOther", "moveToOther", "paste",
         "remote", "sites", "remoteCommand", "exit", "options", "language", "theme", "about", "help", "homepage", "checkUpdates",
         "filter", "newTab", "closeTab", "historyBack", "historyForward", "back", "forward", "favoritesMenu", "switchPane",
         // The FTP mode (2) branch of the original miNewFolderClick(0x432378)·miRenameClick(0x4351cc)·miDeleteClick(0x431c04 → FUN_0042c734).
@@ -795,11 +804,17 @@ impl App {
 
     /// Original FUN_0043feb0: upload the selected items of the local pane (source) to the current folder of the FTP pane (target).
     pub(super) fn ftp_upload(&mut self, source: usize, target: usize) {
+        let items = self.panes[source].targets();
+        self.ftp_upload_paths(target, items, None);
+    }
+
+    /// Ctrl+V on a remote pane uploads the actual clipboard paths, not the
+    /// selected items in the opposite pane. Archive clips use staged files.
+    pub(super) fn ftp_upload_paths(&mut self, target: usize, items: Vec<PathBuf>, paste: Option<PasteUpload>) {
         let Some(remote) = self.panes[target].remote.clone() else { return };
         if remote.busy.load(Ordering::Relaxed) {
             return self.ftp_box("FTPENGINE_BUSY", "Other files are still being transferred.");
         }
-        let items = self.panes[source].targets();
         if items.is_empty() {
             return;
         }
@@ -816,12 +831,14 @@ impl App {
         self.ftp_started = Some(std::time::Instant::now());
         self.ftp_pause.store(false, Ordering::Relaxed);
         let pause = self.ftp_pause.clone();
+        let completion = self.async_tx.clone();
         let title = self.tr("FTP 올리기", "FTP Upload").into_owned();
         let busy = remote.busy.clone();
         busy.store(true, Ordering::Relaxed);
         let started = self.start_task(title, move |events, cancel| {
             let outcome = (|| {
                 let mut fs = remote.fs.lock().map_err(|_| "FTP connection is unavailable".to_owned())?;
+                let mut skipped_any = false;
                 for (row, local) in items.iter().enumerate() {
                     if local.is_dir() && let Some(size) = local_tree_size(local, &cancel) {
                         set_row(&rows, row, |r| r.size = Some(size));
@@ -839,7 +856,15 @@ impl App {
                     });
                     let name = local.file_name().map(|n| n.to_string_lossy().into_owned()).ok_or("Upload source has no name")?;
                     let destination = join_remote(&remote.path, &name);
-                    let mut resolve = |src: &str, dst: &str, info: &ndr::remote::ConflictInfo| ask_remote_conflict(&events, &cancel, src, dst, info);
+                    let mut resolve = |src: &str, dst: &str, info: &ndr::remote::ConflictInfo| {
+                        let choice = ask_remote_conflict(&events, &cancel, src, dst, info);
+                        // OverwriteNewer can skip an item based on timestamps;
+                        // conservatively preserve the source of an entire cut.
+                        if matches!(choice, ConflictChoice::Skip | ConflictChoice::OverwriteNewer | ConflictChoice::Cancel) {
+                            skipped_any = true;
+                        }
+                        choice
+                    };
                     let mut progress = |p: TransferProgress| {
                         set_row(&rows, row, |r| r.done = p.bytes);
                         let _ = events.send(Event::Progress { path: PathBuf::from(p.path), bytes: p.bytes, files: p.files });
@@ -852,6 +877,29 @@ impl App {
                             set_row(&rows, row, |r| r.state = state);
                             return Err(error);
                         }
+                    }
+                }
+                if let Some(paste) = paste.filter(|p| p.moving) {
+                    if skipped_any || cancel.load(Ordering::Relaxed) {
+                        return Err("Some remote items were skipped or canceled. Original cut items were preserved.".into());
+                    }
+                    if let Some(clip) = paste.archive {
+                        let archive = ndr::archive::first_volume_path(&clip.location.file);
+                        let password = (!clip.location.password.is_empty()).then_some(clip.location.password.as_str());
+                        ndr::archive::delete_entries(&archive, &clip.keys, password, &cancel)?;
+                        let _ = completion.send(AsyncResult::ArchiveClipboardMoveDone { archive, sequence: clip.sequence, remaining: vec![] });
+                    } else {
+                        for local in &items {
+                            // Never follow a reparse point while removing a
+                            // source that was just uploaded.
+                            let meta = std::fs::symlink_metadata(local).map_err(|e| e.to_string())?;
+                            if meta.file_type().is_symlink() {
+                                return Err(format!("Refusing to delete changed/symlink source: {}", local.display()));
+                            }
+                            if meta.is_dir() { std::fs::remove_dir_all(local) } else { std::fs::remove_file(local) }
+                                .map_err(|e| format!("{}: {e}", local.display()))?;
+                        }
+                        let _ = completion.send(AsyncResult::FtpPasteMovedLocal { sequence: paste.sequence });
                     }
                 }
                 Ok(())
