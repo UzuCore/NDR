@@ -1394,9 +1394,18 @@ fn alt_enter_edits_the_description_like_the_original() {
     on_file(&mut app);
     let alt_enter = egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::ALT };
     let raw = egui::RawInput { modifiers: egui::Modifiers::ALT, events: vec![alt_enter], screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 850.0))), ..Default::default() };
-    let output = ctx.run(raw, |ctx| app.keyboard(ctx));
+    let output = ctx.run(raw.clone(), |ctx| app.keyboard(ctx));
     let commands = &output.viewport_output[&egui::ViewportId::ROOT].commands;
     assert!(!commands.iter().any(|c| matches!(c, egui::ViewportCommand::Fullscreen(_))), "{commands:?}");
+    // The Enter that ran the shortcut does not reach the window it opened in the same frame (it used to press OK at once).
+    let (same_root, _, mut same_frame) = fixture("fullscreen-same-frame");
+    on_file(&mut same_frame);
+    let _ = ctx.run(raw, |ctx| {
+        same_frame.keyboard(ctx);
+        same_frame.original_dialog_ui(ctx);
+    });
+    assert_eq!(same_frame.original_dialogs.len(), 1, "the description box stays open");
+    let _ = fs::remove_dir_all(same_root);
     let (expected_root, _, mut expected) = fixture("fullscreen-expected");
     on_file(&mut expected);
     expected.dispatch("description", &ctx);

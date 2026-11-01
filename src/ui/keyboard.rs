@@ -92,6 +92,9 @@ impl App {
         let pressed = pressed_key(ctx);
         if let Some((key, modifiers)) = pressed {
             if self.shortcut_key(key, modifiers, ctx) {
+                // The keys that ran the command belong to it: a window the command opens is drawn later in this frame and would otherwise take
+                // the same Enter as its own OK (Alt+Enter opened the description box and closed it at once with nothing saved).
+                ctx.input_mut(|i| i.events.retain(|e| !matches!(e, egui::Event::Key { pressed: true, .. } | egui::Event::Text(_))));
                 return;
             }
             // Original TToolBar (tbFile ... tbHelp) CM_DIALOGCHAR: an Alt+letter that is not a shortcut presses the menu button with that access letter.
