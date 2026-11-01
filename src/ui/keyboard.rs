@@ -85,8 +85,22 @@ impl App {
         }
         // Original KeyDown (0x7d7338) -> ArrowKey handles [ ] first, then the WMChar quick search (which also takes the same letters).
         self.bracket_keys(ctx);
+        // A real Shift+drive-letter key first belongs to the original KeyDown
+        // command (FUN_0048423c), not WMChar quick search. egui also supplies
+        // Text("C") with Shift+C; allowing quick search to consume that text
+        // silently prevents the drive shortcut even with hanshdrive enabled.
+        let shift_drive = pressed_key(ctx).is_some_and(|(key, modifiers)| {
+            if !modifiers.shift || modifiers.ctrl || modifiers.alt || self.panes[self.active].remote.is_some()
+                || !(native::english_input_language() || self.settings.flag("UseAlternateDriveHandling", false))
+            {
+                return false;
+            }
+            wpf_key(key).is_some_and(|name| name.len() == 1
+                && name.as_bytes()[0].is_ascii_uppercase()
+                && Path::new(&format!("{name}:\\")).is_dir())
+        });
         // Original TNXCustomFileListView quick search (WMChar 0x7d5a18 -> QuickSearch 0x7d5f9c).
-        if self.original_typed_search(ctx) {
+        if !shift_drive && self.original_typed_search(ctx) {
             return;
         }
         let pressed = pressed_key(ctx);
