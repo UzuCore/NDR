@@ -664,7 +664,7 @@ pub fn import_ini(path: &Path) -> Result<Settings, String> {
     {
         "black" => "Black",
         "classic" => "Classic",
-        "gray" | "grey" => "Gray",
+        "gray" | "grey" => "Black",
         "white" | "light" => "Light",
         "system" => "System",
         _ => "Dark",

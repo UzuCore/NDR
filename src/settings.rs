@@ -165,11 +165,11 @@ impl Settings {
         if original_schema < 4 && self.text("Theme", "Dark").eq_ignore_ascii_case("Dark") {
             self.set_text("Theme", "Black");
         }
-        // Themes are only the original skins (black, classic, gray). Old C# themes (Dark, Light, System) or unknown names become the original default Black.
+        // Themes are only the original skins (black, classic). Old C# themes (Dark, Light, System) or unknown names become the original default Black.
         let theme = self.text("Theme", "Black");
         self.set_text(
             "Theme",
-            if matches!(theme.as_str(), "Black" | "Classic" | "Gray") {
+            if matches!(theme.as_str(), "Black" | "Classic") {
                 theme.as_str()
             } else {
                 "Black"

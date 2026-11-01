@@ -5,8 +5,8 @@
 use super::*;
 use ndr::msgbox::{MB_ICONASTERISK, MB_ICONEXCLAMATION, MB_OK};
 
-/// Original skins (skin\ folder names): black, classic, gray.
-pub(super) const THEMES: [&str; 3] = ["Black", "Classic", "Gray"];
+/// Original skins (skin\ folder names): black, classic.
+pub(super) const THEMES: [&str; 2] = ["Black", "Classic"];
 
 /// Color table of C# ApplyTheme (when there is no skin). (app background, pane background, raised cell, border, text, faint text, accent).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -32,7 +32,6 @@ impl ThemePalette {
 pub(super) fn theme_palette(theme: &str) -> ThemePalette {
     match theme {
         "Classic" => ThemePalette { app: [0xDE, 0xDE, 0xDE], panel: [0xF0, 0xF0, 0xF0], raised: [0xFF, 0xFF, 0xFF], border: [0xAA, 0xAA, 0xAA], text: [0, 0, 0], muted: [0x66, 0x66, 0x66], accent: [0x17, 0x69, 0xAA] },
-        "Gray" => ThemePalette { app: [0x87, 0x87, 0x87], panel: [0xD1, 0xD7, 0xE2], raised: [0x96, 0x96, 0x96], border: [0x6F, 0x6F, 0x6F], text: [0, 0, 0], muted: [0x33, 0x33, 0x33], accent: [0x4C, 0x82, 0xDC] },
         _ => ThemePalette { app: [0, 0, 0], panel: [0, 0, 0], raised: [0x20, 0x20, 0x20], border: [0x30, 0x30, 0x30], text: [0xC0, 0xC0, 0xC0], muted: [0x85, 0x85, 0x85], accent: [0x4C, 0x82, 0xDC] },
     }
 }
@@ -476,8 +475,8 @@ mod tests {
     #[test]
     fn skin_palettes() {
         assert_eq!(theme_palette("Classic").app, [0xDE, 0xDE, 0xDE]);
-        assert_eq!(theme_palette("Gray").panel, [0xD1, 0xD7, 0xE2]);
-        assert!(!theme_palette("Gray").dark());
+        assert_eq!(theme_palette("Gray"), theme_palette("Black"));
+        assert!(theme_palette("Gray").dark());
         assert_eq!(theme_palette("Black").text, [0xC0, 0xC0, 0xC0]);
         assert!(theme_palette("Black").dark());
         // Unknown names are black.

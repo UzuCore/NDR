@@ -668,7 +668,7 @@ pub struct App {
     file_icon_failed_at: HashMap<String, Instant>,
     /// The dimmed icon of the original TNXShellImageList.Draw (0x7b8ebc) (ILD_BLEND50, blend color white): one per icon image.
     ghost_icons: HashMap<egui::TextureId, egui::TextureHandle>,
-    /// The original skin (conf.ini) of the current theme - (theme name, skin). None if not Black/Classic/Gray.
+    /// The original skin (conf.ini) of the current theme - (theme name, skin). None if not Black/Classic.
     skin_cache: Option<(String, Option<ndr::styles::Skin>)>,
     /// Subfolder list opened from the skin address bar: (panel, folder, whether it is a drive list, position).
     skin_crumb_menu: Option<(usize, PathBuf, bool, egui::Pos2)>,
@@ -1139,7 +1139,7 @@ impl App {
                 .set_flag(&format!("{name}ShowHiddenFiles"), self.panes[i].show_hidden);
         }
         self.settings.set_text("Language", &self.language);
-        // Theme stays the raw setting value (Dark/Light/System/Black/Classic/Gray). self.dark is only its result.
+        // Theme stays the raw setting value (Dark/Light/System/Black/Classic). self.dark is only its result.
         self.settings.set_flag("DualPaneMode", self.dual);
         let any_tree = self.settings.flag("ShowLeftFolderTree", false) || self.settings.flag("ShowRightFolderTree", false);
         self.settings.set_flag("ShowFolderTree", any_tree);

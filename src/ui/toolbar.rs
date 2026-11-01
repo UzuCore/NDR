@@ -205,7 +205,7 @@ impl App {
         texture
     }
 
-    /// Original skin of the current theme (black, classic, gray). conf.ini is reread only when the theme changes. For names that are not original skins or unreadable skins,
+    /// Original skin of the current theme (black, classic). conf.ini is reread only when the theme changes. For names that are not original skins or unreadable skins,
     /// the original default black (Black) is used.
     pub(super) fn current_skin(&mut self) -> Option<ndr::styles::Skin> {
         let theme = self.settings.text("Theme", "Black");

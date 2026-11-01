@@ -212,7 +212,7 @@ pub struct Skin {
 impl Skin {
     pub fn load(directory: &Path, theme: &str) -> Result<Self, String> {
         let theme = theme.trim().to_ascii_lowercase();
-        if !matches!(theme.as_str(), "black" | "classic" | "gray") {
+        if !matches!(theme.as_str(), "black" | "classic") {
             return Err(format!("No original skin for theme: {theme}"));
         }
         let directory = std::fs::canonicalize(directory.join(theme)).map_err(|e| e.to_string())?;

@@ -1,4 +1,4 @@
-//! Panel parts of the original skin themes (black, classic, gray).
+//! Panel parts of the original skin themes (black, classic).
 //! - Address bar: original FUN_00481978 (a TNXPaintPanel of height 19 holding a TNXPathLabel plus two addressbtns.png buttons, width 20) and
 //!   TNXPathLabel.Paint(0x7c9714)·DrawDivider(0x7c9694)·UpdateDisplayInfo(0x7c8c20, segment width = text width + 4).
 //! - Panel border: skin [List] lframelocal·lframenet·lframearc·lframeftp·lframeinactive, lframewidth.

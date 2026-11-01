@@ -59,7 +59,6 @@ jobs:
             'Resources/Languages/en.lang',
             'Resources/Skins/black/conf.ini',
             'Resources/Skins/classic/conf.ini',
-            'Resources/Skins/gray/conf.ini',
             'Resources/Colors/black.col',
             'Resources/Tools/7zip/7za.exe',
             'Resources/Tools/7zip/Full/7z.exe',
