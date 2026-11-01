@@ -47,11 +47,23 @@ pub fn download_github_update(
     release: &GithubRelease,
     get: fn(&str, usize) -> Result<HttpResponse, HttpError>,
 ) -> Result<PathBuf, String> {
+    download_github_update_with_progress(release, |url, max| get(url, max), |_| {})
+}
+
+/// HTTP progress callback reports bytes downloaded; phase callback describes
+/// SHA-256 verification and staging (not a fictitious installation percent).
+pub fn download_github_update_with_progress(
+    release: &GithubRelease,
+    get: impl FnOnce(&str, usize) -> Result<HttpResponse, HttpError>,
+    mut phase: impl FnMut(UpdatePhase),
+) -> Result<PathBuf, String> {
     let response = get(&release.url, MAX_PACKAGE_BYTES).map_err(|e| format!("Download failed: {e:?}"))?;
+    phase(UpdatePhase::Verifying);
     if response.status != 200 || !response.secure { return Err("Update download was not secure or HTTP 200".into()); }
     if response.body.len() != release.size { return Err("Update ZIP size differs from GitHub release".into()); }
     let digest = format!("{:x}", Sha256::digest(&response.body));
     if digest != release.sha256 { return Err("Update SHA-256 verification failed".into()); }
+    phase(UpdatePhase::Preparing);
     let folder = std::env::temp_dir().join(format!("ndr-update-{}-{}-{}", release.tag,
         std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
             .map_err(|e| e.to_string())?.as_nanos()));
@@ -60,6 +72,9 @@ pub fn download_github_update(
     std::fs::write(&archive, &response.body).map_err(|e| e.to_string())?;
     Ok(archive)
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UpdatePhase { Downloading, Verifying, Preparing, Installing, Failed }
 
 /// The script is external to NDR so that Windows can replace NDR.exe after exit.
 pub fn launch_update(archive: &Path) -> Result<(), String> {
@@ -72,11 +87,12 @@ pub fn launch_update(archive: &Path) -> Result<(), String> {
     let script = folder.join("apply-update.ps1");
     std::fs::write(&script, include_str!("apply-update.ps1")).map_err(|e| e.to_string())?;
     std::process::Command::new("powershell.exe")
-        .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File"])
+        .args(["-NoProfile", "-NonInteractive", "-Sta", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File"])
         .arg(&script).arg("-Archive").arg(archive)
         .arg("-Destination").arg(installation)
         .arg("-ParentPid").arg(std::process::id().to_string())
         .arg("-LogPath").arg(folder.join("update.log"))
+        .arg("-ShowProgress")
         .spawn().map_err(|e| format!("Could not launch updater: {e}"))?;
     Ok(())
 }
@@ -201,6 +217,27 @@ mod tests {
             url: "https://github.com/UzuCore/NDR/releases/download/build-12/NDR-windows-x64.zip".into(),
             size: 3, sha256: "0".repeat(64) };
         assert!(download_github_update(&release, fake).is_err());
+    }
+
+    #[test]
+    fn verified_update_advances_to_staging_without_an_extra_approval() {
+        fn fake(_: &str, _: usize) -> Result<HttpResponse, HttpError> {
+            Ok(HttpResponse { status: 200, secure: true, body: b"test update zip".to_vec() })
+        }
+        let payload = b"test update zip";
+        let release = GithubRelease { build: 101, tag: "build-101".into(),
+            url: "https://github.com/UzuCore/NDR/releases/download/build-101/NDR-windows-x64.zip".into(),
+            size: payload.len(), sha256: format!("{:x}", Sha256::digest(payload)) };
+        let mut phases = Vec::new();
+        let archive = download_github_update_with_progress(&release, fake, |phase| phases.push(phase)).unwrap();
+        assert_eq!(phases, [UpdatePhase::Verifying, UpdatePhase::Preparing]);
+        assert_eq!(std::fs::read(&archive).unwrap(), payload);
+        std::fs::remove_dir_all(archive.parent().unwrap()).unwrap();
+        let mut bad_release = release;
+        bad_release.sha256 = "0".repeat(64);
+        let mut phases = Vec::new();
+        assert!(download_github_update_with_progress(&bad_release, fake, |phase| phases.push(phase)).is_err());
+        assert_eq!(phases, [UpdatePhase::Verifying]);
     }
 
     #[test]

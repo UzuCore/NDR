@@ -546,6 +546,8 @@ enum AsyncResult {
     /// Update feed result. bool = the silent check at startup (original [+0x54]; for a new version, only the menu bar button).
     Update(Result<ndr::update::HttpResponse, ndr::update::HttpError>, bool),
     UpdatePackage(Result<PathBuf, String>),
+    UpdateProgress { downloaded: usize, total: usize },
+    UpdatePhase(ndr::update::UpdatePhase),
     /// Info bar disk data (panel, listing generation, (drive letter, free, total)).
     DiskCapacity { pane: usize, generation: u64, disk: Option<(String, u64, u64)> },
     /// Original TfChecksum computation finished (dialog number, result text; None on failure).
@@ -789,6 +791,10 @@ pub struct App {
     menu_focus: std::cell::Cell<Option<egui::Id>>,
     /// Download URL of the new version found by the silent update check (while the original tbNewUpdateAvailable is shown).
     update_available: Option<String>,
+    update_progress: Option<main_window::UpdateProgress>,
+    /// Launch the external installer after verification; testable without
+    /// modifying or closing a real NDR installation.
+    update_launcher: fn(&Path) -> Result<(), String>,
     /// C# _lastCommandWorkingDirectory (working directory of command execution).
     last_command_directory: Option<PathBuf>,
     /// Network drives, Explorer menu, and shell verbs (swapped out in tests).
@@ -1055,6 +1061,8 @@ impl App {
             menu_targets_seen: Vec::new(),
             menu_focus: Default::default(),
             update_available: None,
+            update_progress: None,
+            update_launcher: ndr::update::launch_update,
             last_command_directory: None,
             system: tools_dialog::SystemHooks::default(),
             open_dialog: ndr::file_dialogs::open_file,
@@ -1585,6 +1593,17 @@ impl App {
                 }
                 AsyncResult::Update(result, silent) => self.update_done(result, silent),
                 AsyncResult::UpdatePackage(result) => self.update_package_done(result, ctx),
+                AsyncResult::UpdateProgress { downloaded, total } => {
+                    if let Some(progress) = self.update_progress.as_mut() {
+                        if progress.phase == ndr::update::UpdatePhase::Downloading {
+                            progress.downloaded = downloaded;
+                            progress.total = total;
+                        }
+                    }
+                }
+                AsyncResult::UpdatePhase(phase) => {
+                    if let Some(progress) = self.update_progress.as_mut() { progress.phase = phase; }
+                }
                 AsyncResult::DiskCapacity { pane, generation, disk } => {
                     if self.panes[pane].generation == generation {
                         self.panes[pane].disk = disk;
@@ -2143,6 +2162,7 @@ impl eframe::App for App {
         self.original_dialog_ui(ctx);
         // The modal progress window is drawn above the window under it (for example the custom search of the cleanup options window).
         self.modal_progress_ui(ctx);
+        self.update_progress_ui(ctx);
         self.msgbox_ui(ctx);
         self.pane_message_ui(ctx);
         self.fade_menus(ctx);

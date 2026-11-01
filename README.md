@@ -25,6 +25,11 @@ when **Check for updates on startup** is enabled (the default). A new build
 is indicated in the menu bar; **Help → Check for updates** also checks manually.
 NDR offers to download the *complete* portable ZIP, verifies its size and
 GitHub-published SHA-256 digest, and asks permission to restart and install it.
+**Only one approval is required**: after accepting the update, NDR displays
+actual download bytes and progress, verifies the ZIP, and launches the
+installer automatically. A separate compact installer progress window remains
+visible while NDR exits and the files are replaced; NDR then restarts without
+another confirmation. Installation errors are recorded in `update.log`.
 The updater waits until NDR has exited, replaces the packaged application
 files, keeps `settings.json` and other personal files intact, then relaunches
 NDR. The previous files are backed up in the update staging directory under

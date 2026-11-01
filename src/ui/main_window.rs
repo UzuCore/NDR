@@ -5,6 +5,22 @@
 use super::file_operation::n0;
 use super::*;
 
+/// A single uninterrupted update flow after the user approves the release.
+pub(super) struct UpdateProgress {
+    pub(super) tag: String,
+    pub(super) phase: ndr::update::UpdatePhase,
+    pub(super) downloaded: usize,
+    pub(super) total: usize,
+    pub(super) error: Option<String>,
+}
+
+impl UpdateProgress {
+    fn new(release: &ndr::update::GithubRelease) -> Self {
+        Self { tag: release.tag.clone(), phase: ndr::update::UpdatePhase::Downloading,
+            downloaded: 0, total: release.size, error: None }
+    }
+}
+
 /// C# PaneState.UpdateSummary (counted once when the list is received).
 #[derive(Clone, Debug, Default)]
 pub(super) struct PaneSummary {
@@ -553,6 +569,7 @@ impl App {
 
     /// silent = the original quiet check ([+0x54] == 1, at startup): only the result is used, without notice or error boxes.
     pub(super) fn start_update_check(&mut self, silent: bool) {
+        if self.update_progress.is_some() { return; }
         let configured = self.settings.text("UpdateManifestUrl", "");
         let feed = if configured.trim().is_empty() {
             ndr::update::GITHUB_LATEST_URL.to_owned()
@@ -575,30 +592,135 @@ impl App {
     /// C# CheckForUpdatesAsync (second part). Errors use an "NDR" warning box like RunSafely, notices an information box.
     /// For the quiet check (original FUN_00441dd8 0x441e3d), a newer version only shows the menu bar button (tbNewUpdateAvailable) and nothing else happens.
     fn start_github_download(&mut self, release: ndr::update::GithubRelease) {
+        if self.update_progress.is_some() { return; }
+        self.update_progress = Some(UpdateProgress::new(&release));
         self.status = format!("GitHub {} 업데이트 다운로드 중...", release.tag);
         let (get, tx) = (self.http_get, self.async_tx.clone());
         thread::spawn(move || {
-            let result = ndr::update::download_github_update(&release, get);
+            let progress_tx = tx.clone();
+            let phase_tx = tx.clone();
+            let mut last_reported = 0usize;
+            let fetch = |url: &str, max: usize| {
+                if std::ptr::fn_addr_eq(get, native::https_get as fn(&str, usize) -> Result<ndr::update::HttpResponse, ndr::update::HttpError>) {
+                    native::https_get_with_progress(url, max, |bytes, _| {
+                        if bytes.saturating_sub(last_reported) >= 256 * 1024 || bytes == release.size {
+                            last_reported = bytes;
+                            let _ = progress_tx.send(AsyncResult::UpdateProgress { downloaded: bytes, total: release.size });
+                        }
+                    })
+                } else {
+                    let result = get(url, max);
+                    if let Ok(ref response) = result {
+                        let _ = progress_tx.send(AsyncResult::UpdateProgress { downloaded: response.body.len(), total: release.size });
+                    }
+                    result
+                }
+            };
+            let result = ndr::update::download_github_update_with_progress(&release, fetch, |phase| {
+                let _ = phase_tx.send(AsyncResult::UpdatePhase(phase));
+            });
             let _ = tx.send(AsyncResult::UpdatePackage(result));
         });
     }
 
-    pub(super) fn update_package_done(&mut self, result: Result<PathBuf, String>, _ctx: &egui::Context) {
-        use ndr::msgbox::{IDYES, MB_ICONASTERISK, MB_ICONEXCLAMATION, MB_OK, MB_YESNO};
+    pub(super) fn update_package_done(&mut self, result: Result<PathBuf, String>, ctx: &egui::Context) {
         match result {
-            Err(message) => self.system_box("NDR Update", &format!("업데이트 실패: {message}"), MB_OK | MB_ICONEXCLAMATION, |_, _, _| {}),
+            Err(message) => {
+                if let Some(progress) = self.update_progress.as_mut() {
+                    progress.phase = ndr::update::UpdatePhase::Failed;
+                    progress.error = Some(message);
+                }
+            }
             Ok(archive) => {
-                self.status = "업데이트 ZIP 다운로드 및 SHA-256 검사 완료".into();
-                self.system_box("NDR Update", "ZIP 검증을 완료했습니다.\n지금 NDR을 종료하고 업데이트를 설치한 뒤 다시 실행할까요?", MB_YESNO | MB_ICONASTERISK, move |app, answer, ctx| {
-                    if answer == IDYES {
-                        match ndr::update::launch_update(&archive) {
-                            Ok(()) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
-                            Err(message) => app.system_box("NDR Update", &message, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {}),
+                self.status = "업데이트 다운로드 및 SHA-256 검증 완료. 설치를 시작합니다.".into();
+                if let Some(progress) = self.update_progress.as_mut() {
+                    progress.phase = ndr::update::UpdatePhase::Installing;
+                }
+                match (self.update_launcher)(&archive) {
+                    Ok(()) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+                    Err(message) => {
+                        if let Some(progress) = self.update_progress.as_mut() {
+                            progress.phase = ndr::update::UpdatePhase::Failed;
+                            progress.error = Some(message);
                         }
                     }
-                });
+                }
             }
         }
+    }
+
+    /// A single persistent progress panel, with genuine downloaded byte counts.
+    pub(super) fn update_progress_ui(&mut self, ctx: &egui::Context) {
+        use ndr::update::UpdatePhase;
+        let Some(progress) = self.update_progress.as_ref() else { return };
+        let ko = self.language == "ko";
+        let mut dismiss = false;
+        egui::Window::new(if ko { "NDR 업데이트" } else { "NDR Update" })
+            .id(egui::Id::new("ndr-update-progress"))
+            .collapsible(false).resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .min_width(420.0)
+            .show(ctx, |ui| {
+                ui.add_space(8.0);
+                ui.heading(format!("NDR  {}", progress.tag));
+                ui.label(if ko { "검증된 업데이트를 안전하게 설치합니다." } else { "Securely installing the verified update." });
+                ui.add_space(15.0);
+                let step = match progress.phase {
+                    UpdatePhase::Downloading => 0,
+                    UpdatePhase::Verifying => 1,
+                    UpdatePhase::Preparing => 2,
+                    UpdatePhase::Installing | UpdatePhase::Failed => 3,
+                };
+                let stages = if ko {
+                    ["다운로드", "무결성 검사", "설치 준비", "설치 및 재시작"]
+                } else { ["Download", "Integrity", "Prepare", "Install & restart"] };
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    for (index, label) in stages.iter().enumerate() {
+                        let label = if index < step { format!("✓ {label}") }
+                            else if index == step && progress.phase != UpdatePhase::Failed { format!("● {label}") }
+                            else { format!("○ {label}") };
+                        ui.label(if index <= step { egui::RichText::new(label).strong() }
+                            else { egui::RichText::new(label).weak() });
+                    }
+                });
+                ui.add_space(12.0);
+                match progress.phase {
+                    UpdatePhase::Downloading => {
+                        let total = progress.total.max(1);
+                        let fraction = (progress.downloaded as f32 / total as f32).clamp(0.0, 1.0);
+                        ui.add(egui::ProgressBar::new(fraction)
+                            .text(format!("{:.0}% · {:.1} / {:.1} MiB", fraction * 100.0,
+                                progress.downloaded as f64 / 1048576.0, total as f64 / 1048576.0))
+                            .desired_width(ui.available_width()));
+                    }
+                    UpdatePhase::Verifying | UpdatePhase::Preparing | UpdatePhase::Installing => {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label(match progress.phase {
+                                UpdatePhase::Verifying => if ko { "SHA-256 무결성을 확인하고 있습니다..." } else { "Verifying SHA-256..." },
+                                UpdatePhase::Preparing => if ko { "설치 패키지를 준비하고 있습니다..." } else { "Preparing package..." },
+                                _ => if ko { "설치 프로그램으로 전환합니다..." } else { "Starting installer..." },
+                            });
+                        });
+                        ui.add(egui::ProgressBar::new(1.0).text("ZIP 100%").desired_width(ui.available_width()));
+                    }
+                    UpdatePhase::Failed => {
+                        ui.colored_label(ui.visuals().error_fg_color,
+                            progress.error.as_deref().unwrap_or("Update failed"));
+                        if ui.button(if ko { "닫기" } else { "Close" }).clicked() { dismiss = true; }
+                    }
+                }
+                ui.add_space(10.0);
+                if progress.phase != UpdatePhase::Failed {
+                    ui.label(egui::RichText::new(if ko {
+                        "설치 후 자동으로 재시작합니다. 기존 설정은 그대로 유지됩니다."
+                    } else { "NDR restarts automatically. Your settings stay intact." }).small().weak());
+                }
+                ui.add_space(6.0);
+            });
+        if dismiss { self.update_progress = None; }
+        else { ctx.request_repaint_after(Duration::from_millis(100)); }
     }
 
     pub(super) fn update_done(&mut self, result: Result<ndr::update::HttpResponse, ndr::update::HttpError>, silent: bool) {
@@ -616,7 +738,7 @@ impl App {
             }
             match parsed {
                 Ok(Some(release)) => {
-                    let question = format!("GitHub NDR {} 업데이트를 찾았습니다.\nZIP을 다운로드하고 검증할까요?", release.tag);
+                    let question = format!("GitHub NDR {} 업데이트를 찾았습니다.\n다운로드·검증·설치 후 자동으로 재시작할까요?\n사용자 설정은 유지됩니다.", release.tag);
                     self.system_box("NDR Update", &question, MB_YESNO | MB_ICONASTERISK, move |app, answer, _| {
                         if answer == IDYES { app.start_github_download(release); }
                     });

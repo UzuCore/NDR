@@ -1548,6 +1548,16 @@ pub fn pane_disk_info(path: &Path) -> Option<(String, u64, u64)> {
 
 /// HTTPS GET (WinHTTP, 15-second timeout, blocks HTTPS → HTTP redirects, TooLarge if `max_bytes` is exceeded). Stands in for C# UpdateHttpClient.
 pub fn https_get(url: &str, max_bytes: usize) -> Result<crate::update::HttpResponse, crate::update::HttpError> {
+    https_get_with_progress(url, max_bytes, |_, _| {})
+}
+
+/// The same HTTPS-only WinHTTP request with real byte-count progress.
+/// Callback runs on the request worker thread, never on the UI thread.
+pub fn https_get_with_progress(
+    url: &str,
+    max_bytes: usize,
+    mut progress: impl FnMut(usize, Option<usize>),
+) -> Result<crate::update::HttpResponse, crate::update::HttpError> {
     use crate::update::{HttpError, HttpResponse};
     use windows_sys::Win32::Networking::WinHttp::*;
     struct Handle(*mut std::ffi::c_void);
@@ -1604,7 +1614,8 @@ pub fn https_get(url: &str, max_bytes: usize) -> Result<crate::update::HttpRespo
         WinHttpQueryHeaders(request.0, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, ptr::null(), (&mut status as *mut u32).cast(), &mut size, ptr::null_mut());
         let mut length = 0u32;
         let mut size = size_of::<u32>() as u32;
-        if WinHttpQueryHeaders(request.0, WINHTTP_QUERY_CONTENT_LENGTH | WINHTTP_QUERY_FLAG_NUMBER, ptr::null(), (&mut length as *mut u32).cast(), &mut size, ptr::null_mut()) != 0 && length as usize > max_bytes {
+        let has_length = WinHttpQueryHeaders(request.0, WINHTTP_QUERY_CONTENT_LENGTH | WINHTTP_QUERY_FLAG_NUMBER, ptr::null(), (&mut length as *mut u32).cast(), &mut size, ptr::null_mut()) != 0;
+        if has_length && length as usize > max_bytes {
             return Err(HttpError::TooLarge);
         }
         let mut final_url = vec![0u16; 4096];
@@ -1612,6 +1623,7 @@ pub fn https_get(url: &str, max_bytes: usize) -> Result<crate::update::HttpRespo
         let secure = WinHttpQueryOption(request.0, WINHTTP_OPTION_URL, final_url.as_mut_ptr().cast(), &mut bytes) != 0 && String::from_utf16_lossy(&final_url[..(bytes as usize / 2).min(final_url.len())]).to_ascii_lowercase().starts_with("https://");
         let mut body = Vec::new();
         let mut buffer = vec![0u8; 16 * 1024];
+        progress(0, has_length.then_some(length as usize));
         loop {
             let mut read = 0u32;
             if WinHttpReadData(request.0, buffer.as_mut_ptr().cast(), buffer.len() as u32, &mut read) == 0 {
@@ -1624,6 +1636,7 @@ pub fn https_get(url: &str, max_bytes: usize) -> Result<crate::update::HttpRespo
                 return Err(HttpError::TooLarge);
             }
             body.extend_from_slice(&buffer[..read as usize]);
+            progress(body.len(), has_length.then_some(length as usize));
         }
         Ok(HttpResponse { status, secure, body })
     }

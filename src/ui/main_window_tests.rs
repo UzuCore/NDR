@@ -347,6 +347,35 @@ fn launched(path: &Path, _: &str, _: &Path) -> Result<(), String> {
 }
 
 #[test]
+fn github_update_installs_after_one_approval_without_second_dialog() {
+    let (root, ctx, mut app) = fixture("single-approval-update");
+    let before = app.msgboxes.len();
+    app.update_launcher = |path| {
+        assert_eq!(path, Path::new("mock-update.zip"));
+        Ok(())
+    };
+    app.update_progress = Some(super::main_window::UpdateProgress {
+        tag: "build-99".into(), phase: ndr::update::UpdatePhase::Preparing,
+        downloaded: 1024, total: 1024, error: None,
+    });
+    app.update_package_done(Ok(PathBuf::from("mock-update.zip")), &ctx);
+    assert_eq!(app.msgboxes.len(), before, "no second install confirmation");
+    assert!(matches!(app.update_progress.as_ref().map(|v| v.phase), Some(ndr::update::UpdatePhase::Installing)));
+    app.update_progress = None;
+    app.update_launcher = |_| Err("installer start error".into());
+    app.update_progress = Some(super::main_window::UpdateProgress {
+        tag: "build-99".into(), phase: ndr::update::UpdatePhase::Preparing,
+        downloaded: 1024, total: 1024, error: None,
+    });
+    app.update_package_done(Ok(PathBuf::from("mock-update.zip")), &ctx);
+    assert_eq!(app.msgboxes.len(), before, "failure stays in progress window");
+    assert_eq!(app.update_progress.as_ref().unwrap().phase, ndr::update::UpdatePhase::Failed);
+    assert_eq!(app.update_progress.as_ref().unwrap().error.as_deref(), Some("installer start error"));
+    drop(app);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn ndr_encrypted_folder_opens_in_internal_browser() {
     let (root, ctx, mut app) = fixture("vault-open");
     let entry = app.panes[0].path.join("private.ndr");
