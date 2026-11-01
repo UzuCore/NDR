@@ -67,6 +67,17 @@ impl App {
         if kind == "narrowdetails" && self.frames == SHOT_FRAME - 4 {
             self.panes[0].detail_x = 40.0;
         }
+        // Deterministic real-rendering QA of the transient long-name tooltip.
+        // It is drawn into the main viewport for the screenshot, even while
+        // smoke mode deliberately keeps the window unfocused and offscreen.
+        if kind == "longnametip" && self.frames >= OPEN_FRAME {
+            let screen = ctx.content_rect();
+            let filename = format!("Long_Filename_Layout_Problem_{}_한글테스트_abcdefghijklmnopqrstuvwxyz0123456789.txt", "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_".repeat(4));
+            self.smoke_tip_window = super::panes::draw_bounded_name_tip(
+                ctx, 0, &filename, egui::pos2(screen.right() - 65.0, screen.bottom() - 65.0),
+                screen.width() * 1.8, 0.0, 16.0, 0,
+            ).map(|r| [r.left(), r.top(), r.width(), r.height()]);
+        }
         // Check of the separate tooltip window (panes::show_tip_window): draws a rectangle past the main window's right edge and records the created window's screen position in the report.
         if kind == "tipwindow" && self.frames >= OPEN_FRAME {
             let screen = ctx.content_rect();

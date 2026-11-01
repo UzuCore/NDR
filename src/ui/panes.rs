@@ -394,10 +394,6 @@ impl App {
             self.tip_since[index] = Some((cursor, now - Duration::from_secs(60)));
             return;
         }
-        let color = |index: i32| {
-            let (r, g, b) = native::system_color(index);
-            Color32::from_rgb(r, g, b)
-        };
         // Original ShowToolTip format 3 (thumbnail view): text position left = item left + (item width − thumbnail size) / 2, width = thumbnail size,
         // measure the height with DrawTextW(DT_CALCRECT | DT_WORDBREAK | DT_CENTER | DT_NOPREFIX) (thumbnail size if narrower), expand by 4 on all sides,
         // and overlap it above the name text (+0x2cc = 0: multi-line centered). NDR aligns it to the first line of the name text inside the cell.
@@ -416,34 +412,16 @@ impl App {
                 return;
             }
             ctx.request_repaint_after(life - elapsed);
-            let widest = lines.iter().map(|g| g.size().x).fold(thumb, f32::max);
-            let line_height = lines.iter().map(|g| g.size().y).fold(0.0, f32::max);
             let left = (cell.left() + ((cell.width() - thumb) / 2.0).trunc()).round();
-            let inner = egui::Rect::from_min_size(egui::pos2(left, text_top), egui::vec2(widest, line_height * lines.len() as f32));
-            let mut rect = inner.expand(4.0);
-            let (back, border, fore) = (color(24), color(6), color(23));
-            let paint = |painter: &egui::Painter, rect: egui::Rect| {
-                painter.rect(rect, 0.0, back, egui::Stroke::new(1.0_f32, border), egui::StrokeKind::Inside);
-                let inner = rect.shrink(4.0);
-                for (i, galley) in lines.iter().enumerate() {
-                    let at = egui::pos2(inner.center().x - galley.size().x / 2.0, inner.top() + i as f32 * line_height).round();
-                    painter.galley(at, galley.clone(), fore);
-                }
-            };
-            if show_tip_window(ctx, index, rect, &paint) {
-                self.name_tip_shown[index] = Some(rect);
-                return;
-            }
-            let screen = ctx.content_rect();
-            if rect.right() > screen.right() {
-                rect = rect.translate(egui::vec2(screen.right() - rect.right(), 0.0));
-            }
-            if rect.bottom() > screen.bottom() {
-                rect = rect.translate(egui::vec2(0.0, screen.bottom() - rect.bottom()));
-            }
-            let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new(("ndr-name-tip", index))));
-            paint(&painter, rect);
-            self.name_tip_shown[index] = Some(rect);
+            // A filename with no spaces could be much wider than the pane or
+            // desktop. The old DT_WORDBREAK layout kept that word on one line,
+            // launched a separate egui native viewport and sometimes drew its
+            // text outside the popup. Wrap safely in the main window instead.
+            let name = self.panes[index].entries[row].name.clone();
+            self.name_tip_shown[index] = draw_bounded_name_tip(
+                ctx, index, &name, egui::pos2(left, text_top), thumb, thumb + 8.0,
+                self.list_font_size, self.list_font_style,
+            );
             return;
         }
         let Some((_, row, cell, shown, full)) = tip else { return };
@@ -467,28 +445,74 @@ impl App {
             return;
         }
         ctx.request_repaint_after(life - elapsed);
-        let mut rect = egui::Rect::from_min_size(egui::pos2(cell.left() + header - 2.0, cell.top() - 2.0), egui::vec2(full.size().x + 10.0, cell.height() + 4.0));
-        let (back, border, fore) = (color(24), color(6), color(23));
-        let paint = |painter: &egui::Painter, rect: egui::Rect| {
-            painter.rect(rect, 0.0, back, egui::Stroke::new(1.0_f32, border), egui::StrokeKind::Inside);
-            let at = (rect.center() - full.size() / 2.0).round();
-            painter.galley(at, full.clone(), fore);
-        };
-        if show_tip_window(ctx, index, rect, &paint) {
-            self.name_tip_shown[index] = Some(rect);
-            return;
-        }
-        let screen = ctx.content_rect();
-        if rect.right() > screen.right() {
-            rect = rect.translate(egui::vec2(screen.right() - rect.right(), 0.0));
-        }
-        if rect.bottom() > screen.bottom() {
-            rect = rect.translate(egui::vec2(0.0, screen.bottom() - rect.bottom()));
-        }
-        let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new(("ndr-name-tip", index))));
-        paint(&painter, rect);
-        self.name_tip_shown[index] = Some(rect);
+        self.name_tip_shown[index] = draw_bounded_name_tip(
+            ctx, index, full.text(), egui::pos2(cell.left() + header - 2.0, cell.top() - 2.0),
+            full.size().x + 2.0, 0.0, self.list_font_size, self.list_font_style,
+        );
     }
+}
+
+/// Lay out the *complete* filename in the current NDR viewport. The old
+/// tooltip used an unbounded single-line galley and created another native
+/// viewport when it ran past the window edge. That popup could be wider than
+/// the monitor, draw its text offscreen, and corrupt the visual layout. The
+/// bounded galley wraps even a 255-character name without spaces. It carries
+/// an explicit COLOR_INFOTEXT so a dark-list text color cannot disappear on
+/// the Windows COLOR_INFOBK (usually light-yellow) tooltip background.
+pub(super) fn bounded_name_tip_layout(
+    ctx: &egui::Context,
+    name: &str,
+    anchor: egui::Pos2,
+    preferred_text_width: f32,
+    min_width: f32,
+    font_size: f32,
+    style: u8,
+) -> Option<(egui::Rect, std::sync::Arc<egui::Galley>)> {
+    const MARGIN: f32 = 8.0;
+    const PADDING: f32 = 5.0;
+    const MAX_TEXT_WIDTH: f32 = 740.0;
+    let screen = ctx.content_rect().shrink(MARGIN);
+    if name.is_empty() || screen.width() < PADDING * 2.0 + 4.0 || screen.height() < PADDING * 2.0 + 4.0 {
+        return None;
+    }
+    let (r, g, b) = native::system_color(23);
+    let foreground = Color32::from_rgb(r, g, b);
+    let font = egui::FontId::new(font_size.max(9.0), egui::FontFamily::Name(super::LIST_FONT_FAMILY.into()));
+    let text_width = preferred_text_width.max(20.0).min(MAX_TEXT_WIDTH).min(screen.width() - PADDING * 2.0);
+    let max_rows = ((screen.height() - PADDING * 2.0) / (font.size * 1.3)).floor().max(1.0) as usize;
+    let mut job = egui::text::LayoutJob::simple(name.to_owned(), font, foreground, text_width);
+    job.wrap.break_anywhere = true;
+    job.wrap.max_rows = max_rows;
+    job.wrap.overflow_character = Some('…');
+    if let Some(section) = job.sections.first_mut() {
+        if style & 4 != 0 { section.format.underline = egui::Stroke::new(1.0_f32, foreground); }
+        if style & 8 != 0 { section.format.strikethrough = egui::Stroke::new(1.0_f32, foreground); }
+    }
+    let galley = ctx.fonts_mut(|fonts| fonts.layout_job(job));
+    let width = (galley.size().x + PADDING * 2.0).max(min_width).min(screen.width());
+    let height = (galley.size().y + PADDING * 2.0).min(screen.height());
+    let x = anchor.x.clamp(screen.left(), screen.right() - width);
+    let y = anchor.y.clamp(screen.top(), screen.bottom() - height);
+    Some((egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(width, height)), galley))
+}
+
+pub(super) fn draw_bounded_name_tip(
+    ctx: &egui::Context,
+    index: usize,
+    name: &str,
+    anchor: egui::Pos2,
+    preferred_text_width: f32,
+    min_width: f32,
+    font_size: f32,
+    style: u8,
+) -> Option<egui::Rect> {
+    let (rect, galley) = bounded_name_tip_layout(ctx, name, anchor, preferred_text_width, min_width, font_size, style)?;
+    let color = |index| { let (r, g, b) = native::system_color(index); Color32::from_rgb(r, g, b) };
+    let (back, border, fore) = (color(24), color(6), color(23));
+    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new(("ndr-name-tip", index))));
+    painter.rect(rect, 0.0, back, egui::Stroke::new(1.0_f32, border), egui::StrokeKind::Inside);
+    painter.galley((rect.min + egui::vec2(5.0, 5.0)).round(), galley, fore);
+    Some(rect)
 }
 
 /// Original TNXToolTipWnd hide time (+0x2c8): the initial value is 5000 (0x7efbd9), but the list constructor changes it to 3000 (0x7d4ef5).

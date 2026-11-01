@@ -661,6 +661,60 @@ fn shortened_thumbnail_names_show_the_original_tooltip() {
 }
 
 #[test]
+fn very_long_name_tooltip_wraps_all_characters_inside_viewport_with_readable_color() {
+    let (root, ctx, _app) = fixture("long-filename-tip-layout");
+    let long = format!("{}_한글테스트_abcdefghijklmnopqrstuvwxyz0123456789.txt", "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_".repeat(5));
+    assert!(long.chars().count() > 200);
+    for (width, height) in [(470.0, 260.0), (1400.0, 850.0)] {
+        let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, height))), ..Default::default() };
+        let _ = ctx.run(raw, |ctx| {
+            let (rect, galley) = super::panes::bounded_name_tip_layout(
+                ctx, &long, egui::pos2(width - 20.0, height - 20.0), width * 4.0,
+                0.0, 16.0, 0,
+            ).expect("even a narrow viewport must fit a wrapped tooltip");
+            let usable = ctx.content_rect().shrink(8.0);
+            assert!(usable.contains_rect(rect), "tooltip must be inside the main window: {rect:?} / {usable:?}");
+            assert!(rect.width() < width, "filename may not grow the window or create a huge popup");
+            assert!(rect.height() > 27.0, "a long filename must wrap rather than draw a single invisible line");
+            assert_eq!(galley.text(), long, "the entire name must be present in the rendered text");
+            assert!(!galley.elided, "long name must not be truncated by the tooltip layout");
+            let (r, g, b) = ndr::native::system_color(23);
+            let foreground = Color32::from_rgb(r, g, b);
+            assert!(galley.job.sections.iter().all(|section| section.format.color == foreground),
+                "tooltip text must explicitly use COLOR_INFOTEXT, not the skin/list color");
+            let drawn = super::panes::draw_bounded_name_tip(
+                ctx, 0, &long, egui::pos2(width - 20.0, height - 20.0), width * 4.0, 0.0, 16.0, 0,
+            ).expect("tooltip must paint into the existing viewport");
+            assert_eq!(drawn, rect);
+        });
+    }
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn selected_long_filename_tooltip_is_bounded_in_auto_names_details_and_thumbnails() {
+    let (root, ctx, mut app) = fixture("long-name-every-view");
+    let long = format!("{}.txt", "very_long_unbroken_file_name_0123456789_".repeat(5));
+    fs::write(root.join("left").join(&long), b"test").unwrap();
+    app.active = 0;
+    for view in ["Auto", "Names", "Details", "Thumbnails"] {
+        app.settings.set_text("LeftViewStyle", view);
+        app.refresh(0);
+        wait(&mut app, &ctx);
+        let row = app.panes[0].entries.iter().position(|entry| entry.name == long).unwrap();
+        app.panes[0].cursor = row;
+        draw(&mut app, &ctx);
+        app.tip_since[0] = Some((row, Instant::now() - Duration::from_millis(1000)));
+        draw(&mut app, &ctx);
+        let rect = app.name_tip_shown[0].unwrap_or_else(|| panic!("{view}: selected/truncated name must show tooltip"));
+        let usable = ctx.content_rect().shrink(8.0);
+        assert!(usable.contains_rect(rect), "{view}: tooltip clips/outgrows main window: {rect:?} / {usable:?}");
+        assert!(rect.height() > 25.0, "{view}: a very long filename must wrap to readable rows: {rect:?}");
+    }
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn skin_status_text_is_a_brief_overlay_not_a_status_bar() {
     // The original window has no status bar: the skin theme does not shrink the list area but overlays above the function key row for 4 seconds.
     let (root, ctx, mut app) = fixture("status-overlay");
