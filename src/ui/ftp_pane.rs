@@ -259,15 +259,19 @@ pub(super) struct FtpQuickForm {
 /// Original TfFTPQuickConnect (ClientWidth 424 × ClientHeight 164): lURL(13,22) cbHost(94,20 220×21), lPort(320,23) ePort(364,20 49×21 centered),
 /// lUser(13,59) eUser(94,57 121×21), lPassword(13,86) ePassword(94,84 121×21 '*'), chkPassive(291,88), chkAddToSites(13,132),
 /// btnOk(255,128 75×25 default) btnCancel(338,128 75×25). Some(true) on OK, Some(false) on Cancel.
-pub(super) fn ftp_quick_ui(ui: &mut egui::Ui, form: &mut FtpQuickForm, language: &compat::Language, enter: bool) -> Option<bool> {
+pub(super) fn ftp_quick_ui(ui: &mut egui::Ui, form: &mut FtpQuickForm, language: &compat::Language, first_frame: bool, enter: bool) -> Option<bool> {
     let text = |key: &str, fallback: &str| super::favorites_dialog::access_key(&language.text(&format!("formFTPQuickConnect.{key}"), fallback)).0;
     let mut result = None;
     let (area, _) = ui.allocate_exact_size(egui::vec2(424.0, 164.0), egui::Sense::hover());
     let at = |x: f32, y: f32, w: f32, h: f32| egui::Rect::from_min_size(area.min + egui::vec2(x, y), egui::vec2(w, h));
     super::original_dialogs::put_left(ui, at(13.0, 22.0, 80.0, 15.0), egui::Label::new(text("Caption.lURL", "A&ddress:")).truncate());
-    let host_width = if form.recent_hosts.is_empty() { 220.0 } else { 198.0 };
-    ui.put(at(94.0, 20.0, host_width, 21.0), egui::TextEdit::singleline(&mut form.host));
-    if !form.recent_hosts.is_empty() {
+    // Original cbHost is a drop-down combo (▼ even with no recent hosts) and is the first control: it has the focus when the window opens.
+    // Previously the ▼ showed only with recent hosts and nothing had the focus.
+    let host = ui.put(at(94.0, 20.0, 198.0, 21.0), egui::TextEdit::singleline(&mut form.host));
+    if first_frame {
+        host.request_focus();
+    }
+    {
         ui.scope_builder(egui::UiBuilder::new().max_rect(at(292.0, 20.0, 22.0, 21.0)), |ui| {
             ui.menu_button("▼", |ui| {
                 for host in form.recent_hosts.clone() {

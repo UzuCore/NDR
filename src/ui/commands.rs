@@ -170,6 +170,15 @@ impl App {
                 let raw_title = self.language_pack.raw(title_key).unwrap_or_else(|| (if ko { *ko_title } else { *en_title }).to_owned());
                 let title = self.language_pack.text(title_key, if ko { ko_title } else { en_title }).trim().replace('&', "");
                 let opened = ui.menu_button(title, |ui| {
+                    // Windows menu keyboard (original TToolBar menu buttons with pmFile ... pmHelp): a menu opened from the keyboard (Alt+letter) highlights
+                    // its first row; ↑/↓ move the highlight over every shown row (greyed rows too, wrapping); Enter runs the highlighted command when it is
+                    // enabled. Previously nothing was highlighted and Enter and the arrows did nothing.
+                    let row_id = egui::Id::new(("ndr-menu-row", *title_key));
+                    let count_id = egui::Id::new(("ndr-menu-rows", *title_key));
+                    let mut highlight = ui.data(|d| d.get_temp::<usize>(row_id));
+                    if ui.data_mut(|d| d.remove_temp::<bool>(egui::Id::new(("ndr-menu-focus-first", *title_key)))).unwrap_or(false) {
+                        highlight = Some(0);
+                    }
                     // C# UpdateArchiveMenuItems (when the archive menu opens): enable or hide items by the selected archive and the current archive.
                     let mut archive_state = self.archive_menu_state();
                     archive_state.original = true;
@@ -178,6 +187,31 @@ impl App {
                     let (mut shown, mut pending) = (false, false);
                     // While a submenu is open, typed letters go to that submenu's items.
                     let sub_open = Self::submenu_open(ui);
+                    let rows_last = ui.data(|d| d.get_temp::<usize>(count_id)).unwrap_or(0);
+                    // Enter is not consumed: when an access letter has put the egui focus on an item, egui clicks that item; otherwise the highlighted
+                    // command runs after the rows are drawn.
+                    let (down, up, enter_key) = if sub_open {
+                        (false, false, false)
+                    } else {
+                        ui.input_mut(|i| (i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown), i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp), i.key_pressed(egui::Key::Enter)))
+                    };
+                    let (mut any_focus, mut highlighted_command) = (false, None);
+                    if rows_last > 0 {
+                        if down {
+                            highlight = Some(highlight.map_or(0, |h| (h + 1) % rows_last));
+                        } else if up {
+                            highlight = Some(highlight.map_or(rows_last - 1, |h| (h + rows_last - 1) % rows_last));
+                        }
+                    }
+                    // Access letters move the egui focus between items sharing a letter (menu_target); the arrows take over from there, so drop that focus.
+                    if down || up {
+                        ui.memory_mut(|m| {
+                            if let Some(focused) = m.focused() {
+                                m.surrender_focus(focused);
+                            }
+                        });
+                    }
+                    let mut row = 0usize;
                     // Skin theme shortcut column (original MenuMeasureItem: widest shortcut + 0xe): space reserved after items and last frame's width.
                     let width_id = egui::Id::new(("ndr-menu-shortcut-width", *title_key));
                     let previous_width = ui.data(|d| d.get_temp::<f32>(width_id)).unwrap_or(0.0);
@@ -211,11 +245,13 @@ impl App {
                         shown = true;
                         if let Some(submenu) = id.strip_prefix('@') {
                             self.original_submenu(submenu, ui, &ctx, ko);
+                            row += 1;
                             continue;
                         }
                         // Original miLanguage and miSkin are submenus (FUN_00441830, FUN_0043e580).
                         if *id == "language" || *id == "theme" {
                             self.original_submenu(if *id == "language" { "language" } else { "skin" }, ui, &ctx, ko);
+                            row += 1;
                             continue;
                         }
                         let label = self.menu_label(id, if ko { ko_label } else { en_label });
@@ -227,10 +263,20 @@ impl App {
                         } else {
                             egui::Button::new(label).shortcut_text(shortcut.clone())
                         };
+                        let button = button.selected(highlight == Some(row));
                         let response = match self.menu_checked(id) {
                             Some(checked) => super::skin_pane::menu_check_button(ui, enabled, checked, Self::radio_menu_item(id), button),
                             None => ui.add_enabled(enabled, button),
                         };
+                        // A moving mouse takes the keyboard highlight too (Windows menus share one highlighted row); a resting pointer does not.
+                        if response.hovered() && ui.input(|i| i.pointer.delta() != egui::Vec2::ZERO) {
+                            highlight = Some(row);
+                        }
+                        any_focus |= response.has_focus();
+                        if enabled && highlight == Some(row) {
+                            highlighted_command = Some(*id);
+                        }
+                        row += 1;
                         if let Some(colors) = shortcut_colors {
                             // The highlighted row background (mhighlight) covers the column, so only that row repaints the column (the original paints the column on every row).
                             if response.hovered() {
@@ -244,11 +290,28 @@ impl App {
                             self.menu_target(letter, &response)
                         };
                         if response.clicked() || letter_hit {
+                            ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
                             self.menu_letter = None;
                             self.dispatch(id, &ctx);
                             ui.close();
                         }
                     }
+                    if any_focus {
+                        highlight = None;
+                    } else if let Some(id) = highlighted_command.filter(|_| enter_key) {
+                        // Consume Enter so the window the command opens does not take it as its own OK in the same frame.
+                        ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+                        self.menu_letter = None;
+                        self.dispatch(id, &ctx);
+                        ui.close();
+                    }
+                    ui.data_mut(|d| {
+                        d.insert_temp(count_id, row);
+                        match highlight {
+                            Some(h) => d.insert_temp(row_id, h),
+                            None => d.remove::<usize>(row_id),
+                        }
+                    });
                     if let (Some(slot), Some(colors)) = (column_slot, shortcut_colors) {
                         super::skin_pane::fill_menu_shortcut_column(ui, slot, widest, colors);
                         ui.data_mut(|d| d.insert_temp(width_id, widest));
@@ -257,16 +320,21 @@ impl App {
                 let letter = super::favorites_dialog::access_key(&raw_title).1.map(|c| c.to_ascii_lowercase());
                 if access.is_some() && letter == access {
                     egui::Popup::open_id(&ctx, egui::Popup::default_response_id(&opened.response));
+                    ctx.data_mut(|d| d.insert_temp(egui::Id::new(("ndr-menu-focus-first", *title_key)), true));
                     ctx.request_repaint();
                 }
                 // Windows menu bar (original TToolBar menu buttons): while one menu is open, hovering another menu title switches to that menu.
                 let popup_id = egui::Popup::default_response_id(&opened.response);
                 if opened.inner.is_some() {
                     any_open = true;
-                } else if bar_was_open && opened.response.hovered() {
-                    egui::Popup::open_id(&ctx, popup_id);
-                    any_open = true;
-                    ctx.request_repaint();
+                } else {
+                    // A closed menu forgets its keyboard highlight (a menu opened by the mouse starts with none).
+                    ctx.data_mut(|d| d.remove::<usize>(egui::Id::new(("ndr-menu-row", *title_key))));
+                    if bar_was_open && opened.response.hovered() {
+                        egui::Popup::open_id(&ctx, popup_id);
+                        any_open = true;
+                        ctx.request_repaint();
+                    }
                 }
             }
             ui.data_mut(|d| d.insert_temp(bar_open_id, any_open));

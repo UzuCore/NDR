@@ -132,6 +132,26 @@ fn typed(key: egui::Key, text: &str) -> Vec<egui::Event> {
 
 /// Windows menu: when two or more items share the same access letter (the original View menu's C = "&C. 기능키 표시줄" and "&C. 열 보기"), each press of the letter
 /// only moves the selection (focus) between them without running it. Enter runs the selected item.
+/// Windows menu keyboard: a menu opened with Alt+letter highlights its first row, ↓/↑ move the highlight, Enter runs the highlighted command.
+/// Folder menu (original pmFolder): folder tree, favorites, new folder... so ↓ ↓ Enter opens the new folder box.
+#[test]
+fn menu_arrows_and_enter_follow_windows_menus() {
+    let (root, ctx, mut app) = fixture("menu-arrows");
+    draw(&mut app, &ctx);
+    app.active = 0;
+    let key = |key: egui::Key, modifiers: egui::Modifiers| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
+    menu_frame(&mut app, &ctx, vec![key(egui::Key::O, egui::Modifiers::ALT)]);
+    menu_frame(&mut app, &ctx, Vec::new());
+    menu_frame(&mut app, &ctx, Vec::new());
+    assert!(egui::Popup::is_any_open(&ctx), "the folder menu is open");
+    menu_frame(&mut app, &ctx, vec![key(egui::Key::ArrowDown, egui::Modifiers::NONE)]);
+    menu_frame(&mut app, &ctx, vec![key(egui::Key::ArrowDown, egui::Modifiers::NONE)]);
+    assert!(app.original_dialogs.is_empty(), "arrows only move the highlight");
+    menu_frame(&mut app, &ctx, vec![key(egui::Key::Enter, egui::Modifiers::NONE)]);
+    assert_eq!(app.original_dialogs.last().map(|d| d.title.clone()), Some(app.language_pack.text("RES.TITLE_NEWFOLDER", "?")), "the third row (new folder) ran");
+    fs::remove_dir_all(root).unwrap();
+}
+
 #[test]
 fn shared_access_letters_move_between_items_like_windows_menus() {
     let (root, ctx, mut app) = fixture("shared-letters");

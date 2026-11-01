@@ -816,7 +816,7 @@ impl App {
                     editor_action = super::remote_sites::site_editor_ui(ui, form, &self.language_pack, enter);
                 }
                 DialogKind::FtpQuickConnect(form) => {
-                    ftp_quick = super::ftp_pane::ftp_quick_ui(ui, form, &self.language_pack, enter);
+                    ftp_quick = super::ftp_pane::ftp_quick_ui(ui, form, &self.language_pack, first_frame, enter);
                 }
                 DialogKind::Settings(form) => {
                     // Original lvFunctionKey OnKeyDown: Delete = delete (not received during a message box or modal operation).
