@@ -341,7 +341,11 @@ impl App {
             if let Some(url) = self.update_available.clone() {
                 let label = self.language_pack.text("ToolButton.tbNewUpdateAvailable", if ko { "새 업데이트" } else { "New Update Available" }).trim().to_owned();
                 if ui.button(label).clicked() {
-                    let _ = (self.shell_runner)(Path::new(&url), "", Path::new(""));
+                    if url.starts_with("https://github.com/UzuCore/NDR/releases/download/build-") {
+                        self.start_update_check(false);
+                    } else {
+                        let _ = (self.shell_runner)(Path::new(&url), "", Path::new(""));
+                    }
                 }
             }
         });

@@ -18,6 +18,22 @@ runs **only when manually started** using
 **Actions → Windows build and release → Run workflow**. Git pushes and pull
 requests do not start builds. Every successful manual build publishes a release.
 
+## Updating NDR
+
+NDR checks the latest **UzuCore/NDR GitHub Release** automatically at startup
+when **Check for updates on startup** is enabled (the default). A new build
+is indicated in the menu bar; **Help → Check for updates** also checks manually.
+NDR offers to download the *complete* portable ZIP, verifies its size and
+GitHub-published SHA-256 digest, and asks permission to restart and install it.
+The updater waits until NDR has exited, replaces the packaged application
+files, keeps `settings.json` and other personal files intact, then relaunches
+NDR. The previous files are backed up in the update staging directory under
+the user's temporary folder; `update.log` records installation failures.
+
+Only a release with a higher `build-N` number is installed. Official Actions
+builds embed their build number; local development builds have build number 0.
+Existing custom HTTPS update manifest settings continue to work as before.
+
 Each successful build runs `cargo test --release --locked` and
 `cargo build --release --locked` on GitHub-hosted Windows, produces the complete
 portable ZIP, verifies the ZIP and embedded EXE SHA-256 hashes, uploads

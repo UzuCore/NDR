@@ -553,15 +553,10 @@ impl App {
 
     /// silent = the original quiet check ([+0x54] == 1, at startup): only the result is used, without notice or error boxes.
     pub(super) fn start_update_check(&mut self, silent: bool) {
-        let title = self.update_text("Title", "NDR Update");
-        let feed = self.settings.text("UpdateManifestUrl", "").trim().to_owned();
-        if feed.is_empty() {
-            if silent {
-                return;
-            }
-            let message = self.update_text("FeedMissing", "The update manifest URL is not configured. Add an HTTPS JSON feed in Settings.");
-            return self.system_box(&title, &message, ndr::msgbox::MB_OK | ndr::msgbox::MB_ICONASTERISK, |_, _, _| {});
-        }
+        let configured = self.settings.text("UpdateManifestUrl", "");
+        let feed = if configured.trim().is_empty() {
+            ndr::update::GITHUB_LATEST_URL.to_owned()
+        } else { configured.trim().to_owned() };
         // Fixed: feed[..8] panicked when byte 8 fell inside a multi-byte character.
         let https = feed.get(..8).is_some_and(|head| head.eq_ignore_ascii_case("https://")) && feed.get(8..).is_some_and(|rest| !rest.trim_start_matches('/').is_empty());
         if !https {
@@ -579,9 +574,58 @@ impl App {
 
     /// C# CheckForUpdatesAsync (second part). Errors use an "NDR" warning box like RunSafely, notices an information box.
     /// For the quiet check (original FUN_00441dd8 0x441e3d), a newer version only shows the menu bar button (tbNewUpdateAvailable) and nothing else happens.
+    fn start_github_download(&mut self, release: ndr::update::GithubRelease) {
+        self.status = format!("GitHub {} 업데이트 다운로드 중...", release.tag);
+        let (get, tx) = (self.http_get, self.async_tx.clone());
+        thread::spawn(move || {
+            let result = ndr::update::download_github_update(&release, get);
+            let _ = tx.send(AsyncResult::UpdatePackage(result));
+        });
+    }
+
+    pub(super) fn update_package_done(&mut self, result: Result<PathBuf, String>, _ctx: &egui::Context) {
+        use ndr::msgbox::{IDYES, MB_ICONASTERISK, MB_ICONEXCLAMATION, MB_OK, MB_YESNO};
+        match result {
+            Err(message) => self.system_box("NDR Update", &format!("업데이트 실패: {message}"), MB_OK | MB_ICONEXCLAMATION, |_, _, _| {}),
+            Ok(archive) => {
+                self.status = "업데이트 ZIP 다운로드 및 SHA-256 검사 완료".into();
+                self.system_box("NDR Update", "ZIP 검증을 완료했습니다.\n지금 NDR을 종료하고 업데이트를 설치한 뒤 다시 실행할까요?", MB_YESNO | MB_ICONASTERISK, move |app, answer, ctx| {
+                    if answer == IDYES {
+                        match ndr::update::launch_update(&archive) {
+                            Ok(()) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+                            Err(message) => app.system_box("NDR Update", &message, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {}),
+                        }
+                    }
+                });
+            }
+        }
+    }
+
     pub(super) fn update_done(&mut self, result: Result<ndr::update::HttpResponse, ndr::update::HttpError>, silent: bool) {
         use ndr::msgbox::{IDYES, MB_ICONASTERISK, MB_ICONEXCLAMATION, MB_OK, MB_YESNO};
         use ndr::update::{HttpError, Manifest};
+        if let Ok(ref response) = result
+            && response.secure && response.status == 200
+            && serde_json::from_slice::<serde_json::Value>(&response.body)
+                .is_ok_and(|json| json.get("tag_name").is_some() && json.get("assets").is_some())
+        {
+            let parsed = ndr::update::parse_github_release(&response.body, ndr::update::current_build());
+            if silent {
+                self.update_available = parsed.ok().flatten().map(|release| release.url);
+                return;
+            }
+            match parsed {
+                Ok(Some(release)) => {
+                    let question = format!("GitHub NDR {} 업데이트를 찾았습니다.\nZIP을 다운로드하고 검증할까요?", release.tag);
+                    self.system_box("NDR Update", &question, MB_YESNO | MB_ICONASTERISK, move |app, answer, _| {
+                        if answer == IDYES { app.start_github_download(release); }
+                    });
+                }
+                Ok(None) => self.system_box("NDR Update", "이미 최신 GitHub 빌드입니다.", MB_OK, |_, _, _| {}),
+                Err(message) => self.system_box("NDR Update", &message, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {}),
+            }
+            return;
+        }
         if silent {
             if let Some(response) = result.as_ref().ok().filter(|r| (200..300).contains(&r.status) && r.secure) {
                 let current = ndr::update::parse_version(env!("CARGO_PKG_VERSION")).unwrap_or_else(|| vec![0, 0]);

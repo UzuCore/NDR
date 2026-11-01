@@ -359,9 +359,10 @@ fn update_check_context_menu_and_folder_sizes_follow_csharp() {
         let first = app.msgboxes.first().unwrap();
         (first.title.clone(), first.text.clone())
     };
-    // No feed shows a notice; non-HTTPS is an error.
+    // With no custom feed NDR now checks GitHub Releases by default.
+    app.http_get = latest_feed;
     app.dispatch("update", &ctx);
-    assert_eq!(wait_box(&mut app, &ctx), (app.language_pack.text("NDRUpdate.Title", "?"), app.language_pack.text("NDRUpdate.FeedMissing", "?")));
+    assert_eq!(wait_box(&mut app, &ctx), ("NDR".to_owned(), app.language_pack.text("RES.UPDATE_NOUPDATE", "?")));
     app.answer_message_box(1, &ctx);
     app.settings.set_text("UpdateManifestUrl", "http://example.invalid/feed.json");
     app.dispatch("update", &ctx);

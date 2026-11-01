@@ -17,6 +17,7 @@ jobs:
       CARGO_PROFILE_TEST_DEBUG: '0'
       CARGO_PROFILE_DEV_DEBUG: '0'
       NDR_RESOURCE_DIR: ${{ github.workspace }}\Resources
+      NDR_BUILD_NUMBER: ${{ github.run_number }}
     steps:
       - name: Check out complete source and runtime resources
         uses: actions/checkout@v4

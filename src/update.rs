@@ -1,6 +1,86 @@
 //! Decision part of C# CheckForUpdatesAsync: HTTPS JSON feed ({"version": "x.y[.z[.w]]", "url": "https://..."}), 256 KiB limit,
 //! recognizing the old NexusFile feed (LegacyUpdateFeedDetector: "NXUPDATEINFO1", 12 digits, version), System.Version comparison.
 
+use sha2::{Digest, Sha256};
+use std::path::{Path, PathBuf};
+
+pub const GITHUB_LATEST_URL: &str = "https://api.github.com/repos/UzuCore/NDR/releases/latest";
+pub const MAX_PACKAGE_BYTES: usize = 128 * 1024 * 1024;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GithubRelease {
+    pub build: u64,
+    pub tag: String,
+    pub url: String,
+    pub size: usize,
+    pub sha256: String,
+}
+
+pub fn current_build() -> u64 {
+    option_env!("NDR_BUILD_NUMBER").and_then(|n| n.parse().ok()).unwrap_or(0)
+}
+
+/// Refuse untrusted asset URLs, malformed digests, prereleases and downgrades.
+pub fn parse_github_release(body: &[u8], installed: u64) -> Result<Option<GithubRelease>, String> {
+    let json: serde_json::Value = serde_json::from_slice(body).map_err(|e| e.to_string())?;
+    if json["draft"].as_bool() != Some(false) || json["prerelease"].as_bool() != Some(false) {
+        return Err("GitHub did not return a published stable release".into());
+    }
+    let tag = json["tag_name"].as_str().ok_or("Missing release tag")?;
+    let build = tag.strip_prefix("build-").and_then(|value| value.parse::<u64>().ok()).filter(|n| *n > 0)
+        .ok_or("Invalid build tag")?;
+    if build <= installed { return Ok(None); }
+    let asset = json["assets"].as_array().ok_or("Release assets missing")?.iter()
+        .find(|a| a["name"] == "NDR-windows-x64.zip").ok_or("Complete NDR ZIP missing")?;
+    let expected_url = format!("https://github.com/UzuCore/NDR/releases/download/{tag}/NDR-windows-x64.zip");
+    if asset["browser_download_url"].as_str() != Some(expected_url.as_str()) { return Err("Unexpected release download URL".into()); }
+    let size = asset["size"].as_u64().and_then(|n| usize::try_from(n).ok())
+        .filter(|n| *n > 0 && *n <= MAX_PACKAGE_BYTES).ok_or("Unsafe release ZIP size")?;
+    let sha256 = asset["digest"].as_str().and_then(|value| value.strip_prefix("sha256:"))
+        .filter(|value| value.len() == 64 && value.bytes().all(|b| b.is_ascii_hexdigit()))
+        .ok_or("Release ZIP has no trustworthy SHA-256 digest")?.to_ascii_lowercase();
+    Ok(Some(GithubRelease { build, tag: tag.to_owned(), url: expected_url, size, sha256 }))
+}
+
+/// Runs off the GUI thread, checks TLS, response size and GitHub's published digest.
+pub fn download_github_update(
+    release: &GithubRelease,
+    get: fn(&str, usize) -> Result<HttpResponse, HttpError>,
+) -> Result<PathBuf, String> {
+    let response = get(&release.url, MAX_PACKAGE_BYTES).map_err(|e| format!("Download failed: {e:?}"))?;
+    if response.status != 200 || !response.secure { return Err("Update download was not secure or HTTP 200".into()); }
+    if response.body.len() != release.size { return Err("Update ZIP size differs from GitHub release".into()); }
+    let digest = format!("{:x}", Sha256::digest(&response.body));
+    if digest != release.sha256 { return Err("Update SHA-256 verification failed".into()); }
+    let folder = std::env::temp_dir().join(format!("ndr-update-{}-{}-{}", release.tag,
+        std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| e.to_string())?.as_nanos()));
+    std::fs::create_dir(&folder).map_err(|e| e.to_string())?;
+    let archive = folder.join("NDR-windows-x64.zip");
+    std::fs::write(&archive, &response.body).map_err(|e| e.to_string())?;
+    Ok(archive)
+}
+
+/// The script is external to NDR so that Windows can replace NDR.exe after exit.
+pub fn launch_update(archive: &Path) -> Result<(), String> {
+    let executable = std::env::current_exe().map_err(|e| e.to_string())?;
+    let installation = executable.parent().ok_or("Installation directory not found")?;
+    if !installation.join("Skins").is_dir() || !installation.join("Languages").is_dir() {
+        return Err("Run the updater from a complete installed NDR folder".into());
+    }
+    let folder = archive.parent().ok_or("Update staging folder missing")?;
+    let script = folder.join("apply-update.ps1");
+    std::fs::write(&script, include_str!("apply-update.ps1")).map_err(|e| e.to_string())?;
+    std::process::Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File"])
+        .arg(&script).arg("-Archive").arg(archive)
+        .arg("-Destination").arg(installation)
+        .arg("-ParentPid").arg(std::process::id().to_string())
+        .arg("-LogPath").arg(folder.join("update.log"))
+        .spawn().map_err(|e| format!("Could not launch updater: {e}"))?;
+    Ok(())
+}
+
 /// HTTPS GET result (status code, whether the final address was HTTPS, body).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HttpResponse {
@@ -96,6 +176,32 @@ pub fn evaluate(body: &[u8], current: &[u32]) -> Result<Manifest, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn github_release_requires_exact_package_digest_and_newer_build() {
+        let body = br#"{"tag_name":"build-12","draft":false,"prerelease":false,"assets":[{"name":"NDR-windows-x64.zip","size":123,"digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","browser_download_url":"https://github.com/UzuCore/NDR/releases/download/build-12/NDR-windows-x64.zip"}]}"#;
+        let release = parse_github_release(body, 11).unwrap().unwrap();
+        assert_eq!((release.build, release.size), (12, 123));
+        assert_eq!(parse_github_release(body, 12), Ok(None));
+        assert_eq!(parse_github_release(body, 13), Ok(None));
+        let bad_digest = String::from_utf8(body.to_vec()).unwrap().replace("sha256:aaaa", "sha256:xxxx");
+        assert!(parse_github_release(bad_digest.as_bytes(), 11).is_err());
+        let bad_host = String::from_utf8(body.to_vec()).unwrap().replace("https://github.com/UzuCore/NDR/releases/download/", "https://example.invalid/");
+        assert!(parse_github_release(bad_host.as_bytes(), 11).is_err());
+        let draft = String::from_utf8(body.to_vec()).unwrap().replace("\"draft\":false", "\"draft\":true");
+        assert!(parse_github_release(draft.as_bytes(), 11).is_err());
+    }
+
+    #[test]
+    fn update_download_rejects_bad_body_hash() {
+        fn fake(_: &str, _: usize) -> Result<HttpResponse, HttpError> {
+            Ok(HttpResponse { status: 200, secure: true, body: vec![1, 2, 3] })
+        }
+        let release = GithubRelease { build: 12, tag: "build-12".into(),
+            url: "https://github.com/UzuCore/NDR/releases/download/build-12/NDR-windows-x64.zip".into(),
+            size: 3, sha256: "0".repeat(64) };
+        assert!(download_github_update(&release, fake).is_err());
+    }
 
     #[test]
     fn manifest_and_versions_follow_csharp() {

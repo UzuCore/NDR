@@ -544,6 +544,7 @@ enum AsyncResult {
     /// Received an update feed.
     /// Update feed result. bool = the silent check at startup (original [+0x54]; for a new version, only the menu bar button).
     Update(Result<ndr::update::HttpResponse, ndr::update::HttpError>, bool),
+    UpdatePackage(Result<PathBuf, String>),
     /// Info bar disk data (panel, listing generation, (drive letter, free, total)).
     DiskCapacity { pane: usize, generation: u64, disk: Option<(String, u64, u64)> },
     /// Original TfChecksum computation finished (dialog number, result text; None on failure).
@@ -848,7 +849,7 @@ impl App {
         // C# startup: if CheckForUpdatesOnStartup and a feed exists, check for updates (except in the startup check run).
         // The silent check of the original FUN_00441dd8 ([+0x54] == 1): no box; for a new version, only the "New update" button on the menu bar.
         // Original initial value [Operation] checkupdate=1. If there is no feed (UpdateManifestUrl), no check is done.
-        if app.options.smoke_seconds.is_none() && app.settings.flag("CheckForUpdatesOnStartup", true) && !app.settings.text("UpdateManifestUrl", "").trim().is_empty() {
+        if app.options.smoke_seconds.is_none() && app.settings.flag("CheckForUpdatesOnStartup", true) {
             app.start_update_check(true);
         }
         app
@@ -1580,6 +1581,7 @@ impl App {
                     }
                 }
                 AsyncResult::Update(result, silent) => self.update_done(result, silent),
+                AsyncResult::UpdatePackage(result) => self.update_package_done(result, ctx),
                 AsyncResult::DiskCapacity { pane, generation, disk } => {
                     if self.panes[pane].generation == generation {
                         self.panes[pane].disk = disk;
