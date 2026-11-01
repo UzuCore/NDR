@@ -50,6 +50,113 @@ impl App {
         self.panes[pane].targets().into_iter().map(|k| k.to_string_lossy().replace('\\', "/").trim_end_matches('/').to_owned()).filter(|k| !k.is_empty()).collect()
     }
 
+    /// Ctrl+C / Ctrl+X on archive entries: materialize a snapshot for Windows
+    /// CF_HDROP, and retain the archive origin for a later paste inside NDR.
+    /// The work runs off the UI thread, so large archives don't freeze the UI.
+    pub(super) fn copy_archive_to_clipboard(&mut self, pane: usize, moving: bool) {
+        let Some(location) = self.panes[pane].archive.clone() else { return };
+        let file = ndr::archive::first_volume_path(&location.file);
+        if moving && !ndr::archive::can_modify(&file) {
+            return self.archive_read_only_notice();
+        }
+        let keys = self.archive_target_keys(pane);
+        if keys.is_empty() {
+            return;
+        }
+        let sequence_before = native::clipboard_sequence_number();
+        let stage = std::env::temp_dir().join(format!(
+            "ndr-clipboard-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos()),
+        ));
+        let tx = self.async_tx.clone();
+        let password = (!location.password.is_empty()).then(|| location.password.clone());
+        let title = if moving { self.tr("압축에서 잘라내기", "Cut from archive") } else { self.tr("압축에서 복사", "Copy from archive") }.into_owned();
+        self.archive_edit_task(title, &file.clone(), move |events, cancel| {
+            std::fs::create_dir_all(&stage).map_err(|e| e.to_string())?;
+            let prepared = (|| {
+                // An empty staging directory should never ask to overwrite a
+                // file. Treat duplicate archive entries as a failure instead.
+                let mut conflicts = |_: &Path, _: &Path| ConflictChoice::Cancel;
+                let mut passwords = |archive: &Path, _: Option<&str>| super::commands::ask_password(events, cancel, archive);
+                ndr::archive::extract_entries_with_program(&file, &stage, &keys, password.as_deref(), cancel,
+                    &mut conflicts, &mut passwords, None, &mut |_, _, _| {})?;
+                if let Some(missing) = keys.iter().find(|key| !stage.join(key.rsplit('/').next().unwrap_or(key)).exists()) {
+                    return Err(format!("Archive clipboard entry was not extracted: {missing}"));
+                }
+                tx.send(AsyncResult::ArchiveClipboardReady { location, keys, stage: stage.clone(), sequence_before, moving })
+                    .map_err(|e| e.to_string())
+            })();
+            if prepared.is_err() {
+                let _ = std::fs::remove_dir_all(&stage);
+            }
+            prepared
+        });
+    }
+
+    /// Finishing an extraction is not permission to clobber a clipboard that
+    /// another application replaced while NDR was preparing virtual files.
+    pub(super) fn archive_clipboard_ready(&mut self, location: ArchiveLocation, keys: Vec<String>, stage: PathBuf, sequence_before: u32, moving: bool) {
+        if !cfg!(test) && native::clipboard_sequence_number() != sequence_before {
+            let _ = std::fs::remove_dir_all(stage);
+            self.status = self.tr("클립보드가 변경되어 압축파일 복사를 취소했습니다.", "The clipboard changed while extracting; archive copy was cancelled.").into_owned();
+            return;
+        }
+        let files: Vec<PathBuf> = keys.iter().map(|key| stage.join(key.rsplit('/').next().unwrap_or(key))).collect();
+        // A cut is advertised as a COPY to other Windows apps: moving temp
+        // files cannot safely remove items from the originating archive. NDR
+        // itself uses `moving` and removes the archive entries only on success.
+        if let Err(error) = (self.file_clipboard)(&files, false) {
+            let _ = std::fs::remove_dir_all(stage);
+            self.status = error;
+            return;
+        }
+        let latest = ArchiveClipboard { location, keys, stage, sequence: native::clipboard_sequence_number(), moving };
+        if let Some(previous) = self.archive_clipboard.replace(latest) {
+            let _ = std::fs::remove_dir_all(previous.stage);
+        }
+        self.clipboard = None;
+        self.status = if moving {
+            self.tr("압축파일의 선택 항목을 잘라냈습니다. 붙여넣으면 원본에서 제거합니다.", "Archive items cut. Pasting in NDR moves them from the archive.")
+        } else {
+            self.tr("압축파일의 선택 항목을 복사했습니다.", "Archive items copied to the clipboard.")
+        }.into_owned();
+    }
+
+    pub(super) fn archive_clipboard_move_done(&mut self, archive: &Path, sequence: u32, remaining: Vec<String>) {
+        let Some(clip) = self.archive_clipboard.as_mut().filter(|c| c.sequence == sequence && ndr::names::equals_ignore_case(
+            &ndr::archive::first_volume_path(&c.location.file).to_string_lossy(), &archive.to_string_lossy(),
+        )) else { return };
+        if !remaining.is_empty() {
+            clip.keys = remaining;
+            return;
+        }
+        // Do not clear a newer external clipboard, even if a paste job took a
+        // long time. Clearing a completed cut matches normal file cut/paste.
+        let can_remove_stage = cfg!(test) || native::clipboard_sequence_number() != sequence || native::clipboard_text("").is_ok();
+        if let Some(clip) = self.archive_clipboard.take() {
+            // If another program holds the clipboard open, Windows may still
+            // advertise these staged file paths. Do not delete the files until
+            // the clipboard can be cleared or replaced.
+            if can_remove_stage {
+                let _ = std::fs::remove_dir_all(clip.stage);
+            }
+        }
+    }
+
+    pub(super) fn paste_archive_clipboard(&mut self, pane: usize, clip: ArchiveClipboard) {
+        if self.panes[pane].remote.is_some() || super::panes::is_drives(&self.panes[pane].path) {
+            self.notice("이 위치에는 압축파일의 내용을 붙여넣을 수 없습니다.", "Archive clipboard items cannot be pasted to this location.");
+            return;
+        }
+        let into = if self.panes[pane].archive.is_some() {
+            let Some(editable) = self.editable_archive(pane) else { return self.archive_read_only_notice() };
+            Some(editable)
+        } else { None };
+        let destination = self.panes[pane].path.clone();
+        let notify = clip.moving.then_some((self.async_tx.clone(), clip.sequence));
+        self.archive_transfer_out_location(clip.location, clip.keys, destination, into, clip.moving, notify);
+    }
+
     /// Job that modifies the archive (progress window, cancellable). Both panes are reread when done (report_job).
     fn archive_edit_task(&mut self, title: String, archive: &Path, task: impl FnOnce(&Sender<Event>, &AtomicBool) -> Result<(), String> + Send + 'static) {
         let progress = super::file_operation::ProgressInfo { from: Some(archive.to_string_lossy().into_owned()), caption: Some(title.clone()), ..Default::default() };
@@ -184,6 +291,10 @@ impl App {
     /// them to it; if it is a local folder, extract into that folder. A move then deletes them from the original archive (only when it is modifiable).
     pub(super) fn archive_transfer_out(&mut self, source: usize, keys: Vec<String>, destination: PathBuf, into: Option<EditableArchive>, moving: bool) {
         let Some(location) = self.panes[source].archive.clone() else { return };
+        self.archive_transfer_out_location(location, keys, destination, into, moving, None);
+    }
+
+    fn archive_transfer_out_location(&mut self, location: ArchiveLocation, keys: Vec<String>, destination: PathBuf, into: Option<EditableArchive>, moving: bool, notify: Option<(Sender<AsyncResult>, u32)>) {
         let file = ndr::archive::first_volume_path(&location.file);
         if moving && !ndr::archive::can_modify(&file) {
             return self.archive_read_only_notice();
@@ -238,6 +349,9 @@ impl App {
             if moving {
                 let moved: Vec<String> = keys.iter().filter(|k| !kept.contains(k)).cloned().collect();
                 ndr::archive::delete_entries(&file, &moved, password.as_deref(), cancel)?;
+                if let Some((sender, sequence)) = notify {
+                    let _ = sender.send(AsyncResult::ArchiveClipboardMoveDone { archive: file.clone(), sequence, remaining: kept });
+                }
             }
             Ok(())
         });

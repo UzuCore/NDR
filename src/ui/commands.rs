@@ -700,10 +700,36 @@ impl App {
             "copyToOther"|"moveToOther" if self.panes[i].remote.is_none()&&self.panes[1-i].remote.is_none()=>self.copy_move_to_folder(id=="moveToOther"),
             "copyToOther"|"moveToOther"=>self.copy_to_other(i,id=="moveToOther",ctx),
             "copyToFolder"|"moveToFolder"=>self.copy_move_to_folder(id=="moveToFolder"),
-            "copy"|"cut"=>{if !targets.is_empty(){self.clipboard=Some((targets.clone(),id=="cut"));if self.panes[i].archive.is_none(){result=(self.file_clipboard)(&targets,id=="cut");}
-                // Original 0x433dd8: cutting at a local location redraws those items (+100) with dimmed icons. Copying leaves the display alone.
-                if id=="cut"&&self.panes[i].archive.is_none()&&self.panes[i].remote.is_none(){self.panes[i].cut_marks.extend(targets.iter().cloned());}}},
-            "paste"=>{let copied=native::read_clipboard_files().ok().filter(|(p,_)|!p.is_empty()).or_else(||self.clipboard.clone());if let Some((sources,moving))=copied{if self.panes[i].archive.is_some(){self.archive_add_into(i,sources,moving);}else{self.transfer_from(i,sources,path,moving,super::file_operation::TransferKind::Paste);}}},
+            "copy"|"cut"=>{
+                if !targets.is_empty(){
+                    if self.panes[i].archive.is_some() {
+                        // Archive entry paths are virtual, not local CF_HDROP
+                        // files. Extract to a real staging folder first.
+                        self.copy_archive_to_clipboard(i, id=="cut");
+                    } else {
+                        result=(self.file_clipboard)(&targets,id=="cut");
+                        if result.is_ok() {
+                            self.clipboard=Some((targets.clone(),id=="cut"));
+                            if let Some(previous)=self.archive_clipboard.take(){let _=std::fs::remove_dir_all(previous.stage);}
+                            // Original 0x433dd8: cut items have dimmed icons until a new listing.
+                            if id=="cut"&&self.panes[i].remote.is_none(){self.panes[i].cut_marks.extend(targets.iter().cloned());}
+                        }
+                    }
+                }
+            },
+            "paste"=>{
+                let archive_copy = self.archive_clipboard.clone().filter(|c| cfg!(test) || native::clipboard_sequence_number()==c.sequence);
+                if let Some(clip) = archive_copy {
+                    self.paste_archive_clipboard(i,clip);
+                } else {
+                    if let Some(stale)=self.archive_clipboard.take(){let _=std::fs::remove_dir_all(stale.stage);}
+                    let copied=native::read_clipboard_files().ok().filter(|(p,_)|!p.is_empty()).or_else(||self.clipboard.clone());
+                    if let Some((sources,moving))=copied{
+                        if self.panes[i].archive.is_some(){self.archive_add_into(i,sources,moving);}
+                        else{self.transfer_from(i,sources,path,moving,super::file_operation::TransferKind::Paste);}
+                    }
+                }
+            },
             // Original miDeleteClick (0x431c04): if Shift (GetKeyState 0x10) is down when chosen, the last argument of FUN_0042c734 is 1 = permanent delete.
             "deleteRecycle"|"deletePermanent"=>self.delete_items(id=="deleteRecycle"&&!ctx.input(|i|i.modifiers.shift)),
             "shred"=>self.shred_items(),

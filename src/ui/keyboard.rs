@@ -171,18 +171,6 @@ impl App {
                 self.cycle_selection(shift);
                 return true;
             }
-            // miCopyTo and miMoveTo each occur twice in ORIGINAL_ACTIONS:
-            // the first match routes to the other pane (including FTP), while
-            // the second opens a destination picker. Archive entries must not
-            // accidentally be sent to the FTP transfer route by Alt+C/Alt+M.
-            "miCopyTo" if self.panes[self.active].archive.is_some() => {
-                self.dispatch("copyToFolder", ctx);
-                return true;
-            }
-            "miMoveTo" if self.panes[self.active].archive.is_some() => {
-                self.dispatch("moveToFolder", ctx);
-                return true;
-            }
             "miSearchFile" | "miArcMove" | "miArcInstall" => return true,
             // Original miFind (Ctrl+F) = find input box (TfGetText). The C# version focuses the toolbar quick search field with the same key,
             // so behave like C# only when that field is on the toolbar; otherwise (original toolbar) open the original find box.

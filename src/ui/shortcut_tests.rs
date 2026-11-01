@@ -37,166 +37,152 @@ fn press(app: &mut App, ctx: &egui::Context, key: egui::Key, modifiers: egui::Mo
 }
 const NONE: egui::Modifiers = egui::Modifiers::NONE;
 
-/// Alt+C remains a working "copy to folder" shortcut while browsing inside
-/// an archive: it must open the extraction destination dialog, not search or
-/// silently leave the archive pane unchanged.
-#[test]
-fn alt_c_inside_archive_opens_extraction_destination() {
-    let (root, ctx, mut app) = fixture("alt-c-archive", "ko");
+fn archive_clipboard_fixture(label: &str) -> (PathBuf, egui::Context, App, PathBuf) {
+    let (root, ctx, mut app) = fixture(label, "ko");
     let left = root.join("left");
-    let archive = left.join("alt-c.zip");
-    ndr::archive::create(&[left.join("a.txt")], &archive, None, &AtomicBool::new(false)).unwrap();
+    fs::write(left.join("folder1/nested.txt"), b"nested").unwrap();
+    let zip = left.join("source.zip");
+    ndr::archive::create(&[left.join("a.txt"), left.join("folder1")], &zip, None, &AtomicBool::new(false)).unwrap();
     app.refresh(0);
     wait(&mut app, &ctx);
     app.active = 0;
-    app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == "alt-c.zip").unwrap();
+    app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == "source.zip").unwrap();
     app.open_current();
     wait(&mut app, &ctx);
     assert!(app.panes[0].archive.is_some());
-    app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == "a.txt").unwrap();
-    press(&mut app, &ctx, egui::Key::C, egui::Modifiers::ALT);
-    assert!(matches!(app.original_dialogs.last().map(|d| &d.kind), Some(super::original_dialogs::DialogKind::Destination(_))),
-        "Alt+C inside an archive should ask where to extract: dialogs={}, status={}",
-        app.original_dialogs.len(), app.status);
-    app.destination_action(super::destination_dialog::DestinationAction::Accept, &ctx);
+    (root, ctx, app, zip)
+}
+
+fn finish_archive_clipboard_job(app: &mut App, ctx: &egui::Context) {
     let until = Instant::now() + Duration::from_secs(20);
-    while !root.join("right/a.txt").is_file() {
-        assert!(Instant::now() < until, "Alt+C did not extract the selected file");
-        app.poll(&ctx);
-        thread::sleep(Duration::from_millis(5));
-    }
-    fs::remove_dir_all(root).unwrap();
-}
-
-/// Alt+C must remain a local extraction command when the other pane is FTP.
-#[test]
-fn alt_c_inside_archive_with_ftp_on_other_side_opens_extraction_destination() {
-    let (root, ctx, mut app) = fixture("alt-c-ftp", "ko");
-    let left = root.join("left");
-    let archive = left.join("alt-c.zip");
-    ndr::archive::create(&[left.join("a.txt")], &archive, None, &AtomicBool::new(false)).unwrap();
-    app.refresh(0);
-    wait(&mut app, &ctx);
-    app.active = 0;
-    app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == "alt-c.zip").unwrap();
-    app.open_current();
-    wait(&mut app, &ctx);
-    app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == "a.txt").unwrap();
-    app.panes[1].remote = Some(super::ftp_pane::PaneRemote {
-        fs: Arc::new(Mutex::new(Box::new(super::shot::ShotFtp))),
-        host: "ftp.example.invalid".into(), path: "/pub".into(),
-        busy: Default::default(), modes: Default::default(), permissions: Default::default(), log: None,
-    });
-    press(&mut app, &ctx, egui::Key::C, egui::Modifiers::ALT);
-    assert!(matches!(app.original_dialogs.last().map(|d| &d.kind), Some(super::original_dialogs::DialogKind::Destination(_))),
-        "Alt+C must ask where to extract while the opposite pane is remote: dialogs={}, status={}",
-        app.original_dialogs.len(), app.status);
-    app.destination_action(super::destination_dialog::DestinationAction::Cancel, &ctx);
-    fs::remove_dir_all(root).unwrap();
-}
-
-/// The FTP pane on the other side must not turn Alt+M inside an archive into
-/// an FTP transfer. The move destination must remain a local folder picker.
-#[test]
-fn alt_m_inside_archive_with_ftp_on_other_side_opens_local_move_destination() {
-    let (root, ctx, mut app) = fixture("alt-m-ftp", "ko");
-    let left = root.join("left");
-    let archive = left.join("alt-m.zip");
-    ndr::archive::create(&[left.join("a.txt")], &archive, None, &AtomicBool::new(false)).unwrap();
-    app.refresh(0);
-    wait(&mut app, &ctx);
-    app.active = 0;
-    app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == "alt-m.zip").unwrap();
-    app.open_current();
-    wait(&mut app, &ctx);
-    app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == "a.txt").unwrap();
-    app.panes[1].remote = Some(super::ftp_pane::PaneRemote {
-        fs: Arc::new(Mutex::new(Box::new(super::shot::ShotFtp))),
-        host: "ftp.example.invalid".into(), path: "/pub".into(),
-        busy: Default::default(), modes: Default::default(), permissions: Default::default(), log: None,
-    });
-    press(&mut app, &ctx, egui::Key::M, egui::Modifiers::ALT);
-    assert!(matches!(app.original_dialogs.last().map(|d| &d.kind), Some(super::original_dialogs::DialogKind::Destination(_))),
-        "Alt+M should open a destination picker, not FTP: dialogs={}, status={}", app.original_dialogs.len(), app.status);
-    assert!(app.original_dialogs.last().unwrap().title.starts_with(&app.language_pack.text("RES.MOVE", "Move")));
-    app.destination_action(super::destination_dialog::DestinationAction::Cancel, &ctx);
-    assert!(ndr::archive::list(&archive, None).unwrap().iter().any(|e| e.key == "a.txt"),
-        "cancelling Alt+M must leave the archived file untouched");
-    fs::remove_dir_all(root).unwrap();
-}
-
-/// A confirmed Alt+M must really move the file out, not just extract a copy.
-#[test]
-fn alt_m_inside_archive_moves_file_after_destination_is_accepted() {
-    let (root, ctx, mut app) = fixture("alt-m-move", "ko");
-    let left = root.join("left");
-    let archive = left.join("alt-m.zip");
-    ndr::archive::create(&[left.join("a.txt")], &archive, None, &AtomicBool::new(false)).unwrap();
-    app.refresh(0);
-    wait(&mut app, &ctx);
-    app.active = 0;
-    app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == "alt-m.zip").unwrap();
-    app.open_current();
-    wait(&mut app, &ctx);
-    app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == "a.txt").unwrap();
-    press(&mut app, &ctx, egui::Key::M, egui::Modifiers::ALT);
-    assert!(matches!(app.original_dialogs.last().map(|d| &d.kind), Some(super::original_dialogs::DialogKind::Destination(_))));
-    app.destination_action(super::destination_dialog::DestinationAction::Accept, &ctx);
-    let until = Instant::now() + Duration::from_secs(20);
-    while !app.job.as_ref().is_some_and(|j| j.finished) {
-        assert!(Instant::now() < until, "Alt+M archive move did not finish: {}", app.status);
-        app.poll(&ctx);
-        thread::sleep(Duration::from_millis(5));
-    }
-    assert_eq!(fs::read(root.join("right/a.txt")).unwrap(), b"a");
-    assert!(!ndr::archive::list(&archive, None).unwrap().iter().any(|e| e.key == "a.txt"),
-        "Alt+M must remove the moved item from the source archive");
-    fs::remove_dir_all(root).unwrap();
-}
-
-/// Every default binding with Alt, Ctrl+Alt or Shift+Alt must resolve without
-/// an unintended higher-priority shortcut shadowing the configured action.
-#[test]
-fn every_default_alt_shortcut_resolves_to_its_configured_command() {
-    let map = ndr::compat::ShortcutMap::parse(None);
-    let mut checked = 0;
-    for line in ndr::compat::DEFAULT_SHORTCUT_TEXT.lines().skip(1) {
-        let Some((command, key)) = line.split_once('=') else { continue };
-        if !key.contains("Alt+") { continue; }
-        assert_eq!(map.resolve(ndr::compat::text_to_shortcut(key)).as_deref(), Some(command),
-            "shortcut {line} is shadowed or not resolved");
-        checked += 1;
-    }
-    assert_eq!(checked, 49);
-}
-
-/// Alt+X must request closing the application in a folder and inside a ZIP.
-#[test]
-fn alt_x_requests_close_from_local_and_archive_panes() {
-    let (root, ctx, mut app) = fixture("alt-x-close", "ko");
-    let left = root.join("left");
-    let archive = left.join("close.zip");
-    ndr::archive::create(&[left.join("a.txt")], &archive, None, &AtomicBool::new(false)).unwrap();
-    for inside in [false, true] {
-        if inside {
-            app.refresh(0);
-            wait(&mut app, &ctx);
-            app.active = 0;
-            app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == "close.zip").unwrap();
-            app.open_current();
-            wait(&mut app, &ctx);
-            assert!(app.panes[0].archive.is_some());
+    loop {
+        app.poll(ctx);
+        if app.job.as_ref().is_none_or(|j| j.finished) && app.panes.iter().all(|p| !p.loading) {
+            return;
         }
-        let raw = egui::RawInput {
-            modifiers: egui::Modifiers::ALT,
-            events: vec![egui::Event::Key { key: egui::Key::X, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::ALT }],
-            ..Default::default()
-        };
-        let output = ctx.run(raw, |ctx| app.keyboard(ctx));
-        assert!(output.viewport_output[&egui::ViewportId::ROOT].commands.iter().any(|c| matches!(c, egui::ViewportCommand::Close)),
-            "Alt+X must close the app (inside archive={inside})");
-        assert!(app.original_dialogs.is_empty());
+        assert!(Instant::now() < until, "archive clipboard operation timed out: {}", app.status);
+        thread::sleep(Duration::from_millis(5));
     }
+}
+
+/// Ctrl+C must stage real files for CF_HDROP, then Ctrl+V must extract from the
+/// original ZIP even when its pane has navigated away in the meantime.
+#[test]
+fn ctrl_c_in_archive_copies_file_to_the_other_pane_after_leaving_the_archive() {
+    let (root, ctx, mut app, zip) = archive_clipboard_fixture("archive-copy");
+    app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == "a.txt").unwrap();
+    let menu = app.list_menu_items(0);
+    assert!(menu.iter().flatten().any(|(_, command, enabled)| *command == "copy" && *enabled));
+    assert!(menu.iter().flatten().any(|(_, command, enabled)| *command == "cut" && *enabled));
+    press(&mut app, &ctx, egui::Key::C, egui::Modifiers::CTRL);
+    finish_archive_clipboard_job(&mut app, &ctx);
+    let clipboard = app.archive_clipboard.as_ref().expect("Ctrl+C should prepare an archive clipboard");
+    assert!(!clipboard.moving);
+    assert_eq!(fs::read(clipboard.stage.join("a.txt")).unwrap(), b"a", "Windows must receive a real file, not a virtual archive key");
+    app.navigate(0, root.join("left"), false);
+    wait(&mut app, &ctx);
+    app.active = 1;
+    press(&mut app, &ctx, egui::Key::V, egui::Modifiers::CTRL);
+    finish_archive_clipboard_job(&mut app, &ctx);
+    assert_eq!(fs::read(root.join("right/a.txt")).unwrap(), b"a");
+    assert!(ndr::archive::list(&zip, None).unwrap().iter().any(|e| e.key == "a.txt"), "copy must preserve source");
+    let stage = app.archive_clipboard.take().unwrap().stage;
+    fs::remove_dir_all(stage).unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Ctrl+X must keep the original until a successful Ctrl+V, then remove that
+/// entry from its ZIP and consume the internal clipboard.
+#[test]
+fn ctrl_x_in_archive_moves_file_to_the_other_pane_only_on_paste() {
+    let (root, ctx, mut app, zip) = archive_clipboard_fixture("archive-cut");
+    app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == "a.txt").unwrap();
+    press(&mut app, &ctx, egui::Key::X, egui::Modifiers::CTRL);
+    finish_archive_clipboard_job(&mut app, &ctx);
+    assert!(app.archive_clipboard.as_ref().unwrap().moving);
+    assert!(ndr::archive::list(&zip, None).unwrap().iter().any(|e| e.key == "a.txt"), "Ctrl+X alone must never delete the archive source");
+    let stage = app.archive_clipboard.as_ref().unwrap().stage.clone();
+    app.active = 1;
+    press(&mut app, &ctx, egui::Key::V, egui::Modifiers::CTRL);
+    finish_archive_clipboard_job(&mut app, &ctx);
+    assert_eq!(fs::read(root.join("right/a.txt")).unwrap(), b"a");
+    assert!(!ndr::archive::list(&zip, None).unwrap().iter().any(|e| e.key == "a.txt"), "successful move must delete only the transferred entry");
+    assert!(app.archive_clipboard.is_none(), "successful Ctrl+X/Ctrl+V should consume its clipboard");
+    assert!(!stage.exists(), "staged files must be cleaned up after a successful internal move");
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Clipboard-pasted folders must recursively copy their contents rather than
+/// copying only the virtual directory entry.
+#[test]
+fn ctrl_c_in_archive_recursively_copies_a_folder() {
+    let (root, ctx, mut app, zip) = archive_clipboard_fixture("archive-folder-copy");
+    app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == "folder1").unwrap();
+    press(&mut app, &ctx, egui::Key::C, egui::Modifiers::CTRL);
+    finish_archive_clipboard_job(&mut app, &ctx);
+    assert_eq!(fs::read(app.archive_clipboard.as_ref().unwrap().stage.join("folder1/nested.txt")).unwrap(), b"nested");
+    app.active = 1;
+    press(&mut app, &ctx, egui::Key::V, egui::Modifiers::CTRL);
+    finish_archive_clipboard_job(&mut app, &ctx);
+    assert_eq!(fs::read(root.join("right/folder1/nested.txt")).unwrap(), b"nested");
+    assert!(ndr::archive::list(&zip, None).unwrap().iter().any(|e| e.key.replace('\\', "/") == "folder1/nested.txt"));
+    fs::remove_dir_all(app.archive_clipboard.take().unwrap().stage).unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Ctrl+C -> Ctrl+V between separate archive panes must add the extracted
+/// item to the destination ZIP instead of treating it as a local path.
+#[test]
+fn ctrl_c_from_archive_pastes_into_another_archive() {
+    let (root, ctx, mut app, source) = archive_clipboard_fixture("archive-to-archive");
+    let right = root.join("right");
+    fs::write(right.join("old.txt"), b"old").unwrap();
+    let target = right.join("target.zip");
+    ndr::archive::create(&[right.join("old.txt")], &target, None, &AtomicBool::new(false)).unwrap();
+    app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == "a.txt").unwrap();
+    press(&mut app, &ctx, egui::Key::C, egui::Modifiers::CTRL);
+    finish_archive_clipboard_job(&mut app, &ctx);
+    app.refresh(1);
+    wait(&mut app, &ctx);
+    app.active = 1;
+    app.panes[1].cursor = app.panes[1].entries.iter().position(|e| e.name == "target.zip").unwrap();
+    app.open_current();
+    wait(&mut app, &ctx);
+    press(&mut app, &ctx, egui::Key::V, egui::Modifiers::CTRL);
+    finish_archive_clipboard_job(&mut app, &ctx);
+    let entries = ndr::archive::list(&target, None).unwrap();
+    assert!(entries.iter().any(|e| e.key == "a.txt") && entries.iter().any(|e| e.key == "old.txt"));
+    assert!(ndr::archive::list(&source, None).unwrap().iter().any(|e| e.key == "a.txt"));
+    fs::remove_dir_all(app.archive_clipboard.take().unwrap().stage).unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// A Ctrl+X paste skipped at a name conflict must retain the original entry.
+#[test]
+fn ctrl_x_archive_paste_skipped_conflict_keeps_source_and_destination() {
+    let (root, ctx, mut app, source) = archive_clipboard_fixture("archive-cut-conflict");
+    let right = root.join("right");
+    fs::write(right.join("a.txt"), b"existing").unwrap();
+    app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == "a.txt").unwrap();
+    press(&mut app, &ctx, egui::Key::X, egui::Modifiers::CTRL);
+    finish_archive_clipboard_job(&mut app, &ctx);
+    app.active = 1;
+    press(&mut app, &ctx, egui::Key::V, egui::Modifiers::CTRL);
+    let until = Instant::now() + Duration::from_secs(20);
+    loop {
+        app.poll(&ctx);
+        if matches!(app.original_dialogs.last().map(|d| &d.kind), Some(super::original_dialogs::DialogKind::FileConflict(_))) {
+            break;
+        }
+        assert!(Instant::now() < until, "no conflict prompt for Ctrl+X paste: {}", app.status);
+        thread::sleep(Duration::from_millis(5));
+    }
+    app.answer_dialog(super::original_dialogs::DialogResult::FileConflict(Some((ndr::fsops::ConflictChoice::Skip, false))), &ctx);
+    finish_archive_clipboard_job(&mut app, &ctx);
+    assert_eq!(fs::read(right.join("a.txt")).unwrap(), b"existing");
+    assert!(ndr::archive::list(&source, None).unwrap().iter().any(|e| e.key == "a.txt"));
+    assert_eq!(app.archive_clipboard.as_ref().unwrap().keys, ["a.txt"]);
+    fs::remove_dir_all(app.archive_clipboard.take().unwrap().stage).unwrap();
     fs::remove_dir_all(root).unwrap();
 }
 

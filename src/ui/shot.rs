@@ -9,7 +9,7 @@ const OPEN_FRAME: u64 = 3;
 const SHOT_FRAME: u64 = 20;
 
 /// Fake FTP of the "ftplog" sample (two list rows, other actions refused).
-pub(super) struct ShotFtp;
+struct ShotFtp;
 impl super::ftp_pane::PaneFs for ShotFtp {
     fn pwd(&mut self) -> Result<String, String> {
         Ok("/pub".into())

@@ -526,6 +526,12 @@ fn shell_id_list(paths: &[PathBuf]) -> Option<Vec<u8>> {
     }
     result
 }
+/// Lets NDR detect when another application replaces an archive clipboard.
+pub fn clipboard_sequence_number() -> u32 {
+    // SAFETY: this Win32 query takes no arguments or pointers.
+    unsafe { GetClipboardSequenceNumber() }
+}
+
 /// Paste reads CF_HDROP and Preferred DropEffect. The original drop target (TNXDropFileTarget DoGetData 0x7b2920) takes CF_HDROP first and then
 /// NUL-separated Unicode and ANSI name lists from its other formats; window drops arrive here through winit as CF_HDROP paths.
 pub fn read_clipboard_files() -> Result<(Vec<PathBuf>, bool), String> {

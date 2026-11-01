@@ -105,6 +105,16 @@ struct ArchiveLocation {
     prefix: String,
     password: String,
 }
+/// Archive paths are virtual. Preserve their origin for Ctrl+V even after the
+/// user switches panes. Stage real extracted files for the Windows clipboard.
+#[derive(Clone)]
+struct ArchiveClipboard {
+    location: ArchiveLocation,
+    keys: Vec<String>,
+    stage: PathBuf,
+    sequence: u32,
+    moving: bool,
+}
 struct Pane {
     path: PathBuf,
     address: String,
@@ -477,6 +487,14 @@ struct PasswordRequest {
     reply: Sender<Option<String>>,
 }
 enum AsyncResult {
+    ArchiveClipboardReady {
+        location: ArchiveLocation,
+        keys: Vec<String>,
+        stage: PathBuf,
+        sequence_before: u32,
+        moving: bool,
+    },
+    ArchiveClipboardMoveDone { archive: PathBuf, sequence: u32, remaining: Vec<String> },
     Text {
         title: String,
         text: String,
@@ -599,6 +617,7 @@ pub struct App {
     started: Instant,
     frames: u64,
     clipboard: Option<(Vec<PathBuf>, bool)>,
+    archive_clipboard: Option<ArchiveClipboard>,
     last_selection: [Vec<PathBuf>; 2],
     saved: bool,
     tool_cancel: Arc<AtomicBool>,
@@ -922,6 +941,7 @@ impl App {
             started: Instant::now(),
             frames: 0,
             clipboard: None,
+            archive_clipboard: None,
             last_selection: [vec![], vec![]],
             saved: false,
             tool_cancel: Arc::new(AtomicBool::new(false)),
@@ -1443,6 +1463,12 @@ impl App {
         self.poll_remote_window(ctx);
         while let Ok(result) = self.async_rx.try_recv() {
             match result {
+                AsyncResult::ArchiveClipboardReady { location, keys, stage, sequence_before, moving } => {
+                    self.archive_clipboard_ready(location, keys, stage, sequence_before, moving);
+                }
+                AsyncResult::ArchiveClipboardMoveDone { archive, sequence, remaining } => {
+                    self.archive_clipboard_move_done(&archive, sequence, remaining);
+                }
                 AsyncResult::Text { title, text } => {
                     self.text = Some(TextDocument { title, text })
                 }
