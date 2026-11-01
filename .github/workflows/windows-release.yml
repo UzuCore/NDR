@@ -1,16 +1,7 @@
 name: Windows build and release
 
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
   workflow_dispatch:
-    inputs:
-      publish_release:
-        description: Publish GitHub Release after successful build
-        type: boolean
-        default: false
 
 # GitHub Releases use the built-in GITHUB_TOKEN; no personal token or secret is needed.
 permissions:
@@ -110,7 +101,7 @@ jobs:
           retention-days: 30
 
       - name: Automatically create or update GitHub Release
-        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish_release)
+        if: github.event_name == 'workflow_dispatch'
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}

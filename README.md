@@ -14,9 +14,9 @@ installation; it does **not** include the runtime resources by itself.
 ## GitHub Actions
 
 The [Windows build and release workflow](.github/workflows/windows-release.yml)
-automatically runs on every push to `main` and can also be started manually
-using **Actions → Windows build and release → Run workflow**. Pull requests
-are compiled and tested, but do not publish a release.
+runs **only when manually started** using
+**Actions → Windows build and release → Run workflow**. Git pushes and pull
+requests do not start builds. Every successful manual build publishes a release.
 
 Each successful build runs `cargo test --release --locked` and
 `cargo build --release --locked` on GitHub-hosted Windows, produces the complete
