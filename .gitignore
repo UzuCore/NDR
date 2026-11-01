@@ -6,7 +6,9 @@
 /docs/
 /scripts/*
 !/scripts/release.ps1
-/tests/
+!/scripts/archive_web_corpus.ps1
+/tests/*
+!/tests/archive_web_corpus.rs
 /.cargo/
 /THIRD-PARTY-NOTICES.txt
 /Resources/*

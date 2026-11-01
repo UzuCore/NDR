@@ -660,6 +660,7 @@ fn list_details(
     password_arg(&mut cmd, password)?;
     cmd.arg("--").arg(&archive);
     let text = execute(cmd, cancel)?;
+    reject_unavailable_archive_methods(&archive, &text)?;
     let mut entries = parse_listing(&text)?;
     // 7zip+ bzip2 streams return no Path and an empty Size field in
     // `l -slt -ba`, yet `x` produces one file using the archive's basename.
@@ -686,6 +687,18 @@ fn list_details(
         }
     }
     Ok((entries, encrypted))
+}
+/// The bundled 7zip+ can *list* a 7z with the proprietary extension codec ID
+/// 04F71101 (Zstandard) but cannot decode its payload. Two independent public
+/// test suites reproduce `7z t`: Unsupported Method. Reject before navigation
+/// or extraction, while keeping ZIPX-ZSTD and tar.zst supported.
+fn reject_unavailable_archive_methods(path: &Path, listing: &str) -> Result<(), String> {
+    if archive_format(path).as_deref() == Some("7z")
+        && listing.lines().any(|line| line.trim().eq_ignore_ascii_case("Method = 04F71101"))
+    {
+        return Err("This 7z archive uses Zstandard method 04F71101, which the bundled archive engine cannot extract.".into());
+    }
+    Ok(())
 }
 fn inspect_tree(path: &Path) -> Result<(), String> {
     let mut pending = vec![path.to_owned()];
@@ -2995,6 +3008,28 @@ mod entry_tests {
             assert!(!dest.exists(), "{extension}: failed archive must not create output directory");
         }
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn real_web_corpus_rejects_7z_zstd_codec_before_opening_but_keeps_zipx_zstd() {
+        let listing = "Path = a.txt\nSize = 3\nMethod = 04F71101\n";
+        assert!(reject_unavailable_archive_methods(Path::new("a.7z"), listing)
+            .unwrap_err().contains("cannot extract"));
+        assert!(reject_unavailable_archive_methods(Path::new("a.zipx"), listing).is_ok());
+        let corpus = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/archive-web-corpus/samples");
+        for name in ["test_read_format_7zip_zstd.7z", "test_read_format_7zip_solid_zstd.7z", "sharpcompress/7Zip.ZSTD.7z"] {
+            let archive = corpus.join(name);
+            if archive.is_file() {
+                let error = list(&archive, None).unwrap_err();
+                assert!(error.contains("04F71101"), "{name}: {error}");
+            }
+        }
+        for name in ["test_read_format_zip_zstd.zipx", "sharpcompress/WinZip27_ZSTD.zipx"] {
+            let archive = corpus.join(name);
+            if archive.is_file() {
+                assert!(!list(&archive, None).unwrap_or_else(|e| panic!("{name}: {e}")).is_empty());
+            }
+        }
     }
 
     #[test]
