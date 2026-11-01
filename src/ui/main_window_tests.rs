@@ -1220,6 +1220,85 @@ fn start_folder_setting_is_used_at_startup_like_csharp() {
 
 thread_local! {
     static PER_FILE_ASKED: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+    static GENERIC_FOLDER_ICON_QUERIES: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+    static FLAKY_FOLDER_ICON_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[test]
+fn archive_folder_icon_cache_never_uses_a_drive_root_or_virtual_entry_path() {
+    let (root, ctx, mut app) = fixture("generic-folder-path");
+    app.file_icons.clear();
+    app.file_icon_failed_at.clear();
+    GENERIC_FOLDER_ICON_QUERIES.with(|seen| seen.borrow_mut().clear());
+    app.system.file_icon = |path, directory| {
+        if directory {
+            GENERIC_FOLDER_ICON_QUERIES.with(|seen| seen.borrow_mut().push(path.to_string_lossy().into_owned()));
+        }
+        Some((2, 2, if directory && path == Path::new("folder") { [230, 188, 84, 255] } else { [255, 0, 0, 255] }.repeat(4)))
+    };
+    let first = app.any_path_icon(&ctx, Path::new("C:\\"), true).expect("drive must use generic placeholder");
+    let second = app.any_path_icon(&ctx, Path::new("assets"), true).expect("virtual archive folder must have an icon");
+    let third = app.any_path_icon(&ctx, Path::new("D:\\NDR\\release\\Skins"), true).expect("local folder must use generic placeholder");
+    assert_eq!(first.id(), second.id());
+    assert_eq!(second.id(), third.id());
+    assert_eq!(GENERIC_FOLDER_ICON_QUERIES.with(|seen| seen.borrow().clone()), ["folder"]);
+    assert!(!app.file_icon_failed_at.contains_key("<DIR>"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn transient_missing_or_invisible_folder_icon_recovers_instead_of_being_cached_forever() {
+    let (root, ctx, mut app) = fixture("icon-retry");
+    FLAKY_FOLDER_ICON_CALLS.with(|calls| calls.set(0));
+    app.file_icons.clear();
+    app.file_icon_failed_at.clear();
+    app.system.file_icon = |path, directory| {
+        assert!(directory && path == Path::new("folder"));
+        let n = FLAKY_FOLDER_ICON_CALLS.with(|calls| { let n = calls.get(); calls.set(n + 1); n });
+        if n == 0 { None }
+        else if n == 1 { Some((2, 2, [255, 0, 0, 0].repeat(4))) }
+        else { Some((2, 2, [228, 188, 85, 255].repeat(4))) }
+    };
+    assert!(app.any_path_icon(&ctx, Path::new("assets"), true).is_none());
+    assert!(app.file_icons.get("<DIR>").is_some_and(Option::is_none));
+    assert_eq!(FLAKY_FOLDER_ICON_CALLS.with(|calls| calls.get()), 1);
+    // A failure does not hammer shell handlers at redraw/frame rate.
+    assert!(app.any_path_icon(&ctx, Path::new("build"), true).is_none());
+    assert_eq!(FLAKY_FOLDER_ICON_CALLS.with(|calls| calls.get()), 1);
+    app.file_icon_failed_at.insert("<DIR>".into(), Instant::now() - Duration::from_secs(5));
+    assert!(app.any_path_icon(&ctx, Path::new("config"), true).is_none(), "fully transparent icon is not a success");
+    assert_eq!(FLAKY_FOLDER_ICON_CALLS.with(|calls| calls.get()), 2);
+    app.file_icon_failed_at.insert("<DIR>".into(), Instant::now() - Duration::from_secs(5));
+    let restored = app.any_path_icon(&ctx, Path::new("config"), true).expect("folder icon recovers on retry");
+    assert_eq!(restored.size(), [2, 2]);
+    assert!(!app.file_icon_failed_at.contains_key("<DIR>"));
+    assert_eq!(FLAKY_FOLDER_ICON_CALLS.with(|calls| calls.get()), 3);
+    assert_eq!(app.any_path_icon(&ctx, Path::new("other"), true).unwrap().id(), restored.id());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn transient_local_overlay_failure_retries_and_replaces_the_generic_icon() {
+    let (root, ctx, mut app) = fixture("overlay-retry");
+    app.settings.set_flag("UseOverlayIcons", true);
+    let row = app.panes[0].entries.iter().position(|entry| entry.name == "folder").unwrap();
+    let path = app.panes[0].entries[row].path.clone();
+    app.overlay_icons.insert(path.clone(), None);
+    app.overlay_icon_failed_at.insert(path.clone(), Instant::now());
+    assert_eq!(app.file_icon(&ctx, 0, row).unwrap().size(), [2, 2]);
+    assert!(!app.overlay_pending.contains(&path), "a failed lookup should be throttled");
+    app.overlay_icon_failed_at.insert(path.clone(), Instant::now() - Duration::from_secs(5));
+    assert_eq!(app.file_icon(&ctx, 0, row).unwrap().size(), [2, 2]);
+    assert!(app.overlay_pending.contains(&path), "a failed lookup should be retried once after backoff");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !app.overlay_icons.get(&path).is_some_and(Option::is_some) {
+        assert!(Instant::now() < deadline, "overlay retry timeout");
+        app.poll(&ctx);
+        thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(app.file_icon(&ctx, 0, row).unwrap().size(), [3, 3]);
+    assert!(!app.overlay_icon_failed_at.contains_key(&path));
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

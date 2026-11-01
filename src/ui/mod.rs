@@ -663,6 +663,9 @@ pub struct App {
     images: HashMap<PathBuf, egui::TextureHandle>,
     /// C# FileVisualConverter.IconCache: a small shell icon per extension (lowercase, folder = "<DIR>"). None is remembered if unreadable.
     file_icons: HashMap<String, Option<egui::TextureHandle>>,
+    /// A transient Windows shell icon failure must not permanently hide an
+    /// extension/folder icon. Limit retries to avoid querying Shell each frame.
+    file_icon_failed_at: HashMap<String, Instant>,
     /// The dimmed icon of the original TNXShellImageList.Draw (0x7b8ebc) (ILD_BLEND50, blend color white): one per icon image.
     ghost_icons: HashMap<egui::TextureId, egui::TextureHandle>,
     /// The original skin (conf.ini) of the current theme - (theme name, skin). None if not Black/Classic/Gray.
@@ -676,6 +679,9 @@ pub struct App {
     per_file_icon_types: HashMap<String, bool>,
     /// C# ShellOverlayIconCache (per path, cleared when it exceeds 512) plus the pending paths and where to send to the overlay worker thread (STA).
     overlay_icons: HashMap<PathBuf, Option<egui::TextureHandle>>,
+    /// Local per-path shell/overlay icons may fail while Explorer is busy.
+    /// Cache successes; retry failures only after a short backoff.
+    overlay_icon_failed_at: HashMap<PathBuf, Instant>,
     overlay_pending: HashSet<PathBuf>,
     overlay_tx: Option<Sender<(PathBuf, u8)>>,
     image_requests: HashSet<PathBuf>,
@@ -981,12 +987,14 @@ impl App {
             tip_since: [None, None],
             images: HashMap::new(),
             file_icons: HashMap::new(),
+            file_icon_failed_at: HashMap::new(),
             ghost_icons: HashMap::new(),
             skin_cache: None,
             skin_crumb_menu: None,
             skin_crumb_press: false,
             per_file_icon_types: HashMap::new(),
             overlay_icons: HashMap::new(),
+            overlay_icon_failed_at: HashMap::new(),
             overlay_pending: HashSet::new(),
             overlay_tx: None,
             image_requests: HashSet::new(),
@@ -1587,12 +1595,21 @@ impl App {
                     self.overlay_pending.remove(&path);
                     if self.overlay_icons.len() >= 512 {
                         self.overlay_icons.clear();
+                        self.overlay_icon_failed_at.clear();
                         let kept: HashSet<egui::TextureId> = self.file_icons.values().flatten().map(|t| t.id()).collect();
                         self.ghost_icons.retain(|id, _| kept.contains(id));
                     }
-                    let texture = image.map(|(width, height, rgba)| {
+                    let texture = image.filter(|(width, height, rgba)| {
+                        views::valid_small_icon_pixels(*width, *height, rgba)
+                    }).map(|(width, height, rgba)| {
                         self.icon_texture(ctx, format!("ndr-overlay|{}", path.display()), width, height, &rgba)
                     });
+                    if texture.is_some() {
+                        self.overlay_icon_failed_at.remove(&path);
+                    } else {
+                        self.overlay_icon_failed_at.insert(path.clone(), Instant::now());
+                        ctx.request_repaint_after(Duration::from_secs(3));
+                    }
                     self.overlay_icons.insert(path, texture);
                     ctx.request_repaint();
                 }

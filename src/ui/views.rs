@@ -1,5 +1,16 @@
 use super::*;
 
+/// Reject empty, malformed and fully transparent icons before installing them
+/// into the long-lived texture cache. Shell occasionally returns a usable
+/// handle but no visible pixels while its icon handlers are initializing.
+pub(super) fn valid_small_icon_pixels(width: usize, height: usize, rgba: &[u8]) -> bool {
+    width > 0 && height > 0 && width <= 256 && height <= 256
+        && width.checked_mul(height).and_then(|pixels| pixels.checked_mul(4)) == Some(rgba.len())
+        && rgba.chunks_exact(4).any(|pixel| pixel[3] != 0)
+}
+
+const ICON_RETRY_INTERVAL: Duration = Duration::from_secs(3);
+
 /// Pane folder tree level width (VCL TCustomTreeView Indent default 19, matching the captured original).
 const TREE_INDENT: f32 = 19.0;
 
@@ -95,8 +106,7 @@ impl App {
             if self.settings.flag("ShowIcons", true) && local && real_path {
                 match self.overlay_icons.get(&path) {
                     Some(Some(texture)) => return Some(texture.clone()),
-                    Some(None) => {}
-                    None => self.queue_overlay_icon(path, true),
+                    Some(None) | None => self.queue_overlay_icon_if_due(path, true),
                 }
             }
             return self.path_icon(ctx, Path::new("A"), true);
@@ -118,8 +128,7 @@ impl App {
         if self.settings.flag("ShowIcons", true) && real_path {
             match self.overlay_icons.get(&path) {
                 Some(Some(texture)) => return Some(texture.clone()),
-                Some(None) => {}
-                None => self.queue_overlay_icon(path.clone(), overlays || drive),
+                Some(None) | None => self.queue_overlay_icon_if_due(path.clone(), overlays || drive),
             }
         }
         self.path_icon(ctx, &path, directory)
@@ -132,8 +141,7 @@ impl App {
         }
         match self.overlay_icons.get(root) {
             Some(Some(texture)) => return Some(texture.clone()),
-            Some(None) => {}
-            None => self.queue_overlay_icon(root.to_path_buf(), false),
+            Some(None) | None => self.queue_overlay_icon_if_due(root.to_path_buf(), false),
         }
         self.path_icon(ctx, root, true)
     }
@@ -142,6 +150,15 @@ impl App {
     /// When overlay is false, the file's shell icon without overlay (native::shell_path_icon).
     fn queue_overlay_icon(&mut self, path: PathBuf, overlay: bool) {
         self.queue_icon_job(path, if overlay { 1 } else { 0 });
+    }
+
+    /// Do not permanently cache failed shell icon lookups, but also do not
+    /// hammer Explorer on every frame when it is temporarily unavailable.
+    fn queue_overlay_icon_if_due(&mut self, path: PathBuf, overlay: bool) {
+        if self.overlay_icon_failed_at.get(&path).is_some_and(|at| at.elapsed() < ICON_RETRY_INTERVAL) {
+            return;
+        }
+        self.queue_overlay_icon(path, overlay);
     }
 
     /// Icon job: 0 = the file's shell icon, 1 = overlay icon, 2 = shell key (desktop or virtual folders in the pane's folder tree).
@@ -178,7 +195,12 @@ impl App {
     pub(super) fn shell_node_icon(&mut self, ctx: &egui::Context, node: &ndr::shell_tree::ShellNode) -> Option<egui::TextureHandle> {
         match self.overlay_icons.get(&node.key) {
             Some(Some(texture)) => Some(texture.clone()),
-            Some(None) => self.any_path_icon(ctx, &node.key, true),
+            Some(None) => {
+                if !self.overlay_icon_failed_at.get(&node.key).is_some_and(|at| at.elapsed() < ICON_RETRY_INTERVAL) {
+                    self.queue_icon_job(node.key.clone(), 2);
+                }
+                self.any_path_icon(ctx, &node.key, true)
+            }
             None => {
                 self.queue_icon_job(node.key.clone(), 2);
                 self.any_path_icon(ctx, &node.key, true)
@@ -202,10 +224,34 @@ impl App {
             path.extension().map(|e| format!(".{}", e.to_string_lossy().to_lowercase())).unwrap_or_default()
         };
         if let Some(cached) = self.file_icons.get(&key) {
-            return cached.clone();
+            if cached.is_some() {
+                return cached.clone();
+            }
+            if self.file_icon_failed_at.get(&key).is_some_and(|at| at.elapsed() < ICON_RETRY_INTERVAL) {
+                return None;
+            }
         }
-        let texture = (self.system.file_icon)(path, directory)
-            .map(|(width, height, rgba)| self.icon_texture(ctx, format!("ndr-file-icon{key}"), width, height, &rgba));
+        // Important: the <DIR> cache is shared by *all* pane folders. Passing
+        // a real drive root to SHGetFileInfoW(... USEFILEATTRIBUTES) returns a
+        // DRIVE icon (C:\ index 158), not the generic folder icon (index 3).
+        // That drive icon could poison the <DIR> cache for every archive and
+        // FTP folder. Always use a stable, synthetic folder path for this key.
+        let sample = if directory { Path::new("folder") } else { path };
+        let mut image = (self.system.file_icon)(sample, directory)
+            .filter(|(width, height, rgba)| valid_small_icon_pixels(*width, *height, rgba));
+        if directory && image.is_none() && !cfg!(test) {
+            // Independent Windows stock icon fallback: never let a transient
+            // shell handler failure leave all archive folders blank.
+            image = native::shell_stock_folder_icon()
+                .filter(|(width, height, rgba)| valid_small_icon_pixels(*width, *height, rgba));
+        }
+        let texture = image.map(|(width, height, rgba)| self.icon_texture(ctx, format!("ndr-file-icon{key}"), width, height, &rgba));
+        if texture.is_some() {
+            self.file_icon_failed_at.remove(&key);
+        } else {
+            self.file_icon_failed_at.insert(key.clone(), Instant::now());
+            ctx.request_repaint_after(ICON_RETRY_INTERVAL);
+        }
         self.file_icons.insert(key, texture.clone());
         texture
     }

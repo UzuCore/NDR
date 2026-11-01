@@ -195,6 +195,9 @@ fn broken_archive_open_returns_to_local_folder_instead_of_trapping_pane() {
 fn actual_bk3_archive_opens_and_navigates_without_top_panel_error() {
     let Ok(source) = std::env::var("NDR_LOCAL_BK3") else { return };
     let (root, ctx, mut app) = fixture("archive-bk3-real-gui", "ko");
+    // Use the real Windows shell icon API rather than the usual test stub:
+    // r195 displayed blank folder icons in this exact archive pane.
+    app.system.file_icon = ndr::native::shell_small_icon;
     let name = "bk3.7z";
     let archive = root.join("left").join(name);
     fs::copy(&source, &archive).unwrap();
@@ -207,6 +210,9 @@ fn actual_bk3_archive_opens_and_navigates_without_top_panel_error() {
     assert!(app.panes[0].archive.is_some(), "real archive must remain open with safe members visible");
     assert!(app.panes[0].error.is_none(), "no red panel error while browsing");
     assert!(app.panes[0].entries.iter().any(|e| e.name == "assets" && e.is_dir));
+    let assets_icon_row = app.panes[0].entries.iter().position(|e| e.name == "assets").unwrap();
+    assert_eq!(app.file_icon(&ctx, 0, assets_icon_row).expect("real 7z folder must show a shell icon").size(), [16, 16]);
+    assert!(app.file_icon_failed_at.is_empty(), "the generic folder icon must be available");
     assert!(!app.panes[0].entries.iter().any(|e| e.name.eq_ignore_ascii_case("nul")), "reserved device name must not become a virtual file");
     assert!(app.status.contains("예약 장치명"), "skipped reserved entries must be disclosed");
     app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == "assets").unwrap();

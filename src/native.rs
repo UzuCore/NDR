@@ -1015,6 +1015,23 @@ fn is_drive_root(path: &Path) -> bool {
     chars.len() == 3 && chars[0].is_ascii_alphabetic() && chars[1] == ':' && chars[2] == '\\'
 }
 
+/// Independent fallback for the generic folder class. Unlike a shell lookup
+/// for an arbitrary path, the stock SIID_FOLDER id cannot accidentally return
+/// a drive/virtual-folder icon or trigger a third-party icon handler.
+pub fn shell_stock_folder_icon() -> Option<(usize, usize, Vec<u8>)> {
+    use windows_sys::Win32::UI::Shell::{SHGSI_ICON, SHGSI_SMALLICON, SHGetStockIconInfo, SHSTOCKICONINFO, SIID_FOLDER};
+    let mut info: SHSTOCKICONINFO = unsafe { std::mem::zeroed() };
+    info.cbSize = size_of::<SHSTOCKICONINFO>() as u32;
+    unsafe {
+        if SHGetStockIconInfo(SIID_FOLDER, SHGSI_ICON | SHGSI_SMALLICON, &mut info) < 0 || info.hIcon.is_null() {
+            return None;
+        }
+        let pixels = icon_rgba(info.hIcon, 16).ok();
+        DestroyIcon(info.hIcon);
+        pixels
+    }
+}
+
 /// The Windows default "network drive" small icon (SHGetStockIconInfo SIID_DRIVENET).
 fn stock_network_drive_icon() -> Option<(usize, usize, Vec<u8>)> {
     use windows_sys::Win32::UI::Shell::{SHGSI_ICON, SHGSI_SMALLICON, SHGetStockIconInfo, SHSTOCKICONINFO, SIID_DRIVENET};
@@ -2246,6 +2263,17 @@ mod tests {
         assert!(gap.as_secs() < 2, "{gap:?}");
         let _ = std::fs::remove_dir_all(root);
     }
+    /// A generic folder icon must be available independently of file-system
+    /// paths. This is the last-resort fallback for an archive/FTP pane when
+    /// the shell handler temporarily fails to load an extension icon.
+    #[test]
+    fn windows_stock_folder_icon_is_visible_and_has_valid_alpha() {
+        let (width, height, rgba) = super::shell_stock_folder_icon().expect("stock folder shell icon");
+        assert_eq!((width, height), (16, 16));
+        assert_eq!(rgba.len(), width * height * 4);
+        assert!(rgba.chunks_exact(4).any(|p| p[3] >= 128), "stock icon cannot be fully transparent");
+    }
+
     /// Thumbnails asked from several workers at once all arrive (the shell answered E_PENDING to concurrent GetImage calls before they were serialized).
     #[test]
     fn concurrent_thumbnails_all_arrive() {
