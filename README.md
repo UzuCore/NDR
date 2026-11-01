@@ -6,10 +6,10 @@ with the stable **x86_64-pc-windows-msvc** Rust toolchain.
 ## Download a release
 
 The latest automatic build is published under **[GitHub Releases](https://github.com/UzuCore/NDR/releases/latest)**.
-Download `NDR-windows-x64.zip`, extract it, and run `NDR.exe`. Keep `Languages`,
-`Skins`, `Colors`, `Tools`, and `complete.wav` next to the executable.
-The separately offered `NDR.exe` can replace an executable in an existing
-installation; it does **not** include the runtime resources by itself.
+Download `NDR-windows-x64.zip`, extract the **entire archive**, and run `NDR.exe`
+from the extracted folder. `Languages`, `Skins`, `Colors`, `Tools`, and
+`complete.wav` must remain beside the executable. A standalone `NDR.exe` is
+**not distributed** because it cannot run properly without these resources.
 
 ## GitHub Actions
 
@@ -20,8 +20,8 @@ requests do not start builds. Every successful manual build publishes a release.
 
 Each successful build runs `cargo test --release --locked` and
 `cargo build --release --locked` on GitHub-hosted Windows, produces the complete
-portable ZIP and a standalone EXE, checks their SHA-256 hashes, uploads
-workflow artifacts, and publishes a GitHub Release named `build-<run number>`.
+portable ZIP, verifies the ZIP and embedded EXE SHA-256 hashes, uploads
+workflow artifacts, and publishes **only the ZIP** to a GitHub Release named `build-<run number>`.
 Re-running a workflow updates the existing release assets instead of creating
 a duplicate. The workflow uses GitHub's built-in `GITHUB_TOKEN` with
 `contents: write`; no personal access token needs to be configured.

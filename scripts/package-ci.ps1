@@ -90,13 +90,12 @@ try {
     } finally { $stream.Dispose() }
 } finally { $zip.Dispose() }
 
-Copy-Item -LiteralPath (Join-Path $stage 'NDR.exe') -Destination (Join-Path $output 'NDR.exe')
-$exeHash = (Get-FileHash -LiteralPath (Join-Path $output 'NDR.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
+$exeHash = (Get-FileHash -LiteralPath (Join-Path $stage 'NDR.exe') -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($zipExeHash -ne $exeHash) {
-    throw 'ZIP NDR.exe SHA-256 is different from the standalone EXE'
+    throw 'ZIP NDR.exe SHA-256 differs from the staged EXE'
 }
 $zipHash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
-@("$zipHash  NDR-windows-x64.zip", "$exeHash  NDR.exe") |
+@("$zipHash  NDR-windows-x64.zip") |
     Set-Content -LiteralPath (Join-Path $output 'SHA256SUMS.txt') -Encoding Ascii
 
 $version = [regex]::Match((Get-Content -LiteralPath (Join-Path $project 'Cargo.toml') -Raw), '(?m)^version\s*=\s*"([^"]+)"').Groups[1].Value
@@ -113,7 +112,7 @@ $manifest = [ordered]@{
     utc = [DateTime]::UtcNow.ToString('o')
     filesInZip = $entries.Count
     zip = [ordered]@{ filename = 'NDR-windows-x64.zip'; bytes = (Get-Item $zipPath).Length; sha256 = $zipHash }
-    exe = [ordered]@{ filename = 'NDR.exe'; bytes = (Get-Item (Join-Path $output 'NDR.exe')).Length; sha256 = $exeHash }
+    exe = [ordered]@{ filename = 'NDR.exe (inside ZIP)'; bytes = (Get-Item (Join-Path $stage 'NDR.exe')).Length; sha256 = $exeHash }
 }
 $manifest | ConvertTo-Json -Depth 4 |
     Set-Content -LiteralPath (Join-Path $output 'build-manifest.json') -Encoding UTF8
@@ -123,13 +122,12 @@ $manifest | ConvertTo-Json -Depth 4 |
 
 This release was built automatically from commit ``$commit`` using ``$rust``.
 
-**Installation:** download and extract **NDR-windows-x64.zip** to a folder, then run **NDR.exe**. Keep the included ``Colors``, ``Languages``, ``Skins``, ``Tools`` and ``complete.wav`` beside the executable. The standalone **NDR.exe** is for updating an existing installation that already contains those resources.
+**Installation:** download and extract the **entire NDR-windows-x64.zip** to a folder, then run **NDR.exe** from inside that folder. Keep the included ``Colors``, ``Languages``, ``Skins``, ``Tools`` and ``complete.wav`` beside the executable. The executable is not distributed separately.
 
 Build: ``$env:GITHUB_RUN_NUMBER`` | Cargo version: ``$version`` | Target: ``x86_64-pc-windows-msvc``
 
 - Complete portable package: **NDR-windows-x64.zip** ($($entries.Count) files)
-- Standalone executable: **NDR.exe**
-- Verify downloads using **SHA256SUMS.txt** and **build-manifest.json**
+- Verify package integrity using the SHA-256 checksum recorded by the workflow
 - Original license notices and bundled 7zip+ license files are inside the ZIP.
 
 The workflow runs the full Rust release test suite before publishing. Optional user-owned archive/ISO fixtures are not included in public CI.

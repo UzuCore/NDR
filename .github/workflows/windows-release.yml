@@ -94,7 +94,6 @@ jobs:
           name: NDR-windows-x64-build-${{ github.run_number }}
           path: |
             target/ci-release/NDR-windows-x64.zip
-            target/ci-release/NDR.exe
             target/ci-release/SHA256SUMS.txt
             target/ci-release/build-manifest.json
           if-no-files-found: error
@@ -110,10 +109,7 @@ jobs:
           $tag = "build-$env:GITHUB_RUN_NUMBER"
           $out = 'target/ci-release'
           $assets = @(
-            "$out/NDR-windows-x64.zip",
-            "$out/NDR.exe",
-            "$out/SHA256SUMS.txt",
-            "$out/build-manifest.json"
+            "$out/NDR-windows-x64.zip"
           )
           $tags = @(gh release list --repo $env:GITHUB_REPOSITORY --json tagName --limit 100 --jq '.[].tagName')
           if ($LASTEXITCODE -ne 0) { throw 'GitHub release listing failed' }
