@@ -10,6 +10,7 @@
 /tests/*
 !/tests/archive_web_corpus.rs
 !/tests/archive_web_corpus_operations.rs
+!/tests/archive_local_iso.rs
 /.cargo/
 /THIRD-PARTY-NOTICES.txt
 /Resources/*

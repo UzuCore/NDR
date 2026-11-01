@@ -688,13 +688,13 @@ fn list_cancel(
     password: Option<&str>,
     cancel: &AtomicBool,
 ) -> Result<Vec<ArchiveEntry>, String> {
-    list_details(archive, password, cancel).map(|(entries, _)| entries)
+    list_details(archive, password, cancel).map(|(entries, _, _)| entries)
 }
 fn list_details(
     archive: &Path,
     password: Option<&str>,
     cancel: &AtomicBool,
-) -> Result<(Vec<ArchiveEntry>, HashSet<String>), String> {
+) -> Result<(Vec<ArchiveEntry>, HashSet<String>, bool), String> {
     if !bundled_can_browse(archive) {
         return Err(format!("Archive format not supported by bundled 7-Zip: {}", archive.display()));
     }
@@ -704,7 +704,22 @@ fn list_details(
     cmd.args(["l", "-slt", "-ba", "-sccUTF-8"]);
     password_arg(&mut cmd, password)?;
     cmd.arg("--").arg(&archive);
-    let text = execute(cmd, cancel)?;
+    // Some real ISO9660/UDF hybrid discs have a broken UDF header. 7zip+
+    // autodetects UDF and returns exit 2 even when ISO9660 is perfectly
+    // readable. Retry *only .iso files*, and only after autodetect fails.
+    // Extraction must use the same handler as the successful listing.
+    let (text, iso9660_fallback) = match execute(cmd, cancel) {
+        Ok(text) => (text, false),
+        Err(first) if archive_format(&archive).as_deref() == Some("iso") && !password_failure(&first) => {
+            check_cancel(cancel)?;
+            let mut retry = command()?;
+            retry.args(["l", "-tiso", "-slt", "-ba", "-sccUTF-8"]);
+            password_arg(&mut retry, password)?;
+            retry.arg("--").arg(&archive);
+            (execute(retry, cancel).map_err(|error| format!("{first}; ISO9660 fallback failed: {error}"))?, true)
+        }
+        Err(error) => return Err(error),
+    };
     reject_unavailable_archive_methods(&archive, &text)?;
     let mut entries = parse_listing(&text)?;
     // 7zip+ omits Path for many single-member wrapper streams (bzip2, xz,
@@ -733,7 +748,7 @@ fn list_details(
             }
         }
     }
-    Ok((entries, encrypted))
+    Ok((entries, encrypted, iso9660_fallback))
 }
 /// The bundled 7zip+ can *list* a 7z with the proprietary extension codec ID
 /// 04F71101 (Zstandard) but cannot decode its payload. Two independent public
@@ -1085,7 +1100,7 @@ pub fn extract_with_conflicts(
 ) -> Result<(), String> {
     check_cancel(cancel)?;
     ensure_plain_path(destination)?;
-    let entries = list_cancel(archive, password, cancel)?;
+    let (entries, _, iso9660_fallback) = list_details(archive, password, cancel)?;
     let parent = destination
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
@@ -1100,6 +1115,7 @@ pub fn extract_with_conflicts(
         let mut cmd = command()?;
         cmd.args(["x", "-y", "-sccUTF-8", "-snl-"])
             .arg(format!("-o{}", stage_absolute.display()));
+        if iso9660_fallback { cmd.arg("-tiso"); }
         password_arg(&mut cmd, password)?;
         cmd.arg("--").arg(archive);
         execute(cmd, cancel)?;
@@ -1719,8 +1735,13 @@ pub fn extract_entry_to_temp(archive: &Path, password: Option<&str>, key: &str, 
     // Fixed: when extraction fails (wrong password, cancel etc.) the created folder is removed. Previously a folder was left behind for every failed attempt.
     let result = (|| {
         let archive = fs::canonicalize(archive).map_err(|e| e.to_string())?;
+        // Opening an item must use the same ISO9660 fallback as the archive
+        // pane. For non-ISO archives avoid the extra listing pass.
+        let iso9660_fallback = archive_format(&archive).as_deref() == Some("iso")
+            && list_details(&archive, password, cancel)?.2;
         let mut cmd = command()?;
         cmd.args(["x", "-y", "-sccUTF-8", "-snl-", "-spd"]).arg(format!("-o{}", folder.display()));
+        if iso9660_fallback { cmd.arg("-tiso"); }
         password_arg(&mut cmd, password)?;
         cmd.arg("--").arg(archive).arg(key);
         execute(cmd, cancel)?;
@@ -1951,7 +1972,7 @@ pub fn extract_entries_with_program(
     ensure_plain_path(destination)?;
     let archive = fs::canonicalize(archive).map_err(|e| e.to_string())?;
     let mut header_password = initial_password.map(str::to_owned);
-    let (entries, encrypted) = loop {
+    let (entries, encrypted, iso9660_fallback) = loop {
         match list_details(&archive, header_password.as_deref(), cancel) {
             Ok(details) => break details,
             Err(error) if password_failure(&error) => match passwords(&archive, None) {
@@ -2069,6 +2090,7 @@ pub fn extract_entries_with_program(
                 } else {
                     cmd.args(["x", "-y", "-sccUTF-8", "-spd", "-snl-"])
                         .arg(format!("-o{}", attempt_absolute.display()));
+                    if iso9660_fallback { cmd.arg("-tiso"); }
                     password_arg(&mut cmd, password.as_deref())?;
                     cmd.arg("--").arg(&archive).arg(&entry.key);
                 }
