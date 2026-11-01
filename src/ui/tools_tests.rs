@@ -108,7 +108,7 @@ fn fixture(label: &str, language: &str) -> (PathBuf, egui::Context, App) {
     app.save_dialog = save_target;
     app.open_dialog = open_target;
     app.folder_picker = picked;
-    app.system = super::tools_dialog::SystemHooks { network_drives: one_network_drive, add_connection: connect, cancel_connection: disconnect, explorer_enabled: explorer_off, set_explorer, run_verb, properties: record_properties, network_path_error: |_| 0, connect_share: |_| 1223, shortcut_folder: |_| None, create_shortcut: |_, _| Ok(()), clipboard_files: Vec::new, temp_folder: fake_temp_folder, ready_drives: fake_drives, volume_label: fake_volume_label, set_volume_label: fake_set_volume_label, disk_info: |_| None, drive_item: fake_drive_item, file_icon: |_, _| Some((1, 1, vec![255, 255, 255, 255])), overlay_icon: |_| None, path_icon: |_| None, per_file_icon: |_| false, font_file: |_| None, large_icon: |_| None, compact_path: |p, _| p.to_owned(), wheel_lines: || 3, play_wave: super::tools_dialog::record_wave, tree_root: |_| String::new(), shell_delete: |_, _| 2, shortcut_target: |_| None };
+    app.system = super::tools_dialog::SystemHooks { network_drives: one_network_drive, add_connection: connect, cancel_connection: disconnect, explorer_enabled: explorer_off, set_explorer, run_verb, properties: record_properties, network_path_error: |_| 0, connect_share: |_| 1223, shortcut_folder: || None, create_shortcut: |_, _| Ok(()), clipboard_files: Vec::new, temp_folder: fake_temp_folder, ready_drives: fake_drives, volume_label: fake_volume_label, set_volume_label: fake_set_volume_label, disk_info: |_| None, drive_item: fake_drive_item, file_icon: |_, _| Some((1, 1, vec![255, 255, 255, 255])), overlay_icon: |_| None, path_icon: |_| None, per_file_icon: |_| false, font_file: |_| None, large_icon: |_| None, compact_path: |p, _| p.to_owned(), wheel_lines: || 3, play_wave: super::tools_dialog::record_wave, tree_root: |_| String::new(), shell_delete: |_, _| 2, shortcut_target: |_| None };
     wait_until(&mut app, &ctx, |app| app.panes.iter().all(|p| !p.loading));
     (root, ctx, app)
 }
@@ -1051,7 +1051,7 @@ thread_local! {
     static LINKS: RefCell<Vec<(PathBuf, PathBuf)>> = const { RefCell::new(Vec::new()) };
     static CLIP: RefCell<Vec<PathBuf>> = const { RefCell::new(Vec::new()) };
 }
-fn shortcut_dir(_: bool) -> Option<PathBuf> {
+fn shortcut_dir() -> Option<PathBuf> {
     SHORTCUT_DIR.with(|d| d.borrow().clone())
 }
 fn record_link(target: &Path, folder: &Path) -> Result<(), String> {
@@ -1069,9 +1069,9 @@ fn clip() -> Vec<PathBuf> {
 }
 
 #[test]
-fn quick_launch_shortcut_reports_failure_and_real_link_creation() {
-    let (root, _ctx, mut app) = fixture("quicklaunch-real-link", "ko");
-    let folder = root.join("quick-launch");
+fn desktop_shortcut_reports_failure_and_creates_real_link() {
+    let (root, _ctx, mut app) = fixture("desktop-real-link", "ko");
+    let folder = root.join("desktop");
     fs::create_dir_all(&folder).unwrap();
     SHORTCUT_DIR.with(|d| *d.borrow_mut() = Some(folder.clone()));
     app.system.shortcut_folder = shortcut_dir;
@@ -1080,18 +1080,18 @@ fn quick_launch_shortcut_reports_failure_and_real_link_creation() {
     app.panes[0].selected.insert(entry);
 
     app.system.create_shortcut = reject_link;
-    app.shortcut_command(true);
+    app.shortcut_command();
     assert!(!app.msgboxes.is_empty(), "creation failure must be reported");
     assert!(app.msgboxes.last().unwrap().text.contains("test access denied"));
     assert!(app.panes[0].selected.contains(&entry), "failed creation must preserve selection");
     app.msgboxes.clear();
 
     app.system.create_shortcut = ndr::native::create_original_shortcut;
-    app.shortcut_command(true);
+    app.shortcut_command();
     let link = folder.join("alpha.txt.lnk");
     assert!(link.is_file(), "a real Windows Shell Link must be written to the destination");
     assert!(ndr::native::shortcut_target(&link).is_some(), "the link must be readable by the shell");
-    assert!(app.msgboxes.last().unwrap().text.contains(&folder.display().to_string()), "actual Quick Launch path must be shown");
+    assert!(app.msgboxes.is_empty(), "desktop shortcut should succeed without a popup");
     assert!(app.panes[0].selected.is_empty());
     fs::remove_dir_all(root).unwrap();
 }
@@ -1105,7 +1105,7 @@ fn system_commands_follow_csharp() {
     app.system.clipboard_files = clip;
     let index = |app: &App, name: &str| app.panes[0].entries.iter().position(|e| e.name == name).unwrap();
     // Missing destination reports an error and retains the marked items;
-    // a valid Quick Launch folder creates the links and shows the location.
+    // a valid Desktop folder creates the links.
     app.panes[0].selected = [index(&app, "beta.txt"), index(&app, "alpha.txt")].into_iter().collect();
     app.dispatch("shortcut", &ctx);
     assert!(links().is_empty());
@@ -1114,10 +1114,10 @@ fn system_commands_follow_csharp() {
     let desk = root.join("desk");
     fs::create_dir_all(&desk).unwrap();
     SHORTCUT_DIR.with(|d| *d.borrow_mut() = Some(desk.clone()));
-    app.dispatch("quickLaunchShortcut", &ctx);
+    app.dispatch("shortcut", &ctx);
     assert_eq!(links(), vec![(left.join("alpha.txt"), desk.clone()), (left.join("beta.txt"), desk.clone())]);
     assert!(app.panes[0].selected.is_empty());
-    assert!(app.msgboxes.last().is_some_and(|m| m.text.contains(&desk.display().to_string())));
+    assert!(app.msgboxes.is_empty(), "successful desktop shortcut needs no popup");
     app.msgboxes.clear();
     // PasteShortcutAsync: clipboard order, into the current folder.
     CLIP.with(|c| *c.borrow_mut() = vec![right.clone(), left.join("gamma.log")]);

@@ -42,17 +42,16 @@ fn shortcut_creation_keys_and_menu_accelerators_are_updated() {
     let keys = compat::ShortcutMap::parse(None);
     let resolved = |gesture: &str| keys.resolve(compat::text_to_shortcut(gesture));
     assert_eq!(resolved("Ctrl+Shift+I").as_deref(), Some("miShortcutOnDesktop"));
-    assert_eq!(resolved("Ctrl+Shift+Q").as_deref(), Some("miShortcutOnQuickLaunch"));
+    assert_eq!(resolved("Ctrl+Shift+Q"), None, "removed Quick Launch shortcut must be unbound");
     assert_ne!(resolved("Ctrl+K").as_deref(), Some("miShortcutOnDesktop"));
-    assert_ne!(resolved("Ctrl+U").as_deref(), Some("miShortcutOnQuickLaunch"));
     assert_ne!(resolved("Shift+Enter").as_deref(), Some("miFileInfo"));
     let (root, _, app) = fixture("shortcut-create-accelerators", "ko");
     assert_eq!(app.menu_access_letter("shortcut"), Some('i'));
-    assert_eq!(app.menu_access_letter("quickLaunchShortcut"), Some('q'));
+    assert!(menu_data::MENUS.iter().all(|(_, _, _, items)| items.iter().all(|(id, _, _)| *id != "quickLaunchShortcut")));
+    assert!(ndr::shortcut_bindings::gesture(&app.settings, "legacyQuickLaunchShortcut").is_none());
     assert!(menu_data::MENUS.iter().all(|(_, _, _, items)|
         items.iter().all(|(id, _, _)| *id != "fileInfo")));
     assert_eq!(ndr::shortcut_bindings::gesture(&app.settings, "legacyDesktopShortcut").as_deref(), Some("Ctrl+Shift+I"));
-    assert_eq!(ndr::shortcut_bindings::gesture(&app.settings, "legacyQuickLaunchShortcut").as_deref(), Some("Ctrl+Shift+Q"));
     fs::remove_dir_all(root).unwrap();
 }
 

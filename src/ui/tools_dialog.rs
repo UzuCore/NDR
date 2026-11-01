@@ -22,8 +22,8 @@ pub(super) struct SystemHooks {
     /// C# GetNetworkPathErrorCode / PromptAndConnectNetworkShare (Windows credentials window).
     pub network_path_error: fn(&Path) -> u32,
     pub connect_share: fn(&str) -> u32,
-    /// C# OriginalShortcutService.ExistingTargetFolder (true for Quick Launch) / Create(target, folder).
-    pub shortcut_folder: fn(bool) -> Option<PathBuf>,
+    /// Desktop destination for shortcut creation.
+    pub shortcut_folder: fn() -> Option<PathBuf>,
     pub create_shortcut: fn(&Path, &Path) -> Result<(), String>,
     /// C# _readClipboardFileDropList (CF_HDROP list). Tests do not touch the real clipboard.
     pub clipboard_files: fn() -> Vec<PathBuf>,

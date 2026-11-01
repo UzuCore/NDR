@@ -2656,7 +2656,6 @@ miProperties=F9
 miDescription=Alt+Enter
 miCreateEmptyFile=Ctrl+N
 miShortcutOnDesktop=Ctrl+Shift+I
-miShortcutOnQuickLaunch=Ctrl+Shift+Q
 miExit=Alt+X
 miFolderTree=F10
 miFavorites=F11
@@ -2793,7 +2792,6 @@ const MENU_SHORTCUTS: &[(&str, u16)] = &[
     ("N1", 0x0000),
     ("miCreateEmptyFile", 0x404e),
     ("miShortcutOnDesktop", 0x6049),
-    ("miShortcutOnQuickLaunch", 0x6051),
     ("N6", 0x0000),
     ("miChecksum", 0x0000),
     ("miCRC", 0x0000),

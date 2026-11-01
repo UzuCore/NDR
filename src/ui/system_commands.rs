@@ -264,11 +264,8 @@ impl App {
         }
     }
 
-    /// Creates "name.ext.lnk" in Desktop or the legacy Quick Launch directory.
-    /// Unlike the original silent failure, always report errors and the actual
-    /// Quick Launch destination. Modern Windows does not display this legacy
-    /// directory as pinned taskbar items.
-    pub(super) fn shortcut_command(&mut self, quick_launch: bool) {
+    /// Creates desktop shortcuts and reports creation errors instead of failing silently.
+    pub(super) fn shortcut_command(&mut self) {
         let i = self.active;
         if self.panes[i].archive.is_some() {
             return self.warn("압축 파일 안의 항목은 바로 가기로 만들 수 없습니다.", "Items inside an archive cannot be turned into shortcuts.");
@@ -277,9 +274,9 @@ impl App {
         if items.is_empty() {
             return;
         }
-        let Some(folder) = (self.system.shortcut_folder)(quick_launch) else {
+        let Some(folder) = (self.system.shortcut_folder)() else {
             return self.warn(
-                "바로가기를 저장할 폴더를 찾을 수 없습니다. 빠른 실행 폴더가 있는지 확인하세요.",
+                "바탕화면 폴더를 찾을 수 없습니다.",
                 "The shortcut destination folder could not be found.",
             );
         };
@@ -302,13 +299,6 @@ impl App {
             return;
         }
         self.panes[i].selected.clear();
-        if quick_launch {
-            let message = format!(
-                "빠른 실행 바로가기 {succeeded}개를 생성했습니다.\n저장 위치: {}\n\nWindows 10/11 작업 표시줄에 자동 고정되지는 않습니다. 이 폴더는 기존 빠른 실행(Quick Launch) 폴더입니다.",
-                folder.display()
-            );
-            self.system_box("NDR", &message, MB_OK, |_, _, _| {});
-        }
     }
 
     /// C# PasteShortcutAsync (original miPasteAsShortcutClick 0x4340d4): on a local pane with an existing current folder, creates "name.ext.lnk" in clipboard file list

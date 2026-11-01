@@ -1852,7 +1852,7 @@ fn main_menu_items_follow_the_tfmain_dfm() {
         out.join(" ")
     };
     let expected = [
-        "miOpen miParameterOpen miOpenAllSelectedFiles - miCopyTo miMoveTo - miDelete miShred - miRename miAdvRename miChangeAttributes - miCalculateSelectedFolderSize - miProperties miDescription - miCreateEmptyFile miShortcutOnDesktop miShortcutOnQuickLaunch - miChecksum - miExit",
+        "miOpen miParameterOpen miOpenAllSelectedFiles - miCopyTo miMoveTo - miDelete miShred - miRename miAdvRename miChangeAttributes - miCalculateSelectedFolderSize - miProperties miDescription - miCreateEmptyFile miShortcutOnDesktop - miChecksum - miExit",
         "miFolderTree miFavorites - miNewFolder - miHistoryBack miHistoryForward - miToParent miToRoot miToLastDest - miNetwork - miSetWorkFolder+miGoToWorkFolder - miRefresh",
         "miEditCopy miEditCut miEditPaste miPasteAsShortcut - miCopyFullPath miCopyFileName miCopyPath - miSelect miSelectAll miInvertSelection miAdvSelect miAdvDeselect - miRestoreLastSel miSelectSameExt miSelectSameName - miFind miFindNext",
         "miLanguage miSkin - miDualView miShowFolders - miViewToolbar miViewFindResult miViewVertBar miViewButtonBar - miShowDriveButtons miViewFolderInfoBar miViewFileInfoBar - miNewTab - miListStyle miColumn - miSortBy miFilter - miShowHidden",

@@ -84,7 +84,6 @@ const TABLE: &[(&str, &str, &str, &str, &str)] = &[
     ("legacyEmptyTemp", "임시 폴더 비우기", PANEL, "Ctrl+Shift+P", "emptyTemp"),
     ("legacyCreateEmptyFile", "빈 파일 만들기", PANEL, "Ctrl+N", "newEmpty"),
     ("legacyDesktopShortcut", "바탕 화면 바로 가기 만들기", PANEL, "Ctrl+Shift+I", "shortcut"),
-    ("legacyQuickLaunchShortcut", "빠른 실행 바로가기 만들기", PANEL, "Ctrl+Shift+Q", "quickLaunchShortcut"),
     ("legacyPasteShortcut", "바로 가기로 붙여넣기", PANEL, "Ctrl+Shift+V", "pasteShortcut"),
     ("legacyRestoreSelection", "마지막 선택 복구", PANEL, "Shift+Backspace", "restoreSelection"),
     ("legacyChangeAttributes", "속성 및 시간 변경", PANEL, "Ctrl+Z", "attributes"),

@@ -1971,20 +1971,16 @@ pub fn drag_files_out(paths: &[PathBuf]) -> Result<u32, String> {
     }
 }
 
-/// C# OriginalShortcutService.ExistingTargetFolder (original FUN_00441af4): SHGetSpecialFolderPathW(CSIDL_DESKTOPDIRECTORY 0x10)
-/// or CSIDL_APPDATA (0x1a) + "Microsoft\Internet Explorer\Quick Launch". Only when the folder exists (does not create it).
-pub fn shortcut_target_folder(quick_launch: bool) -> Option<PathBuf> {
+/// Desktop shortcut destination (CSIDL_DESKTOPDIRECTORY 0x10).
+pub fn shortcut_target_folder() -> Option<PathBuf> {
     let mut buffer = [0u16; 1024];
     // SAFETY: the buffer is larger than MAX_PATH as SHGetSpecialFolderPathW requires.
-    let found = unsafe { SHGetSpecialFolderPathW(ptr::null_mut(), buffer.as_mut_ptr(), if quick_launch { 0x1a } else { 0x10 }, 0) } != 0;
+    let found = unsafe { SHGetSpecialFolderPathW(ptr::null_mut(), buffer.as_mut_ptr(), 0x10, 0) } != 0;
     if !found {
         return None;
     }
     let length = buffer.iter().position(|c| *c == 0).unwrap_or(0);
-    let mut folder = PathBuf::from(String::from_utf16_lossy(&buffer[..length]));
-    if quick_launch {
-        folder.push(r"Microsoft\Internet Explorer\Quick Launch");
-    }
+    let folder = PathBuf::from(String::from_utf16_lossy(&buffer[..length]));
     (!folder.as_os_str().is_empty() && folder.exists()).then_some(folder)
 }
 

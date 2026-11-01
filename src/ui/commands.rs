@@ -665,10 +665,10 @@ impl App {
         let i = self.active;
         // Original CopySelection (-> +0xd08): starting copy, move, delete, shred, description, advanced rename, rename, attributes, extract, add to archive or
         // create shortcut saves the current marks for "Restore Selection" (skin theme). Save list and merge save them only when confirmed.
-        const REMEMBERS: [&str; 26] = [
+        const REMEMBERS: [&str; 25] = [
             "copyToOther", "moveToOther", "copyToFolder", "moveToFolder", "contextCopyTo", "contextMoveTo", "deleteRecycle", "deletePermanent", "contextDelete", "shred",
             "description", "contextDescription", "advancedRename", "rename", "contextRename", "attributes", "contextAttributes",
-            "extractSelected", "extractCurrent", "extractNewFolder", "extractAuto", "contextAutoExtract", "archiveAdd", "shortcut", "quickLaunchShortcut", "batchRename",
+            "extractSelected", "extractCurrent", "extractNewFolder", "extractAuto", "contextAutoExtract", "archiveAdd", "shortcut", "batchRename",
         ];
         if REMEMBERS.contains(&id) {
             self.remember_marks();
@@ -823,7 +823,7 @@ impl App {
             "openWithParameters"=>self.open_with_parameters(),"openWith"=>self.open_with_command(),
             "remote"=>self.open_remote_window(None,None),"sites"=>self.open_remote_sites(),
             "remoteCommand"=>self.run_remote_command(),
-            "shortcut"|"quickLaunchShortcut"=>self.shortcut_command(id=="quickLaunchShortcut"),
+            "shortcut"=>self.shortcut_command(),
             "pasteShortcut"=>self.paste_shortcut_command(),
             "diskCopy"=>self.open_disk_copy(),
             // User request: Disk Cleanup (original miCleanupDisk, TfCleanup) was removed.
