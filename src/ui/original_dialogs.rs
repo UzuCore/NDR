@@ -630,6 +630,32 @@ impl App {
         }
         let warning_icon = if matches!(dialog.kind, DialogKind::DeleteWarning { .. } | DialogKind::DeleteConfirm { .. }) { self.msgbox_icon(ctx, 0x7f02) } else { None };
         let (enter, escape) = if waiting { (false, false) } else { ctx.input(|i| (i.key_pressed(egui::Key::Enter), i.key_pressed(egui::Key::Escape))) };
+        // Windows dialog manager: Tab into an edit box selects its whole text, so typing replaces it (TfRename: Tab, "md" turns the extension
+        // "txt" into "md"). egui moves the focus a frame later, so remember the focus at the Tab and select all once it has moved to a text box.
+        // Previously the caret went to the end and the typing was appended ("txtmd").
+        {
+            let tab_id = egui::Id::new("ndr-dialog-tab-focus");
+            let focused = ctx.memory(|m| m.focused());
+            let pass = ctx.cumulative_pass_nr();
+            // (focus at the Tab, pass of the Tab); dropped after a few passes when the focus did not move.
+            let pending = ctx.data(|d| d.get_temp::<(Option<egui::Id>, u64)>(tab_id));
+            if let Some((before, at)) = pending {
+                if before != focused {
+                    if let Some(id) = focused {
+                        if let Some(mut state) = egui::TextEdit::load_state(ctx, id) {
+                            state.cursor.set_char_range(Some(egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(usize::MAX / 2))));
+                            state.store(ctx, id);
+                        }
+                    }
+                    ctx.data_mut(|d| d.remove::<(Option<egui::Id>, u64)>(tab_id));
+                } else if pass > at + 3 {
+                    ctx.data_mut(|d| d.remove::<(Option<egui::Id>, u64)>(tab_id));
+                }
+            }
+            if !waiting && ctx.input(|i| i.key_pressed(egui::Key::Tab)) {
+                ctx.data_mut(|d| d.insert_temp(tab_id, (focused, pass)));
+            }
+        }
         set_dialog_char(ctx, !waiting);
         let modal_id = egui::Id::new(("ndr-original-dialog", serial));
         super::keep_opaque(ctx, modal_id);
