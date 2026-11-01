@@ -213,10 +213,9 @@ impl App {
             self.pending_focus[pane] = focus;
             let title = self.tr("압축 안 이름 바꾸기", "Rename in archive").into_owned();
             return self.archive_edit_task(title, &file.clone(), move |_, cancel| {
-                for (from, to) in &renames {
-                    ndr::archive::rename_entry(&file, from, to, password.as_deref(), cancel)?;
-                }
-                Ok(())
+                // Rename every selected entry in one transaction. Otherwise a
+                // later rename failure leaves earlier items permanently changed.
+                ndr::archive::rename_entries(&file, &renames, password.as_deref(), cancel)
             });
         };
         let file_name = key.rsplit('/').next().unwrap_or(&key).to_owned();
@@ -318,11 +317,18 @@ impl App {
         if moving && !ndr::archive::can_modify(&file) {
             return self.archive_read_only_notice();
         }
-        if into.as_ref().is_some_and(|(target, _, _)| ndr::names::equals_ignore_case(&file.to_string_lossy(), &target.to_string_lossy())) {
-            return self.notice("같은 압축 파일의 두 패널 간 복사·이동은 지원하지 않습니다. 다른 압축 파일을 선택하세요.", "Copying or moving between two panes of the same archive is not supported; choose another archive.");
-        }
         if keys.is_empty() {
             return;
+        }
+        // Both panes may browse different folders of the very same ZIP/7z/TAR.
+        // This is a supported operation, provided no selected source could
+        // be overwritten by its projected destination (especially on cut).
+        let same_archive = into.as_ref().is_some_and(|(target, _, _)| ndr::names::equals_ignore_case(&file.to_string_lossy(), &target.to_string_lossy()));
+        if same_archive {
+            let prefix = &into.as_ref().expect("same-archive target").1;
+            if let Err(reason) = ndr::archive::validate_same_archive_transfer(&keys, prefix) {
+                return self.notice("같은 압축파일에서 자기 자신이나 하위 폴더로 복사·이동할 수 없습니다.", &reason);
+            }
         }
         let password = (!location.password.is_empty()).then(|| location.password.clone());
         let title = if moving { self.tr("압축에서 이동", "Move out of archive") } else { self.tr("압축에서 복사", "Copy out of archive") }.into_owned();
@@ -347,7 +353,10 @@ impl App {
                         // Chosen items are extracted by name only, without their parent path.
                         let extracted: Vec<PathBuf> = keys.iter().map(|k| stage.join(name_of(k))).filter(|p| p.exists()).collect();
                         let mut add_conflicts = |source: &Path, entry: &ndr::archive::ArchiveEntry| ask_add_conflict(events, cancel, target_file, source, entry);
-                        let skipped = ndr::archive::add_entries_with(target_file, target_prefix, &extracted, target_password.as_deref(), cancel, &mut add_conflicts)?;
+                        // Same archive, different panes: preserve the source's
+                        // cached password if the other pane has not opened it.
+                        let add_password = target_password.as_deref().or_else(|| if same_archive { password.as_deref() } else { None });
+                        let skipped = ndr::archive::add_entries_with(target_file, target_prefix, &extracted, add_password, cancel, &mut add_conflicts)?;
                         Ok::<_, String>(keys.iter().filter(|k| skipped_path_intersects(&skipped, &stage.join(name_of(k)))).cloned().collect())
                     })();
                     let _ = std::fs::remove_dir_all(&stage);

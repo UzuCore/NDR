@@ -1336,6 +1336,43 @@ pub fn can_modify(path: &Path) -> bool {
     !(extension == "zip" && path.with_extension("z01").is_file())
 }
 
+/// Preflight for copying or moving entries between two panes of the same
+/// archive. A destination that equals a selected key, is inside a selected
+/// folder, or would replace an ancestor of a selected key is unsafe: in a
+/// cut/paste the final delete could remove newly copied data. Reject before
+/// touching the archive, and also reject duplicate destination basenames.
+pub fn validate_same_archive_transfer(keys: &[String], target_prefix: &str) -> Result<(), String> {
+    if keys.is_empty() {
+        return Err("No archive entries selected".into());
+    }
+    let raw_prefix = target_prefix.replace('\\', "/");
+    let prefix = raw_prefix.trim_matches('/');
+    if !prefix.is_empty() { validate_key(prefix)?; }
+    let sources: Vec<String> = keys.iter().map(|key| {
+        let raw = key.replace('\\', "/");
+        let source = raw.trim_end_matches('/');
+        validate_key(source)?;
+        Ok::<_, String>(source.to_lowercase())
+    }).collect::<Result<_, _>>()?;
+    let prefix = prefix.to_lowercase();
+    let mut destinations = HashSet::new();
+    for source in &sources {
+        let name = source.rsplit('/').next().ok_or("Archive entry missing filename")?;
+        let target = if prefix.is_empty() { name.to_owned() } else { format!("{prefix}/{name}") };
+        if !destinations.insert(target.clone()) {
+            return Err(format!("Several selected entries would overwrite the same archive destination: {target}"));
+        }
+        if sources.iter().any(|original| {
+            original == &target
+                || target.starts_with(&format!("{original}/"))
+                || original.starts_with(&format!("{target}/"))
+        }) {
+            return Err(format!("Cannot copy or move an archive item onto itself or a selected ancestor/descendant: {target}"));
+        }
+    }
+    Ok(())
+}
+
 /// Copies the archive to a staging folder in the same folder, modifies the copy with 7-Zip, then swaps it with the original when done (on failure or cancel the original stays).
 fn modify_archive(archive: &Path, cancel: &AtomicBool, run: impl FnOnce(&Path) -> Result<(), String>) -> Result<(), String> {
     check_cancel(cancel)?;
@@ -1388,20 +1425,79 @@ pub fn delete_entries(archive: &Path, keys: &[String], password: Option<&str>, c
         return Ok(());
     }
     let arguments = keys.iter().map(|k| entry_arg(k)).collect::<Result<Vec<_>, _>>()?;
+    let before = list_cancel(archive, password, cancel)?;
+    for key in keys {
+        if existing_archive_entry(&before, key).is_none() {
+            return Err(format!("Archive entry does not exist; nothing deleted: {key}"));
+        }
+    }
     modify_archive(archive, cancel, |copy| {
         let mut command = edit_command("d", copy, password)?;
         command.args(&arguments);
-        execute(command, cancel).map(|_| ())
+        execute(command, cancel)?;
+        let after = list_cancel(copy, password, cancel)?;
+        if let Some(key) = keys.iter().find(|key| existing_archive_entry(&after, key).is_some()) {
+            return Err(format!("Archive deletion was not applied: {key}"));
+        }
+        Ok(())
     })
 }
 
 /// Renames an archive item (7-Zip rn; for a folder the paths of the items inside change too).
 pub fn rename_entry(archive: &Path, from: &str, to: &str, password: Option<&str>, cancel: &AtomicBool) -> Result<(), String> {
-    let (from, to) = (entry_arg(from)?, entry_arg(to)?);
+    rename_entries(archive, &[(from.to_owned(), to.to_owned())], password, cancel)
+}
+
+/// Rename several archive entries in *one* transactional staging copy. 7zip+
+/// returns exit code 0 even for a nonexistent `rn` source, so validate both
+/// presence and postconditions rather than trusting only the process status.
+/// If any later rename fails, no earlier rename reaches the original archive.
+pub fn rename_entries(archive: &Path, renames: &[(String, String)], password: Option<&str>, cancel: &AtomicBool) -> Result<(), String> {
+    if renames.is_empty() { return Ok(()); }
+    let validated = renames.iter().map(|(from, to)| {
+        let (from_arg, to_arg) = (entry_arg(from)?, entry_arg(to)?);
+        Ok::<_, String>((from.clone(), to.clone(), from_arg, to_arg))
+    }).collect::<Result<Vec<_>, _>>()?;
+    let entries = list_cancel(archive, password, cancel)?;
+    let mut targets = HashSet::new();
+    let mut sources = HashSet::new();
+    for (from, to, _, _) in &validated {
+        if !sources.insert(from.replace('\\', "/").to_lowercase()) {
+            return Err(format!("The same archive entry was selected for renaming more than once: {from}"));
+        }
+        if !targets.insert(to.replace('\\', "/").to_lowercase()) {
+            return Err(format!("Multiple archive items cannot be renamed to the same destination: {to}"));
+        }
+        if existing_archive_entry(&entries, from).is_none() {
+            return Err(format!("Archive entry does not exist; nothing renamed: {from}"));
+        }
+        if existing_archive_entry(&entries, to).is_some() && !from.eq_ignore_ascii_case(to) {
+            return Err(format!("Archive rename destination already exists: {to}"));
+        }
+        let normalized_from = from.replace('\\', "/").to_lowercase();
+        let normalized_to = to.replace('\\', "/").to_lowercase();
+        if normalized_to.starts_with(&format!("{normalized_from}/")) {
+            return Err(format!("Cannot rename an archive folder into itself: {from} -> {to}"));
+        }
+    }
     modify_archive(archive, cancel, |copy| {
-        let mut command = edit_command("rn", copy, password)?;
-        command.arg(&from).arg(&to);
-        execute(command, cancel).map(|_| ())
+        for (source, target, from_arg, to_arg) in &validated {
+            let mut command = edit_command("rn", copy, password)?;
+            command.arg(from_arg).arg(to_arg);
+            execute(command, cancel)?;
+            let actual = list_cancel(copy, password, cancel)?;
+            if existing_archive_entry(&actual, target).is_none() {
+                return Err(format!("Archive rename destination missing after update: {target}"));
+            }
+            if source.eq_ignore_ascii_case(target) {
+                if !actual.iter().any(|e| e.key.replace('\\', "/") == target.replace('\\', "/")) {
+                    return Err(format!("Archive case-only rename did not take effect: {source} -> {target}"));
+                }
+            } else if existing_archive_entry(&actual, source).is_some() {
+                return Err(format!("Archive rename source still exists after update: {source}"));
+            }
+        }
+        Ok(())
     })
 }
 
@@ -2868,6 +2964,62 @@ mod configured_tests {
 #[cfg(test)]
 mod entry_tests {
     use super::*;
+
+    #[test]
+    fn same_archive_copy_move_rejects_self_overlap_and_duplicate_destinations() {
+        let valid = ["source/a.txt".to_owned(), "source/sub/folder".to_owned()];
+        assert!(validate_same_archive_transfer(&valid, "target/").is_ok());
+        assert!(validate_same_archive_transfer(&["source/a.txt".into()], "").is_ok());
+        assert!(validate_same_archive_transfer(&["a.txt".into()], "target").is_ok());
+        assert!(validate_same_archive_transfer(&["source/a.txt".into()], "source").is_err(), "moving a file into its own parent may delete it");
+        assert!(validate_same_archive_transfer(&["folder".into()], "folder/child").is_err(), "cannot copy folder into its own descendant");
+        assert!(validate_same_archive_transfer(&["folder/file.txt".into()], "folder/file.txt/child").is_err());
+        assert!(validate_same_archive_transfer(&["source/folder".into(), "target/folder".into()], "target").is_err(), "selected destination cannot later be removed as a source");
+        assert!(validate_same_archive_transfer(&["one/a.txt".into(), "two/a.txt".into()], "target").is_err(), "duplicate projected basenames are ambiguous");
+        assert!(validate_same_archive_transfer(&["dir/foo.txt".into()], "dir/../other").is_err(), "traversal is forbidden");
+        assert!(validate_same_archive_transfer(&["../malicious".into()], "target").is_err());
+        assert!(validate_same_archive_transfer(&[], "target").is_err());
+    }
+
+    #[test]
+    fn real_zip_7z_tar_rename_and_delete_check_updates_and_preserve_originals() {
+        let root = super::tests::fixture();
+        let cancel = AtomicBool::new(false);
+        let (a, b) = (root.join("a.txt"), root.join("b.txt"));
+        fs::write(&a, b"a-original").unwrap();
+        fs::write(&b, b"b-original").unwrap();
+        for format in ["zip", "7z", "tar"] {
+            let archive = root.join(format!("edit.{format}"));
+            create(&[a.clone(), b.clone()], &archive, None, &cancel).unwrap();
+            let before = fs::read(&archive).unwrap();
+            assert!(delete_entries(&archive, &["missing.txt".into()], None, &cancel).is_err(), "{format}: missing delete must not falsely succeed");
+            assert!(rename_entry(&archive, "missing.txt", "surprise.txt", None, &cancel).is_err(), "{format}: missing rename must not falsely succeed");
+            assert!(rename_entries(&archive, &[("a.txt".into(), "same.txt".into()), ("b.txt".into(), "same.txt".into())], None, &cancel).is_err(), "{format}: two sources may not target one name");
+            assert_eq!(fs::read(&archive).unwrap(), before, "{format}: invalid edits must not mutate archive bytes");
+
+            // A later failure after a successful staged rename must not
+            // commit a partially renamed original archive.
+            let forced_failure = modify_archive(&archive, &cancel, |staged| {
+                let mut cmd = edit_command("rn", staged, None)?;
+                cmd.arg("a.txt").arg("first-change.txt");
+                execute(cmd, &cancel)?;
+                Err("simulated second rename failure".into())
+            });
+            assert!(forced_failure.is_err());
+            assert_eq!(fs::read(&archive).unwrap(), before, "{format}: transaction rollback must preserve original bytes");
+
+            rename_entries(&archive, &[("a.txt".into(), "alpha.txt".into()), ("b.txt".into(), "beta.txt".into())], None, &cancel)
+                .unwrap_or_else(|error| panic!("{format} batch rename: {error}"));
+            let names: Vec<_> = list(&archive, None).unwrap().into_iter().map(|entry| entry.key).collect();
+            assert!(names.iter().any(|name| name == "alpha.txt") && names.iter().any(|name| name == "beta.txt"), "{format}: both renames must take effect");
+            assert!(!names.iter().any(|name| name == "a.txt" || name == "b.txt"), "{format}: original names must disappear");
+            delete_entries(&archive, &["alpha.txt".into()], None, &cancel).unwrap_or_else(|error| panic!("{format} delete: {error}"));
+            let after = list(&archive, None).unwrap();
+            assert!(!after.iter().any(|entry| entry.key == "alpha.txt"));
+            assert!(after.iter().any(|entry| entry.key == "beta.txt"), "{format}: unselected items must survive deletion");
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn archive_format_and_entry_extraction_follow_filesystemservice() {

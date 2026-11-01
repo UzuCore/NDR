@@ -53,6 +53,29 @@ fn archive_clipboard_fixture(label: &str) -> (PathBuf, egui::Context, App, PathB
     (root, ctx, app, zip)
 }
 
+/// Both panes point at different inner folders of the *same* ZIP.
+fn same_archive_panes_fixture(label: &str) -> (PathBuf, egui::Context, App, PathBuf) {
+    let (root, ctx, mut app, zip) = archive_clipboard_fixture(label);
+    let receive = root.join("left/receive");
+    fs::create_dir_all(&receive).unwrap();
+    fs::write(receive.join("existing.txt"), b"existing").unwrap();
+    ndr::archive::add_entries(&zip, "", &[receive], None, &AtomicBool::new(false)).unwrap();
+    app.refresh(0);
+    wait(&mut app, &ctx);
+    app.navigate(1, root.join("left"), false);
+    wait(&mut app, &ctx);
+    app.active = 1;
+    app.panes[1].cursor = app.panes[1].entries.iter().position(|e| e.name == "source.zip").unwrap();
+    app.open_current();
+    wait(&mut app, &ctx);
+    app.panes[1].cursor = app.panes[1].entries.iter().position(|e| e.name == "receive").unwrap();
+    app.open_current();
+    wait(&mut app, &ctx);
+    assert_eq!(app.panes[1].archive.as_ref().unwrap().prefix.replace('\\', "/"), "receive/");
+    assert_eq!(ndr::archive::first_volume_path(&app.panes[1].archive.as_ref().unwrap().file), zip);
+    (root, ctx, app, zip)
+}
+
 fn finish_archive_clipboard_job(app: &mut App, ctx: &egui::Context) {
     let until = Instant::now() + Duration::from_secs(20);
     loop {
@@ -209,6 +232,75 @@ fn ctrl_c_from_archive_pastes_into_another_archive() {
     assert!(ndr::archive::list(&source, None).unwrap().iter().any(|e| e.key == "a.txt"));
     fs::remove_dir_all(app.archive_clipboard.take().unwrap().stage).unwrap();
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn same_archive_two_panes_ctrl_c_copies_between_inner_folders_without_removing_source() {
+    let (root, ctx, mut app, zip) = same_archive_panes_fixture("same-zip-copy");
+    app.active = 0;
+    app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == "a.txt").unwrap();
+    press(&mut app, &ctx, egui::Key::C, egui::Modifiers::CTRL);
+    finish_archive_clipboard_job(&mut app, &ctx);
+    app.active = 1;
+    press(&mut app, &ctx, egui::Key::V, egui::Modifiers::CTRL);
+    finish_archive_clipboard_job(&mut app, &ctx);
+    let entries = ndr::archive::list(&zip, None).unwrap();
+    assert!(entries.iter().any(|e| e.key.replace('\\', "/") == "receive/a.txt"));
+    assert!(entries.iter().any(|e| e.key == "a.txt"), "copy must retain the source");
+    assert!(entries.iter().any(|e| e.key.replace('\\', "/") == "receive/existing.txt"), "unrelated destination content must remain");
+    fs::remove_dir_all(app.archive_clipboard.take().unwrap().stage).unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn same_archive_two_panes_ctrl_x_moves_only_after_successful_paste() {
+    let (root, ctx, mut app, zip) = same_archive_panes_fixture("same-zip-move");
+    app.active = 0;
+    app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == "a.txt").unwrap();
+    press(&mut app, &ctx, egui::Key::X, egui::Modifiers::CTRL);
+    finish_archive_clipboard_job(&mut app, &ctx);
+    assert!(ndr::archive::list(&zip, None).unwrap().iter().any(|e| e.key == "a.txt"), "cut alone must not delete the source");
+    let staged = app.archive_clipboard.as_ref().unwrap().stage.clone();
+    app.active = 1;
+    press(&mut app, &ctx, egui::Key::V, egui::Modifiers::CTRL);
+    finish_archive_clipboard_job(&mut app, &ctx);
+    let entries = ndr::archive::list(&zip, None).unwrap();
+    assert!(!entries.iter().any(|e| e.key == "a.txt"), "move deletes the source after the destination is committed");
+    assert!(entries.iter().any(|e| e.key.replace('\\', "/") == "receive/a.txt"));
+    assert!(entries.iter().any(|e| e.key.replace('\\', "/") == "receive/existing.txt"));
+    assert!(app.archive_clipboard.is_none(), "successful cut must be consumed");
+    assert!(!staged.exists(), "temporary clipboard files are cleaned");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn f4_move_between_folders_of_same_archive_is_no_longer_blocked() {
+    let (root, ctx, mut app, zip) = same_archive_panes_fixture("same-zip-f4");
+    app.active = 0;
+    app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == "a.txt").unwrap();
+    assert!(app.archive_route_to_other(0, true));
+    finish_archive_clipboard_job(&mut app, &ctx);
+    let entries = ndr::archive::list(&zip, None).unwrap();
+    assert!(!entries.iter().any(|e| e.key == "a.txt"));
+    assert!(entries.iter().any(|e| e.key.replace('\\', "/") == "receive/a.txt"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn same_archive_self_folder_and_descendant_moves_are_refused_before_writing() {
+    let (root, ctx, mut app, zip) = same_archive_panes_fixture("same-zip-reject");
+    let bytes = fs::read(&zip).unwrap();
+    // Moving a file to the folder it already occupies must not delete it.
+    app.archive_transfer_out(0, vec!["a.txt".into()], app.panes[1].path.clone(), Some((zip.clone(), "".into(), None)), true);
+    assert!(!app.msgboxes.is_empty(), "same-path move must give an explicit explanation");
+    app.msgboxes.clear();
+    assert!(app.job.as_ref().is_none_or(|job| job.finished));
+    // Neither copying nor moving a folder into a descendant is safe.
+    app.archive_transfer_out(0, vec!["folder1".into()], app.panes[1].path.clone(), Some((zip.clone(), "folder1/deeper/".into(), None)), false);
+    assert!(!app.msgboxes.is_empty(), "descendant copy must be rejected");
+    assert_eq!(fs::read(&zip).unwrap(), bytes, "rejected transfers must not change archive bytes");
+    fs::remove_dir_all(root).unwrap();
+    let _ = ctx;
 }
 
 /// A Ctrl+X paste skipped at a name conflict must retain the original entry.

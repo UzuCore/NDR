@@ -896,11 +896,9 @@ impl App {
                 return true;
             };
             if self.panes[source].archive.is_some() {
-                let same = self.panes[source].archive.as_ref().is_some_and(|a| ndr::names::equals_ignore_case(&ndr::archive::first_volume_path(&a.file).to_string_lossy(), &into.0.to_string_lossy()));
-                if same && moving {
-                    self.notice("같은 압축 파일 안에서는 이동할 수 없습니다. 이름 바꾸기를 사용하세요.", "Items cannot be moved within the same archive. Use rename instead.");
-                    return true;
-                }
+                // Same-archive F3/F4 now follows the same guarded transfer
+                // path as Ctrl+C/Ctrl+X. All source/destination overlap is
+                // checked before any archive mutation there.
                 let keys = sources.iter().map(|k| k.to_string_lossy().replace('\\', "/")).collect();
                 let destination = self.panes[target].path.clone();
                 self.archive_transfer_out(source, keys, destination, Some(into), moving);
