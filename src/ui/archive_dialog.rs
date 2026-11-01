@@ -3,7 +3,7 @@
 //! Changed (user request): the original external archiver field (eExternalProg) and external program settings are not used. Formats the bundled 7-Zip
 //! cannot create, such as RAR and ARJ, cannot be chosen. The name field takes a name only; the archive is always created in the current pane folder.
 //! Difference (HANDOFF): C# writes "built-in" ZIP/7Z/TAR with SharpCompress, Rust uses the bundled 7-Zip (same output format). Adding to a multi-volume
-//! archive (rebuilding the volumes) is not supported yet. Progress uses the ordinary job window without pause.
+//! ZIP/7Z archive extracts a temporary snapshot and rebuilds the volume set; ordinary archive jobs use a progress window without pause.
 use super::original_dialogs::{DialogKind, DialogResult};
 use super::*;
 use ndr::archive::{self, ExternalProgram};

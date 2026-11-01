@@ -171,6 +171,15 @@ impl App {
                 self.cycle_selection(shift);
                 return true;
             }
+            // miCopyTo occurs twice in ORIGINAL_ACTIONS (a historical alias for
+            // "copy to other pane" and the actual "copy to folder" menu item).
+            // Inside archives, Alt+C must always open an extraction destination
+            // instead of attempting a pane-to-pane transfer. In particular the
+            // latter silently fails when the opposite pane is an FTP location.
+            "miCopyTo" if self.panes[self.active].archive.is_some() => {
+                self.dispatch("copyToFolder", ctx);
+                return true;
+            }
             "miSearchFile" | "miArcMove" | "miArcInstall" => return true,
             // Original miFind (Ctrl+F) = find input box (TfGetText). The C# version focuses the toolbar quick search field with the same key,
             // so behave like C# only when that field is on the toolbar; otherwise (original toolbar) open the original find box.

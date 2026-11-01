@@ -8,6 +8,28 @@ use ndr::names;
 /// Archive to modify: (first volume file, inner path "folder/" or "", known password).
 pub(super) type EditableArchive = (PathBuf, String, Option<String>);
 
+/// A skipped child means the selected parent folder must remain in the source.
+/// Conversely, skipping a destination folder keeps all selected items below it.
+fn skipped_path_intersects(skipped: &[PathBuf], target: &Path) -> bool {
+    skipped.iter().any(|path| ndr::fsops::same_or_inside(path, target) || ndr::fsops::same_or_inside(target, path))
+}
+
+/// Only record OverwriteNewer as skipped when the archive extractor actually
+/// skips it. The extracted entry's timestamp is preserved in its staging file.
+fn extraction_choice_skips(choice: ConflictChoice, from: &Path, to: &Path) -> bool {
+    match choice {
+        ConflictChoice::Skip => true,
+        ConflictChoice::OverwriteNewer => match (
+            std::fs::metadata(from).and_then(|m| m.modified()),
+            std::fs::metadata(to).and_then(|m| m.modified()),
+        ) {
+            (Ok(source), Ok(destination)) => source <= destination,
+            _ => true,
+        },
+        _ => false,
+    }
+}
+
 impl App {
     /// That archive, when the pane is inside a modifiable archive.
     pub(super) fn editable_archive(&self, pane: usize) -> Option<EditableArchive> {
@@ -149,7 +171,7 @@ impl App {
             let skipped = ndr::archive::add_entries_with(&file, &prefix, &sources, password.as_deref(), cancel, &mut conflicts)?;
             if moving {
                 // Sources skipped at a name conflict are kept.
-                for source in sources.iter().filter(|s| !skipped.contains(s)) {
+                for source in sources.iter().filter(|s| !skipped_path_intersects(&skipped, s)) {
                     let removed = if source.is_dir() { std::fs::remove_dir_all(source) } else { std::fs::remove_file(source) };
                     removed.map_err(|e| format!("{}: {e}", source.display()))?;
                 }
@@ -166,6 +188,9 @@ impl App {
         if moving && !ndr::archive::can_modify(&file) {
             return self.archive_read_only_notice();
         }
+        if into.as_ref().is_some_and(|(target, _, _)| ndr::names::equals_ignore_case(&file.to_string_lossy(), &target.to_string_lossy())) {
+            return self.notice("같은 압축 파일의 두 패널 간 복사·이동은 지원하지 않습니다. 다른 압축 파일을 선택하세요.", "Copying or moving between two panes of the same archive is not supported; choose another archive.");
+        }
         if keys.is_empty() {
             return;
         }
@@ -176,7 +201,7 @@ impl App {
             let mut held: Vec<PathBuf> = Vec::new();
             let mut conflicts = |from: &Path, to: &Path| {
                 let choice = super::commands::ask_conflict(events, cancel, from, to);
-                if matches!(choice, ConflictChoice::Skip | ConflictChoice::OverwriteNewer) {
+                if extraction_choice_skips(choice, from, to) {
                     held.push(to.to_path_buf());
                 }
                 choice
@@ -193,7 +218,7 @@ impl App {
                         let extracted: Vec<PathBuf> = keys.iter().map(|k| stage.join(name_of(k))).filter(|p| p.exists()).collect();
                         let mut add_conflicts = |source: &Path, entry: &ndr::archive::ArchiveEntry| ask_add_conflict(events, cancel, target_file, source, entry);
                         let skipped = ndr::archive::add_entries_with(target_file, target_prefix, &extracted, target_password.as_deref(), cancel, &mut add_conflicts)?;
-                        Ok::<_, String>(keys.iter().filter(|k| skipped.contains(&stage.join(name_of(k)))).cloned().collect())
+                        Ok::<_, String>(keys.iter().filter(|k| skipped_path_intersects(&skipped, &stage.join(name_of(k)))).cloned().collect())
                     })();
                     let _ = std::fs::remove_dir_all(&stage);
                     result?
@@ -204,7 +229,7 @@ impl App {
                     keys.iter()
                         .filter(|k| {
                             let target = destination.join(name_of(k));
-                            held.iter().any(|h| ndr::fsops::same_or_inside(h, &target))
+                            skipped_path_intersects(&held, &target)
                         })
                         .cloned()
                         .collect()
@@ -257,5 +282,36 @@ fn ask_add_conflict(events: &Sender<Event>, cancel: &AtomicBool, archive: &Path,
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod archive_move_safety_tests {
+    use super::*;
+
+    #[test]
+    fn skipped_nested_items_keep_the_parent_source_on_a_move() {
+        let root = PathBuf::from("C:\\ndr-test\\target");
+        let nested = root.join("folder").join("deep").join("unmoved.txt");
+        assert!(skipped_path_intersects(&[nested], &root.join("folder")));
+        assert!(!skipped_path_intersects(&[root.join("other.txt")], &root.join("folder")));
+        assert!(skipped_path_intersects(&[root.join("folder")], &root.join("folder").join("deep").join("unmoved.txt")));
+    }
+
+    #[test]
+    fn newer_only_keeps_source_only_when_not_actually_transferred() {
+        let root = std::env::temp_dir().join(format!("ndr-move-conflict-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir_all(&root).unwrap();
+        let source = root.join("source.txt");
+        let target = root.join("target.txt");
+        std::fs::write(&source, b"source").unwrap();
+        std::fs::write(&target, b"target").unwrap();
+        filetime::set_file_mtime(&source, filetime::FileTime::from_unix_time(200, 0)).unwrap();
+        filetime::set_file_mtime(&target, filetime::FileTime::from_unix_time(100, 0)).unwrap();
+        assert!(!extraction_choice_skips(ConflictChoice::OverwriteNewer, &source, &target));
+        assert!(extraction_choice_skips(ConflictChoice::Skip, &source, &target));
+        filetime::set_file_mtime(&target, filetime::FileTime::from_unix_time(300, 0)).unwrap();
+        assert!(extraction_choice_skips(ConflictChoice::OverwriteNewer, &source, &target));
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

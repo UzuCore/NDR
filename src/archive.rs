@@ -1317,6 +1317,97 @@ pub fn add_entries(archive: &Path, prefix: &str, sources: &[PathBuf], password: 
     add_entries_with(archive, prefix, sources, password, cancel, &mut |_, _| AddConflict::Merge).map(|_| ())
 }
 
+/// An explicit directory entry is not required: an archive with "dir/file.txt"
+/// already has a "dir" for purposes of collision detection.
+fn existing_archive_entry(entries: &[ArchiveEntry], key: &str) -> Option<ArchiveEntry> {
+    let wanted = key.replace('\\', "/").trim_end_matches('/').to_lowercase();
+    let normal = |k: &str| k.replace('\\', "/").trim_end_matches('/').to_lowercase();
+    entries.iter().find(|e| normal(&e.key) == wanted).cloned().or_else(|| {
+        let prefix = format!("{wanted}/");
+        entries.iter().any(|e| normal(&e.key).starts_with(&prefix)).then(|| ArchiveEntry {
+            key: key.to_owned(), is_dir: true, size: 0, modified: None,
+        })
+    })
+}
+
+/// A merged folder must resolve *nested* name collisions too. Otherwise 7-Zip
+/// silently replaces existing files, and a move could delete the skipped source.
+/// Skipped children are reported by their original paths so callers can keep
+/// the entire source folder if the transfer was only partially successful.
+#[allow(clippy::too_many_arguments)]
+fn stage_merged_archive_folder(
+    source: &Path,
+    target: &Path,
+    key: &str,
+    existing: &[ArchiveEntry],
+    cancel: &AtomicBool,
+    conflicts: &mut dyn FnMut(&Path, &ArchiveEntry) -> AddConflict,
+    skipped: &mut Vec<PathBuf>,
+    removals: &mut Vec<String>,
+) -> Result<(), String> {
+    check_cancel(cancel)?;
+    ensure_plain_path(source)?;
+    let metadata = fs::symlink_metadata(source).map_err(|e| e.to_string())?;
+    if !metadata.is_dir() || is_reparse(&metadata) {
+        return Err(format!("Unsafe archive source folder: {}", source.display()));
+    }
+    fs::create_dir(target).map_err(|e| e.to_string())?;
+    for child in fs::read_dir(source).map_err(|e| e.to_string())? {
+        check_cancel(cancel)?;
+        let child = child.map_err(|e| e.to_string())?;
+        let child_path = child.path();
+        let metadata = fs::symlink_metadata(&child_path).map_err(|e| e.to_string())?;
+        if is_reparse(&metadata) {
+            return Err(format!("Archive source links are rejected: {}", child_path.display()));
+        }
+        let directory = metadata.is_dir();
+        let mut name = child.file_name().to_str().ok_or("Archive source filename must be Unicode")?.to_owned();
+        validate_key(&name)?;
+        let mut merge_folder = false;
+        let mut skip = false;
+        loop {
+            let child_key = format!("{key}/{name}");
+            let Some(entry) = existing_archive_entry(existing, &child_key) else { break };
+            match conflicts(&child_path, &entry) {
+                AddConflict::Merge if entry.is_dir == directory => {
+                    merge_folder = directory;
+                    break;
+                }
+                AddConflict::Merge | AddConflict::Replace => {
+                    removals.push(child_key);
+                    break;
+                }
+                AddConflict::Skip => {
+                    skip = true;
+                    break;
+                }
+                AddConflict::Rename(new_name) => {
+                    validate_key(&new_name)?;
+                    if new_name.contains(['/', '\\']) {
+                        return Err(format!("Unsafe archive entry: {new_name:?}"));
+                    }
+                    name = new_name;
+                }
+                AddConflict::Cancel => return Err("Archive add cancelled".into()),
+            }
+        }
+        if skip {
+            skipped.push(child_path);
+            continue;
+        }
+        let staged = target.join(&name);
+        if staged.exists() {
+            return Err(format!("Duplicate archive source names: {}", staged.display()));
+        }
+        if merge_folder {
+            stage_merged_archive_folder(&child_path, &staged, &format!("{key}/{name}"), existing, cancel, conflicts, skipped, removals)?;
+        } else {
+            copy_tree(&child_path, &staged, cancel)?;
+        }
+    }
+    Ok(())
+}
+
 /// add_entries plus name conflict handling (`conflicts(source, existing item)`).
 /// Builds that path shape in a staging folder and copies into it (source files are not touched), then passes only the top names.
 pub fn add_entries_with(
@@ -1336,14 +1427,7 @@ pub fn add_entries_with(
     }
     // Existing items (a folder counts even without a separate folder entry when items below it exist).
     let existing = list_cancel(archive, password, cancel)?;
-    let find = |key: &str| -> Option<ArchiveEntry> {
-        let wanted = key.to_lowercase();
-        let normal = |k: &str| k.replace('\\', "/").trim_end_matches('/').to_lowercase();
-        existing.iter().find(|e| normal(&e.key) == wanted).cloned().or_else(|| {
-            let folder = format!("{wanted}/");
-            existing.iter().any(|e| normal(&e.key).starts_with(&folder)).then(|| ArchiveEntry { key: key.to_owned(), is_dir: true, size: 0, modified: None })
-        })
-    };
+    let find = |key: &str| existing_archive_entry(&existing, key);
     let snapshot = unique_path(&std::env::temp_dir(), "archive-add");
     fs::create_dir(&snapshot).map_err(|e| e.to_string())?;
     let result = (|| {
@@ -1358,11 +1442,15 @@ pub fn add_entries_with(
             validate_key(&text)?;
             let source_dir = source.is_dir();
             let mut skip = false;
+            let mut merge_folder = false;
             loop {
                 let key = if prefix.is_empty() { text.clone() } else { format!("{prefix}/{text}") };
                 let Some(entry) = find(&key) else { break };
                 match conflicts(source, &entry) {
-                    AddConflict::Merge if entry.is_dir == source_dir => break,
+                    AddConflict::Merge if entry.is_dir == source_dir => {
+                        merge_folder = source_dir;
+                        break;
+                    }
                     AddConflict::Merge | AddConflict::Replace => {
                         removals.push(key);
                         break;
@@ -1388,7 +1476,12 @@ pub fn add_entries_with(
             if !names.insert(text.to_lowercase()) {
                 return Err("Duplicate archive source names".into());
             }
-            copy_tree(source, &base.join(&text), cancel)?;
+            if merge_folder {
+                let key = if prefix.is_empty() { text.clone() } else { format!("{prefix}/{text}") };
+                stage_merged_archive_folder(source, &base.join(&text), &key, &existing, cancel, conflicts, &mut skipped, &mut removals)?;
+            } else {
+                copy_tree(source, &base.join(&text), cancel)?;
+            }
         }
         if names.is_empty() {
             return Ok(skipped);
@@ -2112,6 +2205,39 @@ mod interactive_tests {
         assert!(!p.join("not-created").exists());
         fs::remove_dir_all(p).unwrap();
     }
+    #[test]
+    fn merging_an_archive_folder_honors_nested_skips_without_losing_existing_files() {
+        let p = super::tests::fixture();
+        fs::create_dir_all(p.join("old/dir/inner")).unwrap();
+        fs::create_dir_all(p.join("incoming/dir/inner")).unwrap();
+        fs::write(p.join("old/dir/inner/locked.txt"), b"original").unwrap();
+        fs::write(p.join("old/dir/inner/untouched.txt"), b"untouched").unwrap();
+        fs::write(p.join("incoming/dir/inner/locked.txt"), b"replacement").unwrap();
+        fs::write(p.join("incoming/dir/inner/new.txt"), b"added").unwrap();
+        let cancel = AtomicBool::new(false);
+        for extension in ["zip", "7z"] {
+            let archive = p.join(format!("nested.{extension}"));
+            create(&[p.join("old/dir")], &archive, None, &cancel).unwrap();
+            let mut asked = Vec::new();
+            let skipped = add_entries_with(
+                &archive, "", &[p.join("incoming/dir")], None, &cancel,
+                &mut |source, entry| {
+                    asked.push((source.to_path_buf(), entry.key.replace('\\', "/")));
+                    if entry.key.ends_with("locked.txt") { AddConflict::Skip } else { AddConflict::Merge }
+                },
+            ).unwrap();
+            assert_eq!(skipped, [p.join("incoming/dir/inner/locked.txt")]);
+            assert!(asked.iter().any(|(_, key)| key == "dir/inner/locked.txt"), "nested collision was not offered: {asked:?}");
+            let out = p.join(format!("check-{extension}"));
+            extract(&archive, &out, None, &cancel).unwrap();
+            assert_eq!(fs::read(out.join("dir/inner/locked.txt")).unwrap(), b"original", "{extension}");
+            assert_eq!(fs::read(out.join("dir/inner/untouched.txt")).unwrap(), b"untouched", "{extension}");
+            assert_eq!(fs::read(out.join("dir/inner/new.txt")).unwrap(), b"added", "{extension}");
+            assert_eq!(fs::read(p.join("incoming/dir/inner/locked.txt")).unwrap(), b"replacement");
+        }
+        fs::remove_dir_all(p).unwrap();
+    }
+
     #[test]
     fn archive_entries_can_be_added_renamed_and_deleted_in_place() {
         let p = super::tests::fixture();
