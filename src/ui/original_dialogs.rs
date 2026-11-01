@@ -642,10 +642,12 @@ impl App {
                     let (area, _) = ui.allocate_exact_size(egui::vec2(444.0, 127.0), egui::Sense::hover());
                     let at = |x: f32, y: f32, w: f32, h: f32| egui::Rect::from_min_size(area.min + egui::vec2(x, y), egui::vec2(w, h));
                     bottom_label(ui, at(18.0, 8.0, 411.0, 53.0), markup_job(message, 13.0, text_color, 411.0));
-                    let has_history = history.as_ref().is_some_and(|h| !h.is_empty());
+                    // cbText is a drop-down combo whenever the caller passes a history list, even an empty one (the command line box shows its ▼ with no
+                    // history; the filter box has none). Previously the ▼ appeared only with history entries.
+                    let has_history = history.is_some();
                     let edit = egui::TextEdit::singleline(value).password(*password);
                     let response = ui.put(at(16.0, 67.0, if has_history { 389.0 } else { 413.0 }, 21.0), edit);
-                    if let Some(items) = history.as_ref().filter(|h| !h.is_empty()) {
+                    if let Some(items) = history.as_ref() {
                         ui.scope_builder(egui::UiBuilder::new().max_rect(at(407.0, 67.0, 22.0, 21.0)), |ui| {
                             ui.menu_button("▼", |ui| {
                                 for item in items {
