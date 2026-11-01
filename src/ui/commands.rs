@@ -806,8 +806,6 @@ impl App {
             "textView"|"textEdit"=>self.text_command(id=="textEdit"),
             "properties"=>self.properties_command(),
             "attributes"=>self.change_attributes(),
-            // Original miFileInfoClick (0x4452bc): if the cursor is a file, opens https://ext.xiles.app/?ext=<extension>.
-            "fileInfo" => self.open_extension_info(i),
             "archiveProperties"=>self.archive_properties_command(),
             "description"=>self.edit_descriptions(),
             "clearDescriptions"=>self.clear_descriptions_confirmed(i),

@@ -1541,39 +1541,14 @@ impl App {
         painter.rect_filled(rect, 0.0, skin_color(skin, "lfileback", Color32::from_gray(0x3C)));
         let base = skin_color(skin, "lfiletext", Color32::from_gray(0xA2));
         let width = (rect.width() - 12.0).max(0.0);
-        // The original second row (label 0x350, extension info) has empty text; clicking it runs FUN_0048bd50: when the focused item is a file (kind 3),
-        // ShellExecute "open" https://ext.xiles.app/?ext=<item +8 = extension>.
-        let empty = String::new();
-        let lines: &[(&String, f32)] = if height > 20.0 { &[(&texts[1], 3.0), (&empty, 22.0)] } else { &[(&texts[1], 3.0)] };
-        let mut open_extension = false;
-        for (text, top) in lines {
-            let mut job = skin_markup_job(text, base);
-            job.wrap = egui::text::TextWrapping { max_width: width, max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
-            let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
-            let at = egui::pos2(rect.left() + 6.0, rect.top() + top + ((14.0 - galley.size().y) / 2.0).floor());
-            let line = egui::Rect::from_min_size(at, egui::vec2(width, 14.0));
-            painter.galley(at, galley, base);
-            if *top > 20.0 {
-                open_extension |= ui.interact(line, egui::Id::new(("ndr-skin-file-info", index, *top as i32)), egui::Sense::click()).clicked();
-            } else {
-                ui.interact(line, egui::Id::new(("ndr-skin-file-info", index, *top as i32)), egui::Sense::hover()).on_hover_text(ndr::markup::plain_text(text));
-            }
-        }
-        if open_extension {
-            self.open_extension_info(index);
-        }
-    }
-
-    /// Original FUN_0048bd50 (extension info row click): when the focused item is a file, opens https://ext.xiles.app/?ext=%s (0x913242).
-    /// %s = item +8 (the extension the color table GetExtension looks up, without the dot).
-    pub(super) fn open_extension_info(&mut self, index: usize) {
-        let pane = &self.panes[index];
-        let Some(entry) = pane.entries.get(pane.cursor).filter(|e| !e.is_dir && !e.drive) else { return };
-        let extension = ndr::parity::list_extension(&entry.name).trim_start_matches('.').to_owned();
-        let url = format!("https://ext.xiles.app/?ext={extension}");
-        if let Err(error) = (self.shell_runner)(std::path::Path::new(&url), "", std::path::Path::new("")) {
-            self.status = error;
-        }
+        let mut job = skin_markup_job(&texts[1], base);
+        job.wrap = egui::text::TextWrapping { max_width: width, max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
+        let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
+        let at = egui::pos2(rect.left() + 6.0, rect.top() + 3.0 + ((14.0 - galley.size().y) / 2.0).floor());
+        let line = egui::Rect::from_min_size(at, egui::vec2(width, 14.0));
+        painter.galley(at, galley, base);
+        ui.interact(line, egui::Id::new(("ndr-skin-file-info", index)), egui::Sense::hover())
+            .on_hover_text(ndr::markup::plain_text(&texts[1]));
     }
 
     /// Subfolder (or drive) list after clicking an address bar ">" or the leading ▼. An outside click or Esc closes it.

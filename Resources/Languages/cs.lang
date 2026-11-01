@@ -1,4 +1,4 @@
-﻿; NexusFile ver 5.1.3.3652
+; NexusFile ver 5.1.3.3652
 [RES]
 YES=&Ano
 NO=&NE
@@ -227,10 +227,9 @@ Menu.miChangeAttributes=&Z. Změnit Atributy/Čas...
 Menu.miCalculateSelectedFolderSize=&L. Calculate Selected Folder Size
 Menu.miProperties=&E. Vlastnosti
 Menu.miDescription=&T. Přidat/Zapsat komentář...
-Menu.miFileInfo=&Q. Co to je za soubor?
 Menu.miCreateEmptyFile=&B. Vytvořit an Prázdný soubor...
-Menu.miShortcutOnDesktop=&K. Vytvořit zástupce na Plochu
-Menu.miShortcutOnQuickLaunch=&U. Vytvořit zástupce do panelu snadné Spouštění
+Menu.miShortcutOnDesktop=&I. Vytvořit zástupce na Plochu
+Menu.miShortcutOnQuickLaunch=&Q. Vytvořit zástupce do panelu snadné Spouštění
 Menu.miExit=&X. Konec
 Menu.miFolderTree=&T. Strom složek...
 Menu.miFavorites=&V. Oblíbené...

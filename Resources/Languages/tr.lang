@@ -1,4 +1,4 @@
-﻿; Türkçe
+; Türkçe
 ; Çeviri: Kadir Köprü(kadirkpr@yandex.com)
 ; Son Değişiklik: 2011.06.05
 ; NexusFile ver 5.3.1.5460
@@ -277,10 +277,9 @@ Menu.miChangeAttributes=&Z. Özellik/Tarih'i Değiştir...
 Menu.miCalculateSelectedFolderSize=&L. Seçili Klasörün Boyutunu Hesapla
 Menu.miProperties=&E. Özellikler
 Menu.miDescription=&T. Açıklama Ekle/Düzelt...
-Menu.miFileInfo=&Q. Bu dosya nedir?
 Menu.miCreateEmptyFile=&B. Boş bir dosya oluştur ...
-Menu.miShortcutOnDesktop=&K. Masaüstüne kısayol oluştur
-Menu.miShortcutOnQuickLaunch=&U. Hızlı Başlat'a kısayol oluştur
+Menu.miShortcutOnDesktop=&I. Masaüstüne kısayol oluştur
+Menu.miShortcutOnQuickLaunch=&Q. Hızlı Başlat'a kısayol oluştur
 Menu.miExit=&X. Çıkış
 Menu.miFolderTree=&T. Klasör Ağacı...
 Menu.miFavorites=&V. Favoriler...

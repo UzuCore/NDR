@@ -1117,9 +1117,6 @@ fn system_commands_follow_csharp() {
     assert_eq!(recorded, vec![(left.join("alpha.txt"), "properties*".to_owned()), (left.join("beta.txt"), "properties*".to_owned())]);
     app.panes[0].selected.clear();
     VERBS.with(|v| v.borrow_mut().clear());
-    // Original miFileInfoClick (0x4452bc, skin theme): https://ext.xiles.app/?ext=<extension>.
-    app.dispatch("fileInfo", &ctx);
-    assert_eq!(launched().first().map(|(program, _, _)| program.clone()), Some("https://ext.xiles.app/?ext=txt".to_owned()));
     // ViewTextAsync: the configured viewer gets the quoted file path in the file's folder; with none, the NDR text window.
     app.settings.set_text("TextViewerPath", "viewer.exe");
     app.dispatch("textView", &ctx);
@@ -1474,9 +1471,9 @@ fn skin_folder_info_shows_the_original_hidden_mark() {
     let _ = fs::remove_dir_all(root);
 }
 
-/// Original extension info row (label 0x350): empty text; clicking runs FUN_0048bd50, which opens https://ext.xiles.app/?ext=%s for the focused file.
+/// The old extension info row must no longer open an external site when clicked.
 #[test]
-fn skin_extension_info_line_opens_the_extension_page() {
+fn skin_extension_info_line_is_not_an_external_link() {
     let (root, ctx, mut app) = fixture("skin-extinfo", "en");
     app.settings.set_text("Theme", "Black");
     app.settings.set_flag("ShowExtensionInfoBar", true);
@@ -1489,7 +1486,6 @@ fn skin_extension_info_line_opens_the_extension_page() {
     app.shell_runner = runner;
     let file = app.panes[0].entries.iter().position(|e| !e.is_dir && !e.drive).expect("a file");
     app.panes[0].cursor = file;
-    let extension = Path::new(&app.panes[0].entries[file].name).extension().unwrap().to_string_lossy().into_owned();
     let at = egui::pos2(30.0, 28.0);
     let frame = |app: &mut App, events: Vec<egui::Event>| {
         let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 300.0))), events, ..Default::default() };
@@ -1503,7 +1499,7 @@ fn skin_extension_info_line_opens_the_extension_page() {
     let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
     frame(&mut app, vec![button(true)]);
     frame(&mut app, vec![button(false)]);
-    assert_eq!(OPENED.with(|o| o.borrow().clone()), [format!("https://ext.xiles.app/?ext={extension}")]);
+    assert!(OPENED.with(|o| o.borrow().is_empty()), "removed file-info feature must not open a website");
     let _ = fs::remove_dir_all(root);
 }
 

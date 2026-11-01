@@ -1,4 +1,4 @@
-﻿; 한글
+; 한글
 ; Translator: xiles (xiles@xiles.net)
 ; Last modified: 2011.6.5
 ; Modified by: xiles
@@ -278,11 +278,10 @@ Menu.miChangeAttributes=&Z. 속성 바꾸기...
 Menu.miCalculateSelectedFolderSize=&L. 선택된 폴더 크기 계산
 Menu.miProperties=&E. 속성
 Menu.miDescription=&T. 설명 붙여두기...
-Menu.miFileInfo=&Q. 이 파일은 무슨 파일?
 Menu.miChecksum=&H. 체크섬
 Menu.miCreateEmptyFile=&B. 빈 파일 만들기...
-Menu.miShortcutOnDesktop=&K. 바탕화면에 단축아이콘 만들기
-Menu.miShortcutOnQuickLaunch=&U. 빠른실행에 단축아이콘 만들기
+Menu.miShortcutOnDesktop=&I. 바탕화면에 단축아이콘 만들기
+Menu.miShortcutOnQuickLaunch=&Q. 빠른실행에 단축아이콘 만들기
 Menu.miExit=&X. 프로그램 닫기
 Menu.miFolderTree=&T. 폴더 선택 창...
 Menu.miFavorites=&V. 즐겨찾기...

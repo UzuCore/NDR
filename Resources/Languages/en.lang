@@ -1,4 +1,4 @@
-﻿; English
+; English
 ; Translator: xiles (xiles@xiles.net)
 ; Last modified: 2011.6.5
 ; NexusFile ver 5.3.1.5460
@@ -277,11 +277,10 @@ Menu.miChangeAttributes=&Z. Change Attributes/Time...
 Menu.miCalculateSelectedFolderSize=&L. Calculate Selected Folder Size
 Menu.miProperties=&E. Properties
 Menu.miDescription=&T. Add/Edit Comment...
-Menu.miFileInfo=&Q. What is this file?
 Menu.miChecksum=&H. Checksum
 Menu.miCreateEmptyFile=&B. Create an empty file...
-Menu.miShortcutOnDesktop=&K. Create shortcut(s) on Desktop
-Menu.miShortcutOnQuickLaunch=&U. Create shortcut(s) on Quick Lanuch
+Menu.miShortcutOnDesktop=&I. Create shortcut(s) on Desktop
+Menu.miShortcutOnQuickLaunch=&Q. Create shortcut(s) on Quick Lanuch
 Menu.miExit=&X. Exit
 Menu.miFolderTree=&T. Folder Tree...
 Menu.miFavorites=&V. Favorites...

@@ -37,6 +37,25 @@ fn press(app: &mut App, ctx: &egui::Context, key: egui::Key, modifiers: egui::Mo
 }
 const NONE: egui::Modifiers = egui::Modifiers::NONE;
 
+#[test]
+fn shortcut_creation_keys_and_menu_accelerators_are_updated() {
+    let keys = compat::ShortcutMap::parse(None);
+    let resolved = |gesture: &str| keys.resolve(compat::text_to_shortcut(gesture));
+    assert_eq!(resolved("Ctrl+Shift+I").as_deref(), Some("miShortcutOnDesktop"));
+    assert_eq!(resolved("Ctrl+Shift+Q").as_deref(), Some("miShortcutOnQuickLaunch"));
+    assert_ne!(resolved("Ctrl+K").as_deref(), Some("miShortcutOnDesktop"));
+    assert_ne!(resolved("Ctrl+U").as_deref(), Some("miShortcutOnQuickLaunch"));
+    assert_ne!(resolved("Shift+Enter").as_deref(), Some("miFileInfo"));
+    let (root, _, app) = fixture("shortcut-create-accelerators", "ko");
+    assert_eq!(app.menu_access_letter("shortcut"), Some('i'));
+    assert_eq!(app.menu_access_letter("quickLaunchShortcut"), Some('q'));
+    assert!(menu_data::MENUS.iter().all(|(_, _, _, items)|
+        items.iter().all(|(id, _, _)| *id != "fileInfo")));
+    assert_eq!(ndr::shortcut_bindings::gesture(&app.settings, "legacyDesktopShortcut").as_deref(), Some("Ctrl+Shift+I"));
+    assert_eq!(ndr::shortcut_bindings::gesture(&app.settings, "legacyQuickLaunchShortcut").as_deref(), Some("Ctrl+Shift+Q"));
+    fs::remove_dir_all(root).unwrap();
+}
+
 fn archive_clipboard_fixture(label: &str) -> (PathBuf, egui::Context, App, PathBuf) {
     let (root, ctx, mut app) = fixture(label, "ko");
     let left = root.join("left");
@@ -969,9 +988,9 @@ fn custom_archive_install_shortcut_calls_install_shell_verb() {
     app.system.run_verb = capture;
     CAPTURED.lock().unwrap().clear();
     let mut keys = compat::ShortcutMap::parse(None);
-    keys.set_binding("miArcInstall", "Ctrl+Shift+I").unwrap();
+    keys.set_binding("miArcInstall", "Ctrl+Shift+J").unwrap();
     app.settings.set_text("OriginalShortcutMapText", &keys.to_text());
-    press(&mut app, &ctx, egui::Key::I, CTRL | egui::Modifiers::SHIFT);
+    press(&mut app, &ctx, egui::Key::J, CTRL | egui::Modifiers::SHIFT);
     assert_eq!(CAPTURED.lock().unwrap().as_slice(), &[(zip.clone(), "install".to_owned())]);
     fs::remove_dir_all(root).unwrap();
 }

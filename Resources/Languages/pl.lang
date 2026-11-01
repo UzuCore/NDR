@@ -1,4 +1,4 @@
-﻿; Last modified: 2010.6.8
+; Last modified: 2010.6.8
 ; Modified by: xiles
 ; NexusFile ver 5.1.3.3652
 [RES]
@@ -229,10 +229,9 @@ Menu.miChangeAttributes=&Z. Zmień atrybuty/datę...
 Menu.miCalculateSelectedFolderSize=&L. Calculate Selected Folder Size
 Menu.miProperties=&E. Właściwości
 Menu.miDescription=&T. Dodaj/Edytuj komentarz...
-Menu.miFileInfo=&Q. Co to za plik?
 Menu.miCreateEmptyFile=&B. Utwórz pusty plik...
-Menu.miShortcutOnDesktop=&K. Utwórz skrót(y) na Pulpicie
-Menu.miShortcutOnQuickLaunch=&U. Utwórz skrót(y) na Pasku szybkiego uruchamiania
+Menu.miShortcutOnDesktop=&I. Utwórz skrót(y) na Pulpicie
+Menu.miShortcutOnQuickLaunch=&Q. Utwórz skrót(y) na Pasku szybkiego uruchamiania
 Menu.miExit=&X. Wyjście
 Menu.miFolderTree=&T. Drzewo folderów...
 Menu.miFavorites=&V. Ulubione...

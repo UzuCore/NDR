@@ -2654,10 +2654,9 @@ miChangeAttributes=Ctrl+Z
 miCalculateSelectedFolderSize=Ctrl+Shift+R
 miProperties=F9
 miDescription=Alt+Enter
-miFileInfo=Shift+Enter
 miCreateEmptyFile=Ctrl+N
-miShortcutOnDesktop=Ctrl+K
-miShortcutOnQuickLaunch=Ctrl+U
+miShortcutOnDesktop=Ctrl+Shift+I
+miShortcutOnQuickLaunch=Ctrl+Shift+Q
 miExit=Alt+X
 miFolderTree=F10
 miFavorites=F11
@@ -2791,11 +2790,10 @@ const MENU_SHORTCUTS: &[(&str, u16)] = &[
     ("N31", 0x0000),
     ("miProperties", 0x0078),
     ("miDescription", 0x800d),
-    ("miFileInfo", 0x200d),
     ("N1", 0x0000),
     ("miCreateEmptyFile", 0x404e),
-    ("miShortcutOnDesktop", 0x404b),
-    ("miShortcutOnQuickLaunch", 0x4055),
+    ("miShortcutOnDesktop", 0x6049),
+    ("miShortcutOnQuickLaunch", 0x6051),
     ("N6", 0x0000),
     ("miChecksum", 0x0000),
     ("miCRC", 0x0000),

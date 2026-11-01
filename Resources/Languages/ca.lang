@@ -1,4 +1,4 @@
-﻿; Català
+; Català
 ; Translator: =Lluís Jaime (quintangai@gmail.com)
 ; Last modified: 2010.06.08
 ; NexusFile ver 5.1.3.3652
@@ -230,10 +230,9 @@ Menu.miChangeAttributes=&Z. Canviar Atributs/Data...
 Menu.miCalculateSelectedFolderSize=&L. Calculate Selected Folder Size
 Menu.miProperties=&E. Propietats
 Menu.miDescription=&T. Afegir/Editar Comentari...
-Menu.miFileInfo=&Q. Quin tipus de fitxer es aquest?
 Menu.miCreateEmptyFile=&B. Crear fitxer buït...
-Menu.miShortcutOnDesktop=&K. Crear acces(os) al Escriptori
-Menu.miShortcutOnQuickLaunch=&U. Crear acces(os) al Inici Ràpid
+Menu.miShortcutOnDesktop=&I. Crear acces(os) al Escriptori
+Menu.miShortcutOnQuickLaunch=&Q. Crear acces(os) al Inici Ràpid
 Menu.miExit=&X. Sortir
 Menu.miFolderTree=&T. Arbre de Directoris...
 Menu.miFavorites=&V. Favorits...

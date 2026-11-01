@@ -1,4 +1,4 @@
-﻿; NexusFile ver 5.1.3.3652
+; NexusFile ver 5.1.3.3652
 [RES]
 YES=是(&Y)
 NO=否(&N)
@@ -227,10 +227,9 @@ Menu.miChangeAttributes=&Z. 更改属性/时间戳...
 Menu.miCalculateSelectedFolderSize=&L. Calculate Selected Folder Size
 Menu.miProperties=&E. 属性
 Menu.miDescription=&T. 添加/编辑注释...
-Menu.miFileInfo=&Q. 这是什么文件?
 Menu.miCreateEmptyFile=&B. 创建一个零字节文件...
-Menu.miShortcutOnDesktop=&K. 创建快捷方式到桌面
-Menu.miShortcutOnQuickLaunch=&U. 创建快捷方式到快速启动栏
+Menu.miShortcutOnDesktop=&I. 创建快捷方式到桌面
+Menu.miShortcutOnQuickLaunch=&Q. 创建快捷方式到快速启动栏
 Menu.miExit=&X. 退出
 Menu.miFolderTree=&T. 文件夹树...
 Menu.miFavorites=&V. 收藏夹...
