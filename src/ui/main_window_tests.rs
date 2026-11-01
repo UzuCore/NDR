@@ -347,6 +347,25 @@ fn launched(path: &Path, _: &str, _: &Path) -> Result<(), String> {
 }
 
 #[test]
+fn ndr_encrypted_folder_opens_in_internal_browser() {
+    let (root, ctx, mut app) = fixture("vault-open");
+    let entry = app.panes[0].path.join("private.ndr");
+    std::fs::write(&entry, b"test fake file").unwrap();
+    app.refresh(0);
+    wait(&mut app, &ctx);
+    let index = app.panes[0].entries.iter().position(|e| e.name == "private.ndr").unwrap();
+    app.active = 0;
+    app.panes[0].cursor = index;
+    app.open_current();
+    assert!(app.vault_dialog.is_some(), "NDR file should open inside the vault browser");
+    app.vault_dialog = None;
+    app.dispatch("newVault", &ctx);
+    assert!(app.vault_dialog.is_some(), "File > New encrypted folder should open creator");
+    app.vault_dialog = None;
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
 fn update_check_context_menu_and_folder_sizes_follow_csharp() {
     let (root, ctx, mut app) = fixture("update");
     let wait_box = |app: &mut App, ctx: &egui::Context| {

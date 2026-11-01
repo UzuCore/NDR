@@ -641,7 +641,22 @@ impl SettingsForm {
             .split(';')
             .map(str::to_owned)
             .collect();
-        let (tab_titles, tabs) = original_pages(vec![general, display, paths, programs], language, ko);
+        let (tab_titles, mut tabs) = original_pages(vec![general, display, paths, programs], language, ko);
+        if let Some(rows) = tabs.get_mut(8) {
+            rows.push(Row::Section(t(ko, "암호화 폴더 (.ndr)", "Encrypted Folder (.ndr)")));
+            rows.push(choice_row("VaultSessionPolicy", t(ko, "세션 잠금 정책", "Vault session policy"), vec![
+                ("close".into(), t(ko, "닫을 때 즉시 잠금", "Lock immediately on close")),
+                ("inactive".into(), t(ko, "비활동 시간 경과 시 잠금", "Lock after inactivity")),
+                ("elapsed".into(), t(ko, "잠금 해제 후 설정 시간 경과 시 잠금", "Lock after elapsed time")),
+                ("exit".into(), t(ko, "NDR 종료 시 잠금", "Lock when NDR exits")),
+            ], &draft.text("VaultSessionPolicy", "close")));
+            rows.push(choice_row("VaultSessionMinutes", t(ko, "세션 유지 시간", "Session duration"),
+                ["5", "15", "30", "60", "120"].into_iter().map(|v| (v.into(), format!("{v} min"))).collect(),
+                &draft.values.get("VaultSessionMinutes").and_then(Value::as_i64).unwrap_or(15).to_string()));
+            rows.push(check("VaultLockOnExit", t(ko, "NDR 종료 시 잠금", "Lock when NDR exits"), true));
+            rows.push(check("VaultLockOnMinimize", t(ko, "최소화 시 잠금", "Lock when minimized"), false));
+            rows.push(Row::Note(t(ko, "세션 만료 후에는 반드시 비밀번호를 다시 입력해야 합니다. 비밀번호 복구 기능은 없습니다.", "A password is required after every expiration. There is no password recovery.")));
+        }
         let button_captions = [pref("Caption.btnOk", "확인(&O)", "&OK"), pref("Caption.btnCancel", "취소", "Cancel"), pref("Caption.btnApply", "적용(&A)", "&Apply")];
         let captions = [
             ("GroupBox.gbFont", "Font"),
@@ -801,8 +816,11 @@ impl SettingsForm {
                     let value = selected.and_then(|i| choices.get(i)).map(|(v, _)| v.clone()).unwrap_or_default();
                     match key.as_str() {
                         "Theme" | "LeftViewStyle" | "RightViewStyle" | "LeftSortMode" | "RightSortMode" | "LeftFolderSortMode" | "RightFolderSortMode" | "LeftGroupMode" | "RightGroupMode"
-                        | "LeftFolderCategoryMode" | "RightFolderCategoryMode" | "SizeUnit" | "Language" => {
+                        | "LeftFolderCategoryMode" | "RightFolderCategoryMode" | "SizeUnit" | "Language" | "VaultSessionPolicy" => {
                             values.insert(key.clone(), Value::String(value));
+                        }
+                        "VaultSessionMinutes" => {
+                            values.insert(key.clone(), json!(value.parse::<i64>().unwrap_or(15).clamp(1, 1440)));
                         }
                         "LeftColumnCount" | "RightColumnCount" => {
                             let count = if value == "Auto" { 0 } else { value.parse::<i64>().unwrap_or(0).clamp(1, 19) };

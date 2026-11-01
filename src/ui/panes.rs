@@ -1109,6 +1109,10 @@ impl App {
             self.open_archive_entry(i, &entry);
             return;
         }
+        if entry.path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("ndr")) {
+            self.open_vault(entry.path, false);
+            return;
+        }
         // C# OpenItemAsync: IsArchive (format table) → open the first volume with GetArchiveFirstVolumePath.
         // A format the bundled 7-Zip cannot read (.ace) is extracted with an external program like C# TryGetExternalArchiveProgram and goes to that folder.
         if ndr::archive::archive_format(&entry.path).is_some() && !ndr::archive::bundled_can_browse(&entry.path) {

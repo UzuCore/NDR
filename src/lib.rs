@@ -19,6 +19,7 @@ pub mod rename_macros;
 pub mod shortcut_editor;
 pub mod split;
 pub mod update;
+pub mod vault;
 pub mod file_dialogs;
 pub mod folder_compare;
 pub mod folder_tree;

@@ -111,6 +111,12 @@ impl App {
             }
             return self.path_icon(ctx, Path::new("A"), true);
         }
+        // A .ndr encrypted container looks like a folder in NDR while
+        // remaining an ordinary file for OS copy/move/delete operations.
+        if self.panes[index].archive.is_none() && self.panes[index].remote.is_none()
+            && entry.path.extension().is_some_and(|e| e.eq_ignore_ascii_case("ndr")) {
+            return self.path_icon(ctx, Path::new("A"), true);
+        }
         let (path, directory, drive, attributes) = (entry.path.clone(), entry.is_dir, entry.drive, entry.attributes);
         // Original DrawListItem (0x7d8f58): GetIconIndex of the bare name (extension icon) until the image thread (FUN_007dd51c) stores the item's shell
         // icon by actual path with its overlay index (SHGFI_SYSICONINDEX | SHGFI_ICON | SHGFI_OVERLAYINDEX) for every local item, drives included.

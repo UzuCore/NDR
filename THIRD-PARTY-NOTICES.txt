@@ -389,3 +389,8 @@ Rust crate (Cargo.lock 기준, 각 crate의 Cargo.toml license 값):
   zvariant 5.15.1: MIT
   zvariant_derive 5.15.1: MIT
   zvariant_utils 4.2.0: MIT
+
+SQLCipher 4.19.0 (Zetetic Community Edition, https://github.com/sqlcipher/sqlcipher): BSD-style community license; retain SQLCipher source copyright and conditions. SQLCipher uses OpenSSL for cryptography.
+rusqlite 0.41.1 (https://github.com/rusqlite/rusqlite): MIT.
+sqlcipher-src 419.0.6 (https://github.com/LucaCappelletti94/sqlcipher-src): MIT AND BSD-3-Clause AND blessing AND WTFPL (packaged source components).
+zeroize 1.9.1 (https://github.com/RustCrypto/utils): Apache-2.0 OR MIT.

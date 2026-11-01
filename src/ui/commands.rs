@@ -336,6 +336,19 @@ impl App {
                     }
                 }
             }
+            // Vault actions are intentionally separate from the historical
+            // NexusFile menu table, which is verified against the original DFM.
+            let vault_open = ui.menu_button(if ko { "암호화 폴더" } else { "Encrypted Folder" }, |ui| {
+                if ui.button(if ko { "새 암호화 폴더 (.ndr)..." } else { "New encrypted folder (.ndr)..." }).clicked() {
+                    self.dispatch("newVault", &ctx);
+                    ui.close();
+                }
+                if ui.button(if ko { "선택한 암호화 폴더 열기" } else { "Open selected encrypted folder" }).clicked() {
+                    self.open_current();
+                    ui.close();
+                }
+            });
+            any_open |= vault_open.inner.is_some();
             ui.data_mut(|d| d.insert_temp(bar_open_id, any_open));
             // Original tbNewUpdateAvailable (a quiet update check found a new version). Original tbDonation (donate) was removed per user request.
             if let Some(url) = self.update_available.clone() {
@@ -783,6 +796,11 @@ impl App {
             },"addToFavorites"=>self.add_to_favorites_command(),
             
             "options"=>self.open_settings_window(),
+            "newVault"=> {
+                if self.panes[self.active].archive.is_none() && self.panes[self.active].remote.is_none() {
+                    self.open_vault(self.panes[self.active].path.join("새 암호화 폴더.ndr"), true);
+                }
+            },
             "importLegacy"=>self.import_legacy_command(),
             "shortcuts"=>self.show_shortcut_window(),
             "textView"|"textEdit"=>self.text_command(id=="textEdit"),

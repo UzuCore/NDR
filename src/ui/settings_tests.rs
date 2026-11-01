@@ -112,6 +112,26 @@ fn draw_settings(app: &mut App, ctx: &egui::Context) {
 }
 
 #[test]
+fn encrypted_folder_options_persist_with_required_password_reauthentication() {
+    let (root, ctx, mut app) = fixture("vault-options", "ko");
+    assert_eq!(ndr::vault::SessionPolicy::from_settings(&app.settings), ndr::vault::SessionPolicy::CloseOnLeave);
+    app.dispatch("options", &ctx);
+    assert!(matches!(app.settings_form().unwrap().row_mut("VaultLockOnExit"), Some(Row::Check { value: true, .. })));
+    assert!(matches!(app.settings_form().unwrap().row_mut("VaultLockOnMinimize"), Some(Row::Check { value: false, .. })));
+    set_combo(&mut app, "VaultSessionPolicy", "inactive");
+    set_combo(&mut app, "VaultSessionMinutes", "30");
+    app.settings_action(SettingsAction::Ok, &ctx);
+    assert_eq!(app.settings.text("VaultSessionPolicy", ""), "inactive");
+    assert_eq!(app.settings.values.get("VaultSessionMinutes"), Some(&serde_json::json!(30)));
+    assert_eq!(ndr::vault::SessionPolicy::from_settings(&app.settings),
+        ndr::vault::SessionPolicy::Inactive(Duration::from_secs(1800)));
+    assert!(app.settings.flag("VaultLockOnExit", true));
+    assert!(!app.settings.flag("VaultLockOnMinimize", false));
+    drop(app);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn settings_window_commits_like_csharp() {
     let (root, ctx, mut app) = fixture("ko", "ko");
     app.dispatch("options", &ctx);

@@ -42,6 +42,16 @@ Re-running a workflow updates the existing release assets instead of creating
 a duplicate. The workflow uses GitHub's built-in `GITHUB_TOKEN` with
 `contents: write`; no personal access token needs to be configured.
 
+## Encrypted folders (experimental)
+
+NDR supports `.ndr` SQLCipher-based encrypted containers. Use **File → New
+encrypted folder (.ndr)** to create one; double-click an `.ndr` file in NDR
+to open the password-protected virtual folder browser. Configure session
+locking in **Options → NDR → Encrypted Folder**. A password is required after
+every session expiration. See [security limits and implementation details](docs/ENCRYPTED_VAULT.md)
+before trusting the feature with sensitive information. No separate drive
+mount is required; native pane operations are not all integrated yet.
+
 ## Build locally
 
 Install Visual Studio C++ Build Tools, stable Rust MSVC, and Strawberry Perl

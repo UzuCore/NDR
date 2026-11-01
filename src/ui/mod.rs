@@ -41,6 +41,7 @@ mod split_dialogs;
 mod system_commands;
 mod toolbar;
 mod tools_dialog;
+mod vault_window;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
@@ -698,6 +699,7 @@ pub struct App {
     msgbox_serial: u64,
     msgbox_icons: HashMap<u16, egui::TextureHandle>,
     original_dialogs: Vec<original_dialogs::OriginalDialog>,
+    vault_dialog: Option<vault_window::VaultDialog>,
     /// Subfolders of the address bar's chevron menu (path, whether it is a drive list) -> (path, text). Cleared when a new listing arrives.
     crumb_cache: HashMap<(PathBuf, bool), Vec<(PathBuf, String)>>,
     /// The panel item being dragged, the folder row under it (panel, folder), and this frame's two panel areas.
@@ -1007,6 +1009,7 @@ impl App {
             msgbox_serial: 0,
             msgbox_icons: HashMap::new(),
             original_dialogs: Vec::new(),
+            vault_dialog: None,
             crumb_cache: HashMap::new(),
             folder_size_queue: Arc::new((Mutex::new(std::collections::VecDeque::new()), std::sync::Condvar::new())),
             folder_size_workers: false,
@@ -2136,6 +2139,7 @@ impl eframe::App for App {
         self.dialogs(ctx);
         self.popup_menu_ui(ctx);
         self.shortcut_window_ui(ctx);
+        self.vault_window_ui(ctx);
         self.original_dialog_ui(ctx);
         // The modal progress window is drawn above the window under it (for example the custom search of the cleanup options window).
         self.modal_progress_ui(ctx);
@@ -2189,6 +2193,7 @@ impl eframe::App for App {
         ));
     }
     fn on_exit(&mut self, _: Option<&eframe::glow::Context>) {
+        self.vault_dialog = None;
         if let Some(job) = &self.job {
             job.cancel.store(true, Ordering::Relaxed);
         }

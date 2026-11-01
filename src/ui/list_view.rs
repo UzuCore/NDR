@@ -181,7 +181,11 @@ impl App {
             // Original DrawListItem description cell (field 6, 0x7da043): when the description (+0x10) is empty and showfiletype (+0x384) is on, the file type text (+0xc).
             // The type text of original GetList (0x45a34c) is the shell name (SHGetFileInfoW SHGFI_TYPENAME|USEFILEATTRIBUTES, once per extension,
             // none for ".."). Archive and FTP lists never call SetFileType, so it is empty.
-            let kind = if !skin && entry.is_parent() {
+            let vault_item = pane.archive.is_none() && pane.remote.is_none() && !entry.is_dir
+                && entry.path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("ndr"));
+            let kind = if vault_item {
+                (if korean { "암호화된 가상 폴더" } else { "Encrypted virtual folder" }).to_owned()
+            } else if !skin && entry.is_parent() {
                 (if korean { "상위 폴더" } else { "Parent folder" }).to_owned()
             } else if !skin {
                 ndr::listing::type_name(&entry.name, entry.is_dir, korean)
