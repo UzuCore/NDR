@@ -2039,7 +2039,7 @@ pub fn shortcut_target(link: &Path) -> Option<(PathBuf, bool)> {
 }
 
 /// C# OriginalShortcutService.Create (original @CreateShortcut 0x7b3d04): SetPath(target), SetArguments(""),
-/// SetWorkingDirectory(PathRemoveFileSpecW(target)), SetIconLocation(NULL, 1), SetHotkey(0), SetShowCmd(0),
+/// SetWorkingDirectory(PathRemoveFileSpecW(target)), SetHotkey(0), SetShowCmd(1),
 /// IPersistFile::Save(link, TRUE) — silently replaces an existing link. The original caller does not check the result.
 pub fn create_original_shortcut(target: &Path, folder: &Path) -> Result<(), String> {
     use windows::{
@@ -2063,9 +2063,10 @@ pub fn create_original_shortcut(target: &Path, folder: &Path) -> Result<(), Stri
             link.SetPath(PCWSTR(path.as_ptr()))?;
             link.SetArguments(PCWSTR(empty.as_ptr()))?;
             link.SetWorkingDirectory(PCWSTR(directory.as_ptr()))?;
-            link.SetIconLocation(PCWSTR::null(), 1)?;
             link.SetHotkey(0)?;
-            link.SetShowCmd(SHOW_WINDOW_CMD(0))?;
+            // SW_SHOWNORMAL: a shortcut must not launch the target hidden.
+            // Without an explicit icon location Explorer uses the target icon.
+            link.SetShowCmd(SHOW_WINDOW_CMD(1))?;
             let persist: IPersistFile = link.cast()?;
             persist.Save(PCWSTR(output.as_ptr()), true)?;
             Ok(())

@@ -1058,11 +1058,42 @@ fn record_link(target: &Path, folder: &Path) -> Result<(), String> {
     LINKS.with(|l| l.borrow_mut().push((target.to_path_buf(), folder.to_path_buf())));
     Ok(())
 }
+fn reject_link(_: &Path, _: &Path) -> Result<(), String> {
+    Err("test access denied".to_owned())
+}
 fn links() -> Vec<(PathBuf, PathBuf)> {
     LINKS.with(|l| std::mem::take(&mut *l.borrow_mut()))
 }
 fn clip() -> Vec<PathBuf> {
     CLIP.with(|c| c.borrow().clone())
+}
+
+#[test]
+fn quick_launch_shortcut_reports_failure_and_real_link_creation() {
+    let (root, _ctx, mut app) = fixture("quicklaunch-real-link", "ko");
+    let folder = root.join("quick-launch");
+    fs::create_dir_all(&folder).unwrap();
+    SHORTCUT_DIR.with(|d| *d.borrow_mut() = Some(folder.clone()));
+    app.system.shortcut_folder = shortcut_dir;
+    let entry = app.panes[0].entries.iter().position(|e| e.name == "alpha.txt").unwrap();
+    app.panes[0].cursor = entry;
+    app.panes[0].selected.insert(entry);
+
+    app.system.create_shortcut = reject_link;
+    app.shortcut_command(true);
+    assert!(!app.msgboxes.is_empty(), "creation failure must be reported");
+    assert!(app.msgboxes.last().unwrap().text.contains("test access denied"));
+    assert!(app.panes[0].selected.contains(&entry), "failed creation must preserve selection");
+    app.msgboxes.clear();
+
+    app.system.create_shortcut = ndr::native::create_original_shortcut;
+    app.shortcut_command(true);
+    let link = folder.join("alpha.txt.lnk");
+    assert!(link.is_file(), "a real Windows Shell Link must be written to the destination");
+    assert!(ndr::native::shortcut_target(&link).is_some(), "the link must be readable by the shell");
+    assert!(app.msgboxes.last().unwrap().text.contains(&folder.display().to_string()), "actual Quick Launch path must be shown");
+    assert!(app.panes[0].selected.is_empty());
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -1073,16 +1104,21 @@ fn system_commands_follow_csharp() {
     app.system.create_shortcut = record_link;
     app.system.clipboard_files = clip;
     let index = |app: &App, name: &str| app.panes[0].entries.iter().position(|e| e.name == name).unwrap();
-    // CreateOriginalShortcuts: no target folder -> nothing; otherwise marked items in list order, then the selection is cleared.
+    // Missing destination reports an error and retains the marked items;
+    // a valid Quick Launch folder creates the links and shows the location.
     app.panes[0].selected = [index(&app, "beta.txt"), index(&app, "alpha.txt")].into_iter().collect();
     app.dispatch("shortcut", &ctx);
     assert!(links().is_empty());
+    assert!(!app.msgboxes.is_empty(), "missing destination must be reported");
+    app.msgboxes.clear();
     let desk = root.join("desk");
     fs::create_dir_all(&desk).unwrap();
     SHORTCUT_DIR.with(|d| *d.borrow_mut() = Some(desk.clone()));
     app.dispatch("quickLaunchShortcut", &ctx);
     assert_eq!(links(), vec![(left.join("alpha.txt"), desk.clone()), (left.join("beta.txt"), desk.clone())]);
     assert!(app.panes[0].selected.is_empty());
+    assert!(app.msgboxes.last().is_some_and(|m| m.text.contains(&desk.display().to_string())));
+    app.msgboxes.clear();
     // PasteShortcutAsync: clipboard order, into the current folder.
     CLIP.with(|c| *c.borrow_mut() = vec![right.clone(), left.join("gamma.log")]);
     app.dispatch("pasteShortcut", &ctx);
