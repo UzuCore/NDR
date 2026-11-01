@@ -106,6 +106,10 @@ impl App {
         });
     }
     pub(super) fn copy_to_other(&mut self,source:usize,moving:bool,_ctx:&egui::Context){
+        if self.panes.iter().any(|pane| pane.vault.is_some()) {
+            self.status = "암호화 폴더와의 복사·이동은 클립보드 붙여넣기를 이용하세요.".into();
+            return;
+        }
         // Original FUN_0042d518/FUN_0042d910: when one side is FTP, upload/download (a move becomes a copy).
         if self.ftp_route_copy(source){return;}
         if self.archive_route_to_other(source,moving){return;}
@@ -608,6 +612,25 @@ impl App {
         }
     }
     pub(super) fn dispatch(&mut self, id: &str, ctx: &egui::Context) {
+        if self.panes[self.active].vault.is_some() {
+            match id {
+                "newFolder" => return self.vault_new_item(true),
+                "newEmpty" => return self.vault_new_item(false),
+                "rename" | "contextRename" => return self.vault_rename_item(),
+                "deleteRecycle" | "deletePermanent" | "contextDelete" => return self.vault_remove_items(),
+                "paste" | "contextPaste" => return self.vault_paste_files(),
+                "open" | "textView" | "textEdit" | "contextView" | "contextEdit" => return self.open_current(),
+                "goParent" => return self.parent(),
+                "refresh" => return self.refresh(self.active),
+                "toggleDual" | "viewAuto" | "viewDetails" | "viewNames" | "viewThumbnails" |
+                "options" | "shortcuts" | "exit" | "toggleFolderInfoBar" | "toggleFileInfoBar" => (),
+                _ if id.starts_with("sort:") || id.starts_with("folderSort:") => (),
+                _ => {
+                    self.status = "암호화 폴더에서는 내부 파일 명령만 사용할 수 있습니다.".into();
+                    return;
+                }
+            }
+        }
         // Original pane FTP mode: commands that work on local files do nothing (seen in the running original: Insert on an FTP pane sends nothing
         // and shows nothing). Previously a C# status notice appeared.
         if self.panes[self.active].remote.is_some() && !super::ftp_pane::ftp_allows(id) {
@@ -883,6 +906,10 @@ impl App {
         });
     }
     pub(super) fn transfer_from(&mut self, i: usize, sources: Vec<PathBuf>, destination: PathBuf, moving: bool, kind: super::file_operation::TransferKind) {
+        if self.panes.iter().any(|pane| pane.vault.is_some()) {
+            self.status = "암호화 폴더를 열어 둔 상태에서는 일반 파일 이동을 시작할 수 없습니다.".into();
+            return;
+        }
         if sources.is_empty() {
             return;
         }

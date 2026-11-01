@@ -156,9 +156,13 @@ impl App {
     /// Opens the chosen tab's location (without adding to history). Original FUN_00489d20 (tab switch): an existing location goes to the folder (for a file, its folder with the cursor
     /// on the file); otherwise an existing parent; if none exists, the tab is removed. Fixed: previously it tried to open missing locations as is and read the same location twice.
     fn show_tab(&mut self, index: usize) {
+        if self.panes[index].vault.is_some() {
+            self.vault_text_editor = None;
+        }
         let pane = &mut self.panes[index];
         let Some(path) = pane.tabs.get(pane.tab).cloned() else { return };
         pane.archive = None;
+        pane.vault = None;
         self.active = index;
         let special = super::panes::is_drives(&path) || path.to_string_lossy().starts_with("ftp://") || path.to_string_lossy().starts_with("sftp://");
         let mut target = path.clone();
@@ -273,7 +277,9 @@ impl App {
     pub(super) fn end_address_edit(&mut self, index: usize) {
         let pane = &mut self.panes[index];
         pane.address_editing = false;
-        pane.address = pane.path.to_string_lossy().into_owned();
+        pane.address = if let Some(vault) = &pane.vault {
+            vault.virtual_path().to_string_lossy().into_owned()
+        } else { pane.path.to_string_lossy().into_owned() };
     }
 
     /// C# RenderPathBreadcrumb: "archive name › folder..." for archives, otherwise "root › folder..." (current folder bold). Each local segment has ⌄ (subfolders, the drive list at a drive root).
@@ -288,6 +294,20 @@ impl App {
             let text = RichText::new(label).size(11.0).color(if is_current { current } else { normal });
             ui.add(egui::Button::new(if is_current { text.strong().family(egui::FontFamily::Name(super::BOLD_FONT_FAMILY.into())) } else { text }).frame(false)).clicked()
         };
+        if let Some(vault) = &self.panes[index].vault {
+            let labels: Vec<String> = std::iter::once(vault.file.file_stem().unwrap_or_default().to_string_lossy().into_owned())
+                .chain(vault.stack.iter().skip(1).map(|(_, name)| name.clone())).collect();
+            for (depth, label) in labels.iter().enumerate() {
+                if depth > 0 { separator(ui); }
+                if crumb(ui, label, depth + 1 == labels.len()) {
+                    if let Some(vault) = self.panes[index].vault.as_mut() {
+                        vault.stack.truncate(depth + 1);
+                    }
+                    self.refresh_vault(index);
+                }
+            }
+            return None;
+        }
         if let Some(remote) = self.panes[index].remote.clone() {
             // Original FUN_0048aa30 (FTP mode): "/%s%s" path. The host segment = root.
             let parts: Vec<&str> = remote.path.split('/').filter(|p| !p.is_empty()).collect();
@@ -706,10 +726,13 @@ impl App {
     /// Counts a folder row's size separately (shared by the automatic display and the original miCalculateSelectedFolderSizeClick).
     pub(super) fn enqueue_folder_size(&mut self, index: usize, row: usize) {
         let pane = &mut self.panes[index];
-        if pane.archive.is_some() || pane.remote.is_some() {
+        if pane.vault.is_some() || pane.archive.is_some() || pane.remote.is_some() {
             return;
         }
         let Some(entry) = pane.entries.get(row).filter(|e| e.is_dir && !e.drive && !e.is_parent()) else { return };
+        if entry.path.is_file() && entry.path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("ndr")) {
+            return; // The encrypted container is already a file on disk.
+        }
         if pane.folder_sizes.contains_key(&entry.path) {
             return;
         }

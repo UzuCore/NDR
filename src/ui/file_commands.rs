@@ -98,6 +98,7 @@ impl App {
     /// Original FUN_00432378 (C# NewFolderAsync): default is the short date ('\' and '/' -> '-'), no trimming or character filtering, empty input does nothing,
     /// CreateDirectoryW (no intermediate folders, an existing name fails). Failure shows only an error box; success refreshes and puts the cursor on the new folder.
     pub(super) fn new_folder(&mut self) {
+        if self.panes[self.active].vault.is_some() { return self.vault_new_item(true); }
         let pane = self.active;
         if self.panes[pane].remote.is_some() {
             return self.ftp_new_folder(pane);
@@ -122,6 +123,7 @@ impl App {
     /// Original FUN_00434630 (C# CreateEmptyFileAsync): empty default; CreateFileW(CREATE_NEW) never empties an existing item.
     /// Approved fix: the original silently ignores failure, NDR reports it. Then refresh and put the cursor on the typed name.
     pub(super) fn create_empty_file(&mut self) {
+        if self.panes[self.active].vault.is_some() { return self.vault_new_item(false); }
         let pane = self.active;
         if self.panes[pane].archive.is_some() {
             return self.archive_empty_file(pane);
@@ -143,6 +145,7 @@ impl App {
     /// Original FUN_004351cc (C# RenameAsync): TfRename for each item in display order. Cancel stops.
     /// New name = the name when the extension is empty, else name + "." + extension. MoveFileW within the same folder.
     pub(super) fn rename_items(&mut self) {
+        if self.panes[self.active].vault.is_some() { return self.vault_rename_item(); }
         let pane = self.active;
         if self.panes[pane].remote.is_some() {
             return self.ftp_rename(pane);
@@ -164,13 +167,17 @@ impl App {
 
     fn rename_step(&mut self, mut run: RenameRun) {
         let Some(entry) = run.items.get(run.index).cloned() else { return self.finish_rename(run) };
+        let encrypted_folder = entry.path.is_file() && entry.path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("ndr"));
         let (name, extension) = names::split_for_rename(&entry.name, entry.is_dir);
         let count = run.items.len();
         let file_name = entry.name.clone();
         self.rename_dialog(&file_name, &name, &extension, run.index + 1, count, move |app, value, _| {
             let Some((new_name, new_extension)) = value else { return app.finish_rename(run) };
             let directory = entry.path.parent().map(Path::to_path_buf).unwrap_or_else(|| app.panes[run.pane].path.clone());
-            let target_name = if new_extension.is_empty() { new_name } else { format!("{new_name}.{new_extension}") };
+            let mut target_name = if new_extension.is_empty() { new_name } else { format!("{new_name}.{new_extension}") };
+            if encrypted_folder && !target_name.to_ascii_lowercase().ends_with(".ndr") {
+                target_name.push_str(".ndr");
+            }
             let error = names::move_file(&entry.path.to_string_lossy(), &directory.join(&target_name).to_string_lossy());
             if error == 0 {
                 // Original FUN_004361f8 -> FUN_0040f7f0: the description follows the new name.
@@ -179,7 +186,9 @@ impl App {
                     app.status = message;
                 }
                 if run.focused.as_deref().is_some_and(|f| names::equals_ignore_case(f, &entry.name)) {
-                    run.focus_after = Some(target_name);
+                    run.focus_after = Some(if encrypted_folder {
+                        target_name.strip_suffix(".ndr").unwrap_or(&target_name).to_owned()
+                    } else { target_name });
                 }
                 run.index += 1;
                 return app.rename_step(run);
@@ -330,6 +339,7 @@ impl App {
     /// Original FUN_0042c734 (C# DeleteAsync): TfDelWarning when delconfirm is on or the mode is not the Recycle Bin.
     /// No stops; the Delete button switches to permanent delete. Permanent delete asks TfDelConfirm for each item with protected attributes.
     pub(super) fn delete_items(&mut self, recycle: bool) {
+        if self.panes[self.active].vault.is_some() { return self.vault_remove_items(); }
         let pane = self.active;
         if self.panes[pane].remote.is_some() {
             return self.ftp_delete(pane);

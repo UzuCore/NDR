@@ -92,7 +92,7 @@ fn picked(_: &str, _: Option<&Path>) -> Option<PathBuf> {
     PICKED.with(|t| t.borrow().clone())
 }
 
-fn fixture(label: &str, language: &str) -> (PathBuf, egui::Context, App) {
+pub(super) fn fixture(label: &str, language: &str) -> (PathBuf, egui::Context, App) {
     let root = std::env::temp_dir().join(format!("ndr-tools-{}-{}-{label}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
     let (left, right) = (root.join("left"), root.join("right"));
     fs::create_dir_all(left.join("folder1")).unwrap();

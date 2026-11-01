@@ -727,6 +727,7 @@ impl App {
     /// the drive if a drive, otherwise the selected items or the cursor item); otherwise pmMain.
     pub(super) fn list_menu_kind(&self, index: usize) -> ListMenu {
         let pane = &self.panes[index];
+        if pane.vault.is_some() { return ListMenu::Main; }
         if pane.archive.is_some() || pane.remote.is_some() || pane.loading {
             return ListMenu::None;
         }
@@ -801,6 +802,9 @@ pub(super) fn row_pressed(pane: &mut Pane, row: usize, modifiers: egui::Modifier
 
 impl App {
     pub(super) fn refresh(&mut self, index: usize) {
+        if self.panes[index].vault.is_some() {
+            return self.refresh_vault(index);
+        }
         // C# RefreshPaneAsync: discard that pane's quick-find input.
         self.typed_search[index] = TypedSearch::default();
         // The original turns off TNXShellChangeNotify during its own operation (SetActive(0) = FreeThread), re-reads after the operation, then turns it back on (SetActive(1) =
@@ -981,6 +985,8 @@ impl App {
         }
     }
     pub(super) fn navigate(&mut self, index: usize, path: PathBuf, remember: bool) {
+        // Any real filesystem navigation leaves the encrypted virtual folder.
+        self.panes[index].vault = None;
         // Going to a local folder ends the pane's FTP mode (original FUN_0048d6e4: disconnect, then to a local folder).
         if let Some(remote) = self.panes[index].remote.as_ref() {
             if remote.busy.load(Ordering::Relaxed) {
@@ -1035,6 +1041,10 @@ impl App {
     }
     pub(super) fn parent(&mut self) {
         let i = self.active;
+        if self.panes[i].vault.is_some() {
+            let parent = Entry::parent_item(PathBuf::from(".."), None);
+            return self.enter_vault_item(i, &parent);
+        }
         if self.panes[i].remote.is_some() {
             return self.ftp_parent(i);
         }
@@ -1084,6 +1094,13 @@ impl App {
         let Some(entry) = self.panes[i].entries.get(self.panes[i].cursor).cloned() else {
             return;
         };
+        if self.panes[i].vault.is_some() {
+            return self.enter_vault_item(i, &entry);
+        }
+        if entry.path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("ndr")) && entry.path.is_file() {
+            self.open_vault(entry.path, false);
+            return;
+        }
         // Original ".." item: go to the parent location (local/archive/FTP).
         if entry.is_parent() {
             return self.parent();

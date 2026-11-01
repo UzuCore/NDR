@@ -95,6 +95,11 @@ impl App {
 
     pub(super) fn file_icon(&mut self, ctx: &egui::Context, index: usize, row: usize) -> Option<egui::TextureHandle> {
         let entry = self.panes[index].entries.get(row)?;
+        // SQLCipher rows have synthetic paths; never ask the Windows shell to
+        // resolve them. Render by logical type instead (including subfolders).
+        if self.panes[index].vault.is_some() {
+            return self.path_icon(ctx, Path::new("A"), entry.is_dir);
+        }
         // Original ".." item: DrawListItem (0x7d8f58) first draws GetIconIndex(name, attributes) (relative name = SHGFI_USEFILEATTRIBUTES, the folder icon),
         // then the image thread (StartImageThread 0x7defc8, Execute 0x7de870, FUN_007dd51c) replaces it in a local pane with the shell icon of the parent
         // folder itself (PathRemoveFileSpecW of the current folder, SHGFI_SYSICONINDEX | SHGFI_ICON | SHGFI_OVERLAYINDEX), so above a drive root it is
@@ -113,7 +118,8 @@ impl App {
         }
         // A .ndr encrypted container looks like a folder in NDR while
         // remaining an ordinary file for OS copy/move/delete operations.
-        if self.panes[index].archive.is_none() && self.panes[index].remote.is_none()
+        if self.panes[index].vault.is_none() && self.panes[index].archive.is_none()
+            && self.panes[index].remote.is_none() && entry.path.is_file()
             && entry.path.extension().is_some_and(|e| e.eq_ignore_ascii_case("ndr")) {
             return self.path_icon(ctx, Path::new("A"), true);
         }

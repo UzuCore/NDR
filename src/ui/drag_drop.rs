@@ -56,6 +56,7 @@ impl App {
     /// Skin theme (original FUN_004856d8, FUN_00485bbc): with marks, all marked items are dragged regardless of the pressed item; without marks, the pressed (cursor) item
     /// is dragged. ".." (parent folder) and drive items are never dragged (not put in the original data object).
     pub(super) fn begin_file_drag(&mut self, index: usize, row: usize, secondary: bool, modifiers: egui::Modifiers) {
+        if self.panes[index].vault.is_some() { return; }
         if self.file_drag.is_some() {
             return;
         }
@@ -94,6 +95,7 @@ impl App {
     pub(super) fn drop_target(&self, position: Option<egui::Pos2>, dragged: &[PathBuf]) -> Option<(usize, PathBuf)> {
         let position = position?;
         let pane = (0..2).find(|i| self.pane_rects[*i].contains(position))?;
+        if self.panes[pane].vault.is_some() { return None; }
         let folder = self.folder_rows.iter().find(|(p, rect, path)| *p == pane && rect.contains(position) && !dragged.contains(path)).map(|(_, _, path)| path.clone());
         Some((pane, folder.unwrap_or_else(|| self.panes[pane].path.clone())))
     }
@@ -188,6 +190,7 @@ impl App {
     /// Original tree OnDrop (FUN_0048ecd0): a right-button drag opens pmDrop, otherwise FUN_00488b64(effect, node folder, 1 = skip confirmation, 0).
     /// So dropping on the tree never asks "confirm drag and drop" (only dropping on the list asks).
     pub(super) fn tree_drop(&mut self, pane: usize, candidates: Vec<PathBuf>, destination: PathBuf, modifiers: egui::Modifiers, allowed: u8) {
+        if self.panes.iter().any(|state| state.vault.is_some()) { return; }
         self.tree_drop_hover = None;
         if !destination.is_dir() || candidates.is_empty() {
             return;
@@ -420,6 +423,10 @@ impl App {
 
     /// handle_drop plus the effects allowed when the drag started (allowed). The skin theme uses original_drop, the C# theme C# HandleDropAsync.
     pub(super) fn handle_drop_with(&mut self, pane: usize, candidates: Vec<PathBuf>, destination: PathBuf, modifiers: egui::Modifiers, allowed: u8) {
+        if self.panes.iter().any(|state| state.vault.is_some()) {
+            self.status = "암호화 폴더로는 끌어놓기를 사용할 수 없습니다. 파일을 복사한 뒤 내부에서 붙여넣으세요.".into();
+            return;
+        }
         if self.panes[pane].archive.is_some() {
             // User request (not in the original): dropping local files or folders on an archive pane adds them to its current folder (or the archive folder row under the pointer).
             let local: Vec<PathBuf> = candidates.into_iter().filter(|p| p.is_absolute() && p.exists()).collect();

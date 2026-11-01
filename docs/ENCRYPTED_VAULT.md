@@ -64,11 +64,33 @@ they are not the source database's Korean taxonomic names.
 The suggestion is a convenience feature, **not a security source of entropy**:
 the name generator is independent from SQLCipher keys and passwords.
 
+## In-pane folder behavior (2026-11-02)
+
+- The encrypted container is physically one `.ndr` SQLCipher file, but NDR's
+  ordinary file panels present it with a folder icon, a folder type and a name
+  without the `.ndr` extension. Windows Explorer still sees an `.ndr` file.
+- After creation, NDR enters the new folder immediately with the already
+  authenticated session. Opening an existing one asks for its password once,
+  then the regular file panel displays its encrypted directory contents.
+- Double-click subfolders to enter. The `..` entry returns to the parent;
+  leaving the container closes the SQLCipher session. File names and content
+  are not extracted to an unencrypted working directory.
+- Supported in-pane operations: create internal folders/files, rename, delete,
+  paste local files directly into SQLCipher (64 MiB maximum), and edit UTF-8
+  text files up to 1 MiB using a memory-only editor. Binary files remain
+  encrypted but cannot be edited with an external application in this mode.
+- Conventional shell copy, cut, move, drag-and-drop and external program
+  opening are blocked while browsing the virtual pane to prevent accidental
+  operations on synthetic filesystem paths. Support for transparent external
+  editing and arbitrarily large files requires a separate design.
+- Closing the container or an enabled timeout/minimize lock ends the in-memory
+  session. No password is saved in settings or the local filesystem.
+
 ## Session policy
 
 Configured in Options > NDR > Encrypted Folder:
 
-- Default policy: lock immediately when the encrypted folder browser closes.
+- Default policy: lock immediately when leaving the encrypted folder pane.
 - Default period: 15 minutes (used only for inactivity/timed policies).
 - Always lock on NDR exit: enabled; minimize lock: disabled by default.
 - Expiration or explicit lock drops the SQLCipher connection and destroys
@@ -91,11 +113,10 @@ Configured in Options > NDR > Encrypted Folder:
   original**. Exporting deliberately writes plaintext to the specified path.
   External editors are intentionally not launched automatically because they
   commonly leave sensitive plaintext on disk.
-- The first UI integration supports creating vaults, opening via double-click,
-  browsing nested folders in an NDR vault window, creating folders/files,
-  importing/exporting explicitly, renaming/deleting and editing UTF-8 text in
-  memory. It does **not** yet integrate every native pane file operation,
-  shell drag-and-drop, multi-gigabyte streaming, or password changes.
+- The pane integration supports creating vaults, opening via double-click,
+  browsing nested folders, creating folders/files, renaming/deleting, and
+  editing UTF-8 text in memory. It does **not** yet integrate every native pane
+  operation, shell drag-and-drop, multi-gigabyte streaming, or password changes.
 - Imported file limit is 64 MiB and in-memory text editing limit is 1 MiB.
 
 ## Release readiness

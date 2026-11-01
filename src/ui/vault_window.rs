@@ -4,6 +4,40 @@ use super::*;
 use ndr::vault::{Vault, VaultItem, SessionPolicy, MAX_FILE_SIZE};
 use zeroize::Zeroize;
 
+pub(super) struct PaneVault {
+    pub file: PathBuf,
+    pub database: Vault,
+    pub stack: Vec<(i64, String)>,
+}
+
+pub(super) struct VaultTextEditor {
+    pane: usize,
+    id: i64,
+    name: String,
+    body: String,
+}
+impl Drop for VaultTextEditor {
+    fn drop(&mut self) { self.body.zeroize(); self.name.zeroize(); }
+}
+
+impl Drop for PaneVault {
+    fn drop(&mut self) {
+        for (_, name) in &mut self.stack { name.zeroize(); }
+    }
+}
+
+impl PaneVault {
+    fn new(file: PathBuf, database: Vault) -> Self {
+        Self { file, database, stack: vec![(1, String::new())] }
+    }
+    fn folder(&self) -> i64 { self.stack.last().map_or(1, |item| item.0) }
+    pub(super) fn virtual_path(&self) -> PathBuf {
+        let mut result = self.file.clone();
+        for (_, name) in self.stack.iter().skip(1) { result.push(name); }
+        result
+    }
+}
+
 pub(super) struct VaultDialog {
     path: PathBuf,
     creating: bool,
@@ -23,6 +57,223 @@ pub(super) struct VaultDialog {
     error: String,
 }
 
+impl App {
+    pub(super) fn vault_security_tick(&mut self, ctx: &egui::Context) {
+        let policy = SessionPolicy::from_settings(&self.settings);
+        let minimized = self.settings.flag("VaultLockOnMinimize", false)
+            && ctx.input(|i| i.viewport().minimized.unwrap_or(false));
+        for pane in 0..2 {
+            let expired = self.panes[pane].vault.as_ref().is_some_and(|state|
+                minimized || state.database.expired(policy));
+            if expired {
+                self.vault_text_editor = None;
+                self.exit_vault(pane);
+                self.status = "암호화 폴더가 잠겼습니다. 다시 열어 인증하세요.".into();
+            }
+        }
+    }
+
+    fn attach_vault(&mut self, pane: usize, container: PaneVault) {
+        // The decrypted container remains in memory, never as a plain folder.
+        self.panes[pane].archive = None;
+        self.panes[pane].vault = Some(container);
+        let ctx = self.egui_ctx.clone();
+        self.arm_folder_watch(pane, None, &ctx);
+        self.refresh(pane);
+    }
+
+    pub(super) fn refresh_vault(&mut self, pane: usize) {
+        let policy = SessionPolicy::from_settings(&self.settings);
+        let Some(container) = self.panes[pane].vault.as_mut() else { return };
+        if container.database.expired(policy)
+            || self.settings.flag("VaultLockOnMinimize", false)
+                && self.egui_ctx.input(|i| i.viewport().minimized.unwrap_or(false)) {
+            self.exit_vault(pane);
+            self.status = "암호화 폴더가 잠겼습니다. 다시 열면 비밀번호를 요청합니다.".into();
+            return;
+        }
+        let current = container.virtual_path();
+        let parent = container.file.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
+        let listing = container.database.list(container.folder());
+        let entries = match listing {
+            Ok(items) => {
+                let mut rows = vec![Entry::parent_item(parent, None)];
+                rows.extend(items.into_iter().map(|item| Entry {
+                    path: current.join(&item.name), name: item.name.clone(), is_dir: item.folder,
+                    size: item.size.max(0) as u64, modified: None, hidden: false,
+                    attributes: if item.folder { 0x10 } else { 0x80 }, drive: false,
+                }));
+                rows
+            }
+            Err(error) => { self.status = error; return; }
+        };
+        let state = &mut self.panes[pane];
+        state.generation = state.generation.wrapping_add(1);
+        state.loading = false;
+        state.address = current.to_string_lossy().into_owned();
+        state.entries = entries;
+        state.error = None;
+        state.cursor = 0;
+        state.selected.clear();
+        state.listed = Some(format!("vault|{}", current.display()));
+        state.disk = None;
+        state.summary = None;
+        state.descriptions.clear();
+        state.folder_sizes.clear();
+        state.folder_bytes.clear();
+        self.sort_pane(pane);
+    }
+
+    pub(super) fn exit_vault(&mut self, pane: usize) {
+        let Some(container) = self.panes[pane].vault.take() else { return };
+        let parent = container.file.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
+        let file_name = container.file.file_stem().map(|n| n.to_string_lossy().into_owned());
+        drop(container);
+        for entry in &mut self.panes[pane].entries { entry.name.zeroize(); }
+        self.panes[pane].entries.clear();
+        if let Some(listed) = self.panes[pane].listed.as_mut() { listed.zeroize(); }
+        self.panes[pane].view = PaneView::default();
+        if self.vault_text_editor.as_ref().is_some_and(|editor| editor.pane == pane) {
+            self.vault_text_editor = None;
+        }
+        self.pending_focus[pane] = file_name;
+        self.navigate(pane, parent, false);
+    }
+
+    pub(super) fn enter_vault_item(&mut self, pane: usize, entry: &Entry) {
+        if entry.is_parent() {
+            let state = self.panes[pane].vault.as_mut().unwrap();
+            if state.stack.len() == 1 { self.exit_vault(pane); }
+            else { state.stack.pop(); self.refresh_vault(pane); }
+            return;
+        }
+        let Some(state) = self.panes[pane].vault.as_mut() else { return };
+        if let Ok(items) = state.database.list(state.folder()) {
+            if let Some(item) = items.into_iter().find(|v| v.name == entry.name) {
+                if item.folder {
+                    state.stack.push((item.id, item.name.clone()));
+                    state.database.touch();
+                    self.refresh_vault(pane);
+                } else {
+                    self.open_vault_text(pane, item);
+                }
+            }
+        }
+    }
+    fn open_vault_text(&mut self, pane: usize, item: VaultItem) {
+        let Some(state) = self.panes[pane].vault.as_mut() else { return };
+        match state.database.read_file(item.id) {
+            Ok(bytes) if bytes.len() <= 1024 * 1024 => match String::from_utf8(bytes) {
+                Ok(body) => self.vault_text_editor = Some(VaultTextEditor {
+                    pane, id: item.id, name: item.name.clone(), body,
+                }),
+                Err(_) => self.status = "바이너리 파일은 텍스트 편집기로 열 수 없습니다. 암호화 폴더 안에서 안전하게 보관됩니다.".into(),
+            },
+            Ok(_) => self.status = "텍스트 편집은 1 MiB 이하 파일에만 지원됩니다.".into(),
+            Err(e) => self.status = e,
+        }
+    }
+
+    pub(super) fn vault_text_ui(&mut self, ctx: &egui::Context) {
+        let Some(mut editor) = self.vault_text_editor.take() else { return };
+        let mut open = true;
+        let mut save = false;
+        egui::Window::new(format!("암호화 폴더 - {}", editor.name))
+            .id(egui::Id::new("ndr-vault-text-editor"))
+            .open(&mut open).resizable(true).default_size(egui::vec2(700.0, 490.0))
+            .show(ctx, |ui| {
+                ui.add(egui::TextEdit::multiline(&mut editor.body).desired_width(f32::INFINITY).desired_rows(22));
+                if ui.button("암호화하여 저장").clicked() { save = true; }
+            });
+        if save {
+            if let Some(state) = self.panes[editor.pane].vault.as_mut() {
+                match state.database.update_file(editor.id, editor.body.as_bytes()) {
+                    Ok(()) => { self.refresh_vault(editor.pane); open = false; },
+                    Err(e) => self.status = e,
+                }
+            } else { open = false; }
+        }
+        if open { self.vault_text_editor = Some(editor); }
+    }
+
+    pub(super) fn vault_new_item(&mut self, folder: bool) {
+        let pane = self.active;
+        let title = if folder { "새 폴더" } else { "새 파일" };
+        let message = if folder { "암호화 폴더에 만들 폴더 이름을 입력하세요." }
+            else { "암호화 폴더에 만들 파일 이름을 입력하세요." };
+        self.prompt_file_name(title, message, "", move |app, name, _| {
+            let Some(name) = name.filter(|n| !n.is_empty()) else { return };
+            let Some(state) = app.panes[pane].vault.as_mut() else { return };
+            let current = state.folder();
+            let result = if folder { state.database.add_folder(current, &name).map(|_| ()) }
+                else { state.database.add_file(current, &name, b"").map(|_| ()) };
+            match result { Ok(()) => app.refresh_vault(pane), Err(e) => app.status = e }
+        });
+    }
+
+    pub(super) fn vault_rename_item(&mut self) {
+        let pane = self.active;
+        let Some(entry) = self.panes[pane].entries.get(self.panes[pane].cursor).cloned()
+            .filter(|e| !e.is_parent()) else { return };
+        let old = entry.name;
+        self.prompt_file_name("이름 바꾸기", "새 이름을 입력하세요.", &old.clone(), move |app, new, _| {
+            let Some(new) = new.filter(|n| !n.is_empty()) else { return };
+            let Some(state) = app.panes[pane].vault.as_mut() else { return };
+            let result = state.database.list(state.folder()).and_then(|items| {
+                let id = items.iter().find(|v| v.name == old).ok_or("항목을 찾을 수 없습니다.")?.id;
+                state.database.rename(id, &new)
+            });
+            match result { Ok(()) => app.refresh_vault(pane), Err(e) => app.status = e }
+        });
+    }
+
+    pub(super) fn vault_remove_items(&mut self) {
+        let pane = self.active;
+        let names: Vec<String> = self.target_entries(pane).into_iter().map(|e| e.name).collect();
+        if names.is_empty() { return; }
+        let label = format!("암호화 폴더에서 {}개 항목을 영구 삭제할까요?", names.len());
+        self.system_box("암호화 폴더", &label,
+            ndr::msgbox::MB_YESNO | ndr::msgbox::MB_ICONEXCLAMATION, move |app, confirmed, _| {
+                if confirmed != ndr::msgbox::IDYES { return; }
+                let Some(state) = app.panes[pane].vault.as_mut() else { return };
+                let result = state.database.list(state.folder()).and_then(|items| {
+                    for item in items {
+                        if names.contains(&item.name) { state.database.remove(item.id)?; }
+                    }
+                    Ok(())
+                });
+                match result { Ok(()) => app.refresh_vault(pane), Err(e) => app.status = e }
+            });
+    }
+
+    /// Paste source bytes directly into SQLCipher without plaintext staging.
+    pub(super) fn vault_paste_files(&mut self) {
+        let pane = self.active;
+        let files = match (self.clipboard_files_reader)() {
+            Ok((paths, _)) => paths,
+            Err(e) => { self.status = e; return; }
+        };
+        let Some(state) = self.panes[pane].vault.as_mut() else { return };
+        for file in files {
+            if !file.is_file() { self.status = "일반 파일만 붙여넣을 수 있습니다.".into(); return; }
+            let Some(name) = file.file_name().and_then(|n| n.to_str()) else { continue };
+            let bytes = match std::fs::metadata(&file) {
+                Ok(metadata) if metadata.len() <= MAX_FILE_SIZE as u64 => std::fs::read(&file),
+                _ => { self.status = "최대 64 MiB 파일만 붙여넣을 수 있습니다.".into(); return; }
+            };
+            let current = state.folder();
+            match bytes.map_err(|e| e.to_string()).and_then(|data| {
+                let guarded = zeroize::Zeroizing::new(data);
+                state.database.add_file(current, name, &guarded)
+            }) {
+                Ok(_) => (),
+                Err(e) => { self.status = e; return; }
+            }
+        }
+        self.refresh_vault(pane);
+    }
+}
+
 impl Drop for VaultDialog {
     fn drop(&mut self) {
         self.folder_name.zeroize();
@@ -35,6 +286,73 @@ impl Drop for VaultDialog {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn creating_encrypted_folder_immediately_enters_unlocked_pane() {
+        let (root, ctx, mut app) = super::super::tools_tests::fixture("vault-new-folder", "ko");
+        let parent = root.join("left");
+        app.open_vault(parent.join("placeholder.ndr"), true);
+        let dialog = app.vault_dialog.as_mut().unwrap();
+        dialog.folder_name = "티라노사우루스".into();
+        dialog.password = "strong password 123456".into();
+        dialog.confirmation = dialog.password.clone();
+        dialog.authenticate();
+        assert!(dialog.error.is_empty(), "{}", dialog.error);
+        let _ = ctx.run(egui::RawInput::default(), |ctx| { app.vault_window_ui(ctx); });
+        assert!(app.vault_dialog.is_none());
+        assert!(app.panes[0].vault.is_some());
+        assert!(app.panes[0].entries.iter().any(|e| e.is_parent()));
+        assert!(parent.join("티라노사우루스.ndr").is_file());
+        assert!(!parent.join("티라노사우루스").exists());
+        app.parent();
+        assert!(app.panes[0].vault.is_none());
+        drop(app);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn encrypted_container_behaves_like_a_folder_in_both_panes() {
+        let (root, ctx, mut app) = super::super::tools_tests::fixture("vault-pane", "ko");
+        let parent = root.join("left");
+        let file = parent.join("스테고사우루스.ndr");
+        // Start with a container created by the current SQLCipher backend.
+        let mut database = Vault::create(&file, "correct horse battery staple".into()).unwrap();
+        database.add_folder(1, "비밀 서류").unwrap();
+        database.add_file(1, "notes.txt", b"private text").unwrap();
+        drop(database);
+
+        app.refresh(0);
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        while app.panes[0].loading {
+            assert!(std::time::Instant::now() < until, "pane listing timed out");
+            app.poll(&ctx);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let index = app.panes[0].entries.iter().position(|entry| entry.name == "스테고사우루스").unwrap();
+        assert!(app.panes[0].entries[index].is_dir, "vault must appear as a folder");
+        assert!(app.panes[0].entries[index].path.is_file(), "container bytes stay in one file");
+        app.panes[0].cursor = index;
+        app.open_current();
+        let dialog = app.vault_dialog.as_mut().unwrap();
+        dialog.password = "correct horse battery staple".into();
+        dialog.authenticate();
+        let _ = ctx.run(egui::RawInput::default(), |ctx| { app.vault_window_ui(ctx); });
+        assert!(app.vault_dialog.is_none(), "no further sign-in modal after successful unlock");
+        assert!(app.panes[0].vault.is_some(), "authentication enters the pane");
+        let sub = app.panes[0].entries.iter().position(|e| e.name == "비밀 서류").unwrap();
+        assert!(app.panes[0].entries[sub].is_dir);
+        app.panes[0].cursor = sub;
+        app.open_current();
+        assert_eq!(app.panes[0].vault.as_ref().unwrap().stack.len(), 2);
+        app.parent();
+        assert!(app.panes[0].vault.is_some(), "leaving subfolder does not require reauthentication");
+        assert!(app.panes[0].entries.iter().any(|e| e.name == "notes.txt"));
+        app.parent();
+        assert!(app.panes[0].vault.is_none(), "leaving the container closes the session");
+        assert!(file.is_file());
+        assert!(!parent.join("스테고사우루스").exists(), "no plaintext folder was created");
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn random_dinosaur_name_starts_focused_and_fully_selected() {
@@ -69,7 +387,7 @@ mod tests {
         assert!(dialog.error.is_empty(), "{}", dialog.error);
         assert_eq!(dialog.created_path.as_deref(), Some(root.join("비밀 문서.ndr").as_path()));
         assert!(root.join("비밀 문서.ndr").is_file());
-        assert!(dialog.vault.is_none(), "the created folder should close the dialog");
+        assert!(dialog.vault.is_some(), "the created folder should stay authenticated for entry");
         assert!(Vault::unlock(&root.join("비밀 문서.ndr"), "wrong password 123456".into()).is_err());
         assert!(Vault::unlock(&root.join("비밀 문서.ndr"), "long secure passphrase 12345!".into()).is_ok());
         drop(dialog);
@@ -138,7 +456,7 @@ impl VaultDialog {
             Ok(vault) => {
                 if self.creating {
                     self.created_path = Some(self.path.clone());
-                    drop(vault);
+                    self.vault = Some(vault);
                     self.password.zeroize();
                     self.confirmation.zeroize();
                     self.error.clear();
@@ -221,7 +539,7 @@ impl VaultDialog {
             close = true;
         }
         if ui.input(|input| input.key_pressed(egui::Key::Escape)) { close = true; }
-        if ui.input(|input| input.key_pressed(egui::Key::Enter)) && !close {
+        if ui.input(|input| input.key_pressed(egui::Key::Enter)) && !close && self.created_path.is_none() {
             self.authenticate();
         }
         if !self.error.is_empty() {
@@ -409,9 +727,9 @@ impl App {
                 .open(&mut open).resizable(true).default_width(700.0)
                 .show(ctx, |ui| { close = dialog.draw(ui, policy); });
         }
-        if let Some(path) = dialog.created_path.take() {
-            let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
-            self.refresh_and_focus(self.active, Some(name));
+        if let Some(database) = dialog.vault.take() {
+            self.attach_vault(self.active, PaneVault::new(dialog.path.clone(), database));
+            return;
         }
         if open && !close { self.vault_dialog = Some(dialog); }
         // Otherwise the connection and all plaintext/password UI buffers drop.

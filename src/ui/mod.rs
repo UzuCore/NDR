@@ -137,6 +137,8 @@ struct Pane {
     generation: u64,
     error: Option<String>,
     archive: Option<ArchiveLocation>,
+    /// Open SQLCipher container presented as a directory inside this pane.
+    vault: Option<vault_window::PaneVault>,
     /// Original panel FTP mode (FUN_00481948 == 2): the connection and the remote folder. path stays as the local folder from before connecting.
     remote: Option<ftp_pane::PaneRemote>,
     /// Original FTP log pane height (starts at 60, changed via the upper splitter bar).
@@ -234,6 +236,7 @@ impl Pane {
             generation: 0,
             error: None,
             archive: None,
+            vault: None,
             remote: None,
             ftp_log_height: ftp_pane::FTP_LOG_HEIGHT,
             descriptions: HashMap::new(),
@@ -356,6 +359,9 @@ pub(super) fn restore_clipboard_keys(raw: &mut egui::RawInput, pastes: u32, inse
 }
 /// A panel location as a single string (local folder, archive file + inner path, FTP host + path). Used to tell whether the same location was re-read.
 fn location_key(pane: &Pane) -> String {
+    if let Some(container) = &pane.vault {
+        return format!("vault|{}", container.virtual_path().display());
+    }
     match (&pane.archive, &pane.remote) {
         (_, Some(remote)) => format!("ftp|{}|{}", remote.host, remote.path),
         (Some(archive), None) => format!("arc|{}|{}", archive.file.display(), archive.prefix),
@@ -703,6 +709,7 @@ pub struct App {
     msgbox_icons: HashMap<u16, egui::TextureHandle>,
     original_dialogs: Vec<original_dialogs::OriginalDialog>,
     vault_dialog: Option<vault_window::VaultDialog>,
+    vault_text_editor: Option<vault_window::VaultTextEditor>,
     /// Subfolders of the address bar's chevron menu (path, whether it is a drive list) -> (path, text). Cleared when a new listing arrives.
     crumb_cache: HashMap<(PathBuf, bool), Vec<(PathBuf, String)>>,
     /// The panel item being dragged, the folder row under it (panel, folder), and this frame's two panel areas.
@@ -1017,6 +1024,7 @@ impl App {
             msgbox_icons: HashMap::new(),
             original_dialogs: Vec::new(),
             vault_dialog: None,
+            vault_text_editor: None,
             crumb_cache: HashMap::new(),
             folder_size_queue: Arc::new((Mutex::new(std::collections::VecDeque::new()), std::sync::Condvar::new())),
             folder_size_workers: false,
@@ -1253,7 +1261,7 @@ impl App {
     /// Folder to watch: if watching is on and it is a local folder (not archive/FTP/My PC), that folder.
     fn watch_wanted(&self, index: usize) -> Option<PathBuf> {
         let pane = &self.panes[index];
-        (self.watch_folders && pane.archive.is_none() && pane.remote.is_none() && !panes::is_drives(&pane.path)).then(|| pane.path.clone())
+        (self.watch_folders && pane.vault.is_none() && pane.archive.is_none() && pane.remote.is_none() && !panes::is_drives(&pane.path)).then(|| pane.path.clone())
     }
 
     /// Stop the current watch (original FreeThread) and, if `wanted` exists, open a new watcher thread (original ResetThread -> FindFirstChangeNotificationW).
@@ -1348,6 +1356,18 @@ impl App {
             pane.disk = None;
             match listing.result {
                 Ok(mut entries) => {
+                    // A SQLCipher container is a folder inside NDR, never an
+                    // exposed document. Its on-disk .ndr file remains intact.
+                    if pane.archive.is_none() && pane.remote.is_none() {
+                        for entry in &mut entries {
+                            if !entry.is_dir && !entry.drive
+                                && entry.path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("ndr")) {
+                                entry.is_dir = true;
+                                entry.attributes |= 0x10;
+                                entry.name = entry.path.file_stem().unwrap_or_default().to_string_lossy().into_owned();
+                            }
+                        }
+                    }
                     // Original refresh (FUN_00487ce8): rereading the same folder keeps the cursor on the item with the same name (after copying to the other pane and so on).
                     let location = location_key(pane);
                     if pane.listed.as_deref() == Some(location.as_str()) && self.pending_focus[listing.pane].is_none() {
@@ -2035,6 +2055,7 @@ impl eframe::App for App {
                 compat::Language::load(&self.resources.join("Languages"), &self.language);
         }
         self.poll(ctx);
+        self.vault_security_tick(ctx);
         self.keyboard(ctx);
         self.sync_current_directory();
         for pane in &mut self.panes {
@@ -2160,6 +2181,7 @@ impl eframe::App for App {
         self.popup_menu_ui(ctx);
         self.shortcut_window_ui(ctx);
         self.vault_window_ui(ctx);
+        self.vault_text_ui(ctx);
         self.original_dialog_ui(ctx);
         // The modal progress window is drawn above the window under it (for example the custom search of the cleanup options window).
         self.modal_progress_ui(ctx);
@@ -2215,6 +2237,8 @@ impl eframe::App for App {
     }
     fn on_exit(&mut self, _: Option<&eframe::glow::Context>) {
         self.vault_dialog = None;
+        self.vault_text_editor = None;
+        for pane in &mut self.panes { pane.vault = None; }
         if let Some(job) = &self.job {
             job.cancel.store(true, Ordering::Relaxed);
         }

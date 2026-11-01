@@ -338,6 +338,12 @@ impl App {
     /// Address field text ("archive!/prefix" inside an archive, otherwise the current folder). In place of the original TNXPathLabel.GetPath.
     pub(super) fn address_text(&self, index: usize) -> String {
         let pane = &self.panes[index];
+        if let Some(vault) = &pane.vault {
+            let root = vault.file.with_extension("");
+            let mut display = root;
+            for (_, name) in vault.stack.iter().skip(1) { display.push(name); }
+            return display.to_string_lossy().into_owned();
+        }
         if let Some(remote) = &pane.remote {
             return remote.address();
         }

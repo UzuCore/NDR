@@ -616,6 +616,10 @@ impl App {
     /// move did nothing in the original (FUN_0042bdc4 stops when not local). Per user request NDR, for a modifiable archive (zip, 7z, tar, wim),
     /// extracts to the folder chosen in the same destination window and deletes from the archive.
     pub(super) fn copy_move_to_folder(&mut self, moving: bool) {
+        if self.panes.iter().any(|pane| pane.vault.is_some()) {
+            self.status = "암호화 폴더와 일반 디렉터리 사이의 이동은 현재 지원하지 않습니다.".into();
+            return;
+        }
         let i = self.active;
         if self.panes[i].archive.is_some() {
             if !moving {

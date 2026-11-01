@@ -382,11 +382,13 @@ fn ndr_encrypted_folder_opens_in_internal_browser() {
     std::fs::write(&entry, b"test fake file").unwrap();
     app.refresh(0);
     wait(&mut app, &ctx);
-    let index = app.panes[0].entries.iter().position(|e| e.name == "private.ndr").unwrap();
+    let index = app.panes[0].entries.iter().position(|e| e.name == "private").unwrap();
+    assert!(app.panes[0].entries[index].is_dir, "NDR shows the container as a folder");
+    assert!(app.panes[0].entries[index].path.is_file(), "encrypted bytes remain in a file");
     app.active = 0;
     app.panes[0].cursor = index;
     app.open_current();
-    assert!(app.vault_dialog.is_some(), "NDR file should open inside the vault browser");
+    assert!(app.vault_dialog.is_some(), "NDR folder should request a password before entering the pane");
     app.vault_dialog = None;
     app.dispatch("newVault", &ctx);
     assert!(app.vault_dialog.is_some(), "File > New encrypted folder should open creator");
