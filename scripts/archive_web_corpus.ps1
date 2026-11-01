@@ -2,7 +2,7 @@
 # bundled 7zip+ that NDR ships. No downloaded payload is executed or installed.
 # Source files are upstream BSD-licensed test cases, uuencoded for transport.
 param(
-    [string]$Destination = 'D:\NDR\work\NDR-rust\target\archive-web-corpus',
+    [string]$Destination = 'D:\NDRworks\work\NDR-rust\target\archive-web-corpus',
     [string]$LibarchiveRevision = '348e5a2e27503f5bf114e298e2bd9ddcd59ab48e',
     [string]$SharpCompressRevision = '6128ec51eec4ca9f7b7b9f44b77bdb0cd8b3bd97'
 )

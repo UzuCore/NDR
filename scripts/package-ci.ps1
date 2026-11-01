@@ -1,5 +1,5 @@
 # Assemble a portable GitHub Actions release without touching the user's local
-# D:\NDR\release folder or invoking the interactive desktop GUI smoke test.
+# D:\NDRworks\release folder or invoking the interactive desktop GUI smoke test.
 # Tests and the optimized executable are built by the workflow before calling
 # this script. All temporary files are confined to target/ci-release.
 param([string]$OutputDir = 'target/ci-release')

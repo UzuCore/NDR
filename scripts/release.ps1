@@ -1,9 +1,9 @@
-﻿# NDR Rust 배포: 준비 → 격리 프로필 시작 확인 → zip 확인 → 배포 폴더 교체(이전 묶음은 old로) → 배치본 시작 확인.
+# NDR Rust 배포: 준비 → 격리 프로필 시작 확인 → zip 확인 → 배포 폴더 교체(이전 묶음은 old로) → 배치본 시작 확인.
 # 사용: powershell -ExecutionPolicy Bypass -File scripts\release.ps1 -Series rust-20261027-r2 -Readme <README.md 경로>
 param(
     [Parameter(Mandatory = $true)][string]$Series,
     [Parameter(Mandatory = $true)][string]$Readme,
-    [string]$Release = 'D:\NDR\release'
+    [string]$Release = 'D:\NDRworks\release'
 )
 $ErrorActionPreference = 'Stop'
 $project = Split-Path -Parent $PSScriptRoot
