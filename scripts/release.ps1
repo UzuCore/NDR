@@ -112,7 +112,19 @@ Get-ChildItem -LiteralPath $Release -Directory | Where-Object { $_.Name -like 'r
         # Verify the archive byte-for-byte before even attempting to delete source.
         $sourceFiles = @(Get-ChildItem -LiteralPath $previous -Recurse -File -Force)
         $archiveFiles = @(Get-ChildItem -LiteralPath $saved -Recurse -File -Force)
-        if ($sourceFiles.Count -ne $archiveFiles.Count) { throw "previous bundle copy incomplete: $previous -> $saved" }
+        # Windows may remove some files and then refuse to remove the locked
+        # directory itself. Remaining source files must be a matching subset
+        # of the complete archive already saved under old/.
+        if ($sourceFiles.Count -gt $archiveFiles.Count) { throw "previous bundle copy incomplete: $previous -> $saved" }
+        $savedManifestPath = Join-Path $saved ("source-manifest-$($_.Name).json")
+        if (Test-Path -LiteralPath $savedManifestPath) {
+            $savedManifest = Get-Content -LiteralPath $savedManifestPath -Raw | ConvertFrom-Json
+            $savedZip = Join-Path $saved ("NDR-rust-win-x64-" + ($_.Name -replace '^rust-', '') + '.zip')
+            if ($savedManifest.series -ne $_.Name -or -not (Test-Path -LiteralPath $savedZip) -or
+                (Get-FileHash -LiteralPath $savedZip -Algorithm SHA256).Hash.ToLower() -ne $savedManifest.zip.sha256) {
+                throw "previous bundle ZIP/manifest verification failed: $saved"
+            }
+        }
         foreach ($file in $sourceFiles) {
             $relative = $file.FullName.Substring($previous.Length).TrimStart('\')
             $copy = Join-Path $saved $relative
