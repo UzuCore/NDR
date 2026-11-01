@@ -1,0 +1,4 @@
+7zip+alpha 26.05 (UzuCore fork of 7-Zip with ALZ/EGG support)
+Source: https://github.com/UzuCore/7zip
+Release: build-2026.10.28 (7zip-windows-x64.7z, SHA256 9B468470FDB6680FC5D46DBAEDEE74238C8250D89EDB61192D3F4ED6BEFC7354)
+7za.exe = 7zz.exe from that package; Full\7z.exe + Full\7z.dll from the same package.

@@ -16,3 +16,11 @@
 /THIRD-PARTY-NOTICES.txt
 /Resources/*
 !/Resources/toolbar.xml
+# GitHub-hosted Windows builds must contain the exact runtime resources.
+# Keep the public redistributable payload (with its notices) self-contained.
+!/Resources/Colors/
+!/Resources/Languages/
+!/Resources/Skins/
+!/Resources/Tools/
+!/Resources/complete.wav
+!/THIRD-PARTY-NOTICES.txt

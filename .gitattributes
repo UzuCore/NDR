@@ -1,0 +1,3 @@
+# Do not normalize line endings in archived runtime assets: some .lang files
+# use legacy encodings, while images, sounds and 7zip+ engines are binary.
+Resources/** binary
