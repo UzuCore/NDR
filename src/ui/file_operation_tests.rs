@@ -229,6 +229,18 @@ fn conflict_buttons_follow_the_original_tffileexists() {
     assert_eq!(B::ReplaceFolder.top(), B::OverwriteNewer.top());
     // Same path: overwrite, overwrite newer and replace folder are disabled (not hidden).
     assert_eq!(conflict_buttons(&form("C:\\a\\x.txt", "c:\\A\\X.TXT", false, false)), [(B::Overwrite, false), (B::Skip, true), (B::OverwriteNewer, false), (B::Rename, true), (B::Cancel, true)]);
+    // Enter presses the focused (first enabled) button: overwrite for a plain file, skip when overwriting the same path is impossible.
+    let ctx = egui::Context::default();
+    super::set_app_fonts(&ctx, None, false, 1.0);
+    let _ = ctx.run(egui::RawInput::default(), |_| {});
+    let language = ndr::compat::Language::default();
+    for (mut conflict, expected) in [(form("c:\\a\\x.txt", "c:\\b\\x.txt", false, false), ndr::fsops::ConflictChoice::Overwrite), (form("C:\\a\\x.txt", "c:\\A\\X.TXT", false, false), ndr::fsops::ConflictChoice::Skip)] {
+        let mut chosen = None;
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| chosen = super::file_operation::conflict_ui(ui, &mut conflict, &language, true, true));
+        });
+        assert_eq!(chosen, Some(expected));
+    }
     // New item inside the existing folder disables only replace folder; the existing inside the new folder disables replace folder and overwrite.
     assert_eq!(conflict_buttons(&form("c:\\d\\d", "c:\\d", true, true)), [(B::Overwrite, true), (B::Skip, true), (B::ReplaceFolder, false), (B::Rename, true), (B::Cancel, true)]);
     assert_eq!(conflict_buttons(&form("c:\\d", "c:\\d\\d", true, true)), [(B::Overwrite, false), (B::Skip, true), (B::ReplaceFolder, false), (B::Rename, true), (B::Cancel, true)]);

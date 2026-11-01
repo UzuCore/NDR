@@ -444,7 +444,9 @@ unsafe extern "system" fn paste_key_proc(hwnd: HWND, message: u32, wparam: WPARA
         let down = |key: u16| unsafe { GetKeyState(key as i32) } < 0;
         let (ctrl, shift, alt) = (down(VK_CONTROL), down(VK_SHIFT), down(VK_MENU));
         let key = wparam.0;
-        if message == WM_KEYDOWN && !alt && ((key == b'V' as usize && ctrl && !shift) || (key == VK_INSERT as usize && shift && !ctrl)) {
+        // Ctrl+V and Ctrl+Shift+V (original miPasteAsShortcut, Shift+Ctrl+V) both come from egui-winit as Paste, which it drops with no clipboard text.
+        // Previously only Ctrl+V without Shift was counted, so paste as shortcut did nothing.
+        if message == WM_KEYDOWN && !alt && ((key == b'V' as usize && ctrl) || (key == VK_INSERT as usize && shift && !ctrl)) {
             PASTE_KEYS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
         // The original list also opens the right-click menu with the Apps key (VK_APPS, WM_CONTEXTMENU at -1, -1) (FUN_00484e8c). egui has no such key.

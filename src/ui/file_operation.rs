@@ -201,7 +201,7 @@ pub(super) fn conflict_buttons(form: &ConflictForm) -> Vec<(ConflictButton, bool
 
 /// Original TfFileExists (ClientWidth 545 x ClientHeight 253) layout: lMsg (20,13), lFileName (20,34 bold),
 /// Panel1(17,56 396×155: lOrgLabel·imgOrg·lOrgDir·lOrgFile, Bevel1, lNewLabel·imgNew·lNewDir·lNewFile), chkApplyAll(20,221),
-/// right button column (conflict_buttons). Enter = skip (C# version), Esc = cancel (close the window).
+/// right button column (conflict_buttons). Enter = the first enabled button (overwrite), Esc = cancel (close the window).
 pub(super) fn conflict_ui(ui: &mut egui::Ui, form: &mut ConflictForm, language: &compat::Language, ko: bool, enter: bool) -> Option<ConflictChoice> {
     let text = |key: &str, fallback: &str| language.text(&format!("formFileExists.{key}"), fallback);
     let (area, _) = ui.allocate_exact_size(egui::vec2(545.0, 253.0), egui::Sense::hover());
@@ -272,8 +272,10 @@ pub(super) fn conflict_ui(ui: &mut egui::Ui, form: &mut ConflictForm, language: 
             chosen = Some(button.choice());
         }
     }
+    // Enter presses the focused button: the first enabled one in the column (the original opens with btnOverwrite focused, seen in the running
+    // original; Skip when overwriting is not possible). Previously Enter always skipped (C# version).
     if enter && chosen.is_none() {
-        chosen = Some(ConflictChoice::Skip);
+        chosen = conflict_buttons(form).into_iter().find(|(_, enabled)| *enabled).map(|(button, _)| button.choice());
     }
     chosen
 }
