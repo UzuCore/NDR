@@ -30,7 +30,7 @@ format is intentionally incompatible with SQLCipher 4.
 
 ## Password and authentication
 
-- 16-character *minimum*, but **length alone is not entropy**; prefer unique
+- 6-character *minimum*, but **length alone is not entropy**; prefer unique
   randomly generated passwords/passphrases. SQLCipher 4 defaults to PBKDF2-
   HMAC-SHA512 with 256,000 iterations and a unique salt per container.
 - There is **no master key, backdoor, recovery password, cleartext key file,

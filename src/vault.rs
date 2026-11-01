@@ -63,7 +63,7 @@ fn valid_name(name: &str) -> Result<(), String> {
 }
 
 fn configure(conn: &Connection, password: Zeroizing<String>) -> Result<(), String> {
-    if password.chars().count() < 16 { return Err("Password must contain at least 16 characters".into()); }
+    if password.chars().count() < 6 { return Err("Password must contain at least 6 characters".into()); }
     // SQLITE key must be set before any access to the encrypted database.
     conn.pragma_update(None, "key", password.as_str()).map_err(|e| e.to_string())?;
     // SQLCipher exposes cipher_status as text on some bundled builds and as
@@ -208,6 +208,18 @@ impl Vault {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn password_minimum_is_six_unicode_characters() {
+        let path = std::env::temp_dir().join(format!("ndr-password-six-{}.ndr", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        assert!(Vault::create(&path, "12345".into()).is_err());
+        assert!(!path.exists(), "rejected password must not leave a container");
+        let vault = Vault::create(&path, "123456".into()).unwrap();
+        drop(vault);
+        assert!(Vault::unlock(&path, "12345".into()).is_err());
+        assert!(Vault::unlock(&path, "123456".into()).is_ok());
+        std::fs::remove_file(path).unwrap();
+    }
     #[test]
     fn encrypted_container_roundtrip_password_and_structure() {
         let path = std::env::temp_dir().join(format!("ndr-vault-{}.ndr", std::process::id()));

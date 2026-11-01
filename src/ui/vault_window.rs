@@ -185,7 +185,7 @@ impl VaultDialog {
                 ui.add_space(10.0);
                 ui.separator();
                 ui.label(egui::RichText::new(
-                    "폴더 안의 파일과 이름이 암호화됩니다. 비밀번호는 16자 이상으로 설정하세요."
+                    "폴더 안의 파일과 이름이 암호화됩니다. 비밀번호는 6자 이상으로 설정하세요."
                 ).small().weak());
                 ui.label(egui::RichText::new(
                     "※ 비밀번호를 잊으면 복구할 수 없습니다. 안전한 곳에 보관하세요."
@@ -194,7 +194,7 @@ impl VaultDialog {
                 let mut cancel = false;
                 ui.horizontal(|ui| {
                     ui.add_space(ui.available_width().max(200.0) - 190.0);
-                    if ui.add_sized([88.0, 30.0], egui::Button::new("만들기")).clicked() {
+                    if ui.add_sized([88.0, 30.0], egui::Button::new("확인")).clicked() {
                         self.authenticate();
                     }
                     if ui.add_sized([88.0, 30.0], egui::Button::new("취소")).clicked() {
