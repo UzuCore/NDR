@@ -55,6 +55,21 @@ fn actual_bk3_7z_can_browse_select_copy_and_safely_extract_all() {
         &mut |_, _| ConflictChoice::Cancel, &mut |_, _| None, None, &mut |_, _, _| {})
         .expect("valid selected entry must be copied to normal folder");
     assert_eq!(fs::metadata(selected.join(".gitignore")).unwrap().len(), 311);
+    // Case-insensitive archive keys must also remove their selected parent
+    // path case-insensitively, not create assets/fonts inside the target.
+    let case_destination = folder.join("casefolded");
+    archive::extract_entries_with_program(&source, &case_destination,
+        &["ASSETS/FONTS/UNIFONT-17.0.05-KO.HEX".into()], None, &stop,
+        &mut |_, _| ConflictChoice::Cancel, &mut |_, _| None, None, &mut |_, _, _| {})
+        .expect("case-insensitive selected copy must work on the real 7z");
+    assert_eq!(fs::metadata(case_destination.join("unifont-17.0.05-ko.hex")).unwrap().len(), 38_470);
+    assert!(!case_destination.join("assets").exists());
+    let missing_destination = folder.join("missing-must-not-appear");
+    let missing_error = archive::extract_entries_with_program(&source, &missing_destination,
+        &["does-not-exist.txt".into()], None, &stop,
+        &mut |_, _| ConflictChoice::Cancel, &mut |_, _| None, None, &mut |_, _, _| {}).unwrap_err();
+    assert!(missing_error.contains("not found"), "missing entries must be reported accurately: {missing_error}");
+    assert!(!missing_destination.exists(), "a nonexistent selection cannot create a successful empty copy");
     assert!(archive::extract_entry_to_temp(&source, None, "nul", &stop).is_err(), "never open Windows reserved device member");
     let destination = folder.join("full");
     archive::extract(&source, &destination, None, &stop).expect("full extract must skip the reserved name without losing safe files");
@@ -73,7 +88,8 @@ fn actual_bk3_7z_can_browse_select_copy_and_safely_extract_all() {
 
     let report = json!({"archive": source.display().to_string(), "archive_sha256_unchanged": before,
         "visible_members": entries.len(), "hidden_device_members": omitted,
-        "selective_copy": "PASS", "whole_extraction": "PASS", "extract_files": files,
+        "selective_copy": "PASS", "case_insensitive_selected_copy": "PASS", "missing_entry_rejected": "PASS",
+        "whole_extraction": "PASS", "extract_files": files,
         "extract_dirs": dirs, "extract_bytes": bytes, "unsafe_member_open": "BLOCKED",
         "archive_edit_preservation": "PASS"});
     fs::write(root.join("ndr-bk3-results.json"), serde_json::to_vec_pretty(&report).unwrap()).unwrap();

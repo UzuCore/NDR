@@ -191,6 +191,20 @@ pub fn run_with_options(
                 move_files,
             } => {
                 ensure_plain_path(&destination)?;
+                // Preflight before creating ANY destination folders. The
+                // previous order created `source/subdir/...` first and only
+                // then detected that copying `source` there was recursive.
+                // Even a refused copy therefore changed the user's source.
+                for source in &sources {
+                    if fs::symlink_metadata(source).is_ok_and(|meta| meta.is_dir())
+                        && inside(source, &destination)?
+                    {
+                        return Err(format!(
+                            "Destination is the source folder or lies inside it: {} -> {}",
+                            source.display(), destination.display()
+                        ));
+                    }
+                }
                 fs::create_dir_all(&destination).map_err(|e| e.to_string())?;
                 // Original GetFileListToWork (FUN_00413ac4, +0x868 0 copy / 1 move): before the work, folders are walked (FUN_004138d4)
                 // so the progress window knows every file and byte. A move inside one drive renames, so the original counts it as one item
@@ -388,6 +402,32 @@ mod tests {
         fs::create_dir_all(&p).unwrap();
         p
     }
+    /// Original GetFileListToWork (FUN_00413ac4) + FUN_004138d4: the totals of a folder copy are known before the first file.
+    #[test]
+    fn recursive_copy_and_move_are_rejected_before_creating_destination_folders() {
+        let root = fixture();
+        let source = root.join("source");
+        fs::create_dir_all(source.join("nested")).unwrap();
+        fs::write(source.join("nested/data.txt"), b"source remains intact").unwrap();
+        for moving in [false, true] {
+            let forbidden = source.join("nested/new/copies");
+            assert!(!forbidden.exists());
+            let events = run_events(Operation::Copy {
+                sources: vec![source.clone()], destination: forbidden.clone(), move_files: moving,
+            });
+            assert!(events.iter().any(|event| matches!(event, Event::Fatal(message) if message.contains("inside it"))),
+                "a recursive copy/move must be refused: {events:?}");
+            assert!(!forbidden.exists(), "refused operation must not create even an empty destination folder");
+            assert!(!source.join("nested/new").exists(), "refused operation must not create any parent directories");
+            assert_eq!(fs::read(source.join("nested/data.txt")).unwrap(), b"source remains intact");
+        }
+        let safe_destination = root.join("destination");
+        let events = run_events(Operation::Copy { sources: vec![source.clone()], destination: safe_destination.clone(), move_files: false });
+        assert!(!events.iter().any(|e| matches!(e, Event::Fatal(..) | Event::Error { .. })), "normal copy must still work: {events:?}");
+        assert_eq!(fs::read(safe_destination.join("source/nested/data.txt")).unwrap(), b"source remains intact");
+        fs::remove_dir_all(root).unwrap();
+    }
+
     /// Original GetFileListToWork (FUN_00413ac4) + FUN_004138d4: the totals of a folder copy are known before the first file.
     /// A move inside the same drive whose destination name is free counts as one item (renamed as a whole).
     #[test]

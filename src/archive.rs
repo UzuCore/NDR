@@ -2084,6 +2084,20 @@ pub fn extract_whole_with_program_with_passwords(
 
 /// C# ExtractArchiveWithProgress(requestedKeys): everything when keys is empty, otherwise only items with the same key or inside that folder (case-insensitive, full paths kept).
 /// Progress is (items done, items chosen, key).
+/// Remove the selected archive folder prefix case-insensitively, without
+/// indexing UTF-8 using case-folded byte lengths (which are not stable).
+fn selected_output_relative(key: &str, parents: &[String]) -> String {
+    let relative = key.replace('\\', "/");
+    let folded = relative.to_lowercase();
+    for parent in parents.iter().filter(|p| !p.is_empty()) {
+        if folded.starts_with(&parent.to_lowercase()) {
+            let depth = parent.bytes().filter(|c| *c == b'/').count();
+            return relative.split('/').skip(depth).collect::<Vec<_>>().join("/");
+        }
+    }
+    relative
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn extract_entries_with_program(
     archive: &Path,
@@ -2118,6 +2132,30 @@ pub fn extract_entries_with_program(
         }
     };
     let wanted: Vec<String> = keys.iter().map(|k| k.replace('\\', "/").trim_end_matches('/').to_lowercase()).filter(|k| !k.is_empty()).collect();
+    // Previously, a stale or misspelled selection produced no matches but
+    // returned Ok(()): Ctrl+C/V and copy/move could report success without
+    // transferring any file. Validate all requests before creating a stage.
+    if !keys.is_empty() {
+        if wanted.len() != keys.len() {
+            return Err("Empty archive selection is not a valid entry".into());
+        }
+        for key in &wanted {
+            validate_key(key)?;
+            if !entries.iter().any(|entry| {
+                let candidate = entry.key.replace('\\', "/").trim_end_matches('/').to_lowercase();
+                candidate == *key || candidate.starts_with(&format!("{key}/"))
+            }) {
+                return Err(format!("Selected archive entry was not found: {key}"));
+            }
+        }
+        for (index, key) in wanted.iter().enumerate() {
+            if wanted.iter().enumerate().any(|(other_index, other)| {
+                index != other_index && (key == other || key.starts_with(&format!("{other}/")))
+            }) {
+                return Err(format!("Archive selection contains duplicate or overlapping parent/child entries: {key}"));
+            }
+        }
+    }
     let parents: Vec<String> = keys
         .iter()
         .map(|k| {
@@ -2133,6 +2171,16 @@ pub fn extract_entries_with_program(
             wanted.is_empty() || wanted.iter().any(|w| key == *w || key.starts_with(&format!("{w}/")))
         })
         .collect();
+    // Distinct selected subfolders can contain files with the same basename.
+    // Flattening them would collide after earlier work had already run.
+    // Refuse before creating a staging directory or publishing partial data.
+    let mut projected = HashSet::new();
+    for entry in &entries {
+        let placed = selected_output_relative(&entry.key, &parents);
+        if !projected.insert(placed.to_lowercase()) {
+            return Err(format!("Selected archive entries would collide in the destination: {placed}"));
+        }
+    }
     let total = entries.len();
     progress(0, total, "");
     let parent = destination
@@ -2154,12 +2202,7 @@ pub fn extract_entries_with_program(
         let relative = entry.key.replace('\\', "/");
         // Fixed: extracting items chosen in an archive subfolder recreated that subfolder path ("dir/sub/c.txt" -> destination\dir\sub\c.txt).
         // Now the parent path of chosen items is removed so they land directly under the destination (destination\c.txt). Full extraction (no keys) is unchanged.
-        let placed = parents
-            .iter()
-            .filter(|p| !p.is_empty())
-            .find_map(|p| relative.strip_prefix(p.as_str()))
-            .unwrap_or(&relative)
-            .to_owned();
+        let placed = selected_output_relative(&relative, &parents);
         let target = aggregate.join(&placed);
         if entry.is_dir {
             if let Err(e) = fs::create_dir_all(&target) {
@@ -3000,6 +3043,49 @@ mod configured_tests {
 #[cfg(test)]
 mod entry_tests {
     use super::*;
+
+    #[test]
+    fn selective_copy_refuses_missing_overlapping_or_colliding_keys_and_preserves_casefolded_paths() {
+        let root = super::tests::fixture();
+        let cancel = AtomicBool::new(false);
+        let archive = root.join("selection.zip");
+        let seed = root.join("seed.txt");
+        fs::write(&seed, b"seed").unwrap();
+        create(&[seed], &archive, None, &cancel).unwrap();
+        fs::write(root.join("CaseSensitive.TXT"), b"safe selected payload").unwrap();
+        add_entries(&archive, "Assets/Fonts", &[root.join("CaseSensitive.TXT")], None, &cancel).unwrap();
+        for folder in ["One", "Two"] {
+            let local = root.join(folder);
+            fs::create_dir_all(&local).unwrap();
+            fs::write(local.join("duplicate.txt"), folder.as_bytes()).unwrap();
+            add_entries(&archive, folder, &[local.join("duplicate.txt")], None, &cancel).unwrap();
+        }
+        let original = fs::read(&archive).unwrap();
+        for (label, keys, expected) in [
+            ("absent", vec!["nonexistent.txt".into()], "not found"),
+            ("mixed", vec!["seed.txt".into(), "nonexistent.txt".into()], "not found"),
+            ("empty", vec![String::new()], "Empty archive selection"),
+            ("overlap", vec!["Assets".into(), "Assets/Fonts/CaseSensitive.TXT".into()], "overlapping"),
+            ("duplicate basename", vec!["One/duplicate.txt".into(), "Two/duplicate.txt".into()], "collide"),
+        ] {
+            let destination = root.join(format!("should-not-exist-{label}"));
+            let error = extract_entries_with_program(&archive, &destination, &keys, None, &cancel,
+                &mut |_, _| ConflictChoice::Cancel, &mut |_, _| None, None, &mut |_, _, _| {}).unwrap_err();
+            assert!(error.contains(expected), "{label}: unexpected error: {error}");
+            assert!(!destination.exists(), "{label}: invalid selections must not create a destination");
+            assert_eq!(fs::read(&archive).unwrap(), original, "{label}: source archive is unchanged");
+        }
+        // Windows archive selections are case-insensitive. The archive's
+        // original capitalization must not make the inner parent reappear in
+        // the destination when stripping a selected entry's parent prefix.
+        let destination = root.join("casefolded-selected-copy");
+        extract_entries_with_program(&archive, &destination, &["assets/fonts/casesensitive.txt".into()], None,
+            &cancel, &mut |_, _| ConflictChoice::Cancel, &mut |_, _| None, None, &mut |_, _, _| {}).unwrap();
+        assert_eq!(fs::read(destination.join("CaseSensitive.TXT")).unwrap(), b"safe selected payload");
+        assert!(!destination.join("Assets").exists(), "do not re-create the archive's full path for a selected file");
+        assert_eq!(fs::read(&archive).unwrap(), original);
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn reserved_windows_device_members_are_hidden_only_for_browsing() {
