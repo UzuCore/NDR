@@ -42,6 +42,7 @@ mod system_commands;
 mod toolbar;
 mod tools_dialog;
 mod vault_window;
+mod dinosaur_names;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]

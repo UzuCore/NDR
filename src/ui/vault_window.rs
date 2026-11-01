@@ -8,6 +8,7 @@ pub(super) struct VaultDialog {
     path: PathBuf,
     creating: bool,
     folder_name: String,
+    name_select_pending: bool,
     created_path: Option<PathBuf>,
     password: String,
     confirmation: String,
@@ -36,12 +37,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn random_dinosaur_name_starts_focused_and_fully_selected() {
+        let ctx = egui::Context::default();
+        let mut dialog = VaultDialog::new(PathBuf::from("C:\\temp\\new.ndr"), true);
+        let length = dialog.folder_name.chars().count();
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                dialog.draw(ui, SessionPolicy::CloseOnLeave);
+            });
+        });
+        assert!(!dialog.name_select_pending, "initial selection must happen once");
+        let state = egui::TextEdit::load_state(&ctx, egui::Id::new("ndr-vault-folder-name")).unwrap();
+        let selection = state.cursor.char_range().unwrap();
+        assert_eq!(selection.primary.index.min(selection.secondary.index), 0);
+        assert_eq!(selection.primary.index.max(selection.secondary.index), length);
+    }
+
+    #[test]
     fn encrypted_folder_dialog_accepts_plain_name_and_keeps_extension_internal() {
         let root = std::env::temp_dir().join(format!("ndr-vault-create-ui-{}-{}", std::process::id(),
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
         std::fs::create_dir_all(&root).unwrap();
         let mut dialog = VaultDialog::new(root.join("새 암호화 폴더.ndr"), true);
-        assert_eq!(dialog.folder_name, "새 암호화 폴더");
+        assert!(!dialog.folder_name.is_empty());
+        assert!(dialog.name_select_pending);
+        assert!(!dialog.folder_name.ends_with(".ndr"));
         dialog.folder_name = "비밀 문서".into();
         dialog.password = "long secure passphrase 12345!".into();
         dialog.confirmation = dialog.password.clone();
@@ -68,9 +88,11 @@ mod tests {
 
 impl VaultDialog {
     fn new(path: PathBuf, creating: bool) -> Self {
-        let folder_name = if creating { path.file_stem().unwrap_or_default().to_string_lossy().into_owned() }
+        let folder_name = if creating {
+            super::dinosaur_names::suggest(path.parent().unwrap_or_else(|| Path::new("")))
+        }
             else { String::new() };
-        Self { path, creating, folder_name, created_path: None, password: String::new(), confirmation: String::new(), vault: None,
+        Self { path, creating, folder_name, name_select_pending: creating, created_path: None, password: String::new(), confirmation: String::new(), vault: None,
             folder: 1, folder_stack: vec![(1, String::from("/"))], selected: None,
             name: String::new(), import_path: String::new(), export_path: String::new(), text: None, error: String::new() }
     }
@@ -170,8 +192,14 @@ impl VaultDialog {
                 egui::Grid::new("ndr-vault-create-fields").num_columns(2)
                     .spacing([15.0, 12.0]).show(ui, |ui| {
                         ui.label("폴더 이름");
-                        ui.add(egui::TextEdit::singleline(&mut self.folder_name)
+                        let name_input = ui.add(egui::TextEdit::singleline(&mut self.folder_name)
+                            .id(egui::Id::new("ndr-vault-folder-name"))
                             .desired_width(270.0).hint_text("폴더 이름 입력"));
+                        if self.name_select_pending {
+                            name_input.request_focus();
+                            super::original_dialogs::select_all(ui, name_input.id, self.folder_name.chars().count());
+                            self.name_select_pending = false;
+                        }
                         ui.end_row();
                         ui.label("비밀번호");
                         ui.add(egui::TextEdit::singleline(&mut self.password)

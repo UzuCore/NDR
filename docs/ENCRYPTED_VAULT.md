@@ -44,6 +44,26 @@ format is intentionally incompatible with SQLCipher 4.
   `SQLite format 3` header. Filenames and directory structure are database
   columns encrypted along with the contents.
 
+## Dinosaur names for new encrypted folders
+
+The new-folder field starts with one randomly proposed dinosaur genus name,
+selected from 1,605 distinct non-avian genera and 179 curated Korean display
+names. Korean names are favoured, while the full scientific-name pool remains
+available. The proposed name is fully selected on opening, so typing replaces
+it immediately. Existing `.ndr` files are skipped. The extension is added
+silently on disk; manual user names are always permitted.
+
+The scientific names are taken from the Paleobiology Database's valid-genus
+dataset as presented by https://dinopages.com/dinosaurs/ (retrieved on
+2026-11-02, 1,606 records, 1,605 distinct genus names). DinoPages documents
+the dataset and filtering method at https://dinopages.com/about/. Original
+taxonomy data is CC BY 4.0, credited to the Paleobiology Database
+(https://paleobiodb.org/). Korean names are curated local transliterations;
+they are not the source database's Korean taxonomic names.
+
+The suggestion is a convenience feature, **not a security source of entropy**:
+the name generator is independent from SQLCipher keys and passwords.
+
 ## Session policy
 
 Configured in Options > NDR > Encrypted Folder:

@@ -394,3 +394,10 @@ SQLCipher 4.19.0 (Zetetic Community Edition, https://github.com/sqlcipher/sqlcip
 rusqlite 0.41.1 (https://github.com/rusqlite/rusqlite): MIT.
 sqlcipher-src 419.0.6 (https://github.com/LucaCappelletti94/sqlcipher-src): MIT AND BSD-3-Clause AND blessing AND WTFPL (packaged source components).
 zeroize 1.9.1 (https://github.com/RustCrypto/utils): Apache-2.0 OR MIT.
+
+Paleobiology Database (https://paleobiodb.org/): dinosaur genus taxonomy data,
+Creative Commons Attribution 4.0 International (CC BY 4.0).
+Non-avian valid genera retrieved via DinoPages (https://dinopages.com/dinosaurs/),
+which documents its PBDB methodology at https://dinopages.com/about/.
+The NDR list de-duplicates genus names and adds manually curated Korean
+transliterations. This data is used only for default encrypted-folder names.
