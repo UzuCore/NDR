@@ -1259,16 +1259,27 @@ fn nested_archives_of_any_known_format_open_as_panes_like_csharp() {
     let iso = root.join("left").join("disc.iso");
     fs::write(&iso, b"not really an image").unwrap();
     app.archive_entries_opened(0, root.join("outer.zip"), None, vec![iso.clone()], vec![], true);
-    assert_eq!(app.panes[0].archive.as_ref().map(|l| l.file.clone()), Some(iso));
-    assert!(launched().is_empty(), "not handed to the shell");
     wait_until(&mut app, &ctx, |app| !app.panes[0].loading);
-    // ALZ and EGG are read by the bundled 7-Zip (UzuCore 7zip+), so they open as panes.
+    assert!(app.panes[0].archive.is_none(), "invalid nested ISO must return to its containing folder instead of trapping the pane");
+    assert_eq!(app.panes[0].entries[app.panes[0].cursor].name, "disc.iso");
+    assert!(app.status.contains("Could not open archive"));
+    assert!(launched().is_empty(), "not handed to the shell");
+    // ALZ and EGG are read by bundled 7zip+. Create *real* archives so the
+    // test checks successful pane navigation rather than only file extensions.
+    let payload = root.join("left/nested-payload.txt");
+    fs::write(&payload, b"nested valid content").unwrap();
     for name in ["old.alz", "old.egg"] {
         let nested = root.join("left").join(name);
-        fs::write(&nested, b"x").unwrap();
+        let extension = name.rsplit_once('.').unwrap().1;
+        let options = ndr::commands::ArchiveOptions {
+            extension: extension.into(), level: 5, password: String::new(),
+            volume_bytes: None, recursive: true, append: false,
+        };
+        ndr::archive::create_configured(&[payload.clone()], &nested, &options, &AtomicBool::new(false)).unwrap();
         app.archive_entries_opened(1, root.join("outer.zip"), None, vec![nested.clone()], vec![], true);
-        assert_eq!(app.panes[1].archive.as_ref().map(|l| l.file.clone()), Some(nested));
         wait_until(&mut app, &ctx, |app| !app.panes[1].loading);
+        assert_eq!(app.panes[1].archive.as_ref().map(|l| l.file.clone()), Some(nested));
+        assert!(app.panes[1].entries.iter().any(|e| e.name == "nested-payload.txt"), "valid {extension} contents must appear in the pane");
         app.panes[1].archive = None;
     }
     assert!(launched().is_empty(), "ALZ/EGG not handed to the shell");

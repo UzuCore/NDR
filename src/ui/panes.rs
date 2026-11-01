@@ -842,6 +842,7 @@ impl App {
             let appended: Vec<PathBuf> = if append_drives { roots } else { Vec::new() };
             // The original My PC drive item's TNXDriveInfo (name, kind, and size for fixed disks).
             let drive_infos = listed.into_iter().filter_map(|(root, info)| info.map(|info| (root, info))).collect();
+            let mut skipped_device_names = 0usize;
             let result = if let Some(remote) = remote {
                 super::ftp_pane::list_remote(&remote, show_hidden)
             } else if let Some(drives) = drives {
@@ -850,7 +851,7 @@ impl App {
                     .map(|root| Entry { name: root.to_string_lossy().into_owned(), path: root, is_dir: true, size: 0, modified: None, hidden: false, attributes: 0x10, drive: false })
                     .collect())
             } else if let Some(location) = archive {
-                ndr::archive::list(
+                ndr::archive::list_with_skipped_devices(
                     &location.file,
                     if location.password.is_empty() {
                         None
@@ -858,7 +859,8 @@ impl App {
                         Some(&location.password)
                     },
                 )
-                .map(|items| {
+                .map(|(items, skipped)| {
+                    skipped_device_names = skipped.len();
                     let mut entries = std::collections::BTreeMap::new();
                     // The current folder's own time, by the same rule as its row one level up: its folder entry, otherwise the first entry below it.
                     // The original ".." of an archive subfolder shows that time; previously NDR used the archive file's time at every level.
@@ -931,6 +933,7 @@ impl App {
                 pane: index,
                 generation,
                 result,
+                skipped_device_names,
                 descriptions,
                 drive_infos,
             });

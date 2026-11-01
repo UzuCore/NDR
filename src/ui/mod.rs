@@ -399,6 +399,9 @@ struct Listing {
     pane: usize,
     generation: u64,
     result: Result<Vec<Entry>, String>,
+    /// Entries with Windows reserved device names omitted safely from this
+    /// archive listing (the rest of the archive remains navigable).
+    skipped_device_names: usize,
     descriptions: HashMap<String, String>,
     /// Drive entry info in My PC view (root -> (name, kind, size)).
     drive_infos: HashMap<PathBuf, (String, u32, Option<(u64, u64)>)>,
@@ -1267,6 +1270,36 @@ impl App {
     }
     /// Puts one result of the listing thread into the pane (shared by poll and the waiting refresh, like the original).
     fn apply_listing(&mut self, listing: Listing, auth_panes: &mut Vec<usize>) {
+        if self.panes[listing.pane].generation != listing.generation {
+            return;
+        }
+        // A failed archive open previously left the pane in archive mode with
+        // stale rows and a red error above them. It could appear trapped: no
+        // archive parent row existed and opening entries kept failing. Return
+        // to the containing folder, focus the failed archive, and preserve the
+        // diagnostic in the status bar instead.
+        if let (Some(location), Err(error)) = (&self.panes[listing.pane].archive, &listing.result) {
+            let archive = location.file.clone();
+            let message = if self.language == "ko" {
+                format!("압축파일을 열지 못해 이전 폴더로 돌아왔습니다: {} ({})", archive.display(), error)
+            } else {
+                format!("Could not open archive; returned to the containing folder: {} ({})", archive.display(), error)
+            };
+            let parent = archive.parent().map(Path::to_path_buf).unwrap_or_else(|| self.panes[listing.pane].path.clone());
+            self.panes[listing.pane].archive = None;
+            self.panes[listing.pane].error = None;
+            self.pending_focus[listing.pane] = archive.file_name().map(|name| name.to_string_lossy().into_owned());
+            self.navigate(listing.pane, parent, false);
+            self.status = message;
+            return;
+        }
+        if listing.skipped_device_names > 0 {
+            self.status = if self.language == "ko" {
+                format!("Windows 예약 장치명 항목 {}개를 숨겼습니다. 나머지 파일은 탐색·복사할 수 있습니다. 원본 압축파일은 변경되지 않습니다.", listing.skipped_device_names)
+            } else {
+                format!("{} Windows reserved-device archive entries hidden; remaining files can be browsed/copied. Original archive unchanged.", listing.skipped_device_names)
+            };
+        }
         let skin = true;
         {
             let pane = &mut self.panes[listing.pane];

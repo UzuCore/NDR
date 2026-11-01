@@ -168,6 +168,62 @@ fn unsupported_archive_formats_do_not_enter_panes_or_open_extract_dialogs() {
     fs::remove_dir_all(root).unwrap();
 }
 
+/// A failed archive open must not strand a pane with a red error and no
+/// reliable way to navigate back to the containing folder.
+#[test]
+fn broken_archive_open_returns_to_local_folder_instead_of_trapping_pane() {
+    let (root, ctx, mut app) = fixture("archive-open-recovery", "ko");
+    let broken = root.join("left/broken.7z");
+    fs::write(&broken, b"not a 7zip file").unwrap();
+    app.refresh(0);
+    wait(&mut app, &ctx);
+    app.active = 0;
+    app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == "broken.7z").unwrap();
+    app.open_current();
+    wait(&mut app, &ctx);
+    assert!(app.panes[0].archive.is_none(), "failed archive open must exit archive mode");
+    assert_eq!(app.panes[0].path, root.join("left"));
+    assert!(app.panes[0].error.is_none(), "stale red archive error must be cleared");
+    assert_eq!(app.panes[0].entries[app.panes[0].cursor].name, "broken.7z", "failed source stays focused");
+    assert!(app.status.contains("압축파일을 열지 못해"), "status must explain why the archive was not opened: {}", app.status);
+    fs::remove_dir_all(root).unwrap();
+}
+
+/// Optional UI test: the user's real 7z with Unix-created Windows-reserved
+/// `nul` filename. Only a test copy is opened; the original is untouched.
+#[test]
+fn actual_bk3_archive_opens_and_navigates_without_top_panel_error() {
+    let Ok(source) = std::env::var("NDR_LOCAL_BK3") else { return };
+    let (root, ctx, mut app) = fixture("archive-bk3-real-gui", "ko");
+    let name = "bk3.7z";
+    let archive = root.join("left").join(name);
+    fs::copy(&source, &archive).unwrap();
+    app.refresh(0);
+    wait(&mut app, &ctx);
+    app.active = 0;
+    app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == name).unwrap();
+    app.open_current();
+    wait(&mut app, &ctx);
+    assert!(app.panes[0].archive.is_some(), "real archive must remain open with safe members visible");
+    assert!(app.panes[0].error.is_none(), "no red panel error while browsing");
+    assert!(app.panes[0].entries.iter().any(|e| e.name == "assets" && e.is_dir));
+    assert!(!app.panes[0].entries.iter().any(|e| e.name.eq_ignore_ascii_case("nul")), "reserved device name must not become a virtual file");
+    assert!(app.status.contains("예약 장치명"), "skipped reserved entries must be disclosed");
+    app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == "assets").unwrap();
+    app.open_current();
+    wait(&mut app, &ctx);
+    assert!(app.panes[0].archive.as_ref().unwrap().prefix.ends_with("assets/"));
+    assert!(app.panes[0].error.is_none());
+    app.parent();
+    wait(&mut app, &ctx);
+    assert!(app.panes[0].archive.is_some() && app.panes[0].archive.as_ref().unwrap().prefix.is_empty());
+    app.parent();
+    wait(&mut app, &ctx);
+    assert!(app.panes[0].archive.is_none(), "back from archive root must return to regular folder");
+    assert_eq!(app.panes[0].entries[app.panes[0].cursor].name, name);
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// Ctrl+X must keep the original until a successful Ctrl+V, then remove that
 /// entry from its ZIP and consume the internal clipboard.
 #[test]

@@ -575,9 +575,15 @@ fn validate_key(key: &str) -> Result<(), String> {
     }
     Ok(())
 }
-fn parse_listing(text: &str) -> Result<Vec<ArchiveEntry>, String> {
+/// The bundled engine can list archives created on Unix that contain Windows
+/// reserved device names (`NUL`, `CON`, `COM1`, etc.). These names must never
+/// be materialized on Windows, but they should not prevent browsing and
+/// extracting *other, safe* members. Only reserved-device names are skipped;
+/// malformed paths, links, duplicate names and corrupt metadata still fail.
+fn parse_listing_with_devices_filtered(text: &str, skip_reserved: bool) -> Result<(Vec<ArchiveEntry>, Vec<String>), String> {
     let mut entries = Vec::new();
     let mut seen = HashSet::new();
+    let mut skipped_devices = Vec::new();
     for block in text.replace("\r\n", "\n").split("\n\n") {
         let mut key = None;
         let mut dir = false;
@@ -615,7 +621,13 @@ fn parse_listing(text: &str) -> Result<Vec<ArchiveEntry>, String> {
             if dir {
                 key.truncate(key.trim_end_matches(['/', '\\']).len());
             }
-            validate_key(&key)?;
+            if let Err(error) = validate_key(&key) {
+                if skip_reserved && error.starts_with("Reserved device entry: ") {
+                    skipped_devices.push(key);
+                    continue;
+                }
+                return Err(error);
+            }
             if !seen.insert(key.replace('\\', "/").to_lowercase()) {
                 return Err("Duplicate archive entry names are rejected".into());
             }
@@ -628,7 +640,12 @@ fn parse_listing(text: &str) -> Result<Vec<ArchiveEntry>, String> {
             })
         }
     }
-    Ok(entries)
+    Ok((entries, skipped_devices))
+}
+
+#[cfg(test)]
+fn parse_listing(text: &str) -> Result<Vec<ArchiveEntry>, String> {
+    parse_listing_with_devices_filtered(text, false).map(|(entries, _)| entries)
 }
 /// Some single-stream 7zip+ handlers emit `Size = ...` without `Path =`
 /// under `l -slt -ba`, although extraction produces one real file.
@@ -683,18 +700,24 @@ fn rpm_member_name(archive: &Path, password: Option<&str>, cancel: &AtomicBool) 
 pub fn list(archive: &Path, password: Option<&str>) -> Result<Vec<ArchiveEntry>, String> {
     list_cancel(archive, password, &AtomicBool::new(false))
 }
+/// Same validated browsing result as `list`, plus Windows reserved device
+/// entries that were intentionally hidden rather than exposed as filesystem
+/// paths. Callers can show a warning without marking the entire archive bad.
+pub fn list_with_skipped_devices(archive: &Path, password: Option<&str>) -> Result<(Vec<ArchiveEntry>, Vec<String>), String> {
+    list_details(archive, password, &AtomicBool::new(false)).map(|(entries, _, _, skipped)| (entries, skipped))
+}
 fn list_cancel(
     archive: &Path,
     password: Option<&str>,
     cancel: &AtomicBool,
 ) -> Result<Vec<ArchiveEntry>, String> {
-    list_details(archive, password, cancel).map(|(entries, _, _)| entries)
+    list_details(archive, password, cancel).map(|(entries, _, _, _)| entries)
 }
 fn list_details(
     archive: &Path,
     password: Option<&str>,
     cancel: &AtomicBool,
-) -> Result<(Vec<ArchiveEntry>, HashSet<String>, bool), String> {
+) -> Result<(Vec<ArchiveEntry>, HashSet<String>, bool, Vec<String>), String> {
     if !bundled_can_browse(archive) {
         return Err(format!("Archive format not supported by bundled 7-Zip: {}", archive.display()));
     }
@@ -721,7 +744,7 @@ fn list_details(
         Err(error) => return Err(error),
     };
     reject_unavailable_archive_methods(&archive, &text)?;
-    let mut entries = parse_listing(&text)?;
+    let (mut entries, skipped_devices) = parse_listing_with_devices_filtered(&text, true)?;
     // 7zip+ omits Path for many single-member wrapper streams (bzip2, xz,
     // Zstandard, compress .Z), despite being able to extract them normally.
     if entries.is_empty() {
@@ -748,7 +771,7 @@ fn list_details(
             }
         }
     }
-    Ok((entries, encrypted, iso9660_fallback))
+    Ok((entries, encrypted, iso9660_fallback, skipped_devices))
 }
 /// The bundled 7zip+ can *list* a 7z with the proprietary extension codec ID
 /// 04F71101 (Zstandard) but cannot decode its payload. Two independent public
@@ -1100,7 +1123,7 @@ pub fn extract_with_conflicts(
 ) -> Result<(), String> {
     check_cancel(cancel)?;
     ensure_plain_path(destination)?;
-    let (entries, _, iso9660_fallback) = list_details(archive, password, cancel)?;
+    let (entries, _, iso9660_fallback, skipped_devices) = list_details(archive, password, cancel)?;
     let parent = destination
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
@@ -1113,9 +1136,13 @@ pub fn extract_with_conflicts(
     let stage_absolute = fs::canonicalize(&stage).map_err(|e| e.to_string())?;
     let result = (|| {
         let mut cmd = command()?;
-        cmd.args(["x", "-y", "-sccUTF-8", "-snl-"])
+        cmd.args(["x", "-y", "-sccUTF-8", "-snl-", "-spd"])
             .arg(format!("-o{}", stage_absolute.display()));
         if iso9660_fallback { cmd.arg("-tiso"); }
+        // `NUL` and similar Unix-side member names are unsafe Windows device
+        // paths. A whole-archive 7z `x` would otherwise try to write them even
+        // though the validated NDR pane deliberately hides them.
+        for name in &skipped_devices { cmd.arg(format!("-x!{name}")); }
         password_arg(&mut cmd, password)?;
         cmd.arg("--").arg(archive);
         execute(cmd, cancel)?;
@@ -1373,6 +1400,14 @@ pub fn validate_same_archive_transfer(keys: &[String], target_prefix: &str) -> R
     Ok(())
 }
 
+/// An archive with Unix-only device-name entries may be browsed and its safe
+/// members extracted, but 7-Zip's in-place editing on Windows could silently
+/// discard the unrepresentable members. Never mutate such a source archive.
+fn reject_edit_if_device_entries(skipped_devices: &[String]) -> Result<(), String> {
+    if skipped_devices.is_empty() { return Ok(()); }
+    Err(format!("Archive editing is blocked because {} member name(s) are Windows reserved devices (e.g. {}). Copy/extract safe entries instead.", skipped_devices.len(), skipped_devices[0]))
+}
+
 /// Copies the archive to a staging folder in the same folder, modifies the copy with 7-Zip, then swaps it with the original when done (on failure or cancel the original stays).
 fn modify_archive(archive: &Path, cancel: &AtomicBool, run: impl FnOnce(&Path) -> Result<(), String>) -> Result<(), String> {
     check_cancel(cancel)?;
@@ -1425,7 +1460,8 @@ pub fn delete_entries(archive: &Path, keys: &[String], password: Option<&str>, c
         return Ok(());
     }
     let arguments = keys.iter().map(|k| entry_arg(k)).collect::<Result<Vec<_>, _>>()?;
-    let before = list_cancel(archive, password, cancel)?;
+    let (before, _, _, skipped_devices) = list_details(archive, password, cancel)?;
+    reject_edit_if_device_entries(&skipped_devices)?;
     for key in keys {
         if existing_archive_entry(&before, key).is_none() {
             return Err(format!("Archive entry does not exist; nothing deleted: {key}"));
@@ -1458,7 +1494,8 @@ pub fn rename_entries(archive: &Path, renames: &[(String, String)], password: Op
         let (from_arg, to_arg) = (entry_arg(from)?, entry_arg(to)?);
         Ok::<_, String>((from.clone(), to.clone(), from_arg, to_arg))
     }).collect::<Result<Vec<_>, _>>()?;
-    let entries = list_cancel(archive, password, cancel)?;
+    let (entries, _, _, skipped_devices) = list_details(archive, password, cancel)?;
+    reject_edit_if_device_entries(&skipped_devices)?;
     let mut targets = HashSet::new();
     let mut sources = HashSet::new();
     for (from, to, _, _) in &validated {
@@ -1628,7 +1665,8 @@ pub fn add_entries_with(
         validate_key(prefix)?;
     }
     // Existing items (a folder counts even without a separate folder entry when items below it exist).
-    let existing = list_cancel(archive, password, cancel)?;
+    let (existing, _, _, skipped_devices) = list_details(archive, password, cancel)?;
+    reject_edit_if_device_entries(&skipped_devices)?;
     let find = |key: &str| existing_archive_entry(&existing, key);
     let snapshot = unique_path(&std::env::temp_dir(), "archive-add");
     fs::create_dir(&snapshot).map_err(|e| e.to_string())?;
@@ -1821,9 +1859,7 @@ pub fn summary(entries: &[ArchiveEntry]) -> (usize, usize, u64) {
 pub fn extract_entry_to_temp(archive: &Path, password: Option<&str>, key: &str, cancel: &AtomicBool) -> Result<PathBuf, String> {
     check_cancel(cancel)?;
     ensure_plain_path(archive)?;
-    if key.is_empty() || key.contains('\0') || key.split(['/', '\\']).any(|part| part == "..") {
-        return Err(format!("Unsafe archive entry: {key}"));
-    }
+    validate_key(key)?;
     let root = temp_entry_root();
     fs::create_dir_all(&root).map_err(|e| e.to_string())?;
     let folder = unique_path(&root, "entry");
@@ -2068,7 +2104,7 @@ pub fn extract_entries_with_program(
     ensure_plain_path(destination)?;
     let archive = fs::canonicalize(archive).map_err(|e| e.to_string())?;
     let mut header_password = initial_password.map(str::to_owned);
-    let (entries, encrypted, iso9660_fallback) = loop {
+    let (entries, encrypted, iso9660_fallback, _skipped_devices) = loop {
         match list_details(&archive, header_password.as_deref(), cancel) {
             Ok(details) => break details,
             Err(error) if password_failure(&error) => match passwords(&archive, None) {
@@ -2964,6 +3000,27 @@ mod configured_tests {
 #[cfg(test)]
 mod entry_tests {
     use super::*;
+
+    #[test]
+    fn reserved_windows_device_members_are_hidden_only_for_browsing() {
+        let text = "Path = safe.txt\nSize = 3\nAttributes = A\n\nPath = nul\nSize = 0\nAttributes = A\n\nPath = folder\\good.txt\nSize = 4\nAttributes = A\n";
+        assert!(parse_listing(text).unwrap_err().contains("Reserved device entry"), "strict validation remains available");
+        let (entries, skipped) = parse_listing_with_devices_filtered(text, true).unwrap();
+        assert_eq!(skipped, ["nul"]);
+        assert_eq!(entries.iter().map(|e| e.key.as_str()).collect::<Vec<_>>(), ["safe.txt", "folder\\good.txt"]);
+        assert!(validate_key("nul").is_err());
+        assert!(validate_key("folder/NUL.txt").is_err());
+        assert!(validate_key("folder/COM1.log").is_err());
+        for unsafe_listing in [
+            "Path = ../escape.txt\nSize = 1\nAttributes = A\n",
+            "Path = safe.txt\nSize = 1\nAttributes = AL\n",
+            "Path = safe.txt\nSize = 1\nAttributes = A\n\nPath = safe.txt\nSize = 1\nAttributes = A\n",
+        ] {
+            assert!(parse_listing_with_devices_filtered(unsafe_listing, true).is_err(), "all other safety checks must remain strict");
+        }
+        assert!(reject_edit_if_device_entries(&skipped).is_err(), "editing an archive with unrepresentable names must be blocked");
+        assert!(reject_edit_if_device_entries(&[]).is_ok());
+    }
 
     #[test]
     fn same_archive_copy_move_rejects_self_overlap_and_duplicate_destinations() {
