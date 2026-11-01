@@ -180,60 +180,65 @@ impl VaultDialog {
         }
     }
 
+    /// Same centered movable VCL-style dialog and 444px content width as
+    /// New Folder / TfGetText. Only the additional password fields make it
+    /// taller. No separate heading, grid, or native egui::Window chrome.
+    fn draw_create(&mut self, ui: &mut egui::Ui) -> bool {
+        let (area, _) = ui.allocate_exact_size(egui::vec2(444.0, 250.0), egui::Sense::hover());
+        let at = |x: f32, y: f32, width: f32, height: f32| {
+            egui::Rect::from_min_size(area.min + egui::vec2(x, y), egui::vec2(width, height))
+        };
+
+        ui.put(at(18.0, 8.0, 411.0, 25.0), egui::Label::new("암호화할 새 폴더의 이름을 입력하세요."));
+        ui.put(at(18.0, 47.0, 100.0, 21.0), egui::Label::new("폴더 이름"));
+        let response = ui.put(at(122.0, 43.0, 307.0, 23.0),
+            egui::TextEdit::singleline(&mut self.folder_name)
+                .id(egui::Id::new("ndr-vault-folder-name")));
+        if self.name_select_pending {
+            response.request_focus();
+            super::original_dialogs::select_all(ui, response.id, self.folder_name.chars().count());
+            self.name_select_pending = false;
+        }
+        ui.put(at(18.0, 80.0, 100.0, 21.0), egui::Label::new("비밀번호"));
+        ui.put(at(122.0, 76.0, 307.0, 23.0),
+            egui::TextEdit::singleline(&mut self.password).password(true));
+        ui.put(at(18.0, 113.0, 100.0, 21.0), egui::Label::new("비밀번호 확인"));
+        ui.put(at(122.0, 109.0, 307.0, 23.0),
+            egui::TextEdit::singleline(&mut self.confirmation).password(true));
+
+        ui.put(at(18.0, 145.0, 411.0, 19.0), egui::Label::new(
+            egui::RichText::new("폴더 안의 파일과 이름이 암호화됩니다. 비밀번호는 6자 이상입니다.").small().weak()));
+        ui.put(at(18.0, 165.0, 411.0, 19.0), egui::Label::new(
+            egui::RichText::new("※ 비밀번호를 잊으면 복구할 수 없습니다.").small().weak()));
+
+        // Align exactly with the bottom-right controls of New Folder:
+        // x=265 / 351, width=79, height=25; only Y moves for extra fields.
+        let mut close = false;
+        if ui.put(at(265.0, 215.0, 79.0, 25.0), egui::Button::new("확인")).clicked() {
+            self.authenticate();
+        }
+        if ui.put(at(351.0, 215.0, 79.0, 25.0), egui::Button::new("취소")).clicked() {
+            close = true;
+        }
+        if ui.input(|input| input.key_pressed(egui::Key::Escape)) { close = true; }
+        if ui.input(|input| input.key_pressed(egui::Key::Enter)) && !close {
+            self.authenticate();
+        }
+        if !self.error.is_empty() {
+            ui.painter().text(at(18.0, 189.0, 411.0, 18.0).left_top(),
+                egui::Align2::LEFT_TOP, &self.error,
+                egui::FontId::proportional(11.0), ui.visuals().error_fg_color);
+        }
+        close || self.created_path.is_some()
+    }
+
     fn draw(&mut self, ui: &mut egui::Ui, policy: SessionPolicy) -> bool {
         if self.vault.as_ref().is_some_and(|vault| vault.expired(policy)) {
             self.lock();
             self.error = "세션이 만료되었습니다. 비밀번호를 다시 입력해야 합니다.".into();
         }
         if self.vault.is_none() {
-            if self.creating {
-                ui.heading("새 암호화 폴더");
-                ui.add_space(9.0);
-                egui::Grid::new("ndr-vault-create-fields").num_columns(2)
-                    .spacing([15.0, 12.0]).show(ui, |ui| {
-                        ui.label("폴더 이름");
-                        let name_input = ui.add(egui::TextEdit::singleline(&mut self.folder_name)
-                            .id(egui::Id::new("ndr-vault-folder-name"))
-                            .desired_width(270.0).hint_text("폴더 이름 입력"));
-                        if self.name_select_pending {
-                            name_input.request_focus();
-                            super::original_dialogs::select_all(ui, name_input.id, self.folder_name.chars().count());
-                            self.name_select_pending = false;
-                        }
-                        ui.end_row();
-                        ui.label("비밀번호");
-                        ui.add(egui::TextEdit::singleline(&mut self.password)
-                            .password(true).desired_width(270.0));
-                        ui.end_row();
-                        ui.label("비밀번호 확인");
-                        ui.add(egui::TextEdit::singleline(&mut self.confirmation)
-                            .password(true).desired_width(270.0));
-                        ui.end_row();
-                    });
-                ui.add_space(10.0);
-                ui.separator();
-                ui.label(egui::RichText::new(
-                    "폴더 안의 파일과 이름이 암호화됩니다. 비밀번호는 6자 이상으로 설정하세요."
-                ).small().weak());
-                ui.label(egui::RichText::new(
-                    "※ 비밀번호를 잊으면 복구할 수 없습니다. 안전한 곳에 보관하세요."
-                ).small().weak());
-                ui.add_space(12.0);
-                let mut cancel = false;
-                ui.horizontal(|ui| {
-                    ui.add_space(ui.available_width().max(200.0) - 190.0);
-                    if ui.add_sized([88.0, 30.0], egui::Button::new("확인")).clicked() {
-                        self.authenticate();
-                    }
-                    if ui.add_sized([88.0, 30.0], egui::Button::new("취소")).clicked() {
-                        cancel = true;
-                    }
-                });
-                if !self.error.is_empty() {
-                    ui.colored_label(ui.visuals().error_fg_color, &self.error);
-                }
-                return cancel || self.created_path.is_some();
-            }
+            if self.creating { return self.draw_create(ui); }
             ui.heading("암호화 폴더 잠금 해제");
             ui.add_space(8.0);
             ui.label(self.path.file_stem().unwrap_or_default().to_string_lossy());
@@ -387,11 +392,23 @@ impl App {
         let policy = SessionPolicy::from_settings(&self.settings);
         let mut open = true;
         let mut close = false;
-        egui::Window::new(if dialog.creating { "새 암호화 폴더" } else { "암호화 폴더" })
-            .id(egui::Id::new("ndr-sqlcipher-vault"))
-            .open(&mut open).resizable(!dialog.creating)
-            .default_width(if dialog.creating { 440.0 } else { 700.0 })
-            .show(ctx, |ui| { close = dialog.draw(ui, policy); });
+        if dialog.creating {
+            // The ordinary New Folder prompt uses the same modal and title
+            // helpers. This places both dialogs at the same owner-window
+            // center and gives them matching chrome and title dragging.
+            let id = egui::Id::new("ndr-vault-create-modal");
+            super::keep_opaque(ctx, id);
+            super::movable_modal(ctx, id).show(ctx, |ui| {
+                let title = super::modal_title_start(ui, "새 암호화 폴더");
+                close = dialog.draw_create(ui);
+                close |= super::modal_title_finish(ui, id, title);
+            });
+        } else {
+            egui::Window::new("암호화 폴더")
+                .id(egui::Id::new("ndr-sqlcipher-vault"))
+                .open(&mut open).resizable(true).default_width(700.0)
+                .show(ctx, |ui| { close = dialog.draw(ui, policy); });
+        }
         if let Some(path) = dialog.created_path.take() {
             let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
             self.refresh_and_focus(self.active, Some(name));
