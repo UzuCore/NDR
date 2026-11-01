@@ -26,7 +26,8 @@ pub(super) struct TreeColors {
     pub hint: Color32,
 }
 
-/// Scanning (TfTreeScan window): sends the tree when done.
+/// Scanning (TfTreeScan window): sends the tree when done. TreeViewBeforeScan 0x424950 opens TfTreeScan with the count at 0 and disables the tree,
+/// TreeViewScan 0x424858 adds one per folder and shows the path (its cancel button sets the abort flag +0x390), TreeViewAfterScan 0x4249a4 closes it.
 pub(super) struct TreeScan {
     pub cancel: Arc<AtomicBool>,
     pub count: Arc<AtomicUsize>,
@@ -113,7 +114,7 @@ impl SearchFolder {
 
 /// Work the window hands off to App.
 pub(super) enum FolderTreeAction {
-    /// btnOkClick·TreeViewDblClick → FUN_00424a68(path).
+    /// btnOkClick 0x424bf4 (cbAddress text)·TreeViewDblClick → FUN_00424a68(path).
     Accept(String),
     Cancel,
     /// miPropertiesClick 0x4253ac: ShowFileProperties(selected folder).
@@ -122,7 +123,7 @@ pub(super) enum FolderTreeAction {
     Rename,
     /// miCreateNewFolderClick 0x425b68(F7, Insert, Alt+K).
     NewFolder,
-    /// FUN_004266ac: Del = delete immediately (no FOF_ALLOWUNDO), miDeleteClick(Alt+D) = recycle bin unless Shift is held.
+    /// FUN_004266ac: Del = delete immediately (no FOF_ALLOWUNDO), miDeleteClick(Alt+D, 0x426684) = recycle bin unless Shift is held.
     Delete { recycle: bool },
     /// SpecialFolderClick·FUN_00425904(Ctrl+D/G/Q/S/O): Desktop, Documents, Pictures, Music, Videos.
     Special(&'static str),
@@ -564,7 +565,8 @@ impl FolderTreeForm {
         }
     }
 
-    /// Expand/Collapse (+ recursive) 0x7e4544/0x7e4498 — OneLevelExpandClick·RecurseExpandClick·numpad +/−. If collapsing hides the selected item,
+    /// Expand/Collapse (+ recursive) 0x7e4544/0x7e4498 — OneLevelExpandClick 0x42543c·RecurseExpandClick 0x42548c (Tag 1 = expand, 0 = collapse, on the
+    /// selected item)·numpad +/−. If collapsing hides the selected item,
     /// select that item (MouseDown's HasAsParent).
     pub(super) fn expand(&mut self, item: usize, expanded: bool, recurse: bool) {
         self.tree.set_expanded(item, expanded, recurse);
@@ -1118,6 +1120,7 @@ pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, langu
                         form.align(2);
                     }
                     form.after_move(before);
+                    // TreeViewDblClick 0x4249d4: the item under the cursor (GetItemAt) is accepted with its full path (FUN_00424a68).
                     if tree_response.double_clicked() {
                         action = Some(FolderTreeAction::Accept(form.tree.full_path(item)));
                     }
@@ -1322,6 +1325,7 @@ pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, langu
         let plain_key = !m.alt && !m.ctrl;
         match key {
             egui::Key::Escape if form.favorites_open => form.favorites_open = false,
+            // cbAddressKeyDown 0x426540: Esc in the address box is ModalResult 2 (cancel), the same as Esc in the tree.
             egui::Key::Escape => action = Some(FolderTreeAction::Cancel),
             // TntFormShortCut 0x425704: F11 = pmFavorites below tbFavorites, Ctrl+F = tbSearchClick.
             egui::Key::F11 if plain_key && !m.shift => form.favorites_open = !form.favorites_open,
