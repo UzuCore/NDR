@@ -242,9 +242,7 @@ impl App {
         #[cfg(feature = "winfsp-vault")]
         {
             if !super::vault_winfsp::runtime_available() {
-                self.winfsp_install_offer = true;
-                self.error_notice("보안상 파일 열기 차단", "Encrypted file opening blocked",
-                    "보안 문제로 암호화 폴더 내부 파일을 실행하려면 WinFsp가 설치되어 있어야 합니다.");
+                self.offer_winfsp_installation();
                 return;
             }
             if self.vault_mount.is_some() {
@@ -282,60 +280,72 @@ impl App {
                     }
                 }
                 Err(error) => {
-                    if error.contains("not installed") { self.winfsp_install_offer = true; }
-                    self.error_notice("가상 드라이브 연결 실패", "WinFsp mount failed", error);
+                    if error.contains("not installed") {
+                        self.offer_winfsp_installation();
+                    } else {
+                        self.error_notice("가상 드라이브 연결 실패", "WinFsp mount failed", error);
+                    }
                 }
             }
         }
     }
 
     #[cfg(feature = "winfsp-vault")]
-    pub(super) fn vault_mount_ui(&mut self, ctx: &egui::Context) {
-        if self.winfsp_install_offer {
-            let ko = self.language == "ko";
-            let mut install = false;
-            let mut dismiss = false;
-            egui::Window::new(if ko { "WinFsp 드라이버 설치" } else { "Install WinFsp driver" })
-                .id(egui::Id::new("ndr-winfsp-install"))
-                .resizable(false).collapsible(false).show(ctx, |ui| {
-                    ui.label(if ko {
-                        "보안 문제로 암호화 폴더 내부 파일을 열거나 실행하려면 WinFsp가 설치되어 있어야 합니다. 일반 파일 관리 기능은 그대로 사용할 수 있습니다. 설치파일은 NDR에 포함되어 있으며 Windows 관리자 승인(UAC)이 필요합니다."
-                    } else {
-                        "The WinFsp driver is required for virtual files. The signed installer is embedded in NDR. Windows UAC approval is required."
-                    });
-                    if ui.button(if ko { "WinFsp 설치 시작" } else { "Install bundled WinFsp" }).clicked() { install = true; }
-                    if ui.button(if ko { "취소" } else { "Cancel" }).clicked() { dismiss = true; }
-                });
-            if install {
-                match super::vault_winfsp::launch_embedded_installer() {
-                    Ok(()) => {
-                        self.winfsp_install_offer = false;
-                        self.status = if ko { "설치가 끝나면 NDR을 다시 실행하세요." }
-                            else { "Restart NDR after WinFsp installation completes." }.into();
+    fn offer_winfsp_installation(&mut self) {
+        if self.msgboxes.iter().any(|dialog| dialog.title == "WinFsp") { return; }
+        let message = if self.language == "ko" {
+            "보안 문제로 암호화 폴더 내부 파일을 열려면\nWinFsp가 설치되어 있어야 합니다.\n\nNDR에 포함된 WinFsp를 설치하시겠습니까?\n(Windows 관리자 승인 필요)"
+        } else {
+            "WinFsp must be installed to securely open\nfiles inside encrypted folders.\n\nInstall the WinFsp driver included with NDR?\n(Windows administrator approval required)"
+        };
+        self.message_box("WinFsp", "", message,
+            ndr::msgbox::MB_YESNO | ndr::msgbox::MB_ICONEXCLAMATION,
+            |app, answer, _| {
+                if answer == ndr::msgbox::IDYES {
+                    match super::vault_winfsp::launch_embedded_installer() {
+                        Ok(()) => app.status = if app.language == "ko" {
+                            "설치 완료 후 암호화 파일을 다시 열어 주세요."
+                        } else { "After installation completes, open the encrypted file again." }.into(),
+                        Err(error) => app.error_notice("WinFsp 설치 실패", "WinFsp installation failed", error),
                     }
-                    Err(error) => self.error_notice("WinFsp 설치 실패", "WinFsp installer failed", error),
                 }
-            }
-            if dismiss { self.winfsp_install_offer = false; }
-        }
+            });
+    }
+
+    #[cfg(feature = "winfsp-vault")]
+    pub(super) fn vault_mount_ui(&mut self, ctx: &egui::Context) {
         let Some(mount) = self.vault_mount.as_ref() else { return };
         let filename = mount.file_path.file_name().unwrap_or_default().to_string_lossy().into_owned();
         let ko = self.language == "ko";
         let mut close = false;
-        egui::Window::new(if ko { "암호화 가상 파일" } else { "Encrypted virtual file" })
-            .id(egui::Id::new("ndr-winfsp-open"))
-            .resizable(true).collapsible(false).default_width(410.0)
-            .show(ctx, |ui| {
-                ui.label(&filename);
-                ui.label(if ko {
-                    "WinFsp에서 읽기와 수정을 처리합니다. NDR은 평문 임시파일을 만들지 않습니다."
-                } else { "WinFsp handles file reads and edits without NDR creating a plaintext temp file." });
-                ui.label(if ko { "외부 프로그램은 별도의 평문 캐시나 자동저장 파일을 만들 수 있습니다." }
-                    else { "External applications may still create plaintext caches and autosave files." });
-                ui.label(if ko { "외부 프로그램에서 파일을 저장하고 닫은 후 아래 버튼을 누르세요." }
-                    else { "Save and close the external application before unmounting." });
-                if ui.button(if ko { "닫기 및 암호화 저장" } else { "Unmount and save encrypted" }).clicked() { close = true; }
+        let id = egui::Id::new("ndr-winfsp-open-modal");
+        super::keep_opaque(ctx, id);
+        super::movable_modal(ctx, id).show(ctx, |ui| {
+            let title = super::modal_title_start(ui,
+                if ko { "암호화 파일 열기" } else { "Encrypted file open" });
+            ui.set_width(444.0);
+            ui.add_space(8.0);
+            ui.label(egui::RichText::new(&filename).strong());
+            ui.add_space(8.0);
+            ui.label(if ko {
+                "WinFsp 가상 파일시스템으로 열었습니다. NDR은 평문 임시파일을 생성하지 않습니다."
+            } else { "Opened through WinFsp. NDR does not create a plaintext temporary file." });
+            ui.add_space(4.0);
+            ui.label(if ko { "외부 프로그램은 별도의 캐시나 자동 저장 파일을 생성할 수 있습니다." }
+                else { "External apps may create their own caches or autosave files." });
+            ui.add_space(8.0);
+            ui.label(if ko { "외부 프로그램에서 저장하고 닫은 후 아래 버튼을 누르세요." }
+                else { "Save and close the external application before disconnecting." });
+            ui.add_space(12.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                close = ui.add_sized([150.0, 25.0], egui::Button::new(
+                    if ko { "닫기 및 암호화 저장" } else { "Close and save" })).clicked();
             });
+            ui.add_space(3.0);
+            // Do not dismiss a live mount with the title-bar X; it must first
+            // commit the authenticated changes and propagate any save failure.
+            if super::modal_title_finish(ui, id, title) { close = true; }
+        });
         if !close { return; }
         let result = self.vault_mount.as_mut().unwrap().finish();
         match result {
@@ -676,6 +686,27 @@ impl Drop for VaultDialog {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "winfsp-vault")]
+    #[test]
+    fn winfsp_install_notice_uses_ndr_shared_message_dialog() {
+        let (root, ctx, mut app) = super::super::tools_tests::fixture("winfsp-dialog-layout", "ko");
+        app.offer_winfsp_installation();
+        app.offer_winfsp_installation();
+        assert_eq!(app.msgboxes.len(), 1, "duplicate file-open attempts must not stack prompts");
+        let dialog = &app.msgboxes[0];
+        assert_eq!(dialog.title, "WinFsp");
+        assert!(dialog.text.contains("보안 문제"));
+        assert_eq!(dialog.flags & 0xF, ndr::msgbox::MB_YESNO);
+        let _ = ctx.run(egui::RawInput::default(), |ctx| app.msgbox_ui(ctx));
+        let layout = app.msgboxes[0].layout.as_ref().expect("NDR message layout");
+        assert!(layout.client.x >= ndr::msgbox::minimum_client_width(2));
+        assert!(layout.title_shown, "the standard NDR title strip is visible");
+        assert_eq!(layout.slots.iter().filter(|s| s.is_some()).count(), 2);
+        assert!(layout.slots.iter().flatten().all(|rect| rect.height() == 25.0));
+        drop(app);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
 
     #[test]

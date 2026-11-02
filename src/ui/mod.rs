@@ -720,8 +720,6 @@ pub struct App {
     vault_sessions: HashMap<PathBuf, ndr::vault::Vault>,
     #[cfg(feature = "winfsp-vault")]
     vault_mount: Option<vault_winfsp::VaultMount>,
-    #[cfg(feature = "winfsp-vault")]
-    winfsp_install_offer: bool,
     vault_transfer: Option<vault_transfer_ui::VaultTransferJob>,
     /// Subfolders of the address bar's chevron menu (path, whether it is a drive list) -> (path, text). Cleared when a new listing arrives.
     crumb_cache: HashMap<(PathBuf, bool), Vec<(PathBuf, String)>>,
@@ -1041,8 +1039,6 @@ impl App {
             vault_sessions: HashMap::new(),
             #[cfg(feature = "winfsp-vault")]
             vault_mount: None,
-            #[cfg(feature = "winfsp-vault")]
-            winfsp_install_offer: false,
             vault_transfer: None,
             crumb_cache: HashMap::new(),
             folder_size_queue: Arc::new((Mutex::new(std::collections::VecDeque::new()), std::sync::Condvar::new())),
