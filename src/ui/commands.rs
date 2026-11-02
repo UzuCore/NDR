@@ -987,7 +987,7 @@ impl App {
         title: String,
         task: impl FnOnce(Sender<Event>, Arc<AtomicBool>) -> Result<(), String> + Send + 'static,
     ) -> bool {
-        if self.job.as_ref().is_some_and(|j| !j.finished) {
+        if self.job.as_ref().is_some_and(|j| !j.finished) || !self.background_jobs.is_empty() {
             self.status = "An operation is already running".into();
             return false;
         }

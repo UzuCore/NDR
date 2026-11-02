@@ -420,6 +420,11 @@ struct Listing {
     drive_infos: HashMap<PathBuf, (String, u32, Option<(u64, u64)>)>,
 }
 struct Job {
+    serial: u64,
+    reservation: Option<file_operation::TransferReservation>,
+    /// Apply-to-all conflicts are scoped to one copy job, never shared across
+    /// concurrently running copy/move workers.
+    conflict_policy: Option<ConflictChoice>,
     receiver: Receiver<Event>,
     cancel: Arc<AtomicBool>,
     path: String,
@@ -456,6 +461,9 @@ struct Job {
 impl Job {
     fn new(receiver: Receiver<Event>, cancel: Arc<AtomicBool>, title: String) -> Self {
         Self {
+            serial: 0,
+            reservation: None,
+            conflict_policy: None,
             receiver,
             cancel,
             path: String::new(),
@@ -632,6 +640,9 @@ pub struct App {
     async_tx: Sender<AsyncResult>,
     async_rx: Receiver<AsyncResult>,
     job: Option<Job>,
+    /// Independent local file jobs; the primary job keeps legacy operations compatible.
+    background_jobs: Vec<Job>,
+    next_job_serial: u64,
     password_request: Option<PasswordRequest>,
     conflict_all: Option<ConflictChoice>,
     text: Option<TextDocument>,
@@ -982,6 +993,8 @@ impl App {
             async_tx,
             async_rx,
             job: None,
+            background_jobs: Vec::new(),
+            next_job_serial: 0,
             password_request: None,
             conflict_all: None,
             text: None,
@@ -1206,11 +1219,18 @@ impl App {
                 if let Some(job) = &app.job {
                     job.cancel.store(true, Ordering::Relaxed);
                 }
+                for job in &app.background_jobs {
+                    job.cancel.store(true, Ordering::Relaxed);
+                }
             }
         });
     }
     fn start_job(&mut self, title: String, operation: Operation, report: file_operation::JobReport, progress: Option<file_operation::ProgressInfo>) {
-        if self.job.as_ref().is_some_and(|j| !j.finished) {
+        let reservation = file_operation::TransferReservation::from_operation(&operation);
+        let active = self.job.as_ref().is_some_and(|j| !j.finished);
+        if (active && reservation.is_none())
+            || (reservation.is_none() && !self.background_jobs.is_empty())
+            || (active && self.job.as_ref().is_some_and(|j| j.reservation.is_none())) {
             self.status = self
                 .tr(
                     "진행 중인 작업을 먼저 마치세요.",
@@ -1219,10 +1239,29 @@ impl App {
                 .into();
             return;
         }
+        if let Some(request) = &reservation {
+            let conflicts = self.job.iter().chain(self.background_jobs.iter())
+                .filter(|job| !job.finished)
+                .filter_map(|job| job.reservation.as_ref())
+                .any(|running| request.overlaps(running));
+            if conflicts {
+                self.status = self.tr("동일한 파일을 처리하는 다른 작업이 진행 중입니다.",
+                    "Another operation is using the same file paths.").into();
+                return;
+            }
+            if self.background_jobs.len() + usize::from(active) >= 16 {
+                self.status = self.tr("동시 파일 작업은 최대 16개까지 가능합니다.",
+                    "At most 16 concurrent file operations are allowed.").into();
+                return;
+            }
+        }
         let (tx, rx) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
         let flag = cancel.clone();
         let mut job = Job::new(rx, cancel, title);
+        self.next_job_serial = self.next_job_serial.wrapping_add(1);
+        job.serial = self.next_job_serial;
+        job.reservation = reservation;
         // C# ErrorResolver: copy/move/delete ask on each error (wipe asks all at once at the end).
         let options = fsops::OperationOptions {
             remove_read_only: self.settings.flag("RemoveReadOnlyWhenCopying", true),
@@ -1232,10 +1271,11 @@ impl App {
             prompt_rename: matches!(operation, Operation::Copy { .. }),
         };
         thread::spawn(move || fsops::run_with_options(operation, tx, flag, options));
-        self.conflict_all = None;
+        if !active { self.conflict_all = None; }
         job.report = report;
         job.progress = progress;
-        self.job = Some(job);
+        if active { self.background_jobs.push(job); }
+        else { self.job = Some(job); }
     }
     fn poll(&mut self, ctx: &egui::Context) {
         let mut auth_panes = std::mem::take(&mut self.auth_pending);
@@ -1479,25 +1519,7 @@ impl App {
         }
     }
     /// Work after the list is put in (network share authentication etc.). Called by poll.
-    fn after_listings(&mut self, auth_panes: Vec<usize>, ctx: &egui::Context) {
-        // C# RefreshPaneAsync(allowNetworkAuthPrompt): when a UNC listing fails on credentials, the connect window -> one more read on success, a "network connection" warning on failure.
-        for index in auth_panes {
-            let path = self.panes[index].path.clone();
-            let code = (self.system.network_path_error)(&path);
-            if !matches!(code, 5 | 65 | 86 | 1326) {
-                continue;
-            }
-            match (self.system.connect_share)(&path.to_string_lossy()) {
-                0 => self.refresh(index),
-                1223 => {}
-                connection => {
-                    let ko = self.language == "ko";
-                    let message = native::win32_message(connection);
-                    let text = if ko { format!("네트워크 공유 인증에 실패했습니다. Windows 오류 {connection}: {message}") } else { format!("Network share authentication failed. Windows error {connection}: {message}") };
-                    self.system_box(if ko { "네트워크 연결" } else { "Network connection" }, &text, ndr::msgbox::MB_OK | ndr::msgbox::MB_ICONEXCLAMATION, |_, _, _| {});
-                }
-            }
-        }
+    fn poll_active_job_events(&mut self) {
         let mut finished = None;
         let mut close_modal = false;
         let events: Vec<Event> = self.job.as_ref().map(|job| job.receiver.try_iter().collect()).unwrap_or_default();
@@ -1563,6 +1585,40 @@ impl App {
         if let Some(cancelled) = finished {
             self.report_job(cancelled);
         }
+    }
+    fn poll_background_jobs(&mut self) {
+        let primary = self.job.take();
+        let jobs = std::mem::take(&mut self.background_jobs);
+        for job in jobs {
+            self.job = Some(job);
+            self.poll_active_job_events();
+            if let Some(job) = self.job.take() {
+                if !job.finished { self.background_jobs.push(job); }
+            }
+        }
+        self.job = primary;
+    }
+    fn after_listings(&mut self, auth_panes: Vec<usize>, ctx: &egui::Context) {
+        // C# RefreshPaneAsync(allowNetworkAuthPrompt): when a UNC listing fails on credentials, the connect window -> one more read on success, a "network connection" warning on failure.
+        for index in auth_panes {
+            let path = self.panes[index].path.clone();
+            let code = (self.system.network_path_error)(&path);
+            if !matches!(code, 5 | 65 | 86 | 1326) {
+                continue;
+            }
+            match (self.system.connect_share)(&path.to_string_lossy()) {
+                0 => self.refresh(index),
+                1223 => {}
+                connection => {
+                    let ko = self.language == "ko";
+                    let message = native::win32_message(connection);
+                    let text = if ko { format!("네트워크 공유 인증에 실패했습니다. Windows 오류 {connection}: {message}") } else { format!("Network share authentication failed. Windows error {connection}: {message}") };
+                    self.system_box(if ko { "네트워크 연결" } else { "Network connection" }, &text, ndr::msgbox::MB_OK | ndr::msgbox::MB_ICONEXCLAMATION, |_, _, _| {});
+                }
+            }
+        }
+        self.poll_active_job_events();
+        self.poll_background_jobs();
         self.poll_disk_copy(ctx);
         self.poll_remote_window(ctx);
         while let Ok(result) = self.async_rx.try_recv() {
@@ -2011,12 +2067,14 @@ impl eframe::App for App {
             self.preferences_dirty = false;
         }
         if ctx.input(|i| i.viewport().close_requested())
-            && self.job.as_ref().is_some_and(|j| !j.finished)
+            && (self.job.as_ref().is_some_and(|j| !j.finished)
+                || self.background_jobs.iter().any(|j| !j.finished))
         {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.confirm_close_while_working();
         }
-        if self.close_when_idle && self.job.as_ref().is_none_or(|j| j.finished) {
+        if self.close_when_idle && self.job.as_ref().is_none_or(|j| j.finished)
+            && self.background_jobs.iter().all(|j| j.finished) {
             self.close_when_idle = false;
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }

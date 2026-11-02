@@ -31,6 +31,40 @@ pub(super) struct ConflictForm {
     pub textures: [Option<egui::TextureHandle>; 2],
 }
 
+/// Reserve concrete transfer targets instead of entire destination folders.
+/// Independent file copies may share a directory; overlapping targets and
+/// moving sources are rejected to avoid racing changes to the same files.
+pub(super) struct TransferReservation {
+    pub sources: Vec<PathBuf>,
+    pub targets: Vec<PathBuf>,
+    pub moving: bool,
+}
+
+impl TransferReservation {
+    pub fn from_operation(op: &Operation) -> Option<Self> {
+        let Operation::Copy { sources, destination, move_files } = op else { return None };
+        let targets = sources.iter().map(|source| destination.join(source.file_name().unwrap_or_default())).collect();
+        Some(Self { sources: sources.clone(), targets, moving: *move_files })
+    }
+
+    pub fn overlaps(&self, other: &Self) -> bool {
+        fn normalize(path: &Path) -> String {
+            path.to_string_lossy().replace('/', "\\").trim_end_matches('\\').to_lowercase()
+        }
+        fn intersect(a: &Path, b: &Path) -> bool {
+            let (a, b) = (normalize(a), normalize(b));
+            a == b || a.strip_prefix(&b).is_some_and(|s| s.starts_with('\\'))
+                || b.strip_prefix(&a).is_some_and(|s| s.starts_with('\\'))
+        }
+        fn any(a: &[PathBuf], b: &[PathBuf]) -> bool {
+            a.iter().any(|x| b.iter().any(|y| intersect(x, y)))
+        }
+        any(&self.targets, &other.targets)
+            || (self.moving && (any(&self.sources, &other.sources) || any(&self.sources, &other.targets)))
+            || (other.moving && (any(&other.sources, &self.sources) || any(&other.sources, &self.targets)))
+    }
+}
+
 /// Info about a conflict target that is not a real file (archive or remote item): (shown path, is folder, size, modified time, remote).
 /// The job thread sets it before asking and removes it after the answer.
 type VirtualEntry = (PathBuf, bool, Option<u64>, Option<SystemTime>, bool);
@@ -511,7 +545,10 @@ impl App {
     /// Conflict question: answers at once when an apply-to-all answer fits, otherwise FileConflictWindow.
     pub(super) fn ask_file_conflict(&mut self, source: PathBuf, destination: PathBuf, allow_resume: bool, reply: Sender<ConflictChoice>) {
         let mut form = ConflictForm::read(&source, &destination, allow_resume);
-        if let Some(choice) = self.conflict_all.filter(|c| form.compatible(*c)) {
+        let owner = self.job.as_ref().map(|job| job.serial);
+        let policy = self.job.as_ref().and_then(|job| job.conflict_policy)
+            .or_else(|| owner.is_none().then_some(self.conflict_all).flatten());
+        if let Some(choice) = policy.filter(|c| form.compatible(*c)) {
             let _ = reply.send(choice);
             return;
         }
@@ -522,7 +559,15 @@ impl App {
             let choice = match result {
                 DialogResult::FileConflict(Some((choice, all))) => {
                     if all && choice != ConflictChoice::Cancel {
-                        app.conflict_all = Some(choice);
+                        if let Some(serial) = owner {
+                            if let Some(job) = app.job.as_mut().filter(|job| job.serial == serial) {
+                                job.conflict_policy = Some(choice);
+                            } else if let Some(job) = app.background_jobs.iter_mut().find(|job| job.serial == serial) {
+                                job.conflict_policy = Some(choice);
+                            }
+                        } else {
+                            app.conflict_all = Some(choice);
+                        }
                     }
                     choice
                 }
@@ -576,6 +621,11 @@ impl App {
     /// Only in the C# version: the pause button (355,60 above btnCancel), remaining time for jobs without a byte total (in lRemaining's place), the done count when the total is unknown.
     /// Closing the window (x, Esc) requests cancel (C# OnClosing). With another window on top it only draws.
     pub(super) fn file_progress_ui(&mut self, ctx: &egui::Context) {
+        // Local copy/move uses independent non-modal windows instead. Never
+        // block the two file panes merely because a transfer is running.
+        if self.job.as_ref().is_some_and(|j| !j.finished && j.reservation.is_some()) {
+            return;
+        }
         if self.job.as_ref().is_some_and(|j| !j.finished && j.archive_clipboard_started.is_some()) {
             self.archive_clipboard_progress_ui(ctx);
             return;
@@ -672,6 +722,56 @@ impl App {
         }
         if cancel {
             job.cancel.store(true, Ordering::Relaxed);
+        }
+    }
+
+    /// Concurrent local copies/moves are ordinary floating windows, not
+    /// modal dialogs. Every operation owns its own cancellation token.
+    pub(super) fn concurrent_transfers_ui(&mut self, ctx: &egui::Context) {
+        let ko = self.language == "ko";
+        let jobs = self.job.iter().chain(self.background_jobs.iter())
+            .filter(|job| !job.finished && job.reservation.is_some());
+        for (index, job) in jobs.enumerate() {
+            let id = egui::Id::new(("ndr-transfer-progress", job.serial));
+            let moving = job.reservation.as_ref().is_some_and(|r| r.moving);
+            let caption = if moving { if ko { "파일 이동" } else { "Moving files" } }
+                else { if ko { "파일 복사" } else { "Copying files" } };
+            let fraction = job.progress.as_ref().and_then(|p| {
+                if p.prefer_bytes { p.total_bytes.filter(|n| *n > 0).map(|n| job.bytes as f32 / n as f32) }
+                else { p.total_files.filter(|n| *n > 0).map(|n| job.files as f32 / n as f32) }
+            });
+            let mut cancel = false;
+            let screen = ctx.content_rect();
+            egui::Window::new(format!("{caption} #{}", job.serial))
+                .id(id).collapsible(true).resizable(false)
+                // Keep the file panes usable: start at the lower-right and
+                // stagger independent transfer windows upwards.
+                .default_pos(egui::pos2(
+                    (screen.right() - 380.0).max(screen.left() + 8.0),
+                    (screen.bottom() - 185.0 - index as f32 * 148.0).max(screen.top() + 35.0),
+                ))
+                .default_width(350.0)
+                .show(ctx, |ui| {
+                    ui.set_min_width(350.0);
+                    ui.label(egui::RichText::new(&job.title).strong());
+                    let current = Path::new(&job.path).file_name()
+                        .map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| job.path.clone());
+                    ui.add(egui::Label::new(if current.is_empty() {
+                        if ko { "준비 중...".to_owned() } else { "Preparing...".to_owned() }
+                    } else { current }).truncate());
+                    let bar = match fraction {
+                        Some(value) => egui::ProgressBar::new(value.clamp(0.0, 1.0))
+                            .text(format!("{:.0}%", (value * 100.0).clamp(0.0, 100.0))),
+                        None => egui::ProgressBar::new(0.0).animate(true),
+                    };
+                    ui.add(bar.desired_width(ui.available_width()));
+                    ui.horizontal(|ui| {
+                        ui.label(format!("{} {}", job.files, if ko { "개 항목" } else { "items" }));
+                        ui.label(ndr::native::format_byte_size(job.bytes));
+                        if ui.button(if ko { "취소" } else { "Cancel" }).clicked() { cancel = true; }
+                    });
+                });
+            if cancel { job.cancel.store(true, Ordering::Relaxed); }
         }
     }
 

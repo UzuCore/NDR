@@ -38,7 +38,7 @@ impl App {
                 self.tree_focus = None;
             }
         }
-        if self.job.as_ref().is_some_and(|j| !j.finished && j.progress.is_some())
+        if self.job.as_ref().is_some_and(|j| !j.finished && j.progress.is_some() && j.reservation.is_none())
             || !self.msgboxes.is_empty()
             || !self.original_dialogs.is_empty()
             || self.job.as_ref().is_some_and(|j| j.modal.is_some())
@@ -164,12 +164,12 @@ impl App {
             && !ctx.wants_keyboard_input()
             && self.msgboxes.is_empty()
             && self.original_dialogs.is_empty()
-            && !self.job.as_ref().is_some_and(|j| j.modal.is_some() || (!j.finished && j.progress.is_some()))
+            && !self.job.as_ref().is_some_and(|j| j.modal.is_some() || (!j.finished && j.progress.is_some() && j.reservation.is_none()))
     }
 
     /// State where the list does not take keys (a dialog, message box, progress window or menu is open). Same as the first check in keyboard.
     pub(super) fn keyboard_blocked(&self, ctx: &egui::Context) -> bool {
-        self.job.as_ref().is_some_and(|j| !j.finished && j.progress.is_some())
+        self.job.as_ref().is_some_and(|j| !j.finished && j.progress.is_some() && j.reservation.is_none())
             || !self.msgboxes.is_empty()
             || !self.original_dialogs.is_empty()
             || self.job.as_ref().is_some_and(|j| j.modal.is_some())

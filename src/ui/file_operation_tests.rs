@@ -9,6 +9,68 @@ use std::sync::Mutex;
 
 static EXTERNAL: Mutex<Vec<(String, Vec<String>, String)>> = Mutex::new(Vec::new());
 
+#[test]
+fn independent_copy_jobs_run_together_without_blocking_file_panes() {
+    let (root, ctx, mut app) = fixture("parallel-copy");
+    let src = root.join("left");
+    let dst = root.join("right");
+    fs::remove_file(dst.join("a.txt")).unwrap();
+    app.local_transfer(vec![src.join("a.txt")], dst.clone(), false,
+        super::file_operation::TransferKind::Paste);
+    app.local_transfer(vec![src.join("b.txt")], dst.clone(), false,
+        super::file_operation::TransferKind::Paste);
+    assert_eq!(app.background_jobs.len(), 1, "second copy must have an independent worker");
+    assert!(app.job.as_ref().is_some_and(|j| j.reservation.is_some()));
+    assert!(!app.keyboard_blocked(&ctx), "transfer progress must not block other operations");
+    wait(&mut app, &ctx, |app| {
+        app.job.as_ref().is_none_or(|job| job.finished)
+            && app.background_jobs.is_empty() && app.panes.iter().all(|pane| !pane.loading)
+    });
+    assert_eq!(fs::read(dst.join("a.txt")).unwrap(), b"resumable payload");
+    assert_eq!(fs::read(dst.join("b.txt")).unwrap(), b"bee");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn concurrent_transfer_refuses_overlapping_destination_but_accepts_distinct_files() {
+    use super::file_operation::TransferReservation;
+    let make = |sources: &[&str], destination: &str, move_files| {
+        TransferReservation::from_operation(&Operation::Copy {
+            sources: sources.iter().map(PathBuf::from).collect(),
+            destination: PathBuf::from(destination), move_files,
+        }).unwrap()
+    };
+    let a = make(&[r"C:\source\a.txt"], r"D:\target", false);
+    let different = make(&[r"C:\source\b.txt"], r"D:\target", false);
+    let same = make(&[r"E:\elsewhere\a.txt"], r"D:\target", false);
+    let moving = make(&[r"C:\source\a.txt"], r"E:\dest", true);
+    assert!(!a.overlaps(&different));
+    assert!(a.overlaps(&same));
+    assert!(a.overlaps(&moving));
+}
+
+#[test]
+fn apply_to_all_choice_is_private_to_each_concurrent_copy() {
+    let (root, _ctx, mut app) = fixture("isolated-conflicts");
+    let (_sender_one, receiver_one) = mpsc::channel();
+    let (_sender_two, receiver_two) = mpsc::channel();
+    let mut first = Job::new(receiver_one, Arc::new(AtomicBool::new(false)), "first".into());
+    first.serial = 100;
+    first.conflict_policy = Some(ConflictChoice::Overwrite);
+    let mut second = Job::new(receiver_two, Arc::new(AtomicBool::new(false)), "second".into());
+    second.serial = 101;
+    app.background_jobs.push(first);
+    app.job = Some(second);
+    let (reply, response) = mpsc::channel();
+    app.ask_file_conflict(root.join("left/a.txt"), root.join("right/a.txt"), false, reply);
+    assert_eq!(app.original_dialogs.len(), 1,
+        "first job's overwrite-all must not automatically decide another job's conflict");
+    assert!(response.try_recv().is_err());
+    assert!(app.job.as_ref().unwrap().conflict_policy.is_none());
+    drop(app);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 /// Fake external copy program: records (program, arguments, list file content) and exits with 0.
 fn fake_runner(program: &Path, args: &[String], _: &Path) -> Result<i32, String> {
     let list = args
