@@ -1092,10 +1092,38 @@ fn desktop_shortcut_reports_failure_and_creates_real_link() {
     assert!(link.is_file(), "a real Windows Shell Link must be written to the destination");
     assert!(ndr::native::shortcut_target(&link).is_some(), "the link must be readable by the shell");
     assert!(app.msgboxes.is_empty(), "desktop shortcut should succeed without a popup");
+    assert_eq!(app.completion_toasts.entries.len(), 2, "failed attempt warns, successful attempt confirms");
+    assert_eq!(app.completion_toasts.entries[1].kind, super::completion_toast::NoticeKind::Success);
     assert!(app.panes[0].selected.is_empty());
     fs::remove_dir_all(root).unwrap();
 }
 
+#[test]
+fn completion_toast_setting_disables_visual_notices_without_affecting_sound_preference() {
+    let (root, ctx, mut app) = fixture("completion-toast-setting", "ko");
+    app.settings.set_flag("PlayCompletionSound", true);
+    app.settings.set_flag("ShowCompletionToast", false);
+    app.completion_notice("복사 완료", "Copy completed", "3개 항목 처리");
+    assert!(app.completion_toasts.entries.is_empty());
+    assert!(app.settings.flag("PlayCompletionSound", false));
+    app.settings.set_flag("ShowCompletionToast", true);
+    app.completion_notice("복사 완료", "Copy completed", "3개 항목 처리");
+    app.completion_notice("이동 완료", "Move completed", "2개 항목 처리");
+    assert_eq!(app.completion_toasts.entries.len(), 2);
+    assert_eq!(app.completion_toasts.entries[0].title, "복사 완료");
+    assert_eq!(app.completion_toasts.entries[1].title, "이동 완료");
+    let _ = ctx.run(egui::RawInput::default(), |ctx| app.completion_toasts_ui(ctx));
+    assert_eq!(app.completion_toasts.entries.len(), 2);
+    app.completion_toasts.entries[0].since -= std::time::Duration::from_secs(5);
+    let _ = ctx.run(egui::RawInput::default(), |ctx| app.completion_toasts_ui(ctx));
+    assert_eq!(app.completion_toasts.entries.len(), 1);
+    assert_eq!(app.completion_toasts.entries[0].title, "이동 완료");
+    app.settings.set_flag("ShowCompletionToast", false);
+    let _ = ctx.run(egui::RawInput::default(), |ctx| app.completion_toasts_ui(ctx));
+    assert!(app.completion_toasts.entries.is_empty());
+    drop(app);
+    fs::remove_dir_all(root).unwrap();
+}
 #[test]
 fn system_commands_follow_csharp() {
     let (root, ctx, mut app) = fixture("system", "en");
@@ -1118,10 +1146,12 @@ fn system_commands_follow_csharp() {
     assert_eq!(links(), vec![(left.join("alpha.txt"), desk.clone()), (left.join("beta.txt"), desk.clone())]);
     assert!(app.panes[0].selected.is_empty());
     assert!(app.msgboxes.is_empty(), "successful desktop shortcut needs no popup");
+    assert_eq!(app.completion_toasts.entries.len(), 1, "desktop shortcut completion must create a toast");
     app.msgboxes.clear();
     // PasteShortcutAsync: clipboard order, into the current folder.
     CLIP.with(|c| *c.borrow_mut() = vec![right.clone(), left.join("gamma.log")]);
     app.dispatch("pasteShortcut", &ctx);
+    assert_eq!(app.completion_toasts.entries.len(), 2, "shortcut paste must add its own toast");
     assert_eq!(links(), vec![(right.clone(), left.clone()), (left.join("gamma.log"), left.clone())]);
     // OpenAllSelectedFilesAsync: every marked item through the shell in the current folder; .exe goes to the history.
     fs::write(left.join("tool.exe"), b"MZ").unwrap();

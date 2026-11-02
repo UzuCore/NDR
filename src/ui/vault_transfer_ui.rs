@@ -143,6 +143,14 @@ impl App {
         // This is called once per terminal transition, not per 8 MiB chunk.
         if job.failed.is_none() && !job.cancelled && job.skipped == 0 && job.copied > 0 {
             self.play_operation_completion_sound();
+            self.completion_notice("암호화 작업 완료", "Encrypted transfer completed",
+                if self.language == "ko" { format!("{}개 항목 처리", job.copied) }
+                else { format!("{} item(s) processed", job.copied) });
+        } else if let Some(error) = &job.failed {
+            self.error_notice("암호화 작업 실패", "Encrypted transfer failed", error.clone());
+        } else if !job.cancelled && job.skipped > 0 {
+            self.warning_notice("암호화 작업 일부 완료", "Encrypted transfer partially completed",
+                format!("{} completed · {} skipped", job.copied, job.skipped));
         }
         // Update visible listings only once per finished batch. Previously
         // every imported file re-listed and re-sorted the full directory,

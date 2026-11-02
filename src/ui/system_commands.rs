@@ -289,6 +289,8 @@ impl App {
             }
         }
         if !failures.is_empty() {
+            self.warning_notice("바탕화면 바로가기 일부 실패", "Some desktop shortcuts failed",
+                format!("{succeeded} succeeded · {} failed", failures.len()));
             let detail = failures.iter().take(8).cloned().collect::<Vec<_>>().join("\n");
             let message = format!(
                 "바로가기 생성: 성공 {succeeded}개, 실패 {}개\n저장 위치: {}\n{detail}",
@@ -299,6 +301,9 @@ impl App {
             return;
         }
         self.panes[i].selected.clear();
+        self.completion_notice("바탕화면 바로가기 생성 완료", "Desktop shortcuts created",
+            if self.language == "ko" { format!("바로가기 {succeeded}개 생성") }
+            else { format!("{succeeded} shortcut(s) created") });
     }
 
     /// C# PasteShortcutAsync (original miPasteAsShortcutClick 0x4340d4): on a local pane with an existing current folder, creates "name.ext.lnk" in clipboard file list
@@ -313,10 +318,23 @@ impl App {
         if targets.is_empty() {
             return;
         }
+        let mut created = 0usize;
+        let mut failed = 0usize;
         for target in &targets {
-            let _ = (self.system.create_shortcut)(target, &folder);
+            match (self.system.create_shortcut)(target, &folder) {
+                Ok(()) => created += 1,
+                Err(_) => failed += 1,
+            }
         }
         self.refresh(i);
+        if failed > 0 {
+            self.warning_notice("바로가기 일부 생성 실패", "Some shortcuts could not be created",
+                format!("{created} succeeded · {failed} failed"));
+        } else if created > 0 {
+            self.completion_notice("바로가기 생성 완료", "Shortcuts created",
+                if self.language == "ko" { format!("{created}개 바로가기 생성") }
+                else { format!("{created} shortcut(s) created") });
+        }
     }
 
     /// C# GoToSystemFolderAsync/GoToDownloadsAsync: documents, pictures, music, videos and downloads use the SpecialFolderPaths setting (ExpandSetting)

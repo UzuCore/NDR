@@ -247,7 +247,11 @@ impl App {
         if save {
             if let Some(state) = self.panes[editor.pane].vault.as_mut() {
                 match state.database.update_file(editor.id, editor.body.as_bytes()) {
-                    Ok(()) => { self.refresh_vault(editor.pane); open = false; },
+                    Ok(()) => {
+                        self.refresh_vault(editor.pane);
+                        self.completion_notice("암호화 파일 저장 완료", "Encrypted file saved", editor.name.clone());
+                        open = false;
+                    },
                     Err(e) => self.status = e,
                 }
             } else { open = false; }
@@ -268,7 +272,12 @@ impl App {
             let result = if folder { state.database.add_folder(current, &name).map(|_| ()) }
                 else { state.database.add_file(current, &name, b"").map(|_| ()) };
             match result {
-                Ok(()) => { app.pending_focus[pane] = Some(name); app.refresh_vault(pane) },
+                Ok(()) => {
+                    app.pending_focus[pane] = Some(name.clone());
+                    app.refresh_vault(pane);
+                    app.completion_notice(if folder { "암호화 폴더 생성 완료" } else { "암호화 파일 생성 완료" },
+                        if folder { "Encrypted folder created" } else { "Encrypted file created" }, name);
+                },
                 Err(e) => app.status = e,
             }
         });
@@ -289,7 +298,11 @@ impl App {
                 state.database.rename(id, &new)
             });
             match result {
-                Ok(()) => { app.pending_focus[pane] = Some(new); app.refresh_vault(pane) },
+                Ok(()) => {
+                    app.pending_focus[pane] = Some(new.clone());
+                    app.refresh_vault(pane);
+                    app.completion_notice("이름 변경 완료", "Rename completed", new);
+                },
                 Err(e) => app.status = e,
             }
         });
@@ -330,8 +343,11 @@ impl App {
                             "암호화 폴더 정리와 무결성 검사가 완료되었습니다.".into()
                         }else{"Encrypted folder compaction and integrity verification completed.".into()};
                         app.play_operation_completion_sound();
+                        app.completion_notice("암호화 폴더 정리 완료", "Encrypted folder compacted",
+                            "Encrypted container rebuilt and verified");
                     }
                     Err(error)=>{
+                        app.error_notice("암호화 폴더 정리 실패", "Encrypted folder compaction failed", error.clone());
                         let parent=file.parent().unwrap_or_else(||Path::new(".")).to_path_buf();
                         app.pending_focus[pane]=file.file_stem().map(|n|n.to_string_lossy().into_owned());
                         app.navigate(pane,parent,false);
@@ -363,6 +379,9 @@ impl App {
                     Ok(()) => {
                         app.refresh_vault(pane);
                         app.play_operation_completion_sound();
+                        app.completion_notice("암호화 항목 삭제 완료", "Encrypted items deleted",
+                            if app.language == "ko" { format!("{}개 항목 삭제", names.len()) }
+                            else { format!("{} item(s) deleted", names.len()) });
                     }
                     Err(e) => app.status = e,
                 }

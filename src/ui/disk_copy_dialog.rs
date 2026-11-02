@@ -712,7 +712,12 @@ impl App {
         };
         match follow {
             Follow::None => {}
-            Follow::Close => self.close_disk_copy(ctx),
+            Follow::Close => {
+                self.completion_notice("디스크 작업 완료", "Disk operation completed",
+                    if ko { "디스크 작업이 정상적으로 완료되었습니다." }
+                    else { "Disk operation finished successfully." });
+                self.close_disk_copy(ctx);
+            },
             Follow::Swap(text) => self.system_box(&title, &text, MB_YESNO | MB_ICONEXCLAMATION, |app, answer, _| app.disk_swap_answered(answer == IDYES)),
             Follow::Error { restoring, message } => {
                 let prefix = if restoring {

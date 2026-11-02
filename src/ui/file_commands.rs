@@ -117,6 +117,7 @@ impl App {
                 return app.show_name_operation_error(error, false, |_, _, _| {});
             }
             app.refresh_and_focus(pane, Some(display_name(Path::new(&path))));
+            app.completion_notice("새 폴더 생성 완료", "Folder created", name);
         });
     }
 
@@ -139,6 +140,9 @@ impl App {
                 app.show_name_operation_error(error, false, |_, _, _| {});
             }
             app.refresh_and_focus(pane, Some(names::find_file_name(&path)));
+            if error == 0 {
+                app.completion_notice("새 파일 생성 완료", "File created", name);
+            }
         });
     }
 
@@ -180,6 +184,7 @@ impl App {
             }
             let error = names::move_file(&entry.path.to_string_lossy(), &directory.join(&target_name).to_string_lossy());
             if error == 0 {
+                app.completion_notice("이름 변경 완료", "Rename completed", target_name.clone());
                 // Original FUN_004361f8 -> FUN_0040f7f0: the description follows the new name.
                 let include_legacy = app.settings.flag("UseDescriptionFile", true);
                 if let Err(message) = compat::rename_descriptions(&directory, &[(entry.name.clone(), target_name.clone())], include_legacy) {

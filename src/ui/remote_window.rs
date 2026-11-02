@@ -1833,7 +1833,12 @@ impl App {
             }
         }
         if ok {
+            self.completion_notice("원격 전송 완료", "Remote transfer completed",
+                if ko { format!("{completed}개 항목 전송") }
+                else { format!("{completed} item(s) transferred") });
             self.remote_next_upload();
+        } else if let Some(message) = error {
+            self.error_notice("원격 전송 실패", "Remote transfer failed", message);
         }
     }
 

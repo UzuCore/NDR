@@ -313,6 +313,7 @@ impl App {
         let count = ndr::parity::format_size(result.parts.len() as u64, "B", true).trim_end_matches(" B").to_owned();
         self.status = if self.language == "ko" { format!("{count}개 조각 파일을 만들었습니다.") } else { format!("Created {count} parts.") };
         self.refresh(self.active);
+        self.completion_notice("파일 분할 완료", "File split completed", self.status.clone());
     }
 
     /// C# JoinPartsAsync: the chosen files (with one, all numbered pieces). A relative name is joined to the current folder. When the name exists
@@ -395,6 +396,7 @@ impl App {
                 let count = ndr::parity::format_size(count as u64, "B", true).trim_end_matches(" B").to_owned();
                 self.status = if ko { format!("{count}개 파일을 합쳤습니다.") } else { format!("Joined {count} files.") };
                 self.refresh(self.active);
+                self.completion_notice("파일 합치기 완료", "File join completed", self.status.clone());
             }
         }
     }

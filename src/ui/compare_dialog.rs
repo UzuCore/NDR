@@ -792,7 +792,12 @@ impl App {
         } else {
             format!("Synchronization complete · {copied} files copied · {created} folders created · {skipped} skipped · {errors} errors")
         };
-        if !result.errors.is_empty() {
+        if result.errors.is_empty() {
+            self.completion_notice("동기화 완료", "Synchronization completed", self.status.clone());
+        } else {
+            self.warning_notice("동기화 일부 완료", "Synchronization partially completed",
+                format!("{} errors", result.errors.len()));
+        }        if !result.errors.is_empty() {
             let mut text = result.errors.iter().take(ERROR_LINES).cloned().collect::<Vec<_>>().join("\r\n");
             if result.errors.len() > ERROR_LINES {
                 let rest = n0(result.errors.len() - ERROR_LINES);

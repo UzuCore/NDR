@@ -5,6 +5,7 @@ mod skin_pane;
 mod empty_commands;
 mod commands;
 mod compare_dialog;
+mod completion_toast;
 mod date_time_picker;
 mod destination_dialog;
 mod dialogs;
@@ -632,6 +633,8 @@ pub struct App {
     conflict_all: Option<ConflictChoice>,
     text: Option<TextDocument>,
     status: String,
+    /// Bounded, short-lived bottom-right in-window operation notices.
+    completion_toasts: completion_toast::Notices,
     last_find: String,
     started: Instant,
     frames: u64,
@@ -979,6 +982,7 @@ impl App {
             conflict_all: None,
             text: None,
             status: error.clone().unwrap_or_default(),
+            completion_toasts: Default::default(),
             last_find: String::new(),
             started: Instant::now(),
             frames: 0,
@@ -2196,6 +2200,7 @@ impl eframe::App for App {
         self.update_progress_ui(ctx);
         self.msgbox_ui(ctx);
         self.pane_message_ui(ctx);
+        self.completion_toasts_ui(ctx);
         self.fade_menus(ctx);
         if let Some(seconds) = self.options.smoke_seconds {
             self.shot_step(ctx);

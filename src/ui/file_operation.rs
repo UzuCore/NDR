@@ -705,6 +705,37 @@ impl App {
         self.refresh(0);
         self.refresh(1);
         self.ftp_queue_done();
+        // Match the actual terminal outcome, not a merely started task or a
+        // completion sound (which users may disable). One notice per batch.
+        if !cancelled {
+            if let Some(error) = &fatal {
+                self.error_notice("작업 실패", "Operation failed", error.clone());
+            } else if !errors.is_empty() || skipped > 0 {
+                self.warning_notice(
+                    "작업 일부 완료", "Operation partially completed",
+                    if ko { format!("완료 {files}개 · 오류 {}개 · 건너뜀 {skipped}개", errors.len()) }
+                    else { format!("{files} completed · {} errors · {skipped} skipped", errors.len()) },
+                );
+            } else {
+                let (ko_title, en_title) = match &report {
+                    JobReport::Transfer { verb, .. } => {
+                        if verb.1.eq_ignore_ascii_case("move") || verb.1.eq_ignore_ascii_case("moving") {
+                            ("이동 완료", "Move completed")
+                        } else { ("복사 완료", "Copy completed") }
+                    }
+                    JobReport::Delete { recycle: true, .. } => ("휴지통 이동 완료", "Moved to Recycle Bin"),
+                    JobReport::Delete { .. } => ("삭제 완료", "Delete completed"),
+                    JobReport::Shred => ("완전 삭제 완료", "Shredding completed"),
+                    JobReport::Generic if chime && !custom_status => ("작업 완료", "Operation completed"),
+                    _ => ("", ""),
+                };
+                if !en_title.is_empty() && (files > 0 || matches!(report, JobReport::Generic)) {
+                    self.completion_notice(ko_title, en_title,
+                        if ko { format!("{files}개 항목 처리 · {}", format_size(bytes)) }
+                        else { format!("{files} items processed · {}", format_size(bytes)) });
+                }
+            }
+        }
         match report {
             JobReport::Generic => {
                 if chime && !cancelled && errors.is_empty() && fatal.is_none() {
@@ -887,8 +918,13 @@ impl App {
                 if let Some(status) = status {
                     self.status = status;
                 }
+                self.completion_notice("외부 복사 작업 완료", "External file operation completed",
+                    self.status.clone());
             }
-            Err(message) => self.system_box("NDR", &message, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {}),
+            Err(message) => {
+                self.error_notice("외부 복사 작업 실패", "External file operation failed", message.clone());
+                self.system_box("NDR", &message, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
+            },
         }
     }
 }
