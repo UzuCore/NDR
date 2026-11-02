@@ -4,7 +4,7 @@
 //! No SQL, no virtual-drive driver, no plaintext staging on normal operations.
 use openssl::{hash::MessageDigest, pkcs5::pbkdf2_hmac, pkey::PKey, rand::rand_bytes, sign::Signer, symm::{decrypt_aead, encrypt_aead, Cipher}};
 use serde::{Deserialize, Serialize};
-use std::{collections::{BTreeMap, HashSet}, fs::{self, File, OpenOptions}, io::{Read, Seek, SeekFrom, Write}, path::{Path, PathBuf}, time::{Duration, Instant}};
+use std::{collections::{BTreeMap, HashMap, HashSet}, fs::{self, File, OpenOptions}, io::{Read, Seek, SeekFrom, Write}, path::{Path, PathBuf}, time::{Duration, Instant}};
 use zeroize::{Zeroize, Zeroizing};
 
 pub const EXTENSION: &str = "ndr";
@@ -58,6 +58,13 @@ impl Item {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct Index { next_id: i64, items: BTreeMap<i64, Item> }
+// Short-lived copies of the decrypted directory tree exist during atomic
+// edits and compaction. Scrub their filenames when those snapshots drop.
+impl Drop for Index {
+    fn drop(&mut self) {
+        for item in self.items.values_mut() { item.name.zeroize(); }
+    }
+}
 impl Index {
     fn empty() -> Self {
         let mut items = BTreeMap::new();
@@ -99,9 +106,48 @@ impl Index {
         Ok(())
     }
 }
+// A named, process-shared semaphore holds the vault write lease even while
+// an atomic rewrite briefly closes/replaces the underlying file handle.
+struct VaultGate(usize);
+impl VaultGate {
+    fn acquire(path: &Path) -> Result<Self, String> {
+        #[cfg(windows)] {
+            use windows_sys::Win32::{Foundation::{CloseHandle, WAIT_OBJECT_0}, System::Threading::{CreateSemaphoreW, WaitForSingleObject}};
+            let path = fs::canonicalize(path).map_err(|e| e.to_string())?;
+            let identity = path.to_string_lossy().to_lowercase();
+            let digest = openssl::sha::sha256(identity.as_bytes());
+            let mut name = "Local\\NDR-Vault-".to_string();
+            for byte in &digest[..16] { name.push_str(&format!("{byte:02x}")); }
+            let wide: Vec<u16> = name.encode_utf16().chain(Some(0)).collect();
+            let handle = unsafe { CreateSemaphoreW(std::ptr::null(), 1, 1, wide.as_ptr()) };
+            if handle.is_null() { return Err(format!("Cannot create encrypted session lock: {}", std::io::Error::last_os_error())); }
+            if unsafe { WaitForSingleObject(handle, 0) } != WAIT_OBJECT_0 {
+                unsafe { CloseHandle(handle); }
+                return Err("This encrypted folder is already unlocked in another session".into());
+            }
+            Ok(Self(handle as usize))
+        }
+        #[cfg(not(windows))] { let _ = path; Ok(Self(0)) }
+    }
+}
+impl Drop for VaultGate {
+    fn drop(&mut self) {
+        #[cfg(windows)] {
+            use windows_sys::Win32::{Foundation::CloseHandle, System::Threading::ReleaseSemaphore};
+            let handle = self.0 as windows_sys::Win32::Foundation::HANDLE;
+            unsafe { ReleaseSemaphore(handle, 1, std::ptr::null_mut()); CloseHandle(handle); }
+        }
+    }
+}
+
+struct TemporaryEncryptedFile(PathBuf);
+impl Drop for TemporaryEncryptedFile {
+    fn drop(&mut self) { let _ = fs::remove_file(&self.0); }
+}
 pub struct Vault {
     handle: File, pub file: PathBuf, key: Zeroizing<[u8;32]>, index: Index,
     generation: u64, pending: Option<Index>, opened: Instant, last_used: Instant,
+    gate: Option<VaultGate>,
 }
 fn valid_name(name: &str) -> Result<(), String> {
     if name.is_empty() || name == "." || name == ".." || name.len() > 255 || name.trim() != name
@@ -227,6 +273,7 @@ fn read_slot(header: &[u8;128], index: usize, len: u64, key: &[u8;32]) -> Result
 
 impl Vault {
     pub fn create(path: &Path, password: String) -> Result<Self, String> {
+        let password=Zeroizing::new(password);
         if password.chars().count() < 12 {
             return Err("Password must contain at least 12 characters".into());
         }
@@ -234,15 +281,16 @@ impl Vault {
         let mut options = OpenOptions::new();
         options.read(true).write(true).create_new(true);
         let mut handle = exclusive(&mut options).open(path).map_err(|e| e.to_string())?;
+        let gate = VaultGate::acquire(path)?;
         let result = (|| {
             let mut header = [0u8;128];
             header[..8].copy_from_slice(MAGIC);
             rand_bytes(&mut header[8..24]).map_err(|e| e.to_string())?;
             header[24..28].copy_from_slice(&(KDF_ITERATIONS as u32).to_le_bytes());
             handle.write_all(&header).map_err(|e| e.to_string())?;
-            let key = derive(password, &header[8..24])?;
+            let key = derive((*password).clone(), &header[8..24])?;
             let mut result = Self {handle,file:path.to_path_buf(),key,index:Index::empty(),
-                generation:0,pending:None,opened:Instant::now(),last_used:Instant::now()};
+                generation:0,pending:None,opened:Instant::now(),last_used:Instant::now(),gate:Some(gate)};
             result.commit_index()?;
             Ok::<_,String>(result)
         })();
@@ -250,41 +298,44 @@ impl Vault {
         result
     }
     pub fn unlock(path: &Path, password: String) -> Result<Self, String> {
-        let mut options = OpenOptions::new();
-        options.read(true).write(true);
-        let mut handle = exclusive(&mut options).open(path)
-            .map_err(|e| format!("Cannot open encrypted container exclusively (close any other NDR instance using it): {e}"))?;
-        let mut header = [0u8;128];
-        handle.read_exact(&mut header).map_err(|_| "Not an NDR v2 container (legacy SQLCipher format is unsupported)".to_owned())?;
-        if &header[..8] != MAGIC { return Err("Not an NDR v2 container (legacy SQLCipher format is unsupported)".into()); }
-        if u32::from_le_bytes(header[24..28].try_into().unwrap()) as usize != KDF_ITERATIONS { return Err("Unsupported NDR key derivation format".into()); }
-        let key = derive(password, &header[8..24])?;
-        let len = handle.metadata().map_err(|e| e.to_string())?.len();
-        // Both pointers are authenticated. An invalid latest pointer must NOT
-        // silently fall back to a previous state and resurrect deleted files.
-        let first = read_slot(&header,0,len,&key)?;
-        let second = read_slot(&header,1,len,&key)?;
-        if first.0.abs_diff(second.0) > 1 || (first.0 == second.0 && (first.1.offset != second.1.offset || first.1.size != second.1.size)) {
-            return Err("Encrypted container pointer generations are inconsistent".into());
+        let gate=VaultGate::acquire(path)?;
+        let mut options=OpenOptions::new();options.read(true).write(true);
+        let mut handle=exclusive(&mut options).open(path)
+            .map_err(|e|format!("Cannot open encrypted container exclusively: {e}"))?;
+        let mut header=[0u8;128];
+        handle.read_exact(&mut header).map_err(|_|"Not an NDR v3 container".to_owned())?;
+        if &header[..8]!=MAGIC || u32::from_le_bytes(header[24..28].try_into().unwrap()) as usize != KDF_ITERATIONS {
+            return Err("Unsupported NDR encrypted container format".into());
         }
-        let (generation,block) = if first.0 >= second.0 { first } else { second };
-        let bytes = get_record(&handle,&key,&block,KIND_META)?;
-        let index: Index = serde_json::from_slice(&bytes)
-            .map_err(|_| "Wrong password or encrypted metadata damaged".to_owned())?;
+        let key=derive(password,&header[8..24])?;
+        Self::from_open(handle,path.to_path_buf(),key,gate,header)
+    }
+    fn from_open(mut handle:File, file:PathBuf, key:Zeroizing<[u8;32]>, gate:VaultGate, header:[u8;128])->Result<Self,String>{
+        if &header[..8] != MAGIC || u32::from_le_bytes(header[24..28].try_into().unwrap()) as usize != KDF_ITERATIONS {
+            return Err("Unsupported NDR encrypted container format".into());
+        }
+        let len=handle.metadata().map_err(|e|e.to_string())?.len();
+        let first=read_slot(&header,0,len,&key)?;
+        let second=read_slot(&header,1,len,&key)?;
+        if first.0.abs_diff(second.0)>1 || (first.0==second.0 && (first.1.offset != second.1.offset || first.1.size != second.1.size)) {
+            return Err("Encrypted metadata pointer generations are inconsistent".into());
+        }
+        let (generation,block)=if first.0 >= second.0 {first}else{second};
+        let bytes=get_record(&handle,&key,&block,KIND_META)?;
+        let index:Index=serde_json::from_slice(&bytes).map_err(|_|"Wrong password or encrypted metadata damaged".to_owned())?;
         index.check()?;
-        for item in index.items.values() {
-            if item.folder { continue; }
-            for block in &item.blocks {
-                if block.offset < HEADER_SIZE || block.size as usize > STREAM_CHUNK_SIZE
-                    || block.offset.checked_add(record_size(block.size as usize)?).is_none_or(|end| end > len) {
+        for item in index.items.values(){
+            if item.folder {continue;}
+            for block in &item.blocks{
+                if block.offset<HEADER_SIZE || block.size as usize>STREAM_CHUNK_SIZE
+                    || block.offset.checked_add(record_size(block.size as usize)?).is_none_or(|end|end>len){
                     return Err("Encrypted data block points outside its container".into());
                 }
             }
         }
-        Ok(Self { handle,file:path.to_path_buf(),key,index,generation,pending:None,
-            opened:Instant::now(),last_used:Instant::now() })
-    }
-    fn commit_index(&mut self) -> Result<(), String> {
+        handle.seek(SeekFrom::End(0)).map_err(|e|e.to_string())?;
+        Ok(Self{handle,file,key,index,generation,pending:None,opened:Instant::now(),last_used:Instant::now(),gate:Some(gate)})
+    }    fn commit_index(&mut self) -> Result<(), String> {
         self.index.check()?;
         let data = Zeroizing::new(serde_json::to_vec(&self.index).map_err(|e| e.to_string())?);
         if data.len() > MAX_META { return Err("Encrypted folder index exceeds 64 MiB".into()); }
@@ -693,6 +744,98 @@ impl Vault {
             Ok(())
         })
     }
+    /// Crash-safe, encrypted-only compaction. The fast delete path is unchanged;
+    /// this explicit maintenance operation removes unreachable old ciphertext
+    /// and historical metadata snapshots from the CURRENT .ndr file. It does
+    /// not promise physical SSD erasure, nor delete external file backups.
+    /// Never claim to remove old data while another NTFS hardlink still
+    /// references the old container inode. Also reject EFS protected files:
+    /// replacing those with a new inode could silently remove OS encryption.
+    fn check_compaction_file_safety(&self)->Result<(),String>{
+        #[cfg(windows)]{
+            use std::os::windows::io::AsRawHandle;
+            use windows_sys::Win32::Storage::FileSystem::{GetFileInformationByHandle,BY_HANDLE_FILE_INFORMATION,FILE_ATTRIBUTE_ENCRYPTED,FILE_ATTRIBUTE_REPARSE_POINT};
+            let mut info=unsafe{std::mem::zeroed::<BY_HANDLE_FILE_INFORMATION>()};
+            if unsafe{GetFileInformationByHandle(self.handle.as_raw_handle(),&mut info)}==0{
+                return Err(format!("Cannot inspect encrypted container file identity: {}",std::io::Error::last_os_error()));
+            }
+            if info.nNumberOfLinks>1{return Err("Cannot compact hard-linked encrypted container: another link retains old deleted data".into());}
+            if info.dwFileAttributes & FILE_ATTRIBUTE_ENCRYPTED != 0 {
+                return Err("Cannot compact Windows EFS-encrypted container without preserving EFS attributes".into());
+            }
+            if info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+                return Err("Cannot compact reparse-point encrypted container".into());
+            }
+        }
+        Ok(())
+    }
+    pub fn compact(self)->Result<Self,String>{
+        self.compact_impl(|_|Ok(()))
+    }
+    fn compact_impl(mut self, before_replace:impl FnOnce(&Path)->Result<(),String>)->Result<Self,String>{
+        if self.pending.is_some(){return Err("Finish or cancel encrypted transfers before secure compaction".into());}
+        self.verify_integrity()?;
+        self.check_compaction_file_safety()?;
+        let original=self.file.clone();
+        let parent=original.parent().ok_or("Encrypted container has no parent folder")?;
+        let mut random=[0u8;16];
+        rand_bytes(&mut random).map_err(|e|e.to_string())?;
+        let suffix=random.iter().map(|b|format!("{b:02x}")).collect::<String>();
+        let stage=parent.join(format!(".ndr-compaction-{suffix}.tmp"));
+        let _clean=TemporaryEncryptedFile(stage.clone());
+        let mut options=OpenOptions::new();options.read(true).write(true).create_new(true);
+        // Keep the verified temp file open and deny any other writer until
+        // after the atomic rename. Windows requires FILE_SHARE_DELETE for
+        // replacing an open file, but not FILE_SHARE_WRITE.
+        #[cfg(windows)] {
+            use std::os::windows::fs::OpenOptionsExt;
+            options.share_mode(0x1 | 0x4);
+        }
+        let mut temp=options.open(&stage).map_err(|e|e.to_string())?;
+        let mut header=[0u8;HEADER_SIZE as usize];
+        self.handle.seek(SeekFrom::Start(0)).map_err(|e|e.to_string())?;
+        self.handle.read_exact(&mut header).map_err(|e|e.to_string())?;
+        // Preserve the password-derived key and salt. All new AES-GCM nonces
+        // are fresh, independently generated. No plaintext disk staging.
+        header[32..].fill(0);
+        temp.write_all(&header).map_err(|e|e.to_string())?;
+        let mut rebuilt=Self {
+            handle:temp,file:stage.clone(),key:Zeroizing::new(*self.key),
+            index:self.index.clone(),generation:0,pending:None,
+            opened:self.opened,last_used:self.last_used,gate:None,
+        };
+        // Several internal copies can share the same authenticated ciphertext
+        // block. Keep that relationship while re-encrypting each LIVE block once.
+        let mut mapping=HashMap::<(u64,u32),Block>::new();
+        for item in rebuilt.index.items.values_mut(){
+            if item.folder{continue;}
+            for block in &mut item.blocks{
+                let key=(block.offset,block.size);
+                let new=if let Some(existing)=mapping.get(&key){existing.clone()}else{
+                    let plain=get_record(&self.handle,&self.key,block,KIND_DATA)?;
+                    let new=put_record(&mut rebuilt.handle,&rebuilt.key,KIND_DATA,&plain)?;
+                    mapping.insert(key,new.clone());
+                    new
+                };
+                *block=new;
+            }
+        }
+        rebuilt.commit_index()?;
+        rebuilt.verify_integrity()?;
+        preserve_original_acl(&original,&stage)?;
+        before_replace(&stage)?;
+        // The OS semaphore remains owned throughout the brief handle swap.
+        let gate=self.gate.take().ok_or("Encrypted folder session lock is missing")?;
+        let key=Zeroizing::new(*self.key);
+        drop(self);
+        atomic_replace_encrypted(&stage,&original)?;
+        drop(rebuilt);
+        let mut options=OpenOptions::new();options.read(true).write(true);
+        let mut handle=exclusive(&mut options).open(&original).map_err(|e|e.to_string())?;
+        let mut header=[0u8;HEADER_SIZE as usize];
+        handle.read_exact(&mut header).map_err(|e|e.to_string())?;
+        Self::from_open(handle,original,key,gate,header)
+    }
     pub fn verify_integrity(&self)->Result<(),String>{
         self.index.check()?;
         for item in self.index.items.values(){
@@ -706,6 +849,58 @@ impl Vault {
         }
         Ok(())
     }
+}
+/// Atomic same-directory file replacement on Windows. The new encrypted file
+/// is fully authenticated and synced before this call. Keep the old container
+/// untouched if replacement fails; the temporary file is cleaned by RAII.
+// MoveFileEx preserves only the temp file ACL by default. Copy the original
+// container DACL onto the fully encrypted staging file before atomic rename,
+// or abort: maintenance must never silently widen filesystem access rights.
+fn preserve_original_acl(original:&Path,stage:&Path)->Result<(),String>{
+    #[cfg(windows)]{
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Security::{DACL_SECURITY_INFORMATION,GetFileSecurityW,SetFileSecurityW,GetSecurityDescriptorControl,SetSecurityDescriptorControl,SE_DACL_AUTO_INHERITED,SE_DACL_AUTO_INHERIT_REQ};
+        let source:Vec<u16>=original.as_os_str().encode_wide().chain(Some(0)).collect();
+        let target:Vec<u16>=stage.as_os_str().encode_wide().chain(Some(0)).collect();
+        let mut required=0u32;
+        unsafe{ GetFileSecurityW(source.as_ptr(),DACL_SECURITY_INFORMATION,std::ptr::null_mut(),0,&mut required); }
+        if required==0 || required>1024*1024{return Err("Unable to read original encrypted folder security permissions".into());}
+        let mut descriptor=vec![0u8;required as usize];
+        if unsafe{GetFileSecurityW(source.as_ptr(),DACL_SECURITY_INFORMATION,descriptor.as_mut_ptr().cast(),required,&mut required)}==0{
+            return Err(format!("Unable to read encrypted container ACL: {}",std::io::Error::last_os_error()));
+        }
+        // Windows retains the auto-inheritance state only if the old
+        // auto-inherited DACL is also marked with the set-only INHERIT_REQ
+        // control flag while applying it to the replacement file.
+        let mut control=0u16;
+        let mut revision=0u32;
+        if unsafe{GetSecurityDescriptorControl(descriptor.as_mut_ptr().cast(),&mut control,&mut revision)}==0 {
+            return Err("Cannot inspect original container DACL inheritance".into());
+        }
+        if control & SE_DACL_AUTO_INHERITED !=0 {
+            if unsafe{SetSecurityDescriptorControl(descriptor.as_mut_ptr().cast(),SE_DACL_AUTO_INHERIT_REQ,SE_DACL_AUTO_INHERIT_REQ)}==0 {
+                return Err(format!("Cannot preserve original DACL inheritance flags: {}",std::io::Error::last_os_error()));
+            }
+        }
+        if unsafe{SetFileSecurityW(target.as_ptr(),DACL_SECURITY_INFORMATION,descriptor.as_mut_ptr().cast())}==0{
+            return Err(format!("Unable to preserve encrypted container ACL: {}",std::io::Error::last_os_error()));
+        }
+        Ok(())
+    }
+    #[cfg(not(windows))]{let _=(original,stage);Ok(())}
+}
+fn atomic_replace_encrypted(source:&Path,destination:&Path)->Result<(),String>{
+    #[cfg(windows)]{
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Storage::FileSystem::{MoveFileExW,MOVEFILE_REPLACE_EXISTING,MOVEFILE_WRITE_THROUGH};
+        let src:Vec<u16>=source.as_os_str().encode_wide().chain(Some(0)).collect();
+        let dst:Vec<u16>=destination.as_os_str().encode_wide().chain(Some(0)).collect();
+        if unsafe{MoveFileExW(src.as_ptr(),dst.as_ptr(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH)}==0{
+            return Err(format!("Cannot atomically replace encrypted container: {}",std::io::Error::last_os_error()));
+        }
+        Ok(())
+    }
+    #[cfg(not(windows))]{fs::rename(source,destination).map_err(|e|e.to_string())}
 }
 fn cleanup(paths:&[PathBuf]){
     for path in paths.iter().rev(){
@@ -828,7 +1023,7 @@ mod tests {
     fn foreign_container_rejected_without_format_migration() {
         let root=fixture("legacy");let path=root.join("old.ndr");
         fs::write(&path,b"SQLCipher legacy test bytes").unwrap();
-        assert!(Vault::unlock(&path,"correct secret".into()).err().unwrap().contains("legacy"));
+        assert!(Vault::unlock(&path,"correct secret".into()).err().unwrap().contains("NDR v3"));
         fs::remove_dir_all(root).unwrap();
     }
     #[test]
@@ -897,6 +1092,109 @@ mod tests {
         let mut reopened=Vault::unlock(&path,"correct secret".into()).unwrap();
         assert_eq!(reopened.list(1).unwrap().len(),2);
         drop(reopened);fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn encrypted_compaction_reclaims_unreferenced_records_and_preserves_shared_blocks() {
+        let root=fixture("compact");let path=root.join("single.ndr");
+        let mut vault=Vault::create(&path,"long passphrase for test".into()).unwrap();
+        let folder=vault.add_folder(1,"private").unwrap();
+        let removed_data=vec![0x6c;16*1024*1024];
+        let keep_data=vec![0x78;3*1024*1024];
+        let removed=vault.add_file(folder,"deleted.bin",&removed_data).unwrap();
+        let keep=vault.add_file(folder,"keep.bin",&keep_data).unwrap();
+        vault.transfer_one(folder,"keep.bin",folder,"copy.bin",false,false).unwrap();
+        vault.remove(removed).unwrap();
+        let before=fs::metadata(&path).unwrap().len();
+        assert!(before>18*1024*1024);
+        vault=vault.compact().unwrap();
+        let after=fs::metadata(&path).unwrap().len();
+        assert!(after<before/2,"dead bytes should be removed: {before} -> {after}");
+        assert_eq!(vault.read_file(keep).unwrap(),keep_data);
+        let copied=vault.find_child(folder,"copy.bin").unwrap().unwrap();
+        assert_eq!(vault.read_file(copied.id).unwrap(),keep_data);
+        assert_eq!(vault.item(keep).unwrap().blocks[0].offset,vault.item(copied.id).unwrap().blocks[0].offset);
+        assert!(vault.find_child(folder,"deleted.bin").unwrap().is_none());
+        vault.verify_integrity().unwrap();
+        assert!(Vault::unlock(&path,"long passphrase for test".into()).is_err(),"compaction must preserve its process-wide writer lock");
+        drop(vault);
+        let mut unlocked=Vault::unlock(&path,"long passphrase for test".into()).unwrap();
+        assert_eq!(unlocked.read_file(keep).unwrap(),keep_data);
+        drop(unlocked);
+        assert_eq!(fs::read_dir(&root).unwrap().count(),1,"only one .ndr must remain after compaction");
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn interrupted_compaction_keeps_original_and_cleans_encrypted_temp() {
+        let root=fixture("compact-failure");let path=root.join("single.ndr");
+        let mut vault=Vault::create(&path,"long passphrase for test".into()).unwrap();
+        let id=vault.add_file(1,"important.txt",b"important encrypted content").unwrap();
+        let before=fs::read(&path).unwrap();
+        let outcome=vault.compact_impl(|temp|{
+            assert!(temp.is_file(),"a fully encrypted temporary rewrite must exist before replacement");
+            Err("fault-injected before atomic replacement".into())
+        });
+        assert!(outcome.err().unwrap().contains("fault-injected"));
+        assert_eq!(fs::read(&path).unwrap(),before,"failure must not change original container");
+        let mut vault=Vault::unlock(&path,"long passphrase for test".into()).unwrap();
+        assert_eq!(vault.read_file(id).unwrap(),b"important encrypted content");
+        drop(vault);
+        assert_eq!(fs::read_dir(&root).unwrap().count(),1,"failed rewrite must clean temp");
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[cfg(windows)]
+    #[test]
+    fn compaction_preserves_original_windows_acl_bytes() {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Security::{DACL_SECURITY_INFORMATION,GetFileSecurityW};
+        fn read_dacl(path:&Path)->Vec<u8>{
+            let name:Vec<u16>=path.as_os_str().encode_wide().chain(Some(0)).collect();
+            let mut required=0u32;
+            unsafe{GetFileSecurityW(name.as_ptr(),DACL_SECURITY_INFORMATION,std::ptr::null_mut(),0,&mut required);}
+            assert!(required>0 && required<1024*1024);
+            let mut result=vec![0u8;required as usize];
+            assert_ne!(unsafe{GetFileSecurityW(name.as_ptr(),DACL_SECURITY_INFORMATION,result.as_mut_ptr().cast(),required,&mut required)},0);
+            result
+        }
+        let root=fixture("acl");let path=root.join("permissions.ndr");
+        let mut vault=Vault::create(&path,"long passphrase for test".into()).unwrap();
+        vault.add_file(1,"secret.txt",b"secret content").unwrap();
+        let before=read_dacl(&path);
+        vault=vault.compact().unwrap();
+        assert_eq!(before,read_dacl(&path),"compaction must not change container DACL");
+        drop(vault);fs::remove_dir_all(root).unwrap();
+    }
+    #[cfg(windows)]
+    #[test]
+    fn hard_linked_container_is_never_compacted_behind_an_old_link() {
+        let root=fixture("hard-links");let path=root.join("primary.ndr");
+        let secondary=root.join("historical-hardlink.ndr");
+        let mut vault=Vault::create(&path,"long passphrase for test".into()).unwrap();
+        vault.add_file(1,"history.txt",b"historical content").unwrap();
+        drop(vault);
+        fs::hard_link(&path,&secondary).unwrap();
+        let vault=Vault::unlock(&path,"long passphrase for test".into()).unwrap();
+        let error=vault.compact().err().unwrap();
+        assert!(error.contains("hard-linked"),"unexpected hard-link result: {error}");
+        assert!(path.is_file() && secondary.is_file());
+        let vault=Vault::unlock(&path,"long passphrase for test".into()).unwrap();
+        assert!(vault.find_child(1,"history.txt").unwrap().is_some());
+        drop(vault);fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn compaction_keeps_the_cross_process_writer_gate_during_rewrite() {
+        let root=fixture("gate-through-replace");let path=root.join("locked.ndr");
+        let mut vault=Vault::create(&path,"long passphrase for test".into()).unwrap();
+        vault.add_file(1,"data.txt",b"kept").unwrap();
+        let runner=std::env::current_exe().unwrap();
+        let vault=vault.compact_impl(|_|{
+            let output=std::process::Command::new(&runner)
+                .arg("--exact").arg("vault::tests::second_process_writer_probe")
+                .arg("--nocapture").env("NDR_SECURITY_WRITER_PROBE",&path).output().map_err(|e|e.to_string())?;
+            if !output.status.success(){return Err("Cross-process writer opened during compaction".into());}
+            Ok(())
+        }).unwrap();
+        assert!(Vault::unlock(&path,"long passphrase for test".into()).is_err());
+        drop(vault);fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn a_separate_process_cannot_unlock_a_live_writer() {

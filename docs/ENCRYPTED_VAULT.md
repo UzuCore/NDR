@@ -24,7 +24,7 @@ Storage design is inspired by CoverFS's single-file, dynamically growing index a
 - Move, rename, delete update only the metadata index; no per-file zeroing or SQL transaction work.
 - Import, export, cross-container copy must encrypt/decrypt actual bytes and cannot reach native raw copy speeds for large files.
 - Delete is a logical unlink, NOT secure physical erasure: encrypted older data blocks remain in the .ndr file until a separate compaction pass. The file does not shrink automatically; deleting data can leave dead encrypted space. This is a known limitation and requires compaction/space-reclamation engineering. Guaranteed physical erasure on SSD cannot be promised, even after compaction.
-- The current architecture processes the 8 MiB chunk inside the egui repaint tick for some transfers; UI responsiveness may still degrade for large copy jobs. Future improvement: bounded background worker.
+- The current architecture processes the 8 MiB chunk inside the egui repaint tick for some transfers, and manual compaction runs synchronously in the confirmation callback; UI responsiveness may degrade for large maintenance operations. Future improvement: bounded background worker with cancellable maintenance.
 
 ## UI / behavior
 
@@ -38,3 +38,13 @@ Storage design is inspired by CoverFS's single-file, dynamically growing index a
 
 - Verify password failure; ciphertext and metadata corruption rejection; true GCM tag integrity; aborted stream rollback; 24 MiB transfer; cross-vault copy; recursive folders; conflict handling; deletion timing vs previous SQLCipher implementation; reopen after crash; restart NDR UI; ensure user settings unchanged.
 - Always keep real external encrypted data out of automated deletion. Any benchmark file must be created inside a unique temporary test root.
+
+## Encrypted-only storage compaction (r209)
+
+- Use Folder > Compact Encrypted Folder while browsing inside an unlocked .ndr. Confirmation is required. This maintenance operation deliberately runs outside the fast copy/delete path because it may rewrite gigabytes of ciphertext.
+- The implementation reads and authenticates every live data record, encrypts surviving records under fresh random AES-GCM nonces into a same-directory, encrypted `.ndr-compaction-*.tmp` file, and preserves shared immutable block references instead of multiplying internal copies.
+- The original container is never edited or truncated during staging. Every rebuilt record and the new authenticated metadata index are verified before atomic same-volume replacement. On Windows, a named semaphore holds the writer lease across the handle swap, and the staging file is kept open with deny-write sharing until the rename.
+- Windows DACL permissions are copied from the original container to the staging file; failure to preserve the ACL prevents replacement. A temporary stage file is encrypted, never plaintext. A clean operation leaves exactly one .ndr file and no staging file. A process crash during staging can leave an encrypted `.tmp` file; manual clean-up may be required.
+- Error-injection tests prove that a failed rewrite before replacement leaves the original byte-for-byte intact and cleans temporary files. Reopen, wrong-password, restored in-container shared copies, copied file content and reduced container size are verified.
+- **This is not a secure physical erase.** Old sectors, SSD wear-leveling remnants, OS snapshots, hard-linked copies, backup media, and old valid encrypted containers can survive. If an attacker retains an old authenticated copy, no self-contained format can prevent its replay without trusted external freshness state. To retire old secrets, ensure older backups are removed according to policy and rotate credentials and keys in a separately designed workflow.
+- The in-process decrypted directory index and transaction snapshots now zeroize filename allocations on drop. New container creation zeroizes the password string, including rejected too-short passwords.

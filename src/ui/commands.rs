@@ -244,6 +244,9 @@ impl App {
                                 && self.panes[self.active].archive.is_none()
                                 && self.panes[self.active].remote.is_none();
                         }
+                        if *id == "vaultCompact" {
+                            enabled = self.panes[self.active].vault.is_some() && self.vault_transfer.is_none();
+                        }
                         if !visible || Self::csharp_only_menu_item(id) || menu_data::ORIGINAL_HIDDEN.contains(id) {
                             continue;
                         }
@@ -371,11 +374,12 @@ impl App {
 
     /// Menu commands not in the original menu (only in the C# version). Submenus ("@...") exist in the original.
     pub(super) fn csharp_only_menu_item(id: &str) -> bool {
-        id != "newVault" && !id.starts_with('@') && Self::original_menu_name(id).is_none()
+        id != "newVault" && id != "vaultCompact" && !id.starts_with('@') && Self::original_menu_name(id).is_none()
     }
 
     /// Menu item text: the Menu.* text of the original item name, else the C# version text. & is removed.
     pub(super) fn menu_label(&self, id: &str, fallback: &str) -> String {
+        if id == "vaultCompact" { return self.language_pack.text("NDRVault.MenuCompact", fallback); }
         if id == "newVault" {
             let label = self.language_pack.text("NDRVault.MenuCreate", fallback);
             return format!("K. {}", label.replace('&', ""));
@@ -631,6 +635,7 @@ impl App {
         }
         if self.panes[self.active].vault.is_some() {
             match id {
+                "vaultCompact" => return self.vault_compact_confirm(),
                 "newFolder" => return self.vault_new_item(true),
                 "newEmpty" => return self.vault_new_item(false),
                 "rename" | "contextRename" => return self.vault_rename_item(),

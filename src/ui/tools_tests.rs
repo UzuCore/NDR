@@ -1276,6 +1276,24 @@ fn encrypted_folder_creation_is_under_folder_menu_with_ctrl_k_and_k_access() {
 }
 
 /// Original 0x483c79: with playwav (default on), a .wav is not opened in the shell but played with PlaySoundW(NULL) then PlaySoundW(file).
+#[test]
+fn encrypted_compaction_is_visible_only_in_folder_menu_after_creation() {
+    let folder=super::menu_data::MENUS.iter().find(|(title,_,_,_)| *title=="ToolButton.tbFolder").unwrap();
+    let commands:Vec<&str>=folder.3.iter().map(|(id,_,_)|*id).collect();
+    let created=commands.iter().position(|id|*id=="newVault").unwrap();
+    assert_eq!(commands[created+1],"vaultCompact");
+    assert_eq!(commands.iter().filter(|id|**id=="vaultCompact").count(),1);
+    assert!(!App::csharp_only_menu_item("vaultCompact"));
+    for (title,_,_,items) in super::menu_data::MENUS {
+        if *title!="ToolButton.tbFolder"{
+            assert!(!items.iter().any(|(id,_,_)|*id=="vaultCompact"));
+        }
+    }
+    let (root,_,app)=fixture("compact-menu","en");
+    assert!(app.menu_label("vaultCompact","Compact Encrypted Folder...").contains("Compact"));
+    drop(app);
+    let _=fs::remove_dir_all(root);
+}
 /// Original 0x43d9fc: the completion sound is complete.wav in the program folder.
 #[test]
 fn wave_files_play_inside_ndr_and_the_completion_sound_is_complete_wav() {

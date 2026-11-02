@@ -1,4 +1,4 @@
-//! In-process SQLCipher vault browser. No plaintext file is created except an
+//! In-process authenticated single-file vault browser. No plaintext file is created except an
 //! explicitly requested export. Passwords are never written to NDR settings.
 use super::*;
 use ndr::vault::{Vault, VaultItem, SessionPolicy};
@@ -295,6 +295,51 @@ impl App {
         });
     }
 
+    /// Explicit encrypted-only compaction. The user chooses when to incur
+    /// the cost, leaving the normal fast delete and copy path unchanged.
+    pub(super) fn vault_compact_confirm(&mut self) {
+        let pane=self.active;
+        if self.panes[pane].vault.is_none() { return; }
+        if self.vault_transfer.is_some() {
+            self.status="Finish the encrypted transfer before compacting".into();
+            return;
+        }
+        let title=self.language_pack.text("NDRVault.DeleteTitle", "Encrypted folder");
+        let prompt=if self.language.eq_ignore_ascii_case("ko") {
+            "현재 .ndr에서 삭제된 암호화 기록을 제외하고 나머지 파일을 다시 저장합니다. SSD나 백업의 과거 기록은 제거되지 않습니다. 계속할까요?"
+        }else{
+            "Rebuild the current .ndr without deleted records. This may take time; SSD remnants and external backups are not erased. Continue?"
+        };
+        self.system_box(&title,prompt,ndr::msgbox::MB_YESNO | ndr::msgbox::MB_ICONEXCLAMATION,
+            move |app,confirmed,_|{
+                if confirmed!=ndr::msgbox::IDYES { return; }
+                if app.vault_transfer.is_some() {
+                    app.status="Finish the encrypted transfer before compacting".into();
+                    return;
+                }
+                let Some(container)=app.panes[pane].vault.take() else{return;};
+                let PaneVault{file,database,stack}=container;
+                // The old container remains intact on any pre-swap error.
+                // If compacting fails, close this view and allow the user to
+                // reauthenticate safely rather than retaining stale handles.
+                match database.compact() {
+                    Ok(database)=>{
+                        app.panes[pane].vault=Some(PaneVault{file,database,stack});
+                        app.refresh_vault(pane);
+                        app.status=if app.language.eq_ignore_ascii_case("ko"){
+                            "암호화 폴더 정리와 무결성 검사가 완료되었습니다.".into()
+                        }else{"Encrypted folder compaction and integrity verification completed.".into()};
+                        app.play_operation_completion_sound();
+                    }
+                    Err(error)=>{
+                        let parent=file.parent().unwrap_or_else(||Path::new(".")).to_path_buf();
+                        app.pending_focus[pane]=file.file_stem().map(|n|n.to_string_lossy().into_owned());
+                        app.navigate(pane,parent,false);
+                        app.status=format!("Encrypted folder compaction failed (original retained if replacement did not occur): {error}");
+                    }
+                }
+            });
+    }
     pub(super) fn vault_remove_items(&mut self) {
         let pane = self.active;
         let names: Vec<String> = self.target_entries(pane).into_iter().map(|e| e.name).collect();
@@ -324,7 +369,7 @@ impl App {
             });
     }
 
-    /// Paste source bytes directly into SQLCipher without plaintext staging.
+    /// Paste source bytes directly into the authenticated container without plaintext staging.
     pub(super) fn vault_paste_files(&mut self) {
         let pane = self.active;
         let from_system = (self.clipboard_files_reader)().ok().filter(|(paths, _)| !paths.is_empty());
