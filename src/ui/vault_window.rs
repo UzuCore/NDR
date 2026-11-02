@@ -202,8 +202,8 @@ impl App {
             return;
         }
         let Some(state) = self.panes[pane].vault.as_mut() else { return };
-        if let Ok(items) = state.database.list(state.folder()) {
-            if let Some(item) = items.into_iter().find(|v| v.name == entry.name) {
+        if let Ok(found) = state.database.find_child(state.folder(), &entry.name) {
+            if let Some(item) = found {
                 if item.folder {
                     state.stack.push((item.id, item.name.clone()));
                     self.pending_focus[pane] = None;

@@ -19,6 +19,8 @@ pub(super) struct VaultStreamState {
     source_id: Option<i64>,
     target_id: Option<i64>,
     ordinal: i64,
+    // Reuse the zeroized buffer rather than allocating 8 MiB on every frame.
+    buffer: Zeroizing<Vec<u8>>,
     pub(super) done: u64,
     pub(super) total: u64,
 }
@@ -115,7 +117,7 @@ impl App {
             };
         }
         let pane = self.panes[job.target].vault.as_mut().ok_or("Destination encrypted container closed")?;
-        Ok(pane.database.list(job.to_folder)?.into_iter().find(|e| e.name.eq_ignore_ascii_case(name)))
+        pane.database.find_child(job.to_folder, name)
     }
 
     fn vault_task_source_info(&mut self, job: &VaultTransferJob) -> Option<(bool, u64)> {
@@ -124,8 +126,8 @@ impl App {
             let meta = std::fs::symlink_metadata(job.source_paths.get(job.index)?).ok()?;
             return Some((meta.is_dir(), meta.len()));
         }
-        self.panes[job.source].vault.as_mut()?.database.list(job.from_folder).ok()?
-            .into_iter().find(|e| &e.name == name).map(|e| (e.folder, e.size.max(0) as u64))
+        self.panes[job.source].vault.as_ref()?.database.find_child(job.from_folder, name)
+            .ok().flatten().map(|e| (e.folder, e.size.max(0) as u64))
     }
 
     fn vault_task_paths(job: &VaultTransferJob, name: &str) -> (PathBuf, PathBuf) {
@@ -142,6 +144,10 @@ impl App {
         if job.failed.is_none() && !job.cancelled && job.skipped == 0 && job.copied > 0 {
             self.play_operation_completion_sound();
         }
+        // Update visible listings only once per finished batch. Previously
+        // every imported file re-listed and re-sorted the full directory,
+        // making large selections effectively quadratic.
+        self.vault_task_refresh_after_item(job);
         job.finished = Some(Instant::now());
         self.conflict_all = None;
         let summary = self.language_pack.text("NDRVault.ProgressSummary",
@@ -162,10 +168,10 @@ impl App {
         for (pane, expected) in [(job.source, job.source_container.as_ref()), (job.target, job.target_container.as_ref())] {
             if let Some(expected) = expected {
                 let Some(actual) = self.panes[pane].vault.as_ref() else { return true; };
-                match (std::fs::canonicalize(&actual.file), std::fs::canonicalize(expected)) {
-                    (Ok(a), Ok(b)) if a == b => (),
-                    _ => return true,
-                }
+                // Both paths were captured from the same PaneVault on start.
+                // Repeated canonicalize() forced OS disk/antivirus lookups
+                // every 8 MiB frame, without detecting in-place replacement.
+                if actual.file != *expected { return true; }
                 if pane == job.source && job.kind != VaultTransferKind::Import && actual.folder() != job.from_folder {
                     return true;
                 }
@@ -208,12 +214,14 @@ impl App {
                     job.index += 1;
                     job.destination_name = None;
                     job.replace = false;
-                    self.vault_task_refresh_after_item(&job);
+                    // Progress UI displays committed items immediately. Only
+                    // redraw the expensive full list periodically.
+                    if job.index % 64 == 0 { self.vault_task_refresh_after_item(&job); }
                 }
                 Err(error) => {
                     self.vault_task_abort_stream(&job, stream);
                     job.failed = Some(error);
-                    self.vault_task_refresh_after_item(&job);
+                    // The terminal handler refreshes the pane after failure.
                 }
             }
             if job.failed.is_some() || job.index >= job.names.len() { self.vault_task_finish(&mut job); }
@@ -329,33 +337,14 @@ impl App {
                 job.index += 1;
                 job.destination_name = None;
                 job.replace = false;
-                match job.kind {
-                    VaultTransferKind::Import => {
-                        self.refresh_vault(job.target);
-                        if job.moving { self.refresh(job.source); }
-                    }
-                    VaultTransferKind::Export => {
-                        self.refresh(job.target);
-                        if job.moving { self.refresh_vault(job.source); }
-                    }
-                    VaultTransferKind::Between => {
-                        self.refresh_vault(job.target);
-                        if job.moving { self.refresh_vault(job.source); }
-                    }
-                    VaultTransferKind::Inside => self.refresh_vault(job.source),
-                }
+                if job.index % 64 == 0 { self.vault_task_refresh_after_item(&job); }
             }
             Err(error) => {
                 // A destination may already have committed before a MOVE's
                 // source deletion failed. Refresh both views so the retained
                 // duplicate is visible to the user immediately.
                 job.failed = Some(error);
-                match job.kind {
-                    VaultTransferKind::Import => { self.refresh_vault(job.target); self.refresh(job.source); }
-                    VaultTransferKind::Export => { self.refresh(job.target); self.refresh_vault(job.source); }
-                    VaultTransferKind::Between => { self.refresh_vault(job.source); self.refresh_vault(job.target); }
-                    VaultTransferKind::Inside => self.refresh_vault(job.source),
-                }
+                // The terminal handler also refreshes failed partial batches.
             }
         }
         if job.failed.is_some() || job.index >= job.names.len() { self.vault_task_finish(&mut job); }
@@ -485,8 +474,13 @@ impl App {
             let pane = self.panes[job.target].vault.as_mut().ok_or("Encrypted destination closed")?;
             target_id = Some(pane.database.begin_stream_file(job.to_folder, destination_name, job.replace)?);
         }
+        let buffer = Zeroizing::new(if input.is_some() {
+            vec![0u8; ndr::vault::STREAM_CHUNK_SIZE]
+        } else { Vec::new() });
         Ok(Some(VaultStreamState { input, output, temp_path, destination_path,
-            source_id, target_id, ordinal: 0, done: 0, total }))
+            source_id, target_id, ordinal: 0,
+            buffer,
+            done: 0, total }))
     }
 
     fn vault_task_abort_stream(&mut self, job: &VaultTransferJob, stream: VaultStreamState) {
@@ -503,16 +497,23 @@ impl App {
     fn vault_task_stream_step(&mut self, job: &VaultTransferJob,
         stream: &mut VaultStreamState) -> Result<bool, String> {
         if stream.done < stream.total {
-            let data = if let Some(input) = stream.input.as_mut() {
-                let mut buffer = Zeroizing::new(vec![0u8; ndr::vault::STREAM_CHUNK_SIZE]);
-                let amount = input.read(&mut buffer).map_err(|e| e.to_string())?;
-                if amount == 0 { return Err("Input file changed or ended unexpectedly; transaction rolled back".into()); }
-                buffer.truncate(amount);
-                buffer
-            } else {
+            let fetched = if stream.input.is_none() {
                 let source = self.panes[job.source].vault.as_ref().ok_or("Encrypted source closed during transfer")?;
-                source.database.stream_read_chunk(stream.source_id.ok_or("Missing encrypted source")?, stream.ordinal)?
-                    .ok_or("Encrypted source ended before the expected byte count")?
+                Some(source.database.stream_read_chunk(stream.source_id.ok_or("Missing encrypted source")?, stream.ordinal)?
+                    .ok_or("Encrypted source ended before the expected byte count")?)
+            } else {
+                None
+            };
+            let amount = if let Some(input) = stream.input.as_mut() {
+                input.read(&mut stream.buffer).map_err(|e| e.to_string())?
+            } else { fetched.as_ref().map_or(0, |v| v.len()) };
+            if amount == 0 { return Err("Input file changed or ended unexpectedly; transaction rolled back".into()); }
+            // Option::map_or eagerly evaluates its default argument; for an
+            // encrypted source the import-only buffer is empty. Use a match
+            // so the unused buffer is never sliced or accessed.
+            let data: &[u8] = match fetched.as_ref() {
+                Some(bytes) => bytes.as_slice(),
+                None => &stream.buffer[..amount],
             };
             if stream.done.checked_add(data.len() as u64).ok_or("Transfer byte count overflow")? > stream.total {
                 return Err("Source size changed during transfer".into());
@@ -534,7 +535,14 @@ impl App {
             }
         }
         if let Some(output) = stream.output.as_mut() {
-            output.sync_all().map_err(|e| e.to_string())?;
+            // A MOVE deletes the original after commit, so force its export
+            // data to stable media first. Ordinary COPY keeps the encrypted
+            // original and can use the normal filesystem write cache.
+            if job.moving {
+                output.sync_all().map_err(|e| e.to_string())?;
+            } else {
+                output.flush().map_err(|e| e.to_string())?;
+            }
             stream.output.take();
             let final_path = stream.destination_path.as_ref().ok_or("Missing export destination")?;
             let staged = stream.temp_path.as_ref().ok_or("Missing staged export")?;

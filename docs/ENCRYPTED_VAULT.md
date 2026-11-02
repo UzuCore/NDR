@@ -152,6 +152,24 @@ the name generator is independent from SQLCipher keys and passwords.
   migrated once on unlock; writes, file deletion and transaction rollback
   maintain the cache within the same SQLCipher transaction. The migration
   does not decrypt data into a plaintext temporary folder.
+- After unlocking, individual file/folder navigation and encrypted transfer
+  conflict checks use a case-insensitive indexed lookup, rather than reading
+  the full directory. File transfer panes refresh their contents at most once
+  per 64 completed files and again at job completion, instead of re-sorting
+  the entire folder for each copied item. Imported files reuse an 8 MiB
+  memory buffer, and a direct indexed query retrieves each encrypted chunk.
+- Internal copy within the same `.ndr` uses bounded SQLCipher `INSERT ... SELECT`
+  groups (up to four 8 MiB rows at a time) for chunked data (and an internal
+  SQL BLOB copy for legacy entries) without round-tripping plaintext file
+  contents through the Rust application. SQLCipher
+  continues to encrypt pages, use authenticated storage, and commit changes
+  atomically. A bounded 16 MiB page cache per unlocked container avoids
+  re-reading database pages during common operations.
+- Explicit plaintext COPY exports use the Windows write cache (like regular
+  NDR file copies) to avoid an unnecessary forced disk flush. MOVE exports
+  still force a durable flush before deleting the encrypted original. For a
+  COPY, abrupt power loss may leave the newest exported bytes unwritten,
+  though the original encrypted item remains intact.
 - Navigating away or switching tabs clears decrypted pane text, filenames and
   editor buffers, while the authenticated SQLCipher connection is retained
   only in process memory until the selected session deadline.
