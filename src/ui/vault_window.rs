@@ -1,8 +1,62 @@
-//! In-process authenticated single-file vault browser. No plaintext file is created except an
-//! explicitly requested export. Passwords are never written to NDR settings.
+//! In-process encrypted vault browser. Opening in an external application
+//! explicitly creates a temporary decrypted copy; passwords are not stored.
 use super::*;
 use ndr::vault::{Vault, VaultItem, SessionPolicy};
 use zeroize::Zeroize;
+use sha2::{Digest, Sha256};
+
+/// Explicitly controlled plaintext handoff to a Windows-associated editor.
+/// The file is never silently written back to the encrypted container.
+pub(super) struct VaultExternalEdit {
+    pane: usize,
+    vault_path: PathBuf,
+    id: i64,
+    folder: i64,
+    name: String,
+    directory: PathBuf,
+    path: PathBuf,
+    original_hash: [u8; 32],
+    error: String,
+    confirm_discard: bool,
+}
+
+impl VaultExternalEdit {
+    fn changed(&self) -> Result<bool, String> {
+        let meta = std::fs::symlink_metadata(&self.path).map_err(|e| e.to_string())?;
+        if !meta.is_file() || meta.file_type().is_symlink() {
+            return Err("Temporary file was replaced with a directory or link".into());
+        }
+        Ok(Self::hash_file(&self.path)? != self.original_hash)
+    }
+    fn hash_file(path: &Path) -> Result<[u8; 32], String> {
+        use std::io::Read;
+        let mut file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+        let mut hash = Sha256::new();
+        let mut buffer = [0u8; 65536];
+        loop {
+            let length = file.read(&mut buffer).map_err(|e| e.to_string())?;
+            if length == 0 { break; }
+            hash.update(&buffer[..length]);
+        }
+        buffer.zeroize();
+        Ok(hash.finalize().into())
+    }
+    fn cleanup(&self) -> Result<(), String> {
+        // Do not follow a replaced directory or link during cleanup.
+        let meta = std::fs::symlink_metadata(&self.directory).map_err(|e| e.to_string())?;
+        if !meta.is_dir() || meta.file_type().is_symlink() { return Err("Unsafe temporary directory".into()); }
+        std::fs::remove_file(&self.path).map_err(|e| e.to_string())?;
+        std::fs::remove_dir(&self.directory).map_err(|e| e.to_string())
+    }
+}
+
+impl Drop for VaultExternalEdit {
+    fn drop(&mut self) {
+        // Preserve modified plaintext for recovery on unexpected NDR exit.
+        // It may contain secrets; the external-editor dialog warns about this.
+        if matches!(self.changed(), Ok(false)) { let _ = self.cleanup(); }
+    }
+}
 
 pub(super) struct PaneVault {
     pub file: PathBuf,
@@ -216,8 +270,12 @@ impl App {
         }
     }
     fn open_vault_text(&mut self, pane: usize, item: VaultItem) {
+        let ext = Path::new(&item.name).extension().and_then(|s| s.to_str()).unwrap_or("");
+        let textual = ["txt", "md", "log", "ini", "cfg", "json", "xml", "csv", "yaml", "yml", "toml"]
+            .iter().any(|s| ext.eq_ignore_ascii_case(s));
+        if !textual { self.open_vault_external(pane, item); return; }
         if item.size > 1024 * 1024 {
-            self.status = self.language_pack.text("NDRVault.TextSize", "Only text files up to 1 MiB can be edited.");
+            self.open_vault_external(pane, item);
             return;
         }
         let Some(state) = self.panes[pane].vault.as_mut() else { return };
@@ -226,11 +284,145 @@ impl App {
                 Ok(body) => self.vault_text_editor = Some(VaultTextEditor {
                     pane, id: item.id, name: item.name.clone(), body,
                 }),
-                Err(_) => self.status = self.language_pack.text("NDRVault.BinaryUnsupported", "Binary files cannot be opened in the encrypted text editor."),
+                Err(_) => self.open_vault_external(pane, item),
             },
-            Ok(_) => self.status = self.language_pack.text("NDRVault.TextSize", "Only text files up to 1 MiB can be edited."),
+            Ok(_) => self.open_vault_external(pane, item),
             Err(e) => self.status = e,
         }
+    }
+
+    fn open_vault_external(&mut self, pane: usize, item: VaultItem) {
+        if self.vault_external_edit.is_some() {
+            self.status = "Finish the current external encrypted-file edit first.".into();
+            return;
+        }
+        let Some(state) = self.panes[pane].vault.as_mut() else { return };
+        let vault_path = state.file.clone();
+        let folder = state.folder();
+        let result = (|| -> Result<VaultExternalEdit, String> {
+            let mut random = [0u8; 16];
+            openssl::rand::rand_bytes(&mut random).map_err(|e| e.to_string())?;
+            let token: String = random.iter().map(|b| format!("{b:02x}")).collect();
+            let directory = std::env::temp_dir().join(format!("ndr-vault-edit-{token}"));
+            std::fs::create_dir(&directory).map_err(|e| e.to_string())?;
+            // VaultItem names are validated single path components when imported.
+            let safe_name = Path::new(&item.name);
+            if safe_name.components().count() != 1 || safe_name.file_name().is_none() {
+                let _ = std::fs::remove_dir(&directory);
+                return Err("Unsafe encrypted file name".into());
+            }
+            let path = directory.join(&item.name);
+            let staged = (|| -> Result<(), String> {
+                use std::io::Write;
+                let mut file = std::fs::OpenOptions::new().write(true).create_new(true)
+                    .open(&path).map_err(|e| e.to_string())?;
+                let mut ordinal = 0;
+                while let Some(chunk) = state.database.stream_read_chunk(item.id, ordinal)? {
+                    file.write_all(&chunk).map_err(|e| e.to_string())?;
+                    ordinal += 1;
+                }
+                file.sync_all().map_err(|e| e.to_string())?;
+                Ok(())
+            })();
+            if let Err(error) = staged {
+                let _ = std::fs::remove_file(&path);
+                let _ = std::fs::remove_dir(&directory);
+                return Err(error);
+            }
+            let original_hash = match VaultExternalEdit::hash_file(&path) {
+                Ok(hash) => hash,
+                Err(error) => {
+                    let _ = std::fs::remove_file(&path);
+                    let _ = std::fs::remove_dir(&directory);
+                    return Err(error);
+                }
+            };
+            let session = VaultExternalEdit {
+                pane, vault_path, id: item.id, folder, name: item.name.clone(), directory, path,
+                original_hash, error: String::new(), confirm_discard: false,
+            };
+            if let Err(error) = native::shell_open(&session.path, None, "open") {
+                let _ = session.cleanup();
+                return Err(format!("Windows could not open the file: {error}"));
+            }
+            Ok(session)
+        })();
+        match result {
+            Ok(session) => self.vault_external_edit = Some(session),
+            Err(error) => self.status = error,
+        }
+    }
+
+    pub(super) fn vault_external_edit_ui(&mut self, ctx: &egui::Context) {
+        let Some(mut edit) = self.vault_external_edit.take() else { return };
+        let ko = self.language == "ko";
+        let mut save = false;
+        let mut close = false;
+        egui::Window::new(format!("{} - {}", if ko { "암호화 파일 외부 편집" } else { "External encrypted-file edit" }, edit.name))
+            .id(egui::Id::new("ndr-vault-external-edit"))
+            .collapsible(false).resizable(true).default_width(460.0)
+            .show(ctx, |ui| {
+                ui.label(if ko { "Windows 프로그램에서 열기 위해 평문 임시 파일을 만들었습니다. 외부 프로그램은 별도의 백업이나 최근 파일 기록을 남길 수 있습니다." } else { "This file is temporarily decrypted for a Windows application. Other apps may create plaintext backups or recent-file records." });
+                ui.label(if ko { "먼저 외부 프로그램에서 저장한 후 NDR에서 '암호화 폴더에 저장'을 누르세요. 임시 파일을 정리하기 전에 외부 프로그램을 닫으세요." } else { "Save in the external program first, then select Save changes here. Close the external program before removing the temporary copy." });
+                // Avoid hashing a potentially multi-gigabyte file every frame.
+                ui.label(if ko { "저장 또는 정리할 때 변경 여부를 확인합니다." } else { "Changes are checked when saving or closing." });
+                if !edit.error.is_empty() { ui.colored_label(egui::Color32::RED, &edit.error); }
+                ui.horizontal(|ui| {
+                    if ui.button(if ko { "암호화 폴더에 저장" } else { "Save changes to encrypted folder" }).clicked() { save = true; }
+                    if ui.button(if ko { "임시 파일 정리" } else { "Close temporary copy" }).clicked() { close = true; }
+                });
+                if edit.confirm_discard {
+                    ui.colored_label(egui::Color32::YELLOW, if ko { "저장하지 않은 변경사항을 삭제합니다." } else { "Unsaved modifications will be permanently discarded." });
+                    if ui.button(if ko { "변경사항 버리고 종료" } else { "Discard unsaved changes and close" }).clicked() { close = true; }
+                    if ui.button(if ko { "취소" } else { "Cancel discard" }).clicked() { edit.confirm_discard = false; }
+                }
+            });
+        if save {
+            let result = (|| -> Result<(), String> {
+                if !edit.changed()? { return Ok(()); }
+                let Some(state) = self.panes[edit.pane].vault.as_mut() else {
+                    return Err("Encrypted folder was locked or closed. Reopen it before saving.".into());
+                };
+                if state.file != edit.vault_path { return Err("Encrypted folder has changed".into()); }
+                let existing = state.database.find_child(edit.folder, &edit.name)?;
+                if existing.as_ref().map(|item| item.id) != Some(edit.id) {
+                    return Err("Encrypted file changed, moved or was deleted during editing".into());
+                }
+                // Transactional streaming import replaces the original only
+                // after the complete changed file was successfully imported.
+                state.database.import_one(edit.folder, &edit.path, &edit.name, true)?;
+                edit.id = state.database.find_child(edit.folder, &edit.name)?
+                    .ok_or("Updated encrypted file was not found")?.id;
+                edit.original_hash = VaultExternalEdit::hash_file(&edit.path)?;
+                Ok(())
+            })();
+            match result {
+                Ok(()) => {
+                    self.refresh_vault(edit.pane);
+                    self.completion_notice("암호화 파일 저장 완료", "Encrypted file saved", edit.name.clone());
+                    edit.error.clear();
+                }
+                Err(error) => edit.error = error,
+            }
+        }
+        if close {
+            match edit.changed() {
+                Ok(true) if !edit.confirm_discard => {
+                    edit.confirm_discard = true;
+                    edit.error = "Unsaved edits: click the discard confirmation or save to the encrypted folder.".into();
+                }
+                Ok(true) => match edit.cleanup() {
+                    Ok(()) => return,
+                    Err(error) => edit.error = format!("Close the external application first: {error}"),
+                },
+                Ok(false) => match edit.cleanup() {
+                    Ok(()) => return,
+                    Err(error) => edit.error = format!("Close the external application first: {error}"),
+                },
+                Err(error) => edit.error = error,
+            }
+        }
+        self.vault_external_edit = Some(edit);
     }
 
     pub(super) fn vault_text_ui(&mut self, ctx: &egui::Context) {
@@ -528,6 +720,29 @@ impl Drop for VaultDialog {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn external_edit_detects_changes_and_cleans_unchanged_copy() {
+        let root = std::env::temp_dir().join(format!("ndr-edit-regression-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("binary.png");
+        std::fs::write(&path, b"initial bytes").unwrap();
+        let mut hash = [0u8; 32];
+        hash.copy_from_slice(&Sha256::digest(b"initial bytes"));
+        let mut edit = VaultExternalEdit {
+            pane: 0, vault_path: PathBuf::from("vault.ndr"), id: 12, folder: 1,
+            name: "binary.png".into(), directory: root.clone(), path: path.clone(),
+            original_hash: hash, error: String::new(), confirm_discard: false,
+        };
+        assert_eq!(edit.changed().unwrap(), false);
+        std::fs::write(&path, b"edited content").unwrap();
+        assert_eq!(edit.changed().unwrap(), true);
+        edit.error = "not yet saved".into();
+        drop(edit);
+        assert_eq!(std::fs::read(&path).unwrap(), b"edited content", "unsaved edits must remain recoverable");
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_dir(root).unwrap();
+    }
 
     #[test]
     fn encrypted_pane_border_is_pink_and_reverts_on_exit_for_each_skin() {

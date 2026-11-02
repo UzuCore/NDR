@@ -716,6 +716,7 @@ pub struct App {
     /// Authenticated SQLCipher connections retained in memory between visits.
     vault_sessions: HashMap<PathBuf, ndr::vault::Vault>,
     vault_text_editor: Option<vault_window::VaultTextEditor>,
+    vault_external_edit: Option<vault_window::VaultExternalEdit>,
     vault_transfer: Option<vault_transfer_ui::VaultTransferJob>,
     /// Subfolders of the address bar's chevron menu (path, whether it is a drive list) -> (path, text). Cleared when a new listing arrives.
     crumb_cache: HashMap<(PathBuf, bool), Vec<(PathBuf, String)>>,
@@ -1034,6 +1035,7 @@ impl App {
             vault_dialog: None,
             vault_sessions: HashMap::new(),
             vault_text_editor: None,
+            vault_external_edit: None,
             vault_transfer: None,
             crumb_cache: HashMap::new(),
             folder_size_queue: Arc::new((Mutex::new(std::collections::VecDeque::new()), std::sync::Condvar::new())),
@@ -2193,6 +2195,7 @@ impl eframe::App for App {
         self.shortcut_window_ui(ctx);
         self.vault_window_ui(ctx);
         self.vault_text_ui(ctx);
+        self.vault_external_edit_ui(ctx);
         self.vault_transfer_progress_ui(ctx);
         self.original_dialog_ui(ctx);
         // The modal progress window is drawn above the window under it (for example the custom search of the cleanup options window).
