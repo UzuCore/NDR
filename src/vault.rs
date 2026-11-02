@@ -274,8 +274,8 @@ fn read_slot(header: &[u8;128], index: usize, len: u64, key: &[u8;32]) -> Result
 impl Vault {
     pub fn create(path: &Path, password: String) -> Result<Self, String> {
         let password=Zeroizing::new(password);
-        if password.chars().count() < 12 {
-            return Err("Password must contain at least 12 characters".into());
+        if password.chars().count() < 6 {
+            return Err("Password must contain at least 6 characters".into());
         }
         if !path.extension().is_some_and(|e| e.eq_ignore_ascii_case(EXTENSION)) { return Err("Encrypted containers must use .ndr extension".into()); }
         let mut options = OpenOptions::new();
@@ -935,6 +935,22 @@ mod tests {
         let root=std::env::temp_dir().join(format!("ndr-v2-{label}-{}-{}",
             std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
         fs::create_dir_all(&root).unwrap();root
+    }
+    #[test]
+    fn six_character_password_is_allowed_but_five_is_rejected() {
+        let root=fixture("password-minimum");
+        let path=root.join("minimum.ndr");
+        assert!(Vault::create(&path,"12345".into()).err().unwrap().contains("at least 6"));
+        assert!(!path.exists(),"rejected password must not create a container");
+        let mut vault=Vault::create(&path,"123456".into()).unwrap();
+        let id=vault.add_file(1,"secret.txt",b"encrypted payload").unwrap();
+        vault.verify_integrity().unwrap();
+        drop(vault);
+        assert!(Vault::unlock(&path,"12345".into()).is_err());
+        let mut unlocked=Vault::unlock(&path,"123456".into()).unwrap();
+        assert_eq!(unlocked.read_file(id).unwrap(),b"encrypted payload");
+        drop(unlocked);
+        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn create_unlock_and_password_rejection() {

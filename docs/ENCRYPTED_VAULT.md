@@ -10,7 +10,7 @@ Storage design is inspired by CoverFS's single-file, dynamically growing index a
 
 - Physical storage: exactly one .ndr file, growing on demand; no preallocated disk volume and no file-system mount driver.
 - 128-byte fixed header: magic NDRV3FS!, 16-byte random PBKDF2 salt, KDF parameters, two generation-indexed metadata pointers protected by keyed HMAC-SHA256 (128-bit truncated MAC). Header fields and overall file length are not secret; names and data are encrypted.
-- Password: >=12 characters for newly created containers, PBKDF2-HMAC-SHA256 with 600,000 iterations, 256-bit key. Longer random passwords are strongly recommended. No password or key stored in settings.
+- Password: >=6 characters for newly created containers (user-selectable security tradeoff), PBKDF2-HMAC-SHA256 with 600,000 iterations, 256-bit key. A short or predictable password can be guessed offline even when AES-256-GCM encryption is used. A unique random password of 16+ characters is strongly recommended. No password or key stored in settings.
 - All file content is written in AES-256-GCM authenticated chunks up to 8 MiB, with independent random 96-bit nonces and 128-bit tags. AAD authenticates record kind, payload length, and physical block offset.
 - Directory names, file sizes, block offsets, parent relationships and metadata are stored in a compact AES-256-GCM authenticated JSON index record. The whole index is loaded once on unlock for fast navigation.
 - Windows file sharing rejects a second writer to an unlocked .ndr even across NDR processes, preventing stale concurrent metadata commits.

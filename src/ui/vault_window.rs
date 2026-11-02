@@ -1354,12 +1354,9 @@ impl VaultDialog {
             "Unsupported encrypted container format" => "WrongFormat",
             "Unsupported encrypted container version" => "WrongVersion",
             "Encrypted container file does not exist" => "MissingContainer",
-            "Password must contain at least 12 characters" => "ShortPassword",
+            "Password must contain at least 6 characters" => "ShortPassword",
             _ => return message.to_owned(),
         };
-        if key == "ShortPassword" {
-            return lang.text(&format!("NDRVault.{key}"), message).replace('6', "12");
-        }
         lang.text(&format!("NDRVault.{key}"), message)
     }
 
@@ -1390,7 +1387,7 @@ impl VaultDialog {
             egui::TextEdit::singleline(&mut self.confirmation).password(true));
 
         ui.put(at(18.0, 145.0, 411.0, 19.0), egui::Label::new(
-            egui::RichText::new(lang.text("NDRVault.CreateNote", "Names and files are encrypted. Password: at least 12 characters.").replace('6', "12")).small().weak()));
+            egui::RichText::new(lang.text("NDRVault.CreateNote", "Names and files are encrypted. Password: at least 6 characters.")).small().weak()));
         ui.put(at(18.0, 165.0, 411.0, 19.0), egui::Label::new(
             egui::RichText::new(lang.text("NDRVault.NoRecovery", "A forgotten password cannot be recovered.")).small().weak()));
 
