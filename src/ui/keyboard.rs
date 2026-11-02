@@ -205,6 +205,12 @@ impl App {
     /// then original FormShortCut (shortcut table, function key table). True when handled.
     pub(super) fn shortcut_key(&mut self, key: egui::Key, modifiers: egui::Modifiers, ctx: &egui::Context) -> bool {
         let Some(name) = wpf_key(key) else { return false };
+        // NDR-specific encrypted-folder creation. Keep this distinct from
+        // the original Alt+K shortcut for an ordinary New Folder.
+        if key == egui::Key::K && modifiers.ctrl && !modifiers.alt && !modifiers.shift {
+            self.dispatch("newVault", ctx);
+            return true;
+        }
         if key == egui::Key::Escape {
             match self.settings.values.get("EscapeKeyAction").and_then(|v| v.as_i64()) {
                 Some(0) => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),

@@ -66,6 +66,12 @@ the name generator is independent from SQLCipher keys and passwords.
 
 ## In-pane folder behavior (2026-11-02)
 
+- Create an encrypted folder via **Folder > New Encrypted Folder**,
+  directly below the **New Folder** row (not a separate top-level menu).
+  Use **Ctrl+K** anywhere in the normal file panel, or the **K** access key
+  with the Folder menu open. The separate "Open selected encrypted folder"
+  menu action is removed; double-click or press Enter on a `.ndr` folder to
+  open it as an ordinary panel location.
 - The encrypted container is physically one `.ndr` SQLCipher file, but NDR's
   ordinary file panels present it with a folder icon, a folder type and a name
   without the `.ndr` extension. Windows Explorer still sees an `.ndr` file.

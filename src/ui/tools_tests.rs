@@ -1242,6 +1242,39 @@ fn alz_and_egg_are_not_creation_formats() {
     let _ = fs::remove_dir_all(root);
 }
 
+#[test]
+fn encrypted_folder_creation_is_under_folder_menu_with_ctrl_k_and_k_access() {
+    let folder = super::menu_data::MENUS.iter().find(|(title, _, _, _)|
+        *title == "ToolButton.tbFolder").expect("Folder menu");
+    let rows: Vec<&str> = folder.3.iter().map(|(id, _, _)| *id).collect();
+    let position = rows.iter().position(|id| *id == "newFolder").unwrap();
+    assert_eq!(rows[position + 1], "newVault", "encrypted folder must follow New Folder");
+    assert_eq!(rows.iter().filter(|id| **id == "newVault").count(), 1);
+    for (_, _, _, items) in super::menu_data::MENUS {
+        if !std::ptr::eq(*items, folder.3) {
+            assert!(!items.iter().any(|(id, _, _)| *id == "newVault"));
+        }
+    }
+
+    let (root, ctx, mut app) = fixture("new-vault-menu", "ko");
+    assert!(!App::csharp_only_menu_item("newVault"));
+    assert_eq!(app.menu_access_letter("newVault"), Some('k'));
+    assert_eq!(App::menu_shortcut_text("newVault", &ndr::compat::ShortcutMap::parse(None)), "Ctrl+K");
+    let label = app.menu_label("newVault", "새 암호화 폴더 만들기...");
+    assert!(label.contains("암호화"));
+    assert!(label.starts_with("K."));
+    assert!(app.vault_dialog.is_none());
+    let modifiers = egui::Modifiers { ctrl: true, ..Default::default() };
+    assert!(app.shortcut_key(egui::Key::K, modifiers, &ctx));
+    assert!(app.vault_dialog.is_some(), "Ctrl+K must open encrypted creation dialog");
+    assert!(!root.join("left").join("newVault.ndr").exists(), "shortcut should open create form, not create prematurely");
+    app.vault_dialog = None;
+    app.dispatch("newVault", &ctx);
+    assert!(app.vault_dialog.is_some(), "menu command must open the same dialog");
+    drop(app);
+    let _ = fs::remove_dir_all(root);
+}
+
 /// Original 0x483c79: with playwav (default on), a .wav is not opened in the shell but played with PlaySoundW(NULL) then PlaySoundW(file).
 /// Original 0x43d9fc: the completion sound is complete.wav in the program folder.
 #[test]

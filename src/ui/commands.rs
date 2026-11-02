@@ -238,7 +238,12 @@ impl App {
                             pending = shown;
                             continue;
                         }
-                        let (visible, enabled) = archive_state.item(id);
+                        let (visible, mut enabled) = archive_state.item(id);
+                        if *id == "newVault" {
+                            enabled = self.panes[self.active].vault.is_none()
+                                && self.panes[self.active].archive.is_none()
+                                && self.panes[self.active].remote.is_none();
+                        }
                         if !visible || Self::csharp_only_menu_item(id) || menu_data::ORIGINAL_HIDDEN.contains(id) {
                             continue;
                         }
@@ -340,19 +345,6 @@ impl App {
                     }
                 }
             }
-            // Vault actions are intentionally separate from the historical
-            // NexusFile menu table, which is verified against the original DFM.
-            let vault_open = ui.menu_button(self.language_pack.text("NDRVault.DeleteTitle", "Encrypted folder"), |ui| {
-                if ui.button(self.language_pack.text("NDRVault.MenuCreate", "New encrypted folder...")).clicked() {
-                    self.dispatch("newVault", &ctx);
-                    ui.close();
-                }
-                if ui.button(self.language_pack.text("NDRVault.MenuOpen", "Open selected encrypted folder")).clicked() {
-                    self.open_current();
-                    ui.close();
-                }
-            });
-            any_open |= vault_open.inner.is_some();
             ui.data_mut(|d| d.insert_temp(bar_open_id, any_open));
             // Original tbNewUpdateAvailable (a quiet update check found a new version). Original tbDonation (donate) was removed per user request.
             if let Some(url) = self.update_available.clone() {
@@ -379,16 +371,21 @@ impl App {
 
     /// Menu commands not in the original menu (only in the C# version). Submenus ("@...") exist in the original.
     pub(super) fn csharp_only_menu_item(id: &str) -> bool {
-        !id.starts_with('@') && Self::original_menu_name(id).is_none()
+        id != "newVault" && !id.starts_with('@') && Self::original_menu_name(id).is_none()
     }
 
     /// Menu item text: the Menu.* text of the original item name, else the C# version text. & is removed.
     pub(super) fn menu_label(&self, id: &str, fallback: &str) -> String {
+        if id == "newVault" {
+            let label = self.language_pack.text("NDRVault.MenuCreate", fallback);
+            return format!("K. {}", label.replace('&', ""));
+        }
         Self::original_menu_name(id).map(|name| self.language_pack.text(&format!("Menu.{name}"), fallback)).unwrap_or_else(|| fallback.into()).replace('&', "")
     }
 
     /// Access letter of a menu item (q in the original text "&Q. Open"). None without original text (C# version items).
     pub(super) fn menu_access_letter(&self, id: &str) -> Option<char> {
+        if id == "newVault" { return Some('k'); }
         let raw = self.language_pack.raw(&format!("Menu.{}", Self::original_menu_name(id)?))?;
         super::favorites_dialog::access_key(&raw).1.map(|c| c.to_ascii_lowercase())
     }
@@ -474,6 +471,7 @@ impl App {
 
     /// Shortcut text at the right of an original menu item (TMenuItem.ShortCut, as changed by shortcut.ini, via Delphi ShortCutToText). Empty when none.
     pub(super) fn menu_shortcut_text(id: &str, shortcuts: &compat::ShortcutMap) -> String {
+        if id == "newVault" { return "Ctrl+K".into(); }
         Self::original_menu_name(id)
             .and_then(|name| shortcuts.menu_shortcuts.get(name).copied())
             .filter(|code| *code != 0)

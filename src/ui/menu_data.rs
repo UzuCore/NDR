@@ -44,6 +44,7 @@ pub const MENUS: &[(&str,&str,&str,&[(&str,&str,&str)])] = &[
 ("favoritesMenu","즐겨찾기","Favorites"),
 ("-","",""),
 ("newFolder","새 폴더…","New Folder..."),
+("newVault","새 암호화 폴더 만들기...","New Encrypted Folder..."),
 ("-","",""),
 ("historyBack","뒤로","Back"),
 ("historyForward","앞으로","Forward"),
