@@ -97,6 +97,16 @@ the name generator is independent from SQLCipher keys and passwords.
   path relative to the vault root, such as `documents/archive` or `/`. These
   actions use one SQLCipher transaction for the whole batch; folder cycles,
   name conflicts and failed copies leave the database unchanged.
+- When each panel displays a **different unlocked** `.ndr` container, F3 copies
+  selected files or complete folder trees directly between the two SQLCipher
+  databases without writing plaintext to a temporary filesystem location.
+  The destination database commits one transaction for the whole batch, so a
+  copy error cannot leave only part of that batch in the destination.
+  F4 subsequently deletes the selected source records in one source transaction.
+  Transactions across two separate databases cannot be atomic together: if
+  source deletion fails after destination commit, NDR deliberately retains
+  both encrypted copies and reports the incomplete move. A conflict never
+  overwrites a destination entry.
 - Ctrl+V accepts regular files or whole folder trees from the filesystem. A
   cut/move clipboard is rejected: use copy instead. Shell drag-and-drop
   and external program opening remain unsupported for vault contents to avoid
@@ -139,10 +149,23 @@ Configured in Options > NDR > Encrypted Folder:
   External editors are intentionally not launched automatically because they
   commonly leave sensitive plaintext on disk.
 - The pane integration now supports folder-tree import/export, atomic deletion,
-  F3 copy, F4 move, and transactional copy/move between folders inside a single
-  container. It does **not** yet integrate every native pane
+  F3 copy, F4 move, cross-container encrypted transfer, and transactional
+  copy/move between folders inside a single container. It does **not** yet integrate every native pane
   operation, shell drag-and-drop, multi-gigabyte streaming, or password changes.
 - Imported file limit is 64 MiB and in-memory text editing limit is 1 MiB.
+
+## Dialog appearance and languages
+
+- Opening an existing container uses the same centered, draggable title-row
+  modal chrome and 444 px content width as New Folder / New Encrypted Folder.
+  The password is focused automatically, and the dialog has aligned OK/Cancel
+  buttons, Enter to submit, and Escape to close.
+- The NDRVault section of all 21 bundled language files contains the new
+  encrypted-folder strings, including transfer confirmations/errors, session
+  configuration and the automatic folder-size option. Korean and English have
+  reviewed full text; other languages use local translations for common dialog
+  controls and English fallbacks for longer security-related messages that do
+  not yet have verified translations.
 
 ## Release readiness
 

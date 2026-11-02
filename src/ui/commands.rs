@@ -342,12 +342,12 @@ impl App {
             }
             // Vault actions are intentionally separate from the historical
             // NexusFile menu table, which is verified against the original DFM.
-            let vault_open = ui.menu_button(if ko { "암호화 폴더" } else { "Encrypted Folder" }, |ui| {
-                if ui.button(if ko { "새 암호화 폴더..." } else { "New encrypted folder..." }).clicked() {
+            let vault_open = ui.menu_button(self.language_pack.text("NDRVault.DeleteTitle", "Encrypted folder"), |ui| {
+                if ui.button(self.language_pack.text("NDRVault.MenuCreate", "New encrypted folder...")).clicked() {
                     self.dispatch("newVault", &ctx);
                     ui.close();
                 }
-                if ui.button(if ko { "선택한 암호화 폴더 열기" } else { "Open selected encrypted folder" }).clicked() {
+                if ui.button(self.language_pack.text("NDRVault.MenuOpen", "Open selected encrypted folder")).clicked() {
                     self.open_current();
                     ui.close();
                 }
@@ -617,6 +617,9 @@ impl App {
             let source = self.active;
             let target = 1 - source;
             let moving = id.contains("move") || id.contains("Move");
+            if self.panes[source].vault.is_some() && self.panes[target].vault.is_some() {
+                return self.vault_transfer_between_panes(source, target, moving);
+            }
             if self.panes[target].vault.is_some() && self.panes[source].vault.is_none()
                 && self.panes[source].archive.is_none() && self.panes[source].remote.is_none() {
                 let sources = self.panes[source].targets();

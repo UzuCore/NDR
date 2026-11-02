@@ -509,7 +509,12 @@ impl SettingsForm {
             ("LeftAlwaysShowFolderSize", "왼쪽 항상 파일크기 보기", "Left: always show size", false),
             ("RightAlwaysShowFolderSize", "오른쪽 항상 파일크기 보기", "Right: always show size", false),
         ] {
-            display.push(check(key, t(ko, korean, english), default));
+            let label = match key {
+                "LeftAutoFolderSize" => language.text("NDRVault.AutoFolderSizeLeft", english),
+                "RightAutoFolderSize" => language.text("NDRVault.AutoFolderSizeRight", english),
+                _ => t(ko, korean, english),
+            };
+            display.push(check(key, label, default));
         }
         // Original chkScrollStep1/2 (0x44cfa2: on when the value is 2; 0x44da08: on = 2, off = 1).
         for (key, korean, english) in [("LeftScrollStep", "왼쪽 페이지 단위 스크롤", "Left: scroll by page"), ("RightScrollStep", "오른쪽 페이지 단위 스크롤", "Right: scroll by page")] {
@@ -643,18 +648,19 @@ impl SettingsForm {
             .collect();
         let (tab_titles, mut tabs) = original_pages(vec![general, display, paths, programs], language, ko);
         if let Some(rows) = tabs.get_mut(8) {
-            rows.push(Row::Section(t(ko, "암호화 폴더 (.ndr)", "Encrypted Folder (.ndr)")));
-            rows.push(choice_row("VaultSessionPolicy", t(ko, "세션 유지 방식", "Session retention"), vec![
-                ("exit".into(), t(ko, "NDR 종료 시까지 세션 유지", "Keep session until NDR exits")),
-                ("elapsed".into(), t(ko, "지정한 시간 동안 세션 유지", "Keep session for a specified duration")),
+            rows.push(Row::Section(language.text("NDRVault.SettingsSection", "Encrypted Folder (.ndr)")));
+            rows.push(choice_row("VaultSessionPolicy", language.text("NDRVault.SessionPolicy", "Session retention"), vec![
+                ("exit".into(), language.text("NDRVault.UntilExit", "Keep session until NDR exits")),
+                ("elapsed".into(), language.text("NDRVault.Timed", "Keep session for a specified duration")),
             ], if draft.text("VaultSessionPolicy", "elapsed") == "exit" { "exit" } else { "elapsed" }));
             rows.push(Row::Text {
                 key: "VaultSessionMinutes".into(),
-                label: t(ko, "세션 유지 시간 (분, 1~1440)", "Session duration (minutes, 1-1440)"),
+                label: language.text("NDRVault.SessionMinutes", "Session duration (minutes, 1-1440)"),
                 value: draft.values.get("VaultSessionMinutes").and_then(Value::as_i64).unwrap_or(10).to_string(),
                 read_only: false, max: 4, upper: false,
-            });            rows.push(check("VaultLockOnMinimize", t(ko, "최소화 시 잠금", "Lock when minimized"), false));
-            rows.push(Row::Note(t(ko, "세션 만료 후에는 반드시 비밀번호를 다시 입력해야 합니다. 비밀번호 복구 기능은 없습니다.", "Returning to the folder during the session requires no password. On expiry or NDR exit, authentication is required.")));
+            });
+            rows.push(check("VaultLockOnMinimize", language.text("NDRVault.LockOnMinimize", "Lock when minimized"), false));
+            rows.push(Row::Note(language.text("NDRVault.SessionNote", "Reopening during the session needs no password. When it expires, the password is required again.")));
         }
         let button_captions = [pref("Caption.btnOk", "확인(&O)", "&OK"), pref("Caption.btnCancel", "취소", "Cancel"), pref("Caption.btnApply", "적용(&A)", "&Apply")];
         let captions = [

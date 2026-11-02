@@ -57,6 +57,15 @@ every session expiration. See [security limits and implementation details](docs/
 before trusting the feature with sensitive information. No separate drive
 mount is required; native pane operations are not all integrated yet.
 
+When both panes display different unlocked `.ndr` containers, use **F3** to
+copy and **F4** to move complete folder trees directly between the encrypted
+databases, without a plaintext temporary folder. A cross-container move first
+commits the destination and only then deletes the source. Failed source
+deletion retains both encrypted copies. Folder-internal copy/move uses one
+database transaction. Password and creation dialogs use the same centered,
+movable chrome as other NDR dialogs. Vault strings are provided in all 21
+bundled language resources (English fallback for unreviewed translations).
+
 ## Build locally
 
 Install Visual Studio C++ Build Tools, stable Rust MSVC, and Strawberry Perl

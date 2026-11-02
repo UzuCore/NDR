@@ -1,7 +1,7 @@
 //! In-process SQLCipher vault browser. No plaintext file is created except an
 //! explicitly requested export. Passwords are never written to NDR settings.
 use super::*;
-use ndr::vault::{Vault, VaultItem, SessionPolicy, MAX_FILE_SIZE};
+use ndr::vault::{Vault, VaultItem, SessionPolicy};
 use zeroize::Zeroize;
 
 pub(super) struct PaneVault {
@@ -102,7 +102,7 @@ impl App {
             if expired {
                 self.vault_text_editor = None;
                 self.exit_vault(pane);
-                self.status = "암호화 폴더가 잠겼습니다. 다시 열어 인증하세요.".into();
+                self.status = self.language_pack.text("NDRVault.StatusLocked", "Encrypted folder locked. Reopen to authenticate.");
             }
         }
         // Even if exiting an active pane temporarily cached its session,
@@ -127,7 +127,7 @@ impl App {
             || self.settings.flag("VaultLockOnMinimize", false)
                 && self.egui_ctx.input(|i| i.viewport().minimized.unwrap_or(false)) {
             self.exit_vault(pane);
-            self.status = "암호화 폴더가 잠겼습니다. 다시 열면 비밀번호를 요청합니다.".into();
+            self.status = self.language_pack.text("NDRVault.StatusLocked", "Encrypted folder locked. Reopen to authenticate.");
             return;
         }
         let current = container.virtual_path();
@@ -213,9 +213,9 @@ impl App {
                 Ok(body) => self.vault_text_editor = Some(VaultTextEditor {
                     pane, id: item.id, name: item.name.clone(), body,
                 }),
-                Err(_) => self.status = "바이너리 파일은 텍스트 편집기로 열 수 없습니다. 암호화 폴더 안에서 안전하게 보관됩니다.".into(),
+                Err(_) => self.status = self.language_pack.text("NDRVault.BinaryUnsupported", "Binary files cannot be opened in the encrypted text editor."),
             },
-            Ok(_) => self.status = "텍스트 편집은 1 MiB 이하 파일에만 지원됩니다.".into(),
+            Ok(_) => self.status = self.language_pack.text("NDRVault.TextSize", "Only text files up to 1 MiB can be edited."),
             Err(e) => self.status = e,
         }
     }
@@ -224,12 +224,12 @@ impl App {
         let Some(mut editor) = self.vault_text_editor.take() else { return };
         let mut open = true;
         let mut save = false;
-        egui::Window::new(format!("암호화 폴더 - {}", editor.name))
+        egui::Window::new(format!("{} - {}", self.language_pack.text("NDRVault.TextEditorTitle", "Encrypted folder"), editor.name))
             .id(egui::Id::new("ndr-vault-text-editor"))
             .open(&mut open).resizable(true).default_size(egui::vec2(700.0, 490.0))
             .show(ctx, |ui| {
                 ui.add(egui::TextEdit::multiline(&mut editor.body).desired_width(f32::INFINITY).desired_rows(22));
-                if ui.button("암호화하여 저장").clicked() { save = true; }
+                if ui.button(self.language_pack.text("NDRVault.SaveEncrypted", "Save encrypted")).clicked() { save = true; }
             });
         if save {
             if let Some(state) = self.panes[editor.pane].vault.as_mut() {
@@ -244,10 +244,11 @@ impl App {
 
     pub(super) fn vault_new_item(&mut self, folder: bool) {
         let pane = self.active;
-        let title = if folder { "새 폴더" } else { "새 파일" };
-        let message = if folder { "암호화 폴더에 만들 폴더 이름을 입력하세요." }
-            else { "암호화 폴더에 만들 파일 이름을 입력하세요." };
-        self.prompt_file_name(title, message, "", move |app, name, _| {
+        let title = self.language_pack.text(if folder { "NDRVault.NewFolderTitle" } else { "NDRVault.NewFileTitle" },
+            if folder { "New folder" } else { "New file" });
+        let message = self.language_pack.text(if folder { "NDRVault.NewFolderPrompt" } else { "NDRVault.NewFilePrompt" },
+            if folder { "Enter a folder name inside the encrypted container." } else { "Enter a file name inside the encrypted container." });
+        self.prompt_file_name(&title, &message, "", move |app, name, _| {
             let Some(name) = name.filter(|n| !n.is_empty()) else { return };
             let Some(state) = app.panes[pane].vault.as_mut() else { return };
             let current = state.folder();
@@ -265,11 +266,13 @@ impl App {
         let Some(entry) = self.panes[pane].entries.get(self.panes[pane].cursor).cloned()
             .filter(|e| !e.is_parent()) else { return };
         let old = entry.name;
-        self.prompt_file_name("이름 바꾸기", "새 이름을 입력하세요.", &old.clone(), move |app, new, _| {
+        let title = self.language_pack.text("NDRVault.RenameTitle", "Rename");
+        let message = self.language_pack.text("NDRVault.RenamePrompt", "Enter a new name.");
+        self.prompt_file_name(&title, &message, &old.clone(), move |app, new, _| {
             let Some(new) = new.filter(|n| !n.is_empty()) else { return };
             let Some(state) = app.panes[pane].vault.as_mut() else { return };
             let result = state.database.list(state.folder()).and_then(|items| {
-                let id = items.iter().find(|v| v.name == old).ok_or("항목을 찾을 수 없습니다.")?.id;
+                let id = items.iter().find(|v| v.name == old).ok_or("Encrypted item was not found")?.id;
                 state.database.rename(id, &new)
             });
             match result {
@@ -283,8 +286,10 @@ impl App {
         let pane = self.active;
         let names: Vec<String> = self.target_entries(pane).into_iter().map(|e| e.name).collect();
         if names.is_empty() { return; }
-        let label = format!("암호화 폴더에서 {}개 항목을 영구 삭제할까요?", names.len());
-        self.system_box("암호화 폴더", &label,
+        let label = self.language_pack.text("NDRVault.DeleteConfirm", "Permanently delete {count} encrypted items?")
+            .replace("{count}", &names.len().to_string());
+        let title = self.language_pack.text("NDRVault.DeleteTitle", "Encrypted folder");
+        self.system_box(&title, &label,
             ndr::msgbox::MB_YESNO | ndr::msgbox::MB_ICONEXCLAMATION, move |app, confirmed, _| {
                 if confirmed != ndr::msgbox::IDYES { return; }
                 let Some(state) = app.panes[pane].vault.as_mut() else { return };
@@ -293,7 +298,7 @@ impl App {
                     for item in items {
                         if names.contains(&item.name) { ids.push(item.id); }
                     }
-                    if ids.len() != names.len() { return Err("삭제할 항목이 변경되었습니다.".into()); }
+                    if ids.len() != names.len() { return Err("Encrypted selection changed before deletion".into()); }
                     state.database.remove_many(&ids)
                 });
                 match result { Ok(()) => app.refresh_vault(pane), Err(e) => app.status = e }
@@ -306,11 +311,11 @@ impl App {
         let from_system = (self.clipboard_files_reader)().ok().filter(|(paths, _)| !paths.is_empty());
         let from_internal = self.clipboard.clone().filter(|_| self.clipboard_sequence == Some(native::clipboard_sequence_number()));
         let Some((files, was_cut)) = from_system.or(from_internal) else {
-            self.status = "붙여넣을 파일 또는 폴더가 없습니다.".into();
+            self.status = self.language_pack.text("NDRVault.NoPaste", "No files or folders to paste.");
             return;
         };
         if was_cut {
-            self.status = "암호화 폴더로 이동은 지원하지 않습니다. 원본을 유지하는 복사를 사용하세요.".into();
+            self.status = self.language_pack.text("NDRVault.ClipboardCut", "Cut/paste into encrypted folders is not supported. Use F4 move instead.");
             return;
         }
         self.vault_import_paths(pane, files);
@@ -322,14 +327,18 @@ impl App {
         let target = 1 - source;
         if self.panes[target].vault.is_some() || self.panes[target].archive.is_some()
             || self.panes[target].remote.is_some() || !self.panes[target].path.is_dir() {
-            self.status = "내보내기 대상은 일반 디렉터리여야 합니다.".into();
+            self.status = self.language_pack.text("NDRVault.ExportInvalidTarget", "Export destination must be a regular directory.");
             return;
         }
         let names: Vec<String> = self.target_entries(source).into_iter().map(|entry| entry.name).collect();
         if names.is_empty() { return; }
         let destination = self.panes[target].path.clone();
-        let message = format!("선택한 {}개 항목을 암호화하지 않은 일반 파일로 {}할까요?\n대상: {}\n기존 파일은 덮어쓰지 않습니다.{}", names.len(), if moving { "이동" } else { "복사" }, destination.display(), if moving { "\n모든 항목의 내보내기가 끝난 다음 암호화 폴더의 원본을 삭제합니다." } else { "" });
-        self.system_box("암호화 폴더에서 내보내기", &message,
+        let message = self.language_pack.text(if moving { "NDRVault.ExportMoveConfirm" } else { "NDRVault.ExportCopyConfirm" },
+            if moving { "Move {count} items to unencrypted folder {destination}? Originals are removed only after export succeeds. Existing targets are never overwritten." }
+            else { "Export {count} items as plaintext to {destination}? Existing targets are never overwritten." })
+            .replace("{count}", &names.len().to_string()).replace("{destination}", &destination.display().to_string());
+        let title = self.language_pack.text("NDRVault.ExportTitle", "Export encrypted items");
+        self.system_box(&title, &message,
             ndr::msgbox::MB_YESNO | ndr::msgbox::MB_ICONEXCLAMATION, move |app, answer, _| {
                 if answer != ndr::msgbox::IDYES { return; }
                 let Some(state) = app.panes[source].vault.as_mut() else { return };
@@ -349,9 +358,10 @@ impl App {
                     Ok(count) => {
                         app.refresh(target);
                         if moving { app.refresh_vault(source); }
-                        app.status = format!("{count}개 항목을 일반 폴더로 {}했습니다. 대상 파일은 암호화되지 않았습니다.", if moving { "이동" } else { "복사" });
+                        app.status = app.language_pack.text("NDRVault.ExportDone", "Exported {count} items as unencrypted files.")
+                            .replace("{count}", &count.to_string());
                     }
-                    Err(error) => { app.refresh(target); app.status = format!("암호화 폴더 내보내기/이동 실패: {error}"); },
+                    Err(error) => { app.refresh(target); app.status = format!("{}: {error}", app.language_pack.text("NDRVault.ExportFailed", "Export/move failed")); },
                 }
             });
     }
@@ -361,13 +371,15 @@ impl App {
     pub(super) fn vault_transfer_from_local(&mut self, source: usize, target: usize, files: Vec<PathBuf>, moving: bool) {
         if files.is_empty() { return; }
         if !moving { return self.vault_import_paths(target, files); }
-        self.system_box("암호화 폴더로 이동", "먼저 암호화 폴더에 모든 항목을 복사한 다음 일반 폴더의 원본을 삭제합니다. 계속할까요?",
+        let title = self.language_pack.text("NDRVault.MoveLocalTitle", "Move into encrypted folder");
+        let text = self.language_pack.text("NDRVault.MoveLocalConfirm", "Encrypt all items first, then remove local originals. Continue?");
+        self.system_box(&title, &text,
             ndr::msgbox::MB_YESNO | ndr::msgbox::MB_ICONEXCLAMATION, move |app, answer, _| {
                 if answer != ndr::msgbox::IDYES { return; }
                 let Some(state) = app.panes[target].vault.as_mut() else { return };
                 let imported = state.database.import_paths(state.folder(), &files);
                 match imported {
-                    Err(error) => app.status = format!("암호화 이동 실패 (원본 보존): {error}"),
+                    Err(error) => app.status = format!("{}: {error}", app.language_pack.text("NDRVault.MoveLocalFailed", "Encrypted move failed; local sources preserved")),
                     Ok(count) => {
                         let mut failures = Vec::new();
                         for path in &files {
@@ -384,9 +396,10 @@ impl App {
                         app.refresh_vault(target);
                         app.refresh(source);
                         app.status = if failures.is_empty() {
-                            format!("{count}개 항목을 암호화 폴더로 이동했습니다.")
+                            app.language_pack.text("NDRVault.MoveLocalDone", "Moved {count} encrypted items.")
+                                .replace("{count}", &count.to_string())
                         } else {
-                            format!("{count}개 항목 암호화 저장 완료, 일부 원본 삭제 실패 (암호화된 복사본 유지): {}", failures.join("; "))
+                            format!("{}: {}", app.language_pack.text("NDRVault.MoveLocalPartial", "Encrypted copy completed; some local originals could not be deleted"), failures.join("; "))
                         };
                     }
                 }
@@ -399,10 +412,11 @@ impl App {
         match state.database.import_paths(state.folder(), &files) {
             Ok(count) => {
                 self.refresh_vault(pane);
-                self.status = format!("암호화 폴더에 {count}개 항목을 가져왔습니다.");
+                self.status = self.language_pack.text("NDRVault.ImportDone", "Imported {count} encrypted items.")
+                    .replace("{count}", &count.to_string());
             }
             Err(error) => {
-                self.status = format!("암호화 폴더 가져오기 실패 (모든 변경 취소): {error}");
+                self.status = format!("{}: {error}", self.language_pack.text("NDRVault.ImportFailed", "Encrypted import failed; changes rolled back"));
             }
         }
     }
@@ -410,13 +424,73 @@ impl App {
 
 impl App {
     /// Move/copy inside a single SQLCipher container; no plaintext staging.
+    pub(super) fn vault_transfer_between_panes(&mut self, source: usize, target: usize, moving: bool) {
+        let names: Vec<String> = self.target_entries(source).into_iter().map(|entry| entry.name).collect();
+        if names.is_empty() { return; }
+        let same_container = {
+            let a = self.panes[source].vault.as_ref().unwrap();
+            let b = self.panes[target].vault.as_ref().unwrap();
+            match (std::fs::canonicalize(&a.file), std::fs::canonicalize(&b.file)) {
+                (Ok(left), Ok(right)) => left == right,
+                _ => true, // If identity cannot be proved distinct, fail closed.
+            }
+        };
+        if same_container {
+            self.status = self.language_pack.text("NDRVault.SameContainer", "Open two different encrypted containers for cross-container transfer.");
+            return;
+        }
+        let title = self.language_pack.text("NDRVault.TransferTitle", "Encrypted container transfer");
+        let text = self.language_pack.text(if moving { "NDRVault.MoveConfirm" } else { "NDRVault.CopyConfirm" },
+            if moving { "Copy all selected items to the other encrypted container and then delete the originals?" }
+            else { "Copy all selected items to the other encrypted container?" });
+        self.system_box(&title, &text, ndr::msgbox::MB_YESNO | ndr::msgbox::MB_ICONQUESTION,
+            move |app, answer, _| {
+                if answer != ndr::msgbox::IDYES { return; }
+                let (src_pane, dst_pane) = if source == 0 {
+                    let (left, right) = app.panes.split_at_mut(1);
+                    (&mut left[0], &mut right[0])
+                } else {
+                    let (left, right) = app.panes.split_at_mut(1);
+                    (&mut right[0], &mut left[0])
+                };
+                let Some(src) = src_pane.vault.as_mut() else { return; };
+                let Some(dst) = dst_pane.vault.as_mut() else { return; };
+                let from = src.folder();
+                let to = dst.folder();
+                let transfer = dst.database.copy_from_vault(&mut src.database, from, &names, to);
+                match transfer {
+                    Ok(count) => {
+                        let remove_result = if moving {
+                            src.database.list(from).and_then(|items| {
+                                let ids = names.iter().map(|name| items.iter().find(|item| item.name == *name)
+                                    .map(|item| item.id).ok_or_else(|| format!("Source disappeared: {name}")))
+                                    .collect::<Result<Vec<_>, _>>()?;
+                                src.database.remove_many(&ids)
+                            })
+                        } else { Ok(()) };
+                        app.refresh_vault(source);
+                        app.refresh_vault(target);
+                        app.status = match remove_result {
+                            Ok(()) => app.language_pack.text("NDRVault.TransferDone", "Encrypted items transferred: {count}")
+                                .replace("{count}", &count.to_string()),
+                            Err(error) => format!("{}: {error}", app.language_pack.text("NDRVault.SourceRetained",
+                                "Destination committed, but source deletion failed. Both copies are retained")),
+                        };
+                    }
+                    Err(error) => app.status = format!("{}: {error}", app.language_pack.text("NDRVault.TransferFailed", "Encrypted transfer failed; destination rolled back")),
+                }
+            });
+    }
+
     pub(super) fn vault_transfer_inside(&mut self, moving: bool) {
         let pane = self.active;
         let names: Vec<String> = self.target_entries(pane).into_iter().map(|item| item.name).collect();
         if names.is_empty() { return; }
         let current = self.panes[pane].vault.as_ref().map(|vault| vault.folder()).unwrap_or(1);
-        self.prompt_file_name(if moving { "암호화 폴더 내 이동" } else { "암호화 폴더 내 복사" },
-            "컨테이너 루트 기준 대상 폴더 경로 (예: 문서/보관 또는 /)",
+        let title = self.language_pack.text(if moving { "NDRVault.InsideMoveTitle" } else { "NDRVault.InsideCopyTitle" },
+            if moving { "Move within encrypted container" } else { "Copy within encrypted container" });
+        let message = self.language_pack.text("NDRVault.InsidePrompt", "Destination path relative to container root (e.g. documents/archive or /)");
+        self.prompt_file_name(&title, &message,
             "/", move |app, destination, _| {
                 let Some(destination) = destination else { return; };
                 let Some(state) = app.panes[pane].vault.as_mut() else { return; };
@@ -425,9 +499,10 @@ impl App {
                 match result {
                     Ok(count) => {
                         app.refresh_vault(pane);
-                        app.status = format!("암호화 폴더 안에서 {count}개 항목을 {}했습니다.", if moving { "이동" } else { "복사" });
+                        app.status = app.language_pack.text("NDRVault.InsideDone", "Updated {count} items within the encrypted container.")
+                            .replace("{count}", &count.to_string());
                     }
-                    Err(error) => app.status = format!("암호화 폴더 내부 작업 실패 (모든 변경 취소): {error}"),
+                    Err(error) => app.status = format!("{}: {error}", app.language_pack.text("NDRVault.InsideFailed", "Encrypted folder operation failed; changes rolled back")),
                 }
             });
     }
@@ -445,6 +520,80 @@ impl Drop for VaultDialog {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn encrypted_dialog_strings_exist_in_every_bundled_language() {
+        let resources = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Resources/Languages");
+        let languages = ["ca", "cs", "de", "en", "es", "fi", "fr", "hu", "it", "ja", "ko", "nl", "pl", "pt-BR", "ru", "sk", "sv", "tr", "uk", "zh-CN", "zh-TW"];
+        let keyset: Vec<String> = std::fs::read_to_string(resources.join("en.lang")).unwrap()
+            .split("[NDRVault]").nth(1).unwrap().lines()
+            .filter_map(|line| line.split_once('=').map(|(key, _)| key.to_owned())).collect();
+        for code in languages {
+            let data = std::fs::read_to_string(resources.join(format!("{code}.lang"))).unwrap();
+            let section = data.split("[NDRVault]").nth(1).unwrap();
+            for key in &keyset {
+                assert!(section.lines().any(|line| line.starts_with(&format!("{key}=")) && line.len() > key.len() + 1),
+                    "missing NDRVault.{key} in {code}");
+            }
+            let language = compat::Language::load(&resources, code);
+            assert_eq!(language.code, code);
+            assert!(!language.text("NDRVault.Password", "").is_empty());
+        }
+        let korean = compat::Language::load(&resources, "ko");
+        assert_eq!(korean.text("NDRVault.Password", ""), "비밀번호");
+    }
+
+    #[test]
+    fn unlock_dialog_has_password_focus_and_compact_content() {
+        let ctx = egui::Context::default();
+        let mut dialog = VaultDialog::new(PathBuf::from("C:\\test\\secret.ndr"), false);
+        let lang = compat::Language::default();
+        let mut width = 0.0;
+        let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let before = ui.cursor().min;
+                dialog.draw_unlock(ui, &lang);
+                width = (ui.min_rect().right() - before.x).max(0.0);
+            });
+        });
+        assert!(!dialog.name_select_pending, "password focus is requested on first draw");
+        assert!(width >= 444.0, "unlock matches the 444px New Folder dialog content");
+    }
+
+    #[test]
+    fn cross_vault_f3_f4_copy_move_and_cancel_are_safe() {
+        let (root, ctx, mut app) = super::super::tools_tests::fixture("vault-cross-panes", "en");
+        let left = root.join("left/left.ndr");
+        let right = root.join("right/right.ndr");
+        let mut a = Vault::create(&left, "left secure password".into()).unwrap();
+        let folder = a.add_folder(1, "documents").unwrap();
+        a.add_file(folder, "nested.txt", b"encrypted contents").unwrap();
+        a.add_file(1, "moving.txt", b"moving safely").unwrap();
+        let b = Vault::create(&right, "right secure password".into()).unwrap();
+        app.attach_vault(0, PaneVault::new(left, a));
+        app.attach_vault(1, PaneVault::new(right, b));
+        app.active = 0;
+        app.panes[0].cursor = app.panes[0].entries.iter().position(|i| i.name == "documents").unwrap();
+        app.dispatch("copyToOther", &ctx);
+        assert!(!app.msgboxes.is_empty());
+        app.answer_message_box(ndr::msgbox::IDNO, &ctx);
+        assert!(app.panes[1].vault.as_mut().unwrap().database.list(1).unwrap().is_empty());
+        app.dispatch("copyToOther", &ctx);
+        app.answer_message_box(ndr::msgbox::IDYES, &ctx);
+        let copied = app.panes[1].vault.as_mut().unwrap().database.list(1).unwrap();
+        let folder_id = copied.iter().find(|v| v.name == "documents").unwrap().id;
+        let file_id = app.panes[1].vault.as_mut().unwrap().database.list(folder_id).unwrap()[0].id;
+        assert_eq!(app.panes[1].vault.as_mut().unwrap().database.read_file(file_id).unwrap(), b"encrypted contents");
+        assert!(app.panes[0].vault.as_mut().unwrap().database.list(1).unwrap().iter().any(|v| v.name == "documents"));
+        app.panes[0].cursor = app.panes[0].entries.iter().position(|i| i.name == "moving.txt").unwrap();
+        app.dispatch("moveToOther", &ctx);
+        assert!(app.panes[0].vault.as_mut().unwrap().database.list(1).unwrap().iter().any(|v| v.name == "moving.txt"));
+        app.answer_message_box(ndr::msgbox::IDYES, &ctx);
+        assert!(!app.panes[0].vault.as_mut().unwrap().database.list(1).unwrap().iter().any(|v| v.name == "moving.txt"));
+        assert!(app.panes[1].vault.as_mut().unwrap().database.list(1).unwrap().iter().any(|v| v.name == "moving.txt"));
+        drop(app);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn f4_moves_local_file_into_vault_only_after_confirmed_import() {
@@ -689,7 +838,7 @@ mod tests {
         let length = dialog.folder_name.chars().count();
         let _ = ctx.run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                dialog.draw(ui, SessionPolicy::CloseOnLeave);
+                dialog.draw_create(ui, &compat::Language::default());
             });
         });
         assert!(!dialog.name_select_pending, "initial selection must happen once");
@@ -738,7 +887,7 @@ impl VaultDialog {
             super::dinosaur_names::suggest(path.parent().unwrap_or_else(|| Path::new("")))
         }
             else { String::new() };
-        Self { path, creating, folder_name, name_select_pending: creating, created_path: None, password: String::new(), confirmation: String::new(), vault: None,
+        Self { path, creating, folder_name, name_select_pending: true, created_path: None, password: String::new(), confirmation: String::new(), vault: None,
             folder: 1, folder_stack: vec![(1, String::from("/"))], selected: None,
             name: String::new(), import_path: String::new(), export_path: String::new(), text: None, error: String::new() }
     }
@@ -817,26 +966,32 @@ impl VaultDialog {
         self.confirmation.clear();
     }
 
-    fn apply(&mut self, operation: impl FnOnce(&mut Vault) -> Result<(), String>) {
-        if let Some(vault) = &mut self.vault {
-            match operation(vault) {
-                Ok(()) => self.error.clear(),
-                Err(message) => self.error = message,
-            }
-        }
+    fn localized_error(lang: &compat::Language, message: &str) -> String {
+        let key = match message {
+            "올바른 폴더 이름을 입력해 주세요." => "InvalidFolderName",
+            "Windows에서 사용할 수 없는 폴더 이름입니다." => "ReservedFolderName",
+            "비밀번호가 일치하지 않습니다." => "PasswordMismatch",
+            "Wrong password, damaged container, or unsupported format" => "WrongPassword",
+            "Unsupported encrypted container format" => "WrongFormat",
+            "Unsupported encrypted container version" => "WrongVersion",
+            "Encrypted container file does not exist" => "MissingContainer",
+            "Password must contain at least 6 characters" => "ShortPassword",
+            _ => return message.to_owned(),
+        };
+        lang.text(&format!("NDRVault.{key}"), message)
     }
 
     /// Same centered movable VCL-style dialog and 444px content width as
     /// New Folder / TfGetText. Only the additional password fields make it
     /// taller. No separate heading, grid, or native egui::Window chrome.
-    fn draw_create(&mut self, ui: &mut egui::Ui) -> bool {
+    fn draw_create(&mut self, ui: &mut egui::Ui, lang: &compat::Language) -> bool {
         let (area, _) = ui.allocate_exact_size(egui::vec2(444.0, 250.0), egui::Sense::hover());
         let at = |x: f32, y: f32, width: f32, height: f32| {
             egui::Rect::from_min_size(area.min + egui::vec2(x, y), egui::vec2(width, height))
         };
 
-        ui.put(at(18.0, 8.0, 411.0, 25.0), egui::Label::new("암호화할 새 폴더의 이름을 입력하세요."));
-        ui.put(at(18.0, 47.0, 100.0, 21.0), egui::Label::new("폴더 이름"));
+        ui.put(at(18.0, 8.0, 411.0, 25.0), egui::Label::new(lang.text("NDRVault.CreateHint", "Enter the name of the new encrypted folder.")));
+        ui.put(at(18.0, 47.0, 100.0, 21.0), egui::Label::new(lang.text("NDRVault.FolderName", "Folder name")));
         let response = ui.put(at(122.0, 43.0, 307.0, 23.0),
             egui::TextEdit::singleline(&mut self.folder_name)
                 .id(egui::Id::new("ndr-vault-folder-name")));
@@ -845,25 +1000,25 @@ impl VaultDialog {
             super::original_dialogs::select_all(ui, response.id, self.folder_name.chars().count());
             self.name_select_pending = false;
         }
-        ui.put(at(18.0, 80.0, 100.0, 21.0), egui::Label::new("비밀번호"));
+        ui.put(at(18.0, 80.0, 100.0, 21.0), egui::Label::new(lang.text("NDRVault.Password", "Password")));
         ui.put(at(122.0, 76.0, 307.0, 23.0),
             egui::TextEdit::singleline(&mut self.password).password(true));
-        ui.put(at(18.0, 113.0, 100.0, 21.0), egui::Label::new("비밀번호 확인"));
+        ui.put(at(18.0, 113.0, 100.0, 21.0), egui::Label::new(lang.text("NDRVault.ConfirmPassword", "Confirm password")));
         ui.put(at(122.0, 109.0, 307.0, 23.0),
             egui::TextEdit::singleline(&mut self.confirmation).password(true));
 
         ui.put(at(18.0, 145.0, 411.0, 19.0), egui::Label::new(
-            egui::RichText::new("폴더 안의 파일과 이름이 암호화됩니다. 비밀번호는 6자 이상입니다.").small().weak()));
+            egui::RichText::new(lang.text("NDRVault.CreateNote", "Names and files are encrypted. Password: at least 6 characters.")).small().weak()));
         ui.put(at(18.0, 165.0, 411.0, 19.0), egui::Label::new(
-            egui::RichText::new("※ 비밀번호를 잊으면 복구할 수 없습니다.").small().weak()));
+            egui::RichText::new(lang.text("NDRVault.NoRecovery", "A forgotten password cannot be recovered.")).small().weak()));
 
         // Align exactly with the bottom-right controls of New Folder:
         // x=265 / 351, width=79, height=25; only Y moves for extra fields.
         let mut close = false;
-        if ui.put(at(265.0, 215.0, 79.0, 25.0), egui::Button::new("확인")).clicked() {
+        if ui.put(at(265.0, 215.0, 79.0, 25.0), egui::Button::new(lang.text("NDRVault.OK", "OK"))).clicked() {
             self.authenticate();
         }
-        if ui.put(at(351.0, 215.0, 79.0, 25.0), egui::Button::new("취소")).clicked() {
+        if ui.put(at(351.0, 215.0, 79.0, 25.0), egui::Button::new(lang.text("NDRVault.Cancel", "Cancel"))).clicked() {
             close = true;
         }
         if ui.input(|input| input.key_pressed(egui::Key::Escape)) { close = true; }
@@ -872,156 +1027,51 @@ impl VaultDialog {
         }
         if !self.error.is_empty() {
             ui.painter().text(at(18.0, 189.0, 411.0, 18.0).left_top(),
-                egui::Align2::LEFT_TOP, &self.error,
+                egui::Align2::LEFT_TOP, Self::localized_error(lang, &self.error),
                 egui::FontId::proportional(11.0), ui.visuals().error_fg_color);
         }
         close || self.created_path.is_some()
     }
 
-    fn draw(&mut self, ui: &mut egui::Ui, policy: SessionPolicy) -> bool {
-        if self.vault.as_ref().is_some_and(|vault| vault.expired(policy)) {
-            self.lock();
-            self.error = "세션이 만료되었습니다. 비밀번호를 다시 입력해야 합니다.".into();
+    /// Matches the centered movable original-dialog chrome and 444 px field
+    /// alignment used by New Folder and encrypted-folder creation.
+    fn draw_unlock(&mut self, ui: &mut egui::Ui, lang: &compat::Language) -> bool {
+        let (area, _) = ui.allocate_exact_size(egui::vec2(444.0, 178.0), egui::Sense::hover());
+        let at = |x: f32, y: f32, w: f32, h: f32| {
+            egui::Rect::from_min_size(area.min + egui::vec2(x, y), egui::vec2(w, h))
+        };
+        let display_name = self.path.file_stem().unwrap_or_default().to_string_lossy();
+        ui.put(at(18.0, 8.0, 411.0, 24.0), egui::Label::new(display_name.as_ref()).truncate())
+            .on_hover_text(display_name.as_ref());
+        ui.put(at(18.0, 51.0, 100.0, 23.0),
+            egui::Label::new(lang.text("NDRVault.Password", "Password")));
+        let edit = ui.put(at(122.0, 47.0, 307.0, 23.0),
+            egui::TextEdit::singleline(&mut self.password).password(true)
+                .id(egui::Id::new("ndr-vault-unlock-password")));
+        if self.name_select_pending {
+            edit.request_focus();
+            self.name_select_pending = false;
         }
-        if self.vault.is_none() {
-            if self.creating { return self.draw_create(ui); }
-            ui.heading("암호화 폴더 잠금 해제");
-            ui.add_space(8.0);
-            ui.label(self.path.file_stem().unwrap_or_default().to_string_lossy());
-            ui.horizontal(|ui| {
-                ui.label("비밀번호");
-                ui.add(egui::TextEdit::singleline(&mut self.password).password(true));
-            });
-            if ui.button("잠금 해제").clicked() { self.authenticate(); }
-            ui.label(egui::RichText::new("비밀번호는 저장되지 않습니다.").small().weak());
-        } else {
-            ui.horizontal(|ui| {
-                if ui.button("⬅ 상위 폴더").clicked() && self.folder_stack.len() > 1 {
-                    if let Some((_, mut name)) = self.folder_stack.pop() { name.zeroize(); }
-                    self.folder = self.folder_stack.last().map_or(1, |v| v.0);
-                    self.selected = None;
-                    self.text = None;
-                    if let Some(vault) = &mut self.vault { vault.touch(); }
-                }
-                ui.label(self.folder_stack.iter().map(|f| f.1.as_str()).collect::<Vec<_>>().join(" / "));
-                if ui.button("즉시 잠금").clicked() { self.lock(); }
-            });
-            if let Some(vault) = &mut self.vault {
-                match vault.list(self.folder) {
-                    Ok(items) => {
-                        egui::ScrollArea::vertical().max_height(225.0).show(ui, |ui| {
-                            for item in items {
-                                let label = format!("{}  {} {}", if item.folder { "📁" } else { "📄" }, item.name,
-                                    if item.folder { String::new() } else { format!("({} B)", item.size) });
-                                let chosen = self.selected.as_ref().is_some_and(|v| v.id == item.id);
-                                let response = ui.selectable_label(chosen, label);
-                                if response.clicked() { vault.touch(); self.selected = Some(item.clone()); self.text = None; }
-                                if response.double_clicked() && item.folder {
-                                    self.folder = item.id;
-                                    self.folder_stack.push((item.id, item.name.clone()));
-                                    self.selected = None;
-                                    self.text = None;
-                                }
-                            }
-                        });
-                    }
-                    Err(error) => self.error = error,
-                }
-            }
-            ui.separator();
-            ui.horizontal(|ui| {
-                ui.label("이름");
-                ui.add(egui::TextEdit::singleline(&mut self.name).desired_width(240.0));
-                if ui.button("새 폴더").clicked() {
-                    let folder = self.folder; let name = self.name.clone();
-                    self.apply(|v| v.add_folder(folder, &name).map(|_| ()));
-                }
-                if ui.button("새 빈 파일").clicked() {
-                    let folder = self.folder; let name = self.name.clone();
-                    self.apply(|v| v.add_file(folder, &name, b"").map(|_| ()));
-                }
-            });
-            if let Some(selected) = self.selected.clone() {
-                ui.horizontal(|ui| {
-                    if ui.button("선택 항목 이름 변경").clicked() {
-                        let name = self.name.clone(); self.apply(|v| v.rename(selected.id, &name));
-                    }
-                    if ui.button("선택 항목 삭제").clicked() {
-                        self.apply(|v| v.remove(selected.id));
-                        if self.error.is_empty() { self.selected = None; self.text = None; }
-                    }
-                    if !selected.folder && ui.button("텍스트 편집").clicked() {
-                        if let Some(vault) = &mut self.vault {
-                            match vault.read_file(selected.id) {
-                                Ok(data) if data.len() <= 1024 * 1024 => match String::from_utf8(data) {
-                                    Ok(text) => { self.text = Some((selected.id, text)); self.error.clear(); }
-                                    Err(_) => self.error = "UTF-8 텍스트가 아닙니다.".into(),
-                                },
-                                Ok(_) => self.error = "1 MiB 이하 텍스트만 편집할 수 있습니다.".into(),
-                                Err(message) => self.error = message,
-                            }
-                        }
-                    }
-                });
-            }
-            if let Some((id, content)) = self.text.as_mut() {
-                ui.label("메모리 내 텍스트 편집 (임시 평문 파일 생성 없음)");
-                ui.add(egui::TextEdit::multiline(content).desired_rows(5).desired_width(f32::INFINITY));
-                if ui.button("암호화 컨테이너에 저장").clicked() {
-                    let id = *id; let data = content.as_bytes().to_vec();
-                    self.apply(|v| v.update_file(id, &data));
-                }
-            }
-            ui.horizontal(|ui| {
-                ui.label("가져올 로컬 파일 경로");
-                ui.add(egui::TextEdit::singleline(&mut self.import_path).desired_width(260.0));
-                if ui.button("암호화하여 가져오기").clicked() {
-                    let source = PathBuf::from(self.import_path.trim());
-                    match std::fs::metadata(&source) {
-                        Ok(meta) if meta.is_file() && meta.len() <= MAX_FILE_SIZE as u64 => {
-                            let folder = self.folder;
-                            match (source.file_name().and_then(|n| n.to_str()), std::fs::read(&source)) {
-                                (Some(name), Ok(data)) => {
-                                    let data = zeroize::Zeroizing::new(data);
-                                    self.apply(|v| v.add_file(folder, name, &data).map(|_| ()));
-                                }
-                                _ => self.error = "가져올 파일을 읽을 수 없습니다.".into(),
-                            }
-                        }
-                        _ => self.error = "파일을 찾지 못했거나 64 MiB 크기 제한을 초과했습니다.".into(),
-                    }
-                }
-            });
-            if self.selected.as_ref().is_some_and(|item| !item.folder) {
-                ui.horizontal(|ui| {
-                    ui.label("명시적 평문 내보내기 경로");
-                    ui.add(egui::TextEdit::singleline(&mut self.export_path).desired_width(260.0));
-                    if ui.button("평문 파일 내보내기").clicked() {
-                        let path = PathBuf::from(self.export_path.trim());
-                        let id = self.selected.as_ref().unwrap().id;
-                        if path.as_os_str().is_empty() || path.exists() {
-                            self.error = "비어 있지 않은 새 경로만 지정할 수 있습니다 (덮어쓰기 금지).".into();
-                        } else if let Some(vault) = &mut self.vault {
-                            match vault.read_file(id).and_then(|data| {
-                                let data = zeroize::Zeroizing::new(data);
-                                use std::io::Write;
-                                let mut out = std::fs::OpenOptions::new().write(true).create_new(true).open(&path).map_err(|e| e.to_string())?;
-                                out.write_all(&data).map_err(|e| e.to_string())?;
-                                out.sync_all().map_err(|e| e.to_string())
-                            }) {
-                                Ok(()) => self.error = "요청한 경로에 평문을 내보냈습니다. 직접 보안 관리가 필요합니다.".into(),
-                                Err(message) => self.error = message,
-                            }
-                        }
-                    }
-                });
-            }
+        ui.put(at(18.0, 79.0, 411.0, 22.0), egui::Label::new(
+            egui::RichText::new(lang.text("NDRVault.PasswordNotStored", "The password is not saved.")).small().weak()));
+        if !self.error.is_empty() {
+            ui.put(at(18.0, 106.0, 411.0, 35.0), egui::Label::new(
+                egui::RichText::new(Self::localized_error(lang, &self.error)).small().color(ui.visuals().error_fg_color)));
         }
-        if !self.error.is_empty() { ui.colored_label(ui.visuals().error_fg_color, &self.error); }
-        ui.separator();
-        ui.label("보안: 닫거나 세션이 만료되면 잠금 해제 정보가 폐기됩니다. 잠금 해제 때마다 비밀번호를 다시 입력합니다.");
-        ui.button("닫기 (즉시 잠금)").clicked()
+        let mut close = false;
+        let submit = ui.put(at(265.0, 145.0, 79.0, 25.0),
+            egui::Button::new(lang.text("NDRVault.OK", "OK"))).clicked();
+        if ui.put(at(351.0, 145.0, 79.0, 25.0),
+            egui::Button::new(lang.text("NDRVault.Cancel", "Cancel"))).clicked() {
+            close = true;
+        }
+        if ui.input(|input| input.key_pressed(egui::Key::Escape)) { close = true; }
+        if !close && (submit || ui.input(|input| input.key_pressed(egui::Key::Enter))) {
+            self.authenticate();
+        }
+        close
     }
+
 }
 
 impl App {
@@ -1045,8 +1095,6 @@ impl App {
             && ctx.input(|input| input.viewport().minimized.unwrap_or(false)) {
             dialog.lock();
         }
-        let policy = SessionPolicy::from_settings(&self.settings);
-        let mut open = true;
         let mut close = false;
         if dialog.creating {
             // The ordinary New Folder prompt uses the same modal and title
@@ -1055,21 +1103,24 @@ impl App {
             let id = egui::Id::new("ndr-vault-create-modal");
             super::keep_opaque(ctx, id);
             super::movable_modal(ctx, id).show(ctx, |ui| {
-                let title = super::modal_title_start(ui, "새 암호화 폴더");
-                close = dialog.draw_create(ui);
+                let title = super::modal_title_start(ui, &self.language_pack.text("NDRVault.CreateTitle", "New encrypted folder"));
+                close = dialog.draw_create(ui, &self.language_pack);
                 close |= super::modal_title_finish(ui, id, title);
             });
         } else {
-            egui::Window::new("암호화 폴더")
-                .id(egui::Id::new("ndr-sqlcipher-vault"))
-                .open(&mut open).resizable(true).default_width(700.0)
-                .show(ctx, |ui| { close = dialog.draw(ui, policy); });
+            let id = egui::Id::new("ndr-vault-unlock-modal");
+            super::keep_opaque(ctx, id);
+            super::movable_modal(ctx, id).show(ctx, |ui| {
+                let title = super::modal_title_start(ui, &self.language_pack.text("NDRVault.UnlockTitle", "Unlock encrypted folder"));
+                close = dialog.draw_unlock(ui, &self.language_pack);
+                close |= super::modal_title_finish(ui, id, title);
+            });
         }
         if let Some(database) = dialog.vault.take() {
             self.attach_vault(self.active, PaneVault::new(dialog.path.clone(), database));
             return;
         }
-        if open && !close { self.vault_dialog = Some(dialog); }
+        if !close { self.vault_dialog = Some(dialog); }
         // Otherwise the connection and all plaintext/password UI buffers drop.
     }
 }

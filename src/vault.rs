@@ -211,6 +211,36 @@ impl Vault {
         Ok(copied)
     }
 
+    /// Copy from a different encrypted database without plaintext staging.
+    /// The destination is atomic; source deletion for a move is a separate
+    /// caller operation after this transaction has committed successfully.
+    pub fn copy_from_vault(&mut self, source: &mut Vault, from: i64, names: &[String], to: i64) -> Result<usize, String> {
+        if names.is_empty() { return Ok(0); }
+        let a = std::fs::canonicalize(&self.file).map_err(|e| e.to_string())?;
+        let b = std::fs::canonicalize(&source.file).map_err(|e| e.to_string())?;
+        if a == b { return Err("Use internal transfer for the same encrypted container".into()); }
+        self.ensure_folder(to)?;
+        source.ensure_folder(from)?;
+        let available = source.list(from)?;
+        let mut selected = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for name in names {
+            let item = available.iter().find(|item| item.name == *name)
+                .ok_or_else(|| format!("Encrypted source item is missing: {name}"))?;
+            if !seen.insert(item.id) { return Err("Duplicate encrypted selection".into()); }
+            selected.push(item.id);
+        }
+        let tx = self.connection.transaction().map_err(|e| e.to_string())?;
+        let mut count = 0usize;
+        let mut bytes = 0u64;
+        for id in selected {
+            copy_from_other_vault(&tx, source, id, to, 0, &mut count, &mut bytes)?;
+        }
+        tx.commit().map_err(|e| e.to_string())?;
+        self.touch();
+        Ok(count)
+    }
+
     pub fn add_folder(&mut self, parent: i64, name: &str) -> Result<i64, String> {
         self.insert(parent, name, true, None)
     }
@@ -376,6 +406,41 @@ impl Vault {
     }
 }
 
+fn copy_from_other_vault(
+    tx: &rusqlite::Transaction<'_>, source: &mut Vault, id: i64, parent: i64,
+    depth: usize, count: &mut usize, total: &mut u64,
+) -> Result<(), String> {
+    if depth > 64 || *count >= 10_000 { return Err("Cross-vault copy exceeds depth or item limit".into()); }
+    let (name, folder): (String, bool) = source.connection.query_row(
+        "SELECT name,folder FROM items WHERE id=?1", [id],
+        |r| Ok((r.get(0)?, r.get::<_, i64>(1)? == 1)),
+    ).map_err(|e| e.to_string())?;
+    valid_name(&name)?;
+    let collision: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM items WHERE parent=?1 AND name=?2 COLLATE NOCASE",
+        params![parent, name], |row| row.get(0),
+    ).map_err(|e| e.to_string())?;
+    if collision != 0 { return Err(format!("Encrypted destination already contains {name}")); }
+    if folder {
+        tx.execute("INSERT INTO items(parent,name,folder,contents) VALUES(?1,?2,1,NULL)", params![parent,name])
+            .map_err(|e| e.to_string())?;
+        let new_parent = tx.last_insert_rowid();
+        *count += 1;
+        for child in source.list(id)? {
+            copy_from_other_vault(tx, source, child.id, new_parent, depth + 1, count, total)?;
+        }
+    } else {
+        let data = Zeroizing::new(source.read_file(id)?);
+        if data.len() > MAX_FILE_SIZE { return Err("Cross-vault file exceeds 64 MiB".into()); }
+        *total = total.checked_add(data.len() as u64).ok_or("Cross-vault transfer size overflow")?;
+        if *total > 512 * 1024 * 1024 { return Err("Cross-vault batch exceeds 512 MiB".into()); }
+        tx.execute("INSERT INTO items(parent,name,folder,contents) VALUES(?1,?2,0,?3)",
+            params![parent,name,data.as_slice()]).map_err(|e| e.to_string())?;
+        *count += 1;
+    }
+    Ok(())
+}
+
 fn copy_encrypted_item(
     tx: &rusqlite::Transaction<'_>, id: i64, parent: i64, depth: usize,
     count: &mut usize, total_bytes: &mut u64,
@@ -508,6 +573,42 @@ mod tests {
         drop(vault);
         let raw = std::fs::read(&container).unwrap();
         assert!(!raw.windows(b"hidden plaintext sample".len()).any(|w| w == b"hidden plaintext sample"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cross_container_copy_is_encrypted_recursive_atomic_and_keeps_source() {
+        let root = std::env::temp_dir().join(format!("ndr-cross-vault-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut source = Vault::create(&root.join("source.ndr"), "source password 123456".into()).unwrap();
+        let mut target = Vault::create(&root.join("target.ndr"), "target password 654321".into()).unwrap();
+        let folder = source.add_folder(1, "documents").unwrap();
+        let subfolder = source.add_folder(folder, "nested").unwrap();
+        source.add_file(subfolder, "private.dat", &[0, 255, 48, 17, 99]).unwrap();
+        source.add_file(1, "other.txt", b"second file").unwrap();
+        let names = ["documents".to_string(), "other.txt".to_string()];
+        assert_eq!(target.copy_from_vault(&mut source, 1, &names, 1).unwrap(), 4);
+        assert_eq!(source.list(1).unwrap().len(), 2, "copy must preserve source");
+        let copied = target.list(1).unwrap();
+        let folder_id = copied.iter().find(|i| i.name == "documents").unwrap().id;
+        let nested_id = target.list(folder_id).unwrap()[0].id;
+        let file_id = target.list(nested_id).unwrap()[0].id;
+        assert_eq!(target.read_file(file_id).unwrap(), [0, 255, 48, 17, 99]);
+        assert!(target.copy_from_vault(&mut source, 1, &names, 1).is_err(), "conflict must abort whole batch");
+        assert_eq!(target.list(1).unwrap().len(), 2);
+        source.add_file(1, "new-only.txt", b"must rollback").unwrap();
+        assert!(target.copy_from_vault(&mut source, 1, &["new-only.txt".into(), "other.txt".into()], 1).is_err());
+        assert_eq!(target.list(1).unwrap().len(), 2, "a late destination collision rolls back earlier inserts");
+        let ids = source.list(1).unwrap().into_iter().map(|i| i.id).collect::<Vec<_>>();
+        source.remove_many(&ids).unwrap();
+        assert!(source.list(1).unwrap().is_empty(), "move deletes source only after committed copy");
+        assert_eq!(target.list(1).unwrap().len(), 2);
+        source.verify_integrity().unwrap();
+        target.verify_integrity().unwrap();
+        assert!(std::fs::read(root.join("target.ndr")).unwrap().windows(12)
+            .all(|bytes| bytes != b"private.dat\0"), "filename must not be a plaintext database string");
+        drop((source, target));
         std::fs::remove_dir_all(root).unwrap();
     }
 
