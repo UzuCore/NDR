@@ -298,7 +298,7 @@ impl App {
         } else {
             "WinFsp must be installed to securely open\nfiles inside encrypted folders.\n\nInstall the WinFsp driver included with NDR?\n(Windows administrator approval required)"
         };
-        self.message_box("WinFsp", "", message,
+        self.system_box("WinFsp", message,
             ndr::msgbox::MB_YESNO | ndr::msgbox::MB_ICONEXCLAMATION,
             |app, answer, _| {
                 if answer == ndr::msgbox::IDYES {
@@ -701,7 +701,8 @@ mod tests {
         let _ = ctx.run(egui::RawInput::default(), |ctx| app.msgbox_ui(ctx));
         let layout = app.msgboxes[0].layout.as_ref().expect("NDR message layout");
         assert!(layout.client.x >= ndr::msgbox::minimum_client_width(2));
-        assert!(layout.title_shown, "the standard NDR title strip is visible");
+        assert!(!layout.title_shown, "no extra WinFsp title strip inside the dialog");
+        assert!(app.msgboxes[0].system, "use NDR's standard system-style message layout");
         assert_eq!(layout.slots.iter().filter(|s| s.is_some()).count(), 2);
         assert!(layout.slots.iter().flatten().all(|rect| rect.height() == 25.0));
         drop(app);
