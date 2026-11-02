@@ -114,6 +114,12 @@ the name generator is independent from SQLCipher keys and passwords.
   deletion and reinsertion are atomic in the target SQLCipher transaction.
 - Every encrypted transfer displays the normal-size 441 px NDR progress
   window and opens the original TfFileExists dialog on a duplicate name.
+  On a fully successful encrypted copy or move, it also plays the same
+  `complete.wav` completion sound as ordinary NDR file operations when
+  `PlayCompletionSound` is enabled. Skipped, cancelled and failed transfers
+  remain silent, and a streaming transfer plays once at the end rather
+  than once for every 8 MiB chunk. A successful encrypted-item deletion
+  also uses this shared completion cue.
   The dialog supports overwrite, skip, rename, cancel and apply-to-all.
   Overwrite-newer conservatively skips when vault timestamps cannot be
   compared; resume is unavailable. Cancel stops before the next selected

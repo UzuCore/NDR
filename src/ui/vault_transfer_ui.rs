@@ -136,6 +136,12 @@ impl App {
     }
 
     fn vault_task_finish(&mut self, job: &mut VaultTransferJob) {
+        // Match ordinary NDR transfers: one cue for a fully successful batch,
+        // never for cancellation, failed work, or skipped-only operations.
+        // This is called once per terminal transition, not per 8 MiB chunk.
+        if job.failed.is_none() && !job.cancelled && job.skipped == 0 && job.copied > 0 {
+            self.play_operation_completion_sound();
+        }
         job.finished = Some(Instant::now());
         self.conflict_all = None;
         let summary = self.language_pack.text("NDRVault.ProgressSummary",

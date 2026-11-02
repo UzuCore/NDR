@@ -314,7 +314,13 @@ impl App {
                     if ids.len() != names.len() { return Err("Encrypted selection changed before deletion".into()); }
                     state.database.remove_many(&ids)
                 });
-                match result { Ok(()) => app.refresh_vault(pane), Err(e) => app.status = e }
+                match result {
+                    Ok(()) => {
+                        app.refresh_vault(pane);
+                        app.play_operation_completion_sound();
+                    }
+                    Err(e) => app.status = e,
+                }
             });
     }
 
@@ -459,6 +465,87 @@ impl Drop for VaultDialog {
 mod tests {
     use super::*;
 
+    /// The same PlayCompletionSound switch and packaged complete.wav must
+    /// cover encrypted work; never signal completion on skip/cancel/failure.
+    #[test]
+    fn vault_completion_sound_respects_setting_and_is_once_per_successful_operation() {
+        use super::super::tools_dialog::PLAYED;
+        let (root, ctx, mut app) = super::super::tools_tests::fixture("vault-operation-sound", "en");
+        let encrypted = root.join("right/secure.ndr");
+        let database = Vault::create(&encrypted, "test password 123456".into()).unwrap();
+        app.attach_vault(1, PaneVault::new(encrypted, database));
+        let expected_wave = Some(app.resources.join("complete.wav"));
+        PLAYED.with(|p| p.borrow_mut().clear());
+        app.settings.set_flag("PlayCompletionSound", true);
+
+        // Import: a single file may take several streaming frames, but its
+        // successful job emits the cue exactly once.
+        app.vault_import_paths(1, vec![root.join("left/alpha.txt")]);
+        finish_transfer(&mut app);
+        assert_eq!(PLAYED.with(|p| p.borrow().clone()), vec![expected_wave.clone()]);
+        let refresh_ctx = app.egui_ctx.clone();
+        app.vault_transfer_tick(&refresh_ctx);
+        assert_eq!(PLAYED.with(|p| p.borrow().len()), 1, "no repeat on later UI frames");
+
+        // A duplicate skipped by choice is not a completed transfer.
+        app.vault_import_paths(1, vec![root.join("left/alpha.txt")]);
+        advance_to_conflict(&mut app, &ctx);
+        app.answer_dialog(super::super::original_dialogs::DialogResult::FileConflict(
+            Some((ConflictChoice::Skip, false))), &ctx);
+        app.vault_transfer_tick(&ctx);
+        assert_eq!(PLAYED.with(|p| p.borrow().len()), 1, "skipped operation stays silent");
+        app.vault_transfer = None;
+
+        // Aborting an attempted overwrite preserves existing vault contents
+        // and also does not play the success cue.
+        app.vault_import_paths(1, vec![root.join("left/alpha.txt")]);
+        advance_to_conflict(&mut app, &ctx);
+        app.answer_dialog(super::super::original_dialogs::DialogResult::FileConflict(
+            Some((ConflictChoice::Cancel, false))), &ctx);
+        app.vault_transfer_tick(&ctx);
+        assert_eq!(PLAYED.with(|p| p.borrow().len()), 1, "cancelled operation stays silent");
+        app.vault_transfer = None;
+
+        app.settings.set_flag("PlayCompletionSound", false);
+        app.vault_import_paths(1, vec![root.join("left/beta.txt")]);
+        finish_transfer(&mut app);
+        assert_eq!(PLAYED.with(|p| p.borrow().len()), 1, "setting off silences vault jobs");
+
+        // Vault delete uses the exact same successful-operation audio hook.
+        app.settings.set_flag("PlayCompletionSound", true);
+        app.active = 1;
+        app.panes[1].cursor = app.panes[1].entries.iter()
+            .position(|entry| entry.name == "beta.txt").unwrap();
+        app.vault_remove_items();
+        app.answer_message_box(ndr::msgbox::IDYES, &ctx);
+        assert_eq!(PLAYED.with(|p| p.borrow().clone()),
+            vec![expected_wave.clone(), expected_wave.clone()]);
+
+        // Export from .ndr back to an ordinary directory is also a regular
+        // successful transfer and should chime once, not for every chunk.
+        let exported_folder = root.join("exported-sounds");
+        std::fs::create_dir(&exported_folder).unwrap();
+        app.navigate(0, exported_folder.clone(), false);
+        app.panes[1].cursor = app.panes[1].entries.iter()
+            .position(|entry| entry.name == "alpha.txt").unwrap();
+        app.vault_export_to_other(1, false);
+        app.answer_message_box(ndr::msgbox::IDYES, &ctx);
+        finish_transfer(&mut app);
+        assert_eq!(std::fs::read(exported_folder.join("alpha.txt")).unwrap(), b"alpha.txt");
+        assert_eq!(PLAYED.with(|p| p.borrow().len()), 3, "export should sound exactly once");
+
+        // An invalid local source causes an error and must not sound.
+        app.vault_import_paths(1, vec![root.join("left/no-such-file.txt")]);
+        app.vault_transfer.as_mut().unwrap().started = Instant::now() - Duration::from_millis(250);
+        app.vault_transfer_tick(&ctx);
+        assert!(app.vault_transfer.as_ref().unwrap().failed.is_some());
+        assert_eq!(PLAYED.with(|p| p.borrow().len()), 3, "failed operation stays silent");
+        app.vault_transfer = None;
+
+        drop(app);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn ui_large_file_updates_bytes_and_cancel_rolls_back_partial_encryption() {
         let (root, ctx, mut app) = super::super::tools_tests::fixture("vault-stream-cancel", "ko");
@@ -522,6 +609,62 @@ mod tests {
         finish_transfer(&mut app);
         assert_eq!(std::fs::metadata(out.join("stream-24mb.bin")).unwrap().len(),
             24 * 1024 * 1024 + 7);
+        drop(app);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cross_container_and_internal_transfers_each_play_one_completion_sound() {
+        use super::super::tools_dialog::PLAYED;
+        use super::super::vault_transfer_ui::VaultTransferKind;
+        let (root, ctx, mut app) = super::super::tools_tests::fixture("vault-cross-sound", "en");
+        let left = root.join("left/audio-source.ndr");
+        let right = root.join("right/audio-dest.ndr");
+        let mut source = Vault::create(&left, "sound password left".into()).unwrap();
+        source.add_file(1, "copy.txt", b"copy payload").unwrap();
+        source.add_file(1, "move.txt", b"move payload").unwrap();
+        let folder = source.add_folder(1, "subfolder").unwrap();
+        let target = Vault::create(&right, "sound password right".into()).unwrap();
+        app.attach_vault(0, PaneVault::new(left, source));
+        app.attach_vault(1, PaneVault::new(right, target));
+        app.active = 0;
+        app.settings.set_flag("PlayCompletionSound", true);
+        let expected = Some(app.resources.join("complete.wav"));
+        PLAYED.with(|record| record.borrow_mut().clear());
+
+        app.panes[0].cursor = app.panes[0].entries.iter()
+            .position(|entry| entry.name == "copy.txt").unwrap();
+        app.dispatch("copyToOther", &ctx);
+        app.answer_message_box(ndr::msgbox::IDYES, &ctx);
+        finish_transfer(&mut app);
+        assert_eq!(PLAYED.with(|record| record.borrow().len()), 1);
+
+        app.panes[0].cursor = app.panes[0].entries.iter()
+            .position(|entry| entry.name == "move.txt").unwrap();
+        app.dispatch("moveToOther", &ctx);
+        app.answer_message_box(ndr::msgbox::IDYES, &ctx);
+        finish_transfer(&mut app);
+        assert!(app.panes[0].vault.as_mut().unwrap().database.list(1).unwrap()
+            .iter().all(|entry| entry.name != "move.txt"));
+        assert_eq!(PLAYED.with(|record| record.borrow().len()), 2);
+
+        app.begin_vault_transfer(VaultTransferKind::Inside, 0, 0, false,
+            vec!["copy.txt".into()], vec![], Some(folder));
+        finish_transfer(&mut app);
+        assert_eq!(PLAYED.with(|record| record.borrow().len()), 3);
+
+        // Internal MOVE now encounters an occupied target. Skipping it is
+        // deliberately silent and retains the original in the source folder.
+        app.begin_vault_transfer(VaultTransferKind::Inside, 0, 0, true,
+            vec!["copy.txt".into()], vec![], Some(folder));
+        advance_to_conflict(&mut app, &ctx);
+        app.answer_dialog(super::super::original_dialogs::DialogResult::FileConflict(
+            Some((ConflictChoice::Skip, false))), &ctx);
+        app.vault_transfer_tick(&ctx);
+        assert_eq!(PLAYED.with(|record| record.borrow().len()), 3);
+        app.vault_transfer = None;
+        assert_eq!(PLAYED.with(|record| record.borrow().clone()),
+            vec![expected.clone(), expected.clone(), expected]);
         drop(app);
         std::fs::remove_dir_all(root).unwrap();
     }

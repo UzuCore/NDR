@@ -676,6 +676,16 @@ impl App {
     }
 
     /// Result notice when a job ends (Event::Finished). The job remains in its finished state (it does not block the next job).
+    /// NexusFile/NDR completion cue (original FUN_0043d9fc).
+    /// Keep this path shared between regular jobs and encrypted vault jobs so
+    /// both respect the same setting, packaged WAV and Windows beep fallback.
+    pub(super) fn play_operation_completion_sound(&self) {
+        if self.settings.flag("PlayCompletionSound", true)
+            && !(self.system.play_wave)(Some(&self.resources.join("complete.wav"))) {
+            native::completion_sound();
+        }
+    }
+
     pub(super) fn report_job(&mut self, cancelled: bool) {
         let ko = self.language == "ko";
         let Some(job) = self.job.as_ref() else { return };
@@ -685,13 +695,6 @@ impl App {
         let (files, interactive, skipped, title) = (job.files, job.interactive, job.skipped, job.title.clone());
         let (chime, custom_status, bytes) = (job.chime, job.custom_status, job.bytes);
         let unreported: Vec<String> = errors.iter().skip(interactive.min(errors.len())).cloned().collect();
-        let sound = |app: &App| {
-            // Original 0x43d9fc (completesound): PlaySoundW("<program folder>\complete.wav", 0x22003). If it cannot play, MessageBeep like C#.
-            // Original default completesound=1 (constructor +0xdc = 1).
-            if app.settings.flag("PlayCompletionSound", true) && !(app.system.play_wave)(Some(&app.resources.join("complete.wav"))) {
-                native::completion_sound();
-            }
-        };
         // After creating an archive, put the cursor on it in the new listing of the pane that shows it.
         if let Some((pane, output)) = self.archive_focus.take() {
             let in_pane = output.parent().is_some_and(|folder| ndr::names::equals_ignore_case(&folder.to_string_lossy(), &self.panes[pane].path.to_string_lossy()));
@@ -705,7 +708,7 @@ impl App {
         match report {
             JobReport::Generic => {
                 if chime && !cancelled && errors.is_empty() && fatal.is_none() {
-                    sound(self);
+                    self.play_operation_completion_sound();
                 }
                 if let Some(message) = &fatal {
                     let shown = self.archive_error_text(message);
@@ -765,7 +768,7 @@ impl App {
                     self.clipboard_sequence = None;
                 }
                 self.status = if ko { format!("요청한 {}개 항목을 {v}했습니다.", n0(requested)) } else { format!("Finished: {v} {} requested item(s).", n0(requested)) };
-                sound(self);
+                self.play_operation_completion_sound();
             }
             JobReport::Delete { recycle, skipped } => {
                 let failed = errors.len() + usize::from(fatal.is_some());
@@ -780,7 +783,7 @@ impl App {
                     (false, false, false) => format!("Deleted {completed} item(s).{summary} Failed {}.", n0(failed)),
                 };
                 if !cancelled && failed == 0 && skipped == 0 && files > 0 {
-                    sound(self);
+                    self.play_operation_completion_sound();
                 }
                 let mut rest = unreported;
                 rest.extend(fatal);
@@ -794,7 +797,7 @@ impl App {
                 all.extend(fatal);
                 if all.is_empty() {
                     self.status = self.tr("완전 삭제 작업이 끝났습니다.", "Shredding finished.").into_owned();
-                    sound(self);
+                    self.play_operation_completion_sound();
                 } else {
                     let title = self.tr("일부 항목을 완전히 삭제하지 못했습니다.", "Some items could not be shredded.").into_owned();
                     self.text = Some(TextDocument { title, text: all.join("\r\n") });
