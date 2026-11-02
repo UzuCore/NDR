@@ -146,6 +146,12 @@ the name generator is independent from SQLCipher keys and passwords.
   trigger without changing its encryption key or SQLCipher signature. New
   chunked files require an updated NDR to read; **older NDR versions do not
   understand the new chunk table**. Preserve backups before downgrading.
+- Folder listing speed: NDR caches the byte count of each chunked file in
+  `item_sizes` instead of calculating the sum of all its chunks on every
+  directory navigation. Containers written before this optimization are
+  migrated once on unlock; writes, file deletion and transaction rollback
+  maintain the cache within the same SQLCipher transaction. The migration
+  does not decrypt data into a plaintext temporary folder.
 - Navigating away or switching tabs clears decrypted pane text, filenames and
   editor buffers, while the authenticated SQLCipher connection is retained
   only in process memory until the selected session deadline.

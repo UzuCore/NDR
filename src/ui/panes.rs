@@ -856,6 +856,7 @@ impl App {
         // SuspendIfNotTerminated 0x462e48, destructor 0x462a1c), and results reach the window through TMessageTrap (Nmjfcore: constructor
         // 0x45ff70, RegisterMessageEvent 0x4602b0 / UnregisterMessageEvent 0x460850 keep a message → handler std::map (0x460478 / 0x460a24),
         // Dispatch 0x46091c calls the handler, destructor 0x460204). Here a std::thread sends the listing over a channel and wakes egui.
+        let repaint = self.egui_ctx.clone();
         thread::spawn(move || {
             // The original TNXDriveList is created once at startup and held (it does not re-query drives per listing). NDR changed the per-pane-listing
             // drive read into a cache (use as-is within 5 seconds, use as-is after and re-read in the background). So even if a drive's volume info arrives late,
@@ -965,11 +966,17 @@ impl App {
                 descriptions,
                 drive_infos,
             });
+            // The worker must wake the UI after the bounded foreground wait;
+            // otherwise a slow folder could remain visually stuck until the
+            // user next clicks or moves the mouse.
+            repaint.request_repaint();
         });
-        // The original GetList(0x45a34c) reads the listing in place (the view stays as-is while reading, the new listing when done). The skin theme waits up to
-        // 3 seconds for local and archive listings to switch without a "loading" paint. If it takes longer (network, etc.) it reads separately as before and switches when done. FTP does not wait.
+        // Do not block the UI for up to 3 seconds on slow directory/archive
+        // scans. Fast listings still swap in place; slower scans finish on the
+        // worker thread while the pane remains responsive (the result is
+        // applied via listing_rx in App::poll).
         if self.panes[index].remote.is_none() {
-            let deadline = Instant::now() + Duration::from_secs(3);
+            let deadline = Instant::now() + Duration::from_millis(120);
             let mut auth = Vec::new();
             while self.panes[index].loading && self.panes[index].generation == generation {
                 let left = deadline.saturating_duration_since(Instant::now());

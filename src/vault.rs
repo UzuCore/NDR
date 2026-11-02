@@ -12,13 +12,39 @@ pub const STREAM_CHUNK_SIZE: usize = 8 * 1024 * 1024;
 /// V1 containers remain readable; large imported files use a supplemental
 /// chunk table without changing the authenticated SQLCipher file format.
 fn ensure_chunks(conn: &Connection) -> Result<(), String> {
+    // r201 computed the size of each encrypted file by aggregating every
+    // chunk on EVERY folder refresh. Cache exact byte sizes once; the table is
+    // only created when the first newer build opens an existing container.
+    // Existing SQLCipher v1 single-BLOB files remain fully compatible.
+    let has_sizes: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='item_sizes')",
+        [], |row| row.get(0)).map_err(|e| e.to_string())?;
     conn.execute_batch("CREATE TABLE IF NOT EXISTS item_chunks (
         item_id INTEGER NOT NULL, ordinal INTEGER NOT NULL,
         data BLOB NOT NULL, PRIMARY KEY(item_id,ordinal)
     ) WITHOUT ROWID;
+    CREATE TABLE IF NOT EXISTS item_sizes (
+        item_id INTEGER PRIMARY KEY, byte_size INTEGER NOT NULL CHECK(byte_size>=0)
+    );
+    CREATE TRIGGER IF NOT EXISTS item_chunks_insert_size AFTER INSERT ON item_chunks
+       BEGIN INSERT INTO item_sizes(item_id,byte_size) VALUES(NEW.item_id,length(NEW.data))
+       ON CONFLICT(item_id) DO UPDATE SET byte_size=byte_size+excluded.byte_size; END;
+    CREATE TRIGGER IF NOT EXISTS item_chunks_delete_size AFTER DELETE ON item_chunks
+       BEGIN UPDATE item_sizes SET byte_size=byte_size-length(OLD.data)
+       WHERE item_id=OLD.item_id; END;
     CREATE TRIGGER IF NOT EXISTS items_delete_chunks AFTER DELETE ON items
-       BEGIN DELETE FROM item_chunks WHERE item_id=OLD.id; END;")
-       .map_err(|e| e.to_string())
+       BEGIN DELETE FROM item_chunks WHERE item_id=OLD.id; END;
+    CREATE TRIGGER IF NOT EXISTS items_delete_sizes AFTER DELETE ON items
+       BEGIN DELETE FROM item_sizes WHERE item_id=OLD.id; END;")
+       .map_err(|e| e.to_string())?;
+    if !has_sizes {
+        // Backfill once for containers written by r201-r203. Reopening an
+        // already migrated vault never rescans large encrypted BLOB rows.
+        conn.execute("INSERT INTO item_sizes(item_id,byte_size)
+            SELECT item_id,SUM(length(data)) FROM item_chunks GROUP BY item_id", [])
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -154,11 +180,10 @@ impl Vault {
 
     pub fn list(&mut self, parent: i64) -> Result<Vec<VaultItem>, String> {
         self.ensure_folder(parent)?;
-        let mut statement = self.connection.prepare("SELECT id,name,folder,
-            CASE WHEN EXISTS(SELECT 1 FROM item_chunks c WHERE c.item_id=items.id)
-                 THEN (SELECT coalesce(sum(length(data)),0) FROM item_chunks c WHERE c.item_id=items.id)
-                 ELSE coalesce(length(contents),0) END
-            FROM items WHERE parent=?1 ORDER BY folder DESC,name COLLATE NOCASE")
+        let mut statement = self.connection.prepare("SELECT items.id,items.name,items.folder,
+            coalesce(item_sizes.byte_size,length(items.contents),0)
+            FROM items LEFT JOIN item_sizes ON item_sizes.item_id=items.id
+            WHERE items.parent=?1 ORDER BY items.folder DESC,items.name COLLATE NOCASE")
             .map_err(|e| e.to_string())?;
         let values = statement.query_map([parent], |r| Ok(VaultItem { id: r.get(0)?, name: r.get(1)?, folder: r.get::<_, i64>(2)? == 1, size: r.get(3)? }))
             .map_err(|e| e.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;
@@ -195,9 +220,11 @@ impl Vault {
         for part in path.trim_matches('/').split('/') {
             if part.is_empty() { continue; }
             valid_name(part)?;
-            folder = self.list(folder)?.into_iter()
-                .find(|item| item.folder && item.name.eq_ignore_ascii_case(part))
-                .ok_or_else(|| format!("Encrypted destination folder not found: {part}"))?.id;
+            folder = self.connection.query_row(
+                "SELECT id FROM items WHERE parent=?1 AND folder=1 AND name=?2 COLLATE NOCASE",
+                params![folder,part], |row| row.get(0))
+                .optional().map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("Encrypted destination folder not found: {part}"))?;
         }
         Ok(folder)
     }
@@ -390,20 +417,19 @@ impl Vault {
     }
 
     pub fn stream_file_size(&self, id: i64) -> Result<u64, String> {
-        let size: i64 = self.connection.query_row("SELECT CASE
-            WHEN EXISTS(SELECT 1 FROM item_chunks WHERE item_id=?1)
-                 THEN (SELECT COALESCE(SUM(length(data)),0) FROM item_chunks WHERE item_id=?1)
-            ELSE COALESCE(length(contents),0) END FROM items WHERE id=?1 AND folder=0",
+        let size: i64 = self.connection.query_row("SELECT coalesce(
+                (SELECT byte_size FROM item_sizes WHERE item_id=?1),length(contents),0)
+            FROM items WHERE id=?1 AND folder=0",
             [id], |r| r.get(0)).map_err(|e| e.to_string())?;
         u64::try_from(size).map_err(|e| e.to_string())
     }
 
     pub fn stream_read_chunk(&self, id: i64, ordinal: i64) -> Result<Option<Zeroizing<Vec<u8>>>, String> {
         if ordinal < 0 { return Err("Invalid streaming chunk offset".into()); }
-        let has_chunks: i64 = self.connection.query_row(
-            "SELECT COUNT(*) FROM item_chunks WHERE item_id=?1", [id], |r| r.get(0))
+        let has_chunks: bool = self.connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM item_chunks WHERE item_id=?1)", [id], |r| r.get(0))
             .map_err(|e| e.to_string())?;
-        if has_chunks > 0 {
+        if has_chunks {
             return self.connection.query_row("SELECT data FROM item_chunks WHERE item_id=?1 AND ordinal=?2",
                 params![id,ordinal], |row| row.get::<_,Vec<u8>>(0))
                 .optional().map(|v| v.map(Zeroizing::new)).map_err(|e| e.to_string());
@@ -594,12 +620,9 @@ impl Vault {
         if valid != 0 { return Err("Encrypted item is a folder".into()); }
         // In-memory text editing still has an explicit safety bound; large
         // transfers use write_stored_chunks and never invoke read_file.
-        let size: i64 = self.connection.query_row("SELECT CASE WHEN EXISTS(SELECT 1 FROM item_chunks WHERE item_id=?1)
-            THEN (SELECT COALESCE(SUM(length(data)),0) FROM item_chunks WHERE item_id=?1)
-            ELSE COALESCE(length(contents),0) END FROM items WHERE id=?1",
-            [id], |r| r.get(0)).map_err(|e| e.to_string())?;
-        if size > MAX_FILE_SIZE as i64 { return Err("File is too large for in-memory editing; export to edit".into()); }
-        let mut result = Vec::with_capacity(size.max(0) as usize);
+        let size = self.stream_file_size(id)?;
+        if size > MAX_FILE_SIZE as u64 { return Err("File is too large for in-memory editing; export to edit".into()); }
+        let mut result = Vec::with_capacity(size as usize);
         write_stored_chunks(&self.connection, id, &mut result)?;
         self.touch();
         Ok(result)
@@ -611,6 +634,7 @@ impl Vault {
             .map_err(|e| e.to_string())?;
         if changed == 0 { return Err("File not found".into()); }
         transaction.execute("DELETE FROM item_chunks WHERE item_id=?1", [id]).map_err(|e| e.to_string())?;
+        transaction.execute("DELETE FROM item_sizes WHERE item_id=?1", [id]).map_err(|e| e.to_string())?;
         transaction.commit().map_err(|e| e.to_string())?;
         self.touch();
         Ok(())
@@ -913,6 +937,51 @@ fn is_windows_reserved_name(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cached_file_sizes_survive_legacy_migration_copy_edit_delete_and_reopen() {
+        let root = std::env::temp_dir().join(format!("ndr-fast-list-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("fast.ndr");
+        let mut vault = Vault::create(&path, "fast list password".into()).unwrap();
+        vault.add_file(1, "legacy.txt", b"old").unwrap();
+        let source = root.join("large.bin");
+        std::fs::write(&source, vec![42u8; STREAM_CHUNK_SIZE + 17]).unwrap();
+        vault.import_one(1, &source, "large.bin", false).unwrap();
+        let large = vault.list(1).unwrap().into_iter().find(|i| i.name == "large.bin").unwrap();
+        assert_eq!(large.size as usize, STREAM_CHUNK_SIZE + 17);
+        let cached: i64 = vault.connection.query_row("SELECT byte_size FROM item_sizes WHERE item_id=?1",
+            [large.id], |r| r.get(0)).unwrap();
+        assert_eq!(cached, large.size);
+        // Emulate a container created by r201-r203 before the metadata cache.
+        vault.connection.execute_batch("DROP TRIGGER item_chunks_insert_size;
+            DROP TRIGGER item_chunks_delete_size; DROP TRIGGER items_delete_sizes;
+            DROP TABLE item_sizes;").unwrap();
+        drop(vault);
+        let mut vault = Vault::unlock(&path, "fast list password".into()).unwrap();
+        assert_eq!(vault.list(1).unwrap().into_iter().find(|i| i.name == "large.bin").unwrap().size,
+            (STREAM_CHUNK_SIZE + 17) as i64);
+        let cache_rebuilt: i64 = vault.connection.query_row("SELECT byte_size FROM item_sizes WHERE item_id=?1",
+            [large.id], |r| r.get(0)).unwrap();
+        assert_eq!(cache_rebuilt, large.size);
+        let destination = vault.add_folder(1, "copies").unwrap();
+        vault.transfer_items(1, &["large.bin".into()], destination, false).unwrap();
+        let duplicated = vault.list(destination).unwrap().into_iter().find(|i| i.name == "large.bin").unwrap();
+        assert_eq!(duplicated.size, large.size);
+        vault.update_file(duplicated.id, b"edited").unwrap();
+        assert_eq!(vault.list(destination).unwrap().into_iter().find(|i| i.name == "large.bin").unwrap().size, 6);
+        assert_eq!(vault.stream_file_size(duplicated.id).unwrap(), 6);
+        vault.remove_many(&[large.id]).unwrap();
+        let old_cache: Option<i64> = vault.connection.query_row(
+            "SELECT byte_size FROM item_sizes WHERE item_id=?1", [large.id], |r| r.get(0)).optional().unwrap();
+        assert_eq!(old_cache, None, "deletion must clear the metadata cache");
+        vault.verify_integrity().unwrap();
+        drop(vault);
+        let mut reopened = Vault::unlock(&path, "fast list password".into()).unwrap();
+        assert_eq!(reopened.list(destination).unwrap().into_iter().find(|i| i.name == "large.bin").unwrap().size, 6);
+        drop(reopened);
+        std::fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn unlock_old_v1_container_and_mix_legacy_blob_with_streamed_chunks() {
         let root = std::env::temp_dir().join(format!("ndr-stream-compat-{}-{}", std::process::id(),

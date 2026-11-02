@@ -1279,7 +1279,13 @@ impl Job {
             }
             out.set_permissions(permissions)
                 .map_err(|e| e.to_string())?;
-            out.sync_all().map_err(|e| e.to_string())?;
+            // Win32 file managers ordinarily rely on the OS write cache when
+            // copying a file. Forcing FlushFileBuffers on *every* file can
+            // serialize an entire directory copy and make it dramatically
+            // slower on HDDs, USB disks and network drives. Preserve the
+            // staged-file/atomic-rename protection and metadata verification,
+            // but do not force a physical media flush before each rename.
+            out.flush().map_err(|e| e.to_string())?;
             drop(out);
             check_cancel(&self.cancel)?;
             // Original FUN_004134e0 (overwrite): clears the existing destination's attributes (SetFileAttributesW 0x20) and replaces it regardless of the setting.
