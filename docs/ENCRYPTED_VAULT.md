@@ -79,39 +79,52 @@ the name generator is independent from SQLCipher keys and passwords.
   multi-item delete, paste local files and full directory trees directly into
   SQLCipher, and edit UTF-8 text files up to 1 MiB in a memory-only editor.
 - F3 (Copy to Other Pane) copies selected regular files/directories from the other local pane into
-  an open encrypted folder, preserving subfolder structure. Import runs in a
-  single SQLCipher transaction: a conflict, invalid name or failed read rolls
-  back the entire batch. No plaintext staging files are created. Reparse
-  points, symbolic links and junctions are rejected.
+  an open encrypted folder, preserving subfolder structure. Each top-level
+  item is imported in its own SQLCipher transaction. A failed item rolls back
+  its complete subtree, while earlier completed items remain. No plaintext
+  staging files are created. Reparse points, symbolic links and junctions
+  are rejected.
 - F3 in the reverse direction exports selected items to the other local pane.
   It always requests confirmation because this writes **unencrypted plaintext**.
-  Export never overwrites existing targets; on failure it attempts to remove
-  only the entries created by that export, preserving prior user files.
+  Existing targets invoke NDR's normal duplicate-file dialog. When overwrite
+  is explicitly approved, the old target is moved to a recovery name and
+  restored if the new export fails. Skipping, renaming or cancelling never
+  overwrites existing files silently.
 - F4 between a regular pane and an encrypted pane moves selected items by
-  copying the entire batch successfully first and only then deleting sources.
+  copying each selected root successfully first and only then deleting that
+  root's source.
   A failed source deletion retains the completed destination copy and reports
   the failure. Moving decrypted content into a regular pane requires explicit
   confirmation, and exports are plaintext. This is not a cross-filesystem
   atomic move.
 - Copy to Folder / Move to Folder inside an unlocked vault accepts a destination
   path relative to the vault root, such as `documents/archive` or `/`. These
-  actions use one SQLCipher transaction for the whole batch; folder cycles,
-  name conflicts and failed copies leave the database unchanged.
+  actions use one SQLCipher transaction per top-level item; folder cycles,
+  name conflicts and failed copies roll back that item.
 - When each panel displays a **different unlocked** `.ndr` container, F3 copies
   selected files or complete folder trees directly between the two SQLCipher
   databases without writing plaintext to a temporary filesystem location.
-  The destination database commits one transaction for the whole batch, so a
-  copy error cannot leave only part of that batch in the destination.
-  F4 subsequently deletes the selected source records in one source transaction.
+  The destination database commits one transaction for each selected root,
+  so a copy error cannot leave a partial folder tree. Earlier completed
+  roots are preserved. F4 subsequently deletes each source after its copy.
   Transactions across two separate databases cannot be atomic together: if
   source deletion fails after destination commit, NDR deliberately retains
-  both encrypted copies and reports the incomplete move. A conflict never
-  overwrites a destination entry.
+  both encrypted copies and reports the incomplete move. Existing target
+  entries are replaced only after the user approves NDR's conflict dialog;
+  deletion and reinsertion are atomic in the target SQLCipher transaction.
+- Every encrypted transfer displays the normal-size 441 px NDR progress
+  window and opens the original TfFileExists dialog on a duplicate name.
+  The dialog supports overwrite, skip, rename, cancel and apply-to-all.
+  Overwrite-newer conservatively skips when vault timestamps cannot be
+  compared; resume is unavailable. Cancel stops before the next selected
+  root and retains already completed copies. Progress counts selected roots,
+  not individual bytes inside a root. A single large root is processed
+  synchronously and cannot be interrupted in the middle of that root.
 - Ctrl+V accepts regular files or whole folder trees from the filesystem. A
   cut/move clipboard is rejected: use copy instead. Shell drag-and-drop
   and external program opening remain unsupported for vault contents to avoid
   unsafe operations on synthetic filesystem paths.
-- The per-file size limit is 64 MiB; an import/export batch is limited to
+- The per-file size limit is 64 MiB; each selected root-tree operation is limited to
   512 MiB, 10,000 entries and 64 nested levels. These synchronous operations
   are not intended for huge datasets or external editing workflows.
 - Navigating away or switching tabs clears decrypted pane text, filenames and

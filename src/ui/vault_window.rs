@@ -24,7 +24,7 @@ impl PaneVault {
     fn new(file: PathBuf, database: Vault) -> Self {
         Self { file, database, stack: vec![(1, String::new())] }
     }
-    fn folder(&self) -> i64 { self.stack.last().map_or(1, |item| item.0) }
+    pub(super) fn folder(&self) -> i64 { self.stack.last().map_or(1, |item| item.0) }
     pub(super) fn virtual_path(&self) -> PathBuf {
         let mut result = self.file.clone();
         for (_, name) in self.stack.iter().skip(1) { result.push(name); }
@@ -324,6 +324,7 @@ impl App {
     /// Copy to other pane (F3) from an unlocked vault is an explicit plaintext
     /// export. Warn before releasing decrypted bytes to the filesystem.
     pub(super) fn vault_export_to_other(&mut self, source: usize, moving: bool) {
+        use super::vault_transfer_ui::VaultTransferKind;
         let target = 1 - source;
         if self.panes[target].vault.is_some() || self.panes[target].archive.is_some()
             || self.panes[target].remote.is_some() || !self.panes[target].path.is_dir() {
@@ -334,34 +335,14 @@ impl App {
         if names.is_empty() { return; }
         let destination = self.panes[target].path.clone();
         let message = self.language_pack.text(if moving { "NDRVault.ExportMoveConfirm" } else { "NDRVault.ExportCopyConfirm" },
-            if moving { "Move {count} items to unencrypted folder {destination}? Originals are removed only after export succeeds. Existing targets are never overwritten." }
-            else { "Export {count} items as plaintext to {destination}? Existing targets are never overwritten." })
+            if moving { "Move {count} items to unencrypted folder {destination}? Originals are removed only after export succeeds. Existing targets are never overwritten without confirmation." }
+            else { "Export {count} items as plaintext to {destination}? Existing targets are never overwritten without confirmation." })
             .replace("{count}", &names.len().to_string()).replace("{destination}", &destination.display().to_string());
         let title = self.language_pack.text("NDRVault.ExportTitle", "Export encrypted items");
         self.system_box(&title, &message,
             ndr::msgbox::MB_YESNO | ndr::msgbox::MB_ICONEXCLAMATION, move |app, answer, _| {
-                if answer != ndr::msgbox::IDYES { return; }
-                let Some(state) = app.panes[source].vault.as_mut() else { return };
-                let result = state.database.export_items(state.folder(), &names, &destination)
-                    .and_then(|count| {
-                        if moving {
-                            let items = state.database.list(state.folder())?;
-                            let ids = names.iter().map(|name| items.iter().find(|item| &item.name == name)
-                                .map(|item| item.id).ok_or_else(|| format!("Missing source item after export: {name}")))
-                                .collect::<Result<Vec<_>, _>>()?;
-                            state.database.remove_many(&ids).map_err(|error| format!(
-                                "Files were exported, but encrypted originals were NOT removed: {error}"))?;
-                        }
-                        Ok(count)
-                    });
-                match result {
-                    Ok(count) => {
-                        app.refresh(target);
-                        if moving { app.refresh_vault(source); }
-                        app.status = app.language_pack.text("NDRVault.ExportDone", "Exported {count} items as unencrypted files.")
-                            .replace("{count}", &count.to_string());
-                    }
-                    Err(error) => { app.refresh(target); app.status = format!("{}: {error}", app.language_pack.text("NDRVault.ExportFailed", "Export/move failed")); },
+                if answer == ndr::msgbox::IDYES {
+                    app.begin_vault_transfer(VaultTransferKind::Export, source, target, moving, names, vec![], None);
                 }
             });
     }
@@ -369,62 +350,43 @@ impl App {
     /// Import first, then remove local originals. Failure to delete a source
     /// never destroys the successfully encrypted copy; the status reports it.
     pub(super) fn vault_transfer_from_local(&mut self, source: usize, target: usize, files: Vec<PathBuf>, moving: bool) {
+        use super::vault_transfer_ui::VaultTransferKind;
         if files.is_empty() { return; }
         if !moving { return self.vault_import_paths(target, files); }
         let title = self.language_pack.text("NDRVault.MoveLocalTitle", "Move into encrypted folder");
         let text = self.language_pack.text("NDRVault.MoveLocalConfirm", "Encrypt all items first, then remove local originals. Continue?");
         self.system_box(&title, &text,
             ndr::msgbox::MB_YESNO | ndr::msgbox::MB_ICONEXCLAMATION, move |app, answer, _| {
-                if answer != ndr::msgbox::IDYES { return; }
-                let Some(state) = app.panes[target].vault.as_mut() else { return };
-                let imported = state.database.import_paths(state.folder(), &files);
-                match imported {
-                    Err(error) => app.status = format!("{}: {error}", app.language_pack.text("NDRVault.MoveLocalFailed", "Encrypted move failed; local sources preserved")),
-                    Ok(count) => {
-                        let mut failures = Vec::new();
-                        for path in &files {
-                            let result = std::fs::symlink_metadata(path).and_then(|meta| {
-                                use std::os::windows::fs::MetadataExt;
-                                if meta.file_attributes() & 0x400 != 0 {
-                                    return Err(std::io::Error::other("source changed to a reparse point"));
-                                }
-                                if meta.is_dir() { std::fs::remove_dir_all(path) }
-                                else { std::fs::remove_file(path) }
-                            });
-                            if let Err(error) = result { failures.push(format!("{}: {error}", path.display())); }
-                        }
-                        app.refresh_vault(target);
-                        app.refresh(source);
-                        app.status = if failures.is_empty() {
-                            app.language_pack.text("NDRVault.MoveLocalDone", "Moved {count} encrypted items.")
-                                .replace("{count}", &count.to_string())
-                        } else {
-                            format!("{}: {}", app.language_pack.text("NDRVault.MoveLocalPartial", "Encrypted copy completed; some local originals could not be deleted"), failures.join("; "))
-                        };
-                    }
+                if answer == ndr::msgbox::IDYES {
+                    let Some(names) = files.iter()
+                        .map(|file| file.file_name().and_then(|name| name.to_str()).map(str::to_owned))
+                        .collect::<Option<Vec<_>>>() else {
+                        app.status = app.language_pack.text("NDRVault.InvalidImportPath", "Cannot transfer a path without a valid Unicode filename.");
+                        return;
+                    };
+                    app.begin_vault_transfer(VaultTransferKind::Import, source, target, true, names, files, None);
                 }
             });
     }
 
     pub(super) fn vault_import_paths(&mut self, pane: usize, files: Vec<PathBuf>) {
+        use super::vault_transfer_ui::VaultTransferKind;
         if files.is_empty() { return; }
-        let Some(state) = self.panes[pane].vault.as_mut() else { return };
-        match state.database.import_paths(state.folder(), &files) {
-            Ok(count) => {
-                self.refresh_vault(pane);
-                self.status = self.language_pack.text("NDRVault.ImportDone", "Imported {count} encrypted items.")
-                    .replace("{count}", &count.to_string());
-            }
-            Err(error) => {
-                self.status = format!("{}: {error}", self.language_pack.text("NDRVault.ImportFailed", "Encrypted import failed; changes rolled back"));
-            }
-        }
+        let Some(names) = files.iter()
+            .map(|file| file.file_name().and_then(|name| name.to_str()).map(str::to_owned))
+            .collect::<Option<Vec<_>>>() else {
+            self.status = self.language_pack.text("NDRVault.InvalidImportPath", "Cannot transfer a path without a valid Unicode filename.");
+            return;
+        };
+        self.begin_vault_transfer(VaultTransferKind::Import, 1 - pane, pane, false, names, files, None);
     }
+
 }
 
 impl App {
     /// Move/copy inside a single SQLCipher container; no plaintext staging.
     pub(super) fn vault_transfer_between_panes(&mut self, source: usize, target: usize, moving: bool) {
+        use super::vault_transfer_ui::VaultTransferKind;
         let names: Vec<String> = self.target_entries(source).into_iter().map(|entry| entry.name).collect();
         if names.is_empty() { return; }
         let same_container = {
@@ -432,7 +394,7 @@ impl App {
             let b = self.panes[target].vault.as_ref().unwrap();
             match (std::fs::canonicalize(&a.file), std::fs::canonicalize(&b.file)) {
                 (Ok(left), Ok(right)) => left == right,
-                _ => true, // If identity cannot be proved distinct, fail closed.
+                _ => true,
             }
         };
         if same_container {
@@ -445,67 +407,30 @@ impl App {
             else { "Copy all selected items to the other encrypted container?" });
         self.system_box(&title, &text, ndr::msgbox::MB_YESNO | ndr::msgbox::MB_ICONQUESTION,
             move |app, answer, _| {
-                if answer != ndr::msgbox::IDYES { return; }
-                let (src_pane, dst_pane) = if source == 0 {
-                    let (left, right) = app.panes.split_at_mut(1);
-                    (&mut left[0], &mut right[0])
-                } else {
-                    let (left, right) = app.panes.split_at_mut(1);
-                    (&mut right[0], &mut left[0])
-                };
-                let Some(src) = src_pane.vault.as_mut() else { return; };
-                let Some(dst) = dst_pane.vault.as_mut() else { return; };
-                let from = src.folder();
-                let to = dst.folder();
-                let transfer = dst.database.copy_from_vault(&mut src.database, from, &names, to);
-                match transfer {
-                    Ok(count) => {
-                        let remove_result = if moving {
-                            src.database.list(from).and_then(|items| {
-                                let ids = names.iter().map(|name| items.iter().find(|item| item.name == *name)
-                                    .map(|item| item.id).ok_or_else(|| format!("Source disappeared: {name}")))
-                                    .collect::<Result<Vec<_>, _>>()?;
-                                src.database.remove_many(&ids)
-                            })
-                        } else { Ok(()) };
-                        app.refresh_vault(source);
-                        app.refresh_vault(target);
-                        app.status = match remove_result {
-                            Ok(()) => app.language_pack.text("NDRVault.TransferDone", "Encrypted items transferred: {count}")
-                                .replace("{count}", &count.to_string()),
-                            Err(error) => format!("{}: {error}", app.language_pack.text("NDRVault.SourceRetained",
-                                "Destination committed, but source deletion failed. Both copies are retained")),
-                        };
-                    }
-                    Err(error) => app.status = format!("{}: {error}", app.language_pack.text("NDRVault.TransferFailed", "Encrypted transfer failed; destination rolled back")),
+                if answer == ndr::msgbox::IDYES {
+                    app.begin_vault_transfer(VaultTransferKind::Between, source, target, moving, names, vec![], None);
                 }
             });
     }
 
     pub(super) fn vault_transfer_inside(&mut self, moving: bool) {
+        use super::vault_transfer_ui::VaultTransferKind;
         let pane = self.active;
         let names: Vec<String> = self.target_entries(pane).into_iter().map(|item| item.name).collect();
         if names.is_empty() { return; }
-        let current = self.panes[pane].vault.as_ref().map(|vault| vault.folder()).unwrap_or(1);
         let title = self.language_pack.text(if moving { "NDRVault.InsideMoveTitle" } else { "NDRVault.InsideCopyTitle" },
             if moving { "Move within encrypted container" } else { "Copy within encrypted container" });
         let message = self.language_pack.text("NDRVault.InsidePrompt", "Destination path relative to container root (e.g. documents/archive or /)");
-        self.prompt_file_name(&title, &message,
-            "/", move |app, destination, _| {
-                let Some(destination) = destination else { return; };
-                let Some(state) = app.panes[pane].vault.as_mut() else { return; };
-                let result = state.database.resolve_folder(&destination)
-                    .and_then(|target| state.database.transfer_items(current, &names, target, moving));
-                match result {
-                    Ok(count) => {
-                        app.refresh_vault(pane);
-                        app.status = app.language_pack.text("NDRVault.InsideDone", "Updated {count} items within the encrypted container.")
-                            .replace("{count}", &count.to_string());
-                    }
-                    Err(error) => app.status = format!("{}: {error}", app.language_pack.text("NDRVault.InsideFailed", "Encrypted folder operation failed; changes rolled back")),
-                }
-            });
+        self.prompt(&title, &message, "/", None, false, move |app, destination, _| {
+            let Some(destination) = destination else { return; };
+            let Some(state) = app.panes[pane].vault.as_mut() else { return; };
+            match state.database.resolve_folder(&destination) {
+                Ok(folder) => app.begin_vault_transfer(VaultTransferKind::Inside, pane, pane, moving, names, vec![], Some(folder)),
+                Err(error) => app.status = format!("{}: {error}", app.language_pack.text("NDRVault.InsideFailed", "Encrypted folder operation failed")),
+            }
+        });
     }
+
 }
 
 impl Drop for VaultDialog {
@@ -520,6 +445,146 @@ impl Drop for VaultDialog {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn finish_transfer(app: &mut App) {
+        let ctx = app.egui_ctx.clone();
+        if let Some(job) = app.vault_transfer.as_mut() {
+            job.started = Instant::now() - Duration::from_millis(250);
+        }
+        for _ in 0..32 {
+            app.vault_transfer_tick(&ctx);
+            let Some(job) = &app.vault_transfer else { return; };
+            if job.finished.is_some() {
+                assert!(job.failed.is_none(), "vault transfer failed: {:?}", job.failed);
+                assert!(!job.cancelled, "vault transfer was cancelled");
+                app.vault_transfer = None;
+                return;
+            }
+            assert!(job.waiting_conflict.is_none() && job.waiting_rename.is_none(),
+                "unexpected conflict during the normal vault transfer test");
+        }
+        panic!("vault transfer did not finish");
+    }
+
+    fn advance_to_conflict(app: &mut App, ctx: &egui::Context) {
+        app.vault_transfer.as_mut().expect("progress job").started = Instant::now() - Duration::from_millis(250);
+        let _ = ctx.run(egui::RawInput::default(), |ctx| app.vault_transfer_progress_ui(ctx));
+        app.vault_transfer_tick(ctx);
+        assert!(app.original_dialogs.last().is_some_and(|dialog| matches!(dialog.kind,
+            super::super::original_dialogs::DialogKind::FileConflict(_))),
+            "encrypted copy must show the existing file-conflict dialog");
+    }
+
+    #[test]
+    fn cross_vault_duplicate_dialog_skip_overwrite_rename_cancel_and_move() {
+        let (root, ctx, mut app) = super::super::tools_tests::fixture("vault-conflict-cross", "ko");
+        let left = root.join("left/source.ndr");
+        let right = root.join("right/destination.ndr");
+        let mut a = Vault::create(&left, "left password 123456".into()).unwrap();
+        a.add_file(1, "same.txt", b"new encrypted version").unwrap();
+        let mut b = Vault::create(&right, "right password 123456".into()).unwrap();
+        b.add_file(1, "same.txt", b"old encrypted version").unwrap();
+        app.attach_vault(0, PaneVault::new(left, a));
+        app.attach_vault(1, PaneVault::new(right, b));
+        app.active = 0;
+        app.panes[0].cursor = app.panes[0].entries.iter().position(|entry| entry.name == "same.txt").unwrap();
+        let target_bytes = |app: &mut App, name: &str| {
+            let target = app.panes[1].vault.as_mut().unwrap();
+            let id = target.database.list(1).unwrap().into_iter().find(|entry| entry.name == name).unwrap().id;
+            target.database.read_file(id).unwrap()
+        };
+
+        app.dispatch("copyToOther", &ctx);
+        app.answer_message_box(ndr::msgbox::IDYES, &ctx);
+        advance_to_conflict(&mut app, &ctx);
+        let form = match &app.original_dialogs.last().unwrap().kind {
+            super::super::original_dialogs::DialogKind::FileConflict(form) => form,
+            _ => unreachable!(),
+        };
+        assert_eq!((form.source_size, form.destination_size), (Some(21), Some(21)));
+        app.answer_dialog(super::super::original_dialogs::DialogResult::FileConflict(Some((ConflictChoice::Skip, false))), &ctx);
+        app.vault_transfer_tick(&ctx);
+        assert_eq!(target_bytes(&mut app, "same.txt"), b"old encrypted version");
+        app.vault_transfer = None;
+
+        app.dispatch("copyToOther", &ctx);
+        app.answer_message_box(ndr::msgbox::IDYES, &ctx);
+        advance_to_conflict(&mut app, &ctx);
+        app.answer_dialog(super::super::original_dialogs::DialogResult::FileConflict(Some((ConflictChoice::Overwrite, false))), &ctx);
+        finish_transfer(&mut app);
+        assert_eq!(target_bytes(&mut app, "same.txt"), b"new encrypted version");
+
+        app.dispatch("copyToOther", &ctx);
+        app.answer_message_box(ndr::msgbox::IDYES, &ctx);
+        advance_to_conflict(&mut app, &ctx);
+        app.answer_dialog(super::super::original_dialogs::DialogResult::FileConflict(Some((ConflictChoice::Rename, false))), &ctx);
+        app.vault_transfer_tick(&ctx);
+        assert!(app.original_dialogs.last().is_some_and(|dialog| matches!(dialog.kind,
+            super::super::original_dialogs::DialogKind::Prompt { .. })));
+        app.answer_dialog(super::super::original_dialogs::DialogResult::Text(Some("renamed.txt".into())), &ctx);
+        finish_transfer(&mut app);
+        assert_eq!(target_bytes(&mut app, "renamed.txt"), b"new encrypted version");
+
+        app.dispatch("moveToOther", &ctx);
+        app.answer_message_box(ndr::msgbox::IDYES, &ctx);
+        advance_to_conflict(&mut app, &ctx);
+        app.answer_dialog(super::super::original_dialogs::DialogResult::FileConflict(Some((ConflictChoice::Cancel, false))), &ctx);
+        app.vault_transfer_tick(&ctx);
+        assert!(app.panes[0].vault.as_mut().unwrap().database.list(1).unwrap().iter().any(|entry| entry.name == "same.txt"));
+        app.vault_transfer = None;
+
+        app.dispatch("moveToOther", &ctx);
+        app.answer_message_box(ndr::msgbox::IDYES, &ctx);
+        advance_to_conflict(&mut app, &ctx);
+        app.answer_dialog(super::super::original_dialogs::DialogResult::FileConflict(Some((ConflictChoice::Overwrite, false))), &ctx);
+        finish_transfer(&mut app);
+        assert!(app.panes[0].vault.as_mut().unwrap().database.list(1).unwrap().is_empty());
+        assert_eq!(target_bytes(&mut app, "same.txt"), b"new encrypted version");
+        drop(app);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn regular_to_vault_and_vault_to_regular_both_show_duplicate_dialog() {
+        let (root, ctx, mut app) = super::super::tools_tests::fixture("vault-conflict-regular", "ko");
+        let file = root.join("right/safe.ndr");
+        let mut vault = Vault::create(&file, "strong test password".into()).unwrap();
+        vault.add_file(1, "alpha.txt", b"older secret").unwrap();
+        vault.add_file(1, "export.txt", b"new plaintext contents").unwrap();
+        app.attach_vault(1, PaneVault::new(file, vault));
+        app.active = 0;
+        app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == "alpha.txt").unwrap();
+        app.dispatch("copyToOther", &ctx);
+        advance_to_conflict(&mut app, &ctx);
+        app.answer_dialog(super::super::original_dialogs::DialogResult::FileConflict(Some((ConflictChoice::Skip, false))), &ctx);
+        app.vault_transfer_tick(&ctx);
+        let items = app.panes[1].vault.as_mut().unwrap().database.list(1).unwrap();
+        let id = items.iter().find(|e| e.name == "alpha.txt").unwrap().id;
+        assert_eq!(app.panes[1].vault.as_mut().unwrap().database.read_file(id).unwrap(), b"older secret");
+        app.vault_transfer = None;
+
+        app.dispatch("copyToOther", &ctx);
+        advance_to_conflict(&mut app, &ctx);
+        app.answer_dialog(super::super::original_dialogs::DialogResult::FileConflict(Some((ConflictChoice::Overwrite, false))), &ctx);
+        finish_transfer(&mut app);
+        let items = app.panes[1].vault.as_mut().unwrap().database.list(1).unwrap();
+        let id = items.iter().find(|e| e.name == "alpha.txt").unwrap().id;
+        assert_eq!(app.panes[1].vault.as_mut().unwrap().database.read_file(id).unwrap(), b"alpha.txt");
+
+        std::fs::write(root.join("left/export.txt"), b"existing plaintext").unwrap();
+        app.refresh(0);
+        app.active = 1;
+        app.panes[1].cursor = app.panes[1].entries.iter().position(|e| e.name == "export.txt").unwrap();
+        app.dispatch("copyToOther", &ctx);
+        app.answer_message_box(ndr::msgbox::IDYES, &ctx);
+        advance_to_conflict(&mut app, &ctx);
+        app.answer_dialog(super::super::original_dialogs::DialogResult::FileConflict(Some((ConflictChoice::Overwrite, false))), &ctx);
+        finish_transfer(&mut app);
+        assert_eq!(std::fs::read(root.join("left/export.txt")).unwrap(), b"new plaintext contents");
+        assert!(app.panes[1].vault.as_mut().unwrap().database.list(1).unwrap().iter().any(|item| item.name == "export.txt"));
+        drop(app);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn encrypted_dialog_strings_exist_in_every_bundled_language() {
@@ -580,6 +645,7 @@ mod tests {
         assert!(app.panes[1].vault.as_mut().unwrap().database.list(1).unwrap().is_empty());
         app.dispatch("copyToOther", &ctx);
         app.answer_message_box(ndr::msgbox::IDYES, &ctx);
+        finish_transfer(&mut app);
         let copied = app.panes[1].vault.as_mut().unwrap().database.list(1).unwrap();
         let folder_id = copied.iter().find(|v| v.name == "documents").unwrap().id;
         let file_id = app.panes[1].vault.as_mut().unwrap().database.list(folder_id).unwrap()[0].id;
@@ -589,6 +655,7 @@ mod tests {
         app.dispatch("moveToOther", &ctx);
         assert!(app.panes[0].vault.as_mut().unwrap().database.list(1).unwrap().iter().any(|v| v.name == "moving.txt"));
         app.answer_message_box(ndr::msgbox::IDYES, &ctx);
+        finish_transfer(&mut app);
         assert!(!app.panes[0].vault.as_mut().unwrap().database.list(1).unwrap().iter().any(|v| v.name == "moving.txt"));
         assert!(app.panes[1].vault.as_mut().unwrap().database.list(1).unwrap().iter().any(|v| v.name == "moving.txt"));
         drop(app);
@@ -611,6 +678,7 @@ mod tests {
         assert!(app.panes[1].vault.as_mut().unwrap().database.list(1).unwrap().is_empty());
         app.vault_transfer_from_local(0, 1, vec![source.clone()], true);
         app.answer_message_box(ndr::msgbox::IDYES, &ctx);
+        finish_transfer(&mut app);
         assert!(!source.exists());
         let items = app.panes[1].vault.as_mut().unwrap().database.list(1).unwrap();
         let id = items.iter().find(|i| i.name == "alpha.txt").unwrap().id;
@@ -636,6 +704,7 @@ mod tests {
         assert!(!app.panes[1].vault.as_mut().unwrap().database.list(1).unwrap().is_empty());
         app.vault_export_to_other(1, true);
         app.answer_message_box(ndr::msgbox::IDYES, &ctx);
+        finish_transfer(&mut app);
         assert_eq!(std::fs::read(destination.join("private.txt")).unwrap(), b"original secret");
         assert!(app.panes[1].vault.as_mut().unwrap().database.list(1).unwrap().is_empty());
         drop(app);
@@ -702,6 +771,7 @@ mod tests {
         let file_index = app.panes[0].entries.iter().position(|entry| entry.name == "alpha.txt").unwrap();
         app.panes[0].cursor = file_index;
         app.dispatch("copyToOther", &ctx);
+        finish_transfer(&mut app);
         let listing = app.panes[1].vault.as_mut().unwrap().database.list(1).unwrap();
         let imported = listing.iter().find(|item| item.name == "alpha.txt").unwrap();
         assert_eq!(app.panes[1].vault.as_mut().unwrap().database.read_file(imported.id).unwrap(), b"alpha.txt");
@@ -709,6 +779,7 @@ mod tests {
         let folder_index = app.panes[0].entries.iter().position(|entry| entry.name == "folder1").unwrap();
         app.panes[0].cursor = folder_index;
         app.dispatch("copyToOther", &ctx);
+        finish_transfer(&mut app);
         let items = app.panes[1].vault.as_mut().unwrap().database.list(1).unwrap();
         assert!(items.iter().any(|item| item.name == "folder1" && item.folder));
 
@@ -720,6 +791,7 @@ mod tests {
         app.clipboard = Some((vec![source_tree.clone()], false));
         app.clipboard_sequence = Some(native::clipboard_sequence_number());
         app.vault_paste_files();
+        finish_transfer(&mut app);
         let items = app.panes[1].vault.as_mut().unwrap().database.list(1).unwrap();
         let imported = items.iter().find(|item| item.name == "external_tree").unwrap();
         let nested = app.panes[1].vault.as_mut().unwrap().database.list(imported.id).unwrap();
@@ -737,6 +809,7 @@ mod tests {
         assert!(!app.msgboxes.is_empty(), "plaintext export must require a confirmation");
         assert!(!output.join("alpha.txt").exists(), "confirmation must precede plaintext export");
         app.answer_message_box(ndr::msgbox::IDYES, &ctx);
+        finish_transfer(&mut app);
         assert_eq!(std::fs::read(output.join("alpha.txt")).unwrap(), b"alpha.txt");
         assert!(vault_file.is_file());
         app.discard_vault(1);

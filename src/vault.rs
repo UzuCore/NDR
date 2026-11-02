@@ -151,6 +151,25 @@ impl Vault {
             .map_err(|e| e.to_string())
     }
 
+    /// Display path for an internal encrypted folder; never accesses the
+    /// ordinary filesystem outside the container.
+    pub fn relative_folder_path(&self, mut folder: i64) -> Result<PathBuf, String> {
+        let mut parts = Vec::new();
+        while folder != 1 {
+            if parts.len() >= 64 { return Err("Encrypted folder depth exceeded".into()); }
+            let (parent, name): (i64, String) = self.connection.query_row(
+                "SELECT parent,name FROM items WHERE id=?1 AND folder=1", [folder],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            ).map_err(|e| e.to_string())?;
+            if parent == folder { return Err("Invalid encrypted folder parent".into()); }
+            parts.push(name);
+            folder = parent;
+        }
+        let mut result = PathBuf::new();
+        for component in parts.into_iter().rev() { result.push(component); }
+        Ok(result)
+    }
+
     /// Resolve a folder path relative to the encrypted container root.
     pub fn resolve_folder(&mut self, path: &str) -> Result<i64, String> {
         let mut folder = 1;
@@ -241,6 +260,84 @@ impl Vault {
         Ok(count)
     }
 
+    /// Copy one item with optional destination rename/replacement. Replacing
+    /// the existing destination and copying the new tree is one transaction.
+    pub fn copy_from_vault_item(&mut self, source: &mut Vault, from: i64, name: &str,
+        to: i64, target_name: &str, replace: bool) -> Result<usize, String> {
+        valid_name(target_name)?;
+        self.ensure_folder(to)?;
+        source.ensure_folder(from)?;
+        if std::fs::canonicalize(&self.file).map_err(|e| e.to_string())?
+            == std::fs::canonicalize(&source.file).map_err(|e| e.to_string())? {
+            return Err("Use same-container transfer for the same encrypted file".into());
+        }
+        let item = source.list(from)?.into_iter().find(|v| v.name == name)
+            .ok_or("Encrypted source item is missing")?;
+        let tx = self.connection.transaction().map_err(|e| e.to_string())?;
+        replace_destination(&tx, to, target_name, replace)?;
+        let mut count = 0;
+        let mut bytes = 0;
+        copy_from_other_vault_named(&tx, source, item.id, to, Some(target_name), 0, &mut count, &mut bytes)?;
+        tx.commit().map_err(|e| e.to_string())?;
+        self.touch();
+        Ok(count)
+    }
+
+    /// Import a single filesystem root as a different name or replace an
+    /// existing vault entry atomically. Never removes the source path.
+    pub fn import_one(&mut self, to: i64, path: &Path, name: &str, replace: bool) -> Result<usize, String> {
+        valid_name(name)?;
+        self.ensure_folder(to)?;
+        let own = std::fs::canonicalize(&self.file).map_err(|e| e.to_string())?;
+        let source = std::fs::canonicalize(path).map_err(|e| e.to_string())?;
+        if own.starts_with(&source) { return Err("Cannot import the open encrypted container or its parent".into()); }
+        let tx = self.connection.transaction().map_err(|e| e.to_string())?;
+        replace_destination(&tx, to, name, replace)?;
+        let mut count = 0;
+        let mut bytes = 0;
+        import_path_named(&tx, to, path, Some(name), 0, &mut count, &mut bytes)?;
+        tx.commit().map_err(|e| e.to_string())?;
+        self.touch();
+        Ok(count)
+    }
+
+    /// One safe internal copy/move; overwrite approval replaces the whole
+    /// destination entry in the same transaction as the new data.
+    pub fn transfer_one(&mut self, from: i64, name: &str, to: i64,
+        target_name: &str, moving: bool, replace: bool) -> Result<usize, String> {
+        valid_name(target_name)?;
+        self.ensure_folder(from)?;
+        self.ensure_folder(to)?;
+        let item = self.list(from)?.into_iter().find(|v| v.name == name)
+            .ok_or("Encrypted source item is missing")?;
+        if item.folder {
+            let mut at = to;
+            loop {
+                if at == item.id { return Err("Cannot transfer a folder into its descendants".into()); }
+                if at == 1 { break; }
+                at = self.parent(at)?;
+            }
+        }
+        if from == to && item.name.eq_ignore_ascii_case(target_name) {
+            if moving { return Ok(0); }
+            return Err("Copying an item over itself is not permitted".into());
+        }
+        let tx = self.connection.transaction().map_err(|e| e.to_string())?;
+        replace_destination(&tx, to, target_name, replace)?;
+        let mut count = 0;
+        if moving {
+            tx.execute("UPDATE items SET parent=?1,name=?2 WHERE id=?3", params![to,target_name,item.id])
+                .map_err(|e| e.to_string())?;
+            count = 1;
+        } else {
+            let mut bytes = 0;
+            copy_encrypted_item_named(&tx, item.id, to, Some(target_name), 0, &mut count, &mut bytes)?;
+        }
+        tx.commit().map_err(|e| e.to_string())?;
+        self.touch();
+        Ok(count)
+    }
+
     pub fn add_folder(&mut self, parent: i64, name: &str) -> Result<i64, String> {
         self.insert(parent, name, true, None)
     }
@@ -307,6 +404,58 @@ impl Vault {
                 else { let _ = std::fs::remove_file(path); }
             }
             return Err(error);
+        }
+        self.touch();
+        Ok(count)
+    }
+
+    /// Export one root under a new name, optionally replacing an existing
+    /// non-reparse destination. Existing content is temporarily moved aside
+    /// and restored if writing the replacement fails.
+    pub fn export_one(&mut self, from: i64, name: &str, destination: &Path,
+        target_name: &str, replace: bool) -> Result<usize, String> {
+        valid_name(target_name)?;
+        if is_windows_reserved_name(target_name) { return Err("Reserved Windows export name".into()); }
+        let meta = std::fs::symlink_metadata(destination).map_err(|e| e.to_string())?;
+        if !meta.is_dir() || is_reparse_point(&meta) { return Err("Export destination must be a real directory".into()); }
+        let item = self.list(from)?.into_iter().find(|item| item.name == name)
+            .ok_or("Encrypted source item does not exist")?;
+        let path = destination.join(target_name);
+        let occupied = std::fs::symlink_metadata(&path).ok();
+        if occupied.is_some() && !replace { return Err("Destination already exists".into()); }
+        if occupied.as_ref().is_some_and(is_reparse_point) { return Err("Cannot replace a symbolic link or junction".into()); }
+        let mut backup = None;
+        if occupied.is_some() {
+            let mut candidate = None;
+            for attempt in 0..16u32 {
+                let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+                    .map_err(|e| e.to_string())?.as_nanos();
+                let alternative = destination.join(format!(".ndr-recovery-{}-{stamp}-{attempt}", std::process::id()));
+                if std::fs::symlink_metadata(&alternative).is_err() { candidate = Some(alternative); break; }
+            }
+            let alternative = candidate.ok_or("Unable to reserve a unique replacement backup path")?;
+            std::fs::rename(&path, &alternative).map_err(|e| e.to_string())?;
+            backup = Some(alternative);
+        }
+        let mut created = Vec::new();
+        let mut count = 0;
+        let mut bytes = 0;
+        let result = self.export_item(item.id, target_name, destination, 0, &mut count, &mut bytes, &mut created);
+        if let Err(error) = result {
+            for file in created.iter().rev() {
+                if file.is_dir() { let _ = std::fs::remove_dir(file); }
+                else { let _ = std::fs::remove_file(file); }
+            }
+            if let Some(backup) = backup {
+                std::fs::rename(&backup, &path).map_err(|e| format!(
+                    "Export failed: {error}. Original preserved at {} but restoration failed: {e}", backup.display()))?;
+            }
+            return Err(error);
+        }
+        if let Some(backup) = backup {
+            let meta = std::fs::symlink_metadata(&backup).map_err(|e| e.to_string())?;
+            let removed = if meta.is_dir() { std::fs::remove_dir_all(&backup) } else { std::fs::remove_file(&backup) };
+            removed.map_err(|e| format!("Export finished but old target backup remains at {}: {e}", backup.display()))?;
         }
         self.touch();
         Ok(count)
@@ -406,16 +555,30 @@ impl Vault {
     }
 }
 
-fn copy_from_other_vault(
+fn replace_destination(tx: &rusqlite::Transaction<'_>, parent: i64, name: &str, replace: bool) -> Result<(), String> {
+    let existing: Option<i64> = tx.query_row(
+        "SELECT id FROM items WHERE parent=?1 AND name=?2 COLLATE NOCASE", params![parent,name],
+        |r| r.get(0),
+    ).optional().map_err(|e| e.to_string())?;
+    if let Some(id) = existing {
+        if !replace { return Err(format!("Destination already exists: {name}")); }
+        tx.execute("WITH RECURSIVE descendants(id) AS (SELECT id FROM items WHERE id=?1 UNION ALL SELECT i.id FROM items i JOIN descendants d ON i.parent=d.id) DELETE FROM items WHERE id IN (SELECT id FROM descendants)", [id])
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+fn copy_from_other_vault_named(
     tx: &rusqlite::Transaction<'_>, source: &mut Vault, id: i64, parent: i64,
-    depth: usize, count: &mut usize, total: &mut u64,
+    renamed: Option<&str>, depth: usize, count: &mut usize, total: &mut u64,
 ) -> Result<(), String> {
     if depth > 64 || *count >= 10_000 { return Err("Cross-vault copy exceeds depth or item limit".into()); }
-    let (name, folder): (String, bool) = source.connection.query_row(
+    let (original, folder): (String, bool) = source.connection.query_row(
         "SELECT name,folder FROM items WHERE id=?1", [id],
         |r| Ok((r.get(0)?, r.get::<_, i64>(1)? == 1)),
     ).map_err(|e| e.to_string())?;
-    valid_name(&name)?;
+    let name = renamed.unwrap_or(&original);
+    valid_name(name)?;
     let collision: i64 = tx.query_row(
         "SELECT COUNT(*) FROM items WHERE parent=?1 AND name=?2 COLLATE NOCASE",
         params![parent, name], |row| row.get(0),
@@ -427,7 +590,7 @@ fn copy_from_other_vault(
         let new_parent = tx.last_insert_rowid();
         *count += 1;
         for child in source.list(id)? {
-            copy_from_other_vault(tx, source, child.id, new_parent, depth + 1, count, total)?;
+            copy_from_other_vault_named(tx, source, child.id, new_parent, None, depth + 1, count, total)?;
         }
     } else {
         let data = Zeroizing::new(source.read_file(id)?);
@@ -441,16 +604,24 @@ fn copy_from_other_vault(
     Ok(())
 }
 
-fn copy_encrypted_item(
-    tx: &rusqlite::Transaction<'_>, id: i64, parent: i64, depth: usize,
+fn copy_from_other_vault(
+    tx: &rusqlite::Transaction<'_>, source: &mut Vault, id: i64, parent: i64,
+    depth: usize, count: &mut usize, total: &mut u64,
+) -> Result<(), String> {
+    copy_from_other_vault_named(tx, source, id, parent, None, depth, count, total)
+}
+
+fn copy_encrypted_item_named(
+    tx: &rusqlite::Transaction<'_>, id: i64, parent: i64, renamed: Option<&str>, depth: usize,
     count: &mut usize, total_bytes: &mut u64,
 ) -> Result<(), String> {
     if depth > 64 || *count >= 10_000 { return Err("Encrypted copy exceeds depth or item limit".into()); }
-    let (name, folder, data): (String, i64, Option<Vec<u8>>) = tx.query_row(
+    let (original, folder, data): (String, i64, Option<Vec<u8>>) = tx.query_row(
         "SELECT name,folder,contents FROM items WHERE id=?1", [id],
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
     ).map_err(|e| e.to_string())?;
-    valid_name(&name)?;
+    let name = renamed.unwrap_or(&original);
+    valid_name(name)?;
     let data = data.map(Zeroizing::new);
     if let Some(data) = &data {
         if data.len() > MAX_FILE_SIZE { return Err("Encrypted copy exceeds 64 MiB per file".into()); }
@@ -468,14 +639,21 @@ fn copy_encrypted_item(
             .map_err(|e| e.to_string())?.collect::<Result<_, _>>().map_err(|e| e.to_string())?;
         drop(statement);
         for child in children {
-            copy_encrypted_item(tx, child, target, depth + 1, count, total_bytes)?;
+            copy_encrypted_item_named(tx, child, target, None, depth + 1, count, total_bytes)?;
         }
     }
     Ok(())
 }
 
-fn import_path(
-    tx: &rusqlite::Transaction<'_>, parent: i64, source: &Path,
+fn copy_encrypted_item(
+    tx: &rusqlite::Transaction<'_>, id: i64, parent: i64, depth: usize,
+    count: &mut usize, total_bytes: &mut u64,
+) -> Result<(), String> {
+    copy_encrypted_item_named(tx, id, parent, None, depth, count, total_bytes)
+}
+
+fn import_path_named(
+    tx: &rusqlite::Transaction<'_>, parent: i64, source: &Path, renamed: Option<&str>,
     depth: usize, items: &mut usize, total_bytes: &mut u64,
 ) -> Result<(), String> {
     const MAX_ITEMS: usize = 10_000;
@@ -488,8 +666,9 @@ fn import_path(
     if is_reparse_point(&meta) {
         return Err("Encrypted import does not follow symlinks, junctions or reparse points".into());
     }
-    let name = source.file_name().and_then(|n| n.to_str())
+    let default_name = source.file_name().and_then(|n| n.to_str())
         .ok_or("Encrypted import requires a valid Unicode filename")?;
+    let name = renamed.unwrap_or(default_name);
     valid_name(name)?;
     if meta.is_dir() {
         tx.execute("INSERT INTO items(parent,name,folder,contents) VALUES(?1,?2,1,NULL)", params![parent, name])
@@ -501,7 +680,7 @@ fn import_path(
             .collect::<Result<Vec<_>, _>>()?;
         children.sort();
         for child in children {
-            import_path(tx, id, &child, depth + 1, items, total_bytes)?;
+            import_path_named(tx, id, &child, None, depth + 1, items, total_bytes)?;
         }
     } else if meta.is_file() {
         if meta.len() > MAX_FILE_SIZE as u64 {
@@ -512,7 +691,6 @@ fn import_path(
             return Err("Encrypted import batch exceeds 512 MiB".into());
         }
         let data = Zeroizing::new(std::fs::read(source).map_err(|e| e.to_string())?);
-        // The source may grow after its metadata was checked.
         if data.len() > MAX_FILE_SIZE {
             return Err("Encrypted import source changed while reading".into());
         }
@@ -523,6 +701,13 @@ fn import_path(
         return Err("Encrypted import accepts ordinary files and folders only".into());
     }
     Ok(())
+}
+
+fn import_path(
+    tx: &rusqlite::Transaction<'_>, parent: i64, source: &Path,
+    depth: usize, items: &mut usize, total_bytes: &mut u64,
+) -> Result<(), String> {
+    import_path_named(tx, parent, source, None, depth, items, total_bytes)
 }
 
 fn is_reparse_point(meta: &std::fs::Metadata) -> bool {
@@ -544,6 +729,43 @@ fn is_windows_reserved_name(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn encrypted_conflict_replacement_is_atomic_and_export_restores_on_failure() {
+        let root = std::env::temp_dir().join(format!("ndr-conflict-recovery-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir_all(root.join("local")).unwrap();
+        let local = root.join("local");
+        let mut source = Vault::create(&root.join("source.ndr"), "test source password".into()).unwrap();
+        let mut target = Vault::create(&root.join("target.ndr"), "test target password".into()).unwrap();
+        source.add_file(1, "same.txt", b"updated content").unwrap();
+        target.add_file(1, "same.txt", b"old content").unwrap();
+        assert!(target.copy_from_vault_item(&mut source, 1, "same.txt", 1, "same.txt", false).is_err());
+        let id = target.list(1).unwrap()[0].id;
+        assert_eq!(target.read_file(id).unwrap(), b"old content");
+        target.copy_from_vault_item(&mut source, 1, "same.txt", 1, "same.txt", true).unwrap();
+        let id = target.list(1).unwrap()[0].id;
+        assert_eq!(target.read_file(id).unwrap(), b"updated content");
+        target.copy_from_vault_item(&mut source, 1, "same.txt", 1, "renamed.txt", false).unwrap();
+        assert_eq!(target.list(1).unwrap().len(), 2);
+
+        std::fs::write(local.join("same.txt"), b"filesystem version").unwrap();
+        assert!(target.import_one(1, &local.join("same.txt"), "same.txt", false).is_err());
+        target.import_one(1, &local.join("same.txt"), "same.txt", true).unwrap();
+        let id = target.list(1).unwrap().into_iter().find(|i| i.name == "same.txt").unwrap().id;
+        assert_eq!(target.read_file(id).unwrap(), b"filesystem version");
+        assert_eq!(std::fs::read(local.join("same.txt")).unwrap(), b"filesystem version");
+
+        std::fs::write(local.join("renamed.txt"), b"old plaintext target").unwrap();
+        assert!(target.export_one(1, "renamed.txt", &local, "renamed.txt", false).is_err());
+        assert_eq!(std::fs::read(local.join("renamed.txt")).unwrap(), b"old plaintext target");
+        target.export_one(1, "renamed.txt", &local, "renamed.txt", true).unwrap();
+        assert_eq!(std::fs::read(local.join("renamed.txt")).unwrap(), b"updated content");
+        assert!(!std::fs::read_dir(&local).unwrap().any(|entry| entry.unwrap().file_name().to_string_lossy().starts_with(".ndr-recovery-")));
+        source.verify_integrity().unwrap();
+        target.verify_integrity().unwrap();
+        drop((source, target));
+        std::fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn recursive_import_is_atomic_and_preserves_encrypted_folder_tree() {
         let root = std::env::temp_dir().join(format!("ndr-vault-import-{}-{}", std::process::id(),

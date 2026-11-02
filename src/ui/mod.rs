@@ -15,6 +15,7 @@ mod favorites_dialog;
 mod function_key_editor;
 mod file_commands;
 mod file_operation;
+mod vault_transfer_ui;
 mod ftp_pane;
 mod grid;
 mod keyboard;
@@ -712,6 +713,7 @@ pub struct App {
     /// Authenticated SQLCipher connections retained in memory between visits.
     vault_sessions: HashMap<PathBuf, ndr::vault::Vault>,
     vault_text_editor: Option<vault_window::VaultTextEditor>,
+    vault_transfer: Option<vault_transfer_ui::VaultTransferJob>,
     /// Subfolders of the address bar's chevron menu (path, whether it is a drive list) -> (path, text). Cleared when a new listing arrives.
     crumb_cache: HashMap<(PathBuf, bool), Vec<(PathBuf, String)>>,
     /// The panel item being dragged, the folder row under it (panel, folder), and this frame's two panel areas.
@@ -1028,6 +1030,7 @@ impl App {
             vault_dialog: None,
             vault_sessions: HashMap::new(),
             vault_text_editor: None,
+            vault_transfer: None,
             crumb_cache: HashMap::new(),
             folder_size_queue: Arc::new((Mutex::new(std::collections::VecDeque::new()), std::sync::Condvar::new())),
             folder_size_workers: false,
@@ -2059,6 +2062,7 @@ impl eframe::App for App {
         }
         self.poll(ctx);
         self.vault_security_tick(ctx);
+        self.vault_transfer_tick(ctx);
         self.keyboard(ctx);
         self.sync_current_directory();
         for pane in &mut self.panes {
@@ -2185,6 +2189,7 @@ impl eframe::App for App {
         self.shortcut_window_ui(ctx);
         self.vault_window_ui(ctx);
         self.vault_text_ui(ctx);
+        self.vault_transfer_progress_ui(ctx);
         self.original_dialog_ui(ctx);
         // The modal progress window is drawn above the window under it (for example the custom search of the cleanup options window).
         self.modal_progress_ui(ctx);
@@ -2241,6 +2246,7 @@ impl eframe::App for App {
     fn on_exit(&mut self, _: Option<&eframe::glow::Context>) {
         self.vault_dialog = None;
         self.vault_text_editor = None;
+        self.vault_transfer = None;
         for index in 0..2 { self.discard_vault(index); }
         self.vault_sessions.clear();
         if let Some(job) = &self.job {

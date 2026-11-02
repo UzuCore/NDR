@@ -61,8 +61,11 @@ When both panes display different unlocked `.ndr` containers, use **F3** to
 copy and **F4** to move complete folder trees directly between the encrypted
 databases, without a plaintext temporary folder. A cross-container move first
 commits the destination and only then deletes the source. Failed source
-deletion retains both encrypted copies. Folder-internal copy/move uses one
-database transaction. Password and creation dialogs use the same centered,
+deletion retains both encrypted copies. Encrypted transfers display the same
+progress window and duplicate-name dialog as regular file operations, with
+overwrite, skip, rename, cancel and apply-to-all choices. Each selected root
+is committed in its own transaction; cancellation retains completed items.
+Password and creation dialogs use the same centered,
 movable chrome as other NDR dialogs. Vault strings are provided in all 21
 bundled language resources (English fallback for unreviewed translations).
 
