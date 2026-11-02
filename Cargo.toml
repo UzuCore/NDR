@@ -4,6 +4,10 @@ version = "1.0.0"
 edition = "2024"
 description = "NDR native Rust dual-pane file manager"
 
+[features]
+default = []
+winfsp-vault = ["dep:winfsp", "dep:widestring"]
+
 [dependencies]
 eframe = { version = "=0.33.3", default-features = false, features = ["glow", "default_fonts", "accesskit"] }
 serde = { version = "1", features = ["derive"] }
@@ -29,6 +33,11 @@ windows-core = "=0.61.2"
 windows = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_Ole", "Win32_System_SystemServices", "Win32_System_LibraryLoader", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading", "Win32_Graphics_Gdi"] }
 openssl = { version = "0.10", features = ["vendored"] }
 zeroize = "1"
+winfsp = { version = "=0.13.2", default-features = false, features = ["windows-61", "delayload"], optional = true }
+widestring = { version = "1", optional = true }
+
+[build-dependencies]
+winfsp = { version = "=0.13.2", default-features = false, features = ["delayload"], optional = true }
 
 [profile.release]
 opt-level = 3

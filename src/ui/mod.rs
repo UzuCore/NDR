@@ -44,6 +44,8 @@ mod system_commands;
 mod toolbar;
 mod tools_dialog;
 mod vault_window;
+#[cfg(feature = "winfsp-vault")]
+mod vault_winfsp;
 mod dinosaur_names;
 #[cfg(test)]
 mod tests;
@@ -715,8 +717,10 @@ pub struct App {
     vault_dialog: Option<vault_window::VaultDialog>,
     /// Authenticated SQLCipher connections retained in memory between visits.
     vault_sessions: HashMap<PathBuf, ndr::vault::Vault>,
-    vault_text_editor: Option<vault_window::VaultTextEditor>,
-    vault_external_edit: Option<vault_window::VaultExternalEdit>,
+    #[cfg(feature = "winfsp-vault")]
+    vault_mount: Option<vault_winfsp::VaultMount>,
+    #[cfg(feature = "winfsp-vault")]
+    winfsp_install_offer: bool,
     vault_transfer: Option<vault_transfer_ui::VaultTransferJob>,
     /// Subfolders of the address bar's chevron menu (path, whether it is a drive list) -> (path, text). Cleared when a new listing arrives.
     crumb_cache: HashMap<(PathBuf, bool), Vec<(PathBuf, String)>>,
@@ -1034,8 +1038,10 @@ impl App {
             original_dialogs: Vec::new(),
             vault_dialog: None,
             vault_sessions: HashMap::new(),
-            vault_text_editor: None,
-            vault_external_edit: None,
+            #[cfg(feature = "winfsp-vault")]
+            vault_mount: None,
+            #[cfg(feature = "winfsp-vault")]
+            winfsp_install_offer: false,
             vault_transfer: None,
             crumb_cache: HashMap::new(),
             folder_size_queue: Arc::new((Mutex::new(std::collections::VecDeque::new()), std::sync::Condvar::new())),
@@ -2194,8 +2200,8 @@ impl eframe::App for App {
         self.popup_menu_ui(ctx);
         self.shortcut_window_ui(ctx);
         self.vault_window_ui(ctx);
-        self.vault_text_ui(ctx);
-        self.vault_external_edit_ui(ctx);
+        #[cfg(feature = "winfsp-vault")]
+        self.vault_mount_ui(ctx);
         self.vault_transfer_progress_ui(ctx);
         self.original_dialog_ui(ctx);
         // The modal progress window is drawn above the window under it (for example the custom search of the cleanup options window).
@@ -2253,7 +2259,12 @@ impl eframe::App for App {
     }
     fn on_exit(&mut self, _: Option<&eframe::glow::Context>) {
         self.vault_dialog = None;
-        self.vault_text_editor = None;
+        #[cfg(feature = "winfsp-vault")]
+        if let Some(mut mounted) = self.vault_mount.take() {
+            if let Err(error) = mounted.finish() {
+                eprintln!("NDR WinFsp encrypted mount commit failed during shutdown: {error}");
+            }
+        }
         self.vault_transfer = None;
         for index in 0..2 { self.discard_vault(index); }
         self.vault_sessions.clear();

@@ -3,75 +3,11 @@
 use super::*;
 use ndr::vault::{Vault, VaultItem, SessionPolicy};
 use zeroize::Zeroize;
-use sha2::{Digest, Sha256};
-
-/// Explicitly controlled plaintext handoff to a Windows-associated editor.
-/// The file is never silently written back to the encrypted container.
-pub(super) struct VaultExternalEdit {
-    pane: usize,
-    vault_path: PathBuf,
-    id: i64,
-    folder: i64,
-    name: String,
-    directory: PathBuf,
-    path: PathBuf,
-    original_hash: [u8; 32],
-    error: String,
-    confirm_discard: bool,
-}
-
-impl VaultExternalEdit {
-    fn changed(&self) -> Result<bool, String> {
-        let meta = std::fs::symlink_metadata(&self.path).map_err(|e| e.to_string())?;
-        if !meta.is_file() || meta.file_type().is_symlink() {
-            return Err("Temporary file was replaced with a directory or link".into());
-        }
-        Ok(Self::hash_file(&self.path)? != self.original_hash)
-    }
-    fn hash_file(path: &Path) -> Result<[u8; 32], String> {
-        use std::io::Read;
-        let mut file = std::fs::File::open(path).map_err(|e| e.to_string())?;
-        let mut hash = Sha256::new();
-        let mut buffer = [0u8; 65536];
-        loop {
-            let length = file.read(&mut buffer).map_err(|e| e.to_string())?;
-            if length == 0 { break; }
-            hash.update(&buffer[..length]);
-        }
-        buffer.zeroize();
-        Ok(hash.finalize().into())
-    }
-    fn cleanup(&self) -> Result<(), String> {
-        // Do not follow a replaced directory or link during cleanup.
-        let meta = std::fs::symlink_metadata(&self.directory).map_err(|e| e.to_string())?;
-        if !meta.is_dir() || meta.file_type().is_symlink() { return Err("Unsafe temporary directory".into()); }
-        std::fs::remove_file(&self.path).map_err(|e| e.to_string())?;
-        std::fs::remove_dir(&self.directory).map_err(|e| e.to_string())
-    }
-}
-
-impl Drop for VaultExternalEdit {
-    fn drop(&mut self) {
-        // Preserve modified plaintext for recovery on unexpected NDR exit.
-        // It may contain secrets; the external-editor dialog warns about this.
-        if matches!(self.changed(), Ok(false)) { let _ = self.cleanup(); }
-    }
-}
 
 pub(super) struct PaneVault {
     pub file: PathBuf,
     pub database: Vault,
     pub stack: Vec<(i64, String)>,
-}
-
-pub(super) struct VaultTextEditor {
-    pane: usize,
-    id: i64,
-    name: String,
-    body: String,
-}
-impl Drop for VaultTextEditor {
-    fn drop(&mut self) { self.body.zeroize(); self.name.zeroize(); }
 }
 
 impl PaneVault {
@@ -109,6 +45,21 @@ impl App {
     /// Discard the in-memory connection AND all decrypted pane presentation
     /// buffers, including on tab switches and direct address navigation.
     pub(super) fn discard_vault(&mut self, pane: usize) {
+        #[cfg(feature = "winfsp-vault")]
+        if self.vault_mount.as_ref().is_some_and(|mount| mount.pane == pane) {
+            let result = self.vault_mount.as_mut().unwrap().finish();
+            if let Err(error) = result {
+                self.status = format!("Cannot leave encrypted folder: virtual file save failed: {error}");
+                return;
+            }
+            self.vault_mount = None;
+            if let Some(state) = self.panes[pane].vault.as_mut() {
+                if let Err(error) = state.database.reload_after_mount() {
+                    self.status = error;
+                    return;
+                }
+            }
+        }
         // A file transfer may own an open SQLCipher transaction between UI
         // frames. Roll it back before caching or dropping the unlocked vault.
         if self.vault_transfer.as_ref().is_some_and(|job|
@@ -149,9 +100,6 @@ impl App {
         state.address = state.path.to_string_lossy().into_owned();
         if let Some(name) = self.pending_focus[pane].as_mut() { name.zeroize(); }
         self.pending_focus[pane] = None;
-        if self.vault_text_editor.as_ref().is_some_and(|editor| editor.pane == pane) {
-            self.vault_text_editor = None;
-        }
     }
 
     pub(super) fn vault_security_tick(&mut self, ctx: &egui::Context) {
@@ -163,7 +111,14 @@ impl App {
             let expired = self.panes[pane].vault.as_ref().is_some_and(|state|
                 minimized || state.database.expired(policy));
             if expired {
-                self.vault_text_editor = None;
+                #[cfg(feature = "winfsp-vault")]
+                if self.vault_mount.as_ref().is_some_and(|mount| mount.pane == pane) {
+                    if let Some(mut mount) = self.vault_mount.take() {
+                        if let Err(error) = mount.finish() {
+                            self.status = format!("Encrypted virtual file could not save during lock: {error}");
+                        }
+                    }
+                }
                 self.exit_vault(pane);
                 self.status = self.language_pack.text("NDRVault.StatusLocked", "Encrypted folder locked. Reopen to authenticate.");
             }
@@ -241,11 +196,17 @@ impl App {
         let parent = container.file.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
         let file_name = container.file.file_stem().map(|n| n.to_string_lossy().into_owned());
         self.discard_vault(pane);
+        if self.panes[pane].vault.is_some() { return; }
         self.pending_focus[pane] = file_name;
         self.navigate(pane, parent, false);
     }
 
     pub(super) fn enter_vault_item(&mut self, pane: usize, entry: &Entry) {
+        #[cfg(feature = "winfsp-vault")]
+        if self.vault_mount.is_some() {
+            self.status = "Close the virtual encrypted file before navigating.".into();
+            return;
+        }
         if entry.is_parent() {
             let state = self.panes[pane].vault.as_mut().unwrap();
             if state.stack.len() == 1 { self.exit_vault(pane); }
@@ -264,194 +225,125 @@ impl App {
                     state.database.touch();
                     self.refresh_vault(pane);
                 } else {
-                    self.open_vault_text(pane, item);
+                    self.open_vault_item(pane, item);
                 }
             }
         }
     }
-    fn open_vault_text(&mut self, pane: usize, item: VaultItem) {
-        let ext = Path::new(&item.name).extension().and_then(|s| s.to_str()).unwrap_or("");
-        let textual = ["txt", "md", "log", "ini", "cfg", "json", "xml", "csv", "yaml", "yml", "toml"]
-            .iter().any(|s| ext.eq_ignore_ascii_case(s));
-        if !textual { self.open_vault_external(pane, item); return; }
-        if item.size > 1024 * 1024 {
-            self.open_vault_external(pane, item);
-            return;
+    /// Open a vault entry through the authenticated WinFsp virtual drive.
+    /// No plaintext file is exported to %TEMP% or any physical directory.
+    fn open_vault_item(&mut self, pane: usize, item: VaultItem) {
+        #[cfg(not(feature = "winfsp-vault"))]
+        {
+            let _ = (pane, item);
+            self.error_notice("파일 열기 불가", "WinFsp unavailable",
+                "WinFsp virtual-file support is not enabled in this NDR build.");
         }
-        let Some(state) = self.panes[pane].vault.as_mut() else { return };
-        match state.database.read_file(item.id) {
-            Ok(bytes) if bytes.len() <= 1024 * 1024 => match String::from_utf8(bytes) {
-                Ok(body) => self.vault_text_editor = Some(VaultTextEditor {
-                    pane, id: item.id, name: item.name.clone(), body,
-                }),
-                Err(_) => self.open_vault_external(pane, item),
-            },
-            Ok(_) => self.open_vault_external(pane, item),
-            Err(e) => self.status = e,
-        }
-    }
-
-    fn open_vault_external(&mut self, pane: usize, item: VaultItem) {
-        if self.vault_external_edit.is_some() {
-            self.status = "Finish the current external encrypted-file edit first.".into();
-            return;
-        }
-        let Some(state) = self.panes[pane].vault.as_mut() else { return };
-        let vault_path = state.file.clone();
-        let folder = state.folder();
-        let result = (|| -> Result<VaultExternalEdit, String> {
-            let mut random = [0u8; 16];
-            openssl::rand::rand_bytes(&mut random).map_err(|e| e.to_string())?;
-            let token: String = random.iter().map(|b| format!("{b:02x}")).collect();
-            let directory = std::env::temp_dir().join(format!("ndr-vault-edit-{token}"));
-            std::fs::create_dir(&directory).map_err(|e| e.to_string())?;
-            // VaultItem names are validated single path components when imported.
-            let safe_name = Path::new(&item.name);
-            if safe_name.components().count() != 1 || safe_name.file_name().is_none() {
-                let _ = std::fs::remove_dir(&directory);
-                return Err("Unsafe encrypted file name".into());
+        #[cfg(feature = "winfsp-vault")]
+        {
+            if self.vault_mount.is_some() {
+                self.warning_notice("파일 열기 대기", "Encrypted file is already open",
+                    "Close the current virtual file before opening another one.");
+                return;
             }
-            let path = directory.join(&item.name);
-            let staged = (|| -> Result<(), String> {
-                use std::io::Write;
-                let mut file = std::fs::OpenOptions::new().write(true).create_new(true)
-                    .open(&path).map_err(|e| e.to_string())?;
-                let mut ordinal = 0;
-                while let Some(chunk) = state.database.stream_read_chunk(item.id, ordinal)? {
-                    file.write_all(&chunk).map_err(|e| e.to_string())?;
-                    ordinal += 1;
-                }
-                file.sync_all().map_err(|e| e.to_string())?;
-                Ok(())
-            })();
-            if let Err(error) = staged {
-                let _ = std::fs::remove_file(&path);
-                let _ = std::fs::remove_dir(&directory);
-                return Err(error);
+            if self.vault_transfer.is_some() {
+                self.status = "Finish encrypted file transfers before mounting a file.".into();
+                return;
             }
-            let original_hash = match VaultExternalEdit::hash_file(&path) {
-                Ok(hash) => hash,
-                Err(error) => {
-                    let _ = std::fs::remove_file(&path);
-                    let _ = std::fs::remove_dir(&directory);
-                    return Err(error);
-                }
+            let result = {
+                let Some(state) = self.panes[pane].vault.as_ref() else { return };
+                super::vault_winfsp::VaultMount::start(
+                    pane, state.file.clone(), &state.database, state.folder(), item)
             };
-            let session = VaultExternalEdit {
-                pane, vault_path, id: item.id, folder, name: item.name.clone(), directory, path,
-                original_hash, error: String::new(), confirm_discard: false,
-            };
-            if let Err(error) = native::shell_open(&session.path, None, "open") {
-                let _ = session.cleanup();
-                return Err(format!("Windows could not open the file: {error}"));
-            }
-            Ok(session)
-        })();
-        match result {
-            Ok(session) => self.vault_external_edit = Some(session),
-            Err(error) => self.status = error,
-        }
-    }
-
-    pub(super) fn vault_external_edit_ui(&mut self, ctx: &egui::Context) {
-        let Some(mut edit) = self.vault_external_edit.take() else { return };
-        let ko = self.language == "ko";
-        let mut save = false;
-        let mut close = false;
-        egui::Window::new(format!("{} - {}", if ko { "암호화 파일 외부 편집" } else { "External encrypted-file edit" }, edit.name))
-            .id(egui::Id::new("ndr-vault-external-edit"))
-            .collapsible(false).resizable(true).default_width(460.0)
-            .show(ctx, |ui| {
-                ui.label(if ko { "Windows 프로그램에서 열기 위해 평문 임시 파일을 만들었습니다. 외부 프로그램은 별도의 백업이나 최근 파일 기록을 남길 수 있습니다." } else { "This file is temporarily decrypted for a Windows application. Other apps may create plaintext backups or recent-file records." });
-                ui.label(if ko { "먼저 외부 프로그램에서 저장한 후 NDR에서 '암호화 폴더에 저장'을 누르세요. 임시 파일을 정리하기 전에 외부 프로그램을 닫으세요." } else { "Save in the external program first, then select Save changes here. Close the external program before removing the temporary copy." });
-                // Avoid hashing a potentially multi-gigabyte file every frame.
-                ui.label(if ko { "저장 또는 정리할 때 변경 여부를 확인합니다." } else { "Changes are checked when saving or closing." });
-                if !edit.error.is_empty() { ui.colored_label(egui::Color32::RED, &edit.error); }
-                ui.horizontal(|ui| {
-                    if ui.button(if ko { "암호화 폴더에 저장" } else { "Save changes to encrypted folder" }).clicked() { save = true; }
-                    if ui.button(if ko { "임시 파일 정리" } else { "Close temporary copy" }).clicked() { close = true; }
-                });
-                if edit.confirm_discard {
-                    ui.colored_label(egui::Color32::YELLOW, if ko { "저장하지 않은 변경사항을 삭제합니다." } else { "Unsaved modifications will be permanently discarded." });
-                    if ui.button(if ko { "변경사항 버리고 종료" } else { "Discard unsaved changes and close" }).clicked() { close = true; }
-                    if ui.button(if ko { "취소" } else { "Cancel discard" }).clicked() { edit.confirm_discard = false; }
-                }
-            });
-        if save {
-            let result = (|| -> Result<(), String> {
-                if !edit.changed()? { return Ok(()); }
-                let Some(state) = self.panes[edit.pane].vault.as_mut() else {
-                    return Err("Encrypted folder was locked or closed. Reopen it before saving.".into());
-                };
-                if state.file != edit.vault_path { return Err("Encrypted folder has changed".into()); }
-                let existing = state.database.find_child(edit.folder, &edit.name)?;
-                if existing.as_ref().map(|item| item.id) != Some(edit.id) {
-                    return Err("Encrypted file changed, moved or was deleted during editing".into());
-                }
-                // Transactional streaming import replaces the original only
-                // after the complete changed file was successfully imported.
-                state.database.import_one(edit.folder, &edit.path, &edit.name, true)?;
-                edit.id = state.database.find_child(edit.folder, &edit.name)?
-                    .ok_or("Updated encrypted file was not found")?.id;
-                edit.original_hash = VaultExternalEdit::hash_file(&edit.path)?;
-                Ok(())
-            })();
             match result {
-                Ok(()) => {
-                    self.refresh_vault(edit.pane);
-                    self.completion_notice("암호화 파일 저장 완료", "Encrypted file saved", edit.name.clone());
-                    edit.error.clear();
+                Ok(mut mount) => {
+                    if let Err(error) = native::shell_open(&mount.file_path, None, "open") {
+                        let _ = mount.finish();
+                        self.error_notice("암호화 파일 열기 실패", "Encrypted file open failed", error);
+                    } else {
+                        self.vault_mount = Some(mount);
+                    }
                 }
-                Err(error) => edit.error = error,
+                Err(error) => {
+                    if error.contains("not installed") { self.winfsp_install_offer = true; }
+                    self.error_notice("가상 드라이브 연결 실패", "WinFsp mount failed", error);
+                }
             }
         }
-        if close {
-            match edit.changed() {
-                Ok(true) if !edit.confirm_discard => {
-                    edit.confirm_discard = true;
-                    edit.error = "Unsaved edits: click the discard confirmation or save to the encrypted folder.".into();
-                }
-                Ok(true) => match edit.cleanup() {
-                    Ok(()) => return,
-                    Err(error) => edit.error = format!("Close the external application first: {error}"),
-                },
-                Ok(false) => match edit.cleanup() {
-                    Ok(()) => return,
-                    Err(error) => edit.error = format!("Close the external application first: {error}"),
-                },
-                Err(error) => edit.error = error,
-            }
-        }
-        self.vault_external_edit = Some(edit);
     }
 
-    pub(super) fn vault_text_ui(&mut self, ctx: &egui::Context) {
-        let Some(mut editor) = self.vault_text_editor.take() else { return };
-        let mut open = true;
-        let mut save = false;
-        egui::Window::new(format!("{} - {}", self.language_pack.text("NDRVault.TextEditorTitle", "Encrypted folder"), editor.name))
-            .id(egui::Id::new("ndr-vault-text-editor"))
-            .open(&mut open).resizable(true).default_size(egui::vec2(700.0, 490.0))
-            .show(ctx, |ui| {
-                ui.add(egui::TextEdit::multiline(&mut editor.body).desired_width(f32::INFINITY).desired_rows(22));
-                if ui.button(self.language_pack.text("NDRVault.SaveEncrypted", "Save encrypted")).clicked() { save = true; }
-            });
-        if save {
-            if let Some(state) = self.panes[editor.pane].vault.as_mut() {
-                match state.database.update_file(editor.id, editor.body.as_bytes()) {
+    #[cfg(feature = "winfsp-vault")]
+    pub(super) fn vault_mount_ui(&mut self, ctx: &egui::Context) {
+        if self.winfsp_install_offer {
+            let ko = self.language == "ko";
+            let mut install = false;
+            let mut dismiss = false;
+            egui::Window::new(if ko { "WinFsp 드라이버 설치" } else { "Install WinFsp driver" })
+                .id(egui::Id::new("ndr-winfsp-install"))
+                .resizable(false).collapsible(false).show(ctx, |ui| {
+                    ui.label(if ko {
+                        "가상 파일을 열려면 WinFsp 드라이버 설치가 필요합니다. 설치파일은 NDR에 포함되어 있습니다. Windows 관리자 승인(UAC)이 필요합니다."
+                    } else {
+                        "The WinFsp driver is required for virtual files. The signed installer is embedded in NDR. Windows UAC approval is required."
+                    });
+                    if ui.button(if ko { "WinFsp 설치 시작" } else { "Install bundled WinFsp" }).clicked() { install = true; }
+                    if ui.button(if ko { "취소" } else { "Cancel" }).clicked() { dismiss = true; }
+                });
+            if install {
+                match super::vault_winfsp::launch_embedded_installer() {
                     Ok(()) => {
-                        self.refresh_vault(editor.pane);
-                        self.completion_notice("암호화 파일 저장 완료", "Encrypted file saved", editor.name.clone());
-                        open = false;
-                    },
-                    Err(e) => self.status = e,
+                        self.winfsp_install_offer = false;
+                        self.status = if ko { "설치가 끝나면 NDR을 다시 실행하세요." }
+                            else { "Restart NDR after WinFsp installation completes." }.into();
+                    }
+                    Err(error) => self.error_notice("WinFsp 설치 실패", "WinFsp installer failed", error),
                 }
-            } else { open = false; }
+            }
+            if dismiss { self.winfsp_install_offer = false; }
         }
-        if open { self.vault_text_editor = Some(editor); }
+        let Some(mount) = self.vault_mount.as_ref() else { return };
+        let filename = mount.file_path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        let ko = self.language == "ko";
+        let mut close = false;
+        egui::Window::new(if ko { "암호화 가상 파일" } else { "Encrypted virtual file" })
+            .id(egui::Id::new("ndr-winfsp-open"))
+            .resizable(true).collapsible(false).default_width(410.0)
+            .show(ctx, |ui| {
+                ui.label(&filename);
+                ui.label(if ko {
+                    "WinFsp에서 읽기와 수정을 처리합니다. NDR은 평문 임시파일을 만들지 않습니다."
+                } else { "WinFsp handles file reads and edits without NDR creating a plaintext temp file." });
+                ui.label(if ko { "외부 프로그램에서 파일을 저장하고 닫은 후 아래 버튼을 누르세요." }
+                    else { "Save and close the external application before unmounting." });
+                if ui.button(if ko { "닫기 및 암호화 저장" } else { "Unmount and save encrypted" }).clicked() { close = true; }
+            });
+        if !close { return; }
+        let result = self.vault_mount.as_mut().unwrap().finish();
+        match result {
+            Ok(()) => {
+                let mount = self.vault_mount.take().unwrap();
+                let pane = mount.pane;
+                if let Some(vault) = self.panes[pane].vault.as_mut() {
+                    if vault.file == mount.vault_path {
+                        if let Err(error) = vault.database.reload_after_mount() {
+                            self.error_notice("파일 목록 갱신 실패", "Encrypted folder refresh failed", error);
+                            return;
+                        }
+                        self.refresh_vault(pane);
+                    }
+                }
+                self.completion_notice("암호화 파일 닫기 완료", "Encrypted file closed", filename);
+            }
+            Err(error) => self.error_notice("암호화 파일 저장 실패", "Encrypted file save failed", error),
+        }
     }
 
     pub(super) fn vault_new_item(&mut self, folder: bool) {
+        #[cfg(feature = "winfsp-vault")]
+        if self.vault_mount.is_some() {
+            self.status = "Close the encrypted virtual file before modifying the container.".into();
+            return;
+        }
         let pane = self.active;
         let title = self.language_pack.text(if folder { "NDRVault.NewFolderTitle" } else { "NDRVault.NewFileTitle" },
             if folder { "New folder" } else { "New file" });
@@ -476,6 +368,11 @@ impl App {
     }
 
     pub(super) fn vault_rename_item(&mut self) {
+        #[cfg(feature = "winfsp-vault")]
+        if self.vault_mount.is_some() {
+            self.status = "Close the encrypted virtual file before modifying the container.".into();
+            return;
+        }
         let pane = self.active;
         let Some(entry) = self.panes[pane].entries.get(self.panes[pane].cursor).cloned()
             .filter(|e| !e.is_parent()) else { return };
@@ -503,6 +400,11 @@ impl App {
     /// Explicit encrypted-only compaction. The user chooses when to incur
     /// the cost, leaving the normal fast delete and copy path unchanged.
     pub(super) fn vault_compact_confirm(&mut self) {
+        #[cfg(feature = "winfsp-vault")]
+        if self.vault_mount.is_some() {
+            self.status = "Close the encrypted virtual file before modifying the container.".into();
+            return;
+        }
         let pane=self.active;
         if self.panes[pane].vault.is_none() { return; }
         if self.vault_transfer.is_some() {
@@ -549,6 +451,11 @@ impl App {
             });
     }
     pub(super) fn vault_remove_items(&mut self) {
+        #[cfg(feature = "winfsp-vault")]
+        if self.vault_mount.is_some() {
+            self.status = "Close the encrypted virtual file before modifying the container.".into();
+            return;
+        }
         let pane = self.active;
         let names: Vec<String> = self.target_entries(pane).into_iter().map(|e| e.name).collect();
         if names.is_empty() { return; }
@@ -582,6 +489,11 @@ impl App {
 
     /// Paste source bytes directly into the authenticated container without plaintext staging.
     pub(super) fn vault_paste_files(&mut self) {
+        #[cfg(feature = "winfsp-vault")]
+        if self.vault_mount.is_some() {
+            self.status = "Close the encrypted virtual file before modifying the container.".into();
+            return;
+        }
         let pane = self.active;
         let from_system = (self.clipboard_files_reader)().ok().filter(|(paths, _)| !paths.is_empty());
         let from_internal = self.clipboard.clone().filter(|_| self.clipboard_sequence == Some(native::clipboard_sequence_number()));
@@ -599,6 +511,11 @@ impl App {
     /// Copy to other pane (F3) from an unlocked vault is an explicit plaintext
     /// export. Warn before releasing decrypted bytes to the filesystem.
     pub(super) fn vault_export_to_other(&mut self, source: usize, moving: bool) {
+        #[cfg(feature = "winfsp-vault")]
+        if self.vault_mount.is_some() {
+            self.status = "Close the encrypted virtual file before modifying the container.".into();
+            return;
+        }
         use super::vault_transfer_ui::VaultTransferKind;
         let target = 1 - source;
         if self.panes[target].vault.is_some() || self.panes[target].archive.is_some()
@@ -625,6 +542,11 @@ impl App {
     /// Import first, then remove local originals. Failure to delete a source
     /// never destroys the successfully encrypted copy; the status reports it.
     pub(super) fn vault_transfer_from_local(&mut self, source: usize, target: usize, files: Vec<PathBuf>, moving: bool) {
+        #[cfg(feature = "winfsp-vault")]
+        if self.vault_mount.is_some() {
+            self.status = "Close the encrypted virtual file before modifying the container.".into();
+            return;
+        }
         use super::vault_transfer_ui::VaultTransferKind;
         if files.is_empty() { return; }
         if !moving { return self.vault_import_paths(target, files); }
@@ -645,6 +567,11 @@ impl App {
     }
 
     pub(super) fn vault_import_paths(&mut self, pane: usize, files: Vec<PathBuf>) {
+        #[cfg(feature = "winfsp-vault")]
+        if self.vault_mount.is_some() {
+            self.status = "Close the encrypted virtual file before modifying the container.".into();
+            return;
+        }
         use super::vault_transfer_ui::VaultTransferKind;
         if files.is_empty() { return; }
         let Some(names) = files.iter()
@@ -661,6 +588,11 @@ impl App {
 impl App {
     /// Move/copy inside a single SQLCipher container; no plaintext staging.
     pub(super) fn vault_transfer_between_panes(&mut self, source: usize, target: usize, moving: bool) {
+        #[cfg(feature = "winfsp-vault")]
+        if self.vault_mount.is_some() {
+            self.status = "Close the encrypted virtual file before modifying the container.".into();
+            return;
+        }
         use super::vault_transfer_ui::VaultTransferKind;
         let names: Vec<String> = self.target_entries(source).into_iter().map(|entry| entry.name).collect();
         if names.is_empty() { return; }
@@ -689,6 +621,11 @@ impl App {
     }
 
     pub(super) fn vault_transfer_inside(&mut self, moving: bool) {
+        #[cfg(feature = "winfsp-vault")]
+        if self.vault_mount.is_some() {
+            self.status = "Close the encrypted virtual file before modifying the container.".into();
+            return;
+        }
         use super::vault_transfer_ui::VaultTransferKind;
         let pane = self.active;
         let names: Vec<String> = self.target_entries(pane).into_iter().map(|item| item.name).collect();
@@ -721,28 +658,6 @@ impl Drop for VaultDialog {
 mod tests {
     use super::*;
 
-    #[test]
-    fn external_edit_detects_changes_and_cleans_unchanged_copy() {
-        let root = std::env::temp_dir().join(format!("ndr-edit-regression-{}", std::process::id()));
-        std::fs::create_dir_all(&root).unwrap();
-        let path = root.join("binary.png");
-        std::fs::write(&path, b"initial bytes").unwrap();
-        let mut hash = [0u8; 32];
-        hash.copy_from_slice(&Sha256::digest(b"initial bytes"));
-        let mut edit = VaultExternalEdit {
-            pane: 0, vault_path: PathBuf::from("vault.ndr"), id: 12, folder: 1,
-            name: "binary.png".into(), directory: root.clone(), path: path.clone(),
-            original_hash: hash, error: String::new(), confirm_discard: false,
-        };
-        assert_eq!(edit.changed().unwrap(), false);
-        std::fs::write(&path, b"edited content").unwrap();
-        assert_eq!(edit.changed().unwrap(), true);
-        edit.error = "not yet saved".into();
-        drop(edit);
-        assert_eq!(std::fs::read(&path).unwrap(), b"edited content", "unsaved edits must remain recoverable");
-        std::fs::remove_file(path).unwrap();
-        std::fs::remove_dir(root).unwrap();
-    }
 
     #[test]
     fn encrypted_pane_border_is_pink_and_reverts_on_exit_for_each_skin() {

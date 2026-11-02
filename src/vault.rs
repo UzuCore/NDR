@@ -272,6 +272,54 @@ fn read_slot(header: &[u8;128], index: usize, len: u64, key: &[u8;32]) -> Result
 }
 
 impl Vault {
+    /// A second authenticated handle for an in-process WinFsp mount. The
+    /// original Vault retains the exclusive path gate. Never open a second
+    /// independent writer or use this handle outside the mount lifetime.
+    pub fn fork_for_mount(&self) -> Result<Self, String> {
+        if self.pending.is_some() { return Err("An encrypted transfer is already in progress".into()); }
+        Ok(Self {
+            handle: self.handle.try_clone().map_err(|e| e.to_string())?,
+            file: self.file.clone(), key: Zeroizing::new(*self.key),
+            index: self.index.clone(), generation: self.generation,
+            pending: None, opened: self.opened, last_used: self.last_used,
+            gate: None,
+        })
+    }
+
+    /// Refresh the original in-memory view after a virtual filesystem writer
+    /// commits an authenticated index, without requiring the password again.
+    pub fn reload_after_mount(&mut self) -> Result<(), String> {
+        if self.pending.is_some() { return Err("Cannot refresh during encrypted transfer".into()); }
+        let mut header = [0u8;128];
+        self.handle.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
+        self.handle.read_exact(&mut header).map_err(|e| e.to_string())?;
+        if &header[..8] != MAGIC { return Err("Encrypted container header changed".into()); }
+        let len = self.handle.metadata().map_err(|e| e.to_string())?.len();
+        let first = read_slot(&header, 0, len, &self.key)?;
+        let second = read_slot(&header, 1, len, &self.key)?;
+        if first.0.abs_diff(second.0)>1 ||
+            (first.0 == second.0 && (first.1.offset != second.1.offset || first.1.size != second.1.size)) {
+            return Err("Encrypted metadata pointer generations are inconsistent".into());
+        }
+        let (generation, block) = if first.0 >= second.0 { first } else { second };
+        let bytes = get_record(&self.handle, &self.key, &block, KIND_META)?;
+        let index: Index = serde_json::from_slice(&bytes).map_err(|_|"Encrypted metadata invalid")?;
+        index.check()?;
+        for item in index.items.values() {
+            if !item.folder {
+                for block in &item.blocks {
+                    if block.offset < HEADER_SIZE || block.size as usize > STREAM_CHUNK_SIZE ||
+                        block.offset.checked_add(record_size(block.size as usize)?).is_none_or(|end| end > len) {
+                        return Err("Encrypted data block points outside container".into());
+                    }
+                }
+            }
+        }
+        self.index = index;
+        self.generation = generation;
+        self.touch();
+        Ok(())
+    }
     pub fn create(path: &Path, password: String) -> Result<Self, String> {
         let password=Zeroizing::new(password);
         if password.chars().count() < 6 {
