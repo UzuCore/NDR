@@ -660,22 +660,25 @@ pub(super) fn path_label_widths(text: &[i32], dots: i32, width: i32) -> Vec<i32>
 }
 
 impl App {
-    /// Original panel border (FUN_00483300, drawing the frame panel +0x330): the color depends on the location kind (local lframelocal, lframenet if it starts with "\\", archive lframearc,
-    /// FTP lframeftp). If the list has focus, use that color as-is (inner-ring ratio 0); otherwise mix it with the frame background (lback) (background 40% + border 60%, integer division).
+    /// Original panel border (FUN_00483300, drawing the frame panel +0x330): the color depends on the location kind (local lframelocal, network lframenet, archive lframearc,
+    /// FTP lframeftp). NDR adds pink for an unlocked encrypted .ndr folder. If the list has focus, use that color as-is; otherwise mix it with the frame background (lback) (background 40% + border 60%, integer division).
     /// The width is lframewidth (every bundled skin set uses 1, so a single inner ring).
     pub(super) fn skin_frame_stroke(&self, skin: &Skin, index: usize) -> egui::Stroke {
         let pane = &self.panes[index];
-        let key = if pane.remote.is_some() {
-            "lframeftp"
+        let key = if pane.vault.is_some() {
+            None // Encrypted container: show a pink frame irrespective of skin.
+        } else if pane.remote.is_some() {
+            Some("lframeftp")
         } else if pane.archive.is_some() {
-            "lframearc"
+            Some("lframearc")
         } else if pane.path.to_string_lossy().starts_with("\\\\") {
-            "lframenet"
+            Some("lframenet")
         } else {
-            "lframelocal"
+            Some("lframelocal")
         };
         let width = skin.positive_integer("List", "lframewidth", 1) as f32;
-        let frame = skin_color(skin, key, Color32::from_rgb(0x30, 0x5B, 0x91));
+        let frame = key.map_or(Color32::from_rgb(0xFF, 0x69, 0xB4), |key|
+            skin_color(skin, key, Color32::from_rgb(0x30, 0x5B, 0x91)));
         let color = if self.active == index {
             frame
         } else {

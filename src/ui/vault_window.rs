@@ -465,6 +465,43 @@ impl Drop for VaultDialog {
 mod tests {
     use super::*;
 
+    #[test]
+    fn encrypted_pane_border_is_pink_and_reverts_on_exit_for_each_skin() {
+        let (root, _ctx, mut app) = super::super::tools_tests::fixture("vault-pink-frame", "en");
+        let container = root.join("left/pink.ndr");
+        let mut initial_database = Some(Vault::create(&container, "pink frame password".into()).unwrap());
+        let expected_pink = egui::Color32::from_rgb(0xFF, 0x69, 0xB4);
+        for skin_name in ["Black", "Classic"] {
+            app.settings.set_text("Theme", skin_name);
+            let skin = app.current_skin().expect("skin should be available");
+            app.active = 0;
+            let local = app.skin_frame_stroke(&skin, 0);
+            assert_ne!(local.color, expected_pink, "regular folder must use its usual skin color");
+            if skin_name == "Black" {
+                app.attach_vault(0, PaneVault::new(container.clone(), initial_database.take().unwrap()));
+            } else {
+                // The authenticated session survives leaving the container,
+                // so the same database can be reused without password input.
+                let db = app.vault_sessions.remove(&std::fs::canonicalize(&container).unwrap()).unwrap();
+                app.attach_vault(0, PaneVault::new(container.clone(), db));
+            }
+            assert_eq!(app.skin_frame_stroke(&skin, 0).color, expected_pink,
+                "vault root border must be vivid pink with active focus");
+            app.active = 1;
+            let back = super::super::skin_pane::skin_color(&skin, "lback", egui::Color32::from_gray(0x14));
+            let channel = |bg: u8, pink: u8| ((u32::from(bg) * 40 + u32::from(pink) * 60) / 100) as u8;
+            assert_eq!(app.skin_frame_stroke(&skin, 0).color,
+                egui::Color32::from_rgb(channel(back.r(), 255), channel(back.g(), 105), channel(back.b(), 180)),
+                "inactive vault border should keep the existing 40/60% blending");
+            app.active = 0;
+            app.exit_vault(0);
+            assert_eq!(app.skin_frame_stroke(&skin, 0), local,
+                "leaving an encrypted folder must restore the original folder border");
+        }
+        drop(app);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     /// The same PlayCompletionSound switch and packaged complete.wav must
     /// cover encrypted work; never signal completion on skip/cancel/failure.
     #[test]

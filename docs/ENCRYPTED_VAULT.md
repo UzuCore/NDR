@@ -114,6 +114,10 @@ the name generator is independent from SQLCipher keys and passwords.
   deletion and reinsertion are atomic in the target SQLCipher transaction.
 - Every encrypted transfer displays the normal-size 441 px NDR progress
   window and opens the original TfFileExists dialog on a duplicate name.
+  While an unlocked `.ndr` container is displayed, its pane frame is pink
+  (`#FF69B4`) instead of the normal local/archive frame color. The inactive
+  pane uses the original 40% background / 60% frame blend, and leaving or
+  locking the container immediately restores the ordinary skin border.
   On a fully successful encrypted copy or move, it also plays the same
   `complete.wav` completion sound as ordinary NDR file operations when
   `PlayCompletionSound` is enabled. Skipped, cancelled and failed transfers
