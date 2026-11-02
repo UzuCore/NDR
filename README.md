@@ -69,6 +69,14 @@ Password and creation dialogs use the same centered,
 movable chrome as other NDR dialogs. Vault strings are provided in all 21
 bundled language resources (English fallback for unreviewed translations).
 
+Large encrypted files are copied through 8 MiB SQLCipher-encrypted chunks
+instead of loading entire files into RAM. The former 64 MiB file / 512 MiB
+transfer limits no longer apply to the file-management transfer paths.
+Individual file transfers show byte progress and allow cancellation between
+chunks; recursive directory transfers still complete one folder tree at a
+time. Older `.ndr` containers can be opened, but files newly stored in the
+chunked format require a current NDR version to read.
+
 ## Build locally
 
 Install Visual Studio C++ Build Tools, stable Rust MSVC, and Strawberry Perl

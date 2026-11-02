@@ -2,14 +2,38 @@
 //! dialog as ordinary file jobs, with a separate 441px progress window.
 //! The unit of progress/cancellation is one selected root file/folder.
 use super::*;
+use std::io::{Read, Write};
+use zeroize::Zeroizing;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum VaultTransferKind { Import, Export, Between, Inside }
 
+/// A single file is transferred cooperatively, one 8 MiB chunk per UI frame.
+/// Incomplete SQLCipher transactions are rolled back on explicit cancellation
+/// or database close; temporary plaintext exports are removed on drop.
+pub(super) struct VaultStreamState {
+    input: Option<std::fs::File>,
+    output: Option<std::fs::File>,
+    temp_path: Option<PathBuf>,
+    destination_path: Option<PathBuf>,
+    source_id: Option<i64>,
+    target_id: Option<i64>,
+    ordinal: i64,
+    pub(super) done: u64,
+    pub(super) total: u64,
+}
+
+impl Drop for VaultStreamState {
+    fn drop(&mut self) {
+        self.output.take();
+        if let Some(path) = self.temp_path.take() { let _ = std::fs::remove_file(path); }
+    }
+}
+
 pub(super) struct VaultTransferJob {
     kind: VaultTransferKind,
-    source: usize,
-    target: usize,
+    pub(super) source: usize,
+    pub(super) target: usize,
     from_folder: i64,
     to_folder: i64,
     names: Vec<String>,
@@ -30,6 +54,7 @@ pub(super) struct VaultTransferJob {
     pub(super) waiting_rename: Option<Receiver<Option<String>>>,
     destination_name: Option<String>,
     replace: bool,
+    pub(super) stream: Option<VaultStreamState>,
 }
 
 impl App {
@@ -72,7 +97,7 @@ impl App {
             source_container, target_container, source_display, target_display,
             moving, index: 0, copied: 0, skipped: 0, started: Instant::now(),
             finished: None, failed: None, cancelled: false, waiting_conflict: None,
-            waiting_rename: None, destination_name: None, replace: false,
+            waiting_rename: None, destination_name: None, replace: false, stream: None,
         });
         self.egui_ctx.request_repaint();
     }
@@ -158,6 +183,38 @@ impl App {
             return;
         }
         if self.vault_task_changed(&job) { job.cancelled = true; }
+        if job.cancelled {
+            if let Some(stream) = job.stream.take() { self.vault_task_abort_stream(&job, stream); }
+            self.vault_task_finish(&mut job);
+            self.vault_transfer = Some(job);
+            return;
+        }
+        if let Some(mut stream) = job.stream.take() {
+            match self.vault_task_stream_step(&job, &mut stream) {
+                Ok(false) => {
+                    job.stream = Some(stream);
+                    self.vault_transfer = Some(job);
+                    ctx.request_repaint();
+                    return;
+                }
+                Ok(true) => {
+                    job.copied += 1;
+                    job.index += 1;
+                    job.destination_name = None;
+                    job.replace = false;
+                    self.vault_task_refresh_after_item(&job);
+                }
+                Err(error) => {
+                    self.vault_task_abort_stream(&job, stream);
+                    job.failed = Some(error);
+                    self.vault_task_refresh_after_item(&job);
+                }
+            }
+            if job.failed.is_some() || job.index >= job.names.len() { self.vault_task_finish(&mut job); }
+            self.vault_transfer = Some(job);
+            ctx.request_repaint();
+            return;
+        }
         if job.cancelled || job.index >= job.names.len() {
             self.vault_task_finish(&mut job);
             self.vault_transfer = Some(job);
@@ -245,6 +302,21 @@ impl App {
             return;
         }
         let original = job.names[job.index].clone();
+        match self.vault_task_start_stream(&job, &original, &target_name) {
+            Ok(Some(stream)) => {
+                job.stream = Some(stream);
+                self.vault_transfer = Some(job);
+                ctx.request_repaint();
+                return;
+            }
+            Ok(None) => (), // Recursive folders still use the tree operation.
+            Err(error) => {
+                job.failed = Some(error);
+                self.vault_task_finish(&mut job);
+                self.vault_transfer = Some(job);
+                return;
+            }
+        }
         match self.vault_task_copy_item(&job, &original, &target_name) {
             Ok(count) => {
                 job.copied += count;
@@ -283,6 +355,15 @@ impl App {
         if job.failed.is_some() || job.index >= job.names.len() { self.vault_task_finish(&mut job); }
         self.vault_transfer = Some(job);
         ctx.request_repaint();
+    }
+
+    fn vault_task_refresh_after_item(&mut self, job: &VaultTransferJob) {
+        match job.kind {
+            VaultTransferKind::Import => { self.refresh_vault(job.target); if job.moving { self.refresh(job.source); } }
+            VaultTransferKind::Export => { self.refresh(job.target); if job.moving { self.refresh_vault(job.source); } }
+            VaultTransferKind::Between => { self.refresh_vault(job.target); if job.moving { self.refresh_vault(job.source); } }
+            VaultTransferKind::Inside => self.refresh_vault(job.source),
+        }
     }
 
     fn vault_task_copy_item(&mut self, job: &VaultTransferJob, original: &str, name: &str) -> Result<usize, String> {
@@ -337,6 +418,177 @@ impl App {
         Ok(count)
     }
 
+    /// Prepare the current file without loading it into memory. Directories
+    /// still use the recursive tree transfer, which streams each child file.
+    fn vault_task_start_stream(&mut self, job: &VaultTransferJob,
+        name: &str, destination_name: &str) -> Result<Option<VaultStreamState>, String> {
+        if job.kind == VaultTransferKind::Inside && job.moving { return Ok(None); }
+        let mut input = None;
+        let mut source_id = None;
+        let total;
+        if job.kind == VaultTransferKind::Import {
+            let path = &job.source_paths[job.index];
+            let meta = std::fs::symlink_metadata(path).map_err(|e| e.to_string())?;
+            use std::os::windows::fs::MetadataExt;
+            if meta.file_attributes() & 0x400 != 0 { return Err("Cannot stream symlink, junction or reparse point".into()); }
+            if meta.is_dir() { return Ok(None); }
+            if !meta.is_file() { return Err("Encrypted import requires an ordinary file".into()); }
+            let target = self.panes[job.target].vault.as_ref().ok_or("Encrypted destination closed")?;
+            let own = std::fs::canonicalize(&target.file).map_err(|e| e.to_string())?;
+            let from = std::fs::canonicalize(path).map_err(|e| e.to_string())?;
+            if own == from { return Err("Cannot import the open encrypted container".into()); }
+            input = Some(std::fs::File::open(path).map_err(|e| e.to_string())?);
+            total = meta.len();
+        } else {
+            let source = self.panes[job.source].vault.as_mut().ok_or("Encrypted source closed")?;
+            let selected = source.database.list(job.from_folder)?.into_iter()
+                .find(|item| item.name == name).ok_or("Encrypted source item disappeared")?;
+            if selected.folder { return Ok(None); }
+            total = source.database.stream_file_size(selected.id)?;
+            source_id = Some(selected.id);
+        }
+        let mut output = None;
+        let mut temp_path = None;
+        let mut destination_path = None;
+        let mut target_id = None;
+        if job.kind == VaultTransferKind::Export {
+            let path = PathBuf::from(&job.target_display).join(destination_name);
+            if let Ok(meta) = std::fs::symlink_metadata(&path) {
+                use std::os::windows::fs::MetadataExt;
+                if meta.is_dir() { return Err("Cannot replace a directory with a streamed file".into()); }
+                if meta.file_attributes() & 0x400 != 0 { return Err("Cannot replace symbolic link or junction".into()); }
+                if !job.replace { return Err("Destination already exists".into()); }
+            }
+            let mut staged = None;
+            for attempt in 0..16u32 {
+                let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+                    .map_err(|e| e.to_string())?.as_nanos();
+                let candidate = PathBuf::from(&job.target_display).join(format!(
+                    ".ndr-transfer-{}-{stamp}-{attempt}.tmp", std::process::id()));
+                match std::fs::OpenOptions::new().write(true).create_new(true).open(&candidate) {
+                    Ok(file) => { staged = Some((candidate, file)); break; },
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => (),
+                    Err(error) => return Err(error.to_string()),
+                }
+            }
+            let (path_temp, file) = staged.ok_or("Could not create a unique temporary export file")?;
+            temp_path = Some(path_temp);
+            output = Some(file);
+            destination_path = Some(path);
+        } else {
+            let pane = self.panes[job.target].vault.as_mut().ok_or("Encrypted destination closed")?;
+            target_id = Some(pane.database.begin_stream_file(job.to_folder, destination_name, job.replace)?);
+        }
+        Ok(Some(VaultStreamState { input, output, temp_path, destination_path,
+            source_id, target_id, ordinal: 0, done: 0, total }))
+    }
+
+    fn vault_task_abort_stream(&mut self, job: &VaultTransferJob, stream: VaultStreamState) {
+        if stream.target_id.is_some() {
+            if let Some(vault) = self.panes[job.target].vault.as_mut() {
+                let _ = vault.database.rollback_stream_file();
+            }
+        }
+        // Drop removes the temporary plaintext export without modifying the
+        // original destination. Never delete already committed items here.
+        drop(stream);
+    }
+
+    fn vault_task_stream_step(&mut self, job: &VaultTransferJob,
+        stream: &mut VaultStreamState) -> Result<bool, String> {
+        if stream.done < stream.total {
+            let data = if let Some(input) = stream.input.as_mut() {
+                let mut buffer = Zeroizing::new(vec![0u8; ndr::vault::STREAM_CHUNK_SIZE]);
+                let amount = input.read(&mut buffer).map_err(|e| e.to_string())?;
+                if amount == 0 { return Err("Input file changed or ended unexpectedly; transaction rolled back".into()); }
+                buffer.truncate(amount);
+                buffer
+            } else {
+                let source = self.panes[job.source].vault.as_ref().ok_or("Encrypted source closed during transfer")?;
+                source.database.stream_read_chunk(stream.source_id.ok_or("Missing encrypted source")?, stream.ordinal)?
+                    .ok_or("Encrypted source ended before the expected byte count")?
+            };
+            if stream.done.checked_add(data.len() as u64).ok_or("Transfer byte count overflow")? > stream.total {
+                return Err("Source size changed during transfer".into());
+            }
+            if let Some(output) = stream.output.as_mut() {
+                output.write_all(&data).map_err(|e| e.to_string())?;
+            } else {
+                let target = self.panes[job.target].vault.as_mut().ok_or("Encrypted destination closed during transfer")?;
+                target.database.stream_write_chunk(stream.target_id.ok_or("Missing encrypted destination")?,
+                    stream.ordinal, &data)?;
+            }
+            stream.done += data.len() as u64;
+            stream.ordinal += 1;
+            return Ok(false);
+        }
+        if let Some(input) = stream.input.as_mut() {
+            if input.metadata().map_err(|e| e.to_string())?.len() != stream.total {
+                return Err("Source size changed during encryption; transaction rolled back".into());
+            }
+        }
+        if let Some(output) = stream.output.as_mut() {
+            output.sync_all().map_err(|e| e.to_string())?;
+            stream.output.take();
+            let final_path = stream.destination_path.as_ref().ok_or("Missing export destination")?;
+            let staged = stream.temp_path.as_ref().ok_or("Missing staged export")?;
+            let mut recovery = None;
+            if let Ok(meta) = std::fs::symlink_metadata(final_path) {
+                use std::os::windows::fs::MetadataExt;
+                if meta.is_dir() || meta.file_attributes() & 0x400 != 0 {
+                    return Err("Export target became a directory or link; original preserved".into());
+                }
+                if !job.replace { return Err("Destination appeared during export; original preserved".into()); }
+                let recovery_path = final_path.with_extension(format!("ndr-recovery-{}-{}",
+                    std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+                        .map_err(|e| e.to_string())?.as_nanos()));
+                if std::fs::symlink_metadata(&recovery_path).is_ok() {
+                    return Err("Export recovery name exists; original preserved".into());
+                }
+                std::fs::rename(final_path, &recovery_path).map_err(|e| e.to_string())?;
+                recovery = Some(recovery_path);
+            }
+            if let Err(error) = std::fs::rename(staged, final_path) {
+                if let Some(path) = recovery {
+                    std::fs::rename(&path, final_path).map_err(|restore| format!(
+                        "Export failed: {error}; original remains at {} (restoration error: {restore})", path.display()))?;
+                }
+                return Err(error.to_string());
+            }
+            stream.temp_path = None;
+            if let Some(path) = recovery {
+                std::fs::remove_file(&path).map_err(|e| format!(
+                    "Export completed, but old destination backup remains at {}: {e}", path.display()))?;
+            }
+        } else {
+            let target = self.panes[job.target].vault.as_mut().ok_or("Encrypted destination closed before commit")?;
+            if stream.total == 0 {
+                target.database.stream_write_chunk(stream.target_id.ok_or("Missing destination item")?, 0, &[])?;
+            }
+            target.database.commit_stream_file()?;
+        }
+        // Move the original only AFTER the complete encrypted/plaintext copy
+        // has been successfully committed and renamed into place.
+        if job.moving {
+            match job.kind {
+                VaultTransferKind::Import => {
+                    let path = &job.source_paths[job.index];
+                    let meta = std::fs::symlink_metadata(path).map_err(|e| format!("Copy succeeded; original retained: {e}"))?;
+                    use std::os::windows::fs::MetadataExt;
+                    if meta.file_attributes() & 0x400 != 0 { return Err("Copy succeeded, but source became a link; retained".into()); }
+                    std::fs::remove_file(path).map_err(|e| format!("Copy succeeded; original retained: {e}"))?;
+                }
+                VaultTransferKind::Export | VaultTransferKind::Between => {
+                    let source = self.panes[job.source].vault.as_mut().ok_or("Copy succeeded; encrypted source closed")?;
+                    source.database.remove_many(&[stream.source_id.ok_or("Missing original item ID")?])
+                        .map_err(|e| format!("Copy succeeded; original retained: {e}"))?;
+                }
+                VaultTransferKind::Inside => (),
+            }
+        }
+        Ok(true)
+    }
+
     /// Keep the NDR file-operation layout and popup alignment for encrypted
     /// work as well. The conflict dialog is the existing TfFileExists form.
     pub(super) fn vault_transfer_progress_ui(&mut self, ctx: &egui::Context) {
@@ -364,14 +616,23 @@ impl App {
             ui.put(at(20.0, 42.0, 353.0, 15.0), egui::Label::new(to).truncate());
             let file = job.names.get(job.index).or_else(|| job.names.last()).map(String::as_str).unwrap_or("");
             ui.put(at(20.0, 71.0, 317.0, 17.0), egui::Label::new(file).truncate());
+            let fraction = job.stream.as_ref().map_or(0.0, |stream| {
+                if stream.total == 0 { 1.0 } else { stream.done as f64 / stream.total as f64 }
+            });
             let ratio = if job.finished.is_some() && job.failed.is_none() && !job.cancelled { 1.0 }
-                else { job.index as f32 / job.names.len().max(1) as f32 };
+                else { ((job.index as f64 + fraction) / job.names.len().max(1) as f64) as f32 };
             ui.put(at(18.0, 94.0, 327.0, 16.0), egui::ProgressBar::new(ratio).desired_height(16.0));
             if ui.put(at(355.0, 90.0, 78.0, 25.0), egui::Button::new(cancel_text)).clicked() && !covered {
                 cancel = true;
             }
-            let count = count_template.replace("{done}", &job.index.to_string())
-                .replace("{total}", &job.names.len().to_string());
+            let count = if let Some(stream) = job.stream.as_ref() {
+                self.language_pack.text("NDRVault.ProgressBytes", "{done} / {total} MiB")
+                    .replace("{done}", &format!("{:.1}", stream.done as f64 / 1048576.0))
+                    .replace("{total}", &format!("{:.1}", stream.total as f64 / 1048576.0))
+            } else {
+                count_template.replace("{done}", &job.index.to_string())
+                    .replace("{total}", &job.names.len().to_string())
+            };
             ui.painter().text(area.min + egui::vec2(345.0, 116.0), egui::Align2::RIGHT_TOP,
                 count, egui::FontId::proportional(12.0), ui.visuals().text_color());
         });

@@ -1123,6 +1123,7 @@ ProgressCopy=암호화 항목 복사 중...
 ProgressMove=암호화 항목 이동 중...
 ProgressCancel=취소
 ProgressCount={done} / {total}
+ProgressBytes={done} / {total} MiB
 ProgressSummary=완료: {done}개 / 건너뜀: {skipped}개 / 전체: {total}개
 JobFailed=암호화 전송 중 오류가 발생했습니다
 JobCancelled=암호화 전송을 취소했습니다. 완료된 항목은 유지됩니다

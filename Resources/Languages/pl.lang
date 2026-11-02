@@ -876,6 +876,7 @@ ProgressCopy=Copying encrypted items...
 ProgressMove=Moving encrypted items...
 ProgressCancel=Cancel
 ProgressCount={done} / {total}
+ProgressBytes={done} / {total} MiB
 ProgressSummary=Completed: {done}; skipped: {skipped}; total: {total}
 JobFailed=Encrypted transfer interrupted
 JobCancelled=Encrypted transfer cancelled; completed items retained

@@ -117,16 +117,25 @@ the name generator is independent from SQLCipher keys and passwords.
   The dialog supports overwrite, skip, rename, cancel and apply-to-all.
   Overwrite-newer conservatively skips when vault timestamps cannot be
   compared; resume is unavailable. Cancel stops before the next selected
-  root and retains already completed copies. Progress counts selected roots,
-  not individual bytes inside a root. A single large root is processed
-  synchronously and cannot be interrupted in the middle of that root.
+  root and retains already completed copies. For individual files, the progress
+  window counts bytes, processing one 8 MiB chunk per UI frame; cancellation
+  rolls back uncommitted SQLCipher chunks or removes an unfinished plaintext
+  export. Recursive directory roots currently update progress when the entire
+  root completes, and cannot be interrupted partway through a directory.
 - Ctrl+V accepts regular files or whole folder trees from the filesystem. A
   cut/move clipboard is rejected: use copy instead. Shell drag-and-drop
   and external program opening remain unsupported for vault contents to avoid
   unsafe operations on synthetic filesystem paths.
-- The per-file size limit is 64 MiB; each selected root-tree operation is limited to
-  512 MiB, 10,000 entries and 64 nested levels. These synchronous operations
-  are not intended for huge datasets or external editing workflows.
+- The former 64 MiB file limit and 512 MiB batch-size limit are removed from
+  file transfers. New imported files use 8 MiB SQLCipher-encrypted chunks,
+  so the entire plaintext is not buffered in memory. Root-tree operations
+  retain their 10,000-entry and 64-nested-level safety bounds. Actual limits
+  depend on free disk space, SQLite file-size limits and database journaling.
+- Existing single-BLOB v1 files remain readable and exportable. Opening an
+  older container creates the supplemental `item_chunks` table and a cleanup
+  trigger without changing its encryption key or SQLCipher signature. New
+  chunked files require an updated NDR to read; **older NDR versions do not
+  understand the new chunk table**. Preserve backups before downgrading.
 - Navigating away or switching tabs clears decrypted pane text, filenames and
   editor buffers, while the authenticated SQLCipher connection is retained
   only in process memory until the selected session deadline.
@@ -164,8 +173,10 @@ Configured in Options > NDR > Encrypted Folder:
 - The pane integration now supports folder-tree import/export, atomic deletion,
   F3 copy, F4 move, cross-container encrypted transfer, and transactional
   copy/move between folders inside a single container. It does **not** yet integrate every native pane
-  operation, shell drag-and-drop, multi-gigabyte streaming, or password changes.
-- Imported file limit is 64 MiB and in-memory text editing limit is 1 MiB.
+  operation, shell drag-and-drop, or password changes.
+- The built-in memory-only text editor still supports UTF-8 files of at most
+  1 MiB. The 64 MiB bound remains on internal in-memory APIs used for small
+  edits; it is not a limit on encrypted import/copy/export operations.
 
 ## Dialog appearance and languages
 

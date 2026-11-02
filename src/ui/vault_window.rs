@@ -55,6 +55,15 @@ impl App {
     /// Discard the in-memory connection AND all decrypted pane presentation
     /// buffers, including on tab switches and direct address navigation.
     pub(super) fn discard_vault(&mut self, pane: usize) {
+        // A file transfer may own an open SQLCipher transaction between UI
+        // frames. Roll it back before caching or dropping the unlocked vault.
+        if self.vault_transfer.as_ref().is_some_and(|job|
+            job.finished.is_none() && job.stream.is_some() &&
+            (job.source == pane || job.target == pane)) {
+            if let Some(job) = self.vault_transfer.as_mut() { job.cancelled = true; }
+            let ctx = self.egui_ctx.clone();
+            self.vault_transfer_tick(&ctx);
+        }
         let Some(mut container) = self.panes[pane].vault.take() else { return };
         for (_, name) in &mut container.stack { name.zeroize(); }
         // Keep only the authenticated SQLCipher connection, never the
@@ -207,6 +216,10 @@ impl App {
         }
     }
     fn open_vault_text(&mut self, pane: usize, item: VaultItem) {
+        if item.size > 1024 * 1024 {
+            self.status = self.language_pack.text("NDRVault.TextSize", "Only text files up to 1 MiB can be edited.");
+            return;
+        }
         let Some(state) = self.panes[pane].vault.as_mut() else { return };
         match state.database.read_file(item.id) {
             Ok(bytes) if bytes.len() <= 1024 * 1024 => match String::from_utf8(bytes) {
@@ -445,6 +458,73 @@ impl Drop for VaultDialog {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ui_large_file_updates_bytes_and_cancel_rolls_back_partial_encryption() {
+        let (root, ctx, mut app) = super::super::tools_tests::fixture("vault-stream-cancel", "ko");
+        let input = root.join("left/stream-24mb.bin");
+        let file = std::fs::File::create(&input).unwrap();
+        file.set_len(24 * 1024 * 1024 + 7).unwrap();
+        drop(file);
+        let container = root.join("right/stream.ndr");
+        let database = Vault::create(&container, "stream password 123456".into()).unwrap();
+        app.attach_vault(1, PaneVault::new(container, database));
+        app.active = 0;
+        app.vault_import_paths(1, vec![input.clone()]);
+        app.vault_transfer.as_mut().unwrap().started = Instant::now() - Duration::from_millis(250);
+        app.vault_transfer_tick(&ctx); // create file stream and begin encrypted transaction
+        assert!(app.vault_transfer.as_ref().unwrap().stream.is_some());
+        app.vault_transfer_tick(&ctx); // one 8 MiB slice
+        let stream = app.vault_transfer.as_ref().unwrap().stream.as_ref().unwrap();
+        assert_eq!(stream.done, ndr::vault::STREAM_CHUNK_SIZE as u64);
+        assert_eq!(stream.total, 24 * 1024 * 1024 + 7);
+        app.vault_transfer.as_mut().unwrap().cancelled = true;
+        app.vault_transfer_tick(&ctx);
+        assert!(app.panes[1].vault.as_mut().unwrap().database.list(1).unwrap().is_empty(),
+            "cancel must roll back every previously inserted 8 MiB chunk");
+        assert!(input.is_file(), "cancel must retain the original large file");
+        app.vault_transfer = None;
+
+        app.vault_import_paths(1, vec![input.clone()]);
+        app.vault_transfer.as_mut().unwrap().started = Instant::now() - Duration::from_millis(250);
+        for _ in 0..20 {
+            app.vault_transfer_tick(&ctx);
+            if app.vault_transfer.as_ref().unwrap().finished.is_some() { break; }
+        }
+        let job = app.vault_transfer.as_ref().unwrap();
+        assert!(job.finished.is_some() && job.failed.is_none());
+        assert_eq!(app.panes[1].vault.as_mut().unwrap().database.list(1).unwrap()[0].size,
+            24 * 1024 * 1024 + 7);
+        app.vault_transfer = None;
+
+        let out = root.join("plain-export");
+        std::fs::create_dir(&out).unwrap();
+        app.navigate(0, out.clone(), false);
+        app.active = 1;
+        app.panes[1].cursor = app.panes[1].entries.iter()
+            .position(|entry| entry.name == "stream-24mb.bin").unwrap();
+        app.vault_export_to_other(1, false);
+        app.answer_message_box(ndr::msgbox::IDYES, &ctx);
+        app.vault_transfer.as_mut().unwrap().started = Instant::now() - Duration::from_millis(250);
+        app.vault_transfer_tick(&ctx); // stage a unique temporary plaintext export
+        app.vault_transfer_tick(&ctx); // write one 8 MiB plaintext chunk
+        assert_eq!(app.vault_transfer.as_ref().unwrap().stream.as_ref().unwrap().done,
+            ndr::vault::STREAM_CHUNK_SIZE as u64);
+        app.vault_transfer.as_mut().unwrap().cancelled = true;
+        app.vault_transfer_tick(&ctx);
+        assert!(!out.join("stream-24mb.bin").exists());
+        assert_eq!(std::fs::read_dir(&out).unwrap().count(), 0,
+            "cancelling midway must remove temporary plaintext output");
+        app.vault_transfer = None;
+
+        app.vault_export_to_other(1, false);
+        app.answer_message_box(ndr::msgbox::IDYES, &ctx);
+        finish_transfer(&mut app);
+        assert_eq!(std::fs::metadata(out.join("stream-24mb.bin")).unwrap().len(),
+            24 * 1024 * 1024 + 7);
+        drop(app);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     fn finish_transfer(app: &mut App) {
         let ctx = app.egui_ctx.clone();

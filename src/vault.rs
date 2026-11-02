@@ -2,11 +2,24 @@
 //! Uses SQLCipher 4 authenticated pages; never creates a plaintext staging directory.
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use std::{path::{Path, PathBuf}, time::{Duration, Instant}};
-use std::io::Write;
+use std::io::{Read, Write};
 use zeroize::{Zeroize, Zeroizing};
 
 pub const EXTENSION: &str = "ndr";
 pub const MAX_FILE_SIZE: usize = 64 * 1024 * 1024;
+pub const STREAM_CHUNK_SIZE: usize = 8 * 1024 * 1024;
+
+/// V1 containers remain readable; large imported files use a supplemental
+/// chunk table without changing the authenticated SQLCipher file format.
+fn ensure_chunks(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch("CREATE TABLE IF NOT EXISTS item_chunks (
+        item_id INTEGER NOT NULL, ordinal INTEGER NOT NULL,
+        data BLOB NOT NULL, PRIMARY KEY(item_id,ordinal)
+    ) WITHOUT ROWID;
+    CREATE TRIGGER IF NOT EXISTS items_delete_chunks AFTER DELETE ON items
+       BEGIN DELETE FROM item_chunks WHERE item_id=OLD.id; END;")
+       .map_err(|e| e.to_string())
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SessionPolicy {
@@ -108,6 +121,7 @@ impl Vault {
                 CREATE UNIQUE INDEX items_parent_name ON items(parent,name);
                 INSERT INTO items(id,parent,name,folder) VALUES(1,0,'',1);")
                 .map_err(|e| e.to_string())?;
+            ensure_chunks(&conn)?;
             Ok(Self { connection: conn, file: path.to_path_buf(), opened: Instant::now(), last_used: Instant::now() })
         })();
         if result.is_err() { let _ = std::fs::remove_file(path); }
@@ -124,6 +138,7 @@ impl Vault {
         if signature != "NDR_SQLCIPHER_V1" { return Err("Unsupported encrypted container format".into()); }
         let version: i64 = conn.pragma_query_value(None, "user_version", |row| row.get(0)).map_err(|e| e.to_string())?;
         if version != 1 { return Err("Unsupported encrypted container version".into()); }
+        ensure_chunks(&conn)?;
         Ok(Self { connection: conn, file: path.to_path_buf(), opened: Instant::now(), last_used: Instant::now() })
     }
 
@@ -139,7 +154,11 @@ impl Vault {
 
     pub fn list(&mut self, parent: i64) -> Result<Vec<VaultItem>, String> {
         self.ensure_folder(parent)?;
-        let mut statement = self.connection.prepare("SELECT id,name,folder,coalesce(length(contents),0) FROM items WHERE parent=?1 ORDER BY folder DESC,name COLLATE NOCASE")
+        let mut statement = self.connection.prepare("SELECT id,name,folder,
+            CASE WHEN EXISTS(SELECT 1 FROM item_chunks c WHERE c.item_id=items.id)
+                 THEN (SELECT coalesce(sum(length(data)),0) FROM item_chunks c WHERE c.item_id=items.id)
+                 ELSE coalesce(length(contents),0) END
+            FROM items WHERE parent=?1 ORDER BY folder DESC,name COLLATE NOCASE")
             .map_err(|e| e.to_string())?;
         let values = statement.query_map([parent], |r| Ok(VaultItem { id: r.get(0)?, name: r.get(1)?, folder: r.get::<_, i64>(2)? == 1, size: r.get(3)? }))
             .map_err(|e| e.to_string())?.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;
@@ -346,6 +365,74 @@ impl Vault {
         self.insert(parent, name, false, Some(data))
     }
 
+    /// Begin a file transfer whose lifetime extends across UI frames. The
+    /// caller must call commit_stream_file or rollback_stream_file, including
+    /// on cancellation. An uncommitted transaction is rolled back on close.
+    pub fn begin_stream_file(&mut self, parent: i64, name: &str, replace: bool) -> Result<i64, String> {
+        valid_name(name)?;
+        self.ensure_folder(parent)?;
+        self.connection.execute_batch("BEGIN IMMEDIATE").map_err(|e| e.to_string())?;
+        let prepare = (|| -> Result<i64, String> {
+            replace_destination(&self.connection, parent, name, replace)?;
+            self.connection.execute("INSERT INTO items(parent,name,folder,contents) VALUES(?1,?2,0,NULL)",
+                params![parent,name]).map_err(|e| e.to_string())?;
+            Ok(self.connection.last_insert_rowid())
+        })();
+        if prepare.is_err() { let _ = self.connection.execute_batch("ROLLBACK"); }
+        prepare
+    }
+
+    pub fn stream_write_chunk(&mut self, id: i64, ordinal: i64, bytes: &[u8]) -> Result<(), String> {
+        if bytes.len() > STREAM_CHUNK_SIZE || ordinal < 0 { return Err("Invalid streaming chunk".into()); }
+        self.connection.execute("INSERT INTO item_chunks(item_id,ordinal,data) VALUES(?1,?2,?3)",
+            params![id,ordinal,bytes]).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub fn stream_file_size(&self, id: i64) -> Result<u64, String> {
+        let size: i64 = self.connection.query_row("SELECT CASE
+            WHEN EXISTS(SELECT 1 FROM item_chunks WHERE item_id=?1)
+                 THEN (SELECT COALESCE(SUM(length(data)),0) FROM item_chunks WHERE item_id=?1)
+            ELSE COALESCE(length(contents),0) END FROM items WHERE id=?1 AND folder=0",
+            [id], |r| r.get(0)).map_err(|e| e.to_string())?;
+        u64::try_from(size).map_err(|e| e.to_string())
+    }
+
+    pub fn stream_read_chunk(&self, id: i64, ordinal: i64) -> Result<Option<Zeroizing<Vec<u8>>>, String> {
+        if ordinal < 0 { return Err("Invalid streaming chunk offset".into()); }
+        let has_chunks: i64 = self.connection.query_row(
+            "SELECT COUNT(*) FROM item_chunks WHERE item_id=?1", [id], |r| r.get(0))
+            .map_err(|e| e.to_string())?;
+        if has_chunks > 0 {
+            return self.connection.query_row("SELECT data FROM item_chunks WHERE item_id=?1 AND ordinal=?2",
+                params![id,ordinal], |row| row.get::<_,Vec<u8>>(0))
+                .optional().map(|v| v.map(Zeroizing::new)).map_err(|e| e.to_string());
+        }
+        let mut legacy = self.connection.blob_open(rusqlite::MAIN_DB, "items", "contents", id, true)
+            .map_err(|e| e.to_string())?;
+        let start = (ordinal as u64).checked_mul(STREAM_CHUNK_SIZE as u64)
+            .ok_or("Encrypted chunk offset overflow")?;
+        let length = legacy.len() as u64;
+        if start >= length { return Ok(None); }
+        use std::io::{Seek, SeekFrom};
+        legacy.seek(SeekFrom::Start(start)).map_err(|e| e.to_string())?;
+        let mut bytes = Zeroizing::new(vec![0u8; ((length-start) as usize).min(STREAM_CHUNK_SIZE)]);
+        legacy.read_exact(&mut bytes).map_err(|e| e.to_string())?;
+        Ok(Some(bytes))
+    }
+
+    pub fn commit_stream_file(&mut self) -> Result<(), String> {
+        self.connection.execute_batch("COMMIT").map_err(|e| e.to_string())?;
+        self.touch();
+        Ok(())
+    }
+
+    pub fn rollback_stream_file(&mut self) -> Result<(), String> {
+        self.connection.execute_batch("ROLLBACK").map_err(|e| e.to_string())?;
+        self.touch();
+        Ok(())
+    }
+
     /// Import files and entire folders as a single atomic SQLCipher operation.
     /// Symlinks, junctions and other reparse points are not followed.
     /// If any item conflicts or fails validation, the whole import is rolled back.
@@ -482,14 +569,11 @@ impl Vault {
                 self.export_item(child.id, &child.name, &path, depth + 1, count, total, created)?;
             }
         } else {
-            let data = Zeroizing::new(self.read_file(id)?);
-            if data.len() > MAX_FILE_SIZE { return Err("Encrypted export file exceeds 64 MiB".into()); }
-            *total = total.checked_add(data.len() as u64).ok_or("Export size overflow")?;
-            if *total > 512 * 1024 * 1024 { return Err("Encrypted export batch exceeds 512 MiB".into()); }
             let mut out = std::fs::OpenOptions::new().write(true).create_new(true).open(&path)
                 .map_err(|e| e.to_string())?;
             created.push(path);
-            out.write_all(&data).map_err(|e| e.to_string())?;
+            let bytes = write_stored_chunks(&self.connection, id, &mut out)?;
+            *total = total.checked_add(bytes).ok_or("Export size overflow")?;
             out.sync_all().map_err(|e| e.to_string())?;
             *count += 1;
         }
@@ -505,16 +589,29 @@ impl Vault {
         Ok(self.connection.last_insert_rowid())
     }
     pub fn read_file(&mut self, id: i64) -> Result<Vec<u8>, String> {
-        let result: Vec<u8> = self.connection.query_row("SELECT contents FROM items WHERE id=?1 AND folder=0", [id], |r| r.get(0))
+        let valid: i64 = self.connection.query_row("SELECT folder FROM items WHERE id=?1", [id], |r| r.get(0))
             .map_err(|e| e.to_string())?;
+        if valid != 0 { return Err("Encrypted item is a folder".into()); }
+        // In-memory text editing still has an explicit safety bound; large
+        // transfers use write_stored_chunks and never invoke read_file.
+        let size: i64 = self.connection.query_row("SELECT CASE WHEN EXISTS(SELECT 1 FROM item_chunks WHERE item_id=?1)
+            THEN (SELECT COALESCE(SUM(length(data)),0) FROM item_chunks WHERE item_id=?1)
+            ELSE COALESCE(length(contents),0) END FROM items WHERE id=?1",
+            [id], |r| r.get(0)).map_err(|e| e.to_string())?;
+        if size > MAX_FILE_SIZE as i64 { return Err("File is too large for in-memory editing; export to edit".into()); }
+        let mut result = Vec::with_capacity(size.max(0) as usize);
+        write_stored_chunks(&self.connection, id, &mut result)?;
         self.touch();
         Ok(result)
     }
     pub fn update_file(&mut self, id: i64, data: &[u8]) -> Result<(), String> {
         if data.len() > MAX_FILE_SIZE { return Err("File exceeds current 64 MiB limit".into()); }
-        let changed = self.connection.execute("UPDATE items SET contents=?1 WHERE id=?2 AND folder=0", params![data,id])
+        let transaction = self.connection.transaction().map_err(|e| e.to_string())?;
+        let changed = transaction.execute("UPDATE items SET contents=?1 WHERE id=?2 AND folder=0", params![data,id])
             .map_err(|e| e.to_string())?;
         if changed == 0 { return Err("File not found".into()); }
+        transaction.execute("DELETE FROM item_chunks WHERE item_id=?1", [id]).map_err(|e| e.to_string())?;
+        transaction.commit().map_err(|e| e.to_string())?;
         self.touch();
         Ok(())
     }
@@ -555,7 +652,7 @@ impl Vault {
     }
 }
 
-fn replace_destination(tx: &rusqlite::Transaction<'_>, parent: i64, name: &str, replace: bool) -> Result<(), String> {
+fn replace_destination(tx: &Connection, parent: i64, name: &str, replace: bool) -> Result<(), String> {
     let existing: Option<i64> = tx.query_row(
         "SELECT id FROM items WHERE parent=?1 AND name=?2 COLLATE NOCASE", params![parent,name],
         |r| r.get(0),
@@ -566,6 +663,81 @@ fn replace_destination(tx: &rusqlite::Transaction<'_>, parent: i64, name: &str, 
             .map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+/// Process encrypted data with a bounded 8 MiB plaintext buffer. A failed
+/// read or database write rolls back the caller's SQLCipher transaction.
+fn append_chunks<R: Read>(tx: &rusqlite::Transaction<'_>, id: i64, source: &mut R) -> Result<u64, String> {
+    let mut buffer = Zeroizing::new(vec![0u8; STREAM_CHUNK_SIZE]);
+    let mut ordinal = 0i64;
+    let mut total = 0u64;
+    loop {
+        let size = source.read(&mut buffer).map_err(|e| e.to_string())?;
+        if size == 0 { break; }
+        tx.execute("INSERT INTO item_chunks(item_id,ordinal,data) VALUES(?1,?2,?3)",
+            params![id, ordinal, &buffer[..size]]).map_err(|e| e.to_string())?;
+        ordinal += 1;
+        total = total.checked_add(size as u64).ok_or("Encrypted item size overflow")?;
+    }
+    if ordinal == 0 {
+        tx.execute("INSERT INTO item_chunks(item_id,ordinal,data) VALUES(?1,0,x'')", [id])
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(total)
+}
+
+fn copy_stored_chunks(tx: &rusqlite::Transaction<'_>, source: &Connection,
+    source_id: i64, target_id: i64) -> Result<u64, String> {
+    let mut total = 0u64;
+    let count: i64 = source.query_row("SELECT COUNT(*) FROM item_chunks WHERE item_id=?1",
+        [source_id], |r| r.get(0)).map_err(|e| e.to_string())?;
+    if count > 0 {
+        let mut query = source.prepare("SELECT data FROM item_chunks WHERE item_id=?1 ORDER BY ordinal")
+            .map_err(|e| e.to_string())?;
+        let mut rows = query.query([source_id]).map_err(|e| e.to_string())?;
+        let mut ordinal = 0i64;
+        while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+            let bytes = Zeroizing::new(row.get::<_, Vec<u8>>(0).map_err(|e| e.to_string())?);
+            if bytes.len() > STREAM_CHUNK_SIZE { return Err("Invalid encrypted chunk size".into()); }
+            tx.execute("INSERT INTO item_chunks(item_id,ordinal,data) VALUES(?1,?2,?3)",
+                params![target_id, ordinal, bytes.as_slice()]).map_err(|e| e.to_string())?;
+            total = total.checked_add(bytes.len() as u64).ok_or("Encrypted item size overflow")?;
+            ordinal += 1;
+        }
+    } else {
+        let mut legacy = source.blob_open(rusqlite::MAIN_DB, "items", "contents", source_id, true)
+            .map_err(|e| e.to_string())?;
+        total = append_chunks(tx, target_id, &mut legacy)?;
+    }
+    Ok(total)
+}
+
+fn write_stored_chunks<W: Write>(connection: &Connection, id: i64, destination: &mut W) -> Result<u64, String> {
+    let count: i64 = connection.query_row("SELECT COUNT(*) FROM item_chunks WHERE item_id=?1",
+        [id], |r| r.get(0)).map_err(|e| e.to_string())?;
+    let mut total = 0u64;
+    if count > 0 {
+        let mut query = connection.prepare("SELECT data FROM item_chunks WHERE item_id=?1 ORDER BY ordinal")
+            .map_err(|e| e.to_string())?;
+        let mut rows = query.query([id]).map_err(|e| e.to_string())?;
+        while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+            let bytes = Zeroizing::new(row.get::<_, Vec<u8>>(0).map_err(|e| e.to_string())?);
+            if bytes.len() > STREAM_CHUNK_SIZE { return Err("Invalid encrypted chunk size".into()); }
+            destination.write_all(&bytes).map_err(|e| e.to_string())?;
+            total = total.checked_add(bytes.len() as u64).ok_or("Export size overflow")?;
+        }
+    } else {
+        let mut legacy = connection.blob_open(rusqlite::MAIN_DB, "items", "contents", id, true)
+            .map_err(|e| e.to_string())?;
+        let mut buffer = Zeroizing::new(vec![0u8; STREAM_CHUNK_SIZE]);
+        loop {
+            let size = legacy.read(&mut buffer).map_err(|e| e.to_string())?;
+            if size == 0 { break; }
+            destination.write_all(&buffer[..size]).map_err(|e| e.to_string())?;
+            total = total.checked_add(size as u64).ok_or("Export size overflow")?;
+        }
+    }
+    Ok(total)
 }
 
 fn copy_from_other_vault_named(
@@ -593,12 +765,11 @@ fn copy_from_other_vault_named(
             copy_from_other_vault_named(tx, source, child.id, new_parent, None, depth + 1, count, total)?;
         }
     } else {
-        let data = Zeroizing::new(source.read_file(id)?);
-        if data.len() > MAX_FILE_SIZE { return Err("Cross-vault file exceeds 64 MiB".into()); }
-        *total = total.checked_add(data.len() as u64).ok_or("Cross-vault transfer size overflow")?;
-        if *total > 512 * 1024 * 1024 { return Err("Cross-vault batch exceeds 512 MiB".into()); }
-        tx.execute("INSERT INTO items(parent,name,folder,contents) VALUES(?1,?2,0,?3)",
-            params![parent,name,data.as_slice()]).map_err(|e| e.to_string())?;
+        tx.execute("INSERT INTO items(parent,name,folder,contents) VALUES(?1,?2,0,NULL)",
+            params![parent,name]).map_err(|e| e.to_string())?;
+        let target_id = tx.last_insert_rowid();
+        let size = copy_stored_chunks(tx, &source.connection, id, target_id)?;
+        *total = total.checked_add(size).ok_or("Cross-vault transfer size overflow")?;
         *count += 1;
     }
     Ok(())
@@ -616,21 +787,37 @@ fn copy_encrypted_item_named(
     count: &mut usize, total_bytes: &mut u64,
 ) -> Result<(), String> {
     if depth > 64 || *count >= 10_000 { return Err("Encrypted copy exceeds depth or item limit".into()); }
-    let (original, folder, data): (String, i64, Option<Vec<u8>>) = tx.query_row(
-        "SELECT name,folder,contents FROM items WHERE id=?1", [id],
-        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    let (original, folder): (String, i64) = tx.query_row(
+        "SELECT name,folder FROM items WHERE id=?1", [id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
     ).map_err(|e| e.to_string())?;
     let name = renamed.unwrap_or(&original);
     valid_name(name)?;
-    let data = data.map(Zeroizing::new);
-    if let Some(data) = &data {
-        if data.len() > MAX_FILE_SIZE { return Err("Encrypted copy exceeds 64 MiB per file".into()); }
-        *total_bytes = total_bytes.checked_add(data.len() as u64).ok_or("Encrypted copy size overflow")?;
-        if *total_bytes > 512 * 1024 * 1024 { return Err("Encrypted copy exceeds 512 MiB batch limit".into()); }
-    }
-    tx.execute("INSERT INTO items(parent,name,folder,contents) VALUES(?1,?2,?3,?4)",
-        params![parent, name, folder, data.as_deref()]).map_err(|e| e.to_string())?;
+    tx.execute("INSERT INTO items(parent,name,folder,contents) VALUES(?1,?2,?3,NULL)",
+        params![parent, name, folder]).map_err(|e| e.to_string())?;
     let target = tx.last_insert_rowid();
+    if folder == 0 {
+        // Read from the same encrypted connection while the destination
+        // transaction is open. Iterating the source chunk query would keep a
+        // SQLite read statement alive during writes, so copy via indexed fetch.
+        let n: i64 = tx.query_row("SELECT COUNT(*) FROM item_chunks WHERE item_id=?1",
+            [id], |r| r.get(0)).map_err(|e| e.to_string())?;
+        if n > 0 {
+            for ordinal in 0..n {
+                let bytes = Zeroizing::new(tx.query_row("SELECT data FROM item_chunks WHERE item_id=?1 AND ordinal=?2",
+                    params![id,ordinal], |r| r.get::<_, Vec<u8>>(0)).map_err(|e| e.to_string())?);
+                tx.execute("INSERT INTO item_chunks(item_id,ordinal,data) VALUES(?1,?2,?3)",
+                    params![target,ordinal,bytes.as_slice()]).map_err(|e| e.to_string())?;
+                *total_bytes = total_bytes.checked_add(bytes.len() as u64).ok_or("Encrypted copy size overflow")?;
+            }
+        } else {
+            let contents = Zeroizing::new(tx.query_row("SELECT contents FROM items WHERE id=?1",
+                [id], |r| r.get::<_, Vec<u8>>(0)).map_err(|e| e.to_string())?);
+            let mut reader = contents.as_slice();
+            *total_bytes = total_bytes.checked_add(append_chunks(tx, target, &mut reader)?)
+                .ok_or("Encrypted copy size overflow")?;
+        }
+    }
     *count += 1;
     if folder == 1 {
         let mut statement = tx.prepare("SELECT id FROM items WHERE parent=?1 ORDER BY id")
@@ -658,7 +845,6 @@ fn import_path_named(
 ) -> Result<(), String> {
     const MAX_ITEMS: usize = 10_000;
     const MAX_DEPTH: usize = 64;
-    const MAX_BATCH_BYTES: u64 = 512 * 1024 * 1024;
     if depth > MAX_DEPTH || *items >= MAX_ITEMS {
         return Err("Encrypted import exceeds the folder depth or item limit".into());
     }
@@ -683,19 +869,17 @@ fn import_path_named(
             import_path_named(tx, id, &child, None, depth + 1, items, total_bytes)?;
         }
     } else if meta.is_file() {
-        if meta.len() > MAX_FILE_SIZE as u64 {
-            return Err(format!("Encrypted import file exceeds 64 MiB: {}", source.display()));
-        }
-        *total_bytes = total_bytes.checked_add(meta.len()).ok_or("Encrypted import is too large")?;
-        if *total_bytes > MAX_BATCH_BYTES {
-            return Err("Encrypted import batch exceeds 512 MiB".into());
-        }
-        let data = Zeroizing::new(std::fs::read(source).map_err(|e| e.to_string())?);
-        if data.len() > MAX_FILE_SIZE {
-            return Err("Encrypted import source changed while reading".into());
-        }
-        tx.execute("INSERT INTO items(parent,name,folder,contents) VALUES(?1,?2,0,?3)", params![parent, name, data.as_slice()])
+        // Only one 8 MiB plaintext buffer is used regardless of source size.
+        // The enclosing transaction rolls back the entire folder on error.
+        tx.execute("INSERT INTO items(parent,name,folder,contents) VALUES(?1,?2,0,NULL)", params![parent, name])
             .map_err(|e| e.to_string())?;
+        let id = tx.last_insert_rowid();
+        let mut input = std::fs::File::open(source).map_err(|e| e.to_string())?;
+        let bytes = append_chunks(tx, id, &mut input)?;
+        if bytes != meta.len() {
+            return Err("Import source changed size during encryption; rolled back".into());
+        }
+        *total_bytes = total_bytes.checked_add(bytes).ok_or("Encrypted import size overflow")?;
         *items += 1;
     } else {
         return Err("Encrypted import accepts ordinary files and folders only".into());
@@ -729,6 +913,101 @@ fn is_windows_reserved_name(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn unlock_old_v1_container_and_mix_legacy_blob_with_streamed_chunks() {
+        let root = std::env::temp_dir().join(format!("ndr-stream-compat-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("legacy.ndr");
+        let mut old = Vault::create(&path, "legacy password 123".into()).unwrap();
+        old.add_file(1, "legacy.txt", b"original 2026 format").unwrap();
+        old.connection.execute_batch("DROP TRIGGER items_delete_chunks; DROP TABLE item_chunks;").unwrap();
+        drop(old);
+        let mut opened = Vault::unlock(&path, "legacy password 123".into()).unwrap();
+        let legacy_id = opened.list(1).unwrap()[0].id;
+        assert_eq!(opened.read_file(legacy_id).unwrap(), b"original 2026 format");
+        let input = root.join("new.bin");
+        std::fs::write(&input, b"new chunked format data").unwrap();
+        opened.import_one(1, &input, "new.bin", false).unwrap();
+        let ids = opened.list(1).unwrap();
+        assert_eq!(ids.len(), 2);
+        assert_eq!(opened.read_file(ids.iter().find(|i| i.name == "new.bin").unwrap().id).unwrap(), b"new chunked format data");
+        opened.export_one(1, "legacy.txt", &root, "legacy-output.txt", false).unwrap();
+        assert_eq!(std::fs::read(root.join("legacy-output.txt")).unwrap(), b"original 2026 format");
+        opened.verify_integrity().unwrap();
+        drop(opened);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[ignore = "Run explicitly for a >512 MiB streaming integration check"]
+    fn streams_550_mib_file_without_the_previous_batch_limit() {
+        let root = std::env::temp_dir().join(format!("ndr-stream-550-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir_all(root.join("out")).unwrap();
+        let input = root.join("source.bin");
+        let mut file = std::fs::File::create(&input).unwrap();
+        let size = 550 * 1024 * 1024 + 13;
+        file.set_len(size).unwrap();
+        use std::io::{Seek, SeekFrom};
+        file.write_all(b"FIRST-550").unwrap();
+        file.seek(SeekFrom::End(-8)).unwrap();
+        file.write_all(b"LAST-550").unwrap();
+        drop(file);
+        let mut source = Vault::create(&root.join("first.ndr"), "long password 123456".into()).unwrap();
+        let mut target = Vault::create(&root.join("second.ndr"), "other password 123456".into()).unwrap();
+        source.import_one(1, &input, "large.bin", false).unwrap();
+        assert_eq!(source.list(1).unwrap()[0].size as u64, size);
+        target.copy_from_vault_item(&mut source, 1, "large.bin", 1, "copied.bin", false).unwrap();
+        assert_eq!(target.list(1).unwrap()[0].size as u64, size);
+        target.export_one(1, "copied.bin", &root.join("out"), "roundtrip.bin", false).unwrap();
+        let mut result = std::fs::File::open(root.join("out/roundtrip.bin")).unwrap();
+        assert_eq!(result.metadata().unwrap().len(), size);
+        let mut first = [0u8; 9];
+        result.read_exact(&mut first).unwrap();
+        assert_eq!(&first, b"FIRST-550");
+        result.seek(SeekFrom::End(-8)).unwrap();
+        let mut last = [0u8; 8];
+        result.read_exact(&mut last).unwrap();
+        assert_eq!(&last, b"LAST-550");
+        drop(result);
+        source.verify_integrity().unwrap();
+        target.verify_integrity().unwrap();
+        drop((source,target));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn large_encrypted_files_stream_through_import_export_and_cross_container_copy() {
+        let folder = std::env::temp_dir().join(format!("ndr-stream-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir_all(folder.join("out")).unwrap();
+        let input = folder.join("input.bin");
+        let mut writer = std::fs::File::create(&input).unwrap();
+        writer.set_len(80 * 1024 * 1024 + 7).unwrap();
+        use std::io::{Seek, SeekFrom};
+        writer.write_all(b"START").unwrap();
+        writer.seek(SeekFrom::End(-7)).unwrap();
+        writer.write_all(b"THE-END").unwrap();
+        drop(writer);
+        let mut a = Vault::create(&folder.join("one.ndr"), "long password alpha".into()).unwrap();
+        let mut b = Vault::create(&folder.join("two.ndr"), "long password beta".into()).unwrap();
+        assert_eq!(a.import_one(1, &input, "large.bin", false).unwrap(), 1);
+        let entry = &a.list(1).unwrap()[0];
+        assert_eq!(entry.size, 80 * 1024 * 1024 + 7);
+        assert!(a.read_file(entry.id).is_err(), "large files must not be loaded for text editing");
+        assert_eq!(b.copy_from_vault_item(&mut a, 1, "large.bin", 1, "copied.bin", false).unwrap(), 1);
+        assert_eq!(b.list(1).unwrap()[0].size, entry.size);
+        b.export_one(1, "copied.bin", &folder.join("out"), "out.bin", false).unwrap();
+        let output = std::fs::read(folder.join("out/out.bin")).unwrap();
+        assert_eq!(output.len() as i64, entry.size);
+        assert_eq!(&output[..5], b"START");
+        assert_eq!(&output[output.len()-7..], b"THE-END");
+        drop(output);
+        a.verify_integrity().unwrap();
+        b.verify_integrity().unwrap();
+        drop((a,b));
+        std::fs::remove_dir_all(folder).unwrap();
+    }
     #[test]
     fn encrypted_conflict_replacement_is_atomic_and_export_restores_on_failure() {
         let root = std::env::temp_dir().join(format!("ndr-conflict-recovery-{}-{}", std::process::id(),
