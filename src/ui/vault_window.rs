@@ -1198,9 +1198,10 @@ mod tests {
         assert_eq!(dialog.created_path.as_deref(), Some(root.join("비밀 문서.ndr").as_path()));
         assert!(root.join("비밀 문서.ndr").is_file());
         assert!(dialog.vault.is_some(), "the created folder should stay authenticated for entry");
+        // An exclusive authenticated session must end before testing a second unlock.
+        drop(dialog);
         assert!(Vault::unlock(&root.join("비밀 문서.ndr"), "wrong password 123456".into()).is_err());
         assert!(Vault::unlock(&root.join("비밀 문서.ndr"), "long secure passphrase 12345!".into()).is_ok());
-        drop(dialog);
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -1308,9 +1309,12 @@ impl VaultDialog {
             "Unsupported encrypted container format" => "WrongFormat",
             "Unsupported encrypted container version" => "WrongVersion",
             "Encrypted container file does not exist" => "MissingContainer",
-            "Password must contain at least 6 characters" => "ShortPassword",
+            "Password must contain at least 12 characters" => "ShortPassword",
             _ => return message.to_owned(),
         };
+        if key == "ShortPassword" {
+            return lang.text(&format!("NDRVault.{key}"), message).replace('6', "12");
+        }
         lang.text(&format!("NDRVault.{key}"), message)
     }
 
@@ -1341,7 +1345,7 @@ impl VaultDialog {
             egui::TextEdit::singleline(&mut self.confirmation).password(true));
 
         ui.put(at(18.0, 145.0, 411.0, 19.0), egui::Label::new(
-            egui::RichText::new(lang.text("NDRVault.CreateNote", "Names and files are encrypted. Password: at least 6 characters.")).small().weak()));
+            egui::RichText::new(lang.text("NDRVault.CreateNote", "Names and files are encrypted. Password: at least 12 characters.").replace('6', "12")).small().weak()));
         ui.put(at(18.0, 165.0, 411.0, 19.0), egui::Label::new(
             egui::RichText::new(lang.text("NDRVault.NoRecovery", "A forgotten password cannot be recovered.")).small().weak()));
 

@@ -2,7 +2,7 @@
 //! Inspired by the appendable single-file block index of CoverFS, but not
 //! derived from its crypto implementation. AES-256-GCM is provided by OpenSSL.
 //! No SQL, no virtual-drive driver, no plaintext staging on normal operations.
-use openssl::{hash::MessageDigest, pkcs5::pbkdf2_hmac, rand::rand_bytes, symm::{decrypt_aead, encrypt_aead, Cipher}};
+use openssl::{hash::MessageDigest, pkcs5::pbkdf2_hmac, pkey::PKey, rand::rand_bytes, sign::Signer, symm::{decrypt_aead, encrypt_aead, Cipher}};
 use serde::{Deserialize, Serialize};
 use std::{collections::{BTreeMap, HashSet}, fs::{self, File, OpenOptions}, io::{Read, Seek, SeekFrom, Write}, path::{Path, PathBuf}, time::{Duration, Instant}};
 use zeroize::{Zeroize, Zeroizing};
@@ -10,10 +10,10 @@ use zeroize::{Zeroize, Zeroizing};
 pub const EXTENSION: &str = "ndr";
 pub const STREAM_CHUNK_SIZE: usize = 8 * 1024 * 1024;
 pub const MAX_FILE_SIZE: usize = 64 * 1024 * 1024;
-const MAGIC: &[u8; 8] = b"NDRV2FS!";
+const MAGIC: &[u8; 8] = b"NDRV3FS!";
 const HEADER_SIZE: u64 = 128;
-const SLOT_SIZE: u64 = 32;
-const KDF_ITERATIONS: usize = 300_000;
+const SLOT_SIZE: u64 = 48;
+const KDF_ITERATIONS: usize = 600_000;
 const MAX_META: usize = 64 * 1024 * 1024;
 const RECORD_HEADER: usize = 33; // kind, ciphertext length, random nonce, GCM tag
 const KIND_META: u8 = 0x4d;
@@ -67,13 +67,34 @@ impl Index {
     fn check(&self) -> Result<(), String> {
         if self.items.len() > 2_000_000 { return Err("Encrypted index exceeds safety limit".into()); }
         if !self.items.get(&1).is_some_and(|r| r.folder && r.parent == 0) { return Err("Encrypted root is invalid".into()); }
+        if self.next_id <= 1 || self.next_id <= *self.items.keys().next_back().unwrap_or(&1) {
+            return Err("Encrypted item numbering is invalid".into());
+        }
         let mut pairs = HashSet::new();
-        for item in self.items.values() {
+        for (&key, item) in &self.items {
+            if item.id != key { return Err("Encrypted item ID does not match index".into()); }
             if item.id == 1 { continue; }
             valid_name(&item.name)?;
             if !self.items.get(&item.parent).is_some_and(|p| p.folder) { return Err("Invalid encrypted parent reference".into()); }
             if !pairs.insert((item.parent, item.name.to_lowercase())) { return Err("Duplicate encrypted names".into()); }
             if item.folder && (item.size != 0 || !item.blocks.is_empty()) { return Err("Invalid encrypted folder contents".into()); }
+            if !item.folder {
+                let mut sum = 0u64;
+                for block in &item.blocks {
+                    if block.size as usize > STREAM_CHUNK_SIZE { return Err("Encrypted data block is too large".into()); }
+                    sum = sum.checked_add(block.size as u64).ok_or("Encrypted file size overflow")?;
+                }
+                if sum != item.size { return Err("Encrypted file block lengths are inconsistent".into()); }
+            }
+            // Bound traversal even for a malicious authenticated metadata
+            // snapshot (e.g. tampering through a leaked password).
+            let mut ancestor = item.parent;
+            let mut depth = 0usize;
+            while ancestor != 1 {
+                if ancestor == item.id || depth >= 64 { return Err("Encrypted directory cycle or excessive depth".into()); }
+                ancestor = self.items.get(&ancestor).ok_or("Invalid encrypted ancestor")?.parent;
+                depth += 1;
+            }
         }
         Ok(())
     }
@@ -102,11 +123,24 @@ fn derive(password: String, salt: &[u8]) -> Result<Zeroizing<[u8;32]>, String> {
         .map_err(|e| format!("Key derivation failed: {e}"))?;
     Ok(key)
 }
+// Hold an exclusive OS handle across the entire authenticated session.
+// This rejects stale concurrent writers even across independent NDR processes.
+fn exclusive(options: &mut OpenOptions) -> &mut OpenOptions {
+    #[cfg(windows)] {
+        use std::os::windows::fs::OpenOptionsExt;
+        // Read-only metadata probes and backup readers remain possible, but
+        // other read-write openers cannot acquire a writer handle.
+        options.share_mode(1);
+    }
+    options
+}
 fn record_size(len: usize) -> Result<u64, String> {
     u64::try_from(RECORD_HEADER.checked_add(len).ok_or("Encrypted record length overflow")?)
         .map_err(|e| e.to_string())
 }
 fn put_record(handle: &mut File, key: &[u8;32], kind: u8, plaintext: &[u8]) -> Result<Block, String> {
+    let limit = if kind == KIND_META { MAX_META } else if kind == KIND_DATA { STREAM_CHUNK_SIZE } else { return Err("Invalid encrypted record type".into()); };
+    if plaintext.len() > limit { return Err("Encrypted record exceeds size limit".into()); }
     let length = u32::try_from(plaintext.len()).map_err(|_| "Encrypted record is too large")?;
     let offset = handle.seek(SeekFrom::End(0)).map_err(|e| e.to_string())?;
     let mut nonce = [0u8;12];
@@ -129,6 +163,8 @@ fn put_record(handle: &mut File, key: &[u8;32], kind: u8, plaintext: &[u8]) -> R
     Ok(Block { offset, size: length })
 }
 fn get_record(handle: &File, key: &[u8;32], block: &Block, expected: u8) -> Result<Zeroizing<Vec<u8>>, String> {
+    let limit = if expected == KIND_META { MAX_META } else if expected == KIND_DATA { STREAM_CHUNK_SIZE } else { return Err("Invalid encrypted record type".into()); };
+    if block.size as usize > limit { return Err("Encrypted record exceeds size limit".into()); }
     let mut handle = handle.try_clone().map_err(|e| e.to_string())?;
     let size = handle.metadata().map_err(|e| e.to_string())?.len();
     if block.offset < HEADER_SIZE || block.offset.checked_add(record_size(block.size as usize)?).is_none_or(|end| end > size) {
@@ -149,35 +185,55 @@ fn get_record(handle: &File, key: &[u8;32], block: &Block, expected: u8) -> Resu
         .map_err(|_| "Wrong password, damaged encrypted container, or authentication failure".to_owned())?;
     Ok(Zeroizing::new(plain))
 }
-fn checksum(slot: &[u8]) -> u32 {
-    let digest = openssl::sha::sha256(&slot[..24]);
-    u32::from_le_bytes(digest[..4].try_into().unwrap())
+// Authenticate both metadata pointers using a keyed HMAC over the v3 header
+// prefix, slot index, and generation/offset/length. A silent downgrade on
+// corrupt latest pointer is forbidden. Full-file replay needs a trusted
+// external monotonic counter; no self-contained file can prevent it.
+fn slot_mac(key: &[u8;32], header_prefix: &[u8], index: usize, slot: &[u8]) -> Result<[u8;16], String> {
+    let pkey = PKey::hmac(key).map_err(|e| e.to_string())?;
+    let mut signer = Signer::new(MessageDigest::sha256(), &pkey).map_err(|e| e.to_string())?;
+    signer.update(b"NDRV3 metadata slot").map_err(|e| e.to_string())?;
+    signer.update(header_prefix).map_err(|e| e.to_string())?;
+    signer.update(&[index as u8]).map_err(|e| e.to_string())?;
+    signer.update(&slot[..24]).map_err(|e| e.to_string())?;
+    let tag = signer.sign_to_vec().map_err(|e| e.to_string())?;
+    Ok(tag[..16].try_into().unwrap())
 }
-fn slot_bytes(generation: u64, block: &Block) -> [u8;32] {
-    let mut out = [0u8;32];
+fn slot_bytes(generation: u64, block: &Block, key: &[u8;32], prefix: &[u8], index: usize) -> Result<[u8;48], String> {
+    let mut out = [0u8;48];
     out[..8].copy_from_slice(&generation.to_le_bytes());
     out[8..16].copy_from_slice(&block.offset.to_le_bytes());
-    out[16..24].copy_from_slice(&(record_size(block.size as usize).unwrap_or(0)).to_le_bytes());
-    let digest=checksum(&out);
-    out[24..28].copy_from_slice(&digest.to_le_bytes());
-    out
+    out[16..24].copy_from_slice(&record_size(block.size as usize)?.to_le_bytes());
+    let mac = slot_mac(key, prefix, index, &out)?;
+    out[24..40].copy_from_slice(&mac);
+    Ok(out)
 }
-fn read_slot(header: &[u8;128], index: usize, len: u64) -> Option<(u64,Block)> {
+fn read_slot(header: &[u8;128], index: usize, len: u64, key: &[u8;32]) -> Result<(u64,Block), String> {
     let at = 32 + index * SLOT_SIZE as usize;
     let slot = &header[at..at + SLOT_SIZE as usize];
-    if u32::from_le_bytes(slot[24..28].try_into().ok()?) != checksum(slot) { return None; }
-    let generation = u64::from_le_bytes(slot[..8].try_into().ok()?);
-    let offset = u64::from_le_bytes(slot[8..16].try_into().ok()?);
-    let record_len = u64::from_le_bytes(slot[16..24].try_into().ok()?);
+    let mac = slot_mac(key, &header[..32], index, slot)?;
+    if !openssl::memcmp::eq(&mac, &slot[24..40]) || slot[40..48].iter().any(|&b| b != 0) {
+        return Err("Encrypted container metadata pointer has been altered".into());
+    }
+    let generation = u64::from_le_bytes(slot[..8].try_into().unwrap());
+    let offset = u64::from_le_bytes(slot[8..16].try_into().unwrap());
+    let record_len = u64::from_le_bytes(slot[16..24].try_into().unwrap());
     if generation == 0 || record_len < RECORD_HEADER as u64 || record_len > MAX_META as u64 + RECORD_HEADER as u64
-        || offset < HEADER_SIZE || offset.checked_add(record_len)? > len { return None; }
-    Some((generation,Block { offset, size: u32::try_from(record_len - RECORD_HEADER as u64).ok()? }))
+        || offset < HEADER_SIZE || offset.checked_add(record_len).is_none_or(|end| end > len) {
+        return Err("Encrypted container metadata pointer is invalid".into());
+    }
+    Ok((generation, Block { offset, size: u32::try_from(record_len - RECORD_HEADER as u64).map_err(|e| e.to_string())? }))
 }
 
 impl Vault {
     pub fn create(path: &Path, password: String) -> Result<Self, String> {
+        if password.chars().count() < 12 {
+            return Err("Password must contain at least 12 characters".into());
+        }
         if !path.extension().is_some_and(|e| e.eq_ignore_ascii_case(EXTENSION)) { return Err("Encrypted containers must use .ndr extension".into()); }
-        let mut handle = OpenOptions::new().read(true).write(true).create_new(true).open(path).map_err(|e| e.to_string())?;
+        let mut options = OpenOptions::new();
+        options.read(true).write(true).create_new(true);
+        let mut handle = exclusive(&mut options).open(path).map_err(|e| e.to_string())?;
         let result = (|| {
             let mut header = [0u8;128];
             header[..8].copy_from_slice(MAGIC);
@@ -194,26 +250,39 @@ impl Vault {
         result
     }
     pub fn unlock(path: &Path, password: String) -> Result<Self, String> {
-        let mut handle = OpenOptions::new().read(true).write(true).open(path).map_err(|e| e.to_string())?;
+        let mut options = OpenOptions::new();
+        options.read(true).write(true);
+        let mut handle = exclusive(&mut options).open(path)
+            .map_err(|e| format!("Cannot open encrypted container exclusively (close any other NDR instance using it): {e}"))?;
         let mut header = [0u8;128];
         handle.read_exact(&mut header).map_err(|_| "Not an NDR v2 container (legacy SQLCipher format is unsupported)".to_owned())?;
         if &header[..8] != MAGIC { return Err("Not an NDR v2 container (legacy SQLCipher format is unsupported)".into()); }
         if u32::from_le_bytes(header[24..28].try_into().unwrap()) as usize != KDF_ITERATIONS { return Err("Unsupported NDR key derivation format".into()); }
         let key = derive(password, &header[8..24])?;
         let len = handle.metadata().map_err(|e| e.to_string())?.len();
-        let mut slots: Vec<_> = (0..2).filter_map(|i| read_slot(&header,i,len)).collect();
-        slots.sort_by(|a,b| b.0.cmp(&a.0));
-        for (generation,block) in slots {
-            if let Ok(bytes) = get_record(&handle,&key,&block,KIND_META) {
-                if let Ok(index) = serde_json::from_slice::<Index>(&bytes) {
-                    if index.check().is_ok() {
-                        return Ok(Self { handle,file:path.to_path_buf(),key,index,generation,pending:None,
-                            opened:Instant::now(),last_used:Instant::now() });
-                    }
+        // Both pointers are authenticated. An invalid latest pointer must NOT
+        // silently fall back to a previous state and resurrect deleted files.
+        let first = read_slot(&header,0,len,&key)?;
+        let second = read_slot(&header,1,len,&key)?;
+        if first.0.abs_diff(second.0) > 1 || (first.0 == second.0 && (first.1.offset != second.1.offset || first.1.size != second.1.size)) {
+            return Err("Encrypted container pointer generations are inconsistent".into());
+        }
+        let (generation,block) = if first.0 >= second.0 { first } else { second };
+        let bytes = get_record(&handle,&key,&block,KIND_META)?;
+        let index: Index = serde_json::from_slice(&bytes)
+            .map_err(|_| "Wrong password or encrypted metadata damaged".to_owned())?;
+        index.check()?;
+        for item in index.items.values() {
+            if item.folder { continue; }
+            for block in &item.blocks {
+                if block.offset < HEADER_SIZE || block.size as usize > STREAM_CHUNK_SIZE
+                    || block.offset.checked_add(record_size(block.size as usize)?).is_none_or(|end| end > len) {
+                    return Err("Encrypted data block points outside its container".into());
                 }
             }
         }
-        Err("Wrong password or encrypted container metadata is corrupt".into())
+        Ok(Self { handle,file:path.to_path_buf(),key,index,generation,pending:None,
+            opened:Instant::now(),last_used:Instant::now() })
     }
     fn commit_index(&mut self) -> Result<(), String> {
         self.index.check()?;
@@ -222,9 +291,24 @@ impl Vault {
         let block = put_record(&mut self.handle,&self.key,KIND_META,&data)?;
         self.handle.sync_data().map_err(|e| e.to_string())?;
         let generation = self.generation.checked_add(1).ok_or("Encrypted generation overflow")?;
-        let slot = slot_bytes(generation,&block);
-        self.handle.seek(SeekFrom::Start(32 + (generation % 2) * SLOT_SIZE)).map_err(|e| e.to_string())?;
-        self.handle.write_all(&slot).and_then(|_| self.handle.sync_all()).map_err(|e| e.to_string())?;
+        let mut prefix = [0u8;32];
+        self.handle.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
+        self.handle.read_exact(&mut prefix).map_err(|e| e.to_string())?;
+        if generation == 1 {
+            // Both slots are populated from the beginning so zeroing either
+            // one cannot be confused with an unused slot later.
+            for index in 0..2usize {
+                let slot = slot_bytes(generation,&block,&self.key,&prefix,index)?;
+                self.handle.seek(SeekFrom::Start(32 + index as u64 * SLOT_SIZE)).map_err(|e| e.to_string())?;
+                self.handle.write_all(&slot).map_err(|e| e.to_string())?;
+            }
+        } else {
+            let index = (generation % 2) as usize;
+            let slot = slot_bytes(generation,&block,&self.key,&prefix,index)?;
+            self.handle.seek(SeekFrom::Start(32 + index as u64 * SLOT_SIZE)).map_err(|e| e.to_string())?;
+            self.handle.write_all(&slot).map_err(|e| e.to_string())?;
+        }
+        self.handle.sync_all().map_err(|e| e.to_string())?;
         self.generation = generation;
         self.touch();
         Ok(())
@@ -789,16 +873,69 @@ mod tests {
         let root=fixture("recovery");let path=root.join("recover.ndr");
         let mut vault=Vault::create(&path,"correct secret".into()).unwrap();
         vault.add_file(1,"older.txt",b"safe").unwrap();
-        vault.add_file(1,"newer.txt",b"lost if last slot corrupt").unwrap();
+        vault.add_file(1,"newer.txt",b"latest metadata").unwrap();
         let current=vault.generation;
         drop(vault);
         let mut file=OpenOptions::new().read(true).write(true).open(&path).unwrap();
-        file.seek(SeekFrom::Start(32+(current%2)*SLOT_SIZE)).unwrap();
-        file.write_all(&[0u8;32]).unwrap();file.sync_all().unwrap();drop(file);
-        let mut vault=Vault::unlock(&path,"correct secret".into()).unwrap();
-        assert!(vault.find_child(1,"older.txt").unwrap().is_some());
-        assert!(vault.find_child(1,"newer.txt").unwrap().is_none());
-        drop(vault);fs::remove_dir_all(root).unwrap();
+        file.seek(SeekFrom::Start(32+(current%2)*SLOT_SIZE+24)).unwrap();
+        file.write_all(&[0xff]).unwrap();file.sync_all().unwrap();drop(file);
+        assert!(Vault::unlock(&path,"correct secret".into()).err().unwrap().contains("altered"),
+            "tampered latest pointer must fail closed, not resurrect older deleted data");
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn a_second_writer_is_rejected_until_the_first_closes() {
+        let root=fixture("writer-lock");let path=root.join("locked.ndr");
+        let mut first=Vault::create(&path,"correct secret".into()).unwrap();
+        let first_id=first.add_file(1,"first.txt",b"first").unwrap();
+        assert!(Vault::unlock(&path,"correct secret".into()).is_err());
+        drop(first);
+        let mut next=Vault::unlock(&path,"correct secret".into()).unwrap();
+        assert_eq!(next.read_file(first_id).unwrap(),b"first");
+        next.add_file(1,"second.txt",b"second").unwrap();
+        drop(next);
+        let mut reopened=Vault::unlock(&path,"correct secret".into()).unwrap();
+        assert_eq!(reopened.list(1).unwrap().len(),2);
+        drop(reopened);fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn a_separate_process_cannot_unlock_a_live_writer() {
+        let root=fixture("cross-process-writer-lock");
+        let path=root.join("locked.ndr");
+        let first=Vault::create(&path,"correct secret".into()).unwrap();
+        let runner=std::env::current_exe().unwrap();
+        let output=std::process::Command::new(runner)
+            .arg("--exact").arg("vault::tests::second_process_writer_probe")
+            .arg("--nocapture")
+            .env("NDR_SECURITY_WRITER_PROBE",&path)
+            .output().unwrap();
+        assert!(output.status.success(), "second process unexpectedly opened live vault: {}",
+            String::from_utf8_lossy(&output.stdout));
+        drop(first);
+        assert!(Vault::unlock(&path,"correct secret".into()).is_ok());
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn second_process_writer_probe() {
+        let Some(path)=std::env::var_os("NDR_SECURITY_WRITER_PROBE") else { return };
+        assert!(Vault::unlock(Path::new(&path),"correct secret".into()).is_err(),
+            "another process must not open a container locked by a live writer");
+    }
+    #[test]
+    fn deleted_file_cannot_resurrect_from_corrupted_latest_slot() {
+        let root=fixture("deleted-rollback");let path=root.join("deleted.ndr");
+        let mut vault=Vault::create(&path,"correct secret".into()).unwrap();
+        let id=vault.add_file(1,"deleted.txt",b"deleted content").unwrap();
+        vault.remove(id).unwrap();drop(vault);
+        let mut file=OpenOptions::new().read(true).write(true).open(&path).unwrap();
+        let mut header=[0u8;HEADER_SIZE as usize];file.read_exact(&mut header).unwrap();
+        let a=u64::from_le_bytes(header[32..40].try_into().unwrap());
+        let b=u64::from_le_bytes(header[32+SLOT_SIZE as usize..40+SLOT_SIZE as usize].try_into().unwrap());
+        let latest=if a>b {0} else {1};
+        file.seek(SeekFrom::Start(32+latest as u64*SLOT_SIZE+24)).unwrap();
+        file.write_all(&[0x80]).unwrap();file.sync_all().unwrap();drop(file);
+        assert!(Vault::unlock(&path,"correct secret".into()).is_err());
+        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     #[ignore = "Explicit single-file encrypted transfer and delete performance benchmark"]
