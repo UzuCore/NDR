@@ -18,7 +18,7 @@ const INTERNAL_ERROR: i32 = 0xC00000E5u32 as i32;
 
 fn fs_error(code: i32) -> FspError { FspError::NTSTATUS(code) }
 
-fn load_installed_winfsp_dll() {
+fn load_installed_winfsp_dll() -> bool {
     use std::os::windows::ffi::OsStrExt;
     use windows::Win32::System::LibraryLoader::LoadLibraryW;
     use windows::core::PCWSTR;
@@ -32,10 +32,14 @@ fn load_installed_winfsp_dll() {
             wide.push(0);
             // Load the signed runtime from its installed directory. The
             // winfsp-rs delay-loaded binding can then resolve its basename.
-            let _ = unsafe { LoadLibraryW(PCWSTR(wide.as_ptr())) };
-            break;
+            return unsafe { LoadLibraryW(PCWSTR(wide.as_ptr())).is_ok() };
         }
     }
+    false
+}
+
+pub(super) fn runtime_available() -> bool {
+    load_installed_winfsp_dll() && winfsp::winfsp_init().is_ok()
 }
 
 struct MountData {
@@ -317,8 +321,9 @@ pub(super) struct VaultMount {
 impl VaultMount {
     pub fn start(pane: usize, vault_path: std::path::PathBuf,
         original: &Vault, parent: i64, item: VaultItem) -> Result<Self, String> {
-        load_installed_winfsp_dll();
-        winfsp::winfsp_init().map_err(|_| "WinFsp 2.1 runtime/driver is not installed".to_owned())?;
+        if !runtime_available() {
+            return Err("WinFsp 2.1 runtime/driver is not installed".to_owned());
+        }
         let drives = unsafe { windows_sys::Win32::Storage::FileSystem::GetLogicalDrives() };
         let letter = (b'T'..=b'Z').rev().find(|&c| drives & (1u32 << (c - b'A')) == 0)
             .ok_or("No free drive letter for WinFsp encrypted view")?;

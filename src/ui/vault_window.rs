@@ -236,11 +236,17 @@ impl App {
         #[cfg(not(feature = "winfsp-vault"))]
         {
             let _ = (pane, item);
-            self.error_notice("파일 열기 불가", "WinFsp unavailable",
-                "WinFsp virtual-file support is not enabled in this NDR build.");
+            self.error_notice("보안상 파일 열기 차단", "Encrypted file opening blocked",
+                "보안 문제로 암호화 폴더 내부 파일을 실행하려면 WinFsp가 설치되어 있어야 합니다.");
         }
         #[cfg(feature = "winfsp-vault")]
         {
+            if !super::vault_winfsp::runtime_available() {
+                self.winfsp_install_offer = true;
+                self.error_notice("보안상 파일 열기 차단", "Encrypted file opening blocked",
+                    "보안 문제로 암호화 폴더 내부 파일을 실행하려면 WinFsp가 설치되어 있어야 합니다.");
+                return;
+            }
             if self.vault_mount.is_some() {
                 self.warning_notice("파일 열기 대기", "Encrypted file is already open",
                     "Close the current virtual file before opening another one.");
@@ -257,7 +263,18 @@ impl App {
             };
             match result {
                 Ok(mut mount) => {
-                    if let Err(error) = native::shell_open(&mount.file_path, None, "open") {
+                    // Plain text must go to a real editor, not a file-type
+                    // association that may choose a read-only previewer.
+                    let extension = mount.file_path.extension().and_then(|ext| ext.to_str()).unwrap_or("");
+                    let textual = ["txt", "md", "log", "ini", "cfg", "json", "xml", "csv", "yaml", "yml", "toml", "rs", "py", "bat", "ps1"]
+                        .iter().any(|known| extension.eq_ignore_ascii_case(known));
+                    let opened = if textual {
+                        native::shell_open(std::path::Path::new("notepad.exe"),
+                            Some(&native::quote_arg(&mount.file_path.to_string_lossy())), "open")
+                    } else {
+                        native::shell_open(&mount.file_path, None, "open")
+                    };
+                    if let Err(error) = opened {
                         let _ = mount.finish();
                         self.error_notice("암호화 파일 열기 실패", "Encrypted file open failed", error);
                     } else {
@@ -282,7 +299,7 @@ impl App {
                 .id(egui::Id::new("ndr-winfsp-install"))
                 .resizable(false).collapsible(false).show(ctx, |ui| {
                     ui.label(if ko {
-                        "가상 파일을 열려면 WinFsp 드라이버 설치가 필요합니다. 설치파일은 NDR에 포함되어 있습니다. Windows 관리자 승인(UAC)이 필요합니다."
+                        "보안 문제로 암호화 폴더 내부 파일을 열거나 실행하려면 WinFsp가 설치되어 있어야 합니다. 일반 파일 관리 기능은 그대로 사용할 수 있습니다. 설치파일은 NDR에 포함되어 있으며 Windows 관리자 승인(UAC)이 필요합니다."
                     } else {
                         "The WinFsp driver is required for virtual files. The signed installer is embedded in NDR. Windows UAC approval is required."
                     });

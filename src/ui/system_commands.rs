@@ -426,6 +426,12 @@ impl App {
             return;
         }
         let Some(entry) = pane.entries.get(pane.cursor).filter(|e| !e.is_dir && !e.drive).cloned() else { return };
+        // Vault files have no plaintext on-disk path. Route both View and Edit
+        // commands through the same WinFsp-backed external editor as a double-click.
+        if self.panes[i].vault.is_some() {
+            self.enter_vault_item(i, &entry);
+            return;
+        }
         match self.panes[i].archive.clone() {
             None => self.text_source_ready(Ok(entry.path), edit),
             Some(location) => {

@@ -46,6 +46,7 @@ mod tools_dialog;
 mod vault_window;
 #[cfg(feature = "winfsp-vault")]
 mod vault_winfsp;
+
 mod dinosaur_names;
 #[cfg(test)]
 mod tests;

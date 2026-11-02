@@ -5,7 +5,7 @@ edition = "2024"
 description = "NDR native Rust dual-pane file manager"
 
 [features]
-default = []
+default = ["winfsp-vault"]
 winfsp-vault = ["dep:winfsp", "dep:widestring"]
 
 [dependencies]
