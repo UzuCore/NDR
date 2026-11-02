@@ -46,13 +46,14 @@ struct MountData {
     size: u64,
     original_size: u64,
     pages: BTreeMap<u64, Zeroizing<Vec<u8>>>,
+    read_cache: Option<(u64, Zeroizing<Vec<u8>>)>,
     truncate_floor: Option<u64>,
     dirty: bool,
     last_error: Option<String>,
 }
 
 impl MountData {
-    fn read_at(&self, buffer: &mut [u8], offset: u64) -> Result<usize, String> {
+    fn read_at(&mut self, buffer: &mut [u8], offset: u64) -> Result<usize, String> {
         if offset >= self.size { return Ok(0); }
         let length = buffer.len().min(self.size.saturating_sub(offset) as usize);
         let mut done = 0;
@@ -68,7 +69,13 @@ impl MountData {
                     buffer[done..done + available].copy_from_slice(&staged[within..within + available]);
                 }
             } else if position < self.original_size {
-                if let Some(plaintext) = self.vault.stream_read_chunk(self.id, page as i64)? {
+                // Repeated 64 KiB reads of a large video should not decrypt
+                // the same 8 MiB GCM record on every filesystem callback.
+                if self.read_cache.as_ref().is_none_or(|(cached, _)| *cached != page) {
+                    self.read_cache = self.vault.stream_read_chunk(self.id, page as i64)?
+                        .map(|data| (page, data));
+                }
+                if let Some((_, plaintext)) = self.read_cache.as_ref() {
                     if within < plaintext.len() {
                         let available = take.min(plaintext.len() - within)
                             .min(self.truncate_floor.unwrap_or(u64::MAX).saturating_sub(position) as usize);
@@ -148,6 +155,7 @@ impl MountData {
         self.id = new_id;
         self.original_size = self.size;
         self.pages.clear();
+        self.read_cache = None;
         self.truncate_floor = None;
         self.dirty = false;
         self.last_error = None;
@@ -319,7 +327,7 @@ impl VaultMount {
         let state = Arc::new(Mutex::new(MountData {
             vault: original.fork_for_mount()?, id: item.id, parent, name: item.name.clone(),
             size: item.size.max(0) as u64, original_size: item.size.max(0) as u64,
-            pages: BTreeMap::new(), truncate_floor: None, dirty: false, last_error: None,
+            pages: BTreeMap::new(), read_cache: None, truncate_floor: None, dirty: false, last_error: None,
         }));
         let mut params = VolumeParams::new();
         params.filesystem_name("NDRVAULT").sector_size(512)
@@ -385,11 +393,15 @@ mod tests {
         let mut mounted = MountData {
             vault: original.fork_for_mount().unwrap(), id, parent: 1, name: "picture.png".into(),
             size: plain.len() as u64, original_size: plain.len() as u64,
-            pages: BTreeMap::new(), truncate_floor: None, dirty: false, last_error: None,
+            pages: BTreeMap::new(), read_cache: None, truncate_floor: None, dirty: false, last_error: None,
         };
         let mut before = vec![0; plain.len()];
         mounted.read_at(&mut before, 0).unwrap();
         assert_eq!(&before, plain);
+        assert_eq!(mounted.read_cache.as_ref().map(|(index, _)| *index), Some(0));
+        let mut repeated = vec![0; plain.len()];
+        mounted.read_at(&mut repeated, 0).unwrap();
+        assert_eq!(repeated, before);
         mounted.write_at(b"replaced", 0).unwrap();
         mounted.commit().unwrap();
         original.reload_after_mount().unwrap();
@@ -409,7 +421,7 @@ mod tests {
         let id = original.add_file(1, "video.bin", b"ABCDEFGHIJKLMNOP").unwrap();
         let state = Arc::new(Mutex::new(MountData {
             vault: original.fork_for_mount().unwrap(), id, parent: 1, name: "video.bin".into(),
-            size: 16, original_size: 16, pages: BTreeMap::new(),
+            size: 16, original_size: 16, pages: BTreeMap::new(), read_cache: None,
             truncate_floor: None, dirty: false, last_error: None,
         }));
         let fs = SingleFileFs { state: Arc::clone(&state) };
@@ -441,7 +453,7 @@ mod tests {
         let state = Arc::new(Mutex::new(MountData {
             vault: vault.fork_for_mount().unwrap(), id, parent: 1, name: "photo.png".into(),
             size: original.len() as u64, original_size: original.len() as u64,
-            pages: BTreeMap::new(), truncate_floor: None, dirty: false, last_error: None,
+            pages: BTreeMap::new(), read_cache: None, truncate_floor: None, dirty: false, last_error: None,
         }));
         let fs = SingleFileFs { state: Arc::clone(&state) };
         let mut info = FileInfo::default();

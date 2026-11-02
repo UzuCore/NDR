@@ -313,6 +313,8 @@ impl App {
                 ui.label(if ko {
                     "WinFsp에서 읽기와 수정을 처리합니다. NDR은 평문 임시파일을 만들지 않습니다."
                 } else { "WinFsp handles file reads and edits without NDR creating a plaintext temp file." });
+                ui.label(if ko { "외부 프로그램은 별도의 평문 캐시나 자동저장 파일을 만들 수 있습니다." }
+                    else { "External applications may still create plaintext caches and autosave files." });
                 ui.label(if ko { "외부 프로그램에서 파일을 저장하고 닫은 후 아래 버튼을 누르세요." }
                     else { "Save and close the external application before unmounting." });
                 if ui.button(if ko { "닫기 및 암호화 저장" } else { "Unmount and save encrypted" }).clicked() { close = true; }
