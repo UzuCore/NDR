@@ -616,17 +616,14 @@ impl App {
             && self.panes.iter().any(|pane| pane.vault.is_some()) {
             let source = self.active;
             let target = 1 - source;
-            if id.contains("move") || id.contains("Move") {
-                self.status = "암호화 폴더로의 이동은 지원하지 않습니다. 복사 후 원본을 확인하세요.".into();
-                return;
-            }
+            let moving = id.contains("move") || id.contains("Move");
             if self.panes[target].vault.is_some() && self.panes[source].vault.is_none()
                 && self.panes[source].archive.is_none() && self.panes[source].remote.is_none() {
                 let sources = self.panes[source].targets();
-                return self.vault_import_paths(target, sources);
+                return self.vault_transfer_from_local(source, target, sources, moving);
             }
             if self.panes[source].vault.is_some() {
-                return self.vault_export_to_other(source);
+                return self.vault_export_to_other(source, moving);
             }
             self.status = "이 조합의 암호화 폴더 복사 작업은 지원하지 않습니다.".into();
             return;
@@ -638,6 +635,8 @@ impl App {
                 "rename" | "contextRename" => return self.vault_rename_item(),
                 "deleteRecycle" | "deletePermanent" | "contextDelete" => return self.vault_remove_items(),
                 "paste" | "contextPaste" => return self.vault_paste_files(),
+                "copyToFolder" => return self.vault_transfer_inside(false),
+                "moveToFolder" => return self.vault_transfer_inside(true),
                 "open" | "textView" | "textEdit" | "contextView" | "contextEdit" => return self.open_current(),
                 "goParent" => return self.parent(),
                 "refresh" => return self.refresh(self.active),

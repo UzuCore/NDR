@@ -151,6 +151,66 @@ impl Vault {
             .map_err(|e| e.to_string())
     }
 
+    /// Resolve a folder path relative to the encrypted container root.
+    pub fn resolve_folder(&mut self, path: &str) -> Result<i64, String> {
+        let mut folder = 1;
+        for part in path.trim_matches('/').split('/') {
+            if part.is_empty() { continue; }
+            valid_name(part)?;
+            folder = self.list(folder)?.into_iter()
+                .find(|item| item.folder && item.name.eq_ignore_ascii_case(part))
+                .ok_or_else(|| format!("Encrypted destination folder not found: {part}"))?.id;
+        }
+        Ok(folder)
+    }
+
+    /// Move/copy selected children within one encrypted container atomically.
+    pub fn transfer_items(&mut self, from: i64, names: &[String], to: i64, moving: bool) -> Result<usize, String> {
+        if names.is_empty() { return Ok(0); }
+        self.ensure_folder(from)?;
+        self.ensure_folder(to)?;
+        if from == to && moving { return Ok(0); }
+        let items = self.list(from)?;
+        let mut selected = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for name in names {
+            let item = items.iter().find(|item| &item.name == name)
+                .ok_or_else(|| format!("Encrypted source item is missing: {name}"))?;
+            if !seen.insert(item.id) { return Err("Duplicate encrypted selection".into()); }
+            selected.push((item.id, item.name.clone(), item.folder));
+        }
+        let tx = self.connection.transaction().map_err(|e| e.to_string())?;
+        for (id, name, is_folder) in &selected {
+            // Copies into descendants would otherwise traverse the newly
+            // created copy recursively and can grow without bound.
+            if *is_folder {
+                let mut ancestor = to;
+                loop {
+                    if ancestor == *id { return Err("Cannot move a folder inside itself".into()); }
+                    if ancestor == 1 { break; }
+                    ancestor = tx.query_row("SELECT parent FROM items WHERE id=?1 AND folder=1", [ancestor], |r| r.get(0))
+                        .map_err(|e| e.to_string())?;
+                }
+            }
+            let clash: i64 = tx.query_row("SELECT COUNT(*) FROM items WHERE parent=?1 AND name=?2 COLLATE NOCASE", params![to,name], |r| r.get(0))
+                .map_err(|e| e.to_string())?;
+            if clash != 0 { return Err(format!("Encrypted destination already contains {name}")); }
+        }
+        let mut copied = 0;
+        let mut bytes = 0u64;
+        for (id, _, _) in &selected {
+            if moving {
+                tx.execute("UPDATE items SET parent=?1 WHERE id=?2", params![to,id]).map_err(|e| e.to_string())?;
+                copied += 1;
+            } else {
+                copy_encrypted_item(&tx, *id, to, 0, &mut copied, &mut bytes)?;
+            }
+        }
+        tx.commit().map_err(|e| e.to_string())?;
+        self.touch();
+        Ok(copied)
+    }
+
     pub fn add_folder(&mut self, parent: i64, name: &str) -> Result<i64, String> {
         self.insert(parent, name, true, None)
     }
@@ -316,6 +376,39 @@ impl Vault {
     }
 }
 
+fn copy_encrypted_item(
+    tx: &rusqlite::Transaction<'_>, id: i64, parent: i64, depth: usize,
+    count: &mut usize, total_bytes: &mut u64,
+) -> Result<(), String> {
+    if depth > 64 || *count >= 10_000 { return Err("Encrypted copy exceeds depth or item limit".into()); }
+    let (name, folder, data): (String, i64, Option<Vec<u8>>) = tx.query_row(
+        "SELECT name,folder,contents FROM items WHERE id=?1", [id],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    ).map_err(|e| e.to_string())?;
+    valid_name(&name)?;
+    let data = data.map(Zeroizing::new);
+    if let Some(data) = &data {
+        if data.len() > MAX_FILE_SIZE { return Err("Encrypted copy exceeds 64 MiB per file".into()); }
+        *total_bytes = total_bytes.checked_add(data.len() as u64).ok_or("Encrypted copy size overflow")?;
+        if *total_bytes > 512 * 1024 * 1024 { return Err("Encrypted copy exceeds 512 MiB batch limit".into()); }
+    }
+    tx.execute("INSERT INTO items(parent,name,folder,contents) VALUES(?1,?2,?3,?4)",
+        params![parent, name, folder, data.as_deref()]).map_err(|e| e.to_string())?;
+    let target = tx.last_insert_rowid();
+    *count += 1;
+    if folder == 1 {
+        let mut statement = tx.prepare("SELECT id FROM items WHERE parent=?1 ORDER BY id")
+            .map_err(|e| e.to_string())?;
+        let children: Vec<i64> = statement.query_map([id], |r| r.get(0))
+            .map_err(|e| e.to_string())?.collect::<Result<_, _>>().map_err(|e| e.to_string())?;
+        drop(statement);
+        for child in children {
+            copy_encrypted_item(tx, child, target, depth + 1, count, total_bytes)?;
+        }
+    }
+    Ok(())
+}
+
 fn import_path(
     tx: &rusqlite::Transaction<'_>, parent: i64, source: &Path,
     depth: usize, items: &mut usize, total_bytes: &mut u64,
@@ -415,6 +508,36 @@ mod tests {
         drop(vault);
         let raw = std::fs::read(&container).unwrap();
         assert!(!raw.windows(b"hidden plaintext sample".len()).any(|w| w == b"hidden plaintext sample"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn encrypted_internal_copy_move_preserves_tree_and_rolls_back() {
+        let root = std::env::temp_dir().join(format!("ndr-vault-internal-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut vault = Vault::create(&root.join("safe.ndr"), "long passphrase 123456".into()).unwrap();
+        let source = vault.add_folder(1, "source").unwrap();
+        let destination = vault.add_folder(1, "destination").unwrap();
+        let child = vault.add_folder(source, "nested").unwrap();
+        vault.add_file(child, "secret.txt", b"secret bytes").unwrap();
+        assert_eq!(vault.resolve_folder("destination").unwrap(), destination);
+        assert_eq!(vault.transfer_items(1, &["source".into()], destination, true).unwrap(), 1);
+        assert!(vault.list(1).unwrap().iter().all(|item| item.name != "source"));
+        let moved = vault.list(destination).unwrap()[0].id;
+        assert!(vault.transfer_items(destination, &["source".into()], child, true).is_err(),
+            "moving to descendant must fail");
+        let copied = vault.transfer_items(destination, &["source".into()], 1, false).unwrap();
+        assert_eq!(copied, 3);
+        let copied_folder = vault.list(1).unwrap().into_iter().find(|i| i.name == "source").unwrap();
+        let copied_nested = vault.list(copied_folder.id).unwrap()[0].id;
+        let copied_file = vault.list(copied_nested).unwrap()[0].id;
+        assert_eq!(vault.read_file(copied_file).unwrap(), b"secret bytes");
+        assert_eq!(vault.list(destination).unwrap()[0].id, moved);
+        assert!(vault.transfer_items(destination, &["source".into(), "missing".into()], 1, false).is_err());
+        assert_eq!(vault.list(1).unwrap().len(), 2);
+        vault.verify_integrity().unwrap();
+        drop(vault);
         std::fs::remove_dir_all(root).unwrap();
     }
 

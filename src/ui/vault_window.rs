@@ -318,7 +318,7 @@ impl App {
 
     /// Copy to other pane (F3) from an unlocked vault is an explicit plaintext
     /// export. Warn before releasing decrypted bytes to the filesystem.
-    pub(super) fn vault_export_to_other(&mut self, source: usize) {
+    pub(super) fn vault_export_to_other(&mut self, source: usize, moving: bool) {
         let target = 1 - source;
         if self.panes[target].vault.is_some() || self.panes[target].archive.is_some()
             || self.panes[target].remote.is_some() || !self.panes[target].path.is_dir() {
@@ -328,17 +328,67 @@ impl App {
         let names: Vec<String> = self.target_entries(source).into_iter().map(|entry| entry.name).collect();
         if names.is_empty() { return; }
         let destination = self.panes[target].path.clone();
-        let message = format!("선택한 {}개 항목을 암호화하지 않은 일반 파일로 내보낼까요?\n대상: {}\n기존 파일은 덮어쓰지 않습니다.", names.len(), destination.display());
+        let message = format!("선택한 {}개 항목을 암호화하지 않은 일반 파일로 {}할까요?\n대상: {}\n기존 파일은 덮어쓰지 않습니다.{}", names.len(), if moving { "이동" } else { "복사" }, destination.display(), if moving { "\n모든 항목의 내보내기가 끝난 다음 암호화 폴더의 원본을 삭제합니다." } else { "" });
         self.system_box("암호화 폴더에서 내보내기", &message,
             ndr::msgbox::MB_YESNO | ndr::msgbox::MB_ICONEXCLAMATION, move |app, answer, _| {
                 if answer != ndr::msgbox::IDYES { return; }
                 let Some(state) = app.panes[source].vault.as_mut() else { return };
-                match state.database.export_items(state.folder(), &names, &destination) {
+                let result = state.database.export_items(state.folder(), &names, &destination)
+                    .and_then(|count| {
+                        if moving {
+                            let items = state.database.list(state.folder())?;
+                            let ids = names.iter().map(|name| items.iter().find(|item| &item.name == name)
+                                .map(|item| item.id).ok_or_else(|| format!("Missing source item after export: {name}")))
+                                .collect::<Result<Vec<_>, _>>()?;
+                            state.database.remove_many(&ids).map_err(|error| format!(
+                                "Files were exported, but encrypted originals were NOT removed: {error}"))?;
+                        }
+                        Ok(count)
+                    });
+                match result {
                     Ok(count) => {
                         app.refresh(target);
-                        app.status = format!("{count}개 항목을 일반 파일로 내보냈습니다. 대상 디렉터리는 암호화되지 않았습니다.");
+                        if moving { app.refresh_vault(source); }
+                        app.status = format!("{count}개 항목을 일반 폴더로 {}했습니다. 대상 파일은 암호화되지 않았습니다.", if moving { "이동" } else { "복사" });
                     }
-                    Err(error) => app.status = format!("암호화 폴더 내보내기 실패: {error}"),
+                    Err(error) => { app.refresh(target); app.status = format!("암호화 폴더 내보내기/이동 실패: {error}"); },
+                }
+            });
+    }
+
+    /// Import first, then remove local originals. Failure to delete a source
+    /// never destroys the successfully encrypted copy; the status reports it.
+    pub(super) fn vault_transfer_from_local(&mut self, source: usize, target: usize, files: Vec<PathBuf>, moving: bool) {
+        if files.is_empty() { return; }
+        if !moving { return self.vault_import_paths(target, files); }
+        self.system_box("암호화 폴더로 이동", "먼저 암호화 폴더에 모든 항목을 복사한 다음 일반 폴더의 원본을 삭제합니다. 계속할까요?",
+            ndr::msgbox::MB_YESNO | ndr::msgbox::MB_ICONEXCLAMATION, move |app, answer, _| {
+                if answer != ndr::msgbox::IDYES { return; }
+                let Some(state) = app.panes[target].vault.as_mut() else { return };
+                let imported = state.database.import_paths(state.folder(), &files);
+                match imported {
+                    Err(error) => app.status = format!("암호화 이동 실패 (원본 보존): {error}"),
+                    Ok(count) => {
+                        let mut failures = Vec::new();
+                        for path in &files {
+                            let result = std::fs::symlink_metadata(path).and_then(|meta| {
+                                use std::os::windows::fs::MetadataExt;
+                                if meta.file_attributes() & 0x400 != 0 {
+                                    return Err(std::io::Error::other("source changed to a reparse point"));
+                                }
+                                if meta.is_dir() { std::fs::remove_dir_all(path) }
+                                else { std::fs::remove_file(path) }
+                            });
+                            if let Err(error) = result { failures.push(format!("{}: {error}", path.display())); }
+                        }
+                        app.refresh_vault(target);
+                        app.refresh(source);
+                        app.status = if failures.is_empty() {
+                            format!("{count}개 항목을 암호화 폴더로 이동했습니다.")
+                        } else {
+                            format!("{count}개 항목 암호화 저장 완료, 일부 원본 삭제 실패 (암호화된 복사본 유지): {}", failures.join("; "))
+                        };
+                    }
                 }
             });
     }
@@ -358,6 +408,31 @@ impl App {
     }
 }
 
+impl App {
+    /// Move/copy inside a single SQLCipher container; no plaintext staging.
+    pub(super) fn vault_transfer_inside(&mut self, moving: bool) {
+        let pane = self.active;
+        let names: Vec<String> = self.target_entries(pane).into_iter().map(|item| item.name).collect();
+        if names.is_empty() { return; }
+        let current = self.panes[pane].vault.as_ref().map(|vault| vault.folder()).unwrap_or(1);
+        self.prompt_file_name(if moving { "암호화 폴더 내 이동" } else { "암호화 폴더 내 복사" },
+            "컨테이너 루트 기준 대상 폴더 경로 (예: 문서/보관 또는 /)",
+            "/", move |app, destination, _| {
+                let Some(destination) = destination else { return; };
+                let Some(state) = app.panes[pane].vault.as_mut() else { return; };
+                let result = state.database.resolve_folder(&destination)
+                    .and_then(|target| state.database.transfer_items(current, &names, target, moving));
+                match result {
+                    Ok(count) => {
+                        app.refresh_vault(pane);
+                        app.status = format!("암호화 폴더 안에서 {count}개 항목을 {}했습니다.", if moving { "이동" } else { "복사" });
+                    }
+                    Err(error) => app.status = format!("암호화 폴더 내부 작업 실패 (모든 변경 취소): {error}"),
+                }
+            });
+    }
+}
+
 impl Drop for VaultDialog {
     fn drop(&mut self) {
         self.folder_name.zeroize();
@@ -370,6 +445,53 @@ impl Drop for VaultDialog {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn f4_moves_local_file_into_vault_only_after_confirmed_import() {
+        let (root, ctx, mut app) = super::super::tools_tests::fixture("vault-move-in", "ko");
+        let container = root.join("right/moving.ndr");
+        let database = Vault::create(&container, "strong password 123456".into()).unwrap();
+        app.attach_vault(1, PaneVault::new(container, database));
+        let source = root.join("left/alpha.txt");
+        assert!(source.is_file());
+        app.active = 0;
+        app.vault_transfer_from_local(0, 1, vec![source.clone()], true);
+        assert!(source.is_file(), "confirmation must precede removal");
+        app.answer_message_box(ndr::msgbox::IDNO, &ctx);
+        assert!(source.is_file());
+        assert!(app.panes[1].vault.as_mut().unwrap().database.list(1).unwrap().is_empty());
+        app.vault_transfer_from_local(0, 1, vec![source.clone()], true);
+        app.answer_message_box(ndr::msgbox::IDYES, &ctx);
+        assert!(!source.exists());
+        let items = app.panes[1].vault.as_mut().unwrap().database.list(1).unwrap();
+        let id = items.iter().find(|i| i.name == "alpha.txt").unwrap().id;
+        assert_eq!(app.panes[1].vault.as_mut().unwrap().database.read_file(id).unwrap(), b"alpha.txt");
+        drop(app);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn f4_moves_vault_file_to_local_only_after_confirmed_export() {
+        let (root, ctx, mut app) = super::super::tools_tests::fixture("vault-move-out", "ko");
+        let container = root.join("right/moving.ndr");
+        let mut database = Vault::create(&container, "strong password 123456".into()).unwrap();
+        database.add_file(1, "private.txt", b"original secret").unwrap();
+        app.attach_vault(1, PaneVault::new(container, database));
+        let destination = app.panes[0].path.clone();
+        app.active = 1;
+        let index = app.panes[1].entries.iter().position(|i| i.name == "private.txt").unwrap();
+        app.panes[1].cursor = index;
+        app.vault_export_to_other(1, true);
+        assert!(!destination.join("private.txt").exists());
+        app.answer_message_box(ndr::msgbox::IDNO, &ctx);
+        assert!(!app.panes[1].vault.as_mut().unwrap().database.list(1).unwrap().is_empty());
+        app.vault_export_to_other(1, true);
+        app.answer_message_box(ndr::msgbox::IDYES, &ctx);
+        assert_eq!(std::fs::read(destination.join("private.txt")).unwrap(), b"original secret");
+        assert!(app.panes[1].vault.as_mut().unwrap().database.list(1).unwrap().is_empty());
+        drop(app);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn elapsed_session_is_reused_after_leaving_and_reentering_without_password() {

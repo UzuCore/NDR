@@ -87,8 +87,18 @@ the name generator is independent from SQLCipher keys and passwords.
   It always requests confirmation because this writes **unencrypted plaintext**.
   Export never overwrites existing targets; on failure it attempts to remove
   only the entries created by that export, preserving prior user files.
+- F4 between a regular pane and an encrypted pane moves selected items by
+  copying the entire batch successfully first and only then deleting sources.
+  A failed source deletion retains the completed destination copy and reports
+  the failure. Moving decrypted content into a regular pane requires explicit
+  confirmation, and exports are plaintext. This is not a cross-filesystem
+  atomic move.
+- Copy to Folder / Move to Folder inside an unlocked vault accepts a destination
+  path relative to the vault root, such as `documents/archive` or `/`. These
+  actions use one SQLCipher transaction for the whole batch; folder cycles,
+  name conflicts and failed copies leave the database unchanged.
 - Ctrl+V accepts regular files or whole folder trees from the filesystem. A
-  cut/move clipboard is rejected: use copy instead. F4 move, shell drag-and-drop
+  cut/move clipboard is rejected: use copy instead. Shell drag-and-drop
   and external program opening remain unsupported for vault contents to avoid
   unsafe operations on synthetic filesystem paths.
 - The per-file size limit is 64 MiB; an import/export batch is limited to
@@ -129,7 +139,8 @@ Configured in Options > NDR > Encrypted Folder:
   External editors are intentionally not launched automatically because they
   commonly leave sensitive plaintext on disk.
 - The pane integration now supports folder-tree import/export, atomic deletion,
-  and F3 panel-to-panel copy. It does **not** yet integrate every native pane
+  F3 copy, F4 move, and transactional copy/move between folders inside a single
+  container. It does **not** yet integrate every native pane
   operation, shell drag-and-drop, multi-gigabyte streaming, or password changes.
 - Imported file limit is 64 MiB and in-memory text editing limit is 1 MiB.
 
