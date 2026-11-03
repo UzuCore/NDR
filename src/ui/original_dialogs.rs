@@ -20,6 +20,18 @@ pub(super) enum DeleteWarningChoice {
     No,
 }
 
+/// Cyclic left/right focus order: 0 = Delete, 1 = Yes, 2 = No.
+/// When Delete is hidden the focus cycles between Yes and No only.
+pub(super) fn delete_warning_next_focus(current: usize, show_delete: bool, step: i32) -> usize {
+    if show_delete {
+        (current as i32 + step).rem_euclid(3) as usize
+    } else if current == 2 {
+        1
+    } else {
+        2
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum DeleteConfirmChoice {
     All,
@@ -746,26 +758,54 @@ impl App {
                             ui.label(markup_job(message, 13.0, text_color, message_width));
                         });
                     });
-                    // Tab order btnYes, btnNo, btnDelete.
+                    // VCL buttons allow Left/Right to switch the focused
+                    // action. egui's default arrow-key navigation may leave
+                    // a focused button or even activate it; consume the
+                    // arrows here so they *only* move the focus, not close
+                    // or submit the destructive confirmation dialog.
                     let focus_slot = if *show_delete { *default_button } else if *default_button == 2 { 2 } else { 1 };
+                    let focus_id = modal_id.with("delete-warning-focus-slot");
+                    let focus_current = ctx.data(|d| d.get_temp::<usize>(focus_id)).unwrap_or(focus_slot);
+                    let direction = if waiting { None } else { ctx.input_mut(|input| {
+                        if input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft) {
+                            Some(-1)
+                        } else if input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight) {
+                            Some(1)
+                        } else { None }
+                    }) };
+                    let focused = direction.map(|step| delete_warning_next_focus(focus_current, *show_delete, step))
+                        .unwrap_or(focus_current);
+                    if first_frame || direction.is_some() {
+                        ctx.data_mut(|d| d.insert_temp(focus_id, focused));
+                    }
                     let raw = |key: &str, fallback: &str| self.language_pack.raw(&format!("formDelWarning.{key}")).unwrap_or_else(|| fallback.to_owned());
+                    let mut button_ids = [(0, None), (1, None), (2, None)];
                     if *show_delete {
                         let (delete, pressed) = vcl_button(ui, at(64.0, 86.0 + extra, 75.0, 25.0), true, &raw("Caption.btnDelete", "&Delete"));
-                        if first_frame && focus_slot == 0 {
-                            delete.request_focus();
-                        }
+                        button_ids[0].1 = Some(delete.id);
                         if pressed {
                             outcome = Outcome::Choice(0);
                         }
                     }
                     let (yes, yes_pressed) = vcl_button(ui, at(width - 171.0, 86.0 + extra, 75.0, 25.0), true, &raw("Caption.btnYes", "&Yes"));
                     let (no, no_pressed) = vcl_button(ui, at(width - 90.0, 86.0 + extra, 75.0, 25.0), true, &raw("Caption.btnNo", "&No"));
-                    if first_frame {
-                        match focus_slot {
-                            1 => yes.request_focus(),
-                            2 => no.request_focus(),
-                            _ => {}
+                    button_ids[1].1 = Some(yes.id);
+                    button_ids[2].1 = Some(no.id);
+                    if first_frame || direction.is_some() {
+                        if let Some(id) = button_ids[focused].1 {
+                            ui.memory_mut(|memory| memory.request_focus(id));
                         }
+                    }
+                    // `삭제(&D)` should activate from the keyboard even
+                    // after navigating between buttons. Do not depend on
+                    // egui's focused-button keyboard activation semantics.
+                    let delete_key = *show_delete && !waiting && ctx.input(|input| {
+                        input.events.iter().any(|event| matches!(event,
+                            egui::Event::Key { key: egui::Key::D, pressed: true, modifiers, .. }
+                                if !modifiers.ctrl && !modifiers.command && !modifiers.shift))
+                    });
+                    if delete_key {
+                        outcome = Outcome::Choice(0);
                     }
                     if yes_pressed && matches!(outcome, Outcome::None) {
                         outcome = Outcome::Choice(1);
