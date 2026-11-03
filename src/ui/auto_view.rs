@@ -216,7 +216,12 @@ impl App {
         let mut row = 0;
         while row < count {
             let key = ndr::listing::group_key(&pane.entries[row], &mode, &category);
-            let end = (row..count).find(|r| ndr::listing::group_key(&pane.entries[*r], &mode, &category) != key).unwrap_or(count);
+            // The first entry is known to belong to this group. Starting the
+            // scan at row + 1 avoids reformatting its group key twice for
+            // every group, including one-entry groups in a large listing.
+            let end = (row + 1..count)
+                .find(|&next| ndr::listing::group_key(&pane.entries[next], &mode, &category) != key)
+                .unwrap_or(count);
             if column < columns - 1 && !result[column].is_empty() && result[column].len() + (end - row) > per_column {
                 column += 1;
             }

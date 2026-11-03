@@ -1158,11 +1158,15 @@ impl App {
         if self.tree_focus != Some(index) || !self.settings.flag(if index == 0 { "ShowLeftFolderTree" } else { "ShowRightFolderTree" }, false) {
             return false;
         }
-        let rows = self.panes[index].tree_rows.clone();
+        // A single arrow press should not clone the whole expanded folder
+        // tree (including every ShellNode and PathBuf). Only the selected
+        // node/key is cloned when a navigation action actually needs it.
+        let rows = &self.panes[index].tree_rows;
         if rows.is_empty() {
             return false;
         }
-        let selected = self.panes[index].tree_selected.clone().unwrap_or_else(|| self.panes[index].path.clone());
+        let selected = self.panes[index].tree_selected.as_deref()
+            .unwrap_or(self.panes[index].path.as_path());
         let current = rows.iter().position(|(node, ..)| same_key(&node.key, &selected));
         let (key, typed) = ctx.input(|i| {
             let key = i.events.iter().find_map(|e| match e {

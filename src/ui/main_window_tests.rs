@@ -644,6 +644,45 @@ fn auto_view_columns_follow_the_original() {
 }
 
 #[test]
+fn grouped_auto_distribution_matches_the_original_across_modes_and_column_counts() {
+    let (root, ctx, mut app) = fixture("auto-groups-parity");
+    let dir = root.join("groups");
+    fs::create_dir_all(&dir).unwrap();
+    for i in 0..96 {
+        let extension = ["zip", "txt", "png", "mp3", "exe", "json"][i % 6];
+        fs::write(dir.join(format!("file-{i:03}.{extension}")), vec![0_u8; i * 137]).unwrap();
+    }
+    for i in 0..12 { fs::create_dir(dir.join(format!("folder-{i:02}"))).unwrap(); }
+    app.navigate(0, dir, false);
+    wait(&mut app, &ctx);
+    for mode in ["None", "Extension", "Size", "Time", "Category"] {
+        app.settings.set_text("LeftGroupMode", mode);
+        for columns in [1, 2, 3, 7, 12] {
+            let pane = &app.panes[0];
+            let count = pane.entries.len();
+            let per_column = count.div_ceil(columns).max(1);
+            let mut expected = vec![Vec::new(); columns];
+            if mode == "None" {
+                for row in 0..count { expected[(row / per_column).min(columns - 1)].push(row); }
+            } else {
+                let category = app.settings.text("LeftFolderCategoryMode", "Auto");
+                let mut column = 0;
+                let mut row = 0;
+                while row < count {
+                    let key = ndr::listing::group_key(&pane.entries[row], mode, &category);
+                    let end = (row..count).find(|&r| ndr::listing::group_key(&pane.entries[r], mode, &category) != key).unwrap_or(count);
+                    if column < columns - 1 && !expected[column].is_empty() && expected[column].len() + end - row > per_column { column += 1; }
+                    expected[column].extend(row..end);
+                    row = end;
+                }
+            }
+            assert_eq!(app.auto_distribution(0, columns), expected, "mode={mode}, columns={columns}");
+        }
+    }
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn automatic_column_width_cache_reuses_measured_value_until_listing_changes() {
     let (root, ctx, mut app) = fixture("auto-width-cache");
     let key = egui::Id::new(("ndr-auto-column-widest", 0));
