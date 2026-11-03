@@ -658,7 +658,10 @@ impl App {
         egui::Window::new(if ko { "NDR 업데이트" } else { "NDR Update" })
             .id(egui::Id::new("ndr-update-progress"))
             .collapsible(false).resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            // Anchoring makes egui windows immovable. Keep the original
+            // centered starting location while allowing title-bar dragging.
+            .default_pos(ctx.content_rect().center() - egui::vec2(230.0, 130.0))
+            .movable(true)
             .min_width(420.0)
             .show(ctx, |ui| {
                 ui.add_space(8.0);

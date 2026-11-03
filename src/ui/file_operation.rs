@@ -430,15 +430,25 @@ impl App {
         };
         let fraction = total.filter(|n| *n > 0).map(|n| (completed as f32 / n as f32).clamp(0.0, 1.0));
         let mut cancel = !covered && ctx.input(|i| i.key_pressed(egui::Key::Escape));
-        egui::Area::new(egui::Id::new("ndr-archive-clipboard-progress"))
+        let progress_id = egui::Id::new("ndr-archive-clipboard-progress");
+        let drag_offset = ctx.data(|data| data.get_temp::<egui::Vec2>(
+            progress_id.with("ndr-drag-offset")
+        )).unwrap_or_default();
+        egui::Area::new(progress_id)
             .order(egui::Order::Foreground)
-            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .anchor(egui::Align2::CENTER_CENTER, drag_offset)
             .fade_in(true)
             .show(ctx, |ui| {
                 egui::Frame::popup(ui.style()).show(ui, |ui| {
                     ui.set_min_width(390.0);
                     ui.set_max_width(460.0);
-                    ui.heading(&title);
+                    let header = ui.heading(&title);
+                    // This is a real progress dialog, unlike transient popup
+                    // menus/toasts. Its title can be dragged like all other
+                    // NDR dialogs without moving the rest of the application.
+                    super::drag_title(ui, progress_id,
+                        egui::Rect::from_min_max(header.rect.min,
+                            egui::pos2(ui.max_rect().right(), header.rect.bottom())));
                     ui.add_space(9.0);
                     ui.label(egui::RichText::new(&status).size(12.0));
                     ui.add_space(6.0);
@@ -725,50 +735,100 @@ impl App {
         }
     }
 
-    /// Concurrent local copies/moves are ordinary floating windows, not
-    /// modal dialogs. Every operation owns its own cancellation token.
+    /// Keep the exact original file-progress layout and centered placement,
+    /// but make each copy/move window non-modal with its own cancellation token.
     pub(super) fn concurrent_transfers_ui(&mut self, ctx: &egui::Context) {
-        let ko = self.language == "ko";
+        use super::original_dialogs::{path_ellipsis, put_enabled, put_left};
+        let cancel_label = super::favorites_dialog::access_key(
+            &self.language_pack.text("formProgress.Caption.btnCancel", "&Cancel")
+        ).0;
         let jobs = self.job.iter().chain(self.background_jobs.iter())
             .filter(|job| !job.finished && job.reservation.is_some());
-        for (index, job) in jobs.enumerate() {
+        for job in jobs {
             let id = egui::Id::new(("ndr-transfer-progress", job.serial));
             let moving = job.reservation.as_ref().is_some_and(|r| r.moving);
-            let caption = if moving { if ko { "파일 이동" } else { "Moving files" } }
-                else { if ko { "파일 복사" } else { "Copying files" } };
-            let fraction = job.progress.as_ref().and_then(|p| {
-                if p.prefer_bytes { p.total_bytes.filter(|n| *n > 0).map(|n| job.bytes as f32 / n as f32) }
-                else { p.total_files.filter(|n| *n > 0).map(|n| job.files as f32 / n as f32) }
-            });
+            let caption = if moving { self.language_pack.text("RES.MOVING", "Moving...") }
+                else { self.language_pack.text("RES.COPYING", "Copying...") };
+            let Some(info) = job.progress.as_ref() else { continue };
+            let current_folder = Path::new(&job.path).is_absolute()
+                .then(|| Path::new(&job.path).parent()).flatten().map(Path::to_path_buf);
+            let from = current_folder.map(|p| p.to_string_lossy().into_owned())
+                .or_else(|| info.from.clone()).or_else(|| job.from_seen.clone());
+            let to_line = progress_target_line(
+                info.from.as_deref(), info.to.as_deref(), &job.path, job.target.as_ref()
+            );
+            let fraction = if info.prefer_bytes && info.total_bytes.is_some_and(|n| n > 0) {
+                Some((job.bytes as f64 / info.total_bytes.unwrap_or(1) as f64).clamp(0.0, 1.0))
+            } else if info.total_files.is_some_and(|n| n > 0) {
+                Some((job.files as f64 / info.total_files.unwrap_or(1) as f64).clamp(0.0, 1.0))
+            } else { None };
+            let remaining = match info.total_bytes.filter(|n| *n > 0) {
+                Some(total) if info.prefer_bytes =>
+                    ndr::native::format_byte_size(total.saturating_sub(job.bytes)),
+                _ => String::new(),
+            };
+            let count = match info.total_files {
+                Some(total) => format!("({})", n0(total.saturating_sub(job.files) as usize)),
+                None => format!("({})", n0(job.files as usize)),
+            };
+            let file_line = if job.path.is_empty() {
+                self.language_pack.text(
+                    if moving { "RES.MSG_MOVE_PREPARING" } else { "RES.MSG_COPY_PREPARING" },
+                    if moving { "Preparing for moving file/folder(s)" }
+                    else { "Preparing for copying file/folder(s)" },
+                )
+            } else {
+                Path::new(&job.path).file_name().map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| job.path.clone())
+            };
             let mut cancel = false;
-            let screen = ctx.content_rect();
-            egui::Window::new(format!("{caption} #{}", job.serial))
-                .id(id).collapsible(true).resizable(false)
-                // Keep the file panes usable: start at the lower-right and
-                // stagger independent transfer windows upwards.
-                .default_pos(egui::pos2(
-                    (screen.right() - 380.0).max(screen.left() + 8.0),
-                    (screen.bottom() - 185.0 - index as f32 * 148.0).max(screen.top() + 35.0),
-                ))
-                .default_width(350.0)
+            // Same centered starting position and title-drag offset mechanism
+            // as the original NDR modal. Each independent job has its own id,
+            // so users can move overlapping windows without moving the others.
+            let offset = ctx.data(|d| d.get_temp::<egui::Vec2>(
+                id.with("ndr-drag-offset")
+            )).unwrap_or_default();
+            // Same popup frame and centered position as the original modal,
+            // but as a normal Area: it can be dragged independently and does
+            // not consume input in the file panes behind the progress dialog.
+            egui::Area::new(id)
+                .order(egui::Order::Foreground)
+                .anchor(egui::Align2::CENTER_CENTER, offset)
                 .show(ctx, |ui| {
-                    ui.set_min_width(350.0);
-                    ui.label(egui::RichText::new(&job.title).strong());
-                    let current = Path::new(&job.path).file_name()
-                        .map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| job.path.clone());
-                    ui.add(egui::Label::new(if current.is_empty() {
-                        if ko { "준비 중...".to_owned() } else { "Preparing...".to_owned() }
-                    } else { current }).truncate());
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.set_width(441.0);
+                    if super::modal_title_bar(ui, id, &caption, None) { cancel = true; }
+                    ui.separator();
+                    let (area, _) = ui.allocate_exact_size(
+                        egui::vec2(441.0, 143.0), egui::Sense::hover()
+                    );
+                    let at = |x: f32, y: f32, w: f32, h: f32| {
+                        egui::Rect::from_min_size(area.min + egui::vec2(x, y), egui::vec2(w, h))
+                    };
+                    let font = egui::FontId::proportional(13.0);
+                    for (top, height, value) in [
+                        (23.0, 16.0, from.as_deref()), (42.0, 15.0, to_line.as_deref())
+                    ] {
+                        if let Some(value) = value.filter(|v| !v.trim().is_empty()) {
+                            let shown = path_ellipsis(ui, value, 353.0, &font);
+                            put_left(ui, at(20.0, top, 353.0, height),
+                                egui::Label::new(RichText::new(shown).font(font.clone())));
+                        }
+                    }
+                    put_left(ui, at(20.0, 71.0, 317.0, 17.0),
+                        egui::Label::new(RichText::new(&file_line).font(font.clone())).truncate());
                     let bar = match fraction {
-                        Some(value) => egui::ProgressBar::new(value.clamp(0.0, 1.0))
-                            .text(format!("{:.0}%", (value * 100.0).clamp(0.0, 100.0))),
+                        Some(value) => egui::ProgressBar::new(value as f32),
                         None => egui::ProgressBar::new(0.0).animate(true),
                     };
-                    ui.add(bar.desired_width(ui.available_width()));
-                    ui.horizontal(|ui| {
-                        ui.label(format!("{} {}", job.files, if ko { "개 항목" } else { "items" }));
-                        ui.label(ndr::native::format_byte_size(job.bytes));
-                        if ui.button(if ko { "취소" } else { "Cancel" }).clicked() { cancel = true; }
+                    ui.put(at(18.0, 94.0, 327.0, 16.0), bar.desired_height(16.0));
+                    if put_enabled(ui, at(355.0, 90.0, 78.0, 25.0), true,
+                        egui::Button::new(&cancel_label)).clicked() { cancel = true; }
+                    put_left(ui, at(18.0, 116.0, 268.0, 14.0),
+                        egui::Label::new(RichText::new(&remaining).size(12.0)).truncate());
+                    ui.painter().text(area.min + egui::vec2(345.0, 116.0),
+                        egui::Align2::RIGHT_TOP, &count,
+                        egui::FontId::proportional(12.0), ui.visuals().text_color());
                     });
                 });
             if cancel { job.cancel.store(true, Ordering::Relaxed); }

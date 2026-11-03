@@ -197,6 +197,57 @@ fn in_app_windows_move_by_their_title_bar() {
     fs::remove_dir_all(root).unwrap();
 }
 
+#[test]
+fn parallel_progress_keeps_original_center_and_drags_independently() {
+    let (root, ctx, mut app) = fixture("parallel-progress-drag");
+    let (sender, receiver) = mpsc::channel();
+    let mut job = Job::new(receiver, Arc::new(AtomicBool::new(false)), "copy".into());
+    job.serial = 773;
+    job.reservation = super::file_operation::TransferReservation::from_operation(
+        &Operation::Copy {
+            sources: vec![root.join("left/a.txt")], destination: root.join("right"),
+            move_files: false,
+        },
+    );
+    job.progress = Some(super::file_operation::ProgressInfo {
+        from: Some(root.join("left").to_string_lossy().into_owned()),
+        to: Some(root.join("right").to_string_lossy().into_owned()),
+        total_files: Some(1), total_bytes: Some(17), prefer_bytes: true, caption: None,
+    });
+    app.job = Some(job);
+    let id = egui::Id::new(("ndr-transfer-progress", 773u64));
+    let run = |app: &mut App, events| {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 850.0))),
+            events, ..Default::default()
+        };
+        let _ = ctx.run(input, |ctx| app.concurrent_transfers_ui(ctx));
+    };
+    run(&mut app, vec![]);
+    run(&mut app, vec![]);
+    let before = ctx.memory(|memory| memory.area_rect(id)).expect("progress popup area");
+    assert!((before.center() - egui::pos2(700.0, 425.0)).length() < 4.0,
+        "same initial centered location as the legacy progress dialog: {before:?}");
+    let grab = before.min + egui::vec2(48.0, 18.0);
+    let drag = egui::vec2(-90.0, 65.0);
+    let pointer = |pos, pressed| egui::Event::PointerButton {
+        pos, button: egui::PointerButton::Primary,
+        pressed, modifiers: egui::Modifiers::NONE,
+    };
+    run(&mut app, vec![egui::Event::PointerMoved(grab), pointer(grab, true)]);
+    run(&mut app, vec![egui::Event::PointerMoved(grab + drag * 0.5)]);
+    run(&mut app, vec![egui::Event::PointerMoved(grab + drag)]);
+    run(&mut app, vec![pointer(grab + drag, false)]);
+    run(&mut app, vec![]);
+    let after = ctx.memory(|memory| memory.area_rect(id)).unwrap();
+    assert!((after.min - before.min - drag).length() < 5.0,
+        "progress title drag should move its own window: {before:?} -> {after:?}");
+    assert!(!app.job.as_ref().unwrap().cancel.load(Ordering::Relaxed));
+    drop(sender);
+    drop(app);
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// Original 0x412308 lTo = folder of the current destination file: the real destination reported by the file job (name changed by a conflict) first, otherwise computed from the relative path.
 #[test]
 fn progress_target_line_uses_the_reported_destination_like_the_original() {
