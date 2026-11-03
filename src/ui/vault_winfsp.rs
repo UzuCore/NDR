@@ -54,6 +54,9 @@ struct MountData {
     truncate_floor: Option<u64>,
     dirty: bool,
     last_error: Option<String>,
+    // Incremented only after the encrypted index was committed successfully.
+    saved_revision: u64,
+    open_files: usize,
 }
 
 impl MountData {
@@ -163,6 +166,7 @@ impl MountData {
         self.truncate_floor = None;
         self.dirty = false;
         self.last_error = None;
+        self.saved_revision = self.saved_revision.wrapping_add(1);
         Ok(())
     }
 }
@@ -208,12 +212,17 @@ impl FileSystemContext for SingleFileFs {
             else if self.is_file(file_name) { Handle::File }
             else { return Err(fs_error(NOT_FOUND)); };
         *file_info.as_mut() = self.info(matches!(handle, Handle::File));
+        if matches!(handle, Handle::File) {
+            let mut state = self.state.lock().unwrap();
+            state.open_files = state.open_files.saturating_add(1);
+        }
         Ok(handle)
     }
     fn close(&self, handle: Handle) {
         if matches!(handle, Handle::File) {
             let mut state = self.state.lock().unwrap();
             if let Err(error) = state.commit() { state.last_error = Some(error); }
+            state.open_files = state.open_files.saturating_sub(1);
         }
     }
     fn get_file_info(&self, context: &Handle, output: &mut FileInfo) -> winfsp::Result<()> {
@@ -316,6 +325,7 @@ pub(super) struct VaultMount {
     pub file_path: std::path::PathBuf,
     pub vault_path: std::path::PathBuf,
     pub pane: usize,
+    observed_revision: u64,
 }
 
 impl VaultMount {
@@ -332,7 +342,7 @@ impl VaultMount {
         let state = Arc::new(Mutex::new(MountData {
             vault: original.fork_for_mount()?, id: item.id, parent, name: item.name.clone(),
             size: item.size.max(0) as u64, original_size: item.size.max(0) as u64,
-            pages: BTreeMap::new(), read_cache: None, truncate_floor: None, dirty: false, last_error: None,
+            pages: BTreeMap::new(), read_cache: None, truncate_floor: None, dirty: false, last_error: None, saved_revision: 0, open_files: 0,
         }));
         let mut params = VolumeParams::new();
         params.filesystem_name("NDRVAULT").sector_size(512)
@@ -346,9 +356,30 @@ impl VaultMount {
             .map_err(|e| format!("WinFsp create failed: {e}"))?;
         host.mount(&mountpoint).map_err(|e| format!("WinFsp mount failed: {e}"))?;
         host.start().map_err(|e| format!("WinFsp start failed: {e}"))?;
-        Ok(Self { host, state, file_path, vault_path, pane })
+        Ok(Self { host, state, file_path, vault_path, pane, observed_revision: 0 })
     }
+    /// The driver flushes edited bytes to the encrypted container on close
+    /// and flush, without a separate UI confirmation. The pane may refresh
+    /// after each successful commit while the virtual file remains mounted.
+    pub fn take_saved_revision(&mut self) -> Result<bool, String> {
+        let revision = self.state.lock().map_err(|e| e.to_string())?.saved_revision;
+        if revision == self.observed_revision { return Ok(false); }
+        self.observed_revision = revision;
+        Ok(true)
+    }
+
+    pub fn save_error(&self) -> Option<String> {
+        self.state.lock().ok().and_then(|state| state.last_error.clone())
+    }
+
+    pub fn has_open_files(&self) -> bool {
+        self.state.lock().is_ok_and(|state| state.open_files > 0)
+    }
+
     pub fn finish(&mut self) -> Result<(), String> {
+        if self.has_open_files() {
+            return Err("Close the external editor before disconnecting the encrypted virtual file".into());
+        }
         self.host.stop();
         let mut state = self.state.lock().map_err(|e| e.to_string())?;
         state.commit()?;
@@ -388,6 +419,41 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore = "requires installed WinFsp driver and a free drive letter; opt in for real mount smoke"]
+    fn mounted_virtual_file_round_trips_through_windows_io_without_a_close_dialog() {
+        let root = std::env::temp_dir().join(format!("ndr-winfsp-real-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("test.ndr");
+        let mut original = Vault::create(&path, "real mount disposable password".into()).unwrap();
+        let id = original.add_file(1, "edit.txt", b"before").unwrap();
+        let item = original.find_child(1, "edit.txt").unwrap().unwrap();
+        assert_eq!(item.id, id);
+        let mut mount = VaultMount::start(0, path.clone(), &original, 1, item).unwrap();
+        assert_eq!(std::fs::read(&mount.file_path).unwrap(), b"before");
+        std::fs::write(&mount.file_path, b"after-save").unwrap();
+        // Kernel Close callbacks may finish *after* the user-mode write
+        // handle has been dropped. Never assume a synchronous close.
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while mount.has_open_files() || mount.state.lock().unwrap().saved_revision == 0 {
+            assert!(std::time::Instant::now() < until,
+                "WinFsp close/commit did not complete within 10s (handles={}, revision={})",
+                mount.state.lock().unwrap().open_files,
+                mount.state.lock().unwrap().saved_revision);
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        assert_eq!(mount.state.lock().unwrap().saved_revision, 1);
+        assert!(mount.take_saved_revision().unwrap());
+        assert!(!mount.take_saved_revision().unwrap());
+        mount.finish().unwrap();
+        drop(mount);
+        original.reload_after_mount().unwrap();
+        let updated = original.find_child(1, "edit.txt").unwrap().unwrap();
+        assert_eq!(original.read_file(updated.id).unwrap(), b"after-save");
+        drop(original);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn virtual_file_commits_without_plaintext_disk_copy() {
         let root = std::env::temp_dir().join(format!("ndr-winfsp-pages-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
@@ -398,7 +464,7 @@ mod tests {
         let mut mounted = MountData {
             vault: original.fork_for_mount().unwrap(), id, parent: 1, name: "picture.png".into(),
             size: plain.len() as u64, original_size: plain.len() as u64,
-            pages: BTreeMap::new(), read_cache: None, truncate_floor: None, dirty: false, last_error: None,
+            pages: BTreeMap::new(), read_cache: None, truncate_floor: None, dirty: false, last_error: None, saved_revision: 0, open_files: 0,
         };
         let mut before = vec![0; plain.len()];
         mounted.read_at(&mut before, 0).unwrap();
@@ -408,7 +474,11 @@ mod tests {
         mounted.read_at(&mut repeated, 0).unwrap();
         assert_eq!(repeated, before);
         mounted.write_at(b"replaced", 0).unwrap();
+        assert_eq!(mounted.saved_revision, 0, "unsaved writes must not notify the pane");
         mounted.commit().unwrap();
+        assert_eq!(mounted.saved_revision, 1, "successful encrypted commit notifies the pane");
+        mounted.commit().unwrap();
+        assert_eq!(mounted.saved_revision, 1, "no new writes means no redundant UI refresh");
         original.reload_after_mount().unwrap();
         let updated = original.find_child(1, "picture.png").unwrap().unwrap();
         assert_eq!(original.read_file(updated.id).unwrap(), b"replaced picture bytes");
@@ -427,7 +497,7 @@ mod tests {
         let state = Arc::new(Mutex::new(MountData {
             vault: original.fork_for_mount().unwrap(), id, parent: 1, name: "video.bin".into(),
             size: 16, original_size: 16, pages: BTreeMap::new(), read_cache: None,
-            truncate_floor: None, dirty: false, last_error: None,
+            truncate_floor: None, dirty: false, last_error: None, saved_revision: 0, open_files: 0,
         }));
         let fs = SingleFileFs { state: Arc::clone(&state) };
         let mut info = FileInfo::default();
@@ -458,7 +528,7 @@ mod tests {
         let state = Arc::new(Mutex::new(MountData {
             vault: vault.fork_for_mount().unwrap(), id, parent: 1, name: "photo.png".into(),
             size: original.len() as u64, original_size: original.len() as u64,
-            pages: BTreeMap::new(), read_cache: None, truncate_floor: None, dirty: false, last_error: None,
+            pages: BTreeMap::new(), read_cache: None, truncate_floor: None, dirty: false, last_error: None, saved_revision: 0, open_files: 0,
         }));
         let fs = SingleFileFs { state: Arc::clone(&state) };
         let mut info = FileInfo::default();

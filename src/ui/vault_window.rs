@@ -202,11 +202,8 @@ impl App {
     }
 
     pub(super) fn enter_vault_item(&mut self, pane: usize, entry: &Entry) {
-        #[cfg(feature = "winfsp-vault")]
-        if self.vault_mount.is_some() {
-            self.status = "Close the virtual encrypted file before navigating.".into();
-            return;
-        }
+        // Navigating back must remain possible without the former modal
+        // Close-and-save button. Leaving the vault finalizes its mounted file.
         if entry.is_parent() {
             let state = self.panes[pane].vault.as_mut().unwrap();
             if state.stack.len() == 1 { self.exit_vault(pane); }
@@ -214,6 +211,11 @@ impl App {
                 self.pending_focus[pane] = state.stack.pop().map(|(_, name)| name);
                 self.refresh_vault(pane);
             }
+            return;
+        }
+        #[cfg(feature = "winfsp-vault")]
+        if self.vault_mount.is_some() {
+            self.status = "An encrypted file is still connected. Leave the encrypted folder to close it before opening another item.".into();
             return;
         }
         let Some(state) = self.panes[pane].vault.as_mut() else { return };
@@ -314,7 +316,25 @@ impl App {
 
     #[cfg(feature = "winfsp-vault")]
     pub(super) fn vault_mount_ui(&mut self, ctx: &egui::Context) {
+        // No confirmation dialog for ordinary opens. WinFsp commits changes
+        // on Flush/Close while keeping the virtual file connected. Only show
+        // the existing recovery dialog if an authenticated save has failed.
+        let Some(mount) = self.vault_mount.as_mut() else { return };
+        let pane = mount.pane;
+        let vault_path = mount.vault_path.clone();
+        let saved = mount.take_saved_revision();
+        if matches!(saved, Ok(true)) {
+            if let Some(vault) = self.panes[pane].vault.as_mut() {
+                if vault.file == vault_path {
+                    match vault.database.reload_after_mount() {
+                        Ok(()) => self.refresh_vault(pane),
+                        Err(error) => self.error_notice("Encrypted folder refresh failed", "Encrypted folder refresh failed", error),
+                    }
+                }
+            }
+        }
         let Some(mount) = self.vault_mount.as_ref() else { return };
+        if mount.save_error().is_none() { return; }
         let filename = mount.file_path.file_name().unwrap_or_default().to_string_lossy().into_owned();
         let ko = self.language == "ko";
         let mut close = false;
