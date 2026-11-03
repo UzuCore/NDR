@@ -1219,6 +1219,51 @@ fn breadcrumb_chevron_press_opens_and_closes_without_exiting() {
     fs::remove_dir_all(root).unwrap();
 }
 
+/// Regression: every path-segment chevron opens its own subfolder menu.
+/// A previous variable shadowing error checked text `hot` AND chevron
+/// `arrow_hot` simultaneously, so this was impossible and the release
+/// instead entered address editing (and triggered an AccessKit panic).
+#[test]
+fn breadcrumb_segment_chevron_handles_real_mouse_down() {
+    let (root, ctx, mut app) = fixture("crumb-segment-press");
+    let run = |app: &mut App, events: Vec<egui::Event>| {
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 850.0))),
+            events, ..Default::default()
+        };
+        let _ = ctx.run(raw, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.columns(2, |columns| {
+                    app.pane_ui(&mut columns[0], 0, ctx);
+                    app.pane_ui(&mut columns[1], 1, ctx);
+                });
+            });
+        });
+    };
+    run(&mut app, vec![]);
+    let pane = app.pane_rects[0];
+    let root_segment = app.crumb_segments(0).first().unwrap().label.clone();
+    let font = egui::FontId::proportional(super::BASE_TEXT_SIZE);
+    let width = ctx.fonts_mut(|f| f.layout_no_wrap(root_segment, font, egui::Color32::WHITE).size().x.round() as i32);
+    let arrow = egui::pos2(pane.left() + 2.0 + 16.0 + (width + 4) as f32 + 8.0,
+        pane.top() + 2.0 + super::skin_pane::ADDRESS_BAR_HEIGHT / 2.0);
+    let button = |pressed: bool| egui::Event::PointerButton {
+        pos: arrow, button: egui::PointerButton::Primary, pressed,
+        modifiers: Default::default(),
+    };
+    let path_before = app.panes[0].path.clone();
+    run(&mut app, vec![egui::Event::PointerMoved(arrow), button(true)]);
+    assert!(app.skin_crumb_menu.as_ref().is_some_and(|(pane, _, drives, _)|
+        *pane == 0 && !*drives), "segment '>' must open child-folder menu on MouseDown");
+    run(&mut app, vec![button(false)]);
+    run(&mut app, vec![]);
+    assert!(!app.panes[0].address_editing, "chevron must not enter path editing");
+    assert_eq!(app.panes[0].path, path_before, "opening subfolders does not navigate");
+    assert!(app.skin_crumb_menu.is_some(), "subfolder menu stays open until user chooses");
+    drop(app);
+    fs::remove_dir_all(root).unwrap();
+}
+
 #[test]
 fn skin_drag_follows_the_original_list_mouse_move() {
     // Original FUN_004856d8 (list OnMouseMove): it must move more than 8 pixels horizontally or vertically to drag, and pressing in the mark cell does not drag.

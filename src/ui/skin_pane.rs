@@ -904,8 +904,11 @@ impl App {
                 ui.interact(cell, egui::Id::new(("ndr-skin-crumb-tip", index, i)), egui::Sense::hover()).on_hover_text(path_of_level);
             }
             let color = if i + 1 == count { current } else if hot { over } else { text };
-            let pressed = hot && ui.input(|i| i.pointer.primary_down());
-            let offset = if pressed && i + 1 != count { 1.0 } else { 0.0 };
+            // Keep text-segment pressed styling separate from the MouseDown
+            // event used by the adjacent chevron. Shadowing `pressed` here
+            // made `pressed && arrow_hot` impossible (disjoint hit rectangles).
+            let segment_down = hot && ui.input(|i| i.pointer.primary_down());
+            let offset = if segment_down && i + 1 != count { 1.0 } else { 0.0 };
             painter.galley_with_override_text_color(egui::pos2(x + 2.0 + offset, top + ((height - galley.size().y) / 2.0).floor() + offset), galley, color);
             // The ">" after a segment: lines converging from the top and bottom edges to the center (right + 10).
             let right = cell.right();

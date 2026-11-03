@@ -2202,6 +2202,15 @@ impl eframe::App for App {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
         }
+        // egui 0.33.3 reports the keyboard focus ID to AccessKit separately
+        // from the per-pass widget list. Real mouse clicks on breadcrumb
+        // chevrons exposed a focused ID missing from that list, causing the
+        // Windows accesskit_consumer to panic and terminate NDR. Make the
+        // invariant explicit: the focused node is always included in the
+        // same accesskit tree update, without disabling screen-reader support.
+        if let Some(focused_id) = ctx.memory(|memory| memory.focused()) {
+            ctx.accesskit_node_builder(focused_id, |_| {});
+        }
         ctx.request_repaint_after(Duration::from_millis(
             if self.panes.iter().any(|p| p.loading)
                 || self.job.as_ref().is_some_and(|j| !j.finished)
