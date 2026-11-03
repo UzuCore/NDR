@@ -16,7 +16,11 @@ $binary = Join-Path $project 'target/release/ndr.exe'
 if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) {
     throw "Optimized Windows executable missing: $binary"
 }
+# Files compiled only under #[cfg(test)] do not change the release EXE.
+# Editing an integration test after building should not falsely mark the
+# already-tested production executable stale.
 $newestSource = Get-ChildItem (Join-Path $project 'src') -Recurse -File |
+    Where-Object { $_.Name -notlike '*_tests.rs' -and $_.Name -ne 'tests.rs' } |
     Sort-Object LastWriteTime -Descending | Select-Object -First 1
 if ($newestSource.LastWriteTime -gt (Get-Item -LiteralPath $binary).LastWriteTime) {
     throw "NDR.exe predates source: $($newestSource.FullName)"
