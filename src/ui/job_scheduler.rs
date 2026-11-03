@@ -200,15 +200,24 @@ impl App {
     }
     pub(super) fn poll_background_jobs(&mut self) {
         let primary = self.job.take();
-        let jobs = std::mem::take(&mut self.background_jobs);
-        for job in jobs {
+        // Keep the existing allocation across frames. Taking the whole Vec
+        // discarded its capacity and allocated a new Vec on every repaint
+        // while concurrent copies were running. There are at most 15
+        // background jobs, so shifting these few Job handles in place is
+        // preferable to a heap allocation on every 33 ms frame.
+        let mut index = 0;
+        let mut remaining = self.background_jobs.len();
+        while remaining > 0 {
+            let job = self.background_jobs.remove(index);
             self.job = Some(job);
             self.poll_active_job_events();
             if let Some(job) = self.job.take() {
                 if !job.finished {
-                    self.background_jobs.push(job);
+                    self.background_jobs.insert(index, job);
+                    index += 1;
                 }
             }
+            remaining -= 1;
         }
         self.job = primary;
     }

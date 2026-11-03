@@ -41,6 +41,44 @@ fn progress_event_flood_is_processed_in_bounded_ui_frames_without_losing_control
 }
 
 #[test]
+fn background_copy_polling_preserves_capacity_order_and_primary_job() {
+    let (root, ctx, mut app) = fixture("background-capacity");
+    let (primary_sender, primary_rx) = mpsc::channel();
+    app.job = Some(Job::new(primary_rx, Arc::new(AtomicBool::new(false)), "primary".into()));
+    let mut senders = Vec::new();
+    for index in 0..3u64 {
+        let (sender, receiver) = mpsc::channel();
+        let mut job = Job::new(receiver, Arc::new(AtomicBool::new(false)), format!("copy-{index}"));
+        job.serial = index + 1;
+        app.background_jobs.push(job);
+        senders.push(sender);
+    }
+    let capacity = app.background_jobs.capacity();
+    let storage = app.background_jobs.as_ptr();
+    for cycle in 0..100u64 {
+        for (index, sender) in senders.iter().enumerate() {
+            sender.send(Event::Progress {
+                path: PathBuf::from(format!("copy-{index}")), bytes: cycle, files: 0,
+            }).unwrap();
+        }
+        app.poll_background_jobs();
+        assert_eq!(app.background_jobs.capacity(), capacity);
+        assert_eq!(app.background_jobs.as_ptr(), storage,
+            "poll must reuse background-job storage rather than reallocating every frame");
+        assert_eq!(app.background_jobs.iter().map(|job| job.serial).collect::<Vec<_>>(), vec![1, 2, 3]);
+        assert!(app.background_jobs.iter().all(|job| job.bytes == cycle));
+        assert_eq!(app.job.as_ref().unwrap().title, "primary");
+    }
+    senders[1].send(Event::Finished { cancelled: false, files: 0, bytes: 0 }).unwrap();
+    app.poll_background_jobs();
+    assert_eq!(app.background_jobs.iter().map(|job| job.serial).collect::<Vec<_>>(), vec![1, 3]);
+    assert_eq!(app.job.as_ref().unwrap().title, "primary");
+    drop(primary_sender);
+    drop(app);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn independent_copy_jobs_run_together_without_blocking_file_panes() {
     let (root, ctx, mut app) = fixture("parallel-copy");
     let src = root.join("left");
