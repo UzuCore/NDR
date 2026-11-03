@@ -26,6 +26,20 @@ fn wait(app: &mut App, ctx: &egui::Context) {
         thread::sleep(Duration::from_millis(5));
     }
 }
+#[test]
+fn thumbnail_cache_revision_is_invalidated_by_sort_and_refresh() {
+    let (root, ctx, mut app) = fixture("thumbnail-revision");
+    let initial = app.panes[0].thumb_content_revision;
+    app.sort_pane(0);
+    let sorted = app.panes[0].thumb_content_revision;
+    assert_ne!(sorted, initial, "reordering changes the thumbnail cache key");
+    app.refresh(0);
+    wait(&mut app, &ctx);
+    assert_ne!(app.panes[0].thumb_content_revision, sorted,
+        "a new listing must invalidate thumbnail row measurements");
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// Draws the menu, the favorites row, and both panes once (to check there are no errors while drawing).
 fn draw(app: &mut App, ctx: &egui::Context) {
     let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 850.0))), ..Default::default() };

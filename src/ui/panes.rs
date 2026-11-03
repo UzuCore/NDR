@@ -1283,6 +1283,7 @@ impl App {
         items.append(&mut drives);
         parents.append(&mut items);
         pane.entries = parents;
+        pane.thumb_content_revision = pane.thumb_content_revision.wrapping_add(1);
         pane.selected = pane.entries.iter().enumerate().filter(|(_, e)| marked.contains(&e.path)).map(|(i, _)| i).collect();
         if let Some(cursor) = cursor {
             pane.cursor = pane.entries.iter().position(|e| e.path == cursor).unwrap_or(0);
@@ -1526,8 +1527,9 @@ impl App {
                 if self.panes[index].loading {
                     ui.spinner();
                 }
-                // Like C#, the filter is applied when the listing arrives, so the visible rows = the whole list (matching the selection and operation targets).
-                let visible: Vec<usize> = (0..self.panes[index].entries.len()).collect();
+                // Like C#, filtering happens when a listing arrives; every
+                // entry is visible. Do not allocate a 0..N index vector on
+                // every frame just to render the thumbnail grid.
                 let reserve = self.skin_file_info_height() + ui.spacing().item_spacing.y;
                 // Original FTP-mode pane: a splitter bar and a log box below the list (FUN_0048d7ac).
                 let reserve = reserve + self.ftp_log_reserve(index, ui.spacing().item_spacing.y);
@@ -1556,7 +1558,7 @@ impl App {
                 // User request (2026-10-31 16:49): the wheel scrolls the list like the original WMMouseWheel(0x7d5ba0) (one page at a time when set to page step).
                 // The "wheel = move cursor up/down" from r138~r160 was reverted. Each view's wheel_scroll handles it.
                 if tiles {
-                    let(a,o,c)=self.tile_rows(ui,index,&visible,height,view.contains("humb"));activate|=a;open|=o;if c.is_some(){command=c;}
+                    let(a,o,c)=self.tile_rows(ui,index,height,view.contains("humb"));activate|=a;open|=o;if c.is_some(){command=c;}
                 } else if names || auto_flow {
                     let (a, o, c) = self.flow_rows(ui, index, height, !names);
                     activate |= a;

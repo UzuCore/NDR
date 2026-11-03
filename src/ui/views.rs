@@ -118,8 +118,13 @@ impl App {
         }
         // A .ndr encrypted container looks like a folder in NDR while
         // remaining an ordinary file for OS copy/move/delete operations.
-        if self.panes[index].vault.is_none() && self.panes[index].archive.is_none()
-            && self.panes[index].remote.is_none() && entry.path.is_file()
+        // Listing metadata already marks .ndr vault files as folders. Never
+        // call Path::is_file() in the per-frame icon renderer: this is a
+        // synchronous disk/network stat for every visible row and could stall
+        // the UI while another worker is writing the same drive.
+        if entry.is_dir && !entry.drive
+            && self.panes[index].vault.is_none() && self.panes[index].archive.is_none()
+            && self.panes[index].remote.is_none()
             && entry.path.extension().is_some_and(|e| e.eq_ignore_ascii_case("ndr")) {
             return self.path_icon(ctx, Path::new("A"), true);
         }
@@ -329,7 +334,6 @@ impl App {
         &mut self,
         ui: &mut egui::Ui,
         index: usize,
-        visible: &[usize],
         height: f32,
         thumbnails: bool,
     ) -> (bool, bool, Option<&'static str>) {
@@ -369,14 +373,15 @@ impl App {
         } else {
             let font = egui::TextStyle::Body.resolve(ui.style());
             let widest = ui.fonts_mut(|fonts| {
-                visible.iter().filter_map(|&row| self.panes[index].entries.get(row)).map(|e| fonts.layout_no_wrap(e.name.clone(), font.clone(), Color32::WHITE).size().x).fold(0.0f32, f32::max)
+                self.panes[index].entries.iter().map(|e| fonts.layout_no_wrap(e.name.clone(), font.clone(), Color32::WHITE).size().x).fold(0.0f32, f32::max)
             });
             let item = widest + 14.0 + if self.settings.flag("ShowIcons", true) { 16.0 } else { 0.0 };
             ((ui.available_width().max(1.0) / item.max(1.0)) as usize).clamp(1, 19)
         };
         let gap = if thumbnails { 0.0 } else { ui.spacing().item_spacing.x };
         let tile_width = ((avail - gap * columns.saturating_sub(1) as f32) / columns as f32).floor().max(if thumbnails { tile_width.min(avail) } else { 40.0 });
-        let rows = visible.len().div_ceil(columns);
+        let entry_count = self.panes[index].entries.len();
+        let rows = entry_count.div_ceil(columns);
         // Original UpdateDisplayThumbnails: row height = the largest GetThumbnailTextHeight in that row (width = thumbnail size, line spacing 2, up to 4 lines) + size + 12.
         let spacing_y = if thumbnails { 0.0 } else { ui.spacing().item_spacing.y };
         let gdi_line = self.list_text_height();
@@ -384,19 +389,17 @@ impl App {
             let font = egui::TextStyle::Body.resolve(ui.style());
             // Line unit = Canvas.TextHeight (GDI tmHeight), like the list rows (App::list_text_height).
             let line_height = gdi_line.unwrap_or_else(|| ui.fonts_mut(|fonts| fonts.row_height(&font)));
-            // Fix (speed): previously the name width of every item was measured each frame (15ms per frame for 20,000 items), making the preview view slow.
-            // Like the original, remeasure only when the list, column count, or size changes (keyed by item order, name, and drive label).
+            // Rebuild thumbnail measurements only after the listing is
+            // replaced/reordered or the font/column geometry changes. The
+            // revision is maintained by sort_pane. Previously even a cache
+            // hit hashed every name in the directory on each UI frame.
             let key = {
                 use std::hash::{Hash, Hasher};
                 let pane = &self.panes[index];
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                (columns, rows, thumb.to_bits(), line_height.to_bits(), font.size.to_bits(), format!("{:?}", font.family), pane.drive_infos.len()).hash(&mut hasher);
-                for &row in visible.iter() {
-                    row.hash(&mut hasher);
-                    if let Some(entry) = pane.entries.get(row) {
-                        (entry.name.as_str(), entry.drive).hash(&mut hasher);
-                    }
-                }
+                (pane.thumb_content_revision, entry_count, columns, rows,
+                    thumb.to_bits(), line_height.to_bits(), font.size.to_bits(),
+                    format!("{:?}", font.family), pane.drive_infos.len()).hash(&mut hasher);
                 hasher.finish()
             };
             match &self.panes[index].thumb_heights {
@@ -408,9 +411,8 @@ impl App {
                     let heights: Vec<f32> = ui.fonts_mut(|fonts| {
                         (0..rows)
                             .map(|r| {
-                                let tallest = visible[r * columns..((r + 1) * columns).min(visible.len())]
+                                let tallest = pane.entries[r * columns..((r + 1) * columns).min(entry_count)]
                                     .iter()
-                                    .filter_map(|&row| pane.entries.get(row))
                                     .map(|entry| {
                                         let caption = match pane.drive_infos.get(&entry.path).filter(|_| entry.drive) {
                                             Some((label, _, _)) => format!("{label} ({}:)", entry.name.trim_end_matches(['\\', ':'])),
@@ -519,9 +521,10 @@ impl App {
                             ui.spacing_mut().item_spacing.x = 0.0;
                         }
                         for column in 0..columns {
-                            let Some(&row) = visible.get(tile_row * columns + column) else {
+                            let row = tile_row * columns + column;
+                            if row >= entry_count {
                                 break;
-                            };
+                            }
                             let entry = self.panes[index].entries[row].clone();
                             if thumbnails
                                 && self.panes[index].archive.is_none()

@@ -478,14 +478,23 @@ pub fn sort_groups(entries: &mut Vec<Entry>, mode: &str, folder_category_mode: &
     if mode == "None" {
         return;
     }
-    let mut keyed: Vec<(String, Entry)> = std::mem::take(entries).into_iter().map(|e| (group_key(&e, mode, folder_category_mode), e)).collect();
-    keyed.sort_by(|(ka, _), (kb, _)| {
-        group_rank(ka).cmp(&group_rank(kb)).then_with(|| {
-            let order = compare_text(ka, kb, false);
+    // Windows CompareStringW expects UTF-16. Convert each group key once;
+    // previously every comparison allocated two fresh UTF-16 buffers (about
+    // O(n log n) heap allocations for a large grouped directory).
+    let mut keyed: Vec<(u8, Vec<u16>, Entry)> = std::mem::take(entries)
+        .into_iter()
+        .map(|e| {
+            let name = group_key(&e, mode, folder_category_mode);
+            (group_rank(&name), wide(&name), e)
+        })
+        .collect();
+    keyed.sort_by(|(rank_a, ka, _), (rank_b, kb, _)| {
+        rank_a.cmp(rank_b).then_with(|| {
+            let order = compare_wide(ka, kb, false);
             if descending { order.reverse() } else { order }
         })
     });
-    entries.extend(keyed.into_iter().map(|(_, e)| e));
+    entries.extend(keyed.into_iter().map(|(_, _, e)| e));
 }
 
 /// Header text of GroupHeaderNameConverter: "Folders" is [RES] FOLDERS, known names use language item keys, others the name as is.
@@ -707,6 +716,67 @@ mod tests {
         let mut original = vec![entry("c", false, 0, 0), entry("a", false, 0, 0)];
         sort_entries(&mut original, &options("None", "None", false), &none);
         assert_eq!(names(&original), ["c", "a"], "None keeps the listing order");
+    }
+
+    /// Pre-optimization reference: converts group names to UTF-16 on each
+    /// comparison. Keep it in tests to catch locale/tie-order regressions.
+    fn legacy_group_sort(entries: &mut Vec<Entry>, mode: &str, folder_mode: &str, descending: bool) {
+        if mode == "None" { return; }
+        let mut keyed: Vec<_> = std::mem::take(entries).into_iter()
+            .map(|e| (group_key(&e, mode, folder_mode), e)).collect();
+        keyed.sort_by(|(a, _), (b, _)| {
+            group_rank(a).cmp(&group_rank(b)).then_with(|| {
+                let order = compare_text(a, b, false);
+                if descending { order.reverse() } else { order }
+            })
+        });
+        entries.extend(keyed.into_iter().map(|(_, e)| e));
+    }
+
+    #[test]
+    fn precomputed_utf16_group_sort_matches_reference_across_modes() {
+        let extensions = [".zip", ".txt", ".png", ".mp3", ".ts", ".exe", ".unknown", ""];
+        let originals: Vec<_> = (0..3072usize).map(|i| {
+            let is_dir = i % 17 == 0;
+            let name = if is_dir { format!("folder-{:04}", (i * 7) % 1200) }
+                else { format!("{i:04}-{}{}", if i % 3 == 0 { "가나다" } else { "AbC" }, extensions[i % extensions.len()]) };
+            Entry {
+                modified: Some(SystemTime::UNIX_EPOCH + Duration::from_secs((i * 1739) as u64)),
+                ..entry(&name, is_dir, ((i * 7727) % 1_300_000_000) as u64, 0)
+            }
+        }).collect();
+        for mode in ["None", "Extension", "Size", "Time", "Category"] {
+            for folder_mode in ["Auto", "Category"] {
+                for descending in [false, true] {
+                    let mut expected = originals.clone();
+                    let mut actual = originals.clone();
+                    legacy_group_sort(&mut expected, mode, folder_mode, descending);
+                    sort_groups(&mut actual, mode, folder_mode, descending);
+                    assert_eq!(names(&actual), names(&expected),
+                        "mode={mode}, folder_mode={folder_mode}, descending={descending}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "run explicitly for performance measurements, not CI"]
+    fn benchmark_group_sort_20k_entries() {
+        let originals: Vec<_> = (0..20_000usize).map(|i| {
+            let name = format!("file-{i:05}{}", [".zip", ".ts", ".txt", ".mp3", ".png"][i % 5]);
+            entry(&name, i % 17 == 0, (i * 12477) as u64, 0)
+        }).collect();
+        let mut before = originals.clone();
+        let mut after = originals;
+        let t0 = std::time::Instant::now();
+        legacy_group_sort(&mut before, "Extension", "Auto", false);
+        let legacy = t0.elapsed();
+        let t0 = std::time::Instant::now();
+        sort_groups(&mut after, "Extension", "Auto", false);
+        let optimized = t0.elapsed();
+        assert_eq!(names(&before), names(&after));
+        eprintln!("Group sort 20k: old={legacy:?}, optimized={optimized:?}, speedup={:.2}x",
+            legacy.as_secs_f64() / optimized.as_secs_f64().max(1e-9));
     }
 
     #[test]
