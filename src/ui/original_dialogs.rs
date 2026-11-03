@@ -746,24 +746,46 @@ impl App {
                             ui.label(markup_job(message, 13.0, text_color, message_width));
                         });
                     });
-                    // Keep a single source of truth for keyboard focus:
-                    // egui's native spatial arrow-key navigation. The former
-                    // mirrored focus-slot state plus per-frame consume_key
-                    // fought egui's end-of-frame focus navigation and made
-                    // button changes feel delayed or stuck.
+                    // Navigate the *actual* button focus, not egui's spatial
+                    // search: the large gap before Delete can lose focus.
+                    // No parallel focus index, event queue or extra frame.
                     let focus_slot = if *show_delete { *default_button } else if *default_button == 2 { 2 } else { 1 };
                     let raw = |key: &str, fallback: &str| self.language_pack.raw(&format!("formDelWarning.{key}")).unwrap_or_else(|| fallback.to_owned());
-                    if *show_delete {
+                    let delete_id = if *show_delete {
                         let (delete, pressed) = vcl_button(ui, at(64.0, 86.0 + extra, 75.0, 25.0), true, &raw("Caption.btnDelete", "&Delete"));
                         if first_frame && focus_slot == 0 { delete.request_focus(); }
                         if pressed {
                             outcome = Outcome::Choice(0);
                         }
-                    }
+                        Some(delete.id)
+                    } else { None };
                     let (yes, yes_pressed) = vcl_button(ui, at(width - 171.0, 86.0 + extra, 75.0, 25.0), true, &raw("Caption.btnYes", "&Yes"));
                     let (no, no_pressed) = vcl_button(ui, at(width - 90.0, 86.0 + extra, 75.0, 25.0), true, &raw("Caption.btnNo", "&No"));
                     if first_frame && focus_slot == 1 { yes.request_focus(); }
                     if first_frame && focus_slot == 2 { no.request_focus(); }
+                    if !waiting {
+                        let direction = ctx.input(|input| {
+                            if input.key_pressed(egui::Key::ArrowLeft) { -1 }
+                            else if input.key_pressed(egui::Key::ArrowRight) { 1 }
+                            else { 0 }
+                        });
+                        if direction != 0 {
+                            let ids = [delete_id.unwrap_or(yes.id), yes.id, no.id];
+                            let first = usize::from(delete_id.is_none());
+                            ui.memory_mut(|memory| {
+                                // egui already queued spatial navigation at
+                                // begin_pass; cancel it or end_pass will
+                                // override the explicitly selected button.
+                                memory.move_focus(egui::FocusDirection::None);
+                                let index = (first..ids.len())
+                                    .find(|&index| memory.focused() == Some(ids[index]))
+                                    .unwrap_or(focus_slot.clamp(first, 2));
+                                let next = (index as isize + direction as isize)
+                                    .clamp(first as isize, 2) as usize;
+                                memory.request_focus(ids[next]);
+                            });
+                        }
+                    }
                     if yes_pressed && matches!(outcome, Outcome::None) {
                         outcome = Outcome::Choice(1);
                     }

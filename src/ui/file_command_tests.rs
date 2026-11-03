@@ -343,6 +343,7 @@ fn korean_delete_warning_arrow_keys_keep_dialog_open_and_d_activates_delete() {
     frame(&mut app, &ctx, vec![]);
     let initial_focus = ctx.memory(|m| m.focused()).expect("default button must take keyboard focus");
     let mut focused_after_left = None;
+    let mut delete_focus = None;
     for (index, direction) in [egui::Key::ArrowLeft, egui::Key::ArrowLeft, egui::Key::ArrowRight, egui::Key::ArrowRight].into_iter().enumerate() {
         frame(&mut app, &ctx, vec![key(direction)]);
         assert!(matches!(app.original_dialogs.last().map(|d| &d.kind), Some(DialogKind::DeleteWarning { .. })),
@@ -353,11 +354,19 @@ fn korean_delete_warning_arrow_keys_keep_dialog_open_and_d_activates_delete() {
             focused_after_left = Some(focused);
         } else if index == 1 {
             assert_ne!(Some(focused), focused_after_left, "second Left reaches Delete button");
+            delete_focus = Some(focused);
         } else if index == 3 {
             assert_eq!(focused, initial_focus, "two Right presses return focus to No");
         }
         assert!(left.join("alpha.txt").exists(), "arrows must not delete the file");
     }
+    frame(&mut app, &ctx, vec![key(egui::Key::ArrowLeft)]);
+    frame(&mut app, &ctx, vec![key(egui::Key::ArrowLeft)]);
+    assert_eq!(ctx.memory(|m| m.focused()), delete_focus,
+        "two left presses return focus to the actual Delete widget");
+    frame(&mut app, &ctx, vec![key(egui::Key::ArrowLeft)]);
+    assert_eq!(ctx.memory(|m| m.focused()), delete_focus,
+        "Left at Delete must preserve button focus, not lose it");
     frame(&mut app, &ctx, vec![key(egui::Key::D)]);
     assert!(app.original_dialogs.is_empty(), "bare D is the Delete button access key");
     wait_dialog_or_job(&mut app, &ctx);
