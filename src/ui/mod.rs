@@ -1279,7 +1279,10 @@ impl App {
     }
     fn poll(&mut self, ctx: &egui::Context) {
         let mut auth_panes = std::mem::take(&mut self.auth_pending);
-        while let Ok(listing) = self.listing_rx.try_recv() {
+        // A heavy directory copy can trigger bursts of watcher/listing
+        // notifications. Keep the UI frame bounded instead of applying all
+        // queued filesystem changes before handling pointer input.
+        for listing in self.listing_rx.try_iter().take(16).collect::<Vec<_>>() {
             self.apply_listing(listing, &mut auth_panes);
         }
         self.after_listings(auth_panes, ctx);
@@ -1522,7 +1525,21 @@ impl App {
     fn poll_active_job_events(&mut self) {
         let mut finished = None;
         let mut close_modal = false;
-        let events: Vec<Event> = self.job.as_ref().map(|job| job.receiver.try_iter().collect()).unwrap_or_default();
+        // Never drain an unbounded number of filesystem notifications inside
+        // one UI frame. Retain the last progress snapshot between important
+        // events, but preserve the ordering of conflicts, errors and finish.
+        const MAX_EVENTS_PER_JOB_PER_FRAME: usize = 96;
+        let mut events: Vec<Event> = Vec::new();
+        if let Some(job) = self.job.as_ref() {
+            for event in job.receiver.try_iter().take(MAX_EVENTS_PER_JOB_PER_FRAME) {
+                if matches!(event, Event::Progress { .. })
+                    && matches!(events.last(), Some(Event::Progress { .. })) {
+                    *events.last_mut().unwrap() = event;
+                } else {
+                    events.push(event);
+                }
+            }
+        }
         for event in events {
             let Some(job) = self.job.as_mut() else { break };
             match event {
@@ -1621,7 +1638,7 @@ impl App {
         self.poll_background_jobs();
         self.poll_disk_copy(ctx);
         self.poll_remote_window(ctx);
-        while let Ok(result) = self.async_rx.try_recv() {
+        for result in self.async_rx.try_iter().take(96).collect::<Vec<_>>() {
             match result {
                 AsyncResult::FtpPasteMovedLocal { sequence } => {
                     if self.clipboard_sequence == Some(sequence) {
@@ -2305,8 +2322,9 @@ impl eframe::App for App {
         ctx.request_repaint_after(Duration::from_millis(
             if self.panes.iter().any(|p| p.loading)
                 || self.job.as_ref().is_some_and(|j| !j.finished)
+                || self.background_jobs.iter().any(|j| !j.finished)
             {
-                60
+                33
             } else {
                 500
             },

@@ -1,6 +1,7 @@
 //! Worker filesystem operations. Conflicts are answered through the event reply channel.
 use crate::compat::{self, DescriptionTransfer};
 use std::{
+    cell::Cell,
     fs,
     path::{Path, PathBuf},
     sync::{
@@ -8,7 +9,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
         mpsc::Sender,
     },
-    time::SystemTime,
+    time::{Duration, Instant, SystemTime},
 };
 #[derive(Debug, Clone)]
 pub struct Entry {
@@ -172,6 +173,7 @@ pub fn run_with_options(
     cancel: Arc<AtomicBool>,
     options: OperationOptions,
 ) {
+    let throttle_progress = matches!(&operation, Operation::Copy { .. });
     let mut j = Job {
         events,
         cancel,
@@ -181,6 +183,9 @@ pub fn run_with_options(
         transfers: Vec::new(),
         options,
         quiet: false,
+        throttle_progress,
+        last_progress: Cell::new(None),
+        last_progress_files: Cell::new(0),
     };
     let result = (|| -> Result<(), String> {
         check_cancel(&j.cancel)?;
@@ -637,7 +642,6 @@ use std::{
     fs::{File, OpenOptions},
     io::{Read, Seek, Write},
     sync::mpsc,
-    time::Duration,
 };
 /// Original FUN_004138d4 (inside GetFileListToWork FUN_00413ac4): files and bytes below the chosen items, so the progress window
 /// knows the totals before copying. The job thread FUN_0041377c first runs FUN_0041381c (counters to 0, every item -7 = not done,
@@ -914,6 +918,9 @@ pub(crate) fn preserve_times(file: &File, metadata: &fs::Metadata) -> Result<(),
 struct Job {
     events: Sender<Event>,
     cancel: Arc<AtomicBool>,
+    throttle_progress: bool,
+    last_progress: Cell<Option<Instant>>,
+    last_progress_files: Cell<u64>,
     files: u64,
     bytes: u64,
     descriptions: std::collections::BTreeMap<PathBuf, std::collections::BTreeMap<String, String>>,
@@ -1007,6 +1014,21 @@ impl Job {
         }
     }
     fn progress(&self, p: &Path) {
+        // Local copy and move can write many 1 MiB blocks per second.
+        // Progress is cosmetic; keep first and per-file completion updates,
+        // and send intermediate updates at most every 40ms. The original
+        // per-block updates remain unchanged for Shred and other operations.
+        if self.throttle_progress {
+            let now = Instant::now();
+            let changed_file_count = self.files != self.last_progress_files.get();
+            if !changed_file_count && self.last_progress.get().is_some_and(|previous| {
+                now.duration_since(previous) < Duration::from_millis(40)
+            }) {
+                return;
+            }
+            self.last_progress.set(Some(now));
+            self.last_progress_files.set(self.files);
+        }
         let _ = self.events.send(Event::Progress {
             path: p.to_path_buf(),
             bytes: self.bytes,

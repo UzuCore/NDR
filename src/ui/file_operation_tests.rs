@@ -10,6 +10,37 @@ use std::sync::Mutex;
 static EXTERNAL: Mutex<Vec<(String, Vec<String>, String)>> = Mutex::new(Vec::new());
 
 #[test]
+fn progress_event_flood_is_processed_in_bounded_ui_frames_without_losing_control_events() {
+    let (root, _ctx, mut app) = fixture("bounded-progress-ui");
+    let (sender, receiver) = mpsc::channel();
+    let job = Job::new(receiver, Arc::new(AtomicBool::new(false)), "copy".into());
+    for i in 0..4096u64 {
+        sender.send(Event::Progress {
+            path: PathBuf::from(format!("file-{i}.bin")), bytes: i, files: i,
+        }).unwrap();
+        if i == 128 {
+            sender.send(Event::Totals { files: Some(4096), bytes: Some(4096) }).unwrap();
+        }
+    }
+    sender.send(Event::Fatal("ordered-control-marker".into())).unwrap();
+    app.job = Some(job);
+    app.poll_active_job_events();
+    assert_eq!(app.job.as_ref().unwrap().bytes, 95,
+        "one frame must not drain a flood of progress notifications");
+    assert!(app.job.as_ref().unwrap().fatal.is_none());
+    for _ in 0..50 {
+        app.poll_active_job_events();
+    }
+    let job = app.job.as_ref().unwrap();
+    assert_eq!(job.bytes, 4095);
+    assert_eq!(job.progress.as_ref().unwrap().total_files, Some(4096));
+    assert_eq!(job.fatal.as_deref(), Some("ordered-control-marker"));
+    drop(app);
+    drop(sender);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn independent_copy_jobs_run_together_without_blocking_file_panes() {
     let (root, ctx, mut app) = fixture("parallel-copy");
     let src = root.join("left");
