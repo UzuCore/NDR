@@ -157,6 +157,7 @@ impl App {
     /// on the file); otherwise an existing parent; if none exists, the tab is removed. Fixed: previously it tried to open missing locations as is and read the same location twice.
     fn show_tab(&mut self, index: usize) {
         self.discard_vault(index);
+        if self.panes[index].vault.is_some() { return; }
         let pane = &mut self.panes[index];
         let Some(path) = pane.tabs.get(pane.tab).cloned() else { return };
         pane.archive = None;

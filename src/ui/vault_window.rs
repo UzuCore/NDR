@@ -42,20 +42,42 @@ pub(super) struct VaultDialog {
 }
 
 impl App {
+    fn vault_status(&self, ko: &str, en: &str) -> String {
+        if self.language == "ko" { ko } else { en }.to_owned()
+    }
+
     /// Discard the in-memory connection AND all decrypted pane presentation
     /// buffers, including on tab switches and direct address navigation.
     pub(super) fn discard_vault(&mut self, pane: usize) {
         #[cfg(feature = "winfsp-vault")]
-        if self.vault_mount.as_ref().is_some_and(|mount| mount.pane == pane) {
-            let result = self.vault_mount.as_mut().unwrap().finish();
-            if let Err(error) = result {
-                self.status = format!("Cannot leave encrypted folder: virtual file save failed: {error}");
+        {
+            // Refuse to discard the parent vault while an external editor
+            // still holds a file. Unlike the former single mount we inspect
+            // every active file before releasing any of them.
+            if self.vault_mounts.iter().any(|mount| mount.pane == pane && mount.has_open_files()) {
+                self.status = self.vault_status(
+                    "외부 프로그램에서 암호화 파일을 사용 중입니다. 편집기를 닫은 후 폴더를 나가세요.",
+                    "An external application is using an encrypted file. Close it before leaving the folder.");
                 return;
             }
-            self.vault_mount = None;
+            let mut index = 0;
+            while index < self.vault_mounts.len() {
+                if self.vault_mounts[index].pane != pane { index += 1; continue; }
+                if let Err(error) = self.vault_mounts[index].finish() {
+                    eprintln!("NDR encrypted mount save during navigation failed: {error}");
+                    self.status = self.vault_status(
+                        "암호화 파일 저장에 실패했습니다. 원본은 보존되었으니 편집기에서 다시 저장해 주세요.",
+                        "Encrypted file save failed. The original was preserved; retry saving in the editor.");
+                    return;
+                }
+                self.vault_mounts.remove(index);
+            }
             if let Some(state) = self.panes[pane].vault.as_mut() {
                 if let Err(error) = state.database.reload_after_mount() {
-                    self.status = error;
+                    eprintln!("NDR encrypted folder refresh after mounts failed: {error}");
+                    self.status = self.vault_status(
+                        "암호화 폴더 목록을 갱신하지 못했습니다.",
+                        "Encrypted folder list could not be refreshed.");
                     return;
                 }
             }
@@ -112,12 +134,11 @@ impl App {
                 minimized || state.database.expired(policy));
             if expired {
                 #[cfg(feature = "winfsp-vault")]
-                if self.vault_mount.as_ref().is_some_and(|mount| mount.pane == pane) {
-                    if let Some(mut mount) = self.vault_mount.take() {
-                        if let Err(error) = mount.finish() {
-                            self.status = format!("Encrypted virtual file could not save during lock: {error}");
-                        }
-                    }
+                if self.vault_mounts.iter().any(|mount| mount.pane == pane && mount.has_open_files()) {
+                    self.status = self.vault_status(
+                        "암호화 파일이 다른 프로그램에서 열려 있어 잠금을 보류했습니다. 파일을 닫아 주세요.",
+                        "Encrypted file is open in another application. Close it to lock the folder.");
+                    continue;
                 }
                 self.exit_vault(pane);
                 self.status = self.language_pack.text("NDRVault.StatusLocked", "Encrypted folder locked. Reopen to authenticate.");
@@ -213,11 +234,6 @@ impl App {
             }
             return;
         }
-        #[cfg(feature = "winfsp-vault")]
-        if self.vault_mount.is_some() {
-            self.status = "An encrypted file is still connected. Leave the encrypted folder to close it before opening another item.".into();
-            return;
-        }
         let Some(state) = self.panes[pane].vault.as_mut() else { return };
         if let Ok(found) = state.database.find_child(state.folder(), &entry.name) {
             if let Some(item) = found {
@@ -247,20 +263,40 @@ impl App {
                 self.offer_winfsp_installation();
                 return;
             }
-            if self.vault_mount.is_some() {
-                self.warning_notice("파일 열기 대기", "Encrypted file is already open",
-                    "Close the current virtual file before opening another one.");
-                return;
-            }
             if self.vault_transfer.is_some() {
-                self.status = "Finish encrypted file transfers before mounting a file.".into();
+                self.status = self.vault_status(
+                    "암호화 파일 전송이 끝난 후 다시 시도해 주세요.",
+                    "Finish the encrypted file transfer before opening another file.");
                 return;
             }
-            let result = {
-                let Some(state) = self.panes[pane].vault.as_ref() else { return };
-                super::vault_winfsp::VaultMount::start(
-                    pane, state.file.clone(), &state.database, state.folder(), item)
-            };
+            let Some(state) = self.panes[pane].vault.as_ref() else { return };
+            // Reopening the same item must reuse its active drive: two
+            // independent writers to the same file would lose changes.
+            if let Some(mount) = self.vault_mounts.iter().find(|mount|
+                mount.vault_path == state.file && mount.parent_id == state.folder()
+                    && mount.item_name == item.name) {
+                let path = mount.file_path.clone();
+                let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
+                let textual = ["txt", "md", "log", "ini", "cfg", "json", "xml", "csv", "yaml", "yml", "toml", "rs", "py", "bat", "ps1"]
+                    .iter().any(|known| ext.eq_ignore_ascii_case(known));
+                let opened = if textual {
+                    native::shell_open(std::path::Path::new("notepad.exe"),
+                        Some(&native::quote_arg(&path.to_string_lossy())), "open")
+                } else { native::shell_open(&path, None, "open") };
+                if let Err(error) = opened {
+                    eprintln!("NDR virtual file reopen failed: {error}");
+                    self.error_notice("암호화 파일 열기 실패", "Encrypted file open failed",
+                        self.vault_status("파일을 다시 열 수 없습니다.", "Could not reopen the file."));
+                }
+                return;
+            }
+            let existing = self.vault_mounts.iter().find(|mount| mount.vault_path == state.file);
+            let writer_gate = existing.map(|mount| mount.writer_gate())
+                .unwrap_or_else(|| std::sync::Arc::new(std::sync::Mutex::new(())));
+            let occupied: Vec<char> = self.vault_mounts.iter().filter_map(|mount| mount.drive_letter()).collect();
+            let result = super::vault_winfsp::VaultMount::start(
+                pane, state.file.clone(), &state.database, state.folder(), item,
+                writer_gate, &occupied);
             match result {
                 Ok(mut mount) => {
                     // Plain text must go to a real editor, not a file-type
@@ -276,16 +312,20 @@ impl App {
                     };
                     if let Err(error) = opened {
                         let _ = mount.finish();
-                        self.error_notice("암호화 파일 열기 실패", "Encrypted file open failed", error);
+                        eprintln!("NDR encrypted file open failed: {error}");
+                        self.error_notice("암호화 파일 열기 실패", "Encrypted file open failed",
+                            self.vault_status("파일을 외부 프로그램으로 열지 못했습니다.", "Cannot open the file in its external application."));
                     } else {
-                        self.vault_mount = Some(mount);
+                        self.vault_mounts.push(mount);
                     }
                 }
                 Err(error) => {
                     if error.contains("not installed") {
                         self.offer_winfsp_installation();
                     } else {
-                        self.error_notice("가상 드라이브 연결 실패", "WinFsp mount failed", error);
+                        eprintln!("NDR virtual file mount failed: {error}");
+                        self.error_notice("가상 드라이브 연결 실패", "WinFsp mount failed",
+                            self.vault_status("암호화 파일 연결에 실패했습니다. 가상 드라이브 사용 상태를 확인해 주세요.", "Unable to connect encrypted virtual file."));
                     }
                 }
             }
@@ -315,82 +355,49 @@ impl App {
     }
 
     #[cfg(feature = "winfsp-vault")]
-    pub(super) fn vault_mount_ui(&mut self, ctx: &egui::Context) {
-        // No confirmation dialog for ordinary opens. WinFsp commits changes
-        // on Flush/Close while keeping the virtual file connected. Only show
-        // the existing recovery dialog if an authenticated save has failed.
-        let Some(mount) = self.vault_mount.as_mut() else { return };
-        let pane = mount.pane;
-        let vault_path = mount.vault_path.clone();
-        let saved = mount.take_saved_revision();
-        if matches!(saved, Ok(true)) {
+    pub(super) fn vault_mount_ui(&mut self, _ctx: &egui::Context) {
+        // Files save through WinFsp Flush/Close, without a blocking dialog.
+        // Each mount owns a separate virtual letter, but commits share a
+        // writer gate so their authenticated metadata cannot overwrite peers.
+        let mut updated = [false; 2];
+        let mut errors = Vec::new();
+        for mount in &mut self.vault_mounts {
+            match mount.take_saved_revision() {
+                Ok(true) => updated[mount.pane] = true,
+                Ok(false) => {},
+                Err(error) => eprintln!("NDR vault revision check: {error}"),
+            }
+            if mount.take_save_error_notice() {
+                errors.push(mount.file_path.file_name().unwrap_or_default().to_string_lossy().into_owned());
+            }
+        }
+        for pane in 0..2 {
+            if !updated[pane] { continue; }
             if let Some(vault) = self.panes[pane].vault.as_mut() {
-                if vault.file == vault_path {
-                    match vault.database.reload_after_mount() {
-                        Ok(()) => self.refresh_vault(pane),
-                        Err(error) => self.error_notice("Encrypted folder refresh failed", "Encrypted folder refresh failed", error),
+                match vault.database.reload_after_mount() {
+                    Ok(()) => self.refresh_vault(pane),
+                    Err(error) => {
+                        eprintln!("NDR vault listing refresh failed: {error}");
+                        self.error_notice("암호화 폴더 갱신 실패", "Encrypted folder refresh failed",
+                            self.vault_status("저장된 파일 목록을 갱신하지 못했습니다.",
+                                "Could not refresh the encrypted file list."));
                     }
                 }
             }
         }
-        let Some(mount) = self.vault_mount.as_ref() else { return };
-        if mount.save_error().is_none() { return; }
-        let filename = mount.file_path.file_name().unwrap_or_default().to_string_lossy().into_owned();
-        let ko = self.language == "ko";
-        let mut close = false;
-        let id = egui::Id::new("ndr-winfsp-open-modal");
-        super::keep_opaque(ctx, id);
-        super::movable_modal(ctx, id).show(ctx, |ui| {
-            let title = super::modal_title_start(ui,
-                if ko { "암호화 파일 열기" } else { "Encrypted file open" });
-            ui.set_width(444.0);
-            ui.add_space(8.0);
-            ui.label(egui::RichText::new(&filename).strong());
-            ui.add_space(8.0);
-            ui.label(if ko {
-                "WinFsp 가상 파일시스템으로 열었습니다. NDR은 평문 임시파일을 생성하지 않습니다."
-            } else { "Opened through WinFsp. NDR does not create a plaintext temporary file." });
-            ui.add_space(4.0);
-            ui.label(if ko { "외부 프로그램은 별도의 캐시나 자동 저장 파일을 생성할 수 있습니다." }
-                else { "External apps may create their own caches or autosave files." });
-            ui.add_space(8.0);
-            ui.label(if ko { "외부 프로그램에서 저장하고 닫은 후 아래 버튼을 누르세요." }
-                else { "Save and close the external application before disconnecting." });
-            ui.add_space(12.0);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                close = ui.add_sized([150.0, 25.0], egui::Button::new(
-                    if ko { "닫기 및 암호화 저장" } else { "Close and save" })).clicked();
-            });
-            ui.add_space(3.0);
-            // Do not dismiss a live mount with the title-bar X; it must first
-            // commit the authenticated changes and propagate any save failure.
-            if super::modal_title_finish(ui, id, title) { close = true; }
-        });
-        if !close { return; }
-        let result = self.vault_mount.as_mut().unwrap().finish();
-        match result {
-            Ok(()) => {
-                let mount = self.vault_mount.take().unwrap();
-                let pane = mount.pane;
-                if let Some(vault) = self.panes[pane].vault.as_mut() {
-                    if vault.file == mount.vault_path {
-                        if let Err(error) = vault.database.reload_after_mount() {
-                            self.error_notice("파일 목록 갱신 실패", "Encrypted folder refresh failed", error);
-                            return;
-                        }
-                        self.refresh_vault(pane);
-                    }
-                }
-                self.completion_notice("암호화 파일 닫기 완료", "Encrypted file closed", filename);
-            }
-            Err(error) => self.error_notice("암호화 파일 저장 실패", "Encrypted file save failed", error),
+        for file in errors {
+            self.error_notice("암호화 저장 실패", "Encrypted file save failed",
+                self.vault_status(&format!("{file}: 변경 내용을 암호화 저장하지 못했습니다. 편집기에서 다시 저장해 주세요."),
+                    &format!("{file}: Could not encrypt changes. Retry saving from the editor.")));
         }
     }
 
     pub(super) fn vault_new_item(&mut self, folder: bool) {
         #[cfg(feature = "winfsp-vault")]
-        if self.vault_mount.is_some() {
-            self.status = "Close the encrypted virtual file before modifying the container.".into();
+        if self.vault_mounts.iter().any(|mount| mount.pane == self.active) {
+            self.status = self.vault_status(
+                "열려 있는 암호화 파일을 외부 프로그램에서 닫은 다음 다시 시도해 주세요.",
+                "Close externally opened encrypted files before modifying the container.");
             return;
         }
         let pane = self.active;
@@ -418,8 +425,10 @@ impl App {
 
     pub(super) fn vault_rename_item(&mut self) {
         #[cfg(feature = "winfsp-vault")]
-        if self.vault_mount.is_some() {
-            self.status = "Close the encrypted virtual file before modifying the container.".into();
+        if self.vault_mounts.iter().any(|mount| mount.pane == self.active) {
+            self.status = self.vault_status(
+                "열려 있는 암호화 파일을 외부 프로그램에서 닫은 다음 다시 시도해 주세요.",
+                "Close externally opened encrypted files before modifying the container.");
             return;
         }
         let pane = self.active;
@@ -450,8 +459,10 @@ impl App {
     /// the cost, leaving the normal fast delete and copy path unchanged.
     pub(super) fn vault_compact_confirm(&mut self) {
         #[cfg(feature = "winfsp-vault")]
-        if self.vault_mount.is_some() {
-            self.status = "Close the encrypted virtual file before modifying the container.".into();
+        if self.vault_mounts.iter().any(|mount| mount.pane == self.active) {
+            self.status = self.vault_status(
+                "열려 있는 암호화 파일을 외부 프로그램에서 닫은 다음 다시 시도해 주세요.",
+                "Close externally opened encrypted files before modifying the container.");
             return;
         }
         let pane=self.active;
@@ -501,8 +512,10 @@ impl App {
     }
     pub(super) fn vault_remove_items(&mut self) {
         #[cfg(feature = "winfsp-vault")]
-        if self.vault_mount.is_some() {
-            self.status = "Close the encrypted virtual file before modifying the container.".into();
+        if self.vault_mounts.iter().any(|mount| mount.pane == self.active) {
+            self.status = self.vault_status(
+                "열려 있는 암호화 파일을 외부 프로그램에서 닫은 다음 다시 시도해 주세요.",
+                "Close externally opened encrypted files before modifying the container.");
             return;
         }
         let pane = self.active;
@@ -539,8 +552,10 @@ impl App {
     /// Paste source bytes directly into the authenticated container without plaintext staging.
     pub(super) fn vault_paste_files(&mut self) {
         #[cfg(feature = "winfsp-vault")]
-        if self.vault_mount.is_some() {
-            self.status = "Close the encrypted virtual file before modifying the container.".into();
+        if self.vault_mounts.iter().any(|mount| mount.pane == self.active) {
+            self.status = self.vault_status(
+                "열려 있는 암호화 파일을 외부 프로그램에서 닫은 다음 다시 시도해 주세요.",
+                "Close externally opened encrypted files before modifying the container.");
             return;
         }
         let pane = self.active;
@@ -561,8 +576,10 @@ impl App {
     /// export. Warn before releasing decrypted bytes to the filesystem.
     pub(super) fn vault_export_to_other(&mut self, source: usize, moving: bool) {
         #[cfg(feature = "winfsp-vault")]
-        if self.vault_mount.is_some() {
-            self.status = "Close the encrypted virtual file before modifying the container.".into();
+        if self.vault_mounts.iter().any(|mount| mount.pane == self.active) {
+            self.status = self.vault_status(
+                "열려 있는 암호화 파일을 외부 프로그램에서 닫은 다음 다시 시도해 주세요.",
+                "Close externally opened encrypted files before modifying the container.");
             return;
         }
         use super::vault_transfer_ui::VaultTransferKind;
@@ -592,8 +609,10 @@ impl App {
     /// never destroys the successfully encrypted copy; the status reports it.
     pub(super) fn vault_transfer_from_local(&mut self, source: usize, target: usize, files: Vec<PathBuf>, moving: bool) {
         #[cfg(feature = "winfsp-vault")]
-        if self.vault_mount.is_some() {
-            self.status = "Close the encrypted virtual file before modifying the container.".into();
+        if self.vault_mounts.iter().any(|mount| mount.pane == self.active) {
+            self.status = self.vault_status(
+                "열려 있는 암호화 파일을 외부 프로그램에서 닫은 다음 다시 시도해 주세요.",
+                "Close externally opened encrypted files before modifying the container.");
             return;
         }
         use super::vault_transfer_ui::VaultTransferKind;
@@ -617,8 +636,10 @@ impl App {
 
     pub(super) fn vault_import_paths(&mut self, pane: usize, files: Vec<PathBuf>) {
         #[cfg(feature = "winfsp-vault")]
-        if self.vault_mount.is_some() {
-            self.status = "Close the encrypted virtual file before modifying the container.".into();
+        if self.vault_mounts.iter().any(|mount| mount.pane == self.active) {
+            self.status = self.vault_status(
+                "열려 있는 암호화 파일을 외부 프로그램에서 닫은 다음 다시 시도해 주세요.",
+                "Close externally opened encrypted files before modifying the container.");
             return;
         }
         use super::vault_transfer_ui::VaultTransferKind;
@@ -638,8 +659,10 @@ impl App {
     /// Move/copy inside a single SQLCipher container; no plaintext staging.
     pub(super) fn vault_transfer_between_panes(&mut self, source: usize, target: usize, moving: bool) {
         #[cfg(feature = "winfsp-vault")]
-        if self.vault_mount.is_some() {
-            self.status = "Close the encrypted virtual file before modifying the container.".into();
+        if self.vault_mounts.iter().any(|mount| mount.pane == self.active) {
+            self.status = self.vault_status(
+                "열려 있는 암호화 파일을 외부 프로그램에서 닫은 다음 다시 시도해 주세요.",
+                "Close externally opened encrypted files before modifying the container.");
             return;
         }
         use super::vault_transfer_ui::VaultTransferKind;
@@ -671,8 +694,10 @@ impl App {
 
     pub(super) fn vault_transfer_inside(&mut self, moving: bool) {
         #[cfg(feature = "winfsp-vault")]
-        if self.vault_mount.is_some() {
-            self.status = "Close the encrypted virtual file before modifying the container.".into();
+        if self.vault_mounts.iter().any(|mount| mount.pane == self.active) {
+            self.status = self.vault_status(
+                "열려 있는 암호화 파일을 외부 프로그램에서 닫은 다음 다시 시도해 주세요.",
+                "Close externally opened encrypted files before modifying the container.");
             return;
         }
         use super::vault_transfer_ui::VaultTransferKind;

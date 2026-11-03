@@ -1,4 +1,4 @@
-//! Experimental WinFsp transport: expose an authenticated vault item to
+﻿//! Experimental WinFsp transport: expose an authenticated vault item to
 //! Windows applications without creating any decrypted disk file. Only a
 //! single selected item is exposed per mount; the provider is deliberately
 //! conservative about filesystem operations it cannot support safely.
@@ -57,6 +57,7 @@ struct MountData {
     // Incremented only after the encrypted index was committed successfully.
     saved_revision: u64,
     open_files: usize,
+    writer_gate: Arc<Mutex<()>>,
 }
 
 impl MountData {
@@ -128,6 +129,11 @@ impl MountData {
 
     fn commit(&mut self) -> Result<(), String> {
         if !self.dirty { return Ok(()); }
+        // Different files may be edited concurrently. Their authenticated
+        // index updates must be serialized, and each writer must see the
+        // *latest* committed index to avoid losing another file's changes.
+        let _writer = self.writer_gate.lock().map_err(|e| e.to_string())?;
+        self.vault.reload_after_mount()?;
         // The original authenticated chunks must remain available even after
         // begin_stream_file logically replaces the old index entry.
         let snapshot = self.vault.fork_for_mount()?;
@@ -325,24 +331,29 @@ pub(super) struct VaultMount {
     pub file_path: std::path::PathBuf,
     pub vault_path: std::path::PathBuf,
     pub pane: usize,
+    pub item_name: String,
+    pub parent_id: i64,
     observed_revision: u64,
+    error_reported: bool,
 }
 
 impl VaultMount {
     pub fn start(pane: usize, vault_path: std::path::PathBuf,
-        original: &Vault, parent: i64, item: VaultItem) -> Result<Self, String> {
+        original: &Vault, parent: i64, item: VaultItem,
+        writer_gate: Arc<Mutex<()>>, occupied: &[char]) -> Result<Self, String> {
         if !runtime_available() {
             return Err("WinFsp 2.1 runtime/driver is not installed".to_owned());
         }
         let drives = unsafe { windows_sys::Win32::Storage::FileSystem::GetLogicalDrives() };
-        let letter = (b'T'..=b'Z').rev().find(|&c| drives & (1u32 << (c - b'A')) == 0)
+        let letter = (b'T'..=b'Z').rev().find(|&c|
+            drives & (1u32 << (c - b'A')) == 0 && !occupied.contains(&(c as char)))
             .ok_or("No free drive letter for WinFsp encrypted view")?;
         let mountpoint = format!("{}:", letter as char);
         let file_path = std::path::PathBuf::from(format!("{}\\{}", mountpoint, item.name));
         let state = Arc::new(Mutex::new(MountData {
             vault: original.fork_for_mount()?, id: item.id, parent, name: item.name.clone(),
             size: item.size.max(0) as u64, original_size: item.size.max(0) as u64,
-            pages: BTreeMap::new(), read_cache: None, truncate_floor: None, dirty: false, last_error: None, saved_revision: 0, open_files: 0,
+            pages: BTreeMap::new(), read_cache: None, truncate_floor: None, dirty: false, last_error: None, saved_revision: 0, open_files: 0, writer_gate,
         }));
         let mut params = VolumeParams::new();
         params.filesystem_name("NDRVAULT").sector_size(512)
@@ -356,7 +367,7 @@ impl VaultMount {
             .map_err(|e| format!("WinFsp create failed: {e}"))?;
         host.mount(&mountpoint).map_err(|e| format!("WinFsp mount failed: {e}"))?;
         host.start().map_err(|e| format!("WinFsp start failed: {e}"))?;
-        Ok(Self { host, state, file_path, vault_path, pane, observed_revision: 0 })
+        Ok(Self { host, state, file_path, vault_path, pane, item_name: item.name.clone(), parent_id: parent, observed_revision: 0, error_reported: false })
     }
     /// The driver flushes edited bytes to the encrypted container on close
     /// and flush, without a separate UI confirmation. The pane may refresh
@@ -368,8 +379,20 @@ impl VaultMount {
         Ok(true)
     }
 
-    pub fn save_error(&self) -> Option<String> {
-        self.state.lock().ok().and_then(|state| state.last_error.clone())
+    pub fn take_save_error_notice(&mut self) -> bool {
+        let failed = self.state.lock().is_ok_and(|state| state.last_error.is_some());
+        if !failed { self.error_reported = false; return false; }
+        if self.error_reported { return false; }
+        self.error_reported = true;
+        true
+    }
+
+    pub fn writer_gate(&self) -> Arc<Mutex<()>> {
+        Arc::clone(&self.state.lock().unwrap().writer_gate)
+    }
+
+    pub fn drive_letter(&self) -> Option<char> {
+        self.file_path.to_string_lossy().chars().next()
     }
 
     pub fn has_open_files(&self) -> bool {
@@ -428,7 +451,8 @@ mod tests {
         let id = original.add_file(1, "edit.txt", b"before").unwrap();
         let item = original.find_child(1, "edit.txt").unwrap().unwrap();
         assert_eq!(item.id, id);
-        let mut mount = VaultMount::start(0, path.clone(), &original, 1, item).unwrap();
+        let mut mount = VaultMount::start(0, path.clone(), &original, 1, item,
+            Arc::new(Mutex::new(())), &[]).unwrap();
         assert_eq!(std::fs::read(&mount.file_path).unwrap(), b"before");
         std::fs::write(&mount.file_path, b"after-save").unwrap();
         // Kernel Close callbacks may finish *after* the user-mode write
@@ -454,6 +478,50 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires installed WinFsp driver and two free letters; opt-in real mount test"]
+    fn two_simultaneously_mounted_files_preserve_both_encrypted_commits() {
+        let root = std::env::temp_dir().join(format!("ndr-winfsp-dual-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("dual.ndr");
+        let mut original = Vault::create(&path, "dual mount disposable password".into()).unwrap();
+        original.add_file(1, "first.txt", b"initial first").unwrap();
+        original.add_file(1, "second.txt", b"initial second").unwrap();
+        let gate = Arc::new(Mutex::new(()));
+        let first = original.find_child(1, "first.txt").unwrap().unwrap();
+        let mut mount_first = VaultMount::start(0, path.clone(), &original, 1, first,
+            Arc::clone(&gate), &[]).unwrap();
+        let second = original.find_child(1, "second.txt").unwrap().unwrap();
+        let mut mount_second = VaultMount::start(0, path.clone(), &original, 1, second,
+            Arc::clone(&gate), &[mount_first.drive_letter().unwrap()]).unwrap();
+        assert_ne!(mount_first.drive_letter(), mount_second.drive_letter());
+        assert_eq!(std::fs::read(&mount_first.file_path).unwrap(), b"initial first");
+        assert_eq!(std::fs::read(&mount_second.file_path).unwrap(), b"initial second");
+        for (mount, replacement) in [(&mut mount_second, b"second changed".as_slice()),
+                                      (&mut mount_first, b"first changed".as_slice())] {
+            std::fs::write(&mount.file_path, replacement).unwrap();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while mount.has_open_files() || mount.state.lock().unwrap().saved_revision == 0 {
+                assert!(std::time::Instant::now() < deadline, "WinFsp close/commit timeout");
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
+            assert!(mount.take_saved_revision().unwrap());
+        }
+        mount_second.finish().unwrap();
+        mount_first.finish().unwrap();
+        drop(mount_first);
+        drop(mount_second);
+        original.reload_after_mount().unwrap();
+        for (name, contents) in [("first.txt", b"first changed".as_slice()),
+                                 ("second.txt", b"second changed".as_slice())] {
+            let item = original.find_child(1, name).unwrap().unwrap();
+            assert_eq!(original.read_file(item.id).unwrap(), contents,
+                "one mount must not overwrite the other file's metadata");
+        }
+        drop(original);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn virtual_file_commits_without_plaintext_disk_copy() {
         let root = std::env::temp_dir().join(format!("ndr-winfsp-pages-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
@@ -464,7 +532,7 @@ mod tests {
         let mut mounted = MountData {
             vault: original.fork_for_mount().unwrap(), id, parent: 1, name: "picture.png".into(),
             size: plain.len() as u64, original_size: plain.len() as u64,
-            pages: BTreeMap::new(), read_cache: None, truncate_floor: None, dirty: false, last_error: None, saved_revision: 0, open_files: 0,
+            pages: BTreeMap::new(), read_cache: None, truncate_floor: None, dirty: false, last_error: None, saved_revision: 0, open_files: 0, writer_gate: Arc::new(Mutex::new(())),
         };
         let mut before = vec![0; plain.len()];
         mounted.read_at(&mut before, 0).unwrap();
@@ -497,7 +565,7 @@ mod tests {
         let state = Arc::new(Mutex::new(MountData {
             vault: original.fork_for_mount().unwrap(), id, parent: 1, name: "video.bin".into(),
             size: 16, original_size: 16, pages: BTreeMap::new(), read_cache: None,
-            truncate_floor: None, dirty: false, last_error: None, saved_revision: 0, open_files: 0,
+            truncate_floor: None, dirty: false, last_error: None, saved_revision: 0, open_files: 0, writer_gate: Arc::new(Mutex::new(())),
         }));
         let fs = SingleFileFs { state: Arc::clone(&state) };
         let mut info = FileInfo::default();
@@ -528,7 +596,7 @@ mod tests {
         let state = Arc::new(Mutex::new(MountData {
             vault: vault.fork_for_mount().unwrap(), id, parent: 1, name: "photo.png".into(),
             size: original.len() as u64, original_size: original.len() as u64,
-            pages: BTreeMap::new(), read_cache: None, truncate_floor: None, dirty: false, last_error: None, saved_revision: 0, open_files: 0,
+            pages: BTreeMap::new(), read_cache: None, truncate_floor: None, dirty: false, last_error: None, saved_revision: 0, open_files: 0, writer_gate: Arc::new(Mutex::new(())),
         }));
         let fs = SingleFileFs { state: Arc::clone(&state) };
         let mut info = FileInfo::default();

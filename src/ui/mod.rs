@@ -741,7 +741,7 @@ pub struct App {
     /// Authenticated SQLCipher connections retained in memory between visits.
     vault_sessions: HashMap<PathBuf, ndr::vault::Vault>,
     #[cfg(feature = "winfsp-vault")]
-    vault_mount: Option<vault_winfsp::VaultMount>,
+    vault_mounts: Vec<vault_winfsp::VaultMount>,
     vault_transfer: Option<vault_transfer_ui::VaultTransferJob>,
     /// Subfolders of the address bar's chevron menu (path, whether it is a drive list) -> (path, text). Cleared when a new listing arrives.
     crumb_cache: HashMap<(PathBuf, bool), Vec<(PathBuf, String)>>,
@@ -1069,7 +1069,7 @@ impl App {
             vault_dialog: None,
             vault_sessions: HashMap::new(),
             #[cfg(feature = "winfsp-vault")]
-            vault_mount: None,
+            vault_mounts: Vec::new(),
             vault_transfer: None,
             crumb_cache: HashMap::new(),
             folder_size_queue: Arc::new((Mutex::new(std::collections::VecDeque::new()), std::sync::Condvar::new())),
@@ -2213,7 +2213,7 @@ impl eframe::App for App {
     fn on_exit(&mut self, _: Option<&eframe::glow::Context>) {
         self.vault_dialog = None;
         #[cfg(feature = "winfsp-vault")]
-        if let Some(mut mounted) = self.vault_mount.take() {
+        for mut mounted in self.vault_mounts.drain(..) {
             if let Err(error) = mounted.finish() {
                 eprintln!("NDR WinFsp encrypted mount commit failed during shutdown: {error}");
             }

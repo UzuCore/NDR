@@ -1016,6 +1016,10 @@ impl App {
     pub(super) fn navigate(&mut self, index: usize, path: PathBuf, remember: bool) {
         // Any real filesystem navigation leaves the encrypted virtual folder.
         self.discard_vault(index);
+        // If an editor still owns a virtual-file handle, discard_vault
+        // deliberately refused to unmount. Do not then replace the pane
+        // underneath that live encrypted session.
+        if self.panes[index].vault.is_some() { return; }
         // Going to a local folder ends the pane's FTP mode (original FUN_0048d6e4: disconnect, then to a local folder).
         if let Some(remote) = self.panes[index].remote.as_ref() {
             if remote.busy.load(Ordering::Relaxed) {
