@@ -140,6 +140,7 @@ This release was built automatically from commit ``$commit`` using ``$rust``.
 Build: ``$env:GITHUB_RUN_NUMBER`` | Cargo version: ``$version`` | Target: ``x86_64-pc-windows-msvc``
 
 - Complete portable package: **NDR-windows-x64.zip** ($($entries.Count) files)
+- WinFsp is optional for ordinary file management. Opening a file within an encrypted folder requires its system driver. On first use, NDR offers to install the digitally signed WinFsp MSI that is embedded in **NDR.exe**: no separate download is necessary, but Windows administrator approval is required. If installation is declined, encrypted-file external opening is unavailable until WinFsp is installed.
 - Verify package integrity using the SHA-256 checksum recorded by the workflow
 - Original license notices and bundled 7zip+ license files are inside the ZIP.
 
