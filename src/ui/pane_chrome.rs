@@ -624,7 +624,7 @@ impl App {
         // local pane. Other items are always enabled (the menu appears only when an item is clicked on a local pane, `list_menu_kind`).
         // Fixed: previously every frame while the menu was open opened the clipboard and read the file list (blocking other programs' clipboard writes,
         // and a clipboard change at the same time released the data being read). Like the original it only checks whether the format exists.
-        let paste = (local || writable_archive) && (self.clipboard.is_some() || self.archive_clipboard.is_some() || native::clipboard_has_files());
+        let paste = (local || writable_archive) && ((pane.vault.is_none() && self.vault_clipboard.is_some()) || self.clipboard.is_some() || self.archive_clipboard.is_some() || native::clipboard_has_files());
         let auto_extract = local;
         // Original mipExplorerMenu (+0x770) is untouched by pmMainPopup, so it is always visible.
         let explorer = local && has;

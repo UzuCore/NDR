@@ -138,6 +138,11 @@ impl App {
     }
 
     fn vault_task_finish(&mut self, job: &mut VaultTransferJob) {
+        if job.kind == VaultTransferKind::Export && job.moving &&
+            job.failed.is_none() && !job.cancelled && job.skipped == 0 &&
+            job.copied == job.names.len() {
+            self.vault_clipboard = None;
+        }
         // Match ordinary NDR transfers: one cue for a fully successful batch,
         // never for cancellation, failed work, or skipped-only operations.
         // This is called once per terminal transition, not per 8 MiB chunk.
@@ -369,6 +374,26 @@ impl App {
         }
     }
 
+    fn vault_remove_exported_source(&mut self, job: &VaultTransferJob,
+                                    original: &str, expected_id: Option<i64>) -> Result<(), String> {
+        let path = self.panes[job.source].vault.as_ref()
+            .ok_or("Encrypted export source was closed")?.file.clone();
+        let gate = self.vault_mounts.iter().find(|mount| mount.vault_path == path)
+            .map(|mount| mount.writer_gate());
+        let _guard = if let Some(ref gate) = gate {
+            Some(gate.lock().map_err(|e| e.to_string())?)
+        } else { None };
+        let state = self.panes[job.source].vault.as_mut()
+            .ok_or("Encrypted export source was closed")?;
+        state.database.reload_after_mount()?;
+        let item = state.database.find_child(job.from_folder, original)?
+            .ok_or("Encrypted copy completed but source item no longer exists")?;
+        if expected_id.is_some_and(|id| id != item.id) {
+            return Err("Encrypted copy completed but original was replaced; retained for safety".into());
+        }
+        state.database.remove_many(&[item.id])
+    }
+
     fn vault_task_copy_item(&mut self, job: &VaultTransferJob, original: &str, name: &str) -> Result<usize, String> {
         let count = match job.kind {
             VaultTransferKind::Import => {
@@ -408,7 +433,11 @@ impl App {
                         else { std::fs::remove_file(path) };
                     result.map_err(|e| format!("Encrypted copy saved; local original not removed: {e}"))?;
                 }
-                VaultTransferKind::Export | VaultTransferKind::Between => {
+                VaultTransferKind::Export => {
+                    self.vault_remove_exported_source(job, original, None)
+                        .map_err(|e| format!("Encrypted copy saved; original retained: {e}"))?;
+                }
+                VaultTransferKind::Between => {
                     let source = self.panes[job.source].vault.as_mut().ok_or("Encrypted source closed")?;
                     let item = source.database.list(job.from_folder)?.into_iter().find(|item| item.name == original)
                         .ok_or("Encrypted copy saved; source item changed before removal")?;
@@ -600,7 +629,13 @@ impl App {
                     if meta.file_attributes() & 0x400 != 0 { return Err("Copy succeeded, but source became a link; retained".into()); }
                     std::fs::remove_file(path).map_err(|e| format!("Copy succeeded; original retained: {e}"))?;
                 }
-                VaultTransferKind::Export | VaultTransferKind::Between => {
+                VaultTransferKind::Export => {
+                    let original = &job.names[job.index];
+                    self.vault_remove_exported_source(job, original,
+                        Some(stream.source_id.ok_or("Missing original item ID")?))
+                        .map_err(|e| format!("Copy succeeded; original retained: {e}"))?;
+                }
+                VaultTransferKind::Between => {
                     let source = self.panes[job.source].vault.as_mut().ok_or("Copy succeeded; encrypted source closed")?;
                     source.database.remove_many(&[stream.source_id.ok_or("Missing original item ID")?])
                         .map_err(|e| format!("Copy succeeded; original retained: {e}"))?;

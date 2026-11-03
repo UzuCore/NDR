@@ -743,6 +743,8 @@ pub struct App {
     #[cfg(feature = "winfsp-vault")]
     vault_mounts: Vec<vault_winfsp::VaultMount>,
     vault_transfer: Option<vault_transfer_ui::VaultTransferJob>,
+    // Only an in-app selection, never a CF_HDROP pointing at the .ndr file.
+    vault_clipboard: Option<(usize, PathBuf, i64, Vec<String>, bool, u32)>,
     /// Subfolders of the address bar's chevron menu (path, whether it is a drive list) -> (path, text). Cleared when a new listing arrives.
     crumb_cache: HashMap<(PathBuf, bool), Vec<(PathBuf, String)>>,
     /// The panel item being dragged, the folder row under it (panel, folder), and this frame's two panel areas.
@@ -1071,6 +1073,7 @@ impl App {
             #[cfg(feature = "winfsp-vault")]
             vault_mounts: Vec::new(),
             vault_transfer: None,
+            vault_clipboard: None,
             crumb_cache: HashMap::new(),
             folder_size_queue: Arc::new((Mutex::new(std::collections::VecDeque::new()), std::sync::Condvar::new())),
             folder_size_workers: false,

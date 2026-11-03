@@ -395,6 +395,11 @@ impl VaultMount {
         self.file_path.to_string_lossy().chars().next()
     }
 
+    #[cfg(test)]
+    pub fn state_saved_revision_for_test(&self) -> u64 {
+        self.state.lock().map_or(0, |state| state.saved_revision)
+    }
+
     pub fn has_open_files(&self) -> bool {
         self.state.lock().is_ok_and(|state| state.open_files > 0)
     }

@@ -639,8 +639,10 @@ impl App {
                 "newFolder" => return self.vault_new_item(true),
                 "newEmpty" => return self.vault_new_item(false),
                 "rename" | "contextRename" => return self.vault_rename_item(),
-                "deleteRecycle" | "deletePermanent" | "contextDelete" => return self.vault_remove_items(),
+                "deleteRecycle" | "deletePermanent" | "contextDelete" | "deleteToolbar" => return self.vault_remove_items(),
                 "paste" | "contextPaste" => return self.vault_paste_files(),
+                "copy" | "contextCopy" => return self.vault_copy_selection(false),
+                "cut" | "contextCut" => return self.vault_copy_selection(true),
                 "copyToFolder" => return self.vault_transfer_inside(false),
                 "moveToFolder" => return self.vault_transfer_inside(true),
                 "open" | "textView" | "textEdit" | "contextView" | "contextEdit" => return self.open_current(),
@@ -654,6 +656,13 @@ impl App {
                     return;
                 }
             }
+        }
+        if matches!(id, "paste" | "contextPaste") && self.vault_clipboard.is_some()
+            && self.panes[self.active].vault.is_none() {
+            if self.vault_paste_selection_to_local() { return; }
+        }
+        if matches!(id, "copy" | "cut" | "contextCopy" | "contextCut") {
+            self.vault_clipboard = None;
         }
         // Original pane FTP mode: commands that work on local files do nothing (seen in the running original: Insert on an FTP pane sends nothing
         // and shows nothing). Previously a C# status notice appeared.
