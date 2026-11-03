@@ -30,6 +30,18 @@ pub fn is_volume_change(event: usize, device_type: u32) -> bool {
     (event == 0x8000 || event == 0x8004) && device_type == 2
 }
 const MAX_REQUEST: usize = 64 * 1024;
+/// Another application (or a second NDR profile) can own the same global
+/// Win+letter activation key. NDR remains fully usable without that optional
+/// hotkey, so a collision is not a fatal startup error.
+pub const HOTKEY_ALREADY_IN_USE: &str = "Activation hotkey is already in use";
+
+pub fn is_optional_hotkey_collision(message: &str) -> bool {
+    // Native registration errors also append Windows' localized OS error
+    // text after ": ". Match the stable NDR prefix without suppressing
+    // unrelated lifecycle failures.
+    message == HOTKEY_ALREADY_IN_USE
+        || message.starts_with(&format!("{HOTKEY_ALREADY_IN_USE}: "))
+}
 fn parse_hotkey(value: &str) -> Result<Option<u32>, String> {
     let value = value.trim().to_ascii_uppercase();
     if value.is_empty() {
@@ -706,7 +718,7 @@ mod win {
                 // and there is no MOD_NOREPEAT. Fixed: previously it registered Win+Ctrl instead, silently changing the combination.
                 let fallback = false;
                 if unsafe { RegisterHotKey(hwnd, next, 8, key) } == 0 {
-                    return Err(error("Activation hotkey is already in use"));
+                    return Err(error(HOTKEY_ALREADY_IN_USE));
                 }
                 if self.key_id != 0 {
                     unsafe {
@@ -1201,6 +1213,14 @@ mod tests {
             assert!(parse_hotkey(value).is_err());
         }
     }
+    #[test]
+    fn optional_hotkey_collision_does_not_hide_other_startup_errors() {
+        assert!(is_optional_hotkey_collision(HOTKEY_ALREADY_IN_USE));
+        assert!(is_optional_hotkey_collision("Activation hotkey is already in use: Hotkey is already registered (os error 1409)"));
+        assert!(!is_optional_hotkey_collision("Cannot create lifecycle message window"));
+        assert!(!is_optional_hotkey_collision("Activation key must be one ASCII letter"));
+    }
+
     #[test]
     fn bounded_navigation_wire_accepts_paths_and_rejects_commands() {
         assert_eq!(

@@ -183,6 +183,9 @@ struct Pane {
     /// invalidates thumbnail measurement without hashing every file name on
     /// every animation frame.
     thumb_content_revision: u64,
+    /// Grouped Auto-view display rows: reused until the list or grouping
+    /// settings change, avoiding full-list grouping on every repaint.
+    auto_rows_cache: Option<auto_view::AutoRowsCache>,
     /// Original panel folder tree (TNXShellTreeView, miShowFoldersClick): expanded folders and the last panel location whose expansion was synced (SetPath).
     tree_open: HashSet<PathBuf>,
     tree_synced: Option<PathBuf>,
@@ -266,6 +269,7 @@ impl Pane {
             thumb_rows: None,
             thumb_heights: None,
             thumb_content_revision: 0,
+            auto_rows_cache: None,
             tree_open: HashSet::new(),
             tree_synced: None,
             tree_selected: None,
@@ -879,7 +883,14 @@ impl App {
                 ) {
                     Ok((lifecycle, events)) => {
                         if let Some(error) = lifecycle.hotkey_error() {
-                            app.status = error;
+                            // Win+Q is often registered by Windows or by
+                            // another running NDR. This optional shortcut
+                            // conflict must not appear as a startup error.
+                            // The lifecycle retains the failure for settings
+                            // diagnostics; all file operations still work.
+                            if !ndr::lifecycle::is_optional_hotkey_collision(&error) {
+                                app.status = error;
+                            }
                         }
                         // When a lifecycle event like a device change (WM_DEVICECHANGE) arrives, wake an idle UI too.
                         let repaint = cc.egui_ctx.clone();

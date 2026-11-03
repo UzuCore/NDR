@@ -8,6 +8,18 @@ use super::*;
 const MINIMUM: [f32; 6] = [42.0, 52.0, 60.0, 94.0, 48.0, 72.0];
 const METRICS: [DetailColumn; 6] = [DetailColumn::Extension, DetailColumn::Kind, DetailColumn::Size, DetailColumn::Modified, DetailColumn::Attributes, DetailColumn::Description];
 
+/// Immutable grouped Auto-view rows reused between repaint frames. Rebuild
+/// when the listing revision, layout, grouping options or language changes.
+pub(super) struct AutoRowsCache {
+    pub revision: u64,
+    pub columns: usize,
+    pub mode: String,
+    pub category: String,
+    pub show_names: bool,
+    pub language: String,
+    pub rows: Arc<[Vec<DetailRow>]>,
+}
+
 impl App {
     fn metric_shown(&self, metric: usize) -> bool {
         match metric {
@@ -216,25 +228,38 @@ impl App {
         let mode = self.settings.text(&Self::side_key(index, "GroupMode"), "None");
         let category = self.settings.text(&Self::side_key(index, "FolderCategoryMode"), "Auto");
         let show_names = self.settings.flag(&Self::side_key(index, "ShowGroupName"), true);
-        let lists: Vec<Vec<DetailRow>> = self
-            .auto_distribution(index, columns)
-            .into_iter()
-            .map(|rows| {
-                let mut list = Vec::new();
-                let mut previous: Option<String> = None;
-                for row in rows {
-                    if mode != "None" && show_names {
-                        let key = ndr::listing::group_key(&self.panes[index].entries[row], &mode, &category);
-                        if previous.as_deref() != Some(key.as_str()) {
-                            list.push(DetailRow::Header(self.group_caption(&key)));
-                            previous = Some(key);
+        let revision = self.panes[index].thumb_content_revision;
+        let lists = if let Some(cached) = self.panes[index].auto_rows_cache.as_ref().filter(|cached| {
+            cached.revision == revision && cached.columns == columns
+                && cached.mode == mode && cached.category == category
+                && cached.show_names == show_names && cached.language == self.language
+        }) {
+            Arc::clone(&cached.rows)
+        } else {
+            let lists: Arc<[Vec<DetailRow>]> = self.auto_distribution(index, columns)
+                .into_iter()
+                .map(|rows| {
+                    let mut list = Vec::with_capacity(rows.len());
+                    let mut previous: Option<String> = None;
+                    for row in rows {
+                        if mode != "None" && show_names {
+                            let key = ndr::listing::group_key(&self.panes[index].entries[row], &mode, &category);
+                            if previous.as_deref() != Some(key.as_str()) {
+                                list.push(DetailRow::Header(self.group_caption(&key)));
+                                previous = Some(key);
+                            }
                         }
+                        list.push(DetailRow::Item(row));
                     }
-                    list.push(DetailRow::Item(row));
-                }
-                list
-            })
-            .collect();
+                    list
+                })
+                .collect::<Vec<_>>().into();
+            self.panes[index].auto_rows_cache = Some(AutoRowsCache {
+                revision, columns, mode: mode.clone(), category: category.clone(),
+                show_names, language: self.language.clone(), rows: Arc::clone(&lists),
+            });
+            lists
+        };
         let active = self.active == index;
         let icons_shown = self.settings.flag("ShowIcons", true);
         // Cursor bar style follows the list's real focus (see pane_ui).

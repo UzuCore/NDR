@@ -69,6 +69,27 @@ fn preview_geometry_is_shared_between_frames() {
 }
 
 #[test]
+fn grouped_auto_columns_reuse_rows_and_invalidate_on_changes() {
+    let (root, ctx, mut app) = fixture("auto-columns-cache");
+    app.settings.set_text("LeftViewStyle", "Auto");
+    app.settings.values.insert("LeftColumnCount".into(), serde_json::json!(3));
+    app.settings.set_text("LeftGroupMode", "Extension");
+    draw(&mut app, &ctx);
+    let initial = app.panes[0].auto_rows_cache.as_ref().expect("auto rows cache").rows.clone();
+    draw(&mut app, &ctx);
+    assert!(Arc::ptr_eq(&initial, &app.panes[0].auto_rows_cache.as_ref().unwrap().rows));
+    app.settings.set_text("LeftGroupMode", "Size");
+    draw(&mut app, &ctx);
+    let changed = app.panes[0].auto_rows_cache.as_ref().unwrap();
+    assert!(!Arc::ptr_eq(&initial, &changed.rows), "group mode must invalidate cached rows");
+    let revision = changed.revision;
+    app.sort_pane(0);
+    draw(&mut app, &ctx);
+    assert_ne!(revision, app.panes[0].auto_rows_cache.as_ref().unwrap().revision);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn main_menu_follows_the_original_tfmain_dropdowns() {
     let (root, ctx, mut app) = fixture("menus");
     // The original TfMain menu buttons tbFile … tbHelp (from the text " 파일(&F) " with spaces and & removed), and their order.
