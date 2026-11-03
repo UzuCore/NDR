@@ -172,11 +172,27 @@ impl App {
         if text.is_empty() {
             return 0.0;
         }
+        // Auto/Names/Details layout asks for these fixed reference glyphs
+        // repeatedly while painting. The GDI width call creates a Win32 DC;
+        // cache the invariant probes for the current face, size and style.
+        // Dynamic filenames continue through the existing measured path.
+        let reference = matches!(text, "WWWWW" | "WAA" | "WWWWAAAA" | "WWA" | "AHRS" | "drwxrwxrwx");
+        let width_id = reference.then(|| egui::Id::new((
+            "ndr-reference-text-width", text,
+            self.settings.text("ListFont", "Segoe UI"),
+            self.list_font_size.to_bits(), self.list_font_style,
+        )));
+        if let Some(cached) = width_id.and_then(|id| ui.data(|d| d.get_temp::<f32>(id))) {
+            return cached;
+        }
         if let Some(width) = self.gdi_list_widths(&[text]).and_then(|w| w.first().copied()) {
+            if let Some(id) = width_id { ui.data_mut(|d| d.insert_temp(id, width)); }
             return width;
         }
         let font = egui::FontId::new(self.list_font_size, egui::FontFamily::Name(super::LIST_FONT_FAMILY.into()));
-        ui.fonts_mut(|f| f.layout_no_wrap(text.to_owned(), font, Color32::WHITE).size().x).ceil()
+        let width = ui.fonts_mut(|f| f.layout_no_wrap(text.to_owned(), font, Color32::WHITE).size().x).ceil();
+        if let Some(id) = width_id { ui.data_mut(|d| d.insert_temp(id, width)); }
+        width
     }
 
     /// GDI widths of texts in the list font (face, size, style), as the original Canvas.TextWidth measures them. None without GDI.

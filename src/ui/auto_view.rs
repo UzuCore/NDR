@@ -36,7 +36,21 @@ impl App {
             return configured as usize;
         }
         let font = egui::TextStyle::Body.resolve(ui.style());
-        let widest = ui.fonts_mut(|fonts| self.panes[index].entries.iter().map(|e| fonts.layout_no_wrap(e.name.clone(), font.clone(), Color32::WHITE).size().x).fold(0.0f32, f32::max));
+        // Automatic grouped columns used to shape every filename on every
+        // repaint. The measured width depends only on the listing revision
+        // and resolved text font, not on the current pane width or selection.
+        let key = (self.panes[index].thumb_content_revision, font.clone());
+        let cache_id = egui::Id::new(("ndr-auto-column-widest", index));
+        let widest = if let Some((_, cached)) = ui.data(|d| d.get_temp::<((u64, egui::FontId), f32)>(cache_id))
+            .filter(|(cached_key, _)| cached_key == &key) {
+            cached
+        } else {
+            let measured = ui.fonts_mut(|fonts| self.panes[index].entries.iter()
+                .map(|e| fonts.layout_no_wrap(e.name.clone(), font.clone(), Color32::WHITE).size().x)
+                .fold(0.0f32, f32::max));
+            ui.data_mut(|d| d.insert_temp(cache_id, (key, measured)));
+            measured
+        };
         let mut item = widest.clamp(180.0, 250.0) + 14.0 + if self.settings.flag("ShowIcons", true) { 16.0 } else { 0.0 };
         for (metric, minimum) in MINIMUM.iter().enumerate() {
             if self.metric_shown(metric) {

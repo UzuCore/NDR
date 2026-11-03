@@ -644,6 +644,32 @@ fn auto_view_columns_follow_the_original() {
 }
 
 #[test]
+fn automatic_column_width_cache_reuses_measured_value_until_listing_changes() {
+    let (root, ctx, mut app) = fixture("auto-width-cache");
+    let key = egui::Id::new(("ndr-auto-column-widest", 0));
+    let raw = || egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(
+        egui::Pos2::ZERO, egui::vec2(1400.0, 850.0))), ..Default::default() };
+    let run = |app: &mut App| {
+        let _ = ctx.run(raw(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                assert!(app.auto_column_count(ui, 0, 1400.0) >= 1);
+            });
+        });
+    };
+    app.settings.values.insert("LeftColumnCount".into(), serde_json::json!(0));
+    run(&mut app);
+    let first = ctx.data(|d| d.get_temp::<((u64, egui::FontId), f32)>(key)).unwrap();
+    run(&mut app);
+    let second = ctx.data(|d| d.get_temp::<((u64, egui::FontId), f32)>(key)).unwrap();
+    assert_eq!(first, second, "same listing and font must reuse the width");
+    app.sort_pane(0);
+    run(&mut app);
+    let refreshed = ctx.data(|d| d.get_temp::<((u64, egui::FontId), f32)>(key)).unwrap();
+    assert_ne!(first.0.0, refreshed.0.0, "sorting invalidates measured widths");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn names_view_and_adjusted_widths_follow_the_original() {
     let (root, ctx, mut app) = fixture("names-original");
     assert!(app.current_skin().is_some());

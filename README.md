@@ -3,6 +3,26 @@
 NDR is a dual-pane Windows file manager, developed in Rust. The project builds
 with the stable **x86_64-pc-windows-msvc** Rust toolchain.
 
+## Local development release to both Windows installations
+
+From the repository root, run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-and-deploy-local.ps1
+```
+
+This runs the release regression suite, builds the optimized executable, and
+checks startup before deploying **the same verified `NDR.exe`** to
+`D:\NDRworks\release\NDR.exe` and `D:\NDR\NDR.exe`. Both deployed copies
+receive a startup check. Existing `settings.json` files and runtime resources
+are preserved byte for byte, and previous executables are backed up under
+`D:\NDRworks\release\old`. If either copy is running, deployment stops
+without terminating it. After tests have *already been run on the exact same
+sources*, the `-SkipTests` flag permits redeployment without rerunning them.
+
+This is the **local developer workflow**; official GitHub release ZIPs continue
+to use the complete packaged resources described below.
+
 ## Download a release
 
 The latest automatic build is published under **[GitHub Releases](https://github.com/UzuCore/NDR/releases/latest)**.
