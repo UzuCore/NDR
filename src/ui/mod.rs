@@ -175,9 +175,10 @@ struct Pane {
     /// Horizontal position of the detail view (original 0x378, pixels). Greater than 0 only when the total column width exceeds the list width.
     detail_x: f32,
     /// Thumbnail row positions from the last paint (per-row top/height, top position, list height, column count). Used by the original PageUp/PageDown in style 3.
-    thumb_rows: Option<(Vec<f32>, Vec<f32>, f32, f32, usize)>,
-    /// Thumbnail row height cache (key, heights): not recomputed when list/column count/size are unchanged.
-    thumb_heights: Option<(u64, Vec<f32>)>,
+    thumb_rows: Option<(Arc<[f32]>, Arc<[f32]>, f32, f32, usize)>,
+    /// Cached row heights and starts: immutable data can be shared across
+    /// frames and keyboard navigation without allocating or copying arrays.
+    thumb_heights: Option<(u64, Arc<views::TileGeometry>)>,
     /// Bumped whenever the sorted listing is replaced or reordered. This
     /// invalidates thumbnail measurement without hashing every file name on
     /// every animation frame.

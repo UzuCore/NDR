@@ -290,7 +290,7 @@ fn group_thousands(integer: &str) -> String {
     let digits: Vec<char> = integer.chars().collect();
     let mut out = String::new();
     for (index, digit) in digits.iter().enumerate() {
-        if index > 0 && (digits.len() - index) % 3 == 0 {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
             out.push(',');
         }
         out.push(*digit);

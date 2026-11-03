@@ -378,10 +378,8 @@ pub fn run_with_options(
         }
         Ok(())
     })();
-    if let Err(message) = result {
-        if !j.cancel.load(Ordering::Relaxed) {
-            let _ = j.events.send(Event::Fatal(message));
-        }
+    if let Err(message) = result && !j.cancel.load(Ordering::Relaxed) {
+        let _ = j.events.send(Event::Fatal(message));
     }
     j.flush_descriptions();
     let _ = j.events.send(Event::Finished {

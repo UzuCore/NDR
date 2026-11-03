@@ -615,10 +615,10 @@ pub fn parse_toolbar(xml: &[u8]) -> Result<ToolbarConfig, String> {
                     } else {
                         current = Some(item);
                     }
-                } else if depth == 2 && current.is_some() {
-                    current.as_mut().unwrap().2 = name.clone();
-                } else if depth == 4 && child.is_some() {
-                    child.as_mut().unwrap().2 = name.clone();
+                } else if depth == 2 && let Some(current) = current.as_mut() {
+                    current.2 = name.clone();
+                } else if depth == 4 && let Some(child) = child.as_mut() {
+                    child.2 = name.clone();
                 }
                 if empty {
                     if depth == 1 && name == "item" {

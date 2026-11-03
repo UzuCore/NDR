@@ -14,6 +14,30 @@ const ICON_RETRY_INTERVAL: Duration = Duration::from_secs(3);
 /// Pane folder tree level width (VCL TCustomTreeView Indent default 19, matching the captured original).
 const TREE_INDENT: f32 = 19.0;
 
+/// Immutable layout shared by the current preview render and thumbnail
+/// keyboard navigation. A cache hit must not copy thousands of row positions.
+pub(super) struct TileGeometry {
+    pub heights: Arc<[f32]>,
+    pub tops: Arc<[f32]>,
+    pub content_height: f32,
+}
+
+impl TileGeometry {
+    fn from_heights(heights: Vec<f32>, spacing_y: f32) -> Self {
+        let mut tops = Vec::with_capacity(heights.len());
+        let mut next = 0.0;
+        for height in &heights {
+            tops.push(next);
+            next += *height + spacing_y;
+        }
+        Self {
+            content_height: (next - spacing_y).max(0.0),
+            heights: heights.into(),
+            tops: tops.into(),
+        }
+    }
+}
+
 /// Formats whose shell icon differs per file (executables and icon files whose DefaultIcon is "%1", shortcuts that use the target's icon, etc.).
 pub(super) fn has_own_icon(path: &Path) -> bool {
     const OWN: [&str; 10] = ["exe", "lnk", "ico", "cur", "ani", "url", "scr", "cpl", "msc", "appref-ms"];
@@ -373,7 +397,9 @@ impl App {
         } else {
             let font = egui::TextStyle::Body.resolve(ui.style());
             let widest = ui.fonts_mut(|fonts| {
-                self.panes[index].entries.iter().map(|e| fonts.layout_no_wrap(e.name.clone(), font.clone(), Color32::WHITE).size().x).fold(0.0f32, f32::max)
+                self.panes[index].entries.iter()
+                    .map(|e| fonts.layout_no_wrap(e.name.clone(), font.clone(), Color32::WHITE).size().x)
+                    .fold(0.0f32, f32::max)
             });
             let item = widest + 14.0 + if self.settings.flag("ShowIcons", true) { 16.0 } else { 0.0 };
             ((ui.available_width().max(1.0) / item.max(1.0)) as usize).clamp(1, 19)
@@ -385,26 +411,25 @@ impl App {
         // Original UpdateDisplayThumbnails: row height = the largest GetThumbnailTextHeight in that row (width = thumbnail size, line spacing 2, up to 4 lines) + size + 12.
         let spacing_y = if thumbnails { 0.0 } else { ui.spacing().item_spacing.y };
         let gdi_line = self.list_text_height();
-        let heights: Vec<f32> = if thumbnails {
-            let font = egui::TextStyle::Body.resolve(ui.style());
-            // Line unit = Canvas.TextHeight (GDI tmHeight), like the list rows (App::list_text_height).
-            let line_height = gdi_line.unwrap_or_else(|| ui.fonts_mut(|fonts| fonts.row_height(&font)));
-            // Rebuild thumbnail measurements only after the listing is
-            // replaced/reordered or the font/column geometry changes. The
-            // revision is maintained by sort_pane. Previously even a cache
-            // hit hashed every name in the directory on each UI frame.
-            let key = {
-                use std::hash::{Hash, Hasher};
-                let pane = &self.panes[index];
-                let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                (pane.thumb_content_revision, entry_count, columns, rows,
-                    thumb.to_bits(), line_height.to_bits(), font.size.to_bits(),
-                    format!("{:?}", font.family), pane.drive_infos.len()).hash(&mut hasher);
-                hasher.finish()
-            };
-            match &self.panes[index].thumb_heights {
-                Some((cached_key, cached)) if *cached_key == key => cached.clone(),
-                _ => {
+        let font = egui::TextStyle::Body.resolve(ui.style());
+        let line_height = gdi_line.unwrap_or_else(|| ui.fonts_mut(|fonts| fonts.row_height(&font)));
+        // Both thumbnail and name-grid row coordinates are immutable until
+        // a listing revision, font, grid size or spacing change. A cache hit
+        // avoids reallocating the row heights AND the row positions.
+        let key = {
+            use std::hash::{Hash, Hasher};
+            let pane = &self.panes[index];
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            (pane.thumb_content_revision, entry_count, columns, rows, thumbnails,
+                thumb.to_bits(), line_height.to_bits(), font.size.to_bits(),
+                spacing_y.to_bits(), format!("{:?}", font.family),
+                pane.drive_infos.len()).hash(&mut hasher);
+            hasher.finish()
+        };
+        let geometry = match &self.panes[index].thumb_heights {
+            Some((cached_key, cached)) if *cached_key == key => Arc::clone(cached),
+            _ => {
+                let heights: Vec<f32> = if thumbnails {
                     let pane = &self.panes[index];
                     // Original GetThumbnailRowHeight (0x7d6920): the tallest GetThumbnailTextHeight (cell width, 2, 4) of the row's items plus the
                     // fixed item height; rows before the last read it from the stored item tops, which come from the same sum.
@@ -425,20 +450,18 @@ impl App {
                             })
                             .collect()
                     });
-                    self.panes[index].thumb_heights = Some((key, heights.clone()));
                     heights
-                }
+                } else {
+                    vec![26.0; rows]
+                };
+                let layout = Arc::new(TileGeometry::from_heights(heights, spacing_y));
+                self.panes[index].thumb_heights = Some((key, Arc::clone(&layout)));
+                layout
             }
-        } else {
-            vec![26.0; rows]
         };
-        let mut tops = Vec::with_capacity(rows);
-        let mut bottom_edge = 0.0;
-        for h in &heights {
-            tops.push(bottom_edge);
-            bottom_edge += h + spacing_y;
-        }
-        let content_height = (bottom_edge - spacing_y).max(0.0);
+        let heights = &geometry.heights;
+        let tops = &geometry.tops;
+        let content_height = geometry.content_height;
         let line_at = |offset: f32| tops.partition_point(|&t| t <= offset + 0.5).saturating_sub(1);
         // Original UpdateScrollBar: the preview (style 3) uses one line per step regardless of the page setting.
         let (by_page, wheel_lines) = if thumbnails { (false, 1) } else { (self.scroll_by_page(index), (self.system.wheel_lines)()) };
@@ -500,7 +523,7 @@ impl App {
         let first = tops.partition_point(|&t| t < offset - 0.01);
         let fully = (first..rows).take_while(|&r| tops[r] + heights[r] <= offset + height + 0.01).count();
         self.panes[index].page = super::list_keys::ListPage { style: super::list_keys::ListStyle::Thumbnails, rows: fully.max(1), columns, top: first * columns, last: 0 };
-        self.panes[index].thumb_rows = thumbnails.then(|| (tops.clone(), heights.clone(), offset, height, columns));
+        self.panes[index].thumb_rows = thumbnails.then(|| (Arc::clone(tops), Arc::clone(heights), offset, height, columns));
         if (offset - current).abs() > 0.5 {
             area = area.vertical_scroll_offset(offset);
         }

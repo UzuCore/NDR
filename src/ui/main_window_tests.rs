@@ -55,6 +55,20 @@ fn draw(app: &mut App, ctx: &egui::Context) {
 }
 
 #[test]
+fn preview_geometry_is_shared_between_frames() {
+    let (root, ctx, mut app) = fixture("shared-geometry");
+    app.settings.set_text("LeftViewStyle", "Thumbnails");
+    draw(&mut app, &ctx);
+    let first = app.panes[0].thumb_heights.as_ref().unwrap().1.clone();
+    let (tops, heights, ..) = app.panes[0].thumb_rows.as_ref().unwrap();
+    assert!(Arc::ptr_eq(tops, &first.tops));
+    assert!(Arc::ptr_eq(heights, &first.heights));
+    draw(&mut app, &ctx);
+    assert!(Arc::ptr_eq(&first, &app.panes[0].thumb_heights.as_ref().unwrap().1));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn main_menu_follows_the_original_tfmain_dropdowns() {
     let (root, ctx, mut app) = fixture("menus");
     // The original TfMain menu buttons tbFile … tbHelp (from the text " 파일(&F) " with spaces and & removed), and their order.

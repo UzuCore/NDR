@@ -47,7 +47,7 @@ pub fn download_github_update(
     release: &GithubRelease,
     get: fn(&str, usize) -> Result<HttpResponse, HttpError>,
 ) -> Result<PathBuf, String> {
-    download_github_update_with_progress(release, |url, max| get(url, max), |_| {})
+    download_github_update_with_progress(release, get, |_| {})
 }
 
 /// HTTP progress callback reports bytes downloaded; phase callback describes

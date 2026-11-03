@@ -687,7 +687,7 @@ fn rpm_member_name(archive: &Path, password: Option<&str>, cancel: &AtomicBool) 
     let archive_name = archive.to_string_lossy();
     let inner = listing.lines().filter_map(|line| line.strip_prefix("Path = "))
         .filter(|name| !name.is_empty() && !name.eq_ignore_ascii_case(&archive_name))
-        .last().ok_or("RPM payload has no named member")?;
+        .next_back().ok_or("RPM payload has no named member")?;
     let name = inner.strip_suffix(".bz2").or_else(|| inner.strip_suffix(".BZ2")).unwrap_or(inner);
     validate_key(name)?;
     Ok(name.to_owned())
@@ -2257,7 +2257,7 @@ pub fn extract_entries_with_program(
                         &archive,
                         &attempt_absolute,
                         password.as_deref().unwrap_or(""),
-                        &[entry.key.clone()],
+                        std::slice::from_ref(&entry.key),
                         program.extract_template.as_deref(),
                         true,
                     )?;
