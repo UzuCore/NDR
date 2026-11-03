@@ -785,22 +785,35 @@ impl App {
         let root = self.shell_desktop.clone().unwrap_or(ShellNode { key: PathBuf::new(), name: String::new(), path: None, has_children: true, special: Special::None, ghosted: false });
         let font = egui::FontId::new(self.list_font_size, egui::FontFamily::Name(super::LIST_FONT_FAMILY.into()));
         let row_height = (ui.fonts_mut(|f| f.row_height(&font)).ceil() + 2.0).max(18.0);
-        let mut rows: Vec<(ShellNode, usize)> = Vec::new();
-        fn walk(app: &mut App, index: usize, node: &ShellNode, depth: usize, rows: &mut Vec<(ShellNode, usize)>) {
+        // Expansion counts are usually stable between frames. Reserve the
+        // previous row count so rebuilding the visible hierarchy does not
+        // repeatedly grow the row buffer as the tree becomes large.
+        let mut rows: Vec<(ShellNode, usize)> = Vec::with_capacity(self.panes[index].tree_rows.len());
+        // Tree expansion is read-only while collecting visible rows. The old
+        // implementation cloned every cached child Vec<ShellNode> on each
+        // repaint so it could call the mutable request function recursively.
+        // Defer missing-children requests until after walking borrowed cache
+        // entries: no subtree copies and no change in traversal order.
+        let mut missing_children = Vec::new();
+        fn walk(app: &App, index: usize, node: &ShellNode, depth: usize,
+                rows: &mut Vec<(ShellNode, usize)>, missing: &mut Vec<PathBuf>) {
             rows.push((node.clone(), depth));
             if depth > 32 || !app.panes[index].tree_open.iter().any(|k| ndr::shell_tree::same_key(k, &node.key)) {
                 return;
             }
-            match app.tree_cache.get(&(node.key.clone(), app.panes[index].show_hidden)).cloned() {
+            match app.tree_cache.get(&(node.key.clone(), app.panes[index].show_hidden)) {
                 Some(children) => {
-                    for child in &children {
-                        walk(app, index, child, depth + 1, rows);
+                    for child in children {
+                        walk(app, index, child, depth + 1, rows, missing);
                     }
                 }
-                None => app.request_tree_children(index, &node.key),
+                None => missing.push(node.key.clone()),
             }
         }
-        walk(self, index, &root, 0, &mut rows);
+        walk(self, index, &root, 0, &mut rows, &mut missing_children);
+        for key in missing_children {
+            self.request_tree_children(index, &key);
+        }
         // The tree's own area stops 1 px before the right edge, where FUN_0048e2e0 draws the lframetree line (width - 1); the scroll bar ends next to it.
         let inner_rect = rect.with_max_x(rect.right() - 1.0);
         let mut child = ui.new_child(egui::UiBuilder::new().id_salt(("ndr-pane-tree", index)).max_rect(inner_rect).layout(egui::Layout::top_down(egui::Align::Min)));

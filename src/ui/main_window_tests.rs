@@ -2073,6 +2073,49 @@ fn show_folders_adds_a_tree_inside_the_active_pane() {
 /// and each time the pane goes to that folder. Left collapses an expanded item and goes to the parent from a collapsed one. A letter goes to the next item starting with it.
 /// Clicking the list returns focus to the list.
 #[test]
+fn cached_nested_folder_tree_renders_without_reloading_children() {
+    use ndr::shell_tree::{ShellNode, Special};
+    let (root, ctx, mut app) = fixture("tree-cached-subtrees");
+    let outer = root.join("outer");
+    let inner = outer.join("inner");
+    fs::create_dir_all(&inner).unwrap();
+    let make_node = |path: &Path, has_children| ShellNode {
+        key: path.to_path_buf(), name: path.file_name().unwrap().to_string_lossy().into_owned(),
+        path: Some(path.to_path_buf()), has_children, special: Special::None, ghosted: false,
+    };
+    let root_node = make_node(&root, true);
+    let outer_node = make_node(&outer, true);
+    let inner_node = make_node(&inner, false);
+    app.shell_desktop = Some(root_node);
+    let hidden = app.panes[0].show_hidden;
+    app.tree_cache.insert((root.clone(), hidden), vec![outer_node]);
+    app.tree_cache.insert((outer.clone(), hidden), vec![inner_node]);
+    app.panes[0].tree_open.insert(root.clone());
+    app.panes[0].tree_open.insert(outer.clone());
+    app.panes[0].tree_synced = Some(app.panes[0].path.clone());
+    let render = |app: &mut App| {
+        let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO, egui::vec2(900.0, 650.0))), ..Default::default() };
+        let _ = ctx.run(raw, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                app.pane_tree_ui(ui, 0, egui::Rect::from_min_size(
+                    egui::pos2(0.0, 0.0), egui::vec2(280.0, 520.0)));
+            });
+        });
+    };
+    render(&mut app);
+    let paths = |app: &App| app.panes[0].tree_rows.iter()
+        .map(|(node, ..)| node.key.clone()).collect::<Vec<_>>();
+    let expected = vec![root.clone(), outer.clone(), inner.clone()];
+    assert_eq!(paths(&app), expected);
+    assert!(app.tree_requests.is_empty(), "cached branches must not queue shell reads");
+    render(&mut app);
+    assert_eq!(paths(&app), expected, "subtree traversal remains stable across frames");
+    assert!(app.tree_requests.is_empty());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn pane_tree_keys_follow_the_ttreeview() {
     use ndr::shell_tree::{ShellNode, Special};
     let (root, ctx, mut app) = fixture("tree-keys");
