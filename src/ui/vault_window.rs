@@ -51,34 +51,39 @@ impl App {
     pub(super) fn discard_vault(&mut self, pane: usize) {
         #[cfg(feature = "winfsp-vault")]
         {
-            // Refuse to discard the parent vault while an external editor
-            // still holds a file. Unlike the former single mount we inspect
-            // every active file before releasing any of them.
-            if self.vault_mounts.iter().any(|mount| mount.pane == pane && mount.has_open_files()) {
-                self.status = self.vault_status(
-                    "외부 프로그램에서 암호화 파일을 사용 중입니다. 편집기를 닫은 후 폴더를 나가세요.",
-                    "An external application is using an encrypted file. Close it before leaving the folder.");
-                return;
-            }
-            let mut index = 0;
-            while index < self.vault_mounts.len() {
-                if self.vault_mounts[index].pane != pane { index += 1; continue; }
-                if let Err(error) = self.vault_mounts[index].finish() {
-                    eprintln!("NDR encrypted mount save during navigation failed: {error}");
-                    self.status = self.vault_status(
-                        "암호화 파일 저장에 실패했습니다. 원본은 보존되었으니 편집기에서 다시 저장해 주세요.",
-                        "Encrypted file save failed. The original was preserved; retry saving in the editor.");
-                    return;
+            // Navigating the NDR pane is independent of external editors.
+            // Keep busy WinFsp volumes alive in the background so a program
+            // can save the document even after the user navigates to "..".
+            let current = self.panes[pane].vault.as_ref().map(|v| v.file.clone());
+            if let Some(current) = current {
+                let mut index = 0;
+                while index < self.vault_mounts.len() {
+                    if self.vault_mounts[index].vault_path != current {
+                        index += 1;
+                        continue;
+                    }
+                    if self.vault_mounts[index].has_open_files() {
+                        index += 1;
+                        continue;
+                    }
+                    if let Err(error) = self.vault_mounts[index].finish() {
+                        eprintln!("NDR encrypted mount finalization failed: {error}");
+                        self.status = self.vault_status(
+                            "암호화 파일을 저장하지 못했습니다. 편집기에서 다시 저장해 주세요.",
+                            "Encrypted file save failed. Retry saving it from the editor.");
+                        // Never discard credentials on a failed commit.
+                        return;
+                    }
+                    self.vault_mounts.remove(index);
                 }
-                self.vault_mounts.remove(index);
-            }
-            if let Some(state) = self.panes[pane].vault.as_mut() {
-                if let Err(error) = state.database.reload_after_mount() {
-                    eprintln!("NDR encrypted folder refresh after mounts failed: {error}");
-                    self.status = self.vault_status(
-                        "암호화 폴더 목록을 갱신하지 못했습니다.",
-                        "Encrypted folder list could not be refreshed.");
-                    return;
+                if let Some(state) = self.panes[pane].vault.as_mut() {
+                    if let Err(error) = state.database.reload_after_mount() {
+                        eprintln!("NDR encrypted folder refresh failed: {error}");
+                        self.status = self.vault_status(
+                            "암호화 폴더 목록을 갱신하지 못했습니다.",
+                            "Could not refresh the encrypted folder list.");
+                        return;
+                    }
                 }
             }
         }
@@ -133,13 +138,9 @@ impl App {
             let expired = self.panes[pane].vault.as_ref().is_some_and(|state|
                 minimized || state.database.expired(policy));
             if expired {
-                #[cfg(feature = "winfsp-vault")]
-                if self.vault_mounts.iter().any(|mount| mount.pane == pane && mount.has_open_files()) {
-                    self.status = self.vault_status(
-                        "암호화 파일이 다른 프로그램에서 열려 있어 잠금을 보류했습니다. 파일을 닫아 주세요.",
-                        "Encrypted file is open in another application. Close it to lock the folder.");
-                    continue;
-                }
+                // Session expiry/minimize locks the pane, not an external
+                // application's still-open WinFsp handle. Its in-process
+                // mount stays alive until the file can be disconnected safely.
                 self.exit_vault(pane);
                 self.status = self.language_pack.text("NDRVault.StatusLocked", "Encrypted folder locked. Reopen to authenticate.");
             }
@@ -363,7 +364,12 @@ impl App {
         let mut errors = Vec::new();
         for mount in &mut self.vault_mounts {
             match mount.take_saved_revision() {
-                Ok(true) => updated[mount.pane] = true,
+                Ok(true) => {
+                    if self.panes[mount.pane].vault.as_ref()
+                        .is_some_and(|vault| vault.file == mount.vault_path) {
+                        updated[mount.pane] = true;
+                    }
+                },
                 Ok(false) => {},
                 Err(error) => eprintln!("NDR vault revision check: {error}"),
             }
@@ -731,6 +737,52 @@ impl Drop for VaultDialog {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "winfsp-vault")]
+    #[test]
+    #[ignore = "requires installed WinFsp driver and a free drive letter"]
+    fn parent_navigation_does_not_disconnect_busy_external_editor() {
+        use std::io::Write;
+        let (root, _ctx, mut app) =
+            super::super::tools_tests::fixture("winfsp-parent-busy", "ko");
+        app.settings.values.insert("VaultSessionPolicy".into(), serde_json::json!("exit"));
+        let path = root.join("left/parent-busy.ndr");
+        let mut vault = Vault::create(&path, "test navigation password".into()).unwrap();
+        vault.add_file(1, "note.txt", b"before").unwrap();
+        let item = vault.find_child(1, "note.txt").unwrap().unwrap();
+        app.attach_vault(0, PaneVault::new(path.clone(), vault));
+        app.active = 0;
+        let mount = {
+            let database = &app.panes[0].vault.as_ref().unwrap().database;
+            super::super::vault_winfsp::VaultMount::start(
+                0, path.clone(), database, 1, item,
+                std::sync::Arc::new(std::sync::Mutex::new(())), &[]
+            ).unwrap()
+        };
+        let mut editor = std::fs::OpenOptions::new().write(true).open(&mount.file_path).unwrap();
+        app.vault_mounts.push(mount);
+        app.parent(); // same navigation path as clicking the ".." entry
+        assert!(app.panes[0].vault.is_none(), "parent must be accessible with editor open");
+        assert_eq!(app.vault_mounts.len(), 1, "external file mount must stay available");
+        editor.write_all(b"after!").unwrap();
+        editor.sync_all().unwrap();
+        drop(editor);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while app.vault_mounts[0].has_open_files() {
+            assert!(std::time::Instant::now() < deadline, "WinFsp close timed out");
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        app.open_vault(path.clone(), false);
+        assert!(app.vault_dialog.is_none(), "session reentry should not demand password");
+        let active = app.panes[0].vault.as_mut().unwrap();
+        let note = active.database.find_child(1, "note.txt").unwrap().unwrap();
+        assert_eq!(active.database.read_file(note.id).unwrap(), b"after!");
+        app.exit_vault(0);
+        assert!(app.vault_mounts.is_empty(), "closed background file can unmount safely");
+        app.vault_sessions.clear();
+        drop(app);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[cfg(feature = "winfsp-vault")]
     #[test]
@@ -1702,11 +1754,16 @@ impl App {
     pub(super) fn open_vault(&mut self, path: PathBuf, creating: bool) {
         if !creating {
             let key = std::fs::canonicalize(&path).unwrap_or(path.clone());
-            if let Some(database) = self.vault_sessions.remove(&key) {
+            if let Some(mut database) = self.vault_sessions.remove(&key) {
                 if !database.expired(SessionPolicy::from_settings(&self.settings)) {
-                    self.vault_dialog = None;
-                    self.attach_vault(self.active, PaneVault::new(path, database));
-                    return;
+                    match database.reload_after_mount() {
+                        Ok(()) => {
+                            self.vault_dialog = None;
+                            self.attach_vault(self.active, PaneVault::new(path, database));
+                            return;
+                        }
+                        Err(error) => eprintln!("NDR cached encrypted session refresh failed: {error}"),
+                    }
                 }
             }
         }
