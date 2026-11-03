@@ -224,14 +224,14 @@ impl App {
         let mut fm = FieldMax::default();
         let (mut ext_sum, mut ext_count) = (0f32, 0usize);
         // (field, text index) per measured cell; texts are deduplicated.
-        let mut texts: Vec<String> = Vec::new();
+        // Keep each distinct string only once. The old dedup map cloned
+        // every input into the map and then retained a second owned copy in
+        // `texts`, doubling unique-string allocations on large listings.
         let mut known: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
         let mut cells_measured: Vec<(u8, usize)> = Vec::new();
         let mut add = |field: u8, text: String, cells_measured: &mut Vec<(u8, usize)>| {
-            let slot = *known.entry(text.clone()).or_insert_with(|| {
-                texts.push(text);
-                texts.len() - 1
-            });
+            let next_slot = known.len();
+            let slot = *known.entry(text).or_insert(next_slot);
             cells_measured.push((field, slot));
         };
         for (entry, cells) in pane.entries.iter().zip(&pane.view.cells) {
@@ -250,6 +250,12 @@ impl App {
             // and the time at the right, and the cell fell back to "2009-06-11 05:...".
             add(4, cells[4].replace(ndr::listing::LIST_DATE_TIME_GAP, "  "), &mut cells_measured);
             add(6, cells[6].clone(), &mut cells_measured);
+        }
+        // Reconstruct measurement order using borrowed map keys, without
+        // allocating or copying the names again.
+        let mut texts = vec![""; known.len()];
+        for (text, &slot) in &known {
+            texts[slot] = text.as_str();
         }
         let widths = self
             .gdi_list_widths(&texts)

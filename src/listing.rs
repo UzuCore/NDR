@@ -124,7 +124,10 @@ fn win32_format_st(st: &windows_sys::Win32::Foundation::SYSTEMTIME, format: &str
     use std::time::{Duration, Instant};
     thread_local! {
         static PICTURES: RefCell<(Option<Instant>, HashMap<String, Vec<u16>>)> = RefCell::new((None, HashMap::new()));
-        static TEXTS: RefCell<HashMap<(bool, String, i64), String>> = RefCell::new(HashMap::new());
+        // Group by format so the overwhelmingly common cache hit can look up
+        // `&str` directly, without allocating a new owned format string for
+        // every file's date and time on each listing rebuild.
+        static TEXTS: RefCell<HashMap<String, HashMap<(bool, i64), String>>> = RefCell::new(HashMap::new());
     }
     if format.is_empty() {
         return Some(String::new());
@@ -143,18 +146,18 @@ fn win32_format_st(st: &windows_sys::Win32::Foundation::SYSTEMTIME, format: &str
     if fresh {
         TEXTS.with(|t| t.borrow_mut().clear());
     }
-    let key = (date, format.to_owned(), slot);
-    if let Some(text) = TEXTS.with(|t| t.borrow().get(&key).cloned()) {
+    let key = (date, slot);
+    if let Some(text) = TEXTS.with(|t| t.borrow().get(format).and_then(|slots| slots.get(&key)).cloned()) {
         return Some(text);
     }
     let picture = PICTURES.with(|p| p.borrow_mut().1.entry(format.to_owned()).or_insert_with(|| wide(&dotnet_to_picture(format))).clone());
     let text = win32_format_with(st, &picture, date)?;
     TEXTS.with(|t| {
         let mut t = t.borrow_mut();
-        if t.len() > 20_000 {
+        if t.values().map(HashMap::len).sum::<usize>() > 20_000 {
             t.clear();
         }
-        t.insert(key, text.clone());
+        t.entry(format.to_owned()).or_default().insert(key, text.clone());
     });
     Some(text)
 }
@@ -690,6 +693,27 @@ mod tests {
         assert_eq!(date_text(Some(old), "yy/MM/dd", "HH:mm:ss", false, true, now), expected, "'/' and ':' are the culture separators");
         let expected = format!("{}/{} {}", local.format("%Y"), local.format("%m"), local.format("%Hh"));
         assert_eq!(date_text(Some(old), "yyyy'/'MM", "HH\\h", false, true, now), expected, "quoted and escaped literals");
+    }
+
+    #[test]
+    fn cached_date_time_formats_match_uncached_windows_output() {
+        let base = SystemTime::UNIX_EPOCH + Duration::from_secs(1_706_000_000);
+        let formats = [
+            ("yyyy-MM-dd", true), ("yy/MM/dd", true),
+            ("HH:mm", false), ("HH:mm:ss", false),
+        ];
+        for offset in [0, 1, 61, 3600, 86_400, 86_401, 2_592_000] {
+            let time = base + Duration::from_secs(offset);
+            let local = chrono::DateTime::<chrono::Local>::from(time);
+            let st = systemtime_of(&local);
+            for (format, date) in formats {
+                let picture = wide(&dotnet_to_picture(format));
+                let native = win32_format_with(&st, &picture, date).unwrap();
+                assert_eq!(win32_format_st(&st, format, date).as_deref(), Some(native.as_str()));
+                assert_eq!(win32_format_st(&st, format, date).as_deref(), Some(native.as_str()),
+                    "cached second lookup must match Windows for {format}");
+            }
+        }
     }
 
     #[test]
