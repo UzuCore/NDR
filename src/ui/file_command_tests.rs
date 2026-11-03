@@ -341,18 +341,22 @@ fn korean_delete_warning_arrow_keys_keep_dialog_open_and_d_activates_delete() {
     app.dispatch("deleteRecycle", &ctx);
     assert!(matches!(app.original_dialogs.last().map(|d| &d.kind), Some(DialogKind::DeleteWarning { show_delete: true, .. })));
     frame(&mut app, &ctx, vec![]);
-    let serial = app.original_dialogs.last().unwrap().serial;
-    let focus_id = egui::Id::new(("ndr-original-dialog", serial)).with("delete-warning-focus-slot");
-    assert_eq!(ctx.data(|d| d.get_temp::<usize>(focus_id)), Some(2), "No initially focused");
-    let expected = [1, 2, 1, 2];
-    for (direction, focused) in [egui::Key::ArrowLeft, egui::Key::ArrowRight, egui::Key::ArrowLeft, egui::Key::ArrowRight].into_iter().zip(expected) {
+    let initial_focus = ctx.memory(|m| m.focused()).expect("default button must take keyboard focus");
+    let mut focused_after_left = None;
+    for (index, direction) in [egui::Key::ArrowLeft, egui::Key::ArrowLeft, egui::Key::ArrowRight, egui::Key::ArrowRight].into_iter().enumerate() {
         frame(&mut app, &ctx, vec![key(direction)]);
         assert!(matches!(app.original_dialogs.last().map(|d| &d.kind), Some(DialogKind::DeleteWarning { .. })),
             "arrow key {direction:?} must not close the delete confirmation");
-        assert_eq!(ctx.data(|d| d.get_temp::<usize>(focus_id)), Some(focused),
-            "arrow key {direction:?} should select the expected button");
+        let focused = ctx.memory(|m| m.focused()).expect("focused button after navigation");
+        if index == 0 {
+            assert_ne!(focused, initial_focus, "Left immediately moves focus from No to Yes");
+            focused_after_left = Some(focused);
+        } else if index == 1 {
+            assert_ne!(Some(focused), focused_after_left, "second Left reaches Delete button");
+        } else if index == 3 {
+            assert_eq!(focused, initial_focus, "two Right presses return focus to No");
+        }
         assert!(left.join("alpha.txt").exists(), "arrows must not delete the file");
-        frame(&mut app, &ctx, vec![]);
     }
     frame(&mut app, &ctx, vec![key(egui::Key::D)]);
     assert!(app.original_dialogs.is_empty(), "bare D is the Delete button access key");
@@ -363,12 +367,30 @@ fn korean_delete_warning_arrow_keys_keep_dialog_open_and_d_activates_delete() {
 }
 
 #[test]
-fn permanent_delete_warning_arrows_never_focus_hidden_delete_button() {
-    use super::original_dialogs::delete_warning_next_focus;
-    assert_eq!(delete_warning_next_focus(2, false, -1), 1);
-    assert_eq!(delete_warning_next_focus(1, false, 1), 2);
-    assert_eq!(delete_warning_next_focus(2, true, 1), 0);
-    assert_eq!(delete_warning_next_focus(0, true, -1), 2);
+fn delete_warning_enter_activates_currently_focused_button_not_a_different_action() {
+    let (root, ctx, mut app) = fixture("delete-keyboard-enter", "ko");
+    let left = root.join("left");
+    app.panes[0].cursor = row(&app, 0, "alpha.txt");
+    app.dispatch("deleteRecycle", &ctx);
+    frame(&mut app, &ctx, vec![]);
+    // Default is No: Enter must not delete anything.
+    frame(&mut app, &ctx, vec![key(egui::Key::Enter)]);
+    assert!(app.original_dialogs.is_empty());
+    assert!(left.join("alpha.txt").exists());
+
+    // Left -> Yes -> Delete, then Enter should execute the focused button.
+    app.dispatch("deleteRecycle", &ctx);
+    frame(&mut app, &ctx, vec![]);
+    frame(&mut app, &ctx, vec![key(egui::Key::ArrowLeft)]);
+    let yes_focus = ctx.memory(|m| m.focused());
+    frame(&mut app, &ctx, vec![key(egui::Key::ArrowLeft)]);
+    assert_ne!(ctx.memory(|m| m.focused()), yes_focus);
+    frame(&mut app, &ctx, vec![key(egui::Key::Enter)]);
+    assert!(app.original_dialogs.is_empty(), "Enter activates the selected Delete button");
+    wait_dialog_or_job(&mut app, &ctx);
+    wait_job(&mut app, &ctx);
+    assert!(!left.join("alpha.txt").exists());
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
