@@ -98,13 +98,13 @@ pub(super) fn resource_dir() -> PathBuf {
     if let Some(p) = std::env::var_os("NDR_RESOURCE_DIR") {
         return p.into();
     }
-    let executable = std::env::current_exe().unwrap_or_default();
-    let folder = executable.parent().unwrap_or(Path::new(".")).to_path_buf();
-    if folder.join("Languages").is_dir() {
-        folder
-    } else {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Resources")
-    }
+    // A distributed executable must never fall back to the developer's
+    // compile-time source directory. Keep all runtime resources beside NDR.exe;
+    // if the user extracted an incomplete ZIP, fail with missing resources
+    // instead of accidentally succeeding only on the build machine.
+    std::env::current_exe().ok()
+        .and_then(|exe| exe.parent().map(Path::to_path_buf))
+        .unwrap_or_else(|| PathBuf::from("."))
 }
 
 #[derive(Clone)]

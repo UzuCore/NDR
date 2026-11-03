@@ -32,13 +32,26 @@ $required = @(
     'Resources/Tools/7zip/Full/7z.exe',
     'Resources/Tools/7zip/Full/7z.dll',
     'Resources/complete.wav',
-    'THIRD-PARTY-NOTICES.txt'
+    'THIRD-PARTY-NOTICES.txt',
+    'assets/winfsp-2.1.25156.msi'
 )
 foreach ($file in $required) {
     $path = Join-Path $project $file
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
         throw "Required redistributable file missing: $file"
     }
+}
+
+# The offline WinFsp driver installer is compiled into NDR.exe. Verify the
+# checked-in redistributable before publishing a portable ZIP.
+$winfspInstaller = Join-Path $project 'assets/winfsp-2.1.25156.msi'
+$winfspExpected = '073A70E00F77423E34BED98B86E600DEF93393BA5822204FAC57A29324DB9F7A'
+if ((Get-FileHash -LiteralPath $winfspInstaller -Algorithm SHA256).Hash -ne $winfspExpected) {
+    throw 'Bundled WinFsp offline installer checksum does not match the trusted build asset'
+}
+$winfspSignature = Get-AuthenticodeSignature -LiteralPath $winfspInstaller
+if ($winfspSignature.Status -ne 'Valid') {
+    throw "Bundled WinFsp installer signature invalid: $($winfspSignature.Status)"
 }
 
 if (Test-Path -LiteralPath $output) {
