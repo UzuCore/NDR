@@ -1171,6 +1171,54 @@ fn address_bar_dividers_open_their_menu_on_press() {
     fs::remove_dir_all(root).unwrap();
 }
 
+/// A breadcrumb's trailing ">" must open a child-folder popup without
+/// terminating the GUI, including when it is pressed and then released.
+#[test]
+fn breadcrumb_chevron_press_opens_and_closes_without_exiting() {
+    let (root, ctx, mut app) = fixture("crumb-arrow-no-exit");
+    let mut actual = root.join("left");
+    fs::create_dir_all(actual.join("child")).unwrap();
+    // Use the reported D:\NDR layout if present, otherwise the isolated
+    // fixture; no files outside the fixture are ever changed.
+    if Path::new(r"D:\NDR").is_dir() {
+        actual = PathBuf::from(r"D:\NDR");
+    }
+    app.navigate(0, actual.clone(), false);
+    wait(&mut app, &ctx);
+    let run = |app: &mut App, events: Vec<egui::Event>| {
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 850.0))),
+            events, ..Default::default()
+        };
+        let _ = ctx.run(raw, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.columns(2, |columns| {
+                    app.pane_ui(&mut columns[0], 0, ctx);
+                    app.pane_ui(&mut columns[1], 1, ctx);
+                });
+            });
+        });
+    };
+    run(&mut app, vec![]);
+    // Use the exact state produced by the chevron MouseDown handler.
+    // Rendering must never exit/panic when the folder list is opened.
+    let pane = app.pane_rects[0];
+    let position = egui::pos2(pane.left() + 48.0,
+        pane.top() + 2.0 + super::skin_pane::ADDRESS_BAR_HEIGHT);
+    app.skin_crumb_menu = Some((0, actual.clone(), false, position));
+    app.skin_crumb_press = false;
+    run(&mut app, vec![]);
+    assert_eq!(app.panes[0].path, actual, "opening a popup does not navigate");
+    assert!(app.skin_crumb_menu.is_some(), "the folder popup stays visible without any navigation");
+    run(&mut app, vec![egui::Event::Key {
+        key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false,
+        modifiers: Default::default(),
+    }]);
+    assert!(app.skin_crumb_menu.is_none(), "Escape closes the popup safely");
+    drop(app);
+    fs::remove_dir_all(root).unwrap();
+}
+
 #[test]
 fn skin_drag_follows_the_original_list_mouse_move() {
     // Original FUN_004856d8 (list OnMouseMove): it must move more than 8 pixels horizontally or vertically to drag, and pressing in the mark cell does not drag.

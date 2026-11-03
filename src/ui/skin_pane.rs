@@ -968,7 +968,15 @@ impl App {
             }
             _ => {}
         }
-        self.skin_crumb_menu_ui(ctx, index, just_opened);
+        // Never build a second foreground Area while the address-bar
+        // MouseDown handler is still constructing its own UI hierarchy.
+        // Schedule the popup for the following frame instead. This also
+        // preserves the pressed state for press-drag-release selection.
+        if just_opened {
+            ctx.request_repaint();
+        } else {
+            self.skin_crumb_menu_ui(ctx, index, false);
+        }
     }
 
     /// Original tab row (skin theme, FUN_00481fb8 + TNXTabSet). Visible only with two or more tabs (Visible = tab count > 1).
@@ -1566,7 +1574,9 @@ impl App {
             self.skin_crumb_menu = None;
             return;
         }
-        let icons: Vec<Option<egui::TextureHandle>> = children.iter().map(|(child, _)| if drives { self.drive_icon(ctx, child) } else { self.path_icon(ctx, child, true) }).collect();
+        // A breadcrumb popup is a fast list of subfolders, not an Explorer
+        // thumbnail view. Avoid synchronous icon/COM/shell lookups for every
+        // entry on the UI thread merely because the user clicked ">".
         let mut chosen = None;
         // Opened by a press that is still held (TrackPopupMenu from MouseDown): releasing over an item chooses it, releasing elsewhere keeps the menu.
         let (press_open, released) = (self.skin_crumb_press, ctx.input(|i| i.pointer.primary_released()));
@@ -1583,15 +1593,11 @@ impl App {
             egui::Frame::new().fill(Color32::WHITE).stroke(egui::Stroke::new(1.0_f32, Color32::from_gray(0xA0))).inner_margin(egui::Margin::same(2)).show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
                 egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
-                    for ((child, header), icon) in children.iter().zip(&icons) {
+                    for (child, header) in &children {
                         let (rect, response) = ui.allocate_exact_size(egui::vec2(item_width, item_height), egui::Sense::click());
                         let selected = response.hovered();
                         let (back, fore) = if selected { (Color32::from_gray(0x80), Color32::WHITE) } else { (Color32::WHITE, Color32::from_gray(0x0A)) };
                         ui.painter().rect_filled(rect, 0.0, back);
-                        if let Some(icon) = icon {
-                            let top = rect.top() + ((rect.height() - 16.0) / 2.0).floor();
-                            egui::Image::new((icon.id(), egui::vec2(16.0, 16.0))).paint_at(ui, egui::Rect::from_min_size(egui::pos2(rect.left() + 4.0, top), egui::vec2(16.0, 16.0)));
-                        }
                         let galley = ui.fonts_mut(|f| f.layout_no_wrap(header.clone(), font.clone(), fore));
                         ui.painter().galley(egui::pos2(rect.left() + 24.0, rect.center().y - galley.size().y / 2.0), galley, fore);
                         if response.clicked() || (press_open && released && response.hovered()) {
