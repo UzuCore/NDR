@@ -145,7 +145,13 @@ impl Drop for TemporaryEncryptedFile {
     fn drop(&mut self) { let _ = fs::remove_file(&self.0); }
 }
 pub struct Vault {
-    handle: File, pub file: PathBuf, key: Zeroizing<[u8;32]>, index: Index,
+    /// Append/index writer. Cloned mounts share this Windows file cursor.
+    handle: File,
+    /// Independent read-only Windows file object: seek_read on a synchronous
+    /// duplicated HANDLE actually changes the underlying shared file cursor.
+    /// A separate read handle prevents any reader from moving the writer.
+    read_handle: File,
+    pub file: PathBuf, key: Zeroizing<[u8;32]>, index: Index,
     generation: u64, pending: Option<Index>, opened: Instant, last_used: Instant,
     gate: Option<VaultGate>,
 }
@@ -208,22 +214,42 @@ fn put_record(handle: &mut File, key: &[u8;32], kind: u8, plaintext: &[u8]) -> R
         .map_err(|e| e.to_string())?;
     Ok(Block { offset, size: length })
 }
+/// Reads authenticated records through a separately opened read-only file
+/// object. Windows synchronous HANDLEs share a cursor across try_clone(),
+/// and even FileExt::seek_read moves that shared cursor (verified by an
+/// independent Windows executable). Never pass a writer or its clone here.
+fn read_exact_at(handle: &File, mut target: &mut [u8], offset: u64) -> Result<(), String> {
+    #[cfg(windows)]
+    use std::os::windows::fs::FileExt;
+    #[cfg(not(windows))]
+    use std::os::unix::fs::FileExt;
+    let mut cursor = offset;
+    while !target.is_empty() {
+        #[cfg(windows)]
+        let n = handle.seek_read(target, cursor).map_err(|e| e.to_string())?;
+        #[cfg(not(windows))]
+        let n = handle.read_at(target, cursor).map_err(|e| e.to_string())?;
+        if n == 0 { return Err("Unexpected end of encrypted record".into()); }
+        cursor = cursor.checked_add(n as u64).ok_or("Encrypted file offset overflow")?;
+        target = &mut target[n..];
+    }
+    Ok(())
+}
+
 fn get_record(handle: &File, key: &[u8;32], block: &Block, expected: u8) -> Result<Zeroizing<Vec<u8>>, String> {
     let limit = if expected == KIND_META { MAX_META } else if expected == KIND_DATA { STREAM_CHUNK_SIZE } else { return Err("Invalid encrypted record type".into()); };
     if block.size as usize > limit { return Err("Encrypted record exceeds size limit".into()); }
-    let mut handle = handle.try_clone().map_err(|e| e.to_string())?;
     let size = handle.metadata().map_err(|e| e.to_string())?.len();
     if block.offset < HEADER_SIZE || block.offset.checked_add(record_size(block.size as usize)?).is_none_or(|end| end > size) {
         return Err("Encrypted block points outside container".into());
     }
-    handle.seek(SeekFrom::Start(block.offset)).map_err(|e| e.to_string())?;
     let mut header = [0u8;RECORD_HEADER];
-    handle.read_exact(&mut header).map_err(|e| e.to_string())?;
+    read_exact_at(handle, &mut header, block.offset)?;
     if header[0] != expected || u32::from_le_bytes(header[1..5].try_into().unwrap()) != block.size {
         return Err("Encrypted record header mismatch".into());
     }
     let mut cipher = vec![0u8; block.size as usize];
-    handle.read_exact(&mut cipher).map_err(|e| e.to_string())?;
+    read_exact_at(handle, &mut cipher, block.offset + RECORD_HEADER as u64)?;
     let mut record_aad = [0u8;13];
     record_aad[..5].copy_from_slice(&header[..5]);
     record_aad[5..].copy_from_slice(&block.offset.to_le_bytes());
@@ -279,6 +305,7 @@ impl Vault {
         if self.pending.is_some() { return Err("An encrypted transfer is already in progress".into()); }
         Ok(Self {
             handle: self.handle.try_clone().map_err(|e| e.to_string())?,
+            read_handle: File::open(&self.file).map_err(|e| e.to_string())?,
             file: self.file.clone(), key: Zeroizing::new(*self.key),
             index: self.index.clone(), generation: self.generation,
             pending: None, opened: self.opened, last_used: self.last_used,
@@ -291,8 +318,7 @@ impl Vault {
     pub fn reload_after_mount(&mut self) -> Result<(), String> {
         if self.pending.is_some() { return Err("Cannot refresh during encrypted transfer".into()); }
         let mut header = [0u8;128];
-        self.handle.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
-        self.handle.read_exact(&mut header).map_err(|e| e.to_string())?;
+        read_exact_at(&self.read_handle, &mut header, 0)?;
         if &header[..8] != MAGIC { return Err("Encrypted container header changed".into()); }
         let len = self.handle.metadata().map_err(|e| e.to_string())?.len();
         let first = read_slot(&header, 0, len, &self.key)?;
@@ -302,7 +328,13 @@ impl Vault {
             return Err("Encrypted metadata pointer generations are inconsistent".into());
         }
         let (generation, block) = if first.0 >= second.0 { first } else { second };
-        let bytes = get_record(&self.handle, &self.key, &block, KIND_META)?;
+        // Opening a tree with many files should not decode and parse the
+        // entire authenticated index for every Explorer attribute query.
+        if generation == self.generation {
+            self.touch();
+            return Ok(());
+        }
+        let bytes = get_record(&self.read_handle, &self.key, &block, KIND_META)?;
         let index: Index = serde_json::from_slice(&bytes).map_err(|_|"Encrypted metadata invalid")?;
         index.check()?;
         for item in index.items.values() {
@@ -337,7 +369,8 @@ impl Vault {
             header[24..28].copy_from_slice(&(KDF_ITERATIONS as u32).to_le_bytes());
             handle.write_all(&header).map_err(|e| e.to_string())?;
             let key = derive((*password).clone(), &header[8..24])?;
-            let mut result = Self {handle,file:path.to_path_buf(),key,index:Index::empty(),
+            let read_handle = File::open(path).map_err(|e| e.to_string())?;
+            let mut result = Self {handle,read_handle,file:path.to_path_buf(),key,index:Index::empty(),
                 generation:0,pending:None,opened:Instant::now(),last_used:Instant::now(),gate:Some(gate)};
             result.commit_index()?;
             Ok::<_,String>(result)
@@ -382,7 +415,8 @@ impl Vault {
             }
         }
         handle.seek(SeekFrom::End(0)).map_err(|e|e.to_string())?;
-        Ok(Self{handle,file,key,index,generation,pending:None,opened:Instant::now(),last_used:Instant::now(),gate:Some(gate)})
+        let read_handle = File::open(&file).map_err(|e| e.to_string())?;
+        Ok(Self{handle,read_handle,file,key,index,generation,pending:None,opened:Instant::now(),last_used:Instant::now(),gate:Some(gate)})
     }    fn commit_index(&mut self) -> Result<(), String> {
         self.index.check()?;
         let data = Zeroizing::new(serde_json::to_vec(&self.index).map_err(|e| e.to_string())?);
@@ -513,7 +547,7 @@ impl Vault {
         if !entry.folder{
             let mut copied=Vec::with_capacity(entry.blocks.len());
             for block in &entry.blocks{
-                let plain=get_record(&source.handle,&source.key,block,KIND_DATA)?;
+                let plain=get_record(&source.read_handle,&source.key,block,KIND_DATA)?;
                 copied.push(put_record(&mut self.handle,&self.key,KIND_DATA,&plain)?);
             }
             let target=self.index.items.get_mut(&id).unwrap();target.size=entry.size;target.blocks=copied;
@@ -624,7 +658,7 @@ impl Vault {
     pub fn stream_read_chunk(&self,id:i64,ordinal:i64)->Result<Option<Zeroizing<Vec<u8>>>,String>{
         if ordinal<0{return Err("Invalid encrypted chunk ordinal".into());}
         let item=self.item(id)?;if item.folder{return Err("Encrypted item is a folder".into());}
-        item.blocks.get(ordinal as usize).map(|block|get_record(&self.handle,&self.key,block,KIND_DATA)).transpose()
+        item.blocks.get(ordinal as usize).map(|block|get_record(&self.read_handle,&self.key,block,KIND_DATA)).transpose()
     }
     pub fn commit_stream_file(&mut self)->Result<(),String>{
         let before=self.pending.take().ok_or("No encrypted stream open")?;
@@ -704,7 +738,7 @@ impl Vault {
             let mut output=OpenOptions::new().write(true).create_new(true).open(&path).map_err(|e|e.to_string())?;
             created.push(path);
             for block in &item.blocks{
-                let data=get_record(&self.handle,&self.key,block,KIND_DATA)?;
+                let data=get_record(&self.read_handle,&self.key,block,KIND_DATA)?;
                 output.write_all(&data).map_err(|e|e.to_string())?;
             }
             output.flush().map_err(|e|e.to_string())?;
@@ -759,7 +793,7 @@ impl Vault {
         if size>MAX_FILE_SIZE as u64{return Err("File too large for in-memory editing; export to edit".into());}
         let mut result=Vec::with_capacity(size as usize);
         for block in &self.item(id)?.blocks{
-            let plain=get_record(&self.handle,&self.key,block,KIND_DATA)?;
+            let plain=get_record(&self.read_handle,&self.key,block,KIND_DATA)?;
             result.extend_from_slice(&plain);
         }
         Ok(result)
@@ -841,14 +875,14 @@ impl Vault {
         }
         let mut temp=options.open(&stage).map_err(|e|e.to_string())?;
         let mut header=[0u8;HEADER_SIZE as usize];
-        self.handle.seek(SeekFrom::Start(0)).map_err(|e|e.to_string())?;
-        self.handle.read_exact(&mut header).map_err(|e|e.to_string())?;
+        read_exact_at(&self.read_handle, &mut header, 0)?;
         // Preserve the password-derived key and salt. All new AES-GCM nonces
         // are fresh, independently generated. No plaintext disk staging.
         header[32..].fill(0);
         temp.write_all(&header).map_err(|e|e.to_string())?;
+        let stage_read = File::open(&stage).map_err(|e| e.to_string())?;
         let mut rebuilt=Self {
-            handle:temp,file:stage.clone(),key:Zeroizing::new(*self.key),
+            handle:temp,read_handle:stage_read,file:stage.clone(),key:Zeroizing::new(*self.key),
             index:self.index.clone(),generation:0,pending:None,
             opened:self.opened,last_used:self.last_used,gate:None,
         };
@@ -860,7 +894,7 @@ impl Vault {
             for block in &mut item.blocks{
                 let key=(block.offset,block.size);
                 let new=if let Some(existing)=mapping.get(&key){existing.clone()}else{
-                    let plain=get_record(&self.handle,&self.key,block,KIND_DATA)?;
+                    let plain=get_record(&self.read_handle,&self.key,block,KIND_DATA)?;
                     let new=put_record(&mut rebuilt.handle,&rebuilt.key,KIND_DATA,&plain)?;
                     mapping.insert(key,new.clone());
                     new
@@ -890,7 +924,7 @@ impl Vault {
             if item.folder{continue;}
             let mut sum=0u64;
             for block in &item.blocks{
-                get_record(&self.handle,&self.key,block,KIND_DATA)?;
+                get_record(&self.read_handle,&self.key,block,KIND_DATA)?;
                 sum=sum.checked_add(block.size as u64).ok_or("Encrypted size overflow")?;
             }
             if sum!=item.size{return Err("Encrypted file length mismatch".into());}
@@ -1000,6 +1034,34 @@ mod tests {
         drop(unlocked);
         fs::remove_dir_all(root).unwrap();
     }
+    #[test]
+    fn authenticated_mount_reader_does_not_move_shared_writer_file_cursor() {
+        // Reproduced on Windows: seek_read(3) on a File::try_clone() advances
+        // the original synchronous writer cursor to offset 9. A second
+        // *independently opened* read-only HANDLE must not do so.
+        let root = fixture("independent-mount-reader");
+        let path = root.join("cursor.ndr");
+        let mut writer = Vault::create(&path, "cursor test password 2026".into()).unwrap();
+        let file_id = writer.add_file(1, "original.bin", b"authenticated contents").unwrap();
+        let mut mount = writer.fork_for_mount().unwrap();
+        writer.handle.seek(SeekFrom::Start(19)).unwrap();
+        let before = writer.handle.stream_position().unwrap();
+        let mut header = [0u8; 16];
+        read_exact_at(&mount.read_handle, &mut header, 0).unwrap();
+        assert_eq!(writer.handle.stream_position().unwrap(), before,
+            "a read from a WinFsp fork must not move the encrypted writer cursor");
+        assert_eq!(&header[..8], MAGIC);
+        assert_eq!(mount.read_file(file_id).unwrap(), b"authenticated contents");
+        writer.add_file(1, "a-second-file.bin", b"second authenticated record").unwrap();
+        mount.reload_after_mount().unwrap();
+        let second = mount.find_child(1, "a-second-file.bin").unwrap().unwrap();
+        assert_eq!(mount.read_file(second.id).unwrap(), b"second authenticated record");
+        writer.verify_integrity().unwrap();
+        drop(mount);
+        drop(writer);
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn create_unlock_and_password_rejection() {
         let root=fixture("auth");let path=root.join("auth.ndr");

@@ -42,7 +42,7 @@ pub(super) struct VaultDialog {
 }
 
 impl App {
-    fn vault_status(&self, ko: &str, en: &str) -> String {
+    pub(super) fn vault_status(&self, ko: &str, en: &str) -> String {
         if self.language == "ko" { ko } else { en }.to_owned()
     }
 
@@ -148,6 +148,40 @@ impl App {
         // Even if exiting an active pane temporarily cached its session,
         // minimize-lock must invalidate every retained authentication.
         if minimized { self.vault_sessions.clear(); }
+        #[cfg(feature = "winfsp-vault")]
+        {
+            let mut index = 0;
+            while index < self.vault_trees.len() {
+                let file = &self.vault_trees[index].vault_path;
+                // discard_vault stores sessions by their canonical file path,
+                // which can be \?\D:\... rather than the pane's D:\... path.
+                let session_key = std::fs::canonicalize(file).unwrap_or_else(|_| file.clone());
+                let authenticated = self.panes.iter().any(|pane|
+                    pane.vault.as_ref().is_some_and(|state| state.file == *file))
+                    || self.vault_sessions.contains_key(&session_key);
+                // Revocation is one-way. Reauthenticating before an old
+                // external handle closes creates a NEW drive; the previously
+                // revoked volume still needs to be unmounted when idle.
+                if authenticated && !self.vault_trees[index].is_revoked() {
+                    index += 1;
+                    continue;
+                }
+                // Closing/expiry revokes new file handles, but a previously
+                // opened editor may finish its authenticated save.
+                self.vault_trees[index].revoke();
+                if self.vault_trees[index].has_open_files() {
+                    index += 1;
+                    continue;
+                }
+                match self.vault_trees[index].finish() {
+                    Ok(()) => { self.vault_trees.remove(index); },
+                    Err(error) => {
+                        eprintln!("NDR encrypted session unmount failed: {error}");
+                        index += 1;
+                    }
+                }
+            }
+        }
     }
 
     fn attach_vault(&mut self, pane: usize, container: PaneVault) {
@@ -155,9 +189,51 @@ impl App {
         self.discard_vault(pane);
         self.panes[pane].archive = None;
         self.panes[pane].vault = Some(container);
+        #[cfg(feature = "winfsp-vault")]
+        self.ensure_vault_tree(pane);
         let ctx = self.egui_ctx.clone();
         self.arm_folder_watch(pane, None, &ctx);
         self.refresh(pane);
+    }
+
+    /// Mount the authenticated container *once* as a real read/write Windows
+    /// drive so Explorer and external applications can use files and nested
+    /// folders normally. No temporary decrypted mirror is ever created.
+    #[cfg(feature = "winfsp-vault")]
+    fn ensure_vault_tree(&mut self, pane: usize) {
+        if cfg!(test) { return; }
+        if !super::vault_winfsp::runtime_available() {
+            self.offer_winfsp_installation();
+            return;
+        }
+        let Some(vault) = self.panes[pane].vault.as_ref() else { return };
+        if self.vault_trees.iter().any(|m| m.vault_path == vault.file && !m.is_revoked()) {
+            return;
+        }
+        let file = vault.file.clone();
+        let gate = self.vault_mounts.iter().find(|m| m.vault_path == file)
+            .map(|m| m.writer_gate())
+            .or_else(|| self.vault_trees.iter().find(|m| m.vault_path == file)
+                .map(|m| m.writer_gate()))
+            .unwrap_or_else(|| std::sync::Arc::new(std::sync::Mutex::new(())));
+        let occupied: Vec<char> = self.vault_trees.iter().filter_map(|m| m.drive_letter())
+            .chain(self.vault_mounts.iter().filter_map(|m| m.drive_letter())).collect();
+        match super::vault_winfsp::VaultTreeMount::start(
+            file.clone(), &vault.database, gate, &occupied) {
+            Ok(tree) => {
+                let root = tree.mount_root.display().to_string();
+                self.vault_trees.push(tree);
+                self.status = self.vault_status(
+                    &format!("암호화 폴더가 {root}에 연결됐습니다. 다른 프로그램에서도 일반 폴더처럼 사용할 수 있습니다."),
+                    &format!("Encrypted folder mounted at {root}. Explorer and other applications can use it."));
+            }
+            Err(error) => {
+                eprintln!("NDR full encrypted directory mount failed for {}: {error}", file.display());
+                self.status = self.vault_status(
+                    "암호화 폴더를 Windows 가상 드라이브에 연결하지 못했습니다. NDR 내부 파일 작업은 계속 사용할 수 있습니다.",
+                    "Could not mount encrypted folder as a Windows drive; NDR internal operations remain available.");
+            }
+        }
     }
 
     pub(super) fn refresh_vault(&mut self, pane: usize) {
@@ -271,6 +347,33 @@ impl App {
                 return;
             }
             let Some(state) = self.panes[pane].vault.as_ref() else { return };
+            // When a whole directory is mounted, every item shares the same
+            // real virtual-drive path. Other applications can create sibling
+            // files or use atomic rename/save patterns without a new mount.
+            if let Some(tree) = self.vault_trees.iter().find(|m|
+                m.vault_path == state.file && !m.is_revoked()) {
+                let relative = match state.database.relative_folder_path(state.folder()) {
+                    Ok(path) => path,
+                    Err(error) => { self.status = error; return; }
+                };
+                let path = tree.mount_root.join(relative).join(&item.name);
+                let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                let textual = ["txt", "md", "log", "ini", "cfg", "json", "xml", "csv", "yaml", "yml", "toml", "rs", "py", "bat", "ps1"]
+                    .iter().any(|known| ext.eq_ignore_ascii_case(known));
+                let opened = if textual {
+                    native::shell_open(Path::new("notepad.exe"),
+                        Some(&native::quote_arg(&path.to_string_lossy())), "open")
+                } else {
+                    native::shell_open(&path, None, "open")
+                };
+                if let Err(error) = opened {
+                    eprintln!("NDR encrypted directory file open failed: {error}");
+                    self.error_notice("암호화 파일 열기 실패", "Encrypted file open failed",
+                        self.vault_status("외부 프로그램에서 파일을 열지 못했습니다.",
+                                          "Could not open the encrypted file."));
+                }
+                return;
+            }
             // Reopening the same item must reuse its active drive: two
             // independent writers to the same file would lose changes.
             if let Some(mount) = self.vault_mounts.iter().find(|mount|
@@ -362,6 +465,19 @@ impl App {
         // writer gate so their authenticated metadata cannot overwrite peers.
         let mut updated = [false; 2];
         let mut errors = Vec::new();
+        for tree in &mut self.vault_trees {
+            if tree.take_saved_revision() {
+                for pane in 0..2 {
+                    if self.panes[pane].vault.as_ref()
+                        .is_some_and(|state| state.file == tree.vault_path) {
+                        updated[pane] = true;
+                    }
+                }
+            }
+            if let Some(error) = tree.take_save_error() {
+                errors.push(format!("{}: {error}", tree.vault_path.display()));
+            }
+        }
         for mount in &mut self.vault_mounts {
             match mount.take_saved_revision() {
                 Ok(true) => {
@@ -407,6 +523,19 @@ impl App {
             let Some(path) = self.panes[pane].vault.as_ref().map(|v| v.file.clone()) else {
                 return false;
             };
+            // The whole-directory mount serializes every authenticated edit,
+            // so an external program using another file does not block this
+            // NDR pane's create/rename/delete operations.
+            if self.vault_trees.iter().any(|tree|
+                tree.vault_path == path && !tree.is_revoked()) {
+                if let Some(vault) = self.panes[pane].vault.as_mut() {
+                    if let Err(error) = vault.database.reload_after_mount() {
+                        self.status = error;
+                        return false;
+                    }
+                }
+                return true;
+            }
             if self.vault_mounts.iter().any(|m| m.vault_path == path && m.has_open_files()) {
                 self.status = self.vault_status(
                     "외부 프로그램에서 사용 중인 암호화 파일이 있습니다. 해당 파일을 닫고 다시 시도해 주세요.",
@@ -435,6 +564,27 @@ impl App {
             }
         }
         true
+    }
+
+    /// The NDR panel and the WinFsp driver share a single authenticated
+    /// writer lease. Refresh the encrypted index *inside* that lease so a
+    /// later Windows file save cannot overwrite a new folder/rename/delete.
+    fn vault_modify_metadata<T>(&mut self, pane: usize,
+        operation: impl FnOnce(&mut Vault, i64) -> Result<T, String>) -> Result<T, String> {
+        let path = self.panes[pane].vault.as_ref()
+            .ok_or("Encrypted folder is closed")?.file.clone();
+        #[cfg(feature = "winfsp-vault")]
+        let gate = self.vault_trees.iter().find(|m| m.vault_path == path && !m.is_revoked())
+            .map(|mount| mount.writer_gate());
+        #[cfg(feature = "winfsp-vault")]
+        let _guard = gate.as_ref().map(|g| g.lock().map_err(|e| e.to_string())).transpose()?;
+        #[cfg(not(feature = "winfsp-vault"))]
+        let _ = path;
+        let state = self.panes[pane].vault.as_mut()
+            .ok_or("Encrypted folder is closed")?;
+        state.database.reload_after_mount()?;
+        let folder = state.folder();
+        operation(&mut state.database, folder)
     }
 
     /// Clipboard is an in-app virtual reference, not a plaintext temp file
@@ -474,10 +624,8 @@ impl App {
         let destination = self.active;
         if source == destination || self.panes[source].vault.as_ref().is_none_or(
             |v| v.file != path || v.folder() != folder) {
-            self.status = self.vault_status(
-                "원본 암호화 폴더가 열려 있지 않습니다. 다시 선택한 뒤 복사해 주세요.",
-                "The source encrypted folder is no longer open. Select the items again.");
-            return true;
+            self.vault_clipboard = None;
+            return false; // allow the real Windows clipboard as fallback
         }
         self.vault_export_named_to_other(source, names, moving);
         true
@@ -492,10 +640,11 @@ impl App {
             if folder { "Enter a folder name inside the encrypted container." } else { "Enter a file name inside the encrypted container." });
         self.prompt_file_name(&title, &message, "", move |app, name, _| {
             let Some(name) = name.filter(|n| !n.is_empty()) else { return };
-            let Some(state) = app.panes[pane].vault.as_mut() else { return };
-            let current = state.folder();
-            let result = if folder { state.database.add_folder(current, &name).map(|_| ()) }
-                else { state.database.add_file(current, &name, b"").map(|_| ()) };
+            if !app.vault_prepare_write(pane) { return; }
+            let result = app.vault_modify_metadata(pane, |vault, current| {
+                if folder { vault.add_folder(current, &name).map(|_| ()) }
+                else { vault.add_file(current, &name, b"").map(|_| ()) }
+            });
             match result {
                 Ok(()) => {
                     app.pending_focus[pane] = Some(name.clone());
@@ -518,10 +667,22 @@ impl App {
         let message = self.language_pack.text("NDRVault.RenamePrompt", "Enter a new name.");
         self.prompt_file_name(&title, &message, &old.clone(), move |app, new, _| {
             let Some(new) = new.filter(|n| !n.is_empty()) else { return };
-            let Some(state) = app.panes[pane].vault.as_mut() else { return };
-            let result = state.database.list(state.folder()).and_then(|items| {
-                let id = items.iter().find(|v| v.name == old).ok_or("Encrypted item was not found")?.id;
-                state.database.rename(id, &new)
+            if !app.vault_prepare_write(pane) { return; }
+            #[cfg(feature = "winfsp-vault")]
+            if app.vault_trees.iter().any(|tree| {
+                app.panes[pane].vault.as_ref().is_some_and(|v|
+                    tree.vault_path == v.file && tree.is_open_item(v.folder(), &old))
+            }) {
+                app.status = app.vault_status(
+                    "외부 프로그램에서 사용 중인 파일이나 폴더는 이름을 변경할 수 없습니다.",
+                    "Close the external application before renaming this item.");
+                return;
+            }
+            let result = app.vault_modify_metadata(pane, |database, folder| {
+                let items = database.list(folder)?;
+                let id = items.iter().find(|v| v.name == old)
+                    .ok_or("Encrypted item was not found")?.id;
+                database.rename(id, &new)
             });
             match result {
                 Ok(()) => {
@@ -563,6 +724,30 @@ impl App {
                     app.status="Finish the encrypted transfer before compacting".into();
                     return;
                 }
+                #[cfg(feature = "winfsp-vault")]
+                {
+                    let Some(path) = app.panes[pane].vault.as_ref().map(|v| v.file.clone())
+                        else { return; };
+                    if app.vault_trees.iter().any(|tree|
+                        tree.vault_path == path && tree.has_open_files()) {
+                        app.status = app.vault_status(
+                            "암호화 드라이브를 사용하는 외부 프로그램을 닫고 다시 시도해 주세요.",
+                            "Close external applications using this encrypted drive.");
+                        return;
+                    }
+                    let mut index = 0;
+                    while index < app.vault_trees.len() {
+                        if app.vault_trees[index].vault_path != path {
+                            index += 1;
+                            continue;
+                        }
+                        if let Err(error) = app.vault_trees[index].finish() {
+                            app.status = format!("Cannot compact an active encrypted drive: {error}");
+                            return;
+                        }
+                        app.vault_trees.remove(index);
+                    }
+                }
                 let Some(container)=app.panes[pane].vault.take() else{return;};
                 let PaneVault{file,database,stack}=container;
                 // The old container remains intact on any pre-swap error.
@@ -571,6 +756,8 @@ impl App {
                 match database.compact() {
                     Ok(database)=>{
                         app.panes[pane].vault=Some(PaneVault{file,database,stack});
+                        #[cfg(feature = "winfsp-vault")]
+                        app.ensure_vault_tree(pane);
                         app.refresh_vault(pane);
                         app.status=if app.language.eq_ignore_ascii_case("ko"){
                             "암호화 폴더 정리와 무결성 검사가 완료되었습니다.".into()
@@ -600,45 +787,36 @@ impl App {
             ndr::msgbox::MB_YESNO | ndr::msgbox::MB_ICONEXCLAMATION, move |app, confirmed, _| {
                 if confirmed != ndr::msgbox::IDYES { return; }
                 let Some(path) = app.panes[pane].vault.as_ref().map(|v| v.file.clone()) else { return };
-                // A busy mounted file cannot be removed. Other files can
-                // still be deleted while an editor remains open, provided
-                // the index mutation is serialized with WinFsp commits.
+                // An in-use source may still be saved by its editor. Reject
+                // deletion of that source or its ancestor directory, while
+                // allowing unrelated files to be deleted immediately.
                 let folder = app.panes[pane].vault.as_ref().unwrap().folder();
-                let relevant: Vec<_> = app.vault_mounts.iter()
-                    .filter(|m| m.vault_path == path).collect();
-                let gate = relevant.first().map(|mount| mount.writer_gate());
-                let selected_mounted = relevant.iter().any(|mount|
-                    mount.parent_id == folder && names.iter().any(|n| n == &mount.item_name));
+                let has_legacy = app.vault_mounts.iter().any(|m| m.vault_path == path);
+                let selected_mounted = app.vault_mounts.iter().any(|m|
+                    m.vault_path == path && m.parent_id == folder &&
+                    names.iter().any(|name| name.eq_ignore_ascii_case(&m.item_name)))
+                    || app.vault_trees.iter().any(|tree|
+                        tree.vault_path == path && names.iter().any(|name|
+                            tree.is_open_item(folder, name)));
                 if selected_mounted {
                     app.status = app.vault_status(
-                        "열려 있거나 연결된 암호화 파일은 삭제할 수 없습니다. 해당 파일을 닫고 폴더에서 나갔다가 다시 시도해 주세요.",
-                        "The selected encrypted file is still connected. Close it before deleting.");
+                        "외부 프로그램에서 사용 중인 암호화 파일이나 폴더는 삭제할 수 없습니다.",
+                        "An encrypted item is open in an external application.");
                     return;
                 }
-                let locked = if let Some(ref gate) = gate {
-                    match gate.lock() {
-                        Ok(guard) => Some(guard),
-                        Err(error) => {
-                            eprintln!("NDR vault delete writer lock poisoned: {error}");
-                            return;
-                        }
-                    }
-                } else { None };
-                let Some(state) = app.panes[pane].vault.as_mut() else { return };
-                let result = (|| -> Result<(), String> {
-                    state.database.reload_after_mount()?;
-                    let current = state.database.list(state.folder())?;
-                    let chosen: Vec<_> = current.iter().filter(|item| names.contains(&item.name)).collect();
+                let result = app.vault_modify_metadata(pane, |database, current_folder| {
+                    let current = database.list(current_folder)?;
+                    let chosen: Vec<_> = current.iter().filter(|item|
+                        names.iter().any(|name| name == &item.name)).collect();
                     if chosen.len() != names.len() {
                         return Err("Encrypted selection changed before deletion".into());
                     }
-                    if !relevant.is_empty() && chosen.iter().any(|item| item.folder) {
-                        return Err("Cannot delete a folder while external encrypted file mounts are connected".into());
+                    if has_legacy && chosen.iter().any(|item| item.folder) {
+                        return Err("Close connected legacy files before deleting a folder".into());
                     }
                     let ids: Vec<i64> = chosen.iter().map(|item| item.id).collect();
-                    state.database.remove_many(&ids)
-                })();
-                drop(locked);
+                    database.remove_many(&ids)
+                });
                 match result {
                     Ok(()) => {
                         app.refresh_vault(pane);
@@ -673,15 +851,14 @@ impl App {
             self.status = self.language_pack.text("NDRVault.NoPaste", "No files or folders to paste.");
             return;
         };
-        if was_cut {
-            self.status = self.language_pack.text("NDRVault.ClipboardCut", "Cut/paste into encrypted folders is not supported. Use F4 move instead.");
-            return;
-        }
-        self.vault_import_paths(pane, files);
+        // Ctrl+X from Explorer has the same meaning as F4: the original
+        // disappears only after a complete authenticated encrypted commit.
+        self.vault_transfer_from_local(1 - pane, pane, files, was_cut);
     }
 
-    /// Copy to other pane (F3) from an unlocked vault is an explicit plaintext
-    /// export. Warn before releasing decrypted bytes to the filesystem.
+    /// F3/F4 from an unlocked container behave like ordinary folder
+    /// operations. Explicitly selecting Copy or Move is the user's consent
+    /// to write the destination; only actual name conflicts need a dialog.
     pub(super) fn vault_export_to_other(&mut self, source: usize, moving: bool) {
         let names: Vec<String> = self.target_entries(source).into_iter()
             .filter(|e| !e.is_parent()).map(|e| e.name).collect();
@@ -692,6 +869,15 @@ impl App {
                                   names: Vec<String>, moving: bool) {
         if moving {
             let Some(state) = self.panes[source].vault.as_ref() else { return };
+            #[cfg(feature = "winfsp-vault")]
+            if self.vault_trees.iter().any(|tree|
+                tree.vault_path == state.file && names.iter().any(|name|
+                    tree.is_open_item(state.folder(), name))) {
+                self.status = self.vault_status(
+                    "사용 중인 암호화 파일이나 해당 폴더는 이동할 수 없습니다. 편집기를 닫고 다시 시도해 주세요.",
+                    "Cannot move a file or folder used by an external application.");
+                return;
+            }
             let path = state.file.clone();
             let folder = state.folder();
             let relevant: Vec<_> = self.vault_mounts.iter()
@@ -717,7 +903,7 @@ impl App {
         }
         {
             // Observe already committed edits before copying or moving a
-            // file. No plaintext is staged until user confirms the export.
+            // file. Plaintext is written only to the selected destination.
             if let Some(vault) = self.panes[source].vault.as_mut() {
                 if let Err(error) = vault.database.reload_after_mount() {
                     eprintln!("NDR vault export refresh failed: {error}");
@@ -735,18 +921,7 @@ impl App {
             return;
         }
         if names.is_empty() { return; }
-        let destination = self.panes[target].path.clone();
-        let message = self.language_pack.text(if moving { "NDRVault.ExportMoveConfirm" } else { "NDRVault.ExportCopyConfirm" },
-            if moving { "Move {count} items to unencrypted folder {destination}? Originals are removed only after export succeeds. Existing targets are never overwritten without confirmation." }
-            else { "Export {count} items as plaintext to {destination}? Existing targets are never overwritten without confirmation." })
-            .replace("{count}", &names.len().to_string()).replace("{destination}", &destination.display().to_string());
-        let title = self.language_pack.text("NDRVault.ExportTitle", "Export encrypted items");
-        self.system_box(&title, &message,
-            ndr::msgbox::MB_YESNO | ndr::msgbox::MB_ICONEXCLAMATION, move |app, answer, _| {
-                if answer == ndr::msgbox::IDYES {
-                    app.begin_vault_transfer(VaultTransferKind::Export, source, target, moving, names, vec![], None);
-                }
-            });
+        self.begin_vault_transfer(VaultTransferKind::Export, source, target, moving, names, vec![], None);
     }
 
     /// Import first, then remove local originals. Failure to delete a source
@@ -762,20 +937,58 @@ impl App {
         use super::vault_transfer_ui::VaultTransferKind;
         if files.is_empty() { return; }
         if !moving { return self.vault_import_paths(target, files); }
-        let title = self.language_pack.text("NDRVault.MoveLocalTitle", "Move into encrypted folder");
-        let text = self.language_pack.text("NDRVault.MoveLocalConfirm", "Encrypt all items first, then remove local originals. Continue?");
-        self.system_box(&title, &text,
-            ndr::msgbox::MB_YESNO | ndr::msgbox::MB_ICONEXCLAMATION, move |app, answer, _| {
-                if answer == ndr::msgbox::IDYES {
-                    let Some(names) = files.iter()
-                        .map(|file| file.file_name().and_then(|name| name.to_str()).map(str::to_owned))
-                        .collect::<Option<Vec<_>>>() else {
-                        app.status = app.language_pack.text("NDRVault.InvalidImportPath", "Cannot transfer a path without a valid Unicode filename.");
-                        return;
-                    };
-                    app.begin_vault_transfer(VaultTransferKind::Import, source, target, true, names, files, None);
-                }
-            });
+        let Some(names) = files.iter()
+            .map(|file| file.file_name().and_then(|name| name.to_str()).map(str::to_owned))
+            .collect::<Option<Vec<_>>>() else {
+            self.status = self.language_pack.text("NDRVault.InvalidImportPath",
+                "Cannot transfer a path without a valid Unicode filename.");
+            return;
+        };
+        self.begin_vault_transfer(VaultTransferKind::Import, source, target, true, names, files, None);
+    }
+
+    /// Explorer/another NDR panel dropped files onto an unlocked vault
+    /// folder. Keep the destination as an authenticated item ID, not a
+    /// physical container path that Windows might copy next to the vault.
+    pub(super) fn vault_import_drop(&mut self, pane: usize, paths: Vec<PathBuf>,
+        destination: &Path, moving: bool) {
+        let Some(state) = self.panes[pane].vault.as_ref() else { return; };
+        let current = state.virtual_path();
+        let folder = if destination == current {
+            state.folder()
+        } else if destination.parent() == Some(current.as_path()) {
+            let Some(name) = destination.file_name().and_then(|n| n.to_str()) else { return; };
+            let Ok(Some(child)) = state.database.find_child(state.folder(), name) else { return; };
+            if !child.folder { return; }
+            child.id
+        } else {
+            self.status = self.vault_status(
+                "??? ?? ?? ??? ?? ??? ??? ???.",
+                "Choose a destination inside the encrypted folder.");
+            return;
+        };
+        #[cfg(feature = "winfsp-vault")]
+        if let Some(tree) = self.vault_trees.iter().find(|m|
+            m.vault_path == state.file && !m.is_revoked()) {
+            let relative = state.database.relative_folder_path(folder).unwrap_or_default();
+            let target = tree.mount_root.join(relative).to_string_lossy()
+                .trim_end_matches(['\\', '/']).to_lowercase();
+            if paths.iter().any(|path| path.is_dir() && {
+                let src = path.to_string_lossy().trim_end_matches(['\\', '/']).to_lowercase();
+                target == src || target.starts_with(&(src + "\\"))
+            }) {
+                self.status = self.vault_status(
+                    "폴더를 자기 자신이나 하위 폴더로 복사할 수 없습니다.",
+                    "Cannot copy a folder into itself or one of its descendants.");
+                return;
+            }
+        }
+        let Some(names) = paths.iter()
+            .map(|path| path.file_name().and_then(|name| name.to_str()).map(str::to_owned))
+            .collect::<Option<Vec<_>>>() else { return; };
+        if paths.is_empty() { return; }
+        self.begin_vault_transfer(super::vault_transfer_ui::VaultTransferKind::Import,
+            1 - pane, pane, moving, names, paths, Some(folder));
     }
 
     pub(super) fn vault_import_paths(&mut self, pane: usize, files: Vec<PathBuf>) {
@@ -824,16 +1037,7 @@ impl App {
             self.status = self.language_pack.text("NDRVault.SameContainer", "Open two different encrypted containers for cross-container transfer.");
             return;
         }
-        let title = self.language_pack.text("NDRVault.TransferTitle", "Encrypted container transfer");
-        let text = self.language_pack.text(if moving { "NDRVault.MoveConfirm" } else { "NDRVault.CopyConfirm" },
-            if moving { "Copy all selected items to the other encrypted container and then delete the originals?" }
-            else { "Copy all selected items to the other encrypted container?" });
-        self.system_box(&title, &text, ndr::msgbox::MB_YESNO | ndr::msgbox::MB_ICONQUESTION,
-            move |app, answer, _| {
-                if answer == ndr::msgbox::IDYES {
-                    app.begin_vault_transfer(VaultTransferKind::Between, source, target, moving, names, vec![], None);
-                }
-            });
+        self.begin_vault_transfer(VaultTransferKind::Between, source, target, moving, names, vec![], None);
     }
 
     pub(super) fn vault_transfer_inside(&mut self, moving: bool) {
@@ -899,8 +1103,7 @@ mod tests {
             "no CF_HDROP of the physical .ndr container is allowed");
         app.active = 0;
         app.dispatch("paste", &ctx);
-        assert_eq!(app.msgboxes.len(), 1, "plaintext export confirmation required");
-        app.answer_message_box(ndr::msgbox::IDYES, &ctx);
+        assert!(app.msgboxes.is_empty(), "copying from an unlocked vault must not prompt");
         finish_transfer(&mut app);
         assert_eq!(std::fs::read(root.join("left/only-this.txt")).unwrap(), b"test payload");
         assert!(!root.join("left/not-selected.txt").exists());
@@ -914,13 +1117,128 @@ mod tests {
         assert!(app.vault_clipboard.as_ref().unwrap().4, "Ctrl+X marks virtual move");
         app.active = 0;
         app.dispatch("paste", &ctx);
-        assert_eq!(app.msgboxes.len(), 1, "Ctrl+X/Ctrl+V must confirm plaintext move");
-        app.answer_message_box(ndr::msgbox::IDYES, &ctx);
+        assert!(app.msgboxes.is_empty(), "moving from an unlocked vault must not prompt");
         finish_transfer(&mut app);
         assert_eq!(std::fs::read(root.join("left/not-selected.txt")).unwrap(), b"other payload");
         assert!(app.panes[1].vault.as_mut().unwrap().database
             .find_child(1, "not-selected.txt").unwrap().is_none(),
             "Ctrl+X removes the original only after export succeeds");
+        drop(app);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn explorer_drop_to_unlocked_vault_imports_files_and_folders_without_prompt() {
+        let (root, _ctx, mut app) =
+            super::super::tools_tests::fixture("vault-explorer-drop", "ko");
+        let encrypted = root.join("right/drop.ndr");
+        let mut database = Vault::create(&encrypted, "drop test password 123".into()).unwrap();
+        database.add_folder(1, "nested").unwrap();
+        app.attach_vault(1, PaneVault::new(encrypted, database));
+        let current = app.panes[1].vault.as_ref().unwrap().virtual_path();
+        let source_file = root.join("left/alpha.txt");
+        app.handle_drop(1, vec![source_file.clone()], current.clone(),
+            egui::Modifiers::default());
+        assert!(app.msgboxes.is_empty(), "drop has no security confirmation");
+        assert!(source_file.is_file(), "a copy leaves the original intact");
+        finish_transfer(&mut app);
+        let item = app.panes[1].vault.as_mut().unwrap().database
+            .find_child(1, "alpha.txt").unwrap().unwrap();
+        assert_eq!(app.panes[1].vault.as_mut().unwrap().database.read_file(item.id).unwrap(),
+            b"alpha.txt");
+        let folder_source = root.join("left/folder1");
+        app.handle_drop(1, vec![folder_source.clone()], current.join("nested"),
+            egui::Modifiers::default());
+        finish_transfer(&mut app);
+        let nested = app.panes[1].vault.as_mut().unwrap().database
+            .find_child(1, "nested").unwrap().unwrap().id;
+        assert!(app.panes[1].vault.as_mut().unwrap().database
+            .find_child(nested, "folder1").unwrap().is_some());
+        let moved = root.join("left/move-by-shift.txt");
+        std::fs::write(&moved, b"move safely").unwrap();
+        let mut shift = egui::Modifiers::default();
+        shift.shift = true;
+        app.handle_drop(1, vec![moved.clone()], current, shift);
+        assert!(moved.is_file(), "move must not delete before encrypted commit");
+        finish_transfer(&mut app);
+        assert!(!moved.exists(), "Shift+drop removes source after verified import");
+        let item = app.panes[1].vault.as_mut().unwrap().database
+            .find_child(1, "move-by-shift.txt").unwrap().unwrap();
+        assert_eq!(app.panes[1].vault.as_mut().unwrap().database.read_file(item.id).unwrap(),
+            b"move safely");
+        drop(app);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(feature = "winfsp-vault")]
+    #[test]
+    #[ignore = "requires installed WinFsp driver and a free drive letter; disposable vault only"]
+    fn unlocked_vault_full_drive_supports_explorer_and_ndr_transfer_without_warning() {
+        use std::io::Write;
+        let (root, ctx, mut app) =
+            super::super::tools_tests::fixture("full-vault-app-interop", "ko");
+        let path = root.join("right/full.ndr");
+        let mut database = Vault::create(&path, "interop test passphrase 2026".into()).unwrap();
+        database.add_file(1, "secret.txt", b"original").unwrap();
+        app.attach_vault(1, PaneVault::new(path.clone(), database));
+        let tree = super::super::vault_winfsp::VaultTreeMount::start(
+            path.clone(), &app.panes[1].vault.as_ref().unwrap().database,
+            std::sync::Arc::new(std::sync::Mutex::new(())), &[]).unwrap();
+        let drive = tree.mount_root.clone();
+        app.vault_trees.push(tree);
+        assert_eq!(std::fs::read(drive.join("secret.txt")).unwrap(), b"original");
+        // File from outside NDR copied onto the connected encrypted drive.
+        std::fs::copy(root.join("left/alpha.txt"), drive.join("imported.txt")).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            app.vault_mount_ui(&ctx);
+            if app.panes[1].entries.iter().any(|e| e.name == "imported.txt") { break; }
+            assert!(std::time::Instant::now() < deadline, "NDR did not refresh after Explorer copy");
+            std::thread::sleep(std::time::Duration::from_millis(30));
+        }
+        app.active = 1;
+        app.panes[1].cursor = app.panes[1].entries.iter()
+            .position(|e| e.name == "secret.txt").unwrap();
+        app.dispatch("copyToOther", &ctx);
+        assert!(app.msgboxes.is_empty(), "explicit F3 needs no plaintext warning");
+        finish_transfer(&mut app);
+        assert_eq!(std::fs::read(root.join("left/secret.txt")).unwrap(), b"original");
+        app.active = 1;
+        app.panes[1].cursor = app.panes[1].entries.iter()
+            .position(|e| e.name == "secret.txt").unwrap();
+        app.dispatch("copy", &ctx);
+        assert!(app.vault_clipboard.is_some());
+        app.begin_file_drag(1, app.panes[1].cursor, false, egui::Modifiers::default());
+        assert!(app.file_drag.as_ref().is_some_and(|drag|
+            drag.paths.iter().any(|p| p == &drive.join("secret.txt"))),
+            "outward drag must advertise a real WinFsp path, never the physical .ndr");
+        app.file_drag = None;
+        let mut held = std::fs::OpenOptions::new().read(true).write(true)
+            .open(drive.join("secret.txt")).unwrap();
+        app.vault_modify_metadata(1, |vault, folder| {
+            vault.add_folder(folder, "while-editor-open").map(|_| ())
+        }).unwrap();
+        held.write_all(b"updated").unwrap();
+        held.set_len(b"updated".len() as u64).unwrap();
+        held.sync_all().unwrap();
+        drop(held);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            app.vault_mount_ui(&ctx);
+            let state = app.panes[1].vault.as_mut().unwrap();
+            state.database.reload_after_mount().unwrap();
+            if state.database.read_file(state.database.find_child(1, "secret.txt").unwrap().unwrap().id)
+                .is_ok_and(|content| content == b"updated") { break; }
+            assert!(std::time::Instant::now() < deadline, "external edit did not save");
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        let state = app.panes[1].vault.as_mut().unwrap();
+        assert!(state.database.find_child(1, "while-editor-open").unwrap().is_some(),
+            "editing a different file must not erase NDR's new directory");
+        assert!(state.database.find_child(1, "imported.txt").unwrap().is_some(),
+            "editing a different file must not erase Explorer imports");
+        for tree in &mut app.vault_trees { tree.finish().unwrap(); }
+        app.vault_trees.clear();
         drop(app);
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -949,8 +1267,7 @@ mod tests {
         app.panes[1].cursor = app.panes[1].entries.iter()
             .position(|e| e.name == "export.txt").unwrap();
         app.dispatch("copyToOther", &ctx);
-        assert_eq!(app.msgboxes.len(), 1, "F3 copy confirmation must appear with a live mount");
-        app.answer_message_box(ndr::msgbox::IDYES, &ctx);
+        assert!(app.msgboxes.is_empty(), "F3 must not prompt while another file is open");
         finish_transfer(&mut app);
         assert_eq!(std::fs::read(root.join("left/export.txt")).unwrap(), b"export me");
         app.panes[1].cursor = app.panes[1].entries.iter()
@@ -964,8 +1281,7 @@ mod tests {
         app.panes[1].cursor = app.panes[1].entries.iter()
             .position(|e| e.name == "move.txt").unwrap();
         app.dispatch("moveToOther", &ctx);
-        assert_eq!(app.msgboxes.len(), 1, "F4 must confirm moving unrelated encrypted file");
-        app.answer_message_box(ndr::msgbox::IDYES, &ctx);
+        assert!(app.msgboxes.is_empty(), "F4 must not prompt for explicit move");
         finish_transfer(&mut app);
         assert_eq!(std::fs::read(root.join("left/move.txt")).unwrap(), b"move me");
         assert!(app.panes[1].vault.as_mut().unwrap().database
@@ -1164,7 +1480,6 @@ mod tests {
         app.panes[1].cursor = app.panes[1].entries.iter()
             .position(|entry| entry.name == "alpha.txt").unwrap();
         app.vault_export_to_other(1, false);
-        app.answer_message_box(ndr::msgbox::IDYES, &ctx);
         finish_transfer(&mut app);
         assert_eq!(std::fs::read(exported_folder.join("alpha.txt")).unwrap(), b"alpha.txt");
         assert_eq!(PLAYED.with(|p| p.borrow().len()), 3, "export should sound exactly once");
@@ -1226,7 +1541,6 @@ mod tests {
         app.panes[1].cursor = app.panes[1].entries.iter()
             .position(|entry| entry.name == "stream-24mb.bin").unwrap();
         app.vault_export_to_other(1, false);
-        app.answer_message_box(ndr::msgbox::IDYES, &ctx);
         app.vault_transfer.as_mut().unwrap().started = Instant::now() - Duration::from_millis(250);
         app.vault_transfer_tick(&ctx); // stage a unique temporary plaintext export
         app.vault_transfer_tick(&ctx); // write one 8 MiB plaintext chunk
@@ -1240,7 +1554,6 @@ mod tests {
         app.vault_transfer = None;
 
         app.vault_export_to_other(1, false);
-        app.answer_message_box(ndr::msgbox::IDYES, &ctx);
         finish_transfer(&mut app);
         assert_eq!(std::fs::metadata(out.join("stream-24mb.bin")).unwrap().len(),
             24 * 1024 * 1024 + 7);
@@ -1498,11 +1811,7 @@ mod tests {
         app.active = 0;
         app.panes[0].cursor = app.panes[0].entries.iter().position(|i| i.name == "documents").unwrap();
         app.dispatch("copyToOther", &ctx);
-        assert!(!app.msgboxes.is_empty());
-        app.answer_message_box(ndr::msgbox::IDNO, &ctx);
-        assert!(app.panes[1].vault.as_mut().unwrap().database.list(1).unwrap().is_empty());
-        app.dispatch("copyToOther", &ctx);
-        app.answer_message_box(ndr::msgbox::IDYES, &ctx);
+        assert!(app.msgboxes.is_empty(), "cross-vault F3 needs no security confirmation");
         finish_transfer(&mut app);
         let copied = app.panes[1].vault.as_mut().unwrap().database.list(1).unwrap();
         let folder_id = copied.iter().find(|v| v.name == "documents").unwrap().id;
@@ -1511,8 +1820,8 @@ mod tests {
         assert!(app.panes[0].vault.as_mut().unwrap().database.list(1).unwrap().iter().any(|v| v.name == "documents"));
         app.panes[0].cursor = app.panes[0].entries.iter().position(|i| i.name == "moving.txt").unwrap();
         app.dispatch("moveToOther", &ctx);
+        assert!(app.msgboxes.is_empty(), "cross-vault F4 needs no security confirmation");
         assert!(app.panes[0].vault.as_mut().unwrap().database.list(1).unwrap().iter().any(|v| v.name == "moving.txt"));
-        app.answer_message_box(ndr::msgbox::IDYES, &ctx);
         finish_transfer(&mut app);
         assert!(!app.panes[0].vault.as_mut().unwrap().database.list(1).unwrap().iter().any(|v| v.name == "moving.txt"));
         assert!(app.panes[1].vault.as_mut().unwrap().database.list(1).unwrap().iter().any(|v| v.name == "moving.txt"));
@@ -1521,8 +1830,8 @@ mod tests {
     }
 
     #[test]
-    fn f4_moves_local_file_into_vault_only_after_confirmed_import() {
-        let (root, ctx, mut app) = super::super::tools_tests::fixture("vault-move-in", "ko");
+    fn f4_moves_local_file_into_vault_only_after_encrypted_commit() {
+        let (root, _ctx, mut app) = super::super::tools_tests::fixture("vault-move-in", "ko");
         let container = root.join("right/moving.ndr");
         let database = Vault::create(&container, "strong password 123456".into()).unwrap();
         app.attach_vault(1, PaneVault::new(container, database));
@@ -1530,12 +1839,8 @@ mod tests {
         assert!(source.is_file());
         app.active = 0;
         app.vault_transfer_from_local(0, 1, vec![source.clone()], true);
-        assert!(source.is_file(), "confirmation must precede removal");
-        app.answer_message_box(ndr::msgbox::IDNO, &ctx);
-        assert!(source.is_file());
-        assert!(app.panes[1].vault.as_mut().unwrap().database.list(1).unwrap().is_empty());
-        app.vault_transfer_from_local(0, 1, vec![source.clone()], true);
-        app.answer_message_box(ndr::msgbox::IDYES, &ctx);
+        assert!(app.msgboxes.is_empty(), "F4 must not prompt for import");
+        assert!(source.is_file(), "move must not delete source before encrypted commit");
         finish_transfer(&mut app);
         assert!(!source.exists());
         let items = app.panes[1].vault.as_mut().unwrap().database.list(1).unwrap();
@@ -1546,8 +1851,8 @@ mod tests {
     }
 
     #[test]
-    fn f4_moves_vault_file_to_local_only_after_confirmed_export() {
-        let (root, ctx, mut app) = super::super::tools_tests::fixture("vault-move-out", "ko");
+    fn f4_moves_vault_file_to_local_only_after_plaintext_commit() {
+        let (root, _ctx, mut app) = super::super::tools_tests::fixture("vault-move-out", "ko");
         let container = root.join("right/moving.ndr");
         let mut database = Vault::create(&container, "strong password 123456".into()).unwrap();
         database.add_file(1, "private.txt", b"original secret").unwrap();
@@ -1557,11 +1862,9 @@ mod tests {
         let index = app.panes[1].entries.iter().position(|i| i.name == "private.txt").unwrap();
         app.panes[1].cursor = index;
         app.vault_export_to_other(1, true);
-        assert!(!destination.join("private.txt").exists());
-        app.answer_message_box(ndr::msgbox::IDNO, &ctx);
-        assert!(!app.panes[1].vault.as_mut().unwrap().database.list(1).unwrap().is_empty());
-        app.vault_export_to_other(1, true);
-        app.answer_message_box(ndr::msgbox::IDYES, &ctx);
+        assert!(app.msgboxes.is_empty(), "F4 move requires no security prompt");
+        assert!(!destination.join("private.txt").exists(),
+            "the source is not deleted or copied synchronously");
         finish_transfer(&mut app);
         assert_eq!(std::fs::read(destination.join("private.txt")).unwrap(), b"original secret");
         assert!(app.panes[1].vault.as_mut().unwrap().database.list(1).unwrap().is_empty());
@@ -1619,7 +1922,7 @@ mod tests {
     }
 
     #[test]
-    fn f3_copies_regular_files_and_folders_into_vault_and_exports_with_confirmation() {
+    fn f3_copies_regular_files_and_folders_into_vault_without_warning() {
         let (root, ctx, mut app) = super::super::tools_tests::fixture("vault-f5", "ko");
         let vault_file = root.join("right/safe.ndr");
         let database = Vault::create(&vault_file, "strong password 123456".into()).unwrap();
@@ -1664,9 +1967,7 @@ mod tests {
         let file_index = app.panes[1].entries.iter().position(|entry| entry.name == "alpha.txt").unwrap();
         app.panes[1].cursor = file_index;
         app.dispatch("copyToOther", &ctx);
-        assert!(!app.msgboxes.is_empty(), "plaintext export must require a confirmation");
-        assert!(!output.join("alpha.txt").exists(), "confirmation must precede plaintext export");
-        app.answer_message_box(ndr::msgbox::IDYES, &ctx);
+        assert!(app.msgboxes.is_empty(), "F3 is the user's explicit copy request");
         finish_transfer(&mut app);
         assert_eq!(std::fs::read(output.join("alpha.txt")).unwrap(), b"alpha.txt");
         assert!(vault_file.is_file());

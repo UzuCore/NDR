@@ -57,6 +57,10 @@ pub(super) struct VaultTransferJob {
     destination_name: Option<String>,
     replace: bool,
     pub(super) stream: Option<VaultStreamState>,
+    /// A transfer holds a short-lived authenticated write lease so Explorer
+    /// cannot publish a newer index between two 8 MiB UI frames.
+    #[cfg(feature = "winfsp-vault")]
+    writer_reservations: Vec<super::vault_winfsp::TransferReservation>,
 }
 
 impl App {
@@ -94,12 +98,35 @@ impl App {
                 }
             }
         }
+        #[cfg(feature = "winfsp-vault")]
+        let mut writer_reservations = Vec::new();
+        #[cfg(feature = "winfsp-vault")]
+        {
+            let mut reserved = std::collections::HashSet::new();
+            for file in source_container.iter().chain(target_container.iter()) {
+                if !reserved.insert(file.clone()) { continue; }
+                if let Some(tree) = self.vault_trees.iter().find(|mount|
+                    mount.vault_path == *file && !mount.is_revoked()) {
+                    match tree.reserve_transfer() {
+                        Ok(lease) => writer_reservations.push(lease),
+                        Err(error) => {
+                            self.status = self.vault_status(
+                                "암호화 파일 작업이 다른 프로그램과 겹쳤습니다. 잠시 후 다시 시도해 주세요.",
+                                &format!("Encrypted folder is busy: {error}"));
+                            return;
+                        }
+                    }
+                }
+            }
+        }
         self.vault_transfer = Some(VaultTransferJob {
             kind, source, target, from_folder, to_folder, names, source_paths: paths,
             source_container, target_container, source_display, target_display,
             moving, index: 0, copied: 0, skipped: 0, started: Instant::now(),
             finished: None, failed: None, cancelled: false, waiting_conflict: None,
             waiting_rename: None, destination_name: None, replace: false, stream: None,
+            #[cfg(feature = "winfsp-vault")]
+            writer_reservations,
         });
         self.egui_ctx.request_repaint();
     }
@@ -115,6 +142,13 @@ impl App {
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
                 Err(error) => Err(error.to_string()),
             };
+        }
+        #[cfg(feature = "winfsp-vault")]
+        if let Some(file) = self.panes[job.target].vault.as_ref().map(|v| v.file.clone()) {
+            if self.vault_trees.iter().any(|tree|
+                tree.vault_path == file && tree.is_open_item(job.to_folder, name)) {
+                return Err("Destination is open in another application; close it before replacing".into());
+            }
         }
         let pane = self.panes[job.target].vault.as_mut().ok_or("Destination encrypted container closed")?;
         pane.database.find_child(job.to_folder, name)
@@ -138,6 +172,8 @@ impl App {
     }
 
     fn vault_task_finish(&mut self, job: &mut VaultTransferJob) {
+        #[cfg(feature = "winfsp-vault")]
+        job.writer_reservations.clear(); // release write lease before UI refresh
         if job.kind == VaultTransferKind::Export && job.moving &&
             job.failed.is_none() && !job.cancelled && job.skipped == 0 &&
             job.copied == job.names.len() {
@@ -188,7 +224,11 @@ impl App {
                 if pane == job.source && job.kind != VaultTransferKind::Import && actual.folder() != job.from_folder {
                     return true;
                 }
-                if pane == job.target && job.kind != VaultTransferKind::Inside && actual.folder() != job.to_folder {
+                // Explorer may drop onto a child folder without navigating
+                // into it first. The captured authenticated destination ID
+                // is valid even when the visible pane remains at its parent.
+                if pane == job.target && job.kind != VaultTransferKind::Inside &&
+                    job.kind != VaultTransferKind::Import && actual.folder() != job.to_folder {
                     return true;
                 }
             }

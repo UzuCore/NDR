@@ -742,6 +742,9 @@ pub struct App {
     vault_sessions: HashMap<PathBuf, ndr::vault::Vault>,
     #[cfg(feature = "winfsp-vault")]
     vault_mounts: Vec<vault_winfsp::VaultMount>,
+    /// Authenticated whole-container filesystem mounts, one per unlocked .ndr.
+    #[cfg(feature = "winfsp-vault")]
+    vault_trees: Vec<vault_winfsp::VaultTreeMount>,
     vault_transfer: Option<vault_transfer_ui::VaultTransferJob>,
     // Only an in-app selection, never a CF_HDROP pointing at the .ndr file.
     vault_clipboard: Option<(usize, PathBuf, i64, Vec<String>, bool, u32)>,
@@ -1072,6 +1075,8 @@ impl App {
             vault_sessions: HashMap::new(),
             #[cfg(feature = "winfsp-vault")]
             vault_mounts: Vec::new(),
+            #[cfg(feature = "winfsp-vault")]
+            vault_trees: Vec::new(),
             vault_transfer: None,
             vault_clipboard: None,
             crumb_cache: HashMap::new(),
@@ -1978,6 +1983,17 @@ impl eframe::App for App {
             self.close_when_idle = false;
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
+        // Do not silently tear down the virtual drive while an external
+        // editor still holds an encrypted file handle or has uncommitted
+        // changes. The user may exit normally after those applications close.
+        #[cfg(feature = "winfsp-vault")]
+        if ctx.input(|i| i.viewport().close_requested()) &&
+            self.vault_trees.iter().any(|tree| !tree.can_disconnect()) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.status = self.vault_status(
+                "암호화 드라이브에 열린 파일이나 저장되지 않은 변경 사항이 있습니다. 외부 프로그램을 닫고 다시 종료해 주세요.",
+                "An encrypted drive has open files or unsaved changes. Close external applications before exiting.");
+        }
         // C# DiskCopyWindow OnClosing: no closing during disk work (image creation gets a cancel request).
         if ctx.input(|i| i.viewport().close_requested()) && self.disk_copy_blocks_close() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -2231,6 +2247,12 @@ impl eframe::App for App {
             }
         }
         self.vault_transfer = None;
+        #[cfg(feature = "winfsp-vault")]
+        for mut tree in self.vault_trees.drain(..) {
+            if let Err(error) = tree.finish() {
+                eprintln!("NDR WinFsp encrypted directory unmount at shutdown failed: {error}");
+            }
+        }
         for index in 0..2 { self.discard_vault(index); }
         self.vault_sessions.clear();
         if let Some(job) = &self.job {

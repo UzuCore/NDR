@@ -129,10 +129,15 @@ impl MountData {
 
     fn commit(&mut self) -> Result<(), String> {
         if !self.dirty { return Ok(()); }
-        // Different files may be edited concurrently. Their authenticated
-        // index updates must be serialized, and each writer must see the
-        // *latest* committed index to avoid losing another file's changes.
-        let _writer = self.writer_gate.lock().map_err(|e| e.to_string())?;
+        let gate = Arc::clone(&self.writer_gate);
+        let _writer = gate.lock().map_err(|e| e.to_string())?;
+        self.commit_with_gate()
+    }
+
+    /// Called by the complete-tree filesystem while its writer reservation
+    /// is already held. Never lock the same non-reentrant Mutex twice.
+    fn commit_with_gate(&mut self) -> Result<(), String> {
+        if !self.dirty { return Ok(()); }
         self.vault.reload_after_mount()?;
         // The original authenticated chunks must remain available even after
         // begin_stream_file logically replaces the old index entry.
@@ -617,3 +622,6 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 }
+
+mod tree;
+pub(super) use tree::{VaultTreeMount, TransferReservation};
