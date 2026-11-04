@@ -492,7 +492,7 @@ impl App {
         if self.panes[i].archive.is_some() {
             return self.warn("압축 파일이나 원격 폴더 안에서는 고급 이름 바꾸기를 쓸 수 없습니다.", "Advanced rename is not available inside an archive or a remote folder.");
         }
-        let paths = self.panes[i].targets();
+        let paths = self.command_targets(i);
         if paths.is_empty() {
             return;
         }

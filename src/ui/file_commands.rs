@@ -250,7 +250,7 @@ impl App {
         if items.is_empty() {
             return;
         }
-        let directory = self.panes[pane].path.clone();
+        let directory = self.command_directory(pane);
         self.description_step(pane, directory, items, 0);
     }
 
@@ -290,10 +290,13 @@ impl App {
 
     /// Both pane states for macro expansion (current folder, marked names, cursor item).
     pub(super) fn macro_panes(&self) -> [compat::MacroPane; 2] {
-        self.panes.each_ref().map(|p| compat::MacroPane {
-            path: p.path.clone(),
-            focused: p.entries.get(p.cursor).map(|e| e.name.clone()),
-            selected: p.selected.iter().filter_map(|i| p.entries.get(*i).map(|e| e.name.clone())).collect(),
+        std::array::from_fn(|i| {
+            let p=&self.panes[i];
+            compat::MacroPane {
+                path: self.command_directory(i),
+                focused: p.entries.get(p.cursor).map(|e| e.name.clone()),
+                selected: p.selected.iter().filter_map(|row| p.entries.get(*row).map(|e| e.name.clone())).collect(),
+            }
         })
     }
 
@@ -331,7 +334,7 @@ impl App {
         }
         let title = self.root_text("OPEN_WITH_PARAM", "Open with parameters");
         let message = self.root_text("MSG_OPEN_WITH_PARAM", "Type parameters to be used with this file execution\n<b>%s</b>").replace("%s", &focused.name);
-        let directory = self.panes[pane].path.clone();
+        let directory = self.command_directory(pane);
         self.prompt(&title, &message, "", None, false, move |app, value, _| {
             let Some(parameters) = value else { return };
             let panes = app.macro_panes();

@@ -401,7 +401,7 @@ impl App {
         if self.panes[i].archive.is_some() {
             return self.notice("압축 파일 안에서는 이름 검색을 사용할 수 없습니다.", "Name search is not available inside an archive.");
         }
-        let path = self.panes[i].path.to_string_lossy().into_owned();
+        let path = self.command_directory(i).to_string_lossy().into_owned();
         let custom2 = self.settings.strings("WorkingFolders").get(1).cloned().filter(|p| !p.trim().is_empty());
         let form = SearchForm::new(&path, &self.toolbar_query.clone(), &self.settings.strings("SavedSearchLocations"), &self.settings.strings("SavedSearchPatterns"), custom2);
         let title = self.search_title();

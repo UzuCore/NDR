@@ -332,7 +332,12 @@ impl App {
     /// Files of C# SelectedItems without folders (none on remote panes).
     fn selected_files(&self) -> SourceFiles {
         let pane = &self.panes[self.active];
-        let files = self.target_entries(self.active).into_iter().filter(|e| !e.is_dir).map(|e| (e.name.clone(), e.path.clone())).collect();
+        let directory = self.command_directory(self.active);
+        let files = self.target_entries(self.active).into_iter().filter(|e| !e.is_dir)
+            .map(|e| {
+                let path = if pane.vault.is_some() { directory.join(&e.name) } else { e.path };
+                (e.name, path)
+            }).collect();
         SourceFiles { archive: pane.archive.clone(), files }
     }
 
@@ -375,7 +380,10 @@ impl App {
             return;
         }
         let Some(entry) = pane.entries.get(pane.cursor).filter(|e| !e.is_dir) else { return };
-        let sources = SourceFiles { archive: pane.archive.clone(), files: vec![(entry.name.clone(), entry.path.clone())] };
+        let actual = if pane.vault.is_some() {
+            self.command_directory(self.active).join(&entry.name)
+        } else { entry.path.clone() };
+        let sources = SourceFiles { archive: pane.archive.clone(), files: vec![(entry.name.clone(), actual)] };
         let (caption, name) = match algorithm {
             ChecksumAlgorithm::Crc32 => ("CRC", "crc32"),
             ChecksumAlgorithm::Md5 => ("MD5", "md5"),

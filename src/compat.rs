@@ -1466,7 +1466,10 @@ fn move_no_replace(source: &Path, destination: &Path) -> Result<(), String> {
         windows_sys::Win32::Storage::FileSystem::MoveFileW(source.as_ptr(), destination.as_ptr())
     } == 0
     {
-        return Err(std::io::Error::last_os_error().to_string());
+        let error=std::io::Error::last_os_error();
+        return Err(format!("MoveFileW source={:?}, target={:?}: {error}",
+            String::from_utf16_lossy(&source[..source.len()-1]),
+            String::from_utf16_lossy(&destination[..destination.len()-1])));
     }
     Ok(())
 }
@@ -1501,12 +1504,36 @@ fn apply_renames_inner(
     let mut targets = HashSet::new();
     for (path, name) in paths.iter().zip(names) {
         validate_name(name)?;
-        let parent = fs::canonicalize(
-            path.parent()
-                .filter(|p| !p.as_os_str().is_empty())
-                .unwrap_or(Path::new(".")),
-        )
-        .map_err(|e| e.to_string())?;
+        let source_parent = path.parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or(Path::new("."));
+        let parent = match fs::canonicalize(source_parent) {
+            Ok(parent) => parent,
+            Err(error) => {
+                // Windows GetFinalPathNameByHandleW returns ERROR_UNRECOGNIZED_VOLUME
+                // (1005) on an authenticated WinFsp-mounted NDR drive, even
+                // when its real directory exists and normal Win32 rename works.
+                // For that specific condition only, use the already-absolute
+                // directory path after proving it is not a reparse point.
+                // Ordinary disk errors still fail closed as before.
+                #[cfg(windows)]
+                {
+                    use std::os::windows::fs::MetadataExt;
+                    let safe_virtual_parent = error.raw_os_error() == Some(1005)
+                        && source_parent.is_absolute()
+                        && fs::symlink_metadata(source_parent).is_ok_and(|m|
+                            m.is_dir() && m.file_attributes() & 0x400 == 0);
+                    if !safe_virtual_parent {
+                        return Err(format!("Canonicalizing parent of {} failed: {error}", path.display()));
+                    }
+                    source_parent.to_owned()
+                }
+                #[cfg(not(windows))]
+                {
+                    return Err(format!("Canonicalizing parent of {} failed: {error}", path.display()));
+                }
+            }
+        };
         let file_name = path.file_name().ok_or("Cannot rename a filesystem root")?;
         let source = parent.join(file_name);
         fs::symlink_metadata(&source).map_err(|e| format!("{}: {e}", source.display()))?;

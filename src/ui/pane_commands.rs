@@ -186,7 +186,7 @@ impl App {
         if self.panes[i].archive.is_some() {
             return self.warn("압축 파일 안에서는 속성을 바꿀 수 없습니다.", "Attributes cannot be changed inside an archive.");
         }
-        let paths = self.panes[i].targets();
+        let paths = self.command_targets(i);
         if paths.is_empty() {
             return self.warn("속성을 바꿀 파일이나 폴더를 선택하세요.", "Select the files or folders to change.");
         }
@@ -224,7 +224,10 @@ impl App {
 
     pub(super) fn finish_attributes(&mut self, run: AttributeRun) {
         let pane = &mut self.panes[run.pane];
-        let rows: Vec<usize> = pane.entries.iter().enumerate().filter(|(_, e)| run.processed.contains(&e.path)).map(|(row, _)| row).collect();
+        let rows: Vec<usize> = pane.entries.iter().enumerate()
+            .filter(|(_, e)| run.processed.iter().any(|path|
+                path.file_name().is_some_and(|name| name == e.name.as_str())))
+            .map(|(row, _)| row).collect();
         for row in rows {
             pane.selected.remove(&row);
         }

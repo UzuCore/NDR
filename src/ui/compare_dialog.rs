@@ -475,7 +475,12 @@ impl App {
             }
             return None;
         }
-        let (left, right) = (self.panes[0].path.clone(), self.panes[1].path.clone());
+        if !self.vault_has_filesystem(0) || !self.vault_has_filesystem(1) {
+            self.warn("암호화 폴더를 Windows 드라이브로 연결해 주세요.",
+                "Connect the unlocked encrypted folder through WinFsp first.");
+            return None;
+        }
+        let (left, right) = (self.command_directory(0), self.command_directory(1));
         if fc::ensure_distinct_roots(&left, &right).is_err() {
             self.warn(DISTINCT_KO, DISTINCT_EN);
             return None;

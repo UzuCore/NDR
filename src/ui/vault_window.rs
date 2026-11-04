@@ -236,6 +236,46 @@ impl App {
         }
     }
 
+    /// External filesystem commands need the authenticated WinFsp path, not
+    /// the virtual address under the .ndr container used for pane navigation.
+    pub(super) fn command_directory(&self, pane: usize) -> PathBuf {
+        #[cfg(feature = "winfsp-vault")]
+        if let Some(state) = self.panes[pane].vault.as_ref() {
+            if let Some(tree) = self.vault_trees.iter().find(|tree|
+                tree.vault_path == state.file && !tree.is_revoked()) {
+                if let Ok(relative) = state.database.relative_folder_path(state.folder()) {
+                    return tree.mount_root.join(relative);
+                }
+            }
+        }
+        self.panes[pane].path.clone()
+    }
+
+    pub(super) fn command_targets(&self, pane: usize) -> Vec<PathBuf> {
+        if self.panes[pane].vault.is_some() {
+            #[cfg(feature = "winfsp-vault")]
+            if self.vault_trees.iter().any(|tree| {
+                self.panes[pane].vault.as_ref().is_some_and(|v|
+                    tree.vault_path == v.file && !tree.is_revoked())
+            }) {
+                let directory = self.command_directory(pane);
+                return self.target_entries(pane).into_iter()
+                    .map(|entry| directory.join(entry.name)).collect();
+            }
+        }
+        self.panes[pane].targets()
+    }
+
+    pub(super) fn vault_has_filesystem(&self, pane: usize) -> bool {
+        if self.panes[pane].vault.is_none() { return true; }
+        #[cfg(feature = "winfsp-vault")]
+        return self.vault_trees.iter().any(|tree|
+            self.panes[pane].vault.as_ref().is_some_and(|state|
+                tree.vault_path == state.file && !tree.is_revoked()));
+        #[cfg(not(feature = "winfsp-vault"))]
+        false
+    }
+
     pub(super) fn refresh_vault(&mut self, pane: usize) {
         let policy = SessionPolicy::from_settings(&self.settings);
         let Some(container) = self.panes[pane].vault.as_mut() else { return };
@@ -247,24 +287,52 @@ impl App {
             return;
         }
         let current = container.virtual_path();
+        // All ordinary file operations consume Entry.path. When the session
+        // has a whole-directory WinFsp mount, make these paths REAL Windows
+        // paths directly. Keep the displayed address and navigation stack
+        // anchored to the authenticated vault's virtual address.
+        #[cfg(feature = "winfsp-vault")]
+        let working = self.vault_trees.iter().find(|tree|
+            tree.vault_path == container.file && !tree.is_revoked()).and_then(|tree|
+            container.database.relative_folder_path(container.folder())
+                .ok().map(|relative| tree.mount_root.join(relative)));
+        #[cfg(not(feature = "winfsp-vault"))]
+        let working: Option<PathBuf> = None;
         let parent = container.file.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
         let listing = container.database.list(container.folder());
         let entries = match listing {
             Ok(items) => {
                 let mut rows = vec![Entry::parent_item(parent, None)];
                 rows.extend(items.into_iter().map(|item| Entry {
-                    path: current.join(&item.name), name: item.name.clone(), is_dir: item.folder,
-                    size: item.size.max(0) as u64, modified: None, hidden: false,
-                    attributes: if item.folder { 0x10 } else { 0x80 }, drive: false,
+                    path: working.as_ref().unwrap_or(&current).join(&item.name),
+                    name: item.name.clone(), is_dir: item.folder,
+                    size: item.size.max(0) as u64,
+                    modified: (item.last_write_time >= 116_444_736_000_000_000).then(|| {
+                        std::time::UNIX_EPOCH + std::time::Duration::from_nanos(
+                            (item.last_write_time - 116_444_736_000_000_000)
+                                .saturating_mul(100))
+                    }),
+                    hidden: item.attributes & 0x2 != 0,
+                    attributes: item.attributes, drive: false,
                 }));
                 rows
             }
             Err(error) => { self.status = error; return; }
         };
+        let same_folder = self.panes[pane].listed.as_deref()
+            == Some(format!("vault|{}", current.display()).as_str());
+        // An external editor can commit a file and refresh the pane while
+        // the user is marking files with Space. Keep all surviving marks
+        // (by item name, not old row numbers) across such background refresh.
+        let selected_names: std::collections::HashSet<String> = if same_folder {
+            self.panes[pane].selected.iter()
+                .filter_map(|row| self.panes[pane].entries.get(*row))
+                .filter(|entry| !entry.is_parent())
+                .map(|entry| entry.name.clone()).collect()
+        } else { std::collections::HashSet::new() };
         let focus = self.pending_focus[pane].take().or_else(|| {
             let old = &self.panes[pane];
-            (old.listed.as_deref() == Some(format!("vault|{}", current.display()).as_str()))
-                .then(|| old.entries.get(old.cursor).map(|entry| entry.name.clone())).flatten()
+            same_folder.then(|| old.entries.get(old.cursor).map(|entry| entry.name.clone())).flatten()
         });
         let state = &mut self.panes[pane];
         state.generation = state.generation.wrapping_add(1);
@@ -281,6 +349,9 @@ impl App {
         state.folder_sizes.clear();
         state.folder_bytes.clear();
         self.sort_pane(pane);
+        self.panes[pane].selected = self.panes[pane].entries.iter().enumerate()
+            .filter(|(_, entry)| selected_names.contains(&entry.name))
+            .map(|(index, _)| index).collect();
         if let Some(name) = focus {
             if let Some(index) = self.panes[pane].entries.iter().position(|entry| entry.name == name) {
                 self.panes[pane].cursor = index;
@@ -954,9 +1025,14 @@ impl App {
         destination: &Path, moving: bool) {
         let Some(state) = self.panes[pane].vault.as_ref() else { return; };
         let current = state.virtual_path();
-        let folder = if destination == current {
+        // Both the displayed vault address and the real mounted drive are
+        // accepted. This prevents pane row drops from silently failing when
+        // Entry.path points to the authenticated Windows filesystem.
+        let mounted = self.vault_has_filesystem(pane).then(|| self.command_directory(pane));
+        let folder = if destination == current || mounted.as_deref() == Some(destination) {
             state.folder()
-        } else if destination.parent() == Some(current.as_path()) {
+        } else if destination.parent() == Some(current.as_path())
+            || mounted.as_ref().is_some_and(|path| destination.parent() == Some(path.as_path())) {
             let Some(name) = destination.file_name().and_then(|n| n.to_str()) else { return; };
             let Ok(Some(child)) = state.database.find_child(state.folder(), name) else { return; };
             if !child.folder { return; }
@@ -1093,6 +1169,11 @@ mod tests {
         app.panes[1].cursor = app.panes[1].entries.iter()
             .position(|e| e.name == "only-this.txt").unwrap();
         app.dispatch("copy", &ctx);
+        assert_eq!(app.archive_menu_state().item("paste"), (true, true),
+            "the Edit menu must enable Paste after Ctrl+C inside an unlocked vault");
+        assert!(app.list_menu_items(1).iter().flatten().any(|(_, id, enabled)|
+            *id == "paste" && *enabled),
+            "the vault right-click menu must not disable Paste");
         let (pane, file, folder, names, cut, _) = app.vault_clipboard.as_ref().unwrap();
         assert_eq!(*pane, 1);
         assert_eq!(*file, path);
@@ -1167,6 +1248,289 @@ mod tests {
         assert_eq!(app.panes[1].vault.as_mut().unwrap().database.read_file(item.id).unwrap(),
             b"move safely");
         drop(app);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unlocked_vault_space_and_other_selection_shortcuts_work() {
+        let (root, ctx, mut app) =
+            super::super::tools_tests::fixture("vault-keyboard-selection", "ko");
+        let path = root.join("right/keys.ndr");
+        let mut vault = Vault::create(&path, "keyboard test passphrase".into()).unwrap();
+        vault.add_file(1, "first.txt", b"a").unwrap();
+        vault.add_file(1, "second.txt", b"b").unwrap();
+        vault.add_file(1, "third.txt", b"c").unwrap();
+        app.attach_vault(1, PaneVault::new(path, vault));
+        app.active = 1;
+        let first = app.panes[1].entries.iter().position(|e| e.name == "first.txt").unwrap();
+        app.panes[1].cursor = first;
+        app.dispatch("select", &ctx); // Space
+        assert!(app.panes[1].selected.contains(&first), "Space must mark current file");
+        let second = app.panes[1].cursor;
+        assert_ne!(second, first, "Space must move cursor to next file");
+        app.dispatch("select", &ctx);
+        assert!(app.panes[1].selected.contains(&second), "second Space must mark another file");
+        assert_eq!(app.panes[1].selected.len(), 2);
+        app.dispatch("invertSelection", &ctx);
+        assert!(!app.panes[1].selected.contains(&first));
+        app.dispatch("selectAll", &ctx);
+        // It may cycle all-file marks or clear depending on earlier marks;
+        // exercising it in a vault must never produce a blocked-command error.
+        assert!(!app.status.contains("not available"));
+        drop(app);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unlocked_vault_space_multiselect_f8_deletes_selected_files() {
+        let (root, ctx, mut app) =
+            super::super::tools_tests::fixture("vault-space-f8-multidelete", "ko");
+        let path = root.join("right/multidelete.ndr");
+        let mut vault = Vault::create(&path, "space delete test password".into()).unwrap();
+        for name in ["first.txt", "second.txt", "untouched.txt"] {
+            vault.add_file(1, name, name.as_bytes()).unwrap();
+        }
+        app.attach_vault(1, PaneVault::new(path, vault));
+        app.active = 1;
+        let first = app.panes[1].entries.iter().position(|e| e.name == "first.txt").unwrap();
+        app.panes[1].cursor = first;
+        app.dispatch("select", &ctx);
+        app.dispatch("select", &ctx);
+        assert_eq!(app.panes[1].selected.len(), 2, "Space must mark two files");
+        let selected_names: Vec<_> = app.panes[1].selected.iter().map(|&i|
+            app.panes[1].entries[i].name.clone()).collect();
+        // External editor saves should not wipe the user's active marks.
+        app.refresh_vault(1);
+        assert_eq!(app.panes[1].selected.len(), 2,
+            "a background filesystem refresh must preserve selected names");
+        app.dispatch("deletePermanent", &ctx);
+        assert_eq!(app.msgboxes.len(), 1, "F8 should confirm selected deletion");
+        app.answer_message_box(ndr::msgbox::IDYES, &ctx);
+        let state = app.panes[1].vault.as_mut().unwrap();
+        for name in selected_names {
+            assert!(state.database.find_child(1, &name).unwrap().is_none(),
+                "selected file was not deleted: {name}");
+        }
+        assert!(state.database.find_child(1, "untouched.txt").unwrap().is_some());
+        drop(app);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(feature = "winfsp-vault")]
+    #[test]
+    #[ignore = "requires installed WinFsp driver and a free drive letter; disposable vault only"]
+    fn unlocked_vault_advanced_rename_and_archive_extract_update_encrypted_data() {
+        use super::super::original_dialogs::DialogKind;
+        let (root, ctx, mut app) =
+            super::super::tools_tests::fixture("vault-advanced-rename-unzip", "ko");
+        let seven = std::env::current_dir().unwrap().join("Resources/Tools/7zip/7za.exe");
+        assert!(seven.is_file(), "bundled 7-Zip required for archive interop test");
+        std::fs::write(root.join("left/payload.txt"), b"decompress inside vault").unwrap();
+        let local_zip = root.join("left/to-extract.zip");
+        let output = std::process::Command::new(&seven)
+            .arg("a").arg("-tzip").arg("-y")
+            .arg(&local_zip).arg("payload.txt")
+            .current_dir(root.join("left")).output().unwrap();
+        assert!(output.status.success(), "7za create fixture: {}", String::from_utf8_lossy(&output.stderr));
+        let encrypted = root.join("right/tools.ndr");
+        let mut database = Vault::create(&encrypted, "tools test password 2026".into()).unwrap();
+        database.add_file(1, "alpha.txt", b"a").unwrap();
+        database.add_file(1, "beta.txt", b"b").unwrap();
+        database.add_file(1, "to-extract.zip", &std::fs::read(&local_zip).unwrap()).unwrap();
+        app.attach_vault(1, PaneVault::new(encrypted.clone(), database));
+        let tree = super::super::vault_winfsp::VaultTreeMount::start(
+            encrypted.clone(), &app.panes[1].vault.as_ref().unwrap().database,
+            std::sync::Arc::new(std::sync::Mutex::new(())), &[]).unwrap();
+        let drive = tree.mount_root.clone();
+        app.vault_trees.push(tree);
+        app.active = 1;
+        app.panes[1].selected = app.panes[1].entries.iter().enumerate()
+            .filter(|(_, entry)| entry.name == "alpha.txt" || entry.name == "beta.txt")
+            .map(|(row, _)| row).collect();
+        app.dispatch("advancedRename", &ctx);
+        let form = match &app.original_dialogs.last().expect("advanced rename dialog").kind {
+            DialogKind::AdvancedRename(form) => form,
+            _ => panic!("vault advanced rename must show the normal rename dialog"),
+        };
+        assert_eq!(form.paths.len(), 2);
+        assert!(form.paths.iter().all(|path| path.starts_with(&drive)));
+        app.edit_dialog_kind(|kind| if let DialogKind::AdvancedRename(form) = kind {
+            form.editor.action = "Insert".into();
+            form.editor.position = "Prefix".into();
+            form.editor.text = "new_".into();
+        });
+        app.add_rename_rule();
+        app.commit_advanced_rename();
+        assert_eq!(app.msgboxes.len(), 1);
+        app.answer_message_box(ndr::msgbox::IDYES, &ctx);
+        if !app.original_dialogs.is_empty() {
+            eprintln!("ADVANCED RENAME ERROR: {}", app.msgboxes.iter()
+                .map(|dialog| dialog.text.as_str()).collect::<Vec<_>>().join(" | "));
+        }
+        assert!(app.original_dialogs.is_empty(), "advanced rename must commit");
+        assert!(drive.join("new_alpha.txt").is_file());
+        assert!(drive.join("new_beta.txt").is_file());
+        assert!(!drive.join("alpha.txt").exists());
+        assert!(!drive.join("beta.txt").exists());
+        app.refresh_vault(1);
+        app.panes[1].selected.clear();
+        app.panes[1].cursor = app.panes[1].entries.iter()
+            .position(|entry| entry.name == "to-extract.zip").unwrap();
+        app.dispatch("extractCurrent", &ctx);
+        assert!(app.job.is_some(),
+            "vault extraction did not start: status={} messageboxes={:?}",
+            app.status, app.msgboxes.iter().map(|d| d.text.as_str()).collect::<Vec<_>>());
+        let limit = std::time::Instant::now() + std::time::Duration::from_secs(40);
+        while app.job.as_ref().is_some_and(|job| !job.finished) {
+            assert!(std::time::Instant::now() < limit,
+                "decompression to the mounted encrypted folder timed out");
+            app.poll(&ctx);
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        app.poll(&ctx);
+        if !drive.join("payload.txt").is_file() {
+            let outcome=app.job.as_ref().map(|job| format!(
+                "job finished={} fatal={:?} errors={:?}",
+                job.finished, job.fatal, job.errors));
+            panic!("vault extraction did not create payload: status={} job={:?} messages={:?}",
+                app.status, outcome, app.msgboxes.iter().map(|d|d.text.as_str()).collect::<Vec<_>>());
+        }
+        app.vault_mount_ui(&ctx);
+        assert_eq!(std::fs::read(drive.join("payload.txt")).unwrap(),
+            b"decompress inside vault", "decompression must write into the authenticated virtual directory");
+        let state = app.panes[1].vault.as_mut().unwrap();
+        state.database.reload_after_mount().unwrap();
+        let extracted = state.database.find_child(1,"payload.txt").unwrap().unwrap();
+        assert_eq!(state.database.read_file(extracted.id).unwrap(), b"decompress inside vault");
+        let renamed = state.database.find_child(1,"new_alpha.txt").unwrap().unwrap();
+        assert_eq!(state.database.read_file(renamed.id).unwrap(), b"a");
+        let zipped=drive.join("from-vault.zip");
+        ndr::archive::create(
+            &[drive.join("new_alpha.txt"), drive.join("payload.txt")],
+            &zipped, None, &std::sync::atomic::AtomicBool::new(false))
+            .unwrap_or_else(|error| panic!("create ZIP from encrypted folder: {error}"));
+        assert!(zipped.is_file(), "ZIP output must be written inside the encrypted virtual drive");
+        let contents=ndr::archive::list(&zipped,None)
+            .unwrap_or_else(|error| panic!("read ZIP created inside encrypted folder: {error}"));
+        assert!(contents.iter().any(|entry|entry.key=="payload.txt"));
+        assert!(contents.iter().any(|entry|entry.key=="new_alpha.txt"));
+        let state=&mut app.panes[1].vault.as_mut().unwrap().database;
+        state.reload_after_mount().unwrap();
+        assert!(state.find_child(1,"from-vault.zip").unwrap().is_some(),
+            "new ZIP must be persisted inside authenticated vault index");
+        for tree in &mut app.vault_trees { tree.finish().unwrap(); }
+        app.vault_trees.clear();
+        drop(app);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(feature = "winfsp-vault")]
+    #[test]
+    #[ignore = "requires installed WinFsp driver and a free drive letter; disposable vault only"]
+    fn unlocked_vault_attribute_dialog_writes_authenticated_metadata() {
+        use std::os::windows::fs::MetadataExt;
+        use super::super::original_dialogs::{DialogKind, AttributeAction};
+        let (root, ctx, mut app) =
+            super::super::tools_tests::fixture("vault-attributes-app", "ko");
+        let encrypted=root.join("right/attr.ndr");
+        let mut vault=Vault::create(&encrypted,"attributes app password 2026".into()).unwrap();
+        vault.add_file(1,"normal.txt",b"normal content").unwrap();
+        app.attach_vault(1,PaneVault::new(encrypted.clone(),vault));
+        let tree=super::super::vault_winfsp::VaultTreeMount::start(
+            encrypted.clone(),&app.panes[1].vault.as_ref().unwrap().database,
+            std::sync::Arc::new(std::sync::Mutex::new(())),&[]).unwrap();
+        let working=tree.mount_root.clone();
+        app.vault_trees.push(tree);
+        app.refresh_vault(1);
+        app.active=1;
+        app.panes[1].cursor=app.panes[1].entries.iter()
+            .position(|entry| entry.name=="normal.txt").unwrap();
+        assert_eq!(app.panes[1].entries[app.panes[1].cursor].path,
+            working.join("normal.txt"),"vault list must use the genuine Windows path");
+        app.dispatch("attributes",&ctx);
+        assert!(matches!(app.original_dialogs.last().map(|d|&d.kind),
+            Some(DialogKind::Attributes(_))),
+            "unlocked vault must show the standard NDR attributes dialog");
+        app.edit_attribute_form(|form|{
+            form.read_only=Some(true);
+            form.hidden=Some(true);
+            form.change_time=true;
+            form.date=chrono::NaiveDate::from_ymd_opt(2020,1,2).unwrap();
+            form.time=chrono::NaiveTime::from_hms_opt(3,4,5).unwrap();
+        });
+        app.submit_attributes(AttributeAction::Apply,&ctx);
+        let deadline=std::time::Instant::now()+std::time::Duration::from_secs(20);
+        loop {
+            app.poll(&ctx);
+            let metadata=std::fs::metadata(working.join("normal.txt")).unwrap();
+            if metadata.file_attributes() & 3 == 3 { break; }
+            assert!(std::time::Instant::now()<deadline,
+                "NDR attributes dialog did not apply to the mounted encrypted file");
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        let expected=chrono::NaiveDate::from_ymd_opt(2020,1,2).unwrap()
+            .and_hms_opt(3,4,5).unwrap().and_local_timezone(chrono::Local).earliest().unwrap();
+        let metadata=std::fs::metadata(working.join("normal.txt")).unwrap();
+        assert_eq!(metadata.modified().unwrap(),std::time::SystemTime::from(expected));
+        app.vault_mount_ui(&ctx);
+        let item=app.panes[1].vault.as_mut().unwrap().database
+            .find_child(1,"normal.txt").unwrap().unwrap();
+        assert_eq!(item.attributes & 3,3);
+        for tree in &mut app.vault_trees { tree.finish().unwrap(); }
+        app.vault_trees.clear();
+        drop(app);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(feature = "winfsp-vault")]
+    #[test]
+    #[ignore = "requires installed WinFsp driver and a free drive letter; disposable vault only"]
+    fn unlocked_vault_delete_via_ndr_toolbar_and_explorer_is_persistent() {
+        let (root, ctx, mut app) =
+            super::super::tools_tests::fixture("vault-deletion-with-tree", "ko");
+        let path = root.join("right/deletion.ndr");
+        let mut database = Vault::create(&path, "deletion test password 2026".into()).unwrap();
+        database.add_file(1, "keep.txt", b"keep this").unwrap();
+        database.add_file(1, "remove.txt", b"remove this").unwrap();
+        let sub = database.add_folder(1, "remove-folder").unwrap();
+        database.add_file(sub, "inside.txt", b"inside").unwrap();
+        app.attach_vault(1, PaneVault::new(path.clone(), database));
+        let tree = super::super::vault_winfsp::VaultTreeMount::start(
+            path.clone(), &app.panes[1].vault.as_ref().unwrap().database,
+            std::sync::Arc::new(std::sync::Mutex::new(())), &[]).unwrap();
+        let drive = tree.mount_root.clone();
+        app.vault_trees.push(tree);
+        app.active = 1;
+        for name in ["remove.txt", "remove-folder"] {
+            app.panes[1].cursor = app.panes[1].entries.iter()
+                .position(|entry| entry.name == name).expect("selected item in vault panel");
+            app.dispatch("deleteToolbar", &ctx);
+            assert_eq!(app.msgboxes.len(), 1, "confirmation should appear for {name}");
+            app.answer_message_box(ndr::msgbox::IDYES, &ctx);
+            let state = app.panes[1].vault.as_mut().unwrap();
+            state.database.reload_after_mount().unwrap();
+            assert!(state.database.find_child(1, name).unwrap().is_none(),
+                "NDR toolbar deletion failed for {name}: status={}", app.status);
+            assert!(!drive.join(name).exists(),
+                "Explorer should no longer see NDR-deleted {name}");
+        }
+        assert_eq!(std::fs::read(drive.join("keep.txt")).unwrap(), b"keep this");
+        std::fs::remove_file(drive.join("keep.txt")).unwrap();
+        let limit = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            app.vault_mount_ui(&ctx);
+            let state = app.panes[1].vault.as_mut().unwrap();
+            state.database.reload_after_mount().unwrap();
+            if state.database.find_child(1, "keep.txt").unwrap().is_none() { break; }
+            assert!(std::time::Instant::now() < limit, "Explorer deletion did not persist");
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        for tree in &mut app.vault_trees { tree.finish().unwrap(); }
+        app.vault_trees.clear();
+        drop(app);
+        let mut reopened = Vault::unlock(&path, "deletion test password 2026".into()).unwrap();
+        assert!(reopened.list(1).unwrap().is_empty(), "all removals must survive vault reopening");
+        drop(reopened);
         std::fs::remove_dir_all(root).unwrap();
     }
 

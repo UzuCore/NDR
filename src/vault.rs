@@ -40,7 +40,11 @@ impl SessionPolicy {
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct VaultItem { pub id: i64, pub name: String, pub folder: bool, pub size: i64 }
+pub struct VaultItem {
+    pub id: i64, pub name: String, pub folder: bool, pub size: i64,
+    pub attributes: u32, pub creation_time: u64, pub last_access_time: u64,
+    pub last_write_time: u64, pub change_time: u64,
+}
 impl Drop for VaultItem { fn drop(&mut self) { self.name.zeroize(); } }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -49,11 +53,30 @@ struct Block { offset: u64, size: u32 }
 struct Item {
     id: i64, parent: i64, name: String, folder: bool, size: u64,
     blocks: Vec<Block>,
+    // Backward-compatible optional authenticated metadata. Older NDRV3
+    // indexes omit these fields; they remain readable without migration.
+    #[serde(default)]
+    attributes: u32,
+    #[serde(default)]
+    creation_time: u64,
+    #[serde(default)]
+    last_access_time: u64,
+    #[serde(default)]
+    last_write_time: u64,
+    #[serde(default)]
+    change_time: u64,
 }
 impl Item {
     fn public(&self) -> Result<VaultItem, String> {
         Ok(VaultItem { id: self.id, name: self.name.clone(), folder: self.folder,
-            size: i64::try_from(self.size).map_err(|_| "File size overflow")? })
+            size: i64::try_from(self.size).map_err(|_| "File size overflow")?,
+            attributes: if self.attributes == 0 {
+                if self.folder { 0x10 } else { 0x20 }
+            } else { self.attributes },
+            creation_time: self.creation_time,
+            last_access_time: self.last_access_time,
+            last_write_time: self.last_write_time,
+            change_time: self.change_time })
     }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -68,7 +91,9 @@ impl Drop for Index {
 impl Index {
     fn empty() -> Self {
         let mut items = BTreeMap::new();
-        items.insert(1, Item { id: 1, parent: 0, name: String::new(), folder: true, size: 0, blocks: vec![] });
+        items.insert(1, Item { id: 1, parent: 0, name: String::new(), folder: true,
+            size: 0, blocks: vec![], attributes: 0x10, creation_time: 0,
+            last_access_time: 0, last_write_time: 0, change_time: 0 });
         Self { next_id: 2, items }
     }
     fn check(&self) -> Result<(), String> {
@@ -155,6 +180,14 @@ pub struct Vault {
     generation: u64, pending: Option<Index>, opened: Instant, last_used: Instant,
     gate: Option<VaultGate>,
 }
+/// Windows FILETIME (100 ns ticks from 1601-01-01 UTC).
+fn current_filetime() -> u64 {
+    const EPOCH: u64 = 116_444_736_000_000_000;
+    let duration = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    EPOCH.saturating_add((duration.as_nanos() / 100).min(u64::MAX as u128) as u64)
+}
+
 fn valid_name(name: &str) -> Result<(), String> {
     if name.is_empty() || name == "." || name == ".." || name.len() > 255 || name.trim() != name
         || name.chars().any(|c| c.is_control() || "/\\:*?\"<>|".contains(c)) {
@@ -468,7 +501,10 @@ impl Vault {
         if self.child(parent,name).is_some(){return Err(format!("Destination already exists: {name}"));}
         let id=self.index.next_id;
         self.index.next_id=id.checked_add(1).ok_or("Encrypted item ID overflow")?;
-        self.index.items.insert(id,Item{id,parent,name:name.into(),folder,size:0,blocks:Vec::new()});
+        let now = current_filetime();
+        self.index.items.insert(id,Item{id,parent,name:name.into(),folder,
+            size:0,blocks:Vec::new(), attributes:if folder {0x10} else {0x20},
+            creation_time:now, last_access_time:now, last_write_time:now, change_time:now});
         Ok(id)
     }
     fn subtree(&self,id:i64) -> Result<Vec<i64>,String> {
@@ -499,9 +535,48 @@ impl Vault {
         items.sort_by(|a,b|b.folder.cmp(&a.folder).then_with(||a.name.to_lowercase().cmp(&b.name.to_lowercase())));
         Ok(items)
     }
+    pub fn entry_info(&self,id:i64)->Result<VaultItem,String>{self.item(id)?.public()}
     pub fn find_child(&self,parent:i64,name:&str)->Result<Option<VaultItem>,String>{
         self.folder(parent)?;self.child(parent,name).map(Item::public).transpose()
     }
+    /// Windows file attributes and timestamps stored INSIDE the authenticated
+    /// encrypted index. Zero times, zero attributes or INVALID_FILE_ATTRIBUTES
+    /// (u32::MAX, emitted by WinFsp for timestamp-only operations) mean
+    /// "leave attributes unchanged".
+    /// The directory bit is immutable; filesystem metadata cannot turn a
+    /// directory into a regular file or bypass authenticated access.
+    pub fn set_basic_info(&mut self, id:i64, attrs:u32,
+        created:u64, accessed:u64, written:u64, changed:u64) -> Result<(),String> {
+        let entry=self.item(id)?;
+        let old=entry.public()?;
+        // WinFsp sends INVALID_FILE_ATTRIBUTES (0xffffffff) when it only
+        // changes timestamps (e.g. CopyFileW). Never mask this sentinel into
+        // READONLY | HIDDEN | SYSTEM | ARCHIVE: the resulting copy would be
+        // impossible to delete with ordinary Windows/NDR file operations.
+        let allowed=0x1 | 0x2 | 0x4 | 0x20 | 0x80;
+        let attrs=if attrs == u32::MAX || attrs & allowed==0 { old.attributes } else {
+            // Keep user-settable bits only; separate driver reparse/EFS
+            // operations stay unsupported and cannot be introduced here.
+            let mut safe=attrs & allowed;
+            if safe & !0x80 != 0 { safe &= !0x80; }
+            if entry.folder && safe==0x80 { safe=0; }
+            safe | if entry.folder {0x10} else {0}
+        };
+        if attrs==old.attributes && (created==0 || created==old.creation_time)
+            && (accessed==0 || accessed==old.last_access_time)
+            && (written==0 || written==old.last_write_time)
+            && (changed==0 || changed==old.change_time) { return Ok(()); }
+        self.transaction(|this|{
+            let e=this.index.items.get_mut(&id).ok_or("Encrypted item missing")?;
+            e.attributes=attrs;
+            if created!=0 { e.creation_time=created; }
+            if accessed!=0 { e.last_access_time=accessed; }
+            if written!=0 { e.last_write_time=written; }
+            if changed!=0 { e.change_time=changed; }
+            Ok(())
+        })
+    }
+
     pub fn parent(&self,id:i64)->Result<i64,String>{
         let item=self.item(id)?;if !item.folder{return Err("Encrypted item is not a folder".into());}Ok(item.parent)
     }
@@ -527,6 +602,14 @@ impl Vault {
         if depth>64{return Err("Encrypted folder depth exceeded".into());}
         let source=self.item(source_id)?.clone();
         let id=self.new_item(to,name,source.folder)?;
+        {
+            let item=self.index.items.get_mut(&id).unwrap();
+            item.attributes=source.attributes;
+            item.creation_time=source.creation_time;
+            item.last_access_time=source.last_access_time;
+            item.last_write_time=source.last_write_time;
+            item.change_time=source.change_time;
+        }
         if !source.folder{
             let item=self.index.items.get_mut(&id).unwrap();
             item.size=source.size;
@@ -544,6 +627,14 @@ impl Vault {
         if depth>64{return Err("Encrypted folder depth exceeded".into());}
         let entry=source.item(source_id)?;
         let id=self.new_item(to,name,entry.folder)?;
+        {
+            let copy=self.index.items.get_mut(&id).unwrap();
+            copy.attributes=entry.attributes;
+            copy.creation_time=entry.creation_time;
+            copy.last_access_time=entry.last_access_time;
+            copy.last_write_time=entry.last_write_time;
+            copy.change_time=entry.change_time;
+        }
         if !entry.folder{
             let mut copied=Vec::with_capacity(entry.blocks.len());
             for block in &entry.blocks{
@@ -621,6 +712,19 @@ impl Vault {
         self.transaction(|this|{this.replace(to,target_name,replace)?;this.other_tree(source,id,to,target_name,0)})
     }
     pub fn add_folder(&mut self,parent:i64,name:&str)->Result<i64,String>{self.transaction(|this|this.new_item(parent,name,true))}
+    pub fn add_mounted_entry(&mut self,parent:i64,name:&str,folder:bool,attributes:u32)->Result<i64,String>{
+        self.transaction(|this|{
+            let id=this.new_item(parent,name,folder)?;
+            let allowed=0x1|0x2|0x4|0x20|0x80;
+            let mut attr=attributes & allowed;
+            if attr & !0x80 != 0 {attr&=!0x80;}
+            if folder && attr==0x80 {attr=0;}
+            this.index.items.get_mut(&id).unwrap().attributes=
+                (if attr==0 && !folder {0x20} else {attr}) |
+                if folder {0x10} else {0};
+            Ok(id)
+        })
+    }
     pub fn add_file(&mut self,parent:i64,name:&str,data:&[u8])->Result<i64,String>{
         if data.len()>MAX_FILE_SIZE{return Err("File exceeds in-memory editing safety limit".into());}
         self.transaction(|this|{
@@ -637,7 +741,20 @@ impl Vault {
         if self.pending.is_some(){return Err("Another encrypted stream is open".into());}
         valid_name(name)?;self.folder(parent)?;
         let old=self.index.clone();
-        let result=(||{self.replace(parent,name,replace)?;self.new_item(parent,name,false)})();
+        let result=(||{
+            let previous=self.child(parent,name).cloned();
+            self.replace(parent,name,replace)?;
+            let id=self.new_item(parent,name,false)?;
+            if let Some(original)=previous {
+                let item=self.index.items.get_mut(&id).unwrap();
+                item.attributes=original.attributes;
+                item.creation_time=original.creation_time;
+                item.last_access_time=original.last_access_time;
+                item.last_write_time=original.last_write_time;
+                item.change_time=original.change_time;
+            }
+            Ok(id)
+        })();
         match result{
             Ok(id)=>{self.pending=Some(old);Ok(id)}
             Err(error)=>{self.index=old;Err(error)}
@@ -1034,6 +1151,48 @@ mod tests {
         drop(unlocked);
         fs::remove_dir_all(root).unwrap();
     }
+    #[test]
+    fn winfsp_invalid_attributes_sentinel_keeps_normal_copy_deletable() {
+        let root=fixture("winfsp-attribute-sentinel");
+        let path=root.join("attributes.ndr");
+        let mut vault=Vault::create(&path, "attribute sentinel password 2026".into()).unwrap();
+        let file=vault.add_file(1,"copy.txt",b"sample").unwrap();
+        let folder=vault.add_folder(1,"directory").unwrap();
+        let now=current_filetime();
+        vault.set_basic_info(file, u32::MAX,0,0,now,now).unwrap();
+        vault.set_basic_info(folder, u32::MAX,0,0,now,now).unwrap();
+        assert_eq!(vault.entry_info(file).unwrap().attributes,0x20,
+            "timestamp-only copy must not turn a normal file into readonly/system/hidden");
+        assert_eq!(vault.entry_info(folder).unwrap().attributes,0x10);
+        vault.set_basic_info(file,0x23,0,0,0,0).unwrap();
+        assert_eq!(vault.entry_info(file).unwrap().attributes,0x23);
+        vault.set_basic_info(file,u32::MAX,0,0,now+100,now+100).unwrap();
+        assert_eq!(vault.entry_info(file).unwrap().attributes,0x23,
+            "timestamp-only write must preserve explicitly selected attributes");
+        vault.set_basic_info(file,0x20,0,0,0,0).unwrap();
+        assert_eq!(vault.entry_info(file).unwrap().attributes,0x20);
+        drop(vault);
+        let reopened=Vault::unlock(&path,"attribute sentinel password 2026".into()).unwrap();
+        assert_eq!(reopened.entry_info(file).unwrap().attributes,0x20);
+        drop(reopened);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn authenticated_index_reads_older_items_without_metadata_fields() {
+        let record:Item=serde_json::from_str(
+            r#"{"id":2,"parent":1,"name":"original.txt","folder":false,"size":0,"blocks":[]}"#
+        ).unwrap();
+        assert_eq!(record.attributes,0);
+        let item=record.public().unwrap();
+        assert_eq!(item.attributes,0x20);
+        assert_eq!(item.last_write_time,0);
+        let folder:Item=serde_json::from_str(
+            r#"{"id":3,"parent":1,"name":"folder","folder":true,"size":0,"blocks":[]}"#
+        ).unwrap();
+        assert_eq!(folder.public().unwrap().attributes,0x10);
+    }
+
     #[test]
     fn authenticated_mount_reader_does_not_move_shared_writer_file_cursor() {
         // Reproduced on Windows: seek_read(3) on a File::try_clone() advances

@@ -138,6 +138,8 @@ impl App {
             return match std::fs::symlink_metadata(&path) {
                 Ok(meta) => Ok(Some(ndr::vault::VaultItem {
                     id: 0, name: name.into(), folder: meta.is_dir(), size: meta.len() as i64,
+                    attributes: if meta.is_dir() { 0x10 } else { 0x20 },
+                    creation_time: 0, last_access_time: 0, last_write_time: 0, change_time: 0,
                 })),
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
                 Err(error) => Err(error.to_string()),

@@ -325,11 +325,11 @@ impl App {
         if self.panes[i].archive.is_some() || self.panes[i].remote.is_some() {
             return;
         }
-        let inputs: Vec<PathBuf> = self.panes[i].targets().into_iter().filter(|p| !p.is_dir()).collect();
+        let inputs: Vec<PathBuf> = self.command_targets(i).into_iter().filter(|p| !p.is_dir()).collect();
         if inputs.is_empty() {
             return;
         }
-        let base = self.panes[i].path.clone();
+        let base = self.command_directory(i);
         let mut form = JoinForm { files: vec![], selected: None, join_text: false, name: ndr::split::suggest_joined_file_name(&inputs[0]) };
         for input in &inputs {
             form.add(input);

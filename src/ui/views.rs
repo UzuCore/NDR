@@ -119,10 +119,13 @@ impl App {
 
     pub(super) fn file_icon(&mut self, ctx: &egui::Context, index: usize, row: usize) -> Option<egui::TextureHandle> {
         let entry = self.panes[index].entries.get(row)?;
-        // SQLCipher rows have synthetic paths; never ask the Windows shell to
-        // resolve them. Render by logical type instead (including subfolders).
+        // The authenticated vault exposes real WinFsp paths, but shell icon
+        // resolution can be expensive. Use the same per-extension icon cache
+        // as other panes without hitting the encrypted disk on every row.
         if self.panes[index].vault.is_some() {
-            return self.path_icon(ctx, Path::new("A"), entry.is_dir);
+            let name=entry.name.clone();
+            let directory=entry.is_dir;
+            return self.path_icon(ctx, Path::new(&name), directory);
         }
         // Original ".." item: DrawListItem (0x7d8f58) first draws GetIconIndex(name, attributes) (relative name = SHGFI_USEFILEATTRIBUTES, the folder icon),
         // then the image thread (StartImageThread 0x7defc8, Execute 0x7de870, FUN_007dd51c) replaces it in a local pane with the shell icon of the parent

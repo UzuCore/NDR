@@ -118,7 +118,7 @@ impl App {
         let selected = self.panes[i].archive.is_none() && self.target_entries(i).iter().any(|e| !e.is_dir && ndr::archive::archive_format(&e.path).is_some());
         let current = self.panes[i].archive.as_ref().is_some_and(|l| l.file.is_file());
         // Rust also pastes archive items through the NDR internal clipboard, so those count as pasteable too.
-        let paste = self.clipboard.is_some() || native::clipboard_has_files();
+        let paste = self.vault_clipboard.is_some() || self.clipboard.is_some() || native::clipboard_has_files();
         let restore = !self.last_selection[i].is_empty();
         let last_destination = !self.settings.text("LastDestination", "").trim().is_empty();
         let ftp_active = self.panes[i].remote.is_some();
@@ -182,11 +182,14 @@ impl App {
             let keys = items.iter().filter(|e| !e.is_dir).map(|e| (e.name.clone(), e.path.to_string_lossy().into_owned())).collect();
             return self.spawn_archive_open(i, location, keys, false);
         }
-        let directory = self.panes[i].path.clone();
+        let directory = self.command_directory(i);
         let mut rows = self.settings.strings("ExecutableHistory");
         for item in &items {
-            ndr::command_line::remember_opened_executable(&mut rows, &item.path.to_string_lossy());
-            let _ = (self.shell_runner)(&item.path, "", &directory);
+            let actual = if self.panes[i].vault.is_some() {
+                directory.join(&item.name)
+            } else { item.path.clone() };
+            ndr::command_line::remember_opened_executable(&mut rows, &actual.to_string_lossy());
+            let _ = (self.shell_runner)(&actual, "", &directory);
         }
         self.settings.set_strings("ExecutableHistory", rows);
     }
@@ -310,7 +313,7 @@ impl App {
     /// order (no target check, silently replaced), then relists. No notice.
     pub(super) fn paste_shortcut_command(&mut self) {
         let i = self.active;
-        let folder = self.panes[i].path.clone();
+        let folder = self.command_directory(i);
         if self.panes[i].archive.is_some() || !folder.is_dir() {
             return;
         }
@@ -384,7 +387,7 @@ impl App {
             }
             return;
         }
-        let paths: Vec<PathBuf> = self.target_entries(i).into_iter().filter(|e| !e.drive).map(|e| e.path).collect();
+        let paths: Vec<PathBuf> = self.command_targets(i);
         if !paths.is_empty() {
             if let Err(error) = (self.system.properties)(&paths) {
                 self.status = error;

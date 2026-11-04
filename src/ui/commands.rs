@@ -129,7 +129,12 @@ impl App {
         let pane=&self.panes[self.active];
         let indices=ndr::parity::collect_items(pane.entries.len(),&pane.selected,(!pane.loading).then_some(pane.cursor));
         let archive_file=pane.archive.as_ref().map(|a|a.file.to_string_lossy().into_owned());
-        let strings:Vec<(String,String)>=indices.iter().filter_map(|i|pane.entries.get(*i)).map(|e|(e.path.to_string_lossy().into_owned(),e.name.clone())).collect();
+        let working = self.command_directory(self.active);
+        let strings:Vec<(String,String)>=indices.iter().filter_map(|i|pane.entries.get(*i))
+            .filter(|e| !e.is_parent()).map(|e|(
+                if pane.vault.is_some() { working.join(&e.name).to_string_lossy().into_owned() }
+                else { e.path.to_string_lossy().into_owned() },
+                e.name.clone())).collect();
         let items:Vec<ndr::parity::ItemPath>=strings.iter().map(|(path,name)|{
             if let Some(archive)=&archive_file{ndr::parity::ItemPath::Archive{archive,key:path,name}}
             else{ndr::parity::ItemPath::Local(path)}
@@ -648,12 +653,59 @@ impl App {
                 "open" | "textView" | "textEdit" | "contextView" | "contextEdit" => return self.open_current(),
                 "goParent" => return self.parent(),
                 "refresh" => return self.refresh(self.active),
-                "toggleDual" | "viewAuto" | "viewDetails" | "viewNames" | "viewThumbnails" |
-                "options" | "shortcuts" | "exit" | "toggleFolderInfoBar" | "toggleFileInfoBar" => (),
+                // These commands operate on pane rows/marks or the UI, not
+                // physical entry paths. The exact same keyboard shortcuts
+                // must continue to work after authenticating a vault.
+                "select" | "selectAll" | "invertSelection" | "advancedSelect" |
+                "advancedDeselect" | "selectSameName" | "selectSameExt" |
+                "restoreSelection" | "toggleDual" | "viewAuto" | "viewDetails" |
+                "viewNames" | "viewThumbnails" | "toggleHidden" |
+                "toggleFolderInfoBar" | "toggleFileInfoBar" |
+                "toggleExtensionInfoBar" | "toggleFolderTree" | "toggleFolders" |
+                "toggleToolBar" | "toggleFunctionBar" | "toggleVerticalBar" |
+                "toggleDriveButtons" | "options" | "shortcuts" | "exit" |
+                "back" | "forward" | "historyBack" | "historyForward" |
+                "goRoot" | "goLastDestination" | "find" | "findNext" |
+                "newTab" | "closeTab" | "openInNewTab" |
+                "desktop" | "documents" | "pictures" | "music" |
+                "videos" | "downloads" | "temp" | "about" | "help" |
+                "homepage" | "showInfo" | "filter" => (),
+                // File-based commands require the authenticated virtual
+                // drive, not a pseudo path beneath the physical .ndr file.
+                "advancedRename" | "batchRename" |
+                "extractSelected" | "extractCurrent" | "extractNewFolder" |
+                "extractAuto" | "extractToolbar" | "contextAutoExtract" |
+                "archiveAdd" | "archiveMove" | "contextArchiveAdd" |
+                "createArchive" | "createZip" | "checksum" |
+                "archiveProperties" | "properties" | "attributes" | "contextAttributes" | "copyFullPath" |
+                "copyPathOnly" | "copyName" | "copyFolder" |
+                "explorerMenu" | "openAll" |
+                "description" | "contextDescription" | "clearDescriptions" |
+                "calculateFolderSize" | "saveList" | "split" | "join" | "merge" |
+                "search" | "openWith" | "openWithParameters" |
+                "command" | "shortcut" | "pasteShortcut" => {
+                    if !self.vault_has_filesystem(self.active) {
+                        self.status = self.vault_status(
+                            "암호화 파일 작업을 위해 WinFsp 가상 드라이브가 필요합니다. 드라이브 연결 상태를 확인해 주세요.",
+                            "Connect the unlocked encrypted folder through WinFsp to use this command.");
+                        return;
+                    }
+                }
                 _ if id.starts_with("sort:") || id.starts_with("folderSort:") => (),
+                _ if id.starts_with("checksum:") && self.vault_has_filesystem(self.active) => (),
                 _ => {
-                    self.status = "암호화 폴더에서는 내부 파일 명령만 사용할 수 있습니다.".into();
-                    return;
+                    // A valid unlocked WinFsp directory is a regular writable
+                    // Windows filesystem to every standard NDR command. Do
+                    // not introduce another per-command whitelist: those
+                    // blocks break custom keyboard shortcuts and menus.
+                    // Without a mount, retain the safety guard against
+                    // passing pseudo '.ndr/filename' paths to Windows.
+                    if !self.vault_has_filesystem(self.active) {
+                        self.status = self.vault_status(
+                            "암호화 폴더를 Windows 드라이브로 연결해야 이 작업을 사용할 수 있습니다.",
+                            "This command requires the unlocked WinFsp virtual drive.");
+                        return;
+                    }
                 }
             }
         }
@@ -729,8 +781,8 @@ impl App {
         if REMEMBERS.contains(&id) {
             self.remember_marks();
         }
-        let targets = self.panes[i].targets();
-        let path = self.panes[i].path.clone();
+        let targets = self.command_targets(i);
+        let path = self.command_directory(i);
         let mut result = Ok(());
         if id.contains(':') && self.sort_command(id) {
             return;
@@ -854,7 +906,7 @@ impl App {
             "options"=>self.open_settings_window(),
             "newVault"=> {
                 if self.panes[self.active].archive.is_none() && self.panes[self.active].remote.is_none() {
-                    self.open_vault(self.panes[self.active].path.join("새 암호화 폴더.ndr"), true);
+                    self.open_vault(self.command_directory(self.active).join("새 암호화 폴더.ndr"), true);
                 }
             },
             "importLegacy"=>self.import_legacy_command(),
@@ -922,7 +974,7 @@ impl App {
             self.status = self.tr("압축 파일이나 원격 폴더에서는 설명을 지울 수 없습니다.", "Comments cannot be cleared inside an archive or a remote folder.").into();
             return;
         }
-        let folder = self.panes[pane].path.clone();
+        let folder = self.command_directory(pane);
         if !folder.join("descript.dat").is_file() {
             return;
         }

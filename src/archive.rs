@@ -14,6 +14,38 @@ use std::{
     time::Duration,
 };
 
+/// Windows GetFinalPathNameByHandleW cannot canonicalize authenticated
+/// WinFsp drives (error 1005), even though their files and directories
+/// exist and are accessible to ordinary Windows file APIs.
+/// Normal volumes preserve the existing canonical path behavior. On this
+/// specific WinFsp error, use the absolute input path only after verifying
+/// that none of its existing ancestors is a reparse point.
+fn resolve_archive_path(path: &Path) -> Result<PathBuf, String> {
+    match fs::canonicalize(path) {
+        Ok(resolved) => Ok(resolved),
+        Err(error) => {
+            #[cfg(windows)]
+            if error.raw_os_error()==Some(1005) && path.is_absolute() {
+                ensure_plain_path(path)?;
+                let metadata=fs::symlink_metadata(path).map_err(|e| e.to_string())?;
+                if !is_reparse(&metadata) {
+                    return Ok(path.to_path_buf());
+                }
+            }
+            Err(format!("Cannot canonicalize archive path {}: {error}", path.display()))
+        }
+    }
+}
+
+/// Extraction and archives staged beside an existing filesystem root must
+/// stay on the SAME volume. In particular, Z:\ has no parent: defaulting to
+/// the process working directory would leak decrypted temporary bytes from
+/// an encrypted WinFsp drive onto the physical development folder.
+fn stage_parent(destination: &Path) -> &Path {
+    destination.parent().filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| if destination.has_root() { destination } else { Path::new(".") })
+}
+
 #[derive(Debug, Clone)]
 pub struct ArchiveEntry {
     pub key: String,
@@ -197,7 +229,14 @@ pub fn create_with_progress(
         .filter(|p| !p.as_os_str().is_empty())
         .unwrap_or(Path::new("."));
     ensure_plain_path(parent)?;
-    let temporary = std::env::temp_dir();
+    let temporary = if parent.is_absolute()
+        && fs::canonicalize(parent).is_err_and(|e| e.raw_os_error()==Some(1005))
+    {
+        // WinFsp virtual directory: snapshot stays encrypted in the vault.
+        parent.to_path_buf()
+    } else {
+        std::env::temp_dir()
+    };
     ensure_plain_path(&temporary)?;
     let snapshot = unique_path(&temporary, "archive-input");
     fs::create_dir(&snapshot).map_err(|e| e.to_string())?;
@@ -206,7 +245,7 @@ pub fn create_with_progress(
         let mut names = HashSet::new();
         let mut source_paths = Vec::new();
         for source in sources {
-            let canonical = fs::canonicalize(source).map_err(|e| e.to_string())?;
+            let canonical = resolve_archive_path(source).map_err(|e| e.to_string())?;
             if snapshot.starts_with(&canonical) {
                 return Err("Archive staging directory lies inside a selected source".into());
             }
@@ -225,7 +264,7 @@ pub fn create_with_progress(
             source_paths.push(target);
         }
         fs::create_dir(&output_stage).map_err(|e| e.to_string())?;
-        let output_stage_abs = fs::canonicalize(&output_stage).map_err(|e| e.to_string())?;
+        let output_stage_abs = resolve_archive_path(&output_stage).map_err(|e| e.to_string())?;
         let archive = output_stage_abs.join(expected);
         // Add: copy the existing archive to a staging folder and add to that copy (the original stays intact on failure).
         if options.append && output.is_file() && wrapped.is_none() {
@@ -235,7 +274,7 @@ pub fn create_with_progress(
             permissions.set_readonly(false);
             fs::set_permissions(&archive, permissions).map_err(|e| e.to_string())?;
         }
-        let snapshot_abs = fs::canonicalize(&snapshot).map_err(|e| e.to_string())?;
+        let snapshot_abs = resolve_archive_path(&snapshot).map_err(|e| e.to_string())?;
         let source_paths: Vec<_> = source_paths
             .iter()
             .map(|p| snapshot_abs.join(p.file_name().unwrap_or_default()))
@@ -261,7 +300,7 @@ pub fn create_with_progress(
                 let unpack = snapshot_abs.join(".ndr-inner");
                 fs::create_dir(&unpack).map_err(|e| e.to_string())?;
                 let mut x = command()?;
-                x.args(["e", "-y", "-sccUTF-8", "-snl-"]).arg(format!("-o{}", unpack.display())).arg("--").arg(fs::canonicalize(output).map_err(|e| e.to_string())?);
+                x.args(["e", "-y", "-sccUTF-8", "-snl-"]).arg(format!("-o{}", unpack.display())).arg("--").arg(resolve_archive_path(output).map_err(|e| e.to_string())?);
                 execute(x, cancel)?;
                 let inner = fs::read_dir(&unpack).map_err(|e| e.to_string())?.filter_map(Result::ok).map(|e| e.path()).find(|p| p.is_file()).ok_or("The existing archive holds no TAR")?;
                 fs::rename(&inner, &tar).map_err(|e| e.to_string())?;
@@ -374,7 +413,7 @@ fn command() -> Result<Command, String> {
 }
 fn program_command(program: Option<&ExternalProgram>) -> Result<Command, String> {
     let executable = match program {
-        Some(p) => fs::canonicalize(&p.program)
+        Some(p) => resolve_archive_path(&p.program)
             .map_err(|e| format!("Cannot open configured archive program: {e}"))?,
         None => seven_zip_path()?,
     };
@@ -722,7 +761,7 @@ fn list_details(
         return Err(format!("Archive format not supported by bundled 7-Zip: {}", archive.display()));
     }
     ensure_plain_path(archive)?;
-    let archive = fs::canonicalize(archive).map_err(|e| e.to_string())?;
+    let archive = resolve_archive_path(archive).map_err(|e| e.to_string())?;
     let mut cmd = command()?;
     cmd.args(["l", "-slt", "-ba", "-sccUTF-8"]);
     password_arg(&mut cmd, password)?;
@@ -1074,10 +1113,7 @@ fn commit_aggregate(
     if !destination.is_dir() {
         return Err("Extraction destination is not a directory".into());
     }
-    let parent = destination
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
+    let parent = stage_parent(destination);
     let backup = unique_path(parent, "backup");
     fs::create_dir(&backup).map_err(|e| e.to_string())?;
     let mut commit = Commit {
@@ -1124,16 +1160,13 @@ pub fn extract_with_conflicts(
     check_cancel(cancel)?;
     ensure_plain_path(destination)?;
     let (entries, _, iso9660_fallback, skipped_devices) = list_details(archive, password, cancel)?;
-    let parent = destination
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
+    let parent = stage_parent(destination);
     ensure_plain_path(parent)?;
     fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     let stage = unique_path(parent, "extract");
     fs::create_dir(&stage).map_err(|e| e.to_string())?;
-    let archive = fs::canonicalize(archive).map_err(|e| e.to_string())?;
-    let stage_absolute = fs::canonicalize(&stage).map_err(|e| e.to_string())?;
+    let archive = resolve_archive_path(archive).map_err(|e| e.to_string())?;
+    let stage_absolute = resolve_archive_path(&stage).map_err(|e| e.to_string())?;
     let result = (|| {
         let mut cmd = command()?;
         cmd.args(["x", "-y", "-sccUTF-8", "-snl-", "-spd"])
@@ -1414,7 +1447,7 @@ fn modify_archive(archive: &Path, cancel: &AtomicBool, run: impl FnOnce(&Path) -
     if !can_modify(archive) {
         return Err("This archive format cannot be changed in place".into());
     }
-    let archive = fs::canonicalize(archive).map_err(|e| e.to_string())?;
+    let archive = resolve_archive_path(archive).map_err(|e| e.to_string())?;
     ensure_plain_path(&archive)?;
     let parent = archive.parent().ok_or("Archive has no folder")?.to_path_buf();
     let name = archive.file_name().ok_or("Archive has no name")?.to_owned();
@@ -1731,7 +1764,7 @@ pub fn add_entries_with(
         } else {
             vec![prefix.split('/').next().unwrap_or(prefix).to_owned()]
         };
-        let snapshot_abs = fs::canonicalize(&snapshot).map_err(|e| e.to_string())?;
+        let snapshot_abs = resolve_archive_path(&snapshot).map_err(|e| e.to_string())?;
         let removals = removals.iter().map(|k| entry_arg(k)).collect::<Result<Vec<_>, _>>()?;
         modify_archive(archive, cancel, |copy| {
             if !removals.is_empty() {
@@ -1866,7 +1899,7 @@ pub fn extract_entry_to_temp(archive: &Path, password: Option<&str>, key: &str, 
     fs::create_dir(&folder).map_err(|e| e.to_string())?;
     // Fixed: when extraction fails (wrong password, cancel etc.) the created folder is removed. Previously a folder was left behind for every failed attempt.
     let result = (|| {
-        let archive = fs::canonicalize(archive).map_err(|e| e.to_string())?;
+        let archive = resolve_archive_path(archive).map_err(|e| e.to_string())?;
         // Opening an item must use the same ISO9660 fallback as the archive
         // pane. For non-ISO archives avoid the extra listing pass.
         let iso9660_fallback = archive_format(&archive).as_deref() == Some("iso")
@@ -2021,14 +2054,14 @@ pub fn extract_interactive_with_program(
 pub fn extract_whole_with_program(archive: &Path, destination: &Path, password: Option<&str>, program: &ExternalProgram, cancel: &AtomicBool) -> Result<(), String> {
     check_cancel(cancel)?;
     ensure_plain_path(destination)?;
-    let archive = fs::canonicalize(archive).map_err(|e| e.to_string())?;
-    let parent = destination.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    let archive = resolve_archive_path(archive).map_err(|e| e.to_string())?;
+    let parent = stage_parent(destination);
     ensure_plain_path(parent)?;
     fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     let stage = unique_path(parent, "whole");
     fs::create_dir(&stage).map_err(|e| e.to_string())?;
     let result = (|| {
-        let stage_absolute = fs::canonicalize(&stage).map_err(|e| e.to_string())?;
+        let stage_absolute = resolve_archive_path(&stage).map_err(|e| e.to_string())?;
         let mut cmd = program_command(Some(program))?;
         cmd.current_dir(&stage_absolute);
         cmd.args(crate::commands::build_archive_extract_args(&archive, &stage_absolute, password.unwrap_or(""), &[], program.extract_template.as_deref(), true)?);
@@ -2116,7 +2149,7 @@ pub fn extract_entries_with_program(
         return Err(format!("Archive format not supported by bundled 7-Zip: {}", archive.display()));
     }
     ensure_plain_path(destination)?;
-    let archive = fs::canonicalize(archive).map_err(|e| e.to_string())?;
+    let archive = resolve_archive_path(archive).map_err(|e| e.to_string())?;
     let mut header_password = initial_password.map(str::to_owned);
     let (entries, encrypted, iso9660_fallback, _skipped_devices) = loop {
         match list_details(&archive, header_password.as_deref(), cancel) {
@@ -2183,10 +2216,7 @@ pub fn extract_entries_with_program(
     }
     let total = entries.len();
     progress(0, total, "");
-    let parent = destination
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
+    let parent = stage_parent(destination);
     ensure_plain_path(parent)?;
     fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     let aggregate = unique_path(parent, "aggregate");
@@ -2249,7 +2279,7 @@ pub fn extract_entries_with_program(
                 break;
             }
             let decoded = (|| {
-                let attempt_absolute = fs::canonicalize(&attempt).map_err(|e| e.to_string())?;
+                let attempt_absolute = resolve_archive_path(&attempt).map_err(|e| e.to_string())?;
                 let mut cmd = program_command(program)?;
                 cmd.current_dir(&attempt_absolute);
                 if let Some(program) = program {

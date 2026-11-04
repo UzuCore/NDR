@@ -298,7 +298,7 @@ impl App {
         if p.archive.is_some() {
             return vec![];
         }
-        p.targets()
+        self.command_targets(self.active)
     }
 
     /// archiveAdd / archiveMove / createArchive / createZip.
@@ -329,7 +329,7 @@ impl App {
         let volume_labels = split("ComboBox.cbVolume", "No Volume;1440 KB;2880 KB;5 MB;10 MB;20 MB;50 MB;100 MB");
         // Original miArcAddToArchiveClick (0x43a7f8): cbFileName = default name (the item name for one item, otherwise the folder name), extension from the chosen format
         // (rbFormatClick). Changed (user request): the other pane folder + name row is not added (always created in the current folder).
-        let current = self.panes[self.active].path.clone();
+        let current = self.command_directory(self.active);
         let name = default_archive_name(&paths, &current, &formats[format].extension);
         let form = ArchiveCreateForm {
             formats,
@@ -401,7 +401,7 @@ impl App {
             Err(error) => return self.system_box("NDR", &error, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {}),
         };
         let extension = choice.format.extension.clone();
-        let folder = self.panes[self.active].path.clone();
+        let folder = self.command_directory(self.active);
         let upper = extension.to_uppercase();
         let (title, filter_name, filter_spec, name) = match kind {
             ArchiveKind::Zip => (
@@ -629,12 +629,17 @@ impl App {
             return;
         }
         let selected = self.target_entries(i);
+        let command_folder = self.command_directory(i);
         let archives: Vec<PathBuf> = match &in_archive {
             Some(location) => vec![archive::first_volume_path(&location.file)],
             None => {
                 let mut list: Vec<PathBuf> = vec![];
-                for entry in selected.iter().filter(|e| !e.is_dir && archive::archive_format(&e.path).is_some()) {
-                    let first = archive::first_volume_path(&entry.path);
+                for entry in selected.iter().filter(|e| !e.is_dir) {
+                    let selected_path = if self.panes[i].vault.is_some() {
+                        command_folder.join(&entry.name)
+                    } else { entry.path.clone() };
+                    if archive::archive_format(&selected_path).is_none() { continue; }
+                    let first = archive::first_volume_path(&selected_path);
                     if !list.iter().any(|p| ndr::names::equals_ignore_case(&p.to_string_lossy(), &first.to_string_lossy())) {
                         list.push(first);
                     }
@@ -657,8 +662,10 @@ impl App {
         let parent = archives[0].parent().map(Path::to_path_buf).unwrap_or_default();
         if mode == ExtractMode::Selected || in_archive.is_some() {
             let other = &self.panes[1 - i];
-            let initial = if other.archive.is_none() { other.path.clone() } else { parent };
-            let current = self.panes[i].path.clone();
+            let initial = if other.archive.is_none() {
+                self.command_directory(1 - i)
+            } else { parent };
+            let current = self.command_directory(i);
             return self.select_destination(super::destination_dialog::DestinationPurpose::Extract, initial, Some(current), move |app, base| {
                 app.run_extract(archives, keys, password, base, mode);
             });
@@ -760,7 +767,8 @@ impl App {
         let i = self.active;
         let archive_path = match &self.panes[i].archive {
             Some(location) => Some(location.file.clone()),
-            None => self.target_entries(i).into_iter().find(|e| !e.is_dir && archive::archive_format(&e.path).is_some()).map(|e| e.path),
+            None => self.command_targets(i).into_iter()
+                .find(|path| archive::archive_format(path).is_some()),
         };
         let Some(archive_path) = archive_path else {
             return self.warn("속성을 볼 압축 파일을 열거나 선택하세요.", "Open or select an archive to see its properties.");

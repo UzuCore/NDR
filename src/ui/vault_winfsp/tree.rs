@@ -46,7 +46,9 @@ impl TreeData {
 
     fn lookup(&self, path: &str) -> winfsp::Result<VaultItem> {
         if path.is_empty() || path == "\\" {
-            return Ok(VaultItem { id: 1, name: String::new(), folder: true, size: 0 });
+            return Ok(VaultItem { id: 1, name: String::new(), folder: true, size: 0,
+                attributes: 0x10, creation_time: 0, last_access_time: 0,
+                last_write_time: 0, change_time: 0 });
         }
         let mut current = 1;
         let mut last = None;
@@ -144,14 +146,32 @@ impl TreeFs {
         }
     }
 
+    fn info_item(item: &VaultItem, size: u64) -> FileInfo {
+        let mut info=Self::info(item.id, item.folder, size);
+        info.file_attributes=item.attributes;
+        info.creation_time=item.creation_time;
+        info.last_access_time=item.last_access_time;
+        info.last_write_time=item.last_write_time;
+        info.change_time=item.change_time;
+        info
+    }
+
     fn stat_handle(&self, handle: &TreeHandle) -> winfsp::Result<FileInfo> {
-        match handle {
-            TreeHandle::Directory(id) => Ok(Self::info(*id, true, 0)),
+        let (id, size) = match handle {
+            TreeHandle::Directory(id) => (*id, 0),
             TreeHandle::File { state, .. } => {
-                let file = state.lock().map_err(|_| fs_error(INTERNAL_ERROR))?;
-                Ok(Self::info(file.id, false, file.size))
+                let file=state.lock().map_err(|_| fs_error(INTERNAL_ERROR))?;
+                (file.id, file.size)
             }
-        }
+        };
+        let mut shared=self.state.lock().map_err(|_| fs_error(INTERNAL_ERROR))?;
+        // Flush/Close can commit a new authenticated index and replace a
+        // file's internal id. Refresh this cached view before stat'ing that
+        // open handle or Windows receives a false ERROR_FILE_NOT_FOUND on
+        // FlushFileBuffers, even though the editor's save succeeded.
+        shared.refresh()?;
+        let item=shared.vault.entry_info(id).map_err(|_| fs_error(NOT_FOUND))?;
+        Ok(Self::info_item(&item, size))
     }
 
     fn with_file<R>(&self, context: &TreeHandle,
@@ -219,7 +239,7 @@ impl FileSystemContext for TreeFs {
         shared.refresh()?;
         let node = shared.lookup(&file_name.to_string_lossy())?;
         Ok(FileSecurity { reparse: false, sz_security_descriptor: 0,
-            attributes: if node.folder { 0x10 } else { 0x20 } })
+            attributes: node.attributes })
     }
 
     fn open(&self, file_name: &U16CStr, _options: u32,
@@ -235,10 +255,10 @@ impl FileSystemContext for TreeFs {
             TreeHandle::File { state: file, deleted: AtomicBool::new(false) }
         };
         let info = match &handle {
-            TreeHandle::Directory(_) => Self::info(node.id, true, 0),
+            TreeHandle::Directory(_) => Self::info_item(&node, 0),
             TreeHandle::File { state, .. } => {
                 let file = state.lock().map_err(|_| fs_error(INTERNAL_ERROR))?;
-                Self::info(file.id, false, file.size)
+                Self::info_item(&node, file.size)
             }
         };
         shared.open_handles += 1;
@@ -262,10 +282,8 @@ impl FileSystemContext for TreeFs {
         if shared.vault.find_child(parent, &name).map_err(|_| fs_error(INTERNAL_ERROR))?.is_some() {
             return Err(fs_error(NAME_COLLISION));
         }
-        let id = shared.metadata_write(|vault| {
-            if folder { vault.add_folder(parent, &name) }
-            else { vault.add_file(parent, &name, b"") }
-        })?;
+        let id = shared.metadata_write(|vault|
+            vault.add_mounted_entry(parent, &name, folder, attrs))?;
         let handle = if folder {
             TreeHandle::Directory(id)
         } else {
@@ -276,7 +294,8 @@ impl FileSystemContext for TreeFs {
             TreeHandle::File { state: data, deleted: AtomicBool::new(false) }
         };
         shared.open_handles += 1;
-        *file_info.as_mut() = Self::info(id, folder, 0);
+        let item = shared.vault.entry_info(id).map_err(|_| fs_error(INTERNAL_ERROR))?;
+        *file_info.as_mut() = Self::info_item(&item, 0);
         Ok(handle)
     }
 
@@ -374,10 +393,24 @@ impl FileSystemContext for TreeFs {
         Ok(())
     }
 
-    fn set_basic_info(&self, handle: &TreeHandle, _attributes: u32,
-        _created: u64, _accessed: u64, _written: u64, _changed: u64,
+    fn set_basic_info(&self, handle: &TreeHandle, attributes: u32,
+        created: u64, accessed: u64, written: u64, changed: u64,
         out: &mut FileInfo) -> winfsp::Result<()> {
-        *out = self.stat_handle(handle)?;
+        let id = match handle {
+            TreeHandle::Directory(id) => *id,
+            TreeHandle::File { state, deleted } => {
+                if deleted.load(Ordering::Acquire) { return Err(fs_error(NOT_FOUND)); }
+                state.lock().map_err(|_| fs_error(INTERNAL_ERROR))?.id
+            }
+        };
+        // FileInfo refresh is OUTSIDE the state lock: other driver callbacks
+        // need to read the same authenticated directory metadata.
+        {
+            let mut shared=self.state.lock().map_err(|_| fs_error(INTERNAL_ERROR))?;
+            shared.metadata_write(|vault|
+                vault.set_basic_info(id, attributes, created, accessed, written, changed))?;
+        }
+        *out=self.stat_handle(handle)?;
         Ok(())
     }
 
@@ -402,7 +435,7 @@ impl FileSystemContext for TreeFs {
                 shared.files.get(&format!("\\{key}")).and_then(|file|
                     file.lock().ok().map(|f| f.size)).unwrap_or(item.size.max(0) as u64)
             } else { 0 };
-            entries.push((name, Self::info(item.id, item.folder, size)));
+            entries.push((name, Self::info_item(&item, size)));
         }
         let marker = marker.inner_as_cstr().map(|s| s.to_string_lossy());
         let start = marker.as_ref().map_or(0, |mark| {
@@ -652,6 +685,7 @@ mod tests {
     #[test]
     #[ignore = "requires installed WinFsp and unused drive letter; disposable encrypted test data"]
     fn full_tree_mount_supports_explorer_create_copy_rename_and_delete() {
+        use std::os::windows::fs::MetadataExt;
         let dir = std::env::temp_dir().join(format!(
             "ndr-winfsp-tree-real-{}-{}", std::process::id(),
             std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().subsec_nanos()));
@@ -677,10 +711,20 @@ mod tests {
         std::fs::copy(&incoming,root.join("Subfolder/imported.bin")).unwrap();
         std::fs::copy(root.join("Subfolder/imported.bin"),&outgoing).unwrap();
         assert_eq!(std::fs::read(&outgoing).unwrap(),b"external source 2026");
+        assert_eq!(
+            std::fs::metadata(root.join("Subfolder/Existing.txt")).unwrap()
+                .file_attributes() & 0x7, 0,
+            "source is a normal file without readonly, hidden or system flags");
         std::fs::copy(root.join("Subfolder/Existing.txt"),root.join("copy.txt")).unwrap();
+        assert_eq!(
+            std::fs::metadata(root.join("copy.txt")).unwrap().file_attributes() & 0x7, 0,
+            "CopyFileW must not treat WinFsp's 0xffffffff sentinel as real attributes");
         std::fs::rename(root.join("copy.txt"),root.join("renamed.txt")).unwrap();
         assert_eq!(std::fs::read(root.join("renamed.txt")).unwrap(),b"previous");
-        std::fs::remove_file(root.join("renamed.txt")).unwrap();
+        let renamed=root.join("renamed.txt");
+        assert_eq!(std::fs::metadata(&renamed).unwrap().file_attributes() & 0x7, 0,
+            "renaming must preserve the ordinary removable-file attributes");
+        std::fs::remove_file(&renamed).unwrap();
         std::fs::remove_file(root.join("Newfolder/new.bin")).unwrap();
         std::fs::remove_dir(root.join("Newfolder")).unwrap();
         let closed = std::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -701,6 +745,59 @@ mod tests {
         assert_eq!(original.read_file(imported.id).unwrap(),b"external source 2026");
         drop(original);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires installed WinFsp and unused drive letter; disposable encrypted test data"]
+    fn encrypted_file_properties_persist_readonly_hidden_and_modified_time() {
+        use std::os::windows::fs::MetadataExt;
+        let root = std::env::temp_dir().join(format!(
+            "ndr-winfsp-props-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().subsec_nanos()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path=root.join("properties.ndr");
+        let mut vault=Vault::create(&path,"property test password 2026".into()).unwrap();
+        vault.add_file(1,"file.txt",b"contents").unwrap();
+        vault.add_folder(1,"folder").unwrap();
+        let mut mount=VaultTreeMount::start(path.clone(),&vault,
+            Arc::new(Mutex::new(())),&[]).unwrap();
+        let mounted=mount.mount_root.clone();
+        let file=mounted.join("file.txt");
+        let folder=mounted.join("folder");
+        // filetime opens FILE_WRITE_DATA in some versions, which Windows
+        // disallows after READONLY is set. Apply time first, just like an
+        // ordinary filesystem API sequence, then set READONLY/HIDDEN.
+        let time=filetime::FileTime::from_unix_time(1_577_934_245,0);
+        filetime::set_file_mtime(&file,time).unwrap();
+        ndr::native::set_attributes(&file,true,true).unwrap();
+        ndr::native::set_attributes(&folder,false,true).unwrap();
+        let m=std::fs::metadata(&file).unwrap();
+        assert_ne!(m.file_attributes() & 0x1,0,"readonly attribute from virtual drive");
+        assert_ne!(m.file_attributes() & 0x2,0,"hidden attribute from virtual drive");
+        assert_eq!(m.modified().unwrap(), std::time::SystemTime::from(time),
+            "WinFsp file modified time must roundtrip");
+        assert_ne!(std::fs::metadata(&folder).unwrap().file_attributes() & 0x2,0,
+            "directory hidden attribute must roundtrip");
+        let limit=std::time::Instant::now()+std::time::Duration::from_secs(10);
+        while mount.has_open_files() {
+            assert!(std::time::Instant::now()<limit,"open driver handles after SetFileTime");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        mount.finish().unwrap();
+        drop(mount);
+        vault.reload_after_mount().unwrap();
+        let item=vault.find_child(1,"file.txt").unwrap().unwrap();
+        assert_eq!(item.attributes & 0x3,0x3,
+            "attributes persist in authenticated .ndr metadata");
+        assert_eq!(item.last_write_time,
+            116_444_736_000_000_000+1_577_934_245u64*10_000_000);
+        assert_eq!(vault.find_child(1,"folder").unwrap().unwrap().attributes & 0x2,0x2);
+        drop(vault);
+        let opened=Vault::unlock(&path,"property test password 2026".into()).unwrap();
+        let item=opened.find_child(1,"file.txt").unwrap().unwrap();
+        assert_eq!(item.attributes & 0x3,0x3,"unlock must keep original attributes");
+        drop(opened);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
