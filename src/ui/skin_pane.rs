@@ -147,7 +147,14 @@ pub(super) fn apply_menu_style(ui: &mut egui::Ui) {
 /// Same as `Response::context_menu`, but uses the original menu colors (skin_menu_style) for a skin theme.
 pub(super) fn context_menu(response: &egui::Response, add: impl FnOnce(&mut egui::Ui)) -> Option<egui::InnerResponse<()>> {
     let style = response.ctx.data(|d| d.get_temp::<Option<egui::style::StyleModifier>>(egui::Id::new(MENU_STYLE_ID))).flatten();
-    let popup = egui::Popup::context_menu(response);
+    // A second right click while this popup was already visible both reopens it and registers
+    // as an egui "any_click". Ignore close-on-click only on the opening frame, or egui closes
+    // the freshly reopened popup immediately instead of keeping the context menu visible.
+    let popup = egui::Popup::context_menu(response).close_behavior(if response.secondary_clicked() {
+        egui::PopupCloseBehavior::IgnoreClicks
+    } else {
+        egui::PopupCloseBehavior::CloseOnClick
+    });
     match style {
         Some(style) => popup.style(style),
         None => popup,
@@ -177,11 +184,19 @@ pub(super) fn pane_menu(ui: &egui::Ui, index: usize, open_at: Option<egui::Pos2>
     }
     let at = ctx.data(|d| d.get_temp::<egui::Pos2>(at_id)).unwrap_or_default();
     let style = ctx.data(|d| d.get_temp::<Option<egui::style::StyleModifier>>(egui::Id::new(MENU_STYLE_ID))).flatten();
+    // The native NexusFile menu remains displayed when right-clicking another row. Reopening
+    // the same egui popup must not also consume that right-click as a dismissal: Popup::show
+    // otherwise sees the previous frame's popup and its default CloseOnClick shuts it at once.
     let popup = egui::Popup::new(egui::Id::new(("ndr-list-menu", index)), ctx, egui::PopupAnchor::Position(at), ui.layer_id())
         .kind(egui::PopupKind::Menu)
         .layout(egui::Layout::top_down_justified(egui::Align::Min))
         .gap(0.0)
-        .open_memory(open_at.map(|_| egui::SetOpenCommand::Bool(true)));
+        .open_memory(open_at.map(|_| egui::SetOpenCommand::Bool(true)))
+        .close_behavior(if open_at.is_some() {
+            egui::PopupCloseBehavior::IgnoreClicks
+        } else {
+            egui::PopupCloseBehavior::CloseOnClick
+        });
     match style {
         Some(style) => popup.style(style),
         None => popup.style(egui::containers::menu::menu_style),

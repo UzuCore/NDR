@@ -1002,6 +1002,54 @@ fn clicking_empty_pane_space_activates_the_pane() {
 /// The list right-click menu (original pmMain) does not close after being opened even when the pressed row scrolls out of view (full update path).
 /// Fix: when the menu was attached to the row's response, egui closed the menu in a frame that did not draw that row, so it vanished at once.
 #[test]
+fn pane_menu_reopening_with_a_second_right_click_does_not_immediately_close() {
+    let ctx = egui::Context::default();
+    let menu_id = egui::Id::new(("ndr-list-menu", 0usize));
+    let click = |pos, pressed| egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Secondary,
+        pressed,
+        modifiers: Default::default(),
+    };
+    let draw = |at, events| {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 700.0))),
+            events,
+            ..Default::default()
+        };
+        let _ = ctx.run(input, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                super::skin_pane::pane_menu(ui, 0, at, |ui| {
+                    let _ = ui.button("Copy");
+                    let _ = ui.button("Rename");
+                });
+            });
+        });
+    };
+    let first = egui::pos2(100.0, 120.0);
+    let second = egui::pos2(450.0, 250.0);
+    draw(Some(first), vec![egui::Event::PointerMoved(first), click(first, true), click(first, false)]);
+    assert!(egui::Popup::is_id_open(&ctx, menu_id), "initial right click opens the popup");
+    draw(None, vec![]);
+    assert!(egui::Popup::is_id_open(&ctx, menu_id), "popup remains open when idle");
+    // The original TPopupMenu repositions a displayed menu on another context click.
+    // egui's CloseOnClick must not interpret that opening right-click as a dismissal.
+    draw(Some(second), vec![egui::Event::PointerMoved(second), click(second, true), click(second, false)]);
+    assert!(egui::Popup::is_id_open(&ctx, menu_id), "reopening right click must keep the menu visible");
+    draw(None, vec![]);
+    assert!(egui::Popup::is_id_open(&ctx, menu_id), "reopened menu stays visible without pointer activity");
+    let outside = egui::pos2(900.0, 600.0);
+    let primary = |pressed| egui::Event::PointerButton {
+        pos: outside,
+        button: egui::PointerButton::Primary,
+        pressed,
+        modifiers: Default::default(),
+    };
+    draw(None, vec![egui::Event::PointerMoved(outside), primary(true), primary(false)]);
+    assert!(!egui::Popup::is_id_open(&ctx, menu_id), "click outside still closes the menu normally");
+}
+
+#[test]
 fn list_menu_stays_open_when_its_row_is_not_drawn() {
     for view in ["Details", "Auto"] {
         let (root, ctx, mut app) = fixture("listmenu");
