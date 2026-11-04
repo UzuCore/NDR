@@ -1082,6 +1082,16 @@ fn apps_key_opens_the_list_menu_at_the_cursor_item() {
 #[test]
 fn path_click_mode_follows_the_original_path_label() {
     let (root, ctx, mut app) = fixture("pathclick");
+    // The test clicks an *empty* portion of the path bar. With the fixture's
+    // full temp-directory path, different Windows runner temp prefixes can
+    // make the last breadcrumb reach that coordinate (pane.right() - 46),
+    // turning the click into a real breadcrumb action. Use the drive root
+    // for this empty-space test so the location is unambiguously blank.
+    // Other breadcrumb tests retain realistic long, multi-segment paths.
+    let drive_root = root.ancestors().last().expect("Windows drive root").to_path_buf();
+    app.navigate(0, drive_root.clone(), false);
+    wait(&mut app, &ctx);
+    assert_eq!(app.panes[0].path, drive_root);
     let run = |app: &mut App, events: Vec<egui::Event>| {
         let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 850.0))), events, ..Default::default() };
         let _ = ctx.run(raw, |ctx| {
