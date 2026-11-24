@@ -213,6 +213,9 @@ def create_skin(name, conf):
             sym.line([(6.8, 8.1), (7.35, 14.1), (12.6, 14.1), (13.15, 8.1)], c, 1.3)
             sym.line([(5.85, 7.1), (14.1, 7.1)], c, 1.3)
             sym.line([(8.6, 6.85), (8.6, 5.65), (11.35, 5.65), (11.35, 6.85)], c, 1.05)
+        elif col == 10:  # Downloads: downward arrow above a tray
+            arrow(sym, (10, 8.25), (0, 1), c, stem=True)
+            sym.line([(5.1, 11.45), (5.1, 14.1), (14.9, 14.1), (14.9, 11.45)], c, 1.15)
         else:  # neutral icon for a command with no assigned graphic
             for x in (7, 10, 13):
                 sym.ellipse((x-0.65, 9.25, x+0.65, 10.55), c)
@@ -220,6 +223,7 @@ def create_skin(name, conf):
 
     side = 20
     atlas(path / "toolbar-icons.png", (side, side), 10, 1, toolbar)
+    atlas(path / "tb_downloads.png", (side, side), 1, 1, lambda icon, row, col: toolbar(icon, row, 10))
 
     def address(icon, hovered, col):
         pad(icon, 18, 18, hovered)

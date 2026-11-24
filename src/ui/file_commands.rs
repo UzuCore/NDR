@@ -77,18 +77,6 @@ impl App {
         self.language_pack.text(&format!("RES.{key}"), fallback)
     }
 
-    /// NDR's own notice that C# shows with MessageBox.Show(this, text) (cases not in the original).
-    pub(super) fn notice(&mut self, korean: &str, english: &str) {
-        let text = self.tr(korean, english).into_owned();
-        self.system_box("", &text, MB_OK, |_, _, _| {});
-    }
-
-    /// How C# RunSafely shows an exception: MessageBox(message, "NDR", OK, Warning).
-    pub(super) fn warn(&mut self, korean: &str, english: &str) {
-        let text = self.tr(korean, english).into_owned();
-        self.system_box("NDR", &text, MB_OK | ndr::msgbox::MB_ICONEXCLAMATION, |_, _, _| {});
-    }
-
     /// Target items in display order (original FUN_00485bbc: marked items, otherwise the cursor item).
     pub(super) fn target_entries(&self, pane: usize) -> Vec<Entry> {
         let p = &self.panes[pane];

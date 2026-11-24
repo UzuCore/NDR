@@ -28,7 +28,7 @@ fn all_language_choices_have_a_native_primary_menu() {
     }
     let ja = Language::load(catalogs(), "ja");
     assert_eq!(ja.raw("Menu.miOpen").as_deref(), Some("&Q. 開く"));
-    assert_eq!(ja.raw("Menu.miParameterOpen").as_deref(), Some("&W. Run with arguments…"));
+    assert_eq!(ja.raw("Menu.miParameterOpen").as_deref(), Some("&W. 引数を指定して実行…"));
     assert_eq!(ja.text("RES.MSG_COPY_PREPARING", "missing"), "コピーを準備しています…");
     assert_eq!(Language::load(catalogs(), "invalid").code, "ko");
 }
@@ -84,6 +84,77 @@ fn all_forty_catalogs_directly_translate_startup_updating_and_common_file_operat
         let primary = Language::load(catalogs(), code);
         for key in updater_keys.iter().cloned().chain(file_operations.iter().map(|key| format!("NDR.{key}"))) {
             assert!(primary.primary_raw(&key).is_some_and(|line| !line.is_empty()), "{code}: missing local {key}");
+        }
+    }
+}
+
+#[test]
+fn every_locale_supplies_core_pane_view_and_downloads_captions() {
+    let keys = [
+        "RES.FOLDERINFO", "RES.DISKINFO_SHORT", "RES.DISKINFO_LONG", "RES.SELECTED_INFO",
+        "RES.FOLDER", "RES.DIR", "RES.FOLDERS", "RES.DISKFREE", "RES.TODAY", "RES.YESTERDAY",
+        "RES.DATEAGE", "RES.FUNC_GOTODOWNLOADS", "Menu.miToDownloads", "Menu.miViewToolbar",
+        "Menu.miDualView", "Menu.miListStyle", "Menu.miListStyleAuto", "Menu.miListStyleNames",
+        "Menu.miListStyleDetails", "Menu.miListStyleThumbs", "Menu.miSkin", "Menu.miSortBy",
+        "Menu.miSortDescend", "Menu.miShowHidden", "formPreferences.ComboBox.cbViewStyle1",
+        "formPreferences.ComboBox.cbViewStyle2", "formNDRSearch.Caption.chkFiles",
+        "formNDRSearch.Caption.chkFolders", "NDR.UI_PANE_FOLDER", "NDR.UI_PANE_NO_EXTENSION",
+        "NDR.UI_PANE_NO_EXTENSION_INFO", "NDR.UI_PANE_NO_SELECTION", "NDR.UI_PANE_DRIVE_COUNT",
+        "NDR.UI_SIZE_BYTES", "NDR.UI_PANE_SELECTION_SUMMARY",
+    ];
+    for &(code, _) in ndr::compat::BUILTIN_LANGUAGES {
+        let primary = Language::load(catalogs(), code);
+        for key in keys {
+            assert!(primary.primary_raw(key).is_some_and(|label| !label.is_empty()), "{code}: {key}");
+        }
+        let label = ndr::markup::substitute(
+            &primary.text("NDR.UI_PANE_SELECTION_SUMMARY", "missing"),
+            &[], // braces are interpolated separately at runtime
+        );
+        assert!((0..4).all(|index| label.contains(&format!("{{{index}}}"))), "{code}: {label}");
+    }
+}
+
+#[test]
+fn common_settings_and_open_with_arguments_use_primary_locale() {
+    let english = Language::load(catalogs(), "en");
+    let keys = [
+        "UI_SETTINGS_LANGUAGE", "UI_SETTINGS_THEME_A980E4", "UI_SETTINGS_CAPTION",
+        "UI_SETTINGS_CONFIRM_BEFORE_DELETING_C13428", "UI_SETTINGS_DELETE_TO_THE_RECYCLE_B00473",
+        "UI_SETTINGS_SHOW_TWO_PANES_FF5C36", "UI_SETTINGS_SHOW_THE_MAIN_TOOLBAR_1B9356",
+        "UI_SETTINGS_SHOW_ON_SCREEN_NOTIFICATIONS_462688", "UI_SETTINGS_WORK_FOLDER_NUMBER",
+        "UI_SETTINGS_DISABLED_D41047", "UI_SETTINGS_BROWSE_PROGRAM", "UI_SETTINGS_BROWSE_FOLDER",
+    ];
+    for &(code, _) in ndr::compat::BUILTIN_LANGUAGES {
+        let primary = Language::load(catalogs(), code);
+        for key in keys {
+            let qualified = format!("NDR.{key}");
+            assert!(primary.primary_raw(&qualified).is_some_and(|value| !value.is_empty()), "{code}: {qualified}");
+        }
+        let run = primary.primary_raw("Menu.miParameterOpen").expect("native command caption");
+        assert!(run.starts_with("&W. "), "{code}: missing mnemonic");
+        if code != "en" {
+            assert_ne!(Some(run), english.primary_raw("Menu.miParameterOpen"), "{code}: English command caption");
+            for key in ["UI_SETTINGS_SHOW_TWO_PANES_FF5C36", "UI_SETTINGS_WORK_FOLDER_NUMBER", "UI_SETTINGS_SHOW_THE_MAIN_TOOLBAR_1B9356"] {
+                let qualified = format!("NDR.{key}");
+                assert_ne!(primary.primary_raw(&qualified), english.primary_raw(&qualified), "{code}: {qualified}");
+            }
+        }
+        assert!(primary.text("NDR.UI_SETTINGS_WORK_FOLDER_NUMBER", "").contains("{0}"), "{code}: missing work folder argument");
+    }
+}
+
+#[test]
+fn six_deeper_catalogs_cover_all_explicit_ndr_settings_labels() {
+    let source = include_str!("../src/ui/settings_window.rs");
+    let keys: std::collections::BTreeSet<_> = source.split(".localized(\"NDR.UI_SETTINGS_").skip(1)
+        .filter_map(|rest| rest.split_once('"').map(|(suffix, _)| format!("NDR.UI_SETTINGS_{suffix}")))
+        .collect();
+    assert_eq!(keys.len(), 87);
+    for code in ["ja", "zh-CN", "zh-TW", "de", "fr", "es"] {
+        let primary = Language::load(catalogs(), code);
+        for key in &keys {
+            assert!(primary.primary_raw(key).is_some_and(|value| !value.is_empty()), "{code}: {key}");
         }
     }
 }

@@ -1038,6 +1038,30 @@ fn original_skin_and_language_submenus() {
     fs::remove_dir_all(root).unwrap();
 }
 
+#[test]
+fn language_switch_rebuilds_both_panes_without_navigation() {
+    let (root, _ctx, mut app) = fixture("live-language-panes", "ko");
+    let locate = |app: &App, pane: usize| app.panes[pane].entries.iter()
+        .position(|e| e.is_dir && e.name != ".." && !e.drive).expect("the pane has a folder");
+    if !app.panes[1].entries.iter().any(|e| e.is_dir && e.name != ".." && !e.drive) {
+        app.panes[1].entries = app.panes[0].entries.clone();
+    }
+    let indices = [locate(&app, 0), locate(&app, 1)];
+    app.panes[0].cursor = indices[0];
+    let pane_paths = [app.panes[0].path.clone(), app.panes[1].path.clone()];
+    app.compute_view(0);
+    let before = app.panes[0].view.cells[indices[0]][2].clone();
+    app.apply_language("ja");
+    let expected = app.language_pack.text("RES.FOLDER", "missing");
+    assert_ne!(before, expected);
+    for (index, row) in indices.into_iter().enumerate() {
+        assert_eq!(app.panes[index].view.cells[row][2], expected);
+        assert_eq!(app.panes[index].path, pane_paths[index]);
+    }
+    assert_eq!(app.panes[0].cursor, indices[0]);
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// Original ApplicationEvents1Message (0x442984): mouse XBUTTON1 (back) and XBUTTON2 (forward) = HistoryBack and HistoryForward.
 #[test]
 fn mouse_side_buttons_go_back_and_forward() {

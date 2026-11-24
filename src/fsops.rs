@@ -639,6 +639,56 @@ mod tests {
             "REAL_COPY_SMALL files=800 bytes=1638400 durationMs={:.3} filesPerSec={:.2} sha256=match",
             elapsed.as_secs_f64() * 1000.0, 800.0 / elapsed.as_secs_f64(),
         );
+        // Exercise the real movement, deletion and ZIP paths with owned
+        // files after measuring ordinary copy. Keep fixture setup/verification
+        // outside the measured durations.
+        fn perform(operation: Operation) -> Duration {
+            let (tx, rx) = mpsc::channel();
+            let started = Instant::now();
+            run_with_options(operation, tx, Arc::new(AtomicBool::new(false)),
+                OperationOptions { use_descriptions: false, ..Default::default() });
+            let elapsed = started.elapsed();
+            let events: Vec<_> = rx.into_iter().collect();
+            assert!(!events.iter().any(|event| matches!(event, Event::Fatal(_) | Event::Error { .. } | Event::Failure { .. })), "{events:?}");
+            assert!(events.iter().any(|event| matches!(event, Event::Finished { cancelled: false, .. })));
+            elapsed
+        }
+        let moved = root.join("moved");
+        let elapsed = perform(Operation::Copy {
+            sources: vec![small_source.clone()], destination: moved.clone(), move_files: true,
+        });
+        assert!(!small_source.exists());
+        let moved = moved.join("small-source");
+        assert_eq!(fs::read_dir(&moved).unwrap().count(), sources.len());
+        for source in &sources {
+            let name = source.file_name().unwrap();
+            assert_eq!(digest(&moved.join(name)), digest(&small_dest.join(name)));
+        }
+        println!("REAL_MOVE files=800 durationMs={:.3} sha256=match", elapsed.as_secs_f64() * 1000.0);
+
+        let archive = root.join("roundtrip.zip");
+        let extraction = root.join("extract");
+        let cancel = AtomicBool::new(false);
+        let options = crate::commands::ArchiveOptions {
+            extension: "zip".into(), level: 5, password: String::new(), volume_bytes: None,
+            recursive: true, append: false,
+        };
+        let started = Instant::now();
+        crate::archive::create_configured(std::slice::from_ref(&moved), &archive, &options, &cancel).unwrap();
+        let pack = started.elapsed();
+        let started = Instant::now();
+        crate::archive::extract(&archive, &extraction, None, &cancel).unwrap();
+        let unpack = started.elapsed();
+        for source in &sources {
+            let name = source.file_name().unwrap();
+            assert_eq!(digest(&moved.join(name)), digest(&extraction.join("small-source").join(name)));
+        }
+        println!("REAL_ZIP files=800 createMs={:.3} extractMs={:.3} sha256=match", pack.as_secs_f64() * 1000.0, unpack.as_secs_f64() * 1000.0);
+
+        let elapsed = perform(Operation::Delete { sources: vec![moved.clone()], recycle: false });
+        assert!(!moved.exists());
+        assert_eq!(fs::read_dir(&small_dest).unwrap().count(), sources.len());
+        println!("REAL_DELETE files=800 durationMs={:.3} sibling=preserved", elapsed.as_secs_f64() * 1000.0);
         assert_eq!(digest(&large_source), digest(&large_dest.join("large-source.bin")));
         fs::remove_dir_all(root).unwrap();
     }
@@ -1059,6 +1109,7 @@ fn tree_totals(sources: &[PathBuf], destination: &Path, moving: bool, descriptio
         Some(())
     };
     let root = |p: &Path| p.components().next().map(|c| c.as_os_str().to_string_lossy().to_lowercase());
+    let destination_root = moving.then(|| root(destination));
     let (mut files, mut bytes) = (0u64, 0u64);
     for source in sources {
         count_entry()?;
@@ -1066,8 +1117,9 @@ fn tree_totals(sources: &[PathBuf], destination: &Path, moving: bool, descriptio
             files += 1;
             continue;
         };
-        let target = source.file_name().map(|name| destination.join(name));
-        if moving && root(source) == root(destination) && target.as_ref().is_some_and(|t| fs::symlink_metadata(t).is_err()) {
+        if destination_root.as_ref().is_some_and(|dst| *dst == root(source))
+            && source.file_name().is_some_and(|name| fs::symlink_metadata(destination.join(name)).is_err())
+        {
             files += 1;
             continue;
         }
@@ -1114,7 +1166,7 @@ fn delete_totals(sources: &[PathBuf], skipped: &[PathBuf], with_folders: bool, c
     }
 
     impl Scan<'_> {
-        fn visit(&mut self, path: &Path, depth: usize) -> Option<()> {
+        fn visit(&mut self, path: &Path, depth: usize, listed: Option<fs::Metadata>) -> Option<()> {
             self.remaining = self.remaining.checked_sub(1)?;
             if depth > 256 || self.cancel.load(Ordering::Relaxed) || Instant::now() >= self.deadline {
                 return None;
@@ -1122,7 +1174,7 @@ fn delete_totals(sources: &[PathBuf], skipped: &[PathBuf], with_folders: bool, c
             if self.skipped.iter().any(|root| same_or_inside(path, root)) {
                 return Some(());
             }
-            let Ok(m) = fs::symlink_metadata(path) else { return Some(()) };
+            let Some(m) = listed.or_else(|| fs::symlink_metadata(path).ok()) else { return Some(()) };
             if is_reparse(&m) {
                 self.files += u64::from(self.with_folders);
             } else if m.is_dir() {
@@ -1137,7 +1189,12 @@ fn delete_totals(sources: &[PathBuf], skipped: &[PathBuf], with_folders: bool, c
                             return None;
                         }
                         match children.next() {
-                            Some(Ok(item)) => self.visit(&item.path(), depth + 1)?,
+                            Some(Ok(item)) => {
+                                // Windows read_dir already returned no-follow
+                                // metadata. This count is for progress only;
+                                // the actual delete still verifies fresh data.
+                                self.visit(&item.path(), depth + 1, item.metadata().ok())?;
+                            }
                             Some(Err(_)) => self.remaining -= 1,
                             None => break,
                         }
@@ -1164,7 +1221,7 @@ fn delete_totals(sources: &[PathBuf], skipped: &[PathBuf], with_folders: bool, c
         bytes: 0,
     };
     for source in sources {
-        scan.visit(source, 0)?;
+        scan.visit(source, 0, None)?;
     }
     Some((scan.files, scan.bytes))
 }
@@ -1325,52 +1382,40 @@ fn create_copy_stage(parent: &Path) -> Result<(PathBuf, File), String> {
 /// Atomically replace a file; an existing destination is never truncated first.
 pub(crate) fn commit_file(stage: &Path, target: &Path, overwrite: bool) -> Result<(), String> {
     ensure_plain_path(target)?;
-    if !overwrite {
-        #[cfg(windows)]
-        {
-            return rename_new(stage, target);
-        }
-        #[cfg(not(windows))]
-        {
-            fs::hard_link(stage, target).map_err(|e| e.to_string())?;
-            fs::remove_file(stage).map_err(|e| e.to_string())?;
-            return Ok(());
-        }
-    }
     #[cfg(windows)]
     {
-        use std::os::windows::ffi::OsStrExt;
-        #[link(name = "kernel32")]
-        unsafe extern "system" {
-            fn MoveFileExW(a: *const u16, b: *const u16, flags: u32) -> i32;
-        }
-        let a: Vec<_> = stage.as_os_str().encode_wide().chain(Some(0)).collect();
-        let b: Vec<_> = target.as_os_str().encode_wide().chain(Some(0)).collect();
-        if unsafe { MoveFileExW(a.as_ptr(), b.as_ptr(), 1 | 8) } == 0 {
-            return Err(std::io::Error::last_os_error().to_string());
-        }
-        Ok(())
+        move_file_windows(stage, target, overwrite)
     }
     #[cfg(not(windows))]
     {
-        fs::rename(stage, target).map_err(|e| e.to_string())
+        if overwrite {
+            fs::rename(stage, target).map_err(|e| e.to_string())
+        } else {
+            fs::hard_link(stage, target).map_err(|e| e.to_string())?;
+            fs::remove_file(stage).map_err(|e| e.to_string())
+        }
     }
 }
+
+#[cfg(windows)]
+fn move_file_windows(source: &Path, target: &Path, overwrite: bool) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH};
+    let source: Vec<_> = source.as_os_str().encode_wide().chain(Some(0)).collect();
+    let target: Vec<_> = target.as_os_str().encode_wide().chain(Some(0)).collect();
+    let flags = MOVEFILE_WRITE_THROUGH | if overwrite { MOVEFILE_REPLACE_EXISTING } else { 0 };
+    // Both paths are NUL-terminated and stay alive for the call.
+    if unsafe { MoveFileExW(source.as_ptr(), target.as_ptr(), flags) } == 0 {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    Ok(())
+}
+
 /// Rename without replacing a destination that appeared after the initial check.
 pub(crate) fn rename_new(source: &Path, target: &Path) -> Result<(), String> {
     #[cfg(windows)]
     {
-        use std::os::windows::ffi::OsStrExt;
-        #[link(name = "kernel32")]
-        unsafe extern "system" {
-            fn MoveFileExW(a: *const u16, b: *const u16, flags: u32) -> i32;
-        }
-        let a: Vec<_> = source.as_os_str().encode_wide().chain(Some(0)).collect();
-        let b: Vec<_> = target.as_os_str().encode_wide().chain(Some(0)).collect();
-        if unsafe { MoveFileExW(a.as_ptr(), b.as_ptr(), 8) } == 0 {
-            return Err(std::io::Error::last_os_error().to_string());
-        }
-        Ok(())
+        move_file_windows(source, target, false)
     }
     #[cfg(not(windows))]
     {
@@ -1793,12 +1838,12 @@ impl Job {
                 if !self.flush_descriptions() {
                     return Err("File data copied, but source directory retained because description metadata could not be saved".into());
                 }
-                for item in fs::read_dir(s).map_err(|e| e.to_string())? {
-                    let item = item.map_err(|e| e.to_string())?;
-                    if self.options.use_descriptions
-                        && compat::is_description_file(&item.file_name().to_string_lossy())
-                    {
-                        fs::remove_file(item.path()).map_err(|e| e.to_string())?;
+                if self.options.use_descriptions {
+                    for item in fs::read_dir(s).map_err(|e| e.to_string())? {
+                        let item = item.map_err(|e| e.to_string())?;
+                        if compat::is_description_file(&item.file_name().to_string_lossy()) {
+                            fs::remove_file(item.path()).map_err(|e| e.to_string())?;
+                        }
                     }
                 }
                 fs::remove_dir(s).map_err(|e| e.to_string())?;

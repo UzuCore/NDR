@@ -1990,7 +1990,7 @@ fn skin_toolbar_follows_the_original_layout() {
     assert_eq!(first, 0, "Back comes first in the built-in toolbar");
     // Original default\toolbar.xml: back, forward | desktop, documents, pictures, music, videos, favorites | Recycle Bin (right).
     let commands: Vec<(&str, bool)> = app.toolbar.items.iter().filter(|i| i.kind == ndr::commands::ToolbarKind::Command).map(|i| (i.icon.rsplit('\\').next().unwrap_or(""), i.align_right)).collect();
-    assert_eq!(commands, [("tb_back.png", false), ("tb_forward.png", false), ("tb_desktop.png", false), ("tb_documents.png", false), ("tb_pictures.png", false), ("tb_music.png", false), ("tb_videos.png", false), ("tb_favorites.png", false), ("tb_recyclebin.png", true)]);
+    assert_eq!(commands, [("tb_back.png", false), ("tb_forward.png", false), ("tb_desktop.png", false), ("tb_documents.png", false), ("tb_pictures.png", false), ("tb_music.png", false), ("tb_videos.png", false), ("tb_downloads.png", false), ("tb_favorites.png", false), ("tb_recyclebin.png", true)]);
     assert_eq!(bounds(back.id()).first().copied(), Some(egui::Rect::from_min_size(egui::pos2(4.0, 8.0), egui::vec2(20.0, 20.0))));
     let tiles = bounds(tile.id());
     assert!(tiles.len() >= 1000 / 8 && tiles.iter().all(|r| r.height() == 36.0), "{}", tiles.len());
@@ -2017,6 +2017,25 @@ fn skin_toolbar_follows_the_original_layout() {
     let _ = fs::remove_dir_all(root);
 }
 
+#[test]
+fn downloads_toolbar_uses_the_active_pane_and_configured_downloads_folder() {
+    let (root, ctx, mut app) = fixture("toolbar-downloads", "ja");
+    let folder = root.join("download-target");
+    fs::create_dir(&folder).unwrap();
+    app.settings.values.insert("SpecialFolderPaths".into(), serde_json::json!({"Downloads": folder.to_str().unwrap()}));
+    let i = app.toolbar.items.iter().position(|item| item.action == "downloads").unwrap();
+    assert_eq!(app.toolbar.items[i - 1].action, "videos");
+    let icon = app.toolbar_icon(&ctx, "tb_downloads.png").expect("download icon");
+    assert_eq!(icon.size(), [20, 20]);
+    app.active = 1;
+    let left = app.panes[0].path.clone();
+    app.toolbar_command("downloads", &ctx);
+    wait_until(&mut app, &ctx, |app| !app.panes[1].loading);
+    assert_eq!(app.panes[1].path, folder);
+    assert_eq!(app.panes[0].path, left);
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// Original FUN_00444710: the Favorites button has DropDownMenu = pmFavorites. Clicking opens the favorites menu at the button's bottom left.
 #[test]
 fn skin_toolbar_favorites_drops_down_the_favorites_menu() {
@@ -2029,13 +2048,13 @@ fn skin_toolbar_favorites_drops_down_the_favorites_menu() {
             egui::TopBottomPanel::top("toolbar").exact_height(36.0).frame(egui::Frame::NONE).show(ctx, |ui| app.skin_toolbar(ui, ctx, &skin));
         })
     };
-    // Left group starts at 4 and advances by 24 per button; Favorites begins at x=191.
-    let at = egui::pos2(201.0, 18.0);
+    // Left group starts at 4 and advances by 24 per button; Favorites begins at x=215.
+    let at = egui::pos2(225.0, 18.0);
     let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
     frame(&mut app, vec![egui::Event::PointerMoved(at)]);
     frame(&mut app, vec![button(true)]);
     // TNXImageButton MouseDown → DropDown: the menu is already open on the press.
-    assert_eq!(app.popup.as_ref().and_then(|p| p.position), Some(egui::pos2(191.0, 28.0)), "opened on the press");
+    assert_eq!(app.popup.as_ref().and_then(|p| p.position), Some(egui::pos2(215.0, 28.0)), "opened on the press");
     let popup_frame = |app: &mut App, events: Vec<egui::Event>| {
         let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 700.0))), events, ..Default::default() };
         ctx.run(raw, |ctx| {
@@ -2047,7 +2066,7 @@ fn skin_toolbar_favorites_drops_down_the_favorites_menu() {
     popup_frame(&mut app, vec![button(false)]);
     popup_frame(&mut app, vec![]);
     let popup = app.popup.as_ref().expect("the release of the opening press keeps the favorites menu");
-    assert_eq!(popup.position, Some(egui::pos2(191.0, 28.0)), "under the button");
+    assert_eq!(popup.position, Some(egui::pos2(215.0, 28.0)), "under the button");
     assert!(app.original_dialogs.is_empty(), "not the organize dialog");
     let _ = fs::remove_dir_all(root);
 }

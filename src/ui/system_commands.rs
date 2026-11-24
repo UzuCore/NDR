@@ -430,11 +430,20 @@ impl App {
 
     /// Saves the language and applies it at once (end of C# SelectLanguageAsync, original language menu FUN_0044193c).
     pub(super) fn apply_language(&mut self, code: &str) {
+        self.refresh_language(code);
+        self.settings.set_text("Language", &self.language.clone());
+        self.save();
+    }
+
+    /// Display cells can outlive a catalog change, even when the directory
+    /// does not change. Rebuild them without navigating or dropping selection.
+    pub(super) fn refresh_language(&mut self, code: &str) {
         let language = compat::Language::load(&self.resources.join("Languages"), code);
-        self.settings.set_text("Language", &language.code);
         self.language = language.code.clone();
         self.language_pack = language;
-        self.save();
+        for index in 0..self.panes.len() {
+            self.compute_view(index);
+        }
     }
 
     /// Original miTextViewerClick/miTextEditorClick -> FUN_00430304: only when the cursor item is a file; inside an archive it is extracted to a temp folder first;

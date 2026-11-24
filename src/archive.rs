@@ -519,9 +519,8 @@ fn execute_capture_progress(
             let _ = err.join();
             return Err("Cancelled".into());
         }
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) => thread::sleep(Duration::from_millis(50)),
+        let status = match child.try_wait() {
+            Ok(status) => status,
             Err(e) => {
                 let _ = child.kill();
                 let _ = child.wait();
@@ -529,7 +528,24 @@ fn execute_capture_progress(
                 let _ = err.join();
                 return Err(e.to_string());
             }
+        };
+        if let Some(status) = status {
+            break status;
         }
+        // Wait for short 7-Zip commands to finish immediately; a fixed sleep
+        // used to add up to 50 ms even after the child had already exited.
+        // Long jobs still check cancellation at most every 50 ms.
+        #[cfg(windows)]
+        {
+            use std::os::windows::io::AsRawHandle;
+            use windows_sys::Win32::{Foundation::WAIT_FAILED, System::Threading::WaitForSingleObject};
+            // The Child owns a live Windows process handle until this loop ends.
+            if unsafe { WaitForSingleObject(child.as_raw_handle().cast(), 50) } == WAIT_FAILED {
+                thread::sleep(Duration::from_millis(50));
+            }
+        }
+        #[cfg(not(windows))]
+        thread::sleep(Duration::from_millis(50));
     };
     let (out, large) = out
         .join()
@@ -1244,15 +1260,22 @@ const ARCHIVE_EXTENSIONS: &[&str] = &[
     ".wim", ".swm", ".esd", ".ppkg",
 ];
 
+fn archive_extensions_by_length() -> &'static [&'static str] {
+    static EXTENSIONS_BY_LENGTH: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();
+    EXTENSIONS_BY_LENGTH.get_or_init(|| {
+        let mut sorted = ARCHIVE_EXTENSIONS.to_vec();
+        sorted.sort_by_key(|ext| std::cmp::Reverse(ext.len()));
+        sorted
+    })
+}
+
 /// C# FileSystemService.GetArchiveFormat(name): longest extensions first, split tails of 3+ digits allowed, .partN.rar, .rNN, .zNN, .aNN(N), .001.
 pub fn archive_format(path: &Path) -> Option<String> {
     let name = path.file_name()?.to_string_lossy().into_owned();
     let lower = name.to_lowercase();
     let numeric_start = lower.rfind('.');
     let numeric = numeric_start.is_some_and(|i| lower[i + 1..].len() >= 3 && lower[i + 1..].chars().all(|c| c.is_ascii_digit()));
-    let mut extensions: Vec<&str> = ARCHIVE_EXTENSIONS.to_vec();
-    extensions.sort_by_key(|e| std::cmp::Reverse(e.len()));
-    for extension in extensions {
+    for &extension in archive_extensions_by_length() {
         if lower.ends_with(extension) {
             return Some(extension[1..].to_owned());
         }
@@ -1347,14 +1370,17 @@ pub fn create_unique_extract_folder(parent: &Path, name: &str) -> Result<PathBuf
 pub fn base_name(path: &Path) -> String {
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let lower = name.to_lowercase();
-    let mut extensions: Vec<&str> = ARCHIVE_EXTENSIONS.to_vec();
-    extensions.sort_by_key(|e| std::cmp::Reverse(e.len()));
     if let Some(dot) = lower.rfind('.') {
         let tail = &lower[dot + 1..];
         if tail.len() >= 3 && tail.chars().all(|c| c.is_ascii_digit()) {
-            for extension in &extensions {
+            for &extension in archive_extensions_by_length() {
                 if lower[..dot].ends_with(extension) {
-                    return name[..dot - extension.len()].to_owned();
+                    // Unicode lowercasing can change the byte length of the
+                    // stem. Locate the ASCII-format suffix in the original name.
+                    let suffix_chars = tail.len() + 1 + extension.len();
+                    if let Some((start, _)) = name.char_indices().rev().nth(suffix_chars - 1) {
+                        return name[..start].to_owned();
+                    }
                 }
             }
         }
@@ -1364,10 +1390,10 @@ pub fn base_name(path: &Path) -> String {
             return name[..name.len() - composite.len()].to_owned();
         }
     }
-    if let Some(part) = lower.rfind(".part") {
-        if lower.ends_with(".rar") {
-            return name[..part].to_owned();
-        }
+    if lower.ends_with(".rar")
+        && let Some(part) = name.as_bytes().windows(5).rposition(|part| part.eq_ignore_ascii_case(b".part"))
+    {
+        return name[..part].to_owned();
     }
     let ext = Path::new(&lower).extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_default();
     if ext.len() == 3 && (ext.starts_with('r') || ext.starts_with('z')) && ext[1..].chars().all(|c| c.is_ascii_digit()) {
@@ -1387,9 +1413,11 @@ pub fn output_family(path: &Path) -> Vec<PathBuf> {
         .flatten()
         .filter_map(Result::ok)
         .map(|e| e.path())
-        .filter(|p| p.is_file() && archive_format(p).is_some_and(|f| f.eq_ignore_ascii_case(&format)) && base_name(p).to_lowercase() == base)
+        // Compare names before querying metadata for unrelated siblings.
+        .filter(|p| archive_format(p).is_some_and(|f| f.eq_ignore_ascii_case(&format))
+            && base_name(p).to_lowercase() == base && p.is_file())
         .collect();
-    files.sort_by_key(|p| p.file_name().map(|n| n.to_string_lossy().to_lowercase()));
+    files.sort_by_cached_key(|p| p.file_name().map(|n| n.to_string_lossy().to_lowercase()));
     files
 }
 
@@ -3384,11 +3412,16 @@ mod entry_tests {
         let second = create_unique_extract_folder(&root, "sample").unwrap();
         assert_eq!((first, second), (root.join("sample"), PathBuf::from(format!("{}\\sample(2)", root.display()))));
         assert_eq!(base_name(Path::new("a.part2.rar")), "a");
+        assert_eq!(base_name(Path::new("İ⚙.7z.001")), "İ⚙");
+        assert_eq!(base_name(Path::new("İ⚙.PART3.rar")), "İ⚙");
         assert_eq!(base_name(Path::new("a.7z.001")), "a");
         assert_eq!(base_name(Path::new("a.tar.gz")), "a");
         fs::write(root.join("vol.7z.001"), b"x").unwrap();
         fs::write(root.join("vol.7z.002"), b"x").unwrap();
         assert_eq!(first_volume_path(&root.join("vol.7z.002")), root.join("vol.7z.001"));
+        fs::create_dir(root.join("vol.7z.003")).unwrap();
+        fs::write(root.join("vol.zip"), b"different format").unwrap();
+        fs::write(root.join("other.7z.004"), b"different set").unwrap();
         assert_eq!(output_family(&root.join("vol.7z.001")), [root.join("vol.7z.001"), root.join("vol.7z.002")]);
         assert!(can_read_internally(Path::new("a.zip")) && !can_read_internally(Path::new("a.iso")) && !can_read_internally(Path::new("a.part2.rar")));
         assert!(can_read_internally(Path::new("a.alz")) && can_read_internally(Path::new("a.egg")));

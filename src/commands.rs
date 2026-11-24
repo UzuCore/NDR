@@ -451,6 +451,7 @@ pub fn default_toolbar() -> ToolbarConfig {
             button("pictures", "tb_pictures.png", false),
             button("music", "tb_music.png", false),
             button("videos", "tb_videos.png", false),
+            button("downloads", "tb_downloads.png", false),
             button("favorites", "tb_favorites.png", false),
             divider(),
             button("deleteToolbar", "tb_recyclebin.png", true),

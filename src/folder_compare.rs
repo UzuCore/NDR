@@ -1,5 +1,5 @@
 //! C# FolderComparisonService (comparison and difference copy) and the result texts of FolderComparisonWindow (state, kind, size, date; TSV/HTML save).
-use crate::listing::compare_text;
+use crate::listing::{compare_wide, wide};
 use std::{
     collections::HashMap,
     fs::{self, File, OpenOptions},
@@ -215,9 +215,8 @@ fn index(root: &Path, recursive: bool, left: bool, cancel: &AtomicBool, progress
     Ok((result, issues))
 }
 
-fn contents_equal(left: &Path, right: &Path, cancel: &AtomicBool) -> std::io::Result<bool> {
+fn contents_equal(left: &Path, right: &Path, cancel: &AtomicBool, (x, y): &mut (Vec<u8>, Vec<u8>)) -> std::io::Result<bool> {
     let (mut a, mut b) = (File::open(left)?, File::open(right)?);
-    let (mut x, mut y) = (vec![0u8; 128 * 1024], vec![0u8; 128 * 1024]);
     loop {
         if cancel.load(Ordering::Relaxed) {
             return Err(std::io::Error::other("Cancelled"));
@@ -233,7 +232,7 @@ fn contents_equal(left: &Path, right: &Path, cancel: &AtomicBool) -> std::io::Re
             }
             Ok(total)
         };
-        let (n, m) = (read(&mut a, &mut x)?, read(&mut b, &mut y)?);
+        let (n, m) = (read(&mut a, x)?, read(&mut b, y)?);
         if n != m {
             return Ok(false);
         }
@@ -263,22 +262,26 @@ pub fn compare_partial(left: &Path, right: &Path, recursive: bool, contents: boo
     let (a, issues_left) = index(&left, recursive, true, cancel, progress)?;
     let (b, issues_right) = index(&right, recursive, false, cancel, progress)?;
     let mut issues = [issues_left, issues_right].concat();
-    let mut keys: Vec<(&String, &String)> = a.iter().map(|(k, (name, _))| (k, name)).collect();
-    for (key, (name, _)) in &b {
+    let mut keys: Vec<_> = a.iter()
+        .map(|(key, (name, item))| (wide(name), name, Some(item), b.get(key)))
+        .collect();
+    for (key, row @ (name, _)) in &b {
         if !a.contains_key(key) {
-            keys.push((key, name));
+            keys.push((wide(name), name, None, Some(row)));
         }
     }
-    keys.sort_by(|x, y| compare_text(x.1, y.1, false));
+    keys.sort_by(|x, y| compare_wide(&x.0, &y.0, false));
     let total = keys.len();
     let mut results = Vec::with_capacity(total);
     progress(CompareProgress::Comparing { completed: 0, total });
-    for (index, (key, name)) in keys.into_iter().enumerate() {
+    // Allocate scratch buffers only if content is read, then reuse them.
+    let mut buffers = None;
+    for (index, (_, name, left_item, right_row)) in keys.into_iter().enumerate() {
         if cancel.load(Ordering::Relaxed) {
             return Ok((results, issues, true));
         }
-        let right_name = b.get(key).map_or_else(|| name.clone(), |(n, _)| n.clone());
-        let difference = match (a.get(key).map(|(_, i)| i), b.get(key).map(|(_, i)| i)) {
+        let right_name = right_row.map_or_else(|| name.clone(), |(n, _)| n.clone());
+        let difference = match (left_item, right_row.map(|(_, item)| item)) {
             (None, Some(r)) => Difference { relative: name.clone(), right_relative: right_name, kind: DifferenceKind::RightOnly, left_size: 0, right_size: r.length, left_modified: None, right_modified: Some(r.modified), left_dir: false, right_dir: r.dir },
             (Some(l), None) => Difference { relative: name.clone(), right_relative: right_name, kind: DifferenceKind::LeftOnly, left_size: l.length, right_size: 0, left_modified: Some(l.modified), right_modified: None, left_dir: l.dir, right_dir: false },
             (Some(l), Some(r)) => {
@@ -291,7 +294,8 @@ pub fn compare_partial(left: &Path, right: &Path, recursive: bool, contents: boo
                     if l.length != r.length {
                         false
                     } else {
-                        match contents_equal(&left.join(name), &right.join(name), cancel) {
+                        let buffers = buffers.get_or_insert_with(|| (vec![0; 128 * 1024], vec![0; 128 * 1024]));
+                        match contents_equal(&left.join(name), &right.join(name), cancel, buffers) {
                             Ok(same) => same,
                             Err(error) => {
                                 if cancel.load(Ordering::Relaxed) {

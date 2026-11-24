@@ -45,10 +45,24 @@ impl PreparedStartup {
         let right_explicit = options.right.clone().or_else(|| options.dir2.clone().filter(|_| dual));
         let (right, right_fixed) = start_path("Right", &right_explicit);
         // C# ValidStartPath: an existing folder as-is, otherwise the user folder, otherwise "::drives::" (My PC).
-        let valid_start = |candidate: PathBuf| {
-            if panes::is_drives(&candidate) || candidate.is_dir() {
+        // Both panes often restore the same paths (including network folders).
+        // Probe each path only once during this startup, not on later navigation.
+        let mut checked = HashMap::new();
+        let mut exists = |path: &Path| {
+            if panes::is_drives(path) {
+                return true;
+            }
+            if let Some(&found) = checked.get(path) {
+                return found;
+            }
+            let found = path.is_dir();
+            checked.insert(path.to_path_buf(), found);
+            found
+        };
+        let mut valid_start = |candidate: PathBuf| {
+            if exists(&candidate) {
                 candidate
-            } else if home.is_dir() {
+            } else if exists(&home) {
                 home.clone()
             } else {
                 PathBuf::from(remote_window::DRIVES)
@@ -57,7 +71,7 @@ impl PreparedStartup {
         let (left, right) = (valid_start(left), valid_start(right));
         let [left, right] = [(left, left_fixed, "Left"), (right, right_fixed, "Right")].map(|(start, fixed, side)| {
             let selected = settings.values.get(&format!("Selected{side}Tab")).and_then(|v| v.as_u64()).map(|v| v as usize);
-            let (tabs, tab) = restore_tabs(&settings.strings(&format!("{side}Tabs")), selected, &start, fixed, |p| panes::is_drives(p) || p.is_dir());
+            let (tabs, tab) = restore_tabs(&settings.strings(&format!("{side}Tabs")), selected, &start, fixed, &mut exists);
             (tabs, tab, settings.flag(&format!("{side}ShowHiddenFiles"), false))
         });
         let resources = resource_dir();

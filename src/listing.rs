@@ -3,7 +3,7 @@
 use crate::fsops::Entry;
 use crate::parity::{list_extension, list_stem};
 use serde_json::Value;
-use std::{cmp::Ordering, ffi::OsStr, os::windows::ffi::OsStrExt, time::SystemTime};
+use std::{borrow::Cow, cmp::Ordering, collections::HashMap, ffi::OsStr, os::windows::ffi::OsStrExt, time::SystemTime};
 
 pub const FILE_ATTRIBUTE_READONLY: u32 = 0x1;
 pub const FILE_ATTRIBUTE_HIDDEN: u32 = 0x2;
@@ -12,7 +12,7 @@ pub const FILE_ATTRIBUTE_ARCHIVE: u32 = 0x20;
 const FILE_ATTRIBUTE_PINNED: u32 = 0x0008_0000;
 const FILE_ATTRIBUTE_RECALL_ON_OPEN: u32 = 0x0004_0000;
 
-fn wide(value: &str) -> Vec<u16> {
+pub(crate) fn wide(value: &str) -> Vec<u16> {
     OsStr::new(value).encode_wide().chain(Some(0)).collect()
 }
 
@@ -294,7 +294,7 @@ pub fn compare_text(a: &str, b: &str, logical: bool) -> Ordering {
 }
 
 /// Base of compare_text: between UTF-16 texts already ending with NUL.
-fn compare_wide(a: &[u16], b: &[u16], logical: bool) -> Ordering {
+pub(crate) fn compare_wide(a: &[u16], b: &[u16], logical: bool) -> Ordering {
     // SAFETY: both buffers are NUL-terminated and live through the call.
     let result = unsafe {
         if logical {
@@ -427,8 +427,11 @@ fn sort_group(list: &mut Vec<Entry>, mode: &str, descending: bool, logical: bool
             if descending { by_mode.reverse() } else { by_mode }
         })
     });
-    // Apply the destination-to-source permutation by cycles. Stable ordering
-    // comes from order.sort_by; moving the entries needs no second row buffer.
+    apply_order(list, &mut order);
+}
+
+/// Move rows in place; the order maps destination indices to source indices.
+fn apply_order<T>(rows: &mut [T], order: &mut [usize]) {
     for start in 0..order.len() {
         let mut current = start;
         loop {
@@ -436,7 +439,7 @@ fn sort_group(list: &mut Vec<Entry>, mode: &str, descending: bool, logical: bool
             if next == start {
                 break;
             }
-            list.swap(current, next);
+            rows.swap(current, next);
             current = next;
         }
     }
@@ -456,19 +459,28 @@ pub fn group_category(extension: &str) -> &'static str {
         ("Presentations", &[".key", ".odp", ".pot", ".potm", ".potx", ".pps", ".ppsm", ".ppsx", ".ppt", ".pptm", ".pptx"]),
     ];
     // In C# a later category wins (.ts is Code after Video, .html is Code).
-    let lower = extension.to_ascii_lowercase();
-    TABLE.iter().rev().find(|(_, list)| list.contains(&lower.as_str())).map_or("Other", |(name, _)| name)
+    let lower: Cow<'_, str> = if extension.bytes().any(|b| b.is_ascii_uppercase()) {
+        Cow::Owned(extension.to_ascii_lowercase())
+    } else {
+        Cow::Borrowed(extension)
+    };
+    TABLE.iter().rev().find(|(_, list)| list.contains(&lower.as_ref())).map_or("Other", |(name, _)| name)
 }
 
 /// FileGroupingService.GetGroupKey: "order|name". Folders are "01|Folders" ("05|Folders" when the folder category is not Auto in category grouping).
 pub fn group_key(entry: &Entry, mode: &str, folder_category_mode: &str) -> String {
+    group_key_cow(entry, mode, folder_category_mode).into_owned()
+}
+
+/// Borrow fixed captions instead of allocating the same key for every row.
+pub fn group_key_cow(entry: &Entry, mode: &str, folder_category_mode: &str) -> Cow<'static, str> {
     if entry.is_dir {
         return if mode != "Category" || folder_category_mode == "Auto" { "01|Folders".into() } else { "05|Folders".into() };
     }
     match mode {
         "Extension" => {
             let extension = list_extension(&entry.name);
-            if extension.is_empty() { "10|No extension".into() } else { format!("10|{}", extension.to_lowercase()) }
+            if extension.is_empty() { "10|No extension".into() } else { format!("10|{}", extension.to_lowercase()).into() }
         }
         "Size" => match entry.size {
             0 => "10|Empty",
@@ -481,7 +493,7 @@ pub fn group_key(entry: &Entry, mode: &str, folder_category_mode: &str) -> Strin
         .into(),
         "Time" => match entry.modified {
             None => "10|Unknown date".into(),
-            Some(time) => format!("10|{}", chrono::DateTime::<chrono::Local>::from(time).format("%Y-%m")),
+            Some(time) => format!("10|{}", chrono::DateTime::<chrono::Local>::from(time).format("%Y-%m")).into(),
         },
         "Category" => {
             let order = match group_category(list_extension(&entry.name)) {
@@ -513,27 +525,52 @@ fn group_rank(key: &str) -> u8 {
 }
 
 /// End of SortPaneItems: with grouping, sorts stably again by group key order (rank, then culture comparison, reversed for descending groups).
-pub fn sort_groups(entries: &mut Vec<Entry>, mode: &str, folder_category_mode: &str, descending: bool) {
-    if mode == "None" {
+pub fn sort_groups(entries: &mut [Entry], mode: &str, folder_category_mode: &str, descending: bool) {
+    if mode == "None" || entries.len() < 2 {
         return;
     }
-    // Windows CompareStringW expects UTF-16. Convert each group key once;
-    // previously every comparison allocated two fresh UTF-16 buffers (about
-    // O(n log n) heap allocations for a large grouped directory).
-    let mut keyed: Vec<(u8, Vec<u16>, Entry)> = std::mem::take(entries)
-        .into_iter()
-        .map(|e| {
-            let name = group_key(&e, mode, folder_category_mode);
-            (group_rank(&name), wide(&name), e)
-        })
-        .collect();
-    keyed.sort_by(|(rank_a, ka, _), (rank_b, kb, _)| {
-        rank_a.cmp(rank_b).then_with(|| {
+    // Many rows belong to the same group. Compare each distinct group using
+    // Windows collation, then reorder the rows by inexpensive numeric ranks.
+    let mut groups = Vec::new();
+    let mut ids = HashMap::new();
+    let mut extensions = HashMap::new();
+    let row_groups: Vec<usize> = entries.iter().map(|e| {
+        let mut intern = || {
+            let key = group_key_cow(e, mode, folder_category_mode);
+            *ids.entry(key).or_insert_with_key(|key| {
+                let id = groups.len();
+                groups.push((group_rank(key), wide(key)));
+                id
+            })
+        };
+        if !e.is_dir && matches!(mode, "Category" | "Extension") {
+            *extensions.entry(list_extension(&e.name)).or_insert_with(&mut intern)
+        } else {
+            intern()
+        }
+    }).collect();
+    if groups.len() == 1 {
+        return;
+    }
+    let compare = |a: usize, b: usize| {
+        let ((ra, ka), (rb, kb)) = (&groups[a], &groups[b]);
+        ra.cmp(rb).then_with(|| {
             let order = compare_wide(ka, kb, false);
             if descending { order.reverse() } else { order }
         })
-    });
-    entries.extend(keyed.into_iter().map(|(_, _, e)| e));
+    };
+    let mut sorted_groups: Vec<_> = (0..groups.len()).collect();
+    sorted_groups.sort_unstable_by(|&a, &b| compare(a, b));
+    let mut rank = vec![0; groups.len()];
+    for (i, pair) in sorted_groups.windows(2).enumerate() {
+        let [a, b] = [pair[0], pair[1]];
+        // Distinct strings can compare equal in the active Windows locale.
+        // Give them the same rank so their rows keep their original order.
+        rank[b] = if compare(a, b).is_eq() { rank[a] } else { i + 1 };
+    }
+    let mut order: Vec<_> = (0..entries.len()).collect();
+    order.sort_by_key(|&row| rank[row_groups[row]]);
+    apply_order(entries, &mut order);
 }
 
 /// Header text of GroupHeaderNameConverter: "Folders" is [RES] FOLDERS, known names use language item keys, others the name as is.
@@ -913,8 +950,8 @@ mod tests {
     }
 
     #[test]
-    fn precomputed_utf16_group_sort_matches_reference_across_modes() {
-        let extensions = [".zip", ".txt", ".png", ".mp3", ".ts", ".exe", ".unknown", ""];
+    fn ranked_group_sort_matches_reference_across_modes() {
+        let extensions = [".zip", ".ZIP", ".txt", ".png", ".mp3", ".ts", ".exe", ".unknown", "", ".é", ".e\u{301}"];
         let originals: Vec<_> = (0..3072usize).map(|i| {
             let is_dir = i % 17 == 0;
             let name = if is_dir { format!("folder-{:04}", (i * 7) % 1200) }
@@ -938,6 +975,29 @@ mod tests {
         }
     }
 
+    fn previous_group_sort(entries: &mut Vec<Entry>, mode: &str, folder_category_mode: &str, descending: bool) {
+        if mode == "None" {
+            return;
+        }
+        // Windows CompareStringW expects UTF-16. Convert each group key once;
+        // previously every comparison allocated two fresh UTF-16 buffers (about
+        // O(n log n) heap allocations for a large grouped directory).
+        let mut keyed: Vec<(u8, Vec<u16>, Entry)> = std::mem::take(entries)
+            .into_iter()
+            .map(|e| {
+                let name = group_key(&e, mode, folder_category_mode);
+                (group_rank(&name), wide(&name), e)
+            })
+            .collect();
+        keyed.sort_by(|(rank_a, ka, _), (rank_b, kb, _)| {
+            rank_a.cmp(rank_b).then_with(|| {
+                let order = compare_wide(ka, kb, false);
+                if descending { order.reverse() } else { order }
+            })
+        });
+        entries.extend(keyed.into_iter().map(|(_, _, e)| e));
+    }
+
     #[test]
     #[ignore = "run explicitly for performance measurements, not CI"]
     fn benchmark_group_sort_20k_entries() {
@@ -945,17 +1005,32 @@ mod tests {
             let name = format!("file-{i:05}{}", [".zip", ".ts", ".txt", ".mp3", ".png"][i % 5]);
             entry(&name, i % 17 == 0, (i * 12477) as u64, 0)
         }).collect();
-        let mut before = originals.clone();
-        let mut after = originals;
-        let t0 = std::time::Instant::now();
-        legacy_group_sort(&mut before, "Extension", "Auto", false);
-        let legacy = t0.elapsed();
-        let t0 = std::time::Instant::now();
-        sort_groups(&mut after, "Extension", "Auto", false);
-        let optimized = t0.elapsed();
-        assert_eq!(names(&before), names(&after));
-        eprintln!("Group sort 20k: old={legacy:?}, optimized={optimized:?}, speedup={:.2}x",
-            legacy.as_secs_f64() / optimized.as_secs_f64().max(1e-9));
+        for mode in ["Extension", "Category", "Size"] {
+            let mut previous_times = Vec::new();
+            let mut optimized_times = Vec::new();
+            for round in 0..9 {
+                let mut before = originals.clone();
+                let mut after = originals.clone();
+                let start = std::time::Instant::now;
+                let mut old = || {
+                    let at = start();
+                    previous_group_sort(&mut before, mode, "Auto", false);
+                    previous_times.push(at.elapsed());
+                };
+                let mut new = || {
+                    let at = start();
+                    sort_groups(&mut after, mode, "Auto", false);
+                    optimized_times.push(at.elapsed());
+                };
+                if round % 2 == 0 { old(); new(); } else { new(); old(); }
+                assert_eq!(names(&before), names(&after));
+            }
+            previous_times.sort_unstable();
+            optimized_times.sort_unstable();
+            let (old, new) = (previous_times[4], optimized_times[4]);
+            eprintln!("Group sort 20k {mode}: previous={old:?}, optimized={new:?}, speedup={:.2}x",
+                old.as_secs_f64() / new.as_secs_f64());
+        }
     }
 
     #[test]

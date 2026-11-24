@@ -125,6 +125,7 @@ impl App {
             "pictures" => ("사진", "Pictures"),
             "music" => ("음악", "Music"),
             "videos" => ("동영상", "Videos"),
+            "downloads" => ("다운로드", "Downloads"),
             "favorites" => ("즐겨찾기", "Favorites"),
             "openRecycle" => ("휴지통", "Recycle Bin"),
             "search" => ("찾기", "Search"),
@@ -143,6 +144,7 @@ impl App {
         };
         let mut text = match menu_action {
             "createZip" => self.language_pack.text("NDR.UI_TOOLS_TOOLBAR_CREATE_ZIP", "Create ZIP"),
+            "downloads" => self.language_pack.text("RES.FUNC_GOTODOWNLOADS", fallback),
             "newTab" => self.menu_access_text("Menu.pmiNewTab", fallback),
             "closeTab" => self.menu_access_text("Menu.pmiCloseTab", fallback),
             other => {
@@ -467,6 +469,9 @@ mod tests {
             let path = skin.image_path("toolbar-icons.png").expect("the toolbar strip ships in the skin");
             let (width, height, rgba) = decode_png(&path).unwrap();
             assert_eq!((width, height, rgba.len()), (cell * TOOLBAR_ICON_NAMES.len(), cell, width * height * 4));
+            let (w, h, pixels) = decode_png(&skin.image_path("tb_downloads.png").unwrap()).unwrap();
+            assert_eq!((w, h), (cell, cell), "{theme}: Downloads icon uses the same logical size");
+            assert!(pixels.chunks_exact(4).any(|p| p[3] != 0));
             for name in TOOLBAR_ICON_NAMES {
                 assert!(!path.with_file_name(name).exists(), "{theme} should only ship the strip for {name}");
             }

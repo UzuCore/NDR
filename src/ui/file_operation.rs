@@ -247,6 +247,29 @@ pub(super) fn conflict_buttons(form: &ConflictForm) -> Vec<(ConflictButton, bool
     buttons
 }
 
+// These short transfer commands already have translations in the legacy
+// catalog. Prefer an explicit localized dialog title, then the equivalent
+// command, before letting the English fallback take over.
+fn transfer_title(language: &compat::Language, key: &str, command: &str, fallback: &str) -> String {
+    if language.primary_raw(key).is_none() {
+        if let Some(local) = language.primary_raw(command) {
+            return super::favorites_dialog::access_key(local).0;
+        }
+    }
+    language.text(key, fallback)
+}
+
+fn conflict_cancel_caption(language: &compat::Language) -> String {
+    let key = "formFileExists.Caption.btnAbort";
+    if !matches!(language.code.as_str(), "ko" | "en")
+        && language.primary_raw(key).is_none_or(|caption| caption == "Stop(&C)" || caption == "&Stop")
+        && let Some(cancel) = language.primary_raw("RES.CANCEL")
+    {
+        return cancel.to_owned();
+    }
+    language.raw(key).unwrap_or_else(|| "&Cancel".into())
+}
+
 /// Original TfFileExists (ClientWidth 545 x ClientHeight 253) layout: lMsg (20,13), lFileName (20,34 bold),
 /// Panel1(17,56 396×155: lOrgLabel·imgOrg·lOrgDir·lOrgFile, Bevel1, lNewLabel·imgNew·lNewDir·lNewFile), chkApplyAll(20,221),
 /// right button column (conflict_buttons). Enter = the first enabled button (overwrite), Esc = cancel (close the window).
@@ -314,7 +337,7 @@ pub(super) fn conflict_ui(ui: &mut egui::Ui, form: &mut ConflictForm, language: 
             ConflictButton::OverwriteNewer => raw("Caption.btnOverNewer", "Overwrite N&ewer"),
             ConflictButton::ReplaceFolder => raw("Caption.btnReplace", "Replac&e Folder"),
             ConflictButton::Rename => raw("Caption.btnRename", "&Rename"),
-            ConflictButton::Cancel => raw("Caption.btnAbort", "&Cancel"),
+            ConflictButton::Cancel => conflict_cancel_caption(language),
         };
         if super::original_dialogs::vcl_button(ui, at(425.0, button.top(), 112.0, 25.0), enabled, &label).1 && chosen.is_none() {
             chosen = Some(button.choice());
@@ -542,9 +565,9 @@ impl App {
         }
         self.remember_destination(&destination);
         let (title, verb) = match (moving, kind) {
-            (true, _) => (self.language_pack.text("NDR.OP_TRANSFER_MOVE_ITEMS", "Move items"), ("이동", "move")),
-            (false, TransferKind::Paste) => (self.language_pack.text("NDR.OP_TRANSFER_PASTE_ITEMS", "Paste items"), ("붙여넣기", "paste")),
-            (false, _) => (self.language_pack.text("NDR.OP_TRANSFER_COPY_ITEMS", "Copy items"), ("복사", "copy")),
+            (true, _) => (transfer_title(&self.language_pack, "NDR.OP_TRANSFER_MOVE_ITEMS", "RES.FUNC_MOVETO", "Move items"), ("이동", "move")),
+            (false, TransferKind::Paste) => (transfer_title(&self.language_pack, "NDR.OP_TRANSFER_PASTE_ITEMS", "RES.FUNC_EDITPASTE", "Paste items"), ("붙여넣기", "paste")),
+            (false, _) => (transfer_title(&self.language_pack, "NDR.OP_TRANSFER_COPY_ITEMS", "RES.FUNC_COPYTO", "Copy items"), ("복사", "copy")),
         };
         // Large selections get their totals from the worker. A single
         // selection retains the immediately available progress labels.
@@ -1170,4 +1193,23 @@ pub(super) fn run_program(program: &Path, args: &[String], directory: &Path) -> 
         command.current_dir(directory);
     }
     command.status().map(|s| s.code().unwrap_or(-1)).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod localized_caption_tests {
+    use super::*;
+
+    #[test]
+    fn transfer_titles_reuse_local_commands_only_if_dialog_title_is_missing() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("Resources/Languages");
+        let ja = compat::Language::load(&dir, "ja");
+        let en = compat::Language::load(&dir, "en");
+        let title = |language: &compat::Language| transfer_title(
+            language, "NDR.OP_TRANSFER_COPY_ITEMS", "RES.FUNC_COPYTO", "Copy items",
+        );
+        assert_eq!(title(&ja), "コピー");
+        assert_eq!(title(&en), "Copy items");
+        assert_eq!(conflict_cancel_caption(&ja), "キャンセル(&C)");
+        assert_eq!(conflict_cancel_caption(&en), "Stop(&C)");
+    }
 }

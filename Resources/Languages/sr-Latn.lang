@@ -12,9 +12,9 @@ CONTINUE=&Nastavi
 TITLE_ERROR=Greška programa NDR
 TITLE_INFO=Obaveštenje iz NDR-a
 FOLDERINFO=Fascikle <c000000><b>%d</b></c> · Datoteke <c000000><b>%d</b></c> · <b>%s</b>
-DISKINFO_SHORT=<c000000><b>%s</b></c> slobodno
-DISKINFO_LONG=Slobodno <c000000><b>%s</b></c> od <b>%s</b>
-SELECTED_INFO=Izabrano <b>%d</b> · <b>%s</b> bajtova
+DISKINFO_SHORT=Slobodno: <c000000><b>%s</b></c>
+DISKINFO_LONG=Slobodno: <c000000><b>%s</b></c> · Ukupno: <b>%s</b>
+SELECTED_INFO=Izabrano: <b>%d</b> · <b>%s</b> bajtova
 STILL_HAVE_OPERATION=Radnja nad datotekama je u toku. Zaustaviti je i zatvoriti NDR?
 MSG_COPY_PREPARING=Priprema kopiranja…
 MSG_MOVE_PREPARING=Priprema premeštanja…
@@ -122,6 +122,10 @@ INVALID_PASSWORD=Pogrešna lozinka
 DISKISFULL=Nema dovoljno prostora na disku
 CANNOT_OPEN_FILE=Datoteka nije mogla da se otvori.
 WRITE_FAILED=Upis u datoteku nije uspeo.
+DIR=Fascikla
+TODAY=Danas
+YESTERDAY=Juče
+DATEAGE=pre %d dana
 
 [formMain]
 ToolButton.tbFile=Datoteka (&F)
@@ -170,7 +174,7 @@ Menu.miSearchFile=&E. Pretraži datoteke i fascikle…
 Menu.miLanguage=&O. Jezik
 Menu.miMoreLanguages=&M. Još jezika
 Menu.miViewToolbar=&T. Prikaži traku sa alatkama
-Menu.miDualView=&U. Koristi dva okna
+Menu.miDualView=&U. Dva okna
 Menu.miNewTab=&B. Nova kartica
 Menu.miListStyle=&S. Raspored liste
 Menu.miListStyleAuto=&A. Automatski
@@ -365,3 +369,30 @@ OP_TRANSFER_SIZE_UNAVAILABLE=Veličina nije dostupna
 OP_TRANSFER_VERB_COPY=kopiraj
 OP_TRANSFER_VERB_MOVE=premesti
 OP_TRANSFER_VERB_PASTE=nalepi
+UI_PANE_FOLDER=Fascikla
+UI_PANE_NO_EXTENSION=(bez nastavka)
+UI_PANE_NO_EXTENSION_INFO=Nema podataka o nastavcima
+UI_PANE_NO_SELECTION=Ništa nije izabrano
+UI_PANE_DRIVE_COUNT=Diskovi {0}
+UI_SIZE_BYTES=bajtova
+UI_PANE_SELECTION_SUMMARY=Izabrano: {0} · Datoteke: {1} · Fascikle: {2} · {3}
+
+UI_SETTINGS_BROWSE_FOLDER=Potraži…
+UI_SETTINGS_BROWSE_PROGRAM=Potraži…
+UI_SETTINGS_CAPTION=Podešavanja
+UI_SETTINGS_CONFIRM_BEFORE_DELETING_C13428=Potvrdi pre brisanja
+UI_SETTINGS_DELETE_TO_THE_RECYCLE_B00473=Podrazumevano premesti u korpu
+UI_SETTINGS_DISABLED_D41047=Onemogućeno
+UI_SETTINGS_LANGUAGE=Jezik
+UI_SETTINGS_SHOW_ON_SCREEN_NOTIFICATIONS_462688=Prikaži obaveštenja po završetku radnji
+UI_SETTINGS_SHOW_THE_MAIN_TOOLBAR_1B9356=Prikaži glavnu traku sa alatkama
+UI_SETTINGS_SHOW_TWO_PANES_FF5C36=Prikaži dva okna
+UI_SETTINGS_THEME_A980E4=Tema
+UI_SETTINGS_WORK_FOLDER_NUMBER=Radna fascikla {0}
+[formPreferences]
+ComboBox.cbViewStyle1=Automatski;Samo nazivi;Detalji;Sličice
+ComboBox.cbViewStyle2=Automatski;Samo nazivi;Detalji;Sličice
+
+[formNDRSearch]
+Caption.chkFiles=Datoteke
+Caption.chkFolders=Fascikle

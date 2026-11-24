@@ -123,7 +123,6 @@ impl App {
 
     /// Rebuilds list texts, colors and group rows (called at the end of sort_pane).
     pub(super) fn compute_view(&mut self, index: usize) {
-        let korean = self.language == "ko";
         let attach = self.settings.flag("AttachExtensionToName", false);
         let case = self.settings.values.get("CharacterCase").and_then(|v| v.as_i64()).unwrap_or(0).clamp(0, 3);
         let date_format = self.settings.text("DateFormat", "yyyy-MM-dd");
@@ -142,13 +141,12 @@ impl App {
         // in the folder color, ".." included.
         let folder_size_text = self.language_pack.text("RES.DIR", "[DIR]");
         let vault_type = self.language_pack.text("NDRVault.TextEditorTitle", "Encrypted folder");
-        let parent_type = self.language_pack.text("RES.FUNC_GOTOPARENT", "Parent folder");
+        let folder_type = self.language_pack.text("RES.FOLDER", "Folder");
         let group_mode = self.settings.text(&Self::side_key(index, "GroupMode"), "None");
         let category_mode = self.settings.text(&Self::side_key(index, "FolderCategoryMode"), "Auto");
         let show_group_name = self.settings.flag(&Self::side_key(index, "ShowGroupName"), true);
         let now = std::time::SystemTime::now();
         // Skin theme: original item colors (original_item_color). The three base colors are resolved once.
-        let skin = true;
         // Original [Display] showfiletype (default 1).
         let show_file_type = self.settings.flag("ShowFileType", true);
         let rgb = |key: &str| {
@@ -161,58 +159,66 @@ impl App {
             "NXDRIVE" => drive,
             _ => fore,
         };
-        let (extension_colors, nexus_colors) = self.color_maps();
+        let (extension_colors, _) = self.color_maps();
         let pane = &self.panes[index];
         let sftp_modes = pane.remote.as_ref().filter(|r| r.is_sftp()).and_then(|r| r.modes.lock().ok().map(|m| (r.path.clone(), m.clone())));
         let ftp_permissions = pane.remote.as_ref().filter(|r| !r.is_sftp()).and_then(|r| r.permissions.lock().ok().map(|m| (r.path.clone(), m.clone())));
-        let mut view = PaneView::default();
-        let mut shell_types: HashMap<Option<String>, String> = HashMap::new();
-        let mut item_colors: HashMap<String, (u8, u8, u8)> = HashMap::new();
-        for entry in &pane.entries {
+        let mut view = PaneView {
+            cells: Vec::with_capacity(pane.entries.len()),
+            colors: Vec::with_capacity(pane.entries.len()),
+            rows: Vec::with_capacity(pane.entries.len()),
+        };
+        let mut shell_types = HashMap::<&str, String>::new();
+        let mut item_colors = HashMap::<&str, (u8, u8, u8)>::new();
+        let local = pane.archive.is_none() && pane.remote.is_none();
+        let detect_vault = local && pane.vault.is_none();
+        let grouped = group_mode != "None" && show_group_name;
+        let mut previous = None;
+        for (row, entry) in pane.entries.iter().enumerate() {
+            if grouped && !entry.drive {
+                let key = ndr::listing::group_key_cow(entry, &group_mode, &category_mode);
+                if previous.as_ref() != Some(&key) {
+                    view.rows.push(DetailRow::Header(self.group_caption(&key)));
+                    previous = Some(key);
+                }
+            }
+            view.rows.push(DetailRow::Item(row));
             if entry.drive {
                 // Original DrawListItem kind 4: the drive name (item+8) after "%s:". Other cells (extension, size, date, attributes, description) are not drawn.
                 let label = pane.drive_infos.get(&entry.path).map(|(name, _, _)| name.as_str()).unwrap_or("");
                 let name = if label.is_empty() { entry.name.clone() } else { format!("{} {label}", entry.name) };
                 view.cells.push([name, String::new(), String::new(), String::new(), String::new(), String::new(), String::new()]);
-                view.colors.push(skin.then(|| ndr::listing::original_item_color(entry, extension_colors, basic)));
+                view.colors.push(Some(drive));
                 continue;
             }
-            let extension = if entry.is_dir || attach { "" } else { ndr::parity::list_extension(&entry.name) };
-            let stem = &entry.name[..entry.name.len() - extension.len()];
+            let extension = if entry.is_dir { "" } else { ndr::parity::list_extension(&entry.name) };
+            let stem = if attach { &entry.name } else { &entry.name[..entry.name.len() - extension.len()] };
             let description = if pane.descriptions.is_empty() { String::new() } else { pane.descriptions.get(&entry.name.to_lowercase()).cloned().unwrap_or_default() };
             // Original DrawListItem description cell (field 6, 0x7da043): when the description (+0x10) is empty and showfiletype (+0x384) is on, the file type text (+0xc).
             // The type text of original GetList (0x45a34c) is the shell name (SHGetFileInfoW SHGFI_TYPENAME|USEFILEATTRIBUTES, once per extension,
             // none for ".."). Archive and FTP lists never call SetFileType, so it is empty.
-            let vault_item = pane.vault.is_none() && pane.archive.is_none() && pane.remote.is_none()
-                && entry.is_dir && entry.path.is_file()
-                && entry.path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("ndr"));
+            // Only .ndr candidates need a filesystem probe. Ordinary folders
+            // already have their type in the listing and may be on a slow disk.
+            let vault_item = detect_vault && entry.is_dir
+                && entry.path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("ndr"))
+                && entry.path.is_file();
             let kind = if vault_item {
                 vault_type.clone()
-            } else if !skin && entry.is_parent() {
-                parent_type.clone()
-            } else if !skin {
-                ndr::listing::type_name(&entry.name, entry.is_dir, korean)
-            } else if pane.archive.is_some() || pane.remote.is_some() || entry.name == ".." {
+            } else if !local || entry.name == ".." {
                 String::new()
+            } else if entry.is_dir {
+                folder_type.clone()
             } else {
-                let key = if entry.is_dir { None } else { Some(ndr::parity::list_extension(&entry.name).to_lowercase()) };
-                shell_types.entry(key).or_insert_with_key(|key| native::shell_type_name(key.as_deref().unwrap_or(""), key.is_none())).clone()
+                shell_types.entry(extension)
+                    .or_insert_with(|| native::shell_type_name(&extension.to_lowercase(), false))
+                    .clone()
             };
-            let description = if description.is_empty() && skin && show_file_type { kind.clone() } else { description };
+            let description = if description.is_empty() && show_file_type { kind.clone() } else { description };
             view.cells.push([
                 character_case(stem, case),
-                // Original extension cell (item +8 = extension without the dot, letter case follows charcase). The C# theme uses ".ext" like the C# version.
-                if entry.is_dir {
-                    String::new()
-                } else if skin {
-                    character_case(ndr::parity::list_extension(&entry.name).trim_start_matches('.'), case)
-                } else {
-                    ndr::parity::list_extension(&entry.name).to_owned()
-                },
+                character_case(extension.trim_start_matches('.'), case),
                 kind,
-                // Original DrawListItem field 3 = SizeToStr (0x7df870). Fixed: previously C# FormatSize ("999 B", "1.2 MB").
-                // Folders show RES DIR (see folder_size_text). Previously the cell was empty.
-                if entry.is_dir { if skin { folder_size_text.clone() } else { String::new() } } else { ndr::parity::size_to_str(entry.size, &unit, thousands) },
+                if entry.is_dir { folder_size_text.clone() } else { ndr::parity::size_to_str(entry.size, &unit, thousands) },
                 ndr::listing::list_date_text(entry.modified, &date_format, &time_format, use_age.then(|| [age_labels[0].as_str(), age_labels[1].as_str(), age_labels[2].as_str()]), now),
                 // Original DrawListItem field 5: FTP and SFTP list items (+0x78) show the permission text (+0x74), others GetAttrString (0x7b50a4, A/H/R/S in "____").
                 // FTP keeps the listing's own text (MLSD "perm" fact, e.g. "eldfmcp"; LIST "drwxr-xr-x"), as seen in the running original.
@@ -224,28 +230,12 @@ impl App {
                 },
                 description,
             ]);
-            view.colors.push(if skin {
-                // Fixed (speed): instead of scanning the extension color table from the start for every item, look it up once per extension.
-                if entry.is_dir {
-                    Some(ndr::listing::original_item_color(entry, extension_colors, basic))
-                } else {
-                    let key = ndr::parity::list_extension(&entry.name).to_ascii_lowercase();
-                    Some(*item_colors.entry(key).or_insert_with(|| ndr::listing::original_item_color(entry, extension_colors, basic)))
-                }
+            view.colors.push(Some(if entry.is_dir {
+                folder
             } else {
-                ndr::listing::entry_color(entry, extension_colors, nexus_colors)
-            });
-        }
-        let mut previous: Option<String> = None;
-        for (row, entry) in pane.entries.iter().enumerate() {
-            if group_mode != "None" && show_group_name && !entry.drive {
-                let key = ndr::listing::group_key(entry, &group_mode, &category_mode);
-                if previous.as_deref() != Some(key.as_str()) {
-                    view.rows.push(DetailRow::Header(self.group_caption(&key)));
-                    previous = Some(key);
-                }
-            }
-            view.rows.push(DetailRow::Item(row));
+                *item_colors.entry(extension)
+                    .or_insert_with(|| ndr::listing::original_item_color(entry, extension_colors, basic))
+            }));
         }
         self.panes[index].view = view;
     }

@@ -197,7 +197,7 @@ fn original_pages(built: Vec<Vec<Row>>, language: &compat::Language, _ko: bool) 
     let combo_texts = |row: Option<Row>, key: &str| -> Option<Row> {
         let mut row = row?;
         if let Row::Combo { choices, .. } = &mut row {
-            let texts: Vec<String> = lang(key, "").split(';').map(str::to_owned).collect();
+            let texts: Vec<String> = language.primary_raw(&format!("formPreferences.{key}")).unwrap_or_default().split(';').map(str::to_owned).collect();
             if texts.len() == choices.len() {
                 for ((_, display), text) in choices.iter_mut().zip(texts) {
                     *display = text;
@@ -208,7 +208,7 @@ fn original_pages(built: Vec<Vec<Row>>, language: &compat::Language, _ko: bool) 
     };
     let section = |key: &str, fallback: &str| Some(Row::Section(lang(key, fallback).replace('&', "")));
     // Row names are the VCL Caption as is ('&' access key). Checkboxes are pressed with that letter, and '&' is removed when shown as text.
-    let l = |key: &str, fallback: &str| Some(language.raw(&format!("formPreferences.{key}")).unwrap_or_else(|| fallback.to_owned()));
+    let l = |key: &str, _fallback: &str| language.primary_raw(&format!("formPreferences.{key}")).map(str::to_owned);
     let mut file_list = vec![
         section("GroupBox.gbFont", "Font"),
         take("ListFont", l("Caption.lListFont", "File List:")),
@@ -592,7 +592,7 @@ impl SettingsForm {
         ]);
         let work = draft.strings("WorkingFolders");
         for i in 0..5 {
-            paths.push(text(&format!("WF{i}"), if ko { format!("작업 폴더 {}", i + 1) } else { format!("Work folder {}", i + 1) }, work.get(i).cloned().unwrap_or_default()));
+            paths.push(text(&format!("WF{i}"), language.localized("NDR.UI_SETTINGS_WORK_FOLDER_NUMBER", "작업 폴더 {0}", "Work folder {0}").replace("{0}", &(i + 1).to_string()), work.get(i).cloned().unwrap_or_default()));
         }
         paths.extend([
             check("ShowFavoritesBar", language.localized("NDR.UI_SETTINGS_SHOW_THE_FAVORITES_BAR_8769EB", "즐겨찾기 바 표시", "Show the favorites bar"), true),
@@ -1468,6 +1468,13 @@ impl App {
         let previous_single = self.settings.flag("UseSingleInstance", false);
         self.settings = settings;
         self.settings.normalize();
+        let requested = self.settings.text("Language", &self.language);
+        let code = compat::resolve_language_code(&self.resources.join("Languages"), &requested);
+        if self.language_pack.code != code {
+            self.refresh_language(&code);
+        }
+        self.settings.set_text("Language", &code);
+
         // C# ShowOptionsAsync: when UseSingleInstance changes, ApplySingleInstanceModeAsync. On failure revert to the previous value and notify.
         let wanted_single = self.settings.flag("UseSingleInstance", false);
         if wanted_single != previous_single && !self.apply_single_instance(wanted_single) {
@@ -1478,7 +1485,6 @@ impl App {
             );
             self.system_box("NDR", &text, ndr::msgbox::MB_OK | ndr::msgbox::MB_ICONASTERISK, |_, _, _| {});
         }
-        self.language = compat::resolve_language_code(&self.resources.join("Languages"), &self.settings.text("Language", &self.language));
         self.dark = super::system_commands::theme_palette(&self.settings.text("Theme", ndr::styles::DEFAULT_THEME)).dark();
         self.dual = self.settings.flag("DualPaneMode", true);
         self.profile_load_error = false;
@@ -1498,7 +1504,7 @@ impl App {
                 match form.commit() {
                     Ok(settings) => self.answer_dialog(DialogResult::Settings(Some(settings)), ctx),
                     Err(error) => {
-                        let caption = self.tr("환경 설정", "Settings").into_owned();
+                        let caption = self.language_pack.localized("NDR.UI_SETTINGS_CAPTION", "환경 설정", "Settings");
                         self.system_box(&caption, &error, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
                     }
                 }
@@ -1516,7 +1522,7 @@ impl App {
                         }
                     }
                     Err(error) => {
-                        let caption = self.tr("환경 설정", "Settings").into_owned();
+                        let caption = self.language_pack.localized("NDR.UI_SETTINGS_CAPTION", "환경 설정", "Settings");
                         self.system_box(&caption, &error, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
                     }
                 }
@@ -1801,7 +1807,7 @@ impl App {
             Ok(())
         })();
         if let Err(error) = result {
-            let title = self.tr("NDR 환경 설정", "NDR Settings").into_owned();
+            let title = format!("NDR {}", self.language_pack.localized("NDR.UI_SETTINGS_CAPTION", "환경 설정", "Settings"));
             let text = self.catalog("NDR.UI_SETTINGS_COLOR_IMPORT_ERROR", "색상표를 읽을 수 없습니다: {0}", "The color map could not be read: {0}").replace("{0}", &error);
             self.system_box(&title, &text, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
         }
@@ -1809,7 +1815,7 @@ impl App {
 
     /// C# ExportExtensionColors.
     fn export_extension_colors(&mut self) {
-        let title = self.tr("NDR 환경 설정", "NDR Settings").into_owned();
+        let title = format!("NDR {}", self.language_pack.localized("NDR.UI_SETTINGS_CAPTION", "환경 설정", "Settings"));
         let fail = |app: &mut App, error: String| {
             let text = app.catalog("NDR.UI_SETTINGS_COLOR_EXPORT_ERROR", "색상표를 내보낼 수 없습니다: {0}", "The color map could not be exported: {0}").replace("{0}", &error);
             app.system_box(&title, &text, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});

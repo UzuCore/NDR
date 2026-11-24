@@ -1665,13 +1665,18 @@ impl App {
 /// C# RestorePaneTabs: keeps only saved tabs whose folders exist, and selects the saved selected tab (SelectedLeftTab, original index) if it remains.
 /// With no tab left, one start folder. Difference: C# ignores the command line and start folder when tabs exist, but NDR, for a given folder (fixed),
 /// selects that folder's tab or adds it at the front (earlier NDR behavior). Returns (tab list, selected tab index).
-pub(super) fn restore_tabs(saved: &[String], selected: Option<usize>, start: &Path, fixed: bool, exists: impl Fn(&Path) -> bool) -> (Vec<PathBuf>, usize) {
-    let available: Vec<(usize, PathBuf)> = saved.iter().enumerate().map(|(index, path)| (index, PathBuf::from(path))).filter(|(_, path)| exists(path)).collect();
-    if available.is_empty() {
-        return (vec![start.to_path_buf()], 0);
+pub(super) fn restore_tabs(saved: &[String], selected: Option<usize>, start: &Path, fixed: bool, mut exists: impl FnMut(&Path) -> bool) -> (Vec<PathBuf>, usize) {
+    let mut tabs = Vec::with_capacity(saved.len().max(1));
+    let mut restored = None;
+    for (index, path) in saved.iter().enumerate() {
+        let path = Path::new(path);
+        if exists(path) {
+            if Some(index) == selected {
+                restored = Some(tabs.len());
+            }
+            tabs.push(path.to_path_buf());
+        }
     }
-    let restored = selected.and_then(|wanted| available.iter().position(|(index, _)| *index == wanted));
-    let mut tabs: Vec<PathBuf> = available.into_iter().map(|(_, path)| path).collect();
     if !fixed && let Some(index) = restored {
         return (tabs, index);
     }
@@ -2039,9 +2044,8 @@ impl eframe::App for App {
             }
         }
         if self.language_pack.code != self.language {
-            self.language_pack =
-                compat::Language::load(&self.resources.join("Languages"), &self.language);
-            self.language = self.language_pack.code.clone();
+            let requested = self.language.clone();
+            self.refresh_language(&requested);
         }
         self.poll(ctx);
         self.vault_security_tick(ctx);
