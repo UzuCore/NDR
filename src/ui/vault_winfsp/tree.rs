@@ -1,4 +1,4 @@
-﻿//! One authenticated WinFsp volume per unlocked .ndr container. Unlike the
+//! One authenticated WinFsp volume per unlocked .ndr container. Unlike the
 //! legacy single-file transport, this exposes the complete directory tree to
 //! Explorer, ordinary Windows applications, and their copy/create/rename/delete
 //! APIs. All bytes remain encrypted inside the physical .ndr file.
@@ -430,35 +430,59 @@ impl FileSystemContext for TreeFs {
         let mut shared = self.state.lock().map_err(|_| fs_error(INTERNAL_ERROR))?;
         if shared.revoked.load(Ordering::Acquire) { return Err(fs_error(ACCESS_DENIED)); }
         shared.refresh()?;
-        let mut entries: Vec<(String, FileInfo)> = Vec::new();
-        if *id != 1 {
-            entries.push((".".into(), Self::info(*id, true, 0)));
-            let parent = shared.vault.parent(*id).map_err(|_| fs_error(INTERNAL_ERROR))?;
-            entries.push(("..".into(), Self::info(parent, true, 0)));
-        }
-        let children = shared.vault.list(*id).map_err(|_| fs_error(INTERNAL_ERROR))?;
-        for item in children {
-            let name = item.name.clone();
-            let key = shared.vault.relative_folder_path(*id).unwrap_or_default()
-                .join(&name).to_string_lossy().replace('/', "\\").to_lowercase();
-            let size = if !item.folder {
-                shared.files.get(&format!("\\{key}")).and_then(|file|
-                    file.lock().ok().map(|f| f.size)).unwrap_or(item.size.max(0) as u64)
-            } else { 0 };
-            entries.push((name, Self::info_item(&item, size)));
-        }
         let marker = marker.inner_as_cstr().map(|s| s.to_string_lossy());
-        let start = marker.as_ref().map_or(0, |mark| {
-            entries.iter().position(|(name,_)| ndr::vault::names_equal(name, mark))
-                .map_or(entries.len(), |n| n + 1)
-        });
+        let mut past_marker = marker.is_none();
+        let mut should_emit = |name: &str| {
+            if past_marker {
+                true
+            } else {
+                if marker.as_ref().is_some_and(|mark| ndr::vault::names_equal(name, mark)) {
+                    past_marker = true;
+                }
+                false
+            }
+        };
         let mut cursor = 0u32;
-        for (name, info) in entries.into_iter().skip(start) {
+        let mut wide = Vec::with_capacity(255);
+        let mut append = |name: &str, info: FileInfo| -> winfsp::Result<bool> {
             let mut entry = DirInfo::<255>::new();
             *entry.file_info_mut() = info;
-            let wide: Vec<u16> = name.encode_utf16().collect();
+            wide.clear();
+            wide.extend(name.encode_utf16());
             entry.set_name_raw(wide.as_slice())?;
-            if !entry.append_to_buffer(buffer, &mut cursor) { break; }
+            Ok(entry.append_to_buffer(buffer, &mut cursor))
+        };
+        if *id != 1 {
+            let parent = shared.vault.parent(*id).map_err(|_| fs_error(INTERNAL_ERROR))?;
+            for (name, folder) in [(".", *id), ("..", parent)] {
+                if should_emit(name) && !append(name, Self::info(folder, true, 0))? {
+                    DirInfo::<255>::finalize_buffer(buffer, &mut cursor);
+                    return Ok(cursor);
+                }
+            }
+        }
+        // Reconstruct the directory path once only when staged open files
+        // can have a size different from the committed index.
+        let open_folder = (!shared.files.is_empty())
+            .then(|| shared.vault.relative_folder_path(*id))
+            .transpose().map_err(|_| fs_error(INTERNAL_ERROR))?;
+        for item in shared.vault.list(*id).map_err(|_| fs_error(INTERNAL_ERROR))? {
+            if !should_emit(&item.name) {
+                continue;
+            }
+            let size = if item.folder {
+                0
+            } else {
+                open_folder.as_ref().and_then(|folder| {
+                    let child = folder.join(&item.name);
+                    let key = format!("\\{}", key_for(&child.to_string_lossy()));
+                    shared.files.get(&key)
+                        .and_then(|file| file.lock().ok().map(|f| f.size))
+                }).unwrap_or(item.size.max(0) as u64)
+            };
+            if !append(&item.name, Self::info_item(&item, size))? {
+                break;
+            }
         }
         DirInfo::<255>::finalize_buffer(buffer, &mut cursor);
         Ok(cursor)
@@ -472,7 +496,7 @@ impl FileSystemContext for TreeFs {
                 if *id == 1 { return Err(fs_error(ACCESS_DENIED)); }
                 let mut shared = self.state.lock().map_err(|_| fs_error(INTERNAL_ERROR))?;
                 shared.refresh()?;
-                if !shared.vault.list(*id).map_err(|_| fs_error(INTERNAL_ERROR))?.is_empty() {
+                if !shared.vault.directory_is_empty(*id).map_err(|_| fs_error(INTERNAL_ERROR))? {
                     return Err(fs_error(NOT_EMPTY));
                 }
             }
@@ -493,7 +517,7 @@ impl FileSystemContext for TreeFs {
                 TreeHandle::Directory(id) => {
                     if *id == 1 { return Err(fs_error(ACCESS_DENIED)); }
                     shared.refresh()?;
-                    if !shared.vault.list(*id).map_err(|_| fs_error(INTERNAL_ERROR))?.is_empty() {
+                    if !shared.vault.directory_is_empty(*id).map_err(|_| fs_error(INTERNAL_ERROR))? {
                         return Err(fs_error(NOT_EMPTY));
                     }
                     shared.metadata_write(|v| v.remove(*id))?;
@@ -501,14 +525,11 @@ impl FileSystemContext for TreeFs {
                 TreeHandle::File { state, deleted } => {
                     let file = state.lock().map_err(|_| fs_error(INTERNAL_ERROR))?;
                     if file.open_files > 1 { return Err(fs_error(SHARING_VIOLATION)); }
-                    let parent = file.parent;
-                    let name = file.name.clone();
+                    let id = file.id;
                     drop(file);
-                    shared.refresh()?;
-                    let node = shared.vault.find_child(parent, &name)
-                        .map_err(|_| fs_error(INTERNAL_ERROR))?
-                        .ok_or_else(|| fs_error(NOT_FOUND))?;
-                    shared.metadata_write(|v| v.remove(node.id))?;
+                    // A Windows handle identifies an item, not whichever
+                    // file happens to occupy its former name after a change.
+                    shared.metadata_write(|v| v.remove(id))?;
                     deleted.store(true, Ordering::Release);
                     shared.files.retain(|_,f| !Arc::ptr_eq(f,state));
                 }
@@ -770,6 +791,59 @@ mod tests {
         assert_eq!(original.read_file(imported.id).unwrap(),b"external source 2026");
         drop(original);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires installed WinFsp and an unused drive letter; owned benchmark fixture"]
+    fn mounted_directory_large_listing_round_trips_all_pages() {
+        const FILES: usize = 1200;
+        let temp = std::env::temp_dir();
+        let root = temp.join(format!("ndr-winfsp-listing-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let source = root.join("source");
+        std::fs::create_dir_all(&source).unwrap();
+        let mut expected: Vec<_> = (0..FILES).map(|i| format!("test-item-{i:04}-viewer.txt")).collect();
+        for name in &expected {
+            std::fs::write(source.join(name), b"x").unwrap();
+        }
+        // Verify a directory and the last file page are both retained.
+        std::fs::create_dir(source.join("child")).unwrap();
+        expected.push("child".into());
+        expected.sort_unstable();
+        let vault_path = root.join("listing.ndr");
+        let mut vault = Vault::create(&vault_path, "winfsp listing fixture".into()).unwrap();
+        let started_import = std::time::Instant::now();
+        vault.import_one(1, &source, "Subfolder", false).unwrap();
+        eprintln!("WINFSP_IMPORT files={} durationMs={:.3}", FILES,
+            started_import.elapsed().as_secs_f64() * 1000.0);
+        let mut mount = VaultTreeMount::start(vault_path.clone(), &vault, Arc::new(Mutex::new(())), &[]).unwrap();
+        let folder = mount.mount_root.join("Subfolder");
+        let mut times = Vec::new();
+        for _ in 0..9 {
+            let started = std::time::Instant::now();
+            let mut listing: Vec<String> = std::fs::read_dir(&folder).unwrap()
+                .map(|entry| entry.unwrap().file_name().into_string().unwrap()).collect();
+            times.push(started.elapsed());
+            listing.sort_unstable();
+            assert_eq!(listing, expected, "every item must appear exactly once across WinFsp pages");
+        }
+        assert!(std::fs::remove_dir(&folder).is_err(), "a non-empty directory must not be deleted");
+        let file = folder.join("test-item-1199-viewer.txt");
+        assert_eq!(std::fs::read(&file).unwrap(), b"x");
+        assert_eq!(std::fs::read_dir(&folder).unwrap().count(), FILES + 1);
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while mount.has_open_files() {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        mount.finish().unwrap();
+        drop(mount);
+        drop(vault);
+        times.sort_unstable();
+        eprintln!("WINFSP_LIST entries={} repeated=9 medianMs={:.3}", expected.len(),
+            times[4].as_secs_f64() * 1000.0);
+        assert_eq!(root.parent(), Some(temp.as_path()));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

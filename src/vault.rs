@@ -566,6 +566,12 @@ impl Vault {
         }
         Ok(())
     }
+    /// The mount only needs to know whether a directory has a child before
+    /// deleting it, not build, sort and clone its entire listing.
+    pub fn directory_is_empty(&self, id: i64) -> Result<bool, String> {
+        self.folder(id)?;
+        Ok(!self.index.items.values().any(|item| item.id != id && item.parent == id))
+    }
     pub fn list(&mut self,parent:i64)->Result<Vec<VaultItem>,String>{
         self.folder(parent)?;
         let mut items: Vec<_> = self.index.items.values().filter(|item| item.parent == parent)
@@ -825,7 +831,7 @@ impl Vault {
     pub fn rollback_stream_file(&mut self)->Result<(),String>{
         self.index=self.pending.take().ok_or("No encrypted stream open")?;self.touch();Ok(())
     }
-    fn import_tree(&mut self,parent:i64,path:&Path,name:&str,depth:usize)->Result<usize,String>{
+    fn import_tree(&mut self,parent:i64,path:&Path,name:&str,depth:usize,buffer:&mut Zeroizing<Vec<u8>>)->Result<usize,String>{
         if depth>64{return Err("Encrypted folder depth exceeded".into());}
         valid_name(name)?;
         let meta=fs::symlink_metadata(path).map_err(|e|e.to_string())?;
@@ -836,19 +842,35 @@ impl Vault {
             for child in fs::read_dir(path).map_err(|e|e.to_string())?{
                 let child=child.map_err(|e|e.to_string())?;
                 let name=child.file_name().to_string_lossy().into_owned();
-                count+=self.import_tree(id,&child.path(),&name,depth+1)?;
+                count+=self.import_tree(id,&child.path(),&name,depth+1,buffer)?;
             }
             Ok(count)
         }else if meta.is_file(){
             let id=self.new_item(parent,name,false)?;
             let mut source=File::open(path).map_err(|e|e.to_string())?;
-            let mut buffer=Zeroizing::new(vec![0u8;STREAM_CHUNK_SIZE]);
-            loop{
-                let length=source.read(&mut buffer).map_err(|e|e.to_string())?;
-                if length==0{break;}
-                let block=put_record(&mut self.handle,&self.key,KIND_DATA,&buffer[..length])?;
+            // Reuse one scratch buffer for the whole import. Small files no
+            // longer allocate and wipe an entire 8 MiB page individually.
+            let capacity = meta.len().clamp(1, STREAM_CHUNK_SIZE as u64) as usize;
+            if buffer.len() < capacity { buffer.resize(capacity, 0); }
+            loop {
+                // Keep every nonfinal record page-sized for seek/read on WinFsp,
+                // even if the OS returns a short read before EOF.
+                let mut length = 0;
+                while length < capacity {
+                    match source.read(&mut buffer[length..capacity]) {
+                        Ok(0) => break,
+                        Ok(n) => length += n,
+                        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                        Err(error) => return Err(error.to_string()),
+                    }
+                }
+                if length == 0 { break; }
+                let result = put_record(&mut self.handle, &self.key, KIND_DATA, &buffer[..length]);
+                buffer[..length].zeroize();
+                let block = result?;
                 let item=self.index.items.get_mut(&id).unwrap();
                 item.blocks.push(block);item.size+=length as u64;
+                if length < capacity { break; }
             }
             if self.item(id)?.size!=meta.len(){return Err("Source file changed during encrypted import".into());}
             Ok(1)
@@ -859,7 +881,7 @@ impl Vault {
         let own=fs::canonicalize(&self.file).map_err(|e|e.to_string())?;
         let source=fs::canonicalize(path).map_err(|e|e.to_string())?;
         if own.starts_with(&source){return Err("Cannot import encrypted container or its parent folder".into());}
-        self.transaction(|this|{this.replace(to,name,replace)?;this.import_tree(to,path,name,0)})
+        self.transaction(|this|{this.replace(to,name,replace)?;this.import_tree(to,path,name,0,&mut Zeroizing::new(Vec::new()))})
     }
     pub fn import_paths(&mut self,parent:i64,sources:&[PathBuf])->Result<usize,String>{
         if sources.is_empty(){return Ok(0);}
@@ -871,9 +893,10 @@ impl Vault {
         }
         self.transaction(|this|{
             let mut count=0;
+            let mut buffer=Zeroizing::new(Vec::new());
             for path in sources{
                 let name=path.file_name().ok_or("Import source lacks filename")?.to_string_lossy().into_owned();
-                count+=this.import_tree(parent,path,&name,0)?;
+                count+=this.import_tree(parent,path,&name,0,&mut buffer)?;
             }
             Ok(count)
         })
@@ -1374,6 +1397,33 @@ mod tests {
         assert_eq!(fs::metadata(out.join("test.bin")).unwrap().len(),(3*STREAM_CHUNK_SIZE) as u64);
         drop(v);fs::remove_dir_all(root).unwrap();
     }
+    #[test]
+    fn batch_import_preserves_page_boundaries_and_empty_files() {
+        let root = fixture("batch-page");
+        let large = root.join("large.bin");
+        let small = root.join("small.bin");
+        let empty = root.join("empty.bin");
+        let mut payload = vec![0x4a; STREAM_CHUNK_SIZE];
+        payload.extend_from_slice(b"last-page");
+        fs::write(&large, &payload).unwrap();
+        fs::write(&small, b"tiny").unwrap();
+        fs::write(&empty, []).unwrap();
+        let path = root.join("pages.ndr");
+        let mut vault = Vault::create(&path, "batch import password".into()).unwrap();
+        assert_eq!(vault.import_paths(1, &[large, small, empty]).unwrap(), 3);
+        drop(vault);
+        let mut vault = Vault::unlock(&path, "batch import password".into()).unwrap();
+        let large = vault.find_child(1, "large.bin").unwrap().unwrap().id;
+        assert_eq!(&vault.stream_read_chunk(large, 0).unwrap().unwrap()[..], &payload[..STREAM_CHUNK_SIZE]);
+        assert_eq!(&vault.stream_read_chunk(large, 1).unwrap().unwrap()[..], b"last-page");
+        let small = vault.find_child(1, "small.bin").unwrap().unwrap().id;
+        assert_eq!(vault.read_file(small).unwrap(), b"tiny");
+        let empty = vault.find_child(1, "empty.bin").unwrap().unwrap().id;
+        assert!(vault.read_file(empty).unwrap().is_empty());
+        drop(vault);
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn failed_import_does_not_publish_partial_index() {
         let root=fixture("rollback");let path=root.join("files.ndr");
