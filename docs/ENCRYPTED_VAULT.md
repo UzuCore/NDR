@@ -2,13 +2,13 @@
 
 ## November 2026 replacement
 
-NDR no longer uses SQLCipher, SQLite, or a VeraCrypt volume for newly created .ndr containers. The SQLCipher v1 parser and legacy backward compatibility are intentionally removed at the user's request. Previous .ndr files do NOT open in this version. No user documents are automatically deleted; test assets discovered in ordinary install/work locations were empty.
+Current .ndr containers use the NDR v3 format. Files in the earlier v1 SQLCipher and v2 formats require a compatible older build. Older v3 indexes that lack Windows attributes and timestamps are read with defaults for those fields.
 
 Storage design is inspired by CoverFS's single-file, dynamically growing index and block layout (https://github.com/s-macke/CoverFS). NDR has its own on-disk format and relies on the maintained OpenSSL AES-256-GCM implementation, not CoverFS's legacy CBC implementation. It is not compatible with CoverFS, VeraCrypt, or Cryptomator.
 
 ## Storage and security
 
-- Physical storage: exactly one .ndr file, growing on demand; no preallocated disk volume and no file-system mount driver.
+- Each container is stored in one .ndr file that grows on demand. WinFsp provides the Windows drive view for unlocked containers in the default build.
 - 128-byte fixed header: magic NDRV3FS!, 16-byte random PBKDF2 salt, KDF parameters, two generation-indexed metadata pointers protected by keyed HMAC-SHA256 (128-bit truncated MAC). Header fields and overall file length are not secret; names and data are encrypted.
 - Password: >=6 characters for newly created containers (user-selectable security tradeoff), PBKDF2-HMAC-SHA256 with 600,000 iterations, 256-bit key. A short or predictable password can be guessed offline even when AES-256-GCM encryption is used. A unique random password of 16+ characters is strongly recommended. No password or key stored in settings.
 - All file content is written in AES-256-GCM authenticated chunks up to 8 MiB, with independent random 96-bit nonces and 128-bit tags. AAD authenticates record kind, payload length, and physical block offset.
@@ -23,7 +23,7 @@ Storage design is inspired by CoverFS's single-file, dynamically growing index a
 - Same-container copy shares immutable ciphertext block references (copy-on-write semantics); avoids copying or re-encrypting contents.
 - Move, rename, delete update only the metadata index; no per-file zeroing or SQL transaction work.
 - Import, export, cross-container copy must encrypt/decrypt actual bytes and cannot reach native raw copy speeds for large files.
-- Delete is a logical unlink, NOT secure physical erasure: encrypted older data blocks remain in the .ndr file until a separate compaction pass. The file does not shrink automatically; deleting data can leave dead encrypted space. This is a known limitation and requires compaction/space-reclamation engineering. Guaranteed physical erasure on SSD cannot be promised, even after compaction.
+- Deleting files unlinks them from the current index. Use **Compact Encrypted Folder** to reclaim space occupied by old records in the current file. SSD remnants, snapshots and backups can retain earlier bytes after compaction.
 - The current architecture processes the 8 MiB chunk inside the egui repaint tick for some transfers, and manual compaction runs synchronously in the confirmation callback; UI responsiveness may degrade for large maintenance operations. Future improvement: bounded background worker with cancellable maintenance.
 
 ## UI / behavior
@@ -31,12 +31,10 @@ Storage design is inspired by CoverFS's single-file, dynamically growing index a
 - Ctrl+K opens Create Encrypted Folder in the Folder menu immediately after New Folder. Normal new-folder Alt+K remains.
 - Existing .ndr extension is displayed as an encrypted folder in NDR panes; unlocked panels have the pink border.
 - Password on first unlock; same process-based or minute-based session policies; regular folder navigation, clipboard copy/paste, create, rename, export, delete.
-- Explicit exports create plaintext files by user choice; ordinary editing that exports to temp can also create plaintext.
-- Since r212, double-clicking an encrypted non-text file opens it through the Windows default application. NDR decrypts to a randomly named subdirectory of the user's temporary folder, then shows an in-app external-editor control window. Known small UTF-8 text types continue using the in-memory editor; other formats and large text files use external opening.
-- When finished editing, save in the external program, then click **Save changes to encrypted folder** in NDR. The edited file is streamed back using the existing transactional encrypted import; the original is not replaced if its vault entry changed or disappeared during editing. When finished, close the external application and click **Close temporary copy** to clean up. Unsaved edits require a second explicit discard confirmation.
-- SECURITY WARNING: external applications can write plaintext backups, recovery files, thumbnails, logs and recent-document records outside the NDR temp directory. Windows caches, pagefile and SSD remnants cannot be reliably wiped by NDR. A crash or forced shutdown may leave plaintext temp files; modified temp files are intentionally preserved for recovery rather than silently destroyed. Do not use external editing for secrets that must never be materialized outside the container.
-- Large external files are streamed in 8 MiB blocks rather than loaded into memory. The external open/save operation may temporarily stall the NDR UI on very large items. Modifications are checked on Save / Close, not on every render frame.
-- Decrypting an old v1 SQLCipher file or disposable v2 container fails with a clear unsupported legacy format error. The user authorized discarding the earlier test format rather than migrating it.
+- Double-click a file to open it from the WinFsp drive. NDR uses Notepad for recognized text extensions and the Windows default application for other files. The default build offers its signed, bundled WinFsp installer if the driver is missing. Windows requests administrator approval for installation.
+- Save and close the file in the external application. WinFsp flush and close operations commit changes to the encrypted container. Windows applications can open the unlocked drive and use ordinary file operations. NDR checks for open handles or uncommitted edits before exiting.
+- Session expiry or minimize locking can revoke new opens while allowing existing handles to finish saving. Close the external application before trying to exit NDR.
+- NDR exposes plaintext through the virtual drive and writes plaintext files when explicitly requested to export. External applications and Windows may retain plaintext in backups, caches, thumbnails, recovery files or the pagefile.
 
 ## Known QA requirements
 

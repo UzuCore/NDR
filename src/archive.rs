@@ -243,7 +243,8 @@ pub fn create_with_progress(
     let output_stage = unique_path(parent, "archive-output");
     let result = (|| {
         let mut names = HashSet::new();
-        let mut source_paths = Vec::new();
+        let mut source_paths = Vec::with_capacity(sources.len());
+        let mut copy_buffer = Vec::new();
         for source in sources {
             let canonical = resolve_archive_path(source).map_err(|e| e.to_string())?;
             if snapshot.starts_with(&canonical) {
@@ -260,7 +261,7 @@ pub fn create_with_progress(
                 return Err("Duplicate archive source names".into());
             }
             let target = snapshot.join(name);
-            copy_tree(source, &target, cancel)?;
+            copy_tree(source, &target, cancel, &mut copy_buffer)?;
             source_paths.push(target);
         }
         fs::create_dir(&output_stage).map_err(|e| e.to_string())?;
@@ -842,7 +843,7 @@ fn inspect_tree(path: &Path) -> Result<(), String> {
     }
     Ok(())
 }
-fn copy_tree(source: &Path, target: &Path, cancel: &AtomicBool) -> Result<(), String> {
+fn copy_tree(source: &Path, target: &Path, cancel: &AtomicBool, buffer: &mut Vec<u8>) -> Result<(), String> {
     use std::io::Write;
     let mut pending = vec![(source.to_owned(), target.to_owned())];
     let mut directories = Vec::new();
@@ -867,11 +868,17 @@ fn copy_tree(source: &Path, target: &Path, cancel: &AtomicBool) -> Result<(), St
                 .create_new(true)
                 .open(&target)
                 .map_err(|e| e.to_string())?;
-            let mut buffer = vec![0; 1024 * 1024];
+            // A snapshot can contain thousands of tiny files. Grow one
+            // operation-local buffer only as needed instead of zeroing 1 MiB
+            // for every member. Check cancellation between reads as before.
+            let buffer_len = metadata.len().clamp(4096, 1024 * 1024) as usize;
+            if buffer.len() < buffer_len {
+                buffer.resize(buffer_len, 0);
+            }
             let mut copied = 0;
             loop {
                 check_cancel(cancel)?;
-                let n = input.read(&mut buffer).map_err(|e| e.to_string())?;
+                let n = input.read(&mut buffer[..buffer_len]).map_err(|e| e.to_string())?;
                 if n == 0 {
                     break;
                 }
@@ -879,7 +886,7 @@ fn copy_tree(source: &Path, target: &Path, cancel: &AtomicBool) -> Result<(), St
                 copied += n as u64;
             }
             let current = input.metadata().map_err(|e| e.to_string())?;
-            if copied != metadata.len() || current.modified().ok() != metadata.modified().ok() {
+            if copied != metadata.len() || current.len() != metadata.len() || current.modified().ok() != metadata.modified().ok() {
                 return Err("Archive source changed while taking the snapshot".into());
             }
             crate::fsops::preserve_times(&output, &metadata)?;
@@ -1616,6 +1623,7 @@ fn stage_merged_archive_folder(
     conflicts: &mut dyn FnMut(&Path, &ArchiveEntry) -> AddConflict,
     skipped: &mut Vec<PathBuf>,
     removals: &mut Vec<String>,
+    copy_buffer: &mut Vec<u8>,
 ) -> Result<(), String> {
     check_cancel(cancel)?;
     ensure_plain_path(source)?;
@@ -1672,9 +1680,9 @@ fn stage_merged_archive_folder(
             return Err(format!("Duplicate archive source names: {}", staged.display()));
         }
         if merge_folder {
-            stage_merged_archive_folder(&child_path, &staged, &format!("{key}/{name}"), existing, cancel, conflicts, skipped, removals)?;
+            stage_merged_archive_folder(&child_path, &staged, &format!("{key}/{name}"), existing, cancel, conflicts, skipped, removals, copy_buffer)?;
         } else {
-            copy_tree(&child_path, &staged, cancel)?;
+            copy_tree(&child_path, &staged, cancel, copy_buffer)?;
         }
     }
     Ok(())
@@ -1709,6 +1717,7 @@ pub fn add_entries_with(
         let mut names = HashSet::new();
         let mut removals = Vec::new();
         let mut skipped = Vec::new();
+        let mut copy_buffer = Vec::new();
         for source in sources {
             let name = source.file_name().ok_or("Cannot add a filesystem root")?;
             let mut text = name.to_str().ok_or("Archive source filename must be Unicode")?.to_owned();
@@ -1751,9 +1760,9 @@ pub fn add_entries_with(
             }
             if merge_folder {
                 let key = if prefix.is_empty() { text.clone() } else { format!("{prefix}/{text}") };
-                stage_merged_archive_folder(source, &base.join(&text), &key, &existing, cancel, conflicts, &mut skipped, &mut removals)?;
+                stage_merged_archive_folder(source, &base.join(&text), &key, &existing, cancel, conflicts, &mut skipped, &mut removals, &mut copy_buffer)?;
             } else {
-                copy_tree(source, &base.join(&text), cancel)?;
+                copy_tree(source, &base.join(&text), cancel, &mut copy_buffer)?;
             }
         }
         if names.is_empty() {
@@ -2761,6 +2770,38 @@ mod tests {
         fs::create_dir_all(&p).unwrap();
         p
     }
+    #[test]
+    fn snapshot_reuses_growing_buffer_without_changing_data_or_times() {
+        use std::sync::atomic::Ordering;
+        let root = fixture();
+        let cancel = AtomicBool::new(false);
+        let mut buffer = Vec::new();
+        for (index, data) in [
+            vec![0x1f; 19],
+            (0..2 * 1024 * 1024 + 17).map(|i| (i % 251) as u8).collect(),
+            Vec::new(),
+            vec![0xb2; 2048],
+        ].into_iter().enumerate() {
+            let source = root.join(format!("source{index}"));
+            let target = root.join(format!("target{index}"));
+            fs::write(&source, &data).unwrap();
+            copy_tree(&source, &target, &cancel, &mut buffer).unwrap();
+            assert_eq!(fs::read(&target).unwrap(), data);
+            assert_eq!(fs::metadata(&source).unwrap().modified().unwrap(),
+                fs::metadata(&target).unwrap().modified().unwrap());
+            if index == 0 {
+                assert_eq!(buffer.len(), 4096, "tiny files do not allocate a large buffer");
+            } else {
+                assert_eq!(buffer.len(), 1024 * 1024, "reuse after large files");
+            }
+        }
+        cancel.store(true, Ordering::Relaxed);
+        let cancelled_target = root.join("cancelled");
+        assert!(copy_tree(&root.join("source0"), &cancelled_target, &cancel, &mut buffer).is_err());
+        assert!(!cancelled_target.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
     /// 7-Zip -bsp1 progress text: percentage and file name. Bundled 7-Zip archiving reports progress before it finishes.
     #[test]
     fn seven_zip_progress_is_parsed_and_reported() {

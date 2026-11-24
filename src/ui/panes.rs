@@ -9,6 +9,28 @@ pub(super) fn is_drives(path: &Path) -> bool {
     path.as_os_str() == super::remote_window::DRIVES
 }
 
+/// Bound how long a navigation or F5 refresh may synchronously wait for its
+/// listing worker. UNC and mapped network drives can take seconds to answer
+/// a directory enumeration, so do not spend the normal local 120 ms waiting
+/// on the GUI thread. The same worker and results channel still complete the
+/// listing asynchronously, and refresh still uses its generation guard.
+pub(super) fn foreground_listing_wait(path: &Path) -> Duration {
+    let display = path.to_string_lossy();
+    if display.starts_with(r"\\") {
+        return Duration::from_millis(8);
+    }
+    let bytes = display.as_bytes();
+    if bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && (bytes[2] == b'\\' || bytes[2] == b'/')
+        && ndr::native::is_network_drive(Path::new(&display[..3]))
+    {
+        return Duration::from_millis(8);
+    }
+    Duration::from_millis(120)
+}
+
 /// Original GetSelAreaAt(0x7dae7c): in non-thumbnail views, the left 12 pixels of the item cell (GetItemRect's left ~ left + 0xc).
 /// GetItemRect (0x7daae4): styles 0/1 = column index / rows × column width − horizontal position, row = remainder × (height + gap);
 /// style 2 (Details) = −horizontal position, y = (height + gap) × index − top + header; style 3 (Thumbnails) = the stored cell position.
@@ -744,6 +766,35 @@ pub(super) enum ListMenu {
 }
 
 impl App {
+    pub(super) fn request_shell_menu(&mut self, ctx: &egui::Context, paths: Vec<PathBuf>) {
+        egui::Popup::close_all(ctx);
+        // The click frame can already contain the NDR popup's shapes.
+        // Present one frame without it before TrackPopupMenuEx blocks the UI.
+        self.pending_shell_menu = Some((ctx.cumulative_frame_nr() + 2, paths));
+        ctx.request_repaint();
+    }
+
+    pub(super) fn poll_shell_menu(
+        &mut self,
+        ctx: &egui::Context,
+        show: impl FnOnce(&[PathBuf]) -> Result<(), String>,
+    ) {
+        let Some((ready_at, _)) = &mut self.pending_shell_menu else { return };
+        let frame = ctx.cumulative_frame_nr();
+        if egui::Popup::is_any_open(ctx) {
+            egui::Popup::close_all(ctx);
+            *ready_at = frame + 2;
+        }
+        if frame < *ready_at {
+            ctx.request_repaint();
+            return;
+        }
+        if let Some((_, paths)) = self.pending_shell_menu.take()
+            && let Err(error) = show(&paths) {
+            self.status = error;
+        }
+    }
+
     /// Original list OnContextPopup(FUN_00484e8c): shown only in a local pane (FUN_00481948 = 0). If "Right-click: use Explorer menu"
     /// (chkExplorerMenu, setting +0xd1) is on, or there is no selection and the cursor item is a drive (kind 4), use the Explorer menu (FUN_00486104:
     /// the drive if a drive, otherwise the selected items or the cursor item); otherwise pmMain.
@@ -824,6 +875,14 @@ pub(super) fn row_pressed(pane: &mut Pane, row: usize, modifiers: egui::Modifier
 
 impl App {
     pub(super) fn refresh(&mut self, index: usize) {
+        self.refresh_inner(index, true);
+    }
+
+    pub(super) fn refresh_after_startup(&mut self, index: usize) {
+        self.refresh_inner(index, false);
+    }
+
+    fn refresh_inner(&mut self, index: usize, foreground: bool) {
         if self.panes[index].vault.is_some() {
             return self.refresh_vault(index);
         }
@@ -845,12 +904,14 @@ impl App {
         let current = self.panes[index].path.clone();
         self.tree_cache.retain(|(key, _), _| !ndr::shell_tree::same_key(key, &current));
         self.tree_requests.retain(|(key, _)| !ndr::shell_tree::same_key(key, &current));
+        self.tree_cache_revision = self.tree_cache_revision.wrapping_add(1);
         // The original refresh resets the selection to the name (apply_listing), so keep the current selection until the new listing arrives.
         let pane = &mut self.panes[index];
         pane.generation += 1;
         pane.loading = true;
         let generation = pane.generation;
         let path = pane.path.clone();
+        let foreground_wait = foreground.then(|| foreground_listing_wait(&path));
         let show_hidden = pane.show_hidden;
         let archive = pane.archive.clone();
         let remote = pane.remote.clone();
@@ -870,9 +931,9 @@ impl App {
         let drive_items = move |cache: &std::sync::Arc<std::sync::Mutex<DriveListCache>>| {
             if cfg!(test) { ready_drives().into_iter().map(|root| { let info = drive_item(&root); (root, info) }).collect() } else { cached_drive_items(cache, ready_drives, drive_item) }
         };
-        // The drives of the My PC view are read on the calling thread as before (immediately if cached). Tests have fake drives per thread, so
-        // the appended drives are also read on the calling thread.
-        let this_pc: Option<Vec<(PathBuf, Option<DriveInfo>)>> = (drives_view || (cfg!(test) && append_drives)).then(|| if show_drive_list { drive_items(&drive_list) } else { Vec::new() });
+        // Drive hooks are thread-local in tests; keep test reads on the
+        // caller. Production enumerates drives on the listing worker too.
+        let this_pc: Option<Vec<(PathBuf, Option<DriveInfo>)>> = (cfg!(test) && (drives_view || append_drives)).then(|| if show_drive_list { drive_items(&drive_list) } else { Vec::new() });
         // Original listing workers are TMJFThread (Nmjfthreads: constructor 0x462814, Execute 0x462abc = OnStart, then OnExecute while
         // looping and not terminated, then OnFinish; SyncFunction 0x462ed0 / SyncDataFunction 0x462f6c = Synchronize, Terminate 0x462d34,
         // SuspendIfNotTerminated 0x462e48, destructor 0x462a1c), and results reach the window through TMessageTrap (Nmjfcore: constructor
@@ -885,7 +946,7 @@ impl App {
             // like a disconnected network drive, you don't wait for it every time you change folders.
             let listed = match this_pc {
                 Some(items) => items,
-                None if append_drives => drive_items(&drive_list),
+                None if show_drive_list && (drives_view || append_drives) => drive_items(&drive_list),
                 None => Vec::new(),
             };
             let roots: Vec<PathBuf> = listed.iter().map(|(root, _)| root.clone()).collect();
@@ -997,8 +1058,10 @@ impl App {
         // scans. Fast listings still swap in place; slower scans finish on the
         // worker thread while the pane remains responsive (the result is
         // applied via listing_rx in App::poll).
-        if self.panes[index].remote.is_none() {
-            let deadline = Instant::now() + Duration::from_millis(120);
+        if let Some(foreground_wait) = foreground_wait
+            && self.panes[index].remote.is_none()
+        {
+            let deadline = Instant::now() + foreground_wait;
             let mut auth = Vec::new();
             while self.panes[index].loading && self.panes[index].generation == generation {
                 let left = deadline.saturating_duration_since(Instant::now());
@@ -1292,12 +1355,23 @@ impl App {
         let group_mode = self.side_text(index, "GroupMode", "None");
         let category_mode = self.side_text(index, "FolderCategoryMode", "Auto");
         let group_descending = self.side_flag(index, "GroupDescending", false);
-        let (extension_colors, nexus_colors) = self.color_maps();
-        let (extension_colors, nexus_colors) = (extension_colors.cloned(), nexus_colors.cloned());
-        let color = |entry: &Entry| ndr::listing::color_sort_key(entry, extension_colors.as_ref(), nexus_colors.as_ref());
+        // Borrow the two color maps from settings while sorting the disjoint
+        // pane field. Previously they were deep-cloned on *every* folder
+        // refresh/re-sort, even when sorting by name or modification time.
+        let extension_colors = self.settings.values.get("ExtensionColors").and_then(|value| value.as_object());
+        let nexus_colors = self.settings.flag("UseNexusFileColorMap", false)
+            .then(|| self.settings.values.get("NexusFileColorMapValues").and_then(|value| value.as_object()))
+            .flatten();
+        let color = |entry: &Entry| ndr::listing::color_sort_key(entry, extension_colors, nexus_colors);
         let pane = &mut self.panes[index];
-        let cursor = pane.entries.get(pane.cursor).map(|e| e.path.clone());
-        let marked: HashSet<PathBuf> = pane.selected.iter().filter_map(|i| pane.entries.get(*i).map(|e| e.path.clone())).collect();
+        // At a drive's top-level folder, the appended drive and '..' both
+        // target the drive root. Preserve the row's role as well as its path.
+        let role = |e: &Entry| if e.drive { 4u8 } else if e.is_parent() { 2 } else { 1 };
+        let cursor = pane.entries.get(pane.cursor).map(|e| (e.path.clone(), role(e)));
+        let mut marked = HashMap::<PathBuf, u8>::with_capacity(pane.selected.len());
+        for entry in pane.selected.iter().filter_map(|&i| pane.entries.get(i)) {
+            *marked.entry(entry.path.clone()).or_default() |= role(entry);
+        }
         // The original ".." item comes first regardless of sorting.
         let (mut parents, rest): (Vec<Entry>, Vec<Entry>) = std::mem::take(&mut pane.entries).into_iter().partition(|e| e.is_parent());
         pane.entries = rest;
@@ -1310,9 +1384,17 @@ impl App {
         parents.append(&mut items);
         pane.entries = parents;
         pane.thumb_content_revision = pane.thumb_content_revision.wrapping_add(1);
-        pane.selected = pane.entries.iter().enumerate().filter(|(_, e)| marked.contains(&e.path)).map(|(i, _)| i).collect();
-        if let Some(cursor) = cursor {
-            pane.cursor = pane.entries.iter().position(|e| e.path == cursor).unwrap_or(0);
+        if marked.is_empty() {
+            pane.selected.clear();
+        } else {
+            pane.selected = pane.entries.iter().enumerate()
+                .filter(|(_, e)| marked.get(&e.path).is_some_and(|roles| roles & role(e) != 0))
+                .map(|(i, _)| i).collect();
+        }
+        if let Some((path, kind)) = cursor {
+            pane.cursor = pane.entries.iter()
+                .position(|e| e.path == path && role(e) == kind)
+                .unwrap_or(0);
         }
         self.compute_view(index);
     }
@@ -1903,9 +1985,7 @@ impl App {
                     }
                     ListMenu::Main => Some(ctx.input(|i| i.pointer.interact_pos()).unwrap_or(list_rect.left_top())),
                     ListMenu::Shell(paths) => {
-                        if let Err(error) = ndr::shell_menu::show(&paths) {
-                            self.status = error;
-                        }
+                        self.request_shell_menu(ctx, paths);
                         None
                     }
                     ListMenu::None => None,

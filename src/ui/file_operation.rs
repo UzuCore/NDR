@@ -35,29 +35,43 @@ pub(super) struct ConflictForm {
 /// Independent file copies may share a directory; overlapping targets and
 /// moving sources are rejected to avoid racing changes to the same files.
 pub(super) struct TransferReservation {
-    pub sources: Vec<PathBuf>,
-    pub targets: Vec<PathBuf>,
+    sources: Vec<String>,
+    targets: Vec<String>,
     pub moving: bool,
+    pub conflict_policy: Arc<std::sync::Mutex<Option<ConflictChoice>>>,
 }
 
 impl TransferReservation {
     pub fn from_operation(op: &Operation) -> Option<Self> {
         let Operation::Copy { sources, destination, move_files } = op else { return None };
-        let targets = sources.iter().map(|source| destination.join(source.file_name().unwrap_or_default())).collect();
-        Some(Self { sources: sources.clone(), targets, moving: *move_files })
+        fn sorted_keys(paths: impl Iterator<Item = String>) -> Vec<String> {
+            let mut keys: Vec<_> = paths.collect();
+            keys.sort_unstable();
+            keys.dedup();
+            keys
+        }
+        let normalize = |path: &Path| {
+            path.to_string_lossy().replace('/', "\\").trim_end_matches('\\').to_lowercase()
+        };
+        let targets = sorted_keys(sources.iter().map(|source|
+            normalize(&destination.join(source.file_name().unwrap_or_default()))));
+        let sources = sorted_keys(sources.iter().map(|source| normalize(source)));
+        Some(Self { sources, targets, moving: *move_files, conflict_policy: Default::default() })
     }
 
     pub fn overlaps(&self, other: &Self) -> bool {
-        fn normalize(path: &Path) -> String {
-            path.to_string_lossy().replace('/', "\\").trim_end_matches('\\').to_lowercase()
+        fn contains_path(roots: &[String], paths: &[String]) -> bool {
+            roots.iter().any(|root| {
+                if paths.binary_search(root).is_ok() {
+                    return true;
+                }
+                let prefix = format!("{root}\\");
+                paths.get(paths.partition_point(|path| path < &prefix))
+                    .is_some_and(|path| path.starts_with(&prefix))
+            })
         }
-        fn intersect(a: &Path, b: &Path) -> bool {
-            let (a, b) = (normalize(a), normalize(b));
-            a == b || a.strip_prefix(&b).is_some_and(|s| s.starts_with('\\'))
-                || b.strip_prefix(&a).is_some_and(|s| s.starts_with('\\'))
-        }
-        fn any(a: &[PathBuf], b: &[PathBuf]) -> bool {
-            a.iter().any(|x| b.iter().any(|y| intersect(x, y)))
+        fn any(a: &[String], b: &[String]) -> bool {
+            contains_path(a, b) || contains_path(b, a)
         }
         any(&self.targets, &other.targets)
             || (self.moving && (any(&self.sources, &other.sources) || any(&self.sources, &other.targets)))
@@ -539,7 +553,9 @@ impl App {
             (false, TransferKind::Paste) => (if ko { "항목 붙여넣기" } else { "Paste items" }, ("붙여넣기", "paste")),
             (false, _) => (if ko { "항목 복사" } else { "Copy items" }, ("복사", "copy")),
         };
-        let totals = flat_totals(&sources);
+        // Large selections get their totals from the worker. A single
+        // selection retains the immediately available progress labels.
+        let totals = if sources.len() == 1 { flat_totals(&sources) } else { None };
         let progress = ProgressInfo {
             from: if sources.len() == 1 { source_folder(&sources[0]) } else { None },
             to: Some(destination.to_string_lossy().into_owned()),
@@ -570,10 +586,13 @@ impl App {
                 DialogResult::FileConflict(Some((choice, all))) => {
                     if all && choice != ConflictChoice::Cancel {
                         if let Some(serial) = owner {
-                            if let Some(job) = app.job.as_mut().filter(|job| job.serial == serial) {
+                            if let Some(job) = app.job.iter_mut().chain(&mut app.background_jobs)
+                                .find(|job| job.serial == serial) {
                                 job.conflict_policy = Some(choice);
-                            } else if let Some(job) = app.background_jobs.iter_mut().find(|job| job.serial == serial) {
-                                job.conflict_policy = Some(choice);
+                                if let Some(reservation) = &job.reservation
+                                    && let Ok(mut policy) = reservation.conflict_policy.lock() {
+                                    *policy = Some(choice);
+                                }
                             }
                         } else {
                             app.conflict_all = Some(choice);
@@ -765,6 +784,8 @@ impl App {
             let remaining = match info.total_bytes.filter(|n| *n > 0) {
                 Some(total) if info.prefer_bytes =>
                     ndr::native::format_byte_size(total.saturating_sub(job.bytes)),
+                None if info.prefer_bytes && job.bytes > 0 =>
+                    ndr::native::format_byte_size(job.bytes),
                 _ => String::new(),
             };
             let count = match info.total_files {

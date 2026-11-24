@@ -61,6 +61,78 @@ pub fn equals_ignore_case(a: &str, b: &str) -> bool {
     unsafe { CompareStringOrdinal(a.as_ptr(), a.len() as i32 - 1, b.as_ptr(), b.len() as i32 - 1, 1) == CSTR_EQUAL }
 }
 
+/// A Windows-ordinal, case-insensitive key for restoring large marked lists.
+/// Do not substitute to_lowercase() or a locale sort: those differ from the
+/// CompareStringOrdinal comparison historically used by NDR.
+struct OrdinalName(Vec<u16>);
+
+impl OrdinalName {
+    fn new(name: &str) -> Self {
+        Self(name.encode_utf16().collect())
+    }
+}
+
+impl Ord for OrdinalName {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        use std::cmp::Ordering;
+        use windows_sys::Win32::Globalization::CompareStringOrdinal;
+        // SAFETY: both UTF-16 vectors remain alive and explicit lengths
+        // exclude no interior characters (including any embedded NUL).
+        match unsafe {
+            CompareStringOrdinal(
+                self.0.as_ptr(), self.0.len() as i32,
+                other.0.as_ptr(), other.0.len() as i32, 1,
+            )
+        } {
+            1 => Ordering::Less,
+            2 => Ordering::Equal,
+            3 => Ordering::Greater,
+            // Preserve a total order if the API fails rather than panic.
+            _ => self.0.cmp(&other.0),
+        }
+    }
+}
+
+impl PartialOrd for OrdinalName {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl PartialEq for OrdinalName {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == std::cmp::Ordering::Equal
+    }
+}
+
+impl Eq for OrdinalName {}
+
+/// Restore selected rows after a listing is re-read/reordered, preserving the
+/// ORIGINAL Windows case-insensitive first-match rule. Instead of scanning
+/// every new row for each of M marks (O(N*M) plus repeated UTF-16 allocations),
+/// scan rows once against the remaining marks (O((N+M)*log M)).
+/// The caller excludes drive and parent items as the original algorithm did.
+pub fn restore_marked_rows<'a>(
+    eligible_rows: impl IntoIterator<Item = (usize, &'a str)>,
+    names: &[String],
+) -> Vec<usize> {
+    use std::collections::BTreeSet;
+    if names.is_empty() {
+        return Vec::new();
+    }
+    let mut remaining: BTreeSet<OrdinalName> = names.iter().map(|name| OrdinalName::new(name)).collect();
+    let mut found = Vec::with_capacity(remaining.len());
+    for (index, name) in eligible_rows {
+        if remaining.remove(&OrdinalName::new(name)) {
+            found.push(index);
+            if remaining.is_empty() {
+                break;
+            }
+        }
+    }
+    found
+}
+
 fn last_error() -> u32 {
     // SAFETY: plain thread-local error read.
     unsafe { windows_sys::Win32::Foundation::GetLastError() }
@@ -183,6 +255,86 @@ pub fn system_message(error: u32) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn legacy_restore(rows: &[(usize, String)], names: &[String]) -> Vec<usize> {
+        let mut result: Vec<usize> = names.iter().filter_map(|name| {
+            rows.iter().find(|(_, candidate)| equals_ignore_case(candidate, name)).map(|(index, _)| *index)
+        }).collect();
+        result.sort_unstable();
+        result.dedup();
+        result
+    }
+
+    fn fast_restore(rows: &[(usize, String)], names: &[String]) -> Vec<usize> {
+        // Pane.selected is a BTreeSet, so output order is index order even
+        // when a test supplies the candidate rows in reverse traversal order.
+        let mut result = restore_marked_rows(rows.iter().map(|(index, candidate)| (*index, candidate.as_str())), names);
+        result.sort_unstable();
+        result
+    }
+
+    #[test]
+    fn many_marks_restore_the_original_first_match_with_unicode_and_duplicate_names() {
+        let mut rows: Vec<(usize, String)> = (0..2048)
+            .map(|i| (i + 1, format!("파일_{i:05}_Test.txt")))
+            .collect();
+        rows.extend([
+            (2050, "Istanbul.txt".into()),
+            (2051, "İstanbul.txt".into()),
+            (2052, "ıstanbul.txt".into()),
+            (2053, "Kelvin.txt".into()),
+            (2054, "Kelvin.txt".into()),
+            (2055, "Straße.txt".into()),
+            (2056, "STRASSE.txt".into()),
+            (2057, "Résumé.txt".into()),
+            (2058, "résumé.txt".into()),
+            (2059, "Alpha.TXT".into()),
+            (2060, "alpha.txt".into()),
+        ]);
+        let mut marks: Vec<String> = (0..2048).step_by(3).map(|i| format!("파일_{i:05}_test.TXT")).collect();
+        marks.extend([
+            "ISTANBUL.TXT".into(), "istanbul.txt".into(),
+            "İstanbul.txt".into(), "ıSTANBUL.TXT".into(),
+            "KELVIN.TXT".into(), "kelvin.txt".into(),
+            "STRASSE.TXT".into(), "straße.txt".into(),
+            "RÉSUMÉ.TXT".into(), "résumé.txt".into(),
+            "alpha.txt".into(), "ALPHA.TXT".into(),
+            "does-not-exist.txt".into(),
+        ]);
+        for mut order in [rows.clone(), { rows.reverse(); rows }] {
+            let expected = legacy_restore(&order, &marks);
+            let actual = fast_restore(&order, &marks);
+            assert_eq!(actual, expected, "bulk marking must match original Win32 ordinal comparison");
+            let first = order.iter().find(|(_, name)| equals_ignore_case(name, "alpha.txt")).unwrap().0;
+            assert!(actual.contains(&first));
+            order.rotate_left(23);
+            assert_eq!(fast_restore(&order, &marks), legacy_restore(&order, &marks));
+        }
+        assert!(fast_restore(&[(8, "file.txt".into())], &[]).is_empty());
+        assert!(fast_restore(&[], &["file.txt".into()]).is_empty());
+    }
+
+    /// Run explicitly in Release when assessing the CPU hot path. The
+    /// reference deliberately retains the old O(N*M) Win32 comparison loop.
+    #[test]
+    #[ignore = "measure with cargo test --release -- --ignored benchmark_bulk_selection"]
+    fn benchmark_bulk_selection_against_legacy_lookup() {
+        use std::time::Instant;
+        let rows: Vec<(usize, String)> = (0..12_000)
+            .map(|i| (i, format!("large-folder_항목_{i:05}_long_name_x8.txt"))).collect();
+        let marks: Vec<String> = (0..12_000).step_by(12)
+            .map(|i| format!("LARGE-FOLDER_항목_{i:05}_LONG_NAME_X8.txt")).collect();
+        let before = Instant::now();
+        let reference = legacy_restore(&rows, &marks);
+        let legacy = before.elapsed();
+        let before = Instant::now();
+        let optimized = fast_restore(&rows, &marks);
+        let fast = before.elapsed();
+        assert_eq!(reference, optimized);
+        println!("bulk_restore files={} marks={} legacy_ms={:.3} indexed_ms={:.3} speedup={:.2}x",
+            rows.len(), marks.len(), legacy.as_secs_f64() * 1_000.0,
+            fast.as_secs_f64() * 1_000.0, legacy.as_secs_f64() / fast.as_secs_f64());
+    }
 
     #[test]
     fn native_name_operations_follow_the_original() {

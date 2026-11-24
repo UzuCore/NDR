@@ -69,17 +69,17 @@ a duplicate. The workflow uses GitHub's built-in `GITHUB_TOKEN` with
 
 ## Encrypted folders (experimental)
 
-NDR supports `.ndr` SQLCipher-based encrypted containers. Use **File → New
-encrypted folder (.ndr)** to create one; double-click an `.ndr` file in NDR
-to open the password-protected virtual folder browser. Configure session
-locking in **Options → NDR → Encrypted Folder**. A password is required after
-every session expiration. See [security limits and implementation details](docs/ENCRYPTED_VAULT.md)
-before trusting the feature with sensitive information. No separate drive
-mount is required; native pane operations are not all integrated yet.
+NDR stores encrypted folders in single-file AES-GCM v3 containers. Use
+**Folder → Create Encrypted Folder** (Ctrl+K) to create one. Double-click a
+`.ndr` file and enter its password to unlock it. Configure session locking in
+**Options → NDR → Encrypted Folder**. The default Windows build uses WinFsp
+to expose the unlocked folder to Windows applications, and offers the bundled
+driver installer when needed. See the [encrypted folder documentation](docs/ENCRYPTED_VAULT.md)
+for session and storage behavior.
 
 When both panes display different unlocked `.ndr` containers, use **F3** to
 copy and **F4** to move complete folder trees directly between the encrypted
-databases, without a plaintext temporary folder. A cross-container move first
+containers, without a plaintext temporary folder. A cross-container move first
 commits the destination and only then deletes the source. Failed source
 deletion retains both encrypted copies. Encrypted transfers display the same
 progress window and duplicate-name dialog as regular file operations, with
@@ -89,13 +89,13 @@ Password and creation dialogs use the same centered,
 movable chrome as other NDR dialogs. Vault strings are provided in all 21
 bundled language resources (English fallback for unreviewed translations).
 
-Large encrypted files are copied through 8 MiB SQLCipher-encrypted chunks
+Large encrypted files are copied through 8 MiB authenticated chunks
 instead of loading entire files into RAM. The former 64 MiB file / 512 MiB
 transfer limits no longer apply to the file-management transfer paths.
 Individual file transfers show byte progress and allow cancellation between
 chunks; recursive directory transfers still complete one folder tree at a
-time. Older `.ndr` containers can be opened, but files newly stored in the
-chunked format require a current NDR version to read.
+time. This version opens v3 containers. Legacy v1 and v2 containers require
+the version that created them.
 
 ## Build locally
 

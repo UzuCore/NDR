@@ -1967,6 +1967,8 @@ fn skin_toolbar_follows_the_original_layout() {
     let skin = app.current_skin().expect("the Black skin");
     assert_eq!((skin.positive_integer("Toolbar", "tbheight", 0), skin.positive_integer("Toolbar", "tbtopoffset", 0)), (51, 7));
     let back = app.toolbar_icon(&ctx, "tb_back.png").expect("tb_back.png");
+    let uppercase = app.toolbar_icon(&ctx, "TB_BACK.PNG").expect("legacy toolbar name casing");
+    assert_eq!(uppercase.size(), back.size());
     let tile = app.skin_bitmap(&ctx, "toolbar_back.bmp").expect("toolbar_back.bmp");
     let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 700.0))), ..Default::default() };
     let output = ctx.run(raw, |ctx| {

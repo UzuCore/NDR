@@ -195,13 +195,14 @@ fn user_directory(value: &str) -> Result<PathBuf, String> {
 fn main() {
     let result = (|| -> Result<(), String> {
         let mut options = Options::parse()?;
-        let settings =
-            ndr::settings::Settings::load(&options.profile_directory().join("settings.json"))
-                .unwrap_or_default();
+        let profile = options.profile_directory();
+        let loaded = ndr::settings::Settings::load(&profile.join("settings.json"));
+        let defaults = ndr::settings::Settings::default();
+        let settings = loaded.as_ref().unwrap_or(&defaults);
         let (mut instance_guard, mut navigation) = (None::<ndr::lifecycle::InstanceGuard>, None);
         if settings.flag("UseSingleInstance", false) && options.smoke_seconds.is_none() {
             match ndr::lifecycle::InstanceGuard::acquire(
-                &options.profile_directory(),
+                &profile,
                 ndr::lifecycle::NavigationRequest {
                     left: options.left.clone(),
                     right: options.right.clone().or_else(|| options.dir2.clone()),
@@ -261,7 +262,7 @@ fn main() {
         eframe::run_native(
             "NDR",
             native,
-            Box::new(move |cc| Ok(Box::new(ui::App::new(cc, options, navigation, instance_guard)))),
+            Box::new(move |cc| Ok(Box::new(ui::StartupApp::new(cc, options, profile, loaded, navigation, instance_guard)))),
         )
         .map_err(|e| e.to_string())?;
         Ok(())

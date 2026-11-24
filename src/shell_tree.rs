@@ -252,13 +252,41 @@ pub fn is_virtual(key: &Path) -> bool {
 }
 
 /// Case-insensitive key comparison (Windows paths).
+pub fn key_identity(path: &Path) -> String {
+    path.to_string_lossy().trim_end_matches('\\').to_lowercase()
+}
+
 pub fn same_key(a: &Path, b: &Path) -> bool {
-    a.to_string_lossy().trim_end_matches('\\').to_lowercase() == b.to_string_lossy().trim_end_matches('\\').to_lowercase()
+    key_identity(a) == key_identity(b)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn normalized_expansion_keys_match_windows_shell_path_identity() {
+        use std::collections::HashSet;
+        let open = [
+            PathBuf::from(r"C:\Users\공유\"),
+            PathBuf::from(r"D:\Games"),
+            PathBuf::from(THIS_PC),
+            PathBuf::new(),
+        ];
+        let expanded: HashSet<String> = open.iter().map(|key| key_identity(key)).collect();
+        for candidate in [
+            PathBuf::from(r"c:\users\공유"),
+            PathBuf::from(r"d:\GAMES\"),
+            PathBuf::from(THIS_PC.to_uppercase()),
+            PathBuf::new(),
+            PathBuf::from(r"D:\Pictures"),
+            PathBuf::from(r"c:\users\공유-extra"),
+        ] {
+            let slow = open.iter().any(|key| same_key(key, &candidate));
+            let fast = expanded.contains(&key_identity(&candidate));
+            assert_eq!(fast, slow, "expanded path semantics differ for {:?}", candidate);
+        }
+    }
 
     #[test]
     fn ancestors_follow_the_shell_namespace() {

@@ -152,13 +152,10 @@ impl App {
         {
             let mut index = 0;
             while index < self.vault_trees.len() {
-                let file = &self.vault_trees[index].vault_path;
-                // discard_vault stores sessions by their canonical file path,
-                // which can be \?\D:\... rather than the pane's D:\... path.
-                let session_key = std::fs::canonicalize(file).unwrap_or_else(|_| file.clone());
+                let tree = &self.vault_trees[index];
                 let authenticated = self.panes.iter().any(|pane|
-                    pane.vault.as_ref().is_some_and(|state| state.file == *file))
-                    || self.vault_sessions.contains_key(&session_key);
+                    pane.vault.as_ref().is_some_and(|state| state.file == tree.vault_path))
+                    || self.vault_sessions.contains_key(&tree.session_key);
                 // Revocation is one-way. Reauthenticating before an old
                 // external handle closes creates a NEW drive; the previously
                 // revoked volume still needs to be unmounted when idle.
@@ -857,24 +854,29 @@ impl App {
         self.system_box(&title, &label,
             ndr::msgbox::MB_YESNO | ndr::msgbox::MB_ICONEXCLAMATION, move |app, confirmed, _| {
                 if confirmed != ndr::msgbox::IDYES { return; }
-                let Some(path) = app.panes[pane].vault.as_ref().map(|v| v.file.clone()) else { return };
-                // An in-use source may still be saved by its editor. Reject
-                // deletion of that source or its ancestor directory, while
-                // allowing unrelated files to be deleted immediately.
-                let folder = app.panes[pane].vault.as_ref().unwrap().folder();
-                let has_legacy = app.vault_mounts.iter().any(|m| m.vault_path == path);
-                let selected_mounted = app.vault_mounts.iter().any(|m|
-                    m.vault_path == path && m.parent_id == folder &&
-                    names.iter().any(|name| name.eq_ignore_ascii_case(&m.item_name)))
-                    || app.vault_trees.iter().any(|tree|
-                        tree.vault_path == path && names.iter().any(|name|
-                            tree.is_open_item(folder, name)));
-                if selected_mounted {
-                    app.status = app.vault_status(
-                        "외부 프로그램에서 사용 중인 암호화 파일이나 폴더는 삭제할 수 없습니다.",
-                        "An encrypted item is open in an external application.");
-                    return;
-                }
+                #[cfg(not(feature = "winfsp-vault"))]
+                let has_legacy = false;
+                #[cfg(feature = "winfsp-vault")]
+                let has_legacy = {
+                    let Some(vault) = app.panes[pane].vault.as_ref() else { return };
+                    // An in-use source may still be saved by its editor. Reject
+                    // deletion of that source or its ancestor directory, while
+                    // allowing unrelated files to be deleted immediately.
+                    let folder = vault.folder();
+                    let selected_mounted = app.vault_mounts.iter().any(|m|
+                        m.vault_path == vault.file && m.parent_id == folder &&
+                        names.iter().any(|name| ndr::vault::names_equal(name, &m.item_name)))
+                        || app.vault_trees.iter().any(|tree|
+                            tree.vault_path == vault.file && names.iter().any(|name|
+                                tree.is_open_item(folder, name)));
+                    if selected_mounted {
+                        app.status = app.vault_status(
+                            "외부 프로그램에서 사용 중인 암호화 파일이나 폴더는 삭제할 수 없습니다.",
+                            "An encrypted item is open in an external application.");
+                        return;
+                    }
+                    app.vault_mounts.iter().any(|m| m.vault_path == vault.file)
+                };
                 let result = app.vault_modify_metadata(pane, |database, current_folder| {
                     let current = database.list(current_folder)?;
                     let chosen: Vec<_> = current.iter().filter(|item|
@@ -939,36 +941,42 @@ impl App {
     fn vault_export_named_to_other(&mut self, source: usize,
                                   names: Vec<String>, moving: bool) {
         if moving {
-            let Some(state) = self.panes[source].vault.as_ref() else { return };
+            #[cfg(not(feature = "winfsp-vault"))]
+            let has_legacy = false;
             #[cfg(feature = "winfsp-vault")]
-            if self.vault_trees.iter().any(|tree|
-                tree.vault_path == state.file && names.iter().any(|name|
-                    tree.is_open_item(state.folder(), name))) {
-                self.status = self.vault_status(
-                    "사용 중인 암호화 파일이나 해당 폴더는 이동할 수 없습니다. 편집기를 닫고 다시 시도해 주세요.",
-                    "Cannot move a file or folder used by an external application.");
-                return;
-            }
-            let path = state.file.clone();
-            let folder = state.folder();
-            let relevant: Vec<_> = self.vault_mounts.iter()
-                .filter(|mount| mount.vault_path == path).collect();
-            if !relevant.is_empty() {
-                // A running editor may still save the same file. Only move
-                // unrelated files; never remove a live file or its parent
-                // directory while a virtual-file writer can update it.
-                let overlaps = relevant.iter().any(|mount|
-                    mount.parent_id == folder && names.contains(&mount.item_name));
-                let includes_folder = names.iter().any(|name|
-                    state.database.find_child(folder, name).ok().flatten()
-                        .is_some_and(|item| item.folder));
-                if overlaps || includes_folder {
+            let has_legacy = {
+                let Some(state) = self.panes[source].vault.as_ref() else { return };
+                if self.vault_trees.iter().any(|tree|
+                    tree.vault_path == state.file && names.iter().any(|name|
+                        tree.is_open_item(state.folder(), name))) {
                     self.status = self.vault_status(
-                        "외부 프로그램에 연결된 파일이나 해당 폴더는 아직 이동할 수 없습니다. 편집기를 닫고 다시 시도해 주세요.",
-                        "Cannot move a mounted file or folder while an external editor is connected.");
+                        "사용 중인 암호화 파일이나 해당 폴더는 이동할 수 없습니다. 편집기를 닫고 다시 시도해 주세요.",
+                        "Cannot move a file or folder used by an external application.");
                     return;
                 }
-            } else if !self.vault_prepare_write(source) {
+                let folder = state.folder();
+                let relevant: Vec<_> = self.vault_mounts.iter()
+                    .filter(|mount| mount.vault_path == state.file).collect();
+                if !relevant.is_empty() {
+                    // A running editor may still save the same file. Only move
+                    // unrelated files; never remove a live file or its parent
+                    // directory while a virtual-file writer can update it.
+                    let overlaps = relevant.iter().any(|mount|
+                        mount.parent_id == folder && names.iter().any(|name|
+                            ndr::vault::names_equal(name, &mount.item_name)));
+                    let includes_folder = names.iter().any(|name|
+                        state.database.find_child(folder, name).ok().flatten()
+                            .is_some_and(|item| item.folder));
+                    if overlaps || includes_folder {
+                        self.status = self.vault_status(
+                            "외부 프로그램에 연결된 파일이나 해당 폴더는 아직 이동할 수 없습니다. 편집기를 닫고 다시 시도해 주세요.",
+                            "Cannot move a mounted file or folder while an external editor is connected.");
+                        return;
+                    }
+                }
+                !relevant.is_empty()
+            };
+            if !has_legacy && !self.vault_prepare_write(source) {
                 return;
             }
         }

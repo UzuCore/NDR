@@ -1,11 +1,10 @@
 //! Worker filesystem operations. Conflicts are answered through the event reply channel.
 use crate::compat::{self, DescriptionTransfer};
 use std::{
-    cell::Cell,
     fs,
     path::{Path, PathBuf},
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
         mpsc::Sender,
     },
@@ -92,6 +91,8 @@ pub struct OperationOptions {
     pub interactive_errors: bool,
     /// Original conflict 0x10 (rename): asks for a new name with Event::RenameTarget instead of an automatic name (C# GetAvailableTarget).
     pub prompt_rename: bool,
+    /// A local UI job can publish its apply-to-all decision to its own worker.
+    pub copy_conflict_policy: Option<Arc<Mutex<Option<ConflictChoice>>>>,
 }
 impl Default for OperationOptions {
     fn default() -> Self {
@@ -100,6 +101,7 @@ impl Default for OperationOptions {
             use_descriptions: true,
             interactive_errors: false,
             prompt_rename: false,
+            copy_conflict_policy: None,
         }
     }
 }
@@ -146,6 +148,7 @@ pub enum Event {
     Skipped {
         path: PathBuf,
     },
+    SkippedCount { count: usize },
     /// Total counts and bytes learned during the job (extraction learns them after reading the listing). Used by the progress bar and lCount.
     Totals {
         files: Option<u64>,
@@ -173,7 +176,6 @@ pub fn run_with_options(
     cancel: Arc<AtomicBool>,
     options: OperationOptions,
 ) {
-    let throttle_progress = matches!(&operation, Operation::Copy { .. });
     let mut j = Job {
         events,
         cancel,
@@ -183,9 +185,9 @@ pub fn run_with_options(
         transfers: Vec::new(),
         options,
         quiet: false,
-        throttle_progress,
-        last_progress: Cell::new(None),
-        last_progress_files: Cell::new(0),
+        last_copy_progress: None,
+        copy_buffer: Vec::new(),
+        skipped_count: 0,
     };
     let result = (|| -> Result<(), String> {
         check_cancel(&j.cancel)?;
@@ -211,11 +213,11 @@ pub fn run_with_options(
                     }
                 }
                 fs::create_dir_all(&destination).map_err(|e| e.to_string())?;
-                // Original GetFileListToWork (FUN_00413ac4, +0x868 0 copy / 1 move): before the work, folders are walked (FUN_004138d4)
-                // so the progress window knows every file and byte. A move inside one drive renames, so the original counts it as one item
-                // (4000 bytes) unless the destination folder already exists. NDR always counts the files below (the rename is quick anyway).
-                let (files, bytes) = tree_totals(&sources, &destination, move_files, j.options.use_descriptions, &j.cancel);
-                let _ = j.events.send(Event::Totals { files: Some(files), bytes: Some(bytes) });
+                if let Some((files, bytes)) =
+                    tree_totals(&sources, &destination, move_files, j.options.use_descriptions, &j.cancel)
+                {
+                    let _ = j.events.send(Event::Totals { files: Some(files), bytes: Some(bytes) });
+                }
                 let count = sources.len();
                 for (index, s) in sources.into_iter().enumerate() {
                     j.check()?;
@@ -233,7 +235,7 @@ pub fn run_with_options(
                             // gets a new name from FUN_00411bb4 and copies under it. Fixed: other answers such as overwrite could destroy the source, so they
                             // skip (the original tries CopyFileW onto itself).
                             let is_dir = fs::symlink_metadata(&s).map(|m| m.is_dir()).map_err(|e| e.to_string())?;
-                            match j.conflict(&s, &target)? {
+                            match j.conflict(&s, &target, false)? {
                                 ConflictChoice::Rename if j.options.prompt_rename => match j.ask_rename(name.to_string_lossy().into_owned())? {
                                     Some(new) if !new.trim().is_empty() && !new.contains(['\\', '/']) && !new.eq_ignore_ascii_case(&name.to_string_lossy()) => {
                                         target = target.with_file_name(new);
@@ -273,8 +275,14 @@ pub fn run_with_options(
                 // C# DeleteWithResult: deleted item count (files) = the chosen items for the Recycle Bin, every deleted file and folder for permanent delete.
                 // Original GetFileListToWork (FUN_00413ac4, mode 2): the progress window knows the total before the work. NDR counts what it will
                 // report as done (chosen items for the Recycle Bin, every file, folder and link otherwise); the original counts files only.
-                let total = if use_bin { sources.iter().filter(|p| fs::symlink_metadata(p).is_ok()).count() as u64 } else { delete_totals(&sources, &[], true, &j.cancel).0 };
-                let _ = j.events.send(Event::Totals { files: Some(total), bytes: None });
+                let total = if use_bin {
+                    Some(sources.iter().filter(|p| fs::symlink_metadata(p).is_ok()).count() as u64)
+                } else {
+                    delete_totals(&sources, &[], true, &j.cancel).map(|total| total.0)
+                };
+                if let Some(files) = total {
+                    let _ = j.events.send(Event::Totals { files: Some(files), bytes: None });
+                }
                 let count = sources.len();
                 for (index, p) in sources.into_iter().enumerate() {
                     j.check()?;
@@ -304,8 +312,9 @@ pub fn run_with_options(
                 }
             }
             Operation::DeleteSkipping { sources, skipped } => {
-                let total = delete_totals(&sources, &skipped, true, &j.cancel).0;
-                let _ = j.events.send(Event::Totals { files: Some(total), bytes: None });
+                if let Some((files, _)) = delete_totals(&sources, &skipped, true, &j.cancel) {
+                    let _ = j.events.send(Event::Totals { files: Some(files), bytes: None });
+                }
                 let count = sources.len();
                 for (index, p) in sources.into_iter().enumerate() {
                     j.check()?;
@@ -337,8 +346,9 @@ pub fn run_with_options(
             }
             Operation::Shred { sources } => {
                 // Original GetFileListToWork mode 2 with flag 0x8: the shred total is the file bytes.
-                let (files, bytes) = delete_totals(&sources, &[], false, &j.cancel);
-                let _ = j.events.send(Event::Totals { files: Some(files), bytes: Some(bytes) });
+                if let Some((files, bytes)) = delete_totals(&sources, &[], false, &j.cancel) {
+                    let _ = j.events.send(Event::Totals { files: Some(files), bytes: Some(bytes) });
+                }
                 for p in sources {
                     check_cancel(&j.cancel)?;
                     if fs::symlink_metadata(&p).is_err() {
@@ -382,6 +392,9 @@ pub fn run_with_options(
         let _ = j.events.send(Event::Fatal(message));
     }
     j.flush_descriptions();
+    if j.skipped_count != 0 {
+        let _ = j.events.send(Event::SkippedCount { count: j.skipped_count });
+    }
     let _ = j.events.send(Event::Finished {
         cancelled: j.cancel.load(Ordering::Relaxed),
         files: j.files,
@@ -394,17 +407,232 @@ mod tests {
     use std::sync::mpsc;
     use std::thread;
     pub(super) fn fixture() -> PathBuf {
-        let p = std::env::temp_dir().join(format!(
-            "ndr-core-{}-{}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        fs::create_dir_all(&p).unwrap();
-        p
+        use std::sync::atomic::AtomicU64;
+        static FIXTURE_ID: AtomicU64 = AtomicU64::new(0);
+        let timestamp = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        loop {
+            let id = FIXTURE_ID.fetch_add(1, Ordering::Relaxed);
+            let p = std::env::temp_dir().join(format!(
+                "ndr-core-{}-{timestamp}-{id}", std::process::id()
+            ));
+            // create_dir is exclusive. Do not silently reuse a folder left
+            // by another concurrent test or a previously terminated process.
+            match fs::create_dir(&p) {
+                Ok(()) => return p,
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => panic!("could not create isolated fixture {p:?}: {e}"),
+            }
+        }
     }
+    #[test]
+    fn simultaneous_test_fixtures_never_share_a_directory() {
+        let barrier = Arc::new(std::sync::Barrier::new(16));
+        let workers: Vec<_> = (0..16)
+            .map(|id| {
+                let barrier = Arc::clone(&barrier);
+                thread::spawn(move || {
+                    barrier.wait();
+                    let root = fixture();
+                    fs::write(root.join("owner.txt"), id.to_string()).unwrap();
+                    (root, id)
+                })
+            })
+            .collect();
+        let roots: Vec<_> = workers.into_iter().map(|worker| worker.join().unwrap()).collect();
+        let unique: std::collections::HashSet<_> = roots.iter().map(|(root, _)| root).collect();
+        assert_eq!(unique.len(), roots.len());
+        for (root, id) in roots {
+            assert_eq!(fs::read_to_string(root.join("owner.txt")).unwrap(), id.to_string());
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+    #[test]
+    fn description_index_matches_the_sorted_case_insensitive_legacy_lookup() {
+        let mut originals = std::collections::BTreeMap::new();
+        for (name, value) in [
+            ("README.TXT", "first sorted spelling"),
+            ("readme.txt", "later spelling"),
+            ("한글_문서.TXT", "한글 설명"),
+            ("Straße.txt", "German"),
+            ("İstanbul.TXT", "Turkish"),
+            ("empty_note.txt", ""),
+        ] {
+            originals.insert(name.to_owned(), value.to_owned());
+        }
+        let indexed = index_descriptions(originals.clone());
+        for name in [
+            "Readme.TXT", "readme.txt", "한글_문서.txt", "straße.TXT",
+            "İstanbul.txt", "empty_note.txt", "not-listed.txt",
+        ] {
+            let expected = originals.iter()
+                .find(|(source, _)| source.to_lowercase() == name.to_lowercase())
+                .map(|(_, note)| note);
+            assert_eq!(indexed.get(&name.to_lowercase()), expected, "lookup changed for {name}");
+        }
+        assert_eq!(indexed.get("readme.txt").map(String::as_str), Some("first sorted spelling"));
+    }
+
+    /// Benchmarks the comment lookup algorithm only, without disk caching.
+    #[test]
+    #[ignore = "run explicitly in Release to measure description lookup CPU"]
+    fn benchmark_many_description_lookups_against_the_old_linear_scan() {
+        let source: std::collections::BTreeMap<String, String> = (0..4_000usize)
+            .map(|i| (format!("한글파일_{i:05}_WithDescription.TXT"), format!("설명 {i}")))
+            .collect();
+        let names: Vec<_> = (0..4_000usize)
+            .step_by(2)
+            .map(|i| format!("한글파일_{i:05}_withdescription.txt"))
+            .collect();
+        let start = Instant::now();
+        let old_results: Vec<_> = names.iter()
+            .map(|name| source.iter()
+                .find(|(candidate, _)| candidate.to_lowercase() == name.to_lowercase())
+                .map(|(_, note)| note.clone()))
+            .collect();
+        let old_elapsed = start.elapsed();
+        let start = Instant::now();
+        let index = index_descriptions(source);
+        let new_results: Vec<_> = names.iter()
+            .map(|name| index.get(&name.to_lowercase()).cloned())
+            .collect();
+        let indexed_elapsed = start.elapsed();
+        assert_eq!(new_results, old_results);
+        println!(
+            "description_lookup entries=4000 queries={} legacy_ms={:.3} indexed_ms={:.3} speedup={:.2}x",
+            names.len(), old_elapsed.as_secs_f64() * 1000.0,
+            indexed_elapsed.as_secs_f64() * 1000.0,
+            old_elapsed.as_secs_f64() / indexed_elapsed.as_secs_f64(),
+        );
+    }
+
+    #[test]
+    fn copying_many_files_preserves_all_descriptions_bytes_and_source() {
+        let root = fixture();
+        let source = root.join("source");
+        let destination = root.join("destination");
+        fs::create_dir(&source).unwrap();
+        fs::create_dir(&destination).unwrap();
+        let mut descriptions = String::new();
+        for number in 0..240u32 {
+            let name = format!("파일_{number:04}_DATA.txt");
+            let note = format!("설명_{number:04}_metadata");
+            descriptions.push_str(&format!("{name}={note}\r\n"));
+            let bytes: Vec<u8> = (0..1536)
+                .map(|offset| (number as usize + offset) as u8)
+                .collect();
+            fs::write(source.join(&name), &bytes).unwrap();
+        }
+        let mut encoded = vec![0xff, 0xfe];
+        encoded.extend(descriptions.encode_utf16().flat_map(u16::to_le_bytes));
+        fs::write(source.join("descript.dat"), encoded).unwrap();
+        let original = compat::read_descriptions(&source, true).unwrap();
+        assert_eq!(original.len(), 240);
+
+        let events = run_events(Operation::Copy {
+            sources: vec![source.clone()],
+            destination: destination.clone(),
+            move_files: false,
+        });
+        assert!(
+            !events.iter().any(|event| matches!(event, Event::Error { .. } | Event::Fatal(_))),
+            "batch copy failed: {events:?}"
+        );
+        assert!(events.iter().any(|event| matches!(event, Event::Finished {
+            cancelled: false, files: 240, bytes: 368640,
+        })), "unexpected copy totals: {events:?}");
+        let copied = destination.join("source");
+        let transferred = compat::read_descriptions(&copied, true).unwrap();
+        assert_eq!(transferred, original);
+        for number in 0..240u32 {
+            let file = format!("파일_{number:04}_DATA.txt");
+            assert_eq!(fs::read(source.join(&file)).unwrap(), fs::read(copied.join(&file)).unwrap(), "content differs for {file}");
+        }
+        assert!(!fs::read_dir(&copied).unwrap().any(|entry| {
+            entry.unwrap().file_name().to_string_lossy().starts_with(".ndr-copy-")
+        }), "atomic copy staging must be cleaned");
+        assert_eq!(compat::read_descriptions(&source, true).unwrap(), original, "source description was changed by a copy");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// An opt-in end-to-end copy benchmark: includes conflict-safe staging,
+    /// Win32 path validation, progress accounting and metadata preservation.
+    /// Only writes inside its uniquely named temporary fixture.
+    #[test]
+    #[ignore = "isolated disk copy throughput measurement; run explicitly in Release"]
+    fn benchmark_real_copy_large_file_and_many_small_files() {
+        use std::io::Write;
+        use sha2::{Digest, Sha256};
+
+        fn digest(path: &Path) -> [u8; 32] {
+            let mut file = fs::File::open(path).unwrap();
+            let mut hasher = Sha256::new();
+            let mut bytes = [0; 65536];
+            loop {
+                let n = file.read(&mut bytes).unwrap();
+                if n == 0 { break; }
+                hasher.update(&bytes[..n]);
+            }
+            hasher.finalize().into()
+        }
+        fn copy_timed(sources: Vec<PathBuf>, target: PathBuf) -> (Duration, Vec<Event>) {
+            let (tx, rx) = mpsc::channel();
+            let started = Instant::now();
+            run_with_options(
+                Operation::Copy { sources, destination: target, move_files: false },
+                tx,
+                Arc::new(AtomicBool::new(false)),
+                OperationOptions { use_descriptions: false, ..Default::default() },
+            );
+            (started.elapsed(), rx.into_iter().collect())
+        }
+
+        let root = fixture();
+        let large_source = root.join("large-source.bin");
+        let mut file = fs::File::create(&large_source).unwrap();
+        let pattern: Vec<u8> = (0..1024 * 1024)
+            .map(|i| ((i * 73 + 31) % 251) as u8).collect();
+        for _ in 0..64 { file.write_all(&pattern).unwrap(); }
+        drop(file);
+        let large_dest = root.join("large-dest");
+        let (elapsed, events) = copy_timed(vec![large_source.clone()], large_dest.clone());
+        assert!(!events.iter().any(|event| matches!(event, Event::Fatal(_) | Event::Error { .. })), "{events:?}");
+        assert!(events.iter().any(|event| matches!(event, Event::Finished {
+            cancelled: false, files: 1, bytes: 67108864,
+        })));
+        assert_eq!(digest(&large_source), digest(&large_dest.join("large-source.bin")));
+        println!(
+            "REAL_COPY_LARGE bytes=67108864 durationMs={:.3} MiBps={:.2} sha256=match",
+            elapsed.as_secs_f64() * 1000.0, 64.0 / elapsed.as_secs_f64(),
+        );
+
+        let small_source = root.join("small-source");
+        let small_dest = root.join("small-dest");
+        fs::create_dir(&small_source).unwrap();
+        let sources: Vec<_> = (0..800)
+            .map(|number| {
+                let path = small_source.join(format!("sample_{number:04}.bin"));
+                fs::write(&path, &pattern[..2048]).unwrap();
+                path
+            }).collect();
+        let (elapsed, events) = copy_timed(sources.clone(), small_dest.clone());
+        assert!(!events.iter().any(|event| matches!(event, Event::Fatal(_) | Event::Error { .. })), "{events:?}");
+        assert!(events.iter().any(|event| matches!(event, Event::Finished {
+            cancelled: false, files: 800, bytes: 1638400,
+        })));
+        for source in &sources {
+            assert_eq!(digest(source), digest(&small_dest.join(source.file_name().unwrap())));
+        }
+        println!(
+            "REAL_COPY_SMALL files=800 bytes=1638400 durationMs={:.3} filesPerSec={:.2} sha256=match",
+            elapsed.as_secs_f64() * 1000.0, 800.0 / elapsed.as_secs_f64(),
+        );
+        assert_eq!(digest(&large_source), digest(&large_dest.join("large-source.bin")));
+        fs::remove_dir_all(root).unwrap();
+    }
+
     /// Original GetFileListToWork (FUN_00413ac4) + FUN_004138d4: the totals of a folder copy are known before the first file.
     #[test]
     fn recursive_copy_and_move_are_rejected_before_creating_destination_folders() {
@@ -445,9 +673,96 @@ mod tests {
         assert!(totals < first_progress, "totals come first");
         assert!(matches!(events[totals], Event::Totals { files: Some(2), bytes: Some(12) }));
         let cancel = AtomicBool::new(false);
-        assert_eq!(tree_totals(&[p.join("out/a")], &p.join("other"), true, false, &cancel), (1, 0), "a same-drive move renames the folder");
-        assert_eq!(tree_totals(&[p.join("out/a")], &p.join("in"), true, false, &cancel), (2, 12), "the destination name exists, so its files are moved one by one");
+        assert_eq!(tree_totals(&[p.join("out/a")], &p.join("other"), true, false, &cancel), Some((1, 0)), "a same-drive move renames the folder");
+        assert_eq!(tree_totals(&[p.join("out/a")], &p.join("in"), true, false, &cancel), Some((2, 12)), "the destination name exists, so its files are moved one by one");
         fs::remove_dir_all(&p).unwrap();
+    }
+
+    #[test]
+    fn large_selection_starts_without_partial_totals_and_throttles_progress() {
+        let root = fixture();
+        let source = root.join("source");
+        fs::create_dir(&source).unwrap();
+        let sources: Vec<_> = (0..64).map(|index| {
+            let path = source.join(format!("{index}.txt"));
+            fs::write(&path, b"data").unwrap();
+            path
+        }).collect();
+        let many: Vec<_> = sources.iter().cloned().cycle().take(2049).collect();
+        let destination = root.join("destination");
+        assert_eq!(tree_totals(&many, &destination, false, false, &AtomicBool::new(false)), None);
+
+        let start = Instant::now();
+        let events = run_events(Operation::Copy { sources, destination: destination.clone(), move_files: false });
+        let limit = start.elapsed().as_millis() / 40 + 1;
+        let count = events.iter().filter(|event| matches!(event, Event::Progress { .. })).count();
+        assert!((1..=limit).contains(&(count as u128)), "{count} updates in {:?}", start.elapsed());
+        assert_eq!(count, events.iter().filter(|event| matches!(event, Event::Target { .. })).count());
+        assert!(matches!(events.last(), Some(Event::Finished { cancelled: false, files: 64, bytes: 256 })));
+        assert_eq!(fs::read_dir(destination).unwrap().count(), 64);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn same_volume_merge_moves_unconflicted_files_without_copying_them() {
+        let root = fixture();
+        fs::create_dir_all(root.join("in/a")).unwrap();
+        fs::create_dir_all(root.join("out/a")).unwrap();
+        fs::write(root.join("in/a/item.txt"), b"original").unwrap();
+        fs::hard_link(root.join("in/a/item.txt"), root.join("alias.txt")).unwrap();
+        let events = copy(&root, true, false, ConflictChoice::Overwrite);
+        assert!(matches!(events.last(), Some(Event::Finished { cancelled: false, files: 1, bytes: 8 })));
+        assert!(!root.join("in/a").exists());
+        fs::write(root.join("out/a/item.txt"), b"rewritten").unwrap();
+        assert_eq!(fs::read(root.join("alias.txt")).unwrap(), b"rewritten");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn apply_to_all_skips_remaining_conflicts_in_one_worker_batch() {
+        let root = fixture();
+        let source = root.join("source");
+        let destination = root.join("destination");
+        fs::create_dir(&source).unwrap();
+        fs::create_dir(&destination).unwrap();
+        let sources: Vec<_> = (0..24).map(|index| {
+            let name = format!("{index}.txt");
+            let path = source.join(&name);
+            fs::write(&path, b"source").unwrap();
+            fs::write(destination.join(name), b"destination").unwrap();
+            path
+        }).collect();
+        let (sender, receiver) = mpsc::channel();
+        let policy = Arc::new(Mutex::new(None));
+        let options = OperationOptions {
+            copy_conflict_policy: Some(Arc::clone(&policy)),
+            ..Default::default()
+        };
+        let dest = destination.clone();
+        let worker = thread::spawn(move || run_with_options(
+            Operation::Copy { sources, destination: dest, move_files: true },
+            sender, Arc::new(AtomicBool::new(false)), options,
+        ));
+        let mut conflicts = 0;
+        let mut counts = Vec::new();
+        for event in receiver {
+            match event {
+                Event::Conflict { reply, .. } => {
+                    conflicts += 1;
+                    *policy.lock().unwrap() = Some(ConflictChoice::Skip);
+                    reply.send(ConflictChoice::Skip).unwrap();
+                }
+                Event::SkippedCount { count } => counts.push(count),
+                Event::Error { message, .. } | Event::Fatal(message) => panic!("{message}"),
+                _ => {}
+            }
+        }
+        worker.join().unwrap();
+        assert_eq!(conflicts, 1);
+        assert_eq!(counts, [24]);
+        assert_eq!(fs::read_dir(&source).unwrap().count(), 24);
+        assert_eq!(fs::read(destination.join("23.txt")).unwrap(), b"destination");
+        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn unique_path_skips_names_left_by_an_earlier_process_with_the_same_pid() {
@@ -592,6 +907,53 @@ mod tests {
         assert_eq!(fs::read(p.join("outside/secret")).unwrap(), b"safe");
         fs::remove_dir_all(p).unwrap();
     }
+
+    #[cfg(windows)]
+    #[test]
+    fn optimized_path_preflight_rejects_junction_ancestors_and_keeps_outside_data() {
+        let root = fixture();
+        let outside = root.join("outside");
+        let source = root.join("input");
+        fs::create_dir_all(outside.join("nested")).unwrap();
+        fs::create_dir(&source).unwrap();
+        fs::write(outside.join("nested/secret.txt"), b"untouched").unwrap();
+        fs::write(source.join("a.txt"), b"source data").unwrap();
+        let link = root.join("junction");
+        let result = std::process::Command::new("cmd")
+            .args(["/c", "mklink", "/J"])
+            .arg(&link)
+            .arg(&outside)
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "junction fixture failed");
+
+        // Reject a reparse point at the leaf and in an ancestor, including
+        // when the destination file or one of its descendants is missing.
+        for path in [
+            link.clone(),
+            link.join("nested/secret.txt"),
+            link.join("nested/not-created/child.txt"),
+        ] {
+            let error = ensure_plain_path(&path).unwrap_err();
+            assert!(error.contains("Reparse point"), "{path:?}: {error}");
+        }
+        let direct = plain_metadata(&outside.join("nested/secret.txt")).unwrap().unwrap();
+        assert_eq!(direct.len(), 9);
+        assert!(plain_metadata(&outside.join("missing/child.txt")).unwrap().is_none());
+
+        let events = run_events(Operation::Copy {
+            sources: vec![source.join("a.txt")],
+            destination: link.join("nested"),
+            move_files: false,
+        });
+        assert!(events.iter().any(|event| matches!(event, Event::Fatal(message) if message.contains("Reparse point"))), "{events:?}");
+        assert!(!outside.join("nested/a.txt").exists());
+        assert_eq!(fs::read(outside.join("nested/secret.txt")).unwrap(), b"untouched");
+        assert_eq!(fs::read(source.join("a.txt")).unwrap(), b"source data");
+        fs::remove_dir(link).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
     fn run_events(operation: Operation) -> Vec<Event> {
         let (tx, rx) = mpsc::channel();
         run(operation, tx, Arc::new(AtomicBool::new(false)));
@@ -617,6 +979,30 @@ mod tests {
         assert!(!p.join("readonly.txt").exists(), "read-only cleared before delete");
         fs::remove_dir_all(p).unwrap();
     }
+    #[test]
+    fn large_delete_starts_with_no_partial_total_and_preserves_skips() {
+        let root = fixture();
+        let tree = root.join("tree");
+        let kept = tree.join("keep");
+        fs::create_dir(&tree).unwrap();
+        fs::write(&kept, b"keep").unwrap();
+        for i in 0..PROGRESS_SCAN_LIMIT + 7 {
+            fs::write(tree.join(format!("file_{i:05}")), b"delete").unwrap();
+        }
+        let events = run_events(Operation::DeleteSkipping {
+            sources: vec![tree.clone()],
+            skipped: vec![kept.clone()],
+        });
+        assert!(!events.iter().any(|event| matches!(event, Event::Totals { .. })),
+            "do not show a partial estimate as the total");
+        assert!(!events.iter().any(|event| matches!(event, Event::Error { .. } | Event::Fatal(_))));
+        assert!(matches!(events.last(), Some(Event::Finished { cancelled: false, files, bytes })
+            if *files == (PROGRESS_SCAN_LIMIT + 7) as u64 && *bytes == 6 * *files));
+        assert_eq!(fs::read(&kept).unwrap(), b"keep");
+        assert_eq!(fs::read_dir(tree).unwrap().count(), 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn shred_overwrites_and_removes_files_and_folders() {
         let p = fixture();
@@ -647,10 +1033,25 @@ use std::{
 /// Reparse points and (with descriptions on) description files are not counted because the copy
 /// does not take them. For a move, an item that can be renamed as a whole (same root, destination name free) counts as one item,
 /// like the original's same-drive branch.
-fn tree_totals(sources: &[PathBuf], destination: &Path, moving: bool, descriptions: bool, cancel: &AtomicBool) -> (u64, u64) {
+const PROGRESS_SCAN_LIMIT: usize = 2048;
+const PROGRESS_SCAN_TIME: Duration = Duration::from_millis(80);
+
+fn tree_totals(sources: &[PathBuf], destination: &Path, moving: bool, descriptions: bool, cancel: &AtomicBool) -> Option<(u64, u64)> {
+    // A large or slow directory uses indeterminate progress. Limit work
+    // spent on counting before the first file can start transferring.
+    let mut remaining = PROGRESS_SCAN_LIMIT;
+    let deadline = Instant::now() + PROGRESS_SCAN_TIME;
+    let mut count_entry = || {
+        if remaining == 0 || cancel.load(Ordering::Relaxed) || Instant::now() >= deadline {
+            return None;
+        }
+        remaining -= 1;
+        Some(())
+    };
     let root = |p: &Path| p.components().next().map(|c| c.as_os_str().to_string_lossy().to_lowercase());
     let (mut files, mut bytes) = (0u64, 0u64);
     for source in sources {
+        count_entry()?;
         let Ok(meta) = fs::symlink_metadata(source) else {
             files += 1;
             continue;
@@ -667,11 +1068,11 @@ fn tree_totals(sources: &[PathBuf], destination: &Path, moving: bool, descriptio
         }
         let mut pending = vec![source.clone()];
         while let Some(directory) = pending.pop() {
-            if cancel.load(Ordering::Relaxed) {
-                return (files, bytes);
-            }
+            count_entry()?;
             let Ok(read) = fs::read_dir(&directory) else { continue };
-            for item in read.flatten() {
+            for item in read {
+                count_entry()?;
+                let Ok(item) = item else { continue };
                 // DirEntry::metadata on Windows does not follow links (FindNextFileW values).
                 let Ok(m) = item.metadata() else { continue };
                 if is_reparse(&m) || (descriptions && compat::is_description_file(&item.file_name().to_string_lossy())) {
@@ -686,49 +1087,136 @@ fn tree_totals(sources: &[PathBuf], destination: &Path, moving: bool, descriptio
             }
         }
     }
-    (files, bytes)
+    Some((files, bytes))
 }
 /// Totals for the delete progress window (original GetFileListToWork FUN_00413ac4, mode 2). `with_folders`: also count folders and links,
 /// as permanent delete reports them done; otherwise (shred) only regular files with their bytes. Links are never followed and
 /// `skipped` subtrees are left out.
-fn delete_totals(sources: &[PathBuf], skipped: &[PathBuf], with_folders: bool, cancel: &AtomicBool) -> (u64, u64) {
-    let (mut files, mut bytes) = (0u64, 0u64);
-    let mut pending: Vec<PathBuf> = sources.to_vec();
-    while let Some(path) = pending.pop() {
-        if cancel.load(Ordering::Relaxed) {
-            break;
-        }
-        if skipped.iter().any(|root| same_or_inside(&path, root)) {
-            continue;
-        }
-        let Ok(m) = fs::symlink_metadata(&path) else { continue };
-        if is_reparse(&m) {
-            files += u64::from(with_folders);
-        } else if m.is_dir() {
-            files += u64::from(with_folders);
-            if let Ok(read) = fs::read_dir(&path) {
-                pending.extend(read.flatten().map(|item| item.path()));
+fn delete_totals(sources: &[PathBuf], skipped: &[PathBuf], with_folders: bool, cancel: &AtomicBool) -> Option<(u64, u64)> {
+    struct Scan<'a> {
+        remaining: usize,
+        deadline: Instant,
+        cancel: &'a AtomicBool,
+        skipped: &'a [PathBuf],
+        with_folders: bool,
+        files: u64,
+        bytes: u64,
+    }
+
+    impl Scan<'_> {
+        fn visit(&mut self, path: &Path, depth: usize) -> Option<()> {
+            self.remaining = self.remaining.checked_sub(1)?;
+            if depth > 256 || self.cancel.load(Ordering::Relaxed) || Instant::now() >= self.deadline {
+                return None;
             }
-        } else {
-            files += 1;
-            bytes = bytes.saturating_add(m.len());
+            if self.skipped.iter().any(|root| same_or_inside(path, root)) {
+                return Some(());
+            }
+            let Ok(m) = fs::symlink_metadata(path) else { return Some(()) };
+            if is_reparse(&m) {
+                self.files += u64::from(self.with_folders);
+            } else if m.is_dir() {
+                self.files += u64::from(self.with_folders);
+                if let Ok(mut children) = fs::read_dir(path) {
+                    loop {
+                        // Bound discovery as well as processing. In particular
+                        // do not collect a wide directory before testing the budget.
+                        if self.remaining == 0 || self.cancel.load(Ordering::Relaxed)
+                            || Instant::now() >= self.deadline
+                        {
+                            return None;
+                        }
+                        match children.next() {
+                            Some(Ok(item)) => self.visit(&item.path(), depth + 1)?,
+                            Some(Err(_)) => self.remaining -= 1,
+                            None => break,
+                        }
+                    }
+                }
+            } else {
+                self.files += 1;
+                self.bytes = self.bytes.saturating_add(m.len());
+            }
+            Some(())
         }
     }
-    (files, bytes)
+
+    // Counting is only for the progress display, not the separate protected
+    // item confirmation or the operation's safety checks. Never report a
+    // partial count: the UI already handles unknown totals.
+    let mut scan = Scan {
+        remaining: PROGRESS_SCAN_LIMIT,
+        deadline: Instant::now() + PROGRESS_SCAN_TIME,
+        cancel,
+        skipped,
+        with_folders,
+        files: 0,
+        bytes: 0,
+    };
+    for source in sources {
+        scan.visit(source, 0)?;
+    }
+    Some((scan.files, scan.bytes))
 }
 /// Reject reparse points in every existing component, including destination ancestors.
 pub fn ensure_plain_path(path: &Path) -> Result<(), String> {
-    for p in path.ancestors() {
+    plain_metadata(path).map(|_| ())
+}
+
+fn plain_metadata(path: &Path) -> Result<Option<fs::Metadata>, String> {
+    let mut metadata = None;
+    for (index, p) in path.ancestors().enumerate() {
+        // Only the leaf needs full Metadata (size, timestamps, permissions).
+        // On Windows, querying every existing ancestor with symlink_metadata
+        // repeatedly opened the same directory chain for each file copied,
+        // especially costly for many small files and SMB shares.
+        //
+        // GetFileAttributesW reports FILE_ATTRIBUTE_REPARSE_POINT for
+        // symbolic links and junctions without opening a metadata handle.
+        // Keep the original symlink_metadata path as fallback on API failure
+        // (including long paths) and still validate the leaf by the original
+        // method. This does NOT cache ancestor safety between files.
+        #[cfg(windows)]
+        if index != 0 {
+            check_plain_ancestor_windows(p)?;
+            continue;
+        }
         match fs::symlink_metadata(p) {
             Ok(m) if is_reparse(&m) => {
                 return Err(format!("Reparse point is not allowed: {}", p.display()));
             }
+            Ok(m) if index == 0 => metadata = Some(m),
             Ok(_) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(e.to_string()),
         }
     }
-    Ok(())
+    Ok(metadata)
+}
+
+#[cfg(windows)]
+fn check_plain_ancestor_windows(path: &Path) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::GetFileAttributesW;
+
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    // SAFETY: wide is NUL-terminated and valid until the synchronous API
+    // returns. Do not follow/reuse a previously validated ancestor.
+    let attributes = unsafe { GetFileAttributesW(wide.as_ptr()) };
+    if attributes != u32::MAX {
+        if attributes & 0x400 != 0 {
+            return Err(format!("Reparse point is not allowed: {}", path.display()));
+        }
+        return Ok(());
+    }
+    // Match the old symlink_metadata semantics for long paths, missing
+    // components, access denial and devices the Win32 API treats differently.
+    match fs::symlink_metadata(path) {
+        Ok(m) if is_reparse(&m) => Err(format!("Reparse point is not allowed: {}", path.display())),
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.to_string()),
+    }
 }
 pub fn is_reparse(m: &fs::Metadata) -> bool {
     #[cfg(windows)]
@@ -793,19 +1281,34 @@ pub(crate) fn open_read(path: &Path) -> Result<File, String> {
     options.open(path).map_err(|e| e.to_string())
 }
 pub(crate) fn unique_path(parent: &Path, prefix: &str) -> PathBuf {
-    use std::sync::atomic::AtomicU64;
-    static ID: AtomicU64 = AtomicU64::new(0);
     // Skip names left by an earlier process that used the same number (PID) (e.g. %TEMP%\NDR\.ndr-entry-PID-0).
     // Numbers never collide within one process, and two processes with the same PID cannot exist at once.
     loop {
-        let candidate = parent.join(format!(
-            ".ndr-{}-{}-{}",
-            prefix,
-            std::process::id(),
-            ID.fetch_add(1, Ordering::Relaxed)
-        ));
+        let candidate = next_temporary_path(parent, prefix);
         if fs::symlink_metadata(&candidate).is_err() {
             return candidate;
+        }
+    }
+}
+
+fn next_temporary_path(parent: &Path, prefix: &str) -> PathBuf {
+    use std::sync::atomic::AtomicU64;
+    static ID: AtomicU64 = AtomicU64::new(0);
+    parent.join(format!(
+        ".ndr-{}-{}-{}",
+        prefix,
+        std::process::id(),
+        ID.fetch_add(1, Ordering::Relaxed)
+    ))
+}
+
+fn create_copy_stage(parent: &Path) -> Result<(PathBuf, File), String> {
+    loop {
+        let path = next_temporary_path(parent, "copy");
+        match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(file) => return Ok((path, file)),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error.to_string()),
         }
     }
 }
@@ -916,17 +1419,33 @@ pub(crate) fn preserve_times(file: &File, metadata: &fs::Metadata) -> Result<(),
 struct Job {
     events: Sender<Event>,
     cancel: Arc<AtomicBool>,
-    throttle_progress: bool,
-    last_progress: Cell<Option<Instant>>,
-    last_progress_files: Cell<u64>,
+    last_copy_progress: Option<Instant>,
+    copy_buffer: Vec<u8>,
+    skipped_count: usize,
     files: u64,
     bytes: u64,
-    descriptions: std::collections::BTreeMap<PathBuf, std::collections::BTreeMap<String, String>>,
+    // One case-folded lookup per file instead of scanning every description
+    // name in the folder for every copy/move entry. Keep the per-directory
+    // cache scoped to this job so external edits remain visible to new jobs.
+    descriptions: std::collections::BTreeMap<PathBuf, std::collections::HashMap<String, String>>,
     transfers: Vec<DescriptionTransfer>,
     options: OperationOptions,
     /// Original flags 0x40|0x80 (EmptyFolder): errors are neither asked about nor reported.
     quiet: bool,
 }
+/// The loader yields a BTreeMap with the original spelling. When
+/// case-folded names collide, the old linear lookup chose the first key in
+/// sorted order. Preserve that choice when building an index once per folder.
+fn index_descriptions(
+    entries: std::collections::BTreeMap<String, String>,
+) -> std::collections::HashMap<String, String> {
+    let mut indexed = std::collections::HashMap::with_capacity(entries.len());
+    for (name, value) in entries {
+        indexed.entry(name.to_lowercase()).or_insert(value);
+    }
+    indexed
+}
+
 impl Job {
     /// Original FUN_00412b00: the read-only flag of a copied destination is cleared only when the setting (remreadonly) is on and the source is on a CD/DVD.
     /// Fixed: previously, with the setting on, read-only was cleared when copying from any drive.
@@ -945,13 +1464,16 @@ impl Job {
         }
         let parent = path.parent().unwrap_or(Path::new("."));
         if !self.descriptions.contains_key(parent) {
-            self.descriptions
-                .insert(parent.to_owned(), compat::read_descriptions(parent, true)?);
+            self.descriptions.insert(
+                parent.to_owned(),
+                index_descriptions(compat::read_descriptions(parent, true)?),
+            );
         }
-        Ok(self.descriptions[parent]
-            .iter()
-            .find(|(n, _)| n.to_lowercase() == name.to_lowercase())
-            .map(|(_, s)| s.clone()))
+        let indexed = &self.descriptions[parent];
+        if indexed.is_empty() {
+            return Ok(None);
+        }
+        Ok(indexed.get(&name.to_lowercase()).cloned())
     }
     fn record_description(
         &mut self,
@@ -1011,22 +1533,21 @@ impl Job {
             }
         }
     }
-    fn progress(&self, p: &Path) {
-        // Local copy and move can write many 1 MiB blocks per second.
-        // Progress is cosmetic; keep first and per-file completion updates,
-        // and send intermediate updates at most every 40ms. The original
-        // per-block updates remain unchanged for Shred and other operations.
-        if self.throttle_progress {
-            let now = Instant::now();
-            let changed_file_count = self.files != self.last_progress_files.get();
-            if !changed_file_count && self.last_progress.get().is_some_and(|previous| {
-                now.duration_since(previous) < Duration::from_millis(40)
-            }) {
-                return;
-            }
-            self.last_progress.set(Some(now));
-            self.last_progress_files.set(self.files);
+    fn copy_progress(&mut self, source: &Path, destination: &Path) {
+        let now = Instant::now();
+        if self.last_copy_progress.is_some_and(|previous|
+            now.duration_since(previous) < Duration::from_millis(40)) {
+            return;
         }
+        self.last_copy_progress = Some(now);
+        let _ = self.events.send(Event::Target {
+            source: source.to_path_buf(),
+            destination: destination.to_path_buf(),
+        });
+        self.progress(source);
+    }
+
+    fn progress(&self, p: &Path) {
         let _ = self.events.send(Event::Progress {
             path: p.to_path_buf(),
             bytes: self.bytes,
@@ -1066,8 +1587,12 @@ impl Job {
         }
         Ok(())
     }
-    fn skipped(&self, path: &Path) {
-        let _ = self.events.send(Event::Skipped { path: path.to_owned() });
+    fn skipped(&mut self, path: &Path) {
+        if self.options.copy_conflict_policy.is_some() {
+            self.skipped_count += 1;
+        } else {
+            let _ = self.events.send(Event::Skipped { path: path.to_owned() });
+        }
     }
     fn ask_rename(&self, name: String) -> Result<Option<String>, String> {
         let (tx, rx) = mpsc::channel();
@@ -1081,7 +1606,16 @@ impl Job {
             }
         }
     }
-    fn conflict(&self, s: &Path, d: &Path) -> Result<ConflictChoice, String> {
+    fn conflict(&self, s: &Path, d: &Path, ordinary_files: bool) -> Result<ConflictChoice, String> {
+        self.check()?;
+        let saved = self.options.copy_conflict_policy.as_ref()
+            .and_then(|policy| policy.lock().ok().and_then(|choice| *choice));
+        match saved {
+            Some(choice @ ConflictChoice::Skip) => return Ok(choice),
+            Some(choice @ (ConflictChoice::Overwrite | ConflictChoice::OverwriteNewer))
+                if ordinary_files => return Ok(choice),
+            _ => {}
+        }
         let (tx, rx) = mpsc::channel();
         self.events
             .send(Event::Conflict {
@@ -1126,14 +1660,13 @@ impl Job {
             return Err("Directory nesting exceeds the safe copy limit (256)".into());
         }
         self.check()?;
-        ensure_plain_path(s)?;
-        ensure_plain_path(d)?;
-        let m = fs::symlink_metadata(s).map_err(|e| e.to_string())?;
+        let m = plain_metadata(s)?.ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound).to_string())?;
+        let existing = plain_metadata(d)?;
         let description = self.description(s)?;
         let mut d = d.to_owned();
         let mut overwrite = false;
-        if let Ok(existing) = fs::symlink_metadata(&d) {
-            match self.conflict(s, &d)? {
+        if let Some(existing) = existing {
+            match self.conflict(s, &d, m.is_file() && existing.is_file())? {
                 ConflictChoice::Skip => {
                     self.skipped(s);
                     return Ok(false);
@@ -1177,12 +1710,15 @@ impl Job {
                 }
                 ConflictChoice::Cancel => unreachable!(),
             }
-        } else if moving && depth == 0 {
-            // C# MoveAsync/MoveFileAsync: without a destination, first try a rename only (same volume). If that fails, copy then delete the source.
+        } else if moving && (depth == 0 || m.is_file()) {
+            // A merge can rename its ordinary files on the same volume,
+            // even though the two directories themselves cannot be renamed.
             if rename_new(s, &d).is_ok() {
-                let _ = self.events.send(Event::Target { source: s.to_path_buf(), destination: d.to_path_buf() });
                 self.files += 1;
-                self.progress(s);
+                if depth != 0 {
+                    self.bytes += m.len();
+                }
+                self.copy_progress(s, &d);
                 self.record_description(s, &d, description, true);
                 return Ok(true);
             }
@@ -1196,19 +1732,22 @@ impl Job {
             // C# CopyDirectoryAsync: subfolders first, then files.
             let mut children = Vec::new();
             for item in fs::read_dir(s).map_err(|e| e.to_string())? {
+                self.check()?;
                 let item = item.map_err(|e| e.to_string())?;
+                let name = item.file_name();
                 if self.options.use_descriptions
-                    && compat::is_description_file(&item.file_name().to_string_lossy())
+                    && compat::is_description_file(&name.to_string_lossy())
                 {
                     continue;
                 }
                 let directory = item.metadata().map(|m| attribute_directory(&m)).unwrap_or(false);
-                children.push((!directory, item.path(), item.file_name()));
+                children.push((!directory, name));
             }
-            children.sort_by_key(|(file, _, _)| *file);
+            children.sort_by_key(|(file, _)| *file);
             let count = children.len();
-            for (index, (_, path, name)) in children.into_iter().enumerate() {
+            for (index, (_, name)) in children.into_iter().enumerate() {
                 let child_boundary = boundary || index + 1 < count;
+                let path = s.join(&name);
                 match self.copy_depth(&path, &d.join(name), moving, depth + 1, child_boundary) {
                     Ok(done) => all &= done,
                     Err(e) => {
@@ -1259,31 +1798,28 @@ impl Job {
         if !m.is_file() {
             return Err("Only ordinary files and directories can be copied".into());
         }
-        if d.is_dir() {
+        if overwrite && d.is_dir() {
             return Err("Cannot replace a directory with a file".into());
         }
-        // Original 0x412308: progress window lTo = folder of the current destination file. Report the destination as settled by conflict handling, including changed names.
-        let _ = self.events.send(Event::Target { source: s.to_path_buf(), destination: d.to_path_buf() });
-        let stage = unique_path(d.parent().ok_or("No destination parent")?, "copy");
+        self.copy_progress(s, &d);
+        let mut input = open_read(s)?;
+        let (stage, mut out) = create_copy_stage(d.parent().ok_or("No destination parent")?)?;
+        let buffer_len = m.len().clamp(4096, 1024 * 1024) as usize;
+        if self.copy_buffer.len() < buffer_len {
+            self.copy_buffer.resize(buffer_len, 0);
+        }
         let result = (|| {
-            let mut input = open_read(s)?;
-            let mut out = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&stage)
-                .map_err(|e| e.to_string())?;
-            let mut buf = vec![0; 1024 * 1024];
             let mut copied = 0u64;
             loop {
                 self.check()?;
-                let n = input.read(&mut buf).map_err(|e| e.to_string())?;
+                let n = input.read(&mut self.copy_buffer[..buffer_len]).map_err(|e| e.to_string())?;
                 if n == 0 {
                     break;
                 }
-                out.write_all(&buf[..n]).map_err(|e| e.to_string())?;
+                out.write_all(&self.copy_buffer[..n]).map_err(|e| e.to_string())?;
                 self.bytes += n as u64;
                 copied += n as u64;
-                self.progress(s);
+                self.copy_progress(s, &d);
             }
             let final_source = input.metadata().map_err(|e| e.to_string())?;
             if copied != m.len()
@@ -1299,13 +1835,8 @@ impl Job {
             }
             out.set_permissions(permissions)
                 .map_err(|e| e.to_string())?;
-            // Win32 file managers ordinarily rely on the OS write cache when
-            // copying a file. Forcing FlushFileBuffers on *every* file can
-            // serialize an entire directory copy and make it dramatically
-            // slower on HDDs, USB disks and network drives. Preserve the
-            // staged-file/atomic-rename protection and metadata verification,
-            // but do not force a physical media flush before each rename.
-            out.flush().map_err(|e| e.to_string())?;
+            // Ordinary copies use the OS write cache. Publish the staged
+            // file after validating the source and applying its metadata.
             drop(out);
             check_cancel(&self.cancel)?;
             // Original FUN_004134e0 (overwrite): clears the existing destination's attributes (SetFileAttributesW 0x20) and replaces it regardless of the setting.
@@ -1339,7 +1870,7 @@ impl Job {
             }
             drop(input);
             self.files += 1;
-            self.progress(s);
+            self.copy_progress(s, &d);
             self.record_description(s, &d, description, false);
             if moving {
                 check_cancel(&self.cancel)?;
@@ -1352,8 +1883,11 @@ impl Job {
             }
             Ok(true)
         })();
-        if stage.exists() {
-            let _ = fs::remove_file(&stage);
+        if result.is_err() {
+            if let Ok(metadata) = fs::symlink_metadata(&stage) {
+                clear_read_only(&stage, &metadata);
+                let _ = fs::remove_file(&stage);
+            }
         }
         result
     }
@@ -1531,7 +2065,7 @@ impl Job {
                 }
                 out.write_all(&buf[..n]).map_err(|e| e.to_string())?;
                 self.bytes += n as u64;
-                self.progress(s);
+                self.copy_progress(s, d);
             }
             out.sync_all().map_err(|e| e.to_string())
         })();
@@ -1556,7 +2090,7 @@ impl Job {
         fs::set_permissions(d, permissions).map_err(|e| e.to_string())?;
         drop(input);
         self.files += 1;
-        self.progress(s);
+        self.copy_progress(s, d);
         self.record_description(s, d, description, false);
         if moving {
             self.check()?;

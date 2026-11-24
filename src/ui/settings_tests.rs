@@ -387,6 +387,121 @@ fn list_font_size_only_sizes_the_file_list_like_csharp() {
     let _ = fs::remove_dir_all(root);
 }
 
+#[test]
+fn title_bar_follows_skin_with_opposite_system_theme() {
+    use windows_sys::Win32::{
+        Foundation::{HWND, RECT},
+        Graphics::{
+            Dwm::DwmFlush,
+            Gdi::{
+                BITMAPINFO, BITMAPINFOHEADER, BI_RGB, CreateCompatibleDC, CreateDIBSection,
+                DIB_RGB_COLORS, DeleteDC, DeleteObject, GetPixel, HDC, SelectObject,
+            },
+        },
+        UI::WindowsAndMessaging::{
+            CreateWindowExW, DestroyWindow, GetWindowRect, ShowWindow, SW_SHOWNOACTIVATE,
+            WS_EX_NOACTIVATE, WS_OVERLAPPEDWINDOW,
+        },
+    };
+    // Test-only: windows-sys exposes PrintWindow under the XPS feature; the app
+    // otherwise needs no XPS APIs.
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn PrintWindow(hwnd: HWND, dc: HDC, flags: u32) -> i32;
+    }
+    struct TestWindow(HWND);
+    impl Drop for TestWindow {
+        fn drop(&mut self) {
+            // SAFETY: the off-screen, test-owned window is destroyed by its creating thread.
+            unsafe { DestroyWindow(self.0) };
+        }
+    }
+
+    let class: Vec<_> = "STATIC\0".encode_utf16().collect();
+    // SAFETY: CreateWindow uses a NUL-terminated system class and no optional pointers.
+    let hwnd = unsafe {
+        CreateWindowExW(
+            WS_EX_NOACTIVATE, class.as_ptr(), std::ptr::null(), WS_OVERLAPPEDWINDOW,
+            -30000, -30000, 320, 240, std::ptr::null_mut(), std::ptr::null_mut(),
+            std::ptr::null_mut(), std::ptr::null(),
+        )
+    };
+    assert!(!hwnd.is_null(), "test window must exist");
+    let hwnd = TestWindow(hwnd);
+    let caption_color = || {
+        use std::ptr::null_mut;
+        // SAFETY: only bounded GDI calls against test-owned window and bitmap;
+        // the original DC object is restored before releasing resources.
+        unsafe {
+            let mut rect = RECT::default();
+            assert_ne!(GetWindowRect(hwnd.0, &mut rect), 0);
+            let (width, height) = (rect.right - rect.left, rect.bottom - rect.top);
+            let info = BITMAPINFO {
+                bmiHeader: BITMAPINFOHEADER {
+                    biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                    biWidth: width, biHeight: -height, biPlanes: 1, biBitCount: 32,
+                    biCompression: BI_RGB, ..Default::default()
+                },
+                ..Default::default()
+            };
+            let mut bits = null_mut();
+            let dc = CreateCompatibleDC(null_mut());
+            assert!(!dc.is_null());
+            let bitmap = CreateDIBSection(dc, &info, DIB_RGB_COLORS, &mut bits, null_mut(), 0);
+            assert!(!bitmap.is_null());
+            let previous = SelectObject(dc, bitmap);
+            DwmFlush();
+            let rendered = PrintWindow(hwnd.0, dc, 2); // PW_RENDERFULLCONTENT includes the DWM frame.
+            let pixel = GetPixel(dc, width / 2, 18);
+            SelectObject(dc, previous);
+            DeleteObject(bitmap);
+            DeleteDC(dc);
+            assert_ne!(rendered, 0);
+            pixel
+        }
+    };
+    let dwm_colors_supported = native::set_window_caption_colors(hwnd.0 as isize, [18, 52, 86], [255; 3]);
+    // SAFETY: the test owns the live off-screen window; this does not activate it.
+    unsafe { ShowWindow(hwnd.0, SW_SHOWNOACTIVATE) };
+    if dwm_colors_supported {
+        assert_eq!(caption_color(), 0x0056_3412, "capture must include the actual title bar");
+    }
+    let (root, ctx, mut app) = fixture("title-bar-skin", "en");
+    app.hwnd = hwnd.0 as isize;
+    for (skin, expected, system, background, via_settings) in [
+        ("Black", egui::Theme::Dark, egui::Theme::Light, 0x0000_0000, false),
+        ("Classic", egui::Theme::Light, egui::Theme::Dark, 0x00DE_DEDE, true),
+        ("Black", egui::Theme::Dark, egui::Theme::Light, 0x0000_0000, false),
+    ] {
+        let input = egui::RawInput { system_theme: Some(system), ..Default::default() };
+        let output = ctx.run(input, |ctx| {
+            app.preferences_dirty = false;
+            if via_settings {
+                app.open_settings_window();
+                set_combo(&mut app, "Theme", skin);
+                app.settings_action(SettingsAction::Apply, ctx);
+            } else {
+                app.apply_theme(skin);
+            }
+            assert!(app.preferences_dirty);
+            app.apply_preferences(ctx);
+            assert_eq!(ctx.system_theme(), Some(system));
+            assert_eq!(ctx.theme(), expected, "only the NDR skin controls app visuals");
+        });
+        if dwm_colors_supported {
+            assert_eq!(caption_color(), background, "{skin} caption");
+        } else {
+            let native_theme = if expected == egui::Theme::Dark { egui::SystemTheme::Dark } else { egui::SystemTheme::Light };
+            assert!(output.viewport_output[&egui::ViewportId::ROOT].commands.iter().any(
+                |cmd| matches!(cmd, egui::ViewportCommand::SetTheme(theme) if *theme == native_theme)
+            ));
+        }
+        assert_eq!(app.settings.text("Theme", ""), skin);
+    }
+    app.hwnd = 0;
+    fs::remove_dir_all(root).unwrap();
+}
+
 thread_local! {
     static FONT_LOOKUPS: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
 }

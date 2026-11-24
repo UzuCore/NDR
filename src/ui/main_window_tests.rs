@@ -40,6 +40,105 @@ fn thumbnail_cache_revision_is_invalidated_by_sort_and_refresh() {
     fs::remove_dir_all(root).unwrap();
 }
 
+#[test]
+fn sort_keeps_cursor_on_drive_when_parent_has_the_same_path() {
+    let (root, _ctx, mut app) = fixture("sort-drive-parent-identity");
+    app.active = 0;
+    let pane = &mut app.panes[0];
+    let drive_path = PathBuf::from(r"Q:\");
+    let parent = pane.entries.iter_mut().find(|entry| entry.is_parent()).unwrap();
+    parent.path = drive_path.clone();
+    pane.entries.push(Entry {
+        name: "Q:".into(),
+        drive: true,
+        ..Entry::parent_item(drive_path.clone(), None)
+    });
+    pane.cursor = pane.entries.len() - 1;
+    let marked = pane.entries.iter().position(|entry| entry.name == "a.txt").unwrap();
+    pane.selected.insert(marked);
+    pane.selected.insert(pane.entries.iter().position(|entry| entry.is_parent()).unwrap());
+
+    assert!(app.sort_command("sortDescending"));
+    let pane = &app.panes[0];
+    assert_eq!(pane.entries[0].path, drive_path);
+    assert!(pane.entries[0].is_parent());
+    assert!(pane.entries[pane.cursor].drive, "the cursor must not jump to '..' (same path)");
+    assert_eq!(pane.entries[pane.cursor].path, drive_path);
+    assert_eq!(pane.selected.iter().map(|&row| pane.entries[row].name.as_str()).collect::<Vec<_>>(), ["..", "a.txt"]);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn filename_width_cache_reuses_measurements_until_listing_or_font_changes() {
+    let (root, ctx, mut app) = fixture("filename-width-cache");
+    let measure = |app: &App, size: f32| {
+        let mut result = 0.0;
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 700.0))),
+            ..Default::default()
+        };
+        let _ = ctx.run(raw, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                result = app.widest_pane_filename(ui, 0, &egui::FontId::proportional(size));
+            });
+        });
+        result
+    };
+    let original = measure(&app, 14.0);
+    assert!(original > 0.0);
+    assert_eq!(measure(&app, 14.0), original, "a second frame reuses the same width");
+
+    app.panes[0].entries[1].name = "very_long_filename_for_cache_invalidation_check_0000000000000000000.txt".into();
+    assert_eq!(measure(&app, 14.0), original, "the cache key is unchanged between list revisions");
+    app.sort_pane(0);
+    let updated = measure(&app, 14.0);
+    assert!(updated > original, "re-sorting must remeasure a changed name");
+    let bigger = measure(&app, 28.0);
+    assert!(bigger > updated, "changing font size must remeasure");
+    app.settings.set_text("ListFont", "Another Test Font");
+    let changed_face = measure(&app, 28.0);
+    assert_eq!(changed_face, bigger, "the configured face participates in cache identity even when the test font is unchanged");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn large_marked_list_survives_refresh_and_ignores_removed_names() {
+    let (root, ctx, mut app) = fixture("bulk-marks-refresh");
+    let folder = app.panes[0].path.clone();
+    for i in 0..320 {
+        fs::write(folder.join(format!("bulk_{i:03}_Sample.txt")), [i as u8]).unwrap();
+    }
+    app.refresh(0);
+    wait(&mut app, &ctx);
+    let mut chosen: Vec<String> = Vec::new();
+    for (index, entry) in app.panes[0].entries.iter().enumerate() {
+        if let Some(number) = entry.name.strip_prefix("bulk_")
+            .and_then(|s| s.get(..3))
+            .and_then(|s| s.parse::<usize>().ok())
+            && number % 2 == 0 {
+            app.panes[0].selected.insert(index);
+            chosen.push(entry.name.clone());
+        }
+    }
+    assert_eq!(chosen.len(), 160);
+    app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == "bulk_178_Sample.txt").unwrap();
+    fs::remove_file(folder.join("bulk_178_Sample.txt")).unwrap();
+    fs::write(folder.join("bulk_320_Sample.txt"), b"new").unwrap();
+    app.refresh(0);
+    wait(&mut app, &ctx);
+    let kept: Vec<String> = app.panes[0].selected.iter()
+        .map(|&index| app.panes[0].entries[index].name.clone()).collect();
+    assert_eq!(kept.len(), 159);
+    assert!(!kept.contains(&"bulk_178_Sample.txt".into()));
+    assert!(!kept.contains(&"bulk_320_Sample.txt".into()));
+    assert!(kept.contains(&"bulk_184_Sample.txt".into()));
+    assert!(app.panes[0].selected.iter().all(|&index| {
+        let entry = &app.panes[0].entries[index];
+        !entry.is_parent() && !entry.drive
+    }));
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// Draws the menu, the favorites row, and both panes once (to check there are no errors while drawing).
 fn draw(app: &mut App, ctx: &egui::Context) {
     let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 850.0))), ..Default::default() };
@@ -165,6 +264,46 @@ fn main_menu_follows_the_original_tfmain_dropdowns() {
         }
     }
     assert!(switched, "hovering the Folder title while a menu is open opens the Folder menu");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn hovered_file_menu_shortcut_keeps_the_row_highlight() {
+    let (root, ctx, mut app) = fixture("menu-shortcut-hover");
+    app.settings.set_text("Theme", "Black");
+    let command = menu_data::ORIGINAL_ACTIONS.iter()
+        .find(|(name, _)| *name == "miParameterOpen").unwrap().1;
+    let shortcut = App::menu_shortcut_text(command, &compat::ShortcutMap::parse(None));
+    assert!(!shortcut.is_empty());
+    let frame = |app: &mut App, events| {
+        let screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 850.0)));
+        ctx.run(egui::RawInput { screen_rect, events, ..Default::default() }, |ctx| {
+            app.keyboard(ctx);
+            egui::TopBottomPanel::top("menu").show(ctx, |ui| app.menu(ui));
+        })
+    };
+    frame(&mut app, vec![]);
+    frame(&mut app, vec![egui::Event::Key {
+        key: egui::Key::F, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::ALT,
+    }]);
+    frame(&mut app, vec![]);
+    let opened = frame(&mut app, vec![]);
+    let at = opened.shapes.iter().find_map(|shape| match &shape.shape {
+        egui::Shape::Text(text) if text.galley.text() == shortcut =>
+            Some(text.pos + egui::vec2(text.galley.size().x + 1.0, text.galley.size().y * 0.5)),
+        _ => None,
+    }).expect("File menu draws the shortcut");
+    let hovered = frame(&mut app, vec![egui::Event::PointerMoved(at)]);
+    let background = hovered.shapes.iter().rev().find_map(|shape| match &shape.shape {
+        egui::Shape::Rect(rect) if rect.rect.contains(at) && shape.clip_rect.contains(at)
+            && rect.fill != Color32::TRANSPARENT => Some(rect.fill),
+        _ => None,
+    });
+    // The menu can still be fading in, so compare the RGB before opacity.
+    let [r, g, b, _] = background.expect("a background behind the shortcut").to_srgba_unmultiplied();
+    assert!([r, g, b].into_iter().all(|channel| channel.abs_diff(0xE6) <= 1),
+        "the highlight extends behind the shortcut, got ({r}, {g}, {b})");
+    drop(app);
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -607,6 +746,15 @@ fn network_share_prompt_only_for_credential_failures() {
 }
 
 #[test]
+fn foreground_listing_wait_prioritizes_network_ui_responsiveness() {
+    use super::panes::foreground_listing_wait;
+    assert_eq!(foreground_listing_wait(Path::new(r"\\server\share\slow")), Duration::from_millis(8));
+    assert_eq!(foreground_listing_wait(Path::new(r"\\?\UNC\server\share")), Duration::from_millis(8));
+    assert_eq!(foreground_listing_wait(Path::new(r"relative\local\folder")), Duration::from_millis(120));
+    assert_eq!(foreground_listing_wait(Path::new(r"C:\local\folder")), Duration::from_millis(120));
+}
+
+#[test]
 fn auto_view_columns_follow_the_original() {
     let (root, ctx, mut app) = fixture("auto");
     app.settings.set_text("LeftViewStyle", "Auto");
@@ -685,7 +833,9 @@ fn grouped_auto_distribution_matches_the_original_across_modes_and_column_counts
 #[test]
 fn automatic_column_width_cache_reuses_measured_value_until_listing_changes() {
     let (root, ctx, mut app) = fixture("auto-width-cache");
-    let key = egui::Id::new(("ndr-auto-column-widest", 0));
+    // Grouped Auto and Names now share the same measured-width cache,
+    // including the configured font face/style in the invalidation key.
+    let key = egui::Id::new(("ndr-widest-pane-filename", 0));
     let raw = || egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(
         egui::Pos2::ZERO, egui::vec2(1400.0, 850.0))), ..Default::default() };
     let run = |app: &mut App| {
@@ -697,13 +847,13 @@ fn automatic_column_width_cache_reuses_measured_value_until_listing_changes() {
     };
     app.settings.values.insert("LeftColumnCount".into(), serde_json::json!(0));
     run(&mut app);
-    let first = ctx.data(|d| d.get_temp::<((u64, egui::FontId), f32)>(key)).unwrap();
+    let first = ctx.data(|d| d.get_temp::<((u64, egui::FontId, String, u8), f32)>(key)).unwrap();
     run(&mut app);
-    let second = ctx.data(|d| d.get_temp::<((u64, egui::FontId), f32)>(key)).unwrap();
+    let second = ctx.data(|d| d.get_temp::<((u64, egui::FontId, String, u8), f32)>(key)).unwrap();
     assert_eq!(first, second, "same listing and font must reuse the width");
     app.sort_pane(0);
     run(&mut app);
-    let refreshed = ctx.data(|d| d.get_temp::<((u64, egui::FontId), f32)>(key)).unwrap();
+    let refreshed = ctx.data(|d| d.get_temp::<((u64, egui::FontId, String, u8), f32)>(key)).unwrap();
     assert_ne!(first.0.0, refreshed.0.0, "sorting invalidates measured widths");
     fs::remove_dir_all(root).unwrap();
 }
@@ -1047,6 +1197,47 @@ fn pane_menu_reopening_with_a_second_right_click_does_not_immediately_close() {
     };
     draw(None, vec![egui::Event::PointerMoved(outside), primary(true), primary(false)]);
     assert!(!egui::Popup::is_id_open(&ctx, menu_id), "click outside still closes the menu normally");
+}
+
+#[test]
+fn explorer_menu_waits_for_a_frame_without_the_file_popup() {
+    let (root, ctx, mut app) = fixture("explorer-menu-handoff");
+    let selected = root.join("left").join("a.txt");
+    app.active = 0;
+    app.panes[0].cursor = app.panes[0].entries.iter().position(|entry| entry.path == selected).unwrap();
+    let calls = std::cell::RefCell::new(Vec::new());
+    let draw = |app: &mut App, open_at, dispatch| {
+        let screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 700.0)));
+        let mut drawn = false;
+        let _ = ctx.run(egui::RawInput { screen_rect, ..Default::default() }, |ctx| {
+            app.poll_shell_menu(ctx, |paths| {
+                assert!(!egui::Popup::is_any_open(ctx));
+                calls.borrow_mut().push(paths.to_vec());
+                Ok(())
+            });
+            egui::CentralPanel::default().show(ctx, |ui| {
+                drawn |= super::skin_pane::pane_menu(ui, 0, open_at, |ui| {
+                    let _ = ui.button("Explorer menu");
+                }).is_some();
+                if dispatch {
+                    app.dispatch("explorerMenu", ctx);
+                }
+            });
+        });
+        drawn
+    };
+
+    assert!(draw(&mut app, Some(egui::pos2(100.0, 120.0)), false));
+    assert!(draw(&mut app, None, true), "the selection frame can still draw the old popup");
+    assert!(!egui::Popup::is_any_open(&ctx), "dispatch closes the NDR popup immediately");
+    assert!(!draw(&mut app, None, false), "the next frame clears the old popup");
+    assert!(calls.borrow().is_empty(), "the Windows menu waits for the clear frame");
+    assert!(!draw(&mut app, None, false));
+    assert_eq!(*calls.borrow(), [vec![selected]]);
+    assert!(!draw(&mut app, None, false), "closing the Windows menu does not reopen the NDR popup");
+    assert_eq!(calls.borrow().len(), 1);
+    drop(app);
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -2260,8 +2451,84 @@ fn cached_nested_folder_tree_renders_without_reloading_children() {
     let expected = vec![root.clone(), outer.clone(), inner.clone()];
     assert_eq!(paths(&app), expected);
     assert!(app.tree_requests.is_empty(), "cached branches must not queue shell reads");
+    let first = Arc::clone(&app.panes[0].tree_rows);
     render(&mut app);
     assert_eq!(paths(&app), expected, "subtree traversal remains stable across frames");
+    assert!(Arc::ptr_eq(&first, &app.panes[0].tree_rows), "unchanged paint must share the original row buffer");
+    assert!(app.tree_requests.is_empty());
+    assert_eq!(app.panes[0].tree_row_positions.get(&ndr::shell_tree::key_identity(&inner)), Some(&2));
+
+    // Closing and reopening changes the flattened rows even without a new
+    // shell result. Hidden mode and new shell data also invalidate the cache.
+    app.panes[0].tree_open.remove(&outer);
+    render(&mut app);
+    assert_eq!(paths(&app), vec![root.clone(), outer.clone()]);
+    assert!(!Arc::ptr_eq(&first, &app.panes[0].tree_rows));
+    app.panes[0].tree_open.insert(outer.clone());
+    render(&mut app);
+    assert_eq!(paths(&app), expected);
+    let reopened = Arc::clone(&app.panes[0].tree_rows);
+    let extra = outer.join("extra");
+    app.tree_cache.insert((outer.clone(), hidden), vec![make_node(&inner, false), make_node(&extra, false)]);
+    app.tree_cache_revision = app.tree_cache_revision.wrapping_add(1);
+    render(&mut app);
+    assert!(!Arc::ptr_eq(&reopened, &app.panes[0].tree_rows));
+    assert_eq!(paths(&app), vec![root.clone(), outer.clone(), inner.clone(), extra]);
+    let updated = Arc::clone(&app.panes[0].tree_rows);
+    app.tree_cache.insert((root.clone(), !hidden), vec![make_node(&outer, true)]);
+    app.tree_cache.insert((outer.clone(), !hidden), Vec::new());
+    app.panes[0].show_hidden = !hidden;
+    render(&mut app);
+    assert!(!Arc::ptr_eq(&updated, &app.panes[0].tree_rows));
+    assert_eq!(paths(&app), vec![root.clone(), outer.clone()]);
+    assert!(!app.panes[0].tree_rows[1].2, "empty hidden-view branch has no expand glyph");
+    assert!(app.tree_requests.is_empty());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+#[ignore = "explicit release benchmark for repeated large folder-tree rebuilds"]
+fn benchmark_cached_tree_rows_during_repaints() {
+    use ndr::shell_tree::{ShellNode, Special};
+    let (root, _ctx, mut app) = fixture("tree-repaint-bench");
+    let make_node = |key: PathBuf, has_children: bool| ShellNode {
+        name: key.file_name().unwrap_or_default().to_string_lossy().into_owned(),
+        path: Some(key.clone()), key, has_children, special: Special::None, ghosted: false,
+    };
+    let hidden = app.panes[0].show_hidden;
+    app.shell_desktop = Some(make_node(root.clone(), true));
+    app.panes[0].tree_open.insert(root.clone());
+    let parents: Vec<_> = (0..100).map(|i| root.join(format!("folder_{i:03}"))).collect();
+    app.tree_cache.insert((root.clone(), hidden), parents.iter().cloned().map(|p| make_node(p, true)).collect());
+    for parent in parents {
+        let children = (0..50).map(|i| make_node(parent.join(format!("sub_{i:03}")), false)).collect();
+        app.panes[0].tree_open.insert(parent.clone());
+        app.tree_cache.insert((parent, hidden), children);
+    }
+    let expected = app.cached_pane_tree_rows(0);
+    assert_eq!(expected.len(), 5101);
+    let rounds = 120;
+    let start = Instant::now();
+    for _ in 0..rounds {
+        app.panes[0].tree_rows_key = None;
+        let rows = app.cached_pane_tree_rows(0);
+        assert_eq!(rows.len(), expected.len());
+        std::hint::black_box(rows);
+    }
+    let rebuild = start.elapsed();
+    let first = Arc::clone(&app.panes[0].tree_rows);
+    let start = Instant::now();
+    for _ in 0..rounds {
+        let rows = app.cached_pane_tree_rows(0);
+        assert!(Arc::ptr_eq(&first, &rows));
+        std::hint::black_box(rows);
+    }
+    let reused = start.elapsed();
+    println!(
+        "TREE_REPAINT rows=5101 rounds={rounds} rebuildMs={:.3} cachedMs={:.3} speedup={:.2}x",
+        rebuild.as_secs_f64()*1000.0, reused.as_secs_f64()*1000.0,
+        rebuild.as_secs_f64()/reused.as_secs_f64(),
+    );
     assert!(app.tree_requests.is_empty());
     fs::remove_dir_all(root).unwrap();
 }
@@ -2283,7 +2550,7 @@ fn pane_tree_keys_follow_the_ttreeview() {
         (node(&left, true), 0, true, true),
         (node(&left.join("alpha"), true), 1, true, false),
         (node(&left.join("beta"), true), 1, true, false),
-    ];
+    ].into();
     let press = |app: &mut App, key: egui::Key, text: Option<&str>| {
         let mut events = vec![egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }];
         events.extend(text.map(|t| egui::Event::Text(t.into())));
@@ -2840,7 +3107,7 @@ fn pane_tree_label_edit_renames_the_folder() {
     let node = ndr::shell_tree::ShellNode { key: folder.clone(), name: "folder".into(), path: Some(folder.clone()), has_children: true, special: ndr::shell_tree::Special::None, ghosted: false };
     assert!(super::views::tree_renamable(&node));
     assert!(!super::views::tree_renamable(&ndr::shell_tree::ShellNode { key: PathBuf::from("C:\\"), name: "C:".into(), path: Some(PathBuf::from("C:\\")), has_children: true, special: ndr::shell_tree::Special::None, ghosted: false }));
-    app.panes[0].tree_rows = vec![(node, 1, true, false)];
+    app.panes[0].tree_rows = vec![(node, 1, true, false)].into();
     app.panes[0].tree_selected = Some(folder.clone());
     let start = Instant::now();
     app.panes[0].tree_label_click = Some((folder.clone(), start));

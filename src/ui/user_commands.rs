@@ -287,6 +287,9 @@ impl App {
         // Skin base color table -> skin colors -> color table.
         let palette = super::system_commands::theme_palette(&theme);
         self.dark = palette.dark();
+        ctx.set_theme(palette.egui_theme());
+        // Both the skin menu and Settings Apply/OK refresh preferences here.
+        palette.apply_window_caption(ctx, self.hwnd);
         let mut visuals = super::system_commands::palette_visuals(&palette);
         if let Ok(skin) = ndr::styles::Skin::load(&self.resources.join("Skins"), &theme) {
             if let Some(color) = skin

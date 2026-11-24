@@ -371,39 +371,75 @@ pub fn effective_folder_sort(options: &SortOptions) -> (&str, bool) {
     (mode, options.file_descending)
 }
 
-/// One group of sort_entries (folders or files). Same order as compare_by_mode, but fixed (speed): comparison texts (UTF-16) and colors are built once
-/// per item. Previously each comparison converted both names to UTF-16 (about 300,000 times for 20,000 items) and sorting froze the screen for over 70 ms.
+/// One group of sort_entries (folders or files). Cache comparison data once,
+/// pooling NUL-terminated UTF-16 keys to avoid two heap allocations per row.
 fn sort_group(list: &mut Vec<Entry>, mode: &str, descending: bool, logical: bool, color: &dyn Fn(&Entry) -> u32, priority: bool) {
+    if list.len() < 2 {
+        return;
+    }
+    if mode == "None" {
+        // Even unsorted files keep stable priority buckets.
+        if priority {
+            list.sort_by_key(priority_rank);
+        }
+        return;
+    }
     struct Key {
-        base: Vec<u16>,
-        ext: Vec<u16>,
+        start: usize,
+        extension: usize,
+        end: usize,
         color: u32,
         rank: u8,
     }
-    let keys: Vec<Key> = list
-        .iter()
-        .map(|e| Key { base: wide(sort_base(e)), ext: wide(sort_extension(e)), color: if mode == "Color" { color(e) } else { 0 }, rank: if priority { priority_rank(e) } else { 0 } })
-        .collect();
+    let mut words = Vec::with_capacity(list.len().saturating_mul(24));
+    let keys: Vec<Key> = list.iter().map(|entry| {
+        let start = words.len();
+        words.extend(sort_base(entry).encode_utf16().chain(Some(0)));
+        let extension = words.len();
+        words.extend(sort_extension(entry).encode_utf16().chain(Some(0)));
+        Key {
+            start,
+            extension,
+            end: words.len(),
+            color: if mode == "Color" { color(entry) } else { 0 },
+            rank: if priority { priority_rank(entry) } else { 0 },
+        }
+    }).collect();
     let mut order: Vec<usize> = (0..list.len()).collect();
     order.sort_by(|&i, &j| {
-        let (a, b, ka, kb) = (&list[i], &list[j], &keys[i], &keys[j]);
-        let base = || compare_wide(&ka.base, &kb.base, logical);
-        let ext = || compare_wide(&ka.ext, &kb.ext, false);
-        let by_mode = match mode {
-            "None" => Ordering::Equal,
-            "Extension" => ext().then_with(base),
-            "Size" => a.size.cmp(&b.size).then_with(base).then_with(ext),
-            // Original file comparer FUN_007d307c: base name (+4, StrCmpLogicalW or lstrcmpiW) breaks time and attribute ties before the
-            // extension (+8, lstrcmpiW); color ties compare the extension first. Previously time and attribute ties used the extension first.
-            "Modified" => a.modified.cmp(&b.modified).then_with(base).then_with(ext),
-            "Attributes" => a.attributes.cmp(&b.attributes).then_with(base).then_with(ext),
-            "Color" => ka.color.cmp(&kb.color).then_with(ext).then_with(base),
-            _ => base().then_with(ext),
-        };
-        ka.rank.cmp(&kb.rank).then(if descending { by_mode.reverse() } else { by_mode })
+        let (ka, kb) = (&keys[i], &keys[j]);
+        ka.rank.cmp(&kb.rank).then_with(|| {
+            let (a, b) = (&list[i], &list[j]);
+            let base = || compare_wide(&words[ka.start..ka.extension], &words[kb.start..kb.extension], logical);
+            let ext = || {
+                let (a, b) = (&words[ka.extension..ka.end], &words[kb.extension..kb.end]);
+                if a == b { Ordering::Equal } else { compare_wide(a, b, false) }
+            };
+            let by_mode = match mode {
+                "Extension" => ext().then_with(base),
+                "Size" => a.size.cmp(&b.size).then_with(base).then_with(ext),
+                // Original time and attribute sort breaks ties by base name before extension.
+                "Modified" => a.modified.cmp(&b.modified).then_with(base).then_with(ext),
+                "Attributes" => a.attributes.cmp(&b.attributes).then_with(base).then_with(ext),
+                "Color" => ka.color.cmp(&kb.color).then_with(ext).then_with(base),
+                _ => base().then_with(ext),
+            };
+            if descending { by_mode.reverse() } else { by_mode }
+        })
     });
-    let mut taken: Vec<Option<Entry>> = std::mem::take(list).into_iter().map(Some).collect();
-    *list = order.into_iter().filter_map(|i| taken[i].take()).collect();
+    // Apply the destination-to-source permutation by cycles. Stable ordering
+    // comes from order.sort_by; moving the entries needs no second row buffer.
+    for start in 0..order.len() {
+        let mut current = start;
+        loop {
+            let next = std::mem::replace(&mut order[current], current);
+            if next == start {
+                break;
+            }
+            list.swap(current, next);
+            current = next;
+        }
+    }
 }
 
 /// Group categories of FileTypeCatalog (extensions with the dot, case-insensitive).
@@ -632,6 +668,119 @@ mod tests {
         SortOptions { folder_mode: folder.into(), folder_descending: descending, file_mode: file.into(), file_descending: descending, logical: true }
     }
 
+    // Stage 5 comparator and gather path; baseline for stability and benchmark comparisons.
+    fn previous_sort_group(list: &mut Vec<Entry>, mode: &str, descending: bool, logical: bool, color: &dyn Fn(&Entry) -> u32, priority: bool) {
+        if mode == "None" {
+            // Even unsorted files keep priority buckets, but no comparison
+            // requires UTF-16 filename/extension buffers or an index permutation.
+            if priority {
+                list.sort_by_key(priority_rank);
+            }
+            return;
+        }
+        struct Key {
+            base: Vec<u16>,
+            ext: Vec<u16>,
+            color: u32,
+            rank: u8,
+        }
+        let keys: Vec<Key> = list
+            .iter()
+            .map(|e| Key { base: wide(sort_base(e)), ext: wide(sort_extension(e)), color: if mode == "Color" { color(e) } else { 0 }, rank: if priority { priority_rank(e) } else { 0 } })
+            .collect();
+        let mut order: Vec<usize> = (0..list.len()).collect();
+        order.sort_by(|&i, &j| {
+            let (a, b, ka, kb) = (&list[i], &list[j], &keys[i], &keys[j]);
+            let base = || compare_wide(&ka.base, &kb.base, logical);
+            let ext = || compare_wide(&ka.ext, &kb.ext, false);
+            let by_mode = match mode {
+                "None" => Ordering::Equal,
+                "Extension" => ext().then_with(base),
+                "Size" => a.size.cmp(&b.size).then_with(base).then_with(ext),
+                // Original file comparer FUN_007d307c: base name (+4, StrCmpLogicalW or lstrcmpiW) breaks time and attribute ties before the
+                // extension (+8, lstrcmpiW); color ties compare the extension first. Previously time and attribute ties used the extension first.
+                "Modified" => a.modified.cmp(&b.modified).then_with(base).then_with(ext),
+                "Attributes" => a.attributes.cmp(&b.attributes).then_with(base).then_with(ext),
+                "Color" => ka.color.cmp(&kb.color).then_with(ext).then_with(base),
+                _ => base().then_with(ext),
+            };
+            ka.rank.cmp(&kb.rank).then(if descending { by_mode.reverse() } else { by_mode })
+        });
+        let mut taken: Vec<Option<Entry>> = std::mem::take(list).into_iter().map(Some).collect();
+        *list = order.into_iter().filter_map(|i| taken[i].take()).collect();
+    }
+
+
+    #[test]
+    fn pooled_sort_preserves_stable_ties_and_windows_order() {
+        let mut original: Vec<_> = (0..137).map(|i| {
+            let name = ["a1.txt", "a02.TXT", "A2.txt", "b6.txt", "b10.txt", ".hidden", "noext",
+                        "\u{ac00}\u{1f9ea}.txt", "\u{00c5}3.zip", "a1.txt"][i % 10];
+            let mut row = entry(name, i % 5 == 0, (i % 3) as u64,
+                [0, FILE_ATTRIBUTE_PINNED, FILE_ATTRIBUTE_RECALL_ON_OPEN, FILE_ATTRIBUTE_HIDDEN][i % 4]);
+            // Unique path detects a reordering of even exactly equal sort keys.
+            row.path = PathBuf::from(i.to_string());
+            row.modified = (i % 4 != 0).then_some(SystemTime::UNIX_EPOCH + Duration::from_secs((i % 7) as u64));
+            row
+        }).collect();
+        original.rotate_right(29);
+        let color = |entry: &Entry| (entry.size % 2) as u32;
+        for mode in ["None", "Name", "Extension", "Size", "Modified", "Attributes", "Color"] {
+            for descending in [false, true] {
+                for logical in [false, true] {
+                    for priority in [false, true] {
+                        let mut expected: Vec<_> = original.iter().filter(|e| e.is_dir != priority).cloned().collect();
+                        let mut actual = expected.clone();
+                        previous_sort_group(&mut expected, mode, descending, logical, &color, priority);
+                        sort_group(&mut actual, mode, descending, logical, &color, priority);
+                        assert!(actual.iter().map(|e| &e.path).eq(expected.iter().map(|e| &e.path)),
+                            "mode={mode}, descending={descending}, logical={logical}, priority={priority}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "run explicitly for performance measurements, not CI"]
+    fn benchmark_pooled_sort_20k_entries() {
+        use std::time::Instant;
+
+        let originals: Vec<_> = (0..20_000usize).map(|i| {
+            let name = format!("file-{:05}{}", (i * 17077) % 20_000, [".txt", ".txt", ".zip", ".mp3", ".png"][i % 5]);
+            entry(&name, false, (i % 45) as u64,
+                if i % 191 == 0 { FILE_ATTRIBUTE_PINNED } else if i % 211 == 0 { FILE_ATTRIBUTE_RECALL_ON_OPEN } else { 0 })
+        }).collect();
+        for mode in ["Name", "Extension", "Size"] {
+            let (mut old, mut new) = (Vec::new(), Vec::new());
+            for iteration in 0..13 {
+                let (mut before, mut after) = (originals.clone(), originals.clone());
+                let measure_old = |list| {
+                    let start = Instant::now();
+                    previous_sort_group(list, mode, false, true, &|_| 0, true);
+                    start.elapsed()
+                };
+                let measure_new = |list| {
+                    let start = Instant::now();
+                    sort_group(list, mode, false, true, &|_| 0, true);
+                    start.elapsed()
+                };
+                let (a, b) = if iteration % 2 == 0 {
+                    (measure_old(&mut before), measure_new(&mut after))
+                } else {
+                    let b = measure_new(&mut after);
+                    (measure_old(&mut before), b)
+                };
+                assert!(before.iter().map(|e| &e.path).eq(after.iter().map(|e| &e.path)));
+                if iteration != 0 { old.push(a); new.push(b); }
+            }
+            old.sort_unstable();
+            new.sort_unstable();
+            let (a, b) = (old[old.len() / 2], new[new.len() / 2]);
+            eprintln!("{mode} 20k: previous={a:?}, pooled={b:?}, speedup={:.2}x", a.as_secs_f64() / b.as_secs_f64());
+        }
+    }
+
     /// Original FUN_007d3350 with foldersort 0: folders follow a time or attribute sort and its descending flag; extension, size and color
     /// sorts keep the folders in name order.
     #[test]
@@ -740,6 +889,24 @@ mod tests {
         let mut original = vec![entry("c", false, 0, 0), entry("a", false, 0, 0)];
         sort_entries(&mut original, &options("None", "None", false), &none);
         assert_eq!(names(&original), ["c", "a"], "None keeps the listing order");
+    }
+
+    #[test]
+    fn unsorted_files_preserve_received_order_within_priority_buckets() {
+        let mut list = vec![
+            entry("normal-first", false, 0, 0),
+            entry("cloud-first", false, 0, FILE_ATTRIBUTE_RECALL_ON_OPEN),
+            entry("pinned-first", false, 0, FILE_ATTRIBUTE_PINNED),
+            entry("normal-second", false, 0, 0),
+            entry("pinned-second", false, 0, FILE_ATTRIBUTE_PINNED),
+            entry("cloud-second", false, 0, FILE_ATTRIBUTE_RECALL_ON_OPEN),
+        ];
+        sort_entries(&mut list, &options("None", "None", true), &|_| 0);
+        assert_eq!(names(&list), [
+            "pinned-first", "pinned-second",
+            "normal-first", "normal-second",
+            "cloud-first", "cloud-second",
+        ], "None sorts by priority only, preserving input order within each bucket");
     }
 
     /// Pre-optimization reference: converts group names to UTF-16 on each

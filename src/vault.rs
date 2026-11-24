@@ -195,6 +195,15 @@ fn valid_name(name: &str) -> Result<(), String> {
     }
     Ok(())
 }
+
+/// Match the Unicode lowercase keys used by the on-disk index's duplicate check.
+pub fn names_equal(left: &str, right: &str) -> bool {
+    if left.is_ascii() && right.is_ascii() {
+        left.eq_ignore_ascii_case(right)
+    } else {
+        *Zeroizing::new(left.to_lowercase()) == *Zeroizing::new(right.to_lowercase())
+    }
+}
 fn reserved(name: &str) -> bool {
     if name.ends_with(['.', ' ']) { return true; }
     let stem = name.split('.').next().unwrap_or("").to_ascii_uppercase();
@@ -494,7 +503,18 @@ impl Vault {
     }
     fn item(&self,id:i64) -> Result<&Item,String> {self.index.items.get(&id).ok_or_else(||"Encrypted item not found".into())}
     fn child(&self,parent:i64,name:&str) -> Option<&Item> {
-        self.index.items.values().find(|i|i.parent==parent&&i.name.eq_ignore_ascii_case(name))
+        let mut key = None;
+        self.index.items.values().filter(|item| item.parent == parent).find(|item| {
+            if name.is_ascii() && item.name.is_ascii() {
+                return name.eq_ignore_ascii_case(&item.name);
+            }
+            let key = key.get_or_insert_with(|| Zeroizing::new(name.to_lowercase()));
+            if item.name.is_ascii() {
+                item.name.eq_ignore_ascii_case(key.as_str())
+            } else {
+                *Zeroizing::new(item.name.to_lowercase()) == **key
+            }
+        })
     }
     fn new_item(&mut self,parent:i64,name:&str,folder:bool) -> Result<i64,String> {
         valid_name(name)?;self.folder(parent)?;
@@ -507,33 +527,54 @@ impl Vault {
             creation_time:now, last_access_time:now, last_write_time:now, change_time:now});
         Ok(id)
     }
-    fn subtree(&self,id:i64) -> Result<Vec<i64>,String> {
-        self.item(id)?;
-        if id==1{return Err("Cannot delete container root".into());}
-        let mut result=vec![id];
-        for at in 0..result.len(){
-            let children:Vec<_>=self.index.items.values().filter(|i|i.parent==result[at]).map(|i|i.id).collect();
-            if result.len()+children.len()>2_000_000{return Err("Encrypted tree exceeds item limit".into());}
-            result.extend(children);
+    fn is_within(&self, mut folder: i64, ancestor: i64) -> Result<bool, String> {
+        while folder != 1 {
+            if folder == ancestor { return Ok(true); }
+            folder = self.item(folder)?.parent;
         }
-        Ok(result)
+        Ok(ancestor == 1)
     }
-    fn erase(&mut self,id:i64)->Result<(),String> {
-        for at in self.subtree(id)? { self.index.items.remove(&at); }
+
+    fn erase(&mut self, ids: &[i64]) -> Result<(), String> {
+        let mut includes_folder = false;
+        for &id in ids {
+            if id == 1 { return Err("Cannot delete container root".into()); }
+            includes_folder |= self.item(id)?.folder;
+        }
+
+        let mut children = HashMap::<i64, Vec<i64>>::new();
+        if includes_folder {
+            for item in self.index.items.values() {
+                children.entry(item.parent).or_default().push(item.id);
+            }
+        }
+        let mut remaining = ids.to_vec();
+        while let Some(id) = remaining.pop() {
+            if let Some(mut item) = self.index.items.remove(&id) {
+                item.name.zeroize();
+            }
+            if let Some(descendants) = children.remove(&id) {
+                remaining.extend(descendants);
+            }
+        }
         Ok(())
     }
     fn replace(&mut self,parent:i64,name:&str,replace:bool)->Result<(),String>{
         if let Some(existing)=self.child(parent,name).map(|i|i.id){
             if !replace{return Err(format!("Destination already exists: {name}"));}
-            self.erase(existing)?;
+            self.erase(&[existing])?;
         }
         Ok(())
     }
     pub fn list(&mut self,parent:i64)->Result<Vec<VaultItem>,String>{
         self.folder(parent)?;
-        let mut items:Vec<_>=self.index.items.values().filter(|i|i.parent==parent).map(Item::public).collect::<Result<_,_>>()?;
-        items.sort_by(|a,b|b.folder.cmp(&a.folder).then_with(||a.name.to_lowercase().cmp(&b.name.to_lowercase())));
-        Ok(items)
+        let mut items: Vec<_> = self.index.items.values().filter(|item| item.parent == parent)
+            .map(|item| (item, Zeroizing::new(item.name.to_lowercase()))).collect();
+        items.sort_unstable_by(|(a, a_name), (b, b_name)| {
+            b.folder.cmp(&a.folder).then_with(|| a_name.as_str().cmp(b_name.as_str()))
+                .then_with(|| a.id.cmp(&b.id))
+        });
+        items.into_iter().map(|(item, _)| item.public()).collect()
     }
     pub fn entry_info(&self,id:i64)->Result<VaultItem,String>{self.item(id)?.public()}
     pub fn find_child(&self,parent:i64,name:&str)->Result<Option<VaultItem>,String>{
@@ -661,7 +702,7 @@ impl Vault {
             for (id,name) in ids.iter().zip(names){
                 if moving && from==to{continue;}
                 if this.child(to,name).is_some(){return Err(format!("Destination already exists: {name}"));}
-                if this.item(*id)?.folder && this.subtree(*id)?.contains(&to){
+                if this.item(*id)?.folder && this.is_within(to, *id)? {
                     return Err("Cannot move a folder inside itself".into());
                 }
                 if moving{
@@ -674,10 +715,10 @@ impl Vault {
     pub fn transfer_one(&mut self,from:i64,name:&str,to:i64,target_name:&str,moving:bool,replace:bool)->Result<usize,String>{
         valid_name(target_name)?;self.folder(from)?;self.folder(to)?;
         let id=self.child(from,name).ok_or("Encrypted source item is missing")?.id;
-        if self.item(id)?.folder && self.subtree(id)?.contains(&to){
+        if self.item(id)?.folder && self.is_within(to, id)? {
             return Err("Cannot transfer a folder into its descendants".into());
         }
-        if from==to && name.eq_ignore_ascii_case(target_name){
+        if from==to && names_equal(name, target_name){
             if moving{return Ok(0);}else{return Err("Copying an item over itself is not permitted".into());}
         }
         self.transaction(|this|{
@@ -937,11 +978,7 @@ impl Vault {
     pub fn remove_many(&mut self,ids:&[i64])->Result<(),String>{
         if ids.is_empty(){return Ok(());}
         if ids.iter().copied().collect::<HashSet<_>>().len()!=ids.len(){return Err("Duplicate delete selection".into());}
-        self.transaction(|this|{
-            for id in ids{this.item(*id)?;}
-            for id in ids{if this.index.items.contains_key(id){this.erase(*id)?;}}
-            Ok(())
-        })
+        self.transaction(|this| this.erase(ids))
     }
     /// Crash-safe, encrypted-only compaction. The fast delete path is unchanged;
     /// this explicit maintenance operation removes unreachable old ciphertext
@@ -1262,6 +1299,61 @@ mod tests {
         assert_eq!(v.list(1).unwrap().len(),1);
         drop(v);fs::remove_dir_all(root).unwrap();
     }
+    #[test]
+    fn unicode_names_share_lookup_collision_and_rename_rules() {
+        let root = fixture("unicode-names");
+        let path = root.join("names.ndr");
+        let mut vault = Vault::create(&path, "correct secret".into()).unwrap();
+        let folder = vault.add_folder(1, "PROJETS").unwrap();
+        let id = vault.add_file(folder, "Étude.txt", b"original").unwrap();
+        assert_eq!(vault.find_child(folder, "étude.txt").unwrap().unwrap().id, id);
+        assert_eq!(vault.add_file(folder, "étude.txt", b"duplicate").unwrap_err(),
+            "Destination already exists: étude.txt");
+        assert!(vault.transfer_one(folder, "étude.txt", folder, "Étude.txt", false, true).is_err());
+        vault.rename(id, "étude.txt").unwrap();
+        let kelvin = vault.add_file(folder, "K.txt", b"kelvin").unwrap();
+        assert_eq!(vault.find_child(folder, "K.txt").unwrap().unwrap().id, kelvin);
+        drop(vault);
+
+        let mut vault = Vault::unlock(&path, "correct secret".into()).unwrap();
+        assert_eq!(vault.find_child(folder, "Étude.txt").unwrap().unwrap().name, "étude.txt");
+        assert_eq!(vault.read_file(id).unwrap(), b"original");
+        drop(vault);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn recursive_delete_removes_all_descendants_and_preserves_siblings() {
+        let root = fixture("recursive-delete");
+        let path = root.join("data.ndr");
+        let mut vault = Vault::create(&path, "correct secret".into()).unwrap();
+        let outer = vault.add_folder(1, "outer").unwrap();
+        let inner = vault.add_folder(outer, "inner").unwrap();
+        let deep = vault.add_folder(inner, "deep").unwrap();
+        let removed = vault.add_file(deep, "removed.txt", b"remove").unwrap();
+        let kept = vault.add_file(1, "kept.txt", b"keep").unwrap();
+
+        let error = vault.transfer_one(1, "outer", deep, "cycle", true, false).unwrap_err();
+        assert_eq!(vault.read_file(removed).unwrap(), b"remove");
+        vault.remove_many(&[outer, inner]).unwrap();
+        assert_eq!(error, "Cannot transfer a folder into its descendants");
+        let replaced = vault.add_folder(1, "replaced").unwrap();
+        let nested = vault.add_folder(replaced, "nested").unwrap();
+        let replaced_file = vault.add_file(nested, "removed.txt", b"replace").unwrap();
+        vault.transfer_one(1, "kept.txt", 1, "replaced", false, true).unwrap();
+        drop(vault);
+
+        let mut vault = Vault::unlock(&path, "correct secret".into()).unwrap();
+        assert!(vault.find_child(1, "outer").unwrap().is_none());
+        assert!(vault.entry_info(removed).is_err());
+        assert!(vault.entry_info(replaced_file).is_err());
+        let replacement = vault.find_child(1, "replaced").unwrap().unwrap();
+        assert_eq!(vault.read_file(replacement.id).unwrap(), b"keep");
+        assert_eq!(vault.read_file(kept).unwrap(), b"keep");
+        drop(vault);
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn streamed_24mib_rollback_and_export() {
         let root=fixture("stream");let path=root.join("stream.ndr");

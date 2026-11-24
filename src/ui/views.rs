@@ -106,6 +106,34 @@ pub(super) fn thumbnail_text_height(text: &str, width: f32, max_lines: usize, sp
 }
 
 impl App {
+    /// A long Names or grouped Auto list used to lay out every filename on
+    /// every repaint just to determine its column width. The same listing and
+    /// font have identical widths regardless of pointer movement or scrolling.
+    /// Cache this expensive measurement for both views, but invalidate it
+    /// after sorting/refreshing and when the actual configured font changes.
+    pub(super) fn widest_pane_filename(&self, ui: &egui::Ui, index: usize, font: &egui::FontId) -> f32 {
+        let pane = &self.panes[index];
+        let key = (
+            pane.thumb_content_revision,
+            font.clone(),
+            self.settings.text("ListFont", "Segoe UI"),
+            self.list_font_style,
+        );
+        let cache_id = egui::Id::new(("ndr-widest-pane-filename", index));
+        if let Some((_, width)) = ui.data(|data| {
+            data.get_temp::<((u64, egui::FontId, String, u8), f32)>(cache_id)
+        }).filter(|(cached, _)| cached == &key) {
+            return width;
+        }
+        let width = ui.fonts_mut(|fonts| {
+            pane.entries.iter()
+                .map(|entry| fonts.layout_no_wrap(entry.name.clone(), font.clone(), Color32::WHITE).size().x)
+                .fold(0.0f32, f32::max)
+        });
+        ui.data_mut(|data| data.insert_temp(cache_id, (key, width)));
+        width
+    }
+
     /// Icons: none when ShowIcons is off (original SetShowIcon 0x7dc648 stops the image thread); the extension icon is read once per extension (folders use "<DIR>").
     /// Is this a format whose shell icon differs per file: in the has_own_icon fixed list, or the result of asking HKCR once per extension (system.per_file_icon).
     pub(super) fn per_file_icon_type(&mut self, path: &Path) -> bool {
@@ -399,11 +427,7 @@ impl App {
             configured as usize
         } else {
             let font = egui::TextStyle::Body.resolve(ui.style());
-            let widest = ui.fonts_mut(|fonts| {
-                self.panes[index].entries.iter()
-                    .map(|e| fonts.layout_no_wrap(e.name.clone(), font.clone(), Color32::WHITE).size().x)
-                    .fold(0.0f32, f32::max)
-            });
+            let widest = self.widest_pane_filename(ui, index, &font);
             let item = widest + 14.0 + if self.settings.flag("ShowIcons", true) { 16.0 } else { 0.0 };
             ((ui.available_width().max(1.0) / item.max(1.0)) as usize).clamp(1, 19)
         };
@@ -754,9 +778,69 @@ impl App {
     /// Original pane folder tree (miShowFoldersClick 0x445258 → FUN_0048da38): to the left of the list inside the pane (TNXShellTreeView inside the alLeft TNXPaintPanel).
     /// The root is the shell desktop, and below it the shell namespace (My Computer → drives → folders, Network, Control Panel, Recycle Bin …, ndr::shell_tree).
     /// Background and font match the list (FUN_0048e1ac: list Color·Font, text color GetBasic(1)); when the pane location changes, expand to that folder and select it (SetPath).
+    /// Flatten the folder tree once per change, not once per paint. The
+    /// cached rows contain both the painter's and keyboard's expansion flags.
+    /// Compare the actual open set so every expansion path (including drag
+    /// hover and keyboard) invalidates the cache without a separate counter.
+    pub(super) fn cached_pane_tree_rows(&mut self, index: usize) -> Arc<[(ndr::shell_tree::ShellNode, usize, bool, bool)]> {
+        use ndr::shell_tree::{ShellNode, Special, key_identity};
+        let pane = &self.panes[index];
+        if pane.tree_rows_key.as_ref().is_some_and(|(revision, hidden, open)| {
+            *revision == self.tree_cache_revision && *hidden == pane.show_hidden && *open == pane.tree_open
+        }) {
+            return Arc::clone(&pane.tree_rows);
+        }
+        if self.shell_desktop.is_none() {
+            self.shell_desktop = Some(ndr::shell_tree::desktop().unwrap_or(ShellNode {
+                key: PathBuf::new(), name: self.tr("바탕 화면", "Desktop").into_owned(),
+                path: None, has_children: true, special: Special::None, ghosted: false,
+            }));
+        }
+        let pane = &self.panes[index];
+        let expanded: HashSet<String> = pane.tree_open.iter().map(|key| key_identity(key)).collect();
+        let hidden = pane.show_hidden;
+        let mut rows = Vec::with_capacity(pane.tree_rows.len());
+        let mut positions = HashMap::with_capacity(pane.tree_rows.len());
+        let mut missing = Vec::new();
+        fn walk(
+            app: &App, hidden: bool, node: &ShellNode, depth: usize,
+            expanded: &HashSet<String>, rows: &mut Vec<(ShellNode, usize, bool, bool)>,
+            positions: &mut HashMap<String, usize>, missing: &mut Vec<PathBuf>,
+        ) {
+            let identity = key_identity(&node.key);
+            let open = expanded.contains(&identity);
+            let children = app.tree_cache.get(&(node.key.clone(), hidden));
+            let expandable = node.has_children && !children.is_some_and(|items| items.is_empty());
+            positions.entry(identity).or_insert(rows.len());
+            rows.push((node.clone(), depth, expandable, open));
+            if depth > 32 || !open {
+                return;
+            }
+            if let Some(children) = children {
+                for child in children {
+                    walk(app, hidden, child, depth + 1, expanded, rows, positions, missing);
+                }
+            } else {
+                missing.push(node.key.clone());
+            }
+        }
+        if let Some(root) = self.shell_desktop.as_ref() {
+            walk(self, hidden, root, 0, &expanded, &mut rows, &mut positions, &mut missing);
+        }
+        let rows: Arc<[_]> = rows.into();
+        let pane = &mut self.panes[index];
+        pane.tree_rows_key = Some((self.tree_cache_revision, hidden, pane.tree_open.clone()));
+        pane.tree_row_positions = positions;
+        pane.tree_rows = Arc::clone(&rows);
+        for key in missing {
+            self.request_tree_children(index, &key);
+        }
+        rows
+    }
+
     /// When selected (FUN_0048e320), Control Panel opens control.exe, the Recycle Bin opens via the shell (FUN_00432fe4), virtual folders open via the shell, and a folder navigates that pane.
     pub(super) fn pane_tree_ui(&mut self, ui: &mut egui::Ui, index: usize, rect: egui::Rect) {
-        use ndr::shell_tree::{ShellNode, Special, same_key};
+        use ndr::shell_tree::{ShellNode, same_key};
         // FUN_0048e1ac: background = list Color (NXBACK), text = GetBasic(1) (NXFORE).
         // Selected row: VCL TCustomTreeView drawing sets the selected item's (CDIS_SELECTED) brush to clHighlight, and FUN_006c9388(tree, 0) =
         // HideSelection off (TVS_SHOWSELALWAYS), so this holds even without focus. OnCustomDrawItem FUN_0048e104 sets the selected item's text color: if the tree background
@@ -773,8 +857,10 @@ impl App {
         // every ancestor node that exists (FolderExists), selects the target (or the deepest ancestor found) and makes it visible.
         let mut reveal = false;
         if local && self.panes[index].tree_synced.as_ref() != Some(&path) {
+            let mut expanded: HashSet<String> = self.panes[index].tree_open.iter()
+                .map(|key| ndr::shell_tree::key_identity(key)).collect();
             for key in ndr::shell_tree::ancestors(&path) {
-                if !self.panes[index].tree_open.iter().any(|k| same_key(k, &key)) {
+                if expanded.insert(ndr::shell_tree::key_identity(&key)) {
                     self.panes[index].tree_open.insert(key);
                 }
             }
@@ -782,41 +868,9 @@ impl App {
             self.panes[index].tree_selected = None;
             reveal = true;
         }
-        if self.shell_desktop.is_none() {
-            self.shell_desktop = Some(ndr::shell_tree::desktop().unwrap_or(ShellNode { key: PathBuf::new(), name: self.tr("바탕 화면", "Desktop").into_owned(), path: None, has_children: true, special: Special::None, ghosted: false }));
-        }
-        let root = self.shell_desktop.clone().unwrap_or(ShellNode { key: PathBuf::new(), name: String::new(), path: None, has_children: true, special: Special::None, ghosted: false });
+        let rows = self.cached_pane_tree_rows(index);
         let font = egui::FontId::new(self.list_font_size, egui::FontFamily::Name(super::LIST_FONT_FAMILY.into()));
         let row_height = (ui.fonts_mut(|f| f.row_height(&font)).ceil() + 2.0).max(18.0);
-        // Expansion counts are usually stable between frames. Reserve the
-        // previous row count so rebuilding the visible hierarchy does not
-        // repeatedly grow the row buffer as the tree becomes large.
-        let mut rows: Vec<(ShellNode, usize)> = Vec::with_capacity(self.panes[index].tree_rows.len());
-        // Tree expansion is read-only while collecting visible rows. The old
-        // implementation cloned every cached child Vec<ShellNode> on each
-        // repaint so it could call the mutable request function recursively.
-        // Defer missing-children requests until after walking borrowed cache
-        // entries: no subtree copies and no change in traversal order.
-        let mut missing_children = Vec::new();
-        fn walk(app: &App, index: usize, node: &ShellNode, depth: usize,
-                rows: &mut Vec<(ShellNode, usize)>, missing: &mut Vec<PathBuf>) {
-            rows.push((node.clone(), depth));
-            if depth > 32 || !app.panes[index].tree_open.iter().any(|k| ndr::shell_tree::same_key(k, &node.key)) {
-                return;
-            }
-            match app.tree_cache.get(&(node.key.clone(), app.panes[index].show_hidden)) {
-                Some(children) => {
-                    for child in children {
-                        walk(app, index, child, depth + 1, rows, missing);
-                    }
-                }
-                None => missing.push(node.key.clone()),
-            }
-        }
-        walk(self, index, &root, 0, &mut rows, &mut missing_children);
-        for key in missing_children {
-            self.request_tree_children(index, &key);
-        }
         // The tree's own area stops 1 px before the right edge, where FUN_0048e2e0 draws the lframetree line (width - 1); the scroll bar ends next to it.
         let inner_rect = rect.with_max_x(rect.right() - 1.0);
         let mut child = ui.new_child(egui::UiBuilder::new().id_salt(("ndr-pane-tree", index)).max_rect(inner_rect).layout(egui::Layout::top_down(egui::Align::Min)));
@@ -833,7 +887,7 @@ impl App {
         let reveal_id = egui::Id::new(("ndr-pane-tree-reveal", index));
         let reveal = reveal || ui.ctx().data(|d| d.get_temp::<bool>(reveal_id)).unwrap_or(false);
         let selected_key = self.panes[index].tree_selected.clone().or_else(|| local.then(|| path.clone()));
-        let selected_line = selected_key.as_ref().and_then(|key| rows.iter().position(|(node, _)| same_key(&node.key, key)));
+        let selected_line = selected_key.as_ref().and_then(|key| self.panes[index].tree_row_positions.get(&ndr::shell_tree::key_identity(key)).copied());
         ui.ctx().data_mut(|d| d.insert_temp(reveal_id, reveal && selected_line.is_none()));
         let mut area = egui::ScrollArea::both().id_salt(("ndr-pane-tree-scroll", index)).auto_shrink([false, false]).max_height(rect.height());
         if let (true, Some(line)) = (reveal, selected_line) {
@@ -892,7 +946,7 @@ impl App {
         let scrolled = area.show_rows(&mut child, row_height, rows.len(), |ui, range| {
             visible = range.clone();
             ui.spacing_mut().item_spacing.y = 0.0;
-            for (line, (node, depth)) in rows[range.clone()].iter().enumerate() {
+            for (line, (node, depth, expandable, open)) in rows[range.clone()].iter().enumerate() {
                 let galley = ui.painter().layout_no_wrap(node.name.clone(), font.clone(), Color32::PLACEHOLDER);
                 // Layout measured in the running original (TTreeView Indent 19): the button cell is the level's first 19 px (glyph centered),
                 // the 16 px icon starts 21 px in, the text 42 px in. FUN_0048da38 turns ShowRoot off (FUN_006c9330(tree, 0)), so the root
@@ -912,8 +966,8 @@ impl App {
                 // Expand indicator: only for items the shell reported as having subfolders (SFGAO_HASSUBFOLDER); removed if found empty on read.
                 // Original CanExpand (0x7ede40): a folder node with no children yet is populated, then HasChildren = child count > 0.
                 let arrow = egui::Rect::from_min_size(egui::pos2(row.left() + indent, row.top()), egui::vec2(TREE_INDENT, row_height));
-                let open = self.panes[index].tree_open.iter().any(|k| same_key(k, &node.key));
-                let expandable = node.has_children && !self.tree_cache.get(&(node.key.clone(), self.panes[index].show_hidden)).is_some_and(|c| c.is_empty());
+                let open = *open;
+                let expandable = *expandable;
                 if expandable && *depth > 0 {
                     // The themed chevrons of the captured original: collapsed ">" 4 x 8 px, expanded "v" 8 x 4 px, 1 px strokes (tree_glyph_color).
                     let c = egui::pos2(arrow.center().x.floor() + 0.5, arrow.center().y.floor() + 1.5);
@@ -1005,19 +1059,10 @@ impl App {
                 self.status = error;
             }
         }
-        // Rows and positions used by the next frame's keyboard handling (tree_keys).
+        // The immutable rows are already shared with tree_keys. Only the
+        // current viewport positions need updating after a repaint.
         {
-            let open = &self.panes[index].tree_open;
-            let rows: Vec<(ShellNode, usize, bool, bool)> = rows
-                .into_iter()
-                .map(|(node, depth)| {
-                    let expandable = node.has_children && !self.tree_cache.get(&(node.key.clone(), self.panes[index].show_hidden)).is_some_and(|c| c.is_empty());
-                    let is_open = open.iter().any(|k| same_key(k, &node.key));
-                    (node, depth, expandable, is_open)
-                })
-                .collect();
             let pane = &mut self.panes[index];
-            pane.tree_rows = rows;
             pane.tree_rect = Some(rect);
             pane.tree_first = visible.start;
             pane.tree_page = ((rect.height() / row_height).floor() as usize).max(1);
@@ -1145,6 +1190,7 @@ impl App {
         };
         self.tree_cache.retain(|(key, _), _| !same_key(key, &parent) && moved(key).is_none());
         self.tree_requests.retain(|(key, _)| !same_key(key, &parent) && moved(key).is_none());
+        self.tree_cache_revision = self.tree_cache_revision.wrapping_add(1);
         for i in 0..self.panes.len() {
             let open: Vec<PathBuf> = self.panes[i].tree_open.iter().cloned().collect();
             self.panes[i].tree_open = open.into_iter().map(|k| moved(&k).unwrap_or(k)).collect();

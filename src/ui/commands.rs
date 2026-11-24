@@ -221,9 +221,8 @@ impl App {
                         });
                     }
                     let mut row = 0usize;
-                    // Skin theme shortcut column (original MenuMeasureItem: widest shortcut + 0xe): space reserved after items and last frame's width.
-                    let width_id = egui::Id::new(("ndr-menu-shortcut-width", *title_key));
-                    let previous_width = ui.data(|d| d.get_temp::<f32>(width_id)).unwrap_or(0.0);
+                    // Paint the normal shortcut column behind the menu rows so
+                    // each row's highlight also covers its shortcut.
                     let column_slot = shortcut_colors.map(|_| ui.painter().add(egui::Shape::Noop));
                     let mut widest = 0.0f32;
                     // Original MenuMeasureItem (0x42df68): item width = text + 0x20 + shortcut column (widest shortcut + 0xe). Each row reserves that menu's widest
@@ -280,7 +279,8 @@ impl App {
                         } else {
                             egui::Button::new(label).shortcut_text(shortcut.clone())
                         };
-                        let button = button.selected(highlight == Some(row));
+                        let selected = highlight == Some(row);
+                        let button = button.selected(selected);
                         let response = match self.menu_checked(id) {
                             Some(checked) => super::skin_pane::menu_check_button(ui, enabled, checked, Self::radio_menu_item(id), button),
                             None => ui.add_enabled(enabled, button),
@@ -295,12 +295,8 @@ impl App {
                         }
                         row += 1;
                         if let Some(colors) = shortcut_colors {
-                            // The highlighted row background (mhighlight) covers the column, so only that row repaints the column (the original paints the column on every row).
-                            if response.hovered() {
-                                let left = ui.min_rect().right() - (previous_width.max(8.0) + 14.0);
-                                ui.painter().rect_filled(egui::Rect::from_min_max(egui::pos2(left, response.rect.top()), egui::pos2(ui.min_rect().right(), response.rect.bottom())), 0.0, colors.0);
-                            }
-                            widest = widest.max(super::skin_pane::paint_menu_shortcut(ui, response.rect, &shortcut, colors, response.hovered()));
+                            let emphasized = selected || response.hovered() || response.has_focus();
+                            widest = widest.max(super::skin_pane::paint_menu_shortcut(ui, response.rect, &shortcut, colors, emphasized));
                         }
                         let letter_hit = !sub_open && enabled && {
                             let letter = self.menu_access_letter(id);
@@ -330,7 +326,6 @@ impl App {
                     });
                     if let (Some(slot), Some(colors)) = (column_slot, shortcut_colors) {
                         super::skin_pane::fill_menu_shortcut_column(ui, slot, widest, colors);
-                        ui.data_mut(|d| d.insert_temp(width_id, widest));
                     }
                 });
                 let letter = super::favorites_dialog::access_key(&raw_title).1.map(|c| c.to_ascii_lowercase());
@@ -796,7 +791,7 @@ impl App {
             },"extractToolbar"=>self.dispatch("extractSelected",ctx),
             "open"=>self.open_current(),
             "openAll"=>self.open_all_command(),
-            "explorerMenu"=>result=ndr::shell_menu::show(&targets),
+            "explorerMenu"=>self.request_shell_menu(ctx, targets),
             "sortNone"|"sortName"|"sortExtension"|"sortSize"|"sortTime"|"sortAttributes"|"sortColor"|"folderSortDescending"|"groupDescending"|"groupShowName"=>{self.sort_command(id);},
             "sortDescending"=>{self.sort_command(id);},
             // Original miShowFoldersClick (0x445258): toggles the current pane's (+0xe08) tree and stores it in that pane's setting (+0x50 + pane index).

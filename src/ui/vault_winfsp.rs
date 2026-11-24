@@ -57,6 +57,7 @@ struct MountData {
     // Incremented only after the encrypted index was committed successfully.
     saved_revision: u64,
     open_files: usize,
+    closing: bool,
     writer_gate: Arc<Mutex<()>>,
 }
 
@@ -191,7 +192,7 @@ impl SingleFileFs {
     fn is_file(&self, path: &U16CStr) -> bool {
         let name = path.to_string_lossy();
         let Some(stripped) = name.strip_prefix('\\') else { return false };
-        !stripped.contains('\\') && stripped.eq_ignore_ascii_case(&self.state.lock().unwrap().name)
+        !stripped.contains('\\') && ndr::vault::names_equal(stripped, &self.state.lock().unwrap().name)
     }
     fn info(&self, file: bool) -> FileInfo {
         let size = if file { self.state.lock().unwrap().size } else { 0 };
@@ -222,11 +223,13 @@ impl FileSystemContext for SingleFileFs {
         let handle = if file_name.to_string_lossy() == "\\" { Handle::Root }
             else if self.is_file(file_name) { Handle::File }
             else { return Err(fs_error(NOT_FOUND)); };
-        *file_info.as_mut() = self.info(matches!(handle, Handle::File));
+        let mut state = self.state.lock().map_err(|_| fs_error(INTERNAL_ERROR))?;
+        if state.closing { return Err(fs_error(ACCESS_DENIED)); }
         if matches!(handle, Handle::File) {
-            let mut state = self.state.lock().unwrap();
             state.open_files = state.open_files.saturating_add(1);
         }
+        drop(state);
+        *file_info.as_mut() = self.info(matches!(handle, Handle::File));
         Ok(handle)
     }
     fn close(&self, handle: Handle) {
@@ -358,7 +361,7 @@ impl VaultMount {
         let state = Arc::new(Mutex::new(MountData {
             vault: original.fork_for_mount()?, id: item.id, parent, name: item.name.clone(),
             size: item.size.max(0) as u64, original_size: item.size.max(0) as u64,
-            pages: BTreeMap::new(), read_cache: None, truncate_floor: None, dirty: false, last_error: None, saved_revision: 0, open_files: 0, writer_gate,
+            pages: BTreeMap::new(), read_cache: None, truncate_floor: None, dirty: false, last_error: None, saved_revision: 0, open_files: 0, closing: false, writer_gate,
         }));
         let mut params = VolumeParams::new();
         params.filesystem_name("NDRVAULT").sector_size(512)
@@ -410,13 +413,15 @@ impl VaultMount {
     }
 
     pub fn finish(&mut self) -> Result<(), String> {
-        if self.has_open_files() {
+        let mut state = self.state.lock().map_err(|e| e.to_string())?;
+        if state.open_files != 0 {
             return Err("Close the external editor before disconnecting the encrypted virtual file".into());
         }
-        self.host.stop();
-        let mut state = self.state.lock().map_err(|e| e.to_string())?;
         state.commit()?;
         if let Some(error) = &state.last_error { return Err(error.clone()); }
+        state.closing = true;
+        drop(state);
+        self.host.stop();
         Ok(())
     }
 }
@@ -542,7 +547,7 @@ mod tests {
         let mut mounted = MountData {
             vault: original.fork_for_mount().unwrap(), id, parent: 1, name: "picture.png".into(),
             size: plain.len() as u64, original_size: plain.len() as u64,
-            pages: BTreeMap::new(), read_cache: None, truncate_floor: None, dirty: false, last_error: None, saved_revision: 0, open_files: 0, writer_gate: Arc::new(Mutex::new(())),
+            pages: BTreeMap::new(), read_cache: None, truncate_floor: None, dirty: false, last_error: None, saved_revision: 0, open_files: 0, closing: false, writer_gate: Arc::new(Mutex::new(())),
         };
         let mut before = vec![0; plain.len()];
         mounted.read_at(&mut before, 0).unwrap();
@@ -575,7 +580,7 @@ mod tests {
         let state = Arc::new(Mutex::new(MountData {
             vault: original.fork_for_mount().unwrap(), id, parent: 1, name: "video.bin".into(),
             size: 16, original_size: 16, pages: BTreeMap::new(), read_cache: None,
-            truncate_floor: None, dirty: false, last_error: None, saved_revision: 0, open_files: 0, writer_gate: Arc::new(Mutex::new(())),
+            truncate_floor: None, dirty: false, last_error: None, saved_revision: 0, open_files: 0, closing: false, writer_gate: Arc::new(Mutex::new(())),
         }));
         let fs = SingleFileFs { state: Arc::clone(&state) };
         let mut info = FileInfo::default();
@@ -606,7 +611,7 @@ mod tests {
         let state = Arc::new(Mutex::new(MountData {
             vault: vault.fork_for_mount().unwrap(), id, parent: 1, name: "photo.png".into(),
             size: original.len() as u64, original_size: original.len() as u64,
-            pages: BTreeMap::new(), read_cache: None, truncate_floor: None, dirty: false, last_error: None, saved_revision: 0, open_files: 0, writer_gate: Arc::new(Mutex::new(())),
+            pages: BTreeMap::new(), read_cache: None, truncate_floor: None, dirty: false, last_error: None, saved_revision: 0, open_files: 0, closing: false, writer_gate: Arc::new(Mutex::new(())),
         }));
         let fs = SingleFileFs { state: Arc::clone(&state) };
         let mut info = FileInfo::default();

@@ -31,7 +31,9 @@ $required = @(
     'Resources/Languages/ko.lang',
     'Resources/Languages/en.lang',
     'Resources/Skins/black/conf.ini',
+    'Resources/Skins/black/toolbar-icons.png',
     'Resources/Skins/classic/conf.ini',
+    'Resources/Skins/classic/toolbar-icons.png',
     'Resources/Tools/7zip/7za.exe',
     'Resources/Tools/7zip/Full/7z.exe',
     'Resources/Tools/7zip/Full/7z.dll',
@@ -75,7 +77,7 @@ Copy-Item -LiteralPath (Join-Path $project 'THIRD-PARTY-NOTICES.txt') `
     -Destination (Join-Path $stage 'THIRD-PARTY-NOTICES.txt')
 
 $stagedFiles = @(Get-ChildItem -LiteralPath $stage -File -Recurse)
-if ($stagedFiles.Count -lt 80) {
+if ($stagedFiles.Count -lt 75) {
     throw "Runtime package is incomplete: only $($stagedFiles.Count) files"
 }
 
@@ -89,6 +91,7 @@ try {
         throw "ZIP file count mismatch: zip=$($entries.Count) staged=$($stagedFiles.Count)"
     }
     foreach ($item in @('NDR.exe', 'Languages/ko.lang', 'Skins/black/conf.ini',
+                       'Skins/black/toolbar-icons.png', 'Skins/classic/toolbar-icons.png',
                        'Tools/7zip/7za.exe', 'Tools/7zip/Full/7z.exe',
                        'Tools/7zip/Full/7z.dll', 'THIRD-PARTY-NOTICES.txt')) {
         # Windows PowerShell Compress-Archive writes backslash entry names.

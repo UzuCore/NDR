@@ -3,6 +3,11 @@
 use super::*;
 use ndr::commands::{ToolbarItem, ToolbarKind};
 
+const TOOLBAR_ICON_NAMES: [&str; 10] = [
+    "tb_back.png", "tb_forward.png", "tb_desktop.png", "tb_documents.png", "tb_pictures.png",
+    "tb_music.png", "tb_videos.png", "tb_favorites.png", "tb_recyclebin.png", "tb_noimage.png",
+];
+
 /// Entries of C# LanguageService.MenuKeys used by toolbar commands (createZip is not in the C# table).
 fn menu_key(action: &str) -> Option<&'static str> {
     Some(match action {
@@ -177,20 +182,16 @@ impl App {
         let texture = ndr::styles::Skin::load(&self.resources.join("Skins"), &theme)
             .ok()
             .and_then(|skin| {
-                // One transparent atlas per theme. Each has ten native-size icons.
-                // Keep the original individual PNGs as a compatibility fallback.
-                let names = ["tb_back.png", "tb_forward.png", "tb_desktop.png",
-                    "tb_documents.png", "tb_pictures.png", "tb_music.png",
-                    "tb_videos.png", "tb_favorites.png", "tb_recyclebin.png",
-                    "tb_noimage.png"];
+                // Bundled skins use one horizontal strip. Older and custom
+                // skins can still supply individual PNGs.
                 let atlas_icon = icon.replace('\\', "/");
                 let atlas_icon = atlas_icon.rsplit('/').next().unwrap_or("");
-                let from_atlas = names.iter().position(|name| *name == atlas_icon)
+                let from_atlas = TOOLBAR_ICON_NAMES.iter().position(|name| name.eq_ignore_ascii_case(atlas_icon))
                     .and_then(|index| skin.image_path("toolbar-icons.png")
                         .and_then(|path| decode_png(&path).ok())
                         .and_then(|(width, height, rgba)| {
-                            if width == 0 || height == 0 || width % names.len() != 0 { return None; }
-                            let cell_width = width / names.len();
+                            if width == 0 || height == 0 || width % TOOLBAR_ICON_NAMES.len() != 0 { return None; }
+                            let cell_width = width / TOOLBAR_ICON_NAMES.len();
                             let mut icon_rgba = Vec::with_capacity(cell_width * height * 4);
                             for y in 0..height {
                                 let start = (y * width + index * cell_width) * 4;
@@ -459,9 +460,14 @@ mod tests {
     #[test]
     fn toolbar_icons_from_the_shipped_skins_decode() {
         let skins = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Resources").join("Skins");
-        let skin = ndr::styles::Skin::load(&skins, "Black").expect("the Black skin ships");
-        let path = skin.image_path("tb_back.png").expect("tb_back.png ships in the skin");
-        let (width, height, rgba) = decode_png(&path).unwrap();
-        assert!(width > 0 && height > 0 && rgba.len() == width * height * 4);
+        for (theme, cell) in [("Black", 35), ("Classic", 20)] {
+            let skin = ndr::styles::Skin::load(&skins, theme).unwrap();
+            let path = skin.image_path("toolbar-icons.png").expect("the toolbar strip ships in the skin");
+            let (width, height, rgba) = decode_png(&path).unwrap();
+            assert_eq!((width, height, rgba.len()), (cell * TOOLBAR_ICON_NAMES.len(), cell, width * height * 4));
+            for name in TOOLBAR_ICON_NAMES {
+                assert!(!path.with_file_name(name).exists(), "{theme} should only ship the strip for {name}");
+            }
+        }
     }
 }

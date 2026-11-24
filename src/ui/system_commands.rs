@@ -26,6 +26,19 @@ impl ThemePalette {
         let [r, g, b] = self.panel;
         (u32::from(r) * 299 + u32::from(g) * 587 + u32::from(b) * 114) / 1000 < 128
     }
+
+    pub fn egui_theme(&self) -> egui::Theme {
+        if self.dark() { egui::Theme::Dark } else { egui::Theme::Light }
+    }
+
+    pub fn apply_window_caption(&self, ctx: &egui::Context, hwnd: isize) {
+        if hwnd != 0 && !native::set_window_caption_colors(hwnd, self.app, self.text) {
+            // Older Windows builds reject explicit DWM colors. Use the
+            // toolkit's best-effort native light/dark theme, not a custom frame.
+            let theme = if self.dark() { egui::SystemTheme::Dark } else { egui::SystemTheme::Light };
+            ctx.send_viewport_cmd(egui::ViewportCommand::SetTheme(theme));
+        }
+    }
 }
 
 /// egui base colors per skin (places the skin does not paint, such as dialogs). Unknown names are black.

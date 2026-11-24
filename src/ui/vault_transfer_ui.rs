@@ -418,13 +418,12 @@ impl App {
 
     fn vault_remove_exported_source(&mut self, job: &VaultTransferJob,
                                     original: &str, expected_id: Option<i64>) -> Result<(), String> {
-        let path = self.panes[job.source].vault.as_ref()
-            .ok_or("Encrypted export source was closed")?.file.clone();
-        let gate = self.vault_mounts.iter().find(|mount| mount.vault_path == path)
-            .map(|mount| mount.writer_gate());
-        let _guard = if let Some(ref gate) = gate {
-            Some(gate.lock().map_err(|e| e.to_string())?)
-        } else { None };
+        #[cfg(feature = "winfsp-vault")]
+        let gate = self.panes[job.source].vault.as_ref().and_then(|vault|
+            self.vault_mounts.iter().find(|mount| mount.vault_path == vault.file)
+                .map(|mount| mount.writer_gate()));
+        #[cfg(feature = "winfsp-vault")]
+        let _guard = gate.as_ref().map(|gate| gate.lock().map_err(|e| e.to_string())).transpose()?;
         let state = self.panes[job.source].vault.as_mut()
             .ok_or("Encrypted export source was closed")?;
         state.database.reload_after_mount()?;

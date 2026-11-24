@@ -1687,6 +1687,40 @@ pub fn connect_share_interactive(path: &str) -> u32 {
     unsafe { WNetAddConnection2W(&resource, ptr::null(), ptr::null(), 0x4 | 0x8 | 0x10) }
 }
 
+/// Applies explicit per-window title bar colors where the OS supports them
+/// (Windows 11). A rejected attribute leaves the native fallback intact.
+pub fn set_window_caption_colors(hwnd: isize, background: [u8; 3], text: [u8; 3]) -> bool {
+    use windows_sys::Win32::Graphics::Dwm::{
+        DWMWA_CAPTION_COLOR, DWMWA_TEXT_COLOR, DwmSetWindowAttribute,
+    };
+
+    if hwnd == 0 {
+        return false;
+    }
+    let color_ref = |[red, green, blue]: [u8; 3]| u32::from_le_bytes([red, green, blue, 0]);
+    let set = |attribute: i32, color: u32| {
+        // SAFETY: hwnd is the main window on this thread; DWM reads one COLORREF during the call.
+        let status = unsafe {
+            DwmSetWindowAttribute(
+                hwnd as HWND,
+                attribute as u32,
+                (&color as *const u32).cast(),
+                size_of::<u32>() as u32,
+            )
+        };
+        status >= 0
+    };
+    if !set(DWMWA_CAPTION_COLOR, color_ref(background)) {
+        return false;
+    }
+    if !set(DWMWA_TEXT_COLOR, color_ref(text)) {
+        // Keep the system's original background/text pairing on a partial failure.
+        let _ = set(DWMWA_CAPTION_COLOR, u32::MAX);
+        return false;
+    }
+    true
+}
+
 /// Whether this window is currently the foreground window (GetForegroundWindow).
 pub fn is_foreground(hwnd: isize) -> bool {
     // SAFETY: plain system call without pointers.

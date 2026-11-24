@@ -33,6 +33,17 @@ struct TreeData {
 }
 
 impl TreeData {
+    fn check_disconnect(&self) -> Result<(), String> {
+        if self.open_handles != 0 {
+            return Err("Close external applications using the encrypted drive".into());
+        }
+        if self.files.values().any(|file|
+            !file.lock().is_ok_and(|file| !file.dirty && file.last_error.is_none())) {
+            return Err("An encrypted file has uncommitted edits".into());
+        }
+        Ok(())
+    }
+
     fn refresh(&mut self) -> winfsp::Result<()> {
         let result = {
             let _writer = self.gate.lock().map_err(|_| fs_error(INTERNAL_ERROR))?;
@@ -94,7 +105,7 @@ impl TreeData {
             size: node.size.max(0) as u64, original_size: node.size.max(0) as u64,
             pages: BTreeMap::new(), read_cache: None, truncate_floor: None,
             dirty: false, last_error: None, saved_revision: 0,
-            open_files: 1, writer_gate: Arc::clone(&self.gate),
+            open_files: 1, closing: false, writer_gate: Arc::clone(&self.gate),
         }));
         self.files.insert(key, Arc::clone(&file));
         Ok(file)
@@ -300,26 +311,25 @@ impl FileSystemContext for TreeFs {
     }
 
     fn close(&self, handle: TreeHandle) {
-        let mut closed: Option<Arc<Mutex<MountData>>> = None;
-        match &handle {
-            TreeHandle::File { state, deleted } => {
-                if !deleted.load(Ordering::Acquire) {
-                    let _ = self.flush_file(&handle);
-                }
-                if let Ok(mut file) = state.lock() {
-                    file.open_files = file.open_files.saturating_sub(1);
-                    if file.open_files == 0 && (file.dirty || file.last_error.is_some()) {
-                        eprintln!("NDR WinFsp preserving unsaved virtual file state: {}", file.name);
-                    } else if file.open_files == 0 { closed = Some(Arc::clone(state)); }
-                }
-            }
-            TreeHandle::Directory(_) => {}
+        if let TreeHandle::File { deleted, .. } = &handle
+            && !deleted.load(Ordering::Acquire) {
+            let _ = self.flush_file(&handle);
         }
         if let Ok(mut shared) = self.state.lock() {
-            shared.open_handles = shared.open_handles.saturating_sub(1);
-            if let Some(state) = closed {
-                shared.files.retain(|_, v| !Arc::ptr_eq(v, &state));
+            // Match open's tree-then-file lock order, so a concurrent open
+            // cannot reuse this file state between the last close and removal.
+            if let TreeHandle::File { state, .. } = &handle
+                && let Ok(mut file) = state.lock() {
+                file.open_files = file.open_files.saturating_sub(1);
+                if file.open_files == 0 {
+                    if file.dirty || file.last_error.is_some() {
+                        eprintln!("NDR WinFsp preserving unsaved virtual file state: {}", file.name);
+                    } else {
+                        shared.files.retain(|_, entry| !Arc::ptr_eq(entry, state));
+                    }
+                }
             }
+            shared.open_handles = shared.open_handles.saturating_sub(1);
         }
     }
 
@@ -439,7 +449,7 @@ impl FileSystemContext for TreeFs {
         }
         let marker = marker.inner_as_cstr().map(|s| s.to_string_lossy());
         let start = marker.as_ref().map_or(0, |mark| {
-            entries.iter().position(|(name,_)| name.eq_ignore_ascii_case(mark))
+            entries.iter().position(|(name,_)| ndr::vault::names_equal(name, mark))
                 .map_or(entries.len(), |n| n + 1)
         });
         let mut cursor = 0u32;
@@ -526,7 +536,7 @@ impl FileSystemContext for TreeFs {
         let original = shared.lookup(&old)?;
         let (from_parent, from_name) = shared.parent_name(&old)?;
         let (to_parent, to_name) = shared.parent_name(&new)?;
-        if from_parent == to_parent && from_name.eq_ignore_ascii_case(&to_name) {
+        if from_parent == to_parent && ndr::vault::names_equal(&from_name, &to_name) {
             shared.metadata_write(|v| v.rename(original.id, &to_name))?;
         } else {
             if let Some(existing) = shared.vault.find_child(to_parent, &to_name)
@@ -567,6 +577,7 @@ pub(crate) struct VaultTreeMount {
     host: FileSystemHost<TreeFs, FineGuard>,
     state: Arc<Mutex<TreeData>>,
     pub vault_path: std::path::PathBuf,
+    pub session_key: std::path::PathBuf,
     pub mount_root: std::path::PathBuf,
     observed_revision: u64,
 }
@@ -575,6 +586,7 @@ impl VaultTreeMount {
     pub fn start(path: std::path::PathBuf, source: &Vault,
         gate: Arc<Mutex<()>>, occupied: &[char]) -> Result<Self, String> {
         if !runtime_available() { return Err("WinFsp is not installed".into()); }
+        let session_key = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
         let drives = unsafe { windows_sys::Win32::Storage::FileSystem::GetLogicalDrives() };
         let letter = (b'T'..=b'Z').rev().find(|&c|
             drives & (1u32 << (c - b'A')) == 0 && !occupied.contains(&(c as char)))
@@ -602,7 +614,7 @@ impl VaultTreeMount {
         host.mount(&mountpoint).map_err(|e| format!("WinFsp mount failed: {e}"))?;
         host.start().map_err(|e| format!("WinFsp start failed: {e}"))?;
         Ok(Self {
-            host, state, vault_path: path,
+            host, state, vault_path: path, session_key,
             mount_root: std::path::PathBuf::from(format!("{mountpoint}\\")),
             observed_revision: 0,
         })
@@ -637,10 +649,28 @@ impl VaultTreeMount {
     pub fn has_open_files(&self) -> bool {
         self.state.lock().is_ok_and(|s| s.open_handles != 0)
     }
-    pub fn can_disconnect(&self) -> bool {
-        self.state.lock().is_ok_and(|tree|
-            tree.open_handles == 0 && tree.files.values().all(|entry|
-                entry.lock().is_ok_and(|file| !file.dirty && file.last_error.is_none())))
+    pub fn prepare_shutdown(trees: &[Self], legacy: &[VaultMount]) -> Result<(), String> {
+        // Keep every open guard until all mounts pass. A busy mount leaves
+        // the others usable, including any already-revoked sessions.
+        let trees = trees.iter().map(|mount| mount.state.lock().map_err(|e| e.to_string()))
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut legacy = legacy.iter().map(|mount| mount.state.lock().map_err(|e| e.to_string()))
+            .collect::<Result<Vec<_>, _>>()?;
+        for tree in &trees {
+            tree.check_disconnect()?;
+        }
+        for file in &legacy {
+            if file.open_files != 0 || file.dirty || file.last_error.is_some() {
+                return Err("An encrypted virtual file is open or has uncommitted edits".into());
+            }
+        }
+        for tree in &trees {
+            tree.revoked.store(true, Ordering::Release);
+        }
+        for file in &mut legacy {
+            file.closing = true;
+        }
+        Ok(())
     }
     /// An individual file cannot be moved/deleted in NDR while another
     /// Windows program has it open; unrelated files remain writable.
@@ -665,14 +695,9 @@ impl VaultTreeMount {
         self.state.lock().ok().and_then(|mut s| s.last_error.take())
     }
     pub fn finish(&mut self) -> Result<(), String> {
-        if self.has_open_files() {
-            return Err("Close external applications using the encrypted drive".into());
-        }
         let state = self.state.lock().map_err(|e| e.to_string())?;
-        if state.files.values().any(|f|
-            f.lock().is_ok_and(|f| f.dirty || f.last_error.is_some())) {
-            return Err("An encrypted file has uncommitted edits".into());
-        }
+        state.check_disconnect()?;
+        state.revoked.store(true, Ordering::Release);
         drop(state);
         self.host.stop();
         Ok(())
@@ -802,6 +827,46 @@ mod tests {
 
     #[test]
     #[ignore = "requires installed WinFsp and unused drive letter; disposable encrypted test data"]
+    fn shutdown_freezes_all_mounts_only_after_every_file_is_closed() {
+        let dir = std::env::temp_dir().join(format!("ndr-winfsp-shutdown-{}", std::process::id()));
+        std::fs::create_dir(&dir).unwrap();
+        let path = dir.join("shutdown.ndr");
+        let mut vault = Vault::create(&path, "test shutdown password".into()).unwrap();
+        vault.add_file(1, "Étude.txt", b"tree content").unwrap();
+        let legacy_id = vault.add_file(1, "Legacy.txt", b"legacy content").unwrap();
+        let gate = Arc::new(Mutex::new(()));
+        let tree = VaultTreeMount::start(path.clone(), &vault, Arc::clone(&gate), &[]).unwrap();
+        let occupied = [tree.drive_letter().unwrap()];
+        let legacy = VaultMount::start(0, path, &vault, 1, vault.entry_info(legacy_id).unwrap(),
+            gate, &occupied).unwrap();
+        let tree_path = tree.mount_root.join("étude.txt");
+        let legacy_path = legacy.file_path.clone();
+        let mut trees = [tree];
+        let mut legacy = [legacy];
+
+        let editor = std::fs::File::open(&legacy_path).unwrap();
+        assert!(VaultTreeMount::prepare_shutdown(&trees, &legacy).is_err());
+        assert!(!trees[0].is_revoked());
+        assert_eq!(std::fs::read(&tree_path).unwrap(), b"tree content");
+        drop(editor);
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while trees[0].has_open_files() || legacy[0].has_open_files() {
+            assert!(std::time::Instant::now() < deadline, "WinFsp did not release the test handles");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        VaultTreeMount::prepare_shutdown(&trees, &legacy).unwrap();
+        assert!(std::fs::File::open(&tree_path).is_err(), "tree must deny a late open");
+        assert!(std::fs::File::open(&legacy_path).is_err(), "legacy mount must deny a late open");
+        assert!(std::fs::write(trees[0].mount_root.join("late.txt"), b"late create").is_err());
+        trees[0].finish().unwrap();
+        legacy[0].finish().unwrap();
+        drop((trees, legacy, vault));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires installed WinFsp and unused drive letter; disposable encrypted test data"]
     fn mounted_tree_respects_transfer_reservation_and_session_revocation() {
         use std::io::Write;
         let dir = std::env::temp_dir().join(format!(
@@ -817,6 +882,9 @@ mod tests {
         let mut opened = std::fs::OpenOptions::new().read(true).write(true)
             .open(root.join("already-open.txt")).unwrap();
         assert!(mount.has_open_files());
+        assert!(VaultTreeMount::prepare_shutdown(std::slice::from_ref(&mount), &[]).is_err());
+        assert!(mount.finish().is_err());
+        assert!(!mount.is_revoked(), "a busy drive must remain usable after a failed disconnect");
         let reservation = mount.reserve_transfer().unwrap();
         assert!(std::fs::write(root.join("blocked-during-import.txt"), b"not committed").is_err(),
             "Windows file creation must fail quickly, not deadlock while NDR is transferring");

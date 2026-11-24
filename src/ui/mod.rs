@@ -196,7 +196,11 @@ struct Pane {
     tree_label_click: Option<(PathBuf, Instant)>,
     tree_edit: Option<(PathBuf, String)>,
     /// Tree rows from the last frame (item, depth, expandable, expanded) plus position/rows per page, and whether to scroll the selected row into view.
-    tree_rows: Vec<(ndr::shell_tree::ShellNode, usize, bool, bool)>,
+    tree_rows: Arc<[(ndr::shell_tree::ShellNode, usize, bool, bool)]>,
+    /// Reuse the flattened tree while shell data, expansion and hidden view
+    /// are unchanged; the painter and keyboard share the same immutable rows.
+    tree_rows_key: Option<(u64, bool, HashSet<PathBuf>)>,
+    tree_row_positions: HashMap<String, usize>,
     tree_rect: Option<egui::Rect>,
     tree_page: usize,
     tree_first: usize,
@@ -275,7 +279,9 @@ impl Pane {
             tree_selected: None,
             tree_label_click: None,
             tree_edit: None,
-            tree_rows: Vec::new(),
+            tree_rows: Arc::from([]),
+            tree_rows_key: None,
+            tree_row_positions: HashMap::new(),
             tree_rect: None,
             tree_page: 10,
             tree_first: 0,
@@ -551,7 +557,7 @@ enum AsyncResult {
         directories: Vec<ndr::shell_tree::ShellNode>,
     },
     /// Original TNXShellChangeNotify thread notification (ThreadNotification 0x7b3830): the folder that panel was watching changed.
-    FolderChanged { pane: usize, path: PathBuf, watch: Arc<AtomicBool> },
+    FolderChanged { pane: usize, path: PathBuf, watch: Arc<AtomicBool>, queued: Arc<AtomicBool> },
     ProtectedItems(file_commands::DeleteRun),
     AttributesApplied(pane_commands::AttributeRun),
     SplitDone { source: PathBuf, outcome: Result<ndr::split::SplitResult, String>, cancelled: bool },
@@ -683,6 +689,7 @@ pub struct App {
     profile_load_error: bool,
     preferences_dirty: bool,
     close_when_idle: bool,
+    pending_close_request: bool,
     /// While the STILL_HAVE_OPERATION question of the original FormCloseQuery (0x42a798) is showing.
     close_asking: bool,
     toolbar: ndr::commands::ToolbarConfig,
@@ -728,6 +735,7 @@ pub struct App {
     /// Panel folder tree subfolders: (shell key, hidden folders included) -> children. Because the original miShowHiddenClick (0x4348e0) -> FUN_0048e564 changes
     /// the tree's hidden view (+0x3f8 bit 4) and rebuilds it, this is kept separately per panel hidden view.
     tree_cache: HashMap<(PathBuf, bool), Vec<ndr::shell_tree::ShellNode>>,
+    tree_cache_revision: u64,
     /// Desktop root of the panel folder tree (read on first paint).
     shell_desktop: Option<ndr::shell_tree::ShellNode>,
     /// The panel folder tree that has keyboard focus (that panel number). None when the list or another panel is clicked.
@@ -813,6 +821,7 @@ pub struct App {
     pending_numpad: Vec<(String, bool)>,
     /// The Apps key was pressed (right-click menu of the current panel's list, the key path of the original FUN_00484e8c).
     pending_context_key: bool,
+    pending_shell_menu: Option<(u64, Vec<PathBuf>)>,
     /// The folder last set via SetCurrentDirectoryW (`sync_current_directory`).
     current_directory: Option<PathBuf>,
     /// Folder select dialog (title, initial folder). Swapped out in tests.
@@ -857,54 +866,56 @@ pub struct App {
     drive_list: Arc<Mutex<panes::DriveListCache>>,
     drive_cache_pending: bool,
 }
+mod startup;
+pub use startup::StartupApp;
+
 impl App {
-    pub fn new(
-        cc: &eframe::CreationContext<'_>,
+    fn finish_startup(
+        ctx: &egui::Context,
         options: Options,
+        prepared: startup::PreparedStartup,
         navigation: Option<Receiver<ndr::lifecycle::NavigationRequest>>,
         instance_guard: Option<ndr::lifecycle::InstanceGuard>,
+        hwnd: Option<isize>,
     ) -> Self {
-        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-        let mut app = Self::from_context(&cc.egui_ctx, options);
+        let mut app = Self::from_prepared_context(ctx, options, prepared, false);
         app.navigation = navigation;
         app.instance_guard = instance_guard;
-        if let Ok(handle) = cc.window_handle() {
-            if let RawWindowHandle::Win32(handle) = handle.as_raw() {
-                app.hwnd = handle.hwnd.get();
-                if let Err(error) = ndr::shell_menu::install_paste_key_hook(handle.hwnd.get()) {
-                    app.status = error;
-                }
-                let key = app.settings.text("ExplorerShortcutKey", "Q");
-                let tray = app.settings.flag("HideWhenMinimized", false)
-                    && app.options.smoke_seconds.is_none();
-                match ndr::lifecycle::NativeLifecycle::attach(
-                    handle.hwnd.get(),
-                    if app.options.smoke_seconds.is_some() {
-                        None
-                    } else {
-                        Some(&key)
-                    },
-                    tray,
-                ) {
-                    Ok((lifecycle, events)) => {
-                        if let Some(error) = lifecycle.hotkey_error() {
-                            // Win+Q is often registered by Windows or by
-                            // another running NDR. This optional shortcut
-                            // conflict must not appear as a startup error.
-                            // The lifecycle retains the failure for settings
-                            // diagnostics; all file operations still work.
-                            if !ndr::lifecycle::is_optional_hotkey_collision(&error) {
-                                app.status = error;
-                            }
+        if let Some(hwnd) = hwnd {
+            app.hwnd = hwnd;
+            if let Err(error) = ndr::shell_menu::install_paste_key_hook(hwnd) {
+                app.status = error;
+            }
+            let key = app.settings.text("ExplorerShortcutKey", "Q");
+            let tray = app.settings.flag("HideWhenMinimized", false)
+                && app.options.smoke_seconds.is_none();
+            match ndr::lifecycle::NativeLifecycle::attach(
+                hwnd,
+                if app.options.smoke_seconds.is_some() {
+                    None
+                } else {
+                    Some(&key)
+                },
+                tray,
+            ) {
+                Ok((lifecycle, events)) => {
+                    if let Some(error) = lifecycle.hotkey_error() {
+                        // Win+Q is often registered by Windows or by
+                        // another running NDR. This optional shortcut
+                        // conflict must not appear as a startup error.
+                        // The lifecycle retains the failure for settings
+                        // diagnostics; all file operations still work.
+                        if !ndr::lifecycle::is_optional_hotkey_collision(&error) {
+                            app.status = error;
                         }
-                        // When a lifecycle event like a device change (WM_DEVICECHANGE) arrives, wake an idle UI too.
-                        let repaint = cc.egui_ctx.clone();
-                        let _ = lifecycle.set_wake(Box::new(move || repaint.request_repaint()));
-                        app.lifecycle = Some(lifecycle);
-                        app.lifecycle_events = Some(events);
                     }
-                    Err(error) => app.status = error,
+                    // When a lifecycle event like a device change (WM_DEVICECHANGE) arrives, wake an idle UI too.
+                    let repaint = ctx.clone();
+                    let _ = lifecycle.set_wake(Box::new(move || repaint.request_repaint()));
+                    app.lifecycle = Some(lifecycle);
+                    app.lifecycle_events = Some(events);
                 }
+                Err(error) => app.status = error,
             }
         }
         // C# startup: if CheckForUpdatesOnStartup and a feed exists, check for updates (except in the startup check run).
@@ -915,76 +926,33 @@ impl App {
         }
         app
     }
+    #[cfg(test)]
     fn from_context(ctx: &egui::Context, options: Options) -> Self {
-        // The double-click interval follows the Windows setting (GetDoubleClickTime, default 500ms) (egui's default 0.3s is shorter).
-        let (double_ms, _, _) = native::double_click_metrics();
-        ctx.options_mut(|o| o.input_options.max_double_click_delay = double_ms as f64 / 1000.0);
         let profile = options.profile_directory();
         let loaded = Settings::load(&profile.join("settings.json"));
-        let error = loaded.as_ref().err().cloned();
-        let settings = loaded.unwrap_or_default();
-        let language = options
-            .language
-            .clone()
-            .unwrap_or_else(|| settings.text("Language", "ko"));
-        let home = PathBuf::from(std::env::var_os("USERPROFILE").unwrap_or_else(|| "C:\\".into()));
-        // C# start folder: command line -> "Always start in the following folder" (if StartPathEnabled and StartPath exist) -> last folder (LeftPath).
-        // The second value is whether the folder was given explicitly like a command line / start folder (in which case that folder takes priority over the saved selected tab).
-        let start_path = |side: &str, explicit: &Option<PathBuf>| -> (PathBuf, bool) {
-            if let Some(path) = explicit {
-                return (path.clone(), true);
-            }
-            let start = settings.text(&format!("{side}StartPath"), "");
-            if settings.flag(&format!("{side}StartPathEnabled"), false) && !start.trim().is_empty() {
-                return (PathBuf::from(start.trim()), true);
-            }
-            (PathBuf::from(settings.text(&format!("{side}Path"), &home.to_string_lossy())), false)
-        };
-        let (left, left_fixed) = start_path("Left", &options.left);
-        // Original FUN_004295b0: /pane:single/dual takes precedence over the setting (dualview), and /dir2 opens the right side only in dual-pane view.
-        let dual = options.dual.unwrap_or_else(|| settings.flag("DualPaneMode", true));
-        let right_explicit = options.right.clone().or_else(|| options.dir2.clone().filter(|_| dual));
-        let (right, right_fixed) = start_path("Right", &right_explicit);
-        // C# ValidStartPath: an existing folder as-is, otherwise the user folder, otherwise "::drives::" (My PC).
-        let valid_start = |candidate: PathBuf| {
-            if panes::is_drives(&candidate) || candidate.is_dir() {
-                candidate
-            } else if home.is_dir() {
-                home.clone()
-            } else {
-                PathBuf::from(remote_window::DRIVES)
-            }
-        };
-        let (left, right) = (valid_start(left), valid_start(right));
-        let mut panes_init = Vec::new();
-        for (start, fixed, side) in [(left, left_fixed, "Left"), (right, right_fixed, "Right")] {
-            let selected = settings.values.get(&format!("Selected{side}Tab")).and_then(|v| v.as_u64()).map(|v| v as usize);
-            let (tabs, tab) = restore_tabs(&settings.strings(&format!("{side}Tabs")), selected, &start, fixed, |p| panes::is_drives(p) || p.is_dir());
-            let mut pane = Pane::new(tabs[tab].clone(), settings.flag(&format!("{side}ShowHiddenFiles"), false));
+        let prepared = startup::PreparedStartup::prepare(&options, profile, loaded);
+        Self::from_prepared_context(ctx, options, prepared, true)
+    }
+
+    fn from_prepared_context(ctx: &egui::Context, options: Options, prepared: startup::PreparedStartup, foreground: bool) -> Self {
+        let startup::PreparedStartup { profile, settings, error, language, dual, panes_init, resources, language_pack, toolbar } = prepared;
+        let [left, right] = panes_init.map(|(tabs, tab, show_hidden)| {
+            let mut pane = Pane::new(tabs[tab].clone(), show_hidden);
             pane.tabs = tabs;
             pane.tab = tab;
-            panes_init.push(pane);
-        }
-        let right = panes_init.pop().expect("right pane");
-        let left = panes_init.pop().expect("left pane");
-        let dark = system_commands::theme_palette(&settings.text("Theme", "Black")).dark();
-        ctx.set_visuals(if dark {
-            egui::Visuals::dark()
-        } else {
-            egui::Visuals::light()
+            pane
         });
-        set_app_fonts(&ctx, None, false, 1.0);
+        // The double-click interval follows the Windows setting (GetDoubleClickTime, default 500ms).
+        let (double_ms, _, _) = native::double_click_metrics();
+        ctx.options_mut(|o| o.input_options.max_double_click_delay = double_ms as f64 / 1000.0);
+        let palette = system_commands::theme_palette(&settings.text("Theme", "Black"));
+        let dark = palette.dark();
+        ctx.set_theme(palette.egui_theme());
+        ctx.set_visuals(system_commands::palette_visuals(&palette));
+        if foreground { set_app_fonts(ctx, None, false, 1.0); }
         let (listing_tx, listing_rx) = mpsc::channel();
         let (async_tx, async_rx) = mpsc::channel();
         let active = usize::from(settings.flag("StartWithRightPaneActive", false));
-        let resources = resource_dir();
-        let language_pack = compat::Language::load(&resources.join("Languages"), &language);
-        let toolbar =
-            ndr::commands::load_toolbar(&profile, include_bytes!("../../Resources/toolbar.xml"))
-                .unwrap_or(ndr::commands::ToolbarConfig {
-                    items: vec![],
-                    warning: None,
-                });
         let mut app = Self {
             options,
             settings,
@@ -1041,6 +1009,7 @@ impl App {
             profile_load_error: error.is_some(),
             preferences_dirty: true,
             close_when_idle: false,
+            pending_close_request: false,
             close_asking: false,
             toolbar,
             toolbar_query: String::new(),
@@ -1064,6 +1033,7 @@ impl App {
             overlay_tx: None,
             image_requests: HashSet::new(),
             tree_cache: HashMap::new(),
+            tree_cache_revision: 0,
             shell_desktop: None,
             tree_focus: None,
             tree_requests: HashSet::new(),
@@ -1112,6 +1082,7 @@ impl App {
             auth_pending: Vec::new(),
             pending_numpad: Vec::new(),
             pending_context_key: false,
+            pending_shell_menu: None,
             current_directory: None,
             folder_picker: ndr::file_dialogs::browse_folder,
             network_picker: if cfg!(test) { |_, _| None } else { ndr::file_dialogs::browse_network },
@@ -1135,8 +1106,13 @@ impl App {
             drive_list: Default::default(),
             drive_cache_pending: false,
         };
-        app.refresh(0);
-        app.refresh(1);
+        for pane in 0..2 {
+            if foreground {
+                app.refresh(pane);
+            } else {
+                app.refresh_after_startup(pane);
+            }
+        }
         if !cfg!(test) {
             let (tx, repaint) = (app.async_tx.clone(), ctx.clone());
             native::spawn_drive_watch(app.drive_watch_stop.clone(), move || {
@@ -1307,9 +1283,13 @@ impl App {
         if let Some(path) = wanted {
             let stop = Arc::new(AtomicBool::new(false));
             let (tx, watched, repaint, token) = (self.async_tx.clone(), path.clone(), ctx.clone(), stop.clone());
+            let queued = Arc::new(AtomicBool::new(false));
             native::spawn_folder_watch(path.clone(), stop.clone(), move || {
-                let _ = tx.send(AsyncResult::FolderChanged { pane: index, path: watched.clone(), watch: token.clone() });
-                repaint.request_repaint();
+                if !queued.swap(true, Ordering::AcqRel) && tx.send(AsyncResult::FolderChanged {
+                    pane: index, path: watched.clone(), watch: token.clone(), queued: queued.clone(),
+                }).is_ok() {
+                    repaint.request_repaint();
+                }
             });
             pane.watch = Some((path, stop));
         }
@@ -1471,11 +1451,22 @@ impl App {
                     let drives = pane.entries.iter().filter(|e| e.drive).count();
                     pane.cursor = if old_cursor < pane.entries.len() { old_cursor } else { (pane.entries.len() - drives).saturating_sub(1) };
                 }
-                for name in &marks {
-                    // Original FileListChanged (0x7d79c8) -> FixSelection (0x7dcc78): every item is unmarked, the TNXSelectedFiles names are collected and
-                    // cleared, and each name still found in the new list (FUN_007d2ee4) is marked and added again.
-                    if let Some(row) = pane.entries.iter().position(|e| !e.drive && !e.is_parent() && ndr::names::equals_ignore_case(&e.name, name)) {
-                        pane.selected.insert(row);
+                // The original FileListChanged -> FixSelection selects the
+                // first matching new row for each marked name, ignoring case.
+                // For many marks, do ONE pass over the list using ordinal
+                // Windows comparisons instead of O(N * M) linear searches.
+                if marks.len() >= 8 {
+                    let eligible = pane.entries.iter().enumerate()
+                        .filter(|(_, e)| !e.drive && !e.is_parent())
+                        .map(|(index, e)| (index, e.name.as_str()));
+                    pane.selected.extend(ndr::names::restore_marked_rows(eligible, &marks));
+                } else {
+                    // Avoid building a search tree for small, common
+                    // selections where the simple linear scan is cheaper.
+                    for name in &marks {
+                        if let Some(row) = pane.entries.iter().position(|e| !e.drive && !e.is_parent() && ndr::names::equals_ignore_case(&e.name, name)) {
+                            pane.selected.insert(row);
+                        }
                     }
                 }
                 // Preserve cached folder sizes in O(N + M) instead of
@@ -1562,8 +1553,12 @@ impl App {
                 }
                 AsyncResult::Tree { path, hidden, directories } => {
                     self.tree_cache.insert((path, hidden), directories);
+                    self.tree_cache_revision = self.tree_cache_revision.wrapping_add(1);
                 }
-                AsyncResult::FolderChanged { pane, path, watch } => self.folder_changed(pane, &path, &watch),
+                AsyncResult::FolderChanged { pane, path, watch, queued } => {
+                    queued.store(false, Ordering::Release);
+                    self.folder_changed(pane, &path, &watch);
+                }
                 AsyncResult::ProtectedItems(run) => self.protected_step(run),
                 AsyncResult::AttributesApplied(run) => self.attribute_step(run),
                 AsyncResult::SplitDone { source, outcome, cancelled } => self.split_done(source, outcome, cancelled),
@@ -1942,6 +1937,12 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
         self.frames += 1;
         let frame_started = Instant::now();
+        self.pending_close_request |= ctx.input(|i| i.viewport().close_requested());
+        if self.pending_close_request {
+            self.pending_shell_menu = None;
+        } else {
+            self.poll_shell_menu(ctx, ndr::shell_menu::show);
+        }
         // Count left button presses by the Windows double-click rule (so presses in frames that do not draw the list are not missed).
         let _ = panes::windows_double_press(ctx);
         // Fixed (user report: flicker when starting maximized): winit with_maximized showed an empty window with ShowWindow(SW_MAXIMIZE) before the first frame.
@@ -1971,32 +1972,10 @@ impl eframe::App for App {
             self.apply_preferences(ctx);
             self.preferences_dirty = false;
         }
-        if ctx.input(|i| i.viewport().close_requested())
-            && (self.job.as_ref().is_some_and(|j| !j.finished)
-                || self.background_jobs.iter().any(|j| !j.finished))
-        {
-            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            self.confirm_close_while_working();
-        }
         if self.close_when_idle && self.job.as_ref().is_none_or(|j| j.finished)
             && self.background_jobs.iter().all(|j| j.finished) {
             self.close_when_idle = false;
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-        }
-        // Do not silently tear down the virtual drive while an external
-        // editor still holds an encrypted file handle or has uncommitted
-        // changes. The user may exit normally after those applications close.
-        #[cfg(feature = "winfsp-vault")]
-        if ctx.input(|i| i.viewport().close_requested()) &&
-            self.vault_trees.iter().any(|tree| !tree.can_disconnect()) {
-            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            self.status = self.vault_status(
-                "암호화 드라이브에 열린 파일이나 저장되지 않은 변경 사항이 있습니다. 외부 프로그램을 닫고 다시 종료해 주세요.",
-                "An encrypted drive has open files or unsaved changes. Close external applications before exiting.");
-        }
-        // C# DiskCopyWindow OnClosing: no closing during disk work (image creation gets a cancel request).
-        if ctx.input(|i| i.viewport().close_requested()) && self.disk_copy_blocks_close() {
-            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         }
         let requests = self
             .navigation
@@ -2227,6 +2206,35 @@ impl eframe::App for App {
         if let Some(focused_id) = ctx.memory(|memory| memory.focused()) {
             ctx.accesskit_node_builder(focused_id, |_| {});
         }
+        // The close event is delivered once, even if egui repeats the layout pass.
+        if !ctx.will_discard() && std::mem::take(&mut self.pending_close_request) {
+            let working = self.job.as_ref().is_some_and(|j| !j.finished)
+                || self.background_jobs.iter().any(|j| !j.finished);
+            if working {
+                self.confirm_close_while_working();
+            }
+            // Disk image creation receives a cancel request when necessary.
+            let disk_busy = self.disk_copy_blocks_close();
+            let vault_busy = self.vault_transfer.as_ref().is_some_and(|job| job.finished.is_none());
+            if vault_busy {
+                self.status = self.vault_status(
+                    "암호화 파일 전송을 완료하거나 취소한 후 종료하세요.",
+                    "Finish or cancel the encrypted transfer before exiting.");
+            }
+            if working || disk_busy || vault_busy {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            } else {
+                // Freeze opens after handling this frame's input and navigation.
+                #[cfg(feature = "winfsp-vault")]
+                if vault_winfsp::VaultTreeMount::prepare_shutdown(
+                    &self.vault_trees, &self.vault_mounts).is_err() {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                    self.status = self.vault_status(
+                        "암호화 드라이브에 열린 파일이나 저장되지 않은 변경 사항이 있습니다. 외부 프로그램을 닫고 다시 종료해 주세요.",
+                        "An encrypted drive has open files or unsaved changes. Close external applications before exiting.");
+                }
+            }
+        }
         ctx.request_repaint_after(Duration::from_millis(
             if self.panes.iter().any(|p| p.loading)
                 || self.job.as_ref().is_some_and(|j| !j.finished)
@@ -2240,13 +2248,13 @@ impl eframe::App for App {
     }
     fn on_exit(&mut self, _: Option<&eframe::glow::Context>) {
         self.vault_dialog = None;
+        self.vault_transfer = None;
         #[cfg(feature = "winfsp-vault")]
         for mut mounted in self.vault_mounts.drain(..) {
             if let Err(error) = mounted.finish() {
                 eprintln!("NDR WinFsp encrypted mount commit failed during shutdown: {error}");
             }
         }
-        self.vault_transfer = None;
         #[cfg(feature = "winfsp-vault")]
         for mut tree in self.vault_trees.drain(..) {
             if let Err(error) = tree.finish() {

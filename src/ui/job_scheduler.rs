@@ -70,6 +70,7 @@ impl App {
                     | Operation::DeleteSkipping { .. }
             ),
             prompt_rename: matches!(operation, Operation::Copy { .. }),
+            copy_conflict_policy: job.reservation.as_ref().map(|r| Arc::clone(&r.conflict_policy)),
         };
         thread::spawn(move || fsops::run_with_options(operation, tx, flag, options));
         if !active {
@@ -136,6 +137,7 @@ impl App {
                     self.ask_file_failure(path, message, can_continue, reply);
                 }
                 Event::Skipped { .. } => job.skipped += 1,
+                Event::SkippedCount { count } => job.skipped += count,
                 Event::Totals { files, bytes } => {
                     if let Some(progress) = job.progress.as_mut() {
                         if files.is_some() {
@@ -181,10 +183,10 @@ impl App {
                         close_modal = true;
                         continue;
                     }
-                    if files > 0 {
+                    if files > 0 || job.reservation.is_some() {
                         job.files = files;
                     }
-                    if bytes > 0 {
+                    if bytes > 0 || job.reservation.is_some() {
                         job.bytes = bytes;
                     }
                     finished = Some(cancelled);

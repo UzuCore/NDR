@@ -116,6 +116,29 @@ fn concurrent_transfer_refuses_overlapping_destination_but_accepts_distinct_file
     assert!(!a.overlaps(&different));
     assert!(a.overlaps(&same));
     assert!(a.overlaps(&moving));
+
+    let folder = make(&[r"C:\source\folder"], r"D:\target", false);
+    let inside = make(&[r"E:\elsewhere\item.txt"], r"d:/TARGET/FOLDER/sub", false);
+    let adjacent = make(&[r"E:\elsewhere\item.txt"], r"D:\target\folder-other", false);
+    assert!(folder.overlaps(&inside) && inside.overlaps(&folder));
+    assert!(!folder.overlaps(&adjacent));
+}
+
+#[test]
+fn apply_to_all_skip_reports_every_conflict_to_the_ui() {
+    let (root, ctx, mut app) = fixture("skip-batch");
+    let src = root.join("left");
+    let dst = root.join("right");
+    fs::write(dst.join("b.txt"), b"keep").unwrap();
+    app.local_transfer(vec![src.join("a.txt"), src.join("b.txt")], dst.clone(), false,
+        super::file_operation::TransferKind::Paste);
+    wait(&mut app, &ctx, |app| conflict(app).is_some());
+    app.answer_dialog(DialogResult::FileConflict(Some((ConflictChoice::Skip, true))), &ctx);
+    wait(&mut app, &ctx, finished);
+    assert_eq!(app.job.as_ref().unwrap().skipped, 2);
+    assert_eq!(fs::read(dst.join("b.txt")).unwrap(), b"keep");
+    drop(app);
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
