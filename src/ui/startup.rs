@@ -107,7 +107,7 @@ impl StartupApp {
         let labels = compat::Language::load_labels(&resource_dir().join("Languages"), &startup_language(&options, settings));
         let loading_text = labels.localized("NDR.UI_STARTUP_LOADING", "폴더와 설정을 준비하는 중…", "Preparing folders and settings…");
         let failure_text = labels.localized("NDR.UI_STARTUP_FAILED", "시작 준비에 실패했습니다. 다시 실행해 주세요.", "Startup failed. Please reopen NDR.");
-        let theme = settings.map_or("Black".into(), |settings| settings.text("Theme", "Black"));
+        let theme = settings.map_or(ndr::styles::DEFAULT_THEME.into(), |settings| settings.text("Theme", ndr::styles::DEFAULT_THEME));
         let palette = system_commands::theme_palette(&theme);
         ctx.set_theme(palette.egui_theme());
         ctx.set_visuals(system_commands::palette_visuals(&palette));

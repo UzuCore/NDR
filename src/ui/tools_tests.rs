@@ -1513,10 +1513,10 @@ fn skin_address_segments_and_frame_colors_follow_the_original() {
     // Original TNXPathLabel: the root segment is "C:" (without the trailing '\').
     assert!(segments[0].label.ends_with(':') && !segments[0].label.ends_with('\\') && segments.iter().all(|s| s.folder.is_some()), "{}", segments[0].label);
     app.active = 0;
-    assert_eq!(app.skin_frame_stroke(&skin, 0), egui::Stroke::new(1.0_f32, Color32::from_rgb(0x5A, 0xAF, 0xA2)));
-    assert_eq!(app.skin_frame_stroke(&skin, 1), egui::Stroke::new(1.0_f32, Color32::from_rgb(0x3C, 0x72, 0x6D)), "inactive: 60% lframelocal + 40% lback (11171E), FUN_00483300");
+    assert_eq!(app.skin_frame_stroke(&skin, 0), egui::Stroke::new(1.0_f32, Color32::from_rgb(0x38, 0x65, 0x9A)));
+    assert_eq!(app.skin_frame_stroke(&skin, 1), egui::Stroke::new(1.0_f32, Color32::from_rgb(0x24, 0x40, 0x60)), "inactive: 60% lframelocal + 40% lback (08090A), FUN_00483300");
     app.panes[0].archive = Some(ArchiveLocation { file: folder.join("x.zip"), prefix: "inner/".into(), password: String::new() });
-    assert_eq!(app.skin_frame_stroke(&skin, 0).color, Color32::from_rgb(0xAD, 0x87, 0x51));
+    assert_eq!(app.skin_frame_stroke(&skin, 0).color, Color32::from_rgb(0x62, 0x5F, 0x22));
     let labels: Vec<String> = app.crumb_segments(0).into_iter().map(|s| s.label).collect();
     assert_eq!(&labels[labels.len() - 3..], ["left", "x.zip", "inner"], "archive folders, the archive name, the inner folders");
     let _ = fs::remove_dir_all(root);
@@ -1555,7 +1555,7 @@ fn skin_tab_set_follows_the_original_tnxtabset() {
     let pieces: Vec<egui::Rect> = output.shapes.iter().filter_map(|c| match &c.shape { egui::Shape::Mesh(m) if m.texture_id == tab.id() => Some(m.calc_bounds()), _ => None }).collect();
     assert!(pieces.first().is_some_and(|r| r.left() == 16.0 && r.width() == 5.0 && r.height() == 24.0), "left part at 16: {pieces:?}");
     let texts: Vec<(String, Color32)> = output.shapes.iter().filter_map(|c| match &c.shape { egui::Shape::Text(t) if t.galley.text() != "after" => Some((t.galley.text().to_owned(), t.fallback_color)), _ => None }).collect();
-    assert_eq!(texts, [("alpha".to_owned(), Color32::from_rgb(0xA5, 0xB6, 0xC8)), ("beta".to_owned(), Color32::from_rgb(0xF4, 0xFA, 0xFF))], "tabtext, tabactive");
+    assert_eq!(texts, [("alpha".to_owned(), Color32::from_rgb(0xA1, 0xA2, 0xA5)), ("beta".to_owned(), Color32::from_rgb(0xF1, 0xF2, 0xF3))], "tabtext, tabactive");
     // The tab list button (left end 12 x 24) shows "1. alpha" and "2. beta". Typing "1" while the menu is open goes to the first tab (original "&1. ").
     let run_events = |app: &mut App, events: Vec<egui::Event>| {
         let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 300.0))), events, ..Default::default() };
@@ -1651,12 +1651,12 @@ fn skin_info_bars_follow_the_original() {
         });
     });
     let fills: Vec<(egui::Rect, Color32)> = output.shapes.iter().filter_map(|c| match &c.shape { egui::Shape::Rect(r) => Some((r.rect, r.fill)), _ => None }).collect();
-    assert!(fills.contains(&(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 20.0)), Color32::from_rgb(0x11, 0x17, 0x1E))), "lfolderback: {fills:?}");
-    assert!(fills.contains(&(egui::Rect::from_min_size(egui::pos2(0.0, 20.0), egui::vec2(600.0, 20.0)), Color32::from_rgb(0x16, 0x1C, 0x23))), "lfileback: {fills:?}");
+    assert!(fills.contains(&(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 20.0)), Color32::from_rgb(0x08, 0x09, 0x0A))), "lfolderback: {fills:?}");
+    assert!(fills.contains(&(egui::Rect::from_min_size(egui::pos2(0.0, 20.0), egui::vec2(600.0, 20.0)), Color32::from_rgb(0x19, 0x1A, 0x1C))), "lfileback: {fills:?}");
     let galleys: Vec<std::sync::Arc<egui::Galley>> = output.shapes.iter().filter_map(|c| match &c.shape { egui::Shape::Text(t) => Some(t.galley.clone()), _ => None }).collect();
     let counts = galleys.iter().find(|g| g.text().contains("Folder")).expect("FOLDERINFO");
     let colors: Vec<Color32> = counts.job.sections.iter().map(|s| s.format.color).collect();
-    assert!(colors.contains(&Color32::from_rgb(0x8F, 0xE5, 0xD2)) && colors.contains(&Color32::from_rgb(0xD4, 0xDE, 0xE8)), "lfoldersubtext1 numbers, lfoldertext words: {colors:?}");
+    assert!(colors.contains(&Color32::from_rgb(0x53, 0x8B, 0xE5)) && colors.contains(&Color32::from_rgb(0xC5, 0xC6, 0xC8)), "lfoldersubtext1 numbers, lfoldertext words: {colors:?}");
     let _ = fs::remove_dir_all(root);
 }
 
@@ -1700,21 +1700,21 @@ fn skin_drive_bar_follows_the_original() {
         egui::CentralPanel::default().frame(egui::Frame::NONE).show(ctx, |ui| app.skin_drive_bar(ui, 0, ctx, &skin));
     });
     assert!(!app.settings.flag("ShowDriveButtons", false), "off by default (sdrivebtns=0)");
-    assert!(!output.shapes.iter().any(|c| matches!(&c.shape, egui::Shape::Rect(r) if r.fill == Color32::from_rgb(0x16, 0x1C, 0x23))), "nothing drawn while off");
+    assert!(!output.shapes.iter().any(|c| matches!(&c.shape, egui::Shape::Rect(r) if r.fill == Color32::from_rgb(0x19, 0x1A, 0x1C))), "nothing drawn while off");
     app.settings.set_flag("ShowDriveButtons", true);
     app.drive_cache = Some((std::time::Instant::now(), vec![(PathBuf::from("C:\\"), "C:\\ · Fixed".into()), (PathBuf::from("D:\\"), "D:\\ · Fixed".into())]));
     let output = ctx.run(raw(), |ctx| {
         egui::CentralPanel::default().frame(egui::Frame::NONE).show(ctx, |ui| app.skin_drive_bar(ui, 0, ctx, &skin));
     });
     let fills: Vec<(egui::Rect, Color32)> = output.shapes.iter().filter_map(|c| match &c.shape { egui::Shape::Rect(r) => Some((r.rect, r.fill)), _ => None }).collect();
-    assert!(fills.contains(&(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 22.0)), Color32::from_rgb(0x16, 0x1C, 0x23))), "ldrivesback: {fills:?}");
+    assert!(fills.contains(&(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 22.0)), Color32::from_rgb(0x19, 0x1A, 0x1C))), "ldrivesback: {fills:?}");
     let labels: Vec<(String, f32, f32, Color32)> = output.shapes.iter().filter_map(|c| match &c.shape { egui::Shape::Text(t) => Some((t.galley.text().to_owned(), t.pos.x, t.galley.size().x, t.fallback_color)), _ => None }).collect();
     assert_eq!(labels.iter().map(|l| l.0.as_str()).collect::<Vec<_>>(), ["C:", "D:"], "one button per drive");
     // Original TNXImageButton text layout 1: image x = (36 - (spacing 2 + text width + image width)) div 2, text x = image x + image width + 2 (image width 0 with icons off).
     for (i, l) in labels.iter().enumerate() {
         assert_eq!(l.1, 36.0 * i as f32 + ((36.0 - (2.0 + l.2.round())) / 2.0).trunc() + 2.0, "{l:?}");
     }
-    assert!(labels.iter().all(|l| l.3 == Color32::from_rgb(0xD4, 0xDE, 0xE8)), "ldrivestext: {labels:?}");
+    assert!(labels.iter().all(|l| l.3 == Color32::from_rgb(0xC5, 0xC6, 0xC8)), "ldrivestext: {labels:?}");
     let _ = fs::remove_dir_all(root);
 }
 
@@ -1908,7 +1908,7 @@ fn skin_function_key_bar_follows_the_original_button_bar() {
         .collect();
     assert_eq!(keys.iter().map(|k| k.0.as_str()).collect::<Vec<_>>(), ["F2", "F3", "F4", "F5", "F6", "F7", "F8"]);
     assert!(keys.iter().enumerate().all(|(i, k)| (k.1.x - (97.0 * i as f32 + 5.0)).abs() < 0.01), "cells of (700 - 18 size grip) / 7 = 97, text at + 5: {keys:?}");
-    assert!(keys.iter().all(|k| k.2 == Color32::from_rgb(0xF2, 0xBD, 0x72)), "bbkeytext");
+    assert!(keys.iter().all(|k| k.2 == Color32::from_rgb(0xE5, 0xA7, 0x55)), "bbkeytext");
     let tiles = output.shapes.iter().filter(|c| matches!(&c.shape, egui::Shape::Mesh(m) if m.texture_id == tile.id())).count();
     assert!(tiles >= 700 / 8, "{tiles}");
     // Dividers at ItemRect.right - 2 (the last item ends at 700 - 18), y = (20 - 2 - 14) / 2.
@@ -1976,14 +1976,14 @@ fn skin_toolbar_follows_the_original_layout() {
     let (root, ctx, mut app) = fixture("skin-toolbar", "en");
     app.settings.set_text("Theme", "Black");
     let skin = app.current_skin().expect("the Black skin");
-    assert_eq!((skin.positive_integer("Toolbar", "tbheight", 0), skin.positive_integer("Toolbar", "tbtopoffset", 0)), (51, 7));
+    assert_eq!((skin.positive_integer("Toolbar", "tbheight", 0), skin.positive_integer("Toolbar", "tbtopoffset", 0)), (36, 8));
     let back = app.toolbar_icon(&ctx, "tb_back.png").expect("tb_back.png");
     let uppercase = app.toolbar_icon(&ctx, "TB_BACK.PNG").expect("legacy toolbar name casing");
     assert_eq!(uppercase.size(), back.size());
     let tile = app.skin_bitmap(&ctx, "toolbar_back.bmp").expect("toolbar_back.bmp");
     let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 700.0))), ..Default::default() };
     let output = ctx.run(raw, |ctx| {
-        egui::TopBottomPanel::top("toolbar").exact_height(51.0).frame(egui::Frame::NONE).show(ctx, |ui| app.skin_toolbar(ui, ctx, &skin));
+        egui::TopBottomPanel::top("toolbar").exact_height(36.0).frame(egui::Frame::NONE).show(ctx, |ui| app.skin_toolbar(ui, ctx, &skin));
     });
     let bounds = |id: egui::TextureId| output.shapes.iter().filter_map(|c| match &c.shape { egui::Shape::Mesh(m) if m.texture_id == id => Some(m.calc_bounds()), _ => None }).collect::<Vec<_>>();
     let first = app.toolbar.items.iter().position(|i| i.kind == ndr::commands::ToolbarKind::Command && i.icon.ends_with("tb_back.png")).expect("a Back item");
@@ -1991,15 +1991,15 @@ fn skin_toolbar_follows_the_original_layout() {
     // Original default\toolbar.xml: back, forward | desktop, documents, pictures, music, videos, favorites | Recycle Bin (right).
     let commands: Vec<(&str, bool)> = app.toolbar.items.iter().filter(|i| i.kind == ndr::commands::ToolbarKind::Command).map(|i| (i.icon.rsplit('\\').next().unwrap_or(""), i.align_right)).collect();
     assert_eq!(commands, [("tb_back.png", false), ("tb_forward.png", false), ("tb_desktop.png", false), ("tb_documents.png", false), ("tb_pictures.png", false), ("tb_music.png", false), ("tb_videos.png", false), ("tb_favorites.png", false), ("tb_recyclebin.png", true)]);
-    assert_eq!(bounds(back.id()).first().copied(), Some(egui::Rect::from_min_size(egui::pos2(4.0, 7.0), egui::vec2(35.0, 35.0))));
+    assert_eq!(bounds(back.id()).first().copied(), Some(egui::Rect::from_min_size(egui::pos2(4.0, 8.0), egui::vec2(20.0, 20.0))));
     let tiles = bounds(tile.id());
-    assert!(tiles.len() >= 1000 / 8 && tiles.iter().all(|r| r.height() == 51.0), "{}", tiles.len());
+    assert!(tiles.len() >= 1000 / 8 && tiles.iter().all(|r| r.height() == 36.0), "{}", tiles.len());
     // Original TNXImageButton (one image cell): hovering changes nothing, pressing makes colors x 6 / 10 (FUN_007c39e4).
     let at = egui::pos2(20.0, 20.0);
     let frame = |app: &mut App, events: Vec<egui::Event>| {
         let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 700.0))), events, ..Default::default() };
         ctx.run(raw, |ctx| {
-            egui::TopBottomPanel::top("toolbar").exact_height(51.0).frame(egui::Frame::NONE).show(ctx, |ui| app.skin_toolbar(ui, ctx, &skin));
+            egui::TopBottomPanel::top("toolbar").exact_height(36.0).frame(egui::Frame::NONE).show(ctx, |ui| app.skin_toolbar(ui, ctx, &skin));
         })
     };
     let back_color = |output: &egui::FullOutput| output.shapes.iter().find_map(|c| match &c.shape { egui::Shape::Mesh(m) if m.texture_id == back.id() => m.vertices.first().map(|v| v.color), _ => None });
@@ -2026,20 +2026,20 @@ fn skin_toolbar_favorites_drops_down_the_favorites_menu() {
     let frame = |app: &mut App, events: Vec<egui::Event>| {
         let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 700.0))), events, ..Default::default() };
         ctx.run(raw, |ctx| {
-            egui::TopBottomPanel::top("toolbar").exact_height(51.0).frame(egui::Frame::NONE).show(ctx, |ui| app.skin_toolbar(ui, ctx, &skin));
+            egui::TopBottomPanel::top("toolbar").exact_height(36.0).frame(egui::Frame::NONE).show(ctx, |ui| app.skin_toolbar(ui, ctx, &skin));
         })
     };
-    // Left group: back 4, forward 43, separator 82 (15), desktop 101 ... favorites 296 (width 35, top 7).
-    let at = egui::pos2(310.0, 20.0);
+    // Left group starts at 4 and advances by 24 per button; Favorites begins at x=191.
+    let at = egui::pos2(201.0, 18.0);
     let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
     frame(&mut app, vec![egui::Event::PointerMoved(at)]);
     frame(&mut app, vec![button(true)]);
     // TNXImageButton MouseDown → DropDown: the menu is already open on the press.
-    assert_eq!(app.popup.as_ref().and_then(|p| p.position), Some(egui::pos2(296.0, 42.0)), "opened on the press");
+    assert_eq!(app.popup.as_ref().and_then(|p| p.position), Some(egui::pos2(191.0, 28.0)), "opened on the press");
     let popup_frame = |app: &mut App, events: Vec<egui::Event>| {
         let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 700.0))), events, ..Default::default() };
         ctx.run(raw, |ctx| {
-            egui::TopBottomPanel::top("toolbar").exact_height(51.0).frame(egui::Frame::NONE).show(ctx, |ui| app.skin_toolbar(ui, ctx, &skin));
+            egui::TopBottomPanel::top("toolbar").exact_height(36.0).frame(egui::Frame::NONE).show(ctx, |ui| app.skin_toolbar(ui, ctx, &skin));
             app.popup_menu_ui(ctx);
         })
     };
@@ -2047,7 +2047,7 @@ fn skin_toolbar_favorites_drops_down_the_favorites_menu() {
     popup_frame(&mut app, vec![button(false)]);
     popup_frame(&mut app, vec![]);
     let popup = app.popup.as_ref().expect("the release of the opening press keeps the favorites menu");
-    assert_eq!(popup.position, Some(egui::pos2(296.0, 42.0)), "under the button");
+    assert_eq!(popup.position, Some(egui::pos2(191.0, 28.0)), "under the button");
     assert!(app.original_dialogs.is_empty(), "not the organize dialog");
     let _ = fs::remove_dir_all(root);
 }
@@ -2114,10 +2114,10 @@ fn skin_menus_use_the_ndr_menu_colours() {
     let mut style = egui::Style::default();
     super::skin_pane::skin_menu_style(&skin).apply(&mut style);
     let v = &style.visuals;
-    assert_eq!((v.window_fill, v.window_stroke.color), (Color32::from_rgb(0x16, 0x1C, 0x23), Color32::from_rgb(0x4B, 0x5B, 0x6C)));
-    assert_eq!(v.widgets.inactive.fg_stroke.color, Color32::from_rgb(0xD4, 0xDE, 0xE8));
-    assert_eq!((v.widgets.hovered.weak_bg_fill, v.widgets.hovered.fg_stroke.color), (Color32::from_rgb(0x32, 0x45, 0x53), Color32::from_rgb(0xF4, 0xFA, 0xFF)));
-    assert_eq!((v.widgets.noninteractive.bg_stroke.color, v.weak_text_color), (Color32::from_rgb(0x4B, 0x5B, 0x6C), Some(Color32::from_rgb(0xA5, 0xB6, 0xC8))));
+    assert_eq!((v.window_fill, v.window_stroke.color), (Color32::from_rgb(0x19, 0x1A, 0x1C), Color32::from_rgb(0x49, 0x4A, 0x4D)));
+    assert_eq!(v.widgets.inactive.fg_stroke.color, Color32::from_rgb(0xC5, 0xC6, 0xC8));
+    assert_eq!((v.widgets.hovered.weak_bg_fill, v.widgets.hovered.fg_stroke.color), (Color32::from_rgb(0x35, 0x36, 0x38), Color32::from_rgb(0xF1, 0xF2, 0xF3)));
+    assert_eq!((v.widgets.noninteractive.bg_stroke.color, v.weak_text_color), (Color32::from_rgb(0x49, 0x4A, 0x4D), Some(Color32::from_rgb(0xA1, 0xA2, 0xA5))));
     assert_eq!(v.override_text_color, None);
     // Original MenuDrawItem: text at row left + 0x10 (the check image slot before it), MenuMeasureItem width = text + 0x20.
     assert_eq!(style.spacing.button_padding.x, super::skin_pane::MENU_GUTTER);
@@ -2125,10 +2125,10 @@ fn skin_menus_use_the_ndr_menu_colours() {
     let (bar_back, bar) = super::skin_pane::skin_menu_bar_style(&skin);
     let mut style = egui::Style::default();
     bar.apply(&mut style);
-    assert_eq!(bar_back, Color32::from_rgb(0x20, 0x29, 0x33));
-    assert_eq!((style.visuals.widgets.inactive.fg_stroke.color, style.visuals.widgets.hovered.weak_bg_fill, style.visuals.widgets.hovered.fg_stroke.color), (Color32::from_rgb(0xD4, 0xDE, 0xE8), Color32::from_rgb(0x32, 0x45, 0x53), Color32::from_rgb(0xF4, 0xFA, 0xFF)));
+    assert_eq!(bar_back, Color32::from_rgb(0x2B, 0x2C, 0x2E));
+    assert_eq!((style.visuals.widgets.inactive.fg_stroke.color, style.visuals.widgets.hovered.weak_bg_fill, style.visuals.widgets.hovered.fg_stroke.color), (Color32::from_rgb(0xC5, 0xC6, 0xC8), Color32::from_rgb(0x35, 0x36, 0x38), Color32::from_rgb(0xF1, 0xF2, 0xF3)));
     // The keyboard-shortcut column has its own background and hover ink.
-    assert_eq!(super::skin_pane::skin_menu_shortcut_colors(&skin), (Color32::from_rgb(0x16, 0x1C, 0x23), Color32::from_rgb(0xA5, 0xB6, 0xC8), Color32::from_rgb(0x8F, 0xE5, 0xD2)));
+    assert_eq!(super::skin_pane::skin_menu_shortcut_colors(&skin), (Color32::from_rgb(0x19, 0x1A, 0x1C), Color32::from_rgb(0xA1, 0xA2, 0xA5), Color32::from_rgb(0x53, 0x8B, 0xE5)));
     let _ = fs::remove_dir_all(root);
 }
 
@@ -2353,7 +2353,7 @@ fn closing_while_working_asks_the_original_question_and_columns_use_field_names(
     let (root, ctx, mut app) = fixture("close-working", "ko");
     // Original column headers FIELD_* ("type" is a C# column, only in the C# theme). The skin theme has the six original cells.
     let [name, ext, size, date, attr, desc] = ["FIELD_NAME", "FIELD_EXT", "FIELD_SIZE", "FIELD_DATEMODIFIED", "FIELD_ATTR", "FIELD_DESC"].map(|key| app.language_pack.text(&format!("RES.{key}"), "?"));
-    assert!(app.current_skin().is_some(), "the default theme is the Black skin");
+    assert!(app.current_skin().is_some(), "the default theme has a bundled skin");
     let titles: Vec<String> = app.detail_columns(true).into_iter().map(|(_, title, _)| title).collect();
     assert_eq!(titles, [name.clone(), ext.clone(), size.clone(), date.clone(), attr.clone(), desc.clone()]);
     // Original DrawListItem description cell: the file type text when there is no description and showfiletype is on.

@@ -1019,7 +1019,7 @@ fn menus_have_only_original_commands() {
 #[test]
 fn original_skin_and_language_submenus() {
     let (root, ctx, mut app) = fixture("skin-language-menu", "ko");
-    assert_eq!(app.skin_names(), ["Black", "Classic"]);
+    assert_eq!(app.skin_names(), ["GitHub", "Nexus", "Classic", "Cyan"]);
     app.apply_theme("Classic");
     assert_eq!(app.settings.text("Theme", "?"), "Classic");
     assert!(app.current_skin().is_some());

@@ -301,7 +301,7 @@ fn hovered_file_menu_shortcut_keeps_the_row_highlight() {
     });
     // The menu can still be fading in, so compare the RGB before opacity.
     let [r, g, b, _] = background.expect("a background behind the shortcut").to_srgba_unmultiplied();
-    assert!([r, g, b].into_iter().zip([0x32, 0x45, 0x53]).all(|(channel, expected)| channel.abs_diff(expected) <= 3),
+    assert!([r, g, b].into_iter().zip([0x35, 0x36, 0x38]).all(|(channel, expected)| channel.abs_diff(expected) <= 3),
         "the highlight extends behind the shortcut, got ({r}, {g}, {b})");
     drop(app);
     fs::remove_dir_all(root).unwrap();

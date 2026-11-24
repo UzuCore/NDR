@@ -176,7 +176,7 @@ impl App {
         if icon.is_empty() {
             return None;
         }
-        let theme = self.settings.text("Theme", "Black");
+        let theme = self.settings.text("Theme", ndr::styles::DEFAULT_THEME);
         let key = format!("{theme}|{icon}");
         if let Some(cached) = self.toolbar_icons.get(&key) {
             return cached.clone();
@@ -211,10 +211,10 @@ impl App {
     /// Original skin of the current theme (black, classic). conf.ini is reread only when the theme changes. For names that are not original skins or unreadable skins,
     /// the original default black (Black) is used.
     pub(super) fn current_skin(&mut self) -> Option<ndr::styles::Skin> {
-        let theme = self.settings.text("Theme", "Black");
+        let theme = self.settings.text("Theme", ndr::styles::DEFAULT_THEME);
         if self.skin_cache.as_ref().map(|(name, _)| name.as_str()) != Some(theme.as_str()) {
             let folder = self.resources.join("Skins");
-            let skin = ndr::styles::Skin::load(&folder, &theme).ok().or_else(|| ndr::styles::Skin::load(&folder, "Black").ok());
+            let skin = ndr::styles::Skin::load(&folder, &theme).ok().or_else(|| ndr::styles::Skin::load(&folder, "Nexus").ok());
             self.skin_cache = Some((theme, skin));
         }
         self.skin_cache.as_ref().and_then(|(_, skin)| skin.clone())
@@ -222,7 +222,7 @@ impl App {
 
     /// BMP images of the original skin (tbbackimg, bbbackimg, bbdividerimg). None when missing or unreadable.
     pub(super) fn skin_bitmap(&mut self, ctx: &egui::Context, file: &str) -> Option<egui::TextureHandle> {
-        let theme = self.settings.text("Theme", "Black");
+        let theme = self.settings.text("Theme", ndr::styles::DEFAULT_THEME);
         let key = format!("bmp|{theme}|{file}");
         if let Some(cached) = self.toolbar_icons.get(&key) {
             return cached.clone();
@@ -462,7 +462,7 @@ mod tests {
     #[test]
     fn toolbar_icons_from_the_shipped_skins_decode() {
         let skins = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Resources").join("Skins");
-        for (theme, cell) in [("Black", 35), ("Classic", 20)] {
+        for (theme, cell) in [("Nexus", 20), ("Classic", 20), ("Cyan", 20), ("GitHub", 20)] {
             let skin = ndr::styles::Skin::load(&skins, theme).unwrap();
             let path = skin.image_path("toolbar-icons.png").expect("the toolbar strip ships in the skin");
             let (width, height, rgba) = decode_png(&path).unwrap();

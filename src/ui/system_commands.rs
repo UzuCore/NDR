@@ -6,7 +6,7 @@ use super::*;
 use ndr::msgbox::{MB_ICONASTERISK, MB_ICONEXCLAMATION, MB_OK};
 
 /// Original skins (skin\ folder names): black, classic.
-pub(super) const THEMES: [&str; 2] = ["Black", "Classic"];
+use ndr::styles::THEMES;
 
 /// NDR base palette used where the skin does not paint. (app background, pane background, raised cell, border, text, faint text, accent).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -43,9 +43,11 @@ impl ThemePalette {
 
 /// egui base colors per skin (places the skin does not paint, such as dialogs). Unknown names are black.
 pub(super) fn theme_palette(theme: &str) -> ThemePalette {
-    match theme {
-        "Classic" => ThemePalette { app: [0xE1, 0xE9, 0xF3], panel: [0xED, 0xF2, 0xF8], raised: [0xF8, 0xFB, 0xFE], border: [0xA9, 0xB9, 0xCB], text: [0x25, 0x35, 0x4A], muted: [0x44, 0x5D, 0x74], accent: [0x15, 0x5B, 0x85] },
-        _ => ThemePalette { app: [0x20, 0x29, 0x33], panel: [0x16, 0x1C, 0x23], raised: [0x2D, 0x39, 0x46], border: [0x4B, 0x5B, 0x6C], text: [0xD4, 0xDE, 0xE8], muted: [0xA5, 0xB6, 0xC8], accent: [0x8F, 0xE5, 0xD2] },
+    match ndr::styles::canonical_theme_name(theme) {
+        "Classic" => ThemePalette { app: [0xEB, 0xEB, 0xED], panel: [0xEF, 0xEF, 0xF0], raised: [0xFB, 0xFB, 0xFC], border: [0xAD, 0xAF, 0xB3], text: [0x19, 0x1A, 0x1B], muted: [0x56, 0x59, 0x5E], accent: [0x24, 0x5F, 0xAD] },
+        "GitHub" => ThemePalette { app: [0x21, 0x26, 0x2D], panel: [0x16, 0x1B, 0x22], raised: [0x30, 0x36, 0x3D], border: [0x3D, 0x44, 0x4D], text: [0xE6, 0xED, 0xF3], muted: [0xA0, 0xAB, 0xB7], accent: [0x58, 0xA6, 0xFF] },
+        "Cyan" => ThemePalette { app: [0x20, 0x29, 0x33], panel: [0x16, 0x1C, 0x23], raised: [0x2D, 0x39, 0x46], border: [0x4B, 0x5B, 0x6C], text: [0xD4, 0xDE, 0xE8], muted: [0xA5, 0xB6, 0xC8], accent: [0x8F, 0xE5, 0xD2] },
+        _ => ThemePalette { app: [0x2B, 0x2C, 0x2E], panel: [0x19, 0x1A, 0x1C], raised: [0x25, 0x26, 0x29], border: [0x49, 0x4A, 0x4D], text: [0xC5, 0xC6, 0xC8], muted: [0xA1, 0xA2, 0xA5], accent: [0x53, 0x8B, 0xE5] },
     }
 }
 
@@ -410,19 +412,20 @@ impl App {
 
     /// Saves the theme and applies it at once (end of C# SelectThemeAsync, original skin menu FUN_0043e510).
     pub(super) fn apply_theme(&mut self, theme: &str) {
+        let theme = ndr::styles::canonical_theme_name(theme);
         self.settings.set_text("Theme", theme);
         self.dark = theme_palette(theme).dark();
+        for index in 0..self.panes.len() { self.compute_view(index); }
         self.preferences_dirty = true;
         self.save();
     }
 
     /// Original skin menu (FUN_0043e580): the folders under skin\ (without "." and "..") in order. Only theme names NDR knows (case-insensitive).
     pub(super) fn skin_names(&self) -> Vec<&'static str> {
-        let mut names: Vec<String> = std::fs::read_dir(self.resources.join("Skins"))
-            .map(|dir| dir.filter_map(Result::ok).filter(|e| e.path().is_dir()).map(|e| e.file_name().to_string_lossy().into_owned()).collect())
-            .unwrap_or_default();
-        names.sort_by_key(|n| n.to_lowercase());
-        names.iter().filter_map(|n| THEMES.iter().find(|t| t.eq_ignore_ascii_case(n)).copied()).collect()
+        let skins = self.resources.join("Skins");
+        THEMES.into_iter().filter(|theme| {
+            ndr::styles::theme_skin_directory(theme).is_some_and(|folder| skins.join(folder).is_dir())
+        }).collect()
     }
 
     /// Saves the language and applies it at once (end of C# SelectLanguageAsync, original language menu FUN_0044193c).
@@ -538,10 +541,10 @@ mod tests {
 
     #[test]
     fn skin_palettes() {
-        assert_eq!(theme_palette("Classic").app, [0xE1, 0xE9, 0xF3]);
+        assert_eq!(theme_palette("Classic").app, [0xEB, 0xEB, 0xED]);
         assert_eq!(theme_palette("Gray"), theme_palette("Black"));
         assert!(theme_palette("Gray").dark());
-        assert_eq!(theme_palette("Black").text, [0xD4, 0xDE, 0xE8]);
+        assert_eq!(theme_palette("Black").text, [0xC5, 0xC6, 0xC8]);
         assert!(theme_palette("Black").dark());
         // Unknown names are black.
         assert_eq!(theme_palette("Dark"), theme_palette("Black"));

@@ -69,7 +69,7 @@ pub(super) fn basic_color_index(row: usize) -> Option<usize> {
 pub(super) fn basic_color(draft: &ndr::settings::Settings, index: usize) -> Option<String> {
     let (key, default) = ndr::styles::DEFAULT_ELEMENTS.get(index)?;
     let stored = object(draft, "NexusFileColorMapValues").get(*key).and_then(|v| v.as_str()).map(|v| v.trim_start_matches('#').to_owned());
-    Some(stored.filter(|v| v.len() == 6).unwrap_or_else(|| (*default).to_owned()))
+    Some(stored.filter(|v| v.len() == 6).unwrap_or_else(|| ndr::styles::theme_element_color(&draft.text("Theme", ndr::styles::DEFAULT_THEME), key).unwrap_or(default).to_owned()))
 }
 
 /// lbExtColor entries of the original TNXFileColorMap: extensions of one color on one row ("TXT;DOC", color), in first-appearance color order of the ExtensionColors text (".txt=#RRGGBB; ...").
@@ -442,7 +442,7 @@ impl SettingsForm {
             check("SaveDriveFolders", lang("Caption.chkDriveFolders", "Save each drive's last folder at exit"), true),
             check("SaveFolderTreeState", language.localized("NDR.UI_SETTINGS_SAVE_THE_FOLDER_TREE_80D264", "폴더 트리 펼침 상태 저장 (NDR 사용자 설정에 보관)", "Save the folder tree expansion state (in NDR user settings)"), false),
             check("RemoveReadOnlyWhenCopying", language.localized("NDR.UI_SETTINGS_REMOVE_THE_READ_ONLY_F6122F", "CD/DVD에서 복사할 때 읽기 전용 속성 해제", "Remove the read-only attribute when copying from CD/DVD"), true),
-            combo("Theme", language.localized("NDR.UI_SETTINGS_THEME_A980E4", "테마", "Theme"), &["Black", "Classic"], &draft.text("Theme", "Black")),
+            combo("Theme", language.localized("NDR.UI_SETTINGS_THEME_A980E4", "테마", "Theme"), &ndr::styles::THEMES, ndr::styles::canonical_theme_name(&draft.text("Theme", ndr::styles::DEFAULT_THEME))),
         ]);
         let mut escape_labels: Vec<String> = lang("ComboBox.cbESC", "Minimize;Exit Program;Command Line;Deselect All;Go to Parent").split(';').map(|s| s.trim().to_owned()).collect();
         if escape_labels.len() != 5 {
@@ -1479,7 +1479,7 @@ impl App {
             self.system_box("NDR", &text, ndr::msgbox::MB_OK | ndr::msgbox::MB_ICONASTERISK, |_, _, _| {});
         }
         self.language = compat::resolve_language_code(&self.resources.join("Languages"), &self.settings.text("Language", &self.language));
-        self.dark = super::system_commands::theme_palette(&self.settings.text("Theme", "Black")).dark();
+        self.dark = super::system_commands::theme_palette(&self.settings.text("Theme", ndr::styles::DEFAULT_THEME)).dark();
         self.dual = self.settings.flag("DualPaneMode", true);
         self.profile_load_error = false;
         self.preferences_dirty = true;

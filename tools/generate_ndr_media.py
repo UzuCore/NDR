@@ -83,25 +83,37 @@ def arrow(icon, center, direction, ink, stem=False):
         icon.line([pt(-4.5, 0), pt(1.2, 0)], ink)
 
 
-# Skin schemes are independently chosen. The light scheme uses blue-gray chrome;
-# the dark scheme uses graphite chrome with sea-glass focus and muted amber labels.
+# Skin schemes are independently chosen. The light scheme uses neutral silver chrome;
+# Nexus uses near-black surfaces, warm color tags and restrained blue focus.
 SKINS = {
     "black": {
+        "surface": "191A1C", "chrome": "2B2C2E", "raised": "252629", "edge": "494A4D",
+        "ink": "C5C6C8", "strong": "F1F2F3", "soft": "A1A2A5", "muted": "77797B",
+        "accent": "538BE5", "amber": "E5A755", "active": "212B3C", "back": "08090A",
+        "local": "38659A", "network": "428237", "archive": "625F22", "hover": "353638",
+    },
+    "classic": {
+        "surface": "EFEFF0", "chrome": "EBEBED", "raised": "FBFBFC", "edge": "ADAFB3",
+        "ink": "191A1B", "strong": "111316", "soft": "56595E", "muted": "74777D",
+        "accent": "245FAD", "amber": "90541F", "active": "DDE5F0", "back": "FAFAFB",
+        "local": "8D9197", "network": "478139", "archive": "6D602D", "hover": "DADDE2",
+    },
+    "cyan": {
         "surface": "161C23", "chrome": "202933", "raised": "2D3946", "edge": "4B5B6C",
         "ink": "D4DEE8", "strong": "F4FAFF", "soft": "A5B6C8", "muted": "78899C",
         "accent": "8FE5D2", "amber": "F2BD72", "active": "344C56", "back": "11171E",
         "local": "5AAFA2", "network": "70A9DB", "archive": "AD8751", "hover": "324553",
     },
-    "classic": {
-        "surface": "EDF2F8", "chrome": "E1E9F3", "raised": "F8FBFE", "edge": "A9B9CB",
-        "ink": "25354A", "strong": "102842", "soft": "445D74", "muted": "697D92",
-        "accent": "155B85", "amber": "84501B", "active": "D6E7F6", "back": "F7FAFD",
-        "local": "377F79", "network": "4775AC", "archive": "846139", "hover": "C6D9EE",
+    "github": {
+        "surface": "161B22", "chrome": "21262D", "raised": "30363D", "edge": "3D444D",
+        "ink": "E6EDF3", "strong": "F0F6FC", "soft": "A0ABB7", "muted": "8B949E",
+        "accent": "58A6FF", "amber": "E3B341", "active": "223852", "back": "0D1117",
+        "local": "388BFD", "network": "56B88C", "archive": "AA7F37", "hover": "2A3545",
     },
 }
 
 
-def skin_config(path, skin, dark):
+def skin_config(path, skin):
     c = skin
     values = {
         "Menu": {
@@ -112,9 +124,9 @@ def skin_config(path, skin, dark):
             "mrover": c["accent"], "mdivider": c["edge"],
         },
         "Toolbar": {
-            "tbbackimg": "toolbar_back.bmp", "tbbtnwidth": 35 if dark else 20,
-            "tbbtnheight": 35 if dark else 20, "tbheight": 51 if dark else 36,
-            "tbtopoffset": 7 if dark else 8, "tbtext": c["ink"],
+            "tbbackimg": "toolbar_back.bmp", "tbbtnwidth": 20,
+            "tbbtnheight": 20, "tbheight": 36,
+            "tbtopoffset": 8, "tbtext": c["ink"],
         },
         "List": {
             "ldrivesback": c["surface"], "ldrivestext": c["ink"], "ldriveshot": c["accent"], "ldrivesframe": c["edge"],
@@ -149,10 +161,11 @@ def skin_config(path, skin, dark):
 
 
 def create_skin(name, conf):
-    dark = name == "black"
+    dark = name != "classic"
     path = RES / "Skins" / name
     palette = {k: rgb(v) for k, v in conf.items()}
-    skin_config(path / "conf.ini", conf, dark)
+    path.mkdir(parents=True, exist_ok=True)
+    skin_config(path / "conf.ini", conf)
     surface, raised, chrome, edge, ink, soft, glow, hot, active = (
         palette[k] for k in ("surface", "raised", "chrome", "edge", "ink", "soft", "accent", "hover", "active")
     )
@@ -161,9 +174,12 @@ def create_skin(name, conf):
         if hovered:
             icon.rect((1.5, 1.5, w-2, h-2), fill=hot, radius=border/2)
 
+    toolbar_scheme = {"surface": rgb("EDF2F8"), "edge": rgb("A9B9CB"), "accent": rgb("155B85"), "ink": rgb("25354A"), "soft": rgb("445D74"), "raised": rgb("F8FBFE")}
+
     def toolbar(icon, row, col):
-        # All geometry here is authored at 20px logical size. The larger
-        # Black atlas has the same accessible silhouettes in a separate raster.
+        surface, edge, glow, ink, soft, raised = (toolbar_scheme[k] for k in ("surface", "edge", "accent", "ink", "soft", "raised"))
+        # All geometry here is authored at 20px logical size. Both
+        # themes share these exact Classic glyphs.
         side = icon.size[0]
         sym = Sprite((20, 20))
         sym.rect((1.4, 1.4, 18.3, 18.3), fill=surface, outline=edge, radius=5, width=0.8)
@@ -202,7 +218,7 @@ def create_skin(name, conf):
                 sym.ellipse((x-0.65, 9.25, x+0.65, 10.55), c)
         icon.image.paste(sym.image.resize((side*S, side*S), Image.Resampling.LANCZOS), (0, 0))
 
-    side = 35 if dark else 20
+    side = 20
     atlas(path / "toolbar-icons.png", (side, side), 10, 1, toolbar)
 
     def address(icon, hovered, col):
@@ -305,7 +321,7 @@ def create_skin(name, conf):
         for x in (3.4, 6.2):
             drag.ellipse((x-0.8, y-0.8, x+0.8, y+0.8), soft)
     drag.result().save(path / "vertthumb.png")
-    tile_bmp(path / "toolbar_back.bmp", (8, 51) if dark else (10, 36), raised, chrome, edge)
+    tile_bmp(path / "toolbar_back.bmp", (8, 36) if dark else (10, 36), raised, chrome, edge)
     tile_bmp(path / "btnbar_back.bmp", (8, 22), chrome, surface, edge)
     tile_bmp(path / "btnbar_divider.bmp", (1 if dark else 2, 14), chrome, edge, chrome)
 
@@ -319,108 +335,108 @@ BASIC = (
 # rather than a copied extension sequence/table. nocolor intentionally has no
 # extension overrides.
 PRESETS = {
-    "black": "151B24 DBE4EE 8EDDCF AEC9FB F3CF7D DB9EA2 A9BBD0 E8BD8A F1A276 AAC3D5 A7B5CA AEBFCE B9E0E9 2A3748 111722 D5E0ED ABE6D9 8FC5F0 42536A A3AFBF",
-    "blue": "172D49 E9F1FB AEE0FF C5CAFF F5DFA1 EFADB8 B5D0F2 FFCE9A FFAC8A C4D8F0 BACCE6 BFCEE1 BBDDEF 33506F 14283D E1EFFC A4ECED BCD1FF 4B6D90 AEC4DA",
-    "brown": "392B22 F5E8DC F6D4A4 F3BFA4 FBD687 EDB5AA E4C0A5 F4CE9F F0A57B E3CDBA E7C4AC DBC1AD F7D3AA 624C3D 30241D F5E4D6 F6CD9C EFD5B9 705744 CFB39D",
-    "white1": "FFFCF8 293344 2C596D 3D5278 76511E 8B5361 536A82 74613E 92512B 526078 596B7C 536475 3D6B83 E4E8EB FAF7F2 293745 32566D 264D7D CAD7E0 4C6075",
-    "white2": "F5FAFF 23324A 285C95 554985 80571F 8F4A68 385779 65492F 8E4826 455876 50637F 4D607C 456FA4 D7E3F0 F0F7FF 23324A 215991 2E4B8C BED1E7 4C6280",
-    "white3": "F7FBF6 26372F 326D5A 365D71 78531B 884E58 466656 6E4E2C 874624 486358 4C6356 4E6258 477B65 DCE8DE F2F8F1 2C3D34 2E664D 245A5A C1D4CA 4B6759",
-    "nocolor": "FAFAFB 2E343B 2E343B 2E343B 555D66 626973 545B65 555D66 555D66 515961 515961 515961 566672 E1E5E9 F4F6F7 303740 404A55 38434F C9D1D9 59636F",
+    "black": "08090A C6C7C9 EF4242 898DF1 F1E663 EE5558 579AC4 F35C57 F35C57 87888B 98999C 87888B F1F2F4 2D2E31 F8F8FA 202124 D54141 315BC0 BEC0C5 737780",
+    "blue": "034280 BEBEBD 94D3E7 8080FA FCFB05 FC0405 3882AD FC0405 FC0405 BEBEBD BEBEBD BEBEBD 035DB7 030405 FCFBFA 030405 FC0405 0304FA BEBEBD 808080",
+    "brown": "A2A254 D3D2A8 804205 656505 FCFB05 FC0405 B85D05 FC0405 FC0405 D3D2A8 D3D2A8 D3D2A8 035DB7 030405 FCFBFA 030405 FC0405 0304FA BEBEBD 808080",
+    "white1": "FCFBFA 2A2B2B FC4242 8080FA C5D02F FC0405 3882AD FC0405 FC0405 2A2B2B 2A2B2B 2A2B2B D1D0D0 030405 FCFBFA 030405 FC0405 0304FA BEBEBD 808080",
+    "white2": "FCFBFA 2A2B2B 5C91DF 8080FA C5D02F FC0405 3882AD FC0405 FC0405 2A2B2B 2A2B2B 2A2B2B D1D0D0 030405 FCFBFA 030405 FC0405 0304FA BEBEBD 808080",
+    "white3": "FCFBFA 2A2B2B 030405 9F5105 C5D02F FC0405 3882AD FC0405 FC0405 2A2B2B 2A2B2B 2A2B2B FC0405 84A57B FCFBFA 030405 FC0405 0304FA BEBEBD 808080",
+    "nocolor": "FCFBFA 030405 030405 030405 C5D02F FC0405 030405 FC0405 FC0405 030405 030405 030405 D1D0D0 030405 FCFBFA 030405 FC0405 0304FA BEBEBD 808080",
 }
 # Existing extension slots remain grouped and sorted as before. The swatches
 # themselves belong to NDR and are authored in COLORREF rank order.
 PRESET_EXTENSION_SLOTS = {
     "black": (
-        ("D75F3A", "BAK TMP"),
-        ("C78D48", "CHM HLP"),
-        ("EFC961", "7Z ACE ALZ ARJ CAB EGG GZ ISO LZH RAR TAR ZIP"),
-        ("B6D668", "BAT CMD LNK PIF"),
-        ("EAAA72", "MID MP2 MP3 OGG WAV WMA"),
-        ("F2AB82", "ASF AVI K3G MKV MOV MP4 MPEG MPG RAM RM SKM SWF TP TS WMV"),
-        ("7BD28A", "EXE MSI"),
-        ("75C49A", "CAP DOC DOCX GAL GUL HWP PDF RTF TXT"),
-        ("A6BCAD", "CFG INF INI REG"),
-        ("7CB6CC", "PPT PPTX XLS XLSX"),
-        ("81B5E2", "AS ASP C CPP CS H HPP JS JSP PAS PHP PL VB"),
-        ("E0A7EE", "BMP GIF JPEG JPG PNG PSD PSP TIF WMF"),
-        ("C49CF5", "DLL SYS"),
-        ("A2B8FC", "HTM HTML URL"),
+        ("DF0405", "BAK TMP"),
+        ("804205", "CHM HLP"),
+        ("808005", "7Z ACE ALZ ARJ CAB EGG GZ ISO LZH RAR TAR ZIP"),
+        ("ECF020", "BAT CMD LNK PIF"),
+        ("D45B39", "MID MP2 MP3 OGG WAV WMA"),
+        ("FC8042", "ASF AVI K3G MKV MOV MP4 MPEG MPG RAM RM SKM SWF TP TS WMV"),
+        ("03FB42", "EXE MSI"),
+        ("418080", "CAP DOC DOCX GAL GUL HWP PDF RTF TXT"),
+        ("808080", "CFG INF INI REG"),
+        ("0E8AB3", "PPT PPTX XLS XLSX"),
+        ("60A6D8", "AS ASP C CPP CS H HPP JS JSP PAS PHP PL VB"),
+        ("D658E6", "BMP GIF JPEG JPG PNG PSD PSP TIF WMF"),
+        ("FC04FA", "DLL SYS"),
+        ("8080FA", "HTM HTML URL"),
     ),
     "blue": (
-        ("F07356", "BAK TMP"),
-        ("DF9A5E", "CHM HLP"),
-        ("F0BC67", "7Z ACE ALZ ARJ CAB EGG GZ ISO LZH RAR TAR ZIP"),
-        ("C6DB75", "BAT CMD LNK PIF"),
-        ("ECAE83", "MID MP2 MP3 OGG WAV WMA"),
-        ("BFDB96", "ASF AVI K3G MKV MOV MP4 MPEG MPG RAM RM SKM SWF TP TS WMV"),
-        ("F0B7A1", "EXE MSI"),
-        ("93DDB3", "CAP DOC DOCX GAL GUL HWP PDF RTF TXT"),
-        ("BBCBC6", "CFG INF INI REG"),
-        ("A8CCE1", "PPT PPTX XLS XLSX"),
-        ("8DCBEC", "BMP GIF JPEG JPG PNG PSD PSP TIF WMF"),
-        ("C6C6F5", "DLL SYS"),
-        ("E9BAF9", "HTM HTML URL"),
+        ("DF0405", "BAK TMP"),
+        ("804205", "CHM HLP"),
+        ("808005", "7Z ACE ALZ ARJ CAB EGG GZ ISO LZH RAR TAR ZIP"),
+        ("ECF020", "BAT CMD LNK PIF"),
+        ("D45B39", "MID MP2 MP3 OGG WAV WMA"),
+        ("FC8042", "ASF AVI K3G MKV MOV MP4 MPEG MPG RAM RM SKM SWF TP TS WMV"),
+        ("03FB42", "EXE MSI"),
+        ("418080", "CAP DOC DOCX GAL GUL HWP PDF RTF TXT"),
+        ("808080", "CFG INF INI REG"),
+        ("0E8AB3", "PPT PPTX XLS XLSX"),
+        ("D658E6", "BMP GIF JPEG JPG PNG PSD PSP TIF WMF"),
+        ("FC04FA", "DLL SYS"),
+        ("8080FA", "HTM HTML URL"),
     ),
     "brown": (
-        ("ED8863", "ASF AVI K3G MKV MOV MP4 MPEG MPG RAM RM SKM SWF TP TS WMV"),
-        ("F2A276", "CHM HLP"),
-        ("D8BC7B", "7Z ACE ALZ ARJ CAB EGG GZ ISO LZH RAR TAR ZIP"),
-        ("F2CD82", "BAT CMD LNK PIF"),
-        ("E7B88B", "MID MP2 MP3 MWA OGG WAV"),
-        ("C5D693", "EXE MSI"),
-        ("EAC5A8", "BAK TMP"),
-        ("C6D9B3", "CAP DOC DOCX GAL GUL HWP PDF RTF TXT"),
-        ("F1C2C6", "CFG INF INI REG"),
-        ("D2D4D2", "PPT XLS"),
-        ("BFD4E0", "DLL SYS"),
-        ("E2C9ED", "BMP GIF JPEG JPG PNG PSD PSP TIF WMF"),
-        ("CFDDF4", "HTM HTML URL"),
+        ("A73805", "ASF AVI K3G MKV MOV MP4 MPEG MPG RAM RM SKM SWF TP TS WMV"),
+        ("804205", "CHM HLP"),
+        ("808005", "7Z ACE ALZ ARJ CAB EGG GZ ISO LZH RAR TAR ZIP"),
+        ("ECF020", "BAT CMD LNK PIF"),
+        ("BE4A2A", "MID MP2 MP3 MWA OGG WAV"),
+        ("039A2A", "EXE MSI"),
+        ("D6D268", "BAK TMP"),
+        ("418080", "CAP DOC DOCX GAL GUL HWP PDF RTF TXT"),
+        ("808080", "CFG INF INI REG"),
+        ("0E8AB3", "PPT XLS"),
+        ("BA04B9", "DLL SYS"),
+        ("C71FDD", "BMP GIF JPEG JPG PNG PSD PSP TIF WMF"),
+        ("8080FA", "HTM HTML URL"),
     ),
     "nocolor": (
     ),
     "white1": (
-        ("823A24", "BAK TMP"),
-        ("855835", "CHM HLP"),
-        ("785136", "7Z ACE ALZ ARJ CAB EGG GZ ISO LZH RAR TAR ZIP"),
-        ("67583F", "BAT CMD LNK PIF"),
-        ("8D5B48", "MID MP2 MP3 OGG WAV WMA"),
-        ("7A5E56", "ASF AVI K3G MKV MOV MP4 MPEG MPG RAM RM SKM SWF TP TS WMV"),
-        ("35605C", "EXE MSI"),
-        ("92686B", "CAP DOC DOCX GAL GUL HWP PDF RTF TXT"),
-        ("36707E", "CFG INF INI REG"),
-        ("5E6B8C", "PPT PPTX XLS XLSX"),
-        ("585198", "DLL SYS"),
-        ("355E9F", "AI BMP GIF JPEG JPG PNG PSD PSP TIF WMF"),
-        ("584FA9", "HTM HTML URL"),
+        ("DF0405", "BAK TMP"),
+        ("804205", "CHM HLP"),
+        ("808005", "7Z ACE ALZ ARJ CAB EGG GZ ISO LZH RAR TAR ZIP"),
+        ("CDC925", "BAT CMD LNK PIF"),
+        ("D45B39", "MID MP2 MP3 OGG WAV WMA"),
+        ("FC8042", "ASF AVI K3G MKV MOV MP4 MPEG MPG RAM RM SKM SWF TP TS WMV"),
+        ("03DA70", "EXE MSI"),
+        ("418080", "CAP DOC DOCX GAL GUL HWP PDF RTF TXT"),
+        ("808080", "CFG INF INI REG"),
+        ("0E8AB3", "PPT PPTX XLS XLSX"),
+        ("D813D2", "DLL SYS"),
+        ("D658E6", "AI BMP GIF JPEG JPG PNG PSD PSP TIF WMF"),
+        ("8080FA", "HTM HTML URL"),
     ),
     "white2": (
-        ("85422B", "BAK TMP"),
-        ("6A5C3C", "CHM HLP"),
-        ("735942", "7Z ACE ALZ ARJ CAB EGG GZ ISO LZH RAR TAR ZIP"),
-        ("536948", "BAT CMD LNK PIF"),
-        ("9B594D", "MID MP2 MP3 OGG WAV WMA"),
-        ("45625B", "ASF AVI K3G MKV MOV MP4 MPEG MPG RAM RM SKM SWF TP TS WMV"),
-        ("3A6568", "EXE MSI"),
-        ("5E6872", "CAP DOC DOCX GAL GUL HWP PDF RTF TXT"),
-        ("416B83", "CFG INF INI REG"),
-        ("506895", "PPT PPTX XLS XLSX"),
-        ("465396", "DLL SYS"),
-        ("59489D", "AI BMP GIF JPEG JPG PNG PSD PSP TIF WMF"),
-        ("5964AC", "HTM HTML URL"),
+        ("DF0405", "BAK TMP"),
+        ("804205", "CHM HLP"),
+        ("808005", "7Z ACE ALZ ARJ CAB EGG GZ ISO LZH RAR TAR ZIP"),
+        ("CDC925", "BAT CMD LNK PIF"),
+        ("D45B39", "MID MP2 MP3 OGG WAV WMA"),
+        ("FC8042", "ASF AVI K3G MKV MOV MP4 MPEG MPG RAM RM SKM SWF TP TS WMV"),
+        ("03DA70", "EXE MSI"),
+        ("418080", "CAP DOC DOCX GAL GUL HWP PDF RTF TXT"),
+        ("808080", "CFG INF INI REG"),
+        ("0E8AB3", "PPT PPTX XLS XLSX"),
+        ("D813D2", "DLL SYS"),
+        ("D658E6", "AI BMP GIF JPEG JPG PNG PSD PSP TIF WMF"),
+        ("8080FA", "HTM HTML URL"),
     ),
     "white3": (
-        ("85442C", "MID MP2 MP3 OGG WAV WMA"),
-        ("80613B", "BAK TMP"),
-        ("646442", "CHM HLP"),
-        ("546454", "ASF AVI BMP GIF JPEG JPG K3G MKV MOV MP4 MPEG MPG PNG PSD PSP RAM RM SKM SWF TIF TP TS WMF WMV"),
-        ("746365", "BAT CMD LNK PIF"),
-        ("586970", "EXE MSI"),
-        ("3F687C", "CFG DLL INF INI REG SYS"),
-        ("576A85", "CAP DOC DOCX GAL GUL HWP PDF RTF TXT"),
-        ("4B668D", "7Z ACE ALZ ARJ CAB EGG GZ ISO LZH RAR TAR ZIP"),
-        ("56669A", "PPT PPTX XLS XLSX"),
-        ("56579F", "COM"),
-        ("5753AD", "HTM HTML URL"),
+        ("030405", "MID MP2 MP3 OGG WAV WMA"),
+        ("DF0405", "BAK TMP"),
+        ("804205", "CHM HLP"),
+        ("038005", "ASF AVI BMP GIF JPEG JPG K3G MKV MOV MP4 MPEG MPG PNG PSD PSP RAM RM SKM SWF TIF TP TS WMF WMV"),
+        ("969605", "BAT CMD LNK PIF"),
+        ("03B905", "EXE MSI"),
+        ("808080", "CFG DLL INF INI REG SYS"),
+        ("039696", "CAP DOC DOCX GAL GUL HWP PDF RTF TXT"),
+        ("A504A4", "7Z ACE ALZ ARJ CAB EGG GZ ISO LZH RAR TAR ZIP"),
+        ("0E8AB3", "PPT PPTX XLS XLSX"),
+        ("03BDBD", "COM"),
+        ("8080FA", "HTM HTML URL"),
     ),
 }
 
@@ -481,8 +497,12 @@ def complete():
 
 
 if __name__ == "__main__":
-    for name, conf in SKINS.items():
-        create_skin(name, conf)
+    for name in ("classic", "black", "cyan", "github"):
+        create_skin(name, SKINS[name])
+    # Both themes intentionally share the Classic 20px glyph artwork.
+    toolbar = (RES / "Skins/classic/toolbar-icons.png").read_bytes()
+    for theme in ("black", "cyan", "github"):
+        (RES / "Skins" / theme / "toolbar-icons.png").write_bytes(toolbar)
     colors()
     macro_glyphs()
     complete()

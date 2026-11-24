@@ -781,9 +781,9 @@ pub fn import_ini(path: &Path) -> Result<Settings, String> {
         .to_lowercase()
         .as_str()
     {
-        "black" => "Black",
+        "black" | "nexus" => "Nexus",
         "classic" => "Classic",
-        "gray" | "grey" => "Black",
+        "gray" | "grey" => "Nexus",
         "white" | "light" => "Light",
         "system" => "System",
         _ => "Dark",

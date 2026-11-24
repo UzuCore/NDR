@@ -283,7 +283,7 @@ impl App {
         let _ = (self.shell_runner)(Path::new(program), arguments, &directory);
     }
     pub(super) fn apply_preferences(&mut self, ctx: &egui::Context) {
-        let theme = self.settings.text("Theme", "Black");
+        let theme = self.settings.text("Theme", ndr::styles::DEFAULT_THEME);
         // Skin base color table -> skin colors -> color table.
         let palette = super::system_commands::theme_palette(&theme);
         self.dark = palette.dark();

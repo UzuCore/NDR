@@ -1362,7 +1362,8 @@ impl App {
         let nexus_colors = self.settings.flag("UseNexusFileColorMap", false)
             .then(|| self.settings.values.get("NexusFileColorMapValues").and_then(|value| value.as_object()))
             .flatten();
-        let color = |entry: &Entry| ndr::listing::color_sort_key(entry, extension_colors, nexus_colors);
+        let theme = self.settings.text("Theme", ndr::styles::DEFAULT_THEME);
+        let color = |entry: &Entry| ndr::listing::color_sort_key_with_palette(entry, extension_colors, nexus_colors, &theme);
         let pane = &mut self.panes[index];
         // At a drive's top-level folder, the appended drive and '..' both
         // target the drive root. Preserve the row's role as well as its path.

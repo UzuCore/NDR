@@ -134,7 +134,7 @@ pub(super) enum FolderTreeAction {
 fn color_of(settings: &ndr::settings::Settings, key: &str) -> Color32 {
     let text = settings.values.get("NexusFileColorMapValues").and_then(|m| m.get(key)).and_then(|v| v.as_str());
     let rgba = text.and_then(ndr::styles::parse_color)
-        .or_else(|| ndr::styles::default_element_color(key).and_then(ndr::styles::parse_color))
+        .or_else(|| ndr::styles::theme_element_color(&settings.text("Theme", ndr::styles::DEFAULT_THEME), key).and_then(ndr::styles::parse_color))
         .unwrap_or([0, 0, 0, 255]);
     Color32::from_rgb(rgba[0], rgba[1], rgba[2])
 }

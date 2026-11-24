@@ -715,7 +715,7 @@ pub struct App {
     file_icon_failed_at: HashMap<String, Instant>,
     /// The dimmed icon of the original TNXShellImageList.Draw (0x7b8ebc) (ILD_BLEND50, blend color white): one per icon image.
     ghost_icons: HashMap<egui::TextureId, egui::TextureHandle>,
-    /// The original skin (conf.ini) of the current theme - (theme name, skin). None if not Black/Classic.
+    /// The bundled skin (conf.ini) of the current theme - (theme name, skin). None if not Nexus/Classic.
     skin_cache: Option<(String, Option<ndr::styles::Skin>)>,
     /// Subfolder list opened from the skin address bar: (panel, folder, whether it is a drive list, position).
     skin_crumb_menu: Option<(usize, PathBuf, bool, egui::Pos2)>,
@@ -945,7 +945,7 @@ impl App {
         // The double-click interval follows the Windows setting (GetDoubleClickTime, default 500ms).
         let (double_ms, _, _) = native::double_click_metrics();
         ctx.options_mut(|o| o.input_options.max_double_click_delay = double_ms as f64 / 1000.0);
-        let palette = system_commands::theme_palette(&settings.text("Theme", "Black"));
+        let palette = system_commands::theme_palette(&settings.text("Theme", ndr::styles::DEFAULT_THEME));
         let dark = palette.dark();
         ctx.set_theme(palette.egui_theme());
         ctx.set_visuals(system_commands::palette_visuals(&palette));
@@ -1201,7 +1201,7 @@ impl App {
                 .set_flag(&format!("{name}ShowHiddenFiles"), self.panes[i].show_hidden);
         }
         self.settings.set_text("Language", &self.language);
-        // Theme stays the raw setting value (Dark/Light/System/Black/Classic). self.dark is only its result.
+        // Theme and operating-system appearance are independent.
         self.settings.set_flag("DualPaneMode", self.dual);
         let any_tree = self.settings.flag("ShowLeftFolderTree", false) || self.settings.flag("ShowRightFolderTree", false);
         self.settings.set_flag("ShowFolderTree", any_tree);

@@ -1459,7 +1459,7 @@ impl App {
             .and_then(|map| map.get(key))
             .and_then(|v| v.as_str())
             .and_then(ndr::styles::parse_color)
-            .or_else(|| ndr::styles::default_element_color(key).and_then(ndr::styles::parse_color))
+            .or_else(|| ndr::styles::theme_element_color(&self.settings.text("Theme", ndr::styles::DEFAULT_THEME), key).and_then(ndr::styles::parse_color))
             .map(|[r, g, b, _]| Color32::from_rgb(r, g, b))
             .unwrap_or(Color32::BLACK)
     }

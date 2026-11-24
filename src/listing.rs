@@ -610,26 +610,30 @@ pub fn original_item_color(entry: &Entry, extension_colors: Option<&serde_json::
 /// NDR classification colors used to initialize new profiles. Existing profile
 /// maps are kept, including overrides and intentional empty maps.
 pub const DEFAULT_EXTENSION_COLORS: &[(&str, &[&str])] = &[
-    ("#D75F3A", &["bak", "tmp"]),
-    ("#E0A7EE", &["bmp", "gif", "jpeg", "jpg", "png", "psd", "psp", "tif", "wmf"]),
-    ("#75C49A", &["cap", "doc", "docx", "gal", "gul", "hwp", "pdf", "rtf", "txt"]),
-    ("#A6BCAD", &["cfg", "inf", "ini", "reg"]),
-    ("#C78D48", &["chm", "hlp"]),
-    ("#C49CF5", &["dll", "sys"]),
-    ("#A2B8FC", &["htm", "html", "url"]),
-    ("#F2AB82", &["asf", "avi", "mov", "mpeg", "mpg", "ram", "rm", "wmv", "mp4", "mkv", "swf", "tp", "ts"]),
-    ("#B6D668", &["bat", "lnk", "pif", "cmd"]),
-    ("#7BD28A", &["exe", "msi"]),
-    ("#EAAA72", &["mid", "mp2", "mp3", "wav", "ogg", "wma"]),
-    ("#7CB6CC", &["ppt", "xls", "xlsx", "pptx"]),
-    ("#81B5E2", &["c", "cpp", "as", "php", "asp", "pas", "vb", "cs", "jsp", "js", "pl", "h", "hpp"]),
-    ("#EFC961", &["ace", "alz", "arj", "cab", "gz", "lzh", "rar", "tar", "zip", "7z", "iso", "egg"]),
+    ("#DF0405", &["bak", "tmp"]),
+    ("#D658E6", &["bmp", "gif", "jpeg", "jpg", "png", "psd", "psp", "tif", "wmf"]),
+    ("#418080", &["cap", "doc", "docx", "gal", "gul", "hwp", "pdf", "rtf", "txt"]),
+    ("#808080", &["cfg", "inf", "ini", "reg"]),
+    ("#804205", &["chm", "hlp"]),
+    ("#FC04FA", &["dll", "sys"]),
+    ("#8080FA", &["htm", "html", "url"]),
+    ("#FC8042", &["asf", "avi", "mov", "mpeg", "mpg", "ram", "rm", "wmv", "mp4", "mkv", "swf", "tp", "ts"]),
+    ("#ECF020", &["bat", "lnk", "pif", "cmd"]),
+    ("#03FB42", &["exe", "msi"]),
+    ("#D45B39", &["mid", "mp2", "mp3", "wav", "ogg", "wma"]),
+    ("#0E8AB3", &["ppt", "xls", "xlsx", "pptx"]),
+    ("#60A6D8", &["c", "cpp", "as", "php", "asp", "pas", "vb", "cs", "jsp", "js", "pl", "h", "hpp"]),
+    ("#808005", &["ace", "alz", "arj", "cab", "gz", "lzh", "rar", "tar", "zip", "7z", "iso", "egg"]),
 ];
 
 /// TryGetTColorSortKey: "RRGGBB" -> Delphi TColor (0x00BBGGRR). Color sorting puts colors equal to the default text color, or missing colors, last.
 pub fn color_sort_key(entry: &Entry, extension_colors: Option<&serde_json::Map<String, Value>>, nexus_colors: Option<&serde_json::Map<String, Value>>) -> u32 {
+    color_sort_key_with_palette(entry, extension_colors, nexus_colors, "Nexus")
+}
+
+pub fn color_sort_key_with_palette(entry: &Entry, extension_colors: Option<&serde_json::Map<String, Value>>, nexus_colors: Option<&serde_json::Map<String, Value>>, theme: &str) -> u32 {
     let tcolor = |value: Option<&str>| value.and_then(hex_color).map(|(r, g, b)| (u32::from(b) << 16) | (u32::from(g) << 8) | u32::from(r));
-    let element = |key: &str| lookup(nexus_colors, key).filter(|v| hex_color(v).is_some()).or_else(|| crate::styles::default_element_color(key));
+    let element = |key: &str| lookup(nexus_colors, key).filter(|v| hex_color(v).is_some()).or_else(|| crate::styles::theme_element_color(theme, key));
     if entry.is_dir {
         return tcolor(element("NXFOLDER")).unwrap_or(u32::MAX);
     }
@@ -1004,6 +1008,6 @@ mod tests {
         assert_eq!(entry_color(&entry("a.doc", false, 0, 0), Some(&ext), Some(&nexus)), Some((0xC0, 0xC0, 0xC0)), "NXFORE fallback");
         assert_eq!(color_sort_key(&entry("a.txt", false, 0, 0), Some(&ext), None), 0x332211);
         assert_eq!(color_sort_key(&entry("a.doc", false, 0, 0), Some(&ext), None), u32::MAX);
-        assert_eq!(color_sort_key(&entry("dir", true, 0, 0), None, None), 0xCFDD8E, "default NXFOLDER");
+        assert_eq!(color_sort_key(&entry("dir", true, 0, 0), None, None), 0x4242EF, "default NXFOLDER");
     }
 }

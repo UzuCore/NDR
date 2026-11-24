@@ -469,9 +469,9 @@ fn title_bar_follows_skin_with_opposite_system_theme() {
     let (root, ctx, mut app) = fixture("title-bar-skin", "en");
     app.hwnd = hwnd.0 as isize;
     for (skin, expected, system, background, via_settings) in [
-        ("Black", egui::Theme::Dark, egui::Theme::Light, 0x0033_2920, false),
-        ("Classic", egui::Theme::Light, egui::Theme::Dark, 0x00F3_E9E1, true),
-        ("Black", egui::Theme::Dark, egui::Theme::Light, 0x0033_2920, false),
+        ("Black", egui::Theme::Dark, egui::Theme::Light, 0x002E_2C2B, false),
+        ("Classic", egui::Theme::Light, egui::Theme::Dark, 0x00ED_EBEB, true),
+        ("Black", egui::Theme::Dark, egui::Theme::Light, 0x002E_2C2B, false),
     ] {
         let input = egui::RawInput { system_theme: Some(system), ..Default::default() };
         let output = ctx.run(input, |ctx| {
@@ -496,7 +496,7 @@ fn title_bar_follows_skin_with_opposite_system_theme() {
                 |cmd| matches!(cmd, egui::ViewportCommand::SetTheme(theme) if *theme == native_theme)
             ));
         }
-        assert_eq!(app.settings.text("Theme", ""), skin);
+        assert_eq!(app.settings.text("Theme", ""), ndr::styles::canonical_theme_name(skin));
     }
     app.hwnd = 0;
     fs::remove_dir_all(root).unwrap();

@@ -510,7 +510,8 @@ impl App {
                 // Original FUN_0043e580: one item per folder under skin\, the current skin checked. Clicking runs FUN_0043e510 (apply that skin).
                 let raw = self.raw_menu("miSkin", if ko { "&N. 스킨" } else { "&N. Skin" });
                 let names = self.skin_names();
-                let current = self.settings.text("Theme", "Black");
+                let saved = self.settings.text("Theme", ndr::styles::DEFAULT_THEME);
+                let current = ndr::styles::canonical_theme_name(&saved);
                 let mut chosen = None;
                 self.access_submenu(ui, &raw, |_, ui| {
                     for name in &names {

@@ -1,7 +1,7 @@
 use serde_json::{Map, Value};
 use std::path::Path;
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 5;
+pub const CURRENT_SCHEMA_VERSION: i64 = 6;
 
 /// Default file list (pane) font size (ListFontSize, pixels). User decision: 16 px (the original default\nexusfile.ini has "Segoe UI",9 = 12 px).
 pub const DEFAULT_LIST_FONT_PIXELS: f64 = 16.;
@@ -161,20 +161,9 @@ impl Settings {
             self.set_flag("UseNexusFileColorMap", true);
             self.set_text("Theme", "Dark");
         }
-        // Original default [Window] skin=black (default\nexusfile.ini): the initial theme is Black. The C# default Dark from before schema 4 also moves to Black once.
-        if original_schema < 4 && self.text("Theme", "Dark").eq_ignore_ascii_case("Dark") {
-            self.set_text("Theme", "Black");
-        }
-        // Themes are only the original skins (black, classic). Old C# themes (Dark, Light, System) or unknown names become the original default Black.
-        let theme = self.text("Theme", "Black");
-        self.set_text(
-            "Theme",
-            if matches!(theme.as_str(), "Black" | "Classic") {
-                theme.as_str()
-            } else {
-                "Black"
-            },
-        );
+        // The existing black resource directory keeps older updater installs compatible.
+        let theme = self.text("Theme", crate::styles::DEFAULT_THEME);
+        self.set_text("Theme", crate::styles::canonical_theme_name(&theme));
         let language = self.text("Language", "ko");
         self.set_text(
             "Language",
@@ -318,8 +307,12 @@ impl Settings {
                 self.values.insert(key.into(), json!({}));
             }
         }
-        // Fill the NDR defaults on first migration only; never replace an existing color map.
-        if original_schema < 4 && self.values.get("ExtensionColors").and_then(Value::as_object).is_some_and(|m| m.is_empty()) {
+        // Replace only build-16's complete built-in set; customized or
+        // deliberately empty color maps keep every saved value.
+        let extensions = self.values.get("ExtensionColors").and_then(Value::as_object);
+        if (original_schema < 4 && extensions.is_some_and(Map::is_empty))
+            || (original_schema < 6 && extensions.is_some_and(is_build16_default_palette))
+        {
             let colors: Map<String, Value> = crate::listing::DEFAULT_EXTENSION_COLORS
                 .iter()
                 .flat_map(|(color, extensions)| extensions.iter().map(move |e| (format!(".{e}"), json!(color))))
@@ -517,8 +510,47 @@ fn replace_file(source: &Path, destination: &Path) -> std::io::Result<()> {
     std::fs::rename(source, destination)
 }
 
+// The build-16 defaults used the same extension groups in this order.
+const BUILD16_EXTENSION_SWATCHES: [&str; 14] = [
+    "#D75F3A", "#E0A7EE", "#75C49A", "#A6BCAD", "#C78D48", "#C49CF5", "#A2B8FC",
+    "#F2AB82", "#B6D668", "#7BD28A", "#EAAA72", "#7CB6CC", "#81B5E2", "#EFC961",
+];
+
+fn is_build16_default_palette(map: &Map<String, Value>) -> bool {
+    let groups = crate::listing::DEFAULT_EXTENSION_COLORS;
+    groups.len() == BUILD16_EXTENSION_SWATCHES.len()
+        && map.len() == groups.iter().map(|(_, extensions)| extensions.len()).sum::<usize>()
+        && groups.iter().zip(BUILD16_EXTENSION_SWATCHES).all(|((_, extensions), color)| {
+            extensions.iter().all(|ext| {
+                map.get(&format!(".{ext}")).and_then(Value::as_str) == Some(color)
+            })
+        })
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn nexus_migrates_only_the_complete_unedited_build16_swatch_set() {
+        let build16: Map<String, Value> = crate::listing::DEFAULT_EXTENSION_COLORS.iter()
+            .zip(BUILD16_EXTENSION_SWATCHES)
+            .flat_map(|((_, extensions), color)| extensions.iter().map(move |ext| (format!(".{ext}"), serde_json::json!(color))))
+            .collect();
+        let mut stock = Settings::default();
+        stock.values.insert("SchemaVersion".into(), serde_json::json!(5));
+        stock.set_text("Theme", "Black");
+        stock.values.insert("ExtensionColors".into(), Value::Object(build16.clone()));
+        stock.normalize();
+        assert_eq!(stock.text("Theme", ""), "Nexus");
+        assert_ne!(stock.values["ExtensionColors"], Value::Object(build16.clone()));
+        let mut customized = build16;
+        customized.insert(".jpg".into(), serde_json::json!("#221144"));
+        let mut profile = Settings::default();
+        profile.values.insert("SchemaVersion".into(), serde_json::json!(5));
+        profile.values.insert("ExtensionColors".into(), Value::Object(customized.clone()));
+        profile.normalize();
+        assert_eq!(profile.values["ExtensionColors"], Value::Object(customized));
+    }
+
     use super::*;
     #[test]
     fn unknown_fields_survive_save_and_malformed_input_is_reported() {
@@ -569,11 +601,11 @@ mod tests {
     }
     #[test]
     fn defaults_follow_the_original_default_ini_and_color_map() {
-        // Original default\nexusfile.ini skin=black, default\nexusfile.col [Ext].
+        // New profiles use the GitHub theme and the standard NDR file categories.
         let fresh = Settings::default();
-        assert_eq!(fresh.text("Theme", ""), "Black");
-        assert_eq!(fresh.values["ExtensionColors"][".zip"], "#EFC961");
-        assert_eq!(fresh.values["ExtensionColors"][".jpg"], "#E0A7EE");
+        assert_eq!(fresh.text("Theme", ""), "GitHub");
+        assert_eq!(fresh.values["ExtensionColors"][".zip"], "#808005");
+        assert_eq!(fresh.values["ExtensionColors"][".jpg"], "#D658E6");
         assert_eq!(fresh.values["ExtensionColors"].as_object().unwrap().len(), 85);
         // Default pane (file list) font 16 px. Original points (MulDiv(size, 96, 72)): 12pt = 16px, 9pt = 12px.
         assert_eq!(fresh.values["ListFontSize"].as_f64(), Some(16.0));
@@ -582,12 +614,12 @@ mod tests {
         // The C# default Dark from before schema 4 becomes Black once; extension colors the user chose stay.
         let mut old = Settings { values: serde_json::from_value(serde_json::json!({"SchemaVersion": 3, "Theme": "Dark", "ExtensionColors": {".txt": "#112233"}})).unwrap() };
         old.normalize();
-        assert_eq!(old.text("Theme", ""), "Black");
+        assert_eq!(old.text("Theme", ""), "Nexus");
         assert_eq!(old.values["ExtensionColors"], serde_json::json!({".txt": "#112233"}));
         // Themes are only original skins: a previously chosen C# theme Dark becomes Black too. Emptied extension colors stay empty.
         let mut chosen = Settings { values: serde_json::from_value(serde_json::json!({"SchemaVersion": 4, "Theme": "Dark", "ExtensionColors": {}})).unwrap() };
         chosen.normalize();
-        assert_eq!(chosen.text("Theme", ""), "Black");
+        assert_eq!(chosen.text("Theme", ""), "Nexus");
         assert!(chosen.values["ExtensionColors"].as_object().unwrap().is_empty());
     }
     #[test]
@@ -612,7 +644,7 @@ mod tests {
         assert_eq!(settings.values["PathClickMode"], 1);
         assert_eq!(settings.values["EscapeKeyAction"], 0, "original default ini esckey=0 (minimize)");
         assert!(settings.flag("UseNexusFileColorMap", false));
-        assert_eq!(settings.text("Theme", ""), "Black");
+        assert_eq!(settings.text("Theme", ""), "Nexus");
         assert!(!settings.flag("UseLogicalSort", true));
         assert!(settings.flag("LogicalSort", false));
         assert_eq!(settings.values["Future"]["Keep"], serde_json::json!([1, 2]));

@@ -674,7 +674,7 @@ fn original_quick_search_follows_the_file_list_view() {
     assert_eq!(original_quick_search(&names, 3, "", true), Some(0), "empty text = item 0");
 
     let (root, ctx, mut app) = fixture("original-quicksearch", "ko");
-    assert!(app.current_skin().is_some(), "the default theme is the Black skin");
+    assert!(app.current_skin().is_some(), "the default theme has a bundled skin");
     app.panes[0].cursor = index_of(&app, "folder1");
     type_text(&mut app, &ctx, "a");
     let first = cursor_name(&app);

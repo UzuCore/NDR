@@ -4,6 +4,30 @@ use std::{
     path::{Path, PathBuf},
 };
 pub type Rgba = [u8; 4];
+
+pub const DEFAULT_THEME: &str = "GitHub";
+pub const THEMES: [&str; 4] = ["GitHub", "Nexus", "Classic", "Cyan"];
+
+/// Black is the prior name of Nexus and still uses its existing resource path.
+pub fn canonical_theme_name(value: &str) -> &'static str {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "classic" => "Classic",
+        "cyan" => "Cyan",
+        "black" | "nexus" | "dark" | "gray" | "grey" => "Nexus",
+        _ => DEFAULT_THEME,
+    }
+}
+
+pub fn theme_skin_directory(theme: &str) -> Option<&'static str> {
+    match theme.trim().to_ascii_lowercase().as_str() {
+        "github" => Some("github"),
+        "black" | "nexus" => Some("black"),
+        "classic" => Some("classic"),
+        "cyan" => Some("cyan"),
+        _ => None,
+    }
+}
+
 /// Six-digit RGB or WPF-compatible eight-digit ARGB, returned as RGBA.
 /// Original RGBStrToColor (0x7d1fa8): only a 6-character value is read, each pair through StrToIntExW hex (FUN_007d21b4); anything else keeps
 /// the default. ColorToRGBStr (0x7d2100) writes "%02X%02X%02X" (`rgb_hex`).
@@ -26,30 +50,44 @@ pub fn parse_color(text: &str) -> Option<Rgba> {
 }
 /// NDR palette defaults (14 file-list roles, then six folder-tree roles).
 pub const DEFAULT_ELEMENTS: &[(&str, &str)] = &[
-    ("NXBACK", "151B24"),
-    ("NXFORE", "DBE4EE"),
-    ("NXFOLDER", "8EDDCF"),
-    ("NXDRIVE", "AEC9FB"),
-    ("NXREADONLY", "F3CF7D"),
-    ("NXHIDDEN", "DB9EA2"),
-    ("NXDESC", "A9BBD0"),
-    ("NXMB", "E8BD8A"),
-    ("NXGB", "F1A276"),
-    ("NXSIZE", "AAC3D5"),
-    ("NXTIME", "A7B5CA"),
-    ("NXATTR", "AEBFCE"),
-    ("NXSELECT", "B9E0E9"),
-    ("NXLINE", "2A3748"),
-    ("NXTBACK", "111722"),
-    ("NXTFORE", "D5E0ED"),
-    ("NXTOPENED", "ABE6D9"),
-    ("NXTFOCUSED", "8FC5F0"),
-    ("NXTLINE", "42536A"),
-    ("NXTHINT", "A3AFBF"),
+    ("NXBACK", "08090A"),
+    ("NXFORE", "C6C7C9"),
+    ("NXFOLDER", "EF4242"),
+    ("NXDRIVE", "898DF1"),
+    ("NXREADONLY", "F1E663"),
+    ("NXHIDDEN", "EE5558"),
+    ("NXDESC", "579AC4"),
+    ("NXMB", "F35C57"),
+    ("NXGB", "F35C57"),
+    ("NXSIZE", "87888B"),
+    ("NXTIME", "98999C"),
+    ("NXATTR", "87888B"),
+    ("NXSELECT", "F1F2F4"),
+    ("NXLINE", "2D2E31"),
+    ("NXTBACK", "F8F8FA"),
+    ("NXTFORE", "202124"),
+    ("NXTOPENED", "D54141"),
+    ("NXTFOCUSED", "315BC0"),
+    ("NXTLINE", "BEC0C5"),
+    ("NXTHINT", "737780"),
 ];
 
 pub fn default_element_color(key: &str) -> Option<&'static str> {
     DEFAULT_ELEMENTS.iter().find(|(name, _)| name.eq_ignore_ascii_case(key)).map(|(_, value)| *value)
+}
+
+const CYAN_ELEMENTS: [&str; 20] = ["151B24", "DBE4EE", "8EDDCF", "AEC9FB", "F3CF7D", "DB9EA2", "A9BBD0", "E8BD8A", "F1A276", "AAC3D5", "A7B5CA", "AEBFCE", "B9E0E9", "2A3748", "111722", "D5E0ED", "ABE6D9", "8FC5F0", "42536A", "A3AFBF"];
+const GITHUB_ELEMENTS: [&str; 20] = ["0D1117", "E6EDF3", "80BBFA", "79C0FF", "E3B341", "F28B82", "9AC4EC", "FFAB70", "FF7B72", "9DA9B5", "9DA9B5", "9DA9B5", "B6D8FF", "30363D", "0D1117", "E6EDF3", "80BBFA", "79C0FF", "46515E", "A0ABB7"];
+
+/// Theme defaults are only used when a user override does not supply the role.
+pub fn theme_element_color(theme: &str, key: &str) -> Option<&'static str> {
+    let (index, (_, fallback)) = DEFAULT_ELEMENTS.iter().enumerate()
+        .find(|(_, (name, _))| name.eq_ignore_ascii_case(key))?;
+    Some(match canonical_theme_name(theme) {
+        "Cyan" => CYAN_ELEMENTS[index],
+        "GitHub" => GITHUB_ELEMENTS[index],
+        _ => fallback,
+    })
 }
 
 fn rgb_color_section(section: &str) -> bool {
@@ -220,13 +258,10 @@ pub struct Skin {
 }
 impl Skin {
     pub fn load(directory: &Path, theme: &str) -> Result<Self, String> {
-        let theme = theme.trim().to_ascii_lowercase();
-        let theme_name = match theme.as_str() {
-            "black" => "Black",
-            "classic" => "Classic",
-            _ => return Err(format!("No NDR skin for theme: {theme}")),
-        };
-        let directory = std::fs::canonicalize(directory.join(theme)).map_err(|e| e.to_string())?;
+        let skin_dir = theme_skin_directory(theme)
+            .ok_or_else(|| format!("No NDR skin for theme: {theme}"))?;
+        let theme_name = canonical_theme_name(theme);
+        let directory = std::fs::canonicalize(directory.join(skin_dir)).map_err(|e| e.to_string())?;
         let bytes = std::fs::read(directory.join("conf.ini")).map_err(|e| e.to_string())?;
         let text = crate::compat::decode(&bytes, false);
         let mut values = BTreeMap::new();
@@ -351,7 +386,7 @@ mod tests {
     use super::*;
     #[test]
     fn original_skin_bitmaps_decode() {
-        for (file, size) in [("toolbar_back.bmp", (8, 51)), ("btnbar_back.bmp", (8, 22)), ("btnbar_divider.bmp", (1, 14))] {
+        for (file, size) in [("toolbar_back.bmp", (8, 36)), ("btnbar_back.bmp", (8, 22)), ("btnbar_divider.bmp", (1, 14))] {
             let bytes = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/Resources/Skins/black/").to_owned() + file).unwrap();
             let (width, height, rgba) = decode_bmp(&bytes).unwrap();
             assert_eq!((width, height, rgba.len()), (size.0, size.1, size.0 * size.1 * 4), "{file}");
@@ -373,7 +408,7 @@ mod tests {
         assert!(map.extension("bad?").is_none());
         let reloaded = ColorMap::parse(&map.serialize()).unwrap();
         assert_eq!(reloaded.extension("TXT"), map.extension("txt"));
-        assert_eq!(map.element("NXSELECT"), Some([0xB9, 0xE0, 0xE9, 255]));
+        assert_eq!(map.element("NXSELECT"), Some([0xF1, 0xF2, 0xF4, 255]));
         assert!(ColorMap::parse("[Ext]\r\nTXT=broken\r\n").is_err());
     }
     /// The color maps bundled like the original <program folder>\colors (black, blue, brown, nocolor, white1-3) all load with their base colors.
@@ -395,8 +430,8 @@ mod tests {
         let plain = ColorMap::load(&dir.join("nocolor.col")).unwrap();
         assert_eq!(black.elements.len(), DEFAULT_ELEMENTS.len());
         assert_eq!(plain.elements.len(), DEFAULT_ELEMENTS.len());
-        assert_eq!(black.element("NXFOLDER"), Some([0x8E, 0xDD, 0xCF, 255]));
-        assert_eq!(black.extension(".JPG"), Some([0xE0, 0xA7, 0xEE, 255]));
+        assert_eq!(black.element("NXFOLDER"), Some([0xEF, 0x42, 0x42, 255]));
+        assert_eq!(black.extension(".JPG"), Some([0xD6, 0x58, 0xE6, 255]));
         assert!(plain.extensions.is_empty());
     }
 
@@ -421,8 +456,8 @@ mod tests {
             "Black",
         )
         .unwrap();
-        assert_eq!(skin.color("Menu", "mmainback"), Some([0x20, 0x29, 0x33, 255]));
-        assert_eq!(skin.positive_integer("Toolbar", "tbheight", 10), 51);
+        assert_eq!(skin.color("Menu", "mmainback"), Some([0x2B, 0x2C, 0x2E, 255]));
+        assert_eq!(skin.positive_integer("Toolbar", "tbheight", 10), 36);
         assert!(skin.asset("Toolbar", "tbbackimg").is_some());
     }
     #[test]

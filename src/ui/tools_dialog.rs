@@ -749,7 +749,7 @@ impl App {
         self.settings.normalize();
         self.profile_load_error = false;
         self.language = self.settings.text("Language", &self.language);
-        self.dark = self.settings.text("Theme", "Black") != "Light";
+        self.dark = self.settings.text("Theme", ndr::styles::DEFAULT_THEME) != "Light";
         self.dual = self.settings.flag("DualPaneMode", true);
         self.active = usize::from(self.dual && self.settings.flag("StartWithRightPaneActive", false));
         self.preferences_dirty = true;

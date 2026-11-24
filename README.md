@@ -134,6 +134,8 @@ legacy bilingual literal entries and merging new catalog keys.
 
 ## Bundled resources and compatibility
 
+New profiles start with GitHub. Nexus (formerly Black), Classic, and Cyan remain available; existing profiles keep their choice.
+
 NDR's bundled themes, color presets, completion cue, and UI strings are
 maintained as NDR resources. Its built-in toolbar and key bindings are defined
 in Rust; they do not require a separate toolbar file. Install or update the
