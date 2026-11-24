@@ -349,9 +349,9 @@ impl App {
         }
         let sources = self.selected_files();
         if sources.files.is_empty() {
-            return self.notice("체크섬을 계산할 파일을 선택하세요.", "Select the files to checksum.");
+            return self.system_box("", &self.language_pack.text("NDR.UI_TOOLS_CHECKSUM_SELECT", "Select the files to checksum."), MB_OK, |_, _, _| {});
         }
-        let base = self.tr("체크섬", "Checksum").into_owned();
+        let base = self.language_pack.text("NDR.UI_TOOLS_CHECKSUM_TITLE", "Checksum");
         let title = match algorithm {
             Some(a) => format!("{} {base}", a.label()),
             None => base,
@@ -424,12 +424,13 @@ impl App {
     pub(super) fn merge_text_files_command(&mut self) {
         let sources = self.selected_files();
         if sources.files.len() < 2 {
-            return self.warn("합칠 텍스트 파일을 둘 이상 선택하세요.", "Select at least two text files to merge.");
+            return self.warn_operation(&self.language_pack.text("NDR.UI_TOOLS_MERGE_SELECT", "Select at least two text files to merge."));
         }
         let folder = PathBuf::from(self.favorites_current());
-        let ko = self.language == "ko";
-        let title = self.tr("텍스트 파일 합치기", "Merge text files").into_owned();
-        let filters: [(&str, &str); 2] = if ko { [("텍스트 파일 (*.txt)", "*.txt"), ("모든 파일 (*.*)", "*.*")] } else { [("Text files (*.txt)", "*.txt"), ("All files (*.*)", "*.*")] };
+        let title = self.language_pack.text("NDR.UI_TOOLS_MERGE_TITLE", "Merge text files");
+        let filter_name = self.language_pack.text("NDR.UI_TOOLS_TEXT_FILTER", "Text files (*.txt)");
+        let all_files = self.language_pack.text("NDR.UI_TOOLS_ALL_FILES_FILTER", "All files (*.*)");
+        let filters = [(filter_name.as_str(), "*.txt"), (all_files.as_str(), "*.*")];
         let Some(output) = (self.save_dialog)(&title, Some(&folder), "merged.txt", &filters, "", true) else { return };
         if sources.archive.is_none() {
             let paths = sources.files.into_iter().map(|(_, p)| p).collect();
@@ -449,13 +450,15 @@ impl App {
         };
         let full = |p: &Path| std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf()).to_string_lossy().into_owned();
         if sources.iter().any(|p| ndr::names::equals_ignore_case(&full(p), &full(&output))) {
-            return self.warn("결과 파일을 입력 파일과 같은 경로에 저장할 수 없습니다.", "The result cannot be saved over one of the input files.");
+            return self.warn_operation(&self.language_pack.text("NDR.UI_TOOLS_MERGE_OVER_INPUT", "The result cannot be saved over one of the input files."));
         }
-        let ko = self.language == "ko";
-        let title = self.tr("파일 사이 줄바꿈", "Line breaks between files").into_owned();
-        let message = self.tr("각 파일 뒤에 구분 줄을 넣을까요?", "Add separator lines after each file?").into_owned();
-        let options = if ko { ["구분 없이 이어 붙이기", "줄바꿈 두 개 추가"] } else { ["Join without separators", "Add two line breaks"] };
-        self.choice_dialog(&title, &message, options.map(String::from).to_vec(), 0, move |app, choice, _| {
+        let title = self.language_pack.text("NDR.UI_TOOLS_MERGE_SEPARATOR_TITLE", "Line breaks between files");
+        let message = self.language_pack.text("NDR.UI_TOOLS_MERGE_SEPARATOR_PROMPT", "Add separator lines after each file?");
+        let options = vec![
+            self.language_pack.text("NDR.UI_TOOLS_MERGE_NO_SEPARATOR", "Join without separators"),
+            self.language_pack.text("NDR.UI_TOOLS_MERGE_LINEBREAK_SEPARATOR", "Add two line breaks"),
+        ];
+        self.choice_dialog(&title, &message, options, 0, move |app, choice, _| {
             let Some(choice) = choice else { return };
             let tx = app.async_tx.clone();
             thread::spawn(move || {
@@ -480,7 +483,7 @@ impl App {
         match outcome {
             Ok(()) => {
                 let n = ndr::parity::format_size(count as u64, "B", true).trim_end_matches(" B").to_owned();
-                self.status = if self.language == "ko" { format!("{n}개 텍스트 파일을 합쳤습니다.") } else { format!("Merged {n} text files.") };
+                self.status = super::file_commands::operation_format(&self.language_pack, "NDR.UI_TOOLS_MERGE_COMPLETED", "Merged {0} text files.", &[&n]);
                 self.refresh(self.active);
             }
             Err(error) => self.system_box("NDR", &error, MB_OK | ndr::msgbox::MB_ICONEXCLAMATION, |_, _, _| {}),
@@ -604,10 +607,10 @@ impl App {
 
     /// C# MapNetworkDriveAsync.
     pub(super) fn map_drive_command(&mut self) {
-        let ko = self.language == "ko";
-        let title = if ko { "네트워크 드라이브 연결" } else { "Connect network drive" };
-        let message = if ko { "사용할 드라이브 문자 (예: Z:)" } else { "Drive letter to use (e.g. Z:)" };
-        self.prompt(title, message, "Z:", None, false, move |app, letter, _| {
+        let title = self.language_pack.text("NDR.UI_TOOLS_NETWORK_CONNECT", "Connect network drive");
+        let message = self.language_pack.text("NDR.UI_TOOLS_NETWORK_DRIVE_LETTER", "Drive letter to use (e.g. Z:)");
+        let prompt_title = title.clone();
+        self.prompt(&title, &message, "Z:", None, false, move |app, letter, _| {
             let Some(letter) = letter else { return };
             let mut letter = letter.trim().trim_end_matches('\\').to_owned();
             if letter.chars().count() == 1 {
@@ -615,24 +618,21 @@ impl App {
             }
             let chars: Vec<char> = letter.chars().collect();
             if chars.len() != 2 || !chars[0].is_alphabetic() || chars[1] != ':' {
-                return app.warn("드라이브 문자는 Z: 형식으로 입력하세요.", "Enter the drive letter as Z:.");
+                return app.warn_operation(&app.language_pack.text("NDR.UI_TOOLS_NETWORK_INVALID_DRIVE", "Enter the drive letter as Z:."));
             }
             if native::drives().iter().any(|d| d.to_string_lossy().to_lowercase().starts_with(&letter.to_lowercase())) {
-                let (k, e) = (format!("{letter} 드라이브 문자는 이미 사용 중입니다."), format!("Drive letter {letter} is already in use."));
-                return app.warn(&k, &e);
+                let message = super::file_commands::operation_format(&app.language_pack, "NDR.UI_TOOLS_NETWORK_DRIVE_IN_USE", "Drive letter {0} is already in use.", &[&letter]);
+                return app.warn_operation(&message);
             }
-            let message = if app.language == "ko" { "공유 경로 (예: \\\\server\\share)" } else { "Share path (e.g. \\\\server\\share)" };
-            app.prompt(title, message, "", None, false, move |app, remote, _| {
+            let message = app.language_pack.text("NDR.UI_TOOLS_NETWORK_SHARE_PATH", "Share path (e.g. \\\\server\\share)");
+            app.prompt(&prompt_title, &message, "", None, false, move |app, remote, _| {
                 let Some(remote) = remote.filter(|r| !r.trim().is_empty() && r.starts_with("\\\\")) else { return };
-                let (caption, question) = if app.language == "ko" {
-                    ("네트워크 인증", "현재 Windows 계정으로 연결할까요?\n아니요를 선택하면 별도 계정 정보를 입력합니다.")
-                } else {
-                    ("Network authentication", "Connect with the current Windows account?\nChoose No to enter other credentials.")
-                };
-                app.system_box(caption, question, MB_YESNOCANCEL | MB_ICONQUESTION, move |app, answer, _| match answer {
+                let caption = app.language_pack.text("NDR.UI_TOOLS_NETWORK_AUTH_TITLE", "Network authentication");
+                let question = app.language_pack.text("NDR.UI_TOOLS_NETWORK_AUTH_QUESTION", "Connect with the current Windows account?\nChoose No to enter other credentials.");
+                app.system_box(&caption, &question, MB_YESNOCANCEL | MB_ICONQUESTION, move |app, answer, _| match answer {
                     IDYES => app.connect_drive(&letter, &remote, None),
                     IDNO => {
-                        let title = app.tr("네트워크 드라이브 인증", "Network drive credentials").into_owned();
+                        let title = app.language_pack.text("NDR.UI_TOOLS_NETWORK_CREDENTIALS", "Network drive credentials");
                         app.credentials_dialog(&title, move |app, credentials| {
                             if let Some(credentials) = credentials {
                                 app.connect_drive(&letter, &remote, Some(credentials));
@@ -665,15 +665,15 @@ impl App {
             None => (None, None),
         };
         if let Err((code, message)) = (self.system.add_connection)(letter, remote, user, password) {
-            let (k, e) = (format!("네트워크 드라이브 연결에 실패했습니다. Windows 오류 {code}: {message}"), format!("Could not connect the network drive. Windows error {code}: {message}"));
-            return self.warn(&k, &e);
+            let message = super::file_commands::operation_format(&self.language_pack, "NDR.UI_TOOLS_NETWORK_CONNECT_ERROR", "Could not connect the network drive. Windows error {0}: {1}", &[&code, &message]);
+            return self.warn_operation(&message);
         }
         // Original FUN_00435144: rereads only when the active pane is in local mode (0).
         super::panes::DriveListCache::invalidate(&self.drive_list);
         if self.panes[self.active].archive.is_none() && self.panes[self.active].remote.is_none() {
             self.refresh(self.active);
         }
-        self.status = if self.language == "ko" { format!("{letter} → {remote} 연결됨") } else { format!("{letter} → {remote} connected") };
+        self.status = super::file_commands::operation_format(&self.language_pack, "NDR.UI_TOOLS_NETWORK_CONNECTED", "{0} → {1} connected", &[&letter, &remote]);
     }
 
     /// Opens CredentialsWindow.
@@ -689,15 +689,15 @@ impl App {
     pub(super) fn unmap_drive_command(&mut self) {
         let mapped = (self.system.network_drives)();
         if mapped.is_empty() {
-            return self.notice("연결된 네트워크 드라이브가 없습니다.", "No network drives are connected.");
+            return self.system_box("", &self.language_pack.text("NDR.UI_TOOLS_NETWORK_NOT_CONNECTED", "No network drives are connected."), MB_OK, |_, _, _| {});
         }
-        let title = self.tr("네트워크 드라이브 연결 해제", "Disconnect network drive").into_owned();
-        let message = self.tr("연결을 해제할 드라이브를 고르세요.", "Choose the drive to disconnect.").into_owned();
+        let title = self.language_pack.text("NDR.UI_TOOLS_NETWORK_DISCONNECT", "Disconnect network drive");
+        let message = self.language_pack.text("NDR.UI_TOOLS_NETWORK_CHOOSE_DISCONNECT", "Choose the drive to disconnect.");
         self.choice_dialog(&title, &message, mapped.clone(), 0, move |app, choice, _| {
             let Some(selected) = choice.and_then(|c| mapped.get(c).cloned()) else { return };
             if let Err((code, message)) = (app.system.cancel_connection)(&selected) {
-                let (k, e) = (format!("네트워크 드라이브 연결 해제에 실패했습니다. Windows 오류 {code}: {message}"), format!("Could not disconnect the network drive. Windows error {code}: {message}"));
-                return app.warn(&k, &e);
+                let message = super::file_commands::operation_format(&app.language_pack, "NDR.UI_TOOLS_NETWORK_DISCONNECT_ERROR", "Could not disconnect the network drive. Windows error {0}: {1}", &[&code, &message]);
+                return app.warn_operation(&message);
             }
             // Original FUN_004350bc: rereads only when the active pane is in local mode (0).
             super::panes::DriveListCache::invalidate(&app.drive_list);
@@ -709,21 +709,20 @@ impl App {
 
     /// C# ToggleExplorerIntegrationAsync: asks to remove when registered, otherwise to add.
     pub(super) fn explorer_integration_command(&mut self) {
-        let caption = self.tr("탐색기 통합", "Explorer integration").into_owned();
+        let caption = self.language_pack.text("NDR.UI_TOOLS_EXPLORER_INTEGRATION", "Explorer integration");
         let enabled = (self.system.explorer_enabled)();
         let question = if enabled {
-            self.tr("NDR의 탐색기 폴더 메뉴 등록을 제거할까요?", "Remove NDR from the Explorer folder menu?")
+            self.language_pack.text("NDR.UI_TOOLS_EXPLORER_REMOVE", "Remove NDR from the Explorer folder menu?")
         } else {
-            self.tr("현재 계정의 Windows 탐색기 폴더 메뉴에 NDR을 추가할까요?", "Add NDR to the Windows Explorer folder menu for the current account?")
-        }
-        .into_owned();
+            self.language_pack.text("NDR.UI_TOOLS_EXPLORER_ADD", "Add NDR to the Windows Explorer folder menu for the current account?")
+        };
         self.system_box(&caption, &question, MB_YESNO | MB_ICONQUESTION, move |app, answer, _| {
             if answer != IDYES {
                 return;
             }
             match (app.system.set_explorer)(!enabled) {
                 Ok(()) => {
-                    app.status = if enabled { app.tr("탐색기 메뉴 등록을 제거했습니다.", "Removed NDR from the Explorer menu.") } else { app.tr("탐색기 메뉴에 NDR을 추가했습니다.", "Added NDR to the Explorer menu.") }.into_owned();
+                    app.status = if enabled { app.language_pack.text("NDR.UI_TOOLS_EXPLORER_REMOVED", "Removed NDR from the Explorer menu.") } else { app.language_pack.text("NDR.UI_TOOLS_EXPLORER_ADDED", "Added NDR to the Explorer menu.") };
                 }
                 Err(error) => app.system_box("NDR", &error, MB_OK | ndr::msgbox::MB_ICONEXCLAMATION, |_, _, _| {}),
             }
@@ -733,13 +732,14 @@ impl App {
     /// C# ImportLegacySettingsAsync: choose an INI -> replace settings, also import the toolbar.xml beside it (an existing one is kept as .backup-time),
     /// then reapply language, theme, both panes and start locations.
     pub(super) fn import_legacy_command(&mut self) {
-        let ko = self.language == "ko";
         let exe_dir = std::env::current_exe().ok().and_then(|p| p.parent().map(Path::to_path_buf)).unwrap_or_default();
         let suggested = std::path::absolute(exe_dir.join("..").join("nexusfile").join("default")).unwrap_or_default();
         let initial = if suggested.is_dir() { suggested } else { PathBuf::from(std::env::var_os("USERPROFILE").unwrap_or_default()).join("Documents") };
-        let title = if ko { "NexusFile INI 설정 가져오기" } else { "Import NexusFile INI settings" };
-        let filters: [(&str, &str); 2] = if ko { [("NexusFile 설정 (*.ini)", "*.ini"), ("모든 파일 (*.*)", "*.*")] } else { [("NexusFile settings (*.ini)", "*.ini"), ("All files (*.*)", "*.*")] };
-        let Some(path) = (self.open_dialog)(title, Some(&initial), "nexusfile.ini", &filters) else { return };
+        let title = self.language_pack.text("NDR.UI_TOOLS_IMPORT_TITLE", "Import NexusFile INI settings");
+        let filter_name = self.language_pack.text("NDR.UI_TOOLS_LEGACY_FILTER", "NexusFile settings (*.ini)");
+        let all_files = self.language_pack.text("NDR.UI_TOOLS_ALL_FILES_FILTER", "All files (*.*)");
+        let filters = [(filter_name.as_str(), "*.ini"), (all_files.as_str(), "*.*")];
+        let Some(path) = (self.open_dialog)(&title, Some(&initial), "nexusfile.ini", &filters) else { return };
         let imported = match compat::import_ini(&path) {
             Ok(settings) => settings,
             Err(error) => return self.system_box("NDR", &error, MB_OK | ndr::msgbox::MB_ICONEXCLAMATION, |_, _, _| {}),
@@ -753,7 +753,7 @@ impl App {
         self.dual = self.settings.flag("DualPaneMode", true);
         self.active = usize::from(self.dual && self.settings.flag("StartWithRightPaneActive", false));
         self.preferences_dirty = true;
-        self.toolbar = ndr::commands::load_toolbar(&self.profile, include_bytes!("../../Resources/toolbar.xml")).unwrap_or(ndr::commands::ToolbarConfig { items: vec![], warning: None });
+        self.toolbar = ndr::commands::load_toolbar(&self.profile);
         for (index, side) in ["Left", "Right"].into_iter().enumerate() {
             self.panes[index].show_hidden = self.settings.flag(&format!("{side}ShowHiddenFiles"), false);
             let start = self.settings.text(&format!("{side}StartPath"), "");
@@ -765,18 +765,18 @@ impl App {
         }
         self.save();
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        self.status = if self.language == "ko" { format!("레거시 설정을 가져왔습니다: {name}") } else { format!("Imported legacy settings: {name}") };
+        self.status = super::file_commands::operation_format(&self.language_pack, "NDR.UI_TOOLS_IMPORT_COMPLETED", "Imported legacy settings: {0}", &[&name]);
     }
 
     /// C# InstallSelectedArchive: shell verb "install" on the archive.
     pub(super) fn install_archive_command(&mut self) {
         let i = self.active;
         if self.panes[i].archive.is_some() {
-            return self.warn("압축 파일 안의 항목을 설치할 수 없습니다.", "Items inside an archive cannot be installed.");
+            return self.warn_operation(&self.language_pack.text("NDR.UI_TOOLS_ARCHIVE_CANNOT_INSTALL_INSIDE", "Items inside an archive cannot be installed."));
         }
         let item = self.target_entries(i).into_iter().find(|e| !e.is_dir && ndr::archive::archive_format(&e.path).is_some());
         let Some(item) = item else {
-            return self.warn("설치할 압축 파일을 선택하세요.", "Select an archive to install.");
+            return self.warn_operation(&self.language_pack.text("NDR.UI_TOOLS_ARCHIVE_INSTALL_SELECT", "Select an archive to install."));
         };
         if let Err(error) = (self.system.run_verb)(&item.path, "install") {
             self.system_box("NDR", &error, MB_OK | ndr::msgbox::MB_ICONEXCLAMATION, |_, _, _| {});

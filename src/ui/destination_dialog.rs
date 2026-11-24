@@ -512,7 +512,7 @@ impl App {
                 if full.is_dir() {
                     self.answer_dialog(DialogResult::Destination(Some(full)), ctx);
                 } else {
-                    self.status = format!("{}: {}", self.tr("폴더가 없습니다", "Folder not found"), full.display());
+                    self.status = super::file_commands::operation_format(&self.language_pack, "NDR.OP_DEST_NOT_FOUND", "Folder not found: {0}", &[&full.display()]);
                 }
             }
             DestinationAction::MostUsed(path) => {
@@ -617,7 +617,7 @@ impl App {
     /// extracts to the folder chosen in the same destination window and deletes from the archive.
     pub(super) fn copy_move_to_folder(&mut self, moving: bool) {
         if self.panes.iter().any(|pane| pane.vault.is_some()) {
-            self.status = "암호화 폴더와 일반 디렉터리 사이의 이동은 현재 지원하지 않습니다.".into();
+            self.status = self.language_pack.text("NDR.OP_DEST_MOVE_VAULT_UNSUPPORTED", "Moving between an encrypted folder and a regular directory is not supported.");
             return;
         }
         let i = self.active;

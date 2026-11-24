@@ -20,8 +20,77 @@ pub(super) const DRIVES: &str = "::drives::";
 /// PaneState.HistoryCapacity.
 const HISTORY_CAPACITY: usize = 20;
 
-pub(super) fn t(ko: bool, korean: &'static str, english: &'static str) -> &'static str {
-    if ko { korean } else { english }
+// Keep network/server replies and OS diagnostics verbatim. The backend also
+// exposes a finite set of NDR validation reasons as legacy String errors;
+// classify those exact reasons here, rather than replacing arbitrary text.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum RemoteValidation {
+    ControlCharacters,
+    AuthFailed,
+    Disconnected,
+    RegularUploadFile,
+    RegularUploadItem,
+    ProtectedDeletePath,
+    ProtectedReplacement,
+    ModeRange,
+    PortRange,
+    MissingHost,
+}
+impl RemoteValidation {
+    fn classify(detail: &str) -> Option<Self> {
+        Some(match detail {
+            "Remote paths and commands cannot contain control characters" => Self::ControlCharacters,
+            "SSH authentication failed" => Self::AuthFailed,
+            "Connection is closed; reconnect before continuing" => Self::Disconnected,
+            "Upload source must be a regular file" => Self::RegularUploadFile,
+            "Upload source is not a regular file or directory" => Self::RegularUploadItem,
+            "Refusing recursive delete of a root or dot path" => Self::ProtectedDeletePath,
+            "Refusing to replace a directory or symbolic link" => Self::ProtectedReplacement,
+            "Permission mode must be within 0000..7777 octal" => Self::ModeRange,
+            "Remote port must be between 1 and 65535" => Self::PortRange,
+            "Host is required" => Self::MissingHost,
+            _ => return None,
+        })
+    }
+    fn key(self) -> &'static str {
+        match self {
+            Self::ControlCharacters => "NDR.NET_CONTROL_CHARACTERS",
+            Self::AuthFailed => "NDR.NET_SSH_AUTH_FAILED",
+            Self::Disconnected => "NDR.NET_RECONNECT_REQUIRED",
+            Self::RegularUploadFile => "NDR.NET_UPLOAD_REQUIRES_REGULAR_FILE",
+            Self::RegularUploadItem => "NDR.NET_UPLOAD_REQUIRES_REGULAR_ITEM",
+            Self::ProtectedDeletePath => "NDR.NET_DELETE_PROTECTED_PATH",
+            Self::ProtectedReplacement => "NDR.NET_REPLACE_PROTECTED_PATH",
+            Self::ModeRange => "NDR.NET_PERMISSION_MODE_RANGE",
+            Self::PortRange => "NDR.NET_PORT_RANGE",
+            Self::MissingHost => "NDR.NET_HOST_REQUIRED",
+        }
+    }
+}
+
+pub(super) fn remote_error_text(language: &compat::Language, detail: &str) -> String {
+    RemoteValidation::classify(detail)
+        .map_or_else(|| detail.to_owned(), |reason| language.text(reason.key(), detail))
+}
+
+/// Interpolate one named template without reprocessing literal host/path/diagnostic data.
+pub(super) fn net_template(template: String, args: &[(&str, &str)]) -> String {
+    let mut output = String::with_capacity(template.len());
+    let mut rest = template.as_str();
+    while let Some((before, after)) = rest.split_once('{') {
+        output.push_str(before);
+        if let Some((key, tail)) = after.split_once('}') {
+            if let Some((_, value)) = args.iter().find(|(arg, _)| *arg == key) {
+                output.push_str(value);
+                rest = tail;
+                continue;
+            }
+        }
+        output.push('{');
+        rest = after;
+    }
+    output.push_str(rest);
+    output
 }
 
 /// .NET "N0".
@@ -141,12 +210,12 @@ pub(super) fn parent_path(path: &str) -> String {
 }
 
 /// SafeLocalName: only the last name part; "", "." and ".." are rejected.
-fn safe_local_name(name: &str) -> Result<String, String> {
+fn safe_local_name(name: &str) -> Option<String> {
     let safe = name.rsplit(['/', '\\']).next().unwrap_or("");
     if safe.is_empty() || safe == "." || safe == ".." {
-        return Err("원격 파일 이름이 안전하지 않습니다.".into());
+        return None;
     }
-    Ok(safe.to_owned())
+    Some(safe.to_owned())
 }
 
 /// egui key -> WPF Key name (for ShortcutBindingService comparisons).
@@ -210,7 +279,7 @@ pub(super) struct RemoteRow {
 }
 
 /// C# FileSystemService.ListLocal(path, hidden, no descriptions): the drive list, or ".." + folders + files.
-pub(super) fn list_local(path: &str, show_hidden: bool, ko: bool) -> Result<Vec<LocalRow>, String> {
+pub(super) fn list_local(path: &str, show_hidden: bool, language: &compat::Language) -> Result<Vec<LocalRow>, String> {
     if path == DRIVES {
         return Ok(native::drives()
             .into_iter()
@@ -229,13 +298,13 @@ pub(super) fn list_local(path: &str, show_hidden: bool, ko: bool) -> Result<Vec<
     }
     let full = std::path::absolute(path).map_err(|e| e.to_string())?;
     if !full.is_dir() {
-        return Err(format!("{}: {}", t(ko, "폴더를 찾을 수 없습니다", "Folder not found"), full.display()));
+        return Err(format!("{}: {}", language.text("NDR.NET_FOLDER_NOT_FOUND", "Folder not found"), full.display()));
     }
     let mut rows = Vec::new();
     if let Some(parent) = full.parent() {
         rows.push(LocalRow {
             name: "..".into(),
-            kind: t(ko, "상위 폴더", "Parent folder").into(),
+            kind: language.text("RES.FUNC_GOTOPARENT", "Parent folder").into(),
             size_text: String::new(),
             modified_text: String::new(),
             path: parent.to_path_buf(),
@@ -248,9 +317,9 @@ pub(super) fn list_local(path: &str, show_hidden: bool, ko: bool) -> Result<Vec<
     let entries = ndr::fsops::list_dir(&full, show_hidden)?;
     let row = |e: &Entry| LocalRow {
         name: e.name.clone(),
-        kind: ndr::listing::type_name(&e.name, e.is_dir, ko),
+        kind: if e.is_dir { language.text("RES.FOLDER", "Folder") } else { ndr::listing::type_name(&e.name, false, language.code.eq_ignore_ascii_case("ko")) },
         size_text: if e.is_dir { String::new() } else { ndr::parity::format_size(e.size, "Auto", true) },
-        modified_text: ndr::listing::date_text(e.modified, "yyyy-MM-dd", "HH:mm", false, ko, now),
+        modified_text: ndr::listing::date_text(e.modified, "yyyy-MM-dd", "HH:mm", false, language.code.eq_ignore_ascii_case("ko"), now),
         path: e.path.clone(),
         is_dir: e.is_dir,
         is_parent: false,
@@ -262,17 +331,26 @@ pub(super) fn list_local(path: &str, show_hidden: bool, ko: bool) -> Result<Vec<
 }
 
 /// Rows of C# LoadListingAsync: folders first, by name (case-insensitive), ".." at the top unless at "/".
+#[cfg(test)]
 pub(super) fn remote_rows(directory: &str, entries: &[RemoteEntry], ko: bool) -> Vec<RemoteRow> {
+    let current = compat::Language::load(
+        &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Resources/Languages"),
+        if ko { "ko" } else { "en" },
+    );
+    remote_rows_localized(directory, entries, &current)
+}
+
+fn remote_rows_localized(directory: &str, entries: &[RemoteEntry], language: &compat::Language) -> Vec<RemoteRow> {
     let now = std::time::SystemTime::now();
     let mut rows: Vec<RemoteRow> = entries
         .iter()
         .map(|e| RemoteRow {
             name: e.name.clone(),
-            kind: if e.is_dir { t(ko, "폴더", "Folder") } else { t(ko, "파일", "File") }.into(),
+            kind: if e.is_dir { language.text("RES.FOLDER", "Folder") } else { language.text("NDR.NET_FILE", "File") }.into(),
             size_text: if e.is_dir { String::new() } else { ndr::parity::format_size(e.size, "Auto", true) },
             modified_text: e
                 .modified
-                .map(|s| ndr::listing::date_text(Some(std::time::UNIX_EPOCH + Duration::from_secs(s.max(0) as u64)), "yyyy-MM-dd", "HH:mm", false, ko, now))
+                .map(|s| ndr::listing::date_text(Some(std::time::UNIX_EPOCH + Duration::from_secs(s.max(0) as u64)), "yyyy-MM-dd", "HH:mm", false, language.code.eq_ignore_ascii_case("ko"), now))
                 .unwrap_or_default(),
             remote_path: format!("{}/{}", directory.trim_end_matches('/'), e.name),
             mode: e.mode,
@@ -285,7 +363,7 @@ pub(super) fn remote_rows(directory: &str, entries: &[RemoteEntry], ko: bool) ->
     if directory != "/" {
         rows.insert(0, RemoteRow {
             name: "..".into(),
-            kind: t(ko, "상위 폴더", "Parent folder").into(),
+            kind: language.text("RES.FUNC_GOTOPARENT", "Parent folder").into(),
             size_text: String::new(),
             modified_text: String::new(),
             remote_path: String::new(),
@@ -358,7 +436,7 @@ enum RemoteEvent {
 }
 
 pub(super) struct RemoteForm {
-    ko: bool,
+    language: Arc<compat::Language>,
     pub protocol: usize,
     pub host: String,
     pub port: String,
@@ -430,7 +508,7 @@ impl RemoteForm {
         self.local_items.get(index).cloned()
     }
     fn local_box_text(&self) -> String {
-        if self.local_path == DRIVES { "Computer".into() } else { self.local_path.clone() }
+        if self.local_path == DRIVES { self.language.text("NDR.NET_LOCAL_DRIVES", "Computer") } else { self.local_path.clone() }
     }
 }
 
@@ -481,7 +559,7 @@ pub(super) struct RemoteLabels {
 }
 
 pub(super) fn remote_ui(ui: &mut egui::Ui, form: &mut RemoteForm, labels: &RemoteLabels, settings: &ndr::settings::Settings) -> Option<RemoteAction> {
-    let ko = form.ko;
+    let language = Arc::clone(&form.language);
     let mut action = None;
     if form.busy.is_some() || form.local_loading {
         ui.ctx().request_repaint_after(Duration::from_millis(100));
@@ -498,7 +576,7 @@ pub(super) fn remote_ui(ui: &mut egui::Ui, form: &mut RemoteForm, labels: &Remot
                 }
             });
             ui.label(&labels.fields[0]);
-            ui.add(egui::TextEdit::singleline(&mut form.host).desired_width(176.0).hint_text(t(ko, "호스트 이름 또는 IP", "Host name or IP")));
+            ui.add(egui::TextEdit::singleline(&mut form.host).desired_width(176.0).hint_text(language.text("NDR.NET_HOST_NAME_OR_IP", "Host name or IP")));
             if !form.recent_hosts.is_empty() {
                 ui.menu_button("▼", |ui| {
                     for host in form.recent_hosts.clone() {
@@ -510,11 +588,11 @@ pub(super) fn remote_ui(ui: &mut egui::Ui, form: &mut RemoteForm, labels: &Remot
                 });
             }
             ui.label(&labels.fields[1]);
-            ui.add(egui::TextEdit::singleline(&mut form.port).desired_width(52.0).hint_text(t(ko, "포트", "Port")));
+            ui.add(egui::TextEdit::singleline(&mut form.port).desired_width(52.0).hint_text(language.text("NDR.NET_PORT", "Port")));
             ui.label(&labels.fields[2]);
-            ui.add(egui::TextEdit::singleline(&mut form.user).desired_width(140.0).hint_text(t(ko, "사용자 이름", "User name")));
+            ui.add(egui::TextEdit::singleline(&mut form.user).desired_width(140.0).hint_text(language.text("formPassword.Caption.lUser", "User name")));
             ui.label(&labels.fields[3]);
-            ui.add(egui::TextEdit::singleline(&mut form.password).password(true).desired_width(150.0).hint_text(t(ko, "비밀번호 (저장하지 않음)", "Password (not saved)")));
+            ui.add(egui::TextEdit::singleline(&mut form.password).password(true).desired_width(150.0).hint_text(language.text("NDR.NET_PASSWORD_NOT_SAVED", "Password (not saved)")));
             if ui.add_enabled(form.busy != Some(Busy::Connecting), egui::Button::new(&labels.connect)).clicked() {
                 action = Some(RemoteAction::Connect);
             }
@@ -541,17 +619,17 @@ pub(super) fn remote_ui(ui: &mut egui::Ui, form: &mut RemoteForm, labels: &Remot
             if ui.add_enabled(forward, egui::Button::new("→")).on_hover_text(&labels.forward).clicked() {
                 action = Some(RemoteAction::LocalForward);
             }
-            if ui.button("↑").on_hover_text(t(ko, "상위 폴더", "Parent folder")).clicked() {
+            if ui.button("↑").on_hover_text(language.text("RES.FUNC_GOTOPARENT", "Parent folder")).clicked() {
                 action = Some(RemoteAction::LocalUp);
             }
             let response = ui.add(egui::TextEdit::singleline(&mut form.local_path_box).desired_width(half - 190.0));
             if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 action = Some(RemoteAction::LocalGo);
             }
-            if ui.button(t(ko, "이동", "Go")).clicked() {
+            if ui.button(language.text("NDR.NET_GO", "Go")).clicked() {
                 action = Some(RemoteAction::LocalGo);
             }
-            if ui.button("↻").on_hover_text(t(ko, "로컬 폴더 새로 고침", "Refresh local folder")).clicked() {
+            if ui.button("↻").on_hover_text(language.text("NDR.NET_REFRESH_LOCAL_FOLDER", "Refresh local folder")).clicked() {
                 action = Some(RemoteAction::LocalRefresh);
             }
         });
@@ -569,10 +647,10 @@ pub(super) fn remote_ui(ui: &mut egui::Ui, form: &mut RemoteForm, labels: &Remot
             if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 action = Some(RemoteAction::RemoteGo);
             }
-            if ui.button(t(ko, "이동", "Go")).clicked() {
+            if ui.button(language.text("NDR.NET_GO", "Go")).clicked() {
                 action = Some(RemoteAction::RemoteGo);
             }
-            if ui.button("↻").on_hover_text(t(ko, "원격 폴더 새로 고침", "Refresh remote folder")).clicked() {
+            if ui.button("↻").on_hover_text(language.text("NDR.NET_REFRESH_REMOTE_FOLDER", "Refresh remote folder")).clicked() {
                 action = Some(RemoteAction::RemoteRefresh);
             }
         });
@@ -582,17 +660,17 @@ pub(super) fn remote_ui(ui: &mut egui::Ui, form: &mut RemoteForm, labels: &Remot
     let height = 470.0;
     let typing = ui.ctx().wants_keyboard_input();
     let local_columns = [
-        Column::text(t(ko, "이름", "Name"), half * 0.38),
-        Column::text(t(ko, "종류", "Type"), half * 0.19),
-        Column::right(t(ko, "크기", "Size"), half * 0.19),
-        Column::text(t(ko, "수정한 날짜", "Date modified"), half * 0.24),
+        Column::text(language.text("RES.FIELD_NAME", "Name"), half * 0.38),
+        Column::text(language.text("NDR.NET_TYPE", "Type"), half * 0.19),
+        Column::right(language.text("RES.FIELD_SIZE", "Size"), half * 0.19),
+        Column::text(language.text("formNDRSearch.Caption.TimeModified", "Date modified"), half * 0.24),
     ];
     let remote_columns = [
-        Column::text(t(ko, "이름", "Name"), half * 0.27),
-        Column::text(t(ko, "종류", "Type"), half * 0.13),
-        Column::right(t(ko, "크기", "Size"), half * 0.13),
-        Column::text(t(ko, "수정한 날짜", "Date modified"), half * 0.19),
-        Column::text(t(ko, "원격 경로", "Remote path"), half * 0.28),
+        Column::text(language.text("RES.FIELD_NAME", "Name"), half * 0.27),
+        Column::text(language.text("NDR.NET_TYPE", "Type"), half * 0.13),
+        Column::right(language.text("RES.FIELD_SIZE", "Size"), half * 0.13),
+        Column::text(language.text("formNDRSearch.Caption.TimeModified", "Date modified"), half * 0.19),
+        Column::text(language.text("NDR.NET_REMOTE_PATH", "Remote path"), half * 0.28),
     ];
     let menu_labels = labels.menu.clone();
     let menu = move |ui: &mut egui::Ui| -> Option<usize> { menu_labels.iter().position(|label| ui.button(label).clicked()) };
@@ -699,10 +777,10 @@ pub(super) fn remote_ui(ui: &mut egui::Ui, form: &mut RemoteForm, labels: &Remot
     ui.horizontal(|ui| {
         ui.label(RichText::new(&form.status).weak());
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button(t(ko, "닫기", "Close")).clicked() {
+            if ui.button(language.text("formCleanup.Caption.btnClose", "Close")).clicked() {
                 action = Some(RemoteAction::Close);
             }
-            if ui.button(t(ko, "폴더 선택 업로드…", "Upload folder…")).clicked() {
+            if ui.button(language.text("NDR.NET_UPLOAD_FOLDER", "Upload folder…")).clicked() {
                 action = Some(RemoteAction::UploadFolder);
             }
             if ui.button(&labels.upload).clicked() {
@@ -718,7 +796,7 @@ pub(super) fn remote_ui(ui: &mut egui::Ui, form: &mut RemoteForm, labels: &Remot
 
 /// RemoteTransferProgressWindow (600x250, 400 with details).
 pub(super) struct TransferForm {
-    ko: bool,
+    language: Arc<compat::Language>,
     pub status: String,
     /// 0..1, None when the total size is unknown (indeterminate bar).
     pub progress: Option<f32>,
@@ -753,10 +831,10 @@ fn format_bytes(bytes: u64) -> String {
 }
 
 impl TransferForm {
-    fn new(ko: bool, pause: Arc<AtomicBool>, cancel: Arc<AtomicBool>) -> Self {
+    fn new(language: compat::Language, pause: Arc<AtomicBool>, cancel: Arc<AtomicBool>) -> Self {
         Self {
-            ko,
-            status: t(ko, "전송을 준비하고 있습니다.", "Preparing the transfer.").into(),
+            language: Arc::new(language.clone()),
+            status: language.text("NDR.NET_PREPARING_THE_TRANSFER", "Preparing the transfer.").into(),
             progress: None,
             details: Vec::new(),
             current_detail: None,
@@ -770,8 +848,8 @@ impl TransferForm {
 
     /// RenderLatestProgress.
     pub(super) fn show_progress(&mut self, path: &str, bytes: u64, total: Option<u64>, completed: usize) {
-        let ko = self.ko;
-        let count = format!("{} {}{}", t(ko, "완료", "Completed"), grouped(completed as u64), t(ko, "개", ""));
+        let language = Arc::clone(&self.language);
+        let count = net_template(language.text("NDR.NET_TRANSFER_PROGRESS_COUNT", "Completed: {count}"), &[("count", &grouped(completed as u64))]);
         let size = match total {
             Some(total) if total > 0 => format!(" · {} / {}", format_bytes(bytes), format_bytes(total)),
             _ if bytes > 0 => format!(" · {}", format_bytes(bytes)),
@@ -803,13 +881,13 @@ impl TransferForm {
             return;
         }
         self.cancelling = true;
-        self.status = t(self.ko, "전송을 중단하고 있습니다.", "Stopping the transfer.").into();
+        self.status = self.language.text("NDR.NET_STOPPING_THE_TRANSFER", "Stopping the transfer.").into();
         self.cancel.store(true, Ordering::SeqCst);
     }
 }
 
 pub(super) fn transfer_ui(ui: &mut egui::Ui, form: &mut TransferForm) -> Option<TransferAction> {
-    let ko = form.ko;
+    let language = Arc::clone(&form.language);
     let mut action = None;
     ui.ctx().request_repaint_after(Duration::from_millis(100));
     ui.set_width(560.0);
@@ -831,14 +909,14 @@ pub(super) fn transfer_ui(ui: &mut egui::Ui, form: &mut TransferForm) -> Option<
     }
     ui.add_space(12.0);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-        if ui.add_enabled(!form.cancelling, egui::Button::new(t(ko, "중단", "Abort")).min_size(egui::vec2(88.0, 26.0))).clicked() {
+        if ui.add_enabled(!form.cancelling, egui::Button::new(language.text("NDR.NET_ABORT", "Abort")).min_size(egui::vec2(88.0, 26.0))).clicked() {
             action = Some(TransferAction::Cancel);
         }
-        let details = if form.show_details { t(ko, "간단히 보기", "Fewer details") } else { t(ko, "자세히 보기", "More details") };
+        let details = if form.show_details { language.text("NDR.NET_FEWER_DETAILS", "Fewer details") } else { language.text("NDR.NET_MORE_DETAILS", "More details") };
         if ui.add(egui::Button::new(details).min_size(egui::vec2(88.0, 26.0))).clicked() {
             action = Some(TransferAction::Details);
         }
-        let pause = if form.paused { t(ko, "계속", "Resume") } else { t(ko, "일시 중지", "Pause") };
+        let pause = if form.paused { language.text("NDR.NET_RESUME", "Resume") } else { language.text("NDR.NET_PAUSE", "Pause") };
         if ui.add_enabled(!form.cancelling, egui::Button::new(pause).min_size(egui::vec2(88.0, 26.0))).clicked() {
             action = Some(TransferAction::Pause);
         }
@@ -1055,7 +1133,7 @@ impl App {
 
     /// C# OpenRemoteWindow(profile, initialHost): opens from the active pane folder (inside an archive, the archive's folder).
     pub(super) fn open_remote_window(&mut self, profile: Option<SiteProfile>, initial_host: Option<String>) {
-        let ko = self.language == "ko";
+        let language = self.language_pack.clone();
         let pane = self.active;
         let p = &self.panes[pane];
         let destination = if let Some(archive) = &p.archive {
@@ -1073,7 +1151,7 @@ impl App {
         }
         let (tx, rx) = mpsc::channel();
         let mut form = RemoteForm {
-            ko,
+            language: Arc::new(language.clone()),
             protocol: 1,
             host: String::new(),
             port: "21".into(),
@@ -1109,7 +1187,7 @@ impl App {
             show_hidden,
             show_vertical_bar: self.settings.flag("ShowVerticalBar", true),
             focus_remote: false,
-            status: t(ko, "호스트에 연결하세요.", "Connect to a host.").into(),
+            status: language.text("NDR.NET_CONNECT_TO_A_HOST", "Connect to a host.").into(),
             downloaded: false,
             tx,
             rx,
@@ -1134,7 +1212,7 @@ impl App {
         }
         let connect_now = profile.is_some();
         form.profile = profile;
-        let title = t(ko, "NDR 원격 연결", "NDR Remote Connection").to_owned();
+        let title = language.text("NDR.NET_NDR_REMOTE_CONNECTION", "NDR Remote Connection").to_owned();
         self.push_original_dialog(title, DialogKind::Remote(Box::new(form)), |_, _, _| {});
         let path = self.remote_form().map(|f| f.local_path.clone()).unwrap_or_default();
         self.remote_read_local(path, None);
@@ -1181,7 +1259,8 @@ impl App {
             RemoteAction::LocalGo => {
                 let Some(form) = self.remote_form() else { return };
                 let path = form.local_path_box.trim().to_owned();
-                self.remote_navigate_local(if path.eq_ignore_ascii_case("Computer") { DRIVES.into() } else { path });
+                let drives = form.language.text("NDR.NET_LOCAL_DRIVES", "Computer");
+                self.remote_navigate_local(if path.eq_ignore_ascii_case("Computer") || path.eq_ignore_ascii_case(&drives) { DRIVES.into() } else { path });
             }
             RemoteAction::LocalRefresh => {
                 let Some(form) = self.remote_form() else { return };
@@ -1234,13 +1313,14 @@ impl App {
         }
     }
 
-    fn remote_box(&mut self, caption: &str, text: &str) {
-        self.system_box(caption, text, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
+    fn remote_box(&mut self, caption: impl AsRef<str>, text: impl AsRef<str>) {
+        let detail = remote_error_text(&self.language_pack, text.as_ref());
+        self.system_box(caption.as_ref(), &detail, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
     }
 
     /// MessageBox.Show(this, text): no caption or icon.
-    fn remote_notice(&mut self, korean: &str, english: &str) {
-        let text = self.tr(korean, english).into_owned();
+    fn remote_notice(&mut self, key: &str, english: &str) {
+        let text = self.language_pack.text(key, english);
         self.system_box("", &text, MB_OK, |_, _, _| {});
     }
 
@@ -1249,9 +1329,9 @@ impl App {
         let Some(form) = self.remote_form() else { return };
         form.local_version += 1;
         form.local_loading = true;
-        let (version, show_hidden, ko) = (form.local_version, form.show_hidden, form.ko);
+        let (version, show_hidden, language) = (form.local_version, form.show_hidden, Arc::clone(&form.language));
         spawn_event(&form.tx, move || {
-            let result = list_local(&path, show_hidden, ko);
+            let result = list_local(&path, show_hidden, &language);
             RemoteEvent::LocalListed { version, path, history, result }
         });
     }
@@ -1262,16 +1342,17 @@ impl App {
             return self.remote_read_local(path, None);
         }
         let full = std::path::absolute(native::expand_environment(&path)).map_err(|e| e.to_string()).and_then(|full| {
-            if full.is_dir() { Ok(full) } else { Err(format!("Local folder not found: {}", full.display())) }
+            if full.is_dir() { Ok(full) } else { Err(full.display().to_string()) }
         });
         match full {
             Ok(full) => self.remote_read_local(full.to_string_lossy().into_owned(), None),
             Err(error) => {
                 let Some(form) = self.remote_form() else { return };
                 form.local_path_box = form.local_box_text();
-                form.status = format!("{}: {error}", t(form.ko, "로컬 폴더를 열지 못했습니다", "Local folder could not be opened"));
-                let caption = self.tr("로컬 폴더", "Local folder").into_owned();
-                self.remote_box(&caption, &error);
+                form.status = format!("{}: {error}", form.language.text("NDR.NET_LOCAL_FOLDER_COULD_NOT_BE_OPENED", "Local folder could not be opened"));
+                let detail = form.status.clone();
+                let caption = self.language_pack.text("NDR.NET_LOCAL_FOLDER", "Local folder");
+                self.remote_box(&caption, &detail);
             }
         }
     }
@@ -1288,7 +1369,7 @@ impl App {
         }
         let directory = PathBuf::from(&form.local_path);
         if let Err(error) = (self.shell_runner)(&item.path, "", &directory) {
-            let caption = self.tr("파일 열기", "Open file").into_owned();
+            let caption = self.language_pack.text("NDR.NET_OPEN_FILE", "Open file");
             self.remote_box(&caption, &error);
         }
     }
@@ -1305,7 +1386,7 @@ impl App {
         form.pending_select = None;
         form.items.clear();
         form.remote_grid = GridState::new(0);
-        form.status = t(form.ko, "호스트에 연결하세요.", "Connect to a host.").into();
+        form.status = form.language.text("NDR.NET_CONNECT_TO_A_HOST", "Connect to a host.").into();
         if let Some(client) = form.client.take() {
             thread::spawn(move || {
                 if let Ok(mut client) = client.lock() {
@@ -1323,7 +1404,7 @@ impl App {
         }
         let accepted = form.accepted_fingerprint.take();
         self.remote_disconnect();
-        let ko = self.language == "ko";
+        let language = self.language_pack.clone();
         let connect = self.remote_hooks.connect;
         let Some(form) = self.remote_form() else { return };
         let protocol = form.protocol_name();
@@ -1331,20 +1412,20 @@ impl App {
         let port = if protocol == "SFTP" {
             match form.port.trim().parse::<i64>() {
                 Ok(port) if (1..=65535).contains(&port) && !host.is_empty() && !form.user.is_empty() => port,
-                _ => return self.remote_box_plain(t(ko, "호스트, 사용자 이름, 올바른 포트를 입력하세요.", "Enter a host, a user name and a valid port."), t(ko, "원격 연결", "Remote connection")),
+                _ => return self.remote_box_plain(language.text("NDR.NET_ENTER_A_HOST_A_USER_NAME_AND_A", "Enter a host, a user name and a valid port."), language.text("NDR.NET_REMOTE_CONNECTION", "Remote connection")),
             }
         } else {
             parse_port(&form.port)
         };
         // Fixed: FTP and FTPS truncated the port to 16 bits (99999 -> 34463) and connected to another port. Out of range now warns like SFTP (0 is reported at the connect step).
         if !(0..=65535).contains(&port) {
-            return self.remote_box_plain(t(ko, "호스트, 사용자 이름, 올바른 포트를 입력하세요.", "Enter a host, a user name and a valid port."), t(ko, "원격 연결", "Remote connection"));
+            return self.remote_box_plain(language.text("NDR.NET_ENTER_A_HOST_A_USER_NAME_AND_A", "Enter a host, a user name and a valid port."), language.text("NDR.NET_REMOTE_CONNECTION", "Remote connection"));
         }
         if host.is_empty() {
-            return self.remote_box_plain(t(ko, "호스트, 사용자 이름, 올바른 포트를 입력하세요.", "Enter a host, a user name and a valid port."), t(ko, "원격 연결", "Remote connection"));
+            return self.remote_box_plain(language.text("NDR.NET_ENTER_A_HOST_A_USER_NAME_AND_A", "Enter a host, a user name and a valid port."), language.text("NDR.NET_REMOTE_CONNECTION", "Remote connection"));
         }
         let connection_protocol = if form.profile.is_none() { quick_connect_protocol(protocol, port) } else { protocol.to_owned() };
-        form.status = format!("{protocol} {}", t(ko, "서버에 연결하는 중…", "connecting to the server…"));
+        form.status = net_template(language.text("NDR.NET_CONNECTING", "Connecting to the {protocol} server…"), &[("protocol", protocol)]);
         let mut quick_site = None;
         if form.profile.is_none() && form.add_to_sites && protocol != "SFTP" {
             // The original writes the input as a site before connecting (even if authentication fails). The host as typed, the initial folder empty.
@@ -1388,7 +1469,7 @@ impl App {
         }
         thread::spawn(move || {
             let event = if !sftp && config.port == 0 {
-                RemoteEvent::ConnectFailed { session, error: "포트 0에는 연결할 수 없습니다.".into(), config: Box::new(config) }
+                RemoteEvent::ConnectFailed { session, error: language.text("NDR.NET_INVALID_ZERO_PORT", "Cannot connect to port 0."), config: Box::new(config) }
             } else {
                 match connect(&config).and_then(|mut client| {
                     let path = if sftp {
@@ -1409,8 +1490,8 @@ impl App {
         });
     }
 
-    fn remote_box_plain(&mut self, text: &str, caption: &str) {
-        self.system_box(caption, text, MB_OK, |_, _, _| {});
+    fn remote_box_plain(&mut self, text: impl AsRef<str>, caption: impl AsRef<str>) {
+        self.system_box(caption.as_ref(), text.as_ref(), MB_OK, |_, _, _| {});
     }
 
     /// C# SaveQuickConnectSite: appends to the list (a duplicate name is a separate entry), saves, status line.
@@ -1459,7 +1540,7 @@ impl App {
         }
         form.listing_valid = false;
         let directory = form.remote_path.clone();
-        form.status = format!("{directory} {}", t(form.ko, "읽는 중…", "reading…"));
+        form.status = net_template(form.language.text("NDR.NET_READING_DIRECTORY", "Reading folder… {path}"), &[("path", &directory)]);
         let (session, listing) = (form.session, form.listing_version);
         spawn_event(&form.tx, move || {
             let result = client.lock().map_err(|_| "Connection lock failed".to_owned()).and_then(|mut c| c.list(&directory));
@@ -1493,7 +1574,8 @@ impl App {
     }
 
     fn remote_event(&mut self, event: RemoteEvent, ctx: &egui::Context) {
-        let ko = self.language == "ko";
+        let language = self.remote_form().map(|form| Arc::clone(&form.language))
+            .unwrap_or_else(|| Arc::new(self.language_pack.clone()));
         match event {
             RemoteEvent::LocalListed { version, path, history, result } => {
                 let Some(form) = self.remote_form() else { return };
@@ -1521,7 +1603,7 @@ impl App {
                     }
                     Err(error) => {
                         form.local_path_box = form.local_box_text();
-                        form.status = format!("{}: {error}", t(ko, "로컬 폴더를 읽지 못했습니다", "Local folder could not be read"));
+                        form.status = format!("{}: {error}", language.text("NDR.NET_LOCAL_FOLDER_COULD_NOT_BE_READ", "Local folder could not be read"));
                     }
                 }
             }
@@ -1540,7 +1622,7 @@ impl App {
                 form.remote_path = path.clone();
                 form.remote_path_box = path;
                 form.remote_history.clear();
-                form.status = format!("{} {} · {}{}", form.protocol_name(), t(ko, "연결됨", "connected"), form.local_path, t(ko, "로 다운로드", " is the download folder"));
+                form.status = net_template(language.text("NDR.NET_CONNECTED_STATUS", "{protocol} connected · Download folder: {path}"), &[("protocol", form.protocol_name()), ("path", &form.local_path)]);
                 let host = prepare_host(&form.host);
                 self.record_remote_host(&host);
                 self.remote_load_listing();
@@ -1573,7 +1655,7 @@ impl App {
                 form.busy = None;
                 match result {
                     Ok(entries) => {
-                        let rows = remote_rows(&path, &entries, ko);
+                        let rows = remote_rows_localized(&path, &entries, &language);
                         form.remote_grid = GridState::new(rows.len());
                         if let Some(select) = form.pending_select.take() {
                             for (index, row) in rows.iter().enumerate() {
@@ -1585,7 +1667,7 @@ impl App {
                         form.items = rows;
                         form.listing_valid = true;
                         form.listed_path = Some(path.clone());
-                        form.status = format!("{path} · {}{}", grouped(entries.len() as u64), t(ko, "개 항목", " items"));
+                        form.status = net_template(language.text("NDR.NET_LISTED_ITEM_COUNT", "{path} · {count} items"), &[("path", &path), ("count", &grouped(entries.len() as u64))]);
                         if let Some(status) = form.pending_status.take() {
                             form.status = status;
                         }
@@ -1595,10 +1677,10 @@ impl App {
                             form.items.clear();
                             form.remote_grid = GridState::new(0);
                         }
-                        form.status = form.pending_status.take().unwrap_or_else(|| t(ko, "원격 폴더를 읽지 못했습니다.", "The remote folder could not be read.").into());
+                        form.status = form.pending_status.take().unwrap_or_else(|| language.text("NDR.NET_THE_REMOTE_FOLDER_COULD_NOT_BE_READ", "The remote folder could not be read.").into());
                         form.pending_select = None;
-                        let caption = t(ko, "원격 폴더", "Remote folder");
-                        self.remote_box(caption, &error);
+                        let caption = language.text("NDR.NET_REMOTE_FOLDER", "Remote folder");
+                        self.remote_box(caption, if error == "Connection lock failed" { language.text("NDR.NET_CONNECTION_LOCK_FAILED", "Connection lock failed") } else { error });
                     }
                 }
             }
@@ -1623,9 +1705,9 @@ impl App {
                     }
                     Err(error) => {
                         form.remote_path_box = form.remote_path.clone();
-                        form.status = t(ko, "원격 폴더로 이동하지 못했습니다.", "Could not open the remote folder.").into();
-                        let caption = t(ko, "원격 폴더", "Remote folder");
-                        self.remote_box(caption, &error);
+                        form.status = language.text("NDR.NET_COULD_NOT_OPEN_THE_REMOTE_FOLDER", "Could not open the remote folder.").into();
+                        let caption = language.text("NDR.NET_REMOTE_FOLDER", "Remote folder");
+                        self.remote_box(caption, if error == "Connection lock failed" { language.text("NDR.NET_CONNECTION_LOCK_FAILED", "Connection lock failed") } else { error });
                     }
                 }
             }
@@ -1644,9 +1726,9 @@ impl App {
                         if !failures.is_empty() {
                             let mut summary = failures.iter().take(10).cloned().collect::<Vec<_>>().join("\r\n");
                             if failures.len() > 10 {
-                                summary.push_str(&format!("\r\n{} {}{}", t(ko, "외", "and"), grouped(failures.len() as u64 - 10), t(ko, "개 항목", " more items")));
+                                summary.push_str(&format!("\r\n{}", net_template(language.text("NDR.NET_FAILED_ITEMS_REMAINDER", "and {count} more items"), &[("count", &grouped(failures.len() as u64 - 10))])));
                             }
-                            let caption = t(ko, "권한을 변경하지 못한 항목", "Items whose permissions were not changed");
+                            let caption = language.text("NDR.NET_ITEMS_WHOSE_PERMISSIONS_WERE_NOT_CHANGED", "Items whose permissions were not changed");
                             self.remote_box(caption, &summary);
                         }
                     }
@@ -1674,17 +1756,18 @@ impl App {
 
     fn remote_connect_failed(&mut self, error: &str) {
         self.remote_disconnect();
-        let ko = self.language == "ko";
+        let language = self.language_pack.clone();
         if let Some(form) = self.remote_form() {
-            form.status = t(ko, "연결하지 못했습니다.", "Could not connect.").into();
+            form.status = language.text("NDR.NET_COULD_NOT_CONNECT", "Could not connect.").into();
         }
-        self.remote_box(t(ko, "원격 연결 실패", "Remote connection failed"), error);
+        self.remote_box(language.text("NDR.NET_REMOTE_CONNECTION_FAILED", "Remote connection failed"), error);
     }
 
     /// Answer to the SFTP HostKeyReceived box: yes reconnects with this key (a site stores it in KnownHostFingerprint), no fails the connection.
     fn remote_host_key_answered(&mut self, trust: bool, fingerprint: String) {
         if !trust {
-            return self.remote_connect_failed("Key exchange negotiation failed.");
+            let detail = self.language_pack.text("NDR.NET_KEY_EXCHANGE_NEGOTIATION_FAILED", "Key exchange negotiation failed.");
+            return self.remote_connect_failed(&detail);
         }
         let Some(form) = self.remote_form() else { return };
         let mut saved = None;
@@ -1723,7 +1806,7 @@ impl App {
 
     /// Opens the transfer progress window and runs the worker.
     fn remote_start_transfer(&mut self, title: String, kind: TransferKind, job: impl FnOnce(&mut Client, &AtomicBool, &AtomicBool, &dyn Fn(String, u64, Option<u64>, usize)) -> (Result<(), String>, usize, usize) + Send + 'static) {
-        let ko = self.language == "ko";
+        let language = self.language_pack.clone();
         let Some(form) = self.remote_form() else { return };
         let Some(client) = form.client.clone() else { return };
         let pause = Arc::new(AtomicBool::new(false));
@@ -1748,7 +1831,7 @@ impl App {
             let result = if cancelled { Ok(()) } else { result };
             let _ = tx.send(RemoteEvent::TransferDone { session, kind, result, cancelled, completed, transferred, warnings });
         });
-        self.push_original_dialog(title, DialogKind::RemoteTransfer(Box::new(TransferForm::new(ko, pause, cancel))), |_, _, _| {});
+        self.push_original_dialog(title, DialogKind::RemoteTransfer(Box::new(TransferForm::new(language, pause, cancel))), |_, _, _| {});
     }
 
     pub(super) fn transfer_action(&mut self, action: TransferAction) {
@@ -1773,33 +1856,33 @@ impl App {
     /// After a transfer ends (end of C# Download/Upload/UploadFolder).
     #[allow(clippy::too_many_arguments)]
     fn remote_transfer_done(&mut self, session: u64, kind: TransferKind, result: Result<(), String>, cancelled: bool, completed: usize, transferred: usize, warnings: usize) {
-        let ko = self.language == "ko";
+        let language = self.language_pack.clone();
         let Some(form) = self.remote_form() else { return };
         if session != form.session {
             return;
         }
         form.busy = None;
-        let suffix = if warnings == 0 { String::new() } else { format!(" · {} {}{}", t(ko, "시간 보존 실패", "timestamps not preserved:"), grouped(warnings as u64), t(ko, "개", "")) };
+        let suffix = if warnings == 0 { String::new() } else { format!(" · {}", net_template(language.text("NDR.NET_TIMESTAMP_WARNINGS", "timestamps not preserved: {count}"), &[("count", &grouped(warnings as u64))])) };
         let done = grouped(completed as u64);
         let error = result.err();
         let (failed, stopped, success, caption) = match &kind {
             TransferKind::Download { .. } => (
-                format!("{} {done}{}{suffix}", t(ko, "다운로드 실패. 완료", "Download failed. Completed"), t(ko, "개", "")),
-                format!("{} {done}{}{suffix}", t(ko, "다운로드를 중단했습니다. 완료", "Download stopped. Completed"), t(ko, "개", "")),
-                format!("{done}{}{suffix}", t(ko, "개 항목을 다운로드했습니다.", " items downloaded.")),
-                t(ko, "다운로드 실패", "Download failed"),
+                format!("{}{suffix}", net_template(language.text("NDR.NET_DOWNLOAD_FAILED_COUNT", "Download failed. Completed {count}"), &[("count", &done)])),
+                format!("{}{suffix}", net_template(language.text("NDR.NET_DOWNLOAD_STOPPED_COUNT", "Download stopped. Completed {count}"), &[("count", &done)])),
+                format!("{}{suffix}", net_template(language.text("NDR.NET_DOWNLOAD_DONE_COUNT", "{count} items downloaded."), &[("count", &done)])),
+                language.text("NDR.NET_DOWNLOAD_FAILED", "Download failed"),
             ),
             TransferKind::Upload => (
-                format!("{} {done}{}{suffix}", t(ko, "업로드 실패. 완료", "Upload failed. Completed"), t(ko, "개", "")),
-                format!("{} {done}{}{suffix}", t(ko, "업로드를 중단했습니다. 완료", "Upload stopped. Completed"), t(ko, "개", "")),
-                format!("{done}{}{suffix}", t(ko, "개 파일을 업로드했습니다.", " files uploaded.")),
-                t(ko, "업로드 실패", "Upload failed"),
+                format!("{}{suffix}", net_template(language.text("NDR.NET_UPLOAD_FAILED_COUNT", "Upload failed. Completed {count}"), &[("count", &done)])),
+                format!("{}{suffix}", net_template(language.text("NDR.NET_UPLOAD_STOPPED_COUNT", "Upload stopped. Completed {count}"), &[("count", &done)])),
+                format!("{}{suffix}", net_template(language.text("NDR.NET_UPLOAD_DONE_COUNT", "{count} files uploaded."), &[("count", &done)])),
+                language.text("NDR.NET_UPLOAD_FAILED", "Upload failed"),
             ),
             TransferKind::UploadFolder { name } => (
-                format!("{} {done}{}{suffix}", t(ko, "폴더 업로드 실패. 완료", "Folder upload failed. Completed"), t(ko, "개", "")),
-                format!("{} {done}{}{suffix}", t(ko, "폴더 업로드를 중단했습니다. 완료", "Folder upload stopped. Completed"), t(ko, "개", "")),
-                format!("{}: {name}{suffix}", t(ko, "폴더를 업로드했습니다", "Folder uploaded")),
-                t(ko, "폴더 업로드 실패", "Folder upload failed"),
+                format!("{}{suffix}", net_template(language.text("NDR.NET_FOLDER_UPLOAD_FAILED_COUNT", "Folder upload failed. Completed {count}"), &[("count", &done)])),
+                format!("{}{suffix}", net_template(language.text("NDR.NET_FOLDER_UPLOAD_STOPPED_COUNT", "Folder upload stopped. Completed {count}"), &[("count", &done)])),
+                format!("{}{suffix}", net_template(language.text("NDR.NET_FOLDER_UPLOAD_DONE", "Folder uploaded: {name}"), &[("name", name)])),
+                language.text("NDR.NET_FOLDER_UPLOAD_FAILED", "Folder upload failed"),
             ),
         };
         let status = if error.is_some() { failed } else if cancelled { stopped } else { success };
@@ -1813,7 +1896,7 @@ impl App {
                 form.downloaded |= transferred > 0;
                 let reload = transferred > 0 && !form.local_loading && *destination == form.local_path;
                 if let Some(error) = &error {
-                    self.remote_box(caption, error);
+                    self.remote_box(caption, if error == "Connection lock failed" { language.text("NDR.NET_CONNECTION_LOCK_FAILED", "Connection lock failed") } else { error.clone() });
                 }
                 if reload {
                     let path = destination.clone();
@@ -1822,7 +1905,7 @@ impl App {
             }
             TransferKind::Upload | TransferKind::UploadFolder { .. } => {
                 if let Some(error) = &error {
-                    self.remote_box(caption, error);
+                    self.remote_box(caption, if error == "Connection lock failed" { language.text("NDR.NET_CONNECTION_LOCK_FAILED", "Connection lock failed") } else { error.clone() });
                 }
                 if transferred > 0 {
                     if let Some(form) = self.remote_form() {
@@ -1833,12 +1916,11 @@ impl App {
             }
         }
         if ok {
-            self.completion_notice("원격 전송 완료", "Remote transfer completed",
-                if ko { format!("{completed}개 항목 전송") }
-                else { format!("{completed} item(s) transferred") });
+            self.completion_notice_operation(self.language_pack.text("NDR.NET_REMOTE_TRANSFER_COMPLETED", "Remote transfer completed"),
+                net_template(language.text("NDR.NET_TRANSFERRED_COUNT", "Items transferred: {count}"), &[("count", &completed.to_string())]));
             self.remote_next_upload();
         } else if let Some(message) = error {
-            self.error_notice("원격 전송 실패", "Remote transfer failed", message);
+            self.error_notice_operation(self.language_pack.text("NDR.NET_REMOTE_TRANSFER_FAILED", "Remote transfer failed"), message);
         }
     }
 
@@ -1849,17 +1931,17 @@ impl App {
             return;
         }
         if !form.connected {
-            return self.remote_notice("먼저 원격 서버에 연결하세요.", "Connect to a remote server first.");
+            return self.remote_notice("NDR.NET_CONNECT_TO_A_REMOTE_SERVER_FIRST", "Connect to a remote server first.");
         }
         if !form.listing_valid {
             return;
         }
         let selected = form.selected_local();
         if selected.is_empty() {
-            return self.remote_notice("업로드할 로컬 파일이나 폴더를 선택하세요.", "Select local files or folders to upload.");
+            return self.remote_notice("NDR.NET_SELECT_LOCAL_FILES_OR_FOLDERS_TO_UPLOAD", "Select local files or folders to upload.");
         }
         if selected.iter().any(|item| item.is_dir && item.path.parent().is_none()) {
-            return self.remote_notice("드라이브 루트 대신 드라이브 안의 폴더를 선택하세요.", "Select a folder inside the drive instead of the drive root.");
+            return self.remote_notice("NDR.NET_SELECT_A_FOLDER_INSIDE_THE_DRIVE_INSTEAD_OF", "Select a folder inside the drive instead of the drive root.");
         }
         let files: Vec<PathBuf> = selected.iter().filter(|i| !i.is_dir).map(|i| i.path.clone()).collect();
         form.uploads = selected.iter().filter(|i| i.is_dir).map(|i| UploadStep::Folder(i.path.clone())).collect();
@@ -1879,29 +1961,29 @@ impl App {
 
     /// C# DownloadSelectedAsync.
     fn remote_download(&mut self) {
-        let ko = self.language == "ko";
+        let language = self.language_pack.clone();
         let Some(form) = self.remote_form() else { return };
         if !form.connected {
-            return self.remote_notice("먼저 원격 서버에 연결하세요.", "Connect to a remote server first.");
+            return self.remote_notice("NDR.NET_CONNECT_TO_A_REMOTE_SERVER_FIRST", "Connect to a remote server first.");
         }
         if form.busy.is_some() {
             return;
         }
         let destination = form.local_path.clone();
         if destination == DRIVES {
-            return self.remote_notice("로컬 드라이브를 먼저 선택하세요.", "Select a local drive first.");
+            return self.remote_notice("NDR.NET_SELECT_A_LOCAL_DRIVE_FIRST", "Select a local drive first.");
         }
         let selected = form.selected_remote();
         if selected.is_empty() {
-            return self.remote_notice("다운로드할 파일을 선택하세요.", "Select the files to download.");
+            return self.remote_notice("NDR.NET_SELECT_THE_FILES_TO_DOWNLOAD", "Select the files to download.");
         }
-        let collisions = selected.iter().filter(|e| safe_local_name(&e.name).is_ok_and(|n| std::fs::symlink_metadata(Path::new(&destination).join(n)).is_ok())).count();
+        let collisions = selected.iter().filter(|e| safe_local_name(&e.name).is_some_and(|n| std::fs::symlink_metadata(Path::new(&destination).join(n)).is_ok())).count();
         if collisions == 0 {
             return self.remote_begin_download(destination, selected, false);
         }
-        let text = format!("{}{collisions}{}", t(ko, "로컬 폴더에 같은 이름의 파일 ", "The local folder already has "), t(ko, "개가 있습니다. 덮어쓸까요?", " items with the same names. Overwrite them?"));
-        let caption = t(ko, "이름 충돌", "Name conflict");
-        self.system_box(caption, &text, MB_YESNOCANCEL | MB_ICONEXCLAMATION, move |app, answer, _| {
+        let text = net_template(language.text("NDR.NET_LOCAL_CONFLICT_PROMPT", "The local folder already has {count} items with the same names. Overwrite them?"), &[("count", &collisions.to_string())]);
+        let caption = language.text("NDR.NET_NAME_CONFLICT", "Name conflict");
+        self.system_box(&caption, &text, MB_YESNOCANCEL | MB_ICONEXCLAMATION, move |app, answer, _| {
             if answer != IDCANCEL {
                 app.remote_begin_download(destination, selected, answer == IDYES);
             }
@@ -1909,11 +1991,11 @@ impl App {
     }
 
     fn remote_begin_download(&mut self, destination: String, selected: Vec<RemoteRow>, overwrite: bool) {
-        let ko = self.language == "ko";
+        let language = self.language_pack.clone();
         if let Err(error) = std::fs::create_dir_all(&destination) {
-            return self.remote_box(t(ko, "다운로드 실패", "Download failed"), &error.to_string());
+            return self.remote_box(language.text("NDR.NET_DOWNLOAD_FAILED", "Download failed"), &error.to_string());
         }
-        let title = t(ko, "원격 다운로드", "Remote download").to_owned();
+        let title = language.text("NDR.NET_REMOTE_DOWNLOAD", "Remote download").to_owned();
         let kind = TransferKind::Download { destination: destination.clone() };
         self.remote_start_transfer(title, kind, move |client, pause, cancel, report| {
             let (mut completed, mut transferred) = (0usize, 0usize);
@@ -1921,10 +2003,10 @@ impl App {
                 for entry in &selected {
                     wait_if_paused(pause, cancel);
                     check(cancel)?;
-                    let local = Path::new(&destination).join(safe_local_name(&entry.name)?);
+                    let local = Path::new(&destination).join(safe_local_name(&entry.name).ok_or_else(|| language.text("NDR.NET_UNSAFE_FILENAME", "The remote filename is unsafe."))?);
                     if std::fs::symlink_metadata(&local).is_ok() && !overwrite {
                         completed += 1;
-                        report(format!("{}: {}", t(ko, "건너뜀", "Skipped"), entry.name), 0, None, completed);
+                        report(format!("{}: {}", language.text("NDR.NET_SKIPPED", "Skipped"), entry.name), 0, None, completed);
                         continue;
                     }
                     report(entry.remote_path.clone(), 0, entry.size, completed);
@@ -1953,13 +2035,13 @@ impl App {
 
     /// C# UploadFilesAsync(requestedPaths).
     fn remote_upload_files(&mut self, requested: Option<Vec<PathBuf>>) {
-        let ko = self.language == "ko";
+        let language = self.language_pack.clone();
         let Some(form) = self.remote_form() else { return };
         if form.busy.is_some() {
             return;
         }
         if !form.connected {
-            return self.remote_notice("먼저 원격 서버에 연결하세요.", "Connect to a remote server first.");
+            return self.remote_notice("NDR.NET_CONNECT_TO_A_REMOTE_SERVER_FIRST", "Connect to a remote server first.");
         }
         if !form.listing_valid {
             return;
@@ -1976,7 +2058,7 @@ impl App {
             }
             None => {
                 let initial = if form.local_path == DRIVES { native::documents_folder().unwrap_or_default() } else { PathBuf::from(&form.local_path) };
-                (self.remote_hooks.open_files)(t(ko, "업로드할 파일 선택", "Select files to upload"), Some(&initial))
+                (self.remote_hooks.open_files)(&language.text("NDR.NET_SELECT_FILES_TO_UPLOAD", "Select files to upload"), Some(&initial))
             }
         };
         if paths.is_empty() {
@@ -1998,9 +2080,9 @@ impl App {
         if collisions.is_empty() {
             return self.remote_begin_upload(remote_directory, paths);
         }
-        let text = format!("{}{}{}", t(ko, "원격 폴더에 같은 이름의 파일 ", "The remote folder already has "), grouped(collisions.len() as u64), t(ko, "개가 있습니다. 덮어쓸까요?", " files with the same names. Overwrite them?"));
-        let caption = t(ko, "원격 이름 충돌", "Remote name conflict");
-        self.system_box(caption, &text, MB_YESNOCANCEL | MB_ICONEXCLAMATION, move |app, answer, _| {
+        let text = net_template(language.text("NDR.NET_REMOTE_CONFLICT_PROMPT", "The remote folder already has {count} files with the same names. Overwrite them?"), &[("count", &grouped(collisions.len() as u64))]);
+        let caption = language.text("NDR.NET_REMOTE_NAME_CONFLICT", "Remote name conflict");
+        self.system_box(&caption, &text, MB_YESNOCANCEL | MB_ICONEXCLAMATION, move |app, answer, _| {
             if answer == IDCANCEL {
                 if let Some(form) = app.remote_form() {
                     form.uploads.clear();
@@ -2013,8 +2095,8 @@ impl App {
     }
 
     fn remote_begin_upload(&mut self, remote_directory: String, files: Vec<PathBuf>) {
-        let ko = self.language == "ko";
-        let title = t(ko, "원격 업로드", "Remote upload").to_owned();
+        let language = self.language_pack.clone();
+        let title = language.text("NDR.NET_REMOTE_UPLOAD", "Remote upload").to_owned();
         self.remote_start_transfer(title, TransferKind::Upload, move |client, pause, cancel, report| {
             let (mut completed, mut transferred) = (0usize, 0usize);
             let result = (|| {
@@ -2041,13 +2123,13 @@ impl App {
 
     /// C# UploadFolderAsync(selectedLocalRoot).
     fn remote_upload_folder(&mut self, selected: Option<PathBuf>) {
-        let ko = self.language == "ko";
+        let language = self.language_pack.clone();
         let Some(form) = self.remote_form() else { return };
         if form.busy.is_some() {
             return;
         }
         if !form.connected {
-            return self.remote_notice("먼저 원격 서버에 연결하세요.", "Connect to a remote server first.");
+            return self.remote_notice("NDR.NET_CONNECT_TO_A_REMOTE_SERVER_FIRST", "Connect to a remote server first.");
         }
         if !form.listing_valid {
             return;
@@ -2056,7 +2138,7 @@ impl App {
             Some(root) => root,
             None => {
                 let initial = if form.local_path == DRIVES { native::documents_folder().unwrap_or_default() } else { PathBuf::from(&form.local_path) };
-                match (self.folder_picker)(t(ko, "원격 서버에 올릴 폴더 선택", "Select a folder to upload"), Some(&initial)) {
+                match (self.folder_picker)(&language.text("NDR.NET_SELECT_A_FOLDER_TO_UPLOAD", "Select a folder to upload"), Some(&initial)) {
                     Some(root) => root,
                     None => return,
                 }
@@ -2068,7 +2150,7 @@ impl App {
         }
         let name = root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         let remote_root = format!("{}/{name}", form.remote_path.trim_end_matches('/'));
-        let title = t(ko, "원격 폴더 업로드", "Remote folder upload").to_owned();
+        let title = language.text("NDR.NET_REMOTE_FOLDER_UPLOAD", "Remote folder upload").to_owned();
         self.remote_start_transfer(title, TransferKind::UploadFolder { name }, move |client, pause, cancel, report| {
             let mut completed = 0usize;
             report(remote_root.clone(), 0, None, 0);
@@ -2085,8 +2167,8 @@ impl App {
 
     /// C# CreateRemoteFolderAsync.
     fn remote_new_folder(&mut self) {
-        let ko = self.language == "ko";
-        self.prompt(t(ko, "새 원격 폴더", "New remote folder"), t(ko, "폴더 이름", "Folder name"), "NewFolder", None, false, move |app, value, _| {
+        let language = self.language_pack.clone();
+        self.prompt(&language.text("NDR.NET_NEW_REMOTE_FOLDER", "New remote folder"), &language.text("NDRVault.FolderName", "Folder name"), "NewFolder", None, false, move |app, value, _| {
             let Some(name) = value.filter(|n| !n.trim().is_empty() && !n.contains('/') && !n.contains('\\')) else { return };
             let caption = app.remote_labels().menu[0].clone();
             app.remote_run(caption, RemoteOp::Refresh, move |client, directory| client.mkdir(&format!("{}/{name}", directory.trim_end_matches('/'))));
@@ -2110,13 +2192,13 @@ impl App {
 
     /// C# RenameRemoteAsync.
     fn remote_rename(&mut self) {
-        let ko = self.language == "ko";
+        let language = self.language_pack.clone();
         let caption = self.remote_labels().menu[1].clone();
         let Some(form) = self.remote_form() else { return };
         let Some(entry) = form.current_remote().filter(|e| !e.is_parent) else {
-            return self.remote_box(&caption, t(ko, "이름을 바꿀 원격 항목 하나를 선택하세요.", "Select one remote item to rename."));
+            return self.remote_box(&caption, language.text("NDR.NET_SELECT_ONE_REMOTE_ITEM_TO_RENAME", "Select one remote item to rename."));
         };
-        self.prompt(t(ko, "원격 이름 변경", "Rename remote item"), t(ko, "새 이름", "New name"), &entry.name.clone(), None, false, move |app, value, _| {
+        self.prompt(&language.text("NDR.NET_RENAME_REMOTE_ITEM", "Rename remote item"), &language.text("NDR.NET_NEW_NAME", "New name"), &entry.name.clone(), None, false, move |app, value, _| {
             let Some(name) = value.filter(|n| !n.trim().is_empty() && !n.contains('/') && !n.contains('\\')) else { return };
             let target = format!("{}/{name}", parent_path(&entry.remote_path).trim_end_matches('/'));
             let source = entry.remote_path.clone();
@@ -2126,7 +2208,7 @@ impl App {
 
     /// C# DeleteRemoteAsync.
     fn remote_delete(&mut self) {
-        let ko = self.language == "ko";
+        let language = self.language_pack.clone();
         let caption = self.remote_labels().menu[2].clone();
         let Some(form) = self.remote_form() else { return };
         if form.busy.is_some() {
@@ -2134,10 +2216,10 @@ impl App {
         }
         let selected = form.selected_remote();
         if selected.is_empty() {
-            return self.remote_box(&caption, t(ko, "삭제할 원격 파일이나 폴더를 선택하세요.", "Select the remote files or folders to delete."));
+            return self.remote_box(&caption, language.text("NDR.NET_SELECT_THE_REMOTE_FILES_OR_FOLDERS_TO_DELETE", "Select the remote files or folders to delete."));
         }
-        let text = format!("{}{}{}", t(ko, "원격 항목 ", "Delete "), grouped(selected.len() as u64), t(ko, "개를 서버에서 삭제할까요?", " remote items from the server?"));
-        self.system_box(t(ko, "원격 삭제", "Remote delete"), &text, MB_YESNO | MB_ICONEXCLAMATION, move |app, answer, _| {
+        let text = net_template(language.text("NDR.NET_DELETE_CONFIRM", "Delete {count} remote items from the server?"), &[("count", &grouped(selected.len() as u64))]);
+        self.system_box(&language.text("NDR.NET_REMOTE_DELETE", "Remote delete"), &text, MB_YESNO | MB_ICONEXCLAMATION, move |app, answer, _| {
             if answer != IDYES {
                 return;
             }
@@ -2163,21 +2245,21 @@ impl App {
 
     /// C# ChangeRemotePermissionsAsync: a permission window per item (all/skip/OK/cancel); when unknown, a one-time "default 644" confirmation.
     fn remote_permissions(&mut self) {
-        let ko = self.language == "ko";
+        let language = self.language_pack.clone();
         let caption = self.remote_labels().menu[3].clone();
         let Some(form) = self.remote_form() else { return };
         let selected = form.selected_remote();
         if selected.is_empty() {
-            return self.remote_box(&caption, t(ko, "원격 권한을 변경할 항목을 선택하세요.", "Select the remote items whose permissions to change."));
+            return self.remote_box(&caption, language.text("NDR.NET_SELECT_THE_REMOTE_ITEMS_WHOSE_PERMISSIONS_TO_CHANGE", "Select the remote items whose permissions to change."));
         }
         if !form.connected {
-            return self.remote_box(&caption, t(ko, "먼저 원격 서버에 연결하세요.", "Connect to a remote server first."));
+            return self.remote_box(&caption, language.text("NDR.NET_CONNECT_TO_A_REMOTE_SERVER_FIRST", "Connect to a remote server first."));
         }
         self.permission_step(PermissionRun { entries: selected, index: 0, apply_all: None, default_confirmed: false, plan: Vec::new(), skipped: 0 }, false);
     }
 
     fn permission_step(&mut self, mut run: PermissionRun, stopped: bool) {
-        let ko = self.language == "ko";
+        let language = self.language_pack.clone();
         if stopped || run.index >= run.entries.len() {
             return self.permission_finish(run, stopped);
         }
@@ -2190,8 +2272,8 @@ impl App {
         let mode = match entry.mode {
             Some(mode) => mode & 0o777,
             None if !run.default_confirmed => {
-                let text = t(ko, "서버가 이 항목의 기존 권한을 알려주지 않습니다. 기본값 644로 편집할까요?", "The server did not report this item's permissions. Edit it starting from 644?");
-                self.system_box(t(ko, "원격 권한", "Remote permissions"), text, MB_YESNO | MB_ICONEXCLAMATION, move |app, answer, _| {
+                let text = language.text("NDR.NET_THE_SERVER_DID_NOT_REPORT_THIS_ITEM_S", "The server did not report this item's permissions. Edit it starting from 644?");
+                self.system_box(&language.text("NDR.NET_REMOTE_PERMISSIONS", "Remote permissions"), &text, MB_YESNO | MB_ICONEXCLAMATION, move |app, answer, _| {
                     if answer != IDYES {
                         return app.permission_finish(run, true);
                     }
@@ -2234,7 +2316,7 @@ impl App {
 
     /// Applies the chosen permissions, rereads, then "changed permissions of N/M items, skipped K( (aborted))".
     fn permission_finish(&mut self, run: PermissionRun, stopped: bool) {
-        let ko = self.language == "ko";
+        let language = self.language_pack.clone();
         if run.plan.is_empty() && run.skipped == 0 {
             return;
         }
@@ -2263,17 +2345,55 @@ impl App {
                         }
                     }
                 }
-                Err(_) => failures.push("Connection lock failed".into()),
+                Err(_) => failures.push(language.text("NDR.NET_CONNECTION_LOCK_FAILED", "Connection lock failed")),
             }
-            let status = format!(
-                "{}/{}{}{}{}",
-                grouped(succeeded),
-                grouped(total as u64),
-                t(ko, "개 항목 권한 변경, 건너뜀 ", " items changed, skipped "),
-                grouped(skipped as u64),
-                if ko { format!("개{}", if stopped { " (중단)" } else { "" }) } else { (if stopped { " (stopped)" } else { "" }).to_owned() }
-            );
+            let status = net_template(language.text("NDR.NET_PERMISSIONS_RESULT", "Permissions changed: {done}/{total} · Skipped: {skipped}"), &[("done", &grouped(succeeded)), ("total", &grouped(total as u64)), ("skipped", &grouped(skipped as u64))]);
+            let status = if stopped { net_template(language.text("NDR.NET_PERMISSIONS_STOPPED", "{summary} (stopped)"), &[("summary", &status)]) } else { status };
             RemoteEvent::Done { session, op: RemoteOp::Permissions { remaining, status, failures }, result: Ok(()), caption }
         });
+    }
+}
+
+
+#[cfg(test)]
+mod localized_remote_tests {
+    use super::*;
+
+    #[test]
+    fn known_validation_localizes_without_changing_server_or_os_diagnostics() {
+        let (root, _ctx, app) = super::super::tools_tests::fixture("remote-error-localization", "ko");
+        let test = RemoteValidation::AuthFailed;
+        assert_eq!(RemoteValidation::classify("SSH authentication failed"), Some(test));
+        assert_eq!(remote_error_text(&app.language_pack, "SSH authentication failed"),
+            "SSH 인증에 실패했습니다. 사용자 이름과 인증 정보를 확인하세요.");
+        assert_eq!(remote_error_text(&app.language_pack, "530 SSH authentication failed"), "530 SSH authentication failed");
+        assert_eq!(remote_error_text(&app.language_pack, "Access is denied. (os error 5)"), "Access is denied. (os error 5)");
+        drop(app);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn network_templates_keep_inserted_paths_and_unknown_tokens_verbatim() {
+        assert_eq!(net_template("{path} · {count} · {future}".into(),
+            &[("path", r"C:\{count}\file"), ("count", "22")]),
+            r"C:\{count}\file · 22 · {future}");
+    }
+
+    #[test]
+    fn remote_dialog_and_transfer_status_read_the_selected_locale() {
+        let (root, _ctx, mut app) = super::super::tools_tests::fixture("remote-i18n-keys", "en");
+        let catalogs = root.join("catalogs");
+        std::fs::create_dir(&catalogs).unwrap();
+        std::fs::write(catalogs.join("fr.lang"),
+            "[NDR]\nNET_CONNECT_TO_A_HOST=Connectez-vous à un serveur.\nNET_NDR_REMOTE_CONNECTION=Connexion distante NDR\nNET_UPLOAD_DONE_COUNT=Envois : {count}\n").unwrap();
+        app.language = "fr".into();
+        app.language_pack = compat::Language::load(&catalogs, "fr");
+        app.open_remote_window(None, None);
+        assert_eq!(app.original_dialogs.last().unwrap().title, "Connexion distante NDR");
+        assert_eq!(app.remote_form().unwrap().status, "Connectez-vous à un serveur.");
+        app.remote_transfer_done(0, TransferKind::Upload, Ok(()), false, 5, 0, 0);
+        assert_eq!(app.remote_form().unwrap().status, "Envois : 5");
+        drop(app);
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

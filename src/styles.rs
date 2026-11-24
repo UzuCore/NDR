@@ -1,4 +1,4 @@
-//! Original NexusFile skin and color-map data, independent of any GUI toolkit.
+//! NDR skin and color-map resources, with compatibility for existing imported color maps.
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
@@ -24,29 +24,42 @@ pub fn parse_color(text: &str) -> Option<Rgba> {
         },
     ])
 }
-/// Original TNXBasicColor order (same order as the color rows of lbBasicColor in Preferences): 14 file list colors, 6 folder tree colors.
+/// NDR palette defaults (14 file-list roles, then six folder-tree roles).
 pub const DEFAULT_ELEMENTS: &[(&str, &str)] = &[
-    ("NXBACK", "000000"),
-    ("NXFORE", "C0C0C0"),
-    ("NXFOLDER", "EA2222"),
-    ("NXDRIVE", "8080FF"),
-    ("NXREADONLY", "FFFF00"),
-    ("NXHIDDEN", "FF0000"),
-    ("NXDESC", "3682AF"),
-    ("NXMB", "FF0000"),
-    ("NXGB", "FF0000"),
-    ("NXSIZE", "606060"),
-    ("NXTIME", "808080"),
-    ("NXATTR", "606060"),
-    ("NXSELECT", "FFFFFF"),
-    ("NXLINE", "222222"),
-    ("NXTBACK", "FFFFFF"),
-    ("NXTFORE", "000000"),
-    ("NXTOPENED", "FF0000"),
-    ("NXTFOCUSED", "0000FF"),
-    ("NXTLINE", "C0C0C0"),
-    ("NXTHINT", "808080"),
+    ("NXBACK", "151B24"),
+    ("NXFORE", "DBE4EE"),
+    ("NXFOLDER", "8EDDCF"),
+    ("NXDRIVE", "AEC9FB"),
+    ("NXREADONLY", "F3CF7D"),
+    ("NXHIDDEN", "DB9EA2"),
+    ("NXDESC", "A9BBD0"),
+    ("NXMB", "E8BD8A"),
+    ("NXGB", "F1A276"),
+    ("NXSIZE", "AAC3D5"),
+    ("NXTIME", "A7B5CA"),
+    ("NXATTR", "AEBFCE"),
+    ("NXSELECT", "B9E0E9"),
+    ("NXLINE", "2A3748"),
+    ("NXTBACK", "111722"),
+    ("NXTFORE", "D5E0ED"),
+    ("NXTOPENED", "ABE6D9"),
+    ("NXTFOCUSED", "8FC5F0"),
+    ("NXTLINE", "42536A"),
+    ("NXTHINT", "A3AFBF"),
 ];
+
+pub fn default_element_color(key: &str) -> Option<&'static str> {
+    DEFAULT_ELEMENTS.iter().find(|(name, _)| name.eq_ignore_ascii_case(key)).map(|(_, value)| *value)
+}
+
+fn rgb_color_section(section: &str) -> bool {
+    section.eq_ignore_ascii_case("NDRCOLOR1") || section.eq_ignore_ascii_case("NEXUSFILECOLOR5")
+}
+
+fn has_rgb_color_section(text: &str) -> bool {
+    text.lines().any(|line| line.trim().strip_prefix('[').and_then(|s| s.strip_suffix(']')).is_some_and(rgb_color_section))
+}
+
 fn rgb_hex(color: Rgba) -> String {
     format!("{:02X}{:02X}{:02X}", color[0], color[1], color[2])
 }
@@ -73,13 +86,13 @@ pub struct ColorMap {
     pub extensions: BTreeMap<String, Rgba>,
 }
 impl ColorMap {
-    /// Original TNXFileColorMap::LoadFromFile 0x7d3aa8: a file with a "[NEXUSFILECOLOR5]" line holds the 20 basic colors as NX* = RRGGBB
+    /// "[NDRCOLOR1]" and the compatible legacy "[NEXUSFILECOLOR5]" format hold 20 base colors as NX* = RRGGBB
     /// (RGBStrToColor) and, after "[Ext]", extension = RRGGBB lines. A file without that line is the older format: the basic colors are
     /// decimal TColor values under the old names of table 0x92d358 (GB shares MB, and size, time, attributes and selection share NORMAL),
     /// and the "[Ext]" lines are decimal too (converted with ColorToRGBStr). The original then saved the file in the new format; here it is
     /// only read. GetExtension 0x7d3894: Values[ext], else the normal text color.
     pub fn parse(text: &str) -> Result<Self, String> {
-        if !text.lines().any(|line| line.trim().eq_ignore_ascii_case("[NEXUSFILECOLOR5]")) {
+        if !has_rgb_color_section(text) {
             return Self::parse_legacy(text);
         }
         let mut map = Self::default();
@@ -106,14 +119,14 @@ impl ColorMap {
                 if let Some(key) = extension_key(key) {
                     map.extensions.insert(key, color);
                 }
-            } else if section.eq_ignore_ascii_case("NEXUSFILECOLOR5")
+            } else if rgb_color_section(section)
                 && key.trim().to_ascii_uppercase().starts_with("NX")
             {
                 map.elements.insert(key.trim().to_ascii_uppercase(), color);
             }
         }
         if map.elements.is_empty() && map.extensions.is_empty() {
-            return Err("The NexusFile color map contains no usable colors".into());
+            return Err("The color map contains no usable colors".into());
         }
         Ok(map)
     }
@@ -151,17 +164,15 @@ impl ColorMap {
             }
         }
         if map.elements.is_empty() && map.extensions.is_empty() {
-            return Err("The NexusFile color map contains no usable colors".into());
+            return Err("The color map contains no usable colors".into());
         }
         Ok(map)
     }
-    /// Original LoadFromFile 0x7d3aa8: TStringList.LoadFromFile(path, TEncoding.Unicode) (FUN_00523990: a BOM wins, otherwise UTF-16LE), and
-    /// without "[NEXUSFILECOLOR5]" again with the ANSI default (FUN_005222e0) for the older format. Previously a BOM-less UTF-16 file such as
-    /// the bundled nocolor.col could not be read.
+    /// Accept UTF-8 and UTF-16 with BOM; recognize older BOM-less UTF-16 maps and preserve the ANSI legacy fallback.
     pub fn load(path: &Path) -> Result<Self, String> {
         let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
         let unicode = crate::compat::decode(&bytes, true);
-        if unicode.lines().any(|line| line.trim().eq_ignore_ascii_case("[NEXUSFILECOLOR5]")) {
+        if has_rgb_color_section(&unicode) {
             return Self::parse(&unicode);
         }
         Self::parse(&crate::compat::decode(&bytes, false))
@@ -190,10 +201,7 @@ impl ColorMap {
             .get(&key.to_ascii_uppercase())
             .copied()
             .or_else(|| {
-                DEFAULT_ELEMENTS
-                    .iter()
-                    .find(|(name, _)| name.eq_ignore_ascii_case(key))
-                    .and_then(|(_, value)| parse_color(value))
+                default_element_color(key).and_then(parse_color)
             })
     }
     pub fn extension(&self, extension: &str) -> Option<Rgba> {
@@ -208,13 +216,16 @@ pub struct Skin {
     pub values: BTreeMap<String, String>,
     pub colors: BTreeMap<String, Rgba>,
     directory: PathBuf,
+    theme: &'static str,
 }
 impl Skin {
     pub fn load(directory: &Path, theme: &str) -> Result<Self, String> {
         let theme = theme.trim().to_ascii_lowercase();
-        if !matches!(theme.as_str(), "black" | "classic") {
-            return Err(format!("No original skin for theme: {theme}"));
-        }
+        let theme_name = match theme.as_str() {
+            "black" => "Black",
+            "classic" => "Classic",
+            _ => return Err(format!("No NDR skin for theme: {theme}")),
+        };
         let directory = std::fs::canonicalize(directory.join(theme)).map_err(|e| e.to_string())?;
         let bytes = std::fs::read(directory.join("conf.ini")).map_err(|e| e.to_string())?;
         let text = crate::compat::decode(&bytes, false);
@@ -223,6 +234,7 @@ impl Skin {
         for line in text.lines().map(str::trim) {
             if line.is_empty()
                 || line.starts_with([';', '#'])
+                || line.eq_ignore_ascii_case("NDRSKIN1.0")
                 || line.to_ascii_uppercase().starts_with("NEXUSFILESKIN")
             {
                 continue;
@@ -247,10 +259,15 @@ impl Skin {
             .collect();
         Ok(Self {
             directory,
+            theme: theme_name,
             values,
             colors,
         })
     }
+    pub fn theme_name(&self) -> &'static str {
+        self.theme
+    }
+
     /// Original skin reader FUN_00463798: Values[key] through FUN_00463444 (exactly six hex digits RRGGBB, otherwise the default color).
     pub fn color(&self, section: &str, key: &str) -> Option<Rgba> {
         self.colors
@@ -356,7 +373,7 @@ mod tests {
         assert!(map.extension("bad?").is_none());
         let reloaded = ColorMap::parse(&map.serialize()).unwrap();
         assert_eq!(reloaded.extension("TXT"), map.extension("txt"));
-        assert_eq!(map.element("NXSELECT"), Some([255, 255, 255, 255]));
+        assert_eq!(map.element("NXSELECT"), Some([0xB9, 0xE0, 0xE9, 255]));
         assert!(ColorMap::parse("[Ext]\r\nTXT=broken\r\n").is_err());
     }
     /// The color maps bundled like the original <program folder>\colors (black, blue, brown, nocolor, white1-3) all load with their base colors.
@@ -371,6 +388,18 @@ mod tests {
             assert!(map.elements.contains_key("NXBACK") && map.elements.contains_key("NXFORE"), "{name}: {:?}", map.elements.keys().collect::<Vec<_>>());
         }
     }
+    #[test]
+    fn ndr_presets_keep_roles_and_opt_in_extension_overrides() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("Resources/Colors");
+        let black = ColorMap::load(&dir.join("black.col")).unwrap();
+        let plain = ColorMap::load(&dir.join("nocolor.col")).unwrap();
+        assert_eq!(black.elements.len(), DEFAULT_ELEMENTS.len());
+        assert_eq!(plain.elements.len(), DEFAULT_ELEMENTS.len());
+        assert_eq!(black.element("NXFOLDER"), Some([0x8E, 0xDD, 0xCF, 255]));
+        assert_eq!(black.extension(".JPG"), Some([0xE0, 0xA7, 0xEE, 255]));
+        assert!(plain.extensions.is_empty());
+    }
+
     /// Original LoadFromFile 0x7d3aa8 without "[NEXUSFILECOLOR5]": decimal TColor (0x00BBGGRR) under the old names; MB also gives GB and
     /// NORMAL also gives size, time, attributes and selection.
     #[test]
@@ -382,17 +411,17 @@ mod tests {
         assert_eq!(map.element("NXGB"), Some([0xFF, 0, 0, 255]), "GB reads MB");
         assert_eq!(map.element("NXSELECT"), Some([0xC0, 0xC0, 0xC0, 255]), "selection reads NORMAL");
         assert_eq!(map.element("NXTFOCUSED"), Some([0, 0, 0xFF, 255]));
-        assert_eq!(map.element("NXHIDDEN"), Some([0xFF, 0, 0, 255]), "a system color keeps the default");
+        assert_eq!(map.element("NXHIDDEN"), default_element_color("NXHIDDEN").and_then(parse_color), "a system color keeps the NDR default");
         assert_eq!(map.extension("exe"), Some([0, 0xFF, 0, 255]));
     }
     #[test]
-    fn real_original_black_skin_values_load() {
+    fn bundled_black_skin_values_load() {
         let skin = Skin::load(
             Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/Resources/Skins")),
             "Black",
         )
         .unwrap();
-        assert_eq!(skin.color("Menu", "mmainback"), Some([42, 42, 42, 255]));
+        assert_eq!(skin.color("Menu", "mmainback"), Some([0x20, 0x29, 0x33, 255]));
         assert_eq!(skin.positive_integer("Toolbar", "tbheight", 10), 51);
         assert!(skin.asset("Toolbar", "tbbackimg").is_some());
     }

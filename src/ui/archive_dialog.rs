@@ -156,18 +156,18 @@ pub(super) fn archive_output_path(text: &str, current: &Path) -> Option<PathBuf>
 }
 
 /// EnsureArchiveOutputSafe: Err(text) when the output is one of the source files or inside a source folder.
-pub(super) fn output_conflict(sources: &[PathBuf], output: &Path, ko: bool) -> Option<String> {
+pub(super) fn output_conflict(sources: &[PathBuf], output: &Path, language: &compat::Language) -> Option<String> {
     let full = |p: &Path| std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf()).to_string_lossy().into_owned();
     let output = full(output);
     for source in sources {
         let source_full = full(source);
         if source.is_file() && ndr::names::equals_ignore_case(&source_full, &output) {
-            return Some(if ko { "압축 결과물 경로와 원본 파일 경로가 같습니다." } else { "The archive path is the same as a source file." }.into());
+            return Some(language.text("NDR.OP_ARCHIVE_THE_ARCHIVE_PATH_IS_THE_SAME_AS_A_SOURCE", "The archive path is the same as a source file."));
         }
         if source.is_dir() {
             let prefix = format!("{}\\", source_full.trim_end_matches(['\\', '/']));
             if output.to_lowercase().starts_with(&prefix.to_lowercase()) {
-                return Some(if ko { "압축 결과물을 압축 대상 폴더 안에 저장할 수 없습니다." } else { "The archive cannot be saved inside a folder being archived." }.into());
+                return Some(language.text("NDR.OP_ARCHIVE_THE_ARCHIVE_CANNOT_BE_SAVED_INSIDE_A_FOLDER_BEING", "The archive cannot be saved inside a folder being archived."));
             }
         }
     }
@@ -305,14 +305,14 @@ impl App {
     pub(super) fn archive_command(&mut self, kind: ArchiveKind) {
         if self.panes[self.active].archive.is_some() {
             return match kind {
-                ArchiveKind::Create => self.warn("압축 파일 안에서 새 압축 파일을 만들 수 없습니다.", "A new archive cannot be created inside an archive."),
-                ArchiveKind::Zip => self.notice("압축 파일 안에서는 새 압축 파일을 만들 수 없습니다.", "A new archive cannot be created inside an archive."),
-                _ => self.warn("압축 파일 안에서는 새 압축 파일을 만들 수 없습니다.", "A new archive cannot be created inside an archive."),
+                ArchiveKind::Create => self.warn_operation(&self.language_pack.text("NDR.OP_ARCHIVE_A_NEW_ARCHIVE_CANNOT_BE_CREATED_INSIDE_AN_ARCHIVE", "A new archive cannot be created inside an archive.")),
+                ArchiveKind::Zip => self.notice_operation(&self.language_pack.text("NDR.OP_ARCHIVE_A_NEW_ARCHIVE_CANNOT_BE_CREATED_INSIDE_AN_ARCHIVE", "A new archive cannot be created inside an archive.")),
+                _ => self.warn_operation(&self.language_pack.text("NDR.OP_ARCHIVE_A_NEW_ARCHIVE_CANNOT_BE_CREATED_INSIDE_AN_ARCHIVE", "A new archive cannot be created inside an archive.")),
             };
         }
         let paths = self.archive_sources();
         if paths.is_empty() {
-            return if kind == ArchiveKind::Zip { self.notice("압축할 파일이나 폴더를 선택하세요.", "Select the files or folders to archive.") } else { self.warn("압축할 파일이나 폴더를 선택하세요.", "Select the files or folders to archive.") };
+            return if kind == ArchiveKind::Zip { self.notice_operation(&self.language_pack.text("NDR.OP_ARCHIVE_SELECT_THE_FILES_OR_FOLDERS_TO_ARCHIVE", "Select the files or folders to archive.")) } else { self.warn_operation(&self.language_pack.text("NDR.OP_ARCHIVE_SELECT_THE_FILES_OR_FOLDERS_TO_ARCHIVE", "Select the files or folders to archive.")) };
         }
         if kind == ArchiveKind::Zip {
             let zip = self.archive_formats(false).remove(0);
@@ -382,20 +382,18 @@ impl App {
     /// Whether the bundled 7-Zip can create it (no external programs). Ok(None) = bundled 7-Zip.
     pub(super) fn archive_program(&self, choice: &ArchiveChoice) -> Result<Option<ExternalProgram>, String> {
         let extension = choice.format.extension.as_str();
-        let ko = self.language == "ko";
         // The bundled 7zip+ puts passwords on ZIP/7Z and splits ZIP/7Z/ALZ/EGG (.001...).
         if !choice.password.is_empty() && !matches!(extension, "zip" | "7z") {
-            return Err(if ko { format!(".{extension} 형식은 암호를 넣을 수 없습니다.") } else { format!("The .{extension} format cannot be encrypted.") });
+            return Err(super::file_commands::operation_format(&self.language_pack, "NDR.OP_ARCHIVE_THE_0_FORMAT_CANNOT_BE_ENCRYPTED", "The .{0} format cannot be encrypted.", &[&extension]));
         }
         if choice.volume.is_some() && !matches!(extension, "zip" | "7z" | "alz" | "egg") {
-            return Err(if ko { format!(".{extension} 형식은 분할 압축을 할 수 없습니다.") } else { format!("The .{extension} format cannot be split into volumes.") });
+            return Err(super::file_commands::operation_format(&self.language_pack, "NDR.OP_ARCHIVE_THE_0_FORMAT_CANNOT_BE_SPLIT_INTO_VOLUMES", "The .{0} format cannot be split into volumes.", &[&extension]));
         }
         Ok(None)
     }
 
     /// From the save dialog through checks, confirmation and the run.
     fn archive_save_step(&mut self, kind: ArchiveKind, paths: Vec<PathBuf>, choice: ArchiveChoice, _unused: Option<()>) {
-        let ko = self.language == "ko";
         let program = match self.archive_program(&choice) {
             Ok(program) => program,
             Err(error) => return self.system_box("NDR", &error, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {}),
@@ -405,14 +403,14 @@ impl App {
         let upper = extension.to_uppercase();
         let (title, filter_name, filter_spec, name) = match kind {
             ArchiveKind::Zip => (
-                if ko { "ZIP 압축 파일 만들기" } else { "Create ZIP archive" }.to_owned(),
-                if ko { "ZIP 압축 파일 (*.zip)" } else { "ZIP archives (*.zip)" }.to_owned(),
+                self.language_pack.text("NDR.OP_ARCHIVE_CREATE_ZIP_ARCHIVE", "Create ZIP archive"),
+                self.language_pack.text("NDR.OP_ARCHIVE_ZIP_ARCHIVES_ZIP", "ZIP archives (*.zip)"),
                 "*.zip".to_owned(),
-                if ko { "새 압축 파일.zip" } else { "New archive.zip" }.to_owned(),
+                self.language_pack.text("NDR.OP_ARCHIVE_NEW_ARCHIVE_ZIP", "New archive.zip"),
             ),
             ArchiveKind::Create => (
-                if ko { "압축 파일 만들기" } else { "Create archive" }.to_owned(),
-                if ko { format!(".{upper} 파일 (*.{extension})") } else { format!(".{upper} files (*.{extension})") },
+                self.language_pack.text("NDR.OP_ARCHIVE_CREATE_ARCHIVE", "Create archive"),
+                super::file_commands::operation_format(&self.language_pack, "NDR.OP_ARCHIVE_0_FILES_1", ".{0} files (*.{1})", &[&upper, &extension]),
                 format!("*.{extension}"),
                 default_archive_name(&paths, &folder, &extension),
             ),
@@ -426,15 +424,15 @@ impl App {
                 }
                 let joined = specs.join(";");
                 (
-                    if kind == ArchiveKind::Move { if ko { "압축 파일로 이동" } else { "Move to archive" } } else if ko { "압축 파일에 추가" } else { "Add to archive" }.to_owned(),
-                    if ko { format!("압축 파일 ({joined})") } else { format!("Archives ({joined})") },
+                    if kind == ArchiveKind::Move { self.language_pack.text("NDR.OP_ARCHIVE_MOVE_TO_ARCHIVE", "Move to archive") } else { self.language_pack.text("NDR.OP_ARCHIVE_ADD_TO_ARCHIVE", "Add to archive") },
+                    super::file_commands::operation_format(&self.language_pack, "NDR.OP_ARCHIVE_ARCHIVES_0", "Archives ({0})", &[&joined]),
                     joined,
                     default_archive_name(&paths, &folder, &extension),
                 )
             }
         };
-        let all = if ko { "모든 파일 (*.*)" } else { "All files (*.*)" };
-        let filters: Vec<(&str, &str)> = if kind == ArchiveKind::Zip { vec![(filter_name.as_str(), filter_spec.as_str())] } else { vec![(filter_name.as_str(), filter_spec.as_str()), (all, "*.*")] };
+        let all = self.language_pack.text("NDR.OP_COMMON_ALL_FILES_FILTER", "All files (*.*)");
+        let filters: Vec<(&str, &str)> = if kind == ArchiveKind::Zip { vec![(filter_name.as_str(), filter_spec.as_str())] } else { vec![(filter_name.as_str(), filter_spec.as_str()), (all.as_str(), "*.*")] };
         let chosen = match choice.output.clone() {
             // Original TfAddToArc: the window's cbFileName is the output name (no save dialog).
             Some(path) => path,
@@ -444,7 +442,7 @@ impl App {
             }
         };
         let output = if matches!(kind, ArchiveKind::Add | ArchiveKind::Move) { archive::first_volume_path(&chosen) } else { std::path::absolute(&chosen).unwrap_or(chosen) };
-        if let Some(error) = output_conflict(&paths, &output, ko) {
+        if let Some(error) = output_conflict(&paths, &output, &self.language_pack) {
             return self.system_box("NDR", &error, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
         }
         let family = archive::output_family(&output);
@@ -454,10 +452,10 @@ impl App {
             }
             let mut preview = family.iter().take(8).filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned())).collect::<Vec<_>>().join("\r\n");
             if family.len() > 8 {
-                preview += &if ko { format!("\r\n외 {}개", n0(family.len() - 8)) } else { format!("\r\nand {} more", n0(family.len() - 8)) };
+                preview += &super::file_commands::operation_format(&self.language_pack, "NDR.OP_ARCHIVE_MORE", "\r\nand {0} more", &[&n0(family.len() - 8)]);
             }
-            let text = if ko { format!("기존 압축 파일 묶음 {}개를 새 결과로 교체할까요?\r\n\r\n{preview}", n0(family.len())) } else { format!("Replace the {} existing archive files with the new result?\r\n\r\n{preview}", n0(family.len())) };
-            let caption = self.tr("압축 파일 교체", "Replace archive").into_owned();
+            let text = super::file_commands::operation_format(&self.language_pack, "NDR.OP_ARCHIVE_REPLACE_SET", "Replace the {0} existing archive files with the new result?\r\n\r\n{1}", &[&n0(family.len()), &preview]);
+            let caption = self.language_pack.text("NDR.OP_ARCHIVE_REPLACE_ARCHIVE", "Replace archive");
             return self.system_box(&caption, &text, MB_YESNO | MB_ICONEXCLAMATION, move |app, answer, _| {
                 if answer == IDYES {
                     app.run_archive_task(kind, paths, output, choice, program);
@@ -468,22 +466,17 @@ impl App {
         let exists = output.is_file();
         let target_format = archive::archive_format(&output);
         if !target_format.as_deref().is_some_and(|f| f.eq_ignore_ascii_case(&extension)) {
-            let shown = target_format.unwrap_or_else(|| if ko { "알 수 없음".into() } else { "unknown".into() });
-            let (k, e) = (format!("대상 파일의 형식({shown})과 선택한 형식(.{extension})이 다릅니다."), format!("The target file format ({shown}) differs from the selected format (.{extension})."));
-            return self.warn(&k, &e);
+            let shown = target_format.unwrap_or_else(|| self.language_pack.text("NDR.OP_ARCHIVE_UNKNOWN", "unknown"));
+            return self.warn_operation(&super::file_commands::operation_format(&self.language_pack, "NDR.OP_ARCHIVE_WRONG_FORMAT", "The target file format ({0}) differs from the selected format (.{1}).", &[&shown, &extension]));
         }
         if !exists && !family.is_empty() {
-            return self.warn("완전하지 않은 압축 파일 묶음에는 추가할 수 없습니다. 모든 볼륨이 있는 압축 파일을 선택하세요.", "Items cannot be added to an incomplete archive set. Choose an archive with all of its volumes.");
+            return self.warn_operation(&self.language_pack.text("NDR.OP_ARCHIVE_ITEMS_CANNOT_BE_ADDED_TO_AN_INCOMPLETE_ARCHIVE_SET", "Items cannot be added to an incomplete archive set. Choose an archive with all of its volumes."));
         }
         let mut choice = choice;
         if exists && family.len() > 1 {
             // C# multi-volume update: bundled 7-Zip only (7z, zip). Split size = chosen value, otherwise the largest volume (rounded down to MiB).
             if !matches!(extension.as_str(), "7z" | "zip") || program.is_some() {
-                let (k, e) = (
-                    format!(".{extension} 다중 볼륨 파일을 업데이트하려면 설정에서 {extension}용 외부 압축 인자에 {{archive}}, {{sources}}와 볼륨 크기 자리표시자를 지정하세요."),
-                    format!("To update a .{extension} multi-volume archive, set an external archive template for {extension} with {{archive}}, {{sources}} and a volume size placeholder."),
-                );
-                return self.warn(&k, &e);
+                return self.warn_operation(&super::file_commands::operation_format(&self.language_pack, "NDR.OP_ARCHIVE_EXTERNAL_VOLUME", "To update a .{0} multi-volume archive, set an external archive template for {0} with {archive}, {sources} and a volume size placeholder.", &[&extension]));
             }
             if choice.volume.is_none() {
                 let largest = family.iter().filter_map(|p| std::fs::metadata(p).ok()).map(|m| m.len()).max().unwrap_or(0);
@@ -491,19 +484,18 @@ impl App {
                 choice.volume = (largest > 0).then(|| (largest / MIB).max(1) * MIB);
             }
             if choice.volume.is_none() {
-                return self.warn("기존 분할 크기를 확인하지 못했습니다. 압축 추가 창에서 새 분할 크기를 지정하세요.", "The existing volume size could not be determined. Choose a new volume size in the add-to-archive window.");
+                return self.warn_operation(&self.language_pack.text("NDR.OP_ARCHIVE_THE_EXISTING_VOLUME_SIZE_COULD_NOT_BE_DETERMINED_CHOOSE", "The existing volume size could not be determined. Choose a new volume size in the add-to-archive window."));
             }
         } else if exists && choice.volume.is_some() {
-            return self.warn("기존 압축 파일에 추가할 때는 분할 크기를 지정할 수 없습니다.", "A volume size cannot be used when adding to an existing archive.");
+            return self.warn_operation(&self.language_pack.text("NDR.OP_ARCHIVE_A_VOLUME_SIZE_CANNOT_BE_USED_WHEN_ADDING_TO", "A volume size cannot be used when adding to an existing archive."));
         }
         if exists && std::fs::metadata(&output).is_ok_and(|m| m.permissions().readonly()) {
             let name = output.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            let (k, e) = (format!("기존 압축 파일이 읽기 전용입니다: {name}"), format!("The existing archive is read-only: {name}"));
-            return self.warn(&k, &e);
+            return self.warn_operation(&super::file_commands::operation_format(&self.language_pack, "NDR.OP_ARCHIVE_READ_ONLY", "The existing archive is read-only: {0}", &[&name]));
         }
         if kind == ArchiveKind::Move {
-            let caption = self.tr("압축 후 이동", "Move after archiving").into_owned();
-            let text = self.tr("압축 파일을 만든 뒤 원본을 휴지통으로 이동할까요?", "Move the originals to the Recycle Bin after creating the archive?").into_owned();
+            let caption = self.language_pack.text("NDR.OP_ARCHIVE_MOVE_AFTER_ARCHIVING", "Move after archiving");
+            let text = self.language_pack.text("NDR.OP_ARCHIVE_MOVE_THE_ORIGINALS_TO_THE_RECYCLE_BIN_AFTER_CREATING", "Move the originals to the Recycle Bin after creating the archive?");
             return self.system_box(&caption, &text, MB_YESNO | MB_ICONEXCLAMATION, move |app, answer, _| {
                 if answer == IDYES {
                     app.run_archive_task(kind, paths, output, choice, program);
@@ -515,7 +507,6 @@ impl App {
 
     /// Archive job (ordinary job window). When done the status bar shows the result text (ArchiveStatus).
     fn run_archive_task(&mut self, kind: ArchiveKind, paths: Vec<PathBuf>, output: PathBuf, choice: ArchiveChoice, program: Option<ExternalProgram>) {
-        let ko = self.language == "ko";
         let options = ndr::commands::ArchiveOptions {
             extension: choice.format.extension.clone(),
             level: choice.level,
@@ -529,22 +520,22 @@ impl App {
         let upper = choice.format.extension.to_uppercase();
         let count = n0(paths.len());
         let done = match kind {
-            ArchiveKind::Create => if ko { format!("{upper} 압축 파일을 만들었습니다.") } else { format!("Created the {upper} archive.") },
-            ArchiveKind::Zip => if ko { format!("ZIP 파일을 만들었습니다: {name}") } else { format!("Created the ZIP file: {name}") },
-            _ => if ko { format!("{count}개 항목을 {name}에 추가했습니다.") } else { format!("Added {count} items to {name}.") },
+            ArchiveKind::Create => super::file_commands::operation_format(&self.language_pack, "NDR.OP_ARCHIVE_CREATED_THE_0_ARCHIVE", "Created the {0} archive.", &[&upper]),
+            ArchiveKind::Zip => super::file_commands::operation_format(&self.language_pack, "NDR.OP_ARCHIVE_CREATED_THE_ZIP_FILE_0", "Created the ZIP file: {0}", &[&name]),
+            _ => super::file_commands::operation_format(&self.language_pack, "NDR.OP_ARCHIVE_ADDED_0_ITEMS_TO_1", "Added {0} items to {1}.", &[&count, &name]),
         };
-        let stopped = if ko { format!("압축은 만들었지만 원본 삭제를 중단했습니다: {name}") } else { format!("The archive was created but deleting the originals stopped: {name}") };
+        let stopped = super::file_commands::operation_format(&self.language_pack, "NDR.OP_ARCHIVE_THE_ARCHIVE_WAS_CREATED_BUT_DELETING_THE_ORIGINALS_STOPPED", "The archive was created but deleting the originals stopped: {0}", &[&name]);
         let title = match kind {
-            ArchiveKind::Create => if ko { format!("{upper} 압축 만들기") } else { format!("Create {upper} archive") },
-            ArchiveKind::Zip => if ko { "ZIP 압축 만들기".into() } else { "Create ZIP archive".into() },
-            ArchiveKind::Add => if ko { "압축 파일에 추가".into() } else { "Add to archive".into() },
-            ArchiveKind::Move => if ko { "압축 파일로 이동".into() } else { "Move to archive".into() },
+            ArchiveKind::Create => super::file_commands::operation_format(&self.language_pack, "NDR.OP_ARCHIVE_CREATE_0_ARCHIVE", "Create {0} archive", &[&upper]),
+            ArchiveKind::Zip => self.language_pack.text("NDR.OP_ARCHIVE_CREATE_ZIP_ARCHIVE", "Create ZIP archive"),
+            ArchiveKind::Add => self.language_pack.text("NDR.OP_ARCHIVE_ADD_TO_ARCHIVE", "Add to archive"),
+            ArchiveKind::Move => self.language_pack.text("NDR.OP_ARCHIVE_MOVE_TO_ARCHIVE", "Move to archive"),
         };
         let tx = self.async_tx.clone();
         let moving = kind == ArchiveKind::Move;
         let focus_output = output.clone();
         let rebuild = options.append && archive::output_family(&output).len() > 1;
-        let rebuild_cancelled = if ko { "분할 압축 파일 업데이트를 취소했습니다. 기존 압축 파일은 유지됩니다." } else { "The multi-volume archive update was cancelled. The existing archive was kept." }.to_owned();
+        let rebuild_cancelled = self.language_pack.text("NDR.OP_ARCHIVE_THE_MULTI_VOLUME_ARCHIVE_UPDATE_WAS_CANCELLED_THE_EXISTING", "The multi-volume archive update was cancelled. The existing archive was kept.");
         // C# RunArchiveCreationWithProgress = FileOperationProgressWindow.Run(allowPause: true). External programs cannot pause.
         let external = program.is_some();
         // Progress window: like the original TfProgress, lFrom = source folder, lTo = archive folder, lFileName = file 7-Zip is adding, bar = 7-Zip percentage.
@@ -559,6 +550,7 @@ impl App {
             caption: Some(self.language_pack.text("RES.COMPRESSING", "Adding to the archive...")),
             ..Default::default()
         };
+        let work_language = self.language_pack.clone();
         let work = move |events: Sender<Event>, cancel: Arc<AtomicBool>| -> Result<(), String> {
             let sink: archive::ProgressSink = {
                 let events = events.clone();
@@ -575,7 +567,7 @@ impl App {
             };
             if rebuild {
                 // C# "prepare existing split archive": extract everything into a hidden work folder, overlay the chosen items, then rebuild with the same split size.
-                let result = rebuild_multivolume(&paths, &output, &options, &events, &cancel);
+                let result = rebuild_multivolume(&work_language, &paths, &output, &options, &events, &cancel);
                 if cancel.load(Ordering::Relaxed) {
                     let _ = tx.send(AsyncResult::ArchiveStatus(rebuild_cancelled));
                     return Ok(());
@@ -618,7 +610,7 @@ impl App {
     /// When opening an archive the bundled 7-Zip cannot read (for example .ace). External archivers are not used, so report that it cannot be opened.
     pub(super) fn open_with_external_archive_program(&mut self, _pane: usize, archive_path: PathBuf, _ask_if_not_empty: bool) {
         let extension = archive_path.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
-        self.warn(&format!("{extension} 형식은 열 수 없습니다."), &format!("The {extension} format cannot be opened."));
+        self.warn_operation(&super::file_commands::operation_format(&self.language_pack, "NDR.OP_ARCHIVE_CANNOT_OPEN_FORMAT", "The {0} format cannot be opened.", &[&extension]));
     }
 
     /// C# ExtractArchiveAsync.
@@ -648,11 +640,11 @@ impl App {
             }
         };
         if archives.is_empty() {
-            return self.warn("압축 파일을 선택하거나 압축 파일 안으로 이동하세요.", "Select an archive or open one first.");
+            return self.warn_operation(&self.language_pack.text("NDR.OP_ARCHIVE_SELECT_AN_ARCHIVE_OR_OPEN_ONE_FIRST", "Select an archive or open one first."));
         }
         if let Some(unsupported) = archives.iter().find(|path| !archive::bundled_can_browse(path)) {
             let name = unsupported.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            return self.warn(&format!("지원하지 않는 압축 형식입니다: {name}"), &format!("Unsupported archive format: {name}"));
+            return self.warn_operation(&super::file_commands::operation_format(&self.language_pack, "NDR.OP_ARCHIVE_UNSUPPORTED_FORMAT", "Unsupported archive format: {0}", &[&name]));
         }
         if in_archive.is_some() && selected.is_empty() {
             return;
@@ -683,18 +675,18 @@ impl App {
     fn run_extract(&mut self, archives: Vec<PathBuf>, keys: Vec<String>, password: String, base: PathBuf, mode: ExtractMode) {
         if let Some(unsupported) = archives.iter().find(|path| !archive::bundled_can_browse(path)) {
             let name = unsupported.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-            return self.warn(&format!("지원하지 않는 압축 형식입니다: {name}"), &format!("Unsupported archive format: {name}"));
+            return self.warn_operation(&super::file_commands::operation_format(&self.language_pack, "NDR.OP_ARCHIVE_UNSUPPORTED_FORMAT", "Unsupported archive format: {0}", &[&name]));
         }
         self.remember_destination(&base);
         let programs: Vec<Option<ExternalProgram>> = archives.iter().map(|_| None).collect();
         let tx = self.async_tx.clone();
-        let ko = self.language == "ko";
-        let done = if ko { format!("압축을 풀었습니다: {}", base.display()) } else { format!("Extracted to {}", base.display()) };
-        let title = self.tr("압축 풀기", "Extract").into_owned();
+        let done = super::file_commands::operation_format(&self.language_pack, "NDR.OP_ARCHIVE_EXTRACTED_TO", "Extracted to {0}", &[&base.display()]);
+        let title = self.language_pack.text("NDR.OP_ARCHIVE_EXTRACT", "Extract");
         // C# RunArchiveExtractionWithProgress: the built-in path is FileOperationProgressWindow.Run (source = archive, destination, pausable),
         // external programs are "external extraction" (allowPause: false).
         let external = programs.iter().any(Option::is_some);
         let progress = super::file_operation::ProgressInfo { from: archives.first().map(|a| a.to_string_lossy().into_owned()), to: Some(base.to_string_lossy().into_owned()), caption: Some(self.language_pack.text("RES.EXTRACTING", "Extracting...")), ..Default::default() };
+        let language = self.language_pack.clone();
         let work = move |events: Sender<Event>, cancel: Arc<AtomicBool>| -> Result<(), String> {
             let password = (!password.is_empty()).then_some(password);
             for (archive_path, program) in archives.iter().zip(programs) {
@@ -724,13 +716,13 @@ impl App {
                 let mut announced = None;
                 // Original 0x439593: when the next volume is missing, ask with ARC_CHANGEVOL and retry on OK (cancel ends with that error).
                 loop {
-                    let outcome = archive::extract_entries_with_program(archive_path, &destination, &keys, known.as_deref(), &cancel, &mut conflicts, &mut passwords, program.as_ref(), &mut |done, total, key| {
+                    let outcome = archive::extract_entries_with_locale(archive_path, &destination, &keys, known.as_deref(), &cancel, &mut conflicts, &mut passwords, program.as_ref(), &mut |done, total, key| {
                         if announced != Some(total) {
                             announced = Some(total);
                             let _ = events.send(Event::Totals { files: Some(total as u64), bytes: None });
                         }
                         let _ = events.send(Event::Progress { path: destination.join(key.replace('/', "\\")), bytes: 0, files: done as u64 });
-                    });
+                    }, Some(&language));
                     match outcome {
                         Err(error) if !cancel.load(Ordering::Relaxed) => {
                             if let Some(volume) = archive::missing_volume(&error) {
@@ -771,29 +763,34 @@ impl App {
                 .find(|path| archive::archive_format(path).is_some()),
         };
         let Some(archive_path) = archive_path else {
-            return self.warn("속성을 볼 압축 파일을 열거나 선택하세요.", "Open or select an archive to see its properties.");
+            return self.warn_operation(&self.language_pack.text("NDR.OP_ARCHIVE_OPEN_OR_SELECT_AN_ARCHIVE_TO_SEE_ITS_PROPERTIES", "Open or select an archive to see its properties."));
         };
         let ko = self.language == "ko";
         let unit = self.settings.text("SizeUnit", "Auto");
         let thousands = self.settings.flag("UseThousandsSeparator", true);
         let (date_format, time_format) = (self.settings.text("DateFormat", "yyyy-MM-dd"), self.settings.text("TimeFormat", "HH:mm"));
         let password = self.panes[i].archive.as_ref().map(|l| l.password.clone()).filter(|p| !p.is_empty());
-        let title = self.tr("압축 파일 속성", "Archive properties").into_owned();
+        let title = self.language_pack.text("NDR.OP_ARCHIVE_ARCHIVE_PROPERTIES", "Archive properties");
+        let language = self.language_pack.clone();
         let tx = self.async_tx.clone();
         thread::spawn(move || {
             let outcome = (|| -> Result<String, String> {
                 let metadata = std::fs::metadata(&archive_path).map_err(|e| e.to_string())?;
                 let entries = archive::list(&archive_path, password.as_deref())?;
                 let (files, folders, bytes) = archive::summary(&entries);
-                let format = archive::archive_format(&archive_path).map(|f| f.to_uppercase()).unwrap_or_else(|| if ko { "알 수 없음".into() } else { "unknown".into() });
+                let format = archive::archive_format(&archive_path).map(|f| f.to_uppercase()).unwrap_or_else(|| language.text("NDR.OP_ARCHIVE_UNKNOWN", "unknown"));
                 let modified = ndr::listing::date_text(metadata.modified().ok(), &date_format, &time_format, false, ko, std::time::SystemTime::now());
                 let name = archive_path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                 let size = |b: u64| ndr::parity::format_size(b, &unit, thousands);
-                let lines = if ko {
-                    [format!("파일: {name}"), format!("형식: {format}"), format!("크기: {}", size(metadata.len())), format!("수정한 날짜: {modified}"), format!("파일 항목: {}", n0(files)), format!("폴더 항목: {}", n0(folders)), format!("압축 해제 크기: {}", size(bytes))]
-                } else {
-                    [format!("File: {name}"), format!("Format: {format}"), format!("Size: {}", size(metadata.len())), format!("Modified: {modified}"), format!("File entries: {}", n0(files)), format!("Folder entries: {}", n0(folders)), format!("Extracted size: {}", size(bytes))]
-                };
+                let lines = [
+                    super::file_commands::operation_format(&language, "NDR.OP_ARCHIVE_PROP_FILE", "File: {0}", &[&name]),
+                    super::file_commands::operation_format(&language, "NDR.OP_ARCHIVE_PROP_FORMAT", "Format: {0}", &[&format]),
+                    super::file_commands::operation_format(&language, "NDR.OP_ARCHIVE_PROP_SIZE", "Size: {0}", &[&size(metadata.len())]),
+                    super::file_commands::operation_format(&language, "NDR.OP_ARCHIVE_PROP_MODIFIED", "Modified: {0}", &[&modified]),
+                    super::file_commands::operation_format(&language, "NDR.OP_ARCHIVE_PROP_FILES", "File entries: {0}", &[&n0(files)]),
+                    super::file_commands::operation_format(&language, "NDR.OP_ARCHIVE_PROP_FOLDERS", "Folder entries: {0}", &[&n0(folders)]),
+                    super::file_commands::operation_format(&language, "NDR.OP_ARCHIVE_PROP_UNPACKED", "Extracted size: {0}", &[&size(bytes)]),
+                ];
                 Ok(lines.join("\r\n"))
             })();
             let _ = tx.send(match outcome {
@@ -833,7 +830,7 @@ mod tests {
 
 /// Rebuilds a multi-volume archive (C# UpdateMultiVolumeArchiveAsync): extracts all existing items into `<folder>\.ndr-multivolume-update-...\existing`,
 /// overlays the chosen items, then creates a new set with the same split size under the set name ("x.7z"), deleting leftover old volumes. The work folder is removed afterwards.
-fn rebuild_multivolume(paths: &[PathBuf], first_volume: &Path, options: &ndr::commands::ArchiveOptions, events: &Sender<Event>, cancel: &Arc<AtomicBool>) -> Result<(), String> {
+fn rebuild_multivolume(language: &compat::Language, paths: &[PathBuf], first_volume: &Path, options: &ndr::commands::ArchiveOptions, events: &Sender<Event>, cancel: &Arc<AtomicBool>) -> Result<(), String> {
     let parent = first_volume.parent().ok_or("Invalid archive path")?;
     let mut random = [0u8; 16];
     native::random_bytes(&mut random)?;
@@ -851,7 +848,7 @@ fn rebuild_multivolume(paths: &[PathBuf], first_volume: &Path, options: &ndr::co
         .map_err(|error| {
             let lower = error.to_lowercase();
             if lower.contains("password") || lower.contains("encrypted") || lower.contains("crypt") {
-                format!("{error}\r\n압축 추가 창의 암호 칸에 기존 압축 파일 암호를 입력하세요.")
+                super::file_commands::operation_format(language, "NDR.OP_ARCHIVE_REBUILD_PASSWORD", "{0}\nEnter the existing archive password in the Add to Archive window.", &[&error])
             } else {
                 error
             }
@@ -865,7 +862,7 @@ fn rebuild_multivolume(paths: &[PathBuf], first_volume: &Path, options: &ndr::co
         }
         let roots: Vec<PathBuf> = std::fs::read_dir(&existing).map_err(|e| e.to_string())?.filter_map(Result::ok).map(|e| e.path()).collect();
         if roots.is_empty() {
-            return Err("업데이트된 압축 파일에 항목이 없습니다.".into());
+            return Err(language.text("NDR.OP_ARCHIVE_REBUILT_EMPTY", "The updated archive contains no items."));
         }
         // "x.7z.001" -> "x.7z" (7-Zip appends .001, .002 ...).
         let name = first_volume.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -878,7 +875,7 @@ fn rebuild_multivolume(paths: &[PathBuf], first_volume: &Path, options: &ndr::co
     })();
     if stage.exists() {
         if let Err(error) = std::fs::remove_dir_all(&stage) {
-            let _ = events.send(Event::Error { path: stage.clone(), message: format!("압축 파일 업데이트는 끝났지만 임시 파일을 정리하지 못했습니다. 폴더를 확인하세요. {error}") });
+            let _ = events.send(Event::Error { path: stage.clone(), message: super::file_commands::operation_format(language, "NDR.OP_ARCHIVE_STAGE_CLEANUP_FAILED", "The archive was updated, but its temporary files could not be removed. Check the folder. {0}", &[&error]) });
         }
     }
     result

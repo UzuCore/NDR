@@ -1,0 +1,462 @@
+; NDR language catalog. Untranslated entries use NDR English.
+
+[RES]
+YES=Jā(&Y)
+NO=&Nē
+OK=Labi(&O)
+CANCEL=At&celt
+RETRY=Mēģināt vēl&reiz
+IGNORE=&Ignorēt
+ABORT=Apturēt(&S)
+CONTINUE=Turpi&nāt
+TITLE_ERROR=NDR kļūda
+TITLE_INFO=NDR informācija
+FOLDERINFO=Mapes <c000000><b>%d</b></c> · Faili <c000000><b>%d</b></c> · <b>%s</b>
+DISKINFO_SHORT=Brīvi <c000000><b>%s</b></c>
+DISKINFO_LONG=Brīvi <c000000><b>%s</b></c> no <b>%s</b>
+SELECTED_INFO=Atlasīti: <b>%d</b> · <b>%s</b> baiti
+MSG_COPY_PREPARING=Sagatavo kopēšanu…
+MSG_MOVE_PREPARING=Sagatavo pārvietošanu…
+MSG_DEL_PREPARING=Sagatavo dzēšanu…
+COPYING=Kopē vienumus…
+MOVING=Pārvieto vienumus…
+DELETING=Dzēš vienumus…
+EXTRACTING=Atspiež failus…
+COMPRESSING=Saspiež failus…
+READONLY=Tikai lasāms
+SYSTEM=Sistēma
+HIDDEN=Slēpts
+FOLDER=Mape
+FOLDERS=Mapes
+SELECT_FOLDER=Izvēlēties mapi
+DROPCOPY_CONFIRM=Kopēt šos %d vienumus?
+DROPMOVE_CONFIRM=Pārvietot šos %d vienumus?
+RENAME=Pārdēvēt
+COPY=Kopēt
+MOVE=Pārvietot
+ADDTOARCHIVE=Pievienot arhīvam
+EXTRACT=Atspiest
+SEARCH=Meklēt
+STOP=Apturēt
+SEARCHRESULT=Meklēšanas rezultāti
+SELECTDEST= — Izvēlēties galamērķi
+PAUSE=Pauzēt
+RESUME=Atsākt
+TITLE_FILTER=Failu filtrs
+NETWORK=Tīkls
+TITLE_NEWFOLDER=Jauna mape
+MSG_NEWFOLDER=Ievadiet jaunās mapes nosaukumu.
+NEWFOLDER=Jauna mape
+MSG_RENAME=Ievadiet iezīmētā vienuma jauno nosaukumu.\n\n<b><c0000FF>%s</c></b> <c666666>(%d no %d)</c>
+TITLE_FILEOPERATION=Darbība ar failiem
+SELDEST_DRIVE=Diski
+SELDEST_WORKFOLDER=Darba mapes
+FOLDER_EXISTS=Mape ar šādu nosaukumu jau pastāv.
+SRCISDEST=Avots un galamērķis sakrīt.
+MYCOMPUTER=Šis dators
+ARCHIVE=Arhīvs
+DISKFREE=Brīvs
+LOCATION=Atrašanās vieta
+FUNC_OPEN=Atvērt
+FUNC_COPYTO=Kopēt
+FUNC_MOVETO=Pārvietot
+FUNC_DELETE=Dzēst
+FUNC_RECYCLEBIN=Pārvietot uz atkritni
+FUNC_RENAME=Pārdēvēt
+FUNC_PROPERTIES=Rekvizīti
+FUNC_FAVORITES=Izlase
+FUNC_NEWFOLDER=Jauna mape
+FUNC_REFRESH=Atsvaidzināt
+FUNC_GOTODESKTOP=Darbvirsma
+FUNC_GOTODOCUMENTS=Dokumenti
+FUNC_GOTOMUSIC=Mūzika
+FUNC_GOTOPICTURES=Attēli
+FUNC_GOTOVIDEOS=Video
+FUNC_GOTODOWNLOADS=Lejupielādes
+FUNC_SELECTALL=Atlasīt visu
+FUNC_ADDTOARCHIVE=Pievienot arhīvam
+FUNC_EXTRACT=Atspiest
+FUNC_CLOSETAB=Aizvērt cilni
+FUNC_SELECT=Atlasīt
+FUNC_DESELECTALL=Notīrīt atlasi
+FUNC_BACK=Atpakaļ
+FUNC_FORWARD=Uz priekšu
+FUNC_FOLDERTREE=Mapju koks
+FUNC_GOTOROOT=Saknes mape
+FUNC_GOTOPARENT=Vecākmape
+FUNC_EDITCOPY=Kopēt
+FUNC_EDITCUT=Izgriezt
+FUNC_EDITPASTE=Ielīmēt
+FUNC_INVERTSELECTION=Apvērst atlasi
+FUNC_NEWTAB=Jauna cilne
+TODAY=Šodien
+YESTERDAY=Vakar
+FIELD_NAME=Nosaukums
+FIELD_EXT=Paplašinājums
+FIELD_LOCATION=Atrašanās vieta
+FIELD_SIZE=Izmērs
+FIELD_DATEMODIFIED=Mainīts
+FIELD_ATTR=Atribūti
+FIELD_DESC=Komentārs
+UPDATE=Atjauninājumi
+NAME=Nosaukums
+ACCESS_DENIED=Piekļuve liegta
+INVALID_PASSWORD=Nepareiza parole
+DISKISFULL=Diskā nepietiek vietas
+CALCULATING=Aprēķina…
+ERROR=Kļūda
+
+[formMain]
+ToolButton.tbFile=&Fails
+ToolButton.tbFolder=Mape(&o)
+ToolButton.tbEdit=R&ediģēt
+ToolButton.tbView=Skats(&w)
+ToolButton.tbSystem=&Sistēma
+ToolButton.tbArchive=&Arhīvs
+ToolButton.tbConnect=Savie&not
+ToolButton.tbTools=Rīki(&T)
+ToolButton.tbHelp=Palīdzība(&H)
+ToolButton.tbNewUpdateAvailable=Pieejams NDR atjauninājums
+Menu.miOpen=&Q. Atvērt
+Menu.miCopyTo=&C. Kopēt uz…
+Menu.miMoveTo=&V. Pārvietot uz…
+Menu.miDelete=&D. Dzēst
+Menu.miRename=&R. Pārdēvēt
+Menu.miProperties=&E. Rekvizīti
+Menu.miExit=&X. Iziet
+Menu.miFolderTree=&T. Mapju koks
+Menu.miFavorites=&V. Izlase
+Menu.miNewFolder=&C. Jauna mape
+Menu.miHistoryBack=&B. Atpakaļ
+Menu.miHistoryForward=&F. Uz priekšu
+Menu.miToParent=&X. Vecākmape
+Menu.miToRoot=&Z. Saknes mape
+Menu.miRefresh=&R. Atsvaidzināt
+Menu.miEditCopy=&C. Kopēt
+Menu.miEditCut=&X. Izgriezt
+Menu.miEditPaste=&V. Ielīmēt
+Menu.miSelect=&B. Atlasīt
+Menu.miSelectAll=&U. Atlasīt visu
+Menu.miInvertSelection=&I. Apvērst atlasi
+Menu.miSearchFile=&E. Meklēt failus un mapes…
+Menu.miLanguage=&O. Valoda
+Menu.miNewTab=&B. Jauna cilne
+Menu.miListStyleAuto=&A. Automātiski
+Menu.miListStyleDetails=&D. Detalizēti
+Menu.miListStyleThumbs=&T. Sīktēli
+Menu.miColAuto=&A. Automātiski
+Menu.miSortByName=&A. Nosaukums
+Menu.miSortByExt=&E. Paplašinājums
+Menu.miSortBySize=&S. Izmērs
+Menu.miSortByTime=&T. Mainīts
+Menu.miSortByAttr=&R. Atribūti
+Menu.miSortByColor=&C. Krāsa
+Menu.miToDesktop=&D. Darbvirsma
+Menu.miToDocuments=&W. Dokumenti
+Menu.miToPictures=&P. Attēli
+Menu.miToMusic=&M. Mūzika
+Menu.miToVideos=&V. Video
+Menu.miToDownloads=&S. Lejupielādes
+Menu.miOptions=&O. Iestatījumi
+Menu.miHelp=&H. Palīdzība
+Menu.miShortcut=&S. Tastatūras īsceļi…
+Menu.miHomepage=&W. NDR projekta lapa
+Menu.miCheckUpdate=&U. Meklēt NDR atjauninājumus…
+Menu.miAbout=&A. Par NDR
+Menu.mipOpenWith=&W. Atvērt ar…
+Menu.mipEditCopy=&C. Kopēt
+Menu.mipEditCut=&X. Izgriezt
+Menu.mipEditPaste=&V. Ielīmēt
+Menu.mipCopyTo=&Y. Kopēt uz…
+Menu.mipMoveTo=&M. Pārvietot uz…
+Menu.mipDelete=&D. Dzēst
+Menu.mipRename=&R. Pārdēvēt
+Menu.mipAddToArchive=&A. Pievienot arhīvam
+Menu.mipProperties=&T. Rekvizīti
+Menu.pmiCloseTab=Aizvērt &cilni
+Menu.pmiCloseAllTab=&Aizvērt visas cilnes
+Menu.pmiNewTab=Jauna cilne(&t)
+Hint.bSelectAll=Atlasīt visus vienumus
+Hint.bClearSelection=Notīrīt atlasi
+
+[formFileExists]
+Caption.lMsg=Galamērķī jau ir vienums ar šādu nosaukumu:
+Caption.chkApplyAll=Lietot šo izvēli &arī pārējiem
+Caption.btnOverwrite=Pārrakstīt(&w)
+Caption.btnRename=Pā&rdēvēt
+Caption.btnReplace=Aizstāt(&e)
+Caption.btnSkip=Izlai&st
+
+[formGetText]
+Caption.btnOk=Labi(&O)
+Caption.btnCancel=At&celt
+
+[formDelConfirm]
+Form.Caption=Apstiprināt dzēšanu
+Caption.btnAll=Visi(&A)
+Caption.btnYes=Jā(&Y)
+Caption.btnNo=&Nē
+
+[formDelWarning]
+Caption.btnDelete=&Dzēst
+Caption.btnYes=Jā(&Y)
+Caption.btnNo=&Nē
+Prompt.Recycle=Pārvietot atlasītos vienumus uz atkritni?
+Prompt.Permanent=Neatgriezeniski dzēst atlasītos vienumus?
+
+[formProgress]
+Caption.btnCancel=At&celt
+
+[formOrgFavorites]
+Caption.btnCancel=At&celt
+Caption.btnSave=&Saglabāt
+Caption.btnRename=Pā&rdēvēt
+Caption.btnUp=Pārvietot a&ugšup
+Caption.btnDown=Pārvietot lejup(&w)
+Caption.btnDelete=&Dzēst
+
+[formChangeAttr]
+Caption.btnAll=Visi(&l)
+Caption.btnSkip=Izlaist(&k)
+Caption.btnOk=Labi
+Caption.btnCancel=Atcelt
+Caption.chkHidden=Slēpts(&H)
+Caption.chkSystem=&Sistēma
+Caption.chkReadOnly=Tikai lasāms(&R)
+Caption.lDate=&Datums
+Caption.lTime=Laiks(&T)
+
+[formSaveList]
+Caption.btnSave=Saglabāt
+Caption.btnCancel=Atcelt
+Caption.chkAttributes=&Atribūti
+Caption.chkDate=&Datums
+Caption.chkDescription=Kome&ntārs
+Caption.chkExtension=Paplašinājums(&E)
+Caption.chkFileName=&Faila nosaukums
+Caption.chkFileSize=Izmēr&s
+Caption.chkTime=Laiks(&T)
+
+[formAddToArchive]
+Caption.btnCancel=Atcelt
+Caption.btnOk=Labi
+Caption.lPassword=&Parole
+Caption.lSecFormat=Formāts
+
+[formFileSplit]
+Caption.btnOk=Labi
+Caption.btnCancel=Atcelt
+
+[formFileJoin]
+Caption.btnAdd=Pievienot(&A)
+Caption.btnCancel=Atcelt
+Caption.btnOk=Labi
+Caption.btnDelete=&Dzēst
+Caption.btnDown=Pārvietot lejup(&w)
+Caption.btnUp=Pārvietot a&ugšup
+
+[formCompareFolder]
+Caption.btnCancel=Atcelt
+Caption.btnOk=Labi
+Caption.btnSave=Saglabāt
+Caption.btnStop=Apturēt
+
+[formShortcut]
+Form.Caption=Tastatūras īsceļi
+
+[formEditShortCut]
+Caption.btnOk=Labi
+Caption.btnCancel=Atcelt
+Caption.btnRemove=Noņemt
+
+[formCleanup]
+Caption.btnClose=Aizvērt
+Caption.btnOk=Labi
+Caption.chkRecycleBin=Atk&ritne
+Caption.btnAdd=Pievienot(&A)
+Caption.btnDelete=&Dzēst
+Caption.btnSearch=Meklēt(&S)
+
+[formSelectDest]
+Form.Caption=Izvēlēties galamērķi
+Caption.btnCancel=Atcelt
+Caption.btnOk=Labi
+Caption.btnTree=Pārlūkot mapes(&f)
+
+[formTreeScan]
+Caption.btnCancel=Atcelt
+
+[formSearchFolder]
+Caption.btnSearch=Meklēt
+
+[formFTPQuickConnect]
+Caption.btnCancel=Atcelt
+Caption.chkPassive=Lietot pa&sīvo režīmu
+Caption.lPassword=Parole(&w)
+Caption.lPort=&Ports
+Caption.lURL=Servera a&drese
+Caption.lUser=Lietotājvārds(&U)
+
+[formPassword]
+Caption.btnOk=Labi
+Caption.btnCancel=Atcelt
+Caption.lUser=Lietotājvārds
+Caption.lPassword=Parole
+
+[formFTPSiteManager]
+Caption.btnAdd=Pievienot(&A)
+Caption.btnCancel=Atcelt
+Caption.btnDelete=&Dzēst
+Caption.btnOk=Labi
+Caption.chkPassive=Lietot pasī&vo režīmu
+Caption.lName=&Nosaukums
+Caption.lPassword=Parole(&w)
+Caption.lPort=&Ports
+Caption.lUser=Lietotājvārds(&U)
+
+[formFolderTree]
+Form.Caption=Pārlūkot mapes
+Caption.btnCancel=Atcelt
+Caption.btnOk=Labi
+ToolButton.tbFolder=Map&e
+ToolButton.tbFavorites=Izlase(&v)
+ToolButton.tbSearch=Meklēt
+Hint.tbDesktop=Darbvirsma
+Hint.tbMyDoc=Dokumenti
+Hint.tbMyPic=Attēli
+Hint.tbMyMusic=Mūzika
+Hint.tbMyVideo=Video
+Menu.miFolder=Map&e
+Menu.miDelete=&D. Dzēst
+Menu.miRename=&R. Pārdēvēt
+Menu.miCreateNewFolder=&F. Jauna mape
+Menu.miProperties=&E. Rekvizīti
+Menu.miClose=&C. Aizvērt
+
+[formPreferences]
+Caption.btnApply=Lietot(&A)
+Caption.btnOk=Labi(&O)
+Caption.btnCancel=Atcelt
+TabSheet.tsColor=Krāsas
+TabSheet.tsTree=Mapju koks
+TabSheet.tsEtc=Citi
+Caption.lMyDocuments=Dokumenti
+Caption.lMyMusic=Mūzika
+Caption.lMyPictures=Attēli
+Caption.lMyVideos=Video
+Caption.lPathDownloads=Lejupielādes
+
+[formAdvRename]
+Caption.btnCancel=Atcelt
+Caption.btnUp=Pārvietot augšup
+Caption.btnDown=Pārvietot lejup
+Caption.rbApplyToExt=Paplašinājums
+TabSheet.tsDelete=Noņemt
+TabSheet.tsExtension=Paplašinājums
+
+[formEditFunction]
+Caption.btnCancel=Atcelt
+Caption.btnOk=Labi
+Caption.lName=Nosaukums
+
+[formFTPAttributes]
+Caption.btnCancel=Atcelt
+Caption.btnOk=Labi
+Caption.btnAll=Visi
+Caption.btnSkip=Izlaist
+Caption.chkGExecute=Izpildīt(&x)
+Caption.chkURead=Lasīt(&e)
+Caption.chkUExecute=Izpildīt(&c)
+
+[formRename]
+Caption.btnOK=Labi
+Caption.btnCancel=Atcelt
+
+[formChecksum]
+Caption.btnCopy=Kopēt(&C)
+
+[formNDRSearch]
+Caption.lName=Faila nosaukums
+Caption.chkFiles=Faili
+Caption.chkFolders=Mapes
+Caption.CategoryDocuments=Dokumenti
+Caption.btnMoveUp=Pārvietot augšup
+Caption.btnMoveDown=Pārvietot lejup
+Caption.btnRemove=Noņemt
+Caption.btnAdd=Pievienot
+Status.Results=Meklēšanas rezultāti
+
+[formNDRDestination]
+Button.Cancel=Atcelt
+
+[NDRUpdate]
+Title=NDR atjaunināšana
+FeedHttpsRequired=Atjauninājumu avotam jāizmanto HTTPS.
+InvalidDownloadUrl=Atjauninājumu avotā nav derīgas HTTPS lejupielādes adreses.
+NewVersionAvailable=Pieejama versija {0}. Pašreizējā versija ir {1}.
+OpenDownloadPage=Atvērt lejupielādes lapu?
+CurrentLatest=NDR ir atjaunināts. ({0})
+RequestFailed=Neizdevās sazināties ar atjauninājumu serveri. Pārbaudiet savienojumu un atjauninājumu avotu.
+RequestFailedStatus=Atjauninājumu serveris atgrieza HTTP statusu {0}.
+RequestTimedOut=Atjauninājumu serveris neatbildēja 15 sekunžu laikā.
+
+[NDRSearch]
+Documents=Dokumenti
+
+[NDRVault]
+Password=Parole
+OK=Labi
+Cancel=Atcelt
+NewFolderTitle=Jauna mape
+RenameTitle=Pārdēvēt
+ProgressCancel=Atcelt
+
+[NDR]
+OP_ARCHIVE_REPLACE_ARCHIVE=Aizstāt arhīvu
+OP_JOIN_EXISTS=Fails ar šādu nosaukumu jau pastāv. Faili netika apvienoti.\n{0}
+OP_TRANSFER_CANCEL=Atcelt
+OP_TRANSFER_CANCELLED=Darbība ({0}) tika atcelta. Jau apstrādātie vienumi tika saglabāti.
+OP_TRANSFER_COPY_DONE=Kopēšana pabeigta
+OP_TRANSFER_DELETE_DONE=Dzēšana pabeigta
+OP_TRANSFER_MOVE_DONE=Pārvietošana pabeigta
+OP_TRANSFER_OPERATION_FAILED=Darbība neizdevās
+OP_TRANSFER_PARTIAL=Darbība daļēji pabeigta
+OP_TRANSFER_PARTIAL_DETAIL=Pabeigti: {0} · kļūdas: {1} · izlaisti: {2}
+OP_TRANSFER_PREPARING_THE_OPERATION=Sagatavo darbību…
+OP_TRANSFER_SIZE_UNAVAILABLE=Izmērs nav pieejams
+OP_TRANSFER_VERB_COPY=kopēt
+OP_TRANSFER_VERB_MOVE=pārvietot
+OP_TRANSFER_VERB_PASTE=ielīmēt
+UI_STARTUP_FAILED=Palaišana neizdevās. Atveriet NDR vēlreiz.
+UI_STARTUP_LOADING=Sagatavo mapes un iestatījumus…
+UPD_CLOSE=Aizvērt
+UPD_CONFIRM=Lejupielādēt un instalēt atjauninājumu, pēc tam restartēt NDR?\nJūsu iestatījumi tiks saglabāti.
+UPD_CURRENT_BUILD=Instalētais būvējums: {0}
+UPD_DOWNLOAD_ACTIVE=Lejupielādē NDR {0}…
+UPD_ERROR_DETAILS=Tehniskā informācija
+UPD_FAILED=Atjaunināšana neizdevās.
+UPD_INSTALLER_START=Palaiž instalēšanas programmu…
+UPD_INSTALL_CHECKING=Pārbauda instalācijas pakotni…
+UPD_INSTALL_CLOSING=Pārbauda, vai NDR ir aizvērts…
+UPD_INSTALL_EXTRACTING=Sagatavo instalācijas failus…
+UPD_INSTALL_FAILURE=Atjaunināšana neizdevās. Papildinformāciju skatiet failā update.log.
+UPD_INSTALL_FAILURE_TITLE=NDR atjaunināšanas kļūda
+UPD_INSTALL_FINISHED=Instalēšana pabeigta. Restartē NDR…
+UPD_INSTALL_HEADING=Instalē NDR atjauninājumu
+UPD_INSTALL_TITLE=NDR atjaunināšana
+UPD_INSTALL_WAITING=Gaida, līdz NDR aizveras…
+UPD_INSTALL_WRITING=Instalē NDR failus…
+UPD_LOCAL_BUILD=Lokālais būvējums
+UPD_NEW_BUILD=Jaunais būvējums: {0}
+UPD_NONE=Jaunāks atjauninājums nav pieejams.
+UPD_PREPARING=Sagatavo pakotni…
+UPD_RELEASE_FAILURE=Neizdevās pārbaudīt GitHub laidienu.
+UPD_RESTART_NOTE=NDR restartējas automātiski. Jūsu iestatījumi tiek saglabāti.
+UPD_STARTING=Lejupielāde un integritātes pārbaude pabeigta. Sāk instalēšanu.
+UPD_STEP_DOWNLOAD=Lejupielāde
+UPD_STEP_INSTALL=Instalēt un restartēt
+UPD_STEP_PREPARE=Sagatavošana
+UPD_STEP_VERIFY=Integritāte
+UPD_TITLE=NDR atjaunināšana
+UPD_VERIFIED_INIT=Droši instalē pārbaudīto atjauninājumu.
+UPD_VERIFY_HASH=Pārbauda SHA-256…

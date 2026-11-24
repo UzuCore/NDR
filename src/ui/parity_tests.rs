@@ -959,13 +959,13 @@ fn function_key_bar_texts_and_error_texts_follow_the_original() {
     let alt = app.modifier_functions(egui::Modifiers::ALT).unwrap();
     assert_eq!((alt[0].0.as_str(), alt[0].1.as_str(), alt.len()), ("C", "Copy", 8));
     let ctrl = app.modifier_functions(egui::Modifiers::CTRL).unwrap();
-    assert_eq!(ctrl.last().map(|(k, n)| (k.as_str(), n.as_str())), Some(("->", "Copy To Right")));
+    assert_eq!(ctrl.last().map(|(k, n)| (k.as_str(), n.as_str())), Some(("->", "Copy right")));
     assert_eq!(ctrl[6].0, "<-");
     assert!(app.modifier_functions(egui::Modifiers::NONE).is_none());
     assert!(app.modifier_functions(egui::Modifiers::ALT | egui::Modifiers::CTRL).is_none());
     // The program picker filter is built from the original OD_PROGRAMFILTER (TOpenDialog.Filter "name|pattern|...").
     let filters = original_dialogs::program_filter(&app.language_pack);
-    assert_eq!(filters, [("Program Files(*.exe)".to_owned(), "*.exe".to_owned()), ("All Files(*.*)".to_owned(), "*.*".to_owned())]);
+    assert_eq!(filters, [("Executables (*.exe)".to_owned(), "*.exe".to_owned()), ("All files (*.*)".to_owned(), "*.*".to_owned())]);
     assert_eq!(original_dialogs::delphi_filter("a|b|c"), [("a".to_owned(), "b".to_owned())], "an unpaired tail is dropped");
     // Original FUN_00404890: 7-Zip errors become original archive error texts, other texts stay.
     assert_eq!(app.archive_error_text("7-Zip failed (exit code: 2): ERROR: Wrong password : a"), app.language_pack.text("RES.INVALID_PASSWORD", "?"));

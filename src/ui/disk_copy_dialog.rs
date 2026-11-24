@@ -123,7 +123,7 @@ pub(super) struct DiskCopyForm {
     pub status: String,
     pub progress: f32,
     pub run: Option<DiskRun>,
-    ko: bool,
+    language: compat::Language,
 }
 
 /// Window buttons.
@@ -133,10 +133,6 @@ pub(super) enum DiskAction {
     Start,
     Cancel,
     Close,
-}
-
-fn t(ko: bool, korean: &'static str, english: &'static str) -> &'static str {
-    if ko { korean } else { english }
 }
 
 /// .NET "N0" (comma every three digits in both ko-KR and en-US).
@@ -153,8 +149,8 @@ fn grouped(value: u64) -> String {
 }
 
 /// C# PhysicalDiskChoice.ToString: "PhysicalDrive{n} · {bytes:N0} bytes" (same text in every language).
-pub(super) fn physical_text(disk: &PhysicalDisk) -> String {
-    format!("PhysicalDrive{} · {} bytes", disk.number, grouped(disk.bytes))
+pub(super) fn physical_text(disk: &PhysicalDisk, language: &compat::Language) -> String {
+    super::file_commands::operation_format(language, "NDR.OP_DISK_PHYSICAL_DESCRIPTOR", "PhysicalDrive{0} · {1} bytes", &[&disk.number, &grouped(disk.bytes)])
 }
 
 /// Guid.NewGuid().ToString("N").
@@ -169,7 +165,7 @@ fn guid_n() -> String {
 
 impl DiskCopyForm {
     /// C# constructor: direct copy, first drive, destination the second when there are two or more (else the first).
-    pub(super) fn new(drives: Vec<RemovableDrive>, physical: Vec<PhysicalDisk>, ko: bool) -> Self {
+    pub(super) fn new(drives: Vec<RemovableDrive>, physical: Vec<PhysicalDisk>, language: compat::Language) -> Self {
         let second = |count: usize| match count {
             0 => None,
             1 => Some(0),
@@ -187,10 +183,10 @@ impl DiskCopyForm {
             drives,
             physical,
             image_path: String::new(),
-            status: t(ko, "이동식 드라이브와 이미지 파일을 선택하세요.", "Select a removable drive and an image file.").into(),
+            status: language.text("NDR.OP_DISK_SELECT_A_REMOVABLE_DRIVE_AND_AN_IMAGE_FILE", "Select a removable drive and an image file.").into(),
             progress: 0.0,
             run: None,
-            ko,
+            language,
         }
     }
 
@@ -204,7 +200,7 @@ impl DiskCopyForm {
 
     /// DriveChoice.Label: volume name, otherwise "removable disk".
     fn label_of(&self, drive: &RemovableDrive) -> String {
-        if drive.label.trim().is_empty() { t(self.ko, "이동식 디스크", "Removable Disk").into() } else { drive.label.clone() }
+        if drive.label.trim().is_empty() { self.language.text("NDR.OP_DISK_REMOVABLE_DISK", "Removable Disk").into() } else { drive.label.clone() }
     }
 
     /// DriveChoice.ToString: "{Root} {Label} · {FormatSize(Bytes)}".
@@ -212,62 +208,53 @@ impl DiskCopyForm {
         format!("{} {} · {}", drive.root, self.label_of(drive), ndr::parity::format_size(drive.bytes, "Auto", true))
     }
 
-    pub(super) fn drive_label(&self) -> &'static str {
-        if self.direct() { t(self.ko, "원본 드라이브", "Source drive") } else { t(self.ko, "이동식 드라이브", "Removable drive") }
+    pub(super) fn drive_label(&self) -> String {
+        if self.direct() { self.language.text("NDR.OP_DISK_SOURCE_DRIVE", "Source drive") } else { self.language.text("NDR.OP_DISK_REMOVABLE_DRIVE", "Removable drive") }
     }
 
-    pub(super) fn path_label(&self) -> &'static str {
+    pub(super) fn path_label(&self) -> String {
         match (self.mode == DiskMode::Create, self.whole_disk) {
-            (true, true) => t(self.ko, "저장할 전체 디스크 이미지", "Image to create"),
-            (true, false) => t(self.ko, "저장할 이미지", "Image to save"),
-            (false, true) => t(self.ko, "원본 전체 디스크 이미지", "Source image"),
-            (false, false) => t(self.ko, "원본 이미지", "Source image"),
+            (true, true) => self.language.text("NDR.OP_DISK_IMAGE_TO_CREATE", "Image to create"),
+            (true, false) => self.language.text("NDR.OP_DISK_IMAGE_TO_SAVE", "Image to save"),
+            (false, true) => self.language.text("NDR.OP_DISK_SOURCE_WHOLE_IMAGE", "Source image"),
+            (false, false) => self.language.text("NDR.OP_DISK_SOURCE_IMAGE", "Source image"),
         }
     }
 
-    pub(super) fn start_label(&self) -> &'static str {
-        let ko = self.ko;
+    pub(super) fn start_label(&self) -> String {
         match (self.mode, self.whole_disk) {
-            (DiskMode::Create, true) => t(ko, "전체 디스크 이미지 만들기", "Create full disk image"),
-            (DiskMode::Create, false) => t(ko, "이미지 만들기", "Create image"),
-            (DiskMode::Restore, true) => t(ko, "전체 디스크 복원", "Restore full disk"),
-            (DiskMode::Restore, false) => t(ko, "드라이브 복원", "Restore drive"),
-            (DiskMode::Copy, true) => t(ko, "전체 디스크 복제", "Clone full disk"),
-            (DiskMode::Copy, false) => t(ko, "드라이브 복사", "Copy drive"),
+            (DiskMode::Create, true) => self.language.text("NDR.OP_DISK_CREATE_FULL_DISK_IMAGE", "Create full disk image"),
+            (DiskMode::Create, false) => self.language.text("NDR.OP_DISK_CREATE_IMAGE", "Create image"),
+            (DiskMode::Restore, true) => self.language.text("NDR.OP_DISK_RESTORE_FULL_DISK", "Restore full disk"),
+            (DiskMode::Restore, false) => self.language.text("NDR.OP_DISK_RESTORE_DRIVE", "Restore drive"),
+            (DiskMode::Copy, true) => self.language.text("NDR.OP_DISK_CLONE_FULL_DISK", "Clone full disk"),
+            (DiskMode::Copy, false) => self.language.text("NDR.OP_DISK_COPY_DRIVE", "Copy drive"),
         }
     }
 
     /// _warning.Text of C# UpdateMode.
     pub(super) fn warning(&self) -> String {
-        let ko = self.ko;
         if self.whole_disk {
-            let mut text = String::from(if self.direct() {
+            let mut text = if self.direct() {
                 if self.same() {
-                    t(ko, "원본을 Windows 임시 폴더의 이미지 파일로 저장한 뒤 미디어를 바꿉니다. 같은 용량의 대상 미디어를 넣으면 전체 데이터를 덮어씁니다.",
-                        "NDR saves the source to a temporary image on another local disk. Swap in destination media with the same capacity; every byte on it will be overwritten.")
+                    self.language.text("NDR.OP_DISK_NDR_SAVES_THE_SOURCE_TO_A_TEMPORARY_IMAGE_ON", "NDR saves the source to a temporary image on another local disk. Swap in destination media with the same capacity; every byte on it will be overwritten.")
                 } else {
-                    t(ko, "대상 물리 디스크의 파티션 테이블과 모든 데이터를 덮어씁니다. 디스크 용량이 정확히 같아야 하며, 작업 중에는 취소할 수 없습니다.",
-                        "This overwrites the target disk's partition table and every byte. Disk capacities must match exactly. The operation cannot be cancelled.")
+                    self.language.text("NDR.OP_DISK_THIS_OVERWRITES_THE_TARGET_DISK_S_PARTITION_TABLE_AND", "This overwrites the target disk's partition table and every byte. Disk capacities must match exactly. The operation cannot be cancelled.")
                 }
             } else if self.mode == DiskMode::Create {
-                t(ko, "전체 디스크 이미지에는 파티션 테이블과 모든 파티션이 들어갑니다. 이미지 파일은 다른 로컬 물리 디스크에 저장하세요.",
-                    "The image includes the partition table and every partition. Save it on a different local physical disk.")
+                self.language.text("NDR.OP_DISK_THE_IMAGE_INCLUDES_THE_PARTITION_TABLE_AND_EVERY_PARTITION", "The image includes the partition table and every partition. Save it on a different local physical disk.")
             } else {
-                t(ko, "대상 물리 디스크의 파티션 테이블과 모든 데이터가 이미지로 교체됩니다. 이미지와 디스크 용량이 정확히 같아야 합니다.",
-                    "The target disk's partition table and every byte will be replaced. Image and disk capacities must match exactly.")
-            });
+                self.language.text("NDR.OP_DISK_THE_TARGET_DISK_S_PARTITION_TABLE_AND_EVERY_BYTE", "The target disk's partition table and every byte will be replaced. Image and disk capacities must match exactly.")
+            };
             if self.physical.is_empty() {
-                text.push_str(t(ko, " 이동식 물리 디스크를 찾지 못했습니다. 디스크 복사에는 관리자 권한이 필요할 수 있습니다.",
-                    " No removable physical disks were found. Disk access may require administrator privileges."));
+                text.push_str(&self.language.text("NDR.OP_DISK_NO_REMOVABLE_PHYSICAL_DISKS_WERE_FOUND_DISK_ACCESS_MAY", " No removable physical disks were found. Disk access may require administrator privileges."));
             }
             return text;
         }
         match self.mode {
-            DiskMode::Copy => t(ko, "대상 드라이브의 모든 기존 데이터를 덮어씁니다. 원본과 대상의 용량이 같아야 하며, 복사 중에는 취소할 수 없습니다.",
-                "This overwrites all existing data on the destination drive. Source and destination capacities must match, and copying cannot be cancelled."),
-            DiskMode::Create => t(ko, "이미지 파일은 원본 드라이브 바깥에 저장하세요.", "Save the image file outside the source drive."),
-            DiskMode::Restore => t(ko, "복원은 대상 볼륨의 기존 데이터를 덮어쓰며, 이미지와 대상 용량이 정확히 같아야 합니다.",
-                "Restoring overwrites the existing data on the target volume. Image and target capacities must match exactly."),
+            DiskMode::Copy => self.language.text("NDR.OP_DISK_THIS_OVERWRITES_ALL_EXISTING_DATA_ON_THE_DESTINATION_DRIVE", "This overwrites all existing data on the destination drive. Source and destination capacities must match, and copying cannot be cancelled."),
+            DiskMode::Create => self.language.text("NDR.OP_DISK_SAVE_THE_IMAGE_FILE_OUTSIDE_THE_SOURCE_DRIVE", "Save the image file outside the source drive."),
+            DiskMode::Restore => self.language.text("NDR.OP_DISK_RESTORING_OVERWRITES_THE_EXISTING_DATA_ON_THE_TARGET_VOLUME", "Restoring overwrites the existing data on the target volume. Image and target capacities must match exactly."),
         }
         .into()
     }
@@ -322,65 +309,53 @@ impl DiskCopyForm {
 
     /// Confirmation box before restore or direct copy (caption, text).
     fn confirmation(&self, plan: &DiskPlan) -> (String, String) {
-        let ko = self.ko;
         let direct = plan.direct();
         let file_name = Path::new(&plan.image).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         if plan.whole {
             let source_disk = plan.physical.expect("checked by plan");
             let target = if direct && !plan.same { plan.destination_physical.expect("checked by plan") } else { source_disk };
-            let destination = if plan.same { format!("{} ({})", physical_text(&target), t(ko, "미디어 교체 후", "after media swap")) } else { physical_text(&target) };
-            let source = if direct { physical_text(&source_disk) } else { file_name };
+            let destination = if plan.same { format!("{} ({})", physical_text(&target, &self.language), self.language.text("NDR.OP_DISK_AFTER_MEDIA_SWAP", "after media swap")) } else { physical_text(&target, &self.language) };
+            let source = if direct { physical_text(&source_disk, &self.language) } else { file_name };
             let title = match (direct, plan.same) {
-                (true, true) => t(ko, "한 드라이브 디스크 복사", "Single-drive disk copy"),
-                (true, false) => t(ko, "전체 물리 디스크 복제", "Clone full physical disk"),
-                _ => t(ko, "전체 물리 디스크 복원", "Restore full physical disk"),
+                (true, true) => self.language.text("NDR.OP_DISK_SINGLE_DRIVE_DISK_COPY", "Single-drive disk copy"),
+                (true, false) => self.language.text("NDR.OP_DISK_CLONE_FULL_PHYSICAL_DISK", "Clone full physical disk"),
+                _ => self.language.text("NDR.OP_DISK_RESTORE_FULL_PHYSICAL_DISK", "Restore full physical disk"),
             };
-            let scope = t(ko, "파티션 테이블과 모든 파티션을 포함한 물리 디스크 전체가", "The entire physical disk, including its partition table and every partition,");
-            let message = if ko {
-                format!("{destination}의 {scope} {source} 내용으로 덮어써집니다.\n\n작업 중에는 디스크를 분리하거나 NDR을 종료하지 마세요. 계속할까요?")
-            } else {
-                format!("{scope} {destination} will be overwritten with {source}.\n\nDo not disconnect the disk or close NDR during the operation. Continue?")
-            };
-            return (title.into(), message);
+            let message = super::file_commands::operation_format(&self.language, "NDR.OP_DISK_CONFIRM_PHYSICAL", "The entire physical disk, including its partition table and every partition, {0} will be overwritten with {1}.\n\nDo not disconnect the disk or close NDR during the operation. Continue?", &[&destination, &source]);
+            return (title, message);
         }
         let drive = plan.drive.as_ref().expect("checked by plan");
         let target = if direct { plan.destination_drive.as_ref().expect("checked by plan") } else { drive };
         let destination = format!("{} ({})", target.root, self.label_of(target));
         let source = if direct { format!("{} ({})", drive.root, self.label_of(drive)) } else { file_name };
-        let title = if direct { t(ko, "이동식 드라이브 직접 복사", "Direct removable drive copy") } else { t(ko, "이동식 드라이브 복원", "Restore removable drive") };
-        let message = if ko {
-            format!("{destination}의 기존 볼륨 데이터가 {source} 내용으로 덮어씁니다.\n\n작업 중에는 드라이브를 분리하거나 NDR을 종료하지 마세요. 계속할까요?")
-        } else {
-            format!("The existing volume data on {destination} will be overwritten with {source}.\n\nDo not disconnect the drive or close NDR during the operation. Continue?")
-        };
-        (title.into(), message)
+        let title = if direct { self.language.text("NDR.OP_DISK_DIRECT_REMOVABLE_DRIVE_COPY", "Direct removable drive copy") } else { self.language.text("NDR.OP_DISK_RESTORE_REMOVABLE_DRIVE", "Restore removable drive") };
+        let message = super::file_commands::operation_format(&self.language, "NDR.OP_DISK_CONFIRM_VOLUME", "The existing volume data on {0} will be overwritten with {1}.\n\nDo not disconnect the drive or close NDR during the operation. Continue?", &[&destination, &source]);
+        (title, message)
     }
 
-    fn starting_status(&self, plan: &DiskPlan) -> &'static str {
-        let ko = self.ko;
+    fn starting_status(&self, plan: &DiskPlan) -> String {
         if plan.same {
-            t(ko, "원본 디스크를 임시 이미지로 저장하고 있습니다…", "Saving the source disk to a temporary image…")
+            self.language.text("NDR.OP_DISK_SAVING_THE_SOURCE_DISK_TO_A_TEMPORARY_IMAGE", "Saving the source disk to a temporary image…")
         } else if plan.create {
-            if plan.whole { t(ko, "전체 물리 디스크에서 데이터를 읽고 있습니다…", "Reading full physical disk…") } else { t(ko, "드라이브에서 데이터를 읽고 있습니다…", "Reading data from the drive…") }
+            if plan.whole { self.language.text("NDR.OP_DISK_READING_FULL_PHYSICAL_DISK", "Reading full physical disk…") } else { self.language.text("NDR.OP_DISK_READING_DATA_FROM_THE_DRIVE", "Reading data from the drive…") }
         } else if plan.whole {
-            t(ko, "물리 디스크 볼륨을 잠그고 있습니다…", "Locking physical disk volumes…")
+            self.language.text("NDR.OP_DISK_LOCKING_PHYSICAL_DISK_VOLUMES", "Locking physical disk volumes…")
         } else {
-            t(ko, "드라이브를 잠그고 있습니다…", "Locking the drive…")
+            self.language.text("NDR.OP_DISK_LOCKING_THE_DRIVE", "Locking the drive…")
         }
     }
 
-    fn success_text(&self, plan: &DiskPlan) -> &'static str {
-        let ko = self.ko;
+    fn success_text(&self, plan: &DiskPlan) -> String {
         if plan.create {
-            if plan.whole { t(ko, "전체 디스크 이미지를 만들었습니다.", "Full disk image created.") } else { t(ko, "디스크 이미지를 만들었습니다.", "Disk image created.") }
+            if plan.whole { self.language.text("NDR.OP_DISK_FULL_DISK_IMAGE_CREATED", "Full disk image created.") } else { self.language.text("NDR.OP_DISK_DISK_IMAGE_CREATED", "Disk image created.") }
         } else if plan.restore {
-            if plan.whole { t(ko, "이미지를 전체 물리 디스크에 복원했습니다.", "Image restored to the full physical disk.") } else { t(ko, "이미지를 드라이브에 복원했습니다.", "Image restored to the drive.") }
+            if plan.whole { self.language.text("NDR.OP_DISK_IMAGE_RESTORED_TO_THE_FULL_PHYSICAL_DISK", "Image restored to the full physical disk.") } else { self.language.text("NDR.OP_DISK_IMAGE_RESTORED_TO_THE_DRIVE", "Image restored to the drive.") }
         } else if plan.same {
-            t(ko, "한 드라이브 디스크 복사가 완료되었습니다.", "Single-drive disk copy completed.")
+            self.language.text("NDR.OP_DISK_SINGLE_DRIVE_DISK_COPY_COMPLETED", "Single-drive disk copy completed.")
         } else if plan.whole {
-            t(ko, "전체 물리 디스크 복제가 완료되었습니다.", "Full physical disk clone completed.")
+            self.language.text("NDR.OP_DISK_FULL_PHYSICAL_DISK_CLONE_COMPLETED", "Full physical disk clone completed.")
         } else {
-            t(ko, "드라이브 간 복사가 완료되었습니다.", "Drive-to-drive copy completed.")
+            self.language.text("NDR.OP_DISK_DRIVE_TO_DRIVE_COPY_COMPLETED", "Drive-to-drive copy completed.")
         }
     }
 
@@ -388,8 +363,8 @@ impl DiskCopyForm {
     pub(super) fn show_progress(&mut self, copied: u64, total: u64, verifying: bool) {
         let ratio = if total == 0 { 0.0 } else { copied as f64 / total as f64 };
         self.progress = ratio as f32;
-        let prefix = if verifying { format!("{} · ", t(self.ko, "읽기 검증", "Verifying")) } else { String::new() };
-        self.status = format!("{prefix}{} / {} {} ({}%)", grouped(copied), grouped(total), t(self.ko, "바이트", "bytes"), (ratio * 100.0).round());
+        let prefix = if verifying { format!("{} · ", self.language.text("NDR.OP_DISK_VERIFYING", "Verifying")) } else { String::new() };
+        self.status = format!("{prefix}{} / {} {} ({}%)", grouped(copied), grouped(total), self.language.text("NDR.OP_DISK_BYTES", "bytes"), (ratio * 100.0).round());
     }
 }
 
@@ -414,58 +389,57 @@ fn combo_row(ui: &mut egui::Ui, id: &str, label: &str, items: &[String], selecte
 
 /// Draws the window. A pressed button returns its action.
 pub(super) fn disk_copy_ui(ui: &mut egui::Ui, form: &mut DiskCopyForm) -> Option<DiskAction> {
-    let ko = form.ko;
+    let language = &form.language;
     let running = form.run.is_some();
     if running {
         ui.ctx().request_repaint_after(Duration::from_millis(100));
     }
     let mut action = None;
     ui.set_width(574.0);
-    ui.add(egui::Label::new(t(ko, "이동식 볼륨을 이미지 파일로 저장하거나, 이미지 또는 다른 드라이브의 내용을 복원할 수 있습니다.",
-        "Save a removable volume as an image file, or restore the contents of an image or another drive.")).wrap());
+    ui.add(egui::Label::new(language.text("NDR.OP_DISK_SAVE_A_REMOVABLE_VOLUME_AS_AN_IMAGE_FILE_OR", "Save a removable volume as an image file, or restore the contents of an image or another drive.")).wrap());
     ui.add_space(12.0);
     ui.add_enabled_ui(!running, |ui| {
-        for (mode, korean, english) in [
-            (DiskMode::Create, "이동식 드라이브에서 이미지 만들기", "Create an image from a removable drive"),
-            (DiskMode::Restore, "이미지를 이동식 드라이브에 복원", "Restore an image to a removable drive"),
-            (DiskMode::Copy, "다른 이동식 드라이브로 직접 복사", "Copy directly to another removable drive"),
+        for (mode, label) in [
+            (DiskMode::Create, language.text("NDR.OP_DISK_MODE_CREATE", "Create an image from a removable drive")),
+            (DiskMode::Restore, language.text("NDR.OP_DISK_MODE_RESTORE", "Restore an image to a removable drive")),
+            (DiskMode::Copy, language.text("NDR.OP_DISK_MODE_COPY", "Copy directly to another removable drive")),
         ] {
-            ui.radio_value(&mut form.mode, mode, t(ko, korean, english));
+            ui.radio_value(&mut form.mode, mode, label);
             ui.add_space(4.0);
         }
-        ui.checkbox(&mut form.whole_disk, t(ko, "파티션 테이블과 모든 파티션 포함", "Include partition table and every partition"));
+        ui.checkbox(&mut form.whole_disk, language.text("NDR.OP_DISK_INCLUDE_PARTITION_TABLE_AND_EVERY_PARTITION", "Include partition table and every partition"));
     });
     ui.add_space(8.0);
     let direct = form.direct();
     let whole = form.whole_disk;
     let same = form.same();
     let drive_items: Vec<String> = form.drives.iter().map(|d| form.drive_text(d)).collect();
-    let physical_items: Vec<String> = form.physical.iter().map(physical_text).collect();
+    let physical_items: Vec<String> = form.physical.iter().map(|disk| physical_text(disk, language)).collect();
     if !whole {
         let label = form.drive_label();
-        combo_row(ui, "disk-copy-drive", label, &drive_items, &mut form.drive, !running);
+        combo_row(ui, "disk-copy-drive", &label, &drive_items, &mut form.drive, !running);
     }
     if direct && !whole {
-        combo_row(ui, "disk-copy-destination-drive", t(ko, "대상 드라이브", "Destination drive"), &drive_items, &mut form.destination_drive, !running);
+        combo_row(ui, "disk-copy-destination-drive", &language.text("NDR.OP_DISK_DESTINATION_DRIVE", "Destination drive"), &drive_items, &mut form.destination_drive, !running);
     }
     if whole {
-        combo_row(ui, "disk-copy-physical", t(ko, "전체 물리 디스크", "Physical disk"), &physical_items, &mut form.physical_disk, !running);
+        combo_row(ui, "disk-copy-physical", &language.text("NDR.OP_DISK_PHYSICAL_DISK", "Physical disk"), &physical_items, &mut form.physical_disk, !running);
     }
     if whole && direct && !same {
-        combo_row(ui, "disk-copy-destination-physical", t(ko, "대상 물리 디스크", "Target physical disk"), &physical_items, &mut form.destination_physical, !running);
+        combo_row(ui, "disk-copy-destination-physical", &language.text("NDR.OP_DISK_TARGET_PHYSICAL_DISK", "Target physical disk"), &physical_items, &mut form.destination_physical, !running);
     }
     ui.add_enabled_ui(!running, |ui| {
         if whole && direct {
             ui.horizontal(|ui| {
                 ui.add_space(24.0);
-                ui.checkbox(&mut form.same_drive, t(ko, "한 드라이브로 복사 (미디어 교체)", "Use one drive and swap media"));
+                ui.checkbox(&mut form.same_drive, language.text("NDR.OP_DISK_USE_ONE_DRIVE_AND_SWAP_MEDIA", "Use one drive and swap media"));
             });
             ui.add_space(8.0);
         }
         if direct {
             ui.horizontal(|ui| {
                 ui.add_space(24.0);
-                ui.checkbox(&mut form.verify, t(ko, "복사 후 데이터 읽기 검증", "Verify copied data after writing"));
+                ui.checkbox(&mut form.verify, language.text("NDR.OP_DISK_VERIFY_COPIED_DATA_AFTER_WRITING", "Verify copied data after writing"));
             });
             ui.add_space(8.0);
         }
@@ -478,7 +452,7 @@ pub(super) fn disk_copy_ui(ui: &mut egui::Ui, form: &mut DiskCopyForm) -> Option
                 ui.label(label);
             });
             ui.add_enabled(!running, egui::TextEdit::singleline(&mut form.image_path.as_str()).desired_width(340.0));
-            if ui.add_enabled(!running, egui::Button::new(t(ko, "찾아보기…", "Browse…")).min_size(egui::vec2(96.0, 22.0))).clicked() {
+            if ui.add_enabled(!running, egui::Button::new(language.text("NDR.OP_DISK_BROWSE", "Browse…")).min_size(egui::vec2(96.0, 22.0))).clicked() {
                 action = Some(DiskAction::Browse);
             }
         });
@@ -494,10 +468,10 @@ pub(super) fn disk_copy_ui(ui: &mut egui::Ui, form: &mut DiskCopyForm) -> Option
     let can_cancel = form.run.as_ref().is_some_and(DiskRun::cancellable);
     let start_label = form.start_label();
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-        if ui.add_enabled(!running, egui::Button::new(t(ko, "닫기", "Close")).min_size(egui::vec2(90.0, 26.0))).clicked() {
+        if ui.add_enabled(!running, egui::Button::new(language.text("NDR.OP_DISK_CLOSE", "Close")).min_size(egui::vec2(90.0, 26.0))).clicked() {
             action = Some(DiskAction::Close);
         }
-        if ui.add_enabled(can_cancel, egui::Button::new(t(ko, "취소", "Cancel")).min_size(egui::vec2(90.0, 26.0))).clicked() {
+        if ui.add_enabled(can_cancel, egui::Button::new(language.text("NDR.OP_DISK_CANCEL", "Cancel")).min_size(egui::vec2(90.0, 26.0))).clicked() {
             action = Some(DiskAction::Cancel);
         }
         if ui.add_enabled(can_start, egui::Button::new(start_label).min_size(egui::vec2(100.0, 26.0))).clicked() {
@@ -541,9 +515,8 @@ enum Follow {
 impl App {
     /// C# ShowDiskCopyWindow: reads the lists and opens the window.
     pub(super) fn open_disk_copy(&mut self) {
-        let ko = self.language == "ko";
-        let form = DiskCopyForm::new((self.disk.drives)(), (self.disk.physical_disks)(), ko);
-        let title = self.tr("디스크 복사", "Disk Copy").into_owned();
+        let form = DiskCopyForm::new((self.disk.drives)(), (self.disk.physical_disks)(), self.language_pack.clone());
+        let title = self.language_pack.text("NDR.OP_DISK_DISK_COPY", "Disk Copy");
         self.push_original_dialog(title, DialogKind::DiskCopy(Box::new(form)), |_, _, _| {});
     }
 
@@ -591,7 +564,7 @@ impl App {
 
     /// C# BrowseForImage: create uses a save dialog (Documents folder, suggested name, overwrite prompt), otherwise an open dialog.
     fn browse_disk_image(&mut self) {
-        let ko = self.language == "ko";
+        let language = self.language_pack.clone();
         let Some(form) = self.disk_copy_form() else { return };
         let create = form.mode == DiskMode::Create;
         let name = if form.whole_disk {
@@ -599,11 +572,13 @@ impl App {
         } else {
             form.drive.and_then(|i| form.drives.get(i)).map_or_else(|| "removable-disk.img".to_owned(), |d| format!("{}.img", d.root.trim_end_matches('\\').replace(':', "-")))
         };
-        let filters = [("Raw disk image (*.img)", "*.img"), (t(ko, "모든 파일 (*.*)", "All files (*.*)"), "*.*")];
+        let raw = language.text("NDR.OP_DISK_RAW_IMAGE_FILTER", "Raw disk image (*.img)");
+        let all = language.text("NDR.OP_COMMON_ALL_FILES_FILTER", "All files (*.*)");
+        let filters = [(raw.as_str(), "*.img"), (all.as_str(), "*.*")];
         let picked = if create {
-            (self.save_dialog)(t(ko, "디스크 이미지 저장", "Save Disk Image"), native::documents_folder().as_deref(), &name, &filters, "img", true)
+            (self.save_dialog)(&language.text("NDR.OP_DISK_SAVE_DISK_IMAGE", "Save Disk Image"), native::documents_folder().as_deref(), &name, &filters, "img", true)
         } else {
-            (self.open_dialog)(t(ko, "디스크 이미지 선택", "Select Disk Image"), None, "", &filters)
+            (self.open_dialog)(&language.text("NDR.OP_DISK_SELECT_DISK_IMAGE", "Select Disk Image"), None, "", &filters)
         };
         if let (Some(path), Some(form)) = (picked, self.disk_copy_form()) {
             form.image_path = path.to_string_lossy().into_owned();
@@ -675,15 +650,14 @@ impl App {
 
     /// End of C# StartCopyAsync (success, media swap, cancel, error) and finally.
     fn disk_copy_done(&mut self, result: Result<(), String>, ctx: &egui::Context) {
-        let title = self.tr("디스크 복사", "Disk Copy").into_owned();
+        let title = self.language_pack.text("NDR.OP_DISK_DISK_COPY", "Disk Copy");
         let Some(form) = self.disk_copy_form() else { return };
         let Some(run) = form.run.take() else { return };
-        let ko = form.ko;
+        let language = form.language.clone();
         let follow = match (run.stage, result) {
             (DiskStage::SameRead, Ok(())) => {
-                form.status = t(ko, "원본을 읽었습니다. 원본 미디어를 꺼내고 같은 용량의 대상 미디어를 넣은 뒤 계속을 누르세요.",
-                    "The source has been read. Eject it, insert destination media of the same capacity, then continue.").into();
-                let text = format!("{}\n\n{}", form.status, t(ko, "대상 미디어의 모든 데이터를 덮어씁니다.", "Every byte on the destination media will be overwritten."));
+                form.status = language.text("NDR.OP_DISK_THE_SOURCE_HAS_BEEN_READ_EJECT_IT_INSERT_DESTINATION", "The source has been read. Eject it, insert destination media of the same capacity, then continue.").into();
+                let text = format!("{}\n\n{}", form.status, language.text("NDR.OP_DISK_EVERY_BYTE_ON_THE_DESTINATION_MEDIA_WILL_BE_OVERWRITTEN", "Every byte on the destination media will be overwritten."));
                 form.run = Some(DiskRun { stage: DiskStage::Swap, ..run });
                 Follow::Swap(text)
             }
@@ -693,7 +667,7 @@ impl App {
                 Follow::Close
             }
             (DiskStage::Create | DiskStage::SameRead, Err(_)) if run.cancel.load(Ordering::Relaxed) => {
-                form.status = t(ko, "이미지 만들기를 취소했습니다. 불완전한 이미지 파일은 삭제했습니다.", "Image creation cancelled. The incomplete image file was deleted.").into();
+                form.status = language.text("NDR.OP_DISK_IMAGE_CREATION_CANCELLED_THE_INCOMPLETE_IMAGE_FILE_WAS_DELETED", "Image creation cancelled. The incomplete image file was deleted.").into();
                 discard_temp(&run);
                 Follow::None
             }
@@ -702,7 +676,7 @@ impl App {
                 let temp = run.temp.clone().unwrap_or_default();
                 form.image_path = temp.to_string_lossy().into_owned();
                 form.mode = DiskMode::Restore;
-                let kept = t(ko, "복구용 이미지 파일을 보존했습니다", "The recovery image was kept at");
+                let kept = language.text("NDR.OP_DISK_THE_RECOVERY_IMAGE_WAS_KEPT_AT", "The recovery image was kept at");
                 Follow::Error { restoring: run.restoring(), message: format!("{error}\n\n{kept}: {}", temp.display()) }
             }
             (_, Err(error)) => {
@@ -713,18 +687,16 @@ impl App {
         match follow {
             Follow::None => {}
             Follow::Close => {
-                self.completion_notice("디스크 작업 완료", "Disk operation completed",
-                    if ko { "디스크 작업이 정상적으로 완료되었습니다." }
-                    else { "Disk operation finished successfully." });
+                self.completion_notice_operation(self.language_pack.text("NDR.OP_DISK_DISK_OPERATION_COMPLETED", "Disk operation completed"),
+                    language.text("NDR.OP_DISK_FINISH_DETAIL", "Disk operation finished successfully."));
                 self.close_disk_copy(ctx);
             },
             Follow::Swap(text) => self.system_box(&title, &text, MB_YESNO | MB_ICONEXCLAMATION, |app, answer, _| app.disk_swap_answered(answer == IDYES)),
             Follow::Error { restoring, message } => {
                 let prefix = if restoring {
-                    t(ko, "복원 또는 드라이브 복사 중 오류가 발생했습니다. 대상 디스크의 데이터가 일부 변경되었을 수 있습니다.\n\n",
-                        "An error occurred while restoring or copying the drive. Data on the target disk may have been partly changed.\n\n")
+                    language.text("NDR.OP_DISK_AN_ERROR_OCCURRED_WHILE_RESTORING_OR_COPYING_THE_DRIVE", "An error occurred while restoring or copying the drive. Data on the target disk may have been partly changed.\n\n")
                 } else {
-                    t(ko, "이미지를 만들지 못했습니다.\n\n", "The image could not be created.\n\n")
+                    language.text("NDR.OP_DISK_THE_IMAGE_COULD_NOT_BE_CREATED_N_N", "The image could not be created.\n\n")
                 };
                 self.system_box(&title, &format!("{prefix}{message}"), MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
             }
@@ -736,13 +708,13 @@ impl App {
         let hooks = self.disk;
         let Some(form) = self.disk_copy_form() else { return };
         let Some(run) = form.run.take() else { return };
-        let ko = form.ko;
+        let language = &form.language;
         if !yes {
-            form.status = t(ko, "복사를 취소했습니다. 대상 미디어에는 기록하지 않았습니다.", "Copy cancelled. Nothing was written to destination media.").into();
+            form.status = language.text("NDR.OP_DISK_COPY_CANCELLED_NOTHING_WAS_WRITTEN_TO_DESTINATION_MEDIA", "Copy cancelled. Nothing was written to destination media.").into();
             discard_temp(&run);
             return;
         }
-        form.status = t(ko, "대상 미디어에 이미지를 기록하고 있습니다…", "Writing the image to destination media…").into();
+        form.status = language.text("NDR.OP_DISK_WRITING_THE_IMAGE_TO_DESTINATION_MEDIA", "Writing the image to destination media…").into();
         let image = run.temp.clone().unwrap_or_default();
         let device = run.plan.physical.map(|d| d.device()).unwrap_or_default();
         let verify = run.plan.verify;

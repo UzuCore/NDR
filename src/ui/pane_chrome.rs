@@ -6,6 +6,10 @@
 use super::*;
 use std::fs;
 
+fn pane_text(language: &compat::Language, key: &str, en: &str, ko: &str) -> String {
+    language.text(key, if language.code.eq_ignore_ascii_case("ko") { ko } else { en })
+}
+
 /// Extensions Rust opens as archive panes (same as open_current).
 fn is_archive(path: &Path) -> bool {
     let extension = path.extension().unwrap_or_default().to_string_lossy().to_ascii_lowercase();
@@ -25,7 +29,7 @@ impl App {
         if ui.add_enabled(several, egui::Button::new(menu("pmiCloseTab", if ko { "탭 닫기" } else { "Close Tab" }))).clicked() {
             chosen = Some(format!("closeTab:{tab}"));
         }
-        if ui.add_enabled(several, egui::Button::new(menu("pmiCloseAllTab", if ko { "다른 탭 모두 닫기" } else { "Close All Other Tabs" }))).clicked() {
+        if ui.add_enabled(several, egui::Button::new(pane_text(&self.language_pack, "NDR.UI_PANE_CLOSE_OTHER_TABS", "Close other tabs", "다른 탭 모두 닫기"))).clicked() {
             chosen = Some(format!("closeOthers:{tab}"));
         }
         ui.separator();
@@ -194,7 +198,6 @@ impl App {
         if !self.settings.flag("ShowAddressBar", true) {
             return;
         }
-        let ko = self.language == "ko";
         let mode = self.settings.values.get("PathClickMode").and_then(|v| v.as_i64()).unwrap_or(0);
         ui.add_space(5.0);
         let rect = egui::Rect::from_min_size(ui.cursor().min, egui::vec2(ui.available_width(), 26.0));
@@ -215,15 +218,15 @@ impl App {
                 ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.small_button("↻").on_hover_text(if ko { "현재 폴더 새로 고침" } else { "Refresh the current folder" }).clicked() {
+                        if ui.small_button("↻").on_hover_text(pane_text(&self.language_pack, "NDR.UI_PANE_REFRESH_FOLDER", "Refresh the current folder", "현재 폴더 새로 고침")).clicked() {
                             action = Some(AddressAction::Refresh);
                         }
                         let history = !self.panes[index].back.is_empty() || !self.panes[index].forward.is_empty();
-                        let button = ui.add_enabled(history, egui::Button::new("▼").small()).on_hover_text(if ko { "경로 기록" } else { "Path history" });
+                        let button = ui.add_enabled(history, egui::Button::new("▼").small()).on_hover_text(pane_text(&self.language_pack, "RES.FUNC_SHOWPATHHISTORY", "Path history", "경로 기록"));
                         if button.clicked() {
                             action = Some(AddressAction::History(button.rect.left_bottom()));
                         }
-                        if ui.small_button("…").on_hover_text(if ko { "경로 직접 입력" } else { "Type a path" }).clicked() {
+                        if ui.small_button("…").on_hover_text(pane_text(&self.language_pack, "NDR.UI_PANE_TYPE_PATH", "Type a path", "경로 직접 입력")).clicked() {
                             action = Some(AddressAction::BeginEdit);
                         }
                         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
@@ -373,11 +376,11 @@ impl App {
                 chosen = Some(AddressAction::Navigate(CrumbTarget::Local(path.clone())));
             }
             let drive_root = i == 0 && count == 1 && label.len() == 3 && label.as_bytes()[1] == b':';
-            let tip = self.tr("하위 폴더", "Subfolders").into_owned();
+            let tip = pane_text(&self.language_pack, "NDR.UI_PANE_SUBFOLDERS", "Subfolders", "하위 폴더");
             ui.menu_button(RichText::new("▼").size(10.0).weak(), |ui| {
                 let children = self.crumb_children(index, &path, drive_root);
                 if children.is_empty() {
-                    ui.add_enabled(false, egui::Button::new(self.tr("하위 폴더 없음", "No subfolders")));
+                    ui.add_enabled(false, egui::Button::new(pane_text(&self.language_pack, "NDR.UI_PANE_NO_SUBFOLDERS", "No subfolders", "하위 폴더 없음")));
                 }
                 egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
                     for (child, header) in children {
@@ -553,14 +556,18 @@ impl App {
                 }
                 if connection != 0 {
                     let message = native::win32_message(connection);
-                    let text = if ko { format!("네트워크 공유 인증에 실패했습니다. Windows 오류 {connection}: {message}") } else { format!("Network share authentication failed. Windows error {connection}: {message}") };
-                    return self.system_box(if ko { "폴더 이동" } else { "Go to folder" }, &text, ndr::msgbox::MB_OK | ndr::msgbox::MB_ICONEXCLAMATION, |_, _, _| {});
+                    let fallback = if ko { "네트워크 공유 인증에 실패했습니다. Windows 오류 {0}: {1}" } else { "Network share authentication failed. Windows error {0}: {1}" };
+                    let text = super::file_commands::operation_format(&self.language_pack, "NDR.UI_PANE_SHARE_AUTH_FAILED", fallback, &[&connection, &message]);
+                    let title = pane_text(&self.language_pack, "NDR.UI_PANE_GO_TO_FOLDER", "Go to folder", "폴더 이동");
+                    return self.system_box(&title, &text, ndr::msgbox::MB_OK | ndr::msgbox::MB_ICONEXCLAMATION, |_, _, _| {});
                 }
             }
         }
         if !path.is_dir() {
-            let (title, text) = if ko { ("폴더 이동", format!("폴더를 찾을 수 없습니다: {}", path.display())) } else { ("Go to folder", format!("The folder was not found: {}", path.display())) };
-            return self.system_box(title, &text, ndr::msgbox::MB_OK | ndr::msgbox::MB_ICONEXCLAMATION, |_, _, _| {});
+            let title = pane_text(&self.language_pack, "NDR.UI_PANE_GO_TO_FOLDER", "Go to folder", "폴더 이동");
+            let fallback = if ko { "폴더를 찾을 수 없습니다: {0}" } else { "The folder was not found: {0}" };
+            let text = super::file_commands::operation_format(&self.language_pack, "NDR.UI_PANE_FOLDER_NOT_FOUND", fallback, &[&path.display()]);
+            return self.system_box(&title, &text, ndr::msgbox::MB_OK | ndr::msgbox::MB_ICONEXCLAMATION, |_, _, _| {});
         }
         self.panes[index].archive = None;
         self.active = index;
@@ -631,7 +638,7 @@ impl App {
         // Original text (with &): & is removed when drawing, and a letter typed while the menu is open (menu_letter) picks the item with that access letter.
         let text = |key: &str, fallback: &str| self.language_pack.raw(&format!("formMain.Menu.{key}")).unwrap_or_else(|| fallback.to_owned());
         type Item<'a> = Option<(String, &'static str, bool)>;
-        // Original pmMain order (docs/original-menus.txt): Explorer menu | open in new tab | open with, view, edit | copy, cut, paste |
+        // NDR context-menu order: Explorer menu | open in new tab | open with, view, edit | copy, cut, paste |
         // copy to, move to | delete, rename, attributes/time, description | add to archive, auto extract | properties.
         let mut items: Vec<Item> = Vec::new();
         if explorer {

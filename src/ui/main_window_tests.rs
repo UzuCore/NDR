@@ -301,7 +301,7 @@ fn hovered_file_menu_shortcut_keeps_the_row_highlight() {
     });
     // The menu can still be fading in, so compare the RGB before opacity.
     let [r, g, b, _] = background.expect("a background behind the shortcut").to_srgba_unmultiplied();
-    assert!([r, g, b].into_iter().all(|channel| channel.abs_diff(0xE6) <= 1),
+    assert!([r, g, b].into_iter().zip([0x32, 0x45, 0x53]).all(|(channel, expected)| channel.abs_diff(expected) <= 3),
         "the highlight extends behind the shortcut, got ({r}, {g}, {b})");
     drop(app);
     fs::remove_dir_all(root).unwrap();
@@ -445,7 +445,7 @@ fn main_window_frame_info_bars_tabs_and_address_follow_csharp() {
     // Info bar: original FOLDERINFO (folders, files, StrFormatByteSizeW size); extensions by most frequent.
     let [folder, file, extension] = app.info_texts(0);
     let bytes: u64 = app.panes[0].entries.iter().filter(|e| !e.is_dir).map(|e| e.size).sum();
-    let counts = format!("<c000000><b>1</b></c> 폴더, <c000000><b>3</b></c> 파일 (<b>{}</b>)", native::format_byte_size(bytes));
+    let counts = format!("폴더 <c000000><b>1</b></c>개 · 파일 <c000000><b>3</b></c>개 · <b>{}</b>", native::format_byte_size(bytes));
     assert_eq!(folder, counts, "no disk text in tests (disk_info hook)");
     let cursor = app.panes[0].entries[app.panes[0].cursor].clone();
     // Original FUN_0048a5cc: the focused item "size  |  date  |  attributes  |  name" (a folder with unknown size shows FOLDER).
@@ -457,14 +457,14 @@ fn main_window_frame_info_bars_tabs_and_address_follow_csharp() {
     app.panes[0].disk = Some(("로컬 디스크 (C:) ".into(), 2048, 4096));
     let (_, drive, right, hint) = app.folder_info(0);
     let (free, total) = (native::format_byte_size(2048), native::format_byte_size(4096));
-    assert_eq!((drive.as_str(), right), ("로컬 디스크 (C:) ", format!("<c000000><b>{free}</b></c> 남음")));
-    assert_eq!(hint, format!("{free} 남음 (총 {total})"));
-    assert_eq!(app.info_texts(0)[0], format!("{counts}  로컬 디스크 (C:) <c000000><b>{free}</b></c> 남음"));
+    assert_eq!((drive.as_str(), right), ("로컬 디스크 (C:) ", format!("남은 공간 <c000000><b>{free}</b></c>")));
+    assert_eq!(hint, format!("남은 공간 {free} / 전체 {total}"));
+    assert_eq!(app.info_texts(0)[0], format!("{counts}  로컬 디스크 (C:) 남은 공간 <c000000><b>{free}</b></c>"));
     app.panes[0].selected = (0..app.panes[0].entries.len()).collect();
     let [folder, file, extension] = app.info_texts(0);
     // Original FUN_00484b24: when there are marked items, SELECTED_INFO (count, byte count + "+" if a folder is included) replaces the disk text.
     let marked = super::file_operation::n0(bytes as usize);
-    assert_eq!(folder, format!("{counts}  선택정보: <b>4</b> 항목 (<b>{marked}+</b> bytes)"));
+    assert_eq!(folder, format!("{counts}  <b>4</b>개 선택 · <b>{marked}+</b>바이트"));
     assert_eq!(file, app.file_info(0).unwrap(), "the file bar keeps showing the focused item");
     // If there is a description, show the 6B9FFF-colored description instead of the name.
     let focused = app.panes[0].entries[app.panes[0].cursor].name.to_lowercase();
@@ -538,8 +538,9 @@ fn launched(path: &Path, _: &str, _: &Path) -> Result<(), String> {
 fn github_update_installs_after_one_approval_without_second_dialog() {
     let (root, ctx, mut app) = fixture("single-approval-update");
     let before = app.msgboxes.len();
-    app.update_launcher = |path| {
+    app.update_launcher = |path, language| {
         assert_eq!(path, Path::new("mock-update.zip"));
+        assert_eq!(language.code, "ko");
         Ok(())
     };
     app.update_progress = Some(super::main_window::UpdateProgress {
@@ -550,7 +551,7 @@ fn github_update_installs_after_one_approval_without_second_dialog() {
     assert_eq!(app.msgboxes.len(), before, "no second install confirmation");
     assert!(matches!(app.update_progress.as_ref().map(|v| v.phase), Some(ndr::update::UpdatePhase::Installing)));
     app.update_progress = None;
-    app.update_launcher = |_| Err("installer start error".into());
+    app.update_launcher = |_, _| Err("installer start error".into());
     app.update_progress = Some(super::main_window::UpdateProgress {
         tag: "build-99".into(), phase: ndr::update::UpdatePhase::Preparing,
         downloaded: 1024, total: 1024, error: None,
@@ -559,6 +560,88 @@ fn github_update_installs_after_one_approval_without_second_dialog() {
     assert_eq!(app.msgboxes.len(), before, "failure stays in progress window");
     assert_eq!(app.update_progress.as_ref().unwrap().phase, ndr::update::UpdatePhase::Failed);
     assert_eq!(app.update_progress.as_ref().unwrap().error.as_deref(), Some("installer start error"));
+    drop(app);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn github_update_dialog_identifies_installed_and_target_builds() {
+    let (root, ctx, mut app) = fixture("github-build-message");
+    let installed = ndr::update::current_build();
+    let response = |build| {
+        let tag = format!("build-{build}");
+        let body = serde_json::json!({
+            "tag_name": tag, "draft": false, "prerelease": false,
+            "assets": [{
+                "name": "NDR-windows-x64.zip", "size": 123,
+                "digest": format!("sha256:{}", "a".repeat(64)),
+                "browser_download_url": format!("https://github.com/UzuCore/NDR/releases/download/{tag}/NDR-windows-x64.zip"),
+            }]
+        });
+        Ok(ndr::update::HttpResponse { status: 200, secure: true, body: serde_json::to_vec(&body).unwrap() })
+    };
+    for (language, title, current, local, new) in [
+        ("ko", "NDR 업데이트", "현재 빌드", "로컬 빌드", "새 빌드"),
+        ("en", "NDR Update", "Installed build", "Local build", "New build"),
+    ] {
+        app.apply_language(language);
+        app.update_done(response(installed + 1), false);
+        let msg = app.msgboxes.first().unwrap();
+        let label = ndr::update::build_label(installed).unwrap_or_else(|| local.into());
+        assert_eq!(msg.title, title);
+        assert!(msg.text.contains(&format!("{current}: {label}")));
+        assert!(msg.text.contains(&format!("{new}: build-{}", installed + 1)));
+        app.answer_message_box(2, &ctx);
+        assert!(app.update_progress.is_none(), "declining cannot start a download");
+        if installed > 0 {
+            app.update_available = Some("stale update button".into());
+            app.update_done(response(installed), false);
+            let msg = app.msgboxes.first().unwrap();
+            assert_eq!(msg.title, title);
+            assert!(msg.text.contains(&format!("{current}: {label}")));
+            assert!(app.update_available.is_none());
+            app.answer_message_box(1, &ctx);
+        }
+        app.about_command();
+        assert!(app.msgboxes.first().unwrap().text.starts_with(&format!("NDR {label}\n")));
+        app.answer_message_box(1, &ctx);
+    }
+    drop(app);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn all_forty_locale_choices_open_their_own_update_dialog_and_save_canonical_id() {
+    let (root, ctx, mut app) = fixture("all-forty-update-dialogs");
+    let build = ndr::update::current_build() + 10;
+    let tag = format!("build-{build}");
+    let response = serde_json::json!({
+        "tag_name": tag, "draft": false, "prerelease": false,
+        "assets": [{
+            "name": "NDR-windows-x64.zip", "size": 123,
+            "digest": format!("sha256:{}", "a".repeat(64)),
+            "browser_download_url": format!("https://github.com/UzuCore/NDR/releases/download/{tag}/NDR-windows-x64.zip"),
+        }]
+    });
+    let body = serde_json::to_vec(&response).unwrap();
+    assert_eq!(super::settings_window::available_languages(&app.resources).len(), 40);
+    for &(locale, _) in ndr::compat::BUILTIN_LANGUAGES {
+        app.apply_language(locale);
+        assert_eq!(app.language, locale);
+        assert_eq!(app.settings.text("Language", ""), locale);
+        assert_eq!(app.language_pack.code, locale);
+        let primary = app.language_pack.primary_raw("NDR.UPD_TITLE").expect("localized update title").to_owned();
+        app.update_done(Ok(ndr::update::HttpResponse {
+            status: 200, secure: true, body: body.clone(),
+        }), false);
+        let msg = app.msgboxes.first().expect("update dialog should open");
+        assert_eq!(msg.title, primary, "{locale}: update dialog used fallback");
+        assert!(msg.text.contains(&tag), "{locale}: build placeholder did not resolve");
+        app.answer_message_box(2, &ctx);
+        assert!(app.update_progress.is_none());
+    }
+    app.apply_language("pt_PT");
+    assert_eq!(app.settings.text("Language", ""), "pt-PT");
     drop(app);
     fs::remove_dir_all(root).unwrap();
 }

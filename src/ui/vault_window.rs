@@ -43,7 +43,7 @@ pub(super) struct VaultDialog {
 
 impl App {
     pub(super) fn vault_status(&self, ko: &str, en: &str) -> String {
-        if self.language == "ko" { ko } else { en }.to_owned()
+        self.language_pack.translate_pair(ko, en)
     }
 
     /// Discard the in-memory connection AND all decrypted pane presentation
@@ -68,9 +68,7 @@ impl App {
                     }
                     if let Err(error) = self.vault_mounts[index].finish() {
                         eprintln!("NDR encrypted mount finalization failed: {error}");
-                        self.status = self.vault_status(
-                            "암호화 파일을 저장하지 못했습니다. 편집기에서 다시 저장해 주세요.",
-                            "Encrypted file save failed. Retry saving it from the editor.");
+                        self.status = self.language_pack.text("NDR.SEC_ENCRYPTED_FILE_SAVE_FAILED_RETRY_SAVING_IT_FROM", "Encrypted file save failed. Retry saving it from the editor.");
                         // Never discard credentials on a failed commit.
                         return;
                     }
@@ -79,9 +77,7 @@ impl App {
                 if let Some(state) = self.panes[pane].vault.as_mut() {
                     if let Err(error) = state.database.reload_after_mount() {
                         eprintln!("NDR encrypted folder refresh failed: {error}");
-                        self.status = self.vault_status(
-                            "암호화 폴더 목록을 갱신하지 못했습니다.",
-                            "Could not refresh the encrypted folder list.");
+                        self.status = self.language_pack.text("NDR.SEC_COULD_NOT_REFRESH_THE_ENCRYPTED_FOLDER_LIST", "Could not refresh the encrypted folder list.");
                         return;
                     }
                 }
@@ -220,15 +216,11 @@ impl App {
             Ok(tree) => {
                 let root = tree.mount_root.display().to_string();
                 self.vault_trees.push(tree);
-                self.status = self.vault_status(
-                    &format!("암호화 폴더가 {root}에 연결됐습니다. 다른 프로그램에서도 일반 폴더처럼 사용할 수 있습니다."),
-                    &format!("Encrypted folder mounted at {root}. Explorer and other applications can use it."));
+                self.status = self.language_pack.text("NDR.SEC_ENCRYPTED_FOLDER_MOUNTED_AT_ROOT_EXPLORER_AND_OTHER", "Encrypted folder mounted at {root}. Explorer and other applications can use it.").replace("{root}", &root.to_string());
             }
             Err(error) => {
                 eprintln!("NDR full encrypted directory mount failed for {}: {error}", file.display());
-                self.status = self.vault_status(
-                    "암호화 폴더를 Windows 가상 드라이브에 연결하지 못했습니다. NDR 내부 파일 작업은 계속 사용할 수 있습니다.",
-                    "Could not mount encrypted folder as a Windows drive; NDR internal operations remain available.");
+                self.status = self.language_pack.text("NDR.SEC_COULD_NOT_MOUNT_ENCRYPTED_FOLDER_AS_A_WINDOWS", "Could not mount encrypted folder as a Windows drive; NDR internal operations remain available.");
             }
         }
     }
@@ -314,7 +306,7 @@ impl App {
                 }));
                 rows
             }
-            Err(error) => { self.status = error; return; }
+            Err(error) => { self.status = super::vault_transfer_ui::vault_error_text(&self.language_pack, &error); return; }
         };
         let same_folder = self.panes[pane].listed.as_deref()
             == Some(format!("vault|{}", current.display()).as_str());
@@ -399,8 +391,8 @@ impl App {
         #[cfg(not(feature = "winfsp-vault"))]
         {
             let _ = (pane, item);
-            self.error_notice("보안상 파일 열기 차단", "Encrypted file opening blocked",
-                "보안 문제로 암호화 폴더 내부 파일을 실행하려면 WinFsp가 설치되어 있어야 합니다.");
+            self.error_notice_operation(self.language_pack.text("NDR.SEC_ENCRYPTED_FILE_OPENING_BLOCKED", "Encrypted file opening blocked"),
+                self.language_pack.text("NDR.SEC_WINFSP_REQUIRED", "WinFsp is required to securely open files inside encrypted folders."));
         }
         #[cfg(feature = "winfsp-vault")]
         {
@@ -409,9 +401,7 @@ impl App {
                 return;
             }
             if self.vault_transfer.is_some() {
-                self.status = self.vault_status(
-                    "암호화 파일 전송이 끝난 후 다시 시도해 주세요.",
-                    "Finish the encrypted file transfer before opening another file.");
+                self.status = self.language_pack.text("NDR.SEC_FINISH_THE_ENCRYPTED_FILE_TRANSFER_BEFORE_OPENING_ANOTHER", "Finish the encrypted file transfer before opening another file.");
                 return;
             }
             let Some(state) = self.panes[pane].vault.as_ref() else { return };
@@ -422,7 +412,7 @@ impl App {
                 m.vault_path == state.file && !m.is_revoked()) {
                 let relative = match state.database.relative_folder_path(state.folder()) {
                     Ok(path) => path,
-                    Err(error) => { self.status = error; return; }
+                    Err(error) => { self.status = super::vault_transfer_ui::vault_error_text(&self.language_pack, &error); return; }
                 };
                 let path = tree.mount_root.join(relative).join(&item.name);
                 let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
@@ -436,9 +426,8 @@ impl App {
                 };
                 if let Err(error) = opened {
                     eprintln!("NDR encrypted directory file open failed: {error}");
-                    self.error_notice("암호화 파일 열기 실패", "Encrypted file open failed",
-                        self.vault_status("외부 프로그램에서 파일을 열지 못했습니다.",
-                                          "Could not open the encrypted file."));
+                    self.error_notice_operation(self.language_pack.text("NDR.SEC_ENCRYPTED_FILE_OPEN_FAILED", "Encrypted file open failed"),
+                        self.language_pack.text("NDR.SEC_COULD_NOT_OPEN_THE_ENCRYPTED_FILE", "Could not open the encrypted file."));
                 }
                 return;
             }
@@ -457,8 +446,8 @@ impl App {
                 } else { native::shell_open(&path, None, "open") };
                 if let Err(error) = opened {
                     eprintln!("NDR virtual file reopen failed: {error}");
-                    self.error_notice("암호화 파일 열기 실패", "Encrypted file open failed",
-                        self.vault_status("파일을 다시 열 수 없습니다.", "Could not reopen the file."));
+                    self.error_notice_operation(self.language_pack.text("NDR.SEC_ENCRYPTED_FILE_OPEN_FAILED", "Encrypted file open failed"),
+                        self.language_pack.text("NDR.SEC_COULD_NOT_REOPEN_THE_FILE", "Could not reopen the file."));
                 }
                 return;
             }
@@ -485,8 +474,8 @@ impl App {
                     if let Err(error) = opened {
                         let _ = mount.finish();
                         eprintln!("NDR encrypted file open failed: {error}");
-                        self.error_notice("암호화 파일 열기 실패", "Encrypted file open failed",
-                            self.vault_status("파일을 외부 프로그램으로 열지 못했습니다.", "Cannot open the file in its external application."));
+                        self.error_notice_operation(self.language_pack.text("NDR.SEC_ENCRYPTED_FILE_OPEN_FAILED", "Encrypted file open failed"),
+                            self.language_pack.text("NDR.SEC_CANNOT_OPEN_THE_FILE_IN_ITS_EXTERNAL_APPLICATION", "Cannot open the file in its external application."));
                     } else {
                         self.vault_mounts.push(mount);
                     }
@@ -496,8 +485,8 @@ impl App {
                         self.offer_winfsp_installation();
                     } else {
                         eprintln!("NDR virtual file mount failed: {error}");
-                        self.error_notice("가상 드라이브 연결 실패", "WinFsp mount failed",
-                            self.vault_status("암호화 파일 연결에 실패했습니다. 가상 드라이브 사용 상태를 확인해 주세요.", "Unable to connect encrypted virtual file."));
+                        self.error_notice_operation(self.language_pack.text("NDR.SEC_WINFSP_MOUNT_FAILED", "WinFsp mount failed"),
+                            self.language_pack.text("NDR.SEC_UNABLE_TO_CONNECT_ENCRYPTED_VIRTUAL_FILE", "Unable to connect encrypted virtual file."));
                     }
                 }
             }
@@ -507,20 +496,14 @@ impl App {
     #[cfg(feature = "winfsp-vault")]
     fn offer_winfsp_installation(&mut self) {
         if self.msgboxes.iter().any(|dialog| dialog.title == "WinFsp") { return; }
-        let message = if self.language == "ko" {
-            "보안 문제로 암호화 폴더 내부 파일을 열려면\nWinFsp가 설치되어 있어야 합니다.\n\nNDR에 포함된 WinFsp를 설치하시겠습니까?\n(Windows 관리자 승인 필요)"
-        } else {
-            "WinFsp must be installed to securely open\nfiles inside encrypted folders.\n\nInstall the WinFsp driver included with NDR?\n(Windows administrator approval required)"
-        };
-        self.system_box("WinFsp", message,
+        let message = self.language_pack.text("NDR.SEC_WINFSP_MUST_BE_INSTALLED_TO_SECURELY_OPEN_FILES", "WinFsp must be installed to securely open\nfiles inside encrypted folders.\n\nInstall the WinFsp driver included with NDR?\n(Windows administrator approval required)");
+        self.system_box("WinFsp", &message,
             ndr::msgbox::MB_YESNO | ndr::msgbox::MB_ICONEXCLAMATION,
             |app, answer, _| {
                 if answer == ndr::msgbox::IDYES {
                     match super::vault_winfsp::launch_embedded_installer() {
-                        Ok(()) => app.status = if app.language == "ko" {
-                            "설치 완료 후 암호화 파일을 다시 열어 주세요."
-                        } else { "After installation completes, open the encrypted file again." }.into(),
-                        Err(error) => app.error_notice("WinFsp 설치 실패", "WinFsp installation failed", error),
+                        Ok(()) => app.status = app.language_pack.text("NDR.SEC_AFTER_INSTALLATION_COMPLETES_OPEN_THE_ENCRYPTED_FILE_AGAIN", "After installation completes, open the encrypted file again."),
+                        Err(error) => app.error_notice_operation(app.language_pack.text("NDR.SEC_WINFSP_INSTALLATION_FAILED", "WinFsp installation failed"), error),
                     }
                 }
             });
@@ -568,17 +551,15 @@ impl App {
                     Ok(()) => self.refresh_vault(pane),
                     Err(error) => {
                         eprintln!("NDR vault listing refresh failed: {error}");
-                        self.error_notice("암호화 폴더 갱신 실패", "Encrypted folder refresh failed",
-                            self.vault_status("저장된 파일 목록을 갱신하지 못했습니다.",
-                                "Could not refresh the encrypted file list."));
+                        self.error_notice_operation(self.language_pack.text("NDR.SEC_ENCRYPTED_FOLDER_REFRESH_FAILED_2", "Encrypted folder refresh failed"),
+                            self.language_pack.text("NDR.SEC_COULD_NOT_REFRESH_THE_ENCRYPTED_FILE_LIST", "Could not refresh the encrypted file list."));
                     }
                 }
             }
         }
         for file in errors {
-            self.error_notice("암호화 저장 실패", "Encrypted file save failed",
-                self.vault_status(&format!("{file}: 변경 내용을 암호화 저장하지 못했습니다. 편집기에서 다시 저장해 주세요."),
-                    &format!("{file}: Could not encrypt changes. Retry saving from the editor.")));
+            self.error_notice_operation(self.language_pack.text("NDR.SEC_ENCRYPTED_FILE_SAVE_FAILED", "Encrypted file save failed"),
+                self.language_pack.text("NDR.SEC_FILE_COULD_NOT_ENCRYPT_CHANGES_RETRY_SAVING_FROM", "{file}: Could not encrypt changes. Retry saving from the editor.").replace("{file}", &file.to_string()));
         }
     }
 
@@ -598,16 +579,14 @@ impl App {
                 tree.vault_path == path && !tree.is_revoked()) {
                 if let Some(vault) = self.panes[pane].vault.as_mut() {
                     if let Err(error) = vault.database.reload_after_mount() {
-                        self.status = error;
+                        self.status = super::vault_transfer_ui::vault_error_text(&self.language_pack, &error);
                         return false;
                     }
                 }
                 return true;
             }
             if self.vault_mounts.iter().any(|m| m.vault_path == path && m.has_open_files()) {
-                self.status = self.vault_status(
-                    "외부 프로그램에서 사용 중인 암호화 파일이 있습니다. 해당 파일을 닫고 다시 시도해 주세요.",
-                    "Close externally opened encrypted files before changing this container.");
+                self.status = self.language_pack.text("NDR.SEC_CLOSE_EXTERNALLY_OPENED_ENCRYPTED_FILES_BEFORE_CHANGING_THIS", "Close externally opened encrypted files before changing this container.");
                 return false;
             }
             let mut index = 0;
@@ -615,9 +594,7 @@ impl App {
                 if self.vault_mounts[index].vault_path != path { index += 1; continue; }
                 if let Err(error) = self.vault_mounts[index].finish() {
                     eprintln!("NDR vault metadata operation: mount finalization error: {error}");
-                    self.status = self.vault_status(
-                        "암호화 파일 저장이 완료되지 않아 작업을 중단했습니다.",
-                        "The encrypted file has not saved; operation cancelled.");
+                    self.status = self.language_pack.text("NDR.SEC_THE_ENCRYPTED_FILE_HAS_NOT_SAVED_OPERATION_CANCELLED", "The encrypted file has not saved; operation cancelled.");
                     return false;
                 }
                 self.vault_mounts.remove(index);
@@ -625,8 +602,7 @@ impl App {
             if let Some(vault) = self.panes[pane].vault.as_mut() {
                 if let Err(error) = vault.database.reload_after_mount() {
                     eprintln!("NDR vault metadata operation: refresh failed: {error}");
-                    self.status = self.vault_status("암호화 폴더 갱신에 실패했습니다.",
-                        "Encrypted folder refresh failed.");
+                    self.status = self.language_pack.text("NDR.SEC_ENCRYPTED_FOLDER_REFRESH_FAILED", "Encrypted folder refresh failed.");
                     return false;
                 }
             }
@@ -670,15 +646,11 @@ impl App {
         // physical .ndr behind. Only a harmless explanatory text marker
         // enters the Windows clipboard; actual data stays authenticated in
         // the virtual NDR clipboard until the user confirms Ctrl+V export.
-        let marker = self.vault_status(
-            "NDR 암호화 폴더에서 복사한 항목은 NDR 일반 폴더 패널에서 Ctrl+V로 내보낼 수 있습니다.",
-            "Encrypted entries can be exported by pressing Ctrl+V in a regular NDR folder pane.");
+        let marker = self.language_pack.text("NDR.SEC_ENCRYPTED_ENTRIES_CAN_BE_EXPORTED_BY_PRESSING_CTRL", "Encrypted entries can be exported by pressing Ctrl+V in a regular NDR folder pane.");
         let _ = (self.clipboard_writer)(&marker);
         let sequence = native::clipboard_sequence_number();
         self.vault_clipboard = Some((source, file, folder, names.clone(), moving, sequence));
-        self.status = self.vault_status(
-            "선택한 암호화 항목을 NDR 내부 클립보드에 보관했습니다. 반대쪽 일반 폴더에서 Ctrl+V로 내보내세요.",
-            "Encrypted selection copied within NDR. Switch to the regular destination pane and press Ctrl+V.");
+        self.status = self.language_pack.text("NDR.SEC_ENCRYPTED_SELECTION_COPIED_WITHIN_NDR_SWITCH_TO_THE", "Encrypted selection copied within NDR. Switch to the regular destination pane and press Ctrl+V.");
     }
 
     pub(super) fn vault_paste_selection_to_local(&mut self) -> bool {
@@ -717,10 +689,14 @@ impl App {
                 Ok(()) => {
                     app.pending_focus[pane] = Some(name.clone());
                     app.refresh_vault(pane);
-                    app.completion_notice(if folder { "암호화 폴더 생성 완료" } else { "암호화 파일 생성 완료" },
-                        if folder { "Encrypted folder created" } else { "Encrypted file created" }, name);
+                    let title = if folder {
+                        app.language_pack.text("NDR.SEC_FOLDER_CREATED", "Encrypted folder created")
+                    } else {
+                        app.language_pack.text("NDR.SEC_FILE_CREATED", "Encrypted file created")
+                    };
+                    app.completion_notice_operation(title, name);
                 },
-                Err(e) => app.status = e,
+                Err(e) => app.status = super::remote_window::net_template(app.language_pack.text("NDR.SEC_MODIFY_ERROR", "Could not modify the encrypted folder: {error}"), &[("error", &super::vault_transfer_ui::vault_error_text(&app.language_pack, &e))]),
             }
         });
     }
@@ -741,9 +717,7 @@ impl App {
                 app.panes[pane].vault.as_ref().is_some_and(|v|
                     tree.vault_path == v.file && tree.is_open_item(v.folder(), &old))
             }) {
-                app.status = app.vault_status(
-                    "외부 프로그램에서 사용 중인 파일이나 폴더는 이름을 변경할 수 없습니다.",
-                    "Close the external application before renaming this item.");
+                app.status = app.language_pack.text("NDR.SEC_CLOSE_THE_EXTERNAL_APPLICATION_BEFORE_RENAMING_THIS_ITEM", "Close the external application before renaming this item.");
                 return;
             }
             let result = app.vault_modify_metadata(pane, |database, folder| {
@@ -756,9 +730,9 @@ impl App {
                 Ok(()) => {
                     app.pending_focus[pane] = Some(new.clone());
                     app.refresh_vault(pane);
-                    app.completion_notice("이름 변경 완료", "Rename completed", new);
+                    app.completion_notice_operation(app.language_pack.text("NDR.SEC_RENAME_COMPLETED", "Rename completed"), new);
                 },
-                Err(e) => app.status = e,
+                Err(e) => app.status = super::remote_window::net_template(app.language_pack.text("NDR.SEC_MODIFY_ERROR", "Could not modify the encrypted folder: {error}"), &[("error", &super::vault_transfer_ui::vault_error_text(&app.language_pack, &e))]),
             }
         });
     }
@@ -768,28 +742,22 @@ impl App {
     pub(super) fn vault_compact_confirm(&mut self) {
         #[cfg(feature = "winfsp-vault")]
         if self.vault_mounts.iter().any(|mount| mount.pane == self.active) {
-            self.status = self.vault_status(
-                "열려 있는 암호화 파일을 외부 프로그램에서 닫은 다음 다시 시도해 주세요.",
-                "Close externally opened encrypted files before modifying the container.");
+            self.status = self.language_pack.text("NDR.SEC_CLOSE_EXTERNALLY_OPENED_ENCRYPTED_FILES_BEFORE_MODIFYING_THE", "Close externally opened encrypted files before modifying the container.");
             return;
         }
         let pane=self.active;
         if self.panes[pane].vault.is_none() { return; }
         if self.vault_transfer.is_some() {
-            self.status="Finish the encrypted transfer before compacting".into();
+            self.status = self.language_pack.text("NDR.SEC_FINISH_THE_ENCRYPTED_TRANSFER_BEFORE_COMPACTING", "Finish the encrypted transfer before compacting.");
             return;
         }
         let title=self.language_pack.text("NDRVault.DeleteTitle", "Encrypted folder");
-        let prompt=if self.language.eq_ignore_ascii_case("ko") {
-            "현재 .ndr에서 삭제된 암호화 기록을 제외하고 나머지 파일을 다시 저장합니다. SSD나 백업의 과거 기록은 제거되지 않습니다. 계속할까요?"
-        }else{
-            "Rebuild the current .ndr without deleted records. This may take time; SSD remnants and external backups are not erased. Continue?"
-        };
-        self.system_box(&title,prompt,ndr::msgbox::MB_YESNO | ndr::msgbox::MB_ICONEXCLAMATION,
+        let prompt=self.language_pack.text("NDR.SEC_REBUILD_THE_CURRENT_NDR_WITHOUT_DELETED_RECORDS_THIS", "Rebuild the current .ndr without deleted records. This may take time; SSD remnants and external backups are not erased. Continue?");
+        self.system_box(&title,&prompt,ndr::msgbox::MB_YESNO | ndr::msgbox::MB_ICONEXCLAMATION,
             move |app,confirmed,_|{
                 if confirmed!=ndr::msgbox::IDYES { return; }
                 if app.vault_transfer.is_some() {
-                    app.status="Finish the encrypted transfer before compacting".into();
+                    app.status = app.language_pack.text("NDR.SEC_FINISH_THE_ENCRYPTED_TRANSFER_BEFORE_COMPACTING", "Finish the encrypted transfer before compacting.");
                     return;
                 }
                 #[cfg(feature = "winfsp-vault")]
@@ -798,9 +766,7 @@ impl App {
                         else { return; };
                     if app.vault_trees.iter().any(|tree|
                         tree.vault_path == path && tree.has_open_files()) {
-                        app.status = app.vault_status(
-                            "암호화 드라이브를 사용하는 외부 프로그램을 닫고 다시 시도해 주세요.",
-                            "Close external applications using this encrypted drive.");
+                        app.status = app.language_pack.text("NDR.SEC_CLOSE_EXTERNAL_APPLICATIONS_USING_THIS_ENCRYPTED_DRIVE", "Close external applications using this encrypted drive.");
                         return;
                     }
                     let mut index = 0;
@@ -810,7 +776,7 @@ impl App {
                             continue;
                         }
                         if let Err(error) = app.vault_trees[index].finish() {
-                            app.status = format!("Cannot compact an active encrypted drive: {error}");
+                            app.status = app.language_pack.text("NDR.SEC_CANNOT_COMPACT_AN_ACTIVE_ENCRYPTED_DRIVE_ERROR", "Cannot compact an active encrypted drive: {error}").replace("{error}", &error);
                             return;
                         }
                         app.vault_trees.remove(index);
@@ -827,19 +793,17 @@ impl App {
                         #[cfg(feature = "winfsp-vault")]
                         app.ensure_vault_tree(pane);
                         app.refresh_vault(pane);
-                        app.status=if app.language.eq_ignore_ascii_case("ko"){
-                            "암호화 폴더 정리와 무결성 검사가 완료되었습니다.".into()
-                        }else{"Encrypted folder compaction and integrity verification completed.".into()};
+                        app.status=app.language_pack.text("NDR.SEC_ENCRYPTED_FOLDER_COMPACTION_AND_INTEGRITY_VERIFICATION_COMPLETED", "Encrypted folder compaction and integrity verification completed.");
                         app.play_operation_completion_sound();
-                        app.completion_notice("암호화 폴더 정리 완료", "Encrypted folder compacted",
-                            "Encrypted container rebuilt and verified");
+                        app.completion_notice_operation(app.language_pack.text("NDR.SEC_ENCRYPTED_FOLDER_COMPACTED", "Encrypted folder compacted"),
+                            app.language_pack.text("NDR.SEC_ENCRYPTED_CONTAINER_REBUILT_AND_VERIFIED", "Encrypted container rebuilt and verified"));
                     }
                     Err(error)=>{
-                        app.error_notice("암호화 폴더 정리 실패", "Encrypted folder compaction failed", error.clone());
+                        app.error_notice_operation(app.language_pack.text("NDR.SEC_ENCRYPTED_FOLDER_COMPACTION_FAILED", "Encrypted folder compaction failed"), error.clone());
                         let parent=file.parent().unwrap_or_else(||Path::new(".")).to_path_buf();
                         app.pending_focus[pane]=file.file_stem().map(|n|n.to_string_lossy().into_owned());
                         app.navigate(pane,parent,false);
-                        app.status=format!("Encrypted folder compaction failed (original retained if replacement did not occur): {error}");
+                        app.status=app.language_pack.text("NDR.SEC_ENCRYPTED_FOLDER_COMPACTION_FAILED_ORIGINAL_RETAINED_IF_REPLACEMENT", "Encrypted folder compaction failed (original retained if replacement did not occur): {error}").replace("{error}", &error);
                     }
                 }
             });
@@ -870,9 +834,7 @@ impl App {
                             tree.vault_path == vault.file && names.iter().any(|name|
                                 tree.is_open_item(folder, name)));
                     if selected_mounted {
-                        app.status = app.vault_status(
-                            "외부 프로그램에서 사용 중인 암호화 파일이나 폴더는 삭제할 수 없습니다.",
-                            "An encrypted item is open in an external application.");
+                        app.status = app.language_pack.text("NDR.SEC_AN_ENCRYPTED_ITEM_IS_OPEN_IN_AN_EXTERNAL", "An encrypted item is open in an external application.");
                         return;
                     }
                     app.vault_mounts.iter().any(|m| m.vault_path == vault.file)
@@ -894,15 +856,12 @@ impl App {
                     Ok(()) => {
                         app.refresh_vault(pane);
                         app.play_operation_completion_sound();
-                        app.completion_notice("암호화 항목 삭제 완료", "Encrypted items deleted",
-                            if app.language == "ko" { format!("{}개 항목 삭제", names.len()) }
-                            else { format!("{} item(s) deleted", names.len()) });
+                        app.completion_notice_operation(app.language_pack.text("NDR.SEC_ENCRYPTED_ITEMS_DELETED", "Encrypted items deleted"),
+                            app.language_pack.text("NDR.SEC_ITEMS_DELETED_COUNT", "Items deleted: {count}").replace("{count}", &names.len().to_string()));
                     }
                     Err(e) => {
                         eprintln!("NDR encrypted delete failed: {e}");
-                        app.status = app.vault_status(
-                            "암호화 파일을 삭제하지 못했습니다. 사용 중인 파일이 있는지 확인해 주세요.",
-                            "Could not delete encrypted items. Check whether a file is still in use.");
+                        app.status = app.language_pack.text("NDR.SEC_COULD_NOT_DELETE_ENCRYPTED_ITEMS_CHECK_WHETHER_A", "Could not delete encrypted items. Check whether a file is still in use.");
                     },
                 }
             });
@@ -912,9 +871,7 @@ impl App {
     pub(super) fn vault_paste_files(&mut self) {
         #[cfg(feature = "winfsp-vault")]
         if self.vault_mounts.iter().any(|mount| mount.pane == self.active) {
-            self.status = self.vault_status(
-                "열려 있는 암호화 파일을 외부 프로그램에서 닫은 다음 다시 시도해 주세요.",
-                "Close externally opened encrypted files before modifying the container.");
+            self.status = self.language_pack.text("NDR.SEC_CLOSE_EXTERNALLY_OPENED_ENCRYPTED_FILES_BEFORE_MODIFYING_THE", "Close externally opened encrypted files before modifying the container.");
             return;
         }
         let pane = self.active;
@@ -949,9 +906,7 @@ impl App {
                 if self.vault_trees.iter().any(|tree|
                     tree.vault_path == state.file && names.iter().any(|name|
                         tree.is_open_item(state.folder(), name))) {
-                    self.status = self.vault_status(
-                        "사용 중인 암호화 파일이나 해당 폴더는 이동할 수 없습니다. 편집기를 닫고 다시 시도해 주세요.",
-                        "Cannot move a file or folder used by an external application.");
+                    self.status = self.language_pack.text("NDR.SEC_CANNOT_MOVE_A_FILE_OR_FOLDER_USED_BY", "Cannot move a file or folder used by an external application.");
                     return;
                 }
                 let folder = state.folder();
@@ -968,9 +923,7 @@ impl App {
                         state.database.find_child(folder, name).ok().flatten()
                             .is_some_and(|item| item.folder));
                     if overlaps || includes_folder {
-                        self.status = self.vault_status(
-                            "외부 프로그램에 연결된 파일이나 해당 폴더는 아직 이동할 수 없습니다. 편집기를 닫고 다시 시도해 주세요.",
-                            "Cannot move a mounted file or folder while an external editor is connected.");
+                        self.status = self.language_pack.text("NDR.SEC_CANNOT_MOVE_A_MOUNTED_FILE_OR_FOLDER_WHILE", "Cannot move a mounted file or folder while an external editor is connected.");
                         return;
                     }
                 }
@@ -986,8 +939,7 @@ impl App {
             if let Some(vault) = self.panes[source].vault.as_mut() {
                 if let Err(error) = vault.database.reload_after_mount() {
                     eprintln!("NDR vault export refresh failed: {error}");
-                    self.status = self.vault_status("암호화 파일 목록을 갱신하지 못했습니다.",
-                        "Could not refresh encrypted files for export.");
+                    self.status = self.language_pack.text("NDR.SEC_COULD_NOT_REFRESH_ENCRYPTED_FILES_FOR_EXPORT", "Could not refresh encrypted files for export.");
                     return;
                 }
             }
@@ -1008,9 +960,7 @@ impl App {
     pub(super) fn vault_transfer_from_local(&mut self, source: usize, target: usize, files: Vec<PathBuf>, moving: bool) {
         #[cfg(feature = "winfsp-vault")]
         if self.vault_mounts.iter().any(|mount| mount.pane == self.active) {
-            self.status = self.vault_status(
-                "열려 있는 암호화 파일을 외부 프로그램에서 닫은 다음 다시 시도해 주세요.",
-                "Close externally opened encrypted files before modifying the container.");
+            self.status = self.language_pack.text("NDR.SEC_CLOSE_EXTERNALLY_OPENED_ENCRYPTED_FILES_BEFORE_MODIFYING_THE", "Close externally opened encrypted files before modifying the container.");
             return;
         }
         use super::vault_transfer_ui::VaultTransferKind;
@@ -1046,9 +996,7 @@ impl App {
             if !child.folder { return; }
             child.id
         } else {
-            self.status = self.vault_status(
-                "??? ?? ?? ??? ?? ??? ??? ???.",
-                "Choose a destination inside the encrypted folder.");
+            self.status = self.language_pack.text("NDR.SEC_CHOOSE_A_DESTINATION_INSIDE_THE_ENCRYPTED_FOLDER", "Choose a destination inside the encrypted folder.");
             return;
         };
         #[cfg(feature = "winfsp-vault")]
@@ -1061,9 +1009,7 @@ impl App {
                 let src = path.to_string_lossy().trim_end_matches(['\\', '/']).to_lowercase();
                 target == src || target.starts_with(&(src + "\\"))
             }) {
-                self.status = self.vault_status(
-                    "폴더를 자기 자신이나 하위 폴더로 복사할 수 없습니다.",
-                    "Cannot copy a folder into itself or one of its descendants.");
+                self.status = self.language_pack.text("NDR.SEC_CANNOT_COPY_A_FOLDER_INTO_ITSELF_OR_ONE", "Cannot copy a folder into itself or one of its descendants.");
                 return;
             }
         }
@@ -1078,9 +1024,7 @@ impl App {
     pub(super) fn vault_import_paths(&mut self, pane: usize, files: Vec<PathBuf>) {
         #[cfg(feature = "winfsp-vault")]
         if self.vault_mounts.iter().any(|mount| mount.pane == self.active) {
-            self.status = self.vault_status(
-                "열려 있는 암호화 파일을 외부 프로그램에서 닫은 다음 다시 시도해 주세요.",
-                "Close externally opened encrypted files before modifying the container.");
+            self.status = self.language_pack.text("NDR.SEC_CLOSE_EXTERNALLY_OPENED_ENCRYPTED_FILES_BEFORE_MODIFYING_THE", "Close externally opened encrypted files before modifying the container.");
             return;
         }
         use super::vault_transfer_ui::VaultTransferKind;
@@ -1101,9 +1045,7 @@ impl App {
     pub(super) fn vault_transfer_between_panes(&mut self, source: usize, target: usize, moving: bool) {
         #[cfg(feature = "winfsp-vault")]
         if self.vault_mounts.iter().any(|mount| mount.pane == self.active) {
-            self.status = self.vault_status(
-                "열려 있는 암호화 파일을 외부 프로그램에서 닫은 다음 다시 시도해 주세요.",
-                "Close externally opened encrypted files before modifying the container.");
+            self.status = self.language_pack.text("NDR.SEC_CLOSE_EXTERNALLY_OPENED_ENCRYPTED_FILES_BEFORE_MODIFYING_THE", "Close externally opened encrypted files before modifying the container.");
             return;
         }
         use super::vault_transfer_ui::VaultTransferKind;
@@ -1127,9 +1069,7 @@ impl App {
     pub(super) fn vault_transfer_inside(&mut self, moving: bool) {
         #[cfg(feature = "winfsp-vault")]
         if self.vault_mounts.iter().any(|mount| mount.pane == self.active) {
-            self.status = self.vault_status(
-                "열려 있는 암호화 파일을 외부 프로그램에서 닫은 다음 다시 시도해 주세요.",
-                "Close externally opened encrypted files before modifying the container.");
+            self.status = self.language_pack.text("NDR.SEC_CLOSE_EXTERNALLY_OPENED_ENCRYPTED_FILES_BEFORE_MODIFYING_THE", "Close externally opened encrypted files before modifying the container.");
             return;
         }
         use super::vault_transfer_ui::VaultTransferKind;
@@ -2130,15 +2070,34 @@ mod tests {
     }
 
     #[test]
+    fn encrypted_dialog_localizes_current_authentication_errors_without_masking_os_errors() {
+        let resources = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Resources/Languages");
+        let korean = compat::Language::load(&resources, "ko");
+        let root = std::env::temp_dir().join(format!("ndr-vault-auth-i18n-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("test.ndr");
+        drop(Vault::create(&path, "correct password in test".into()).unwrap());
+        let error = Vault::unlock(&path, "incorrect password in test".into()).err().unwrap();
+        assert_eq!(VaultDialog::localized_error(&korean, &error),
+            korean.text("NDRVault.WrongPassword", ""));
+        assert_eq!(VaultDialog::localized_error(&korean, "Not an NDR v3 container"),
+            korean.text("NDRVault.WrongFormat", ""));
+        assert_eq!(VaultDialog::localized_error(&korean, "This encrypted folder is already unlocked in another session"),
+            "이 암호화 폴더는 이미 다른 세션에서 잠금 해제되어 있습니다.");
+        assert_eq!(VaultDialog::localized_error(&korean, "Access is denied. (os error 5)"), "Access is denied. (os error 5)");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn encrypted_dialog_strings_exist_in_every_bundled_language() {
         let resources = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Resources/Languages");
         let languages = ["ca", "cs", "de", "en", "es", "fi", "fr", "hu", "it", "ja", "ko", "nl", "pl", "pt-BR", "ru", "sk", "sv", "tr", "uk", "zh-CN", "zh-TW"];
         let keyset: Vec<String> = std::fs::read_to_string(resources.join("en.lang")).unwrap()
-            .split("[NDRVault]").nth(1).unwrap().lines()
+            .split("[NDRVault]").nth(1).unwrap().lines().take_while(|line| !line.starts_with('['))
             .filter_map(|line| line.split_once('=').map(|(key, _)| key.to_owned())).collect();
         for code in languages {
             let data = std::fs::read_to_string(resources.join(format!("{code}.lang"))).unwrap();
-            let section = data.split("[NDRVault]").nth(1).unwrap();
+            let section = data.split("[NDRVault]").nth(1).unwrap().split("\n[").next().unwrap();
             for key in &keyset {
                 assert!(section.lines().any(|line| line.starts_with(&format!("{key}=")) && line.len() > key.len() + 1),
                     "missing NDRVault.{key} in {code}");
@@ -2576,8 +2535,16 @@ impl VaultDialog {
             "올바른 폴더 이름을 입력해 주세요." => "InvalidFolderName",
             "Windows에서 사용할 수 없는 폴더 이름입니다." => "ReservedFolderName",
             "비밀번호가 일치하지 않습니다." => "PasswordMismatch",
-            "Wrong password, damaged container, or unsupported format" => "WrongPassword",
-            "Unsupported encrypted container format" => "WrongFormat",
+            "Wrong password, damaged container, or unsupported format"
+            | "Wrong password, damaged encrypted container, or authentication failure"
+            | "Wrong password or encrypted metadata damaged"
+            | "Encrypted container metadata pointer has been altered" => "WrongPassword",
+            "Unsupported encrypted container format"
+            | "Unsupported NDR encrypted container format"
+            | "Not an NDR v3 container" => "WrongFormat",
+            "This encrypted folder is already unlocked in another session" => {
+                return lang.text("NDR.SEC_ALREADY_UNLOCKED", message);
+            }
             "Unsupported encrypted container version" => "WrongVersion",
             "Encrypted container file does not exist" => "MissingContainer",
             "Password must contain at least 6 characters" => "ShortPassword",

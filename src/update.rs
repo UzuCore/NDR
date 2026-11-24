@@ -20,6 +20,11 @@ pub fn current_build() -> u64 {
     option_env!("NDR_BUILD_NUMBER").and_then(|n| n.parse().ok()).unwrap_or(0)
 }
 
+/// The build number is only embedded in GitHub Actions distributions.
+pub fn build_label(build: u64) -> Option<String> {
+    (build > 0).then(|| format!("build-{build}"))
+}
+
 /// Refuse untrusted asset URLs, malformed digests, prereleases and downgrades.
 pub fn parse_github_release(body: &[u8], installed: u64) -> Result<Option<GithubRelease>, String> {
     let json: serde_json::Value = serde_json::from_slice(body).map_err(|e| e.to_string())?;
@@ -76,8 +81,30 @@ pub fn download_github_update_with_progress(
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UpdatePhase { Downloading, Verifying, Preparing, Installing, Failed }
 
+fn write_installer_script(path: &Path) -> std::io::Result<()> {
+    // Windows PowerShell 5.1 treats BOM-less -File scripts as ANSI.
+    std::fs::write(path, format!("\u{feff}{}", include_str!("apply-update.ps1")))
+}
+
+/// Resolve window text in Rust before leaving the selected app catalog. The
+/// updater receives data only (UTF-8 JSON), never executable locale snippets.
+fn installer_messages(language: &crate::compat::Language) -> std::collections::BTreeMap<&'static str, String> {
+    [
+        ("title", language.localized("NDR.UPD_INSTALL_TITLE", "NDR 업데이트", "NDR Update")),
+        ("heading", language.localized("NDR.UPD_INSTALL_HEADING", "NDR 업데이트 설치", "Installing NDR update")),
+        ("checking", language.localized("NDR.UPD_INSTALL_CHECKING", "설치 패키지를 확인하고 있습니다...", "Checking the installation package...")),
+        ("extracting", language.localized("NDR.UPD_INSTALL_EXTRACTING", "설치 파일을 준비하고 있습니다...", "Preparing the installation files...")),
+        ("closing", language.localized("NDR.UPD_INSTALL_CLOSING", "NDR 종료를 확인하고 있습니다...", "Checking whether NDR has closed...")),
+        ("waiting", language.localized("NDR.UPD_INSTALL_WAITING", "NDR 종료를 기다리고 있습니다...", "Waiting for NDR to close...")),
+        ("installing", language.localized("NDR.UPD_INSTALL_WRITING", "NDR 파일을 설치하고 있습니다...", "Installing the NDR files...")),
+        ("finished", language.localized("NDR.UPD_INSTALL_FINISHED", "설치 완료. NDR을 다시 실행합니다...", "Installation complete. Restarting NDR...")),
+        ("failed", language.localized("NDR.UPD_INSTALL_FAILURE", "업데이트 실패. 자세한 내용은 update.log를 확인하세요.", "The update failed. See update.log for details.")),
+        ("failureTitle", language.localized("NDR.UPD_INSTALL_FAILURE_TITLE", "NDR 업데이트 오류", "NDR update error")),
+    ].into_iter().collect()
+}
+
 /// The script is external to NDR so that Windows can replace NDR.exe after exit.
-pub fn launch_update(archive: &Path) -> Result<(), String> {
+pub fn launch_update(archive: &Path, language: &crate::compat::Language) -> Result<(), String> {
     let executable = std::env::current_exe().map_err(|e| e.to_string())?;
     let installation = executable.parent().ok_or("Installation directory not found")?;
     if !installation.join("Skins").is_dir() || !installation.join("Languages").is_dir() {
@@ -85,13 +112,17 @@ pub fn launch_update(archive: &Path) -> Result<(), String> {
     }
     let folder = archive.parent().ok_or("Update staging folder missing")?;
     let script = folder.join("apply-update.ps1");
-    std::fs::write(&script, include_str!("apply-update.ps1")).map_err(|e| e.to_string())?;
+    write_installer_script(&script).map_err(|e| e.to_string())?;
+    let messages = folder.join("installer-locale.json");
+    let locale = serde_json::to_vec(&installer_messages(language)).map_err(|e| e.to_string())?;
+    std::fs::write(&messages, locale).map_err(|e| e.to_string())?;
     std::process::Command::new("powershell.exe")
         .args(["-NoProfile", "-NonInteractive", "-Sta", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File"])
         .arg(&script).arg("-Archive").arg(archive)
         .arg("-Destination").arg(installation)
         .arg("-ParentPid").arg(std::process::id().to_string())
         .arg("-LogPath").arg(folder.join("update.log"))
+        .arg("-TextPath").arg(&messages)
         .arg("-ShowProgress")
         .spawn().map_err(|e| format!("Could not launch updater: {e}"))?;
     Ok(())
@@ -192,6 +223,34 @@ pub fn evaluate(body: &[u8], current: &[u32]) -> Result<Manifest, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn emitted_installer_has_bom_and_intact_korean() {
+        let path = std::env::temp_dir().join(format!("ndr-update-utf8-test-{}.ps1", std::process::id()));
+        write_installer_script(&path).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        assert!(bytes.starts_with(&[0xef, 0xbb, 0xbf]));
+        let content = std::str::from_utf8(&bytes[3..]).unwrap();
+        assert_eq!(content, include_str!("apply-update.ps1"));
+        assert!(content.contains("Get-Content -LiteralPath $TextPath -Raw -Encoding UTF8"));
+        assert!(content.contains("$script:installerText"));
+    }
+
+    #[test]
+    fn installer_messages_follow_the_selected_catalog_as_unicode_data() {
+        let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/Resources/Languages"));
+        for &(locale, _) in crate::compat::BUILTIN_LANGUAGES {
+            let selected = crate::compat::Language::load(root, locale);
+            let messages = installer_messages(&selected);
+            let primary = selected.primary_raw("NDR.UPD_INSTALL_TITLE").expect("localized installer title");
+            assert_eq!(messages["title"], primary, "{locale}");
+            let serialized = serde_json::to_vec(&messages).unwrap();
+            let decoded: std::collections::BTreeMap<String, String> = serde_json::from_slice(&serialized).unwrap();
+            assert_eq!(decoded["title"], primary);
+            assert!(!decoded["failed"].is_empty());
+        }
+    }
 
     #[test]
     fn github_release_requires_exact_package_digest_and_newer_build() {

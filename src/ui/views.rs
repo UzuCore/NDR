@@ -792,7 +792,7 @@ impl App {
         }
         if self.shell_desktop.is_none() {
             self.shell_desktop = Some(ndr::shell_tree::desktop().unwrap_or(ShellNode {
-                key: PathBuf::new(), name: self.tr("바탕 화면", "Desktop").into_owned(),
+                key: PathBuf::new(), name: self.catalog("RES.FUNC_GOTODESKTOP", "바탕 화면", "Desktop"),
                 path: None, has_children: true, special: Special::None, ghosted: false,
             }));
         }

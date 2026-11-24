@@ -564,23 +564,6 @@ pub fn group_caption_key(key: &str) -> (&str, Option<&'static str>) {
     (label, caption)
 }
 
-/// Base element colors of NexusFileColorMapService.
-pub fn default_element_color(key: &str) -> Option<&'static str> {
-    Some(match key.to_ascii_uppercase().as_str() {
-        "NXBACK" => "000000",
-        "NXFORE" => "C0C0C0",
-        "NXFOLDER" => "EA2222",
-        "NXDRIVE" => "8080FF",
-        "NXREADONLY" => "FFFF00",
-        "NXHIDDEN" => "FF0000",
-        "NXDESC" => "3682AF",
-        "NXSIZE" => "606060",
-        "NXTIME" => "808080",
-        "NXATTR" => "606060",
-        _ => return None,
-    })
-}
-
 fn hex_color(value: &str) -> Option<(u8, u8, u8)> {
     let hex = value.trim().trim_start_matches('#');
     if hex.len() != 6 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
@@ -624,28 +607,29 @@ pub fn original_item_color(entry: &Entry, extension_colors: Option<&serde_json::
     }
 }
 
-/// Extension colors of the original default color table (default\nexusfile.col [Ext]). The initial value when there are no extension colors at all (settings.rs).
-pub const ORIGINAL_EXTENSION_COLORS: &[(&str, &[&str])] = &[
-    ("#E10000", &["bak", "tmp"]),
-    ("#D857EA", &["bmp", "gif", "jpeg", "jpg", "png", "psd", "psp", "tif", "wmf"]),
-    ("#408080", &["cap", "doc", "docx", "gal", "gul", "hwp", "pdf", "rtf", "txt"]),
-    ("#808080", &["cfg", "inf", "ini", "reg"]),
-    ("#804000", &["chm", "hlp"]),
-    ("#FF00FF", &["dll", "sys"]),
-    ("#8080FF", &["htm", "html", "url"]),
-    ("#FF8040", &["asf", "avi", "mov", "mpeg", "mpg", "ram", "rm", "wmv", "mp4", "mkv", "swf", "tp", "ts"]),
-    ("#EFF41C", &["bat", "lnk", "pif", "cmd"]),
-    ("#00FF40", &["exe", "msi"]),
-    ("#D65A36", &["mid", "mp2", "mp3", "wav", "ogg", "wma"]),
-    ("#0B8AB5", &["ppt", "xls", "xlsx", "pptx"]),
-    ("#5FA7DC", &["c", "cpp", "as", "php", "asp", "pas", "vb", "cs", "jsp", "js", "pl", "h", "hpp"]),
-    ("#808000", &["ace", "alz", "arj", "cab", "gz", "lzh", "rar", "tar", "zip", "7z", "iso", "egg"]),
+/// NDR classification colors used to initialize new profiles. Existing profile
+/// maps are kept, including overrides and intentional empty maps.
+pub const DEFAULT_EXTENSION_COLORS: &[(&str, &[&str])] = &[
+    ("#D75F3A", &["bak", "tmp"]),
+    ("#E0A7EE", &["bmp", "gif", "jpeg", "jpg", "png", "psd", "psp", "tif", "wmf"]),
+    ("#75C49A", &["cap", "doc", "docx", "gal", "gul", "hwp", "pdf", "rtf", "txt"]),
+    ("#A6BCAD", &["cfg", "inf", "ini", "reg"]),
+    ("#C78D48", &["chm", "hlp"]),
+    ("#C49CF5", &["dll", "sys"]),
+    ("#A2B8FC", &["htm", "html", "url"]),
+    ("#F2AB82", &["asf", "avi", "mov", "mpeg", "mpg", "ram", "rm", "wmv", "mp4", "mkv", "swf", "tp", "ts"]),
+    ("#B6D668", &["bat", "lnk", "pif", "cmd"]),
+    ("#7BD28A", &["exe", "msi"]),
+    ("#EAAA72", &["mid", "mp2", "mp3", "wav", "ogg", "wma"]),
+    ("#7CB6CC", &["ppt", "xls", "xlsx", "pptx"]),
+    ("#81B5E2", &["c", "cpp", "as", "php", "asp", "pas", "vb", "cs", "jsp", "js", "pl", "h", "hpp"]),
+    ("#EFC961", &["ace", "alz", "arj", "cab", "gz", "lzh", "rar", "tar", "zip", "7z", "iso", "egg"]),
 ];
 
 /// TryGetTColorSortKey: "RRGGBB" -> Delphi TColor (0x00BBGGRR). Color sorting puts colors equal to the default text color, or missing colors, last.
 pub fn color_sort_key(entry: &Entry, extension_colors: Option<&serde_json::Map<String, Value>>, nexus_colors: Option<&serde_json::Map<String, Value>>) -> u32 {
     let tcolor = |value: Option<&str>| value.and_then(hex_color).map(|(r, g, b)| (u32::from(b) << 16) | (u32::from(g) << 8) | u32::from(r));
-    let element = |key: &str| lookup(nexus_colors, key).filter(|v| hex_color(v).is_some()).or_else(|| default_element_color(key));
+    let element = |key: &str| lookup(nexus_colors, key).filter(|v| hex_color(v).is_some()).or_else(|| crate::styles::default_element_color(key));
     if entry.is_dir {
         return tcolor(element("NXFOLDER")).unwrap_or(u32::MAX);
     }
@@ -1020,6 +1004,6 @@ mod tests {
         assert_eq!(entry_color(&entry("a.doc", false, 0, 0), Some(&ext), Some(&nexus)), Some((0xC0, 0xC0, 0xC0)), "NXFORE fallback");
         assert_eq!(color_sort_key(&entry("a.txt", false, 0, 0), Some(&ext), None), 0x332211);
         assert_eq!(color_sort_key(&entry("a.doc", false, 0, 0), Some(&ext), None), u32::MAX);
-        assert_eq!(color_sort_key(&entry("dir", true, 0, 0), None, None), 0x2222EA, "default NXFOLDER");
+        assert_eq!(color_sort_key(&entry("dir", true, 0, 0), None, None), 0xCFDD8E, "default NXFOLDER");
     }
 }

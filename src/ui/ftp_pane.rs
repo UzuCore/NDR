@@ -375,7 +375,16 @@ impl FtpResultRow {
     /// Original FUN_0043f04c event 1 lvFTPProgress column text: Progress column = percent/10 '>' chars (upload, local → remote) or '<' (download),
     /// fourth column (right-aligned) = "%d%" (wsprintf "%d%%"). When the item size is unknown, use the overall percent (`overall`) like the original.
     /// Waiting rows leave both blank; cancelled/failed rows show the NDR status text (the original removes finished rows).
+    #[cfg(test)]
     pub(super) fn progress_cells(&self, overall: u64, ko: bool) -> (String, String) {
+        let language = compat::Language::load(
+            &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Resources/Languages"),
+            if ko { "ko" } else { "en" },
+        );
+        self.progress_cells_localized(overall, &language)
+    }
+
+    fn progress_cells_localized(&self, overall: u64, language: &compat::Language) -> (String, String) {
         let percent = match self.size.filter(|s| *s > 0) {
             Some(size) => self.done.min(size) * 100 / size,
             None => overall.min(100),
@@ -385,20 +394,29 @@ impl FtpResultRow {
             RowState::Waiting => (String::new(), String::new()),
             RowState::Running => (bar(percent), format!("{percent}%")),
             RowState::Done => (bar(100), "100%".into()),
-            RowState::Cancelled | RowState::Failed(_) => (self.progress_text(ko), String::new()),
+            RowState::Cancelled | RowState::Failed(_) => (self.progress_text_localized(language), String::new()),
         }
     }
     /// Progress column text: % if the size is known, otherwise bytes received.
+    #[cfg(test)]
     pub(super) fn progress_text(&self, ko: bool) -> String {
+        let language = compat::Language::load(
+            &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Resources/Languages"),
+            if ko { "ko" } else { "en" },
+        );
+        self.progress_text_localized(&language)
+    }
+
+    fn progress_text_localized(&self, language: &compat::Language) -> String {
         match &self.state {
             RowState::Waiting => String::new(),
             RowState::Running => match self.size.filter(|s| *s > 0) {
                 Some(size) => format!("{}%", self.done.min(size) * 100 / size),
-                None => format!("{} bytes", self.done),
+                None => super::remote_window::net_template(language.text("NDR.NET_FTP_BYTES", "{count} bytes"), &[("count", &self.done.to_string())]),
             },
             RowState::Done => "100%".into(),
-            RowState::Cancelled => (if ko { "취소" } else { "Cancelled" }).into(),
-            RowState::Failed(error) => error.clone(),
+            RowState::Cancelled => language.text("NDR.NET_FTP_CANCELLED", "Cancelled"),
+            RowState::Failed(error) => super::remote_window::remote_error_text(language, error),
         }
     }
 }
@@ -600,7 +618,7 @@ impl App {
         // Original FUN_004408f8: if the site type is not "sftp", create a log pane (FUN_0048d7ac(pane, 1); keep the existing one if present).
         let existing = self.panes[index].remote.as_ref().and_then(|r| r.log.clone());
         let log = existing.or_else(|| (!site.protocol.eq_ignore_ascii_case("sftp")).then(Arc::default));
-        self.status = format!("{} {host}…", self.ftp_title());
+        self.status = super::remote_window::net_template(self.language_pack.text("NDR.NET_FTP_CONNECTING", "Connecting to {host}…"), &[("host", &host)]);
         thread::spawn(move || {
             let result = ndr::remote::with_protocol_log(log.as_ref(), || connect(&config)).and_then(|fs| {
                 let mut fs: Box<dyn PaneFs> = match &log {
@@ -639,7 +657,7 @@ impl App {
     pub(super) fn ftp_failed(&mut self, error: String) {
         self.status.clear();
         let title = self.ftp_title();
-        self.system_box(&title, &error, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
+        self.system_box(&title, &super::remote_window::remote_error_text(&self.language_pack, &error), MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
     }
 
     /// Original miFTPDisconnectClick(0x43e8d4): FTP_CANNOTDISCONNECT if transferring, otherwise disconnect and go to a local folder.
@@ -832,7 +850,7 @@ impl App {
         self.ftp_pause.store(false, Ordering::Relaxed);
         let pause = self.ftp_pause.clone();
         let completion = self.async_tx.clone();
-        let title = self.tr("FTP 올리기", "FTP Upload").into_owned();
+        let title = self.language_pack.text("NDR.NET_FTP_UPLOAD", "FTP Upload");
         let busy = remote.busy.clone();
         busy.store(true, Ordering::Relaxed);
         let started = self.start_task(title, move |events, cancel| {
@@ -1036,7 +1054,6 @@ impl App {
 
     /// Original pBottom: lvFTPProgress (" ;Local;Progress; ;Remote") and btnFTPPause, btnFTPAbort.
     pub(super) fn ftp_results_ui(&mut self, ui: &mut egui::Ui) {
-        let ko = self.language == "ko";
         let headers: Vec<String> = self.language_pack.text("formMain.ListViewCols.lvFTPProgress", " ;Local;Progress; ;Remote").split(';').map(str::to_owned).collect();
         let header = |i: usize| headers.get(i).cloned().unwrap_or_default();
         let paused = self.ftp_pause.load(Ordering::Relaxed);
@@ -1095,6 +1112,7 @@ impl App {
             let rgb = |(r, g, b): (u8, u8, u8)| Color32::from_rgb(r, g, b);
             (rgb(native::system_color(5)), rgb(native::system_color(8)))
         });
+        let language = &self.language_pack;
         ui.scope(|ui| {
         if let Some((back, text)) = colors {
             ui.painter().rect_filled(ui.available_rect_before_wrap(), 0.0, back);
@@ -1110,7 +1128,7 @@ impl App {
                 // Original FUN_0043f04c event 2 (item end): removes that row from lvFTPProgress.
                 // Original event 4 (build the list): the first cell is empty (lvFTPProgress has no image list), then Local, Progress, (percentage), Remote.
                 for row in rows.iter().filter(|r| r.state != RowState::Done) {
-                    let (bar, percent_text) = row.progress_cells(percent, ko);
+                    let (bar, percent_text) = row.progress_cells_localized(percent, language);
                     ui.label("");
                     ui.label(&row.local);
                     ui.label(RichText::new(bar).monospace());
@@ -1309,7 +1327,7 @@ impl App {
     pub(super) fn ftp_edited(&mut self, index: usize, focus: Option<String>, error: Option<String>) {
         if let Some(error) = error {
             let title = self.ftp_title();
-            self.system_box(&title, &error, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
+            self.system_box(&title, &super::remote_window::remote_error_text(&self.language_pack, &error), MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
         }
         if self.panes[index].remote.is_some() {
             self.refresh_and_focus(index, focus);
@@ -1343,7 +1361,7 @@ impl App {
             Ok(reply) => self.status = reply.trim().to_owned(),
             Err(error) => {
                 let title = self.ftp_title();
-                self.system_box(&title, &error, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
+                self.system_box(&title, &super::remote_window::remote_error_text(&self.language_pack, &error), MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
             }
         }
     }

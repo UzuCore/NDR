@@ -1,0 +1,462 @@
+; NDR language catalog. Untranslated entries use NDR English.
+
+[RES]
+YES=Да(&Y)
+NO=Не(&N)
+OK=Потвърждаване(&O)
+CANCEL=Отказ(&C)
+RETRY=Повторен опит(&R)
+IGNORE=Игнориране(&I)
+ABORT=Спиране(&S)
+CONTINUE=Продължаване(&n)
+TITLE_ERROR=Грешка в NDR
+TITLE_INFO=Информация от NDR
+FOLDERINFO=Папки <c000000><b>%d</b></c> · Файлове <c000000><b>%d</b></c> · <b>%s</b>
+DISKINFO_SHORT=Свободни <c000000><b>%s</b></c>
+DISKINFO_LONG=Свободни <c000000><b>%s</b></c> от <b>%s</b>
+SELECTED_INFO=Избрани: <b>%d</b> · <b>%s</b> байта
+MSG_COPY_PREPARING=Подготовка за копиране…
+MSG_MOVE_PREPARING=Подготовка за преместване…
+MSG_DEL_PREPARING=Подготовка за изтриване…
+COPYING=Копиране на елементи…
+MOVING=Преместване на елементи…
+DELETING=Изтриване на елементи…
+EXTRACTING=Разархивиране на файлове…
+COMPRESSING=Архивиране на файлове…
+READONLY=Само за четене
+SYSTEM=Система
+HIDDEN=Скрити
+FOLDER=Папка
+FOLDERS=Папки
+SELECT_FOLDER=Избиране на папка
+DROPCOPY_CONFIRM=Копиране на тези %d елемента?
+DROPMOVE_CONFIRM=Преместване на тези %d елемента?
+RENAME=Преименуване
+COPY=Копиране
+MOVE=Преместване
+ADDTOARCHIVE=Добавяне към архив
+EXTRACT=Разархивиране
+SEARCH=Търсене
+STOP=Спиране
+SEARCHRESULT=Резултати от търсенето
+SELECTDEST= — Избор на местоназначение
+PAUSE=Пауза
+RESUME=Подновяване
+TITLE_FILTER=Филтър за файлове
+NETWORK=Мрежа
+TITLE_NEWFOLDER=Нова папка
+MSG_NEWFOLDER=Въведете име за новата папка.
+NEWFOLDER=Нова папка
+MSG_RENAME=Въведете ново име за маркирания елемент.\n\n<b><c0000FF>%s</c></b> <c666666>(%d от %d)</c>
+TITLE_FILEOPERATION=Файлова операция
+SELDEST_DRIVE=Устройства
+SELDEST_WORKFOLDER=Работни папки
+FOLDER_EXISTS=Вече съществува папка с това име.
+SRCISDEST=Източникът и местоназначението съвпадат.
+MYCOMPUTER=Този компютър
+ARCHIVE=Архив
+DISKFREE=Свободно
+LOCATION=Местоположение
+FUNC_OPEN=Отваряне
+FUNC_COPYTO=Копиране
+FUNC_MOVETO=Преместване
+FUNC_DELETE=Изтриване
+FUNC_RECYCLEBIN=Преместване в кошчето
+FUNC_RENAME=Преименуване
+FUNC_PROPERTIES=Свойства
+FUNC_FAVORITES=Предпочитани
+FUNC_NEWFOLDER=Нова папка
+FUNC_REFRESH=Опресняване
+FUNC_GOTODESKTOP=Работен плот
+FUNC_GOTODOCUMENTS=Документи
+FUNC_GOTOMUSIC=Музика
+FUNC_GOTOPICTURES=Картини
+FUNC_GOTOVIDEOS=Видеоклипове
+FUNC_GOTODOWNLOADS=Изтегляния
+FUNC_SELECTALL=Избиране на всичко
+FUNC_ADDTOARCHIVE=Добавяне към архив
+FUNC_EXTRACT=Разархивиране
+FUNC_CLOSETAB=Затваряне на раздела
+FUNC_SELECT=Избиране
+FUNC_DESELECTALL=Изчистване на избора
+FUNC_BACK=Назад
+FUNC_FORWARD=Напред
+FUNC_FOLDERTREE=Дърво на папките
+FUNC_GOTOROOT=Главна папка
+FUNC_GOTOPARENT=Родителска папка
+FUNC_EDITCOPY=Копиране
+FUNC_EDITCUT=Изрязване
+FUNC_EDITPASTE=Поставяне
+FUNC_INVERTSELECTION=Обръщане на избора
+FUNC_NEWTAB=Нов раздел
+TODAY=Днес
+YESTERDAY=Вчера
+FIELD_NAME=Име
+FIELD_EXT=Разширение
+FIELD_LOCATION=Местоположение
+FIELD_SIZE=Размер
+FIELD_DATEMODIFIED=Променено
+FIELD_ATTR=Атрибути
+FIELD_DESC=Коментар
+UPDATE=Обновявания
+NAME=Име
+ACCESS_DENIED=Достъпът е отказан
+INVALID_PASSWORD=Грешна парола
+DISKISFULL=Недостатъчно място на диска
+CALCULATING=Изчисляване…
+ERROR=Грешка
+
+[formMain]
+ToolButton.tbFile=Файл(&F)
+ToolButton.tbFolder=Папка(&o)
+ToolButton.tbEdit=Редактиране(&E)
+ToolButton.tbView=Изглед(&w)
+ToolButton.tbSystem=Система(&S)
+ToolButton.tbArchive=Архив(&A)
+ToolButton.tbConnect=Свързване(&n)
+ToolButton.tbTools=Инструменти(&T)
+ToolButton.tbHelp=Помощ(&H)
+ToolButton.tbNewUpdateAvailable=Има обновяване на NDR
+Menu.miOpen=&Q. Отваряне
+Menu.miCopyTo=&C. Копиране в…
+Menu.miMoveTo=&V. Преместване в…
+Menu.miDelete=&D. Изтриване
+Menu.miRename=&R. Преименуване
+Menu.miProperties=&E. Свойства
+Menu.miExit=&X. Изход
+Menu.miFolderTree=&T. Дърво на папките
+Menu.miFavorites=&V. Предпочитани
+Menu.miNewFolder=&C. Нова папка
+Menu.miHistoryBack=&B. Назад
+Menu.miHistoryForward=&F. Напред
+Menu.miToParent=&X. Родителска папка
+Menu.miToRoot=&Z. Главна папка
+Menu.miRefresh=&R. Опресняване
+Menu.miEditCopy=&C. Копиране
+Menu.miEditCut=&X. Изрязване
+Menu.miEditPaste=&V. Поставяне
+Menu.miSelect=&B. Избиране
+Menu.miSelectAll=&U. Избиране на всичко
+Menu.miInvertSelection=&I. Обръщане на избора
+Menu.miSearchFile=&E. Търсене на файлове и папки…
+Menu.miLanguage=&O. Език
+Menu.miNewTab=&B. Нов раздел
+Menu.miListStyleAuto=&A. Автоматично
+Menu.miListStyleDetails=&D. Подробности
+Menu.miListStyleThumbs=&T. Миниатюри
+Menu.miColAuto=&A. Автоматично
+Menu.miSortByName=&A. Име
+Menu.miSortByExt=&E. Разширение
+Menu.miSortBySize=&S. Размер
+Menu.miSortByTime=&T. Променено
+Menu.miSortByAttr=&R. Атрибути
+Menu.miSortByColor=&C. Цвят
+Menu.miToDesktop=&D. Работен плот
+Menu.miToDocuments=&W. Документи
+Menu.miToPictures=&P. Картини
+Menu.miToMusic=&M. Музика
+Menu.miToVideos=&V. Видеоклипове
+Menu.miToDownloads=&S. Изтегляния
+Menu.miOptions=&O. Настройки
+Menu.miHelp=&H. Помощ
+Menu.miShortcut=&S. Клавишни комбинации…
+Menu.miHomepage=&W. Страница на NDR
+Menu.miCheckUpdate=&U. Проверка за обновявания…
+Menu.miAbout=&A. За NDR
+Menu.mipOpenWith=&W. Отваряне с…
+Menu.mipEditCopy=&C. Копиране
+Menu.mipEditCut=&X. Изрязване
+Menu.mipEditPaste=&V. Поставяне
+Menu.mipCopyTo=&Y. Копиране в…
+Menu.mipMoveTo=&M. Преместване в…
+Menu.mipDelete=&D. Изтриване
+Menu.mipRename=&R. Преименуване
+Menu.mipAddToArchive=&A. Добавяне към архив
+Menu.mipProperties=&T. Свойства
+Menu.pmiCloseTab=Затваряне на раздела(&C)
+Menu.pmiCloseAllTab=Затваряне на всички раздели(&a)
+Menu.pmiNewTab=Нов раздел(&t)
+Hint.bSelectAll=Избиране на всеки елемент
+Hint.bClearSelection=Изчистване на избора
+
+[formFileExists]
+Caption.lMsg=В местоназначението вече има елемент с това име:
+Caption.chkApplyAll=Прилагане за останалите елементи(&A)
+Caption.btnOverwrite=Презаписване(&w)
+Caption.btnRename=Преименуване(&R)
+Caption.btnReplace=Замяна(&e)
+Caption.btnSkip=Пропускане(&S)
+
+[formGetText]
+Caption.btnOk=Потвърждаване(&O)
+Caption.btnCancel=Отказ(&C)
+
+[formDelConfirm]
+Form.Caption=Потвърждаване на изтриването
+Caption.btnAll=Всички(&A)
+Caption.btnYes=Да(&Y)
+Caption.btnNo=Не(&N)
+
+[formDelWarning]
+Caption.btnDelete=Изтриване(&D)
+Caption.btnYes=Да(&Y)
+Caption.btnNo=Не(&N)
+Prompt.Recycle=Преместване на избраните елементи в кошчето?
+Prompt.Permanent=Окончателно изтриване на избраните елементи?
+
+[formProgress]
+Caption.btnCancel=Отказ(&C)
+
+[formOrgFavorites]
+Caption.btnCancel=Отказ(&C)
+Caption.btnSave=Записване(&S)
+Caption.btnRename=Преименуване(&R)
+Caption.btnUp=Преместване нагоре(&u)
+Caption.btnDown=Преместване надолу(&w)
+Caption.btnDelete=Изтриване(&D)
+
+[formChangeAttr]
+Caption.btnAll=Всички(&l)
+Caption.btnSkip=Пропускане(&k)
+Caption.btnOk=Потвърждаване
+Caption.btnCancel=Отказ
+Caption.chkHidden=Скрити(&H)
+Caption.chkSystem=Система(&S)
+Caption.chkReadOnly=Само за четене(&R)
+Caption.lDate=Дата(&D)
+Caption.lTime=Час(&T)
+
+[formSaveList]
+Caption.btnSave=Записване
+Caption.btnCancel=Отказ
+Caption.chkAttributes=Атрибути(&A)
+Caption.chkDate=Дата(&D)
+Caption.chkDescription=Коментар(&n)
+Caption.chkExtension=Разширение(&E)
+Caption.chkFileName=Име на файл(&F)
+Caption.chkFileSize=Размер(&S)
+Caption.chkTime=Час(&T)
+
+[formAddToArchive]
+Caption.btnCancel=Отказ
+Caption.btnOk=Потвърждаване
+Caption.lPassword=Парола(&P)
+Caption.lSecFormat=Формат
+
+[formFileSplit]
+Caption.btnOk=Потвърждаване
+Caption.btnCancel=Отказ
+
+[formFileJoin]
+Caption.btnAdd=Добавяне(&A)
+Caption.btnCancel=Отказ
+Caption.btnOk=Потвърждаване
+Caption.btnDelete=Изтриване(&D)
+Caption.btnDown=Преместване надолу(&w)
+Caption.btnUp=Преместване нагоре(&u)
+
+[formCompareFolder]
+Caption.btnCancel=Отказ
+Caption.btnOk=Потвърждаване
+Caption.btnSave=Записване
+Caption.btnStop=Спиране
+
+[formShortcut]
+Form.Caption=Клавишни комбинации
+
+[formEditShortCut]
+Caption.btnOk=Потвърждаване
+Caption.btnCancel=Отказ
+Caption.btnRemove=Премахване
+
+[formCleanup]
+Caption.btnClose=Затваряне
+Caption.btnOk=Потвърждаване
+Caption.chkRecycleBin=Кошче(&R)
+Caption.btnAdd=Добавяне(&A)
+Caption.btnDelete=Изтриване(&D)
+Caption.btnSearch=Търсене(&S)
+
+[formSelectDest]
+Form.Caption=Избор на местоназначение
+Caption.btnCancel=Отказ
+Caption.btnOk=Потвърждаване
+Caption.btnTree=Преглед на папките(&f)
+
+[formTreeScan]
+Caption.btnCancel=Отказ
+
+[formSearchFolder]
+Caption.btnSearch=Търсене
+
+[formFTPQuickConnect]
+Caption.btnCancel=Отказ
+Caption.chkPassive=Пасивен режим(&s)
+Caption.lPassword=Парола(&w)
+Caption.lPort=Порт(&P)
+Caption.lURL=Адрес на сървъра(&d)
+Caption.lUser=Потребителско име(&U)
+
+[formPassword]
+Caption.btnOk=Потвърждаване
+Caption.btnCancel=Отказ
+Caption.lUser=Потребителско име
+Caption.lPassword=Парола
+
+[formFTPSiteManager]
+Caption.btnAdd=Добавяне(&A)
+Caption.btnCancel=Отказ
+Caption.btnDelete=Изтриване(&D)
+Caption.btnOk=Потвърждаване
+Caption.chkPassive=Пасивен режим(&v)
+Caption.lName=Име(&N)
+Caption.lPassword=Парола(&w)
+Caption.lPort=Порт(&P)
+Caption.lUser=Потребителско име(&U)
+
+[formFolderTree]
+Form.Caption=Преглед на папките
+Caption.btnCancel=Отказ
+Caption.btnOk=Потвърждаване
+ToolButton.tbFolder=Папка(&e)
+ToolButton.tbFavorites=Предпочитани(&v)
+ToolButton.tbSearch=Търсене
+Hint.tbDesktop=Работен плот
+Hint.tbMyDoc=Документи
+Hint.tbMyPic=Картини
+Hint.tbMyMusic=Музика
+Hint.tbMyVideo=Видеоклипове
+Menu.miFolder=Папка(&e)
+Menu.miDelete=&D. Изтриване
+Menu.miRename=&R. Преименуване
+Menu.miCreateNewFolder=&F. Нова папка
+Menu.miProperties=&E. Свойства
+Menu.miClose=&C. Затваряне
+
+[formPreferences]
+Caption.btnApply=Прилагане(&A)
+Caption.btnOk=Потвърждаване(&O)
+Caption.btnCancel=Отказ
+TabSheet.tsColor=Цветове
+TabSheet.tsTree=Дърво на папките
+TabSheet.tsEtc=Други
+Caption.lMyDocuments=Документи
+Caption.lMyMusic=Музика
+Caption.lMyPictures=Картини
+Caption.lMyVideos=Видеоклипове
+Caption.lPathDownloads=Изтегляния
+
+[formAdvRename]
+Caption.btnCancel=Отказ
+Caption.btnUp=Преместване нагоре
+Caption.btnDown=Преместване надолу
+Caption.rbApplyToExt=Разширение
+TabSheet.tsDelete=Премахване
+TabSheet.tsExtension=Разширение
+
+[formEditFunction]
+Caption.btnCancel=Отказ
+Caption.btnOk=Потвърждаване
+Caption.lName=Име
+
+[formFTPAttributes]
+Caption.btnCancel=Отказ
+Caption.btnOk=Потвърждаване
+Caption.btnAll=Всички
+Caption.btnSkip=Пропускане
+Caption.chkGExecute=Изпълнение(&x)
+Caption.chkURead=Четене(&e)
+Caption.chkUExecute=Изпълнение(&c)
+
+[formRename]
+Caption.btnOK=Потвърждаване
+Caption.btnCancel=Отказ
+
+[formChecksum]
+Caption.btnCopy=Копиране(&C)
+
+[formNDRSearch]
+Caption.lName=Име на файл
+Caption.chkFiles=Файлове
+Caption.chkFolders=Папки
+Caption.CategoryDocuments=Документи
+Caption.btnMoveUp=Преместване нагоре
+Caption.btnMoveDown=Преместване надолу
+Caption.btnRemove=Премахване
+Caption.btnAdd=Добавяне
+Status.Results=Резултати от търсенето
+
+[formNDRDestination]
+Button.Cancel=Отказ
+
+[NDRUpdate]
+Title=Обновяване на NDR
+FeedHttpsRequired=Източникът за обновяване трябва да използва HTTPS.
+InvalidDownloadUrl=Източникът за обновяване няма валиден HTTPS адрес за изтегляне.
+NewVersionAvailable=Версия {0} е налична. Текуща версия: {1}.
+OpenDownloadPage=Отваряне на страницата за изтегляне?
+CurrentLatest=NDR е актуален. ({0})
+RequestFailed=Няма връзка със сървъра. Проверете връзката и адреса за обновяване.
+RequestFailedStatus=Сървърът за обновяване върна HTTP код {0}.
+RequestTimedOut=Сървърът не отговори в рамките на 15 секунди.
+
+[NDRSearch]
+Documents=Документи
+
+[NDRVault]
+Password=Парола
+OK=Потвърждаване
+Cancel=Отказ
+NewFolderTitle=Нова папка
+RenameTitle=Преименуване
+ProgressCancel=Отказ
+
+[NDR]
+OP_ARCHIVE_REPLACE_ARCHIVE=Замяна на архива
+OP_JOIN_EXISTS=Вече има файл с това име. Не са обединени файлове.\n{0}
+OP_TRANSFER_CANCEL=Отказ
+OP_TRANSFER_CANCELLED=Операцията ({0}) е отменена. Завършените елементи са запазени.
+OP_TRANSFER_COPY_DONE=Копирането завърши
+OP_TRANSFER_DELETE_DONE=Изтриването завърши
+OP_TRANSFER_MOVE_DONE=Преместването завърши
+OP_TRANSFER_OPERATION_FAILED=Операцията е неуспешна
+OP_TRANSFER_PARTIAL=Операцията завърши частично
+OP_TRANSFER_PARTIAL_DETAIL=Завършени: {0} · грешки: {1} · пропуснати: {2}
+OP_TRANSFER_PREPARING_THE_OPERATION=Подготовка на операцията…
+OP_TRANSFER_SIZE_UNAVAILABLE=Размерът не е наличен
+OP_TRANSFER_VERB_COPY=копиране
+OP_TRANSFER_VERB_MOVE=преместване
+OP_TRANSFER_VERB_PASTE=поставяне
+UI_STARTUP_FAILED=Стартирането не бе успешно. Отворете NDR отново.
+UI_STARTUP_LOADING=Подготовка на папките и настройките…
+UPD_CLOSE=Затваряне
+UPD_CONFIRM=Да се изтегли и инсталира обновяването и да се рестартира NDR?\nНастройките ви ще се запазят.
+UPD_CURRENT_BUILD=Инсталирана компилация: {0}
+UPD_DOWNLOAD_ACTIVE=Изтегляне на NDR {0}…
+UPD_ERROR_DETAILS=Технически подробности
+UPD_FAILED=Обновяването не бе успешно.
+UPD_INSTALLER_START=Стартиране на инсталатора…
+UPD_INSTALL_CHECKING=Проверка на инсталационния пакет…
+UPD_INSTALL_CLOSING=Проверка дали NDR е затворен…
+UPD_INSTALL_EXTRACTING=Подготовка на инсталационните файлове…
+UPD_INSTALL_FAILURE=Обновяването не бе успешно. Вижте update.log за подробности.
+UPD_INSTALL_FAILURE_TITLE=Грешка при обновяване на NDR
+UPD_INSTALL_FINISHED=Инсталацията приключи. NDR се стартира отново…
+UPD_INSTALL_HEADING=Инсталиране на обновяването на NDR
+UPD_INSTALL_TITLE=Обновяване на NDR
+UPD_INSTALL_WAITING=Изчакване NDR да се затвори…
+UPD_INSTALL_WRITING=Инсталиране на файловете на NDR…
+UPD_LOCAL_BUILD=Локална компилация
+UPD_NEW_BUILD=Нова компилация: {0}
+UPD_NONE=Няма налично по-ново обновяване.
+UPD_PREPARING=Подготовка на пакета…
+UPD_RELEASE_FAILURE=Неуспешна проверка на изданието в GitHub.
+UPD_RESTART_NOTE=NDR се рестартира автоматично. Настройките ви се запазват.
+UPD_STARTING=Изтеглянето и проверката за цялост приключиха. Стартиране на инсталацията.
+UPD_STEP_DOWNLOAD=Изтегляне
+UPD_STEP_INSTALL=Инсталиране и рестартиране
+UPD_STEP_PREPARE=Подготовка
+UPD_STEP_VERIFY=Цялост
+UPD_TITLE=Обновяване на NDR
+UPD_VERIFIED_INIT=Провереното обновяване се инсталира сигурно.
+UPD_VERIFY_HASH=Проверка на SHA-256…

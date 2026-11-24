@@ -1,0 +1,462 @@
+; NDR language catalog. Untranslated entries use NDR English.
+
+[RES]
+YES=&Ya
+NO=Tidak(&N)
+OK=&OK
+CANCEL=Batal(&C)
+RETRY=Cuba lagi(&R)
+IGNORE=Aba&ikan
+ABORT=Henti(&S)
+CONTINUE=Teruska&n
+TITLE_ERROR=Ralat NDR
+TITLE_INFO=Maklumat NDR
+FOLDERINFO=Folder <c000000><b>%d</b></c> · Fail <c000000><b>%d</b></c> · <b>%s</b>
+DISKINFO_SHORT=<c000000><b>%s</b></c> tersedia
+DISKINFO_LONG=<c000000><b>%s</b></c> tersedia daripada <b>%s</b>
+SELECTED_INFO=<b>%d</b> dipilih · <b>%s</b> bait
+MSG_COPY_PREPARING=Menyediakan salinan…
+MSG_MOVE_PREPARING=Menyediakan pemindahan…
+MSG_DEL_PREPARING=Menyediakan pemadaman…
+COPYING=Menyalin item…
+MOVING=Mengalih item…
+DELETING=Memadam item…
+EXTRACTING=Mengekstrak fail…
+COMPRESSING=Memampatkan fail…
+READONLY=Baca sahaja
+SYSTEM=Sistem
+HIDDEN=Tersembunyi
+FOLDER=Folder
+FOLDERS=Folder
+SELECT_FOLDER=Pilih folder
+DROPCOPY_CONFIRM=Salin %d item ini?
+DROPMOVE_CONFIRM=Alih %d item ini?
+RENAME=Namakan semula
+COPY=Salin
+MOVE=Alih
+ADDTOARCHIVE=Tambah pada arkib
+EXTRACT=Ekstrak
+SEARCH=Cari
+STOP=Henti
+SEARCHRESULT=Hasil carian
+SELECTDEST= — Pilih destinasi
+PAUSE=Jeda
+RESUME=Sambung
+TITLE_FILTER=Penapis fail
+NETWORK=Rangkaian
+TITLE_NEWFOLDER=Folder baharu
+MSG_NEWFOLDER=Masukkan nama folder baharu.
+NEWFOLDER=Folder baharu
+MSG_RENAME=Masukkan nama baharu bagi item yang diserlahkan.\n\n<b><c0000FF>%s</c></b> <c666666>(%d daripada %d)</c>
+TITLE_FILEOPERATION=Operasi fail
+SELDEST_DRIVE=Pemacu
+SELDEST_WORKFOLDER=Folder kerja
+FOLDER_EXISTS=Folder dengan nama itu sudah wujud.
+SRCISDEST=Sumber dan destinasi adalah sama.
+MYCOMPUTER=PC ini
+ARCHIVE=Arkib
+DISKFREE=Kosong
+LOCATION=Lokasi
+FUNC_OPEN=Buka
+FUNC_COPYTO=Salin
+FUNC_MOVETO=Alih
+FUNC_DELETE=Padam
+FUNC_RECYCLEBIN=Alih ke Tong Kitar Semula
+FUNC_RENAME=Namakan semula
+FUNC_PROPERTIES=Sifat
+FUNC_FAVORITES=Kegemaran
+FUNC_NEWFOLDER=Folder baharu
+FUNC_REFRESH=Muat semula
+FUNC_GOTODESKTOP=Desktop
+FUNC_GOTODOCUMENTS=Dokumen
+FUNC_GOTOMUSIC=Muzik
+FUNC_GOTOPICTURES=Gambar
+FUNC_GOTOVIDEOS=Video
+FUNC_GOTODOWNLOADS=Muat turun
+FUNC_SELECTALL=Pilih semua
+FUNC_ADDTOARCHIVE=Tambah pada arkib
+FUNC_EXTRACT=Ekstrak
+FUNC_CLOSETAB=Tutup tab
+FUNC_SELECT=Pilih
+FUNC_DESELECTALL=Kosongkan pilihan
+FUNC_BACK=Kembali
+FUNC_FORWARD=Maju
+FUNC_FOLDERTREE=Pepohon folder
+FUNC_GOTOROOT=Folder akar
+FUNC_GOTOPARENT=Folder induk
+FUNC_EDITCOPY=Salin
+FUNC_EDITCUT=Potong
+FUNC_EDITPASTE=Tampal
+FUNC_INVERTSELECTION=Songsangkan pilihan
+FUNC_NEWTAB=Tab baharu
+TODAY=Hari ini
+YESTERDAY=Semalam
+FIELD_NAME=Nama
+FIELD_EXT=Sambungan
+FIELD_LOCATION=Lokasi
+FIELD_SIZE=Saiz
+FIELD_DATEMODIFIED=Diubah suai
+FIELD_ATTR=Atribut
+FIELD_DESC=Ulasan
+UPDATE=Kemas kini
+NAME=Nama
+ACCESS_DENIED=Akses ditolak
+INVALID_PASSWORD=Kata laluan salah
+DISKISFULL=Ruang cakera tidak mencukupi
+CALCULATING=Mengira…
+ERROR=Ralat
+
+[formMain]
+ToolButton.tbFile=&Fail
+ToolButton.tbFolder=F&older
+ToolButton.tbEdit=Sunting(&E)
+ToolButton.tbView=Paparan(&w)
+ToolButton.tbSystem=&Sistem
+ToolButton.tbArchive=&Arkib
+ToolButton.tbConnect=Sambu&ng
+ToolButton.tbTools=Ala&t
+ToolButton.tbHelp=Bantuan(&H)
+ToolButton.tbNewUpdateAvailable=Kemas kini NDR tersedia
+Menu.miOpen=&Q. Buka
+Menu.miCopyTo=&C. Salin ke…
+Menu.miMoveTo=&V. Alih ke…
+Menu.miDelete=&D. Padam
+Menu.miRename=&R. Namakan semula
+Menu.miProperties=&E. Sifat
+Menu.miExit=&X. Keluar
+Menu.miFolderTree=&T. Pepohon folder
+Menu.miFavorites=&V. Kegemaran
+Menu.miNewFolder=&C. Folder baharu
+Menu.miHistoryBack=&B. Kembali
+Menu.miHistoryForward=&F. Maju
+Menu.miToParent=&X. Folder induk
+Menu.miToRoot=&Z. Folder akar
+Menu.miRefresh=&R. Muat semula
+Menu.miEditCopy=&C. Salin
+Menu.miEditCut=&X. Potong
+Menu.miEditPaste=&V. Tampal
+Menu.miSelect=&B. Pilih
+Menu.miSelectAll=&U. Pilih semua
+Menu.miInvertSelection=&I. Songsangkan pilihan
+Menu.miSearchFile=&E. Cari fail dan folder…
+Menu.miLanguage=&O. Bahasa
+Menu.miNewTab=&B. Tab baharu
+Menu.miListStyleAuto=&A. Automatik
+Menu.miListStyleDetails=&D. Butiran
+Menu.miListStyleThumbs=&T. Lakaran kenit
+Menu.miColAuto=&A. Automatik
+Menu.miSortByName=&A. Nama
+Menu.miSortByExt=&E. Sambungan
+Menu.miSortBySize=&S. Saiz
+Menu.miSortByTime=&T. Diubah suai
+Menu.miSortByAttr=&R. Atribut
+Menu.miSortByColor=&C. Warna
+Menu.miToDesktop=&D. Desktop
+Menu.miToDocuments=&W. Dokumen
+Menu.miToPictures=&P. Gambar
+Menu.miToMusic=&M. Muzik
+Menu.miToVideos=&V. Video
+Menu.miToDownloads=&S. Muat turun
+Menu.miOptions=&O. Tetapan
+Menu.miHelp=&H. Bantuan
+Menu.miShortcut=&S. Pintasan papan kekunci…
+Menu.miHomepage=&W. Laman projek NDR
+Menu.miCheckUpdate=&U. Semak kemas kini NDR…
+Menu.miAbout=&A. Perihal NDR
+Menu.mipOpenWith=&W. Buka dengan…
+Menu.mipEditCopy=&C. Salin
+Menu.mipEditCut=&X. Potong
+Menu.mipEditPaste=&V. Tampal
+Menu.mipCopyTo=&Y. Salin ke…
+Menu.mipMoveTo=&M. Alih ke…
+Menu.mipDelete=&D. Padam
+Menu.mipRename=&R. Namakan semula
+Menu.mipAddToArchive=&A. Tambah pada arkib
+Menu.mipProperties=&T. Sifat
+Menu.pmiCloseTab=Tutup tab(&C)
+Menu.pmiCloseAllTab=Tutup semu&a tab
+Menu.pmiNewTab=&Tab baharu
+Hint.bSelectAll=Pilih semua item
+Hint.bClearSelection=Kosongkan pilihan
+
+[formFileExists]
+Caption.lMsg=Item dengan nama ini sudah wujud di destinasi:
+Caption.chkApplyAll=Gun&a pilihan ini untuk yang lain
+Caption.btnOverwrite=Tulis ganti(&w)
+Caption.btnRename=Namakan semula(&R)
+Caption.btnReplace=Ganti(&e)
+Caption.btnSkip=Langkau(&S)
+
+[formGetText]
+Caption.btnOk=&OK
+Caption.btnCancel=Batal(&C)
+
+[formDelConfirm]
+Form.Caption=Sahkan pemadaman
+Caption.btnAll=Semu&a
+Caption.btnYes=&Ya
+Caption.btnNo=Tidak(&N)
+
+[formDelWarning]
+Caption.btnDelete=Pa&dam
+Caption.btnYes=&Ya
+Caption.btnNo=Tidak(&N)
+Prompt.Recycle=Alih item yang dipilih ke Tong Kitar Semula?
+Prompt.Permanent=Padam item yang dipilih secara kekal?
+
+[formProgress]
+Caption.btnCancel=Batal(&C)
+
+[formOrgFavorites]
+Caption.btnCancel=Batal(&C)
+Caption.btnSave=&Simpan
+Caption.btnRename=Namakan semula(&R)
+Caption.btnUp=Alih ke atas(&u)
+Caption.btnDown=Alih ke ba&wah
+Caption.btnDelete=Pa&dam
+
+[formChangeAttr]
+Caption.btnAll=Semua(&l)
+Caption.btnSkip=Lang&kau
+Caption.btnOk=OK
+Caption.btnCancel=Batal
+Caption.chkHidden=Tersembunyi(&H)
+Caption.chkSystem=&Sistem
+Caption.chkReadOnly=Baca sahaja(&R)
+Caption.lDate=Tarikh(&D)
+Caption.lTime=Masa(&T)
+
+[formSaveList]
+Caption.btnSave=Simpan
+Caption.btnCancel=Batal
+Caption.chkAttributes=&Atribut
+Caption.chkDate=Tarikh(&D)
+Caption.chkDescription=Ulasa&n
+Caption.chkExtension=Sambungan(&E)
+Caption.chkFileName=Nama &fail
+Caption.chkFileSize=&Saiz
+Caption.chkTime=Masa(&T)
+
+[formAddToArchive]
+Caption.btnCancel=Batal
+Caption.btnOk=OK
+Caption.lPassword=Kata laluan(&P)
+Caption.lSecFormat=Format
+
+[formFileSplit]
+Caption.btnOk=OK
+Caption.btnCancel=Batal
+
+[formFileJoin]
+Caption.btnAdd=T&ambah
+Caption.btnCancel=Batal
+Caption.btnOk=OK
+Caption.btnDelete=Pa&dam
+Caption.btnDown=Alih ke ba&wah
+Caption.btnUp=Alih ke atas(&u)
+
+[formCompareFolder]
+Caption.btnCancel=Batal
+Caption.btnOk=OK
+Caption.btnSave=Simpan
+Caption.btnStop=Henti
+
+[formShortcut]
+Form.Caption=Pintasan papan kekunci
+
+[formEditShortCut]
+Caption.btnOk=OK
+Caption.btnCancel=Batal
+Caption.btnRemove=Buang
+
+[formCleanup]
+Caption.btnClose=Tutup
+Caption.btnOk=OK
+Caption.chkRecycleBin=Tong Kita&r Semula
+Caption.btnAdd=T&ambah
+Caption.btnDelete=Pa&dam
+Caption.btnSearch=Cari(&S)
+
+[formSelectDest]
+Form.Caption=Pilih destinasi
+Caption.btnCancel=Batal
+Caption.btnOk=OK
+Caption.btnTree=Layari &folder
+
+[formTreeScan]
+Caption.btnCancel=Batal
+
+[formSearchFolder]
+Caption.btnSearch=Cari
+
+[formFTPQuickConnect]
+Caption.btnCancel=Batal
+Caption.chkPassive=Gunakan mod pa&sif
+Caption.lPassword=Kata laluan(&w)
+Caption.lPort=&Port
+Caption.lURL=Alamat pelayan(&d)
+Caption.lUser=Nama pengg&una
+
+[formPassword]
+Caption.btnOk=OK
+Caption.btnCancel=Batal
+Caption.lUser=Nama pengguna
+Caption.lPassword=Kata laluan
+
+[formFTPSiteManager]
+Caption.btnAdd=T&ambah
+Caption.btnCancel=Batal
+Caption.btnDelete=Pa&dam
+Caption.btnOk=OK
+Caption.chkPassive=Gunakan mod pasif(&v)
+Caption.lName=&Nama
+Caption.lPassword=Kata laluan(&w)
+Caption.lPort=&Port
+Caption.lUser=Nama pengg&una
+
+[formFolderTree]
+Form.Caption=Layari folder
+Caption.btnCancel=Batal
+Caption.btnOk=OK
+ToolButton.tbFolder=Fold&er
+ToolButton.tbFavorites=Kegemaran(&v)
+ToolButton.tbSearch=Cari
+Hint.tbDesktop=Desktop
+Hint.tbMyDoc=Dokumen
+Hint.tbMyPic=Gambar
+Hint.tbMyMusic=Muzik
+Hint.tbMyVideo=Video
+Menu.miFolder=Fold&er
+Menu.miDelete=&D. Padam
+Menu.miRename=&R. Namakan semula
+Menu.miCreateNewFolder=&F. Folder baharu
+Menu.miProperties=&E. Sifat
+Menu.miClose=&C. Tutup
+
+[formPreferences]
+Caption.btnApply=Gun&a
+Caption.btnOk=&OK
+Caption.btnCancel=Batal
+TabSheet.tsColor=Warna
+TabSheet.tsTree=Pepohon folder
+TabSheet.tsEtc=Lain-lain
+Caption.lMyDocuments=Dokumen
+Caption.lMyMusic=Muzik
+Caption.lMyPictures=Gambar
+Caption.lMyVideos=Video
+Caption.lPathDownloads=Muat turun
+
+[formAdvRename]
+Caption.btnCancel=Batal
+Caption.btnUp=Alih ke atas
+Caption.btnDown=Alih ke bawah
+Caption.rbApplyToExt=Sambungan
+TabSheet.tsDelete=Buang
+TabSheet.tsExtension=Sambungan
+
+[formEditFunction]
+Caption.btnCancel=Batal
+Caption.btnOk=OK
+Caption.lName=Nama
+
+[formFTPAttributes]
+Caption.btnCancel=Batal
+Caption.btnOk=OK
+Caption.btnAll=Semua
+Caption.btnSkip=Langkau
+Caption.chkGExecute=Jalankan(&x)
+Caption.chkURead=Baca(&e)
+Caption.chkUExecute=Jalankan(&c)
+
+[formRename]
+Caption.btnOK=OK
+Caption.btnCancel=Batal
+
+[formChecksum]
+Caption.btnCopy=Salin(&C)
+
+[formNDRSearch]
+Caption.lName=Nama fail
+Caption.chkFiles=Fail
+Caption.chkFolders=Folder
+Caption.CategoryDocuments=Dokumen
+Caption.btnMoveUp=Alih ke atas
+Caption.btnMoveDown=Alih ke bawah
+Caption.btnRemove=Buang
+Caption.btnAdd=Tambah
+Status.Results=Hasil carian
+
+[formNDRDestination]
+Button.Cancel=Batal
+
+[NDRUpdate]
+Title=Kemas kini NDR
+FeedHttpsRequired=Sumber kemas kini mesti menggunakan HTTPS.
+InvalidDownloadUrl=Sumber kemas kini tiada URL muat turun HTTPS yang sah.
+NewVersionAvailable=Versi {0} tersedia. Versi semasa ialah {1}.
+OpenDownloadPage=Buka halaman muat turun?
+CurrentLatest=NDR sudah dikemas kini. ({0})
+RequestFailed=Pelayan kemas kini tidak dapat dihubungi. Semak sambungan dan sumber kemas kini.
+RequestFailedStatus=Pelayan kemas kini mengembalikan status HTTP {0}.
+RequestTimedOut=Pelayan kemas kini tidak membalas dalam 15 saat.
+
+[NDRSearch]
+Documents=Dokumen
+
+[NDRVault]
+Password=Kata laluan
+OK=OK
+Cancel=Batal
+NewFolderTitle=Folder baharu
+RenameTitle=Namakan semula
+ProgressCancel=Batal
+
+[NDR]
+OP_ARCHIVE_REPLACE_ARCHIVE=Gantikan arkib
+OP_JOIN_EXISTS=Fail dengan nama ini sudah wujud. Tiada fail yang digabungkan.\n{0}
+OP_TRANSFER_CANCEL=Batal
+OP_TRANSFER_CANCELLED=Operasi ({0}) telah dibatalkan. Item yang sudah diproses dikekalkan.
+OP_TRANSFER_COPY_DONE=Penyalinan selesai
+OP_TRANSFER_DELETE_DONE=Pemadaman selesai
+OP_TRANSFER_MOVE_DONE=Pengalihan selesai
+OP_TRANSFER_OPERATION_FAILED=Operasi gagal
+OP_TRANSFER_PARTIAL=Operasi selesai sebahagian
+OP_TRANSFER_PARTIAL_DETAIL={0} selesai · {1} ralat · {2} dilangkau
+OP_TRANSFER_PREPARING_THE_OPERATION=Menyediakan operasi…
+OP_TRANSFER_SIZE_UNAVAILABLE=Saiz tidak tersedia
+OP_TRANSFER_VERB_COPY=salin
+OP_TRANSFER_VERB_MOVE=alih
+OP_TRANSFER_VERB_PASTE=tampal
+UI_STARTUP_FAILED=Gagal dimulakan. Buka semula NDR.
+UI_STARTUP_LOADING=Menyediakan folder dan tetapan…
+UPD_CLOSE=Tutup
+UPD_CONFIRM=Muat turun dan pasang kemas kini, kemudian mulakan semula NDR?\nTetapan anda akan dikekalkan.
+UPD_CURRENT_BUILD=Binaan dipasang: {0}
+UPD_DOWNLOAD_ACTIVE=Memuat turun NDR {0}…
+UPD_ERROR_DETAILS=Butiran teknikal
+UPD_FAILED=Kemas kini gagal.
+UPD_INSTALLER_START=Memulakan pemasang…
+UPD_INSTALL_CHECKING=Memeriksa pakej pemasangan…
+UPD_INSTALL_CLOSING=Memeriksa sama ada NDR telah ditutup…
+UPD_INSTALL_EXTRACTING=Menyediakan fail pemasangan…
+UPD_INSTALL_FAILURE=Kemas kini gagal. Lihat update.log untuk butiran.
+UPD_INSTALL_FAILURE_TITLE=Ralat kemas kini NDR
+UPD_INSTALL_FINISHED=Pemasangan selesai. Memulakan semula NDR…
+UPD_INSTALL_HEADING=Memasang kemas kini NDR
+UPD_INSTALL_TITLE=Kemas kini NDR
+UPD_INSTALL_WAITING=Menunggu NDR ditutup…
+UPD_INSTALL_WRITING=Memasang fail NDR…
+UPD_LOCAL_BUILD=Binaan setempat
+UPD_NEW_BUILD=Binaan baharu: {0}
+UPD_NONE=Tiada kemas kini yang lebih baharu.
+UPD_PREPARING=Menyediakan pakej…
+UPD_RELEASE_FAILURE=Keluaran GitHub tidak dapat disahkan.
+UPD_RESTART_NOTE=NDR bermula semula secara automatik. Tetapan anda dikekalkan.
+UPD_STARTING=Muat turun dan semakan integriti selesai. Memulakan pemasangan.
+UPD_STEP_DOWNLOAD=Muat turun
+UPD_STEP_INSTALL=Pasang dan mula semula
+UPD_STEP_PREPARE=Persediaan
+UPD_STEP_VERIFY=Integriti
+UPD_TITLE=Kemas kini NDR
+UPD_VERIFIED_INIT=Memasang kemas kini yang disahkan dengan selamat.
+UPD_VERIFY_HASH=Mengesahkan SHA-256…

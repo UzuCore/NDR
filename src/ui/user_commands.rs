@@ -198,7 +198,7 @@ impl App {
             "F11" => "favoritesMenu",
             "F12" => "shortcuts",
             _ => {
-                self.status = format!("{key}: {}", if self.language == "ko" { "설정된 동작이 없습니다." } else { "No action is configured." });
+                self.status = super::file_commands::operation_format(&self.language_pack, "NDR.UI_TOOLS_FUNCTION_UNASSIGNED", "{0}: No action is configured.", &[&key]);
                 return;
             }
         };

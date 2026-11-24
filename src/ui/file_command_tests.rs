@@ -865,7 +865,7 @@ fn advanced_select_follows_advancedselectasync() {
     assert_eq!(marked(&app), ["alpha.txt", "beta.txt", "big.txt", "note.log"], "PathMatchSpecW per filter, files only (dir.txt is a folder)");
     // Advanced deselect: only files matching the filter are unmarked.
     app.dispatch("advancedDeselect", &ctx);
-    assert_eq!(prompt_of(&app).0, "고급 해제", "original TITLE_ADVDESELECT");
+    assert_eq!(prompt_of(&app).0, "고급 선택 해제", "NDR TITLE_ADVDESELECT");
     answer_text(&mut app, &ctx, Some("b*"));
     assert_eq!(marked(&app), ["alpha.txt", "note.log"]);
     app.dispatch("restoreSelection", &ctx);
@@ -1162,7 +1162,7 @@ fn folder_compare_follows_original_tfcomparefolder() {
     assert!(page.starts_with(&[0xEF, 0xBB, 0xBF]));
     let page = String::from_utf8(page[3..].to_vec()).unwrap();
     let lines: Vec<&str> = page.split("\r\n").collect();
-    assert!(lines[0].starts_with("<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//ENhttp://") && lines[0].contains("\t<title>NexusFile Folder Compare</title>\t"));
+    assert!(lines[0].starts_with("<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//ENhttp://") && lines[0].contains(&format!("\t<title>{}</title>\t", app.language_pack.localized("NDR.UI_COMPARE_SAVE_TITLE", "폴더 비교 결과 저장", "Save folder comparison"))));
     assert_eq!(lines[1], format!("<tr class=\"header\"><td align=\"right\" class=\"headleft\">{}</td><td>&nbsp;</td><td class=\"headright\">{}</td></tr>", root.join("left").display(), root.join("right").display()));
     assert_eq!(lines[2..7], ["<tr class=\"line1\">", "<td align=\"right\" class=\"same\">folder1</td>", "<td width=\"50\" align=\"center\" class=\"same\">=</td>", "<td class=\"same\">FOLDER1</td>", "</tr>"]);
     assert_eq!(lines[7..12], ["<tr class=\"line2\">", "<td align=\"right\" class=\"diff\">beta.txt</td>", "<td width=\"50\" align=\"center\" class=\"diff\">&lt; &gt;</td>", "<td class=\"diff\">beta.txt</td>", "</tr>"]);
@@ -1363,7 +1363,7 @@ fn favorites_window_follows_the_original_orgfavorites() {
     app.settings.set_strings("Favorites", vec![right.to_string_lossy().into_owned(), gone.clone(), gone.clone()]);
     app.settings.set_strings("FavoriteNames", vec!["오른쪽".into(), String::new(), "없음".into()]);
     app.dispatch("favorites", &ctx);
-    assert_eq!(app.original_dialogs[0].title, "즐겨찾기 구성", "[formOrgFavorites] Form.Caption");
+    assert_eq!(app.original_dialogs[0].title, "즐겨찾기 편집", "[formOrgFavorites] Form.Caption");
     let form = favorites(&app);
     assert_eq!(form.rows.len(), 20, "FUN_0044bed8 makes 20 rows");
     assert_eq!(form.rows[0], ["오른쪽".to_owned(), right.to_string_lossy().into_owned()]);
@@ -1497,7 +1497,7 @@ fn favorites_menu_and_path_history_follow_the_context_menus() {
     assert!(app.popup.is_none());
     app.dispatch("favoritesMenu", &ctx);
     app.run_popup_action(super::favorites_dialog::PopupAction::ManageFavorites);
-    assert_eq!(app.original_dialogs[0].title, "Organize Favorites");
+    assert_eq!(app.original_dialogs[0].title, "Edit favorites");
     fs::remove_dir_all(root).unwrap();
 }
 #[test]

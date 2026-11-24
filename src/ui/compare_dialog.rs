@@ -21,23 +21,6 @@ fn n0(value: usize) -> String {
     ndr::parity::format_size(value as u64, "B", true).trim_end_matches(" B").to_owned()
 }
 
-const DISTINCT_KO: &str = "비교하거나 동기화할 두 폴더는 서로 같거나 포함 관계일 수 없습니다.";
-const DISTINCT_EN: &str = "The two folders to compare or synchronize cannot be the same folder or contain each other.";
-
-/// Maps Korean errors of the comparison service to an English UI (known texts only).
-fn localized_error(error: &str, ko: bool) -> String {
-    if ko {
-        return error.into();
-    }
-    if error == DISTINCT_KO {
-        return DISTINCT_EN.into();
-    }
-    if let Some(path) = error.strip_prefix("폴더를 찾을 수 없습니다: ") {
-        return format!("Folder not found: {path}");
-    }
-    error.into()
-}
-
 /// Original result code (lvList row SubItems.Objects[1], 0x41d464): 0 same, 1 different, 2 left only, 3 right only.
 pub(super) fn original_code(kind: DifferenceKind) -> u8 {
     match kind {
@@ -69,7 +52,7 @@ pub(super) fn folder_compare_cell(d: &Difference, column: usize) -> String {
 }
 
 /// Header text of original btnSaveClick (0x41e2d0) (0x8de604, one line with tabs).
-const REPORT_HEAD: &str = "<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//ENhttp://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd\">\t<html xmlns=\"http://www.w3.org/1999/xhtml\">\t<head>\t<meta http-equiv=\"Content-Type\" content=\"text/html; charset=utf-8\" />\t<title>NexusFile Folder Compare</title>\t<style type=\"text/css\">\tbody,td {font-family:Tahoma,Arial,Verdana;font-size:9pt}\t.onlyleft {color:#008000;padding:4px}\t.onlyright {color:#0000FF;padding:4px}\t.same {color:#666666;padding:4px}\t.diff {color:#FF0000;padding:4px}\t.line1 {background-color:#FFFFFF}\t.line2 {background-color:#F1F5FA}\t.header {background-color:#666666;color:#FFFFFF}\t.headleft {padding-top:2px;padding-bottom:2px;padding-left:12px}\t.headright {padding-top:2px;padding-bottom:2px;padding-right:12px}\t</style>\t</head>\t<body>\t<div style=\"border:1px solid silver;padding:4px;position:absolute\">\t<table border=\"0\" cellspacing=\"0\" cellpadding=\"0\">\t";
+const REPORT_HEAD: &str = "<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//ENhttp://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd\">\t<html xmlns=\"http://www.w3.org/1999/xhtml\">\t<head>\t<meta http-equiv=\"Content-Type\" content=\"text/html; charset=utf-8\" />\t<title></title>\t<style type=\"text/css\">\tbody,td {font-family:Tahoma,Arial,Verdana;font-size:9pt}\t.onlyleft {color:#008000;padding:4px}\t.onlyright {color:#0000FF;padding:4px}\t.same {color:#666666;padding:4px}\t.diff {color:#FF0000;padding:4px}\t.line1 {background-color:#FFFFFF}\t.line2 {background-color:#F1F5FA}\t.header {background-color:#666666;color:#FFFFFF}\t.headleft {padding-top:2px;padding-bottom:2px;padding-left:12px}\t.headright {padding-top:2px;padding-bottom:2px;padding-right:12px}\t</style>\t</head>\t<body>\t<div style=\"border:1px solid silver;padding:4px;position:absolute\">\t<table border=\"0\" cellspacing=\"0\" cellpadding=\"0\">\t";
 
 /// Name placed in HTML (the original inserts it as is; NDR escapes &, <, >).
 fn html_text(text: &str) -> String {
@@ -172,9 +155,9 @@ impl FolderCompareForm {
 
     /// Original btnSaveClick: header text, header row (left and right paths), rows in display order (even line1, odd line2, class per result), footer.
     /// TStringList.SaveToFile(TEncoding.UTF8): CRLF per line; the caller adds the UTF-8 BOM.
-    pub(super) fn report_html(&self) -> String {
+    pub(super) fn report_html(&self, title: &str) -> String {
         let mut lines = vec![
-            REPORT_HEAD.to_owned(),
+            REPORT_HEAD.replace("<title></title>", &format!("<title>{}</title>", html_text(title))),
             format!(
                 "<tr class=\"header\"><td align=\"right\" class=\"headleft\">{}</td><td>&nbsp;</td><td class=\"headright\">{}</td></tr>",
                 html_text(&self.left_caption),
@@ -234,16 +217,16 @@ pub(super) enum ComparisonAction {
 }
 
 impl ComparisonForm {
-    pub(super) fn new(left: String, right: String, differences: Vec<Difference>, select_for_sync: bool, issues: Vec<String>, ko: bool) -> Self {
+    pub(super) fn new(left: String, right: String, differences: Vec<Difference>, select_for_sync: bool, issues: Vec<String>, language: &compat::Language) -> Self {
         let rows: Vec<ComparisonRow> = differences
             .into_iter()
             .map(|d| {
                 let cells = [
-                    fc::status_text(d.kind, ko).to_owned(),
-                    fc::type_text(&d, ko).to_owned(),
+                    fc::localized_status(d.kind, Some(language), false),
+                    fc::localized_type(&d, Some(language), false),
                     d.relative.clone(),
-                    fc::size_text(d.left_modified, d.left_dir, d.left_size, ko),
-                    fc::size_text(d.right_modified, d.right_dir, d.right_size, ko),
+                    fc::localized_size(d.left_modified, d.left_dir, d.left_size, Some(language), false),
+                    fc::localized_size(d.right_modified, d.right_dir, d.right_size, Some(language), false),
                     fc::time_text(d.left_modified),
                     fc::time_text(d.right_modified),
                 ];
@@ -268,28 +251,35 @@ impl ComparisonForm {
     }
 
     /// UpdateStatus.
+    #[cfg(test)]
     pub(super) fn status(&self, ko: bool) -> String {
+        self.localized_status(None, ko)
+    }
+
+    fn localized_status(&self, language: Option<&compat::Language>, ko: bool) -> String {
         let count = |kind: DifferenceKind| self.rows.iter().filter(|r| r.difference.kind == kind).count();
         let changed = self.rows.len() - count(DifferenceKind::Same);
         let selected = self.rows.iter().filter(|r| r.include).count();
-        match (self.select_for_sync, ko) {
-            (true, true) => format!("차이 {}개 · 선택 {} / {}개 · 읽지 못함 {}개", n0(changed), n0(selected), n0(self.rows.len()), n0(self.issues.len())),
-            (true, false) => format!("{} different · {} / {} selected · {} unreadable", n0(changed), n0(selected), n0(self.rows.len()), n0(self.issues.len())),
-            (false, true) => format!("전체 {}개 · 같음 {} · 차이 {}개 · 읽지 못함 {}개", n0(self.rows.len()), n0(count(DifferenceKind::Same)), n0(changed), n0(self.issues.len())),
-            (false, false) => format!("{} total · {} same · {} different · {} unreadable", n0(self.rows.len()), n0(count(DifferenceKind::Same)), n0(changed), n0(self.issues.len())),
+        let text = |key, k, e| fc::comparison_text(language, ko, key, k, e);
+        if self.select_for_sync {
+            fc::render_message(&text("NDR.UI_COMPARE_SELECTED_STATUS", "차이 {0}개 · 선택 {1} / {2}개 · 읽지 못함 {3}개", "{0} different · {1} / {2} selected · {3} unreadable"),
+                &[&n0(changed), &n0(selected), &n0(self.rows.len()), &n0(self.issues.len())])
+        } else {
+            fc::render_message(&text("NDR.UI_COMPARE_TOTAL_STATUS", "전체 {0}개 · 같음 {1} · 차이 {2}개 · 읽지 못함 {3}개", "{0} total · {1} same · {2} different · {3} unreadable"),
+                &[&n0(self.rows.len()), &n0(count(DifferenceKind::Same)), &n0(changed), &n0(self.issues.len())])
         }
     }
 
     /// Visible columns (the "copy" checkbox column only in the sync preview). The relative path column takes the remaining width.
-    pub(super) fn columns(&self, ko: bool, width: f32) -> Vec<Column> {
-        let titles = fc::column_titles(ko);
+    fn columns(&self, language: Option<&compat::Language>, width: f32) -> Vec<Column> {
+        let titles = fc::localized_titles(language, false);
         let range = if self.select_for_sync { 0..8 } else { 1..8 };
         let fixed: f32 = range.clone().map(|c| COLUMN_WIDTHS[c]).sum();
         range
             .map(|c| match c {
-                0 => Column::check(titles[0], COLUMN_WIDTHS[0]),
-                3 => Column::text(titles[3], (width - fixed - 16.0).max(160.0)),
-                _ => Column::text(titles[c], COLUMN_WIDTHS[c]),
+                0 => Column::check(titles[0].clone(), COLUMN_WIDTHS[0]),
+                3 => Column::text(titles[3].clone(), (width - fixed - 16.0).max(160.0)),
+                _ => Column::text(titles[c].clone(), COLUMN_WIDTHS[c]),
             })
             .collect()
     }
@@ -310,7 +300,7 @@ impl ComparisonForm {
 
     /// Ctrl+C text (selected rows in display order, tabs, CRLF, checkboxes as True/False).
     pub(super) fn copy_text(&self) -> String {
-        self.grid.copy_text(&self.columns(true, 0.0), &|row, column| self.cell(row, column), &|row| self.rows[row].include)
+        self.grid.copy_text(&self.columns(None, 0.0), &|row, column| self.cell(row, column), &|row| self.rows[row].include)
     }
 
     pub(super) fn included(&self) -> Vec<Difference> {
@@ -395,23 +385,23 @@ pub(super) fn folder_compare_ui(ui: &mut egui::Ui, form: &mut FolderCompareForm,
 
 /// Draws FolderComparisonWindow: left/right paths, unreadable warning, status line, table (header sort, row selection, copy checkboxes), buttons.
 pub(super) fn comparison_ui(ui: &mut egui::Ui, form: &mut ComparisonForm, language: &compat::Language, ko: bool, enter: bool, size: egui::Vec2) -> Option<ComparisonAction> {
-    let t = |ko_text: &'static str, en: &'static str| if ko { ko_text } else { en };
+    let t = |key, k, e| language.localized(key, k, e);
     let mut action = None;
     ui.set_width(size.x);
-    ui.add(egui::Label::new(format!("{}: {}", t("왼쪽", "Left"), form.left)).truncate());
-    ui.add(egui::Label::new(format!("{}: {}", t("오른쪽", "Right"), form.right)).truncate());
+    ui.add(egui::Label::new(format!("{}: {}", t("NDR.UI_COMPARE_LEFT", "왼쪽", "Left"), form.left)).truncate());
+    ui.add(egui::Label::new(format!("{}: {}", t("NDR.UI_COMPARE_RIGHT", "오른쪽", "Right"), form.right)).truncate());
     if !form.issues.is_empty() {
         ui.add_space(4.0);
         let n = n0(form.issues.len());
-        ui.add(egui::Label::new(if ko { format!("주의: {n}개 항목을 읽지 못했습니다. 비교 결과가 부분적입니다.") } else { format!("Warning: {n} items could not be read. The comparison is partial.") }).wrap());
+        ui.add(egui::Label::new(fc::render_message(&t("NDR.UI_COMPARE_PARTIAL_WARNING", "주의: {0}개 항목을 읽지 못했습니다. 비교 결과가 부분적입니다.", "Warning: {0} items could not be read. The comparison is partial."), &[&n])).wrap());
     }
     ui.add_space(10.0);
     // Original FUN_0041e0b4: counts per kind (same, different, left only, right only) as FOLDERCOMPARE_RESULT (NXLabel markup).
     let summary = form.original_result(language);
     ui.label(super::original_dialogs::markup_job(&summary, 12.0, ui.visuals().text_color(), size.x));
-    ui.label(form.status(ko));
+    ui.label(form.localized_status(Some(language), ko));
     ui.add_space(6.0);
-    let columns = form.columns(ko, size.x);
+    let columns = form.columns(Some(language), size.x);
     let view = GridView { id: "compare-grid", columns: &columns, height: size.y, enabled: true, sortable: true, multi_select: true, keyboard: true, context_menu: None, row_color: None, background: None };
     let events = {
         let ComparisonForm { rows, grid: state, select_for_sync, .. } = form;
@@ -432,7 +422,7 @@ pub(super) fn comparison_ui(ui: &mut egui::Ui, form: &mut ComparisonForm, langua
     }
     ui.add_space(9.0);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-        let close = if form.select_for_sync { t("선택 항목 동기화", "Synchronize selected").to_owned() } else { language.text("formCompareFolder.Caption.btnCancel", "Close") };
+        let close = if form.select_for_sync { t("NDR.UI_COMPARE_SYNC_SELECTED", "선택 항목 동기화", "Synchronize selected").to_owned() } else { language.text("formCompareFolder.Caption.btnCancel", "Close") };
         if ui.add_sized([116.0, 26.0], egui::Button::new(close)).clicked() {
             action = Some(if form.select_for_sync { ComparisonAction::Commit } else { ComparisonAction::Close });
         }
@@ -440,10 +430,10 @@ pub(super) fn comparison_ui(ui: &mut egui::Ui, form: &mut ComparisonForm, langua
             action = Some(ComparisonAction::Save);
         }
         if form.select_for_sync {
-            if ui.add_sized([84.0, 26.0], egui::Button::new(t("모두 해제", "Clear all"))).clicked() {
+            if ui.add_sized([84.0, 26.0], egui::Button::new(t("NDR.UI_COMPARE_CLEAR_ALL", "모두 해제", "Clear all"))).clicked() {
                 action = Some(ComparisonAction::SelectNone);
             }
-            if ui.add_sized([84.0, 26.0], egui::Button::new(t("모두 선택", "Select all"))).clicked() {
+            if ui.add_sized([84.0, 26.0], egui::Button::new(t("NDR.UI_COMPARE_SELECT_ALL", "모두 선택", "Select all"))).clicked() {
                 action = Some(ComparisonAction::SelectAll);
             }
         }
@@ -469,20 +459,19 @@ impl App {
         let local = |p: &Pane| p.archive.is_none() && p.remote.is_none();
         if !local(&self.panes[0]) || !local(&self.panes[1]) {
             if synchronize {
-                self.warn("폴더 동기화는 일반 폴더에서 사용할 수 없습니다.", "Folder synchronization is only available for regular folders.");
+                self.warn_operation(&self.catalog("NDR.UI_COMPARE_SYNC_LOCAL_ONLY", "폴더 동기화는 일반 폴더에서 사용할 수 없습니다.", "Folder synchronization is only available for regular folders."));
             } else {
-                self.warn("폴더 비교는 일반 폴더에서 사용할 수 없습니다.", "Folder comparison is only available for regular folders.");
+                self.warn_operation(&self.catalog("NDR.UI_COMPARE_LOCAL_ONLY", "폴더 비교는 일반 폴더에서 사용할 수 없습니다.", "Folder comparison is only available for regular folders."));
             }
             return None;
         }
         if !self.vault_has_filesystem(0) || !self.vault_has_filesystem(1) {
-            self.warn("암호화 폴더를 Windows 드라이브로 연결해 주세요.",
-                "Connect the unlocked encrypted folder through WinFsp first.");
+            self.warn_operation(&self.catalog("NDR.UI_COMPARE_MOUNT_REQUIRED", "암호화 폴더를 Windows 드라이브로 연결해 주세요.", "Connect the unlocked encrypted folder through WinFsp first."));
             return None;
         }
         let (left, right) = (self.command_directory(0), self.command_directory(1));
         if fc::ensure_distinct_roots(&left, &right).is_err() {
-            self.warn(DISTINCT_KO, DISTINCT_EN);
+            self.warn_operation(&self.catalog("NDR.UI_COMPARE_ROOTS_DISTINCT", "비교하거나 동기화할 두 폴더는 서로 같거나 포함 관계일 수 없습니다.", "The two folders to compare or synchronize cannot be the same folder or contain each other."));
             return None;
         }
         Some((left, right))
@@ -547,7 +536,6 @@ impl App {
     /// After comparing (after the original loop): result text (FUN_0041e0b4), btnSave enabled, ProgressBar hidden, btnOk shown again.
     /// On stop the original keeps the rows inserted so far but NDR shows an empty list. If the window is already closed, only the status line.
     fn folder_compare_done(&mut self, outcome: Result<(Vec<Difference>, Vec<String>), String>, cancelled: bool) {
-        let ko = self.language == "ko";
         let template = self.language_pack.text(
             "RES.FOLDERCOMPARE_RESULT",
             "<c666666>Indentical: <b>%d</b></c>, <cFF0000>Different: <b>%d</b></c>, <c008000>Only in left: <b>%d</b></c>, <c0000FF>Only in right: <b>%d</b></c>",
@@ -555,7 +543,7 @@ impl App {
         let open = self.folder_compare_form().is_some_and(|form| form.running.is_some());
         if !open {
             if cancelled {
-                self.status = self.tr("폴더 비교를 취소했습니다.", "Folder comparison canceled.").into_owned();
+                self.status = self.catalog("NDR.UI_COMPARE_CANCELLED", "폴더 비교를 취소했습니다.", "Folder comparison canceled.");
             }
             return;
         }
@@ -565,7 +553,7 @@ impl App {
                 form.running = None;
                 form.compared = true;
                 form.result = Some(form.result_text(&template));
-                self.status = self.tr("폴더 비교를 취소했습니다.", "Folder comparison canceled.").into_owned();
+                self.status = self.catalog("NDR.UI_COMPARE_CANCELLED", "폴더 비교를 취소했습니다.", "Folder comparison canceled.");
                 return;
             }
             Err(error) => error,
@@ -579,12 +567,12 @@ impl App {
                 form.issues = unreadable;
                 form.compared = true;
                 form.result = Some(form.result_text(&template));
-                self.status = match (ko, unreadable) {
-                    _ if cancelled => self.tr("폴더 비교를 취소했습니다.", "Folder comparison canceled.").into_owned(),
-                    (true, 0) => format!("비교 완료 · 변경 {}개", n0(changed)),
-                    (true, n) => format!("비교 완료 · 변경 {}개 · 읽지 못함 {}개", n0(changed), n0(n)),
-                    (false, 0) => format!("Comparison complete · {} changed", n0(changed)),
-                    (false, n) => format!("Comparison complete · {} changed · {} unreadable", n0(changed), n0(n)),
+                self.status = if cancelled {
+                    self.catalog("NDR.UI_COMPARE_CANCELLED", "폴더 비교를 취소했습니다.", "Folder comparison canceled.")
+                } else if unreadable == 0 {
+                    fc::render_message(&self.catalog("NDR.UI_COMPARE_COMPLETE", "비교 완료 · 변경 {0}개", "Comparison complete · {0} changed"), &[&n0(changed)])
+                } else {
+                    fc::render_message(&self.catalog("NDR.UI_COMPARE_COMPLETE_UNREADABLE", "비교 완료 · 변경 {0}개 · 읽지 못함 {1}개", "Comparison complete · {0} changed · {1} unreadable"), &[&n0(changed), &n0(unreadable)])
                 };
                 return;
             }
@@ -592,46 +580,43 @@ impl App {
         if let Some(form) = self.folder_compare_form() {
             form.running = None;
         }
-        let text = localized_error(&error, ko);
+        let text = fc::localize_issue(&error, &self.language_pack);
         self.system_box("NDR", &text, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
     }
 
     /// Original btnSaveClick: SaveDialog (FileName "compare result.html", Filter "HTML File (*.html)", DefaultExt html, overwrite prompt) ->
     /// TStringList.SaveToFile(name, TEncoding.UTF8).
     fn save_folder_compare(&mut self) {
+        let title = self.catalog("NDR.UI_COMPARE_SAVE_TITLE", "폴더 비교 결과 저장", "Save folder comparison");
+        let filter = self.catalog("NDR.UI_COMPARE_FILTER_HTML", "HTML 파일 (*.html)", "HTML files (*.html)");
         let Some(form) = self.folder_compare_form() else { return };
         if !form.compared || form.running.is_some() {
             return;
         }
-        let text = form.report_html();
-        let Some(path) = (self.save_dialog)("", None, "compare result.html", &[("HTML File (*.html)", "*.html")], "html", true) else { return };
+        let text = form.report_html(&title);
+        let Some(path) = (self.save_dialog)(&title, None, "compare result.html", &[(filter.as_str(), "*.html")], "html", true) else { return };
         if let Err(error) = fs::write(&path, [&[0xEF, 0xBB, 0xBF][..], text.as_bytes()].concat()) {
-            let title = self.original_dialogs.last().map(|d| d.title.clone()).unwrap_or_default();
-            self.system_box(&title, &error.to_string(), MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
+            let detail = fc::render_message(&self.catalog("NDR.UI_COMPARE_SAVE_FAILED", "비교 결과를 저장할 수 없습니다: {0}", "Could not save the comparison results: {0}"), &[&error.to_string()]);
+            self.system_box(&title, &detail, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
         }
     }
 
     /// C# SynchronizeFoldersAsync: direction -> content comparison mode -> compare (with subfolders) -> preview -> existing item handling -> confirm -> copy.
     pub(super) fn synchronize_command(&mut self) {
         let Some((left, right)) = self.compare_roots(true) else { return };
-        let ko = self.language == "ko";
-        let title = self.tr("폴더 동기화 방향", "Synchronization direction").into_owned();
-        let message = self.tr(
-            "어느 쪽 파일로 다른 폴더를 갱신할까요? 동기화는 파일을 복사하고 대상에서 추가 파일을 삭제하지 않습니다.",
-            "Which side should update the other folder? Synchronization copies files and does not delete extra files from the destination.",
-        );
-        let directions = if ko { ["왼쪽 → 오른쪽", "오른쪽 → 왼쪽"] } else { ["Left → Right", "Right → Left"] };
-        self.choice_dialog(&title, &message, directions.map(String::from).to_vec(), 0, move |app, direction, _| {
+        let title = self.catalog("NDR.UI_COMPARE_DIRECTION_TITLE", "폴더 동기화 방향", "Synchronization direction");
+        let message = self.catalog("NDR.UI_COMPARE_DIRECTION_PROMPT", "어느 쪽 파일로 다른 폴더를 갱신할까요? 동기화는 파일을 복사하고 대상에서 추가 파일을 삭제하지 않습니다.", "Which side should update the other folder? Synchronization copies files and does not delete extra files from the destination.");
+        let directions = [self.catalog("NDR.UI_COMPARE_LEFT_TO_RIGHT", "왼쪽 → 오른쪽", "Left → Right"), self.catalog("NDR.UI_COMPARE_RIGHT_TO_LEFT", "오른쪽 → 왼쪽", "Right → Left")].to_vec();
+        self.choice_dialog(&title, &message, directions, 0, move |app, direction, _| {
             let Some(direction) = direction else { return };
             let source_is_left = direction == 0;
-            let ko = app.language == "ko";
-            let title = app.tr("파일 내용 비교", "Compare file contents").into_owned();
-            let message = app.tr("크기와 수정 시간 외에 파일 내용까지 비교할까요?", "Compare file contents in addition to size and modification time?").into_owned();
-            let modes = if ko { ["크기·수정 날짜", "파일 내용 포함"] } else { ["Size and modified date", "Include file contents"] };
+            let title = app.catalog("NDR.UI_COMPARE_MODE_TITLE", "파일 내용 비교", "Compare file contents");
+            let message = app.catalog("NDR.UI_COMPARE_MODE_PROMPT", "크기와 수정 시간 외에 파일 내용까지 비교할까요?", "Compare file contents in addition to size and modification time?");
+            let modes = [app.catalog("NDR.UI_COMPARE_MODE_METADATA", "크기·수정 날짜", "Size and modified date"), app.catalog("NDR.UI_COMPARE_MODE_CONTENT", "파일 내용 포함", "Include file contents")].to_vec();
             let initial = usize::from(app.settings.flag("UseContentComparison", true));
-            app.choice_dialog(&title, &message, modes.map(String::from).to_vec(), initial, move |app, mode, _| {
+            app.choice_dialog(&title, &message, modes, initial, move |app, mode, _| {
                 let Some(mode) = mode else { return };
-                let title = app.tr("동기화 비교", "Synchronization compare").into_owned();
+                let title = app.catalog("NDR.UI_COMPARE_SYNC_COMPARE_TITLE", "동기화 비교", "Synchronization compare");
                 app.start_comparison(title, CompareRun { left, right, source_is_left: Some(source_is_left) }, true, mode == 1);
             });
         });
@@ -639,20 +624,20 @@ impl App {
 
     /// FolderComparisonProgressWindow (stop button, "preparing folder comparison...").
     fn start_comparison(&mut self, title: String, run: CompareRun, recursive: bool, contents: bool) {
-        let ko = self.language == "ko";
+        let language = self.language_pack.clone();
         let modal = ModalProgress {
             stop: self.language_pack.text("formCompareFolder.Caption.btnStop", "Stop"),
-            stopping: Some(self.tr("중단 중…", "Stopping…").into_owned()),
-            stopping_text: self.tr("현재 작업을 안전하게 멈추는 중…", "Stopping the current work safely…").into_owned(),
+            stopping: Some(self.catalog("NDR.UI_COMPARE_STOPPING", "중단 중…", "Stopping…")),
+            stopping_text: self.catalog("NDR.UI_COMPARE_STOPPING_DETAIL", "현재 작업을 안전하게 멈추는 중…", "Stopping the current work safely…"),
             kind: ModalKind::Message,
         };
-        let preparing = self.tr("폴더 비교 준비 중…", "Preparing the folder comparison…").into_owned();
+        let preparing = self.catalog("NDR.UI_COMPARE_PREPARING", "폴더 비교 준비 중…", "Preparing the folder comparison…");
         let tx = self.async_tx.clone();
         let (left, right) = (run.left.clone(), run.right.clone());
         let started = self.start_modal_task(title, modal, move |events, cancel| {
             let outcome = fc::compare(&left, &right, recursive, contents, &cancel, &mut |report| {
                 let (completed, total) = report.counts();
-                let _ = events.send(Event::Progress { path: PathBuf::from(report.message(ko)), bytes: total.unwrap_or(0) as u64, files: completed as u64 });
+                let _ = events.send(Event::Progress { path: PathBuf::from(report.localized_message(&language)), bytes: total.unwrap_or(0) as u64, files: completed as u64 });
             });
             let _ = tx.send(AsyncResult::CompareDone(run, outcome, cancel.load(Ordering::Relaxed)));
             Ok(())
@@ -665,17 +650,16 @@ impl App {
     }
 
     pub(super) fn compare_done(&mut self, run: CompareRun, outcome: Result<(Vec<Difference>, Vec<String>), String>, cancelled: bool) {
-        let ko = self.language == "ko";
         if run.source_is_left.is_none() {
             return self.folder_compare_done(outcome, cancelled);
         }
         let (differences, issues) = match outcome {
             Err(_) if cancelled => {
-                self.status = self.tr("폴더 동기화를 취소했습니다.", "Folder synchronization canceled.").into_owned();
+                self.status = self.catalog("NDR.UI_COMPARE_SYNC_CANCELLED", "폴더 동기화를 취소했습니다.", "Folder synchronization canceled.");
                 return;
             }
             Err(error) => {
-                let text = localized_error(&error, ko);
+                let text = fc::localize_issue(&error, &self.language_pack);
                 return self.system_box("NDR", &text, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
             }
             Ok(result) => result,
@@ -684,19 +668,16 @@ impl App {
         let Some(source_is_left) = run.source_is_left else { return };
         if !issues.is_empty() {
             // Stop when some items could not be read so nothing is copied wrongly.
-            let mut text = self.tr(
-                "일부 항목을 읽지 못해 비교 결과가 완전하지 않습니다. 잘못된 파일 복사를 막기 위해 동기화를 시작하지 않았습니다.\n\n",
-                "Some items could not be read, so the comparison is incomplete. Synchronization did not start, to avoid copying the wrong files.\n\n",
-            )
-            .into_owned();
-            text += &issues.iter().take(ERROR_LINES).cloned().collect::<Vec<_>>().join("\r\n");
+            let mut text = self.catalog("NDR.UI_COMPARE_SYNC_PARTIAL_CANNOT_START", "일부 항목을 읽지 못해 비교 결과가 완전하지 않습니다. 잘못된 파일 복사를 막기 위해 동기화를 시작하지 않았습니다.\n\n", "Some items could not be read, so the comparison is incomplete. Synchronization did not start, to avoid copying the wrong files.\n\n");
+            text += &issues.iter().take(ERROR_LINES).map(|detail| fc::localize_issue(detail, &self.language_pack)).collect::<Vec<_>>().join("\r\n");
             if issues.len() > ERROR_LINES {
                 let rest = n0(issues.len() - ERROR_LINES);
-                text += &if ko { format!("\r\n… 나머지 {rest}개 오류") } else { format!("\r\n… {rest} more errors") };
+                text += "\r\n… ";
+                text += &fc::render_message(&self.catalog("NDR.UI_COMPARE_MORE_ERRORS", "나머지 {0}개 오류", "{0} more errors"), &[&rest]);
             }
-            let title = self.tr("폴더 동기화 중단", "Folder synchronization stopped").into_owned();
+            let title = self.catalog("NDR.UI_COMPARE_SYNC_STOPPED", "폴더 동기화 중단", "Folder synchronization stopped");
             self.text = Some(TextDocument { title, text });
-            self.status = if ko { format!("동기화 중단 · 읽지 못한 항목 {}개", n0(issues.len())) } else { format!("Synchronization stopped · {} unreadable items", n0(issues.len())) };
+            self.status = fc::render_message(&self.catalog("NDR.UI_COMPARE_SYNC_STOPPED_COUNT", "동기화 중단 · 읽지 못한 항목 {0}개", "Synchronization stopped · {0} unreadable items"), &[&n0(issues.len())]);
             return;
         }
         let plan: Vec<Difference> = differences
@@ -704,11 +685,11 @@ impl App {
             .filter(|d| d.kind == DifferenceKind::Different || d.kind == if source_is_left { DifferenceKind::LeftOnly } else { DifferenceKind::RightOnly })
             .collect();
         if plan.is_empty() {
-            self.status = self.tr("동기화할 차이가 없습니다.", "There are no differences to synchronize.").into_owned();
+            self.status = self.catalog("NDR.UI_COMPARE_SYNC_NONE", "동기화할 차이가 없습니다.", "There are no differences to synchronize.");
             return;
         }
-        let title = self.tr("동기화 미리보기", "Synchronization preview").into_owned();
-        let form = ComparisonForm::new(left, right, plan, true, vec![], ko);
+        let title = self.catalog("NDR.UI_COMPARE_SYNC_PREVIEW", "동기화 미리보기", "Synchronization preview");
+        let form = ComparisonForm::new(left, right, plan, true, vec![], &self.language_pack);
         self.push_original_dialog(title, DialogKind::Comparison(Box::new(form)), move |app, result, _| {
             let DialogResult::Comparison(Some(selected)) = result else { return };
             app.choose_existing_behavior(run, source_is_left, selected);
@@ -717,25 +698,16 @@ impl App {
 
     /// Choose existing item handling -> confirm "run synchronization" (yes/no).
     fn choose_existing_behavior(&mut self, run: CompareRun, source_is_left: bool, selected: Vec<Difference>) {
-        let ko = self.language == "ko";
-        let title = self.tr("기존 항목 처리", "Existing items").into_owned();
-        let message = self.tr("대상에 같은 경로가 있을 때 처리할 방법을 선택하세요.", "Choose what to do when the destination already has the same path.").into_owned();
-        let options = if ko {
-            ["기존 항목 건너뛰기", "기존 파일 덮어쓰기", "원본이 최신이면 덮어쓰기", "파일/폴더 형식 충돌도 교체"]
-        } else {
-            ["Skip existing items", "Overwrite existing files", "Overwrite if the source is newer", "Also replace file/folder type conflicts"]
-        };
-        self.choice_dialog(&title, &message, options.map(String::from).to_vec(), 0, move |app, choice, _| {
+        let title = self.catalog("NDR.UI_COMPARE_EXISTING_TITLE", "기존 항목 처리", "Existing items");
+        let message = self.catalog("NDR.UI_COMPARE_EXISTING_PROMPT", "대상에 같은 경로가 있을 때 처리할 방법을 선택하세요.", "Choose what to do when the destination already has the same path.");
+        let options = [self.catalog("NDR.UI_COMPARE_EXISTING_SKIP", "기존 항목 건너뛰기", "Skip existing items"), self.catalog("NDR.UI_COMPARE_EXISTING_REPLACE", "기존 파일 덮어쓰기", "Overwrite existing files"), self.catalog("NDR.UI_COMPARE_EXISTING_NEWER", "원본이 최신이면 덮어쓰기", "Overwrite if the source is newer"), self.catalog("NDR.UI_COMPARE_EXISTING_CONFLICT", "파일/폴더 형식 충돌도 교체", "Also replace file/folder type conflicts")].to_vec();
+        self.choice_dialog(&title, &message, options, 0, move |app, choice, _| {
             let Some(choice) = choice else { return };
             let behavior = [ExistingBehavior::Skip, ExistingBehavior::Overwrite, ExistingBehavior::OverwriteIfSourceIsNewer, ExistingBehavior::OverwriteAndReplaceTypeConflicts][choice.min(3)];
             let (source, destination) = if source_is_left { (run.left, run.right) } else { (run.right, run.left) };
             let count = n0(selected.len());
-            let text = if app.language == "ko" {
-                format!("선택한 파일 {count}개를\n{}\n에서\n{}\n으로 동기화할까요? 대상의 추가 파일은 삭제하지 않습니다.", source.display(), destination.display())
-            } else {
-                format!("Synchronize the {count} selected files from\n{}\nto\n{}\n? Extra files in the destination are not deleted.", source.display(), destination.display())
-            };
-            let caption = app.tr("동기화 실행", "Run synchronization").into_owned();
+            let text = fc::render_message(&app.catalog("NDR.UI_COMPARE_RUN_PROMPT", "선택한 파일 {0}개를\n{1}\n에서\n{2}\n으로 동기화할까요? 대상의 추가 파일은 삭제하지 않습니다.", "Synchronize the {0} selected files from\n{1}\nto\n{2}\n? Extra files in the destination are not deleted."), &[&count, &source.to_string_lossy(), &destination.to_string_lossy()]);
+            let caption = app.catalog("NDR.UI_COMPARE_RUN_TITLE", "동기화 실행", "Run synchronization");
             app.system_box(&caption, &text, MB_YESNO | MB_ICONQUESTION, move |app, answer, _| {
                 if answer == IDYES {
                     app.start_sync(source, destination, selected, source_is_left, behavior);
@@ -757,7 +729,7 @@ impl App {
         };
         let recycle = self.settings.flag("UseRecycleBin", true);
         let tx = self.async_tx.clone();
-        let title = self.tr("폴더 동기화", "Synchronize folders").into_owned();
+        let title = self.catalog("NDR.UI_COMPARE_SYNC_TITLE", "폴더 동기화", "Synchronize folders");
         let started = self.start_progress_task(title, progress, move |events, cancel| {
             let outcome = fc::copy_differences(&source, &destination, &selected, source_is_left, behavior, recycle, &cancel, &mut |copied, bytes, path| {
                 let _ = events.send(Event::Progress { path: path.to_path_buf(), bytes, files: copied });
@@ -777,38 +749,35 @@ impl App {
     pub(super) fn sync_done(&mut self, outcome: Result<fc::SyncResult, String>, cancelled: bool) {
         self.refresh(0);
         self.refresh(1);
-        let ko = self.language == "ko";
         if cancelled {
-            self.status = self.tr("동기화를 취소했습니다. 이미 완료된 항목은 유지됩니다.", "Synchronization canceled. Items already completed are kept.").into_owned();
+            self.status = self.catalog("NDR.UI_COMPARE_SYNC_CANCELLED_KEEP", "동기화를 취소했습니다. 이미 완료된 항목은 유지됩니다.", "Synchronization canceled. Items already completed are kept.");
             return;
         }
         let result = match outcome {
             Ok(result) => result,
             Err(error) => {
-                let caption = self.tr("동기화 오류", "Synchronization error").into_owned();
-                self.system_box(&caption, &error, MB_OK | MB_ICONHAND, |_, _, _| {});
-                self.status = self.tr("동기화 작업을 마치지 못했습니다.", "The synchronization could not be completed.").into_owned();
+                let caption = self.catalog("NDR.UI_COMPARE_SYNC_FATAL_ERROR", "동기화 오류", "Synchronization error");
+                self.system_box(&caption, &fc::localize_issue(&error, &self.language_pack), MB_OK | MB_ICONHAND, |_, _, _| {});
+                self.status = self.catalog("NDR.UI_COMPARE_SYNC_FAILED", "동기화 작업을 마치지 못했습니다.", "The synchronization could not be completed.");
                 return;
             }
         };
         let (copied, created, skipped, errors) = (n0(result.copied as usize), n0(result.created_directories as usize), n0(result.skipped_existing as usize), n0(result.errors.len()));
-        self.status = if ko {
-            format!("동기화 완료 · 파일 {copied}개 복사 · 폴더 {created}개 생성 · 건너뜀 {skipped}개 · 오류 {errors}개")
-        } else {
-            format!("Synchronization complete · {copied} files copied · {created} folders created · {skipped} skipped · {errors} errors")
-        };
+        self.status = fc::render_message(&self.catalog("NDR.UI_COMPARE_SYNC_SUMMARY", "동기화 완료 · 파일 {0}개 복사 · 폴더 {1}개 생성 · 건너뜀 {2}개 · 오류 {3}개", "Synchronization complete · {0} files copied · {1} folders created · {2} skipped · {3} errors"), &[&copied, &created, &skipped, &errors]);
         if result.errors.is_empty() {
-            self.completion_notice("동기화 완료", "Synchronization completed", self.status.clone());
+            self.completion_notice_operation(self.catalog("NDR.UI_COMPARE_SYNC_COMPLETED_TOAST", "동기화 완료", "Synchronization completed"), self.status.clone());
         } else {
-            self.warning_notice("동기화 일부 완료", "Synchronization partially completed",
-                format!("{} errors", result.errors.len()));
-        }        if !result.errors.is_empty() {
-            let mut text = result.errors.iter().take(ERROR_LINES).cloned().collect::<Vec<_>>().join("\r\n");
+            self.warning_notice_operation(self.catalog("NDR.UI_COMPARE_SYNC_PARTIAL_TOAST", "동기화 일부 완료", "Synchronization partially completed"),
+                fc::render_message(&self.catalog("NDR.UI_COMPARE_ERROR_COUNT", "오류 {0}개", "{0} errors"), &[&errors]));
+        }
+        if !result.errors.is_empty() {
+            let mut text = result.errors.iter().take(ERROR_LINES).map(|detail| fc::localize_issue(detail, &self.language_pack)).collect::<Vec<_>>().join("\r\n");
             if result.errors.len() > ERROR_LINES {
                 let rest = n0(result.errors.len() - ERROR_LINES);
-                text += &if ko { format!("\r\n나머지 {rest}개 오류") } else { format!("\r\n{rest} more errors") };
+                text += "\r\n";
+                text += &fc::render_message(&self.catalog("NDR.UI_COMPARE_MORE_ERRORS", "나머지 {0}개 오류", "{0} more errors"), &[&rest]);
             }
-            let title = self.tr("동기화 오류", "Synchronization errors").into_owned();
+            let title = self.catalog("NDR.UI_COMPARE_SYNC_ERROR_LIST", "동기화 오류", "Synchronization errors");
             self.text = Some(TextDocument { title, text });
         }
     }
@@ -828,7 +797,7 @@ impl App {
                 let selected = form.included();
                 if selected.is_empty() {
                     let title = self.original_dialogs.last().map(|d| d.title.clone()).unwrap_or_default();
-                    let text = self.tr("동기화할 파일을 하나 이상 선택하세요.", "Select at least one file to synchronize.").into_owned();
+                    let text = self.catalog("NDR.UI_COMPARE_SYNC_SELECT_FILES", "동기화할 파일을 하나 이상 선택하세요.", "Select at least one file to synchronize.");
                     return self.system_box(&title, &text, MB_OK | MB_ICONASTERISK, |_, _, _| {});
                 }
                 self.answer_dialog(DialogResult::Comparison(Some(selected)), ctx);
@@ -836,7 +805,7 @@ impl App {
             ComparisonAction::Save => self.save_comparison(),
             ComparisonAction::Copy(text) => {
                 if let Err(error) = (self.clipboard_writer)(&text) {
-                    self.status = error;
+                    self.status = fc::render_message(&self.catalog("NDR.UI_COMPARE_CLIPBOARD_FAILED", "비교 결과를 클립보드에 복사할 수 없습니다: {0}", "Could not copy the comparison results to the clipboard: {0}"), &[&error]);
                 }
             }
         }
@@ -844,31 +813,33 @@ impl App {
 
     /// SaveResults: HTML (.html, window title as title) or TSV (any other extension), UTF-8 BOM. The save dialog uses the C# filter list as is.
     fn save_comparison(&mut self) {
-        let ko = self.language == "ko";
         let title = self.original_dialogs.last().map(|d| d.title.clone()).unwrap_or_default();
-        let dialog_title = self.tr("폴더 비교 결과 저장", "Save folder comparison").into_owned();
-        let filters: [(&str, &str); 4] = if ko {
-            [("HTML 파일 (*.html)", "*.html"), ("TSV 파일 (*.tsv)", "*.tsv"), ("텍스트 파일 (*.txt)", "*.txt"), ("모든 파일 (*.*)", "*.*")]
-        } else {
-            [("HTML files (*.html)", "*.html"), ("TSV files (*.tsv)", "*.tsv"), ("Text files (*.txt)", "*.txt"), ("All files (*.*)", "*.*")]
-        };
+        let dialog_title = self.catalog("NDR.UI_COMPARE_SAVE_TITLE", "폴더 비교 결과 저장", "Save folder comparison");
+        let filters = [
+            (self.catalog("NDR.UI_COMPARE_FILTER_HTML", "HTML 파일 (*.html)", "HTML files (*.html)"), "*.html"),
+            (self.catalog("NDR.UI_COMPARE_FILTER_TSV", "TSV 파일 (*.tsv)", "TSV files (*.tsv)"), "*.tsv"),
+            (self.catalog("NDR.UI_COMPARE_FILTER_TEXT", "텍스트 파일 (*.txt)", "Text files (*.txt)"), "*.txt"),
+            (self.catalog("NDR.UI_COMPARE_FILTER_ALL", "모든 파일 (*.*)", "All files (*.*)"), "*.*"),
+        ];
+        let filters = filters.each_ref().map(|(caption, pattern)| (caption.as_str(), *pattern));
         let Some(path) = (self.save_dialog)(&dialog_title, None, "NDR-folder-comparison.html", &filters, "html", true) else { return };
+        let language = self.language_pack.clone();
         let Some(form) = self.comparison_form() else { return };
         let rows: Vec<(Difference, bool)> = form.rows.iter().map(|r| (r.difference.clone(), r.include)).collect();
         let text = if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("html")) {
-            fc::report_html(&title, &form.left, &form.right, &rows, &form.issues, form.select_for_sync, ko)
+            fc::report_html_localized(&title, &form.left, &form.right, &rows, &form.issues, form.select_for_sync, Some(&language), false)
         } else {
-            fc::report_tsv(&rows, &form.issues, ko)
+            fc::report_tsv_localized(&rows, &form.issues, Some(&language), false)
         };
         if let Err(error) = fs::write(&path, [&[0xEF, 0xBB, 0xBF][..], text.as_bytes()].concat()) {
-            self.system_box(&title, &error.to_string(), MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
+            let detail = fc::render_message(&self.catalog("NDR.UI_COMPARE_SAVE_FAILED", "비교 결과를 저장할 수 없습니다: {0}", "Could not save the comparison results: {0}"), &[&error.to_string()]);
+            self.system_box(&title, &detail, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
         }
     }
 
     /// Modal progress window (in place of FolderComparisonProgressWindow / SearchProgressWindow / sync FileOperationProgressWindow).
     /// A button or Esc (close) only requests cancel; the window closes when the job ends.
     pub(super) fn modal_progress_ui(&mut self, ctx: &egui::Context) {
-        let ko = self.language == "ko";
         let Some(job) = self.job.as_ref() else { return };
         let Some(modal) = job.modal.as_ref() else { return };
         let stopping = job.cancel.load(Ordering::Relaxed);
@@ -876,7 +847,7 @@ impl App {
         let (status, detail, fraction): (String, Option<String>, Option<f32>) = match &modal.kind {
             ModalKind::Message => (job.path.clone(), None, (job.bytes > 0).then(|| job.files.min(job.bytes) as f32 / job.bytes as f32)),
             ModalKind::Search => {
-                let counts = if ko { format!("검색 항목 {} · 결과 {}", n0(job.files as usize), n0(job.bytes as usize)) } else { format!("Scanned {} · Results {}", n0(job.files as usize), n0(job.bytes as usize)) };
+                let counts = fc::render_message(&self.catalog("NDR.UI_COMPARE_SEARCH_COUNTS", "검색 항목 {0} · 결과 {1}", "Scanned {0} · Results {1}"), &[&n0(job.files as usize), &n0(job.bytes as usize)]);
                 (format!("{counts}\n{}", job.path), None, None)
             }
 

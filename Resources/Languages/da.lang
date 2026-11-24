@@ -1,0 +1,462 @@
+; NDR language catalog. Untranslated entries use NDR English.
+
+[RES]
+YES=Ja(&Y)
+NO=&Nej
+OK=&OK
+CANCEL=Annuller(&C)
+RETRY=P&røv igen
+IGNORE=&Ignorer
+ABORT=&Stop
+CONTINUE=Fortsæt(&n)
+TITLE_ERROR=NDR-fejl
+TITLE_INFO=NDR-oplysninger
+FOLDERINFO=Mapper <c000000><b>%d</b></c> · Filer <c000000><b>%d</b></c> · <b>%s</b>
+DISKINFO_SHORT=<c000000><b>%s</b></c> ledig
+DISKINFO_LONG=<c000000><b>%s</b></c> ledig af <b>%s</b>
+SELECTED_INFO=<b>%d</b> valgt · <b>%s</b> bytes
+MSG_COPY_PREPARING=Forbereder kopiering…
+MSG_MOVE_PREPARING=Forbereder flytning…
+MSG_DEL_PREPARING=Forbereder sletning…
+COPYING=Kopierer elementer…
+MOVING=Flytter elementer…
+DELETING=Sletter elementer…
+EXTRACTING=Pakker filer ud…
+COMPRESSING=Pakker filer…
+READONLY=Skrivebeskyttet
+SYSTEM=System
+HIDDEN=Skjult
+FOLDER=Mappe
+FOLDERS=Mapper
+SELECT_FOLDER=Vælg en mappe
+DROPCOPY_CONFIRM=Kopiér disse %d elementer?
+DROPMOVE_CONFIRM=Flyt disse %d elementer?
+RENAME=Omdøb
+COPY=Kopiér
+MOVE=Flyt
+ADDTOARCHIVE=Føj til arkiv
+EXTRACT=Pak ud
+SEARCH=Søg
+STOP=Stop
+SEARCHRESULT=Søgeresultater
+SELECTDEST= — Vælg destination
+PAUSE=Sæt på pause
+RESUME=Genoptag
+TITLE_FILTER=Filfilter
+NETWORK=Netværk
+TITLE_NEWFOLDER=Ny mappe
+MSG_NEWFOLDER=Indtast et navn til den nye mappe.
+NEWFOLDER=Ny mappe
+MSG_RENAME=Indtast det nye navn til det markerede element.\n\n<b><c0000FF>%s</c></b> <c666666>(%d af %d)</c>
+TITLE_FILEOPERATION=Filhandling
+SELDEST_DRIVE=Drev
+SELDEST_WORKFOLDER=Arbejdsmapper
+FOLDER_EXISTS=Der findes allerede en mappe med det navn.
+SRCISDEST=Kilde og destination er de samme.
+MYCOMPUTER=Denne pc
+ARCHIVE=Arkiv
+DISKFREE=Ledig
+LOCATION=Placering
+FUNC_OPEN=Åbn
+FUNC_COPYTO=Kopiér
+FUNC_MOVETO=Flyt
+FUNC_DELETE=Slet
+FUNC_RECYCLEBIN=Flyt til papirkurven
+FUNC_RENAME=Omdøb
+FUNC_PROPERTIES=Egenskaber
+FUNC_FAVORITES=Favoritter
+FUNC_NEWFOLDER=Ny mappe
+FUNC_REFRESH=Opdatér
+FUNC_GOTODESKTOP=Skrivebord
+FUNC_GOTODOCUMENTS=Dokumenter
+FUNC_GOTOMUSIC=Musik
+FUNC_GOTOPICTURES=Billeder
+FUNC_GOTOVIDEOS=Videoer
+FUNC_GOTODOWNLOADS=Downloads
+FUNC_SELECTALL=Vælg alt
+FUNC_ADDTOARCHIVE=Føj til arkiv
+FUNC_EXTRACT=Pak ud
+FUNC_CLOSETAB=Luk fanen
+FUNC_SELECT=Vælg
+FUNC_DESELECTALL=Ryd markering
+FUNC_BACK=Tilbage
+FUNC_FORWARD=Frem
+FUNC_FOLDERTREE=Mappetræ
+FUNC_GOTOROOT=Rodmappe
+FUNC_GOTOPARENT=Overordnet mappe
+FUNC_EDITCOPY=Kopiér
+FUNC_EDITCUT=Klip
+FUNC_EDITPASTE=Sæt ind
+FUNC_INVERTSELECTION=Omvend markering
+FUNC_NEWTAB=Ny fane
+TODAY=I dag
+YESTERDAY=I går
+FIELD_NAME=Navn
+FIELD_EXT=Filtypenavn
+FIELD_LOCATION=Placering
+FIELD_SIZE=Størrelse
+FIELD_DATEMODIFIED=Ændret
+FIELD_ATTR=Attributter
+FIELD_DESC=Kommentar
+UPDATE=Opdateringer
+NAME=Navn
+ACCESS_DENIED=Adgang nægtet
+INVALID_PASSWORD=Forkert adgangskode
+DISKISFULL=Ikke nok diskplads
+CALCULATING=Beregner…
+ERROR=Fejl
+
+[formMain]
+ToolButton.tbFile=&Fil
+ToolButton.tbFolder=Mappe(&o)
+ToolButton.tbEdit=R&ediger
+ToolButton.tbView=Vis(&w)
+ToolButton.tbSystem=&System
+ToolButton.tbArchive=&Arkiv
+ToolButton.tbConnect=Forbi&nd
+ToolButton.tbTools=Værk&tøjer
+ToolButton.tbHelp=&Hjælp
+ToolButton.tbNewUpdateAvailable=NDR-opdatering tilgængelig
+Menu.miOpen=&Q. Åbn
+Menu.miCopyTo=&C. Kopiér til…
+Menu.miMoveTo=&V. Flyt til…
+Menu.miDelete=&D. Slet
+Menu.miRename=&R. Omdøb
+Menu.miProperties=&E. Egenskaber
+Menu.miExit=&X. Afslut
+Menu.miFolderTree=&T. Mappetræ
+Menu.miFavorites=&V. Favoritter
+Menu.miNewFolder=&C. Ny mappe
+Menu.miHistoryBack=&B. Tilbage
+Menu.miHistoryForward=&F. Frem
+Menu.miToParent=&X. Overordnet mappe
+Menu.miToRoot=&Z. Rodmappe
+Menu.miRefresh=&R. Opdatér
+Menu.miEditCopy=&C. Kopiér
+Menu.miEditCut=&X. Klip
+Menu.miEditPaste=&V. Sæt ind
+Menu.miSelect=&B. Vælg
+Menu.miSelectAll=&U. Vælg alt
+Menu.miInvertSelection=&I. Omvend markering
+Menu.miSearchFile=&E. Søg efter filer og mapper…
+Menu.miLanguage=&O. Sprog
+Menu.miNewTab=&B. Ny fane
+Menu.miListStyleAuto=&A. Automatisk
+Menu.miListStyleDetails=&D. Detaljer
+Menu.miListStyleThumbs=&T. Miniaturer
+Menu.miColAuto=&A. Automatisk
+Menu.miSortByName=&A. Navn
+Menu.miSortByExt=&E. Filtypenavn
+Menu.miSortBySize=&S. Størrelse
+Menu.miSortByTime=&T. Ændret
+Menu.miSortByAttr=&R. Attributter
+Menu.miSortByColor=&C. Farve
+Menu.miToDesktop=&D. Skrivebord
+Menu.miToDocuments=&W. Dokumenter
+Menu.miToPictures=&P. Billeder
+Menu.miToMusic=&M. Musik
+Menu.miToVideos=&V. Videoer
+Menu.miToDownloads=&S. Downloads
+Menu.miOptions=&O. Indstillinger
+Menu.miHelp=&H. Hjælp
+Menu.miShortcut=&S. Tastaturgenveje…
+Menu.miHomepage=&W. NDR-projektside
+Menu.miCheckUpdate=&U. Søg efter NDR-opdateringer…
+Menu.miAbout=&A. Om NDR
+Menu.mipOpenWith=&W. Åbn med…
+Menu.mipEditCopy=&C. Kopiér
+Menu.mipEditCut=&X. Klip
+Menu.mipEditPaste=&V. Sæt ind
+Menu.mipCopyTo=&Y. Kopiér til…
+Menu.mipMoveTo=&M. Flyt til…
+Menu.mipDelete=&D. Slet
+Menu.mipRename=&R. Omdøb
+Menu.mipAddToArchive=&A. Føj til arkiv
+Menu.mipProperties=&T. Egenskaber
+Menu.pmiCloseTab=Luk fanen(&C)
+Menu.pmiCloseAllTab=Luk &alle faner
+Menu.pmiNewTab=Ny fane(&t)
+Hint.bSelectAll=Vælg alle elementer
+Hint.bClearSelection=Ryd markering
+
+[formFileExists]
+Caption.lMsg=Der findes allerede et element med dette navn på destinationen:
+Caption.chkApplyAll=Brug v&alget for resten
+Caption.btnOverwrite=Overskriv(&w)
+Caption.btnRename=Omdøb(&R)
+Caption.btnReplace=&Erstat
+Caption.btnSkip=&Spring over
+
+[formGetText]
+Caption.btnOk=&OK
+Caption.btnCancel=Annuller(&C)
+
+[formDelConfirm]
+Form.Caption=Bekræft sletning
+Caption.btnAll=&Alle
+Caption.btnYes=Ja(&Y)
+Caption.btnNo=&Nej
+
+[formDelWarning]
+Caption.btnDelete=Slet(&D)
+Caption.btnYes=Ja(&Y)
+Caption.btnNo=&Nej
+Prompt.Recycle=Flyt de markerede elementer til papirkurven?
+Prompt.Permanent=Slet de markerede elementer permanent?
+
+[formProgress]
+Caption.btnCancel=Annuller(&C)
+
+[formOrgFavorites]
+Caption.btnCancel=Annuller(&C)
+Caption.btnSave=Gem(&S)
+Caption.btnRename=Omdøb(&R)
+Caption.btnUp=Flyt op(&u)
+Caption.btnDown=Flyt ned(&w)
+Caption.btnDelete=Slet(&D)
+
+[formChangeAttr]
+Caption.btnAll=A&lle
+Caption.btnSkip=Spring over(&k)
+Caption.btnOk=OK
+Caption.btnCancel=Annuller
+Caption.chkHidden=Skjult(&H)
+Caption.chkSystem=&System
+Caption.chkReadOnly=Sk&rivebeskyttet
+Caption.lDate=&Dato
+Caption.lTime=&Tid
+
+[formSaveList]
+Caption.btnSave=Gem
+Caption.btnCancel=Annuller
+Caption.chkAttributes=&Attributter
+Caption.chkDate=&Dato
+Caption.chkDescription=Komme&ntar
+Caption.chkExtension=Filtyp&enavn
+Caption.chkFileName=&Filnavn
+Caption.chkFileSize=&Størrelse
+Caption.chkTime=&Tid
+
+[formAddToArchive]
+Caption.btnCancel=Annuller
+Caption.btnOk=OK
+Caption.lPassword=Adgangskode(&P)
+Caption.lSecFormat=Format
+
+[formFileSplit]
+Caption.btnOk=OK
+Caption.btnCancel=Annuller
+
+[formFileJoin]
+Caption.btnAdd=Tilføj(&A)
+Caption.btnCancel=Annuller
+Caption.btnOk=OK
+Caption.btnDelete=Slet(&D)
+Caption.btnDown=Flyt ned(&w)
+Caption.btnUp=Flyt op(&u)
+
+[formCompareFolder]
+Caption.btnCancel=Annuller
+Caption.btnOk=OK
+Caption.btnSave=Gem
+Caption.btnStop=Stop
+
+[formShortcut]
+Form.Caption=Tastaturgenveje
+
+[formEditShortCut]
+Caption.btnOk=OK
+Caption.btnCancel=Annuller
+Caption.btnRemove=Fjern
+
+[formCleanup]
+Caption.btnClose=Luk
+Caption.btnOk=OK
+Caption.chkRecycleBin=Papi&rkurv
+Caption.btnAdd=Tilføj(&A)
+Caption.btnDelete=Slet(&D)
+Caption.btnSearch=&Søg
+
+[formSelectDest]
+Form.Caption=Vælg destination
+Caption.btnCancel=Annuller
+Caption.btnOk=OK
+Caption.btnTree=Gennemse mapper(&f)
+
+[formTreeScan]
+Caption.btnCancel=Annuller
+
+[formSearchFolder]
+Caption.btnSearch=Søg
+
+[formFTPQuickConnect]
+Caption.btnCancel=Annuller
+Caption.chkPassive=Brug pa&ssiv tilstand
+Caption.lPassword=Adgangskode(&w)
+Caption.lPort=&Port
+Caption.lURL=Servera&dresse
+Caption.lUser=Br&ugernavn
+
+[formPassword]
+Caption.btnOk=OK
+Caption.btnCancel=Annuller
+Caption.lUser=Brugernavn
+Caption.lPassword=Adgangskode
+
+[formFTPSiteManager]
+Caption.btnAdd=Tilføj(&A)
+Caption.btnCancel=Annuller
+Caption.btnDelete=Slet(&D)
+Caption.btnOk=OK
+Caption.chkPassive=Brug passi&v tilstand
+Caption.lName=&Navn
+Caption.lPassword=Adgangskode(&w)
+Caption.lPort=&Port
+Caption.lUser=Br&ugernavn
+
+[formFolderTree]
+Form.Caption=Gennemse mapper
+Caption.btnCancel=Annuller
+Caption.btnOk=OK
+ToolButton.tbFolder=Mapp&e
+ToolButton.tbFavorites=Fa&voritter
+ToolButton.tbSearch=Søg
+Hint.tbDesktop=Skrivebord
+Hint.tbMyDoc=Dokumenter
+Hint.tbMyPic=Billeder
+Hint.tbMyMusic=Musik
+Hint.tbMyVideo=Videoer
+Menu.miFolder=Mapp&e
+Menu.miDelete=&D. Slet
+Menu.miRename=&R. Omdøb
+Menu.miCreateNewFolder=&F. Ny mappe
+Menu.miProperties=&E. Egenskaber
+Menu.miClose=&C. Luk
+
+[formPreferences]
+Caption.btnApply=&Anvend
+Caption.btnOk=&OK
+Caption.btnCancel=Annuller
+TabSheet.tsColor=Farver
+TabSheet.tsTree=Mappetræ
+TabSheet.tsEtc=Andet
+Caption.lMyDocuments=Dokumenter
+Caption.lMyMusic=Musik
+Caption.lMyPictures=Billeder
+Caption.lMyVideos=Videoer
+Caption.lPathDownloads=Downloads
+
+[formAdvRename]
+Caption.btnCancel=Annuller
+Caption.btnUp=Flyt op
+Caption.btnDown=Flyt ned
+Caption.rbApplyToExt=Filtypenavn
+TabSheet.tsDelete=Fjern
+TabSheet.tsExtension=Filtypenavn
+
+[formEditFunction]
+Caption.btnCancel=Annuller
+Caption.btnOk=OK
+Caption.lName=Navn
+
+[formFTPAttributes]
+Caption.btnCancel=Annuller
+Caption.btnOk=OK
+Caption.btnAll=Alle
+Caption.btnSkip=Spring over
+Caption.chkGExecute=Kør(&x)
+Caption.chkURead=Læs(&e)
+Caption.chkUExecute=Kør(&c)
+
+[formRename]
+Caption.btnOK=OK
+Caption.btnCancel=Annuller
+
+[formChecksum]
+Caption.btnCopy=Kopiér(&C)
+
+[formNDRSearch]
+Caption.lName=Filnavn
+Caption.chkFiles=Filer
+Caption.chkFolders=Mapper
+Caption.CategoryDocuments=Dokumenter
+Caption.btnMoveUp=Flyt op
+Caption.btnMoveDown=Flyt ned
+Caption.btnRemove=Fjern
+Caption.btnAdd=Tilføj
+Status.Results=Søgeresultater
+
+[formNDRDestination]
+Button.Cancel=Annuller
+
+[NDRUpdate]
+Title=NDR-opdatering
+FeedHttpsRequired=Opdateringskilden skal bruge HTTPS.
+InvalidDownloadUrl=Opdateringskilden har ikke en gyldig HTTPS-downloadadresse.
+NewVersionAvailable=Version {0} er tilgængelig. Din version er {1}.
+OpenDownloadPage=Åbn downloadsiden?
+CurrentLatest=NDR er opdateret. ({0})
+RequestFailed=Kunne ikke kontakte opdateringsserveren. Kontrollér forbindelsen og opdateringskilden.
+RequestFailedStatus=Opdateringsserveren returnerede HTTP-status {0}.
+RequestTimedOut=Opdateringsserveren svarede ikke inden for 15 sekunder.
+
+[NDRSearch]
+Documents=Dokumenter
+
+[NDRVault]
+Password=Adgangskode
+OK=OK
+Cancel=Annuller
+NewFolderTitle=Ny mappe
+RenameTitle=Omdøb
+ProgressCancel=Annuller
+
+[NDR]
+OP_ARCHIVE_REPLACE_ARCHIVE=Erstat arkiv
+OP_JOIN_EXISTS=En fil med dette navn findes allerede. Ingen filer blev sammenføjet.\n{0}
+OP_TRANSFER_CANCEL=Annuller
+OP_TRANSFER_CANCELLED=Handlingen ({0}) blev annulleret. Fuldførte elementer blev bevaret.
+OP_TRANSFER_COPY_DONE=Kopiering fuldført
+OP_TRANSFER_DELETE_DONE=Sletning fuldført
+OP_TRANSFER_MOVE_DONE=Flytning fuldført
+OP_TRANSFER_OPERATION_FAILED=Handlingen mislykkedes
+OP_TRANSFER_PARTIAL=Handlingen blev delvist fuldført
+OP_TRANSFER_PARTIAL_DETAIL={0} fuldført · {1} fejl · {2} sprunget over
+OP_TRANSFER_PREPARING_THE_OPERATION=Forbereder handlingen…
+OP_TRANSFER_SIZE_UNAVAILABLE=Størrelsen er ikke tilgængelig
+OP_TRANSFER_VERB_COPY=kopiér
+OP_TRANSFER_VERB_MOVE=flyt
+OP_TRANSFER_VERB_PASTE=indsæt
+UI_STARTUP_FAILED=Starten mislykkedes. Åbn NDR igen.
+UI_STARTUP_LOADING=Forbereder mapper og indstillinger…
+UPD_CLOSE=Luk
+UPD_CONFIRM=Vil du hente og installere opdateringen og derefter genstarte NDR?\nDine indstillinger bevares.
+UPD_CURRENT_BUILD=Installeret build: {0}
+UPD_DOWNLOAD_ACTIVE=Henter NDR {0}…
+UPD_ERROR_DETAILS=Tekniske detaljer
+UPD_FAILED=Opdateringen mislykkedes.
+UPD_INSTALLER_START=Starter installationsprogrammet…
+UPD_INSTALL_CHECKING=Kontrollerer installationspakken…
+UPD_INSTALL_CLOSING=Kontrollerer, om NDR er lukket…
+UPD_INSTALL_EXTRACTING=Forbereder installationsfilerne…
+UPD_INSTALL_FAILURE=Opdateringen mislykkedes. Se update.log for detaljer.
+UPD_INSTALL_FAILURE_TITLE=Fejl ved opdatering af NDR
+UPD_INSTALL_FINISHED=Installationen er færdig. Genstarter NDR…
+UPD_INSTALL_HEADING=Installerer NDR-opdateringen
+UPD_INSTALL_TITLE=NDR-opdatering
+UPD_INSTALL_WAITING=Venter på, at NDR lukker…
+UPD_INSTALL_WRITING=Installerer NDR-filerne…
+UPD_LOCAL_BUILD=Lokalt build
+UPD_NEW_BUILD=Nyt build: {0}
+UPD_NONE=Der er ingen nyere opdatering.
+UPD_PREPARING=Forbereder pakken…
+UPD_RELEASE_FAILURE=Kunne ikke bekræfte udgivelsen på GitHub.
+UPD_RESTART_NOTE=NDR genstarter automatisk. Dine indstillinger bevares.
+UPD_STARTING=Download og integritetskontrol er færdige. Starter installationen.
+UPD_STEP_DOWNLOAD=Download
+UPD_STEP_INSTALL=Installér og genstart
+UPD_STEP_PREPARE=Forberedelse
+UPD_STEP_VERIFY=Integritet
+UPD_TITLE=NDR-opdatering
+UPD_VERIFIED_INIT=Installerer den bekræftede opdatering sikkert.
+UPD_VERIFY_HASH=Kontrollerer SHA-256…

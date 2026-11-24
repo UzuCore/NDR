@@ -318,9 +318,9 @@ impl Settings {
                 self.values.insert(key.into(), json!({}));
             }
         }
-        // Original default color table (default\nexusfile.col [Ext]): filled once before schema 4 when there are no extension colors at all.
+        // Fill the NDR defaults on first migration only; never replace an existing color map.
         if original_schema < 4 && self.values.get("ExtensionColors").and_then(Value::as_object).is_some_and(|m| m.is_empty()) {
-            let colors: Map<String, Value> = crate::listing::ORIGINAL_EXTENSION_COLORS
+            let colors: Map<String, Value> = crate::listing::DEFAULT_EXTENSION_COLORS
                 .iter()
                 .flat_map(|(color, extensions)| extensions.iter().map(move |e| (format!(".{e}"), json!(color))))
                 .collect();
@@ -572,8 +572,8 @@ mod tests {
         // Original default\nexusfile.ini skin=black, default\nexusfile.col [Ext].
         let fresh = Settings::default();
         assert_eq!(fresh.text("Theme", ""), "Black");
-        assert_eq!(fresh.values["ExtensionColors"][".zip"], "#808000");
-        assert_eq!(fresh.values["ExtensionColors"][".jpg"], "#D857EA");
+        assert_eq!(fresh.values["ExtensionColors"][".zip"], "#EFC961");
+        assert_eq!(fresh.values["ExtensionColors"][".jpg"], "#E0A7EE");
         assert_eq!(fresh.values["ExtensionColors"].as_object().unwrap().len(), 85);
         // Default pane (file list) font 16 px. Original points (MulDiv(size, 96, 72)): 12pt = 16px, 9pt = 12px.
         assert_eq!(fresh.values["ListFontSize"].as_f64(), Some(16.0));

@@ -1,0 +1,462 @@
+; NDR language catalog. Untranslated entries use NDR English.
+
+[RES]
+YES=Ναι(&Y)
+NO=Όχι(&N)
+OK=Εντάξει(&O)
+CANCEL=Ακύρωση(&C)
+RETRY=Νέα προσπάθεια(&R)
+IGNORE=Παράβλεψη(&I)
+ABORT=Διακοπή(&S)
+CONTINUE=Συνέχεια(&n)
+TITLE_ERROR=Σφάλμα NDR
+TITLE_INFO=Πληροφορίες NDR
+FOLDERINFO=Φάκελοι <c000000><b>%d</b></c> · Αρχεία <c000000><b>%d</b></c> · <b>%s</b>
+DISKINFO_SHORT=Διαθέσιμα <c000000><b>%s</b></c>
+DISKINFO_LONG=Διαθέσιμα <c000000><b>%s</b></c> από <b>%s</b>
+SELECTED_INFO=Επιλεγμένα: <b>%d</b> · <b>%s</b> byte
+MSG_COPY_PREPARING=Προετοιμασία αντιγραφής…
+MSG_MOVE_PREPARING=Προετοιμασία μετακίνησης…
+MSG_DEL_PREPARING=Προετοιμασία διαγραφής…
+COPYING=Αντιγραφή στοιχείων…
+MOVING=Μετακίνηση στοιχείων…
+DELETING=Διαγραφή στοιχείων…
+EXTRACTING=Αποσυμπίεση αρχείων…
+COMPRESSING=Συμπίεση αρχείων…
+READONLY=Μόνο για ανάγνωση
+SYSTEM=Σύστημα
+HIDDEN=Κρυφό
+FOLDER=Φάκελος
+FOLDERS=Φάκελοι
+SELECT_FOLDER=Επιλογή φακέλου
+DROPCOPY_CONFIRM=Αντιγραφή αυτών των %d στοιχείων;
+DROPMOVE_CONFIRM=Μετακίνηση αυτών των %d στοιχείων;
+RENAME=Μετονομασία
+COPY=Αντιγραφή
+MOVE=Μετακίνηση
+ADDTOARCHIVE=Προσθήκη στο συμπιεσμένο αρχείο
+EXTRACT=Αποσυμπίεση
+SEARCH=Αναζήτηση
+STOP=Διακοπή
+SEARCHRESULT=Αποτελέσματα αναζήτησης
+SELECTDEST= — Επιλογή προορισμού
+PAUSE=Παύση
+RESUME=Συνέχιση
+TITLE_FILTER=Φίλτρο αρχείων
+NETWORK=Δίκτυο
+TITLE_NEWFOLDER=Νέος φάκελος
+MSG_NEWFOLDER=Πληκτρολογήστε όνομα για τον νέο φάκελο.
+NEWFOLDER=Νέος φάκελος
+MSG_RENAME=Πληκτρολογήστε νέο όνομα για το επισημασμένο στοιχείο.\n\n<b><c0000FF>%s</c></b> <c666666>(%d από %d)</c>
+TITLE_FILEOPERATION=Λειτουργία αρχείων
+SELDEST_DRIVE=Μονάδες δίσκου
+SELDEST_WORKFOLDER=Φάκελοι εργασίας
+FOLDER_EXISTS=Υπάρχει ήδη φάκελος με αυτό το όνομα.
+SRCISDEST=Η προέλευση και ο προορισμός είναι ίδιοι.
+MYCOMPUTER=Αυτός ο υπολογιστής
+ARCHIVE=Συμπίεση
+DISKFREE=Ελεύθερα
+LOCATION=Τοποθεσία
+FUNC_OPEN=Άνοιγμα
+FUNC_COPYTO=Αντιγραφή
+FUNC_MOVETO=Μετακίνηση
+FUNC_DELETE=Διαγραφή
+FUNC_RECYCLEBIN=Μετακίνηση στον Κάδο ανακύκλωσης
+FUNC_RENAME=Μετονομασία
+FUNC_PROPERTIES=Ιδιότητες
+FUNC_FAVORITES=Αγαπημένα
+FUNC_NEWFOLDER=Νέος φάκελος
+FUNC_REFRESH=Ανανέωση
+FUNC_GOTODESKTOP=Επιφάνεια εργασίας
+FUNC_GOTODOCUMENTS=Έγγραφα
+FUNC_GOTOMUSIC=Μουσική
+FUNC_GOTOPICTURES=Εικόνες
+FUNC_GOTOVIDEOS=Βίντεο
+FUNC_GOTODOWNLOADS=Λήψεις
+FUNC_SELECTALL=Επιλογή όλων
+FUNC_ADDTOARCHIVE=Προσθήκη στο συμπιεσμένο αρχείο
+FUNC_EXTRACT=Αποσυμπίεση
+FUNC_CLOSETAB=Κλείσιμο καρτέλας
+FUNC_SELECT=Επιλογή
+FUNC_DESELECTALL=Κατάργηση επιλογής
+FUNC_BACK=Πίσω
+FUNC_FORWARD=Μπροστά
+FUNC_FOLDERTREE=Δέντρο φακέλων
+FUNC_GOTOROOT=Ριζικός φάκελος
+FUNC_GOTOPARENT=Γονικός φάκελος
+FUNC_EDITCOPY=Αντιγραφή
+FUNC_EDITCUT=Αποκοπή
+FUNC_EDITPASTE=Επικόλληση
+FUNC_INVERTSELECTION=Αντιστροφή επιλογής
+FUNC_NEWTAB=Νέα καρτέλα
+TODAY=Σήμερα
+YESTERDAY=Χθες
+FIELD_NAME=Όνομα
+FIELD_EXT=Επέκταση
+FIELD_LOCATION=Τοποθεσία
+FIELD_SIZE=Μέγεθος
+FIELD_DATEMODIFIED=Τροποποίηση
+FIELD_ATTR=Χαρακτηριστικά
+FIELD_DESC=Σχόλιο
+UPDATE=Ενημερώσεις
+NAME=Όνομα
+ACCESS_DENIED=Δεν επιτρέπεται η πρόσβαση
+INVALID_PASSWORD=Λανθασμένος κωδικός
+DISKISFULL=Ανεπαρκής χώρος δίσκου
+CALCULATING=Υπολογισμός…
+ERROR=Σφάλμα
+
+[formMain]
+ToolButton.tbFile=Αρχείο(&F)
+ToolButton.tbFolder=Φάκελος(&o)
+ToolButton.tbEdit=Επεξεργασία(&E)
+ToolButton.tbView=Προβολή(&w)
+ToolButton.tbSystem=Σύστημα(&S)
+ToolButton.tbArchive=Συμπίεση(&A)
+ToolButton.tbConnect=Σύνδεση(&n)
+ToolButton.tbTools=Εργαλεία(&T)
+ToolButton.tbHelp=Βοήθεια(&H)
+ToolButton.tbNewUpdateAvailable=Διαθέσιμη ενημέρωση NDR
+Menu.miOpen=&Q. Άνοιγμα
+Menu.miCopyTo=&C. Αντιγραφή σε…
+Menu.miMoveTo=&V. Μετακίνηση σε…
+Menu.miDelete=&D. Διαγραφή
+Menu.miRename=&R. Μετονομασία
+Menu.miProperties=&E. Ιδιότητες
+Menu.miExit=&X. Έξοδος
+Menu.miFolderTree=&T. Δέντρο φακέλων
+Menu.miFavorites=&V. Αγαπημένα
+Menu.miNewFolder=&C. Νέος φάκελος
+Menu.miHistoryBack=&B. Πίσω
+Menu.miHistoryForward=&F. Μπροστά
+Menu.miToParent=&X. Γονικός φάκελος
+Menu.miToRoot=&Z. Ριζικός φάκελος
+Menu.miRefresh=&R. Ανανέωση
+Menu.miEditCopy=&C. Αντιγραφή
+Menu.miEditCut=&X. Αποκοπή
+Menu.miEditPaste=&V. Επικόλληση
+Menu.miSelect=&B. Επιλογή
+Menu.miSelectAll=&U. Επιλογή όλων
+Menu.miInvertSelection=&I. Αντιστροφή επιλογής
+Menu.miSearchFile=&E. Αναζήτηση αρχείων και φακέλων…
+Menu.miLanguage=&O. Γλώσσα
+Menu.miNewTab=&B. Νέα καρτέλα
+Menu.miListStyleAuto=&A. Αυτόματα
+Menu.miListStyleDetails=&D. Λεπτομέρειες
+Menu.miListStyleThumbs=&T. Μικρογραφίες
+Menu.miColAuto=&A. Αυτόματα
+Menu.miSortByName=&A. Όνομα
+Menu.miSortByExt=&E. Επέκταση
+Menu.miSortBySize=&S. Μέγεθος
+Menu.miSortByTime=&T. Τροποποίηση
+Menu.miSortByAttr=&R. Χαρακτηριστικά
+Menu.miSortByColor=&C. Χρώμα
+Menu.miToDesktop=&D. Επιφάνεια εργασίας
+Menu.miToDocuments=&W. Έγγραφα
+Menu.miToPictures=&P. Εικόνες
+Menu.miToMusic=&M. Μουσική
+Menu.miToVideos=&V. Βίντεο
+Menu.miToDownloads=&S. Λήψεις
+Menu.miOptions=&O. Ρυθμίσεις
+Menu.miHelp=&H. Βοήθεια
+Menu.miShortcut=&S. Συντομεύσεις πληκτρολογίου…
+Menu.miHomepage=&W. Σελίδα έργου NDR
+Menu.miCheckUpdate=&U. Έλεγχος ενημερώσεων NDR…
+Menu.miAbout=&A. Σχετικά με το NDR
+Menu.mipOpenWith=&W. Άνοιγμα με…
+Menu.mipEditCopy=&C. Αντιγραφή
+Menu.mipEditCut=&X. Αποκοπή
+Menu.mipEditPaste=&V. Επικόλληση
+Menu.mipCopyTo=&Y. Αντιγραφή σε…
+Menu.mipMoveTo=&M. Μετακίνηση σε…
+Menu.mipDelete=&D. Διαγραφή
+Menu.mipRename=&R. Μετονομασία
+Menu.mipAddToArchive=&A. Προσθήκη στο συμπιεσμένο αρχείο
+Menu.mipProperties=&T. Ιδιότητες
+Menu.pmiCloseTab=Κλείσιμο καρτέλας(&C)
+Menu.pmiCloseAllTab=Κλείσιμο όλων των καρτελών(&a)
+Menu.pmiNewTab=Νέα καρτέλα(&t)
+Hint.bSelectAll=Επιλογή όλων των στοιχείων
+Hint.bClearSelection=Κατάργηση επιλογής
+
+[formFileExists]
+Caption.lMsg=Υπάρχει ήδη στοιχείο με αυτό το όνομα στον προορισμό:
+Caption.chkApplyAll=Χρήση της επιλογής και για τα υπόλοιπα(&A)
+Caption.btnOverwrite=Αντικατάσταση(&w)
+Caption.btnRename=Μετονομασία(&R)
+Caption.btnReplace=Αντικατάσταση(&e)
+Caption.btnSkip=Παράλειψη(&S)
+
+[formGetText]
+Caption.btnOk=Εντάξει(&O)
+Caption.btnCancel=Ακύρωση(&C)
+
+[formDelConfirm]
+Form.Caption=Επιβεβαίωση διαγραφής
+Caption.btnAll=Όλα(&A)
+Caption.btnYes=Ναι(&Y)
+Caption.btnNo=Όχι(&N)
+
+[formDelWarning]
+Caption.btnDelete=Διαγραφή(&D)
+Caption.btnYes=Ναι(&Y)
+Caption.btnNo=Όχι(&N)
+Prompt.Recycle=Μετακίνηση των επιλεγμένων στοιχείων στον Κάδο ανακύκλωσης;
+Prompt.Permanent=Οριστική διαγραφή των επιλεγμένων στοιχείων;
+
+[formProgress]
+Caption.btnCancel=Ακύρωση(&C)
+
+[formOrgFavorites]
+Caption.btnCancel=Ακύρωση(&C)
+Caption.btnSave=Αποθήκευση(&S)
+Caption.btnRename=Μετονομασία(&R)
+Caption.btnUp=Μετακίνηση πάνω(&u)
+Caption.btnDown=Μετακίνηση κάτω(&w)
+Caption.btnDelete=Διαγραφή(&D)
+
+[formChangeAttr]
+Caption.btnAll=Όλα(&l)
+Caption.btnSkip=Παράλειψη(&k)
+Caption.btnOk=Εντάξει
+Caption.btnCancel=Ακύρωση
+Caption.chkHidden=Κρυφό(&H)
+Caption.chkSystem=Σύστημα(&S)
+Caption.chkReadOnly=Μόνο για ανάγνωση(&R)
+Caption.lDate=Ημερομηνία(&D)
+Caption.lTime=Ώρα(&T)
+
+[formSaveList]
+Caption.btnSave=Αποθήκευση
+Caption.btnCancel=Ακύρωση
+Caption.chkAttributes=Χαρακτηριστικά(&A)
+Caption.chkDate=Ημερομηνία(&D)
+Caption.chkDescription=Σχόλιο(&n)
+Caption.chkExtension=Επέκταση(&E)
+Caption.chkFileName=Όνομα αρχείου(&F)
+Caption.chkFileSize=Μέγεθος(&S)
+Caption.chkTime=Ώρα(&T)
+
+[formAddToArchive]
+Caption.btnCancel=Ακύρωση
+Caption.btnOk=Εντάξει
+Caption.lPassword=Κωδικός πρόσβασης(&P)
+Caption.lSecFormat=Μορφή
+
+[formFileSplit]
+Caption.btnOk=Εντάξει
+Caption.btnCancel=Ακύρωση
+
+[formFileJoin]
+Caption.btnAdd=Προσθήκη(&A)
+Caption.btnCancel=Ακύρωση
+Caption.btnOk=Εντάξει
+Caption.btnDelete=Διαγραφή(&D)
+Caption.btnDown=Μετακίνηση κάτω(&w)
+Caption.btnUp=Μετακίνηση πάνω(&u)
+
+[formCompareFolder]
+Caption.btnCancel=Ακύρωση
+Caption.btnOk=Εντάξει
+Caption.btnSave=Αποθήκευση
+Caption.btnStop=Διακοπή
+
+[formShortcut]
+Form.Caption=Συντομεύσεις πληκτρολογίου
+
+[formEditShortCut]
+Caption.btnOk=Εντάξει
+Caption.btnCancel=Ακύρωση
+Caption.btnRemove=Αφαίρεση
+
+[formCleanup]
+Caption.btnClose=Κλείσιμο
+Caption.btnOk=Εντάξει
+Caption.chkRecycleBin=Κάδος ανακύκλωσης(&R)
+Caption.btnAdd=Προσθήκη(&A)
+Caption.btnDelete=Διαγραφή(&D)
+Caption.btnSearch=Αναζήτηση(&S)
+
+[formSelectDest]
+Form.Caption=Επιλογή προορισμού
+Caption.btnCancel=Ακύρωση
+Caption.btnOk=Εντάξει
+Caption.btnTree=Περιήγηση σε φακέλους(&f)
+
+[formTreeScan]
+Caption.btnCancel=Ακύρωση
+
+[formSearchFolder]
+Caption.btnSearch=Αναζήτηση
+
+[formFTPQuickConnect]
+Caption.btnCancel=Ακύρωση
+Caption.chkPassive=Χρήση παθητικής λειτουργίας(&s)
+Caption.lPassword=Κωδικός πρόσβασης(&w)
+Caption.lPort=Θύρα(&P)
+Caption.lURL=Διεύθυνση διακομιστή(&d)
+Caption.lUser=Όνομα χρήστη(&U)
+
+[formPassword]
+Caption.btnOk=Εντάξει
+Caption.btnCancel=Ακύρωση
+Caption.lUser=Όνομα χρήστη
+Caption.lPassword=Κωδικός πρόσβασης
+
+[formFTPSiteManager]
+Caption.btnAdd=Προσθήκη(&A)
+Caption.btnCancel=Ακύρωση
+Caption.btnDelete=Διαγραφή(&D)
+Caption.btnOk=Εντάξει
+Caption.chkPassive=Χρήση παθητικής λειτουργίας(&v)
+Caption.lName=Όνομα(&N)
+Caption.lPassword=Κωδικός πρόσβασης(&w)
+Caption.lPort=Θύρα(&P)
+Caption.lUser=Όνομα χρήστη(&U)
+
+[formFolderTree]
+Form.Caption=Περιήγηση σε φακέλους
+Caption.btnCancel=Ακύρωση
+Caption.btnOk=Εντάξει
+ToolButton.tbFolder=Φάκελος(&e)
+ToolButton.tbFavorites=Αγαπημένα(&v)
+ToolButton.tbSearch=Αναζήτηση
+Hint.tbDesktop=Επιφάνεια εργασίας
+Hint.tbMyDoc=Έγγραφα
+Hint.tbMyPic=Εικόνες
+Hint.tbMyMusic=Μουσική
+Hint.tbMyVideo=Βίντεο
+Menu.miFolder=Φάκελος(&e)
+Menu.miDelete=&D. Διαγραφή
+Menu.miRename=&R. Μετονομασία
+Menu.miCreateNewFolder=&F. Νέος φάκελος
+Menu.miProperties=&E. Ιδιότητες
+Menu.miClose=&C. Κλείσιμο
+
+[formPreferences]
+Caption.btnApply=Εφαρμογή(&A)
+Caption.btnOk=Εντάξει(&O)
+Caption.btnCancel=Ακύρωση
+TabSheet.tsColor=Χρώματα
+TabSheet.tsTree=Δέντρο φακέλων
+TabSheet.tsEtc=Άλλα
+Caption.lMyDocuments=Έγγραφα
+Caption.lMyMusic=Μουσική
+Caption.lMyPictures=Εικόνες
+Caption.lMyVideos=Βίντεο
+Caption.lPathDownloads=Λήψεις
+
+[formAdvRename]
+Caption.btnCancel=Ακύρωση
+Caption.btnUp=Μετακίνηση πάνω
+Caption.btnDown=Μετακίνηση κάτω
+Caption.rbApplyToExt=Επέκταση
+TabSheet.tsDelete=Αφαίρεση
+TabSheet.tsExtension=Επέκταση
+
+[formEditFunction]
+Caption.btnCancel=Ακύρωση
+Caption.btnOk=Εντάξει
+Caption.lName=Όνομα
+
+[formFTPAttributes]
+Caption.btnCancel=Ακύρωση
+Caption.btnOk=Εντάξει
+Caption.btnAll=Όλα
+Caption.btnSkip=Παράλειψη
+Caption.chkGExecute=Εκτέλεση(&x)
+Caption.chkURead=Ανάγνωση(&e)
+Caption.chkUExecute=Εκτέλεση(&c)
+
+[formRename]
+Caption.btnOK=Εντάξει
+Caption.btnCancel=Ακύρωση
+
+[formChecksum]
+Caption.btnCopy=Αντιγραφή(&C)
+
+[formNDRSearch]
+Caption.lName=Όνομα αρχείου
+Caption.chkFiles=Αρχεία
+Caption.chkFolders=Φάκελοι
+Caption.CategoryDocuments=Έγγραφα
+Caption.btnMoveUp=Μετακίνηση πάνω
+Caption.btnMoveDown=Μετακίνηση κάτω
+Caption.btnRemove=Αφαίρεση
+Caption.btnAdd=Προσθήκη
+Status.Results=Αποτελέσματα αναζήτησης
+
+[formNDRDestination]
+Button.Cancel=Ακύρωση
+
+[NDRUpdate]
+Title=Ενημέρωση NDR
+FeedHttpsRequired=Η πηγή ενημερώσεων πρέπει να χρησιμοποιεί HTTPS.
+InvalidDownloadUrl=Η πηγή ενημερώσεων δεν περιέχει έγκυρη διεύθυνση λήψης HTTPS.
+NewVersionAvailable=Διατίθεται η έκδοση {0}. Η τρέχουσα έκδοση είναι {1}.
+OpenDownloadPage=Άνοιγμα της σελίδας λήψης;
+CurrentLatest=Το NDR είναι ενημερωμένο. ({0})
+RequestFailed=Αδυναμία σύνδεσης με τον διακομιστή ενημερώσεων. Ελέγξτε τη σύνδεση και την πηγή ενημέρωσης.
+RequestFailedStatus=Ο διακομιστής ενημερώσεων επέστρεψε κωδικό HTTP {0}.
+RequestTimedOut=Ο διακομιστής ενημερώσεων δεν απάντησε εντός 15 δευτερολέπτων.
+
+[NDRSearch]
+Documents=Έγγραφα
+
+[NDRVault]
+Password=Κωδικός πρόσβασης
+OK=Εντάξει
+Cancel=Ακύρωση
+NewFolderTitle=Νέος φάκελος
+RenameTitle=Μετονομασία
+ProgressCancel=Ακύρωση
+
+[NDR]
+OP_ARCHIVE_REPLACE_ARCHIVE=Αντικατάσταση αρχείου συμπίεσης
+OP_JOIN_EXISTS=Υπάρχει ήδη αρχείο με αυτό το όνομα. Δεν ενώθηκε κανένα αρχείο.\n{0}
+OP_TRANSFER_CANCEL=Ακύρωση
+OP_TRANSFER_CANCELLED=Η λειτουργία ({0}) ακυρώθηκε. Οι ολοκληρωμένες αλλαγές διατηρήθηκαν.
+OP_TRANSFER_COPY_DONE=Η αντιγραφή ολοκληρώθηκε
+OP_TRANSFER_DELETE_DONE=Η διαγραφή ολοκληρώθηκε
+OP_TRANSFER_MOVE_DONE=Η μετακίνηση ολοκληρώθηκε
+OP_TRANSFER_OPERATION_FAILED=Η λειτουργία απέτυχε
+OP_TRANSFER_PARTIAL=Η λειτουργία ολοκληρώθηκε μερικώς
+OP_TRANSFER_PARTIAL_DETAIL=Ολοκληρώθηκαν: {0} · σφάλματα: {1} · παραλείφθηκαν: {2}
+OP_TRANSFER_PREPARING_THE_OPERATION=Προετοιμασία λειτουργίας…
+OP_TRANSFER_SIZE_UNAVAILABLE=Μη διαθέσιμο μέγεθος
+OP_TRANSFER_VERB_COPY=αντιγραφή
+OP_TRANSFER_VERB_MOVE=μετακίνηση
+OP_TRANSFER_VERB_PASTE=επικόλληση
+UI_STARTUP_FAILED=Η εκκίνηση απέτυχε. Ανοίξτε ξανά το NDR.
+UI_STARTUP_LOADING=Προετοιμασία φακέλων και ρυθμίσεων…
+UPD_CLOSE=Κλείσιμο
+UPD_CONFIRM=Να γίνει λήψη και εγκατάσταση της ενημέρωσης και κατόπιν επανεκκίνηση του NDR;\nΟι ρυθμίσεις σας θα διατηρηθούν.
+UPD_CURRENT_BUILD=Εγκατεστημένη έκδοση: {0}
+UPD_DOWNLOAD_ACTIVE=Λήψη του NDR {0}…
+UPD_ERROR_DETAILS=Τεχνικές λεπτομέρειες
+UPD_FAILED=Η ενημέρωση απέτυχε.
+UPD_INSTALLER_START=Εκκίνηση του προγράμματος εγκατάστασης…
+UPD_INSTALL_CHECKING=Έλεγχος του πακέτου εγκατάστασης…
+UPD_INSTALL_CLOSING=Έλεγχος αν έχει κλείσει το NDR…
+UPD_INSTALL_EXTRACTING=Προετοιμασία των αρχείων εγκατάστασης…
+UPD_INSTALL_FAILURE=Η ενημέρωση απέτυχε. Δείτε το update.log για λεπτομέρειες.
+UPD_INSTALL_FAILURE_TITLE=Σφάλμα ενημέρωσης NDR
+UPD_INSTALL_FINISHED=Η εγκατάσταση ολοκληρώθηκε. Επανεκκίνηση του NDR…
+UPD_INSTALL_HEADING=Εγκατάσταση ενημέρωσης NDR
+UPD_INSTALL_TITLE=Ενημέρωση NDR
+UPD_INSTALL_WAITING=Αναμονή για το κλείσιμο του NDR…
+UPD_INSTALL_WRITING=Εγκατάσταση των αρχείων του NDR…
+UPD_LOCAL_BUILD=Τοπική έκδοση
+UPD_NEW_BUILD=Νέα έκδοση: {0}
+UPD_NONE=Δεν υπάρχει νεότερη ενημέρωση.
+UPD_PREPARING=Προετοιμασία πακέτου…
+UPD_RELEASE_FAILURE=Αδυναμία επαλήθευσης της έκδοσης στο GitHub.
+UPD_RESTART_NOTE=Το NDR επανεκκινείται αυτόματα. Οι ρυθμίσεις σας διατηρούνται.
+UPD_STARTING=Η λήψη και ο έλεγχος ακεραιότητας ολοκληρώθηκαν. Έναρξη εγκατάστασης.
+UPD_STEP_DOWNLOAD=Λήψη
+UPD_STEP_INSTALL=Εγκατάσταση και επανεκκίνηση
+UPD_STEP_PREPARE=Προετοιμασία
+UPD_STEP_VERIFY=Ακεραιότητα
+UPD_TITLE=Ενημέρωση NDR
+UPD_VERIFIED_INIT=Ασφαλής εγκατάσταση της επαληθευμένης ενημέρωσης.
+UPD_VERIFY_HASH=Επαλήθευση SHA-256…

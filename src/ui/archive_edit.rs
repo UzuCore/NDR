@@ -39,9 +39,7 @@ impl App {
     }
 
     pub(super) fn archive_read_only_notice(&mut self) {
-        self.notice(
-            "이 압축 형식은 고칠 수 없습니다. 항목 추가·삭제·이름 변경은 단일 ZIP·7z·TAR에서만 지원합니다.",
-            "This archive format cannot be changed. Only single-volume ZIP, 7z and TAR support adding, deleting or renaming entries.",
+        self.notice_operation(&self.language_pack.text("NDR.OP_ARCHIVE_THIS_ARCHIVE_FORMAT_CANNOT_BE_CHANGED_ONLY_SINGLE_VOLUME", "This archive format cannot be changed. Only single-volume ZIP, 7z and TAR support adding, deleting or renaming entries."),
         );
     }
 
@@ -58,7 +56,7 @@ impl App {
         let Some(location) = self.panes[pane].archive.clone() else { return };
         let file = ndr::archive::first_volume_path(&location.file);
         if !ndr::archive::bundled_can_browse(&file) {
-            return self.warn("이 압축 형식은 지원하지 않아 복사할 수 없습니다.", "This archive format is unsupported; clipboard copy cannot start.");
+            return self.warn_operation(&self.language_pack.text("NDR.OP_ARCHIVE_THIS_ARCHIVE_FORMAT_IS_UNSUPPORTED_CLIPBOARD_COPY_CANNOT_START", "This archive format is unsupported; clipboard copy cannot start."));
         }
         if moving && !ndr::archive::can_modify(&file) {
             return self.archive_read_only_notice();
@@ -74,7 +72,7 @@ impl App {
         ));
         let tx = self.async_tx.clone();
         let password = (!location.password.is_empty()).then(|| location.password.clone());
-        let title = if moving { self.tr("압축에서 잘라내기", "Cut from archive") } else { self.tr("압축에서 복사", "Copy from archive") }.into_owned();
+        let title = if moving { self.language_pack.text("NDR.OP_ARCHIVE_CUT_FROM_ARCHIVE", "Cut from archive") } else { self.language_pack.text("NDR.OP_ARCHIVE_COPY_FROM_ARCHIVE", "Copy from archive") };
         self.archive_edit_task(title, &file.clone(), move |events, cancel| {
             std::fs::create_dir_all(&stage).map_err(|e| e.to_string())?;
             let prepared = (|| {
@@ -114,7 +112,7 @@ impl App {
     pub(super) fn archive_clipboard_ready(&mut self, location: ArchiveLocation, keys: Vec<String>, stage: PathBuf, sequence_before: u32, moving: bool) {
         if !cfg!(test) && native::clipboard_sequence_number() != sequence_before {
             let _ = std::fs::remove_dir_all(stage);
-            self.status = self.tr("클립보드가 변경되어 압축파일 복사를 취소했습니다.", "The clipboard changed while extracting; archive copy was cancelled.").into_owned();
+            self.status = self.language_pack.text("NDR.OP_ARCHIVE_THE_CLIPBOARD_CHANGED_WHILE_EXTRACTING_ARCHIVE_COPY_WAS_CANCELLED", "The clipboard changed while extracting; archive copy was cancelled.");
             return;
         }
         let files: Vec<PathBuf> = keys.iter().map(|key| stage.join(key.rsplit('/').next().unwrap_or(key))).collect();
@@ -133,10 +131,10 @@ impl App {
         self.clipboard = None;
         self.clipboard_sequence = None;
         self.status = if moving {
-            self.tr("압축파일의 선택 항목을 잘라냈습니다. 붙여넣으면 원본에서 제거합니다.", "Archive items cut. Pasting in NDR moves them from the archive.")
+            self.language_pack.text("NDR.OP_ARCHIVE_ARCHIVE_ITEMS_CUT_PASTING_IN_NDR_MOVES_THEM_FROM", "Archive items cut. Pasting in NDR moves them from the archive.")
         } else {
-            self.tr("압축파일의 선택 항목을 복사했습니다.", "Archive items copied to the clipboard.")
-        }.into_owned();
+            self.language_pack.text("NDR.OP_ARCHIVE_ARCHIVE_ITEMS_COPIED_TO_THE_CLIPBOARD", "Archive items copied to the clipboard.")
+        };
         self.archive_clipboard_notice = Some((Instant::now(), moving));
         self.egui_ctx.request_repaint();
     }
@@ -164,7 +162,7 @@ impl App {
 
     pub(super) fn paste_archive_clipboard(&mut self, pane: usize, clip: ArchiveClipboard) {
         if self.panes[pane].remote.is_some() || super::panes::is_drives(&self.panes[pane].path) {
-            self.notice("이 위치에는 압축파일의 내용을 붙여넣을 수 없습니다.", "Archive clipboard items cannot be pasted to this location.");
+            self.notice_operation(&self.language_pack.text("NDR.OP_ARCHIVE_ARCHIVE_CLIPBOARD_ITEMS_CANNOT_BE_PASTED_TO_THIS_LOCATION", "Archive clipboard items cannot be pasted to this location."));
             return;
         }
         let into = if self.panes[pane].archive.is_some() {
@@ -191,7 +189,7 @@ impl App {
             if choice == DeleteWarningChoice::No {
                 return;
             }
-            let title = app.tr("압축 안 항목 삭제", "Delete from archive").into_owned();
+            let title = app.language_pack.text("NDR.OP_ARCHIVE_DELETE_FROM_ARCHIVE", "Delete from archive");
             app.archive_edit_task(title, &file.clone(), move |_, cancel| ndr::archive::delete_entries(&file, &keys, password.as_deref(), cancel));
         });
     }
@@ -211,7 +209,7 @@ impl App {
             let (file, _, password) = archive;
             let focus = renames.last().map(|(_, to)| to.rsplit('/').next().unwrap_or(to).to_owned());
             self.pending_focus[pane] = focus;
-            let title = self.tr("압축 안 이름 바꾸기", "Rename in archive").into_owned();
+            let title = self.language_pack.text("NDR.OP_ARCHIVE_RENAME_IN_ARCHIVE", "Rename in archive");
             return self.archive_edit_task(title, &file.clone(), move |_, cancel| {
                 // Rename every selected entry in one transaction. Otherwise a
                 // later rename failure leaves earlier items permanently changed.
@@ -243,7 +241,7 @@ impl App {
         self.prompt_file_name(&title, &message, &names::new_folder_default_name(), move |app, value, _| {
             let Some(name) = value.filter(|v| !v.trim().is_empty()) else { return };
             app.pending_focus[pane] = Some(name.clone());
-            let title = app.tr("압축 안 새 폴더", "New folder in archive").into_owned();
+            let title = app.language_pack.text("NDR.OP_ARCHIVE_NEW_FOLDER_IN_ARCHIVE", "New folder in archive");
             app.archive_edit_task(title, &file.clone(), move |_, cancel| ndr::archive::add_folder(&file, &prefix, &name, password.as_deref(), cancel));
         });
     }
@@ -256,7 +254,7 @@ impl App {
         self.prompt_file_name(&title, &message, "", move |app, value, _| {
             let Some(name) = value.filter(|v| !v.trim().is_empty()) else { return };
             app.pending_focus[pane] = Some(name.clone());
-            let title = app.tr("압축 안 빈 파일", "Empty file in archive").into_owned();
+            let title = app.language_pack.text("NDR.OP_ARCHIVE_EMPTY_FILE_IN_ARCHIVE", "Empty file in archive");
             app.archive_edit_task(title, &file.clone(), move |_, cancel| {
                 let holder = std::env::temp_dir().join(format!("ndr-empty-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos())));
                 std::fs::create_dir_all(&holder).map_err(|e| e.to_string())?;
@@ -288,9 +286,9 @@ impl App {
             return;
         }
         if sources.iter().any(|s| ndr::fsops::same_or_inside(&file, s)) {
-            return self.notice("압축 파일을 그 자신 안에 넣을 수 없습니다.", "An archive cannot be added into itself.");
+            return self.notice_operation(&self.language_pack.text("NDR.OP_ARCHIVE_AN_ARCHIVE_CANNOT_BE_ADDED_INTO_ITSELF", "An archive cannot be added into itself."));
         }
-        let title = if moving { self.tr("압축 안으로 이동", "Move into archive") } else { self.tr("압축 안으로 복사", "Copy into archive") }.into_owned();
+        let title = if moving { self.language_pack.text("NDR.OP_ARCHIVE_MOVE_INTO_ARCHIVE", "Move into archive") } else { self.language_pack.text("NDR.OP_ARCHIVE_COPY_INTO_ARCHIVE", "Copy into archive") };
         self.archive_edit_task(title, &file.clone(), move |events, cancel| {
             let mut conflicts = |source: &Path, entry: &ndr::archive::ArchiveEntry| ask_add_conflict(events, cancel, &file, source, entry);
             let skipped = ndr::archive::add_entries_with(&file, &prefix, &sources, password.as_deref(), cancel, &mut conflicts)?;
@@ -326,12 +324,12 @@ impl App {
         let same_archive = into.as_ref().is_some_and(|(target, _, _)| ndr::names::equals_ignore_case(&file.to_string_lossy(), &target.to_string_lossy()));
         if same_archive {
             let prefix = &into.as_ref().expect("same-archive target").1;
-            if let Err(reason) = ndr::archive::validate_same_archive_transfer(&keys, prefix) {
-                return self.notice("같은 압축파일에서 자기 자신이나 하위 폴더로 복사·이동할 수 없습니다.", &reason);
+            if ndr::archive::validate_same_archive_transfer(&keys, prefix).is_err() {
+                return self.notice_operation(&self.language_pack.text("NDR.OP_ARCHIVE_INVALID_SELF_TRANSFER", "An item cannot be copied or moved onto itself or into one of its descendants inside the same archive."));
             }
         }
         let password = (!location.password.is_empty()).then(|| location.password.clone());
-        let title = if moving { self.tr("압축에서 이동", "Move out of archive") } else { self.tr("압축에서 복사", "Copy out of archive") }.into_owned();
+        let title = if moving { self.language_pack.text("NDR.OP_ARCHIVE_MOVE_OUT_OF_ARCHIVE", "Move out of archive") } else { self.language_pack.text("NDR.OP_ARCHIVE_COPY_OUT_OF_ARCHIVE", "Copy out of archive") };
         self.archive_edit_task(title, &file.clone(), move |events, cancel| {
             // Destinations that may have been skipped at a conflict (skip, overwrite older). Those items stay in the archive even on a move (a folder keeps the whole folder).
             let mut held: Vec<PathBuf> = Vec::new();

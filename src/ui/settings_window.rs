@@ -50,6 +50,8 @@ pub(super) struct SettingsForm {
     button_captions: [String; 3],
     /// Group and notice texts of the original TfPreferences (used when drawing pages at original positions).
     captions: std::collections::HashMap<&'static str, String>,
+    browse_folder: String,
+    browse_program: String,
     /// Original tsFunctionKey lvFunctionKey (F1-F12, ^F1-^F11).
     pub function_keys: super::function_key_editor::FunctionKeyEditorForm,
 }
@@ -129,26 +131,13 @@ pub(super) enum SettingsAction {
     Cancel,
 }
 
-/// C# LanguageService.Names (21 languages).
-const LANGUAGE_NAMES: [(&str, &str); 21] = [
-    ("ca", "Català"), ("cs", "Čeština"), ("de", "Deutsch"), ("en", "English"), ("es", "Español"), ("fi", "Suomi"), ("fr", "Français"),
-    ("hu", "Magyar"), ("it", "Italiano"), ("ja", "日本語"), ("ko", "한국어"), ("nl", "Nederlands"), ("pl", "Polski"), ("pt-BR", "Português (Brasil)"),
-    ("ru", "Русский"), ("sk", "Slovenčina"), ("sv", "Svenska"), ("tr", "Türkçe"), ("uk", "Українська"), ("zh-CN", "简体中文"), ("zh-TW", "繁體中文"),
-];
-
-/// C# AvailableLanguages: the Languages\*.lang files with known names, sorted by name.
+/// A language appears only when the corresponding catalog is available.
 pub(super) fn available_languages(resources: &Path) -> Vec<(String, String)> {
-    let mut list: Vec<(String, String)> = std::fs::read_dir(resources.join("Languages"))
-        .map(|dir| {
-            dir.filter_map(Result::ok)
-                .filter_map(|e| {
-                    let path = e.path();
-                    let stem = path.extension().filter(|x| x.eq_ignore_ascii_case("lang")).and(path.file_stem())?.to_string_lossy().into_owned();
-                    LANGUAGE_NAMES.iter().find(|(code, _)| code.eq_ignore_ascii_case(&stem)).map(|(code, name)| ((*code).to_owned(), (*name).to_owned()))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    let codes = compat::available_codes(&resources.join("Languages"));
+    let mut list: Vec<_> = compat::BUILTIN_LANGUAGES.iter()
+        .filter(|(code, _)| codes.iter().any(|file| file.eq_ignore_ascii_case(code)))
+        .map(|(code, name)| ((*code).to_owned(), (*name).to_owned()))
+        .collect();
     list.sort_by(|a, b| a.1.cmp(&b.1));
     list
 }
@@ -193,7 +182,7 @@ fn relabel(mut row: Row, text: String) -> Row {
 /// Page order of the original TfPreferences (DFM -Tree): tsDisplay, tsTree, tsColor, tsOption, tsExtProgram, tsPath, tsFunctionKey, tsEtc.
 /// Rows with the same setting in the original move to that page, order and text ([formPreferences] Caption.*, ComboBox.*); rows only in the C# version stay on the final "NDR" page
 /// in their original order (headers and notices with no remaining rows are dropped).
-fn original_pages(built: Vec<Vec<Row>>, language: &compat::Language, ko: bool) -> (Vec<String>, Vec<Vec<Row>>) {
+fn original_pages(built: Vec<Vec<Row>>, language: &compat::Language, _ko: bool) -> (Vec<String>, Vec<Vec<Row>>) {
     let lang = |key: &str, fallback: &str| language.text(&format!("formPreferences.{key}"), fallback);
     let mut pool: Vec<Option<Row>> = built.into_iter().flatten().map(Some).collect();
     let mut take = |key: &str, label: Option<String>| -> Option<Row> {
@@ -322,7 +311,7 @@ fn original_pages(built: Vec<Vec<Row>>, language: &compat::Language, ko: bool) -
         Some(Row::Note(format!(
             "{} {}",
             lang("Caption.lApplyAfterRestart", "(Restart required)"),
-            t(ko, "Win+문자 조합을 사용할 수 없으면 Win+Shift+문자 조합으로 등록을 시도합니다.", "If Win+letter is unavailable, NDR tries Win+Shift+letter.")
+            language.localized("NDR.UI_SETTINGS_SHORTCUT_FALLBACK", "Win+문자 조합을 사용할 수 없으면 Win+Shift+문자 조합으로 등록을 시도합니다.", "If Win+letter is unavailable, NDR tries Win+Shift+letter.")
         ))),
         take("CheckForUpdatesOnStartup", l("Caption.chkCheckUpdate", "Check update when program starts")),
         take("UseDescriptionFile", l("Caption.chkUseION", "Read comment file \"descript.ion\" ")),
@@ -410,20 +399,20 @@ impl SettingsForm {
         };
         // General.
         let mut general = vec![
-            check("DualPaneMode", t(ko, "두 패널 표시", "Show two panes"), true),
-            check("StartWithRightPaneActive", t(ko, "시작할 때 오른쪽 패널 활성화", "Activate the right pane at startup"), false),
-            check("UseTabs", t(ko, "탭 사용", "Use tabs"), true),
-            check("ShowToolBar", t(ko, "주요 도구 모음 표시", "Show the main toolbar"), true),
-            check("ShowFunctionBar", t(ko, "기능키 표시", "Show function keys"), true),
-            check("ShowVerticalBar", t(ko, "수직 도구 모음 표시(작업 폴더 단추, FTP 전송 막대)", "Show the vertical bar (work folder buttons, FTP transfer bar)"), true),
-            check("ShowAddressBar", t(ko, "경로 표시", "Show the address bar"), true),
-            check("ShowIcons", t(ko, "파일 아이콘 표시", "Show file icons"), true),
+            check("DualPaneMode", language.localized("NDR.UI_SETTINGS_SHOW_TWO_PANES_FF5C36", "두 패널 표시", "Show two panes"), true),
+            check("StartWithRightPaneActive", language.localized("NDR.UI_SETTINGS_ACTIVATE_THE_RIGHT_PANE_ACE5C1", "시작할 때 오른쪽 패널 활성화", "Activate the right pane at startup"), false),
+            check("UseTabs", language.localized("NDR.UI_SETTINGS_USE_TABS_0B7EE8", "탭 사용", "Use tabs"), true),
+            check("ShowToolBar", language.localized("NDR.UI_SETTINGS_SHOW_THE_MAIN_TOOLBAR_1B9356", "주요 도구 모음 표시", "Show the main toolbar"), true),
+            check("ShowFunctionBar", language.localized("NDR.UI_SETTINGS_SHOW_FUNCTION_KEYS_345DD2", "기능키 표시", "Show function keys"), true),
+            check("ShowVerticalBar", language.localized("NDR.UI_SETTINGS_SHOW_THE_VERTICAL_BAR_581B30", "수직 도구 모음 표시(작업 폴더 단추, FTP 전송 막대)", "Show the vertical bar (work folder buttons, FTP transfer bar)"), true),
+            check("ShowAddressBar", language.localized("NDR.UI_SETTINGS_SHOW_THE_ADDRESS_BAR_F11EFC", "경로 표시", "Show the address bar"), true),
+            check("ShowIcons", language.localized("NDR.UI_SETTINGS_SHOW_FILE_ICONS_29244C", "파일 아이콘 표시", "Show file icons"), true),
             check("UseOverlayIcons", lang("Caption.chkOverlayIcons", if ko { "셸 아이콘 오버레이 표시" } else { "Show Shell icon overlays" }), true),
-            check("ConfirmDelete", t(ko, "삭제 전에 확인", "Confirm before deleting"), true),
-            check("ConfirmDragDrop", t(ko, "드래그 작업 확인", "Confirm drag operations"), true),
+            check("ConfirmDelete", language.localized("NDR.UI_SETTINGS_CONFIRM_BEFORE_DELETING_C13428", "삭제 전에 확인", "Confirm before deleting"), true),
+            check("ConfirmDragDrop", language.localized("NDR.UI_SETTINGS_CONFIRM_DRAG_OPERATIONS_758376", "드래그 작업 확인", "Confirm drag operations"), true),
             check("SelectFolders", lang("Caption.chkSelectAllFolder", "Select folders when execute select all function"), false),
             check("ShowDeleteButton", lang("Caption.chkShowDeleteButton", "Show 'Delete' button on delete confirmation dialog"), true),
-            Row::Check { key: "ShowDeleteToolbarButton".into(), label: t(ko, "NDR 삭제 도구 버튼 표시", "Show the NDR delete toolbar button"), value: draft.values.get("ShowDeleteToolbarButton").and_then(Value::as_bool).unwrap_or(true) },
+            Row::Check { key: "ShowDeleteToolbarButton".into(), label: language.localized("NDR.UI_SETTINGS_SHOW_THE_NDR_DELETE_F59DB8", "NDR 삭제 도구 버튼 표시", "Show the NDR delete toolbar button"), value: draft.values.get("ShowDeleteToolbarButton").and_then(Value::as_bool).unwrap_or(true) },
         ];
         let mut delete_labels: Vec<String> = lang("ComboBox.cbDefDelBtn", "Delete;Yes;No").split(';').map(|s| s.trim().to_owned()).collect();
         if delete_labels.len() != 3 {
@@ -432,40 +421,40 @@ impl SettingsForm {
         let delete_default = draft.values.get("DefaultDeleteButton").and_then(Value::as_i64).unwrap_or(2).clamp(0, 2).to_string();
         general.push(choice_row("DefaultDeleteButton", lang("Caption.lDefDelBtn", "Default button for a delete warning dialog:"), delete_labels.into_iter().enumerate().map(|(i, l)| (i.to_string(), l)).collect(), &delete_default));
         general.extend([
-            check("UseRecycleBin", t(ko, "기본 삭제는 휴지통 사용", "Delete to the Recycle Bin by default"), true),
+            check("UseRecycleBin", language.localized("NDR.UI_SETTINGS_DELETE_TO_THE_RECYCLE_B00473", "기본 삭제는 휴지통 사용", "Delete to the Recycle Bin by default"), true),
             check("UseDescriptionFile", lang("Caption.chkUseION", "Read comment file \"descript.ion\""), true),
-            check("UseContentComparison", t(ko, "폴더 비교에서 파일 내용 확인", "Compare file contents in folder comparison"), true),
-            check("ShowHiddenFoldersInTree", t(ko, "폴더 트리에서 숨김 폴더 표시", "Show hidden folders in the folder tree"), false),
-            check("ShowFolderTreeIcons", t(ko, "폴더 트리 아이콘 표시", "Show folder tree icons"), true),
-            check("PlayCompletionSound", t(ko, "작업 완료 소리", "Play a sound when an operation completes"), true),
-            check("ShowCompletionToast", t(ko, "작업 완료 알림 표시", "Show on-screen notifications when operations complete"), true),
+            check("UseContentComparison", language.localized("NDR.UI_SETTINGS_COMPARE_FILE_CONTENTS_IN_F5A20C", "폴더 비교에서 파일 내용 확인", "Compare file contents in folder comparison"), true),
+            check("ShowHiddenFoldersInTree", language.localized("NDR.UI_SETTINGS_SHOW_HIDDEN_FOLDERS_IN_7A053E", "폴더 트리에서 숨김 폴더 표시", "Show hidden folders in the folder tree"), false),
+            check("ShowFolderTreeIcons", language.localized("NDR.UI_SETTINGS_SHOW_FOLDER_TREE_ICONS_E752D8", "폴더 트리 아이콘 표시", "Show folder tree icons"), true),
+            check("PlayCompletionSound", language.localized("NDR.UI_SETTINGS_PLAY_A_SOUND_WHEN_FFCBEC", "작업 완료 소리", "Play a sound when an operation completes"), true),
+            check("ShowCompletionToast", language.localized("NDR.UI_SETTINGS_SHOW_ON_SCREEN_NOTIFICATIONS_462688", "작업 완료 알림 표시", "Show on-screen notifications when operations complete"), true),
             check("PlayWaveInProgram", lang("Caption.chkPlayWave", "Play .wav(Wave Sound) file in this program."), true),
-            check("UseSingleInstance", t(ko, "한 번에 NDR 하나만 실행", "Run only one NDR at a time"), false),
+            check("UseSingleInstance", language.localized("NDR.UI_SETTINGS_RUN_ONLY_ONE_NDR_4792BB", "한 번에 NDR 하나만 실행", "Run only one NDR at a time"), false),
         ]);
         let activation = format!("{} {}", lang("Caption.lActivateKey", "Program activation shortcut:").trim(), lang("Caption.lWinKey", "Windows key +").trim());
         general.push(Row::Text { key: "ExplorerShortcutKey".into(), label: activation, value: text_of(&draft, "ExplorerShortcutKey"), read_only: false, max: 1, upper: true });
-        general.push(Row::Note(t(ko, "원본처럼 Win+문자로만 등록합니다. 다른 프로그램이 그 조합을 쓰고 있으면 등록하지 않고 안내합니다.",
-            "Like the original, only Win+letter is registered. If another program uses it, nothing is registered and a message is shown.")));
+        general.push(Row::Note(language.localized("NDR.UI_SETTINGS_LIKE_THE_ORIGINAL_ONLY_929B45", "원본처럼 Win+문자로만 등록합니다. 다른 프로그램이 그 조합을 쓰고 있으면 등록하지 않고 안내합니다.", "Like the original, only Win+letter is registered. If another program uses it, nothing is registered and a message is shown.")));
         general.extend([
-            check("CheckForUpdatesOnStartup", t(ko, "설정된 피드에서 시작 시 업데이트 확인", "Check the configured feed for updates at startup"), true),
-            check("HideWhenMinimized", t(ko, "최소화할 때 알림 영역으로 숨기기", "Hide in the notification area when minimized"), false),
-            check("UseLogicalSort", t(ko, "숫자를 고려한 자연 정렬", "Natural sort that considers numbers"), true),
+            check("CheckForUpdatesOnStartup", language.localized("NDR.UI_SETTINGS_CHECK_THE_CONFIGURED_FEED_8A0D4C", "설정된 피드에서 시작 시 업데이트 확인", "Check the configured feed for updates at startup"), true),
+            check("HideWhenMinimized", language.localized("NDR.UI_SETTINGS_HIDE_IN_THE_NOTIFICATION_BE1F1B", "최소화할 때 알림 영역으로 숨기기", "Hide in the notification area when minimized"), false),
+            check("UseLogicalSort", language.localized("NDR.UI_SETTINGS_NATURAL_SORT_THAT_CONSIDERS_6AA921", "숫자를 고려한 자연 정렬", "Natural sort that considers numbers"), true),
             check("UseAlternateDriveHandling", lang("Caption.chkHanShiftDrive", "Use Shift+Drive Letter when the input language is not English"), false),
             check("SaveDriveFolders", lang("Caption.chkDriveFolders", "Save each drive's last folder at exit"), true),
-            check("SaveFolderTreeState", t(ko, "폴더 트리 펼침 상태 저장 (NDR 사용자 설정에 보관)", "Save the folder tree expansion state (in NDR user settings)"), false),
-            check("RemoveReadOnlyWhenCopying", t(ko, "CD/DVD에서 복사할 때 읽기 전용 속성 해제", "Remove the read-only attribute when copying from CD/DVD"), true),
-            combo("Theme", t(ko, "테마", "Theme"), &["Black", "Classic"], &draft.text("Theme", "Black")),
+            check("SaveFolderTreeState", language.localized("NDR.UI_SETTINGS_SAVE_THE_FOLDER_TREE_80D264", "폴더 트리 펼침 상태 저장 (NDR 사용자 설정에 보관)", "Save the folder tree expansion state (in NDR user settings)"), false),
+            check("RemoveReadOnlyWhenCopying", language.localized("NDR.UI_SETTINGS_REMOVE_THE_READ_ONLY_F6122F", "CD/DVD에서 복사할 때 읽기 전용 속성 해제", "Remove the read-only attribute when copying from CD/DVD"), true),
+            combo("Theme", language.localized("NDR.UI_SETTINGS_THEME_A980E4", "테마", "Theme"), &["Black", "Classic"], &draft.text("Theme", "Black")),
         ]);
         let mut escape_labels: Vec<String> = lang("ComboBox.cbESC", "Minimize;Exit Program;Command Line;Deselect All;Go to Parent").split(';').map(|s| s.trim().to_owned()).collect();
         if escape_labels.len() != 5 {
             escape_labels = ["Minimize", "Exit Program", "Command Line", "Deselect All", "Go to Parent"].map(String::from).to_vec();
         }
-        let mut escape: Vec<(String, String)> = vec![("Disabled".into(), t(ko, "사용 안 함", "Disabled"))];
+        let mut escape: Vec<(String, String)> = vec![("Disabled".into(), language.localized("NDR.UI_SETTINGS_DISABLED_D41047", "사용 안 함", "Disabled"))];
         escape.extend(escape_labels.into_iter().enumerate().map(|(i, label)| (i.to_string(), label)));
         let escape_selected = draft.values.get("EscapeKeyAction").and_then(Value::as_i64).filter(|v| (0..=4).contains(v)).map_or("Disabled".to_owned(), |v| v.to_string());
         general.push(choice_row("EscapeKeyAction", lang("Caption.lESC", "ESC Key Function"), escape, &escape_selected));
         let languages: Vec<(String, String)> = available_languages(resources).into_iter().map(|(code, name)| (code.clone(), format!("{code} — {name}"))).collect();
-        general.push(choice_row("Language", t(ko, "언어", "Language"), languages, &draft.text("Language", "ko")));
+        let language_choice = compat::resolve_language_code(&resources.join("Languages"), &draft.text("Language", "ko"));
+        general.push(choice_row("Language", language.localized("NDR.UI_SETTINGS_LANGUAGE", "언어", "Language"), languages, &language_choice));
 
         // Display.
         let mut cases: Vec<String> = lang("RadioGroupItems.rgCharCase", "Normal;Lower Case;Upper Case;Capitalize First Letter").split(';').map(str::to_owned).collect();
@@ -477,25 +466,25 @@ impl SettingsForm {
         let sorts = ["None", "Name", "Extension", "Size", "Modified", "Attributes", "Color"];
         let folder_sorts = ["Auto", "Name", "Extension", "Size", "Modified", "Attributes", "Color"];
         let groups = ["None", "Extension", "Size", "Time", "Category"];
-        let categories = vec![("Auto".to_owned(), t(ko, "자동", "Auto")), ("Default".to_owned(), t(ko, "기본값", "Default"))];
+        let categories = vec![("Auto".to_owned(), language.localized("NDR.UI_SETTINGS_AUTO_44B5D1", "자동", "Auto")), ("Default".to_owned(), language.localized("NDR.UI_SETTINGS_DEFAULT_0A5B1A", "기본값", "Default"))];
         let columns: Vec<&str> = vec!["Auto", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19"];
         let column_value = |key: &str| draft.values.get(key).and_then(Value::as_i64).filter(|v| *v > 0).map_or("Auto".to_owned(), |v| v.to_string());
         let mut display = vec![
             Row::Combo { key: "CharacterCase".into(), label: lang("RadioGroup.rgCharCase", "Character Case"), choices: cases.iter().map(|c| (c.clone(), c.clone())).collect(), selected: Some(case_index) },
             check("AttachExtensionToName", lang("Caption.chkAttachExt", "Attach extension to the name"), false),
             text("ListLineSpace", lang("Caption.lLineSpace", "Line Space:"), number_text(&draft, "ListLineSpace")),
-            combo("LeftViewStyle", t(ko, "왼쪽 기본 보기", "Left default view"), &views, &draft.text("LeftViewStyle", "Auto")),
-            combo("RightViewStyle", t(ko, "오른쪽 기본 보기", "Right default view"), &views, &draft.text("RightViewStyle", "Auto")),
-            combo("LeftSortMode", t(ko, "왼쪽 정렬", "Left sort"), &sorts, &draft.text("LeftSortMode", "Name")),
-            combo("RightSortMode", t(ko, "오른쪽 정렬", "Right sort"), &sorts, &draft.text("RightSortMode", "Name")),
-            combo("LeftFolderSortMode", t(ko, "왼쪽 폴더 정렬", "Left folder sort"), &folder_sorts, &draft.text("LeftFolderSortMode", "Auto")),
-            combo("RightFolderSortMode", t(ko, "오른쪽 폴더 정렬", "Right folder sort"), &folder_sorts, &draft.text("RightFolderSortMode", "Auto")),
-            combo("LeftGroupMode", t(ko, "왼쪽 그룹 기준", "Left grouping"), &groups, &draft.text("LeftGroupMode", "None")),
-            combo("RightGroupMode", t(ko, "오른쪽 그룹 기준", "Right grouping"), &groups, &draft.text("RightGroupMode", "None")),
-            choice_row("LeftFolderCategoryMode", t(ko, "왼쪽 폴더 범주", "Left folder category"), categories.clone(), &draft.text("LeftFolderCategoryMode", "Auto")),
-            choice_row("RightFolderCategoryMode", t(ko, "오른쪽 폴더 범주", "Right folder category"), categories, &draft.text("RightFolderCategoryMode", "Auto")),
-            combo("LeftColumnCount", t(ko, "왼쪽 이름 목록 열 수", "Left name list columns"), &columns, &column_value("LeftColumnCount")),
-            combo("RightColumnCount", t(ko, "오른쪽 이름 목록 열 수", "Right name list columns"), &columns, &column_value("RightColumnCount")),
+            combo("LeftViewStyle", language.localized("NDR.UI_SETTINGS_LEFT_DEFAULT_VIEW_9C33AE", "왼쪽 기본 보기", "Left default view"), &views, &draft.text("LeftViewStyle", "Auto")),
+            combo("RightViewStyle", language.localized("NDR.UI_SETTINGS_RIGHT_DEFAULT_VIEW_3AC64A", "오른쪽 기본 보기", "Right default view"), &views, &draft.text("RightViewStyle", "Auto")),
+            combo("LeftSortMode", language.localized("NDR.UI_SETTINGS_LEFT_SORT_4B7A0A", "왼쪽 정렬", "Left sort"), &sorts, &draft.text("LeftSortMode", "Name")),
+            combo("RightSortMode", language.localized("NDR.UI_SETTINGS_RIGHT_SORT_4F5C88", "오른쪽 정렬", "Right sort"), &sorts, &draft.text("RightSortMode", "Name")),
+            combo("LeftFolderSortMode", language.localized("NDR.UI_SETTINGS_LEFT_FOLDER_SORT_8A5480", "왼쪽 폴더 정렬", "Left folder sort"), &folder_sorts, &draft.text("LeftFolderSortMode", "Auto")),
+            combo("RightFolderSortMode", language.localized("NDR.UI_SETTINGS_RIGHT_FOLDER_SORT_C83CFC", "오른쪽 폴더 정렬", "Right folder sort"), &folder_sorts, &draft.text("RightFolderSortMode", "Auto")),
+            combo("LeftGroupMode", language.localized("NDR.UI_SETTINGS_LEFT_GROUPING_B67F4D", "왼쪽 그룹 기준", "Left grouping"), &groups, &draft.text("LeftGroupMode", "None")),
+            combo("RightGroupMode", language.localized("NDR.UI_SETTINGS_RIGHT_GROUPING_7D4CA5", "오른쪽 그룹 기준", "Right grouping"), &groups, &draft.text("RightGroupMode", "None")),
+            choice_row("LeftFolderCategoryMode", language.localized("NDR.UI_SETTINGS_LEFT_FOLDER_CATEGORY_E7CFAE", "왼쪽 폴더 범주", "Left folder category"), categories.clone(), &draft.text("LeftFolderCategoryMode", "Auto")),
+            choice_row("RightFolderCategoryMode", language.localized("NDR.UI_SETTINGS_RIGHT_FOLDER_CATEGORY_0F2E06", "오른쪽 폴더 범주", "Right folder category"), categories, &draft.text("RightFolderCategoryMode", "Auto")),
+            combo("LeftColumnCount", language.localized("NDR.UI_SETTINGS_LEFT_NAME_LIST_COLUMNS_866D26", "왼쪽 이름 목록 열 수", "Left name list columns"), &columns, &column_value("LeftColumnCount")),
+            combo("RightColumnCount", language.localized("NDR.UI_SETTINGS_RIGHT_NAME_LIST_COLUMNS_960216", "오른쪽 이름 목록 열 수", "Right name list columns"), &columns, &column_value("RightColumnCount")),
         ];
         for (key, korean, english, default) in [
             ("LeftSortDescending", "왼쪽 내림차순", "Left descending", false),
@@ -544,18 +533,18 @@ impl SettingsForm {
         let alpha = draft.values.get("WindowAlpha").and_then(Value::as_f64).unwrap_or(210.0).clamp(0.0, 255.0) as f32;
         display.push(Row::Slider { key: "WindowAlpha".into(), label: format!("{} — {}", lang("Caption.lTransMin", "Transparent"), lang("Caption.lTransMax", "Opaque")), value: alpha });
         display.extend([
-            check("UseDateAge", t(ko, "최근 날짜를 상대 시간으로 표시", "Show recent dates as relative times"), true),
-            check("UseThousandsSeparator", t(ko, "파일 크기에 천 단위 구분자 표시", "Show thousands separators in file sizes"), true),
-            text("DateFormat", t(ko, "날짜 형식", "Date format"), draft.text("DateFormat", "yyyy-MM-dd")),
-            text("TimeFormat", t(ko, "시간 형식", "Time format"), draft.text("TimeFormat", "HH:mm")),
-            combo("SizeUnit", t(ko, "크기 단위", "Size unit"), &["Auto", "B", "KB", "MB", "GB"], &draft.text("SizeUnit", "Auto")),
-            text("ListFont", t(ko, "목록 글꼴", "List font"), text_of(&draft, "ListFont")),
-            text("ListFontSize", t(ko, "글꼴 크기", "Font size"), number_text(&draft, "ListFontSize")),
-            text("ThumbnailSize", t(ko, "미리 보기 크기 (px)", "Thumbnail size (px)"), number_text(&draft, "ThumbnailSize")),
-            check("UseNexusFileColorMap", t(ko, "NexusFile .col 색상표 적용", "Use NexusFile .col color map"), false),
+            check("UseDateAge", language.localized("NDR.UI_SETTINGS_SHOW_RECENT_DATES_AS_B31039", "최근 날짜를 상대 시간으로 표시", "Show recent dates as relative times"), true),
+            check("UseThousandsSeparator", language.localized("NDR.UI_SETTINGS_SHOW_THOUSANDS_SEPARATORS_IN_41AF28", "파일 크기에 천 단위 구분자 표시", "Show thousands separators in file sizes"), true),
+            text("DateFormat", language.localized("NDR.UI_SETTINGS_DATE_FORMAT_31B392", "날짜 형식", "Date format"), draft.text("DateFormat", "yyyy-MM-dd")),
+            text("TimeFormat", language.localized("NDR.UI_SETTINGS_TIME_FORMAT_8BE286", "시간 형식", "Time format"), draft.text("TimeFormat", "HH:mm")),
+            combo("SizeUnit", language.localized("NDR.UI_SETTINGS_SIZE_UNIT_048CB0", "크기 단위", "Size unit"), &["Auto", "B", "KB", "MB", "GB"], &draft.text("SizeUnit", "Auto")),
+            text("ListFont", language.localized("NDR.UI_SETTINGS_LIST_FONT_F8A5D7", "목록 글꼴", "List font"), text_of(&draft, "ListFont")),
+            text("ListFontSize", language.localized("NDR.UI_SETTINGS_FONT_SIZE_54FFED", "글꼴 크기", "Font size"), number_text(&draft, "ListFontSize")),
+            text("ThumbnailSize", language.localized("NDR.UI_SETTINGS_THUMBNAIL_SIZE_PX_670BAF", "미리 보기 크기 (px)", "Thumbnail size (px)"), number_text(&draft, "ThumbnailSize")),
+            check("UseNexusFileColorMap", language.localized("NDR.UI_SETTINGS_USE_NEXUSFILE_COL_COLOR_65185B", "NexusFile .col 색상표 적용", "Use NexusFile .col color map"), false),
         ]);
         let colors = object(&draft, "ExtensionColors").iter().map(|(k, v)| format!("{k}={}", v.as_str().unwrap_or(""))).collect::<Vec<_>>().join("; ");
-        display.push(text("ExtensionColors", t(ko, "확장자 글자색 (.zip=#F59E0B; .txt=#60A5FA)", "Extension text colors (.zip=#F59E0B; .txt=#60A5FA)"), colors));
+        display.push(text("ExtensionColors", language.localized("NDR.UI_SETTINGS_EXTENSION_TEXT_COLORS_ZIP_B1DE31", "확장자 글자색 (.zip=#F59E0B; .txt=#60A5FA)", "Extension text colors (.zip=#F59E0B; .txt=#60A5FA)"), colors));
         display.push(Row::ColorButtons);
 
         // Paths.
@@ -563,8 +552,8 @@ impl SettingsForm {
         let special = object(&draft, "SpecialFolderPaths");
         let special_value = |name: &str| special.get(name).and_then(Value::as_str).unwrap_or("").to_owned();
         let mut paths = vec![
-            text("LeftPath", t(ko, "시작 경로 — 왼쪽", "Start path — left"), text_of(&draft, "LeftPath")),
-            text("RightPath", t(ko, "시작 경로 — 오른쪽", "Start path — right"), text_of(&draft, "RightPath")),
+            text("LeftPath", language.localized("NDR.UI_SETTINGS_START_PATH_LEFT_830B58", "시작 경로 — 왼쪽", "Start path — left"), text_of(&draft, "LeftPath")),
+            text("RightPath", language.localized("NDR.UI_SETTINGS_START_PATH_RIGHT_504484", "시작 경로 — 오른쪽", "Start path — right"), text_of(&draft, "RightPath")),
             Row::Section(lang("GroupBox.gbMyFolders", "User Folders Location")),
         ];
         for (name, key, fallback, default) in [
@@ -578,54 +567,53 @@ impl SettingsForm {
         }
         paths.push(Row::Note(lang("Caption.lHelpPath", "Leave blank to use the Windows default folder.")));
         let path_click = vec![
-            ("0".to_owned(), t(ko, "기본 동작 (0)", "Default behavior (0)")),
-            ("1".to_owned(), t(ko, "경로 클릭 이동, 빈 공간은 즐겨찾기 (1)", "Path clicks navigate; blank area opens Favorites (1)")),
-            ("2".to_owned(), t(ko, "주소 표시줄 클릭 시 즐겨찾기 (2)", "Any address-bar click opens Favorites (2)")),
+            ("0".to_owned(), language.localized("NDR.UI_SETTINGS_DEFAULT_BEHAVIOR_0_48A99C", "기본 동작 (0)", "Default behavior (0)")),
+            ("1".to_owned(), language.localized("NDR.UI_SETTINGS_PATH_CLICKS_NAVIGATE_BLANK_F698D8", "경로 클릭 이동, 빈 공간은 즐겨찾기 (1)", "Path clicks navigate; blank area opens Favorites (1)")),
+            ("2".to_owned(), language.localized("NDR.UI_SETTINGS_ANY_ADDRESS_BAR_CLICK_81173E", "주소 표시줄 클릭 시 즐겨찾기 (2)", "Any address-bar click opens Favorites (2)")),
         ];
         let path_click_value = draft.values.get("PathClickMode").and_then(Value::as_i64).unwrap_or(0).clamp(0, 2).to_string();
-        paths.push(choice_row("PathClickMode", t(ko, "주소 표시줄 클릭 동작", "Address bar click behavior"), path_click, &path_click_value));
-        let destination = vec![("0".to_owned(), t(ko, "반대 패널 경로 (0)", "Opposite pane folder (0)")), ("1".to_owned(), t(ko, "현재 드라이브 루트 (1)", "Current drive root (1)"))];
+        paths.push(choice_row("PathClickMode", language.localized("NDR.UI_SETTINGS_ADDRESS_BAR_CLICK_BEHAVIOR_7F6E96", "주소 표시줄 클릭 동작", "Address bar click behavior"), path_click, &path_click_value));
+        let destination = vec![("0".to_owned(), language.localized("NDR.UI_SETTINGS_OPPOSITE_PANE_FOLDER_0_7FE5A7", "반대 패널 경로 (0)", "Opposite pane folder (0)")), ("1".to_owned(), language.localized("NDR.UI_SETTINGS_CURRENT_DRIVE_ROOT_1_F0CD80", "현재 드라이브 루트 (1)", "Current drive root (1)"))];
         let destination_value = draft.values.get("DefaultDestinationMode").and_then(Value::as_i64).unwrap_or(0).clamp(0, 1).to_string();
-        paths.push(choice_row("DefaultDestinationMode", t(ko, "대상 선택 기본 위치", "Default destination location"), destination, &destination_value));
+        paths.push(choice_row("DefaultDestinationMode", language.localized("NDR.UI_SETTINGS_DEFAULT_DESTINATION_LOCATION_062904", "대상 선택 기본 위치", "Default destination location"), destination, &destination_value));
         paths.push(text("MaxRecentFileCount", lang("Caption.lMostUsedFolder", if ko { "대상 선택 창에 표시할 자주 쓰는 폴더 수" } else { "Most used destination folders in chooser" }), number_text(&draft, "MaxRecentFileCount")));
         paths.extend([
-            check("ShowLeftFolderTree", t(ko, "왼쪽 폴더 트리 표시", "Show the left folder tree"), false),
-            check("ShowRightFolderTree", t(ko, "오른쪽 폴더 트리 표시", "Show the right folder tree"), false),
-            check("UseExplorerMenu", t(ko, "오른쪽버튼 클릭: 탐색기 메뉴 사용하기", "Right-click: use the Explorer menu"), false),
-            text("LeftFolderTreeWidth", t(ko, "왼쪽 폴더 트리 너비", "Left folder tree width"), number_text(&draft, "LeftFolderTreeWidth")),
-            text("RightFolderTreeWidth", t(ko, "오른쪽 폴더 트리 너비", "Right folder tree width"), number_text(&draft, "RightFolderTreeWidth")),
-            check("TreeWindowMatchesMainSize", t(ko, "별도 폴더 트리 창을 메인 창 크기로 열기", "Open the separate folder tree window at the main window size"), false),
-            check("LeftStartPathEnabled", t(ko, "왼쪽 고정 시작 경로 사용", "Use a fixed left start path"), false),
-            text("LeftStartPath", t(ko, "왼쪽 고정 시작 경로", "Fixed left start path"), text_of(&draft, "LeftStartPath")),
-            check("RightStartPathEnabled", t(ko, "오른쪽 고정 시작 경로 사용", "Use a fixed right start path"), false),
-            text("RightStartPath", t(ko, "오른쪽 고정 시작 경로", "Fixed right start path"), text_of(&draft, "RightStartPath")),
-            Row::Section(t(ko, "작업 폴더 1–5", "Work folders 1–5")),
+            check("ShowLeftFolderTree", language.localized("NDR.UI_SETTINGS_SHOW_THE_LEFT_FOLDER_C1E89F", "왼쪽 폴더 트리 표시", "Show the left folder tree"), false),
+            check("ShowRightFolderTree", language.localized("NDR.UI_SETTINGS_SHOW_THE_RIGHT_FOLDER_B27A4D", "오른쪽 폴더 트리 표시", "Show the right folder tree"), false),
+            check("UseExplorerMenu", language.localized("NDR.UI_SETTINGS_RIGHT_CLICK_USE_THE_7BFB18", "오른쪽버튼 클릭: 탐색기 메뉴 사용하기", "Right-click: use the Explorer menu"), false),
+            text("LeftFolderTreeWidth", language.localized("NDR.UI_SETTINGS_LEFT_FOLDER_TREE_WIDTH_536287", "왼쪽 폴더 트리 너비", "Left folder tree width"), number_text(&draft, "LeftFolderTreeWidth")),
+            text("RightFolderTreeWidth", language.localized("NDR.UI_SETTINGS_RIGHT_FOLDER_TREE_WIDTH_F7D983", "오른쪽 폴더 트리 너비", "Right folder tree width"), number_text(&draft, "RightFolderTreeWidth")),
+            check("TreeWindowMatchesMainSize", language.localized("NDR.UI_SETTINGS_OPEN_THE_SEPARATE_FOLDER_9BFA18", "별도 폴더 트리 창을 메인 창 크기로 열기", "Open the separate folder tree window at the main window size"), false),
+            check("LeftStartPathEnabled", language.localized("NDR.UI_SETTINGS_USE_A_FIXED_LEFT_99CCC9", "왼쪽 고정 시작 경로 사용", "Use a fixed left start path"), false),
+            text("LeftStartPath", language.localized("NDR.UI_SETTINGS_FIXED_LEFT_START_PATH_23E79E", "왼쪽 고정 시작 경로", "Fixed left start path"), text_of(&draft, "LeftStartPath")),
+            check("RightStartPathEnabled", language.localized("NDR.UI_SETTINGS_USE_A_FIXED_RIGHT_D7DEC1", "오른쪽 고정 시작 경로 사용", "Use a fixed right start path"), false),
+            text("RightStartPath", language.localized("NDR.UI_SETTINGS_FIXED_RIGHT_START_PATH_5EB216", "오른쪽 고정 시작 경로", "Fixed right start path"), text_of(&draft, "RightStartPath")),
+            Row::Section(language.localized("NDR.UI_SETTINGS_WORK_FOLDERS_1_5_C08C44", "작업 폴더 1–5", "Work folders 1–5")),
         ]);
         let work = draft.strings("WorkingFolders");
         for i in 0..5 {
             paths.push(text(&format!("WF{i}"), if ko { format!("작업 폴더 {}", i + 1) } else { format!("Work folder {}", i + 1) }, work.get(i).cloned().unwrap_or_default()));
         }
         paths.extend([
-            check("ShowFavoritesBar", t(ko, "즐겨찾기 바 표시", "Show the favorites bar"), true),
-            text("FolderTreeDepth", t(ko, "폴더 트리 탐색 깊이 (1–64)", "Folder tree scan depth (1–64)"), number_text(&draft, "FolderTreeDepth")),
-            text("FolderTreeFont", t(ko, "폴더 트리 글꼴", "Folder tree font"), text_of(&draft, "FolderTreeFont")),
-            text("FolderTreeFontSize", t(ko, "폴더 트리 글꼴 크기", "Folder tree font size"), number_text(&draft, "FolderTreeFontSize")),
-            text("FolderTreeItemWidth", t(ko, "폴더 트리 이름 너비 (px)", "Folder tree name width (px)"), number_text(&draft, "FolderTreeItemWidth")),
-            text("TreeExcludedPaths", t(ko, "폴더 트리 제외 경로 (세미콜론 구분)", "Folder tree excluded paths (semicolon separated)"), draft.strings("FolderTreeExcludedPaths").join(";")),
+            check("ShowFavoritesBar", language.localized("NDR.UI_SETTINGS_SHOW_THE_FAVORITES_BAR_8769EB", "즐겨찾기 바 표시", "Show the favorites bar"), true),
+            text("FolderTreeDepth", language.localized("NDR.UI_SETTINGS_FOLDER_TREE_SCAN_DEPTH_AE4293", "폴더 트리 탐색 깊이 (1–64)", "Folder tree scan depth (1–64)"), number_text(&draft, "FolderTreeDepth")),
+            text("FolderTreeFont", language.localized("NDR.UI_SETTINGS_FOLDER_TREE_FONT_9996B6", "폴더 트리 글꼴", "Folder tree font"), text_of(&draft, "FolderTreeFont")),
+            text("FolderTreeFontSize", language.localized("NDR.UI_SETTINGS_FOLDER_TREE_FONT_SIZE_10701D", "폴더 트리 글꼴 크기", "Folder tree font size"), number_text(&draft, "FolderTreeFontSize")),
+            text("FolderTreeItemWidth", language.localized("NDR.UI_SETTINGS_FOLDER_TREE_NAME_WIDTH_B9AB39", "폴더 트리 이름 너비 (px)", "Folder tree name width (px)"), number_text(&draft, "FolderTreeItemWidth")),
+            text("TreeExcludedPaths", language.localized("NDR.UI_SETTINGS_FOLDER_TREE_EXCLUDED_PATHS_F8DB38", "폴더 트리 제외 경로 (세미콜론 구분)", "Folder tree excluded paths (semicolon separated)"), draft.strings("FolderTreeExcludedPaths").join(";")),
         ]);
 
         // External programs.
         // External archivers (original chkUseExtArcProgram, the C# per-format programs and arguments) are not used (user request).
         let mut programs = vec![
-            check("UseCopyHandler", t(ko, "등록한 외부 복사 프로그램 사용", "Use the registered external copy program"), false),
-            Row::Program { key: "TextViewerPath".into(), label: t(ko, "텍스트 보기 프로그램", "Text viewer program"), value: text_of(&draft, "TextViewerPath") },
-            Row::Program { key: "TextEditorPath".into(), label: t(ko, "텍스트 편집 프로그램", "Text editor program"), value: text_of(&draft, "TextEditorPath") },
+            check("UseCopyHandler", language.localized("NDR.UI_SETTINGS_USE_THE_REGISTERED_EXTERNAL_A57224", "등록한 외부 복사 프로그램 사용", "Use the registered external copy program"), false),
+            Row::Program { key: "TextViewerPath".into(), label: language.localized("NDR.UI_SETTINGS_TEXT_VIEWER_PROGRAM_BF3C33", "텍스트 보기 프로그램", "Text viewer program"), value: text_of(&draft, "TextViewerPath") },
+            Row::Program { key: "TextEditorPath".into(), label: language.localized("NDR.UI_SETTINGS_TEXT_EDITOR_PROGRAM_0EF879", "텍스트 편집 프로그램", "Text editor program"), value: text_of(&draft, "TextEditorPath") },
             Row::Program { key: "CopyHandlerPath".into(), label: language.text("NDRCopyHandler.Path", "External copy/move handler path (TeraCopy or KillCopy)"), value: text_of(&draft, "CopyHandlerPath") },
-            text("UpdateManifestUrl", t(ko, "업데이트 JSON 피드 (HTTPS)", "Update JSON feed (HTTPS)"), text_of(&draft, "UpdateManifestUrl")),
+            text("UpdateManifestUrl", language.localized("NDR.UI_SETTINGS_UPDATE_JSON_FEED_HTTPS_C1FD01", "업데이트 JSON 피드 (HTTPS)", "Update JSON feed (HTTPS)"), text_of(&draft, "UpdateManifestUrl")),
         ];
-        programs.push(Row::Section(language.text("formFunctionKeys.Form.Caption", "Function Keys")));
-        programs.push(Row::Note(t(ko, "F1–F12별 표시 이름, 내부 동작 또는 사용자 프로그램/문서와 실행 인자를 편집합니다. 기존 NexusFile 기능키 설정도 자동으로 불러옵니다.",
-            "Edit the display name, internal action or user program/document, and launch parameters for F1–F12. Existing NexusFile function key settings are imported automatically.")));
+        programs.push(Row::Section(language.text("formPreferences.TabSheet.tsFunctionKey", "Function Keys")));
+        programs.push(Row::Note(language.localized("NDR.UI_SETTINGS_EDIT_THE_DISPLAY_NAME_B78A0F", "F1–F12별 표시 이름, 내부 동작 또는 사용자 프로그램/문서와 실행 인자를 편집합니다. 기존 NexusFile 기능키 설정도 자동으로 불러옵니다.", "Edit the display name, internal action or user program/document, and launch parameters for F1–F12. Existing NexusFile function key settings are imported automatically.")));
         programs.push(Row::FunctionKeys);
         let _ = flag;
         let pref = |key: &str, ko_text: &str, en_text: &str| language.text(&format!("formPreferences.{key}"), if ko { ko_text } else { en_text });
@@ -695,7 +683,9 @@ impl SettingsForm {
         .map(|(key, fallback)| (key, lang(key, fallback)))
         .collect();
         let function_keys = super::function_key_editor::FunctionKeyEditorForm::new(&draft, ko);
-        Self { ko, tab: 0, tabs, tab_titles, draft, color_selected: None, last_color: 0, color_captions, basic_items, button_captions, captions, function_keys }
+        let browse_folder = language.localized("NDR.UI_SETTINGS_BROWSE_FOLDER", "찾아보기...", "Browse...");
+        let browse_program = language.localized("NDR.UI_SETTINGS_BROWSE_PROGRAM", "찾아보기…", "Browse…");
+        Self { ko, tab: 0, tabs, tab_titles, draft, color_selected: None, last_color: 0, color_captions, basic_items, button_captions, captions, browse_folder, browse_program, function_keys }
     }
 
     /// After editing the function key list (original btnEditFunc, btnFuncDelete): like the C# version, changes FunctionKeyBindings of the settings copy and removes F1-F12 and ^F1-^F11 of the old FunctionKeys.
@@ -1330,10 +1320,9 @@ fn original_page(ui: &mut egui::Ui, form: &mut SettingsForm, tab: usize, origin:
 
 /// The "NDR" page of rows only in the C# version: laid out top to bottom (C# OptionsWindow).
 fn list_page(ui: &mut egui::Ui, form: &mut SettingsForm) -> Option<SettingsAction> {
-    let ko = form.ko;
     let mut action = None;
-    let browse_folder = t(ko, "찾아보기...", "Browse...");
-    let browse_program = t(ko, "찾아보기…", "Browse…");
+    let browse_folder = form.browse_folder.as_str();
+    let browse_program = form.browse_program.as_str();
     let tab = form.tab;
     egui::ScrollArea::vertical().id_salt(("settings-tab", tab)).auto_shrink([false, false]).show(ui, |ui| {
         let label_cell = |ui: &mut egui::Ui, text: &str| {
@@ -1369,7 +1358,7 @@ fn list_page(ui: &mut egui::Ui, form: &mut SettingsForm) -> Option<SettingsActio
                     ui.horizontal(|ui| {
                         label_cell(ui, label);
                         ui.add(egui::TextEdit::singleline(value).desired_width(ui.available_width() - 96.0));
-                        if ui.button(browse_folder.as_str()).clicked() {
+                        if ui.button(browse_folder).clicked() {
                             action = Some(SettingsAction::BrowseFolder(index));
                         }
                     });
@@ -1378,7 +1367,7 @@ fn list_page(ui: &mut egui::Ui, form: &mut SettingsForm) -> Option<SettingsActio
                     ui.horizontal(|ui| {
                         label_cell(ui, label);
                         ui.add(egui::TextEdit::singleline(value).desired_width(ui.available_width() - 96.0));
-                        if ui.button(browse_program.as_str()).clicked() {
+                        if ui.button(browse_program).clicked() {
                             action = Some(SettingsAction::BrowseProgram(index));
                         }
                     });
@@ -1387,7 +1376,7 @@ fn list_page(ui: &mut egui::Ui, form: &mut SettingsForm) -> Option<SettingsActio
                     ui.horizontal(|ui| {
                         label_cell(ui, label);
                         let text = selected.and_then(|i| choices.get(i)).map(|(_, d)| d.clone()).unwrap_or_default();
-                        egui::ComboBox::from_id_salt(("settings-combo", key.as_str())).width(300.0).selected_text(text).show_opaque(ui, |ui| {
+                        egui::ComboBox::from_id_salt(("settings-combo", key.as_str())).width(300.0).height(340.0).selected_text(text).show_opaque(ui, |ui| {
                             for (i, (_, display)) in choices.iter().enumerate() {
                                 ui.selectable_value(selected, Some(i), display.as_str());
                             }
@@ -1489,7 +1478,7 @@ impl App {
             );
             self.system_box("NDR", &text, ndr::msgbox::MB_OK | ndr::msgbox::MB_ICONASTERISK, |_, _, _| {});
         }
-        self.language = self.settings.text("Language", &self.language);
+        self.language = compat::resolve_language_code(&self.resources.join("Languages"), &self.settings.text("Language", &self.language));
         self.dark = super::system_commands::theme_palette(&self.settings.text("Theme", "Black")).dark();
         self.dual = self.settings.flag("DualPaneMode", true);
         self.profile_load_error = false;
@@ -1558,8 +1547,8 @@ impl App {
                 let name = if current.is_file() { current.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default() } else { String::new() };
                 let filters = super::original_dialogs::program_filter(&self.language_pack);
                 let filters: Vec<(&str, &str)> = filters.iter().map(|(n, p)| (n.as_str(), p.as_str())).collect();
-                let title = if ko { "프로그램 선택" } else { "Select a program" };
-                if let Some(path) = (self.open_dialog)(title, Some(&initial), &name, &filters) {
+                let title = self.catalog("NDR.UI_SETTINGS_CHOOSE_PROGRAM", "프로그램 선택", "Select a program");
+                if let Some(path) = (self.open_dialog)(&title, Some(&initial), &name, &filters) {
                     if let Some(Row::Program { value, .. }) = self.settings_form().and_then(|f| f.tabs[tab].get_mut(index)) {
                         *value = path.to_string_lossy().into_owned();
                     }
@@ -1775,12 +1764,10 @@ impl App {
     /// Original btnImportColorClick (0x44fe94): OpenDialog with InitialDir = <program folder>\colors (the bundled color maps), then
     /// TNXFileColorMap.LoadFromFile.
     fn import_extension_colors(&mut self) {
-        let ko = self.language == "ko";
-        let filters = if ko {
-            [("NexusFile 색상표 (*.col)", "*.col"), ("NDR 색상표 (*.json)", "*.json"), ("모든 파일 (*.*)", "*.*")]
-        } else {
-            [("NexusFile color map (*.col)", "*.col"), ("NDR color map (*.json)", "*.json"), ("All files (*.*)", "*.*")]
-        };
+        let col = self.catalog("NDR.UI_SETTINGS_COLOR_FILTER_COL", "NexusFile 색상표 (*.col)", "NexusFile color map (*.col)");
+        let json = self.catalog("NDR.UI_SETTINGS_COLOR_FILTER_JSON", "NDR 색상표 (*.json)", "NDR color map (*.json)");
+        let all = self.catalog("NDR.UI_SETTINGS_COLOR_FILTER_ALL", "모든 파일 (*.*)", "All files (*.*)");
+        let filters = [(col.as_str(), "*.col"), (json.as_str(), "*.json"), (all.as_str(), "*.*")];
         let colors_dir = super::resource_dir().join("Colors");
         let Some(path) = (self.open_dialog)("", Some(colors_dir.as_path()).filter(|d| d.is_dir()), "", &filters) else { return };
         let result: Result<(), String> = (|| {
@@ -1815,17 +1802,16 @@ impl App {
         })();
         if let Err(error) = result {
             let title = self.tr("NDR 환경 설정", "NDR Settings").into_owned();
-            let text = if ko { format!("색상표를 읽을 수 없습니다: {error}") } else { format!("The color map could not be read: {error}") };
+            let text = self.catalog("NDR.UI_SETTINGS_COLOR_IMPORT_ERROR", "색상표를 읽을 수 없습니다: {0}", "The color map could not be read: {0}").replace("{0}", &error);
             self.system_box(&title, &text, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
         }
     }
 
     /// C# ExportExtensionColors.
     fn export_extension_colors(&mut self) {
-        let ko = self.language == "ko";
         let title = self.tr("NDR 환경 설정", "NDR Settings").into_owned();
         let fail = |app: &mut App, error: String| {
-            let text = if ko { format!("색상표를 내보낼 수 없습니다: {error}") } else { format!("The color map could not be exported: {error}") };
+            let text = app.catalog("NDR.UI_SETTINGS_COLOR_EXPORT_ERROR", "색상표를 내보낼 수 없습니다: {0}", "The color map could not be exported: {0}").replace("{0}", &error);
             app.system_box(&title, &text, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
         };
         let Some(form) = self.settings_form() else { return };
@@ -1841,7 +1827,9 @@ impl App {
             Err(error) => return fail(self, error),
         };
         let elements = object(&form.draft, "NexusFileColorMapValues");
-        let filters = if ko { [("NexusFile 색상표 (*.col)", "*.col"), ("NDR 색상표 (*.json)", "*.json")] } else { [("NexusFile color map (*.col)", "*.col"), ("NDR color map (*.json)", "*.json")] };
+        let col = self.catalog("NDR.UI_SETTINGS_COLOR_FILTER_COL", "NexusFile 색상표 (*.col)", "NexusFile color map (*.col)");
+        let json = self.catalog("NDR.UI_SETTINGS_COLOR_FILTER_JSON", "NDR 색상표 (*.json)", "NDR color map (*.json)");
+        let filters = [(col.as_str(), "*.col"), (json.as_str(), "*.json")];
         let colors_dir = super::resource_dir().join("Colors");
         // Original btnSaveColorMapClick (0x44fd68): SaveDialog (DefaultExt col, ofOverwritePrompt) with InitialDir = <program folder>\colors.
         let Some(path) = (self.save_dialog)("", Some(colors_dir.as_path()).filter(|d| d.is_dir()), "NDR-extension-colors.col", &filters, "col", true) else { return };

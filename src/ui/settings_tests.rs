@@ -140,7 +140,7 @@ fn encrypted_folder_options_persist_with_required_password_reauthentication() {
 fn settings_window_commits_like_csharp() {
     let (root, ctx, mut app) = fixture("ko", "ko");
     app.dispatch("options", &ctx);
-    assert_eq!(app.original_dialogs.last().unwrap().title, "옵션", "original [formPreferences] Form.Caption");
+    assert_eq!(app.original_dialogs.last().unwrap().title, "NDR 설정", "[formPreferences] Form.Caption");
     // Original btnApply: applying keeps the window open.
     app.settings_action(SettingsAction::Apply, &ctx);
     assert!(app.settings_form().is_some());
@@ -158,15 +158,15 @@ fn settings_window_commits_like_csharp() {
     {
         let form = app.settings_form().unwrap();
         // Original TfPreferences pages (file list ... other) + the "NDR" page for rows only in the C# version.
-        assert_eq!(form.tab_titles, ["파일목록", "폴더트리", "색", "옵션", "프로그램", "경로", "기능키", "기타", "NDR"]);
+        assert_eq!(form.tab_titles, ["파일 목록", "폴더 트리", "색상", "동작", "외부 프로그램", "경로", "기능키", "기타", "NDR"]);
         assert_eq!(form.tabs.len(), 9);
-        assert!(matches!(&form.tabs[0][1], Row::Text { key, label, .. } if key == "ListFont" && label == "파일 목록:"));
-        assert!(matches!(&form.tabs[3][0], Row::Check { key, label, .. } if key == "SelectFolders" && label == "전체선택 할 때 폴더도 모두 선택하기"));
+        assert!(matches!(&form.tabs[0][1], Row::Text { key, label, .. } if key == "ListFont" && label == "목록 글꼴"));
+        assert!(matches!(&form.tabs[3][0], Row::Check { key, label, .. } if key == "SelectFolders" && label == "모두 선택할 때 폴더 포함"));
         assert!(form.tabs[2].iter().any(|row| matches!(row, Row::ColorButtons)));
         assert!(form.tabs[6].iter().any(|row| matches!(row, Row::FunctionKeys)));
         assert!(matches!(&form.tabs[8][0], Row::Check { key, label, .. } if key == "DualPaneMode" && label == "두 패널 표시"));
         // Original ComboBox text (values unchanged): cbSort1.
-        assert!(form.tabs[0].iter().any(|row| matches!(row, Row::Combo { key, choices, .. } if key == "LeftSortMode" && choices[1] == ("Name".to_owned(), "이름순".to_owned()))));
+        assert!(form.tabs[0].iter().any(|row| matches!(row, Row::Combo { key, choices, .. } if key == "LeftSortMode" && choices[1] == ("Name".to_owned(), "이름".to_owned()))));
         // Original cbColumn1: "자동;1열;...;6열", and the NDR-only 7-19 columns use the same form.
         assert!(form.tabs[0].iter().any(|row| matches!(row, Row::Combo { key, choices, .. } if key == "LeftColumnCount"
             && choices[0] == ("Auto".to_owned(), "자동".to_owned()) && choices[6] == ("6".to_owned(), "6열".to_owned()) && choices[19] == ("19".to_owned(), "19열".to_owned()))));
@@ -284,7 +284,7 @@ fn function_key_editor_follows_csharp_in_english() {
     }
     // Edit F2: user command. Original btnOkClick silently uses the command file name (without extension) when the name is empty.
     app.settings_action(SettingsAction::EditFunctionKey, &ctx);
-    assert_eq!(app.original_dialogs.last().unwrap().title, "Edit Function Key — F2");
+    assert_eq!(app.original_dialogs.last().unwrap().title, "Assign a function key — F2");
     if let Some(DialogKind::FunctionKeyEdit(edit)) = app.original_dialogs.last_mut().map(|d| &mut d.kind) {
         assert_eq!(edit.name, "F2");
         edit.set_internal(true);
@@ -469,9 +469,9 @@ fn title_bar_follows_skin_with_opposite_system_theme() {
     let (root, ctx, mut app) = fixture("title-bar-skin", "en");
     app.hwnd = hwnd.0 as isize;
     for (skin, expected, system, background, via_settings) in [
-        ("Black", egui::Theme::Dark, egui::Theme::Light, 0x0000_0000, false),
-        ("Classic", egui::Theme::Light, egui::Theme::Dark, 0x00DE_DEDE, true),
-        ("Black", egui::Theme::Dark, egui::Theme::Light, 0x0000_0000, false),
+        ("Black", egui::Theme::Dark, egui::Theme::Light, 0x0033_2920, false),
+        ("Classic", egui::Theme::Light, egui::Theme::Dark, 0x00F3_E9E1, true),
+        ("Black", egui::Theme::Dark, egui::Theme::Light, 0x0033_2920, false),
     ] {
         let input = egui::RawInput { system_theme: Some(system), ..Default::default() };
         let output = ctx.run(input, |ctx| {

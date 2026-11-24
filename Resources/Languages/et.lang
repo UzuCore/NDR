@@ -1,0 +1,462 @@
+; NDR language catalog. Untranslated entries use NDR English.
+
+[RES]
+YES=Jah(&Y)
+NO=Ei(&N)
+OK=&OK
+CANCEL=Loobu(&C)
+RETRY=P&roovi uuesti
+IGNORE=E&ira
+ABORT=Peata(&S)
+CONTINUE=Jätka(&n)
+TITLE_ERROR=NDR-i viga
+TITLE_INFO=NDR-i teave
+FOLDERINFO=Kaustad <c000000><b>%d</b></c> · Failid <c000000><b>%d</b></c> · <b>%s</b>
+DISKINFO_SHORT=Vaba <c000000><b>%s</b></c>
+DISKINFO_LONG=Vaba <c000000><b>%s</b></c> / kokku <b>%s</b>
+SELECTED_INFO=Valitud: <b>%d</b> · <b>%s</b> baiti
+MSG_COPY_PREPARING=Kopeerimise ettevalmistamine…
+MSG_MOVE_PREPARING=Teisaldamise ettevalmistamine…
+MSG_DEL_PREPARING=Kustutamise ettevalmistamine…
+COPYING=Üksuste kopeerimine…
+MOVING=Üksuste teisaldamine…
+DELETING=Üksuste kustutamine…
+EXTRACTING=Failide lahtipakkimine…
+COMPRESSING=Failide pakkimine…
+READONLY=Kirjutuskaitstud
+SYSTEM=Süsteem
+HIDDEN=Peidetud
+FOLDER=Kaust
+FOLDERS=Kaustad
+SELECT_FOLDER=Vali kaust
+DROPCOPY_CONFIRM=Kas kopeerida need %d üksust?
+DROPMOVE_CONFIRM=Kas teisaldada need %d üksust?
+RENAME=Nimeta ümber
+COPY=Kopeeri
+MOVE=Teisalda
+ADDTOARCHIVE=Lisa arhiivi
+EXTRACT=Paki lahti
+SEARCH=Otsi
+STOP=Peata
+SEARCHRESULT=Otsingutulemused
+SELECTDEST= — Vali sihtkoht
+PAUSE=Peata ajutiselt
+RESUME=Jätka
+TITLE_FILTER=Failifilter
+NETWORK=Võrk
+TITLE_NEWFOLDER=Uus kaust
+MSG_NEWFOLDER=Sisesta uue kausta nimi.
+NEWFOLDER=Uus kaust
+MSG_RENAME=Sisesta valitud üksuse uus nimi.\n\n<b><c0000FF>%s</c></b> <c666666>(%d / %d)</c>
+TITLE_FILEOPERATION=Failitoiming
+SELDEST_DRIVE=Kettad
+SELDEST_WORKFOLDER=Töökaustad
+FOLDER_EXISTS=Selle nimega kaust on juba olemas.
+SRCISDEST=Allikas ja sihtkoht on samad.
+MYCOMPUTER=See arvuti
+ARCHIVE=Arhiiv
+DISKFREE=Vaba
+LOCATION=Asukoht
+FUNC_OPEN=Ava
+FUNC_COPYTO=Kopeeri
+FUNC_MOVETO=Teisalda
+FUNC_DELETE=Kustuta
+FUNC_RECYCLEBIN=Teisalda prügikasti
+FUNC_RENAME=Nimeta ümber
+FUNC_PROPERTIES=Atribuudid
+FUNC_FAVORITES=Lemmikud
+FUNC_NEWFOLDER=Uus kaust
+FUNC_REFRESH=Värskenda
+FUNC_GOTODESKTOP=Töölaud
+FUNC_GOTODOCUMENTS=Dokumendid
+FUNC_GOTOMUSIC=Muusika
+FUNC_GOTOPICTURES=Pildid
+FUNC_GOTOVIDEOS=Videod
+FUNC_GOTODOWNLOADS=Allalaadimised
+FUNC_SELECTALL=Vali kõik
+FUNC_ADDTOARCHIVE=Lisa arhiivi
+FUNC_EXTRACT=Paki lahti
+FUNC_CLOSETAB=Sulge vahekaart
+FUNC_SELECT=Vali
+FUNC_DESELECTALL=Tühista valik
+FUNC_BACK=Tagasi
+FUNC_FORWARD=Edasi
+FUNC_FOLDERTREE=Kaustapuu
+FUNC_GOTOROOT=Juurkaust
+FUNC_GOTOPARENT=Ülemkaust
+FUNC_EDITCOPY=Kopeeri
+FUNC_EDITCUT=Lõika
+FUNC_EDITPASTE=Kleebi
+FUNC_INVERTSELECTION=Pööra valik ümber
+FUNC_NEWTAB=Uus vahekaart
+TODAY=Täna
+YESTERDAY=Eile
+FIELD_NAME=Nimi
+FIELD_EXT=Laiend
+FIELD_LOCATION=Asukoht
+FIELD_SIZE=Suurus
+FIELD_DATEMODIFIED=Muudetud
+FIELD_ATTR=Atribuudid
+FIELD_DESC=Kommentaar
+UPDATE=Uuendused
+NAME=Nimi
+ACCESS_DENIED=Juurdepääs keelatud
+INVALID_PASSWORD=Vale parool
+DISKISFULL=Kettaruumi pole piisavalt
+CALCULATING=Arvutan…
+ERROR=Viga
+
+[formMain]
+ToolButton.tbFile=&Fail
+ToolButton.tbFolder=Kaust(&o)
+ToolButton.tbEdit=R&edigeeri
+ToolButton.tbView=Vaade(&w)
+ToolButton.tbSystem=&Süsteem
+ToolButton.tbArchive=&Arhiiv
+ToolButton.tbConnect=Ühe&nda
+ToolButton.tbTools=&Tööriistad
+ToolButton.tbHelp=Abi(&H)
+ToolButton.tbNewUpdateAvailable=NDR-i uuendus saadaval
+Menu.miOpen=&Q. Ava
+Menu.miCopyTo=&C. Kopeeri kohta…
+Menu.miMoveTo=&V. Teisalda kohta…
+Menu.miDelete=&D. Kustuta
+Menu.miRename=&R. Nimeta ümber
+Menu.miProperties=&E. Atribuudid
+Menu.miExit=&X. Välju
+Menu.miFolderTree=&T. Kaustapuu
+Menu.miFavorites=&V. Lemmikud
+Menu.miNewFolder=&C. Uus kaust
+Menu.miHistoryBack=&B. Tagasi
+Menu.miHistoryForward=&F. Edasi
+Menu.miToParent=&X. Ülemkaust
+Menu.miToRoot=&Z. Juurkaust
+Menu.miRefresh=&R. Värskenda
+Menu.miEditCopy=&C. Kopeeri
+Menu.miEditCut=&X. Lõika
+Menu.miEditPaste=&V. Kleebi
+Menu.miSelect=&B. Vali
+Menu.miSelectAll=&U. Vali kõik
+Menu.miInvertSelection=&I. Pööra valik ümber
+Menu.miSearchFile=&E. Otsi faile ja kaustu…
+Menu.miLanguage=&O. Keel
+Menu.miNewTab=&B. Uus vahekaart
+Menu.miListStyleAuto=&A. Automaatne
+Menu.miListStyleDetails=&D. Üksikasjad
+Menu.miListStyleThumbs=&T. Pisipildid
+Menu.miColAuto=&A. Automaatne
+Menu.miSortByName=&A. Nimi
+Menu.miSortByExt=&E. Laiend
+Menu.miSortBySize=&S. Suurus
+Menu.miSortByTime=&T. Muudetud
+Menu.miSortByAttr=&R. Atribuudid
+Menu.miSortByColor=&C. Värv
+Menu.miToDesktop=&D. Töölaud
+Menu.miToDocuments=&W. Dokumendid
+Menu.miToPictures=&P. Pildid
+Menu.miToMusic=&M. Muusika
+Menu.miToVideos=&V. Videod
+Menu.miToDownloads=&S. Allalaadimised
+Menu.miOptions=&O. Sätted
+Menu.miHelp=&H. Abi
+Menu.miShortcut=&S. Kiirklahvid…
+Menu.miHomepage=&W. NDR-i projektileht
+Menu.miCheckUpdate=&U. Otsi NDR-i uuendusi…
+Menu.miAbout=&A. Teave NDR-i kohta
+Menu.mipOpenWith=&W. Ava rakendusega…
+Menu.mipEditCopy=&C. Kopeeri
+Menu.mipEditCut=&X. Lõika
+Menu.mipEditPaste=&V. Kleebi
+Menu.mipCopyTo=&Y. Kopeeri kohta…
+Menu.mipMoveTo=&M. Teisalda kohta…
+Menu.mipDelete=&D. Kustuta
+Menu.mipRename=&R. Nimeta ümber
+Menu.mipAddToArchive=&A. Lisa arhiivi
+Menu.mipProperties=&T. Atribuudid
+Menu.pmiCloseTab=Sulge vahekaart(&C)
+Menu.pmiCloseAllTab=Sulge kõik v&ahekaardid
+Menu.pmiNewTab=Uus vahekaar&t
+Hint.bSelectAll=Vali kõik üksused
+Hint.bClearSelection=Tühista valik
+
+[formFileExists]
+Caption.lMsg=Sihtkohas on juba selle nimega üksus:
+Caption.chkApplyAll=R&akenda valik ülejäänutele
+Caption.btnOverwrite=Kirjuta üle(&w)
+Caption.btnRename=Nimeta ümbe&r
+Caption.btnReplace=As&enda
+Caption.btnSkip=Jäta vahele(&S)
+
+[formGetText]
+Caption.btnOk=&OK
+Caption.btnCancel=Loobu(&C)
+
+[formDelConfirm]
+Form.Caption=Kinnita kustutamine
+Caption.btnAll=Kõik(&A)
+Caption.btnYes=Jah(&Y)
+Caption.btnNo=Ei(&N)
+
+[formDelWarning]
+Caption.btnDelete=Kustuta(&D)
+Caption.btnYes=Jah(&Y)
+Caption.btnNo=Ei(&N)
+Prompt.Recycle=Kas teisaldada valitud üksused prügikasti?
+Prompt.Permanent=Kas kustutada valitud üksused jäädavalt?
+
+[formProgress]
+Caption.btnCancel=Loobu(&C)
+
+[formOrgFavorites]
+Caption.btnCancel=Loobu(&C)
+Caption.btnSave=&Salvesta
+Caption.btnRename=Nimeta ümbe&r
+Caption.btnUp=Liig&uta üles
+Caption.btnDown=Liiguta alla(&w)
+Caption.btnDelete=Kustuta(&D)
+
+[formChangeAttr]
+Caption.btnAll=Kõik(&l)
+Caption.btnSkip=Jäta vahele(&k)
+Caption.btnOk=OK
+Caption.btnCancel=Loobu
+Caption.chkHidden=Peidetud(&H)
+Caption.chkSystem=&Süsteem
+Caption.chkReadOnly=Ki&rjutuskaitstud
+Caption.lDate=Kuupäev(&D)
+Caption.lTime=Kellaaeg(&T)
+
+[formSaveList]
+Caption.btnSave=Salvesta
+Caption.btnCancel=Loobu
+Caption.chkAttributes=&Atribuudid
+Caption.chkDate=Kuupäev(&D)
+Caption.chkDescription=Komme&ntaar
+Caption.chkExtension=Lai&end
+Caption.chkFileName=&Failinimi
+Caption.chkFileSize=&Suurus
+Caption.chkTime=Kellaaeg(&T)
+
+[formAddToArchive]
+Caption.btnCancel=Loobu
+Caption.btnOk=OK
+Caption.lPassword=&Parool
+Caption.lSecFormat=Vorming
+
+[formFileSplit]
+Caption.btnOk=OK
+Caption.btnCancel=Loobu
+
+[formFileJoin]
+Caption.btnAdd=Lis&a
+Caption.btnCancel=Loobu
+Caption.btnOk=OK
+Caption.btnDelete=Kustuta(&D)
+Caption.btnDown=Liiguta alla(&w)
+Caption.btnUp=Liig&uta üles
+
+[formCompareFolder]
+Caption.btnCancel=Loobu
+Caption.btnOk=OK
+Caption.btnSave=Salvesta
+Caption.btnStop=Peata
+
+[formShortcut]
+Form.Caption=Kiirklahvid
+
+[formEditShortCut]
+Caption.btnOk=OK
+Caption.btnCancel=Loobu
+Caption.btnRemove=Eemalda
+
+[formCleanup]
+Caption.btnClose=Sulge
+Caption.btnOk=OK
+Caption.chkRecycleBin=P&rügikast
+Caption.btnAdd=Lis&a
+Caption.btnDelete=Kustuta(&D)
+Caption.btnSearch=Ot&si
+
+[formSelectDest]
+Form.Caption=Vali sihtkoht
+Caption.btnCancel=Loobu
+Caption.btnOk=OK
+Caption.btnTree=Sirvi kaustu(&f)
+
+[formTreeScan]
+Caption.btnCancel=Loobu
+
+[formSearchFolder]
+Caption.btnSearch=Otsi
+
+[formFTPQuickConnect]
+Caption.btnCancel=Loobu
+Caption.chkPassive=Ka&suta passiivset režiimi
+Caption.lPassword=Parool(&w)
+Caption.lPort=&Port
+Caption.lURL=Serveri aa&dress
+Caption.lUser=Kas&utajanimi
+
+[formPassword]
+Caption.btnOk=OK
+Caption.btnCancel=Loobu
+Caption.lUser=Kasutajanimi
+Caption.lPassword=Parool
+
+[formFTPSiteManager]
+Caption.btnAdd=Lis&a
+Caption.btnCancel=Loobu
+Caption.btnDelete=Kustuta(&D)
+Caption.btnOk=OK
+Caption.chkPassive=Kasuta passii&vset režiimi
+Caption.lName=&Nimi
+Caption.lPassword=Parool(&w)
+Caption.lPort=&Port
+Caption.lUser=Kas&utajanimi
+
+[formFolderTree]
+Form.Caption=Sirvi kaustu
+Caption.btnCancel=Loobu
+Caption.btnOk=OK
+ToolButton.tbFolder=Kaust(&e)
+ToolButton.tbFavorites=Lemmikud(&v)
+ToolButton.tbSearch=Otsi
+Hint.tbDesktop=Töölaud
+Hint.tbMyDoc=Dokumendid
+Hint.tbMyPic=Pildid
+Hint.tbMyMusic=Muusika
+Hint.tbMyVideo=Videod
+Menu.miFolder=Kaust(&e)
+Menu.miDelete=&D. Kustuta
+Menu.miRename=&R. Nimeta ümber
+Menu.miCreateNewFolder=&F. Uus kaust
+Menu.miProperties=&E. Atribuudid
+Menu.miClose=&C. Sulge
+
+[formPreferences]
+Caption.btnApply=R&akenda
+Caption.btnOk=&OK
+Caption.btnCancel=Loobu
+TabSheet.tsColor=Värvid
+TabSheet.tsTree=Kaustapuu
+TabSheet.tsEtc=Muu
+Caption.lMyDocuments=Dokumendid
+Caption.lMyMusic=Muusika
+Caption.lMyPictures=Pildid
+Caption.lMyVideos=Videod
+Caption.lPathDownloads=Allalaadimised
+
+[formAdvRename]
+Caption.btnCancel=Loobu
+Caption.btnUp=Liiguta üles
+Caption.btnDown=Liiguta alla
+Caption.rbApplyToExt=Laiend
+TabSheet.tsDelete=Eemalda
+TabSheet.tsExtension=Laiend
+
+[formEditFunction]
+Caption.btnCancel=Loobu
+Caption.btnOk=OK
+Caption.lName=Nimi
+
+[formFTPAttributes]
+Caption.btnCancel=Loobu
+Caption.btnOk=OK
+Caption.btnAll=Kõik
+Caption.btnSkip=Jäta vahele
+Caption.chkGExecute=Käivita(&x)
+Caption.chkURead=Lo&e
+Caption.chkUExecute=Käivita(&c)
+
+[formRename]
+Caption.btnOK=OK
+Caption.btnCancel=Loobu
+
+[formChecksum]
+Caption.btnCopy=Kopeeri(&C)
+
+[formNDRSearch]
+Caption.lName=Failinimi
+Caption.chkFiles=Failid
+Caption.chkFolders=Kaustad
+Caption.CategoryDocuments=Dokumendid
+Caption.btnMoveUp=Liiguta üles
+Caption.btnMoveDown=Liiguta alla
+Caption.btnRemove=Eemalda
+Caption.btnAdd=Lisa
+Status.Results=Otsingutulemused
+
+[formNDRDestination]
+Button.Cancel=Loobu
+
+[NDRUpdate]
+Title=NDR-i uuendus
+FeedHttpsRequired=Uuendusallikas peab kasutama HTTPS-i.
+InvalidDownloadUrl=Uuendusallikas ei sisalda kehtivat HTTPS-allalaadimisaadressi.
+NewVersionAvailable=Versioon {0} on saadaval. Praegune versioon on {1}.
+OpenDownloadPage=Kas avada allalaadimisleht?
+CurrentLatest=NDR on ajakohane. ({0})
+RequestFailed=Uuendusserveriga ei saanud ühendust. Kontrolli ühendust ja uuendusallikat.
+RequestFailedStatus=Uuendusserver tagastas HTTP olekukoodi {0}.
+RequestTimedOut=Uuendusserver ei vastanud 15 sekundi jooksul.
+
+[NDRSearch]
+Documents=Dokumendid
+
+[NDRVault]
+Password=Parool
+OK=OK
+Cancel=Loobu
+NewFolderTitle=Uus kaust
+RenameTitle=Nimeta ümber
+ProgressCancel=Loobu
+
+[NDR]
+OP_ARCHIVE_REPLACE_ARCHIVE=Asenda arhiiv
+OP_JOIN_EXISTS=Selle nimega fail on juba olemas. Ühtegi faili ei liidetud.\n{0}
+OP_TRANSFER_CANCEL=Loobu
+OP_TRANSFER_CANCELLED=Toiming ({0}) katkestati. Lõpetatud toimingu tulemused säilitati.
+OP_TRANSFER_COPY_DONE=Kopeerimine lõpetatud
+OP_TRANSFER_DELETE_DONE=Kustutamine lõpetatud
+OP_TRANSFER_MOVE_DONE=Teisaldamine lõpetatud
+OP_TRANSFER_OPERATION_FAILED=Toiming nurjus
+OP_TRANSFER_PARTIAL=Toiming on osaliselt lõpetatud
+OP_TRANSFER_PARTIAL_DETAIL=Lõpetatud: {0} · vead: {1} · vahele jäetud: {2}
+OP_TRANSFER_PREPARING_THE_OPERATION=Toimingu ettevalmistamine…
+OP_TRANSFER_SIZE_UNAVAILABLE=Suurus pole saadaval
+OP_TRANSFER_VERB_COPY=kopeeri
+OP_TRANSFER_VERB_MOVE=teisalda
+OP_TRANSFER_VERB_PASTE=kleebi
+UI_STARTUP_FAILED=Käivitamine nurjus. Ava NDR uuesti.
+UI_STARTUP_LOADING=Kaustade ja sätete ettevalmistamine…
+UPD_CLOSE=Sulge
+UPD_CONFIRM=Kas alla laadida ja paigaldada uuendus ning seejärel taaskäivitada NDR?\nSinu sätted säilivad.
+UPD_CURRENT_BUILD=Paigaldatud järk: {0}
+UPD_DOWNLOAD_ACTIVE=NDR {0} allalaadimine…
+UPD_ERROR_DETAILS=Tehnilised üksikasjad
+UPD_FAILED=Uuendamine nurjus.
+UPD_INSTALLER_START=Paigaldaja käivitamine…
+UPD_INSTALL_CHECKING=Paigalduspaketi kontrollimine…
+UPD_INSTALL_CLOSING=Kontrollitakse, kas NDR on suletud…
+UPD_INSTALL_EXTRACTING=Paigaldusfailide ettevalmistamine…
+UPD_INSTALL_FAILURE=Uuendamine nurjus. Vaata üksikasju failist update.log.
+UPD_INSTALL_FAILURE_TITLE=NDR-i uuenduse viga
+UPD_INSTALL_FINISHED=Paigaldamine on lõpetatud. NDR taaskäivitub…
+UPD_INSTALL_HEADING=NDR-i uuenduse paigaldamine
+UPD_INSTALL_TITLE=NDR-i uuendus
+UPD_INSTALL_WAITING=Oodatakse NDR-i sulgumist…
+UPD_INSTALL_WRITING=NDR-i failide paigaldamine…
+UPD_LOCAL_BUILD=Kohalik järk
+UPD_NEW_BUILD=Uus järk: {0}
+UPD_NONE=Uuemat versiooni pole saadaval.
+UPD_PREPARING=Paketi ettevalmistamine…
+UPD_RELEASE_FAILURE=GitHubi väljalaset ei saanud kontrollida.
+UPD_RESTART_NOTE=NDR taaskäivitub automaatselt. Sinu sätted säilivad.
+UPD_STARTING=Allalaadimine ja tervikluse kontroll on lõpetatud. Paigaldamine algab.
+UPD_STEP_DOWNLOAD=Allalaadimine
+UPD_STEP_INSTALL=Paigaldus ja taaskäivitus
+UPD_STEP_PREPARE=Ettevalmistus
+UPD_STEP_VERIFY=Terviklus
+UPD_TITLE=NDR-i uuendus
+UPD_VERIFIED_INIT=Kontrollitud uuenduse turvaline paigaldamine.
+UPD_VERIFY_HASH=SHA-256 kontrollimine…

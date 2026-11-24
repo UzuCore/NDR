@@ -324,7 +324,7 @@ fn checksum_merge_and_destination_follow_the_csharp_flows() {
     assert_eq!(app.original_dialogs.last().unwrap().title, format!("{}{}", app.language_pack.text("RES.COPY", "?"), app.language_pack.text("RES.SELECTDEST", "?")), "original COPY + SELECTDEST");
     frame(&mut app, &ctx, vec![]);
     app.destination_action(super::destination_dialog::DestinationAction::Work(1), &ctx);
-    assert_eq!(boxed(&app), ("Copy - Select a destination".to_owned(), "Work folder 2 is not set or is unavailable.".to_owned()));
+    assert_eq!(boxed(&app), ("Copy — Choose destination".to_owned(), "Work folder 2 is not set or is unavailable.".to_owned()));
     // Even with a box on top, the destination window keeps being drawn behind it (it used to disappear).
     let serial = app.original_dialogs.last().unwrap().serial;
     frame(&mut app, &ctx, vec![]);
@@ -341,7 +341,7 @@ fn checksum_merge_and_destination_follow_the_csharp_flows() {
     assert_eq!((used["Path"].as_str().unwrap(), used["UseCount"].as_u64()), (right.to_string_lossy().as_ref(), Some(1)));
     app.panes[0].selected = [row(&app, "beta.txt")].into_iter().collect();
     app.dispatch("moveToFolder", &ctx);
-    assert_eq!(app.original_dialogs.last().unwrap().title, "Move - Select a destination");
+    assert_eq!(app.original_dialogs.last().unwrap().title, "Move — Choose destination");
     let form = match &app.original_dialogs.last().unwrap().kind {
         DialogKind::Destination(form) => form.clone(),
         _ => panic!("no destination window"),
@@ -355,7 +355,7 @@ fn checksum_merge_and_destination_follow_the_csharp_flows() {
     app.panes[0].cursor = row(&app, "gamma.log");
     app.dispatch("copyToFolder", &ctx);
     app.destination_action(super::destination_dialog::DestinationAction::Remove(right.to_string_lossy().into_owned()), &ctx);
-    assert_eq!(boxed(&app).1, app.language_pack.text("RES.SELDEST_DELMUFOLDER", "?"));
+    assert_eq!(boxed(&app).1, app.language_pack.text("RES.SELDEST_DELMUFOLDER", "?").replace("{0}", &right.to_string_lossy()));
     app.answer_message_box(6, &ctx);
     assert!(app.settings.values["MostUsedDestinations"].as_array().unwrap().is_empty());
     app.destination_action(super::destination_dialog::DestinationAction::Browse, &ctx);
@@ -475,17 +475,24 @@ fn network_drives_explorer_import_and_install_follow_the_csharp_flows() {
     fs::create_dir_all(&legacy).unwrap();
     let ini = legacy.join("nexusfile.ini");
     fs::write(&ini, format!("[Window]\ndualview=0\n[View1]\nlastpath1={}\n", root.join("right").display())).unwrap();
-    fs::write(legacy.join("toolbar.xml"), include_bytes!("../../Resources/toolbar.xml")).unwrap();
+    let imported_toolbar = b"<toolbar><item type='InternalCommand'><command>Forward</command></item></toolbar>";
+    let prior_toolbar = b"<toolbar><item type='InternalCommand'><command>Back</command></item></toolbar>";
+    fs::write(legacy.join("toolbar.xml"), imported_toolbar).unwrap();
     fs::create_dir_all(root.join("profile")).unwrap();
-    fs::write(root.join("profile").join("toolbar.xml"), include_bytes!("../../Resources/toolbar.xml")).unwrap();
+    fs::write(root.join("profile").join("toolbar.xml"), prior_toolbar).unwrap();
     OPEN_TARGET.with(|t| *t.borrow_mut() = Some(ini));
     app.dispatch("importLegacy", &ctx);
     wait_until(&mut app, &ctx, |app| app.panes.iter().all(|p| !p.loading));
     assert_eq!(app.status, "레거시 설정을 가져왔습니다: nexusfile.ini");
     assert!(!app.dual && !app.settings.flag("DualPaneMode", true));
     assert_eq!(app.panes[0].path, root.join("right"));
-    let backups = fs::read_dir(root.join("profile")).unwrap().filter_map(Result::ok).filter(|e| e.file_name().to_string_lossy().starts_with("toolbar.xml.backup-")).count();
-    assert_eq!(backups, 1, "the previous toolbar.xml is kept");
+    let toolbar_path = root.join("profile").join("toolbar.xml");
+    assert_eq!(fs::read(&toolbar_path).unwrap(), imported_toolbar);
+    assert_eq!(app.toolbar.items.len(), 1);
+    assert_eq!(app.toolbar.items[0].action, "historyForward");
+    let backups: Vec<_> = fs::read_dir(root.join("profile")).unwrap().filter_map(Result::ok).filter(|e| e.file_name().to_string_lossy().starts_with("toolbar.xml.backup-")).collect();
+    assert_eq!(backups.len(), 1, "the previous toolbar.xml is kept");
+    assert_eq!(fs::read(backups[0].path()).unwrap(), prior_toolbar);
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -560,12 +567,12 @@ fn archive_create_add_move_and_extract_follow_the_csharp_flows() {
     app.panes[0].selected = [row(&app, "alpha.txt"), row(&app, "folder1")].into_iter().collect();
     // Create archive window: include subfolders (initially on when there are folders), split size check.
     app.dispatch("createArchive", &ctx);
-    assert_eq!(app.original_dialogs.last().unwrap().title, "압축하기");
+    assert_eq!(app.original_dialogs.last().unwrap().title, "압축 파일 만들기");
     let form = archive_form(&app);
     assert!(form.recursive);
     assert_eq!(form.formats.iter().map(|f| f.label.as_str()).collect::<Vec<_>>(), ["zip", "7z", "tar", "tar.gz", "tar.bz2"], "plain names, no ALZ/WIM");
-    assert_eq!(form.preset_labels, ["최고", "보통", "빠르게"]);
-    assert_eq!(form.volume, "분할 안함");
+    assert_eq!(form.preset_labels, ["최대", "기본", "빠름"]);
+    assert_eq!(form.volume, "분할 안 함");
     frame(&mut app, &ctx, vec![]);
     // Original FUN_0040d86c: unreadable volume text such as "열 MB" reads as 0 = one archive (archive_dialog parse_volume); there is no warning.
     let pack = left.join("pack.zip");
@@ -591,7 +598,7 @@ fn archive_create_add_move_and_extract_follow_the_csharp_flows() {
     name_archive(&mut app, &named);
     app.submit_archive_create(0, &ctx);
     assert_eq!(boxed(&app).0, "압축 파일 교체");
-    assert!(boxed(&app).1.starts_with("기존 압축 파일 묶음 1개를 새 결과로 교체할까요?\r\n\r\npack.zip"));
+    assert!(boxed(&app).1.replace("\r\n", "\n").starts_with("기존 압축 파일 묶음 1개를 새 결과로 교체할까요?\n\npack.zip"));
     app.answer_message_box(7, &ctx);
     assert!(app.job.as_ref().is_none_or(|j| j.finished));
     // Add to an archive: existing items stay. A different format is reported.
@@ -794,7 +801,7 @@ fn disk_copy_window_follows_the_csharp_flows() {
         let form = app.disk_copy_form().unwrap();
         // Initially: direct copy, source = first drive, destination = second.
         assert_eq!((form.mode, form.drive, form.destination_drive, form.physical_disk, form.destination_physical), (DiskMode::Copy, Some(0), Some(1), Some(0), Some(1)));
-        assert_eq!((form.drive_label(), form.start_label()), ("원본 드라이브", "드라이브 복사"));
+        assert_eq!((form.drive_label().as_str(), form.start_label().as_str()), ("원본 드라이브", "드라이브 복사"));
         assert_eq!(form.status, "이동식 드라이브와 이미지 파일을 선택하세요.");
         assert_eq!(form.warning(), "대상 드라이브의 모든 기존 데이터를 덮어씁니다. 원본과 대상의 용량이 같아야 하며, 복사 중에는 취소할 수 없습니다.");
         assert_eq!(form.drive_text(&form.drives[0]), "E:\\ USB-A · 1.0 MB");
@@ -823,7 +830,7 @@ fn disk_copy_window_follows_the_csharp_flows() {
     {
         let form = app.disk_copy_form().unwrap();
         form.mode = DiskMode::Create;
-        assert_eq!((form.drive_label(), form.path_label(), form.start_label()), ("이동식 드라이브", "저장할 이미지", "이미지 만들기"));
+        assert_eq!((form.drive_label().as_str(), form.path_label().as_str(), form.start_label().as_str()), ("이동식 드라이브", "저장할 이미지", "이미지 만들기"));
         assert_eq!(form.warning(), "이미지 파일은 원본 드라이브 바깥에 저장하세요.");
         assert!(!form.can_start(), "an image path is required");
     }
@@ -832,7 +839,7 @@ fn disk_copy_window_follows_the_csharp_flows() {
     let (title, name, filters, extension, overwrite) = DISK_DIALOGS.with(|d| d.borrow_mut().remove(0));
     let documents = native::documents_folder().map(|p| p.display().to_string()).unwrap_or_default();
     assert_eq!((title, name.as_str(), extension.as_str(), overwrite), (format!("디스크 이미지 저장|{documents}"), "E-.img", "img", true));
-    assert_eq!(filters, [("Raw disk image (*.img)".to_owned(), "*.img".to_owned()), ("모든 파일 (*.*)".to_owned(), "*.*".to_owned())]);
+    assert_eq!(filters, [("디스크 이미지 (*.img)".to_owned(), "*.img".to_owned()), ("모든 파일 (*.*)".to_owned(), "*.*".to_owned())]);
     assert_eq!(app.disk_copy_form().unwrap().image_path, image.to_string_lossy());
     app.disk_copy_action(DiskAction::Start, &ctx);
     assert!(app.msgboxes.is_empty(), "creating an image asks nothing");
@@ -884,8 +891,8 @@ fn disk_copy_window_follows_the_csharp_flows() {
         assert!(form.can_start());
     }
     frame(&mut app, &ctx, vec![]);
-    let disk3 = physical_text(&PhysicalDisk { number: 3, bytes: 4096 });
-    assert_eq!(disk3, "PhysicalDrive3 · 4,096 bytes");
+    let disk3 = physical_text(&PhysicalDisk { number: 3, bytes: 4096 }, &app.language_pack);
+    assert_eq!(disk3, "PhysicalDrive3 · 4,096바이트");
     for (attempt, swap) in [(0, 7), (1, 6)] {
         app.disk_copy_action(DiskAction::Start, &ctx);
         assert_eq!(boxed(&app), ("한 드라이브 디스크 복사".to_owned(), format!("{disk3} (미디어 교체 후)의 파티션 테이블과 모든 파티션을 포함한 물리 디스크 전체가 {disk3} 내용으로 덮어써집니다.\n\n작업 중에는 디스크를 분리하거나 NDR을 종료하지 마세요. 계속할까요?")));
@@ -921,7 +928,7 @@ fn disk_copy_window_follows_the_csharp_flows() {
         let form = app.disk_copy_form().unwrap();
         assert!(temp.is_file(), "the recovery image is kept");
         assert_eq!((form.mode, form.image_path.as_str(), form.whole_disk), (DiskMode::Restore, &*temp.to_string_lossy(), true));
-        assert_eq!((form.path_label(), form.start_label()), ("원본 전체 디스크 이미지", "전체 디스크 복원"));
+        assert_eq!((form.path_label().as_str(), form.start_label().as_str()), ("원본 전체 디스크 이미지", "전체 디스크 복원"));
         // Whole-disk restore from the remaining image: confirm -> write without verify -> the window closes.
         app.disk_copy_action(DiskAction::Start, &ctx);
         assert_eq!(boxed(&app), ("전체 물리 디스크 복원".to_owned(), format!("{disk3}의 파티션 테이블과 모든 파티션을 포함한 물리 디스크 전체가 {name} 내용으로 덮어써집니다.\n\n작업 중에는 디스크를 분리하거나 NDR을 종료하지 마세요. 계속할까요?")));
@@ -941,7 +948,7 @@ fn disk_copy_window_in_english_reports_errors_like_csharp() {
     assert_eq!(app.original_dialogs.last().unwrap().title, "Disk Copy");
     {
         let form = app.disk_copy_form().unwrap();
-        assert_eq!((form.drive_label(), form.start_label(), form.status.as_str()), ("Source drive", "Copy drive", "Select a removable drive and an image file."));
+        assert_eq!((form.drive_label().as_str(), form.start_label().as_str(), form.status.as_str()), ("Source drive", "Copy drive", "Select a removable drive and an image file."));
         assert_eq!(form.drive_text(&form.drives[1]), "F:\\ Removable Disk · 1.0 MB");
         form.whole_disk = true;
         assert_eq!(form.warning(), "This overwrites the target disk's partition table and every byte. Disk capacities must match exactly. The operation cannot be cancelled. No removable physical disks were found. Disk access may require administrator privileges.");
@@ -961,7 +968,7 @@ fn disk_copy_window_in_english_reports_errors_like_csharp() {
         let form = app.disk_copy_form().unwrap();
         form.mode = DiskMode::Restore;
         form.whole_disk = true;
-        assert_eq!((form.path_label(), form.start_label()), ("Source image", "Restore full disk"));
+        assert_eq!((form.path_label().as_str(), form.start_label().as_str()), ("Source image", "Restore full disk"));
         assert_eq!(form.warning(), "The target disk's partition table and every byte will be replaced. Image and disk capacities must match exactly.");
     }
     app.disk_copy_action(DiskAction::Browse, &ctx);
@@ -1199,12 +1206,14 @@ fn system_commands_follow_csharp() {
     // ShowAbout: information box with the profile folder.
     app.dispatch("about", &ctx);
     let (_, about) = boxed(&app);
-    assert!(about.starts_with(&format!("NDR {}", env!("CARGO_PKG_VERSION"))) && about.contains(&app.profile.display().to_string()), "{about}");
+    let build = ndr::update::build_label(ndr::update::current_build()).unwrap_or_else(|| "Local build".into());
+    assert!(about.starts_with(&format!("NDR {build}")) && about.contains(&app.profile.display().to_string()), "{about}");
+    assert!(about.contains(&format!("App version: {}", env!("CARGO_PKG_VERSION"))), "{about}");
     // User request: version 1.0.0, homepage = the NDR repository.
     assert_eq!(env!("CARGO_PKG_VERSION"), "1.0.0");
-    assert_eq!(app.menu_label("homepage", "Homepage"), "W. GitHub Repository");
+    assert_eq!(app.menu_label("homepage", "Homepage"), "W. NDR project page");
     let korean = ndr::compat::Language::load(&app.resources.join("Languages"), "ko");
-    assert_eq!(korean.text("Menu.miHomepage", ""), "W. GitHub 저장소");
+    assert_eq!(korean.text("Menu.miHomepage", ""), "W. NDR 프로젝트 페이지");
     app.dispatch("homepage", &ctx);
     assert_eq!(launched().first().map(|(program, _, _)| program.clone()), Some("https://github.com/UzuCore/NDR".to_owned()));
     // User request: Help also opens the NDR repository.
@@ -1489,7 +1498,7 @@ fn single_instance_mode_applies_without_restart_like_csharp() {
 }
 
 
-/// Original address bar (TNXPathLabel.SetPath) segments and pane frame colors (black skin: lframelocal 305B91, lframearc 505000, lframeinactive 3C3C3C).
+/// Original address bar (TNXPathLabel.SetPath) segments and the Black skin’s active and inactive pane frames.
 #[test]
 fn skin_address_segments_and_frame_colors_follow_the_original() {
     let (root, _ctx, mut app) = fixture("skin-crumbs", "en");
@@ -1504,10 +1513,10 @@ fn skin_address_segments_and_frame_colors_follow_the_original() {
     // Original TNXPathLabel: the root segment is "C:" (without the trailing '\').
     assert!(segments[0].label.ends_with(':') && !segments[0].label.ends_with('\\') && segments.iter().all(|s| s.folder.is_some()), "{}", segments[0].label);
     app.active = 0;
-    assert_eq!(app.skin_frame_stroke(&skin, 0), egui::Stroke::new(1.0_f32, Color32::from_rgb(0x30, 0x5B, 0x91)));
-    assert_eq!(app.skin_frame_stroke(&skin, 1), egui::Stroke::new(1.0_f32, Color32::from_rgb(0x1C, 0x36, 0x57)), "inactive: 60% lframelocal + 40% lback (000000), FUN_00483300");
+    assert_eq!(app.skin_frame_stroke(&skin, 0), egui::Stroke::new(1.0_f32, Color32::from_rgb(0x5A, 0xAF, 0xA2)));
+    assert_eq!(app.skin_frame_stroke(&skin, 1), egui::Stroke::new(1.0_f32, Color32::from_rgb(0x3C, 0x72, 0x6D)), "inactive: 60% lframelocal + 40% lback (11171E), FUN_00483300");
     app.panes[0].archive = Some(ArchiveLocation { file: folder.join("x.zip"), prefix: "inner/".into(), password: String::new() });
-    assert_eq!(app.skin_frame_stroke(&skin, 0).color, Color32::from_rgb(0x50, 0x50, 0x00));
+    assert_eq!(app.skin_frame_stroke(&skin, 0).color, Color32::from_rgb(0xAD, 0x87, 0x51));
     let labels: Vec<String> = app.crumb_segments(0).into_iter().map(|s| s.label).collect();
     assert_eq!(&labels[labels.len() - 3..], ["left", "x.zip", "inner"], "archive folders, the archive name, the inner folders");
     let _ = fs::remove_dir_all(root);
@@ -1546,7 +1555,7 @@ fn skin_tab_set_follows_the_original_tnxtabset() {
     let pieces: Vec<egui::Rect> = output.shapes.iter().filter_map(|c| match &c.shape { egui::Shape::Mesh(m) if m.texture_id == tab.id() => Some(m.calc_bounds()), _ => None }).collect();
     assert!(pieces.first().is_some_and(|r| r.left() == 16.0 && r.width() == 5.0 && r.height() == 24.0), "left part at 16: {pieces:?}");
     let texts: Vec<(String, Color32)> = output.shapes.iter().filter_map(|c| match &c.shape { egui::Shape::Text(t) if t.galley.text() != "after" => Some((t.galley.text().to_owned(), t.fallback_color)), _ => None }).collect();
-    assert_eq!(texts, [("alpha".to_owned(), Color32::from_gray(0x66)), ("beta".to_owned(), Color32::from_gray(0xC0))], "tabtext, tabactive");
+    assert_eq!(texts, [("alpha".to_owned(), Color32::from_rgb(0xA5, 0xB6, 0xC8)), ("beta".to_owned(), Color32::from_rgb(0xF4, 0xFA, 0xFF))], "tabtext, tabactive");
     // The tab list button (left end 12 x 24) shows "1. alpha" and "2. beta". Typing "1" while the menu is open goes to the first tab (original "&1. ").
     let run_events = |app: &mut App, events: Vec<egui::Event>| {
         let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 300.0))), events, ..Default::default() };
@@ -1642,12 +1651,12 @@ fn skin_info_bars_follow_the_original() {
         });
     });
     let fills: Vec<(egui::Rect, Color32)> = output.shapes.iter().filter_map(|c| match &c.shape { egui::Shape::Rect(r) => Some((r.rect, r.fill)), _ => None }).collect();
-    assert!(fills.contains(&(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 20.0)), Color32::BLACK)), "lfolderback: {fills:?}");
-    assert!(fills.contains(&(egui::Rect::from_min_size(egui::pos2(0.0, 20.0), egui::vec2(600.0, 20.0)), Color32::from_gray(0x3C))), "lfileback: {fills:?}");
+    assert!(fills.contains(&(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 20.0)), Color32::from_rgb(0x11, 0x17, 0x1E))), "lfolderback: {fills:?}");
+    assert!(fills.contains(&(egui::Rect::from_min_size(egui::pos2(0.0, 20.0), egui::vec2(600.0, 20.0)), Color32::from_rgb(0x16, 0x1C, 0x23))), "lfileback: {fills:?}");
     let galleys: Vec<std::sync::Arc<egui::Galley>> = output.shapes.iter().filter_map(|c| match &c.shape { egui::Shape::Text(t) => Some(t.galley.clone()), _ => None }).collect();
     let counts = galleys.iter().find(|g| g.text().contains("Folder")).expect("FOLDERINFO");
     let colors: Vec<Color32> = counts.job.sections.iter().map(|s| s.format.color).collect();
-    assert!(colors.contains(&Color32::from_rgb(0x4C, 0x82, 0xDC)) && colors.contains(&Color32::from_gray(0x85)), "lfoldersubtext1 numbers, lfoldertext words: {colors:?}");
+    assert!(colors.contains(&Color32::from_rgb(0x8F, 0xE5, 0xD2)) && colors.contains(&Color32::from_rgb(0xD4, 0xDE, 0xE8)), "lfoldersubtext1 numbers, lfoldertext words: {colors:?}");
     let _ = fs::remove_dir_all(root);
 }
 
@@ -1659,6 +1668,8 @@ fn skin_list_header_follows_the_original_draw_list_header() {
     assert_eq!([0.4, 0.6, 0.3].map(|t| mix_color(fore, back, t)), [Color32::from_gray(0x4D), Color32::from_gray(0x73), Color32::from_gray(0x3A)]);
     assert_eq!(mix_color(Color32::from_gray(0x22), back, 0.3), Color32::from_gray(0x0A));
     let (root, ctx, app) = fixture("skin-header", "en");
+    let native_fore = app.basic_list_color("NXFORE");
+    let native_back = app.basic_list_color("NXBACK");
     let columns = app.detail_columns(false);
     let widths: Vec<Option<f32>> = columns.iter().map(|_| Some(80.0)).collect();
     let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 300.0))), ..Default::default() };
@@ -1669,9 +1680,9 @@ fn skin_list_header_follows_the_original_draw_list_header() {
     });
     let titles: Vec<(String, f32, Color32)> = output.shapes.iter().filter_map(|c| match &c.shape { egui::Shape::Text(t) => Some((t.galley.text().to_owned(), t.pos.x, t.fallback_color)), _ => None }).collect();
     // The original writes column text at + 5 from GetListHeaderWidth (30 in icon view): the name cell text is at 35 (same spot as the name text).
-    assert_eq!(titles.first().map(|t| (t.1, t.2)), Some((35.0, Color32::from_gray(0x73))), "the Name column sorts by default: {titles:?}");
-    assert!(titles.iter().skip(1).all(|t| t.2 == Color32::from_gray(0x4D)), "{titles:?}");
-    let marks: Vec<egui::Rect> = output.shapes.iter().filter_map(|c| match &c.shape { egui::Shape::Rect(r) if r.fill == Color32::from_gray(0x3A) => Some(r.rect), _ => None }).collect();
+    assert_eq!(titles.first().map(|t| (t.1, t.2)), Some((35.0, mix_color(native_fore, native_back, 0.6))), "the Name column sorts by default: {titles:?}");
+    assert!(titles.iter().skip(1).all(|t| t.2 == mix_color(native_fore, native_back, 0.4)), "{titles:?}");
+    let marks: Vec<egui::Rect> = output.shapes.iter().filter_map(|c| match &c.shape { egui::Shape::Rect(r) if r.fill == mix_color(native_fore, native_back, 0.3) => Some(r.rect), _ => None }).collect();
     assert_eq!(marks.len(), 3, "a 5-3-1 triangle");
     assert_eq!(marks.iter().map(|r| (r.top(), r.width())).collect::<Vec<_>>(), [(2.0, 5.0), (1.0, 3.0), (0.0, 1.0)], "ascending: wide row at the bottom");
     let _ = fs::remove_dir_all(root);
@@ -1689,21 +1700,21 @@ fn skin_drive_bar_follows_the_original() {
         egui::CentralPanel::default().frame(egui::Frame::NONE).show(ctx, |ui| app.skin_drive_bar(ui, 0, ctx, &skin));
     });
     assert!(!app.settings.flag("ShowDriveButtons", false), "off by default (sdrivebtns=0)");
-    assert!(!output.shapes.iter().any(|c| matches!(&c.shape, egui::Shape::Rect(r) if r.fill == Color32::from_gray(0x20))), "nothing drawn while off");
+    assert!(!output.shapes.iter().any(|c| matches!(&c.shape, egui::Shape::Rect(r) if r.fill == Color32::from_rgb(0x16, 0x1C, 0x23))), "nothing drawn while off");
     app.settings.set_flag("ShowDriveButtons", true);
     app.drive_cache = Some((std::time::Instant::now(), vec![(PathBuf::from("C:\\"), "C:\\ · Fixed".into()), (PathBuf::from("D:\\"), "D:\\ · Fixed".into())]));
     let output = ctx.run(raw(), |ctx| {
         egui::CentralPanel::default().frame(egui::Frame::NONE).show(ctx, |ui| app.skin_drive_bar(ui, 0, ctx, &skin));
     });
     let fills: Vec<(egui::Rect, Color32)> = output.shapes.iter().filter_map(|c| match &c.shape { egui::Shape::Rect(r) => Some((r.rect, r.fill)), _ => None }).collect();
-    assert!(fills.contains(&(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 22.0)), Color32::from_gray(0x20))), "ldrivesback: {fills:?}");
+    assert!(fills.contains(&(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 22.0)), Color32::from_rgb(0x16, 0x1C, 0x23))), "ldrivesback: {fills:?}");
     let labels: Vec<(String, f32, f32, Color32)> = output.shapes.iter().filter_map(|c| match &c.shape { egui::Shape::Text(t) => Some((t.galley.text().to_owned(), t.pos.x, t.galley.size().x, t.fallback_color)), _ => None }).collect();
     assert_eq!(labels.iter().map(|l| l.0.as_str()).collect::<Vec<_>>(), ["C:", "D:"], "one button per drive");
     // Original TNXImageButton text layout 1: image x = (36 - (spacing 2 + text width + image width)) div 2, text x = image x + image width + 2 (image width 0 with icons off).
     for (i, l) in labels.iter().enumerate() {
         assert_eq!(l.1, 36.0 * i as f32 + ((36.0 - (2.0 + l.2.round())) / 2.0).trunc() + 2.0, "{l:?}");
     }
-    assert!(labels.iter().all(|l| l.3 == Color32::from_gray(0x99)), "ldrivestext (Black 999999): {labels:?}");
+    assert!(labels.iter().all(|l| l.3 == Color32::from_rgb(0xD4, 0xDE, 0xE8)), "ldrivestext: {labels:?}");
     let _ = fs::remove_dir_all(root);
 }
 
@@ -1876,7 +1887,7 @@ fn skin_focus_bar_follows_the_original_draw_focus() {
     ], "a 7-5-3-1 ▶ at left + 2, centred on the row");
 }
 
-/// Original bbFunctions (skin theme): seven equal cells F2-F8, key text bbkeytext (black E2A31D), background btnbar_back.bmp repeated.
+/// Original bbFunctions (skin theme): seven equal cells F2-F8, key text bbkeytext, background btnbar_back.bmp repeated.
 #[test]
 fn skin_function_key_bar_follows_the_original_button_bar() {
     let (root, ctx, mut app) = fixture("skin-fkeys", "ko");
@@ -1897,7 +1908,7 @@ fn skin_function_key_bar_follows_the_original_button_bar() {
         .collect();
     assert_eq!(keys.iter().map(|k| k.0.as_str()).collect::<Vec<_>>(), ["F2", "F3", "F4", "F5", "F6", "F7", "F8"]);
     assert!(keys.iter().enumerate().all(|(i, k)| (k.1.x - (97.0 * i as f32 + 5.0)).abs() < 0.01), "cells of (700 - 18 size grip) / 7 = 97, text at + 5: {keys:?}");
-    assert!(keys.iter().all(|k| k.2 == Color32::from_rgb(0xE2, 0xA3, 0x1D)), "bbkeytext");
+    assert!(keys.iter().all(|k| k.2 == Color32::from_rgb(0xF2, 0xBD, 0x72)), "bbkeytext");
     let tiles = output.shapes.iter().filter(|c| matches!(&c.shape, egui::Shape::Mesh(m) if m.texture_id == tile.id())).count();
     assert!(tiles >= 700 / 8, "{tiles}");
     // Dividers at ItemRect.right - 2 (the last item ends at 700 - 18), y = (20 - 2 - 14) / 2.
@@ -1976,7 +1987,7 @@ fn skin_toolbar_follows_the_original_layout() {
     });
     let bounds = |id: egui::TextureId| output.shapes.iter().filter_map(|c| match &c.shape { egui::Shape::Mesh(m) if m.texture_id == id => Some(m.calc_bounds()), _ => None }).collect::<Vec<_>>();
     let first = app.toolbar.items.iter().position(|i| i.kind == ndr::commands::ToolbarKind::Command && i.icon.ends_with("tb_back.png")).expect("a Back item");
-    assert_eq!(first, 0, "Back comes first in the shipped toolbar.xml");
+    assert_eq!(first, 0, "Back comes first in the built-in toolbar");
     // Original default\toolbar.xml: back, forward | desktop, documents, pictures, music, videos, favorites | Recycle Bin (right).
     let commands: Vec<(&str, bool)> = app.toolbar.items.iter().filter(|i| i.kind == ndr::commands::ToolbarKind::Command).map(|i| (i.icon.rsplit('\\').next().unwrap_or(""), i.align_right)).collect();
     assert_eq!(commands, [("tb_back.png", false), ("tb_forward.png", false), ("tb_desktop.png", false), ("tb_documents.png", false), ("tb_pictures.png", false), ("tb_music.png", false), ("tb_videos.png", false), ("tb_favorites.png", false), ("tb_recyclebin.png", true)]);
@@ -2095,19 +2106,18 @@ fn vertical_bar_cells_are_square() {
 }
 
 #[test]
-fn skin_menus_use_the_original_menu_colours() {
-    // Original MenuDrawItem (0x42e518) and menu bar (0x430e74): skin [Menu] colors (black: mback 141414, mtext B4B4B4, mhighlight E6E6E6, mover 000000,
-    // mdivider 303030, mborder 5F5F5F, mrtext C8C8C8, mmainback 2A2A2A, mmaintext 9F9F9F, mmainoverback 333333, mmainover FFFFFF).
+fn skin_menus_use_the_ndr_menu_colours() {
+    // Sidebar, menu strip, hover, text and key labels keep independent palette roles.
     let (root, _ctx, mut app) = fixture("skin-menu-colours", "en");
     app.settings.set_text("Theme", "Black");
     let skin = app.current_skin().expect("the Black skin");
     let mut style = egui::Style::default();
     super::skin_pane::skin_menu_style(&skin).apply(&mut style);
     let v = &style.visuals;
-    assert_eq!((v.window_fill, v.window_stroke.color), (Color32::from_rgb(0x14, 0x14, 0x14), Color32::from_rgb(0x5F, 0x5F, 0x5F)));
-    assert_eq!(v.widgets.inactive.fg_stroke.color, Color32::from_rgb(0xB4, 0xB4, 0xB4));
-    assert_eq!((v.widgets.hovered.weak_bg_fill, v.widgets.hovered.fg_stroke.color), (Color32::from_rgb(0xE6, 0xE6, 0xE6), Color32::BLACK));
-    assert_eq!((v.widgets.noninteractive.bg_stroke.color, v.weak_text_color), (Color32::from_rgb(0x30, 0x30, 0x30), Some(Color32::from_rgb(0xC8, 0xC8, 0xC8))));
+    assert_eq!((v.window_fill, v.window_stroke.color), (Color32::from_rgb(0x16, 0x1C, 0x23), Color32::from_rgb(0x4B, 0x5B, 0x6C)));
+    assert_eq!(v.widgets.inactive.fg_stroke.color, Color32::from_rgb(0xD4, 0xDE, 0xE8));
+    assert_eq!((v.widgets.hovered.weak_bg_fill, v.widgets.hovered.fg_stroke.color), (Color32::from_rgb(0x32, 0x45, 0x53), Color32::from_rgb(0xF4, 0xFA, 0xFF)));
+    assert_eq!((v.widgets.noninteractive.bg_stroke.color, v.weak_text_color), (Color32::from_rgb(0x4B, 0x5B, 0x6C), Some(Color32::from_rgb(0xA5, 0xB6, 0xC8))));
     assert_eq!(v.override_text_color, None);
     // Original MenuDrawItem: text at row left + 0x10 (the check image slot before it), MenuMeasureItem width = text + 0x20.
     assert_eq!(style.spacing.button_padding.x, super::skin_pane::MENU_GUTTER);
@@ -2115,32 +2125,31 @@ fn skin_menus_use_the_original_menu_colours() {
     let (bar_back, bar) = super::skin_pane::skin_menu_bar_style(&skin);
     let mut style = egui::Style::default();
     bar.apply(&mut style);
-    assert_eq!(bar_back, Color32::from_rgb(0x2A, 0x2A, 0x2A));
-    assert_eq!((style.visuals.widgets.inactive.fg_stroke.color, style.visuals.widgets.hovered.weak_bg_fill, style.visuals.widgets.hovered.fg_stroke.color), (Color32::from_rgb(0x9F, 0x9F, 0x9F), Color32::from_rgb(0x33, 0x33, 0x33), Color32::WHITE));
-    // Shortcut column: mrback 000000, mrtext C8C8C8, mrover 5577EE.
-    assert_eq!(super::skin_pane::skin_menu_shortcut_colors(&skin), (Color32::BLACK, Color32::from_rgb(0xC8, 0xC8, 0xC8), Color32::from_rgb(0x55, 0x77, 0xEE)));
+    assert_eq!(bar_back, Color32::from_rgb(0x20, 0x29, 0x33));
+    assert_eq!((style.visuals.widgets.inactive.fg_stroke.color, style.visuals.widgets.hovered.weak_bg_fill, style.visuals.widgets.hovered.fg_stroke.color), (Color32::from_rgb(0xD4, 0xDE, 0xE8), Color32::from_rgb(0x32, 0x45, 0x53), Color32::from_rgb(0xF4, 0xFA, 0xFF)));
+    // The keyboard-shortcut column has its own background and hover ink.
+    assert_eq!(super::skin_pane::skin_menu_shortcut_colors(&skin), (Color32::from_rgb(0x16, 0x1C, 0x23), Color32::from_rgb(0xA5, 0xB6, 0xC8), Color32::from_rgb(0x8F, 0xE5, 0xD2)));
     let _ = fs::remove_dir_all(root);
 }
 
 #[test]
-fn checked_menu_items_draw_the_original_check_bitmaps() {
-    // Original MenuDrawItem: checkable items draw CHECK (21 points), radio items RCHECK (12 points) at the row left, nothing when unchecked.
+fn checked_menu_items_paint_native_gutter_indicators() {
     let ctx = egui::Context::default();
-    let mut counts = Vec::new();
     for (checked, radio) in [(true, false), (true, true), (false, false)] {
+        let mut gutter = egui::Rect::NOTHING;
         let output = ctx.run(egui::RawInput::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                super::skin_pane::menu_check_button(ui, true, checked, radio, egui::Button::new("item"));
+                let button = super::skin_pane::menu_check_button(ui, true, checked, radio, egui::Button::new("item"));
+                gutter = egui::Rect::from_min_size(button.rect.min, egui::vec2(16.0, button.rect.height()));
             });
         });
-        let quads: usize = output
-            .shapes
-            .iter()
-            .filter_map(|clipped| if let egui::Shape::Mesh(mesh) = &clipped.shape { Some(mesh.vertices.len() / 4) } else { None })
-            .sum();
-        counts.push(quads);
+        let glyphs: Vec<_> = output.shapes.iter().filter(|c| matches!(c.shape, egui::Shape::Path(_) | egui::Shape::Circle(_))).collect();
+        assert_eq!(glyphs.len(), usize::from(checked), "checked={checked}, radio={radio}");
+        if let Some(glyph) = glyphs.first() {
+            assert!(gutter.contains_rect(glyph.shape.visual_bounding_rect()));
+            assert_eq!(matches!(glyph.shape, egui::Shape::Circle(_)), radio);
+        }
     }
-    assert_eq!(counts, vec![21, 12, 0]);
 }
 
 /// Original FUN_0048aa30: the folder info bar of My PC also uses FOLDERINFO (drives are not counted). The internal path "::drives::" is never shown.

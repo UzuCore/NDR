@@ -14,8 +14,8 @@ pub(super) struct AttributeRun {
 }
 
 impl App {
-    fn side_name(&self, pane: usize) -> std::borrow::Cow<'static, str> {
-        if pane == 0 { self.tr("왼쪽", "Left") } else { self.tr("오른쪽", "Right") }
+    fn side_name(&self, pane: usize) -> String {
+        if pane == 0 { self.catalog("NDR.UI_COMPARE_LEFT", "왼쪽", "Left") } else { self.catalog("NDR.UI_COMPARE_RIGHT", "오른쪽", "Right") }
     }
 
     /// Original bSelectAllClick (0x431450, vertical bar "select all" button, skin theme). Whether folders are included = setting (selectfolder) XOR Shift.
@@ -138,10 +138,10 @@ impl App {
         self.panes[i].selected.clear();
         self.refresh(i);
         let side = self.side_name(i);
-        self.status = if self.language == "ko" {
-            format!("{side} 패널 숨김 항목 {}", if visible { "표시" } else { "숨김" })
+        self.status = if visible {
+            super::file_commands::operation_format(&self.language_pack, "NDR.OP_PANE_HIDDEN_SHOWN", "{0} pane hidden items shown", &[&side])
         } else {
-            format!("{side} pane hidden items {}", if visible { "shown" } else { "hidden" })
+            super::file_commands::operation_format(&self.language_pack, "NDR.OP_PANE_HIDDEN_HIDDEN", "{0} pane hidden items hidden", &[&side])
         };
     }
 
@@ -150,7 +150,14 @@ impl App {
         let i = self.active;
         self.settings.set_text(if i == 0 { "LeftViewStyle" } else { "RightViewStyle" }, style);
         let side = self.side_name(i);
-        self.status = if self.language == "ko" { format!("{side} 패널 보기: {style}") } else { format!("{side} pane view: {style}") };
+        let shown = match style {
+            "Auto" => self.catalog("NDR.OP_PANE_VIEW_AUTO", "자동", "Auto"),
+            "Details" => self.catalog("NDR.OP_PANE_VIEW_DETAILS", "자세히", "Details"),
+            "Names" => self.catalog("NDR.OP_PANE_VIEW_NAMES", "이름", "Names"),
+            "Thumbnails" => self.catalog("NDR.OP_PANE_VIEW_THUMBNAILS", "미리 보기", "Thumbnails"),
+            _ => style.to_owned(),
+        };
+        self.status = super::file_commands::operation_format(&self.language_pack, "NDR.OP_PANE_STYLE_STATUS", "{0} pane view: {1}", &[&side, &shown]);
     }
 
     /// C# CalculateSelectedFolderSizeAsync: each path once, items inside chosen folders left out, counted in a progress window, then a summary box.
@@ -184,11 +191,11 @@ impl App {
             return self.ftp_change_attributes(i);
         }
         if self.panes[i].archive.is_some() {
-            return self.warn("압축 파일 안에서는 속성을 바꿀 수 없습니다.", "Attributes cannot be changed inside an archive.");
+            return self.warn_operation(&self.catalog("NDR.UI_PAIR_366CCD9D479C3750", "압축 파일 안에서는 속성을 바꿀 수 없습니다.", "Attributes cannot be changed inside an archive."));
         }
         let paths = self.command_targets(i);
         if paths.is_empty() {
-            return self.warn("속성을 바꿀 파일이나 폴더를 선택하세요.", "Select the files or folders to change.");
+            return self.warn_operation(&self.catalog("NDR.OP_ATTRIBUTES_SELECT", "속성을 바꿀 파일이나 폴더를 선택하세요.", "Select the files or folders to change."));
         }
         self.attribute_step(AttributeRun { pane: i, paths, index: 0, completed: 0, skipped: 0, errors: vec![], processed: vec![] });
     }
@@ -232,18 +239,17 @@ impl App {
             pane.selected.remove(&row);
         }
         self.refresh(run.pane);
-        let ko = self.language == "ko";
         let n = |value: usize| ndr::parity::format_size(value as u64, "B", true).trim_end_matches(" B").to_owned();
         if !run.errors.is_empty() {
-            let title = self.tr("일부 항목의 속성을 변경하지 못했습니다.", "Some attributes could not be changed.").into_owned();
+            let title = self.catalog("NDR.UI_PAIR_1628D71196EA0682", "일부 항목의 속성을 변경하지 못했습니다.", "Some attributes could not be changed.");
             let text = run.errors.iter().take(80).cloned().collect::<Vec<_>>().join("\r\n");
             self.text = Some(TextDocument { title, text });
         } else if run.completed > 0 && run.skipped > 0 {
-            self.status = if ko { format!("{}개 항목의 속성을 변경하고 {}개 항목을 건너뛰었습니다.", n(run.completed), n(run.skipped)) } else { format!("Changed {} items and skipped {}.", n(run.completed), n(run.skipped)) };
+            self.status = super::file_commands::operation_format(&self.language_pack, "NDR.OP_ATTRIBUTES_CHANGED_SKIPPED", "Changed {0} items and skipped {1}.", &[&n(run.completed), &n(run.skipped)]);
         } else if run.completed > 0 {
-            self.status = if ko { format!("{}개 항목의 속성을 변경했습니다.", n(run.completed)) } else { format!("Changed the attributes of {} items.", n(run.completed)) };
+            self.status = super::file_commands::operation_format(&self.language_pack, "NDR.OP_ATTRIBUTES_CHANGED", "Changed the attributes of {0} items.", &[&n(run.completed)]);
         } else if run.skipped > 0 {
-            self.status = if ko { format!("{}개 항목을 건너뛰었습니다.", n(run.skipped)) } else { format!("Skipped {} items.", n(run.skipped)) };
+            self.status = super::file_commands::operation_format(&self.language_pack, "NDR.OP_ATTRIBUTES_SKIPPED", "Skipped {0} items.", &[&n(run.skipped)]);
         }
     }
 

@@ -59,9 +59,25 @@ impl App {
         self.push_notice(ko, en, detail, NoticeKind::Error);
     }
 
+    pub(super) fn completion_notice_operation(&mut self, title: String, detail: impl Into<String>) {
+        self.push_operation_notice(title, detail, NoticeKind::Success);
+    }
+
+    pub(super) fn warning_notice_operation(&mut self, title: String, detail: impl Into<String>) {
+        self.push_operation_notice(title, detail, NoticeKind::Warning);
+    }
+
+    pub(super) fn error_notice_operation(&mut self, title: String, detail: impl Into<String>) {
+        self.push_operation_notice(title, detail, NoticeKind::Error);
+    }
+
     fn push_notice(&mut self, ko: &str, en: &str, detail: impl Into<String>, kind: NoticeKind) {
-        if !self.settings.flag("ShowCompletionToast", true) { return; }
         let title = self.tr(ko, en).into_owned();
+        self.push_operation_notice(title, detail, kind);
+    }
+
+    fn push_operation_notice(&mut self, title: String, detail: impl Into<String>, kind: NoticeKind) {
+        if !self.settings.flag("ShowCompletionToast", true) { return; }
         self.completion_toasts.push_at(title, detail, kind, Instant::now());
         self.egui_ctx.request_repaint();
     }

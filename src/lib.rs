@@ -2,6 +2,7 @@
 pub mod settings;
 pub mod compat;
 pub mod fsops;
+mod operation_diagnostic;
 pub mod native;
 pub mod remote;
 pub mod tools;

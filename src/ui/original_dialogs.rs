@@ -494,7 +494,7 @@ impl App {
                 Ok(changes) => DialogResult::Attributes(action, Some(changes)),
                 Err(()) => {
                     let title = self.original_dialogs[self.original_dialogs.len() - 1].title.clone();
-                    let text = self.tr("날짜 또는 시간이 올바르지 않습니다.", "The date or time is invalid.").into_owned();
+                    let text = self.catalog("NDR.UI_PAIR_23EEDF5CA7CA6101", "날짜 또는 시간이 올바르지 않습니다.", "The date or time is invalid.");
                     return self.system_box(&title, &text, ndr::msgbox::MB_OK | ndr::msgbox::MB_ICONEXCLAMATION, |_, _, _| {});
                 }
             },
@@ -814,10 +814,10 @@ impl App {
                     });
                     ui.add_space(24.0);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-                        if ui.add_sized([82.0, 28.0], egui::Button::new(if ko { "취소" } else { "Cancel" })).clicked() {
+                        if ui.add_sized([82.0, 28.0], egui::Button::new(self.language_pack.text("RES.CANCEL", "Cancel"))).clicked() {
                             outcome = Outcome::Cancel;
                         }
-                        if ui.add_sized([82.0, 28.0], egui::Button::new(if ko { "확인" } else { "OK" })).clicked() {
+                        if ui.add_sized([82.0, 28.0], egui::Button::new(self.language_pack.text("RES.OK", "OK"))).clicked() {
                             outcome = Outcome::Ok;
                         }
                     });

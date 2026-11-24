@@ -14,6 +14,7 @@
 !/tests/archive_web_corpus_operations.rs
 !/tests/archive_local_iso.rs
 !/tests/archive_local_bk3.rs
+!/tests/ndr_catalog_resources.rs
 /.cargo/
 /THIRD-PARTY-NOTICES.txt
 /Resources/*

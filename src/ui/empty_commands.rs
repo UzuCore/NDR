@@ -11,7 +11,7 @@ impl App {
     pub(super) fn empty_temp_command(&mut self) {
         let Some(folder) = (self.system.temp_folder)() else { return };
         // Counting runs separately (the original counts on the UI thread and stalls briefly on a large temp folder). empty_temp_counted asks when it finishes.
-        self.status = self.tr("임시 폴더 크기를 세고 있습니다…", "Counting the temporary folder…").into_owned();
+        self.status = self.catalog("NDR.UI_PAIR_4755D22C8F4A65D9", "임시 폴더 크기를 세고 있습니다…", "Counting the temporary folder…");
         let tx = self.async_tx.clone();
         thread::spawn(move || {
             let summary = ndr::tools::folder_size_summary(std::slice::from_ref(&folder), &std::sync::atomic::AtomicBool::new(false)).unwrap_or_default();

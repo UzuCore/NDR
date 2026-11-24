@@ -141,6 +141,8 @@ impl App {
         // Original DrawListItem field 3 for a folder whose size was not counted (+0x60 == -1): GetString RES DIR ("[폴더]", "[DIR]"), right-aligned
         // in the folder color, ".." included.
         let folder_size_text = self.language_pack.text("RES.DIR", "[DIR]");
+        let vault_type = self.language_pack.text("NDRVault.TextEditorTitle", "Encrypted folder");
+        let parent_type = self.language_pack.text("RES.FUNC_GOTOPARENT", "Parent folder");
         let group_mode = self.settings.text(&Self::side_key(index, "GroupMode"), "None");
         let category_mode = self.settings.text(&Self::side_key(index, "FolderCategoryMode"), "Auto");
         let show_group_name = self.settings.flag(&Self::side_key(index, "ShowGroupName"), true);
@@ -185,9 +187,9 @@ impl App {
                 && entry.is_dir && entry.path.is_file()
                 && entry.path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("ndr"));
             let kind = if vault_item {
-                (if korean { "암호화 폴더" } else { "Encrypted folder" }).to_owned()
+                vault_type.clone()
             } else if !skin && entry.is_parent() {
-                (if korean { "상위 폴더" } else { "Parent folder" }).to_owned()
+                parent_type.clone()
             } else if !skin {
                 ndr::listing::type_name(&entry.name, entry.is_dir, korean)
             } else if pane.archive.is_some() || pane.remote.is_some() || entry.name == ".." {

@@ -62,27 +62,31 @@ pub struct Language {
     values: HashMap<String, String>,
     fallback: HashMap<String, String>,
     keys_by_text: HashMap<String, String>,
+    literal_pairs: HashMap<u64, String>,
 }
 impl Language {
-    /// `directory` contains original *.lang resources. Missing languages fall back to Korean.
+    /// Load a catalog and its English fallback. An unknown locale uses Korean.
     pub fn load(directory: &Path, code: &str) -> Self {
+        Self::load_impl(directory, code, true)
+    }
+
+    /// An early-start catalog does not need the legacy phrase reverse index.
+    pub fn load_labels(directory: &Path, code: &str) -> Self {
+        Self::load_impl(directory, code, false)
+    }
+
+    fn load_impl(directory: &Path, code: &str, phrase_index: bool) -> Self {
         let read = |code: &str| {
             fs::read(directory.join(format!("{code}.lang")))
                 .ok()
                 .map(|b| parse_resource(&decode(&b, false)))
                 .unwrap_or_default()
         };
-        let code = if !code.contains(['/', '\\', ':'])
-            && directory.join(format!("{code}.lang")).is_file()
-        {
-            code
-        } else {
-            "ko"
-        };
-        let korean = read("ko");
+        let (code, stem) = resolve_catalog(directory, code).unwrap_or_else(|| ("ko".into(), "ko".into()));
+        let korean = if code == "ko" || phrase_index { read("ko") } else { HashMap::new() };
         let english = read("en");
         let mut keys_by_text = HashMap::new();
-        for strings in [&korean, &english] {
+        for strings in [&korean, &english].into_iter().filter(|_| phrase_index) {
             let mut entries: Vec<_> = strings.iter().collect();
             entries.sort_by_key(|(key, _)| {
                 (!key.starts_with("res."), !key.starts_with("root."), *key)
@@ -96,46 +100,86 @@ impl Language {
                 }
             }
         }
-        Self {
-            code: code.into(),
-            values: if code.eq_ignore_ascii_case("ko") {
-                korean
-            } else if code.eq_ignore_ascii_case("en") {
-                english.clone()
-            } else {
-                read(code)
-            },
-            fallback: english,
-            keys_by_text,
-        }
+        let values = if code == "ko" { korean } else if code == "en" { english.clone() } else { read(&stem) };
+        let literal_pairs = if phrase_index {
+            values.iter()
+                .filter_map(|(key, value)| {
+                    let suffix = key.strip_prefix("ndr.ui_pair_")?;
+                    Some((u64::from_str_radix(suffix, 16).ok()?, clean_language_text(value)))
+                })
+                .collect()
+        } else {
+            HashMap::new()
+        };
+        Self { code, values, fallback: english, keys_by_text, literal_pairs }
+
     }
+    /// Fetch an explicit catalog key with language-appropriate built-in text
+    /// when neither the selected nor its English catalog contains it.
+    pub fn localized(&self, key: &str, korean: &str, english: &str) -> String {
+        self.text(key, if self.code == "ko" { korean } else { english })
+    }
+
     /// Accepts RES.KEY, Root.KEY, formMain.Menu.miOpen, Menu.miOpen or a bare root key.
     /// Original FUN_0040bd74 / FUN_0040bc8c: ReadString(section, key, default) on the language TIniFile (DAT_008d44bc), the default when no file is loaded.
     pub fn text(&self, key: &str, fallback: &str) -> String {
         clean_language_text(self.raw(key).as_deref().unwrap_or(fallback))
     }
-    /// The stored value with its '&' accelerator markers (the original strips them itself), or None when absent.
-    /// Same key rules as [`Language::text`].
-    pub fn raw(&self, key: &str) -> Option<String> {
-        let lower = key.to_lowercase();
-        let mut keys = vec![lower.clone()];
-        if let Some(rest) = lower
-            .strip_prefix("root.")
-            .or_else(|| lower.strip_prefix("res."))
-        {
-            keys = vec![format!("res.{rest}"), format!("root.{rest}")];
-        } else if lower.starts_with("menu.") || lower.starts_with("toolbutton.") {
-            keys.push(format!("formmain.{lower}"));
-        } else if !lower.contains('.') {
-            keys = vec![format!("res.{lower}"), format!("root.{lower}")];
+    /// An equivalent already translated catalog entry can be reused only
+    /// when its meaning and format arguments are the same.
+    fn alias(key: &str) -> Option<&'static str> {
+        match key {
+            "ndr.upd_title" | "ndr.upd_install_title" => Some("ndrupdate.title"),
+            "ndr.upd_none" => Some("res.update_noupdate"),
+            _ => None,
         }
-        keys.iter()
-            .find_map(|key| self.values.get(key))
-            .or_else(|| keys.iter().find_map(|key| self.fallback.get(key)))
+    }
+
+    /// The selected catalog's own string, never the fallback catalog.
+    pub fn primary_raw(&self, key: &str) -> Option<&str> {
+        let keys = Self::keys(key);
+        keys.iter().find_map(|candidate| self.values.get(candidate).map(String::as_str))
+            .or_else(|| Self::alias(&keys[0]).and_then(|alias| self.values.get(alias).map(String::as_str)))
+    }
+
+    fn keys(key: &str) -> Vec<String> {
+        let lower = key.to_lowercase();
+        if let Some(rest) = lower.strip_prefix("root.").or_else(|| lower.strip_prefix("res.")) {
+            vec![format!("res.{rest}"), format!("root.{rest}")]
+        } else if lower.starts_with("menu.") || lower.starts_with("toolbutton.") {
+            vec![lower.clone(), format!("formmain.{lower}")]
+        } else if !lower.contains('.') {
+            vec![format!("res.{lower}"), format!("root.{lower}")]
+        } else {
+            vec![lower]
+        }
+    }
+
+    /// The stored value (including '&' accelerators), or None when absent.
+    /// Same key rules as [Language::text].
+    pub fn raw(&self, key: &str) -> Option<String> {
+        if let Some(local) = self.primary_raw(key) {
+            return Some(local.into());
+        }
+        let keys = Self::keys(key);
+        keys.iter().find_map(|candidate| self.fallback.get(candidate))
+            .or_else(|| Self::alias(&keys[0]).and_then(|alias| self.fallback.get(alias)))
             .cloned()
     }
-    /// Resolve either source caption through cached original resource keys; performs no filesystem I/O.
+    /// NDR literal-pair overrides are keyed by source, not by a translated
+    /// sentence. They have priority over cross-referenced legacy catalog keys.
+    pub fn literal_pair(&self, korean: &str, english: &str) -> Option<&str> {
+        let hash = korean.bytes().chain([0]).chain(english.bytes()).fold(
+            0xcbf29ce484222325_u64, |hash, byte| (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3),
+        );
+        self.literal_pairs.get(&hash).map(String::as_str)
+    }
+
+    /// Resolve either source caption through cached resource keys; performs no filesystem I/O.
     pub fn translate_pair(&self, korean: &str, english: &str) -> String {
+        if let Some(text) = self.literal_pair(korean, english) {
+            return text.into();
+        }
         let fallback = if self.code.eq_ignore_ascii_case("ko") {
             korean
         } else {
@@ -161,6 +205,81 @@ fn clean_language_text(value: &str) -> String {
         .replace('&', "")
         .replace('\u{1}', "&")
 }
+/// The packaged NDR locale IDs and localized display names.
+pub const BUILTIN_LANGUAGES: &[(&str, &str)] = &[
+    ("af", "Afrikaans"), ("bg", "Български"), ("ca", "Català"), ("cs", "Čeština"),
+    ("da", "Dansk"), ("de", "Deutsch"), ("el", "Ελληνικά"), ("en", "English"),
+    ("es", "Español"), ("et", "Eesti"), ("eu", "Euskara"), ("fi", "Suomi"),
+    ("fil", "Filipino"), ("fr", "Français"), ("hr", "Hrvatski"), ("hu", "Magyar"),
+    ("id", "Bahasa Indonesia"), ("is", "Íslenska"), ("it", "Italiano"), ("ja", "日本語"),
+    ("ko", "한국어"), ("lt", "Lietuvių"), ("lv", "Latviešu"), ("ms", "Bahasa Melayu"),
+    ("nb", "Norsk bokmål"), ("nl", "Nederlands"), ("pl", "Polski"),
+    ("pt-BR", "Português (Brasil)"), ("pt-PT", "Português (Portugal)"), ("ro", "Română"),
+    ("ru", "Русский"), ("sk", "Slovenčina"), ("sl", "Slovenščina"), ("sr-Latn", "Srpski (latinica)"),
+    ("sv", "Svenska"), ("tr", "Türkçe"), ("uk", "Українська"), ("vi", "Tiếng Việt"),
+    ("zh-CN", "简体中文"), ("zh-TW", "繁體中文"),
+];
+
+fn normalized_locale(locale: &str) -> Option<String> {
+    let locale = locale.trim().replace('_', "-").to_ascii_lowercase();
+    if locale.len() > 64 || locale.split('-').any(|part| part.is_empty() || !part.bytes().all(|b| b.is_ascii_alphanumeric())) {
+        return None;
+    }
+    Some(locale)
+}
+
+fn resolve_catalog(directory: &Path, requested: &str) -> Option<(String, String)> {
+    let locale = normalized_locale(requested)?;
+    let mut parts = locale.split('-');
+    let primary = parts.next()?;
+    let alternatives: Vec<&str> = match primary {
+        "zh" => {
+            let variant: Vec<_> = parts.collect();
+            if variant.contains(&"hant") || variant.iter().any(|&part| matches!(part, "tw" | "hk" | "mo")) {
+                vec!["zh-TW", "zh-CN"]
+            } else {
+                vec!["zh-CN", "zh-TW"]
+            }
+        }
+        "pt" if parts.any(|part| part == "br") => vec!["pt-BR", "pt-PT"],
+        "pt" => vec!["pt-PT", "pt-BR"],
+        "sr" => vec!["sr-Latn", "sr"],
+        "no" => vec!["nb"],
+        "tl" => vec!["fil"],
+        "in" => vec!["id"],
+        _ => vec![primary],
+    };
+    let from_disk = |stem: String| {
+        let code = BUILTIN_LANGUAGES.iter()
+            .find(|(known, _)| normalized_locale(&stem).is_some_and(|stem| known.eq_ignore_ascii_case(&stem)))
+            .map_or_else(|| stem.clone(), |(code, _)| (*code).into());
+        (code, stem)
+    };
+    // Soundly validated names can be opened directly; enumerate only for case
+    // variants or imported packs stored under a noncanonical spelling.
+    let choices = std::iter::once(locale.as_str()).chain(alternatives);
+    let mut disk_codes: Option<Vec<String>> = None;
+    for choice in choices {
+        let canonical = BUILTIN_LANGUAGES.iter()
+            .find(|(known, _)| known.eq_ignore_ascii_case(choice))
+            .map_or(choice, |(known, _)| *known);
+        if directory.join(format!("{canonical}.lang")).is_file() {
+            return Some(from_disk(canonical.to_owned()));
+        }
+        let codes = disk_codes.get_or_insert_with(|| available_codes(directory));
+        if let Some(stem) = codes.iter()
+            .find(|code| normalized_locale(code).is_some_and(|code| code.eq_ignore_ascii_case(choice))) {
+            return Some(from_disk(stem.clone()));
+        }
+    }
+    None
+}
+
+/// Report the effective bundled or custom language ID without rewriting a saved preference.
+pub fn resolve_language_code(directory: &Path, requested: &str) -> String {
+    resolve_catalog(directory, requested).map_or_else(|| "ko".into(), |(code, _)| code)
+}
+
 pub fn available_codes(directory: &Path) -> Vec<String> {
     let mut codes: Vec<_> = fs::read_dir(directory)
         .into_iter()
@@ -2187,8 +2306,19 @@ impl ShortcutMap {
     }
     /// A header replaces defaults; a headerless file overrides each default name using its first occurrence.
     pub fn parse(text: Option<&str>) -> Self {
-        let mut lines = shortcut_lines(DEFAULT_SHORTCUT_TEXT);
-        lines.remove(0);
+        let mut lines: Vec<_> = default_shortcut_bindings()
+            .iter()
+            .map(|&(action, chord)| {
+                let text = shortcut_to_text(chord);
+                // Keep the existing exported profile spelling for these menu actions.
+                if matches!(action, "miShred" | "miPasteAsShortcut" | "miFindNext" | "miEmptyRecycleBin" | "miEmptyTemp") {
+                    let key = text.strip_prefix("Ctrl+Shift+").unwrap_or(&text);
+                    format!("{action}=Shift+Ctrl+{key}")
+                } else {
+                    format!("{action}={text}")
+                }
+            })
+            .collect();
         if let Some(text) = text {
             let supplied = shortcut_lines(text);
             if supplied
@@ -2666,137 +2796,144 @@ mod tests {
     }
 }
 
-// Original r69 shortcut defaults and DFM menu search order, ported as data.
-pub const DEFAULT_SHORTCUT_TEXT: &str = r##"NEXUSFILESHORTCUT1.0
-miOpen=Enter
-miParameterOpen=Ctrl+Enter
-miOpenAllSelectedFiles=Ctrl+Alt+Enter
-miCopyTo=Alt+C
-miMoveTo=Alt+M
-miDelete=Alt+D
-miShred=Shift+Ctrl+D
-miRename=Alt+R
-miAdvRename=Shift+Alt+R
-miChangeAttributes=Ctrl+Z
-miCalculateSelectedFolderSize=Ctrl+Shift+R
-miProperties=F9
-miDescription=Alt+Enter
-miCreateEmptyFile=Ctrl+N
-miShortcutOnDesktop=Ctrl+Shift+I
-miExit=Alt+X
-miFolderTree=F10
-miFavorites=F11
-miNewFolder=Alt+K
-miHistoryBack=Alt+Left
-miHistoryForward=Alt+Right
-miToParent=Backspace
-miToRoot=\
-miToLastDest=Ctrl+Backspace
-miNetwork=Shift+/
-miWorkFolder1=Ctrl+1
-miWorkFolder2=Ctrl+2
-miWorkFolder3=Ctrl+3
-miWorkFolder4=Ctrl+4
-miWorkFolder5=Ctrl+5
-miGoToWorkFolder1=Alt+1
-miGoToWorkFolder2=Alt+2
-miGoToWorkFolder3=Alt+3
-miGoToWorkFolder4=Alt+4
-miGoToWorkFolder5=Alt+5
-miRefresh=Ctrl+R
-miEditCopy=Ctrl+C
-miEditCut=Ctrl+X
-miEditPaste=Ctrl+V
-miPasteAsShortcut=Shift+Ctrl+V
-miCopyFullPath=Ctrl+Alt+F
-miCopyFileName=Ctrl+Alt+A
-miCopyPath=Ctrl+Alt+R
-miSelect=Spacebar
-miSelectAll=Alt+U
-miInvertSelection=Num *
-miAdvSelect=Num +
-miAdvDeselect=Num -
-miRestoreLastSel=Shift+Backspace
-miSelectSameExt=Num /
-miSelectSameName=Ctrl+Num /
-miFind=Ctrl+F
-miFindNext=Shift+Ctrl+F
-miDualView=Alt+F2
-miShowFolders=Alt+F3
-miNewTab=Ctrl+T
-miListStyleAuto=
-miListStyleNames=
-miListStyleDetails=
-miListStyleThumbs=
-miColAuto=Ctrl+Alt+0
-miCol1=Ctrl+Alt+1
-miCol2=Ctrl+Alt+2
-miCol3=Ctrl+Alt+3
-miCol4=Ctrl+Alt+4
-miCol5=Ctrl+Alt+5
-miCol6=Ctrl+Alt+6
-miSortByNone=Ctrl+Alt+O
-miSortByName=Ctrl+Alt+N
-miSortByExt=Ctrl+Alt+E
-miSortBySize=Ctrl+Alt+S
-miSortByTime=Ctrl+Alt+T
-miSortByAttr=Ctrl+Alt+B
-miSortDescend=Ctrl+Alt+Num -
-miFilterCustom=Ctrl+I
-miShowHidden=Alt+Z
-miToDesktop=Ctrl+D
-miToDocuments=Ctrl+G
-miToPictures=Ctrl+Q
-miToMusic=Ctrl+S
-miToVideos=Ctrl+O
-miToDownloads=
-miControlPanel=Alt+F12
-miAddRemoveProg=Alt+F11
-miRecycleBin=Ctrl+B
-miEmptyRecycleBin=Shift+Ctrl+B
-miToTemp=Ctrl+P
-miEmptyTemp=Shift+Ctrl+P
-miCommandLine=/
-miArcAdd=Ctrl+A
-miArcMove=Ctrl+Shift+A
-miArcExtract=Ctrl+E
-miArcExtractToCurr=Ctrl+Shift+E
-miArcExtractToFolder=
-miArcExtractAuto=Alt+Q
-miFTPQuickConnect=
-miFTPManageSites=
-miFTPDisconnect=
-miMapNetworkDrive=
-miUnmapNetworkDrive=
-miTextViewer=Alt+V
-miTextEditor=Alt+B
-miClearDescriptions=
-miSaveList=
-miSplitFile=Ctrl+Alt+L
-miJoinFile=Ctrl+Alt+J
-miDiskCopy=
-miCleanupDisk=
-miCompareFolder=
-miOptions=Ctrl+F12
-CopyToLeft=Ctrl+Left
-CopyToRight=Ctrl+Right
-MoveToLeft=Ctrl+Alt+Left
-MoveToRight=Ctrl+Alt+Right
-CopyTo=Insert
-MoveTo=Shift+Insert
-SelectAllWithFolder=Ctrl+Num *
-FindNext=Ctrl+L
-ExchangePath=
-ShowPathHistory=Alt+Down
-RecycleBin=Delete
-Delete=Shift+Delete
-Delete=Shift+Alt+D
-Shred=Ctrl+Shift+Delete
-FocusAddressBar=Alt+`
-SelectSameName=Shift+,
-SelectSameExt=Shift+.
-CloseTab=Ctrl+W
-SelectCurrAndMove=Spacebar"##;
+/// NDR-owned key chords mapped to action IDs. An action can appear more than
+/// once; dispatch order is intentional. Legacy IDs are supported at the file boundary.
+pub fn default_shortcut_bindings() -> &'static [(&'static str, u16)] {
+    const SHIFT: u16 = 0x2000;
+    const CTRL: u16 = 0x4000;
+    const ALT: u16 = 0x8000;
+    &[
+        ("miOpen", 0x0d),
+        ("miParameterOpen", CTRL | 0x0d),
+        ("miOpenAllSelectedFiles", CTRL | ALT | 0x0d),
+        ("miCopyTo", ALT | b'C' as u16),
+        ("miMoveTo", ALT | b'M' as u16),
+        ("miDelete", ALT | b'D' as u16),
+        ("miShred", SHIFT | CTRL | b'D' as u16),
+        ("miRename", ALT | b'R' as u16),
+        ("miAdvRename", SHIFT | ALT | b'R' as u16),
+        ("miChangeAttributes", CTRL | b'Z' as u16),
+        ("miCalculateSelectedFolderSize", CTRL | SHIFT | b'R' as u16),
+        ("miProperties", 0x78),
+        ("miDescription", ALT | 0x0d),
+        ("miCreateEmptyFile", CTRL | b'N' as u16),
+        ("miShortcutOnDesktop", CTRL | SHIFT | b'I' as u16),
+        ("miExit", ALT | b'X' as u16),
+        ("miFolderTree", 0x79),
+        ("miFavorites", 0x7a),
+        ("miNewFolder", ALT | b'K' as u16),
+        ("miHistoryBack", ALT | 0x25),
+        ("miHistoryForward", ALT | 0x27),
+        ("miToParent", 0x08),
+        ("miToRoot", 0xdc),
+        ("miToLastDest", CTRL | 0x08),
+        ("miNetwork", SHIFT | 0xbf),
+        ("miWorkFolder1", CTRL | b'1' as u16),
+        ("miWorkFolder2", CTRL | b'2' as u16),
+        ("miWorkFolder3", CTRL | b'3' as u16),
+        ("miWorkFolder4", CTRL | b'4' as u16),
+        ("miWorkFolder5", CTRL | b'5' as u16),
+        ("miGoToWorkFolder1", ALT | b'1' as u16),
+        ("miGoToWorkFolder2", ALT | b'2' as u16),
+        ("miGoToWorkFolder3", ALT | b'3' as u16),
+        ("miGoToWorkFolder4", ALT | b'4' as u16),
+        ("miGoToWorkFolder5", ALT | b'5' as u16),
+        ("miRefresh", CTRL | b'R' as u16),
+        ("miEditCopy", CTRL | b'C' as u16),
+        ("miEditCut", CTRL | b'X' as u16),
+        ("miEditPaste", CTRL | b'V' as u16),
+        ("miPasteAsShortcut", SHIFT | CTRL | b'V' as u16),
+        ("miCopyFullPath", CTRL | ALT | b'F' as u16),
+        ("miCopyFileName", CTRL | ALT | b'A' as u16),
+        ("miCopyPath", CTRL | ALT | b'R' as u16),
+        ("miSelect", 0x20),
+        ("miSelectAll", ALT | b'U' as u16),
+        ("miInvertSelection", 0x6a),
+        ("miAdvSelect", 0x6b),
+        ("miAdvDeselect", 0x6d),
+        ("miRestoreLastSel", SHIFT | 0x08),
+        ("miSelectSameExt", 0x6f),
+        ("miSelectSameName", CTRL | 0x6f),
+        ("miFind", CTRL | b'F' as u16),
+        ("miFindNext", SHIFT | CTRL | b'F' as u16),
+        ("miDualView", ALT | 0x71),
+        ("miShowFolders", ALT | 0x72),
+        ("miNewTab", CTRL | b'T' as u16),
+        ("miListStyleAuto", 0),
+        ("miListStyleNames", 0),
+        ("miListStyleDetails", 0),
+        ("miListStyleThumbs", 0),
+        ("miColAuto", CTRL | ALT | b'0' as u16),
+        ("miCol1", CTRL | ALT | b'1' as u16),
+        ("miCol2", CTRL | ALT | b'2' as u16),
+        ("miCol3", CTRL | ALT | b'3' as u16),
+        ("miCol4", CTRL | ALT | b'4' as u16),
+        ("miCol5", CTRL | ALT | b'5' as u16),
+        ("miCol6", CTRL | ALT | b'6' as u16),
+        ("miSortByNone", CTRL | ALT | b'O' as u16),
+        ("miSortByName", CTRL | ALT | b'N' as u16),
+        ("miSortByExt", CTRL | ALT | b'E' as u16),
+        ("miSortBySize", CTRL | ALT | b'S' as u16),
+        ("miSortByTime", CTRL | ALT | b'T' as u16),
+        ("miSortByAttr", CTRL | ALT | b'B' as u16),
+        ("miSortDescend", CTRL | ALT | 0x6d),
+        ("miFilterCustom", CTRL | b'I' as u16),
+        ("miShowHidden", ALT | b'Z' as u16),
+        ("miToDesktop", CTRL | b'D' as u16),
+        ("miToDocuments", CTRL | b'G' as u16),
+        ("miToPictures", CTRL | b'Q' as u16),
+        ("miToMusic", CTRL | b'S' as u16),
+        ("miToVideos", CTRL | b'O' as u16),
+        ("miToDownloads", 0),
+        ("miControlPanel", ALT | 0x7b),
+        ("miAddRemoveProg", ALT | 0x7a),
+        ("miRecycleBin", CTRL | b'B' as u16),
+        ("miEmptyRecycleBin", SHIFT | CTRL | b'B' as u16),
+        ("miToTemp", CTRL | b'P' as u16),
+        ("miEmptyTemp", SHIFT | CTRL | b'P' as u16),
+        ("miCommandLine", 0xbf),
+        ("miArcAdd", CTRL | b'A' as u16),
+        ("miArcMove", CTRL | SHIFT | b'A' as u16),
+        ("miArcExtract", CTRL | b'E' as u16),
+        ("miArcExtractToCurr", CTRL | SHIFT | b'E' as u16),
+        ("miArcExtractToFolder", 0),
+        ("miArcExtractAuto", ALT | b'Q' as u16),
+        ("miFTPQuickConnect", 0),
+        ("miFTPManageSites", 0),
+        ("miFTPDisconnect", 0),
+        ("miMapNetworkDrive", 0),
+        ("miUnmapNetworkDrive", 0),
+        ("miTextViewer", ALT | b'V' as u16),
+        ("miTextEditor", ALT | b'B' as u16),
+        ("miClearDescriptions", 0),
+        ("miSaveList", 0),
+        ("miSplitFile", CTRL | ALT | b'L' as u16),
+        ("miJoinFile", CTRL | ALT | b'J' as u16),
+        ("miDiskCopy", 0),
+        ("miCleanupDisk", 0),
+        ("miCompareFolder", 0),
+        ("miOptions", CTRL | 0x7b),
+        ("CopyToLeft", CTRL | 0x25),
+        ("CopyToRight", CTRL | 0x27),
+        ("MoveToLeft", CTRL | ALT | 0x25),
+        ("MoveToRight", CTRL | ALT | 0x27),
+        ("CopyTo", 0x2d),
+        ("MoveTo", SHIFT | 0x2d),
+        ("SelectAllWithFolder", CTRL | 0x6a),
+        ("FindNext", CTRL | b'L' as u16),
+        ("ExchangePath", 0),
+        ("ShowPathHistory", ALT | 0x28),
+        ("RecycleBin", 0x2e),
+        ("Delete", SHIFT | 0x2e),
+        ("Delete", SHIFT | ALT | b'D' as u16),
+        ("Shred", CTRL | SHIFT | 0x2e),
+        ("FocusAddressBar", ALT | 0xc0),
+        ("SelectSameName", SHIFT | 0xbc),
+        ("SelectSameExt", SHIFT | 0xbe),
+        ("CloseTab", CTRL | b'W' as u16),
+        ("SelectCurrAndMove", 0x20),
+    ]
+}
 const MENU_SHORTCUTS: &[(&str, u16)] = &[
     ("miOpen", 0x0000),
     ("miParameterOpen", 0x400d),

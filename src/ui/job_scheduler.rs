@@ -72,7 +72,8 @@ impl App {
             prompt_rename: matches!(operation, Operation::Copy { .. }),
             copy_conflict_policy: job.reservation.as_ref().map(|r| Arc::clone(&r.conflict_policy)),
         };
-        thread::spawn(move || fsops::run_with_options(operation, tx, flag, options));
+        let language = self.language_pack.clone();
+        thread::spawn(move || fsops::run_with_locale(operation, tx, flag, options, Some(language)));
         if !active {
             self.conflict_all = None;
         }

@@ -86,8 +86,8 @@ progress window and duplicate-name dialog as regular file operations, with
 overwrite, skip, rename, cancel and apply-to-all choices. Each selected root
 is committed in its own transaction; cancellation retains completed items.
 Password and creation dialogs use the same centered,
-movable chrome as other NDR dialogs. Vault strings are provided in all 21
-bundled language resources (English fallback for unreviewed translations).
+movable chrome as other NDR dialogs. Core vault text is available in the
+40 selectable locale catalogs; missing entries fall back to English.
 
 Large encrypted files are copied through 8 MiB authenticated chunks
 instead of loading entire files into RAM. The former 64 MiB file / 512 MiB
@@ -117,5 +117,28 @@ Runtime assets and third-party license notices are retained under `Resources/`
 and `THIRD-PARTY-NOTICES.txt`. The bundled 7zip+ upstream source reference is
 in `Resources/Tools/7zip/SOURCE.txt`.
 
-The original menu metadata in `docs/original-menus.txt` is also tracked; UI
-regression tests compare the implemented menu items against this fixture.
+## Languages
+
+Use the language menu or settings list to select one of 40 locale catalogs.
+Portuguese (Brazil and Portugal) and Chinese (Simplified and Traditional) are
+separate choices. Regional forms such as `en-US` and `ko_KR` are recognized
+without forcing a change to a saved profile. Translation coverage varies:
+main commands, copy preparation and update titles are localized in every
+catalog; unfilled application messages use English. System errors and
+third-party diagnostic text can retain their original wording.
+
+Each locale is a UTF-8 file in `Resources/Languages`. Prefer named catalog keys
+for UI captions and preserve format arguments when translating. See
+`tools/ndr_locale_catalog.py` for checking or regenerating the remaining
+legacy bilingual literal entries and merging new catalog keys.
+
+## Bundled resources and compatibility
+
+NDR's bundled themes, color presets, completion cue, and UI strings are
+maintained as NDR resources. Its built-in toolbar and key bindings are defined
+in Rust; they do not require a separate toolbar file. Install or update the
+complete package so the bundled resources change with the executable.
+
+NDR's keyboard and two-pane behavior was developed with reference to NexusFile
+by Xiles. The compatibility layer still reads existing custom toolbar XML and
+legacy shortcut or settings files. The NexusFile application is not bundled.

@@ -15,7 +15,7 @@ use std::sync::{
     mpsc,
 };
 
-/// Original nexusfile.col folder tree colors (FUN_00423e00 → TreeView+0x2e8): background, lines, text, selected row, opened folder, ancestor text.
+/// Folder tree palette roles: background, lines, text, selected row, opened folder, ancestor text.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct TreeColors {
     pub back: Color32,
@@ -132,9 +132,10 @@ pub(super) enum FolderTreeAction {
 }
 
 fn color_of(settings: &ndr::settings::Settings, key: &str) -> Color32 {
-    let text = settings.values.get("NexusFileColorMapValues").and_then(|m| m.get(key)).and_then(|v| v.as_str()).map(str::to_owned);
-    let fallback = ndr::styles::DEFAULT_ELEMENTS.iter().find(|(k, _)| *k == key).map(|(_, v)| v.to_string()).unwrap_or_default();
-    let rgba = text.as_deref().and_then(ndr::styles::parse_color).or_else(|| ndr::styles::parse_color(&fallback)).unwrap_or([0, 0, 0, 255]);
+    let text = settings.values.get("NexusFileColorMapValues").and_then(|m| m.get(key)).and_then(|v| v.as_str());
+    let rgba = text.and_then(ndr::styles::parse_color)
+        .or_else(|| ndr::styles::default_element_color(key).and_then(ndr::styles::parse_color))
+        .unwrap_or([0, 0, 0, 255]);
     Color32::from_rgb(rgba[0], rgba[1], rgba[2])
 }
 
@@ -1534,7 +1535,8 @@ impl App {
         let Some(item) = form.focused.filter(|i| form.tree.items[*i].level != 0) else { return };
         let (name, old) = (form.tree.items[item].name.clone(), form.tree.full_path(item));
         let title = self.language_pack.text("RES.RENAME", "Rename");
-        let message = self.language_pack.text("RES.MSG_RENAME", "Type a new file name.(\\/:*?\"<>| characters cannot be used.)\n\n<b><c0000FF>%s</c></b> <c666666>(%d / %d)</c>").replacen("%s", &name, 1).replacen("%d", "1", 2);
+        let message = self.language_pack.text("RES.MSG_RENAME", "Type a new file name.(\\/:*?\"<>| characters cannot be used.)\n\n<b><c0000FF>%s</c></b> <c666666>(%d / %d)</c>");
+        let message = ndr::markup::substitute(&message, &[&name, "1", "1"]);
         self.prompt(&title, &message, &name, None, false, move |app, value, _| {
             let Some(new) = value.filter(|v| !v.is_empty()) else { return };
             let parent = Path::new(&old).parent().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();

@@ -1,0 +1,462 @@
+; NDR language catalog. Untranslated entries use NDR English.
+
+[RES]
+YES=Taip(&Y)
+NO=&Ne
+OK=Gerai(&O)
+CANCEL=Atšaukti(&C)
+RETRY=Bandyti da&r kartą
+IGNORE=Nepa&isyti
+ABORT=&Stabdyti
+CONTINUE=Tęsti(&n)
+TITLE_ERROR=NDR klaida
+TITLE_INFO=NDR informacija
+FOLDERINFO=Aplankai <c000000><b>%d</b></c> · Failai <c000000><b>%d</b></c> · <b>%s</b>
+DISKINFO_SHORT=Laisva <c000000><b>%s</b></c>
+DISKINFO_LONG=Laisva <c000000><b>%s</b></c> iš <b>%s</b>
+SELECTED_INFO=Pažymėta: <b>%d</b> · <b>%s</b> baitų
+MSG_COPY_PREPARING=Ruošiamasi kopijuoti…
+MSG_MOVE_PREPARING=Ruošiamasi perkelti…
+MSG_DEL_PREPARING=Ruošiamasi ištrinti…
+COPYING=Kopijuojami elementai…
+MOVING=Perkeliami elementai…
+DELETING=Trinami elementai…
+EXTRACTING=Išskleidžiami failai…
+COMPRESSING=Glaudinami failai…
+READONLY=Tik skaitomas
+SYSTEM=Sistema
+HIDDEN=Paslėpta
+FOLDER=Aplankas
+FOLDERS=Aplankai
+SELECT_FOLDER=Pasirinkti aplanką
+DROPCOPY_CONFIRM=Kopijuoti šiuos elementus (%d)?
+DROPMOVE_CONFIRM=Perkelti šiuos elementus (%d)?
+RENAME=Pervadinti
+COPY=Kopijuoti
+MOVE=Perkelti
+ADDTOARCHIVE=Įtraukti į archyvą
+EXTRACT=Išskleisti
+SEARCH=Ieškoti
+STOP=Stabdyti
+SEARCHRESULT=Paieškos rezultatai
+SELECTDEST= — Pasirinkti paskirties vietą
+PAUSE=Pristabdyti
+RESUME=Tęsti
+TITLE_FILTER=Failų filtras
+NETWORK=Tinklas
+TITLE_NEWFOLDER=Naujas aplankas
+MSG_NEWFOLDER=Įveskite naujo aplanko pavadinimą.
+NEWFOLDER=Naujas aplankas
+MSG_RENAME=Įveskite naują išskirto elemento pavadinimą.\n\n<b><c0000FF>%s</c></b> <c666666>(%d iš %d)</c>
+TITLE_FILEOPERATION=Failų operacija
+SELDEST_DRIVE=Diskai
+SELDEST_WORKFOLDER=Darbo aplankai
+FOLDER_EXISTS=Aplankas tokiu pavadinimu jau yra.
+SRCISDEST=Šaltinis ir paskirties vieta sutampa.
+MYCOMPUTER=Šis kompiuteris
+ARCHIVE=Archyvas
+DISKFREE=Laisva
+LOCATION=Vieta
+FUNC_OPEN=Atverti
+FUNC_COPYTO=Kopijuoti
+FUNC_MOVETO=Perkelti
+FUNC_DELETE=Ištrinti
+FUNC_RECYCLEBIN=Perkelti į šiukšlinę
+FUNC_RENAME=Pervadinti
+FUNC_PROPERTIES=Ypatybės
+FUNC_FAVORITES=Parankiniai
+FUNC_NEWFOLDER=Naujas aplankas
+FUNC_REFRESH=Atnaujinti
+FUNC_GOTODESKTOP=Darbalaukis
+FUNC_GOTODOCUMENTS=Dokumentai
+FUNC_GOTOMUSIC=Muzika
+FUNC_GOTOPICTURES=Paveikslėliai
+FUNC_GOTOVIDEOS=Vaizdo įrašai
+FUNC_GOTODOWNLOADS=Atsisiuntimai
+FUNC_SELECTALL=Pažymėti viską
+FUNC_ADDTOARCHIVE=Įtraukti į archyvą
+FUNC_EXTRACT=Išskleisti
+FUNC_CLOSETAB=Užverti skirtuką
+FUNC_SELECT=Pažymėti
+FUNC_DESELECTALL=Atžymėti
+FUNC_BACK=Atgal
+FUNC_FORWARD=Pirmyn
+FUNC_FOLDERTREE=Aplankų medis
+FUNC_GOTOROOT=Šakninis aplankas
+FUNC_GOTOPARENT=Pirminis aplankas
+FUNC_EDITCOPY=Kopijuoti
+FUNC_EDITCUT=Iškirpti
+FUNC_EDITPASTE=Įklijuoti
+FUNC_INVERTSELECTION=Invertuoti žymėjimą
+FUNC_NEWTAB=Naujas skirtukas
+TODAY=Šiandien
+YESTERDAY=Vakar
+FIELD_NAME=Pavadinimas
+FIELD_EXT=Prievardis
+FIELD_LOCATION=Vieta
+FIELD_SIZE=Dydis
+FIELD_DATEMODIFIED=Keista
+FIELD_ATTR=Atributai
+FIELD_DESC=Pastaba
+UPDATE=Naujiniai
+NAME=Pavadinimas
+ACCESS_DENIED=Prieiga uždrausta
+INVALID_PASSWORD=Neteisingas slaptažodis
+DISKISFULL=Nepakanka vietos diske
+CALCULATING=Skaičiuojama…
+ERROR=Klaida
+
+[formMain]
+ToolButton.tbFile=&Failas
+ToolButton.tbFolder=Aplankas(&o)
+ToolButton.tbEdit=Taisyti(&E)
+ToolButton.tbView=Rodinys(&w)
+ToolButton.tbSystem=&Sistema
+ToolButton.tbArchive=&Archyvas
+ToolButton.tbConnect=Prisiju&ngti
+ToolButton.tbTools=Įrankiai(&T)
+ToolButton.tbHelp=Žinynas(&H)
+ToolButton.tbNewUpdateAvailable=Yra NDR naujinys
+Menu.miOpen=&Q. Atverti
+Menu.miCopyTo=&C. Kopijuoti į…
+Menu.miMoveTo=&V. Perkelti į…
+Menu.miDelete=&D. Ištrinti
+Menu.miRename=&R. Pervadinti
+Menu.miProperties=&E. Ypatybės
+Menu.miExit=&X. Išeiti
+Menu.miFolderTree=&T. Aplankų medis
+Menu.miFavorites=&V. Parankiniai
+Menu.miNewFolder=&C. Naujas aplankas
+Menu.miHistoryBack=&B. Atgal
+Menu.miHistoryForward=&F. Pirmyn
+Menu.miToParent=&X. Pirminis aplankas
+Menu.miToRoot=&Z. Šakninis aplankas
+Menu.miRefresh=&R. Atnaujinti
+Menu.miEditCopy=&C. Kopijuoti
+Menu.miEditCut=&X. Iškirpti
+Menu.miEditPaste=&V. Įklijuoti
+Menu.miSelect=&B. Pažymėti
+Menu.miSelectAll=&U. Pažymėti viską
+Menu.miInvertSelection=&I. Invertuoti žymėjimą
+Menu.miSearchFile=&E. Ieškoti failų ir aplankų…
+Menu.miLanguage=&O. Kalba
+Menu.miNewTab=&B. Naujas skirtukas
+Menu.miListStyleAuto=&A. Automatiškai
+Menu.miListStyleDetails=&D. Išsamiai
+Menu.miListStyleThumbs=&T. Miniatiūros
+Menu.miColAuto=&A. Automatiškai
+Menu.miSortByName=&A. Pavadinimas
+Menu.miSortByExt=&E. Prievardis
+Menu.miSortBySize=&S. Dydis
+Menu.miSortByTime=&T. Keista
+Menu.miSortByAttr=&R. Atributai
+Menu.miSortByColor=&C. Spalva
+Menu.miToDesktop=&D. Darbalaukis
+Menu.miToDocuments=&W. Dokumentai
+Menu.miToPictures=&P. Paveikslėliai
+Menu.miToMusic=&M. Muzika
+Menu.miToVideos=&V. Vaizdo įrašai
+Menu.miToDownloads=&S. Atsisiuntimai
+Menu.miOptions=&O. Nuostatos
+Menu.miHelp=&H. Žinynas
+Menu.miShortcut=&S. Spartieji klavišai…
+Menu.miHomepage=&W. NDR projekto svetainė
+Menu.miCheckUpdate=&U. Tikrinti NDR naujinius…
+Menu.miAbout=&A. Apie NDR
+Menu.mipOpenWith=&W. Atverti naudojant…
+Menu.mipEditCopy=&C. Kopijuoti
+Menu.mipEditCut=&X. Iškirpti
+Menu.mipEditPaste=&V. Įklijuoti
+Menu.mipCopyTo=&Y. Kopijuoti į…
+Menu.mipMoveTo=&M. Perkelti į…
+Menu.mipDelete=&D. Ištrinti
+Menu.mipRename=&R. Pervadinti
+Menu.mipAddToArchive=&A. Įtraukti į archyvą
+Menu.mipProperties=&T. Ypatybės
+Menu.pmiCloseTab=Užverti skirtuką(&C)
+Menu.pmiCloseAllTab=Užverti visus skirtukus(&a)
+Menu.pmiNewTab=Naujas skir&tukas
+Hint.bSelectAll=Pažymėti visus elementus
+Hint.bClearSelection=Atžymėti
+
+[formFileExists]
+Caption.lMsg=Paskirties vietoje jau yra elementas šiuo pavadinimu:
+Caption.chkApplyAll=T&aikyti šį pasirinkimą likusiems
+Caption.btnOverwrite=Perrašyti(&w)
+Caption.btnRename=Pe&rvadinti
+Caption.btnReplace=Pak&eisti
+Caption.btnSkip=Pralei&sti
+
+[formGetText]
+Caption.btnOk=Gerai(&O)
+Caption.btnCancel=Atšaukti(&C)
+
+[formDelConfirm]
+Form.Caption=Patvirtinti ištrynimą
+Caption.btnAll=Visi(&A)
+Caption.btnYes=Taip(&Y)
+Caption.btnNo=&Ne
+
+[formDelWarning]
+Caption.btnDelete=Ištrinti(&D)
+Caption.btnYes=Taip(&Y)
+Caption.btnNo=&Ne
+Prompt.Recycle=Perkelti pažymėtus elementus į šiukšlinę?
+Prompt.Permanent=Visam laikui ištrinti pažymėtus elementus?
+
+[formProgress]
+Caption.btnCancel=Atšaukti(&C)
+
+[formOrgFavorites]
+Caption.btnCancel=Atšaukti(&C)
+Caption.btnSave=Įrašyti(&S)
+Caption.btnRename=Pe&rvadinti
+Caption.btnUp=Perkelti a&ukštyn
+Caption.btnDown=Perkelti žemyn(&w)
+Caption.btnDelete=Ištrinti(&D)
+
+[formChangeAttr]
+Caption.btnAll=Visi(&l)
+Caption.btnSkip=Praleisti(&k)
+Caption.btnOk=Gerai
+Caption.btnCancel=Atšaukti
+Caption.chkHidden=Paslėpta(&H)
+Caption.chkSystem=&Sistema
+Caption.chkReadOnly=Tik skaitomas(&R)
+Caption.lDate=&Data
+Caption.lTime=Laikas(&T)
+
+[formSaveList]
+Caption.btnSave=Įrašyti
+Caption.btnCancel=Atšaukti
+Caption.chkAttributes=&Atributai
+Caption.chkDate=&Data
+Caption.chkDescription=Pastaba(&n)
+Caption.chkExtension=Pri&evardis
+Caption.chkFileName=&Failo vardas
+Caption.chkFileSize=Dydi&s
+Caption.chkTime=Laikas(&T)
+
+[formAddToArchive]
+Caption.btnCancel=Atšaukti
+Caption.btnOk=Gerai
+Caption.lPassword=Sla&ptažodis
+Caption.lSecFormat=Formatas
+
+[formFileSplit]
+Caption.btnOk=Gerai
+Caption.btnCancel=Atšaukti
+
+[formFileJoin]
+Caption.btnAdd=Pridėti(&A)
+Caption.btnCancel=Atšaukti
+Caption.btnOk=Gerai
+Caption.btnDelete=Ištrinti(&D)
+Caption.btnDown=Perkelti žemyn(&w)
+Caption.btnUp=Perkelti a&ukštyn
+
+[formCompareFolder]
+Caption.btnCancel=Atšaukti
+Caption.btnOk=Gerai
+Caption.btnSave=Įrašyti
+Caption.btnStop=Stabdyti
+
+[formShortcut]
+Form.Caption=Spartieji klavišai
+
+[formEditShortCut]
+Caption.btnOk=Gerai
+Caption.btnCancel=Atšaukti
+Caption.btnRemove=Pašalinti
+
+[formCleanup]
+Caption.btnClose=Užverti
+Caption.btnOk=Gerai
+Caption.chkRecycleBin=Šiukšlinė(&R)
+Caption.btnAdd=Pridėti(&A)
+Caption.btnDelete=Ištrinti(&D)
+Caption.btnSearch=Ieškoti(&S)
+
+[formSelectDest]
+Form.Caption=Pasirinkti paskirties vietą
+Caption.btnCancel=Atšaukti
+Caption.btnOk=Gerai
+Caption.btnTree=Naršyti aplankus(&f)
+
+[formTreeScan]
+Caption.btnCancel=Atšaukti
+
+[formSearchFolder]
+Caption.btnSearch=Ieškoti
+
+[formFTPQuickConnect]
+Caption.btnCancel=Atšaukti
+Caption.chkPassive=Naudoti pa&syvią veikseną
+Caption.lPassword=Slaptažodis(&w)
+Caption.lPort=&Prievadas
+Caption.lURL=Serverio a&dresas
+Caption.lUser=Na&udotojo vardas
+
+[formPassword]
+Caption.btnOk=Gerai
+Caption.btnCancel=Atšaukti
+Caption.lUser=Naudotojo vardas
+Caption.lPassword=Slaptažodis
+
+[formFTPSiteManager]
+Caption.btnAdd=Pridėti(&A)
+Caption.btnCancel=Atšaukti
+Caption.btnDelete=Ištrinti(&D)
+Caption.btnOk=Gerai
+Caption.chkPassive=Naudoti pasy&vią veikseną
+Caption.lName=Pavadi&nimas
+Caption.lPassword=Slaptažodis(&w)
+Caption.lPort=&Prievadas
+Caption.lUser=Na&udotojo vardas
+
+[formFolderTree]
+Form.Caption=Naršyti aplankus
+Caption.btnCancel=Atšaukti
+Caption.btnOk=Gerai
+ToolButton.tbFolder=Aplankas(&e)
+ToolButton.tbFavorites=Parankiniai(&v)
+ToolButton.tbSearch=Ieškoti
+Hint.tbDesktop=Darbalaukis
+Hint.tbMyDoc=Dokumentai
+Hint.tbMyPic=Paveikslėliai
+Hint.tbMyMusic=Muzika
+Hint.tbMyVideo=Vaizdo įrašai
+Menu.miFolder=Aplankas(&e)
+Menu.miDelete=&D. Ištrinti
+Menu.miRename=&R. Pervadinti
+Menu.miCreateNewFolder=&F. Naujas aplankas
+Menu.miProperties=&E. Ypatybės
+Menu.miClose=&C. Užverti
+
+[formPreferences]
+Caption.btnApply=T&aikyti
+Caption.btnOk=Gerai(&O)
+Caption.btnCancel=Atšaukti
+TabSheet.tsColor=Spalvos
+TabSheet.tsTree=Aplankų medis
+TabSheet.tsEtc=Kita
+Caption.lMyDocuments=Dokumentai
+Caption.lMyMusic=Muzika
+Caption.lMyPictures=Paveikslėliai
+Caption.lMyVideos=Vaizdo įrašai
+Caption.lPathDownloads=Atsisiuntimai
+
+[formAdvRename]
+Caption.btnCancel=Atšaukti
+Caption.btnUp=Perkelti aukštyn
+Caption.btnDown=Perkelti žemyn
+Caption.rbApplyToExt=Prievardis
+TabSheet.tsDelete=Pašalinti
+TabSheet.tsExtension=Prievardis
+
+[formEditFunction]
+Caption.btnCancel=Atšaukti
+Caption.btnOk=Gerai
+Caption.lName=Pavadinimas
+
+[formFTPAttributes]
+Caption.btnCancel=Atšaukti
+Caption.btnOk=Gerai
+Caption.btnAll=Visi
+Caption.btnSkip=Praleisti
+Caption.chkGExecute=Vykdyti(&x)
+Caption.chkURead=Skaityti(&e)
+Caption.chkUExecute=Vykdyti(&c)
+
+[formRename]
+Caption.btnOK=Gerai
+Caption.btnCancel=Atšaukti
+
+[formChecksum]
+Caption.btnCopy=Kopijuoti(&C)
+
+[formNDRSearch]
+Caption.lName=Failo vardas
+Caption.chkFiles=Failai
+Caption.chkFolders=Aplankai
+Caption.CategoryDocuments=Dokumentai
+Caption.btnMoveUp=Perkelti aukštyn
+Caption.btnMoveDown=Perkelti žemyn
+Caption.btnRemove=Pašalinti
+Caption.btnAdd=Pridėti
+Status.Results=Paieškos rezultatai
+
+[formNDRDestination]
+Button.Cancel=Atšaukti
+
+[NDRUpdate]
+Title=NDR naujinimas
+FeedHttpsRequired=Naujinimų šaltinis turi naudoti HTTPS.
+InvalidDownloadUrl=Naujinimų šaltinyje nėra galiojančio HTTPS atsisiuntimo adreso.
+NewVersionAvailable=Pasiekiama {0} versija. Dabartinė versija: {1}.
+OpenDownloadPage=Atverti atsisiuntimo puslapį?
+CurrentLatest=Naudojate naujausią NDR versiją. ({0})
+RequestFailed=Nepavyko susisiekti su naujinimų serveriu. Patikrinkite ryšį ir naujinimų šaltinį.
+RequestFailedStatus=Naujinimų serveris grąžino HTTP būseną {0}.
+RequestTimedOut=Naujinimų serveris neatsakė per 15 sekundžių.
+
+[NDRSearch]
+Documents=Dokumentai
+
+[NDRVault]
+Password=Slaptažodis
+OK=Gerai
+Cancel=Atšaukti
+NewFolderTitle=Naujas aplankas
+RenameTitle=Pervadinti
+ProgressCancel=Atšaukti
+
+[NDR]
+OP_ARCHIVE_REPLACE_ARCHIVE=Pakeisti archyvą
+OP_JOIN_EXISTS=Failas tokiu pavadinimu jau yra. Failai nesujungti.\n{0}
+OP_TRANSFER_CANCEL=Atšaukti
+OP_TRANSFER_CANCELLED=Operacija ({0}) atšaukta. Jau apdoroti elementai buvo išsaugoti.
+OP_TRANSFER_COPY_DONE=Kopijavimas baigtas
+OP_TRANSFER_DELETE_DONE=Šalinimas baigtas
+OP_TRANSFER_MOVE_DONE=Perkėlimas baigtas
+OP_TRANSFER_OPERATION_FAILED=Operacija nepavyko
+OP_TRANSFER_PARTIAL=Operacija baigta iš dalies
+OP_TRANSFER_PARTIAL_DETAIL=Baigta: {0} · klaidų: {1} · praleista: {2}
+OP_TRANSFER_PREPARING_THE_OPERATION=Ruošiama operacija…
+OP_TRANSFER_SIZE_UNAVAILABLE=Dydis nežinomas
+OP_TRANSFER_VERB_COPY=kopijuoti
+OP_TRANSFER_VERB_MOVE=perkelti
+OP_TRANSFER_VERB_PASTE=įklijuoti
+UI_STARTUP_FAILED=Paleisti nepavyko. Atverkite NDR iš naujo.
+UI_STARTUP_LOADING=Ruošiami aplankai ir nuostatos…
+UPD_CLOSE=Užverti
+UPD_CONFIRM=Atsisiųsti ir įdiegti naujinį, tada paleisti NDR iš naujo?\nJūsų nuostatos bus išsaugotos.
+UPD_CURRENT_BUILD=Įdiegta versija: {0}
+UPD_DOWNLOAD_ACTIVE=Atsisiunčiamas NDR {0}…
+UPD_ERROR_DETAILS=Techninė informacija
+UPD_FAILED=Atnaujinti nepavyko.
+UPD_INSTALLER_START=Paleidžiama diegimo programa…
+UPD_INSTALL_CHECKING=Tikrinamas diegimo paketas…
+UPD_INSTALL_CLOSING=Tikrinama, ar NDR užvertas…
+UPD_INSTALL_EXTRACTING=Ruošiami diegimo failai…
+UPD_INSTALL_FAILURE=Atnaujinti nepavyko. Išsamiau žr. update.log.
+UPD_INSTALL_FAILURE_TITLE=NDR naujinimo klaida
+UPD_INSTALL_FINISHED=Diegimas baigtas. NDR paleidžiamas iš naujo…
+UPD_INSTALL_HEADING=Diegiamas NDR naujinys
+UPD_INSTALL_TITLE=NDR naujinimas
+UPD_INSTALL_WAITING=Laukiama, kol NDR užsivers…
+UPD_INSTALL_WRITING=Diegiami NDR failai…
+UPD_LOCAL_BUILD=Vietinė versija
+UPD_NEW_BUILD=Nauja versija: {0}
+UPD_NONE=Naujesnių naujinimų nėra.
+UPD_PREPARING=Ruošiamas paketas…
+UPD_RELEASE_FAILURE=Nepavyko patikrinti laidos „GitHub“ svetainėje.
+UPD_RESTART_NOTE=NDR automatiškai paleidžiamas iš naujo. Jūsų nuostatos išsaugomos.
+UPD_STARTING=Atsisiuntimas ir vientisumo patikra baigti. Pradedamas diegimas.
+UPD_STEP_DOWNLOAD=Atsisiuntimas
+UPD_STEP_INSTALL=Diegti ir paleisti iš naujo
+UPD_STEP_PREPARE=Paruošimas
+UPD_STEP_VERIFY=Vientisumas
+UPD_TITLE=NDR naujinimas
+UPD_VERIFIED_INIT=Saugiai diegiamas patikrintas naujinys.
+UPD_VERIFY_HASH=Tikrinama SHA-256…

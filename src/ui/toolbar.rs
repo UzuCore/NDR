@@ -105,35 +105,36 @@ impl App {
             }
         }
         let action = item.action.as_str();
-        let fallback = match action {
-            "historyBack" => "뒤로",
-            "historyForward" => "앞으로",
-            "goParent" => "상위",
-            "newFolder" => "새 폴더",
-            "rename" => "이름 변경",
-            "copyToOther" => "복사",
-            "moveToOther" => "이동",
-            "deleteToolbar" => "삭제",
-            "extractToolbar" => "압축 풀기",
-            "createZip" => "ZIP 만들기",
-            "batchRename" => "일괄 변경",
-            "saveList" => "목록 저장",
-            "split" => "분할",
-            "join" => "합치기",
-            "desktop" => "바탕 화면",
-            "documents" => "문서",
-            "pictures" => "사진",
-            "music" => "음악",
-            "videos" => "동영상",
-            "favorites" => "즐겨찾기",
-            "openRecycle" => "휴지통",
-            "search" => "찾기",
-            "browseFolder" => "폴더 선택",
-            "toggleHidden" => "숨김 파일",
-            "newTab" => "새 탭",
-            "closeTab" => "탭 닫기",
-            other => other,
+        let (ko_fallback, en_fallback) = match action {
+            "historyBack" => ("뒤로", "Back"),
+            "historyForward" => ("앞으로", "Forward"),
+            "goParent" => ("상위", "Parent folder"),
+            "newFolder" => ("새 폴더", "New folder"),
+            "rename" => ("이름 변경", "Rename"),
+            "copyToOther" => ("복사", "Copy"),
+            "moveToOther" => ("이동", "Move"),
+            "deleteToolbar" => ("삭제", "Delete"),
+            "extractToolbar" => ("압축 풀기", "Extract"),
+            "createZip" => ("ZIP 만들기", "Create ZIP"),
+            "batchRename" => ("일괄 변경", "Batch rename"),
+            "saveList" => ("목록 저장", "Export file list"),
+            "split" => ("분할", "Split"),
+            "join" => ("합치기", "Join"),
+            "desktop" => ("바탕 화면", "Desktop"),
+            "documents" => ("문서", "Documents"),
+            "pictures" => ("사진", "Pictures"),
+            "music" => ("음악", "Music"),
+            "videos" => ("동영상", "Videos"),
+            "favorites" => ("즐겨찾기", "Favorites"),
+            "openRecycle" => ("휴지통", "Recycle Bin"),
+            "search" => ("찾기", "Search"),
+            "browseFolder" => ("폴더 선택", "Choose a folder"),
+            "toggleHidden" => ("숨김 파일", "Show hidden items"),
+            "newTab" => ("새 탭", "New tab"),
+            "closeTab" => ("탭 닫기", "Close tab"),
+            other => (other, other),
         };
+        let fallback = if language.code.eq_ignore_ascii_case("ko") { ko_fallback } else { en_fallback };
         let menu_action = match action {
             "deleteToolbar" => "deleteRecycle",
             "extractToolbar" => "extractSelected",
@@ -141,10 +142,11 @@ impl App {
             other => other,
         };
         let mut text = match menu_action {
+            "createZip" => self.language_pack.text("NDR.UI_TOOLS_TOOLBAR_CREATE_ZIP", "Create ZIP"),
             "newTab" => self.menu_access_text("Menu.pmiNewTab", fallback),
             "closeTab" => self.menu_access_text("Menu.pmiCloseTab", fallback),
             other => {
-                let translated = language.translate_pair(fallback, fallback);
+                let translated = language.translate_pair(ko_fallback, en_fallback);
                 // C# Menu(): the fallback text as is when not in MenuKeys (no ToAccessText).
                 match menu_key(other) {
                     Some(key) => self.menu_access_text(key, &translated),
@@ -369,7 +371,7 @@ impl App {
         if let Some(name) = action.strip_prefix("function:") {
             let id = format!("#{name}");
             if !function_key_editor::INTERNAL_COMMANDS.iter().any(|(candidate, _)| candidate.eq_ignore_ascii_case(&id)) || !self.original_internal(name, ctx) {
-                self.warn("toolbar.xml refers to an unavailable internal command.", "toolbar.xml refers to an unavailable internal command.");
+                self.warn_operation(&self.language_pack.text("NDR.UI_TOOLS_TOOLBAR_COMMAND_UNAVAILABLE", "toolbar.xml refers to an unavailable internal command."));
             }
             return;
         }

@@ -409,7 +409,7 @@ pub(super) fn rename_ui(ui: &mut egui::Ui, form: &mut RenameForm, language: &com
                 let cells = if row < shown {
                     [(row + 1).to_string(), form.paths[row].file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), preview_name(form, row)]
                 } else {
-                    [String::new(), if ko { format!("외 {more}개") } else { format!("{more} more items") }, "…".into()]
+                    [String::new(), super::file_commands::operation_format(language, "NDR.OP_RENAME_MORE_ITEMS", "{0} more items", &[&more]), "…".into()]
                 };
                 let mut x = rect.left();
                 // Original lvPreviewAdvancedCustomDrawSubItem (FUN_00418b04): the new name cell (SubItem 2) turns red (clRed) when it fails FUN_00469b64 (length < 0x105 and no forbidden characters
@@ -443,13 +443,13 @@ pub(super) fn selection_after_remove(index: usize, remaining: usize) -> Option<u
     (remaining > 0).then(|| index.min(remaining - 1))
 }
 /// Checks of C# BuildPlan: overlapping results, unusable names, existing destinations. On success the list of names to change.
-pub(super) fn build_plan(form: &RenameForm, ko: bool) -> Result<Vec<String>, String> {
+pub(super) fn build_plan(form: &RenameForm, language: &compat::Language) -> Result<Vec<String>, String> {
     let mut raw: Vec<String> = Vec::new();
     for (i, path) in form.paths.iter().enumerate() {
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         raw.push(match compat::rename_with_rules(&name, &form.rules, i, form.dirs[i]) {
             Ok(value) => value,
-            Err(error) => return Err(if ko { format!("사용할 수 없는 결과 이름입니다: {name} ({error})") } else { format!("The resulting name cannot be used: {name} ({error})") }),
+            Err(error) => return Err(super::file_commands::operation_format(language, "NDR.OP_RENAME_INVALID_RESULT", "The resulting name cannot be used: {0} ({1})", &[&name, &error])),
         });
     }
     let changed: Vec<usize> = (0..raw.len()).filter(|i| form.paths[*i].file_name().map(|n| n.to_string_lossy() != raw[*i].as_str()).unwrap_or(true)).collect();
@@ -462,13 +462,13 @@ pub(super) fn build_plan(form: &RenameForm, ko: bool) -> Result<Vec<String>, Str
     }
     if !duplicates.is_empty() {
         let list = duplicates.iter().take(5).cloned().collect::<Vec<_>>().join(", ");
-        return Err(if ko { format!("둘 이상의 항목이 같은 이름으로 바뀝니다: {list}") } else { format!("Two or more items would get the same name: {list}") });
+        return Err(super::file_commands::operation_format(language, "NDR.OP_RENAME_DUPLICATE_RESULT", "Two or more items would get the same name: {0}", &[&list]));
     }
     let sources: Vec<String> = changed.iter().map(|i| form.paths[*i].to_string_lossy().to_lowercase()).collect();
     for i in &changed {
         let target = form.paths[*i].parent().map(|p| p.join(&raw[*i])).unwrap_or_default();
         if target.exists() && !sources.contains(&target.to_string_lossy().to_lowercase()) {
-            return Err(if ko { format!("대상 이름이 이미 사용 중입니다: {}", target.display()) } else { format!("The target name is already in use: {}", target.display()) });
+            return Err(super::file_commands::operation_format(language, "NDR.OP_RENAME_EXISTS", "The target name is already in use: {0}", &[&target.display()]));
         }
     }
     Ok(raw)
@@ -490,7 +490,7 @@ impl App {
     pub(super) fn advanced_rename(&mut self) {
         let i = self.active;
         if self.panes[i].archive.is_some() {
-            return self.warn("압축 파일이나 원격 폴더 안에서는 고급 이름 바꾸기를 쓸 수 없습니다.", "Advanced rename is not available inside an archive or a remote folder.");
+            return self.warn_operation(&self.language_pack.text("NDR.OP_RENAME_ADVANCED_RENAME_IS_NOT_AVAILABLE_INSIDE_AN_ARCHIVE_OR", "Advanced rename is not available inside an archive or a remote folder."));
         }
         let paths = self.command_targets(i);
         if paths.is_empty() {
@@ -519,14 +519,13 @@ impl App {
 
     /// AddRule: checks integers and ranges, then builds the action from the current input.
     pub(super) fn add_rename_rule(&mut self) {
-        let ko = self.language == "ko";
         let title = self.rename_title();
         let range = self.language_pack.text("formAdvRename.Caption.numericRangeError", "Position: 1-255, count: up to 255, start: up to 999999, step: -999999 to 999999, digits: 1-250.");
         let Some(form) = self.rename_form() else { return };
         let parsed: Vec<Option<i64>> = form.numbers.iter().map(|v| v.trim().parse::<i32>().ok().map(i64::from)).collect();
         let [Some(index), Some(count), Some(start), Some(step), Some(digits)] = parsed[..] else {
-            let message = if ko { "위치와 번호 값은 정수로 입력하세요." } else { "Enter whole numbers for positions and numbering." };
-            return self.system_box(&title, message, MB_OK | ndr::msgbox::MB_ICONASTERISK, |_, _, _| {});
+            let message = self.language_pack.text("NDR.OP_RENAME_WHOLE_NUMBERS", "Enter whole numbers for positions and numbering.");
+            return self.system_box(&title, &message, MB_OK | ndr::msgbox::MB_ICONASTERISK, |_, _, _| {});
         };
         if !(1..=255).contains(&index) || !(0..=255).contains(&count) || start > 999_999 || !(-999_999..=999_999).contains(&step) || !(1..=250).contains(&digits) {
             return self.system_box(&title, &range, MB_OK | ndr::msgbox::MB_ICONASTERISK, |_, _, _| {});
@@ -642,12 +641,12 @@ impl App {
 
     /// Commit: a notice without actions, plan checks, a yes/no box showing the first 12, and on yes renames and closes.
     pub(super) fn commit_advanced_rename(&mut self) {
-        let ko = self.language == "ko";
+        let language = self.language_pack.clone();
         let title = self.rename_title();
         let Some(form) = self.rename_form() else { return };
         if form.rules.is_empty() {
-            let message = if ko { "적용할 이름 변경 작업을 추가하세요." } else { "Add at least one rename action." };
-            return self.system_box(&title, message, MB_OK, |_, _, _| {});
+            let message = language.text("NDR.OP_RENAME_NO_ACTIONS", "Add at least one rename action.");
+            return self.system_box(&title, &message, MB_OK, |_, _, _| {});
         }
         // Original FUN_0046d000: if any new name is unusable (FUN_00469b64), only MessageBoxW(REN_INVALIDNAMES, REN_TITLE,
         // MB_ICONASTERISK) shows and nothing is renamed.
@@ -660,16 +659,16 @@ impl App {
             let text = self.language_pack.text("RES.REN_INVALIDNAMES", "There are invalid file names.\nFile names with red color are invalid names. Please, correct names then try again.");
             return self.system_box(&caption, &text, MB_OK | ndr::msgbox::MB_ICONASTERISK, |_, _, _| {});
         }
-        let plan = match build_plan(form, ko) {
+        let plan = match build_plan(form, &language) {
             Ok(plan) => plan,
             Err(error) => return self.system_box(&title, &error, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {}),
         };
         let paths = form.paths.clone();
         let mut display: Vec<String> = paths.iter().zip(&plan).take(12).map(|(p, n)| format!("{}  →  {n}", p.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default())).collect();
         if plan.len() > 12 {
-            display.push(if ko { format!("외 {}개", plan.len() - 12) } else { format!("{} more items", plan.len() - 12) });
+            display.push(super::file_commands::operation_format(&language, "NDR.OP_RENAME_MORE_ITEMS", "{0} more items", &[&(plan.len() - 12)]));
         }
-        let text = format!("{}{}", display.join("\r\n"), if ko { "\n\n이름을 바꿀까요?" } else { "\n\nRename these items?" });
+        let text = super::file_commands::operation_format(&language, "NDR.OP_RENAME_CONFIRM", "{0}\n\nRename these items?", &[&display.join("\r\n")]);
         self.system_box(&title.clone(), &text, MB_YESNO | MB_ICONQUESTION, move |app, result, ctx| {
             if result != IDYES {
                 return;
@@ -695,17 +694,18 @@ mod glyph_tests {
         assert_eq!(selection_after_remove(0, 0), None, "nothing left");
     }
 
-    /// Original sbtnSave and sbtnDelete Glyph.Data: 16x16, the color of the bottom-left pixel (clSilver) is transparent, the rest is the image.
+    /// NDR action glyphs retain the 16px sizing and bitmap transparency convention.
     #[test]
-    fn macro_buttons_use_the_original_glyph_bitmaps() {
+    fn macro_buttons_use_distinct_ndr_glyphs() {
+        assert_ne!(SAVE_GLYPH, DELETE_GLYPH);
         for bmp in [SAVE_GLYPH, DELETE_GLYPH] {
-            let image = super::super::original_dialogs::decode_glyph(bmp).expect("an 8-bit BMP");
+            let image = super::super::original_dialogs::decode_glyph(bmp).expect("decodable BMP");
             assert_eq!(image.size, [16, 16]);
             assert_eq!(image.pixels[15 * 16], Color32::TRANSPARENT, "bottom-left is the transparent colour");
             let drawn = image.pixels.iter().filter(|p| **p != Color32::TRANSPARENT).count();
             assert!(drawn > 30 && drawn < 256, "{drawn} drawn pixels");
         }
         let delete = super::super::original_dialogs::decode_glyph(DELETE_GLYPH).unwrap();
-        assert!(delete.pixels.iter().any(|p| p.r() > 0xC0 && p.g() < 0x60 && p.b() < 0x80), "the red cross");
+        assert!(delete.pixels.iter().any(|p| p.r() > 0xC0 && p.g() < 0x60 && p.b() < 0x80), "the red delete icon");
     }
 }

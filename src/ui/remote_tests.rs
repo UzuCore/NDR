@@ -123,19 +123,20 @@ fn remote_window_follows_the_csharp_connection_and_local_flows() {
     app.remote_action(RemoteAction::LocalUp, &ctx);
     wait_local(&mut app, &ctx);
     assert_eq!(form(&mut app).local_path, left.to_string_lossy());
+    let drives_label = app.language_pack.text("NDR.NET_LOCAL_DRIVES", "Computer");
     form(&mut app).local_path_box = "computer".into();
     app.remote_action(RemoteAction::LocalGo, &ctx);
     wait_local(&mut app, &ctx);
     {
         let f = form(&mut app);
-        assert_eq!((f.local_path.as_str(), f.local_path_box.as_str()), (rw::DRIVES, "Computer"));
+        assert_eq!((f.local_path.as_str(), f.local_path_box.as_str()), (rw::DRIVES, drives_label.as_str()));
         assert!(!f.local_items.is_empty() && f.local_items.iter().all(|r| r.is_drive));
     }
     form(&mut app).local_path_box = root.join("missing").to_string_lossy().into_owned();
     app.remote_action(RemoteAction::LocalGo, &ctx);
     assert_eq!(boxed(&app).0, "로컬 폴더");
     app.answer_message_box(1, &ctx);
-    assert_eq!(form(&mut app).local_path_box, "Computer", "a missing folder keeps the current path");
+    assert_eq!(form(&mut app).local_path_box, drives_label, "a missing folder keeps the current path");
     app.remote_action(RemoteAction::LocalBack, &ctx);
     wait_local(&mut app, &ctx);
     // Download and upload before connecting.
@@ -252,11 +253,11 @@ fn remote_sites_editor_and_command_follow_the_csharp_flows() {
     assert_eq!(boxed(&app), ("NDR".to_owned(), "Save a remote site from the Network menu first.".to_owned()));
     app.answer_message_box(1, &ctx);
     app.dispatch("sites", &ctx);
-    assert_eq!(app.original_dialogs.last().unwrap().title, "FTP Site Manager");
+    assert_eq!(app.original_dialogs.last().unwrap().title, "Manage FTP sites");
     // Add: TfGetText(FTPSITE_ADD) -> a new row (FTP, 21, passive mode).
     app.sites_action(SitesAction::Add, &ctx);
     let dialog = app.original_dialogs.last().unwrap();
-    assert!(matches!(&dialog.kind, DialogKind::Prompt { message, .. } if message == "Type a FTP site name."));
+    assert!(matches!(&dialog.kind, DialogKind::Prompt { message, .. } if message == "Name this FTP site."));
     app.answer_dialog(DialogResult::Text(Some("alpha".into())), &ctx);
     {
         let f = app.sites_form().unwrap();
@@ -264,7 +265,7 @@ fn remote_sites_editor_and_command_follow_the_csharp_flows() {
     }
     // An empty name or address gives FTPSITE_INVALIDINFO (TfMsgBox, asterisk icon).
     app.sites_action(SitesAction::Save, &ctx);
-    assert_eq!(boxed(&app), ("FTP Site Manager".to_owned(), "Site name or address is empty.".to_owned()));
+    assert_eq!(boxed(&app), ("Manage FTP sites".to_owned(), "Both a site name and an address are required.".to_owned()));
     assert_eq!(app.msgboxes[0].flags, ndr::msgbox::MB_OK | ndr::msgbox::MB_ICONASTERISK);
     app.answer_message_box(1, &ctx);
     {
@@ -273,7 +274,7 @@ fn remote_sites_editor_and_command_follow_the_csharp_flows() {
     }
     app.sites_action(SitesAction::Add, &ctx);
     app.answer_dialog(DialogResult::Text(Some("ALPHA".into())), &ctx);
-    assert_eq!(boxed(&app).1, "A site has same name already exists.");
+    assert_eq!(boxed(&app).1, "That site name is already in use.");
     app.answer_message_box(1, &ctx);
     // Advanced settings (editor window): switching to SFTP sets port 22; the saved key stays only for the same SFTP host and port.
     app.sites_action(SitesAction::Advanced, &ctx);
@@ -317,7 +318,7 @@ fn remote_sites_editor_and_command_follow_the_csharp_flows() {
     // Delete: FTPSITE_DELCONFIRM yes/no.
     app.dispatch("sites", &ctx);
     app.sites_action(SitesAction::Delete, &ctx);
-    assert_eq!(boxed(&app).1, "Are you sure you want to delete a selected site?");
+    assert_eq!(boxed(&app).1, "Remove the selected FTP site?");
     app.answer_message_box(7, &ctx);
     assert_eq!(app.sites_form().unwrap().sites.len(), 1);
     app.sites_action(SitesAction::Cancel, &ctx);

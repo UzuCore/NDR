@@ -36,7 +36,42 @@ pub(super) fn display_name(path: &Path) -> String {
     if name.is_empty() { text.into_owned() } else { name }
 }
 
+
+/// Format numbered localization placeholders without rescanning inserted values.
+/// A path or an error containing "{1}" must stay literal.
+pub(super) fn operation_format(language: &compat::Language, key: &str, fallback: &str, args: &[&dyn std::fmt::Display]) -> String {
+    use std::fmt::Write as _;
+    let template = language.text(key, fallback);
+    let mut rest = template.as_str();
+    let mut out = String::with_capacity(rest.len());
+    while let Some(open) = rest.find('{') {
+        let (before, tail) = rest.split_at(open);
+        out.push_str(before);
+        if let Some(close) = tail.find('}') {
+            if let Ok(index) = tail[1..close].parse::<usize>() {
+                if let Some(value) = args.get(index) {
+                    let _ = write!(&mut out, "{value}");
+                    rest = &tail[close + 1..];
+                    continue;
+                }
+            }
+        }
+        out.push('{');
+        rest = &tail[1..];
+    }
+    out.push_str(rest);
+    out
+}
+
 impl App {
+    pub(super) fn notice_operation(&mut self, text: &str) {
+        self.system_box("", text, MB_OK, |_, _, _| {});
+    }
+
+    pub(super) fn warn_operation(&mut self, text: &str) {
+        self.system_box("NDR", text, MB_OK | ndr::msgbox::MB_ICONEXCLAMATION, |_, _, _| {});
+    }
+
     /// [RES]/[Root] text (language file value, otherwise the original English literal).
     pub(super) fn root_text(&self, key: &str, fallback: &str) -> String {
         self.language_pack.text(&format!("RES.{key}"), fallback)
@@ -117,7 +152,7 @@ impl App {
                 return app.show_name_operation_error(error, false, |_, _, _| {});
             }
             app.refresh_and_focus(pane, Some(display_name(Path::new(&path))));
-            app.completion_notice("새 폴더 생성 완료", "Folder created", name);
+            app.completion_notice_operation(app.language_pack.text("NDR.OP_FILE_FOLDER_CREATED", "Folder created"), name);
         });
     }
 
@@ -141,7 +176,7 @@ impl App {
             }
             app.refresh_and_focus(pane, Some(names::find_file_name(&path)));
             if error == 0 {
-                app.completion_notice("새 파일 생성 완료", "File created", name);
+                app.completion_notice_operation(app.language_pack.text("NDR.OP_FILE_FILE_CREATED", "File created"), name);
             }
         });
     }
@@ -184,7 +219,7 @@ impl App {
             }
             let error = names::move_file(&entry.path.to_string_lossy(), &directory.join(&target_name).to_string_lossy());
             if error == 0 {
-                app.completion_notice("이름 변경 완료", "Rename completed", target_name.clone());
+                app.completion_notice_operation(app.language_pack.text("NDR.OP_FILE_RENAME_COMPLETED", "Rename completed"), target_name.clone());
                 // Original FUN_004361f8 -> FUN_0040f7f0: the description follows the new name.
                 let include_legacy = app.settings.flag("UseDescriptionFile", true);
                 if let Err(message) = compat::rename_descriptions(&directory, &[(entry.name.clone(), target_name.clone())], include_legacy) {
@@ -244,7 +279,7 @@ impl App {
     pub(super) fn edit_descriptions(&mut self) {
         let pane = self.active;
         if self.panes[pane].archive.is_some() {
-            return self.warn("압축 파일이나 원격 폴더 안에서는 설명을 바꿀 수 없습니다.", "Comments cannot be changed inside an archive or a remote folder.");
+            return self.warn_operation(&self.language_pack.text("NDR.OP_FILE_COMMENTS_CANNOT_BE_CHANGED_INSIDE_AN_ARCHIVE_OR_A", "Comments cannot be changed inside an archive or a remote folder."));
         }
         let items: Vec<String> = self.target_entries(pane).into_iter().map(|e| e.name).collect();
         if items.is_empty() {
@@ -445,7 +480,7 @@ impl App {
         }
         let paths = self.panes[pane].targets();
         if paths.is_empty() {
-            return self.warn("완전 삭제할 항목을 선택하세요.", "Select the items to shred.");
+            return self.warn_operation(&self.language_pack.text("NDR.OP_FILE_SELECT_THE_ITEMS_TO_SHRED", "Select the items to shred."));
         }
         let first = display_name(&paths[0]);
         self.delete_warning(DeleteWarningMode::Shred, paths.len(), &first, move |app, choice, _| {
@@ -455,5 +490,24 @@ impl App {
                 app.start_job("Shred".into(), Operation::Shred { sources: paths }, JobReport::Shred, Some(progress));
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod operation_format_tests {
+    use super::*;
+    use std::time::SystemTime;
+
+    #[test]
+    fn operation_catalog_reorders_arguments_and_does_not_interpolate_error_contents() {
+        let dir = std::env::temp_dir().join(format!("ndr-op-loc-{}-{}", std::process::id(), SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("en.lang"), "[NDR]\nOP_TEST=From {0} to {1}\n").unwrap();
+        std::fs::write(dir.join("fr.lang"), "[NDR]\nOP_TEST=Vers {1} depuis {0}\n").unwrap();
+        let language = compat::Language::load(&dir, "fr");
+        let from = "source-{1}.txt";
+        let to = "target-{0}.txt";
+        assert_eq!(operation_format(&language, "NDR.OP_TEST", "unused", &[&from, &to]), "Vers target-{0}.txt depuis source-{1}.txt");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

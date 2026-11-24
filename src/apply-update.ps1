@@ -6,13 +6,40 @@ param(
     [Parameter(Mandatory=$true)][int]$ParentPid,
     [Parameter(Mandatory=$true)][string]$LogPath,
     [switch]$SkipRestart,
-    [switch]$ShowProgress
+    [switch]$ShowProgress,
+    [string]$TextPath
 )
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $script:installerForm = $null
 $script:installerLabel = $null
 $script:installerBar = $null
+# Standalone/headless test invocation remains possible without a text file.
+$script:installerText = @{
+    title = 'NDR Update'
+    heading = 'Installing NDR update'
+    checking = 'Checking the installation package...'
+    extracting = 'Preparing the installation files...'
+    closing = 'Checking whether NDR has closed...'
+    waiting = 'Waiting for NDR to close...'
+    installing = 'Installing the NDR files...'
+    finished = 'Installation complete. Restarting NDR...'
+    failed = 'The update failed. See update.log for details.'
+    failureTitle = 'NDR update error'
+}
+if ($TextPath -and (Test-Path -LiteralPath $TextPath -PathType Leaf)) {
+    try {
+        $translated = Get-Content -LiteralPath $TextPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        foreach ($key in @($script:installerText.Keys)) {
+            $property = $translated.PSObject.Properties[[string]$key]
+            if ($property -and $property.Value -is [string] -and -not [string]::IsNullOrWhiteSpace($property.Value)) {
+                $script:installerText[$key] = $property.Value
+            }
+        }
+    } catch {
+        # Invalid overlay data must not prevent an otherwise verified update.
+    }
+}
 
 # When the NDR window closes, this separate STA PowerShell process keeps a
 # compact, real installation-progress window alive. The QA mode stays headless.
@@ -27,7 +54,7 @@ if ($ShowProgress -and -not $SkipRestart) {
     Add-Type -AssemblyName System.Drawing
     [System.Windows.Forms.Application]::EnableVisualStyles()
     $script:installerForm = [System.Windows.Forms.Form]::new()
-    $script:installerForm.Text = 'NDR 업데이트'
+    $script:installerForm.Text = $script:installerText.title
     $script:installerForm.Size = [System.Drawing.Size]::new(460, 172)
     $script:installerForm.StartPosition = 'CenterScreen'
     $script:installerForm.FormBorderStyle = 'FixedDialog'
@@ -37,7 +64,7 @@ if ($ShowProgress -and -not $SkipRestart) {
     $script:installerForm.TopMost = $true
     $script:installerForm.BackColor = [System.Drawing.Color]::FromArgb(245, 247, 251)
     $heading = [System.Windows.Forms.Label]::new()
-    $heading.Text = 'NDR  |  업데이트 설치'
+    $heading.Text = $script:installerText.heading
     $heading.Font = [System.Drawing.Font]::new('Segoe UI', 12, [System.Drawing.FontStyle]::Bold)
     $heading.Location = [System.Drawing.Point]::new(22, 17)
     $heading.Size = [System.Drawing.Size]::new(400, 28)
@@ -53,7 +80,7 @@ if ($ShowProgress -and -not $SkipRestart) {
     $script:installerBar.Style = 'Continuous'
     $script:installerForm.Controls.Add($script:installerBar)
     $script:installerForm.Show()
-    Set-InstallProgress '설치 패키지를 확인하고 있습니다...' 2
+    Set-InstallProgress $script:installerText.checking 2
 }
 $work = Split-Path -Parent $Archive
 $staging = Join-Path $work 'extracted'
@@ -98,7 +125,7 @@ try {
             New-Item -ItemType Directory -Path (Split-Path -Parent $target) -Force | Out-Null
             [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $target, $false)
             $entryIndex++
-            Set-InstallProgress '안전하게 설치 파일을 준비하고 있습니다...' (5 + [int](35 * $entryIndex / $entryCount))
+            Set-InstallProgress $script:installerText.extracting (5 + [int](35 * $entryIndex / $entryCount))
         }
     } finally { $zip.Dispose() }
     foreach ($required in @('NDR.exe','Skins/black/conf.ini','Skins/classic/conf.ini','Languages/ko.lang','Tools/7zip/7za.exe')) {
@@ -108,11 +135,11 @@ try {
     # The running executable is locked. Wait for only its originating process;
     # never kill any other NDR instance.
     $deadline = [DateTime]::UtcNow.AddMinutes(2)
-    Set-InstallProgress 'NDR 종료를 확인하고 있습니다...' 45
+    Set-InstallProgress $script:installerText.closing 45
     while (Get-Process -Id $ParentPid -ErrorAction SilentlyContinue) {
         if ([DateTime]::UtcNow -ge $deadline) { throw 'NDR did not exit before update deadline' }
         Start-Sleep -Milliseconds 500
-        Set-InstallProgress 'NDR 종료를 기다리고 있습니다...' 45
+        Set-InstallProgress $script:installerText.waiting 45
     }
     New-Item -ItemType Directory -Path $backup -Force | Out-Null
     $copied = [Collections.Generic.List[string]]::new()
@@ -129,7 +156,7 @@ try {
             New-Item -ItemType Directory -Path (Split-Path -Parent $target) -Force | Out-Null
             $copied.Add($relative)
             Copy-Item -LiteralPath $source.FullName -Destination $target -Force
-            Set-InstallProgress 'NDR 파일을 설치하고 있습니다...' (50 + [int](45 * $copied.Count / [Math]::Max(1, $installFiles.Count)))
+            Set-InstallProgress $script:installerText.installing (50 + [int](45 * $copied.Count / [Math]::Max(1, $installFiles.Count)))
         }
     } catch {
         foreach ($relative in $copied) {
@@ -143,7 +170,7 @@ try {
     # User settings, toolbar customization, favorites and other non-package
     # files are deliberately left in place.
     "Update installed: $files files" | Set-Content -LiteralPath $LogPath -Encoding UTF8
-    Set-InstallProgress '설치 완료. NDR을 다시 실행합니다...' 100
+    Set-InstallProgress $script:installerText.finished 100
     if (-not $SkipRestart) {
         Start-Process -FilePath (Join-Path $root 'NDR.exe') -WorkingDirectory $root
     }
@@ -153,9 +180,9 @@ try {
     "Update failed: $_" | Set-Content -LiteralPath $LogPath -Encoding UTF8
     if ($script:installerForm) {
         $script:installerForm.ControlBox = $true
-        Set-InstallProgress ('설치 오류: ' + $_.Exception.Message) 0
+        Set-InstallProgress $script:installerText.failed 0
         $script:installerForm.TopMost = $false
-        [void][System.Windows.Forms.MessageBox]::Show('업데이트 실패. 자세한 내용은 update.log를 확인하세요.', 'NDR 업데이트 오류')
+        [void][System.Windows.Forms.MessageBox]::Show($script:installerText.failed, $script:installerText.failureTitle)
         $script:installerForm.Close()
         $script:installerForm.Dispose()
     }

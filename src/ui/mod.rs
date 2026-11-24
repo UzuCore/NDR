@@ -849,7 +849,7 @@ pub struct App {
     update_progress: Option<main_window::UpdateProgress>,
     /// Launch the external installer after verification; testable without
     /// modifying or closing a real NDR installation.
-    update_launcher: fn(&Path) -> Result<(), String>,
+    update_launcher: fn(&Path, &compat::Language) -> Result<(), String>,
     /// C# _lastCommandWorkingDirectory (working directory of command execution).
     last_command_directory: Option<PathBuf>,
     /// Network drives, Explorer menu, and shell verbs (swapped out in tests).
@@ -1122,7 +1122,18 @@ impl App {
         }
         app
     }
+    fn catalog(&self, key: &str, korean: &str, english: &str) -> String {
+        self.language_pack.localized(key, korean, english)
+    }
+
     fn tr<'a>(&self, ko: &'a str, en: &'a str) -> std::borrow::Cow<'a, str> {
+        if (self.language == "ko" || self.language == "en")
+            && self.language_pack.code == self.language
+            && let Some(text) = self.language_pack.literal_pair(ko, en)
+            && text != if self.language == "ko" { ko } else { en }
+        {
+            return std::borrow::Cow::Owned(text.into());
+        }
         if self.language == "ko" {
             std::borrow::Cow::Borrowed(ko)
         } else if self.language == "en" {
@@ -1156,7 +1167,7 @@ impl App {
     /// Same as save but returns the error text on failure (like a C# SettingsStore.Save exception, when the caller notifies separately).
     fn try_save(&mut self) -> Result<(), String> {
         if self.profile_load_error {
-            self.status=self.tr("기존 설정을 읽지 못해 덮어쓰지 않았습니다. 설정 가져오기를 사용하세요.","Existing settings could not be read and were preserved. Use Import settings to recover.").into();
+            self.status=self.catalog("NDR.UI_PAIR_E4902D82E49C38F3", "기존 설정을 읽지 못해 덮어쓰지 않았습니다. 설정 가져오기를 사용하세요.", "Existing settings could not be read and were preserved. Use Import settings to recover.");
             return Err(self.status.clone());
         }
         // C# Closing: if WindowState is Normal, WindowLeft/Top/Width/Height, and always WindowMaximized and HasWindowBounds = true.
@@ -1321,11 +1332,8 @@ impl App {
         // diagnostic in the status bar instead.
         if let (Some(location), Err(error)) = (&self.panes[listing.pane].archive, &listing.result) {
             let archive = location.file.clone();
-            let message = if self.language == "ko" {
-                format!("압축파일을 열지 못해 이전 폴더로 돌아왔습니다: {} ({})", archive.display(), error)
-            } else {
-                format!("Could not open archive; returned to the containing folder: {} ({})", archive.display(), error)
-            };
+            let template = self.catalog("NDR.UI_ARCHIVE_REOPEN_FAILED", "압축파일을 열지 못해 이전 폴더로 돌아왔습니다: %s (%s)", "Could not open archive; returned to the containing folder: %s (%s)");
+            let message = ndr::markup::substitute(&template, &[&archive.to_string_lossy(), error]);
             let parent = archive.parent().map(Path::to_path_buf).unwrap_or_else(|| self.panes[listing.pane].path.clone());
             self.panes[listing.pane].archive = None;
             self.panes[listing.pane].error = None;
@@ -1335,11 +1343,8 @@ impl App {
             return;
         }
         if listing.skipped_device_names > 0 {
-            self.status = if self.language == "ko" {
-                format!("Windows 예약 장치명 항목 {}개를 숨겼습니다. 나머지 파일은 탐색·복사할 수 있습니다. 원본 압축파일은 변경되지 않습니다.", listing.skipped_device_names)
-            } else {
-                format!("{} Windows reserved-device archive entries hidden; remaining files can be browsed/copied. Original archive unchanged.", listing.skipped_device_names)
-            };
+            let template = self.catalog("NDR.UI_ARCHIVE_DEVICES_HIDDEN", "Windows 예약 장치명 항목 %d개를 숨겼습니다. 나머지 파일은 탐색·복사할 수 있습니다. 원본 압축파일은 변경되지 않습니다.", "%d Windows reserved-device archive entries hidden; remaining files can be browsed/copied. Original archive unchanged.");
+            self.status = ndr::markup::substitute(&template, &[&listing.skipped_device_names.to_string()]);
         }
         let skin = true;
         {
@@ -1506,10 +1511,10 @@ impl App {
                 0 => self.refresh(index),
                 1223 => {}
                 connection => {
-                    let ko = self.language == "ko";
                     let message = native::win32_message(connection);
-                    let text = if ko { format!("네트워크 공유 인증에 실패했습니다. Windows 오류 {connection}: {message}") } else { format!("Network share authentication failed. Windows error {connection}: {message}") };
-                    self.system_box(if ko { "네트워크 연결" } else { "Network connection" }, &text, ndr::msgbox::MB_OK | ndr::msgbox::MB_ICONEXCLAMATION, |_, _, _| {});
+                    let text = self.catalog("NDR.NET_SHARE_AUTH_ERROR", "네트워크 공유 인증에 실패했습니다. Windows 오류 {0}: {1}", "Network share authentication failed. Windows error {0}: {1}").replace("{0}", &connection.to_string()).replace("{1}", &message);
+                    let title = self.catalog("NDR.NET_SHARE_AUTH_TITLE", "네트워크 연결", "Network connection");
+                    self.system_box(&title, &text, ndr::msgbox::MB_OK | ndr::msgbox::MB_ICONEXCLAMATION, |_, _, _| {});
                 }
             }
         }
@@ -1859,6 +1864,21 @@ pub(super) fn set_app_fonts(ctx: &egui::Context, list_font: Option<(&'static [u8
         fonts.font_data.insert("UI".into(), data);
         fonts.families.entry(egui::FontFamily::Proportional).or_default().insert(0, "UI".into());
     }
+    // Optional Windows CJK fonts keep their autonyms readable in every UI
+    // language without shipping a large FontCollection or changing Latin metrics.
+    let windows = std::env::var_os("WINDIR").map(PathBuf::from).unwrap_or_else(|| "C:/Windows".into());
+    let mut script_fallbacks = Vec::new();
+    for (name, filename) in [("Japanese", "YuGothM.ttc"), ("ChineseSimplified", "msyh.ttc"), ("ChineseTraditional", "msjh.ttc")] {
+        let file = windows.join("Fonts").join(filename);
+        if let Some(bytes) = native::mapped_file(&file) {
+            fonts.font_data.insert(name.into(), Arc::new(egui::FontData::from_static(bytes)));
+            script_fallbacks.push(name.to_owned());
+        }
+    }
+    for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+        fonts.families.entry(family).or_default().extend(script_fallbacks.iter().cloned());
+    }
+    korean_first.extend(script_fallbacks);
     let list = match list_font {
         Some((bytes, index)) => {
             let mut data = egui::FontData::from_static(bytes);
@@ -2021,6 +2041,7 @@ impl eframe::App for App {
         if self.language_pack.code != self.language {
             self.language_pack =
                 compat::Language::load(&self.resources.join("Languages"), &self.language);
+            self.language = self.language_pack.code.clone();
         }
         self.poll(ctx);
         self.vault_security_tick(ctx);

@@ -398,10 +398,10 @@ fn conflict_file_info_follows_the_original_tffileexists() {
     let time = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
     let (date, clock) = ndr::listing::long_date_and_time(time);
     assert!(!date.is_empty() && !clock.is_empty());
-    assert_eq!(conflict_file_info(Some(1_234_567), Some(time), false, true), format!("<b>1,234,567</b> bytes ( {date}, {clock} )"));
-    assert_eq!(conflict_file_info(Some(5), Some(time), true, false), format!("<c0000FF><b>5</b> bytes ( {date}, {clock} )</c>"));
-    assert_eq!(conflict_file_info(Some(5), None, false, false), "<b>5</b> bytes");
-    assert_eq!(ndr::markup::plain_text(&conflict_file_info(Some(5), None, true, false)), "5 bytes");
+    assert_eq!(conflict_file_info(Some(1_234_567), Some(time), false, &compat::Language::default()), format!("<b>1,234,567</b> bytes ( {date}, {clock} )"));
+    assert_eq!(conflict_file_info(Some(5), Some(time), true, &compat::Language::default()), format!("<c0000FF><b>5</b> bytes ( {date}, {clock} )</c>"));
+    assert_eq!(conflict_file_info(Some(5), None, false, &compat::Language::default()), "<b>5</b> bytes");
+    assert_eq!(ndr::markup::plain_text(&conflict_file_info(Some(5), None, true, &compat::Language::default())), "5 bytes");
 }
 
 /// TfFileExists button rules of original FUN_004116dc and FUN_00422870, and the DFM positions.
@@ -623,7 +623,7 @@ fn external_copy_handler_follows_csharp() {
     let active = app.active;
     app.copy_to_other(active, true, &ctx);
     app.answer_message_box(IDYES, &ctx);
-    assert_eq!(app.status, "External copy handler is processing 1 item(s).");
+    assert_eq!(app.status, "외부 복사 프로그램에서 1개 항목을 처리하고 있습니다.");
     wait(&mut app, &ctx, |app| app.status == "1개 항목을 이동했습니다." && finished(app));
     let runs = mine(&kc);
     let (_, args, list) = &runs[0];

@@ -219,25 +219,24 @@ fn invalid_file_name(name: &str) -> bool {
 impl App {
     /// SplitFileWindow.Confirm / JoinFilesWindow.Commit: closes with the result when valid, otherwise shows a warning box with the window title and stays.
     pub(super) fn submit_split_or_join(&mut self, ctx: &egui::Context) {
-        let ko = self.language == "ko";
         let Some(dialog) = self.original_dialogs.last() else { return };
         let title = dialog.title.clone();
         let outcome = match &dialog.kind {
             DialogKind::Split(form) => match ndr::split::parse_split_size(&form.size) {
-                None => Err(if ko { "분할 크기를 입력하세요. 예: 1440 KB 또는 100 MB." } else { "Enter a positive split size, such as 1440 KB or 100 MB." }),
-                Some(_) if form.path.trim().is_empty() => Err(if ko { "저장 경로를 입력하세요." } else { "Enter an output folder." }),
+                None => Err(self.language_pack.text("NDR.OP_SPLIT_ENTER_A_POSITIVE_SPLIT_SIZE_SUCH_AS_1440_KB", "Enter a positive split size, such as 1440 KB or 100 MB.")),
+                Some(_) if form.path.trim().is_empty() => Err(self.language_pack.text("NDR.OP_SPLIT_ENTER_AN_OUTPUT_FOLDER", "Enter an output folder.")),
                 Some(size) => match std::path::absolute(form.path.trim()) {
-                    Err(_) => Err(if ko { "올바른 저장 경로를 입력하세요." } else { "Enter a valid output folder." }),
-                    Ok(folder) if !folder.is_dir() => Err(if ko { "저장할 폴더가 없습니다." } else { "The output folder does not exist." }),
+                    Err(_) => Err(self.language_pack.text("NDR.OP_SPLIT_ENTER_A_VALID_OUTPUT_FOLDER", "Enter a valid output folder.")),
+                    Ok(folder) if !folder.is_dir() => Err(self.language_pack.text("NDR.OP_SPLIT_THE_OUTPUT_FOLDER_DOES_NOT_EXIST", "The output folder does not exist.")),
                     Ok(folder) => Ok(DialogResult::Split(Some((folder, size, ndr::split::part_count(form.length, size))))),
                 },
             },
             DialogKind::Join(form) => {
                 let file_name = Path::new(&form.name).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                 if form.files.is_empty() {
-                    Err(if ko { "합칠 파일을 하나 이상 추가하세요." } else { "Add at least one file to join." })
+                    Err(self.language_pack.text("NDR.OP_SPLIT_ADD_AT_LEAST_ONE_FILE_TO_JOIN", "Add at least one file to join."))
                 } else if form.name.trim().is_empty() || form.name.chars().any(|c| c < ' ' || c == '|' || c == '"' || c == '<' || c == '>') || file_name.is_empty() || invalid_file_name(&file_name) {
-                    Err(if ko { "올바른 결과 파일 이름을 입력하세요." } else { "Enter a valid output file name." })
+                    Err(self.language_pack.text("NDR.OP_SPLIT_ENTER_A_VALID_OUTPUT_FILE_NAME", "Enter a valid output file name."))
                 } else {
                     Ok(DialogResult::Join(Some(JoinOptions { files: form.files.iter().map(|(p, _)| p.clone()).collect(), join_text: form.join_text, name: form.name.clone(), overwrite_confirmed: false })))
                 }
@@ -246,7 +245,7 @@ impl App {
         };
         match outcome {
             Ok(result) => self.answer_dialog(result, ctx),
-            Err(message) => self.system_box(&title, message, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {}),
+            Err(message) => self.system_box(&title, &message, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {}),
         }
     }
 
@@ -281,10 +280,11 @@ impl App {
                 prefer_bytes: true,
                 caption: Some(app.language_pack.text("RES.SPLITTING", "Splitting a file...")),
             };
+            let language = app.language_pack.clone();
             let started = app.start_progress_task(title.clone(), progress, move |events, cancel| {
-                let outcome = ndr::split::split_file(&source, size, &destination, &cancel, &mut |files, bytes, path| {
+                let outcome = ndr::split::split_file_with_locale(&source, size, &destination, &cancel, &mut |files, bytes, path| {
                     let _ = events.send(Event::Progress { path: path.to_path_buf(), bytes, files });
-                });
+                }, Some(&language));
                 let _ = tx.send(AsyncResult::SplitDone { source, outcome, cancelled: cancel.load(Ordering::Relaxed) });
                 Ok(())
             });
@@ -299,7 +299,7 @@ impl App {
         let title = self.language_pack.text("formFileSplit.Form.Caption", "Split File");
         let result = match outcome {
             Err(_) if cancelled => {
-                self.status = self.tr("파일 분할을 취소했습니다.", "File split canceled.").into_owned();
+                self.status = self.language_pack.text("NDR.OP_SPLIT_FILE_SPLIT_CANCELED", "File split canceled.");
                 return;
             }
             Err(error) => return self.system_box(&title, &error, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {}),
@@ -311,9 +311,9 @@ impl App {
             }
         }
         let count = ndr::parity::format_size(result.parts.len() as u64, "B", true).trim_end_matches(" B").to_owned();
-        self.status = if self.language == "ko" { format!("{count}개 조각 파일을 만들었습니다.") } else { format!("Created {count} parts.") };
+        self.status = super::file_commands::operation_format(&self.language_pack, "NDR.OP_SPLIT_CREATED_PARTS", "Created {0} parts.", &[&count]);
         self.refresh(self.active);
-        self.completion_notice("파일 분할 완료", "File split completed", self.status.clone());
+        self.completion_notice_operation(self.language_pack.text("NDR.OP_SPLIT_FILE_SPLIT_COMPLETED", "File split completed"), self.status.clone());
     }
 
     /// C# JoinPartsAsync: the chosen files (with one, all numbered pieces). A relative name is joined to the current folder. When the name exists
@@ -342,15 +342,11 @@ impl App {
             let typed = Path::new(&options.name);
             let destination = std::path::absolute(if typed.is_absolute() { typed.to_path_buf() } else { base.join(typed) }).unwrap_or_else(|_| base.join(typed));
             if (destination.is_file() && !options.overwrite_confirmed) || destination.is_dir() {
-                let text = if app.language == "ko" {
-                    format!("같은 이름의 파일이 이미 있어 합치지 않았습니다.\n{}", destination.display())
-                } else {
-                    format!("A file with this name already exists. Nothing was joined.\n{}", destination.display())
-                };
+                let text = super::file_commands::operation_format(&app.language_pack, "NDR.OP_JOIN_EXISTS", "A file with this name already exists. Nothing was joined.\n{0}", &[&destination.display()]);
                 return app.system_box(&title, &text, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
             }
             let tx = app.async_tx.clone();
-            let task_title = app.tr("파일 합치기", "Join Files").into_owned();
+            let task_title = app.language_pack.text("formFileJoin.Form.Caption", if app.language.eq_ignore_ascii_case("ko") { "파일 합치기" } else { "Join Files" });
             let totals = super::file_operation::flat_totals(&options.files);
             let progress = super::file_operation::ProgressInfo {
                 from: options.files.first().and_then(|f| super::file_operation::source_folder(f)),
@@ -360,6 +356,7 @@ impl App {
                 prefer_bytes: true,
                 caption: Some(app.language_pack.text("RES.JOINING", "Joining files...")),
             };
+            let language = app.language_pack.clone();
             let started = app.start_progress_task(task_title, progress, move |events, cancel| {
                 // A single numbered piece (".001", ".part1") joins all of its pieces in order, as the original does (joining big.001 alone
                 // rebuilt the whole big.bin). Previously only that one piece was copied.
@@ -371,9 +368,9 @@ impl App {
                     _ => options.files.clone(),
                 };
                 let count = files.len();
-                let outcome = ndr::split::join_ordered_files(&files, &destination, options.join_text, options.overwrite_confirmed, &cancel, &mut |files, bytes, path| {
+                let outcome = ndr::split::join_ordered_files_with_locale(&files, &destination, options.join_text, options.overwrite_confirmed, &cancel, &mut |files, bytes, path| {
                     let _ = events.send(Event::Progress { path: path.to_path_buf(), bytes, files });
-                });
+                }, Some(&language));
                 let _ = tx.send(AsyncResult::JoinDone { count, outcome: outcome.map(|_| ()), cancelled: cancel.load(Ordering::Relaxed) });
                 Ok(())
             });
@@ -385,18 +382,17 @@ impl App {
     }
 
     pub(super) fn join_done(&mut self, count: usize, outcome: Result<(), String>, cancelled: bool) {
-        let ko = self.language == "ko";
         match outcome {
-            Err(_) if cancelled => self.status = if ko { "파일 합치기를 취소했습니다." } else { "File join canceled." }.into(),
+            Err(_) if cancelled => self.status = self.language_pack.text("NDR.OP_SPLIT_FILE_JOIN_CANCELED", "File join canceled."),
             Err(error) => {
-                let title = self.tr("파일 합치기", "Join Files").into_owned();
+                let title = self.language_pack.text("formFileJoin.Form.Caption", "Join Files");
                 self.system_box(&title, &error, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
             }
             Ok(()) => {
                 let count = ndr::parity::format_size(count as u64, "B", true).trim_end_matches(" B").to_owned();
-                self.status = if ko { format!("{count}개 파일을 합쳤습니다.") } else { format!("Joined {count} files.") };
+                self.status = super::file_commands::operation_format(&self.language_pack, "NDR.OP_JOIN_CREATED_FILES", "Joined {0} files.", &[&count]);
                 self.refresh(self.active);
-                self.completion_notice("파일 합치기 완료", "File join completed", self.status.clone());
+                self.completion_notice_operation(self.language_pack.text("NDR.OP_SPLIT_FILE_JOIN_COMPLETED", "File join completed"), self.status.clone());
             }
         }
     }

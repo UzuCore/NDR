@@ -145,8 +145,8 @@ impl ConflictForm {
 
 /// Original FUN_00422068: file info text "<b>%s</b> bytes ( long date, time )" (size via FloatToStrF ffNumber = thousands separators).
 /// With highlight, <c0000FF>...</c> like FUN_00422314 (red, the newer side).
-pub(super) fn conflict_file_info(size: Option<u64>, modified: Option<SystemTime>, highlight: bool, ko: bool) -> String {
-    let bytes = size.map(|s| format!("<b>{}</b> bytes", n0(s as usize))).unwrap_or_else(|| (if ko { "크기 확인 불가" } else { "Size unavailable" }).to_owned());
+pub(super) fn conflict_file_info(size: Option<u64>, modified: Option<SystemTime>, highlight: bool, language: &compat::Language) -> String {
+    let bytes = size.map(|s| super::file_commands::operation_format(language, "NDR.OP_TRANSFER_CONFLICT_BYTES", "<b>{0}</b> bytes", &[&n0(s as usize)])).unwrap_or_else(|| language.text("NDR.OP_TRANSFER_SIZE_UNAVAILABLE", "Size unavailable"));
     let info = match modified.map(ndr::listing::long_date_and_time) {
         Some((date, time)) => format!("{bytes} ( {date}, {time} )"),
         None => bytes,
@@ -296,7 +296,7 @@ pub(super) fn conflict_ui(ui: &mut egui::Ui, form: &mut ConflictForm, language: 
             let full = path.to_string_lossy().into_owned();
             if highlight { format!("<c0000FF>{full}</c>") } else { full }
         } else {
-            conflict_file_info(size, modified, highlight, ko)
+            conflict_file_info(size, modified, highlight, language)
         };
         super::original_dialogs::put_left(ui, local(62.0, if slot == 0 { 50.0 } else { 49.0 }, 324.0, 18.0), egui::Label::new(super::original_dialogs::markup_job(&info, 13.0, text_color, 324.0)).truncate());
     }
@@ -431,16 +431,15 @@ impl App {
         let covered = !self.msgboxes.is_empty() || !self.original_dialogs.is_empty();
         // Password and conflict dialogs must remain on top and fully usable.
         if covered { return; }
-        let ko = self.language == "ko";
-        let cancel_text = if ko { "취소" } else { "Cancel" };
+        let cancel_text = self.language_pack.text("NDR.OP_TRANSFER_CANCEL", "Cancel");
         let status = if current.is_empty() {
-            if ko { "압축파일의 항목을 클립보드에 준비하고 있습니다…" } else { "Preparing archive items for the clipboard…" }.to_owned()
+            self.language_pack.text("NDR.OP_TRANSFER_PREPARING_ARCHIVE_ITEMS_FOR_THE_CLIPBOARD", "Preparing archive items for the clipboard…")
         } else {
             Path::new(&current).file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or(current)
         };
         let count = match total {
             Some(n) => format!("{} / {}", n0(completed as usize), n0(n as usize)),
-            None => if ko { "압축파일 확인 중".into() } else { "Scanning archive".into() },
+            None => self.language_pack.text("NDR.OP_TRANSFER_SCANNING_ARCHIVE", "Scanning archive"),
         };
         let fraction = total.filter(|n| *n > 0).map(|n| (completed as f32 / n as f32).clamp(0.0, 1.0));
         let mut cancel = !covered && ctx.input(|i| i.key_pressed(egui::Key::Escape));
@@ -475,7 +474,7 @@ impl App {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new(&count).weak().small());
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.add_enabled(!covered, egui::Button::new(cancel_text)).clicked() {
+                            if ui.add_enabled(!covered, egui::Button::new(&cancel_text)).clicked() {
                                 cancel = true;
                             }
                         });
@@ -496,12 +495,7 @@ impl App {
             self.archive_clipboard_notice = None;
             return;
         }
-        let message = match (self.language.as_str(), moving) {
-            ("ko", true) => "잘라내기 준비 완료 · 붙여넣으면 이동합니다",
-            ("ko", false) => "클립보드에 복사했습니다",
-            (_, true) => "Ready to move · paste to finish",
-            (_, false) => "Copied to the clipboard",
-        };
+        let message = if moving { self.language_pack.text("NDR.OP_TRANSFER_CLIPBOARD_READY_MOVE", "Ready to move · paste to finish") } else { self.language_pack.text("NDR.OP_TRANSFER_CLIPBOARD_COPIED", "Copied to the clipboard") };
         egui::Area::new(egui::Id::new("ndr-archive-clipboard-completed"))
             .order(egui::Order::Foreground)
             .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -56.0))
@@ -547,11 +541,10 @@ impl App {
             return;
         }
         self.remember_destination(&destination);
-        let ko = self.language == "ko";
         let (title, verb) = match (moving, kind) {
-            (true, _) => (if ko { "항목 이동" } else { "Move items" }, ("이동", "move")),
-            (false, TransferKind::Paste) => (if ko { "항목 붙여넣기" } else { "Paste items" }, ("붙여넣기", "paste")),
-            (false, _) => (if ko { "항목 복사" } else { "Copy items" }, ("복사", "copy")),
+            (true, _) => (self.language_pack.text("NDR.OP_TRANSFER_MOVE_ITEMS", "Move items"), ("이동", "move")),
+            (false, TransferKind::Paste) => (self.language_pack.text("NDR.OP_TRANSFER_PASTE_ITEMS", "Paste items"), ("붙여넣기", "paste")),
+            (false, _) => (self.language_pack.text("NDR.OP_TRANSFER_COPY_ITEMS", "Copy items"), ("복사", "copy")),
         };
         // Large selections get their totals from the worker. A single
         // selection retains the immediately available progress labels.
@@ -565,7 +558,7 @@ impl App {
             caption: None,
         };
         let report = JobReport::Transfer { verb, requested: sources.len(), clear_clipboard: moving && kind == TransferKind::Paste };
-        self.start_job(title.into(), Operation::Copy { sources, destination, move_files: moving }, report, Some(progress));
+        self.start_job(title, Operation::Copy { sources, destination, move_files: moving }, report, Some(progress));
     }
 
     /// Conflict question: answers at once when an apply-to-all answer fits, otherwise FileConflictWindow.
@@ -660,7 +653,6 @@ impl App {
             return;
         }
         use super::original_dialogs::{path_ellipsis, put_enabled, put_left};
-        let ko = self.language == "ko";
         let covered = !self.msgboxes.is_empty() || !self.original_dialogs.is_empty();
 
         let cancel_label = super::favorites_dialog::access_key(&self.language_pack.text("formProgress.Caption.btnCancel", "&Cancel")).0;
@@ -701,7 +693,7 @@ impl App {
                 JobReport::Transfer { verb: (_, "move"), .. } => self.language_pack.text("RES.MSG_MOVE_PREPARING", "Preparing for moving file/folder(s)"),
                 JobReport::Transfer { .. } => self.language_pack.text("RES.MSG_COPY_PREPARING", "Preparing for copying file/folder(s)"),
                 JobReport::Delete { .. } | JobReport::Shred => self.language_pack.text("RES.MSG_DEL_PREPARING", "Preparing for deleting file/folder(s)"),
-                _ => (if ko { "작업을 준비하고 있습니다." } else { "Preparing the operation." }).to_owned(),
+                _ => self.language_pack.text("NDR.OP_TRANSFER_PREPARING_THE_OPERATION", "Preparing the operation."),
             }
         } else {
             Path::new(&job.path).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| job.path.clone())
@@ -868,7 +860,6 @@ impl App {
     }
 
     pub(super) fn report_job(&mut self, cancelled: bool) {
-        let ko = self.language == "ko";
         let Some(job) = self.job.as_ref() else { return };
         let report = job.report.clone();
         let errors = job.errors.clone();
@@ -890,30 +881,28 @@ impl App {
         // completion sound (which users may disable). One notice per batch.
         if !cancelled {
             if let Some(error) = &fatal {
-                self.error_notice("작업 실패", "Operation failed", error.clone());
+                self.error_notice_operation(self.language_pack.text("NDR.OP_TRANSFER_OPERATION_FAILED", "Operation failed"), error.clone());
             } else if !errors.is_empty() || skipped > 0 {
-                self.warning_notice(
-                    "작업 일부 완료", "Operation partially completed",
-                    if ko { format!("완료 {files}개 · 오류 {}개 · 건너뜀 {skipped}개", errors.len()) }
-                    else { format!("{files} completed · {} errors · {skipped} skipped", errors.len()) },
+                self.warning_notice_operation(
+                    self.language_pack.text("NDR.OP_TRANSFER_PARTIAL", "Operation partially completed"),
+                    super::file_commands::operation_format(&self.language_pack, "NDR.OP_TRANSFER_PARTIAL_DETAIL", "{0} completed · {1} errors · {2} skipped", &[&files, &errors.len(), &skipped]),
                 );
             } else {
-                let (ko_title, en_title) = match &report {
-                    JobReport::Transfer { verb, .. } => {
-                        if verb.1.eq_ignore_ascii_case("move") || verb.1.eq_ignore_ascii_case("moving") {
-                            ("이동 완료", "Move completed")
-                        } else { ("복사 완료", "Copy completed") }
-                    }
-                    JobReport::Delete { recycle: true, .. } => ("휴지통 이동 완료", "Moved to Recycle Bin"),
-                    JobReport::Delete { .. } => ("삭제 완료", "Delete completed"),
-                    JobReport::Shred => ("완전 삭제 완료", "Shredding completed"),
-                    JobReport::Generic if chime && !custom_status => ("작업 완료", "Operation completed"),
-                    _ => ("", ""),
+                let completion = match &report {
+                    JobReport::Transfer { verb, .. } => if verb.1.eq_ignore_ascii_case("move") || verb.1.eq_ignore_ascii_case("moving") {
+                        Some(self.language_pack.text("NDR.OP_TRANSFER_MOVE_DONE", "Move completed"))
+                    } else {
+                        Some(self.language_pack.text("NDR.OP_TRANSFER_COPY_DONE", "Copy completed"))
+                    },
+                    JobReport::Delete { recycle: true, .. } => Some(self.language_pack.text("NDR.OP_TRANSFER_RECYCLE_DONE", "Moved to Recycle Bin")),
+                    JobReport::Delete { .. } => Some(self.language_pack.text("NDR.OP_TRANSFER_DELETE_DONE", "Delete completed")),
+                    JobReport::Shred => Some(self.language_pack.text("NDR.OP_TRANSFER_SHRED_DONE", "Shredding completed")),
+                    JobReport::Generic if chime && !custom_status => Some(self.language_pack.text("NDR.OP_TRANSFER_DONE", "Operation completed")),
+                    _ => None,
                 };
-                if !en_title.is_empty() && (files > 0 || matches!(report, JobReport::Generic)) {
-                    self.completion_notice(ko_title, en_title,
-                        if ko { format!("{files}개 항목 처리 · {}", format_size(bytes)) }
-                        else { format!("{files} items processed · {}", format_size(bytes)) });
+                if let Some(completion) = completion.filter(|_| files > 0 || matches!(report, JobReport::Generic)) {
+                    self.completion_notice_operation(completion,
+                        super::file_commands::operation_format(&self.language_pack, "NDR.OP_TRANSFER_DONE_DETAIL", "{0} items processed · {1}", &[&files, &format_size(bytes)]));
                 }
             }
         }
@@ -929,70 +918,64 @@ impl App {
                 if custom_status {
                     return;
                 }
-                self.status = format!(
-                    "{title}: {} files, {}{}{}",
-                    files,
-                    format_size(bytes),
-                    if cancelled { " (cancelled)" } else { "" },
-                    if errors.is_empty() { String::new() } else { format!(" · {} errors", errors.len()) }
-                );
+                let cancel = if cancelled { self.language_pack.text("NDR.OP_TRANSFER_CANCELLED_SUFFIX", " (cancelled)") } else { String::new() };
+                let error_summary = if errors.is_empty() { String::new() } else { super::file_commands::operation_format(&self.language_pack, "NDR.OP_TRANSFER_ERROR_COUNT_SUFFIX", " · {0} errors", &[&errors.len()]) };
+                self.status = super::file_commands::operation_format(&self.language_pack, "NDR.OP_TRANSFER_GENERIC_SUMMARY", "{0}: {1} files, {2}{3}{4}", &[&title, &files, &format_size(bytes), &cancel, &error_summary]);
                 if !errors.is_empty() {
                     self.show_error_text(&title, &errors);
                 }
             }
             JobReport::Transfer { verb, requested, clear_clipboard } => {
-                let v = if ko { verb.0 } else { verb.1 };
+                let v = match verb.1 {
+                    "move" | "moving" => self.language_pack.text("NDR.OP_TRANSFER_VERB_MOVE", "move"),
+                    "paste" => self.language_pack.text("NDR.OP_TRANSFER_VERB_PASTE", "paste"),
+                    _ => self.language_pack.text("NDR.OP_TRANSFER_VERB_COPY", "copy"),
+                };
+                let initial_v = capitalize(&v);
                 if let Some(message) = fatal {
-                    let caption = if ko { format!("{v} 오류") } else { format!("{} error", capitalize(v)) };
+                    let caption = super::file_commands::operation_format(&self.language_pack, "NDR.OP_TRANSFER_ERROR_TITLE", "{0} error", &[&initial_v]);
                     self.system_box(&caption, &message, MB_OK | MB_ICONHAND, |_, _, _| {});
-                    self.status = if ko { format!("{v} 작업을 마치지 못했습니다.") } else { format!("The {v} operation did not finish.") };
+                    self.status = super::file_commands::operation_format(&self.language_pack, "NDR.OP_TRANSFER_NOT_FINISHED", "The {0} operation did not finish.", &[&v]);
                     return;
                 }
                 if cancelled {
-                    self.status = if ko { format!("{v} 작업을 취소했습니다. 완료된 항목은 유지됩니다.") } else { format!("The {v} operation was cancelled. Completed items were kept.") };
+                    self.status = super::file_commands::operation_format(&self.language_pack, "NDR.OP_TRANSFER_CANCELLED", "The {0} operation was cancelled. Completed items were kept.", &[&v]);
                     return;
                 }
                 if !errors.is_empty() {
                     let mut details = unreported.iter().take(30).cloned().collect::<Vec<_>>().join("\r\n");
                     if unreported.len() > 30 {
-                        details += &if ko { format!("\r\n외 {}건", n0(unreported.len() - 30)) } else { format!("\r\nand {} more", n0(unreported.len() - 30)) };
+                        details += &super::file_commands::operation_format(&self.language_pack, "NDR.OP_TRANSFER_MORE_ERRORS", "\r\nand {0} more", &[&n0(unreported.len() - 30)]);
                     }
                     if skipped > 0 {
-                        details += &if ko { format!("\r\n\r\n사용자 선택으로 건너뛴 항목: {}개", n0(skipped)) } else { format!("\r\n\r\nItems skipped by choice: {}", n0(skipped)) };
+                        details += &super::file_commands::operation_format(&self.language_pack, "NDR.OP_TRANSFER_SKIPPED_BY_CHOICE", "\r\n\r\nItems skipped by choice: {0}", &[&n0(skipped)]);
                     }
                     if !unreported.is_empty() || skipped > 0 {
-                        let caption = if ko { format!("일부 {v} 실패 ({}건)", n0(errors.len())) } else { format!("Some items failed to {v} ({})", n0(errors.len())) };
+                        let caption = super::file_commands::operation_format(&self.language_pack, "NDR.OP_TRANSFER_ERRORS_TITLE", "Some items failed to {0} ({1})", &[&v, &n0(errors.len())]);
                         self.system_box(&caption, &details, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
                     }
-                    self.status = if ko {
-                        format!("{v} 완료: 요청 {}개, 실패 {}건, 건너뜀 {}개", n0(requested), n0(errors.len()), n0(skipped))
-                    } else {
-                        format!("{} finished: {} requested, {} failed, {} skipped", capitalize(v), n0(requested), n0(errors.len()), n0(skipped))
-                    };
+                    self.status = super::file_commands::operation_format(&self.language_pack, "NDR.OP_TRANSFER_FAILED_SUMMARY", "{0} finished: {1} requested, {2} failed, {3} skipped", &[&initial_v, &n0(requested), &n0(errors.len()), &n0(skipped)]);
                     return;
                 }
                 if skipped > 0 {
-                    self.status = if ko { format!("{v} 완료: {}개 항목을 건너뛰었습니다.", n0(skipped)) } else { format!("{} finished: skipped {} item(s).", capitalize(v), n0(skipped)) };
+                    self.status = super::file_commands::operation_format(&self.language_pack, "NDR.OP_TRANSFER_SKIPPED_SUMMARY", "{0} finished: skipped {1} item(s).", &[&initial_v, &n0(skipped)]);
                     return;
                 }
                 if clear_clipboard {
                     self.clipboard = None;
                     self.clipboard_sequence = None;
                 }
-                self.status = if ko { format!("요청한 {}개 항목을 {v}했습니다.", n0(requested)) } else { format!("Finished: {v} {} requested item(s).", n0(requested)) };
+                self.status = super::file_commands::operation_format(&self.language_pack, "NDR.OP_TRANSFER_DONE_SUMMARY", "Finished: {0} {1} requested item(s).", &[&v, &n0(requested)]);
                 self.play_operation_completion_sound();
             }
             JobReport::Delete { recycle, skipped } => {
                 let failed = errors.len() + usize::from(fatal.is_some());
-                let summary = if skipped > 0 { if ko { format!(" 건너뜀 {}개", n0(skipped)) } else { format!(" Skipped {}.", n0(skipped)) } } else { String::new() };
+                let summary = if skipped > 0 { super::file_commands::operation_format(&self.language_pack, "NDR.OP_TRANSFER_DELETE_SKIPPED", " Skipped {0}.", &[&n0(skipped)]) } else { String::new() };
                 let completed = n0(files as usize);
-                self.status = match (cancelled, recycle, ko) {
-                    (true, _, true) => format!("삭제 작업을 중단했습니다. 완료 {completed}개, 실패 {}개", n0(failed)),
-                    (true, _, false) => format!("Deletion stopped. Completed {completed}, failed {}.", n0(failed)),
-                    (false, true, true) => format!("{completed}개 항목을 휴지통으로 이동했습니다.{summary} 실패 {}개", n0(failed)),
-                    (false, true, false) => format!("Moved {completed} item(s) to the Recycle Bin.{summary} Failed {}.", n0(failed)),
-                    (false, false, true) => format!("{completed}개 항목을 삭제했습니다.{summary} 실패 {}개", n0(failed)),
-                    (false, false, false) => format!("Deleted {completed} item(s).{summary} Failed {}.", n0(failed)),
+                self.status = match (cancelled, recycle) {
+                    (true, _) => super::file_commands::operation_format(&self.language_pack, "NDR.OP_TRANSFER_DELETE_STOPPED", "Deletion stopped. Completed {0}, failed {1}.", &[&completed, &n0(failed)]),
+                    (false, true) => super::file_commands::operation_format(&self.language_pack, "NDR.OP_TRANSFER_RECYCLE_SUMMARY", "Moved {0} item(s) to the Recycle Bin.{1} Failed {2}.", &[&completed, &summary, &n0(failed)]),
+                    (false, false) => super::file_commands::operation_format(&self.language_pack, "NDR.OP_TRANSFER_DELETE_SUMMARY", "Deleted {0} item(s).{1} Failed {2}.", &[&completed, &summary, &n0(failed)]),
                 };
                 if !cancelled && failed == 0 && skipped == 0 && files > 0 {
                     self.play_operation_completion_sound();
@@ -1000,7 +983,7 @@ impl App {
                 let mut rest = unreported;
                 rest.extend(fatal);
                 if !rest.is_empty() {
-                    let title = self.tr("삭제하지 못한 항목", "Items that could not be deleted").into_owned();
+                    let title = self.language_pack.text("NDR.OP_TRANSFER_ITEMS_THAT_COULD_NOT_BE_DELETED", "Items that could not be deleted");
                     self.show_error_text(&title, &rest);
                 }
             }
@@ -1008,10 +991,10 @@ impl App {
                 let mut all = errors;
                 all.extend(fatal);
                 if all.is_empty() {
-                    self.status = self.tr("완전 삭제 작업이 끝났습니다.", "Shredding finished.").into_owned();
+                    self.status = self.language_pack.text("NDR.OP_TRANSFER_SHREDDING_FINISHED", "Shredding finished.");
                     self.play_operation_completion_sound();
                 } else {
-                    let title = self.tr("일부 항목을 완전히 삭제하지 못했습니다.", "Some items could not be shredded.").into_owned();
+                    let title = self.language_pack.text("NDR.OP_TRANSFER_SOME_ITEMS_COULD_NOT_BE_SHREDDED", "Some items could not be shredded.");
                     self.text = Some(TextDocument { title, text: all.join("\r\n") });
                 }
             }
@@ -1022,7 +1005,7 @@ impl App {
     fn show_error_text(&mut self, title: &str, errors: &[String]) {
         let mut text = errors.iter().take(500).map(|e| self.archive_error_text(e)).collect::<Vec<_>>().join("\r\n");
         if errors.len() > 500 {
-            text += &if self.language == "ko" { format!("\r\n… 나머지 {}개 오류", n0(errors.len() - 500)) } else { format!("\r\n… {} more errors", n0(errors.len() - 500)) };
+            text += &super::file_commands::operation_format(&self.language_pack, "NDR.OP_TRANSFER_MORE_ERRORS_TRUNCATED", "\r\n… {0} more errors", &[&n0(errors.len() - 500)]);
         }
         self.text = Some(TextDocument { title: title.into(), text });
     }
@@ -1051,25 +1034,16 @@ impl App {
         let target = std::path::absolute(destination).unwrap_or_else(|_| destination.to_path_buf());
         self.remember_destination(&target);
         let target = target.to_string_lossy().into_owned();
-        let ko = self.language == "ko";
         let name = Path::new(&program).file_stem().map(|s| s.to_string_lossy().to_lowercase()).unwrap_or_default();
         let kill_gui = name.contains("killcopy");
         let kill_console = name == "kc";
         let count = paths.len();
-        self.status = if kill_gui || kill_console || !ko {
-            format!("External copy handler is processing {} item(s).", n0(count))
-        } else {
-            format!("외부 복사 프로그램에서 {}개 항목을 처리하고 있습니다.", n0(count))
-        };
-        let done = match (kind, moving, ko) {
-            (TransferKind::OtherPane, false, true) => Some(format!("{}개 항목을 복사했습니다.", n0(count))),
-            (TransferKind::OtherPane, true, true) => Some(format!("{}개 항목을 이동했습니다.", n0(count))),
-            (TransferKind::OtherPane, false, false) => Some(format!("Copied {} item(s).", n0(count))),
-            (TransferKind::OtherPane, true, false) => Some(format!("Moved {} item(s).", n0(count))),
-            (TransferKind::Drag, false, true) => Some(format!("드래그한 {}개 항목을 복사했습니다.", n0(count))),
-            (TransferKind::Drag, true, true) => Some(format!("드래그한 {}개 항목을 이동했습니다.", n0(count))),
-            (TransferKind::Drag, false, false) => Some(format!("Copied {} dragged item(s).", n0(count))),
-            (TransferKind::Drag, true, false) => Some(format!("Moved {} dragged item(s).", n0(count))),
+        self.status = super::file_commands::operation_format(&self.language_pack, "NDR.OP_TRANSFER_EXTERNAL_PROCESSING", "External copy handler is processing {0} item(s).", &[&n0(count)]);
+        let done = match (kind, moving) {
+            (TransferKind::OtherPane, false) => Some(super::file_commands::operation_format(&self.language_pack, "NDR.OP_TRANSFER_EXTERNAL_COPIED", "Copied {0} item(s).", &[&n0(count)])),
+            (TransferKind::OtherPane, true) => Some(super::file_commands::operation_format(&self.language_pack, "NDR.OP_TRANSFER_EXTERNAL_MOVED", "Moved {0} item(s).", &[&n0(count)])),
+            (TransferKind::Drag, false) => Some(super::file_commands::operation_format(&self.language_pack, "NDR.OP_TRANSFER_EXTERNAL_DRAG_COPIED", "Copied {0} dragged item(s).", &[&n0(count)])),
+            (TransferKind::Drag, true) => Some(super::file_commands::operation_format(&self.language_pack, "NDR.OP_TRANSFER_EXTERNAL_DRAG_MOVED", "Moved {0} dragged item(s).", &[&n0(count)])),
             _ => None,
         };
         let clear_clipboard = moving && kind == TransferKind::Paste;
@@ -1080,8 +1054,9 @@ impl App {
             let estimate = program.len() * 2 + target.len() * 2 + 256 + paths.iter().map(|p| p.len() * 2 + 8).sum::<usize>();
             estimate < 30_000
         };
+        let language = self.language_pack.clone();
         thread::spawn(move || {
-            let result = run_external_copy(runner, &program, &paths, &target, moving, kill_gui, kill_console, teracopy);
+            let result = run_external_copy(&language, runner, &program, &paths, &target, moving, kill_gui, kill_console, teracopy);
             let _ = tx.send(AsyncResult::ExternalCopy { result, status: done, clear_clipboard });
         });
         true
@@ -1099,11 +1074,11 @@ impl App {
                 if let Some(status) = status {
                     self.status = status;
                 }
-                self.completion_notice("외부 복사 작업 완료", "External file operation completed",
+                self.completion_notice_operation(self.language_pack.text("NDR.OP_TRANSFER_EXTERNAL_FILE_OPERATION_COMPLETED", "External file operation completed"),
                     self.status.clone());
             }
             Err(message) => {
-                self.error_notice("외부 복사 작업 실패", "External file operation failed", message.clone());
+                self.error_notice_operation(self.language_pack.text("NDR.OP_TRANSFER_EXTERNAL_FILE_OPERATION_FAILED", "External file operation failed"), message.clone());
                 self.system_box("NDR", &message, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
             },
         }
@@ -1123,7 +1098,7 @@ fn list_path(extension: &str) -> PathBuf {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn run_external_copy(runner: fn(&Path, &[String], &Path) -> Result<i32, String>, program: &str, paths: &[String], target: &str, moving: bool, kill_gui: bool, kill_console: bool, teracopy: bool) -> Result<(), String> {
+fn run_external_copy(language: &compat::Language, runner: fn(&Path, &[String], &Path) -> Result<i32, String>, program: &str, paths: &[String], target: &str, moving: bool, kill_gui: bool, kill_console: bool, teracopy: bool) -> Result<(), String> {
     let directory = Path::new(program).parent().map(Path::to_path_buf).unwrap_or_default();
     let mut list = None;
     let result = (|| {
@@ -1148,9 +1123,9 @@ fn run_external_copy(runner: fn(&Path, &[String], &Path) -> Result<i32, String>,
                     args.push("-m".into());
                 }
             }
-            let code = runner(Path::new(program), &args, &directory).map_err(|e| format!("KillCopy could not be started. {e}"))?;
+            let code = runner(Path::new(program), &args, &directory).map_err(|e| super::file_commands::operation_format(language, "NDR.OP_TRANSFER_KILLCOPY_START_ERR", "KillCopy could not be started. {0}", &[&e]))?;
             if code != 0 {
-                return Err(format!("KillCopy exited with error code {code}."));
+                return Err(super::file_commands::operation_format(language, "NDR.OP_TRANSFER_KILLCOPY_EXIT_ERR", "KillCopy exited with error code {0}.", &[&code]));
             }
             return Ok(());
         }
@@ -1177,7 +1152,7 @@ fn run_external_copy(runner: fn(&Path, &[String], &Path) -> Result<i32, String>,
         }
         let code = runner(Path::new(program), &args, &directory)?;
         if code != 0 {
-            return Err(format!("외부 복사 프로그램이 오류 코드 {code}로 종료되었습니다."));
+            return Err(super::file_commands::operation_format(language, "NDR.OP_TRANSFER_EXTERNAL_EXIT_ERR", "External copy handler exited with error code {0}.", &[&code]));
         }
         Ok(())
     })();

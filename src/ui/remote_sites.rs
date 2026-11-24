@@ -6,7 +6,7 @@
 //! Original TfFTPSiteManager: the row check-and-store is FUN_00428438 (index < 0 passes; port through StrToIntDef FUN_0040c2a0), and btnAddClick
 //! (0x428048) first runs it on the selected row, then asks for the name (FUN_0040bea0 finds a duplicate) and adds the row (FUN_00427b00 refreshes).
 use super::original_dialogs::{DialogKind, DialogResult};
-use super::remote_window::{SiteProfile, load_sites, parse_port, prepare_host, store_sites, t};
+use super::remote_window::{SiteProfile, load_sites, parse_port, prepare_host, store_sites, net_template};
 use super::*;
 use ndr::msgbox::{IDYES, MB_ICONASTERISK, MB_ICONEXCLAMATION, MB_ICONQUESTION, MB_OK, MB_YESNO};
 use ndr::remote::Config;
@@ -175,7 +175,7 @@ pub(super) fn sites_ui(ui: &mut egui::Ui, form: &mut SitesForm, language: &compa
 }
 /// RemoteSiteEditorWindow.
 pub(super) struct SiteEditorForm {
-    ko: bool,
+    language: compat::Language,
     pub name: String,
     pub protocol: String,
     pub host: String,
@@ -196,9 +196,9 @@ pub(super) struct SiteEditorForm {
 }
 
 impl SiteEditorForm {
-    pub(super) fn new(source: &SiteProfile, existing_names: Vec<String>, ko: bool) -> Self {
+    pub(super) fn new(source: &SiteProfile, existing_names: Vec<String>, language: compat::Language) -> Self {
         Self {
-            ko,
+            language,
             name: source.name.clone(),
             protocol: source.protocol.clone(),
             host: source.host.clone(),
@@ -226,7 +226,7 @@ impl SiteEditorForm {
         }
         let port = parse_port(&self.port);
         if !self.key_path.is_empty() && !Path::new(&self.key_path).is_file() {
-            return Err((false, t(self.ko, "개인 키 파일을 찾을 수 없습니다.", "The private key file was not found.").into()));
+            return Err((false, self.language.text("NDR.NET_THE_PRIVATE_KEY_FILE_WAS_NOT_FOUND", "The private key file was not found.").into()));
         }
         if self.require_unique && self.existing_names.iter().any(|n| names_equal(n, &self.name)) {
             return Err((true, "FTPSITE_EXISTS".into()));
@@ -260,7 +260,6 @@ pub(super) enum EditorAction {
 }
 
 pub(super) fn site_editor_ui(ui: &mut egui::Ui, form: &mut SiteEditorForm, language: &compat::Language, enter: bool) -> Option<EditorAction> {
-    let ko = form.ko;
     let mut action = None;
     ui.set_width(584.0);
     egui::ScrollArea::vertical().id_salt("remote-site-editor").max_height(520.0).show(ui, |ui| {
@@ -268,9 +267,9 @@ pub(super) fn site_editor_ui(ui: &mut egui::Ui, form: &mut SiteEditorForm, langu
             ui.add_space(8.0);
             ui.label(text);
         };
-        label(ui, t(ko, "프로필 이름", "Profile name"));
+        label(ui, &language.text("NDR.NET_PROFILE_NAME", "Profile name"));
         ui.add(egui::TextEdit::singleline(&mut form.name).desired_width(f32::INFINITY));
-        label(ui, t(ko, "프로토콜", "Protocol"));
+        label(ui, &language.text("NDR.NET_PROTOCOL", "Protocol"));
         egui::ComboBox::from_id_salt("remote-site-editor-protocol").width(200.0).selected_text(form.protocol.clone()).show_opaque(ui, |ui| {
             for name in EDITOR_PROTOCOLS {
                 if ui.selectable_label(form.protocol == name, name).clicked() && form.protocol != name {
@@ -279,27 +278,27 @@ pub(super) fn site_editor_ui(ui: &mut egui::Ui, form: &mut SiteEditorForm, langu
                 }
             }
         });
-        label(ui, t(ko, "호스트", "Host"));
+        label(ui, &language.text("NDRSFTPHostKey.HostLabel", "Host"));
         ui.add(egui::TextEdit::singleline(&mut form.host).desired_width(f32::INFINITY));
-        label(ui, t(ko, "포트", "Port"));
+        label(ui, &language.text("NDR.NET_PORT", "Port"));
         ui.add(egui::TextEdit::singleline(&mut form.port).desired_width(f32::INFINITY));
-        label(ui, t(ko, "사용자 이름", "User name"));
+        label(ui, &language.text("formPassword.Caption.lUser", "User name"));
         ui.add(egui::TextEdit::singleline(&mut form.user).desired_width(f32::INFINITY));
-        label(ui, t(ko, "비밀번호", "Password"));
+        label(ui, &language.text("formPassword.Caption.lPassword", "Password"));
         ui.add(egui::TextEdit::singleline(&mut form.password).password(true).desired_width(f32::INFINITY));
-        label(ui, t(ko, "원격 시작 경로", "Remote start folder"));
+        label(ui, &language.text("NDR.NET_REMOTE_START_FOLDER", "Remote start folder"));
         ui.add(egui::TextEdit::singleline(&mut form.remote_directory).desired_width(f32::INFINITY));
-        label(ui, t(ko, "목록 문자 인코딩", "Listing character encoding"));
+        label(ui, &language.text("NDR.NET_LISTING_CHARACTER_ENCODING", "Listing character encoding"));
         ui.add(egui::TextEdit::singleline(&mut form.encoding).desired_width(f32::INFINITY));
-        ui.checkbox(&mut form.passive, t(ko, "FTP 수동 모드", "FTP passive mode"));
-        label(ui, t(ko, "SFTP 개인 키 (선택 사항)", "SFTP private key (optional)"));
+        ui.checkbox(&mut form.passive, language.text("NDR.NET_FTP_PASSIVE_MODE", "FTP passive mode"));
+        label(ui, &language.text("NDR.NET_SFTP_PRIVATE_KEY_OPTIONAL", "SFTP private key (optional)"));
         ui.horizontal(|ui| {
             ui.add(egui::TextEdit::singleline(&mut form.key_path).desired_width(440.0));
-            if ui.button(t(ko, "키 파일 선택", "Choose key file")).clicked() {
+            if ui.button(language.text("NDR.NET_CHOOSE_KEY_FILE", "Choose key file")).clicked() {
                 action = Some(EditorAction::BrowseKey);
             }
         });
-        label(ui, t(ko, "개인 키 암호", "Private key passphrase"));
+        label(ui, &language.text("NDR.NET_PRIVATE_KEY_PASSPHRASE", "Private key passphrase"));
         ui.add(egui::TextEdit::singleline(&mut form.key_passphrase).password(true).desired_width(f32::INFINITY));
         if form.protocol.eq_ignore_ascii_case("SFTP") {
             label(ui, &language.text("NDRSFTPHostKey.StoredHostFingerprint", "Stored SFTP host fingerprint (SHA-256)"));
@@ -313,10 +312,10 @@ pub(super) fn site_editor_ui(ui: &mut egui::Ui, form: &mut SiteEditorForm, langu
     });
     ui.add_space(10.0);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-        if ui.add(egui::Button::new(t(ko, "취소", "Cancel")).min_size(egui::vec2(82.0, 26.0))).clicked() {
+        if ui.add(egui::Button::new(language.text("formGetText.Caption.btnCancel", "Cancel")).min_size(egui::vec2(82.0, 26.0))).clicked() {
             action = Some(EditorAction::Cancel);
         }
-        if ui.add(egui::Button::new(t(ko, "저장", "Save")).min_size(egui::vec2(82.0, 26.0))).clicked() {
+        if ui.add(egui::Button::new(language.text("formSaveList.Caption.btnSave", "Save")).min_size(egui::vec2(82.0, 26.0))).clicked() {
             action = Some(EditorAction::Save);
         }
     });
@@ -415,8 +414,8 @@ impl App {
                 let Some(index) = form.editing else { return };
                 let current = form.sites[index].clone();
                 let others = form.sites.iter().enumerate().filter(|(i, _)| *i != index).map(|(_, s)| s.name.clone()).collect();
-                let editor = SiteEditorForm::new(&current, others, self.language == "ko");
-                let title = self.tr("원격 사이트", "Remote site").into_owned();
+                let editor = SiteEditorForm::new(&current, others, self.language_pack.clone());
+                let title = self.language_pack.text("NDR.NET_REMOTE_SITE", "Remote site");
                 self.push_original_dialog(title, DialogKind::SiteEditor(Box::new(editor)), move |app, result, _| {
                     let DialogResult::SiteEditor(Some(site)) = result else { return };
                     let Some(form) = app.sites_form() else { return };
@@ -455,8 +454,8 @@ impl App {
         };
         match action {
             EditorAction::BrowseKey => {
-                let title = t(form.ko, "SFTP 개인 키 선택", "Select SFTP private key");
-                if let Some(path) = (self.open_dialog)(title, None, "", &[]) {
+                let title = form.language.text("NDR.NET_SELECT_SFTP_PRIVATE_KEY", "Select SFTP private key");
+                if let Some(path) = (self.open_dialog)(&title, None, "", &[]) {
                     if let Some(DialogKind::SiteEditor(form)) = self.original_dialogs.last_mut().map(|d| &mut d.kind) {
                         form.key_path = path.to_string_lossy().into_owned();
                     }
@@ -478,17 +477,18 @@ impl App {
     pub(super) fn run_remote_command(&mut self) {
         let sites = load_sites(&self.settings);
         if sites.is_empty() {
-            return self.warn("먼저 네트워크 메뉴에서 원격 사이트를 저장하세요.", "Save a remote site from the Network menu first.");
+            let text = self.language_pack.text("NDR.NET_SAVE_A_REMOTE_SITE_FROM_THE_NETWORK_MENU", "Save a remote site from the Network menu first.");
+            return self.system_box("NDR", &text, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
         }
         let labels: Vec<String> = sites.iter().map(|s| format!("{} — {} {}:{}", s.name, s.protocol, s.host, s.port)).collect();
-        let ko = self.language == "ko";
-        self.choice_dialog(t(ko, "원격 사이트 선택", "Select remote site"), t(ko, "대상 사이트를 선택하세요.", "Select the target site."), labels, 0, move |app, index, _| {
+        let language = self.language_pack.clone();
+        self.choice_dialog(&language.text("NDR.NET_SELECT_REMOTE_SITE", "Select remote site"), &language.text("NDR.NET_SELECT_THE_TARGET_SITE", "Select the target site."), labels, 0, move |app, index, _| {
             let Some(index) = index else { return };
             let Some(site) = sites.get(index).cloned() else { return };
-            let message = if ko { format!("{} ({})에서 실행할 명령", site.name, site.protocol) } else { format!("Command to run on {} ({})", site.name, site.protocol) };
+            let message = net_template(language.text("NDR.NET_COMMAND_PROMPT", "Command to run on {site} ({protocol})"), &[("site", &site.name), ("protocol", &site.protocol)]);
             // Fixed: remembering the site by list position (index) stored the key on another site and reran when sites were added or removed while the command ran.
             let name = site.name.clone();
-            app.prompt(t(ko, "원격 명령", "Remote command"), &message, "pwd", None, false, move |app, command, _| {
+            app.prompt(&language.text("NDR.NET_REMOTE_COMMAND", "Remote command"), &message, "pwd", None, false, move |app, command, _| {
                 let Some(command) = command.filter(|c| !c.trim().is_empty()) else { return };
                 app.execute_remote_command(name, command, None);
             });
@@ -499,8 +499,8 @@ impl App {
         let Some(site) = load_sites(&self.settings).into_iter().find(|s| s.name == name) else { return };
         // Fixed: the port was truncated to 16 bits and connected to another port (0 is reported at the connect step).
         let Ok(port) = u16::try_from(site.port) else {
-            let ko = self.language == "ko";
-            return self.system_box("NDR", t(ko, "올바른 포트를 입력하세요.", "Enter a valid port."), MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
+            let language = self.language_pack.clone();
+            return self.system_box("NDR", &language.text("NDR.NET_ENTER_A_VALID_PORT", "Enter a valid port."), MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
         };
         let sftp = site.protocol.eq_ignore_ascii_case("SFTP");
         let private_key = PathBuf::from(&site.private_key_path);
@@ -540,15 +540,16 @@ impl App {
 
     /// Remote command result: asks and retries for a server key confirmation, otherwise a text window or a warning box.
     pub(super) fn remote_command_done(&mut self, site_name: String, command: String, host: String, result: Result<String, String>) {
-        let ko = self.language == "ko";
+        let language = self.language_pack.clone();
         match result {
             Ok(output) => {
-                self.text = Some(TextDocument { title: t(ko, "원격 명령 결과", "Remote command result").into(), text: output });
+                self.text = Some(TextDocument { title: language.text("NDR.NET_REMOTE_COMMAND_RESULT", "Remote command result").into(), text: output });
             }
             Err(error) => {
                 let challenge = serde_json::from_str::<Value>(&error).ok().filter(|v| matches!(v.get("kind").and_then(Value::as_str), Some("unknown_host_key" | "host_key_mismatch")));
                 let Some(challenge) = challenge else {
-                    return self.system_box("NDR", &error, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
+                    let detail = super::remote_window::remote_error_text(&self.language_pack, &error);
+                    return self.system_box("NDR", &detail, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
                 };
                 let changed = challenge["kind"] == "host_key_mismatch";
                 let candidate = challenge["candidate"].as_str().unwrap_or_default().to_owned();
@@ -561,7 +562,7 @@ impl App {
                 );
                 self.system_box(&title, &prompt, MB_YESNO | MB_ICONEXCLAMATION, move |app, answer, _| {
                     if answer != IDYES {
-                        return app.system_box("NDR", "Key exchange negotiation failed.", MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
+                        return app.system_box("NDR", &app.language_pack.text("NDR.NET_KEY_EXCHANGE_NEGOTIATION_FAILED", "Key exchange negotiation failed."), MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
                     }
                     // C#: saves the site's KnownHostFingerprint when it changed.
                     let mut sites = load_sites(&app.settings);

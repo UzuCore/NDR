@@ -1,0 +1,462 @@
+; NDR language catalog. Untranslated entries use NDR English.
+
+[RES]
+YES=Da(&Y)
+NO=&Ne
+OK=U redu(&O)
+CANCEL=Odustani(&C)
+RETRY=Pokušaj ponovno(&R)
+IGNORE=Zanemar&i
+ABORT=Zau&stavi
+CONTINUE=&Nastavi
+TITLE_ERROR=Pogreška NDR-a
+TITLE_INFO=Informacije o NDR-u
+FOLDERINFO=Mape <c000000><b>%d</b></c> · Datoteke <c000000><b>%d</b></c> · <b>%s</b>
+DISKINFO_SHORT=Slobodno <c000000><b>%s</b></c>
+DISKINFO_LONG=Slobodno <c000000><b>%s</b></c> od <b>%s</b>
+SELECTED_INFO=Odabrano: <b>%d</b> · <b>%s</b> bajtova
+MSG_COPY_PREPARING=Priprema kopiranja…
+MSG_MOVE_PREPARING=Priprema premještanja…
+MSG_DEL_PREPARING=Priprema brisanja…
+COPYING=Kopiranje stavki…
+MOVING=Premještanje stavki…
+DELETING=Brisanje stavki…
+EXTRACTING=Raspakiravanje datoteka…
+COMPRESSING=Pakiranje datoteka…
+READONLY=Samo za čitanje
+SYSTEM=Sustav
+HIDDEN=Skriveno
+FOLDER=Mapa
+FOLDERS=Mape
+SELECT_FOLDER=Odaberi mapu
+DROPCOPY_CONFIRM=Kopirati ovih %d stavki?
+DROPMOVE_CONFIRM=Premjestiti ovih %d stavki?
+RENAME=Preimenuj
+COPY=Kopiraj
+MOVE=Premjesti
+ADDTOARCHIVE=Dodaj u arhivu
+EXTRACT=Raspakiraj
+SEARCH=Pretraži
+STOP=Zaustavi
+SEARCHRESULT=Rezultati pretraživanja
+SELECTDEST= — Odaberi odredište
+PAUSE=Pauziraj
+RESUME=Nastavi
+TITLE_FILTER=Filtar datoteka
+NETWORK=Mreža
+TITLE_NEWFOLDER=Nova mapa
+MSG_NEWFOLDER=Unesite naziv nove mape.
+NEWFOLDER=Nova mapa
+MSG_RENAME=Unesite novi naziv za označenu stavku.\n\n<b><c0000FF>%s</c></b> <c666666>(%d od %d)</c>
+TITLE_FILEOPERATION=Radnja nad datotekama
+SELDEST_DRIVE=Pogoni
+SELDEST_WORKFOLDER=Radne mape
+FOLDER_EXISTS=Mapa s tim nazivom već postoji.
+SRCISDEST=Izvor i odredište jednaki su.
+MYCOMPUTER=Ovaj PC
+ARCHIVE=Arhiva
+DISKFREE=Slobodno
+LOCATION=Mjesto
+FUNC_OPEN=Otvori
+FUNC_COPYTO=Kopiraj
+FUNC_MOVETO=Premjesti
+FUNC_DELETE=Izbriši
+FUNC_RECYCLEBIN=Premjesti u koš
+FUNC_RENAME=Preimenuj
+FUNC_PROPERTIES=Svojstva
+FUNC_FAVORITES=Favoriti
+FUNC_NEWFOLDER=Nova mapa
+FUNC_REFRESH=Osvježi
+FUNC_GOTODESKTOP=Radna površina
+FUNC_GOTODOCUMENTS=Dokumenti
+FUNC_GOTOMUSIC=Glazba
+FUNC_GOTOPICTURES=Slike
+FUNC_GOTOVIDEOS=Videozapisi
+FUNC_GOTODOWNLOADS=Preuzimanja
+FUNC_SELECTALL=Odaberi sve
+FUNC_ADDTOARCHIVE=Dodaj u arhivu
+FUNC_EXTRACT=Raspakiraj
+FUNC_CLOSETAB=Zatvori karticu
+FUNC_SELECT=Odaberi
+FUNC_DESELECTALL=Poništi odabir
+FUNC_BACK=Natrag
+FUNC_FORWARD=Naprijed
+FUNC_FOLDERTREE=Stablo mapa
+FUNC_GOTOROOT=Korijenska mapa
+FUNC_GOTOPARENT=Nadređena mapa
+FUNC_EDITCOPY=Kopiraj
+FUNC_EDITCUT=Izreži
+FUNC_EDITPASTE=Zalijepi
+FUNC_INVERTSELECTION=Obrni odabir
+FUNC_NEWTAB=Nova kartica
+TODAY=Danas
+YESTERDAY=Jučer
+FIELD_NAME=Naziv
+FIELD_EXT=Datotečni nastavak
+FIELD_LOCATION=Mjesto
+FIELD_SIZE=Veličina
+FIELD_DATEMODIFIED=Izmijenjeno
+FIELD_ATTR=Atributi
+FIELD_DESC=Komentar
+UPDATE=Nadogradnje
+NAME=Naziv
+ACCESS_DENIED=Pristup odbijen
+INVALID_PASSWORD=Pogrešna lozinka
+DISKISFULL=Nema dovoljno prostora na disku
+CALCULATING=Izračunavanje…
+ERROR=Pogreška
+
+[formMain]
+ToolButton.tbFile=Datoteka(&F)
+ToolButton.tbFolder=Mapa(&o)
+ToolButton.tbEdit=Ur&edi
+ToolButton.tbView=Prikaz(&w)
+ToolButton.tbSystem=&Sustav
+ToolButton.tbArchive=&Arhiva
+ToolButton.tbConnect=Poveži(&n)
+ToolButton.tbTools=Ala&ti
+ToolButton.tbHelp=Pomoć(&H)
+ToolButton.tbNewUpdateAvailable=Dostupna je nadogradnja NDR-a
+Menu.miOpen=&Q. Otvori
+Menu.miCopyTo=&C. Kopiraj u…
+Menu.miMoveTo=&V. Premjesti u…
+Menu.miDelete=&D. Izbriši
+Menu.miRename=&R. Preimenuj
+Menu.miProperties=&E. Svojstva
+Menu.miExit=&X. Izlaz
+Menu.miFolderTree=&T. Stablo mapa
+Menu.miFavorites=&V. Favoriti
+Menu.miNewFolder=&C. Nova mapa
+Menu.miHistoryBack=&B. Natrag
+Menu.miHistoryForward=&F. Naprijed
+Menu.miToParent=&X. Nadređena mapa
+Menu.miToRoot=&Z. Korijenska mapa
+Menu.miRefresh=&R. Osvježi
+Menu.miEditCopy=&C. Kopiraj
+Menu.miEditCut=&X. Izreži
+Menu.miEditPaste=&V. Zalijepi
+Menu.miSelect=&B. Odaberi
+Menu.miSelectAll=&U. Odaberi sve
+Menu.miInvertSelection=&I. Obrni odabir
+Menu.miSearchFile=&E. Pretraži datoteke i mape…
+Menu.miLanguage=&O. Jezik
+Menu.miNewTab=&B. Nova kartica
+Menu.miListStyleAuto=&A. Automatski
+Menu.miListStyleDetails=&D. Detalji
+Menu.miListStyleThumbs=&T. Minijature
+Menu.miColAuto=&A. Automatski
+Menu.miSortByName=&A. Naziv
+Menu.miSortByExt=&E. Datotečni nastavak
+Menu.miSortBySize=&S. Veličina
+Menu.miSortByTime=&T. Izmijenjeno
+Menu.miSortByAttr=&R. Atributi
+Menu.miSortByColor=&C. Boja
+Menu.miToDesktop=&D. Radna površina
+Menu.miToDocuments=&W. Dokumenti
+Menu.miToPictures=&P. Slike
+Menu.miToMusic=&M. Glazba
+Menu.miToVideos=&V. Videozapisi
+Menu.miToDownloads=&S. Preuzimanja
+Menu.miOptions=&O. Postavke
+Menu.miHelp=&H. Pomoć
+Menu.miShortcut=&S. Tipkovni prečaci…
+Menu.miHomepage=&W. Stranica projekta NDR
+Menu.miCheckUpdate=&U. Provjeri nadogradnje NDR-a…
+Menu.miAbout=&A. O NDR-u
+Menu.mipOpenWith=&W. Otvori pomoću…
+Menu.mipEditCopy=&C. Kopiraj
+Menu.mipEditCut=&X. Izreži
+Menu.mipEditPaste=&V. Zalijepi
+Menu.mipCopyTo=&Y. Kopiraj u…
+Menu.mipMoveTo=&M. Premjesti u…
+Menu.mipDelete=&D. Izbriši
+Menu.mipRename=&R. Preimenuj
+Menu.mipAddToArchive=&A. Dodaj u arhivu
+Menu.mipProperties=&T. Svojstva
+Menu.pmiCloseTab=Zatvori karti&cu
+Menu.pmiCloseAllTab=Z&atvori sve kartice
+Menu.pmiNewTab=Nova kar&tica
+Hint.bSelectAll=Odaberi sve stavke
+Hint.bClearSelection=Poništi odabir
+
+[formFileExists]
+Caption.lMsg=Na odredištu već postoji stavka s tim nazivom:
+Caption.chkApplyAll=Primijeni od&abir na ostale
+Caption.btnOverwrite=Prebriši(&w)
+Caption.btnRename=P&reimenuj
+Caption.btnReplace=Zamij&eni
+Caption.btnSkip=Pre&skoči
+
+[formGetText]
+Caption.btnOk=U redu(&O)
+Caption.btnCancel=Odustani(&C)
+
+[formDelConfirm]
+Form.Caption=Potvrdi brisanje
+Caption.btnAll=Sve(&A)
+Caption.btnYes=Da(&Y)
+Caption.btnNo=&Ne
+
+[formDelWarning]
+Caption.btnDelete=Izbriši(&D)
+Caption.btnYes=Da(&Y)
+Caption.btnNo=&Ne
+Prompt.Recycle=Premjestiti odabrane stavke u koš za smeće?
+Prompt.Permanent=Trajno izbrisati odabrane stavke?
+
+[formProgress]
+Caption.btnCancel=Odustani(&C)
+
+[formOrgFavorites]
+Caption.btnCancel=Odustani(&C)
+Caption.btnSave=&Spremi
+Caption.btnRename=P&reimenuj
+Caption.btnUp=Pomakni gore(&u)
+Caption.btnDown=Pomakni dolje(&w)
+Caption.btnDelete=Izbriši(&D)
+
+[formChangeAttr]
+Caption.btnAll=Sve(&l)
+Caption.btnSkip=Pres&koči
+Caption.btnOk=U redu
+Caption.btnCancel=Odustani
+Caption.chkHidden=Skriveno(&H)
+Caption.chkSystem=&Sustav
+Caption.chkReadOnly=Samo za čitanje(&R)
+Caption.lDate=&Datum
+Caption.lTime=Vrijeme(&T)
+
+[formSaveList]
+Caption.btnSave=Spremi
+Caption.btnCancel=Odustani
+Caption.chkAttributes=&Atributi
+Caption.chkDate=&Datum
+Caption.chkDescription=Kome&ntar
+Caption.chkExtension=Datot&ečni nastavak
+Caption.chkFileName=Naziv datoteke(&F)
+Caption.chkFileSize=Veličina(&S)
+Caption.chkTime=Vrijeme(&T)
+
+[formAddToArchive]
+Caption.btnCancel=Odustani
+Caption.btnOk=U redu
+Caption.lPassword=Lozinka(&P)
+Caption.lSecFormat=Format
+
+[formFileSplit]
+Caption.btnOk=U redu
+Caption.btnCancel=Odustani
+
+[formFileJoin]
+Caption.btnAdd=Dod&aj
+Caption.btnCancel=Odustani
+Caption.btnOk=U redu
+Caption.btnDelete=Izbriši(&D)
+Caption.btnDown=Pomakni dolje(&w)
+Caption.btnUp=Pomakni gore(&u)
+
+[formCompareFolder]
+Caption.btnCancel=Odustani
+Caption.btnOk=U redu
+Caption.btnSave=Spremi
+Caption.btnStop=Zaustavi
+
+[formShortcut]
+Form.Caption=Tipkovni prečaci
+
+[formEditShortCut]
+Caption.btnOk=U redu
+Caption.btnCancel=Odustani
+Caption.btnRemove=Ukloni
+
+[formCleanup]
+Caption.btnClose=Zatvori
+Caption.btnOk=U redu
+Caption.chkRecycleBin=Koš za smeće(&R)
+Caption.btnAdd=Dod&aj
+Caption.btnDelete=Izbriši(&D)
+Caption.btnSearch=Pretraži(&S)
+
+[formSelectDest]
+Form.Caption=Odaberi odredište
+Caption.btnCancel=Odustani
+Caption.btnOk=U redu
+Caption.btnTree=Pregledaj mape(&f)
+
+[formTreeScan]
+Caption.btnCancel=Odustani
+
+[formSearchFolder]
+Caption.btnSearch=Pretraži
+
+[formFTPQuickConnect]
+Caption.btnCancel=Odustani
+Caption.chkPassive=Kori&sti pasivni način
+Caption.lPassword=Lozinka(&w)
+Caption.lPort=&Priključak
+Caption.lURL=A&dresa poslužitelja
+Caption.lUser=Korisničko ime(&U)
+
+[formPassword]
+Caption.btnOk=U redu
+Caption.btnCancel=Odustani
+Caption.lUser=Korisničko ime
+Caption.lPassword=Lozinka
+
+[formFTPSiteManager]
+Caption.btnAdd=Dod&aj
+Caption.btnCancel=Odustani
+Caption.btnDelete=Izbriši(&D)
+Caption.btnOk=U redu
+Caption.chkPassive=Koristi pasi&vni način
+Caption.lName=&Naziv
+Caption.lPassword=Lozinka(&w)
+Caption.lPort=&Priključak
+Caption.lUser=Korisničko ime(&U)
+
+[formFolderTree]
+Form.Caption=Pregledaj mape
+Caption.btnCancel=Odustani
+Caption.btnOk=U redu
+ToolButton.tbFolder=Mapa(&e)
+ToolButton.tbFavorites=Fa&voriti
+ToolButton.tbSearch=Pretraži
+Hint.tbDesktop=Radna površina
+Hint.tbMyDoc=Dokumenti
+Hint.tbMyPic=Slike
+Hint.tbMyMusic=Glazba
+Hint.tbMyVideo=Videozapisi
+Menu.miFolder=Mapa(&e)
+Menu.miDelete=&D. Izbriši
+Menu.miRename=&R. Preimenuj
+Menu.miCreateNewFolder=&F. Nova mapa
+Menu.miProperties=&E. Svojstva
+Menu.miClose=&C. Zatvori
+
+[formPreferences]
+Caption.btnApply=Primijeni(&A)
+Caption.btnOk=U redu(&O)
+Caption.btnCancel=Odustani
+TabSheet.tsColor=Boje
+TabSheet.tsTree=Stablo mapa
+TabSheet.tsEtc=Ostalo
+Caption.lMyDocuments=Dokumenti
+Caption.lMyMusic=Glazba
+Caption.lMyPictures=Slike
+Caption.lMyVideos=Videozapisi
+Caption.lPathDownloads=Preuzimanja
+
+[formAdvRename]
+Caption.btnCancel=Odustani
+Caption.btnUp=Pomakni gore
+Caption.btnDown=Pomakni dolje
+Caption.rbApplyToExt=Datotečni nastavak
+TabSheet.tsDelete=Ukloni
+TabSheet.tsExtension=Datotečni nastavak
+
+[formEditFunction]
+Caption.btnCancel=Odustani
+Caption.btnOk=U redu
+Caption.lName=Naziv
+
+[formFTPAttributes]
+Caption.btnCancel=Odustani
+Caption.btnOk=U redu
+Caption.btnAll=Sve
+Caption.btnSkip=Preskoči
+Caption.chkGExecute=Pokreni(&x)
+Caption.chkURead=Čitaj(&e)
+Caption.chkUExecute=Pokreni(&c)
+
+[formRename]
+Caption.btnOK=U redu
+Caption.btnCancel=Odustani
+
+[formChecksum]
+Caption.btnCopy=Kopiraj(&C)
+
+[formNDRSearch]
+Caption.lName=Naziv datoteke
+Caption.chkFiles=Datoteke
+Caption.chkFolders=Mape
+Caption.CategoryDocuments=Dokumenti
+Caption.btnMoveUp=Pomakni gore
+Caption.btnMoveDown=Pomakni dolje
+Caption.btnRemove=Ukloni
+Caption.btnAdd=Dodaj
+Status.Results=Rezultati pretraživanja
+
+[formNDRDestination]
+Button.Cancel=Odustani
+
+[NDRUpdate]
+Title=Nadogradnja NDR-a
+FeedHttpsRequired=Izvor nadogradnje mora koristiti HTTPS.
+InvalidDownloadUrl=Izvor nadogradnje nema valjanu HTTPS adresu za preuzimanje.
+NewVersionAvailable=Dostupna je inačica {0}. Trenutačna inačica je {1}.
+OpenDownloadPage=Otvoriti stranicu za preuzimanje?
+CurrentLatest=NDR je ažuriran. ({0})
+RequestFailed=Poslužitelj za nadogradnju nije dostupan. Provjerite vezu i izvor nadogradnje.
+RequestFailedStatus=Poslužitelj za nadogradnju vratio je HTTP status {0}.
+RequestTimedOut=Poslužitelj za nadogradnju nije odgovorio u roku od 15 sekundi.
+
+[NDRSearch]
+Documents=Dokumenti
+
+[NDRVault]
+Password=Lozinka
+OK=U redu
+Cancel=Odustani
+NewFolderTitle=Nova mapa
+RenameTitle=Preimenuj
+ProgressCancel=Odustani
+
+[NDR]
+OP_ARCHIVE_REPLACE_ARCHIVE=Zamijeni arhivu
+OP_JOIN_EXISTS=Datoteka s tim nazivom već postoji. Datoteke nisu spojene.\n{0}
+OP_TRANSFER_CANCEL=Odustani
+OP_TRANSFER_CANCELLED=Radnja ({0}) je otkazana. Dovršene stavke su zadržane.
+OP_TRANSFER_COPY_DONE=Kopiranje završeno
+OP_TRANSFER_DELETE_DONE=Brisanje završeno
+OP_TRANSFER_MOVE_DONE=Premještanje završeno
+OP_TRANSFER_OPERATION_FAILED=Radnja nije uspjela
+OP_TRANSFER_PARTIAL=Radnja je djelomično završena
+OP_TRANSFER_PARTIAL_DETAIL=Dovršeno: {0} · pogreške: {1} · preskočeno: {2}
+OP_TRANSFER_PREPARING_THE_OPERATION=Priprema radnje…
+OP_TRANSFER_SIZE_UNAVAILABLE=Veličina nije dostupna
+OP_TRANSFER_VERB_COPY=kopiraj
+OP_TRANSFER_VERB_MOVE=premjesti
+OP_TRANSFER_VERB_PASTE=zalijepi
+UI_STARTUP_FAILED=Pokretanje nije uspjelo. Ponovno otvorite NDR.
+UI_STARTUP_LOADING=Priprema mapa i postavki…
+UPD_CLOSE=Zatvori
+UPD_CONFIRM=Preuzeti i instalirati nadogradnju pa ponovno pokrenuti NDR?\nVaše će se postavke zadržati.
+UPD_CURRENT_BUILD=Instalirano izdanje: {0}
+UPD_DOWNLOAD_ACTIVE=Preuzimanje NDR-a {0}…
+UPD_ERROR_DETAILS=Tehničke pojedinosti
+UPD_FAILED=Nadogradnja nije uspjela.
+UPD_INSTALLER_START=Pokretanje instalacijskog programa…
+UPD_INSTALL_CHECKING=Provjera instalacijskog paketa…
+UPD_INSTALL_CLOSING=Provjera je li NDR zatvoren…
+UPD_INSTALL_EXTRACTING=Priprema instalacijskih datoteka…
+UPD_INSTALL_FAILURE=Nadogradnja nije uspjela. Pojedinosti su u datoteci update.log.
+UPD_INSTALL_FAILURE_TITLE=Pogreška pri nadogradnji NDR-a
+UPD_INSTALL_FINISHED=Instalacija je završena. NDR se ponovno pokreće…
+UPD_INSTALL_HEADING=Instalacija nadogradnje NDR-a
+UPD_INSTALL_TITLE=Nadogradnja NDR-a
+UPD_INSTALL_WAITING=Čeka se zatvaranje NDR-a…
+UPD_INSTALL_WRITING=Instalacija datoteka NDR-a…
+UPD_LOCAL_BUILD=Lokalno izdanje
+UPD_NEW_BUILD=Novo izdanje: {0}
+UPD_NONE=Nema novije nadogradnje.
+UPD_PREPARING=Priprema paketa…
+UPD_RELEASE_FAILURE=Nije moguće provjeriti izdanje na GitHubu.
+UPD_RESTART_NOTE=NDR se automatski ponovno pokreće. Vaše postavke ostaju nepromijenjene.
+UPD_STARTING=Preuzimanje i provjera cjelovitosti završeni su. Instalacija počinje.
+UPD_STEP_DOWNLOAD=Preuzimanje
+UPD_STEP_INSTALL=Instalacija i ponovno pokretanje
+UPD_STEP_PREPARE=Priprema
+UPD_STEP_VERIFY=Cjelovitost
+UPD_TITLE=Nadogradnja NDR-a
+UPD_VERIFIED_INIT=Sigurna instalacija provjerene nadogradnje.
+UPD_VERIFY_HASH=Provjera SHA-256…

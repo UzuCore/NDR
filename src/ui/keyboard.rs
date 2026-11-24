@@ -297,7 +297,6 @@ impl App {
         if let Some(n) = alias("column") {
             return self.prefixed_command(&format!("column:{n}"));
         }
-        let ko = self.language == "ko";
         let number = |prefix: &str| id.strip_prefix(prefix).and_then(|n| n.parse::<usize>().ok());
         if let Some(index) = number("favoriteOpen:") {
             let paths = self.settings.strings("Favorites");
@@ -318,7 +317,7 @@ impl App {
             } else if Path::new(&path).is_dir() {
                 self.navigate(self.active, PathBuf::from(path), true);
             } else {
-                let text = if ko { format!("작업 폴더 {}이 설정되지 않았습니다.", index + 1) } else { format!("Work folder {} is not set.", index + 1) };
+                let text = super::file_commands::operation_format(&self.language_pack, "formNDRDestination.Message.InvalidWorkFolder", "Work folder {0} is not set or is unavailable.", &[&(index + 1)]);
                 self.system_box("NDR", &text, ndr::msgbox::MB_OK, |_, _, _| {});
             }
             return true;
@@ -664,7 +663,6 @@ impl App {
 
     /// miSetWorkFolder (set work folder 1-5) and miGoToWorkFolder (go to work folder 1-5, shown with paths like C#) of the original Folder menu.
     pub(super) fn work_folder_menus(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        let ko = self.language == "ko";
         let folders = self.settings.strings("WorkingFolders");
         let mut chosen: Option<String> = None;
         let set_raw = self.raw_menu("miSetWorkFolder", "&W. Set Work Folder");
@@ -683,7 +681,12 @@ impl App {
                 let path = folders.get(index).cloned().unwrap_or_default();
                 let raw = app.raw_menu(&format!("miGoToWorkFolder{}", index + 1), &format!("Work Folder &{}", index + 1));
                 let open = super::favorites_dialog::access_key(&raw).0;
-                let label = if path.trim().is_empty() { format!("{open}{}", if ko { " (미설정)" } else { " (not set)" }) } else { format!("{open} — {path}") };
+                let label = if path.trim().is_empty() {
+                    let empty = app.language_pack.text("formNDRDestination.Slot.Empty", "Not configured");
+                    format!("{open} ({empty})")
+                } else {
+                    format!("{open} — {path}")
+                };
                 let response = ui.button(label);
                 if response.clicked() || app.take_menu_letter(&raw, &response) {
                     chosen = Some(format!("workOpen:{index}"));
@@ -756,14 +759,14 @@ pub(super) fn original_shortcut_text(key: egui::Key, modifiers: egui::Modifiers)
 mod tests {
     use super::*;
 
-    /// Whether every key of the original default shortcut table (DEFAULT_SHORTCUT_TEXT) (except numpad "Num" keys, which go through raw_input_hook)
+    /// Whether every native default shortcut (except numpad "Num" keys, which go through raw_input_hook)
     /// turns into the same shortcut value from egui key events.
     #[test]
     fn every_default_original_shortcut_is_reachable_from_egui_keys() {
         let mut checked = 0;
-        for line in ndr::compat::DEFAULT_SHORTCUT_TEXT.lines().skip(1) {
-            let Some((name, text)) = line.split_once('=') else { continue };
-            let text = text.trim();
+        for &(name, chord) in ndr::compat::default_shortcut_bindings() {
+            let text = ndr::compat::shortcut_to_text(chord);
+            let text = text.as_str();
             if text.is_empty() || text.contains("Num ") {
                 continue;
             }

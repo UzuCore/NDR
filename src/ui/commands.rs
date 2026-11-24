@@ -107,7 +107,7 @@ impl App {
     }
     pub(super) fn copy_to_other(&mut self,source:usize,moving:bool,_ctx:&egui::Context){
         if self.panes.iter().any(|pane| pane.vault.is_some()) {
-            self.status = "암호화 폴더와의 복사·이동은 클립보드 붙여넣기를 이용하세요.".into();
+            self.status = self.catalog("NDR.UI_VAULT_CLIPBOARD_COPY", "암호화 폴더와의 복사·이동은 클립보드 붙여넣기를 이용하세요.", "Use clipboard paste to copy or move items to or from an encrypted folder.");
             return;
         }
         // Original FUN_0042d518/FUN_0042d910: when one side is FTP, upload/download (a move becomes a copy).
@@ -379,7 +379,7 @@ impl App {
 
     /// Menu item text: the Menu.* text of the original item name, else the C# version text. & is removed.
     pub(super) fn menu_label(&self, id: &str, fallback: &str) -> String {
-        if id == "vaultCompact" { return self.language_pack.text("NDRVault.MenuCompact", fallback); }
+        if id == "vaultCompact" { return self.catalog("NDR.UI_VAULT_COMPACT_MENU", "암호화 폴더 안전 정리...", "Compact Encrypted Folder..."); }
         if id == "newVault" {
             let label = self.language_pack.text("NDRVault.MenuCreate", fallback);
             return format!("K. {}", label.replace('&', ""));
@@ -533,12 +533,17 @@ impl App {
                 let mut chosen = None;
                 let mut open_more = false;
                 self.access_submenu(ui, &raw, |app, ui| {
-                    for (code, name) in &languages {
-                        if super::skin_pane::menu_check_button(ui, true, code.eq_ignore_ascii_case(&current), true, egui::Button::new(name.as_str())).clicked() {
-                            chosen = Some(code.clone());
-                            ui.close();
-                        }
-                    }
+                    egui::ScrollArea::vertical().id_salt("ndr-language-menu")
+                        .max_height(340.0).auto_shrink([true, true]).show(ui, |ui| {
+                            for (code, name) in &languages {
+                                let selected = code.eq_ignore_ascii_case(&current);
+                                let button = egui::Button::new(name.as_str());
+                                if super::skin_pane::menu_check_button(ui, true, selected, true, button).clicked() {
+                                    chosen = Some(code.clone());
+                                    ui.close();
+                                }
+                            }
+                        });
                     ui.separator();
                     let response = ui.button(super::favorites_dialog::access_key(&more).0);
                     if response.clicked() || app.take_menu_letter(&more, &response) {
@@ -630,7 +635,7 @@ impl App {
             if self.panes[source].vault.is_some() {
                 return self.vault_export_to_other(source, moving);
             }
-            self.status = "이 조합의 암호화 폴더 복사 작업은 지원하지 않습니다.".into();
+            self.status = self.catalog("NDR.UI_VAULT_COPY_COMBINATION", "이 조합의 암호화 폴더 복사 작업은 지원하지 않습니다.", "This encrypted-folder copy combination is not supported.");
             return;
         }
         if self.panes[self.active].vault.is_some() {
@@ -944,11 +949,10 @@ impl App {
             "homepage"=>result=(self.shell_runner)(Path::new(HOMEPAGE_URL),"",Path::new("")),
             // User request: Help also opens the NDR repository (original miHelpClick (0x445b60) opened "https://www.xiles.app/help/nexusfile/").
             "help"=>result=(self.shell_runner)(Path::new(HOMEPAGE_URL),"",Path::new("")),
-            // Original miMoreLanguagesClick (FUN_00445b88): ShellExecute "open" https://www.xiles.app/languages/#NexusFile (0x8ee3bc).
-            "moreLanguages"=>result=(self.shell_runner)(Path::new("https://www.xiles.app/languages/#NexusFile"),"",Path::new("")),
+            "moreLanguages"=>self.status=self.catalog("NDR.UI_MORE_LANGUAGES_HELP", "설정 또는 도구 → 언어에서 NDR 표시 언어를 선택하세요.", "Choose your NDR display language in Settings or Tools → Language."),
             "about"=>self.about_command(),
             "update"=>self.check_for_updates(),
-            _=>self.status=format!("Unknown command: {id}"),
+            _=>self.status=self.catalog("NDR.UI_UNKNOWN_COMMAND", "알 수 없는 명령: {0}", "Unknown command: {0}").replace("{0}", id),
         }
         if let Err(e) = result {
             self.status = e;
@@ -966,7 +970,7 @@ impl App {
     /// MSG_DELDESCFILE, MB_YESNO | MB_ICONQUESTION), then descript.dat is deleted.
     pub(super) fn clear_descriptions_confirmed(&mut self, pane: usize) {
         if self.panes[pane].archive.is_some() {
-            self.status = self.tr("압축 파일이나 원격 폴더에서는 설명을 지울 수 없습니다.", "Comments cannot be cleared inside an archive or a remote folder.").into();
+            self.status = self.catalog("NDR.UI_CLEAR_COMMENT_LIMIT", "압축 파일이나 원격 폴더에서는 설명을 지울 수 없습니다.", "Comments cannot be cleared inside an archive or a remote folder.");
             return;
         }
         let folder = self.command_directory(pane);
@@ -987,7 +991,7 @@ impl App {
     }
     pub(super) fn transfer_from(&mut self, i: usize, sources: Vec<PathBuf>, destination: PathBuf, moving: bool, kind: super::file_operation::TransferKind) {
         if self.panes.iter().any(|pane| pane.vault.is_some()) {
-            self.status = "암호화 폴더를 열어 둔 상태에서는 일반 파일 이동을 시작할 수 없습니다.".into();
+            self.status = self.catalog("NDR.UI_VAULT_REGULAR_MOVE", "암호화 폴더를 열어 둔 상태에서는 일반 파일 이동을 시작할 수 없습니다.", "Close encrypted folders before starting a regular file move.");
             return;
         }
         if sources.is_empty() {
@@ -1044,7 +1048,7 @@ impl App {
         task: impl FnOnce(Sender<Event>, Arc<AtomicBool>) -> Result<(), String> + Send + 'static,
     ) -> bool {
         if self.job.as_ref().is_some_and(|j| !j.finished) || !self.background_jobs.is_empty() {
-            self.status = "An operation is already running".into();
+            self.status = self.catalog("NDR.UI_OPERATION_RUNNING", "이미 다른 작업을 진행 중입니다.", "An operation is already running");
             return false;
         }
         let (tx, rx) = mpsc::channel();

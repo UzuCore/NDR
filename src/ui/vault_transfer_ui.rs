@@ -63,6 +63,60 @@ pub(super) struct VaultTransferJob {
     writer_reservations: Vec<super::vault_winfsp::TransferReservation>,
 }
 
+/// Translate NDR's own diagnostic captions at presentation; leave OS/engine details intact.
+pub(super) fn vault_error_text(language: &compat::Language, detail: &str) -> String {
+    let key = match detail {
+        "Destination is open in another application; close it before replacing" => "NDR.SEC_DEST_IN_USE",
+        "Encrypted export source was closed" => "NDR.SEC_EXPORT_SOURCE_CLOSED",
+        "Encrypted copy completed but source item no longer exists" => "NDR.SEC_SOURCE_GONE_AFTER_COPY",
+        "Encrypted copy completed but original was replaced; retained for safety" => "NDR.SEC_SOURCE_REPLACED",
+        "Encrypted destination closed" => "NDR.SEC_DEST_CLOSED",
+        "Encrypted source closed" => "NDR.SEC_SOURCE_CLOSED",
+        "Encrypted container closed" => "NDR.SEC_CONTAINER_CLOSED",
+        "Encrypted copy saved; local path became a link, original retained" => "NDR.SEC_SOURCE_LINK_RETAINED",
+        "Encrypted copy saved; source item changed before removal" => "NDR.SEC_SOURCE_CHANGED_BEFORE_REMOVE",
+        "Cannot stream symlink, junction or reparse point" => "NDR.SEC_NO_REPARSE_STREAM",
+        "Encrypted import requires an ordinary file" => "NDR.SEC_IMPORT_REGULAR_FILE",
+        "Cannot import the open encrypted container" => "NDR.SEC_NO_IMPORT_OPEN_CONTAINER",
+        "Encrypted source item disappeared" => "NDR.SEC_SOURCE_ITEM_DISAPPEARED",
+        "Cannot replace a directory with a streamed file" => "NDR.SEC_NO_DIR_REPLACE_FILE",
+        "Cannot replace symbolic link or junction" => "NDR.SEC_NO_LINK_REPLACE_FILE",
+        "Destination already exists" => "NDR.SEC_DEST_EXISTS",
+        "Could not create a unique temporary export file" => "NDR.SEC_TEMP_EXPORT_FAILED",
+        "Encrypted source closed during transfer" => "NDR.SEC_SOURCE_CLOSED_DURING_TRANSFER",
+        "Encrypted source ended before the expected byte count" => "NDR.SEC_SOURCE_SHORT_READ",
+        "Input file changed or ended unexpectedly; transaction rolled back" => "NDR.SEC_INPUT_CHANGED_ROLLBACK",
+        "Transfer byte count overflow" => "NDR.SEC_TRANSFER_SIZE_OVERFLOW",
+        "Source size changed during transfer" => "NDR.SEC_SOURCE_SIZE_CHANGED",
+        "Source size changed during encryption; transaction rolled back" => "NDR.SEC_SOURCE_SIZE_CHANGED_ROLLBACK",
+        "Export target became a directory or link; original preserved" => "NDR.SEC_EXPORT_TARGET_CHANGED",
+        "Destination appeared during export; original preserved" => "NDR.SEC_EXPORT_TARGET_APPEARED",
+        "Export recovery name exists; original preserved" => "NDR.SEC_EXPORT_RECOVERY_EXISTS",
+        "Encrypted destination closed before commit" => "NDR.SEC_DEST_CLOSED_BEFORE_COMMIT",
+        "Copy succeeded, but source became a link; retained" => "NDR.SEC_SOURCE_LINK_AFTER_COPY",
+        "Copy succeeded; encrypted source closed" => "NDR.SEC_SOURCE_CLOSED_AFTER_COPY",
+        "Encrypted folder is closed" => "NDR.SEC_FOLDER_CLOSED",
+        "Encrypted item was not found" => "NDR.SEC_ITEM_MISSING",
+        _ => "",
+    };
+    if !key.is_empty() {
+        return language.text(key, detail);
+    }
+    if let Some(cause) = detail.strip_prefix("Encrypted copy saved; local original retained: ") {
+        return language.text("NDR.SEC_LOCAL_RETAINED", "Encrypted copy saved; local original retained: {error}").replace("{error}", cause);
+    }
+    if let Some(cause) = detail.strip_prefix("Encrypted copy saved; local original not removed: ") {
+        return language.text("NDR.SEC_LOCAL_DELETE_FAILED", "Encrypted copy saved; local original not removed: {error}").replace("{error}", cause);
+    }
+    if let Some(cause) = detail.strip_prefix("Encrypted copy saved; original retained: ") {
+        return language.text("NDR.SEC_SOURCE_RETAINED", "Encrypted copy saved; original retained: {error}").replace("{error}", cause);
+    }
+    if let Some(cause) = detail.strip_prefix("Copy succeeded; original retained: ") {
+        return language.text("NDR.SEC_SOURCE_RETAINED_AFTER_COPY", "Copy succeeded; original retained: {error}").replace("{error}", cause);
+    }
+    detail.to_owned()
+}
+
 impl App {
     pub(super) fn begin_vault_transfer(&mut self, kind: VaultTransferKind, source: usize,
         target: usize, moving: bool, names: Vec<String>, paths: Vec<PathBuf>,
@@ -110,9 +164,7 @@ impl App {
                     match tree.reserve_transfer() {
                         Ok(lease) => writer_reservations.push(lease),
                         Err(error) => {
-                            self.status = self.vault_status(
-                                "암호화 파일 작업이 다른 프로그램과 겹쳤습니다. 잠시 후 다시 시도해 주세요.",
-                                &format!("Encrypted folder is busy: {error}"));
+                            self.status = self.language_pack.text("NDR.SEC_FOLDER_BUSY", "Encrypted folder is busy: {error}").replace("{error}", &error);
                             return;
                         }
                     }
@@ -186,14 +238,13 @@ impl App {
         // This is called once per terminal transition, not per 8 MiB chunk.
         if job.failed.is_none() && !job.cancelled && job.skipped == 0 && job.copied > 0 {
             self.play_operation_completion_sound();
-            self.completion_notice("암호화 작업 완료", "Encrypted transfer completed",
-                if self.language == "ko" { format!("{}개 항목 처리", job.copied) }
-                else { format!("{} item(s) processed", job.copied) });
+            self.completion_notice_operation(self.language_pack.text("NDR.SEC_ENCRYPTED_TRANSFER_COMPLETED", "Encrypted transfer completed"),
+                self.language_pack.text("NDR.SEC_ITEMS_PROCESSED_COUNT", "Items processed: {count}").replace("{count}", &job.copied.to_string()));
         } else if let Some(error) = &job.failed {
-            self.error_notice("암호화 작업 실패", "Encrypted transfer failed", error.clone());
+            self.error_notice_operation(self.language_pack.text("NDR.SEC_ENCRYPTED_TRANSFER_FAILED", "Encrypted transfer failed"), vault_error_text(&self.language_pack, error));
         } else if !job.cancelled && job.skipped > 0 {
-            self.warning_notice("암호화 작업 일부 완료", "Encrypted transfer partially completed",
-                format!("{} completed · {} skipped", job.copied, job.skipped));
+            self.warning_notice_operation(self.language_pack.text("NDR.SEC_ENCRYPTED_TRANSFER_PARTIALLY_COMPLETED", "Encrypted transfer partially completed"),
+                self.language_pack.text("NDR.SEC_TRANSFER_PARTIAL_COUNT", "{done} completed · {skipped} skipped").replace("{done}", &job.copied.to_string()).replace("{skipped}", &job.skipped.to_string()));
         }
         // Update visible listings only once per finished batch. Previously
         // every imported file re-listed and re-sorted the full directory,
@@ -207,7 +258,7 @@ impl App {
             .replace("{skipped}", &job.skipped.to_string())
             .replace("{total}", &job.names.len().to_string());
         let label = if let Some(error) = &job.failed {
-            format!("{}: {error}", self.language_pack.text("NDRVault.JobFailed", "Encrypted transfer interrupted"))
+            format!("{}: {}", self.language_pack.text("NDRVault.JobFailed", "Encrypted transfer interrupted"), vault_error_text(&self.language_pack, error))
         } else if job.cancelled {
             self.language_pack.text("NDRVault.JobCancelled", "Encrypted transfer cancelled; completed items retained")
         } else { self.language_pack.text("NDRVault.JobDone", "Encrypted transfer completed") };

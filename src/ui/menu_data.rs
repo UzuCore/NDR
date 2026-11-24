@@ -9,7 +9,7 @@ pub const ORIGINAL_HIDDEN: &[&str] = &[
     "synchronize",       // miSynchronizeFolder
     "search",            // miSearchFile
 ];
-/// Order and items of the original TfMain menu buttons (tbFile ... tbHelp, DropdownMenu = pmFile ... pmHelp) (docs/original-menus.txt).
+/// NDR's menu groups, retaining legacy command identifiers for imports.
 /// (title language key, Korean, English, items). Item "-" is a separator, "@..." a submenu (checksum, workFolders, listStyle, columns, sort, filter).
 pub const MENUS: &[(&str,&str,&str,&[(&str,&str,&str)])] = &[
 ("ToolButton.tbFile","파일","File",&[

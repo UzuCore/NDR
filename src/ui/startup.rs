@@ -62,12 +62,8 @@ impl PreparedStartup {
         });
         let resources = resource_dir();
         let language_pack = compat::Language::load(&resources.join("Languages"), &language);
-        let toolbar =
-            ndr::commands::load_toolbar(&profile, include_bytes!("../../Resources/toolbar.xml"))
-                .unwrap_or(ndr::commands::ToolbarConfig {
-                    items: vec![],
-                    warning: None,
-                });
+        let language = language_pack.code.clone();
+        let toolbar = ndr::commands::load_toolbar(&profile);
         Self { profile, settings, error, language, dual, panes_init: [left, right], resources, language_pack, toolbar }
     }
 }
@@ -75,7 +71,7 @@ impl PreparedStartup {
 enum StartupPhase {
     Loading(Box<Pending>),
     Ready(Box<App>),
-    Failed { korean: bool },
+    Failed { message: String },
 }
 
 struct Pending {
@@ -85,7 +81,8 @@ struct Pending {
     hwnd: Option<isize>,
     prepared: Receiver<PreparedStartup>,
     painted: bool,
-    korean: bool,
+    loading_text: String,
+    failure_text: String,
 }
 
 pub struct StartupApp {
@@ -107,7 +104,9 @@ impl StartupApp {
             _ => None,
         });
         let settings = loaded.as_ref().ok();
-        let korean = startup_language(&options, settings) == "ko";
+        let labels = compat::Language::load_labels(&resource_dir().join("Languages"), &startup_language(&options, settings));
+        let loading_text = labels.localized("NDR.UI_STARTUP_LOADING", "폴더와 설정을 준비하는 중…", "Preparing folders and settings…");
+        let failure_text = labels.localized("NDR.UI_STARTUP_FAILED", "시작 준비에 실패했습니다. 다시 실행해 주세요.", "Startup failed. Please reopen NDR.");
         let theme = settings.map_or("Black".into(), |settings| settings.text("Theme", "Black"));
         let palette = system_commands::theme_palette(&theme);
         ctx.set_theme(palette.egui_theme());
@@ -127,21 +126,19 @@ impl StartupApp {
             let _ = tx.send(data);
             repaint.request_repaint();
         });
-        Self { phase: StartupPhase::Loading(Box::new(Pending { options, navigation, guard, hwnd, prepared, painted: false, korean })) }
+        Self { phase: StartupPhase::Loading(Box::new(Pending { options, navigation, guard, hwnd, prepared, painted: false, loading_text, failure_text })) }
     }
 
-    fn draw_loading(ctx: &egui::Context, korean: bool, failed: bool) {
+    fn draw_loading(ctx: &egui::Context, message: &str, failed: bool) {
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.vertical_centered(|ui| {
                 ui.add_space((ui.available_height() * 0.36).max(8.0));
                 ui.heading("NDR");
                 ui.add_space(8.0);
-                if failed {
-                    ui.label(if korean { "\u{c2dc}\u{c791} \u{c900}\u{be44}\u{c5d0} \u{c2e4}\u{d328}\u{d588}\u{c2b5}\u{b2c8}\u{b2e4}. \u{b2e4}\u{c2dc} \u{c2e4}\u{d589}\u{d574} \u{c8fc}\u{c138}\u{c694}." } else { "Startup failed. Please reopen NDR." });
-                } else {
+                if !failed {
                     ui.spinner();
-                    ui.label(if korean { "\u{d3f4}\u{b354}\u{c640} \u{c124}\u{c815}\u{c744} \u{c900}\u{be44}\u{d558}\u{b294} \u{c911}\u{2026}" } else { "Preparing folders and settings\u{2026}" });
                 }
+                ui.label(message);
             });
         });
     }
@@ -159,12 +156,12 @@ impl eframe::App for StartupApp {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         match &mut self.phase {
             StartupPhase::Ready(app) => return app.update(ctx, frame),
-            StartupPhase::Failed { korean } => return Self::draw_loading(ctx, *korean, true),
+            StartupPhase::Failed { message } => return Self::draw_loading(ctx, message, true),
             StartupPhase::Loading(pending) if !pending.painted => {
                 // eframe reveals the window after this paint, even if the
                 // startup worker has not returned or already finished.
                 pending.painted = true;
-                Self::draw_loading(ctx, pending.korean, false);
+                Self::draw_loading(ctx, &pending.loading_text, false);
                 ctx.request_repaint();
                 return;
             }
@@ -180,11 +177,11 @@ impl eframe::App for StartupApp {
                 app.update(ctx, frame);
                 self.phase = StartupPhase::Ready(app);
             }
-            Err(mpsc::TryRecvError::Empty) => Self::draw_loading(ctx, pending.korean, false),
+            Err(mpsc::TryRecvError::Empty) => Self::draw_loading(ctx, &pending.loading_text, false),
             Err(mpsc::TryRecvError::Disconnected) => {
-                let korean = pending.korean;
-                self.phase = StartupPhase::Failed { korean };
-                Self::draw_loading(ctx, korean, true);
+                let message = std::mem::take(&mut pending.failure_text);
+                Self::draw_loading(ctx, &message, true);
+                self.phase = StartupPhase::Failed { message };
             }
         }
     }
@@ -218,7 +215,7 @@ mod tests {
         ]);
         settings.values.insert("SelectedLeftTab".into(), serde_json::json!(1));
         settings.set_flag("LeftShowHiddenFiles", true);
-        settings.set_text("Language", "en");
+        settings.set_text("Language", "en-US");
         let options = Options { left: Some(explicit.clone()), dual: Some(false), ..Default::default() };
         let prepared = PreparedStartup::prepare(&options, root.join("profile"), Ok(settings));
         let (tabs, selected, hidden) = &prepared.panes_init[0];
@@ -227,6 +224,7 @@ mod tests {
         assert!(!tabs.contains(&removed), "an unavailable saved tab is not restored");
         assert!(*hidden);
         assert_eq!(prepared.language, "en");
+        assert_eq!(prepared.settings.text("Language", ""), "en-US", "opening a profile must not overwrite its preference");
         assert!(!prepared.dual);
         std::fs::remove_dir_all(root).unwrap();
     }

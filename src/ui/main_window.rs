@@ -31,7 +31,7 @@ pub(super) struct PaneSummary {
     pub extensions: Vec<(String, usize)>,
 }
 
-pub(super) fn summarize(entries: &[Entry], ko: bool) -> PaneSummary {
+pub(super) fn summarize(entries: &[Entry]) -> PaneSummary {
     let mut summary = PaneSummary::default();
     let mut extensions: Vec<(String, usize)> = Vec::new();
     // Original FUN_0048aa30 counts with FUN_007d2f80 every item of kind 1 and 3, so ".." is counted as a folder ("5 폴더" for four folders,
@@ -46,10 +46,7 @@ pub(super) fn summarize(entries: &[Entry], ko: bool) -> PaneSummary {
         }
         summary.files += 1;
         summary.bytes = summary.bytes.saturating_add(entry.size);
-        let extension = match ndr::parity::list_extension(&entry.name) {
-            "" => (if ko { "(확장자 없음)" } else { "(no extension)" }).to_owned(),
-            e => e.to_owned(),
-        };
+        let extension = ndr::parity::list_extension(&entry.name).to_owned();
         match extensions.iter_mut().find(|(k, _)| k.eq_ignore_ascii_case(&extension)) {
             Some((_, count)) => *count += 1,
             None => extensions.push((extension, 1)),
@@ -372,12 +369,11 @@ impl App {
 
     /// C# UpdatePaneInfoBars: (folder/disk, file, extension) texts.
     pub(super) fn info_texts(&mut self, index: usize) -> [String; 3] {
-        let ko = self.language == "ko";
         let unit = self.settings.text("SizeUnit", "Auto");
         let thousands = self.settings.flag("UseThousandsSeparator", true);
         let size = |bytes: u64| ndr::parity::format_size(bytes, &unit, thousands);
         if self.panes[index].summary.is_none() {
-            let summary = summarize(&self.panes[index].entries, ko);
+            let summary = summarize(&self.panes[index].entries);
             self.panes[index].summary = Some(summary);
         }
         if self.panes[index].view.cells.len() != self.panes[index].entries.len() {
@@ -388,7 +384,7 @@ impl App {
         let folder = if super::panes::is_drives(&pane.path) {
             // C# UpdatePaneInfoBars: "::drives::" and N drives (no disk text).
             let count = pane.entries.len();
-            format!("{} · {}", pane.path.display(), if ko { format!("드라이브 {count}개") } else { format!("Drives {count}") })
+            format!("{} · {}", pane.path.display(), self.catalog("NDR.UI_PANE_DRIVE_COUNT", "드라이브 {0}개", "Drives {0}").replace("{0}", &count.to_string()))
         } else {
             let (counts, drive, right, _) = self.folder_info(index);
             if right.is_empty() { counts } else { format!("{counts}  {drive}{right}") }
@@ -414,12 +410,12 @@ impl App {
         };
         let file = match selected.as_slice() {
             _ if original_file.is_some() => original_file.unwrap_or_default(),
-            [] => (if ko { "선택된 항목 없음" } else { "No selection" }).to_owned(),
+            [] => self.catalog("NDR.UI_PANE_NO_SELECTION", "선택된 항목 없음", "No selection"),
             [row] => {
                 let entry = &pane.entries[*row];
                 let description = pane.descriptions.get(&entry.name.to_lowercase()).filter(|d| !d.trim().is_empty()).map(|d| format!(" · {d}")).unwrap_or_default();
                 if entry.is_dir {
-                    format!("{} · {} · {}{description}", entry.name, if ko { "폴더" } else { "Folder" }, modified(*row))
+                    format!("{} · {} · {}{description}", entry.name, self.catalog("NDR.UI_PANE_FOLDER", "폴더", "Folder"), modified(*row))
                 } else {
                     format!("{} · {} · {}{description}", entry.name, size(entry.size), modified(*row))
                 }
@@ -428,21 +424,19 @@ impl App {
                 let files: Vec<&Entry> = rows.iter().map(|r| &pane.entries[*r]).filter(|e| !e.is_dir).collect();
                 let bytes = files.iter().fold(0u64, |total, e| total.saturating_add(e.size));
                 let folders = rows.len() - files.len();
-                if ko {
-                    format!("선택 {}개 · 파일 {}개 · 폴더 {}개 · {}", n0(rows.len()), n0(files.len()), n0(folders), size(bytes))
-                } else {
-                    format!("Selected {} · Files {} · Folders {} · {}", n0(rows.len()), n0(files.len()), n0(folders), size(bytes))
-                }
+                self.catalog("NDR.UI_PANE_SELECTION_SUMMARY", "선택 {0}개 · 파일 {1}개 · 폴더 {2}개 · {3}", "Selected {0} · Files {1} · Folders {2} · {3}")
+                    .replace("{0}", &n0(rows.len())).replace("{1}", &n0(files.len()))
+                    .replace("{2}", &n0(folders)).replace("{3}", &size(bytes))
             }
         };
-        let count = |n: usize| if ko { format!("{}개", n0(n)) } else { n0(n) };
+        let count = |n: usize| self.catalog("NDR.UI_PANE_EXTENSION_COUNT", "{0}개", "{0}").replace("{0}", &n0(n));
         let selected_files: Vec<&Entry> = selected.iter().map(|r| &pane.entries[*r]).filter(|e| !e.is_dir).collect();
         let extension = if !selected_files.is_empty() {
             // C# GroupBy (extensions in order of first appearance in the selection) -> the first 4.
             let mut groups: Vec<(String, usize)> = Vec::new();
             for entry in selected_files {
                 let key = match ndr::parity::list_extension(&entry.name) {
-                    "" => (if ko { "(확장자 없음)" } else { "(no extension)" }).to_owned(),
+                    "" => self.catalog("NDR.UI_PANE_NO_EXTENSION", "(확장자 없음)", "(no extension)"),
                     e => e.to_owned(),
                 };
                 match groups.iter_mut().find(|(k, _)| k.eq_ignore_ascii_case(&key)) {
@@ -452,9 +446,13 @@ impl App {
             }
             groups.iter().take(4).map(|(k, n)| format!("{k} {}", count(*n))).collect::<Vec<_>>().join(" · ")
         } else {
-            summary.extensions.iter().take(4).map(|(k, n)| format!("{k} {}", count(*n))).collect::<Vec<_>>().join(" · ")
+            let no_extension = self.catalog("NDR.UI_PANE_NO_EXTENSION", "(확장자 없음)", "(no extension)");
+            summary.extensions.iter().take(4).map(|(k, n)| {
+                let caption = if k.is_empty() { no_extension.as_str() } else { k.as_str() };
+                format!("{caption} {}", count(*n))
+            }).collect::<Vec<_>>().join(" · ")
         };
-        let extension = if extension.is_empty() { (if ko { "확장자 정보 없음" } else { "No extension information" }).to_owned() } else { extension };
+        let extension = if extension.is_empty() { self.catalog("NDR.UI_PANE_NO_EXTENSION_INFO", "확장자 정보 없음", "No extension information") } else { extension };
         [folder, file, extension]
     }
 
@@ -594,7 +592,7 @@ impl App {
     fn start_github_download(&mut self, release: ndr::update::GithubRelease) {
         if self.update_progress.is_some() { return; }
         self.update_progress = Some(UpdateProgress::new(&release));
-        self.status = format!("GitHub {} 업데이트 다운로드 중...", release.tag);
+        self.status = self.catalog("NDR.UPD_DOWNLOAD_ACTIVE", "NDR {0} 다운로드 중...", "Downloading NDR {0}...").replace("{0}", &release.tag);
         let (get, tx) = (self.http_get, self.async_tx.clone());
         thread::spawn(move || {
             let progress_tx = tx.clone();
@@ -632,11 +630,11 @@ impl App {
                 }
             }
             Ok(archive) => {
-                self.status = "업데이트 다운로드 및 SHA-256 검증 완료. 설치를 시작합니다.".into();
+                self.status = self.catalog("NDR.UPD_STARTING", "다운로드와 무결성 검사 완료. 설치를 시작합니다.", "Download and integrity check complete. Starting installation.");
                 if let Some(progress) = self.update_progress.as_mut() {
                     progress.phase = ndr::update::UpdatePhase::Installing;
                 }
-                match (self.update_launcher)(&archive) {
+                match (self.update_launcher)(&archive, &self.language_pack) {
                     Ok(()) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
                     Err(message) => {
                         if let Some(progress) = self.update_progress.as_mut() {
@@ -653,9 +651,8 @@ impl App {
     pub(super) fn update_progress_ui(&mut self, ctx: &egui::Context) {
         use ndr::update::UpdatePhase;
         let Some(progress) = self.update_progress.as_ref() else { return };
-        let ko = self.language == "ko";
         let mut dismiss = false;
-        egui::Window::new(if ko { "NDR 업데이트" } else { "NDR Update" })
+        egui::Window::new(self.catalog("NDR.UPD_TITLE", "NDR 업데이트", "NDR Update"))
             .id(egui::Id::new("ndr-update-progress"))
             .collapsible(false).resizable(false)
             // Anchoring makes egui windows immovable. Keep the original
@@ -666,7 +663,7 @@ impl App {
             .show(ctx, |ui| {
                 ui.add_space(8.0);
                 ui.heading(format!("NDR  {}", progress.tag));
-                ui.label(if ko { "검증된 업데이트를 안전하게 설치합니다." } else { "Securely installing the verified update." });
+                ui.label(self.catalog("NDR.UPD_VERIFIED_INIT", "검증된 업데이트를 안전하게 설치합니다.", "Securely installing the verified update."));
                 ui.add_space(15.0);
                 let step = match progress.phase {
                     UpdatePhase::Downloading => 0,
@@ -674,10 +671,13 @@ impl App {
                     UpdatePhase::Preparing => 2,
                     UpdatePhase::Installing | UpdatePhase::Failed => 3,
                 };
-                let stages = if ko {
-                    ["다운로드", "무결성 검사", "설치 준비", "설치 및 재시작"]
-                } else { ["Download", "Integrity", "Prepare", "Install & restart"] };
-                ui.horizontal(|ui| {
+                let stages = [
+                    self.catalog("NDR.UPD_STEP_DOWNLOAD", "다운로드", "Download"),
+                    self.catalog("NDR.UPD_STEP_VERIFY", "무결성 검사", "Integrity"),
+                    self.catalog("NDR.UPD_STEP_PREPARE", "설치 준비", "Prepare"),
+                    self.catalog("NDR.UPD_STEP_INSTALL", "설치 및 재시작", "Install and restart"),
+                ];
+                ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing.x = 8.0;
                     for (index, label) in stages.iter().enumerate() {
                         let label = if index < step { format!("✓ {label}") }
@@ -701,24 +701,26 @@ impl App {
                         ui.horizontal(|ui| {
                             ui.spinner();
                             ui.label(match progress.phase {
-                                UpdatePhase::Verifying => if ko { "SHA-256 무결성을 확인하고 있습니다..." } else { "Verifying SHA-256..." },
-                                UpdatePhase::Preparing => if ko { "설치 패키지를 준비하고 있습니다..." } else { "Preparing package..." },
-                                _ => if ko { "설치 프로그램으로 전환합니다..." } else { "Starting installer..." },
+                                UpdatePhase::Verifying => self.catalog("NDR.UPD_VERIFY_HASH", "SHA-256 무결성을 확인하고 있습니다...", "Verifying SHA-256..."),
+                                UpdatePhase::Preparing => self.catalog("NDR.UPD_PREPARING", "설치 패키지를 준비하고 있습니다...", "Preparing package..."),
+                                _ => self.catalog("NDR.UPD_INSTALLER_START", "설치 프로그램으로 전환합니다...", "Starting installer..."),
                             });
                         });
                         ui.add(egui::ProgressBar::new(1.0).text("ZIP 100%").desired_width(ui.available_width()));
                     }
                     UpdatePhase::Failed => {
-                        ui.colored_label(ui.visuals().error_fg_color,
-                            progress.error.as_deref().unwrap_or("Update failed"));
-                        if ui.button(if ko { "닫기" } else { "Close" }).clicked() { dismiss = true; }
+                        ui.colored_label(ui.visuals().error_fg_color, self.catalog("NDR.UPD_FAILED", "업데이트에 실패했습니다.", "Update failed."));
+                        if let Some(detail) = &progress.error {
+                            egui::CollapsingHeader::new(self.catalog("NDR.UPD_ERROR_DETAILS", "오류 세부 정보", "Technical details")).show(ui, |ui| {
+                                ui.label(detail);
+                            });
+                        }
+                        if ui.button(self.catalog("NDR.UPD_CLOSE", "닫기", "Close")).clicked() { dismiss = true; }
                     }
                 }
                 ui.add_space(10.0);
                 if progress.phase != UpdatePhase::Failed {
-                    ui.label(egui::RichText::new(if ko {
-                        "설치 후 자동으로 재시작합니다. 기존 설정은 그대로 유지됩니다."
-                    } else { "NDR restarts automatically. Your settings stay intact." }).small().weak());
+                    ui.label(egui::RichText::new(self.catalog("NDR.UPD_RESTART_NOTE", "설치 후 자동으로 재시작합니다. 기존 설정은 그대로 유지됩니다.", "NDR restarts automatically. Your settings stay intact.")).small().weak());
                 }
                 ui.add_space(6.0);
             });
@@ -734,20 +736,34 @@ impl App {
             && serde_json::from_slice::<serde_json::Value>(&response.body)
                 .is_ok_and(|json| json.get("tag_name").is_some() && json.get("assets").is_some())
         {
-            let parsed = ndr::update::parse_github_release(&response.body, ndr::update::current_build());
+            let installed_build = ndr::update::current_build();
+            let parsed = ndr::update::parse_github_release(&response.body, installed_build);
             if silent {
                 self.update_available = parsed.ok().flatten().map(|release| release.url);
                 return;
             }
+            let title = self.catalog("NDR.UPD_TITLE", "NDR 업데이트", "NDR Update");
+            let installed = ndr::update::build_label(installed_build)
+                .unwrap_or_else(|| self.catalog("NDR.UPD_LOCAL_BUILD", "로컬 빌드", "Local build"));
+            let installed_line = self.catalog("NDR.UPD_CURRENT_BUILD", "현재 빌드: {0}", "Installed build: {0}").replace("{0}", &installed);
             match parsed {
                 Ok(Some(release)) => {
-                    let question = format!("GitHub NDR {} 업데이트를 찾았습니다.\n다운로드·검증·설치 후 자동으로 재시작할까요?\n사용자 설정은 유지됩니다.", release.tag);
-                    self.system_box("NDR Update", &question, MB_YESNO | MB_ICONASTERISK, move |app, answer, _| {
+                    let target = self.catalog("NDR.UPD_NEW_BUILD", "새 빌드: {0}", "New build: {0}").replace("{0}", &release.tag);
+                    let action = self.catalog("NDR.UPD_CONFIRM", "다운로드 후 설치하고 NDR을 다시 시작할까요?\n기존 설정은 유지됩니다.", "Download and install the update, then restart NDR?\nYour settings will be kept.");
+                    let question = format!("{installed_line}\n{target}\n\n{action}");
+                    self.system_box(&title, &question, MB_YESNO | MB_ICONASTERISK, move |app, answer, _| {
                         if answer == IDYES { app.start_github_download(release); }
                     });
                 }
-                Ok(None) => self.system_box("NDR Update", "이미 최신 GitHub 빌드입니다.", MB_OK, |_, _, _| {}),
-                Err(message) => self.system_box("NDR Update", &message, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {}),
+                Ok(None) => {
+                    self.update_available = None;
+                    let message = self.catalog("NDR.UPD_NONE", "새 업데이트가 없습니다.", "No newer update is available.");
+                    self.system_box(&title, &format!("{message}\n{installed_line}"), MB_OK, |_, _, _| {});
+                }
+                Err(detail) => {
+                    let message = self.catalog("NDR.UPD_RELEASE_FAILURE", "GitHub 릴리스 정보를 확인하지 못했습니다.", "Could not verify the GitHub release.");
+                    self.system_box(&title, &format!("{message}\n{detail}"), MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
+                }
             }
             return;
         }

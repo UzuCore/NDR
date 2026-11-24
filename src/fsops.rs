@@ -1,4 +1,5 @@
 //! Worker filesystem operations. Conflicts are answered through the event reply channel.
+use crate::operation_diagnostic::OperationDiagnostic as Diag;
 use crate::compat::{self, DescriptionTransfer};
 use std::{
     fs,
@@ -176,6 +177,17 @@ pub fn run_with_options(
     cancel: Arc<AtomicBool>,
     options: OperationOptions,
 ) {
+    run_with_locale(operation, events, cancel, options, None)
+}
+
+/// UI entry point. Internal controls and raw system diagnostics stay unchanged.
+pub fn run_with_locale(
+    operation: Operation,
+    events: Sender<Event>,
+    cancel: Arc<AtomicBool>,
+    options: OperationOptions,
+    language: Option<crate::compat::Language>,
+) {
     let mut j = Job {
         events,
         cancel,
@@ -184,6 +196,7 @@ pub fn run_with_options(
         descriptions: std::collections::BTreeMap::new(),
         transfers: Vec::new(),
         options,
+        language,
         quiet: false,
         last_copy_progress: None,
         copy_buffer: Vec::new(),
@@ -206,10 +219,7 @@ pub fn run_with_options(
                     if fs::symlink_metadata(source).is_ok_and(|meta| meta.is_dir())
                         && inside(source, &destination)?
                     {
-                        return Err(format!(
-                            "Destination is the source folder or lies inside it: {} -> {}",
-                            source.display(), destination.display()
-                        ));
+                        return Err(Diag::RecursiveTransfer(source, &destination).render(j.language.as_ref()));
                     }
                 }
                 fs::create_dir_all(&destination).map_err(|e| e.to_string())?;
@@ -224,7 +234,7 @@ pub fn run_with_options(
                     // C# CanContinueAfterError: asks "continue?" only when sources remain after this one.
                     let boundary = index + 1 < count;
                     let result = (|| {
-                        let name = s.file_name().ok_or("A filesystem root cannot be copied")?;
+                        let name = s.file_name().ok_or_else(|| Diag::CopyRoot.render(j.language.as_ref()))?;
                         let mut target = destination.join(name);
                         if absolute(&s)?.to_string_lossy().eq_ignore_ascii_case(&absolute(&target)?.to_string_lossy()) {
                             // A move in place has nothing to do.
@@ -256,7 +266,7 @@ pub fn run_with_options(
                             }
                         }
                         if inside(&s, &target)? {
-                            return Err("Destination is the source or lies inside it".into());
+                            return Err(Diag::RecursiveItem.render(j.language.as_ref()));
                         }
                         j.copy(&s, &target, move_files, boundary).map(|_| ())
                     })();
@@ -1430,6 +1440,7 @@ struct Job {
     descriptions: std::collections::BTreeMap<PathBuf, std::collections::HashMap<String, String>>,
     transfers: Vec<DescriptionTransfer>,
     options: OperationOptions,
+    language: Option<crate::compat::Language>,
     /// Original flags 0x40|0x80 (EmptyFolder): errors are neither asked about nor reported.
     quiet: bool,
 }
@@ -1657,7 +1668,7 @@ impl Job {
         boundary: bool,
     ) -> Result<bool, String> {
         if depth > 256 {
-            return Err("Directory nesting exceeds the safe copy limit (256)".into());
+            return Err(Diag::CopyDepth.render(self.language.as_ref()));
         }
         self.check()?;
         let m = plain_metadata(s)?.ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound).to_string())?;
@@ -1725,7 +1736,7 @@ impl Job {
         }
         if m.is_dir() {
             if d.exists() && !d.is_dir() {
-                return Err("Cannot replace a file with a directory".into());
+                return Err(Diag::FolderToFile.render(self.language.as_ref()));
             }
             fs::create_dir_all(&d).map_err(|e| e.to_string())?;
             let mut all = true;
@@ -1799,7 +1810,7 @@ impl Job {
             return Err("Only ordinary files and directories can be copied".into());
         }
         if overwrite && d.is_dir() {
-            return Err("Cannot replace a directory with a file".into());
+            return Err(Diag::FileToFolder.render(self.language.as_ref()));
         }
         self.copy_progress(s, &d);
         let mut input = open_read(s)?;
@@ -1826,7 +1837,7 @@ impl Job {
                 || final_source.len() != m.len()
                 || final_source.modified().ok() != m.modified().ok()
             {
-                return Err("Source changed during copy; existing destination retained".into());
+                return Err(Diag::SourceChanged.render(self.language.as_ref()));
             }
             preserve_times(&out, &m)?;
             let mut permissions = m.permissions();
@@ -1899,7 +1910,7 @@ impl Job {
     /// then SetFileAttributesW 0x10 and RemoveDirectoryW). The protected-item question (FUN_004150ac) is asked before the job here.
     fn delete_filtered(&mut self, p: &Path, skipped: &[PathBuf], depth: usize, boundary: bool) -> Result<Disposition, String> {
         if depth > 256 {
-            return Err("Directory nesting exceeds the safe delete limit (256)".into());
+            return Err(Diag::DeleteDepth.render(self.language.as_ref()));
         }
         self.check()?;
         if skipped.iter().any(|root| same_or_inside(p, root)) {
@@ -1961,7 +1972,7 @@ impl Job {
     /// without being followed. Each shredded file counts one in files.
     fn shred(&mut self, p: &Path, depth: usize) -> Result<(), String> {
         if depth > 256 {
-            return Err("Directory nesting exceeds the safe delete limit (256)".into());
+            return Err(Diag::DeleteDepth.render(self.language.as_ref()));
         }
         check_cancel(&self.cancel)?;
         let m = fs::symlink_metadata(p).map_err(|e| e.to_string())?;
@@ -2028,7 +2039,7 @@ impl Job {
     fn resume_file(&mut self, s: &Path, d: &Path, m: &fs::Metadata, moving: bool, description: Option<String>) -> Result<bool, String> {
         let existing = fs::metadata(d).map_err(|e| e.to_string())?.len();
         if existing > m.len() {
-            return Err("The existing file is larger than the source and cannot be resumed".into());
+            return Err(Diag::ResumeLarger.render(self.language.as_ref()));
         }
         let mut input = open_read(s)?;
         {
@@ -2042,7 +2053,7 @@ impl Job {
                 input.read_exact(&mut left[..n]).map_err(|e| e.to_string())?;
                 current.read_exact(&mut right[..n]).map_err(|e| e.to_string())?;
                 if left[..n] != right[..n] {
-                    return Err("The existing file does not match the start of the source; it was not resumed".into());
+                    return Err(Diag::ResumeMismatch.render(self.language.as_ref()));
                 }
                 remaining -= n as u64;
             }

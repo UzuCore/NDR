@@ -1,4 +1,5 @@
 //! Archive operations use bundled 7-Zip, validated entries and isolated extraction.
+use crate::operation_diagnostic::OperationDiagnostic as Diag;
 use crate::fsops::{
     ConflictChoice, check_cancel, ensure_plain_path, is_reparse, rename_new,
     unique_path,
@@ -2152,10 +2153,26 @@ pub fn extract_entries_with_program(
     program: Option<&ExternalProgram>,
     progress: &mut dyn FnMut(usize, usize, &str),
 ) -> Result<(), String> {
+    extract_entries_with_locale(archive, destination, keys, initial_password, cancel, conflicts, passwords, program, progress, None)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn extract_entries_with_locale(
+    archive: &Path,
+    destination: &Path,
+    keys: &[String],
+    initial_password: Option<&str>,
+    cancel: &AtomicBool,
+    conflicts: &mut dyn FnMut(&Path, &Path) -> ConflictChoice,
+    passwords: &mut dyn FnMut(&Path, Option<&str>) -> Option<String>,
+    program: Option<&ExternalProgram>,
+    progress: &mut dyn FnMut(usize, usize, &str),
+    language: Option<&crate::compat::Language>,
+) -> Result<(), String> {
     use std::sync::atomic::Ordering;
     check_cancel(cancel)?;
     if program.is_none() && !bundled_can_browse(archive) {
-        return Err(format!("Archive format not supported by bundled 7-Zip: {}", archive.display()));
+        return Err(Diag::ArchiveUnsupported(archive).render(language));
     }
     ensure_plain_path(destination)?;
     let archive = resolve_archive_path(archive).map_err(|e| e.to_string())?;
@@ -2179,7 +2196,7 @@ pub fn extract_entries_with_program(
     // transferring any file. Validate all requests before creating a stage.
     if !keys.is_empty() {
         if wanted.len() != keys.len() {
-            return Err("Empty archive selection is not a valid entry".into());
+            return Err(Diag::ArchiveEmptySelection.render(language));
         }
         for key in &wanted {
             validate_key(key)?;
@@ -2187,14 +2204,14 @@ pub fn extract_entries_with_program(
                 let candidate = entry.key.replace('\\', "/").trim_end_matches('/').to_lowercase();
                 candidate == *key || candidate.starts_with(&format!("{key}/"))
             }) {
-                return Err(format!("Selected archive entry was not found: {key}"));
+                return Err(Diag::ArchiveMissingSelection(key).render(language));
             }
         }
         for (index, key) in wanted.iter().enumerate() {
             if wanted.iter().enumerate().any(|(other_index, other)| {
                 index != other_index && (key == other || key.starts_with(&format!("{other}/")))
             }) {
-                return Err(format!("Archive selection contains duplicate or overlapping parent/child entries: {key}"));
+                return Err(Diag::ArchiveOverlapSelection(key).render(language));
             }
         }
     }
@@ -2220,7 +2237,7 @@ pub fn extract_entries_with_program(
     for entry in &entries {
         let placed = selected_output_relative(&entry.key, &parents);
         if !projected.insert(placed.to_lowercase()) {
-            return Err(format!("Selected archive entries would collide in the destination: {placed}"));
+            return Err(Diag::ArchiveDestinationCollision(&placed).render(language));
         }
     }
     let total = entries.len();
@@ -2314,9 +2331,9 @@ pub fn extract_entries_with_program(
                 let metadata = fs::symlink_metadata(&source)
                     .map_err(|e| format!("Missing decoded entry {}: {e}", entry.key))?;
                 if !metadata.is_file() || (entry.size_known && metadata.len() != entry.size) {
-                    return Err(format!("Decoded entry mismatch: {}", entry.key));
+                    return Err(Diag::ArchiveDecodedMismatch(&entry.key).render(language));
                 }
-                let target_parent = target.parent().ok_or("Decoded target parent missing")?;
+                let target_parent = target.parent().ok_or_else(|| Diag::ArchiveDecodedParent.render(language))?;
                 fs::create_dir_all(target_parent).map_err(|e| e.to_string())?;
                 rename_new(&source, &target)
             })();
@@ -2364,9 +2381,7 @@ pub fn extract_entries_with_program(
             commit_aggregate(&aggregate, destination, commit_cancel, conflicts)?;
         }
         if let Some(error) = stopped {
-            Err(format!(
-                "{error}; {completed} successful archive entries were preserved"
-            ))
+            Err(Diag::ArchivePartial(&error, completed).render(language))
         } else {
             Ok(())
         }

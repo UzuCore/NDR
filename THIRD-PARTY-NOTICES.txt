@@ -1,5 +1,9 @@
 NDR (Rust) 제3자 구성 요소
 
+Compatibility acknowledgment: NexusFile, created by Xiles, was a reference for
+file-manager behavior and legacy file formats. The current package uses NDR's
+bundled defaults; it does not include the NexusFile application or its DLLs.
+
 7zip+α 26.05 (Tools/7zip, UzuCore의 7-Zip 포크, https://github.com/UzuCore/7zip, build-2026.10.28): GNU LGPL 등, Tools/7zip/License.txt 참조. unRAR 코드는 Tools/7zip/unRarLicense.txt, ALZ·EGG 해제(UnEGG)는 Tools/7zip/UnEGG-LICENSE.txt 참조.
 OpenSSL (openssl-src로 정적 포함): Apache License 2.0.
 libssh2 (libssh2-sys로 정적 포함): BSD-3-Clause.

@@ -68,21 +68,51 @@ fn n0(value: usize) -> String {
     crate::parity::format_size(value as u64, "B", true).trim_end_matches(" B").to_owned()
 }
 
+
+/// User-facing formatting for compare/sync; keep fallback text and resource lookup together.
+pub fn comparison_text(language: Option<&crate::compat::Language>, korean: bool, key: &str, ko: &str, en: &str) -> String {
+    language.map_or_else(|| if korean { ko } else { en }.to_owned(), |pack| pack.localized(key, ko, en))
+}
+
+/// Render numbered arguments in one pass so paths and diagnostics are never reparsed.
+pub fn render_message(mut template: &str, values: &[&str]) -> String {
+    let mut result = String::with_capacity(template.len());
+    while let Some(open) = template.find('{') {
+        result.push_str(&template[..open]);
+        template = &template[open..];
+        if let Some(close) = template.find('}') {
+            let token = &template[1..close];
+            if !token.is_empty() && token.bytes().all(|c| c.is_ascii_digit()) {
+                if let Some(value) = token.parse::<usize>().ok().and_then(|index| values.get(index)) {
+                    result.push_str(value);
+                    template = &template[close + 1..];
+                    continue;
+                }
+            }
+        }
+        result.push('{');
+        template = &template[1..];
+    }
+    result.push_str(template);
+    result
+}
+
 impl CompareProgress {
     pub fn message(&self, korean: bool) -> String {
-        let label = |left: bool| match (left, korean) {
-            (true, true) => "왼쪽 폴더",
-            (false, true) => "오른쪽 폴더",
-            (true, false) => "Left folder",
-            (false, false) => "Right folder",
-        };
-        match (*self, korean) {
-            (Self::Scanning { left, scanned }, true) => format!("{} 검색 중 · {}개 확인", label(left), n0(scanned)),
-            (Self::Scanning { left, scanned }, false) => format!("Scanning {} · {} checked", label(left).to_lowercase(), n0(scanned)),
-            (Self::Scanned { left, count, .. }, true) => format!("{} 검색 완료 · {}개 항목", label(left), n0(count)),
-            (Self::Scanned { left, count, .. }, false) => format!("{} scanned · {} items", label(left), n0(count)),
-            (Self::Comparing { .. }, true) => "파일 비교 중".into(),
-            (Self::Comparing { .. }, false) => "Comparing files".into(),
+        self.message_with(None, korean)
+    }
+
+    pub fn localized_message(&self, language: &crate::compat::Language) -> String {
+        self.message_with(Some(language), false)
+    }
+
+    fn message_with(&self, language: Option<&crate::compat::Language>, korean: bool) -> String {
+        match *self {
+            Self::Scanning { left: true, scanned } => render_message(&comparison_text(language, korean, "NDR.UI_COMPARE_SCAN_LEFT", "왼쪽 폴더 검색 중 · {0}개 확인", "Scanning left folder · {0} checked"), &[&n0(scanned)]),
+            Self::Scanning { left: false, scanned } => render_message(&comparison_text(language, korean, "NDR.UI_COMPARE_SCAN_RIGHT", "오른쪽 폴더 검색 중 · {0}개 확인", "Scanning right folder · {0} checked"), &[&n0(scanned)]),
+            Self::Scanned { left: true, count, .. } => render_message(&comparison_text(language, korean, "NDR.UI_COMPARE_SCANNED_LEFT", "왼쪽 폴더 검색 완료 · {0}개 항목", "Left folder scanned · {0} items"), &[&n0(count)]),
+            Self::Scanned { left: false, count, .. } => render_message(&comparison_text(language, korean, "NDR.UI_COMPARE_SCANNED_RIGHT", "오른쪽 폴더 검색 완료 · {0}개 항목", "Right folder scanned · {0} items"), &[&n0(count)]),
+            Self::Comparing { .. } => comparison_text(language, korean, "NDR.UI_COMPARE_COMPARING_PROGRESS", "파일 비교 중", "Comparing files"),
         }
     }
 
@@ -325,6 +355,34 @@ pub fn time_text(modified: Option<SystemTime>) -> String {
     modified.map_or_else(|| "—".into(), |t| chrono::DateTime::<chrono::Local>::from(t).format("%Y-%m-%d %H:%M:%S").to_string())
 }
 
+
+pub fn localized_status(kind: DifferenceKind, language: Option<&crate::compat::Language>, korean: bool) -> String {
+    match kind {
+        DifferenceKind::Same => comparison_text(language, korean, "NDR.UI_COMPARE_STATE_SAME", "같음", "Same"),
+        DifferenceKind::LeftOnly => comparison_text(language, korean, "NDR.UI_COMPARE_STATE_LEFT_ONLY", "왼쪽에만 있음", "Left only"),
+        DifferenceKind::RightOnly => comparison_text(language, korean, "NDR.UI_COMPARE_STATE_RIGHT_ONLY", "오른쪽에만 있음", "Right only"),
+        DifferenceKind::Different => comparison_text(language, korean, "NDR.UI_COMPARE_STATE_DIFFERENT", "다름", "Different"),
+    }
+}
+
+pub fn localized_type(d: &Difference, language: Option<&crate::compat::Language>, korean: bool) -> String {
+    if d.left_dir != d.right_dir && matches!(d.kind, DifferenceKind::Same | DifferenceKind::Different) {
+        comparison_text(language, korean, "NDR.UI_COMPARE_TYPE_CONFLICT", "파일/폴더 충돌", "File/folder conflict")
+    } else if d.left_dir || d.right_dir {
+        comparison_text(language, korean, "RES.FOLDER", "폴더", "Folder")
+    } else {
+        comparison_text(language, korean, "NDR.UI_COMPARE_TYPE_FILE", "파일", "File")
+    }
+}
+
+pub fn localized_size(modified: Option<SystemTime>, dir: bool, size: u64, language: Option<&crate::compat::Language>, korean: bool) -> String {
+    if modified.is_some() && dir {
+        comparison_text(language, korean, "RES.FOLDER", "폴더", "Folder")
+    } else {
+        size_text(modified, dir, size, korean)
+    }
+}
+
 fn escape_tsv(value: &str) -> String {
     if value.contains(['\t', '\r', '\n', '"']) { format!("\"{}\"", value.replace('"', "\"\"")) } else { value.to_owned() }
 }
@@ -343,31 +401,43 @@ pub fn column_titles(korean: bool) -> [&'static str; 8] {
     }
 }
 
-fn yes_no(value: bool, korean: bool) -> &'static str {
-    match (value, korean) {
-        (true, true) => "예",
-        (false, true) => "아니요",
-        (true, false) => "Yes",
-        (false, false) => "No",
+pub fn localized_titles(language: Option<&crate::compat::Language>, korean: bool) -> [String; 8] {
+    [
+        comparison_text(language, korean, "NDR.UI_COMPARE_COLUMN_COPY", "복사", "Copy"),
+        comparison_text(language, korean, "NDR.UI_COMPARE_COLUMN_STATUS", "상태", "Status"),
+        comparison_text(language, korean, "NDR.UI_COMPARE_COLUMN_TYPE", "종류", "Type"),
+        comparison_text(language, korean, "NDR.UI_COMPARE_COLUMN_PATH", "상대 경로", "Relative path"),
+        comparison_text(language, korean, "NDR.UI_COMPARE_COLUMN_LEFT_SIZE", "왼쪽 크기", "Left size"),
+        comparison_text(language, korean, "NDR.UI_COMPARE_COLUMN_RIGHT_SIZE", "오른쪽 크기", "Right size"),
+        comparison_text(language, korean, "NDR.UI_COMPARE_COLUMN_LEFT_MODIFIED", "왼쪽 수정 날짜", "Left modified"),
+        comparison_text(language, korean, "NDR.UI_COMPARE_COLUMN_RIGHT_MODIFIED", "오른쪽 수정 날짜", "Right modified"),
+    ]
+}
+
+fn localized_yes_no(value: bool, language: Option<&crate::compat::Language>, korean: bool) -> String {
+    if value {
+        comparison_text(language, korean, "RES.YES", "예", "Yes")
+    } else {
+        comparison_text(language, korean, "RES.NO", "아니요", "No")
     }
 }
-
-fn unreadable_heading(korean: bool) -> &'static str {
-    if korean { "읽지 못한 항목" } else { "Unreadable items" }
-}
-
 /// TSV of SaveResults (every extension other than .html). The first column is "select" (yes/no).
 pub fn report_tsv(rows: &[(Difference, bool)], issues: &[String], korean: bool) -> String {
-    let titles = column_titles(korean);
-    let mut out = format!("{}\t{}\r\n", if korean { "선택" } else { "Selected" }, titles[1..].join("\t"));
+    report_tsv_localized(rows, issues, None, korean)
+}
+
+pub fn report_tsv_localized(rows: &[(Difference, bool)], issues: &[String], language: Option<&crate::compat::Language>, korean: bool) -> String {
+    let titles = localized_titles(language, korean);
+    let heading = comparison_text(language, korean, "NDR.UI_COMPARE_COLUMN_SELECTED", "선택", "Selected");
+    let mut out = format!("{}\t{}\r\n", escape_tsv(&heading), titles[1..].iter().map(|t| escape_tsv(t)).collect::<Vec<_>>().join("\t"));
     for (d, include) in rows {
         let cells = [
-            yes_no(*include, korean).to_owned(),
-            escape_tsv(status_text(d.kind, korean)),
-            escape_tsv(type_text(d, korean)),
+            escape_tsv(&localized_yes_no(*include, language, korean)),
+            escape_tsv(&localized_status(d.kind, language, korean)),
+            escape_tsv(&localized_type(d, language, korean)),
             escape_tsv(&d.relative),
-            escape_tsv(&size_text(d.left_modified, d.left_dir, d.left_size, korean)),
-            escape_tsv(&size_text(d.right_modified, d.right_dir, d.right_size, korean)),
+            escape_tsv(&localized_size(d.left_modified, d.left_dir, d.left_size, language, korean)),
+            escape_tsv(&localized_size(d.right_modified, d.right_dir, d.right_size, language, korean)),
             escape_tsv(&time_text(d.left_modified)),
             escape_tsv(&time_text(d.right_modified)),
         ];
@@ -375,9 +445,9 @@ pub fn report_tsv(rows: &[(Difference, bool)], issues: &[String], korean: bool) 
         out.push_str("\r\n");
     }
     if !issues.is_empty() {
-        out.push_str(&format!("\r\n{}\r\n", unreadable_heading(korean)));
+        out.push_str(&format!("\r\n{}\r\n", escape_tsv(&comparison_text(language, korean, "NDR.UI_COMPARE_UNREADABLE_HEADING", "읽지 못한 항목", "Unreadable items"))));
         for issue in issues {
-            out.push_str(&escape_tsv(issue));
+            out.push_str(&escape_tsv(&language.map_or_else(|| issue.clone(), |pack| localize_issue(issue, pack))));
             out.push_str("\r\n");
         }
     }
@@ -386,14 +456,19 @@ pub fn report_tsv(rows: &[(Difference, bool)], issues: &[String], korean: bool) 
 
 /// HTML of SaveResults.
 pub fn report_html(title: &str, left: &str, right: &str, rows: &[(Difference, bool)], issues: &[String], select_for_sync: bool, korean: bool) -> String {
-    let titles = column_titles(korean);
+    report_html_localized(title, left, right, rows, issues, select_for_sync, None, korean)
+}
+
+pub fn report_html_localized(title: &str, left: &str, right: &str, rows: &[(Difference, bool)], issues: &[String], select_for_sync: bool, language: Option<&crate::compat::Language>, korean: bool) -> String {
+    let titles = localized_titles(language, korean);
     let mut out = String::new();
     let mut line = |text: &str| {
         out.push_str(text);
         out.push_str("\r\n");
     };
     line("<!doctype html>");
-    line(if korean { "<html lang=\"ko\">" } else { "<html lang=\"en\">" });
+    let code = language.map_or(if korean { "ko" } else { "en" }, |pack| pack.code.as_str());
+    line(&format!("<html lang=\"{}\">", html(code)));
     line("<head>");
     line("<meta charset=\"utf-8\">");
     line("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">");
@@ -402,38 +477,83 @@ pub fn report_html(title: &str, left: &str, right: &str, rows: &[(Difference, bo
     line("</head>");
     line("<body>");
     line(&format!("<h1>{}</h1>", html(title)));
-    line(&format!("<p><strong>{}:</strong> {}</p>", if korean { "왼쪽" } else { "Left" }, html(left)));
-    line(&format!("<p><strong>{}:</strong> {}</p>", if korean { "오른쪽" } else { "Right" }, html(right)));
+    line(&format!("<p><strong>{}:</strong> {}</p>", html(&comparison_text(language, korean, "NDR.UI_COMPARE_LEFT", "왼쪽", "Left")), html(left)));
+    line(&format!("<p><strong>{}:</strong> {}</p>", html(&comparison_text(language, korean, "NDR.UI_COMPARE_RIGHT", "오른쪽", "Right")), html(right)));
     line("<table><thead><tr>");
     if select_for_sync {
-        line(&format!("<th>{}</th>", titles[0]));
+        line(&format!("<th>{}</th>", html(&titles[0])));
     }
-    line(&format!("{}</tr></thead><tbody>", titles[1..].iter().map(|t| format!("<th>{t}</th>")).collect::<String>()));
+    line(&format!("{}</tr></thead><tbody>", titles[1..].iter().map(|t| format!("<th>{}</th>", html(t))).collect::<String>()));
     for (d, include) in rows {
         line("<tr>");
         if select_for_sync {
-            line(&format!("<td>{}</td>", yes_no(*include, korean)));
+            line(&format!("<td>{}</td>", html(&localized_yes_no(*include, language, korean))));
         }
-        line(&format!("<td>{}</td>", html(status_text(d.kind, korean))));
-        line(&format!("<td>{}</td>", html(type_text(d, korean))));
+        line(&format!("<td>{}</td>", html(&localized_status(d.kind, language, korean))));
+        line(&format!("<td>{}</td>", html(&localized_type(d, language, korean))));
         line(&format!("<td class=\"path\">{}</td>", html(&d.relative)));
-        line(&format!("<td>{}</td>", html(&size_text(d.left_modified, d.left_dir, d.left_size, korean))));
-        line(&format!("<td>{}</td>", html(&size_text(d.right_modified, d.right_dir, d.right_size, korean))));
+        line(&format!("<td>{}</td>", html(&localized_size(d.left_modified, d.left_dir, d.left_size, language, korean))));
+        line(&format!("<td>{}</td>", html(&localized_size(d.right_modified, d.right_dir, d.right_size, language, korean))));
         line(&format!("<td>{}</td>", html(&time_text(d.left_modified))));
         line(&format!("<td>{}</td>", html(&time_text(d.right_modified))));
         line("</tr>");
     }
     line("</tbody></table>");
     if !issues.is_empty() {
-        line(&format!("<section class=\"issues\"><h2>{}</h2><ul>", unreadable_heading(korean)));
+        line(&format!("<section class=\"issues\"><h2>{}</h2><ul>", html(&comparison_text(language, korean, "NDR.UI_COMPARE_UNREADABLE_HEADING", "읽지 못한 항목", "Unreadable items"))));
         for issue in issues {
-            line(&format!("<li>{}</li>", html(issue)));
+            line(&format!("<li>{}</li>", html(&language.map_or_else(|| issue.clone(), |pack| localize_issue(issue, pack)))));
         }
         line("</ul></section>");
     }
     line("</body>");
     line("</html>");
     out
+}
+
+/// Localize NDR-authored errors without translating the path or raw OS details.
+pub fn localize_issue(detail: &str, language: &crate::compat::Language) -> String {
+    if let Some(translated) = localize_known_issue(detail, language) {
+        return translated;
+    }
+    // Synchronization may prepend a relative item to a known error. Leave
+    // messages from Windows and other unknown diagnostics intact.
+    if let Some((relative, reason)) = detail.split_once(": ")
+        && let Some(translated) = localize_known_issue(reason, language)
+    {
+        return format!("{relative}: {translated}");
+    }
+    detail.to_owned()
+}
+
+fn localize_known_issue(detail: &str, language: &crate::compat::Language) -> Option<String> {
+    if detail == "비교하거나 동기화할 두 폴더는 서로 같거나 포함 관계일 수 없습니다." {
+        return Some(language.localized("NDR.UI_COMPARE_ROOTS_DISTINCT", "비교하거나 동기화할 두 폴더는 서로 같거나 포함 관계일 수 없습니다.", "The two folders to compare or synchronize cannot be the same folder or contain each other."));
+    }
+    if detail == "Both synchronization roots must exist." {
+        return Some(language.localized("NDR.UI_COMPARE_ROOTS_MISSING", "동기화할 두 폴더가 모두 있어야 합니다.", "Both synchronization roots must exist."));
+    }
+    if let Some((path, error)) = detail.split_once(": 파일 내용을 비교하지 못했습니다. ") {
+        return Some(render_message(&language.localized("NDR.UI_COMPARE_CONTENT_IO", "{0}: 파일 내용을 비교하지 못했습니다. {1}", "{0}: Could not compare file contents. {1}"), &[path, error]));
+    }
+    for (prefix, key, ko, en) in [
+        ("폴더를 찾을 수 없습니다: ", "NDR.UI_COMPARE_ROOT_NOT_FOUND", "폴더를 찾을 수 없습니다: {0}", "Folder not found: {0}"),
+        ("경로가 루트 폴더를 벗어납니다: ", "NDR.UI_COMPARE_PATH_OUTSIDE_ROOT", "경로가 루트 폴더를 벗어납니다: {0}", "Path is outside its root folder: {0}"),
+        ("재분석 지점(심볼릭 링크 또는 연결 지점)을 통한 파일 작업은 건너뜁니다: ", "NDR.UI_COMPARE_REPARSE_SKIP", "심볼릭 링크 또는 연결 지점을 건너뜁니다: {0}", "Skipped a symbolic link or junction: {0}"),
+        ("Destination folder escaped its root: ", "NDR.UI_COMPARE_DEST_ROOT_OUTSIDE", "대상 폴더가 루트를 벗어납니다: {0}", "Destination folder escaped its root: {0}"),
+        ("A file blocks the required destination folder: ", "NDR.UI_COMPARE_DEST_PARENT_FILE", "파일 때문에 필요한 대상 폴더를 만들 수 없습니다: {0}", "A file blocks the required destination folder: {0}"),
+        ("Synchronization cannot traverse a reparse point: ", "NDR.UI_COMPARE_DEST_REPARSE", "동기화는 재분석 지점을 통과할 수 없습니다: {0}", "Synchronization cannot traverse a reparse point: {0}"),
+        ("Unsafe relative path in comparison result: ", "NDR.UI_COMPARE_UNSAFE_RELATIVE", "비교 결과에 안전하지 않은 상대 경로가 있습니다: {0}", "Unsafe relative path in comparison result: {0}"),
+        ("Source folder is missing: ", "NDR.UI_COMPARE_SOURCE_FOLDER_MISSING", "원본 폴더가 없습니다: {0}", "Source folder is missing: {0}"),
+        ("Destination is a file where a folder is required: ", "NDR.UI_COMPARE_DEST_EXPECTED_FOLDER", "폴더가 필요한 대상에 파일이 있습니다: {0}", "Destination is a file where a folder is required: {0}"),
+        ("Source file is missing: ", "NDR.UI_COMPARE_SOURCE_FILE_MISSING", "원본 파일이 없습니다: {0}", "Source file is missing: {0}"),
+        ("Destination is a folder where a file is required: ", "NDR.UI_COMPARE_DEST_EXPECTED_FILE", "파일이 필요한 대상에 폴더가 있습니다: {0}", "Destination is a folder where a file is required: {0}"),
+    ] {
+        if let Some(path) = detail.strip_prefix(prefix) {
+            return Some(render_message(&language.localized(key, ko, en), &[path]));
+        }
+    }
+    None
 }
 
 /// EnsureNoReparseTraversal: inside the root, and the traversed path (including the destination) has no reparse points.
@@ -739,4 +859,26 @@ mod tests {
         assert_eq!(compare(&left, &right, false, true, &cancel, &mut stop_now).unwrap_err(), "Cancelled");
         fs::remove_dir_all(root).unwrap();
     }
+    #[test]
+    fn comparison_catalog_format_does_not_reparse_paths_or_diagnostics() {
+        assert_eq!(render_message("{1} → {0} · {9}", &["name{1}.txt", "상태"]), "상태 → name{1}.txt · {9}");
+    }
+
+    #[test]
+    fn compare_report_resolves_selected_catalog_and_preserves_raw_details() {
+        let dir = unique(&std::env::temp_dir(), "ndr-compare-catalog");
+        fs::create_dir(&dir).unwrap();
+        std::fs::write(dir.join("de.lang"), "[NDR]\nUI_COMPARE_COLUMN_COPY=Kopieren & <ja>\nUI_COMPARE_ROOT_NOT_FOUND=Ordner fehlt: {0}\nUI_COMPARE_COMPARING_PROGRESS=Dateien vergleichen").unwrap();
+        let pack = crate::compat::Language::load(&dir, "de");
+        assert_eq!(localize_issue("폴더를 찾을 수 없습니다: C:\\\\{0} Ordner", &pack), "Ordner fehlt: C:\\\\{0} Ordner");
+        assert_eq!(localize_issue("OS error 5", &pack), "OS error 5");
+        assert_eq!(localize_issue("sub\\file{1}.txt: 폴더를 찾을 수 없습니다: C:\\\\{0} Ordner", &pack), "sub\\file{1}.txt: Ordner fehlt: C:\\\\{0} Ordner");
+        assert_eq!(localize_issue("sub\\file.txt: OS error 5", &pack), "sub\\file.txt: OS error 5");
+        assert_eq!(CompareProgress::Comparing { completed: 2, total: 4 }.localized_message(&pack), "Dateien vergleichen");
+        let html = report_html_localized("Test", "L", "R", &[], &[], true, Some(&pack), false);
+        assert!(html.contains("<html lang=\"de\">"));
+        assert!(html.contains("<th>Kopieren  &lt;ja&gt;</th>"));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
 }

@@ -17,18 +17,38 @@ pub(super) struct CrumbSegment {
 pub(super) const ADDRESS_BAR_HEIGHT: f32 = 19.0;
 const ADDRESS_BUTTON_WIDTH: f32 = 20.0;
 
-/// Skin conf.ini [List] colors. The fallback used when a key is missing follows the default TColor the original passes to FUN_00463798 (e.g. lback·laback 141414,
-/// latext 646464, lfolderdivider 3C3C3C, ldrivesframe 1A1A1A, lframetree 3C3C3C). Text/background keys whose original default is 0 (black)
-/// (lfileback, lfiletext, lfolderback, menu colors) would make black text on a black background, so they are set to readable values (fixed). The bundled skin set has every key.
+/// The authoring files define component colors; incomplete skins still inherit
+/// NDR's native app palette without getting old product colors.
 pub(super) fn skin_color(skin: &Skin, key: &str, fallback: Color32) -> Color32 {
-    skin.color("List", key).map(|c| Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3])).unwrap_or(fallback)
+    let palette = super::system_commands::theme_palette(skin.theme_name());
+    let color = match key {
+        "ldrivesback" | "laback" | "lfileback" => palette.panel,
+        "lfolderback" | "lback" | "tabback" => palette.app,
+        "ldrivestext" | "lacurr" | "lfiletext" | "lfoldertext" | "tabhot" | "tabactive" => palette.text,
+        "ldriveshot" | "laover" | "lfilesubtext1" | "lfoldersubtext1" | "lselinfotext" | "lframelocal" | "lframenet" | "lframearc" | "lframeftp" => palette.accent,
+        "latext" | "ldisksubtext1" | "tabtext" => palette.muted,
+        "ldrivesframe" | "ladivider" | "lfolderdivider" | "lframeinactive" | "lframetree" => palette.border,
+        "lafocus" => palette.raised,
+        _ => [fallback.r(), fallback.g(), fallback.b()],
+    };
+    skin.color("List", key).map(|c| Color32::from_rgba_unmultiplied(c[0], c[1], c[2], c[3]))
+        .unwrap_or_else(|| Color32::from_rgb(color[0], color[1], color[2]))
 }
 
-/// Skin [Menu] colors (the order original FUN_00463914 reads: mmainback +0x20, mmaintext +0x24, mmainover +0x28, mmainoverback +0x2c,
-/// mback +0x30, mtext +0x34, mborder +0x38, mdisabled +0x3c, mhighlight +0x40, mover +0x44, mrback +0x48, mrtext +0x4c,
-/// mrover +0x50, mdivider +0x54).
 fn menu_color(skin: &Skin, key: &str, fallback: Color32) -> Color32 {
-    skin.color("Menu", key).map(|c| Color32::from_rgb(c[0], c[1], c[2])).unwrap_or(fallback)
+    let palette = super::system_commands::theme_palette(skin.theme_name());
+    let color = match key {
+        "mmainback" => palette.app,
+        "mback" | "mrback" => palette.panel,
+        "mhighlight" | "mmainoverback" => palette.raised,
+        "mmaintext" | "mmainover" | "mtext" | "mover" => palette.text,
+        "mdisabled" | "mrtext" => palette.muted,
+        "mrover" => palette.accent,
+        "mborder" | "mdivider" => palette.border,
+        _ => [fallback.r(), fallback.g(), fallback.b()],
+    };
+    let [r, g, b, _] = skin.color("Menu", key).unwrap_or([color[0], color[1], color[2], 255]);
+    Color32::from_rgb(r, g, b)
 }
 
 /// Original dropdown menu drawing (MenuDrawItem 0x42e518): background mback, text mtext, the selected row uses background mhighlight and text mover, disabled text mdisabled,
@@ -75,26 +95,19 @@ const MENU_STYLE_ID: &str = "ndr-skin-menu-style";
 /// Left padding of the original dropdown menu row (MenuDrawItem: text = row left + 0x10).
 pub(super) const MENU_GUTTER: f32 = 16.0;
 
-/// In the original bitmap CHECK (16×16, check item), the (x, y) of the white dots (the dots recolored to the text color).
-const MENU_CHECK_DOTS: [(u8, u8); 21] = [
-    (10, 4), (9, 5), (10, 5), (4, 6), (8, 6), (9, 6), (10, 6), (4, 7), (5, 7), (7, 7), (8, 7), (9, 7),
-    (4, 8), (5, 8), (6, 8), (7, 8), (8, 8), (5, 9), (6, 9), (7, 9), (6, 10),
-];
-/// White dots of the original bitmap RCHECK (16×16, radio item).
-const MENU_RADIO_DOTS: [(u8, u8); 12] = [(7, 6), (8, 6), (6, 7), (7, 7), (8, 7), (9, 7), (6, 8), (7, 8), (8, 8), (9, 8), (7, 9), (8, 9)];
-
-/// Original MenuDrawItem(0x42e518): a checked item (TMenuItem +0x44) draws CHECK (a radio item +0x49 draws RCHECK) at the row's left, vertically centered in the row.
-/// The white dots take the text color (selected row mover, otherwise mtext; a disabled item is the same color), the rest is transparent. An unchecked row leaves that slot empty.
+/// Paint NDR's own checkmark or filled radio dot in the reserved 16-point gutter.
 pub(super) fn paint_menu_check(ui: &egui::Ui, item: egui::Rect, radio: bool, selected: bool) {
     let color = if selected { ui.visuals().widgets.hovered.fg_stroke.color } else { ui.visuals().widgets.inactive.fg_stroke.color };
-    let origin = egui::pos2(item.left().round(), (item.top() + ((item.height() - 16.0) / 2.0).trunc()).round());
-    let dots: &[(u8, u8)] = if radio { &MENU_RADIO_DOTS } else { &MENU_CHECK_DOTS };
-    // One pixel at a time: drawn as mesh rectangles with no feathering (a 1×1 rect_filled turned into a line and was invisible).
-    let mut mesh = egui::Mesh::default();
-    for &(x, y) in dots {
-        mesh.add_colored_rect(egui::Rect::from_min_size(origin + egui::vec2(x as f32, y as f32), egui::vec2(1.0, 1.0)), color);
+    let origin = egui::pos2(item.left(), item.center().y);
+    if radio {
+        ui.painter().circle_filled(origin + egui::vec2(8.0, 0.0), 2.4, color);
+    } else {
+        let points = [(3.5, -0.3), (6.5, 2.6), (12.3, -3.1)];
+        ui.painter().add(egui::Shape::line(
+            points.map(|(x, y)| origin + egui::vec2(x, y)).to_vec(),
+            egui::Stroke::new(1.8_f32, color),
+        ));
     }
-    ui.painter().add(egui::Shape::mesh(mesh));
 }
 
 /// Check/radio menu item (original TMenuItem Checked·RadioItem): the same button as a normal item, just with the check graphic added.
@@ -796,7 +809,7 @@ impl App {
                 let tint = if response.is_pointer_button_down_on() && response.hovered() { Color32::from_gray(153) } else { Color32::WHITE };
                 painter.image(texture.id(), egui::Rect::from_center_size(slot.center(), size), uv, tint);
             }
-            let tip = if cell == 0 { self.tr("경로 기록", "Path history") } else { self.tr("현재 폴더 새로 고침", "Refresh the current folder") }.into_owned();
+            let tip = if cell == 0 { self.language_pack.text("RES.FUNC_SHOWPATHHISTORY", if self.language.eq_ignore_ascii_case("ko") { "경로 기록" } else { "Path history" }) } else { self.catalog("NDR.UI_PANE_REFRESH_FOLDER", "현재 폴더 새로 고침", "Refresh the current folder") };
             if response.on_hover_text(tip).clicked() {
                 clicked_button = Some((cell, slot.left_bottom()));
             }
@@ -1439,14 +1452,14 @@ impl App {
         }
     }
 
-    /// Original color table base color (TNXFileColorMap.GetBasic): the color table value when present, otherwise the original default (styles::DEFAULT_ELEMENTS).
+    /// Use the configured palette slot, falling back to NDR’s native palette.
     pub(super) fn basic_list_color(&self, key: &str) -> Color32 {
         let (_, nexus) = self.color_maps();
         nexus
             .and_then(|map| map.get(key))
             .and_then(|v| v.as_str())
             .and_then(ndr::styles::parse_color)
-            .or_else(|| ndr::styles::DEFAULT_ELEMENTS.iter().find(|(k, _)| *k == key).and_then(|(_, v)| ndr::styles::parse_color(v)))
+            .or_else(|| ndr::styles::default_element_color(key).and_then(ndr::styles::parse_color))
             .map(|[r, g, b, _]| Color32::from_rgb(r, g, b))
             .unwrap_or(Color32::BLACK)
     }

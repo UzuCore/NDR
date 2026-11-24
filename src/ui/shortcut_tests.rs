@@ -655,7 +655,7 @@ fn drive_items_follow_the_original_list_end() {
     app.active = 0;
     let drives: Vec<bool> = app.panes[0].entries.iter().map(|e| e.drive).collect();
     assert_eq!(drives, [false, false, false, false, true, true], "\"..\", folder1, a.txt, b.txt, then two drives");
-    let summary = super::main_window::summarize(&app.panes[0].entries, true);
+    let summary = super::main_window::summarize(&app.panes[0].entries);
     assert_eq!((summary.folders, summary.files), (1, 2), "drives and \"..\" are not counted");
     assert_eq!(app.panes[0].view.cells[4][0], format!("{} Disk", app.panes[0].entries[4].name));
     press(&mut app, &ctx, egui::Key::End, CTRL);
@@ -876,7 +876,10 @@ fn work_folder_messages_in_english() {
     folders[4] = root.join("missing").to_string_lossy().into_owned();
     app.settings.set_strings("WorkingFolders", folders);
     app.dispatch("workOpen:4", &ctx);
-    assert_eq!(app.msgboxes.first().map(|m| m.text.clone()), Some("Work folder 5 is not set.".to_owned()));
+    let template = app.language_pack.text("formNDRDestination.Message.InvalidWorkFolder", "missing");
+    let expected = template.replace("{0}", "5");
+    assert!(expected.contains("5") && !expected.contains("{0}"));
+    assert_eq!(app.msgboxes.first().map(|m| m.text.as_str()), Some(expected.as_str()));
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -999,16 +1002,17 @@ fn custom_archive_install_shortcut_calls_install_shell_verb() {
 fn menus_have_only_original_commands() {
     let foreign: Vec<&str> = menu_data::MENUS.iter().flat_map(|(_, _, _, items)| items.iter().map(|(id, _, _)| *id)).filter(|id| *id != "-" && App::csharp_only_menu_item(id)).collect();
     assert!(foreign.is_empty(), "{foreign:?}");
-    // ORIGINAL_HIDDEN = every item with Visible=False in the original DFM that is in the NDR menu, none missing.
-    let dfm = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/docs/original-menus.txt")).unwrap();
-    let invisible: Vec<&str> = dfm.lines().filter(|l| l.contains("Visible=False")).filter_map(|l| l.trim().strip_prefix("TMenuItem ")?.split(' ').next()).collect();
-    let menu_ids: Vec<&str> = menu_data::MENUS.iter().flat_map(|(_, _, _, items)| items.iter().map(|(id, _, _)| *id)).collect();
-    let mut from_dfm: Vec<&str> = menu_ids.iter().copied().filter(|id| App::original_menu_name(id).is_some_and(|name| invisible.contains(&name))).collect();
-    from_dfm.sort_unstable();
-    from_dfm.dedup();
-    let mut listed = menu_data::ORIGINAL_HIDDEN.to_vec();
-    listed.sort_unstable();
-    assert_eq!(from_dfm, listed);
+    // Hidden actions remain callable, but do not appear in the standard menu.
+    let mut hidden = menu_data::ORIGINAL_HIDDEN.to_vec();
+    hidden.sort_unstable();
+    assert_eq!(hidden, [
+        "archiveInstall", "archiveMove", "archiveProperties", "diskCopy",
+        "extractNewFolder", "search", "synchronize",
+    ]);
+    for action in hidden {
+        assert!(App::original_menu_name(action).is_some(), "{action} must have a legacy binding ID");
+        assert!(menu_data::MENUS.iter().any(|(_, _, _, items)| items.iter().any(|(id, _, _)| *id == action)));
+    }
 }
 
 /// Original miSkin (FUN_0043e580: one item per skin\ folder) and miLanguage (FUN_00441830, miMoreLanguages at the end).
@@ -1028,7 +1032,9 @@ fn original_skin_and_language_submenus() {
     }
     app.shell_runner = runner;
     app.dispatch("moreLanguages", &ctx);
-    assert_eq!(OPENED.with(|o| o.borrow().clone()), ["https://www.xiles.app/languages/#NexusFile"]);
+    assert!(OPENED.with(|o| o.borrow().is_empty()), "stock language guidance must not open an external URL");
+    assert_eq!(app.status, app.language_pack.text("NDR.UI_MORE_LANGUAGES_HELP", "missing"));
+    assert!(app.status.contains("Tools") && app.status.contains("Language"));
     fs::remove_dir_all(root).unwrap();
 }
 

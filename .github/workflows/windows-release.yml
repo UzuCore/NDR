@@ -63,7 +63,6 @@ jobs:
             'Resources/Tools/7zip/License.txt',
             'Resources/complete.wav',
             'THIRD-PARTY-NOTICES.txt',
-            'docs/original-menus.txt',
             'scripts/package-ci.ps1'
           )
           foreach ($file in $required) {

@@ -12,7 +12,6 @@ impl App {
     }
 
     pub(super) fn dialogs(&mut self, ctx: &egui::Context) {
-        let ko = self.language == "ko";
         // Original FUN_004399b4 = C# RequestArchivePasswordAsync: TfGetText(TITLE_PASSWORD, MSG_PASSWORD, empty text, masked).
         if let Some(request) = self.password_request.take() {
             self.open_password_prompt(request);
@@ -23,6 +22,7 @@ impl App {
         // Result text window (error lists, comparison results, archive properties). Read-only.
         if let Some(document) = &mut self.text {
             let mut close = false;
+            let close_label = self.language_pack.text("formCleanup.Caption.btnClose", "Close");
             egui::Window::new(&document.title)
                 .default_width(900.0)
                 .default_height(580.0)
@@ -35,7 +35,7 @@ impl App {
                             .interactive(false);
                         ui.add(edit);
                     });
-                    if ui.button(if ko { "닫기" } else { "Close" }).clicked() {
+                    if ui.button(&close_label).clicked() {
                         close = true;
                     }
                 });

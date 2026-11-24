@@ -1,0 +1,462 @@
+; NDR language catalog. Untranslated entries use NDR English.
+
+[RES]
+YES=Já(&Y)
+NO=&Nei
+OK=Í lagi(&O)
+CANCEL=Hætta við(&C)
+RETRY=&Reyna aftur
+IGNORE=Hunsa(&I)
+ABORT=&Stöðva
+CONTINUE=Halda áfram(&n)
+TITLE_ERROR=NDR-villa
+TITLE_INFO=NDR-upplýsingar
+FOLDERINFO=Möppur <c000000><b>%d</b></c> · Skrár <c000000><b>%d</b></c> · <b>%s</b>
+DISKINFO_SHORT=<c000000><b>%s</b></c> laust
+DISKINFO_LONG=<c000000><b>%s</b></c> laust af <b>%s</b>
+SELECTED_INFO=Valin: <b>%d</b> · <b>%s</b> bæti
+MSG_COPY_PREPARING=Undirbý afritun…
+MSG_MOVE_PREPARING=Undirbý færslu…
+MSG_DEL_PREPARING=Undirbý eyðingu…
+COPYING=Afrita atriði…
+MOVING=Færi atriði…
+DELETING=Eyði atriðum…
+EXTRACTING=Afþjappa skrám…
+COMPRESSING=Þjappa skrám…
+READONLY=Skrifvarið
+SYSTEM=Kerfi
+HIDDEN=Falið
+FOLDER=Mappa
+FOLDERS=Möppur
+SELECT_FOLDER=Velja möppu
+DROPCOPY_CONFIRM=Afrita þessi %d atriði?
+DROPMOVE_CONFIRM=Færa þessi %d atriði?
+RENAME=Endurnefna
+COPY=Afrita
+MOVE=Færa
+ADDTOARCHIVE=Bæta við safnskrá
+EXTRACT=Afþjappa
+SEARCH=Leita
+STOP=Stöðva
+SEARCHRESULT=Leitarniðurstöður
+SELECTDEST= — Velja áfangastað
+PAUSE=Gera hlé
+RESUME=Halda áfram
+TITLE_FILTER=Skráasía
+NETWORK=Netkerfi
+TITLE_NEWFOLDER=Ný mappa
+MSG_NEWFOLDER=Sláðu inn heiti nýju möppunnar.
+NEWFOLDER=Ný mappa
+MSG_RENAME=Sláðu inn nýtt heiti fyrir merkta atriðið.\n\n<b><c0000FF>%s</c></b> <c666666>(%d af %d)</c>
+TITLE_FILEOPERATION=Skráaraðgerð
+SELDEST_DRIVE=Drif
+SELDEST_WORKFOLDER=Vinnumöppur
+FOLDER_EXISTS=Mappa með þessu heiti er þegar til.
+SRCISDEST=Uppruni og áfangastaður eru þeir sömu.
+MYCOMPUTER=Þessi tölva
+ARCHIVE=Safnskrá
+DISKFREE=Laust
+LOCATION=Staðsetning
+FUNC_OPEN=Opna
+FUNC_COPYTO=Afrita
+FUNC_MOVETO=Færa
+FUNC_DELETE=Eyða
+FUNC_RECYCLEBIN=Færa í ruslakistu
+FUNC_RENAME=Endurnefna
+FUNC_PROPERTIES=Eiginleikar
+FUNC_FAVORITES=Eftirlæti
+FUNC_NEWFOLDER=Ný mappa
+FUNC_REFRESH=Endurlesa
+FUNC_GOTODESKTOP=Skjáborð
+FUNC_GOTODOCUMENTS=Skjöl
+FUNC_GOTOMUSIC=Tónlist
+FUNC_GOTOPICTURES=Myndir
+FUNC_GOTOVIDEOS=Myndskeið
+FUNC_GOTODOWNLOADS=Niðurhal
+FUNC_SELECTALL=Velja allt
+FUNC_ADDTOARCHIVE=Bæta við safnskrá
+FUNC_EXTRACT=Afþjappa
+FUNC_CLOSETAB=Loka flipa
+FUNC_SELECT=Velja
+FUNC_DESELECTALL=Hreinsa val
+FUNC_BACK=Til baka
+FUNC_FORWARD=Áfram
+FUNC_FOLDERTREE=Möpputré
+FUNC_GOTOROOT=Rótarmappa
+FUNC_GOTOPARENT=Yfirmappa
+FUNC_EDITCOPY=Afrita
+FUNC_EDITCUT=Klippa
+FUNC_EDITPASTE=Líma
+FUNC_INVERTSELECTION=Snúa vali við
+FUNC_NEWTAB=Nýr flipi
+TODAY=Í dag
+YESTERDAY=Í gær
+FIELD_NAME=Heiti
+FIELD_EXT=Skráarending
+FIELD_LOCATION=Staðsetning
+FIELD_SIZE=Stærð
+FIELD_DATEMODIFIED=Breytt
+FIELD_ATTR=Eigindi
+FIELD_DESC=Athugasemd
+UPDATE=Uppfærslur
+NAME=Heiti
+ACCESS_DENIED=Aðgangi hafnað
+INVALID_PASSWORD=Rangt lykilorð
+DISKISFULL=Ekki nóg pláss á diski
+CALCULATING=Reikna…
+ERROR=Villa
+
+[formMain]
+ToolButton.tbFile=Skrá(&F)
+ToolButton.tbFolder=Mappa(&o)
+ToolButton.tbEdit=Br&eyta
+ToolButton.tbView=Sýn(&w)
+ToolButton.tbSystem=Kerfi(&S)
+ToolButton.tbArchive=S&afnskrá
+ToolButton.tbConnect=Te&ngjast
+ToolButton.tbTools=Verkfæri(&T)
+ToolButton.tbHelp=&Hjálp
+ToolButton.tbNewUpdateAvailable=NDR-uppfærsla í boði
+Menu.miOpen=&Q. Opna
+Menu.miCopyTo=&C. Afrita í…
+Menu.miMoveTo=&V. Færa í…
+Menu.miDelete=&D. Eyða
+Menu.miRename=&R. Endurnefna
+Menu.miProperties=&E. Eiginleikar
+Menu.miExit=&X. Hætta
+Menu.miFolderTree=&T. Möpputré
+Menu.miFavorites=&V. Eftirlæti
+Menu.miNewFolder=&C. Ný mappa
+Menu.miHistoryBack=&B. Til baka
+Menu.miHistoryForward=&F. Áfram
+Menu.miToParent=&X. Yfirmappa
+Menu.miToRoot=&Z. Rótarmappa
+Menu.miRefresh=&R. Endurlesa
+Menu.miEditCopy=&C. Afrita
+Menu.miEditCut=&X. Klippa
+Menu.miEditPaste=&V. Líma
+Menu.miSelect=&B. Velja
+Menu.miSelectAll=&U. Velja allt
+Menu.miInvertSelection=&I. Snúa vali við
+Menu.miSearchFile=&E. Leita að skrám og möppum…
+Menu.miLanguage=&O. Tungumál
+Menu.miNewTab=&B. Nýr flipi
+Menu.miListStyleAuto=&A. Sjálfvirkt
+Menu.miListStyleDetails=&D. Ítarlegt
+Menu.miListStyleThumbs=&T. Smámyndir
+Menu.miColAuto=&A. Sjálfvirkt
+Menu.miSortByName=&A. Heiti
+Menu.miSortByExt=&E. Skráarending
+Menu.miSortBySize=&S. Stærð
+Menu.miSortByTime=&T. Breytt
+Menu.miSortByAttr=&R. Eigindi
+Menu.miSortByColor=&C. Litur
+Menu.miToDesktop=&D. Skjáborð
+Menu.miToDocuments=&W. Skjöl
+Menu.miToPictures=&P. Myndir
+Menu.miToMusic=&M. Tónlist
+Menu.miToVideos=&V. Myndskeið
+Menu.miToDownloads=&S. Niðurhal
+Menu.miOptions=&O. Stillingar
+Menu.miHelp=&H. Hjálp
+Menu.miShortcut=&S. Flýtilyklar…
+Menu.miHomepage=&W. Verkefnissíða NDR
+Menu.miCheckUpdate=&U. Leita að NDR-uppfærslum…
+Menu.miAbout=&A. Um NDR
+Menu.mipOpenWith=&W. Opna með…
+Menu.mipEditCopy=&C. Afrita
+Menu.mipEditCut=&X. Klippa
+Menu.mipEditPaste=&V. Líma
+Menu.mipCopyTo=&Y. Afrita í…
+Menu.mipMoveTo=&M. Færa í…
+Menu.mipDelete=&D. Eyða
+Menu.mipRename=&R. Endurnefna
+Menu.mipAddToArchive=&A. Bæta við safnskrá
+Menu.mipProperties=&T. Eiginleikar
+Menu.pmiCloseTab=Loka flipa(&C)
+Menu.pmiCloseAllTab=Lok&a öllum flipum
+Menu.pmiNewTab=Nýr flipi(&t)
+Hint.bSelectAll=Velja öll atriði
+Hint.bClearSelection=Hreinsa val
+
+[formFileExists]
+Caption.lMsg=Atriði með þessu heiti er þegar á áfangastað:
+Caption.chkApplyAll=Not&a valið fyrir afganginn
+Caption.btnOverwrite=Yfirskrifa(&w)
+Caption.btnRename=Endu&rnefna
+Caption.btnReplace=Skipta út(&e)
+Caption.btnSkip=&Sleppa
+
+[formGetText]
+Caption.btnOk=Í lagi(&O)
+Caption.btnCancel=Hætta við(&C)
+
+[formDelConfirm]
+Form.Caption=Staðfesta eyðingu
+Caption.btnAll=&Allt
+Caption.btnYes=Já(&Y)
+Caption.btnNo=&Nei
+
+[formDelWarning]
+Caption.btnDelete=Eyða(&D)
+Caption.btnYes=Já(&Y)
+Caption.btnNo=&Nei
+Prompt.Recycle=Færa valin atriði í ruslakistu?
+Prompt.Permanent=Eyða völdum atriðum varanlega?
+
+[formProgress]
+Caption.btnCancel=Hætta við(&C)
+
+[formOrgFavorites]
+Caption.btnCancel=Hætta við(&C)
+Caption.btnSave=Vi&sta
+Caption.btnRename=Endu&rnefna
+Caption.btnUp=Færa &upp
+Caption.btnDown=Færa niður(&w)
+Caption.btnDelete=Eyða(&D)
+
+[formChangeAttr]
+Caption.btnAll=A&llt
+Caption.btnSkip=Sleppa(&k)
+Caption.btnOk=Í lagi
+Caption.btnCancel=Hætta við
+Caption.chkHidden=Falið(&H)
+Caption.chkSystem=Kerfi(&S)
+Caption.chkReadOnly=Sk&rifvarið
+Caption.lDate=&Dagsetning
+Caption.lTime=&Tími
+
+[formSaveList]
+Caption.btnSave=Vista
+Caption.btnCancel=Hætta við
+Caption.chkAttributes=Eigindi(&A)
+Caption.chkDate=&Dagsetning
+Caption.chkDescription=Athugasemd(&n)
+Caption.chkExtension=Skráar&ending
+Caption.chkFileName=Skráarheiti(&F)
+Caption.chkFileSize=&Stærð
+Caption.chkTime=&Tími
+
+[formAddToArchive]
+Caption.btnCancel=Hætta við
+Caption.btnOk=Í lagi
+Caption.lPassword=Lykilorð(&P)
+Caption.lSecFormat=Snið
+
+[formFileSplit]
+Caption.btnOk=Í lagi
+Caption.btnCancel=Hætta við
+
+[formFileJoin]
+Caption.btnAdd=Bæt&a við
+Caption.btnCancel=Hætta við
+Caption.btnOk=Í lagi
+Caption.btnDelete=Eyða(&D)
+Caption.btnDown=Færa niður(&w)
+Caption.btnUp=Færa &upp
+
+[formCompareFolder]
+Caption.btnCancel=Hætta við
+Caption.btnOk=Í lagi
+Caption.btnSave=Vista
+Caption.btnStop=Stöðva
+
+[formShortcut]
+Form.Caption=Flýtilyklar
+
+[formEditShortCut]
+Caption.btnOk=Í lagi
+Caption.btnCancel=Hætta við
+Caption.btnRemove=Fjarlægja
+
+[formCleanup]
+Caption.btnClose=Loka
+Caption.btnOk=Í lagi
+Caption.chkRecycleBin=&Ruslakista
+Caption.btnAdd=Bæt&a við
+Caption.btnDelete=Eyða(&D)
+Caption.btnSearch=Leita(&S)
+
+[formSelectDest]
+Form.Caption=Velja áfangastað
+Caption.btnCancel=Hætta við
+Caption.btnOk=Í lagi
+Caption.btnTree=Skoða möppur(&f)
+
+[formTreeScan]
+Caption.btnCancel=Hætta við
+
+[formSearchFolder]
+Caption.btnSearch=Leita
+
+[formFTPQuickConnect]
+Caption.btnCancel=Hætta við
+Caption.chkPassive=Nota óvirkan ham(&s)
+Caption.lPassword=Lykilorð(&w)
+Caption.lPort=Gátt(&P)
+Caption.lURL=Vistfang þjóns(&d)
+Caption.lUser=Notandanafn(&U)
+
+[formPassword]
+Caption.btnOk=Í lagi
+Caption.btnCancel=Hætta við
+Caption.lUser=Notandanafn
+Caption.lPassword=Lykilorð
+
+[formFTPSiteManager]
+Caption.btnAdd=Bæt&a við
+Caption.btnCancel=Hætta við
+Caption.btnDelete=Eyða(&D)
+Caption.btnOk=Í lagi
+Caption.chkPassive=Nota ó&virkan ham
+Caption.lName=Heiti(&N)
+Caption.lPassword=Lykilorð(&w)
+Caption.lPort=Gátt(&P)
+Caption.lUser=Notandanafn(&U)
+
+[formFolderTree]
+Form.Caption=Skoða möppur
+Caption.btnCancel=Hætta við
+Caption.btnOk=Í lagi
+ToolButton.tbFolder=Mappa(&e)
+ToolButton.tbFavorites=Eftirlæti(&v)
+ToolButton.tbSearch=Leita
+Hint.tbDesktop=Skjáborð
+Hint.tbMyDoc=Skjöl
+Hint.tbMyPic=Myndir
+Hint.tbMyMusic=Tónlist
+Hint.tbMyVideo=Myndskeið
+Menu.miFolder=Mappa(&e)
+Menu.miDelete=&D. Eyða
+Menu.miRename=&R. Endurnefna
+Menu.miCreateNewFolder=&F. Ný mappa
+Menu.miProperties=&E. Eiginleikar
+Menu.miClose=&C. Loka
+
+[formPreferences]
+Caption.btnApply=Virkj&a
+Caption.btnOk=Í lagi(&O)
+Caption.btnCancel=Hætta við
+TabSheet.tsColor=Litir
+TabSheet.tsTree=Möpputré
+TabSheet.tsEtc=Annað
+Caption.lMyDocuments=Skjöl
+Caption.lMyMusic=Tónlist
+Caption.lMyPictures=Myndir
+Caption.lMyVideos=Myndskeið
+Caption.lPathDownloads=Niðurhal
+
+[formAdvRename]
+Caption.btnCancel=Hætta við
+Caption.btnUp=Færa upp
+Caption.btnDown=Færa niður
+Caption.rbApplyToExt=Skráarending
+TabSheet.tsDelete=Fjarlægja
+TabSheet.tsExtension=Skráarending
+
+[formEditFunction]
+Caption.btnCancel=Hætta við
+Caption.btnOk=Í lagi
+Caption.lName=Heiti
+
+[formFTPAttributes]
+Caption.btnCancel=Hætta við
+Caption.btnOk=Í lagi
+Caption.btnAll=Allt
+Caption.btnSkip=Sleppa
+Caption.chkGExecute=Keyra(&x)
+Caption.chkURead=L&esa
+Caption.chkUExecute=Keyra(&c)
+
+[formRename]
+Caption.btnOK=Í lagi
+Caption.btnCancel=Hætta við
+
+[formChecksum]
+Caption.btnCopy=Afrita(&C)
+
+[formNDRSearch]
+Caption.lName=Skráarheiti
+Caption.chkFiles=Skrár
+Caption.chkFolders=Möppur
+Caption.CategoryDocuments=Skjöl
+Caption.btnMoveUp=Færa upp
+Caption.btnMoveDown=Færa niður
+Caption.btnRemove=Fjarlægja
+Caption.btnAdd=Bæta við
+Status.Results=Leitarniðurstöður
+
+[formNDRDestination]
+Button.Cancel=Hætta við
+
+[NDRUpdate]
+Title=NDR-uppfærsla
+FeedHttpsRequired=Uppfærsluveitan verður að nota HTTPS.
+InvalidDownloadUrl=Uppfærsluveitan inniheldur ekki gilda HTTPS-niðurhalsslóð.
+NewVersionAvailable=Útgáfa {0} er í boði. Núverandi útgáfa er {1}.
+OpenDownloadPage=Opna niðurhalssíðuna?
+CurrentLatest=NDR er uppfært. ({0})
+RequestFailed=Ekki náðist samband við uppfærsluþjóninn. Athugaðu tenginguna og uppfærsluveituna.
+RequestFailedStatus=Uppfærsluþjónninn skilaði HTTP-stöðukóða {0}.
+RequestTimedOut=Uppfærsluþjónninn svaraði ekki innan 15 sekúndna.
+
+[NDRSearch]
+Documents=Skjöl
+
+[NDRVault]
+Password=Lykilorð
+OK=Í lagi
+Cancel=Hætta við
+NewFolderTitle=Ný mappa
+RenameTitle=Endurnefna
+ProgressCancel=Hætta við
+
+[NDR]
+OP_ARCHIVE_REPLACE_ARCHIVE=Skipta út safnskrá
+OP_JOIN_EXISTS=Skrá með þessu heiti er þegar til. Engar skrár voru sameinaðar.\n{0}
+OP_TRANSFER_CANCEL=Hætta við
+OP_TRANSFER_CANCELLED=Hætt var við aðgerðina ({0}). Atriði sem þegar voru unnin héldust óbreytt.
+OP_TRANSFER_COPY_DONE=Afritun lokið
+OP_TRANSFER_DELETE_DONE=Eyðingu lokið
+OP_TRANSFER_MOVE_DONE=Færslu lokið
+OP_TRANSFER_OPERATION_FAILED=Aðgerðin mistókst
+OP_TRANSFER_PARTIAL=Aðgerð lokið að hluta
+OP_TRANSFER_PARTIAL_DETAIL={0} lokið · {1} villur · {2} sleppt
+OP_TRANSFER_PREPARING_THE_OPERATION=Undirbý aðgerð…
+OP_TRANSFER_SIZE_UNAVAILABLE=Stærð ekki tiltæk
+OP_TRANSFER_VERB_COPY=afrita
+OP_TRANSFER_VERB_MOVE=færa
+OP_TRANSFER_VERB_PASTE=líma
+UI_STARTUP_FAILED=Ræsing mistókst. Opnaðu NDR aftur.
+UI_STARTUP_LOADING=Undirbý möppur og stillingar…
+UPD_CLOSE=Loka
+UPD_CONFIRM=Sækja og setja upp uppfærsluna og endurræsa síðan NDR?\nStillingarnar þínar haldast óbreyttar.
+UPD_CURRENT_BUILD=Uppsett útgáfa: {0}
+UPD_DOWNLOAD_ACTIVE=Sæki NDR {0}…
+UPD_ERROR_DETAILS=Tæknilegar upplýsingar
+UPD_FAILED=Uppfærsla mistókst.
+UPD_INSTALLER_START=Ræsi uppsetningarforritið…
+UPD_INSTALL_CHECKING=Athuga uppsetningarpakkann…
+UPD_INSTALL_CLOSING=Athuga hvort NDR sé lokað…
+UPD_INSTALL_EXTRACTING=Undirbý uppsetningarskrár…
+UPD_INSTALL_FAILURE=Uppfærsla mistókst. Sjá update.log fyrir nánari upplýsingar.
+UPD_INSTALL_FAILURE_TITLE=Villa við NDR-uppfærslu
+UPD_INSTALL_FINISHED=Uppsetningu lokið. Endurræsi NDR…
+UPD_INSTALL_HEADING=Set upp NDR-uppfærslu
+UPD_INSTALL_TITLE=NDR-uppfærsla
+UPD_INSTALL_WAITING=Bíð eftir að NDR lokist…
+UPD_INSTALL_WRITING=Set upp NDR-skrárnar…
+UPD_LOCAL_BUILD=Staðbundin útgáfa
+UPD_NEW_BUILD=Ný útgáfa: {0}
+UPD_NONE=Engin nýrri uppfærsla er í boði.
+UPD_PREPARING=Undirbý pakkann…
+UPD_RELEASE_FAILURE=Ekki tókst að staðfesta útgáfuna á GitHub.
+UPD_RESTART_NOTE=NDR endurræsist sjálfkrafa. Stillingarnar þínar haldast óbreyttar.
+UPD_STARTING=Niðurhali og heilleikaprófun lokið. Uppsetning hefst.
+UPD_STEP_DOWNLOAD=Niðurhal
+UPD_STEP_INSTALL=Setja upp og endurræsa
+UPD_STEP_PREPARE=Undirbúningur
+UPD_STEP_VERIFY=Heilleiki
+UPD_TITLE=NDR-uppfærsla
+UPD_VERIFIED_INIT=Set upp staðfestu uppfærsluna á öruggan hátt.
+UPD_VERIFY_HASH=Staðfesti SHA-256…

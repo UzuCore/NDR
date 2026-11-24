@@ -426,16 +426,49 @@ pub struct ToolbarConfig {
     pub warning: Option<String>,
 }
 
-pub fn load_toolbar(profile_dir: &Path, default_xml: &[u8]) -> Result<ToolbarConfig, String> {
+/// Built-in actions are native; XML is only for customized profiles.
+pub fn default_toolbar() -> ToolbarConfig {
+    let button = |action: &str, icon: &str, align_right| ToolbarItem {
+        kind: ToolbarKind::Command,
+        action: action.into(),
+        icon: icon.into(),
+        caption: String::new(),
+        align_right,
+        width: 1.0,
+        children: Vec::new(),
+    };
+    let divider = || ToolbarItem {
+        kind: ToolbarKind::Separator,
+        ..button("", "", false)
+    };
+    ToolbarConfig {
+        items: vec![
+            button("historyBack", "tb_back.png", false),
+            button("historyForward", "tb_forward.png", false),
+            divider(),
+            button("desktop", "tb_desktop.png", false),
+            button("documents", "tb_documents.png", false),
+            button("pictures", "tb_pictures.png", false),
+            button("music", "tb_music.png", false),
+            button("videos", "tb_videos.png", false),
+            button("favorites", "tb_favorites.png", false),
+            divider(),
+            button("deleteToolbar", "tb_recyclebin.png", true),
+        ],
+        warning: None,
+    }
+}
+
+pub fn load_toolbar(profile_dir: &Path) -> ToolbarConfig {
     let path = profile_dir.join("toolbar.xml");
     match fs::read(&path).and_then(|bytes| parse_toolbar(&bytes).map_err(std::io::Error::other)) {
-        Ok(config) => Ok(config),
+        Ok(config) => config,
         Err(error) => {
-            let mut fallback = parse_toolbar(default_xml)?;
+            let mut fallback = default_toolbar();
             if error.kind() != std::io::ErrorKind::NotFound {
                 fallback.warning = Some(format!("{}: {error}", path.display()));
             }
-            Ok(fallback)
+            fallback
         }
     }
 }

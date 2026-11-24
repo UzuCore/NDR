@@ -9,6 +9,11 @@ use ndr::tools::{SearchCategory, SearchCriteria, SearchTimeKind};
 
 const MAXIMUM_PATTERN_HISTORY: usize = 20;
 
+fn search_text(language: &compat::Language, key: &str, en: &str, ko: &str) -> String {
+    let fallback = if language.code.eq_ignore_ascii_case("ko") { ko } else { en };
+    language.text(&format!("formNDRSearch.{key}"), fallback)
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct SearchForm {
     pub root: String,
@@ -167,12 +172,12 @@ impl SearchForm {
 
     /// Check order and texts of Commit (locations -> missing locations -> files/folders -> size -> date). On success the search criteria.
     /// `connect`: C# connectNetworkShare (an error number for UNC, the connect window result on credential failure). Cancelling the connect window (1223) is Err("") = do nothing.
-    pub(super) fn criteria(&mut self, ko: bool, connect: &dyn Fn(&str) -> u32) -> Result<SearchCriteria, String> {
+    pub(super) fn criteria(&mut self, language: &compat::Language, connect: &dyn Fn(&str) -> u32) -> Result<SearchCriteria, String> {
         if self.locations.is_empty() {
             let _ = self.add_location(&self.root.clone());
         }
         if self.locations.is_empty() {
-            return Err(if ko { "검색할 위치를 하나 이상 추가하세요." } else { "Add at least one search location." }.into());
+            return Err(search_text(language, "Message.NoRoots", "Add at least one search location.", "검색할 위치를 하나 이상 추가하세요."));
         }
         let mut missing: Vec<String> = Vec::new();
         for path in &self.locations {
@@ -193,24 +198,24 @@ impl SearchForm {
             missing.push(path.clone());
         }
         if !missing.is_empty() {
-            let head = if ko { "다음 검색 위치를 찾을 수 없습니다. 목록에서 제거하거나 다시 선택하세요." } else { "These search locations cannot be found. Remove them or choose them again." };
+            let head = search_text(language, "Message.StaleRoots", "These search locations cannot be found. Remove them or choose them again.", "다음 검색 위치를 찾을 수 없습니다. 목록에서 제거하거나 다시 선택하세요.");
             return Err(format!("{head}\n{}", missing.join("\r\n")));
         }
         if !self.files && !self.folders {
-            return Err(if ko { "파일 또는 폴더를 하나 이상 선택하세요." } else { "Select files, folders or both." }.into());
+            return Err(search_text(language, "Message.NoFileOrFolder", "Select files, folders or both.", "파일 또는 폴더를 하나 이상 선택하세요."));
         }
         let sizes = (size(&self.minimum, self.minimum_unit), size(&self.maximum, self.maximum_unit));
         let (Ok(minimum), Ok(maximum)) = sizes else {
-            return Err(if ko { "크기는 0 이상의 숫자로 입력하고 최소 크기는 최대 크기보다 작아야 합니다." } else { "Enter sizes of 0 or more; the minimum must not exceed the maximum." }.into());
+            return Err(search_text(language, "Message.InvalidSize", "Enter sizes of 0 or more; the minimum must not exceed the maximum.", "크기는 0 이상의 숫자로 입력하고 최소 크기는 최대 크기보다 작아야 합니다."));
         };
         if minimum.zip(maximum).is_some_and(|(a, b)| a > b) {
-            return Err(if ko { "크기는 0 이상의 숫자로 입력하고 최소 크기는 최대 크기보다 작아야 합니다." } else { "Enter sizes of 0 or more; the minimum must not exceed the maximum." }.into());
+            return Err(search_text(language, "Message.InvalidSize", "Enter sizes of 0 or more; the minimum must not exceed the maximum.", "크기는 0 이상의 숫자로 입력하고 최소 크기는 최대 크기보다 작아야 합니다."));
         }
         let dates = (date_time(&self.date_from, &self.time_from, false), date_time(&self.date_to, &self.time_to, true));
-        let date_error = if ko { "날짜를 선택하고 시각은 HH:mm 또는 HH:mm:ss 형식으로 입력하세요. 시작은 끝보다 늦을 수 없습니다." } else { "Pick dates and enter times as HH:mm or HH:mm:ss. The start cannot be later than the end." };
-        let (Ok(date_from), Ok(date_to)) = dates else { return Err(date_error.into()) };
+        let date_error = || search_text(language, "Message.InvalidDateTime", "Pick dates and enter times as HH:mm or HH:mm:ss. The start cannot be later than the end.", "날짜를 선택하고 시각은 HH:mm 또는 HH:mm:ss 형식으로 입력하세요. 시작은 끝보다 늦을 수 없습니다.");
+        let (Ok(date_from), Ok(date_to)) = dates else { return Err(date_error()) };
         if date_from.zip(date_to).is_some_and(|(a, b)| a > b) {
-            return Err(date_error.into());
+            return Err(date_error());
         }
         let name_patterns = if self.patterns.trim().is_empty() { "*".to_owned() } else { self.patterns.trim().to_owned() };
         let mut history = vec![name_patterns.clone()];
@@ -241,32 +246,30 @@ impl SearchForm {
 }
 
 /// Draws the window.
-pub(super) fn search_ui(ui: &mut egui::Ui, form: &mut SearchForm, language: &compat::Language, ko: bool, enter: bool) -> Option<SearchAction> {
-    // C# LanguageService.TranslateControls: looks up the (Korean) window text in ko.lang and uses that key's text in the current language ([formNDRSearch] etc.). Otherwise as is.
-    let _ = ko;
-    let t = |ko_text: &str, en: &str| language.translate_pair(ko_text, en);
+pub(super) fn search_ui(ui: &mut egui::Ui, form: &mut SearchForm, language: &compat::Language, _ko: bool, enter: bool) -> Option<SearchAction> {
+    let t = |key, en, ko| search_text(language, key, en, ko);
     let mut action = None;
     ui.set_width(750.0);
     egui::Grid::new("search-form").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
-        ui.label(t("검색 위치", "Search in"));
+        ui.label(t("Caption.lRoot", "Search in", "검색 위치"));
         ui.vertical(|ui| {
             ui.horizontal(|ui| {
                 ui.add(egui::TextEdit::singleline(&mut form.root).desired_width(400.0));
-                if ui.button(t("찾아보기…", "Browse…")).clicked() {
+                if ui.button(t("Caption.btnBrowse", "Browse…", "찾아보기…")).clicked() {
                     action = Some(SearchAction::Browse);
                 }
-                if ui.button(t("추가", "Add")).clicked() {
+                if ui.button(t("Caption.btnAdd", "Add", "추가")).clicked() {
                     action = Some(SearchAction::Add);
                 }
             });
             let presets = [
-                language.text("NDRSearch.AllLocalDrives", &t("모든 로컬 드라이브", "All local drives")),
+                language.text("NDRSearch.AllLocalDrives", "All local drives"),
                 language.text("NDRSearch.DriveC", "C:"),
                 language.text("NDRSearch.DriveD", "D:"),
                 language.text("NDRSearch.DriveE", "E:"),
                 language.text("NDRSearch.DriveF", "F:"),
                 language.text("NDRSearch.Documents", "Documents"),
-                language.text("NDRSearch.Custom2", &t("사용자지정2", "Custom 2")),
+                language.text("NDRSearch.Custom2", "Custom 2"),
             ];
             egui::ComboBox::from_id_salt("search-presets").width(300.0).selected_text("").show_opaque(ui, |ui| {
                 for (index, label) in presets.iter().enumerate() {
@@ -284,7 +287,7 @@ pub(super) fn search_ui(ui: &mut egui::Ui, form: &mut SearchForm, language: &com
                 }
             });
             ui.horizontal(|ui| {
-                for (label, value) in [(t("위로", "Up"), SearchAction::Up), (t("아래로", "Down"), SearchAction::Down), (t("제거", "Remove"), SearchAction::Remove), (t("위치 저장", "Save locations"), SearchAction::SaveLocations)] {
+                for (label, value) in [(t("Caption.btnMoveUp", "Up", "위로"), SearchAction::Up), (t("Caption.btnMoveDown", "Down", "아래로"), SearchAction::Down), (t("Caption.btnRemove", "Remove", "제거"), SearchAction::Remove), (t("Caption.btnSaveLocations", "Save locations", "위치 저장"), SearchAction::SaveLocations)] {
                     if ui.button(label).clicked() {
                         action = Some(value);
                     }
@@ -292,7 +295,7 @@ pub(super) fn search_ui(ui: &mut egui::Ui, form: &mut SearchForm, language: &com
             });
         });
         ui.end_row();
-        ui.label(t("파일 이름", "File name"));
+        ui.label(t("Caption.lName", "File name", "파일 이름"));
         ui.horizontal(|ui| {
             ui.add(egui::TextEdit::singleline(&mut form.patterns).desired_width(400.0));
             if !form.history.is_empty() {
@@ -307,73 +310,89 @@ pub(super) fn search_ui(ui: &mut egui::Ui, form: &mut SearchForm, language: &com
             }
         });
         ui.end_row();
-        ui.label(t("범주", "Category"));
-        let categories = if ko { ["모든 파일", "문서", "사진 및 이미지", "오디오", "동영상", "압축 파일", "프로그램 파일", "폴더만", "기타 파일"] } else { ["All files", "Documents", "Pictures and images", "Audio", "Video", "Archives", "Programs", "Folders only", "Other files"] };
-        egui::ComboBox::from_id_salt("search-category").width(180.0).selected_text(categories[form.category.min(8)]).show_opaque(ui, |ui| {
+        ui.label(t("Caption.lCategory", "Category", "범주"));
+        let categories = [
+            ("Caption.CategoryAll", "All files", "모든 파일"),
+            ("Caption.CategoryDocuments", "Documents", "문서"),
+            ("Caption.CategoryPictures", "Pictures and images", "사진 및 이미지"),
+            ("Caption.CategoryAudio", "Audio", "오디오"),
+            ("Caption.CategoryVideo", "Video", "동영상"),
+            ("Caption.CategoryArchives", "Archives", "압축 파일"),
+            ("Caption.CategoryApplications", "Programs", "프로그램 파일"),
+            ("Caption.CategoryFolders", "Folders only", "폴더만"),
+            ("Caption.CategoryOther", "Other files", "기타 파일"),
+        ].map(|(key, en, ko)| t(key, en, ko));
+        egui::ComboBox::from_id_salt("search-category").width(180.0).selected_text(&categories[form.category.min(8)]).show_opaque(ui, |ui| {
             for (index, label) in categories.iter().enumerate() {
-                ui.selectable_value(&mut form.category, index, *label);
+                ui.selectable_value(&mut form.category, index, label);
             }
         });
         ui.end_row();
-        ui.label(t("확장자", "Extensions"));
-        ui.add(egui::TextEdit::singleline(&mut form.extensions).desired_width(430.0)).on_hover_text(t("예: TXT; DOC; *.PDF (비우면 모든 확장자)", "e.g. TXT; DOC; *.PDF (empty: every extension)"));
+        ui.label(t("Caption.lExtension", "Extensions", "확장자"));
+        ui.add(egui::TextEdit::singleline(&mut form.extensions).desired_width(430.0)).on_hover_text(t("Hint.extension", "e.g. TXT; DOC; *.PDF (empty: every extension)", "예: TXT; DOC; *.PDF (비우면 모든 확장자)"));
         ui.end_row();
-        ui.label(t("파일 내용 포함", "Containing text"));
+        ui.label(t("Caption.lContent", "Containing text", "파일 내용 포함"));
         ui.add(egui::TextEdit::singleline(&mut form.content).desired_width(430.0));
         ui.end_row();
-        ui.label(t("크기 범위", "Size range"));
+        ui.label(t("Caption.lSize", "Size range", "크기 범위"));
         ui.horizontal(|ui| {
-            let units = ["bytes", "KiB", "MiB", "GiB"];
+            let bytes = language.text("NDR.UI_SIZE_BYTES", "bytes");
+            let units = [bytes.as_str(), "KiB", "MiB", "GiB"];
             ui.add(egui::TextEdit::singleline(&mut form.minimum).desired_width(78.0));
             egui::ComboBox::from_id_salt("search-min-unit").width(70.0).selected_text(units[form.minimum_unit]).show_opaque(ui, |ui| {
                 for (index, unit) in units.iter().enumerate() {
                     ui.selectable_value(&mut form.minimum_unit, index, *unit);
                 }
             });
-            ui.label(format!("  {}   ~   ", t("최소", "minimum")));
+            ui.label(format!("  {}   ~   ", t("Caption.btnMinimum", "minimum", "최소")));
             ui.add(egui::TextEdit::singleline(&mut form.maximum).desired_width(78.0));
             egui::ComboBox::from_id_salt("search-max-unit").width(70.0).selected_text(units[form.maximum_unit]).show_opaque(ui, |ui| {
                 for (index, unit) in units.iter().enumerate() {
                     ui.selectable_value(&mut form.maximum_unit, index, *unit);
                 }
             });
-            ui.label(t("최대", "maximum"));
+            ui.label(t("Caption.btnMaximum", "maximum", "최대"));
         });
         ui.end_row();
-        ui.label(t("날짜/시간 범위", "Date/time range"));
+        ui.label(t("Caption.lDateRange", "Date/time range", "날짜/시간 범위"));
         ui.horizontal(|ui| {
             ui.add(egui::TextEdit::singleline(&mut form.date_from).desired_width(100.0).hint_text("yyyy-MM-dd"));
             ui.add(egui::TextEdit::singleline(&mut form.time_from).desired_width(70.0).hint_text("HH:mm"));
-            ui.label(format!("{}   ~   ", t("부터", "from")));
+            ui.label(format!("{}   ~   ", t("Caption.btnFrom", "from", "부터")));
             ui.add(egui::TextEdit::singleline(&mut form.date_to).desired_width(100.0).hint_text("yyyy-MM-dd"));
             ui.add(egui::TextEdit::singleline(&mut form.time_to).desired_width(70.0).hint_text("HH:mm"));
-            ui.label(t("까지", "to"));
+            ui.label(t("Caption.btnTo", "to", "까지"));
         });
         ui.end_row();
-        ui.label(t("날짜 기준", "Date kind"));
-        let kinds = if ko { ["모든날짜", "수정한 날짜", "만든 날짜", "마지막 액세스 날짜"] } else { ["Any date", "Date modified", "Date created", "Date accessed"] };
-        egui::ComboBox::from_id_salt("search-time-kind").width(180.0).selected_text(kinds[form.time_kind.min(3)]).show_opaque(ui, |ui| {
+        ui.label(t("Caption.lDateKind", "Date kind", "날짜 기준"));
+        let kinds = [
+            ("Caption.TimeAll", "Any date", "모든 날짜"),
+            ("Caption.TimeModified", "Date modified", "수정한 날짜"),
+            ("Caption.TimeCreated", "Date created", "만든 날짜"),
+            ("Caption.TimeAccessed", "Date accessed", "마지막 액세스 날짜"),
+        ].map(|(key, en, ko)| t(key, en, ko));
+        egui::ComboBox::from_id_salt("search-time-kind").width(180.0).selected_text(&kinds[form.time_kind.min(3)]).show_opaque(ui, |ui| {
             for (index, label) in kinds.iter().enumerate() {
-                ui.selectable_value(&mut form.time_kind, index, *label);
+                ui.selectable_value(&mut form.time_kind, index, label);
             }
         });
         ui.end_row();
-        ui.label(t("검색 옵션", "Options"));
+        ui.label(t("Caption.lOptions", "Options", "검색 옵션"));
         ui.horizontal_wrapped(|ui| {
-            ui.checkbox(&mut form.recursive, t("하위 폴더 포함", "Include subfolders"));
-            ui.checkbox(&mut form.hidden, t("숨김·시스템 항목 포함", "Include hidden and system items"));
-            ui.checkbox(&mut form.files, t("파일", "Files"));
-            ui.checkbox(&mut form.folders, t("폴더", "Folders"));
-            ui.checkbox(&mut form.match_case, t("대소문자 구분", "Match case"));
+            ui.checkbox(&mut form.recursive, t("Caption.chkRecursive", "Include subfolders", "하위 폴더 포함"));
+            ui.checkbox(&mut form.hidden, t("Caption.chkHidden", "Include hidden and system items", "숨김·시스템 항목 포함"));
+            ui.checkbox(&mut form.files, t("Caption.chkFiles", "Files", "파일"));
+            ui.checkbox(&mut form.folders, t("Caption.chkFolders", "Folders", "폴더"));
+            ui.checkbox(&mut form.match_case, t("Caption.chkMatchCase", "Match case", "대소문자 구분"));
         });
         ui.end_row();
     });
     ui.add_space(12.0);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
-        if ui.add_sized([82.0, 26.0], egui::Button::new(t("취소", "Cancel"))).clicked() {
+        if ui.add_sized([82.0, 26.0], egui::Button::new(language.text("RES.CANCEL", "Cancel"))).clicked() {
             action = Some(SearchAction::Cancel);
         }
-        if ui.add_sized([90.0, 26.0], egui::Button::new(t("검색", "Search"))).clicked() {
+        if ui.add_sized([90.0, 26.0], egui::Button::new(language.text("RES.SEARCH", "Search"))).clicked() {
             action = Some(SearchAction::Search);
         }
     });
@@ -385,7 +404,7 @@ pub(super) fn search_ui(ui: &mut egui::Ui, form: &mut SearchForm, language: &com
 
 impl App {
     fn search_title(&self) -> String {
-        self.tr("파일 및 폴더 검색", "Search Files and Folders").into_owned()
+        search_text(&self.language_pack, "Form.Caption", "Search Files and Folders", "파일 및 폴더 검색")
     }
 
     fn search_form(&mut self) -> Option<&mut SearchForm> {
@@ -399,7 +418,8 @@ impl App {
     pub(super) fn search_command(&mut self) {
         let i = self.active;
         if self.panes[i].archive.is_some() {
-            return self.notice("압축 파일 안에서는 이름 검색을 사용할 수 없습니다.", "Name search is not available inside an archive.");
+            let text = search_text(&self.language_pack, "Message.SearchUnavailableInArchive", "Name search is not available inside an archive.", "압축 파일 안에서는 이름 검색을 사용할 수 없습니다.");
+            return self.notice_operation(&text);
         }
         let path = self.command_directory(i).to_string_lossy().into_owned();
         let custom2 = self.settings.strings("WorkingFolders").get(1).cloned().filter(|p| !p.trim().is_empty());
@@ -407,13 +427,13 @@ impl App {
         let title = self.search_title();
         self.push_original_dialog(title, DialogKind::Search(Box::new(form)), move |app, result, _| {
             let DialogResult::Search(Some(criteria)) = result else { return };
-            app.status = app.tr("파일 및 폴더 검색 중…", "Searching files and folders…").into_owned();
+            app.status = search_text(&app.language_pack, "Status.Searching", "Searching files and folders…", "파일 및 폴더 검색 중…");
             let tx = app.async_tx.clone();
             let root = criteria.roots[0].clone();
             let modal = ModalProgress {
-                stop: app.tr("취소", "Cancel").into_owned(),
+                stop: app.language_pack.text("RES.CANCEL", "Cancel"),
                 stopping: None,
-                stopping_text: app.tr("검색을 취소하고 있습니다…", "Canceling the search…").into_owned(),
+                stopping_text: search_text(&app.language_pack, "Progress.Canceling", "Canceling the search…", "검색을 취소하고 있습니다…"),
                 kind: ModalKind::Search,
             };
             let title = app.search_progress_title(&criteria.roots);
@@ -436,10 +456,10 @@ impl App {
                 distinct.push(text);
             }
         }
-        let searching = self.tr("검색 중", "Searching");
+        let searching = search_text(&self.language_pack, "Progress.Searching", "Searching", "검색 중");
         if distinct.len() > 1 {
             let count = ndr::parity::format_size(distinct.len() as u64, "B", true).trim_end_matches(" B").to_owned();
-            return format!("{searching} · {count} {}", self.tr("개 위치", "locations"));
+            return format!("{searching} · {count} {}", search_text(&self.language_pack, "Progress.LocationCount", "locations", "개 위치"));
         }
         let root = distinct.first().map(String::as_str).unwrap_or("");
         let trimmed = if root.len() > 3 { root.trim_end_matches(['\\', '/']) } else { root };
@@ -452,14 +472,15 @@ impl App {
         let ko = self.language == "ko";
         let title = self.search_title();
         let warn = |app: &mut App, text: &str| app.system_box(&title, text, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
+        let missing_folder = search_text(&self.language_pack, "Message.MissingFolder", "The folder to add does not exist.", "추가할 폴더가 존재하지 않습니다.");
         match action {
             SearchAction::Cancel => self.answer_dialog(DialogResult::Search(None), ctx),
             SearchAction::Search => {
                 let connect_share = self.system.connect_share;
                 let path_error = self.system.network_path_error;
                 let connect = move |path: &str| network_share_code(path, path_error, connect_share);
-                let Some(form) = self.search_form() else { return };
-                match form.criteria(ko, &connect) {
+                let Some(DialogKind::Search(form)) = self.original_dialogs.last_mut().map(|dialog| &mut dialog.kind) else { return };
+                match form.criteria(&self.language_pack, &connect) {
                     Ok(criteria) => {
                         let history = form.history.clone();
                         self.settings.set_strings("SavedSearchPatterns", history);
@@ -471,13 +492,13 @@ impl App {
                 }
             }
             SearchAction::Browse => {
-                let picker_title = self.tr("검색 위치 선택", "Choose a search location").into_owned();
+                let picker_title = search_text(&self.language_pack, "Dialog.TitleLocation", "Choose a search location", "검색 위치 선택");
                 let folder_picker = self.folder_picker;
                 let Some(form) = self.search_form() else { return };
                 let initial = Path::new(&form.root).is_dir().then(|| PathBuf::from(&form.root));
                 if let Some(folder) = folder_picker(&picker_title, initial.as_deref()) {
                     if form.add_location(&folder.to_string_lossy()).is_err() {
-                        warn(self, if ko { "추가할 폴더가 존재하지 않습니다." } else { "The folder to add does not exist." });
+                        warn(self, &missing_folder);
                     }
                 }
             }
@@ -485,7 +506,7 @@ impl App {
                 let Some(form) = self.search_form() else { return };
                 let root = form.root.clone();
                 if form.add_location(&root).is_err() {
-                    warn(self, if ko { "추가할 폴더가 존재하지 않습니다." } else { "The folder to add does not exist." });
+                    warn(self, &missing_folder);
                 }
             }
             SearchAction::Preset(index) => {
@@ -505,7 +526,7 @@ impl App {
                     },
                 };
                 if outcome.is_err() {
-                    warn(self, if ko { "추가할 폴더가 존재하지 않습니다." } else { "The folder to add does not exist." });
+                    warn(self, &missing_folder);
                 }
             }
             SearchAction::Up | SearchAction::Down => {
@@ -531,7 +552,7 @@ impl App {
                 let locations = form.locations.clone();
                 self.settings.set_strings("SavedSearchLocations", locations);
                 self.save();
-                let text = self.tr("검색 위치 목록을 저장했습니다.", "The search locations were saved.").into_owned();
+                let text = search_text(&self.language_pack, "Message.LocationsSaved", "The search locations were saved.", "검색 위치 목록을 저장했습니다.");
                 self.system_box(&title, &text, MB_OK | MB_ICONASTERISK, |_, _, _| {});
             }
         }
@@ -541,12 +562,12 @@ impl App {
     pub(super) fn search_done(&mut self, pane: usize, root: PathBuf, outcome: Result<Vec<Entry>, String>, cancelled: bool) {
         let results = match outcome {
             Err(_) if cancelled => {
-                self.status = self.tr("검색을 취소했습니다.", "Search canceled.").into_owned();
+                self.status = search_text(&self.language_pack, "Status.Cancelled", "Search canceled.", "검색을 취소했습니다.");
                 return;
             }
             Err(error) => {
                 // SearchProgressWindow.Run: MessageBox(error, "search", OK, Warning).
-                let title = self.tr("검색", "Search").into_owned();
+                let title = self.language_pack.text("RES.SEARCH", "Search");
                 return self.system_box(&title, &error, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
             }
             Ok(results) => results,

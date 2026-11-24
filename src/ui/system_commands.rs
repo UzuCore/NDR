@@ -8,7 +8,7 @@ use ndr::msgbox::{MB_ICONASTERISK, MB_ICONEXCLAMATION, MB_OK};
 /// Original skins (skin\ folder names): black, classic.
 pub(super) const THEMES: [&str; 2] = ["Black", "Classic"];
 
-/// Color table of C# ApplyTheme (when there is no skin). (app background, pane background, raised cell, border, text, faint text, accent).
+/// NDR base palette used where the skin does not paint. (app background, pane background, raised cell, border, text, faint text, accent).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct ThemePalette {
     pub app: [u8; 3],
@@ -44,8 +44,8 @@ impl ThemePalette {
 /// egui base colors per skin (places the skin does not paint, such as dialogs). Unknown names are black.
 pub(super) fn theme_palette(theme: &str) -> ThemePalette {
     match theme {
-        "Classic" => ThemePalette { app: [0xDE, 0xDE, 0xDE], panel: [0xF0, 0xF0, 0xF0], raised: [0xFF, 0xFF, 0xFF], border: [0xAA, 0xAA, 0xAA], text: [0, 0, 0], muted: [0x66, 0x66, 0x66], accent: [0x17, 0x69, 0xAA] },
-        _ => ThemePalette { app: [0, 0, 0], panel: [0, 0, 0], raised: [0x20, 0x20, 0x20], border: [0x30, 0x30, 0x30], text: [0xC0, 0xC0, 0xC0], muted: [0x85, 0x85, 0x85], accent: [0x4C, 0x82, 0xDC] },
+        "Classic" => ThemePalette { app: [0xE1, 0xE9, 0xF3], panel: [0xED, 0xF2, 0xF8], raised: [0xF8, 0xFB, 0xFE], border: [0xA9, 0xB9, 0xCB], text: [0x25, 0x35, 0x4A], muted: [0x44, 0x5D, 0x74], accent: [0x15, 0x5B, 0x85] },
+        _ => ThemePalette { app: [0x20, 0x29, 0x33], panel: [0x16, 0x1C, 0x23], raised: [0x2D, 0x39, 0x46], border: [0x4B, 0x5B, 0x6C], text: [0xD4, 0xDE, 0xE8], muted: [0xA5, 0xB6, 0xC8], accent: [0x8F, 0xE5, 0xD2] },
     }
 }
 
@@ -274,9 +274,12 @@ impl App {
         if !failures.is_empty() {
             let mut details = failures.iter().take(10).cloned().collect::<Vec<_>>().join("\r\n");
             if failures.len() > 10 {
-                details.push_str(&format!("\r\n…and {} more.", failures.len() - 10));
+                let more = self.catalog("NDR.UI_OPEN_SELECTED_MORE", "…외 %d개.", "…and %d more.");
+                details.push_str("\r\n");
+                details.push_str(&ndr::markup::substitute(&more, &[&(failures.len() - 10).to_string()]));
             }
-            self.system_box("Open selected files", &details, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
+            let title = self.catalog("NDR.UI_OPEN_SELECTED_TITLE", "선택한 파일 열기", "Open selected files");
+            self.system_box(&title, &details, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
         }
     }
 
@@ -284,17 +287,14 @@ impl App {
     pub(super) fn shortcut_command(&mut self) {
         let i = self.active;
         if self.panes[i].archive.is_some() {
-            return self.warn("압축 파일 안의 항목은 바로 가기로 만들 수 없습니다.", "Items inside an archive cannot be turned into shortcuts.");
+            return self.warn_operation(&self.catalog("NDR.UI_PAIR_EF84C1F650A1D817", "압축 파일 안의 항목은 바로 가기로 만들 수 없습니다.", "Items inside an archive cannot be turned into shortcuts."));
         }
         let items = self.target_entries(i);
         if items.is_empty() {
             return;
         }
         let Some(folder) = (self.system.shortcut_folder)() else {
-            return self.warn(
-                "바탕화면 폴더를 찾을 수 없습니다.",
-                "The shortcut destination folder could not be found.",
-            );
+            return self.warn_operation(&self.catalog("NDR.UI_PAIR_8E4D083EA93AAFB2", "바탕화면 폴더를 찾을 수 없습니다.", "The shortcut destination folder could not be found."));
         };
         let mut succeeded = 0usize;
         let mut failures = Vec::new();
@@ -305,21 +305,21 @@ impl App {
             }
         }
         if !failures.is_empty() {
-            self.warning_notice("바탕화면 바로가기 일부 실패", "Some desktop shortcuts failed",
-                format!("{succeeded} succeeded · {} failed", failures.len()));
-            let detail = failures.iter().take(8).cloned().collect::<Vec<_>>().join("\n");
-            let message = format!(
-                "바로가기 생성: 성공 {succeeded}개, 실패 {}개\n저장 위치: {}\n{detail}",
-                failures.len(), folder.display()
+            self.warning_notice_operation(
+                self.catalog("NDR.OP_SHORTCUTS_PARTIAL", "바탕화면 바로가기 일부 실패", "Some desktop shortcuts failed"),
+                super::file_commands::operation_format(&self.language_pack, "NDR.OP_SHORTCUTS_PARTIAL_COUNTS", "{0} succeeded · {1} failed", &[&succeeded, &failures.len()]),
             );
+            let detail = failures.iter().take(8).cloned().collect::<Vec<_>>().join("\n");
+            let message = super::file_commands::operation_format(&self.language_pack, "NDR.OP_SHORTCUTS_PARTIAL_DETAILS", "Shortcuts: {0} succeeded, {1} failed\nDestination: {2}\n{3}", &[&succeeded, &failures.len(), &folder.display(), &detail]);
             self.system_box("NDR", &message, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
             // On failure do not lose the marked selection: users may retry.
             return;
         }
         self.panes[i].selected.clear();
-        self.completion_notice("바탕화면 바로가기 생성 완료", "Desktop shortcuts created",
-            if self.language == "ko" { format!("바로가기 {succeeded}개 생성") }
-            else { format!("{succeeded} shortcut(s) created") });
+        self.completion_notice_operation(
+            self.catalog("NDR.OP_SHORTCUTS_DONE", "바탕화면 바로가기 생성 완료", "Desktop shortcuts created"),
+            super::file_commands::operation_format(&self.language_pack, "NDR.OP_SHORTCUTS_DONE_COUNT", "{0} shortcut(s) created", &[&succeeded]),
+        );
     }
 
     /// C# PasteShortcutAsync (original miPasteAsShortcutClick 0x4340d4): on a local pane with an existing current folder, creates "name.ext.lnk" in clipboard file list
@@ -427,8 +427,10 @@ impl App {
 
     /// Saves the language and applies it at once (end of C# SelectLanguageAsync, original language menu FUN_0044193c).
     pub(super) fn apply_language(&mut self, code: &str) {
-        self.settings.set_text("Language", code);
-        self.language = code.to_owned();
+        let language = compat::Language::load(&self.resources.join("Languages"), code);
+        self.settings.set_text("Language", &language.code);
+        self.language = language.code.clone();
+        self.language_pack = language;
         self.save();
     }
 
@@ -480,13 +482,16 @@ impl App {
 
     /// C# ShowAbout: "NDR {version}\nWindows 10/11 · 64-bit\nUser settings: {profile}", caption "About NDR", information icon.
     pub(super) fn about_command(&mut self) {
+        let build = ndr::update::build_label(ndr::update::current_build())
+            .unwrap_or_else(|| self.catalog("NDR.UPD_LOCAL_BUILD", "로컬 빌드", "Local build"));
         let text = format!(
-            "NDR {}\nWindows 10/11 · 64-bit\n{}: {}",
+            "NDR {build}\n{}: {}\nWindows 10/11 · 64-bit\n{}: {}",
+            self.catalog("NDR.UI_ABOUT_APP_VERSION", "앱 버전", "App version"),
             env!("CARGO_PKG_VERSION"),
-            self.tr("사용자 설정", "User settings"),
+            self.catalog("NDR.UI_ABOUT_SETTINGS_LOCATION", "사용자 설정", "User settings"),
             self.profile.display()
         );
-        let caption = self.tr("NDR 정보", "About NDR").into_owned();
+        let caption = self.catalog("NDR.UI_ABOUT_TITLE", "NDR 정보", "About NDR");
         self.system_box(&caption, &text, MB_OK | MB_ICONASTERISK, |_, _, _| {});
     }
 }
@@ -533,10 +538,10 @@ mod tests {
 
     #[test]
     fn skin_palettes() {
-        assert_eq!(theme_palette("Classic").app, [0xDE, 0xDE, 0xDE]);
+        assert_eq!(theme_palette("Classic").app, [0xE1, 0xE9, 0xF3]);
         assert_eq!(theme_palette("Gray"), theme_palette("Black"));
         assert!(theme_palette("Gray").dark());
-        assert_eq!(theme_palette("Black").text, [0xC0, 0xC0, 0xC0]);
+        assert_eq!(theme_palette("Black").text, [0xD4, 0xDE, 0xE8]);
         assert!(theme_palette("Black").dark());
         // Unknown names are black.
         assert_eq!(theme_palette("Dark"), theme_palette("Black"));

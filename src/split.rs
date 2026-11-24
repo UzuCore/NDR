@@ -1,5 +1,6 @@
 //! File split and join of C# FileSystemService (SplitFile, WriteSplitMetadata, FindNumberedParts, HasContinuousNumberedParts,
 //! SuggestJoinedFileName, JoinOrderedFiles) and SplitFileWindow.TryParseSize / SelectDefaultSplitSize.
+use crate::operation_diagnostic::OperationDiagnostic as Diag;
 use crate::names;
 use std::{
     fs::{self, File, OpenOptions},
@@ -98,15 +99,19 @@ pub fn split_prefix(destination: &Path, file_name: &str) -> PathBuf {
 /// C# SplitFile: makes nothing when the source is at most the piece size. Fails before writing if any piece to create ("{prefix}.001"...) already exists
 /// (approved fix). Pieces are written under temp names then moved; on failure created pieces are deleted. Progress is (pieces done, bytes written).
 pub fn split_file(path: &Path, part_size: u64, destination: &Path, cancel: &AtomicBool, progress: &mut dyn FnMut(u64, u64, &Path)) -> Result<SplitResult, String> {
+    split_file_with_locale(path, part_size, destination, cancel, progress, None)
+}
+
+pub fn split_file_with_locale(path: &Path, part_size: u64, destination: &Path, cancel: &AtomicBool, progress: &mut dyn FnMut(u64, u64, &Path), language: Option<&crate::compat::Language>) -> Result<SplitResult, String> {
     if part_size == 0 {
-        return Err("Part size must be greater than zero".into());
+        return Err(Diag::SplitSize.render(language));
     }
     let source = std::path::absolute(path).map_err(|e| e.to_string())?;
     let destination = std::path::absolute(destination).map_err(|e| e.to_string())?;
     if !destination.is_dir() {
-        return Err(format!("Split destination folder does not exist: {}", destination.display()));
+        return Err(Diag::SplitDestination(&destination).render(language));
     }
-    let file_name = source.file_name().ok_or("Missing file name")?.to_string_lossy().into_owned();
+    let file_name = source.file_name().ok_or_else(|| Diag::SplitName.render(language))?.to_string_lossy().into_owned();
     let prefix = split_prefix(&destination, &file_name).to_string_lossy().into_owned();
     let mut input = File::open(&source).map_err(|e| e.to_string())?;
     let length = input.metadata().map_err(|e| e.to_string())?.len();
@@ -117,7 +122,7 @@ pub fn split_file(path: &Path, part_size: u64, destination: &Path, cancel: &Atom
     for number in 1..=count {
         let planned = format!("{prefix}.{number:03}");
         if Path::new(&planned).exists() {
-            return Err(format!("A split output part with this file name already exists: {planned}"));
+            return Err(Diag::SplitCollision(&planned).render(language));
         }
     }
     let mut created: Vec<PathBuf> = Vec::new();
@@ -137,7 +142,7 @@ pub fn split_file(path: &Path, part_size: u64, destination: &Path, cancel: &Atom
                     let want = remaining.min(BUFFER as u64) as usize;
                     let read = input.read(&mut buffer[..want]).map_err(|e| e.to_string())?;
                     if read == 0 {
-                        return Err("The source file changed while it was being split.".to_string());
+                        return Err(Diag::SplitChanged.render(language));
                     }
                     target.write_all(&buffer[..read]).map_err(|e| e.to_string())?;
                     hasher.update(&buffer[..read]);
@@ -402,18 +407,22 @@ fn read_lines(text: &str) -> Vec<&str> {
 /// SaveToFile with the last encoding, or TEncoding.Unicode when some file was not the default and the last one is. Fixed: FUN_0046541c gives
 /// FF FE and FE FF the same encoding (FUN_00523990, little-endian Unicode), so a big-endian file comes out garbled; NDR decodes it as UTF-16BE.
 pub fn join_ordered_files(inputs: &[PathBuf], output: &Path, join_text: bool, allow_overwrite: bool, cancel: &AtomicBool, progress: &mut dyn FnMut(u64, u64, &Path)) -> Result<PathBuf, String> {
+    join_ordered_files_with_locale(inputs, output, join_text, allow_overwrite, cancel, progress, None)
+}
+
+pub fn join_ordered_files_with_locale(inputs: &[PathBuf], output: &Path, join_text: bool, allow_overwrite: bool, cancel: &AtomicBool, progress: &mut dyn FnMut(u64, u64, &Path), language: Option<&crate::compat::Language>) -> Result<PathBuf, String> {
     if inputs.is_empty() {
-        return Err("합칠 입력 파일이 없습니다.".into());
+        return Err(language.map_or_else(|| "합칠 입력 파일이 없습니다.".to_owned(), |pack| Diag::JoinNoInput.render(Some(pack))));
     }
     let sources: Vec<PathBuf> = inputs.iter().map(|p| std::path::absolute(p).unwrap_or_else(|_| p.clone())).collect();
     if sources.iter().any(|p| !p.is_file()) {
-        return Err("입력 파일을 찾을 수 없습니다.".into());
+        return Err(language.map_or_else(|| "입력 파일을 찾을 수 없습니다.".to_owned(), |pack| Diag::JoinMissingInput.render(Some(pack))));
     }
     let destination = std::path::absolute(output).map_err(|e| e.to_string())?;
     if sources.iter().any(|p| names::equals_ignore_case(&p.to_string_lossy(), &destination.to_string_lossy())) {
-        return Err("입력 파일을 결과 파일로 덮어쓸 수 없습니다.".into());
+        return Err(language.map_or_else(|| "입력 파일을 결과 파일로 덮어쓸 수 없습니다.".to_owned(), |pack| Diag::JoinOverwriteInput.render(Some(pack))));
     }
-    let directory = destination.parent().filter(|d| d.is_dir()).ok_or("결과 폴더를 찾을 수 없습니다.")?.to_path_buf();
+    let directory = destination.parent().filter(|d| d.is_dir()).ok_or_else(|| language.map_or_else(|| "결과 폴더를 찾을 수 없습니다.".to_owned(), |pack| Diag::JoinMissingDirectory.render(Some(pack))))?.to_path_buf();
     let kinds = if join_text { Some(sources.iter().map(|s| inspect_text(s)).collect::<Result<Vec<_>, _>>()?) } else { None };
     let file_name = destination.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let temporary = directory.join(format!(".{file_name}.{}.tmp", temporary_suffix()));
