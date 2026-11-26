@@ -442,10 +442,11 @@ fn main_window_frame_info_bars_tabs_and_address_follow_csharp() {
     }
     assert_eq!(app.file_icon(&ctx, 0, row).map(|t| t.size()), Some([3, 3]));
     app.settings.set_flag("UseOverlayIcons", false);
-    // Info bar: original FOLDERINFO (folders, files, StrFormatByteSizeW size); extensions by most frequent.
+    // Info bar: original FOLDERINFO (folders, files, size); the byte unit below 1 KiB follows the selected UI language, not the Windows locale.
     let [folder, file, extension] = app.info_texts(0);
     let bytes: u64 = app.panes[0].entries.iter().filter(|e| !e.is_dir).map(|e| e.size).sum();
-    let counts = format!("폴더 <c000000><b>1</b></c>개 · 파일 <c000000><b>3</b></c>개 · <b>{}</b>", native::format_byte_size(bytes));
+    assert_eq!(bytes, 7);
+    let counts = format!("폴더 <c000000><b>1</b></c>개 · 파일 <c000000><b>3</b></c>개 · <b>{bytes}바이트</b>");
     assert_eq!(folder, counts, "no disk text in tests (disk_info hook)");
     let cursor = app.panes[0].entries[app.panes[0].cursor].clone();
     // Original FUN_0048a5cc: the focused item "size  |  date  |  attributes  |  name" (a folder with unknown size shows FOLDER).
