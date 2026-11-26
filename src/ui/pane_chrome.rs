@@ -717,51 +717,129 @@ impl App {
         chosen
     }
 
-    /// C# QueueFolderSizeCalculation: with Left/RightAutoFolderSize (C# only, default off) on a local folder row, counts the size separately (up to two at once).
-    /// Shows "..." while counting and the size when done ("≥ size" when some parts were unreadable). Stops when a new list arrives.
+    /// Count only visible folder rows, never during an active file operation.
     pub(super) fn queue_folder_size(&mut self, index: usize, row: usize) {
-        // Fixed: original alwaysshowsize ("always show file size", Left/RightAlwaysShowFolderSize) only keeps a size cell in the Auto list (UpdateDisplayAuto 0x390),
-        // but like the C# version it used that value to count every folder size. Automatic folder size counting is now separate.
         if !self.settings.flag(if index == 0 { "LeftAutoFolderSize" } else { "RightAutoFolderSize" }, false) {
             return;
         }
-        self.enqueue_folder_size(index, row);
+        let pane = &self.panes[index];
+        if !pane.entries.get(row).is_some_and(|e| e.is_dir && !e.drive && !e.is_parent() && !pane.folder_sizes.contains_key(&e.path)) {
+            return;
+        }
+        self.sync_folder_size_activity();
+        if !self.folder_auto_busy {
+            self.enqueue_folder_size_job(index, row, true);
+        }
+    }
+
+    pub(super) fn clear_automatic_folder_sizes(&mut self, index: usize) {
+        let pane = &mut self.panes[index];
+        pane.folder_auto_cancel.store(true, Ordering::Relaxed);
+        pane.folder_auto_cancel = Arc::new(AtomicBool::new(false));
+        for path in pane.folder_auto_paths.drain() {
+            pane.folder_sizes.remove(&path);
+            pane.folder_bytes.remove(&path);
+        }
+        pane.folder_auto_volume = None;
+        if self.folder_size_workers {
+            let (queue, _) = &*self.folder_size_queue;
+            queue.lock().unwrap_or_else(|e| e.into_inner()).retain(|j| !j.cancel.load(Ordering::Relaxed));
+        }
+    }
+
+    pub(super) fn sync_folder_size_activity(&mut self) {
+        let busy = self.job.as_ref().is_some_and(|j| !j.finished)
+            || self.background_jobs.iter().any(|j| !j.finished)
+            || self.vault_transfer.is_some()
+            || self.disk_copy_active();
+        if busy && !self.folder_auto_busy {
+            // A scan interrupted by a write could otherwise combine sizes
+            // measured before and after the write. Restart it when idle.
+            self.clear_automatic_folder_sizes(0);
+            self.clear_automatic_folder_sizes(1);
+            self.folder_size_cache.clear();
+        }
+        self.folder_auto_busy = busy;
+    }
+
+    pub(super) fn cache_folder_size(&mut self, path: PathBuf, bytes: u64) {
+        const MAX_CACHED: usize = 256;
+        self.folder_size_cache.retain(|_, (_, time)| time.elapsed() < Duration::from_secs(15));
+        if self.folder_size_cache.len() >= MAX_CACHED && !self.folder_size_cache.contains_key(&path) {
+            if let Some(oldest) = self.folder_size_cache.iter().min_by_key(|(_, (_, time))| *time).map(|(path, _)| path.clone()) {
+                self.folder_size_cache.remove(&oldest);
+            }
+        }
+        self.folder_size_cache.insert(path, (bytes, Instant::now()));
     }
 
     /// Counts a folder row's size separately (shared by the automatic display and the original miCalculateSelectedFolderSizeClick).
     pub(super) fn enqueue_folder_size(&mut self, index: usize, row: usize) {
+        self.enqueue_folder_size_job(index, row, false);
+    }
+
+    fn enqueue_folder_size_job(&mut self, index: usize, row: usize, automatic: bool) {
         let can_use_filesystem = self.vault_has_filesystem(index);
         let pane = &mut self.panes[index];
-        if !can_use_filesystem || pane.archive.is_some() || pane.remote.is_some() {
+        if !can_use_filesystem || pane.loading || pane.archive.is_some() || pane.remote.is_some() {
             return;
         }
         let Some(entry) = pane.entries.get(row).filter(|e| e.is_dir && !e.drive && !e.is_parent()) else { return };
-        if entry.path.is_file() && entry.path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("ndr")) {
-            return; // The encrypted container is already a file on disk.
-        }
         if pane.folder_sizes.contains_key(&entry.path) {
             return;
         }
+        if entry.path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("ndr")) && entry.path.is_file() {
+            return; // The encrypted container is already a file on disk.
+        }
+        if automatic {
+            // No automatic enumeration of encrypted virtual folders,
+            // reparse points, UNC shares, or mapped network drives.
+            if pane.vault.is_some() || entry.attributes & 0x400 != 0 {
+                return;
+            }
+            let local = *pane.folder_auto_volume.get_or_insert_with(|| native::folder_size_local_volume(&pane.path));
+            if !local {
+                return;
+            }
+            if let Some(&(bytes, time)) = self.folder_size_cache.get(&entry.path) {
+                if time.elapsed() < Duration::from_secs(15) {
+                    let text = ndr::parity::size_to_str(bytes, &self.settings.text("SizeUnit", "Auto"), self.settings.flag("UseThousandsSeparator", true));
+                    pane.folder_auto_paths.insert(entry.path.clone());
+                    pane.folder_bytes.insert(entry.path.clone(), bytes);
+                    pane.folder_sizes.insert(entry.path.clone(), Some(text));
+                    return;
+                }
+            }
+        }
+        let (queue, signal) = &*self.folder_size_queue;
+        let mut jobs = queue.lock().unwrap_or_else(|e| e.into_inner());
+        // At most 48 waiting jobs plus one running scan. A fast scroll
+        // cannot create an unbounded backlog of expensive I/O.
+        if automatic && jobs.len() >= 48 {
+            return;
+        }
         pane.folder_sizes.insert(entry.path.clone(), None);
+        if automatic {
+            pane.folder_auto_paths.insert(entry.path.clone());
+        }
         let job = FolderSizeJob {
             pane: index,
             generation: pane.generation,
             path: entry.path.clone(),
-            cancel: pane.folder_cancel.clone(),
+            cancel: if automatic { pane.folder_auto_cancel.clone() } else { pane.folder_cancel.clone() },
+            automatic,
             unit: self.settings.text("SizeUnit", "Auto"),
             thousands: self.settings.flag("UseThousandsSeparator", true),
         };
-        let (queue, signal) = &*self.folder_size_queue;
-        queue.lock().unwrap_or_else(|e| e.into_inner()).push_back(job);
+        if automatic { jobs.push_back(job); } else { jobs.push_front(job); }
+        drop(jobs);
         signal.notify_one();
         if !self.folder_size_workers {
             self.folder_size_workers = true;
-            // C# _folderSizeSemaphore = new(2, 2).
-            for _ in 0..2 {
-                let shared = self.folder_size_queue.clone();
-                let tx = self.async_tx.clone();
-                thread::spawn(move || folder_size_worker(shared, tx));
-            }
+            let shared = self.folder_size_queue.clone();
+            let tx = self.async_tx.clone();
+            let ctx = self.egui_ctx.clone();
+            thread::spawn(move || folder_size_worker(shared, tx, ctx));
         }
     }
 }
@@ -771,13 +849,19 @@ pub(super) struct FolderSizeJob {
     generation: u64,
     path: PathBuf,
     cancel: Arc<AtomicBool>,
+    automatic: bool,
     unit: String,
     thousands: bool,
 }
 
 pub(super) type FolderSizeQueue = Arc<(Mutex<std::collections::VecDeque<FolderSizeJob>>, std::sync::Condvar)>;
 
-fn folder_size_worker(shared: FolderSizeQueue, tx: Sender<AsyncResult>) {
+fn folder_size_worker(shared: FolderSizeQueue, tx: Sender<AsyncResult>, ctx: egui::Context) {
+    // Keep interactive foreground I/O responsive even while a scan is active.
+    unsafe {
+        use windows_sys::Win32::System::Threading::{GetCurrentThread, SetThreadPriority, THREAD_MODE_BACKGROUND_BEGIN};
+        SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN as i32);
+    }
     let (queue, signal) = &*shared;
     loop {
         let job = {
@@ -786,18 +870,26 @@ fn folder_size_worker(shared: FolderSizeQueue, tx: Sender<AsyncResult>) {
                 if let Some(job) = jobs.pop_front() {
                     break job;
                 }
-                jobs = signal.wait(jobs).unwrap_or_else(|e| e.into_inner());
+                // Do not leave an idle worker alive after its app was dropped.
+                if Arc::strong_count(&shared) == 1 {
+                    return;
+                }
+                jobs = signal.wait_timeout(jobs, Duration::from_millis(500)).unwrap_or_else(|e| e.into_inner()).0;
             }
         };
         if job.cancel.load(Ordering::Relaxed) {
             continue;
         }
         let Some(summary) = ndr::tools::folder_size_summary(std::slice::from_ref(&job.path), &job.cancel) else { continue };
+        if job.cancel.load(Ordering::Relaxed) {
+            continue;
+        }
         // Original DrawListItem: folder sizes (+0x60 != -1) are drawn with SizeToStr too.
         let size = ndr::parity::size_to_str(summary.total_bytes, &job.unit, job.thousands);
         let text = if summary.errors.is_empty() { size } else { format!("≥ {size}") };
-        if tx.send(AsyncResult::FolderSizeRow { pane: job.pane, generation: job.generation, path: job.path, text, bytes: summary.total_bytes }).is_err() {
+        if tx.send(AsyncResult::FolderSizeRow { pane: job.pane, generation: job.generation, path: job.path, text, bytes: summary.total_bytes, automatic: job.automatic, complete: summary.errors.is_empty(), cancel: job.cancel }).is_err() {
             return;
         }
+        ctx.request_repaint();
     }
 }

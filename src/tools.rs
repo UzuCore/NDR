@@ -297,13 +297,30 @@ fn inventory(root: &Path, cancel: &AtomicBool) -> Result<BTreeMap<PathBuf, (bool
     Ok(result)
 }
 fn equal_bytes(a: &Path, b: &Path, cancel: &AtomicBool) -> Result<bool, String> {
+    let mut buffers = CompareBuffers::default();
+    equal_bytes_reusing(a, b, cancel, &mut buffers)
+}
+
+/// A directory comparison can inspect thousands of files. Allocate its
+/// streaming buffers only on the first content comparison, and keep them
+/// local to the operation rather than zeroing 2 MiB for every file pair.
+#[derive(Default)]
+struct CompareBuffers {
+    left: Vec<u8>,
+    right: Vec<u8>,
+}
+
+fn equal_bytes_reusing(a: &Path, b: &Path, cancel: &AtomicBool, buffers: &mut CompareBuffers) -> Result<bool, String> {
     let mut a = open_read(a)?;
     let mut b = open_read(b)?;
-    let mut x = vec![0; 1024 * 1024];
-    let mut y = vec![0; 1024 * 1024];
+    if buffers.left.is_empty() {
+        buffers.left.resize(1024 * 1024, 0);
+        buffers.right.resize(1024 * 1024, 0);
+    }
+    let (x, y) = (&mut buffers.left, &mut buffers.right);
     loop {
         check_cancel(cancel)?;
-        let an = a.read(&mut x).map_err(|e| e.to_string())?;
+        let an = a.read(x).map_err(|e| e.to_string())?;
         let mut bn = 0;
         while bn < an {
             let n = b.read(&mut y[bn..an]).map_err(|e| e.to_string())?;
@@ -330,13 +347,14 @@ pub fn compare(
     let a = inventory(left, cancel)?;
     let b = inventory(right, cancel)?;
     let mut differences = Vec::new();
+    let mut buffers = CompareBuffers::default();
     for (k, (dir, size)) in &a {
         check_cancel(cancel)?;
         let reason = match b.get(k) {
             None => Some("left-only"),
             Some((d, _)) if d != dir => Some("type"),
             Some((_, s)) if !dir && s != size => Some("size"),
-            Some(_) if !dir && content && !equal_bytes(&left.join(k), &right.join(k), cancel)? => {
+            Some(_) if !dir && content && !equal_bytes_reusing(&left.join(k), &right.join(k), cancel, &mut buffers)? => {
                 Some("content")
             }
             _ => None,
@@ -420,6 +438,12 @@ pub fn folder_size_summary(roots: &[PathBuf], cancel: &AtomicBool) -> Option<Fol
             };
             let mut children = Vec::new();
             for entry in entries {
+                // A single huge directory can contain millions of files.
+                // Navigation and foreground file operations must cancel
+                // automatic enumeration without waiting for that whole folder.
+                if check_cancel(cancel).is_err() {
+                    return None;
+                }
                 let entry = match entry {
                     Ok(entry) => entry,
                     Err(e) => {
@@ -427,11 +451,10 @@ pub fn folder_size_summary(roots: &[PathBuf], cancel: &AtomicBool) -> Option<Fol
                         break;
                     }
                 };
-                let path = entry.path();
                 let metadata = match entry.metadata() {
                     Ok(m) => m,
                     Err(e) => {
-                        error(&mut summary, &path, e.to_string());
+                        error(&mut summary, &entry.path(), e.to_string());
                         continue;
                     }
                 };
@@ -441,7 +464,7 @@ pub fn folder_size_summary(roots: &[PathBuf], cancel: &AtomicBool) -> Option<Fol
                 }
                 if attributes & DIRECTORY != 0 {
                     summary.folders += 1;
-                    children.push(path);
+                    children.push(entry.path());
                 } else {
                     summary.total_bytes += metadata.len();
                     summary.files += 1;
@@ -1092,6 +1115,60 @@ mod tests {
             1
         );
         fs::remove_dir_all(p).unwrap();
+    }
+    #[test]
+    fn reused_compare_buffers_preserve_boundary_eof_and_cancellation() {
+        let root=fixture();
+        let a=root.join("a");let b=root.join("b");
+        let cancel=AtomicBool::new(false);
+        let mut buffers=CompareBuffers::default();
+        let mut payload=vec![0x6bu8;2*1024*1024+7];
+        fs::write(&a,&payload).unwrap();fs::write(&b,&payload).unwrap();
+        assert!(equal_bytes_reusing(&a,&b,&cancel,&mut buffers).unwrap());
+        let ptrs=(buffers.left.as_ptr(),buffers.right.as_ptr());
+        payload[1024*1024]=0x7a;
+        fs::write(&b,&payload).unwrap();
+        assert!(!equal_bytes_reusing(&a,&b,&cancel,&mut buffers).unwrap());
+        fs::write(&a,[]).unwrap();fs::write(&b,[]).unwrap();
+        assert!(equal_bytes_reusing(&a,&b,&cancel,&mut buffers).unwrap());
+        fs::write(&b,[1]).unwrap();
+        assert!(!equal_bytes_reusing(&a,&b,&cancel,&mut buffers).unwrap());
+        fs::write(&a,[1,2]).unwrap();
+        assert!(!equal_bytes_reusing(&a,&b,&cancel,&mut buffers).unwrap());
+        assert!(equal_bytes_reusing(&a,&b,&AtomicBool::new(true),&mut buffers).is_err());
+        assert_eq!(ptrs,(buffers.left.as_ptr(),buffers.right.as_ptr()));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[ignore = "explicit Release benchmark with real files"]
+    fn benchmark_reused_compare_buffers() {
+        let root=fixture();let a=root.join("left");let b=root.join("right");
+        fs::create_dir_all(&a).unwrap();fs::create_dir_all(&b).unwrap();
+        let pairs: Vec<_>=(0..1000).map(|i|{
+            let (l,r)=(a.join(format!("file{i}")),b.join(format!("file{i}")));
+            fs::write(&l,format!("sample-{i}")).unwrap();
+            fs::write(&r,format!("sample-{}",if i%17==0{i+1}else{i})).unwrap();
+            (l,r)
+        }).collect();
+        let cancel=AtomicBool::new(false);let(mut old,mut new)=(Vec::new(),Vec::new());
+        for i in 0..9 {
+            let before=||{
+                let t=std::time::Instant::now();
+                let r: Vec<_>=pairs.iter().map(|(a,b)|equal_bytes(a,b,&cancel).unwrap()).collect();
+                (t.elapsed().as_secs_f64()*1000.0,r)
+            };
+            let after=||{
+                let t=std::time::Instant::now();let mut buffers=CompareBuffers::default();
+                let r: Vec<_>=pairs.iter().map(|(a,b)|equal_bytes_reusing(a,b,&cancel,&mut buffers).unwrap()).collect();
+                (t.elapsed().as_secs_f64()*1000.0,r)
+            };
+            let(a,b)=if i%2==0{(before(),after())}else{let b=after();(before(),b)};
+            assert_eq!(a.1,b.1);assert_eq!(b.1.iter().filter(|v|!**v).count(),59);
+            if i>0{old.push(a.0);new.push(b.0);}
+        }
+        eprintln!("BATCH77 compare1000 old_ms={old:?} new_ms={new:?}");
+        fs::remove_dir_all(root).unwrap();
     }
 }
 #[cfg(test)]

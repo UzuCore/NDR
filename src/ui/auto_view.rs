@@ -60,7 +60,7 @@ impl App {
         let fm = self.original_field_max(ui, index);
         let header = if self.settings.flag("ShowIcons", true) { 30.0 } else { 14.0 };
         let attach = self.settings.flag("AttachExtensionToName", false);
-        let always = self.side_flag(index, "AlwaysShowFolderSize", false);
+        let always = self.side_flag(index, "AlwaysShowFolderSize", false) || self.side_flag(index, "AutoFolderSize", false);
         let name = self.original_adjusted_name_width(ui, &fm);
         let ext = if attach { 0.0 } else { self.original_adjusted_ext_width(ui, &fm) };
         let size = if always { fm.max[3] + 10.0 } else { 0.0 };
@@ -75,7 +75,7 @@ impl App {
         let max = fm.max;
         let header = if self.settings.flag("ShowIcons", true) { 30.0 } else { 14.0 };
         let attach = self.settings.flag("AttachExtensionToName", false);
-        let always = self.side_flag(index, "AlwaysShowFolderSize", false);
+        let always = self.side_flag(index, "AlwaysShowFolderSize", false) || self.side_flag(index, "AutoFolderSize", false);
         // Original OnGetFieldMaxWidth (FUN_00485ae8): "drwxrwxrwx" on any FTP-mode pane (FTP lists show permission texts too).
         let sftp = self.panes[index].remote.is_some();
         let size = max[3] + 10.0;
@@ -312,7 +312,9 @@ impl App {
                                     }
                                     DetailRow::Item(row) => *row,
                                 };
-                                self.queue_folder_size(index, row);
+                                if widths[2].is_some() {
+                                    self.queue_folder_size(index, row);
+                                }
                                 let icon = self.file_icon(ui.ctx(), index, row);
                                 let icon = self.row_icon_for_skin(index, row, icon);
                                 let bar_slot = original.map(|_| ui.painter().add(egui::Shape::Noop));
@@ -338,7 +340,7 @@ impl App {
                                         }
                                         for (metric, column) in METRICS.iter().enumerate() {
                                             if let Some(w) = widths[metric] {
-                                                let folder_size = (*column == DetailColumn::Size && entry.is_dir).then(|| pane.folder_sizes.get(&entry.path).map(|s| s.clone().unwrap_or_else(|| "…".into()))).flatten();
+                                                let folder_size = (*column == DetailColumn::Size && entry.is_dir).then(|| pane.folder_size_display(&entry.path)).flatten();
                                                 let text = folder_size.as_ref().unwrap_or(&texts[column.index()]);
                                                 // Original DrawListItem: an uncounted folder's RES DIR text keeps the item color (counted sizes use the size colors).
                                                 let color_column = if *column == DetailColumn::Size && entry.is_dir && folder_size.is_none() { DetailColumn::Name } else { *column };
@@ -583,7 +585,9 @@ impl App {
                             let y = Self::row_line_y(ui.painter(), cell.bottom(), pitch - item_height);
                             ui.painter().hline(cell.left()..=cell.right(), y, egui::Stroke::new(1.0_f32, line_color));
                         }
-                        self.queue_folder_size(index, row);
+                        if widths[2].is_some() {
+                            self.queue_folder_size(index, row);
+                        }
                         let icon = self.file_icon(ui.ctx(), index, row);
                         let icon = self.row_icon_for_skin(index, row, icon);
                         let pane = &self.panes[index];
@@ -611,7 +615,7 @@ impl App {
                         } else if entry.is_dir {
                             let ext = widths[0].unwrap_or(0.0);
                             let size = widths[2].map_or(0.0, |size_width| {
-                                let counted = pane.folder_sizes.get(&entry.path).map(|s| s.clone().unwrap_or_else(|| "…".into()));
+                                let counted = pane.folder_size_display(&entry.path);
                                 let size_text = counted.as_deref().unwrap_or(texts[DetailColumn::Size.index()].as_str());
                                 (size_width - self.list_text_width(ui, size_text) - 5.0).max(0.0)
                             });
@@ -633,7 +637,7 @@ impl App {
                         let mut x = cell.left() + name_width.min(column_width);
                         for (metric, column) in METRICS.iter().enumerate().filter(|_| !entry.drive) {
                             if let Some(w) = widths[metric] {
-                                let folder_size = (*column == DetailColumn::Size && entry.is_dir).then(|| pane.folder_sizes.get(&entry.path).map(|s| s.clone().unwrap_or_else(|| "…".into()))).flatten();
+                                let folder_size = (*column == DetailColumn::Size && entry.is_dir).then(|| pane.folder_size_display(&entry.path)).flatten();
                                 let text = folder_size.as_ref().unwrap_or(&texts[column.index()]);
                                 // Original DrawListItem: an uncounted folder's RES DIR text keeps the item color (counted sizes use the size colors).
                                 let color_column = if *column == DetailColumn::Size && entry.is_dir && folder_size.is_none() { DetailColumn::Name } else { *column };

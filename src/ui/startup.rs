@@ -127,6 +127,17 @@ impl StartupApp {
         ctx.set_visuals(system_commands::palette_visuals(&palette));
         // Style the hidden native window before eframe reveals the loading frame.
         if let Some(hwnd) = hwnd {
+            // egui-winit sets ICON_SMALL from the viewport PNG, but not
+            // ICON_BIG on Windows. Use the embedded executable icon for
+            // the taskbar and Alt+Tab before the first visible frame.
+            use windows_sys::Win32::UI::WindowsAndMessaging::{LoadIconW, SendMessageW, WM_SETICON, ICON_BIG};
+            if let Ok(module) = unsafe { windows::Win32::System::LibraryLoader::GetModuleHandleW(windows::core::PCWSTR::null()) } {
+                // LoadIconW returns a shared resource handle, not owned by us.
+                let icon = unsafe { LoadIconW(module.0, 101usize as *const u16) };
+                if !icon.is_null() {
+                    unsafe { SendMessageW(hwnd as _, WM_SETICON, ICON_BIG as usize, icon as isize); }
+                }
+            }
             palette.apply_window_caption(ctx, hwnd);
         }
         // Install all font families before the first paint; the full app

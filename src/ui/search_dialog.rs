@@ -257,7 +257,7 @@ fn compact_search_ui(ui: &mut egui::Ui, form: &mut SearchForm, language: &compat
             ui.add(egui::Label::new(label).wrap());
             ui.add_sized([ui.available_width(), 23.0], egui::TextEdit::singleline(value))
         };
-        field(ui, t("Caption.lRoot", "Search in", "검색 위치"), &mut form.root);
+        field(ui, t("Caption.lRoot", "Search in", "검색 위치"), &mut form.root).on_hover_text(&form.root);
         ui.horizontal_wrapped(|ui| {
             if ui.add(egui::Button::new(t("Caption.btnBrowse", "Browse…", "찾아보기…")).wrap()).clicked() { action=Some(SearchAction::Browse); }
             if ui.add(egui::Button::new(t("Caption.btnAdd", "Add", "추가")).wrap()).clicked() { action=Some(SearchAction::Add); }
@@ -343,7 +343,8 @@ pub(super) fn search_ui(ui: &mut egui::Ui, form: &mut SearchForm, language: &com
         ui.label(t("Caption.lRoot", "Search in", "검색 위치"));
         ui.vertical(|ui| {
             ui.horizontal(|ui| {
-                ui.add(egui::TextEdit::singleline(&mut form.root).desired_width(400.0));
+                ui.add(egui::TextEdit::singleline(&mut form.root).desired_width(400.0))
+                    .on_hover_text(&form.root);
                 if ui.button(t("Caption.btnBrowse", "Browse…", "찾아보기…")).clicked() {
                     action = Some(SearchAction::Browse);
                 }
@@ -370,7 +371,7 @@ pub(super) fn search_ui(ui: &mut egui::Ui, form: &mut SearchForm, language: &com
             egui::ScrollArea::vertical().id_salt("search-locations").max_height(100.0).min_scrolled_height(100.0).show(ui, |ui| {
                 ui.set_width(400.0);
                 for (index, location) in form.locations.iter().enumerate() {
-                    if ui.selectable_label(form.selected_location == Some(index), location).clicked() {
+                    if ui.selectable_label(form.selected_location == Some(index), location).on_hover_text(location).clicked() {
                         form.selected_location = Some(index);
                     }
                 }

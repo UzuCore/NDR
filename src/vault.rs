@@ -1506,8 +1506,14 @@ mod tests {
         let current=vault.generation;
         drop(vault);
         let mut file=OpenOptions::new().read(true).write(true).open(&path).unwrap();
-        file.seek(SeekFrom::Start(32+(current%2)*SLOT_SIZE+24)).unwrap();
-        file.write_all(&[0xff]).unwrap();file.sync_all().unwrap();drop(file);
+        let corrupt_at=32+(current%2)*SLOT_SIZE+24;
+        file.seek(SeekFrom::Start(corrupt_at)).unwrap();
+        // The authentication tag is random. Writing a fixed 0xff was a
+        // no-op whenever that byte already happened to equal 0xff.
+        let mut byte=[0u8;1];file.read_exact(&mut byte).unwrap();
+        byte[0]^=0xff;
+        file.seek(SeekFrom::Start(corrupt_at)).unwrap();
+        file.write_all(&byte).unwrap();file.sync_all().unwrap();drop(file);
         assert!(Vault::unlock(&path,"correct secret".into()).err().unwrap().contains("altered"),
             "tampered latest pointer must fail closed, not resurrect older deleted data");
         fs::remove_dir_all(root).unwrap();

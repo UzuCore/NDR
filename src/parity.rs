@@ -214,8 +214,22 @@ pub fn quick_filter_pattern(query: &str) -> String {
 
 /// FilterPattern of C# RefreshPaneAsync: visible when any ';'-separated mask matches (an empty pattern shows everything).
 pub fn matches_filter(pattern: &str, name: &str) -> bool {
-    let masks: Vec<&str> = pattern.split(';').map(str::trim).filter(|mask| !mask.is_empty()).collect();
-    masks.is_empty() || masks.iter().any(|mask| matches_simple_expression(mask, name))
+    CompiledFilter::new(pattern).matches(name)
+}
+
+/// Parse the list mask once instead of once per row.
+pub struct CompiledFilter {
+    masks: Vec<Vec<Token>>,
+}
+impl CompiledFilter {
+    pub fn new(pattern: &str) -> Self {
+        Self {
+            masks: pattern.split(';').map(str::trim).filter(|mask| !mask.is_empty()).map(expression_tokens).collect(),
+        }
+    }
+    pub fn matches(&self, name: &str) -> bool {
+        self.masks.is_empty() || self.masks.iter().any(|mask| match_tokens(mask, name))
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -228,30 +242,45 @@ enum Token {
 /// .NET FileSystemName.MatchesSimpleExpression(mask, name, ignoreCase: true): '*' is zero or more characters, '?' exactly one,
 /// '\' takes the next character literally. Empty masks or names do not match. Case uses ordinal upper-case comparison (OrdinalIgnoreCase).
 pub fn matches_simple_expression(mask: &str, name: &str) -> bool {
-    if mask.is_empty() || name.is_empty() {
-        return false;
+    match_tokens(&expression_tokens(mask), name)
+}
+
+fn ordinal_upper(c: char) -> char {
+    if c.is_ascii() {
+        return c.to_ascii_uppercase();
     }
+    let mut mapped = c.to_uppercase();
+    match (mapped.next(), mapped.next()) {
+        (Some(single), None) => single,
+        _ => c,
+    }
+}
+
+fn expression_tokens(mask: &str) -> Vec<Token> {
     let mut tokens = Vec::new();
     let mut chars = mask.chars();
     while let Some(c) = chars.next() {
         tokens.push(match c {
             '*' => Token::Star,
             '?' => Token::One,
-            '\\' => Token::Char(chars.next().unwrap_or('\\')),
-            other => Token::Char(other),
+            '\\' => Token::Char(ordinal_upper(chars.next().unwrap_or('\\'))),
+            other => Token::Char(ordinal_upper(other)),
         });
     }
-    let upper = |c: char| {
-        let mut mapped = c.to_uppercase();
-        match (mapped.next(), mapped.next()) {
-            (Some(single), None) => single,
-            _ => c,
-        }
-    };
-    let name: Vec<char> = name.chars().collect();
+    tokens
+}
+
+fn match_tokens(tokens: &[Token], name: &str) -> bool {
+    if tokens.is_empty() || name.is_empty() {
+        return false;
+    }
+    // Work at UTF-8 character boundaries. Unlike a byte-oriented wildcard,
+    // '?' still consumes exactly one Unicode scalar, and star backtracking
+    // never lands inside a multibyte character. No per-row name allocation.
     let (mut t, mut n) = (0usize, 0usize);
     let mut backtrack: Option<(usize, usize)> = None;
     while n < name.len() {
+        let ch = name[n..].chars().next().unwrap();
         match tokens.get(t) {
             Some(Token::Star) => {
                 backtrack = Some((t, n));
@@ -260,12 +289,12 @@ pub fn matches_simple_expression(mask: &str, name: &str) -> bool {
             }
             Some(Token::One) => {
                 t += 1;
-                n += 1;
+                n += ch.len_utf8();
                 continue;
             }
-            Some(Token::Char(c)) if upper(*c) == upper(name[n]) => {
+            Some(Token::Char(c)) if *c == ordinal_upper(ch) => {
                 t += 1;
-                n += 1;
+                n += ch.len_utf8();
                 continue;
             }
             _ => {}
@@ -273,8 +302,8 @@ pub fn matches_simple_expression(mask: &str, name: &str) -> bool {
         match backtrack {
             Some((star, from)) => {
                 t = star + 1;
-                n = from + 1;
-                backtrack = Some((star, from + 1));
+                n = from + name[from..].chars().next().unwrap().len_utf8();
+                backtrack = Some((star, n));
             }
             None => return false,
         }
@@ -434,6 +463,91 @@ pub fn quick_search_match(names: &[String], cursor: Option<usize>, query: &str, 
 
 #[cfg(test)]
 mod tests {
+    // Before Batch 76: build scalar vectors for every comparison.
+    fn filter_reference(mask: &str, name: &str) -> bool {
+        use super::{Token, ordinal_upper};
+        if mask.is_empty() || name.is_empty() { return false; }
+        let mut chars = mask.chars();
+        let mut tokens = Vec::new();
+        while let Some(c) = chars.next() {
+            tokens.push(match c {
+                '*' => Token::Star, '?' => Token::One,
+                '\\' => Token::Char(chars.next().unwrap_or('\\')), c => Token::Char(c),
+            });
+        }
+        let name: Vec<char> = name.chars().collect();
+        let (mut t, mut n) = (0, 0);
+        let mut backtrack = None;
+        while n < name.len() {
+            match tokens.get(t) {
+                Some(Token::Star) => { backtrack = Some((t, n)); t += 1; continue; }
+                Some(Token::One) => { t += 1; n += 1; continue; }
+                Some(Token::Char(c)) if ordinal_upper(*c) == ordinal_upper(name[n]) => { t += 1; n += 1; continue; }
+                _ => {}
+            }
+            match backtrack {
+                Some((star, from)) => { t = star + 1; n = from + 1; backtrack = Some((star, n)); }
+                None => return false,
+            }
+        }
+        tokens[t..].iter().all(|token| *token == Token::Star)
+    }
+
+    fn old_filter(pattern: &str, name: &str) -> bool {
+        let masks: Vec<_> = pattern.split(';').map(str::trim).filter(|s| !s.is_empty()).collect();
+        masks.is_empty() || masks.iter().any(|mask| filter_reference(mask, name))
+    }
+
+    #[test]
+    fn compiled_filter_matches_unicode_and_escaped_reference() {
+        let alphabet = ["a", "A", "0", "*", "?", "\\", ".", ";", "\u{ac00}", "\u{1f680}", "\u{00df}", "\u{0130}", "\u{03c2}", "\u{0301}"];
+        let mut names = vec![String::new(), "report-01.TXT".into(), "aaabbb".into()];
+        for a in alphabet {
+            for b in alphabet {
+                names.push(format!("{a}{b}"));
+            }
+        }
+        let mut masks = vec!["".into(), "*".into(), "?".into(), " ; ; ".into(), "*.TXT; report-??.csv".into(), "*a*b*".into(), "*?*?*".into()];
+        for a in alphabet {
+            for b in alphabet {
+                masks.push(format!("{a}{b}"));
+                masks.push(format!("*{a}*{b}"));
+            }
+        }
+        for mask in masks {
+            let compiled = super::CompiledFilter::new(&mask);
+            for name in &names {
+                assert_eq!(compiled.matches(name), old_filter(&mask, name), "filter={mask:?}, name={name:?}");
+                assert_eq!(super::matches_simple_expression(&mask, name), filter_reference(&mask, name), "expression={mask:?}, name={name:?}");
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "explicit Release benchmark"]
+    fn benchmark_compiled_filter_100k() {
+        let names: Vec<_> = (0..100000).map(|i| format!("file-{i:06}.{}", ["txt","csv","log","png","zip"][i%5])).collect();
+        let pattern = "*.TXT;file-03????.csv;*.zip;file-000001.log";
+        let mut old = Vec::new();
+        let mut new = Vec::new();
+        for i in 0..13 {
+            let before = || {
+                let t = std::time::Instant::now();
+                let rows: Vec<_> = names.iter().enumerate().filter_map(|(i,s)| old_filter(pattern,s).then_some(i)).collect();
+                (t.elapsed().as_secs_f64()*1000.0,rows)
+            };
+            let after = || {
+                let t = std::time::Instant::now();
+                let filter = super::CompiledFilter::new(pattern);
+                let rows: Vec<_> = names.iter().enumerate().filter_map(|(i,s)| filter.matches(s).then_some(i)).collect();
+                (t.elapsed().as_secs_f64()*1000.0,rows)
+            };
+            let (a,b) = if i%2==0 { (before(),after()) } else { let b=after();(before(),b) };
+            assert_eq!(a.1,b.1);
+            if i>0 { old.push(a.0);new.push(b.0); }
+        }
+        eprintln!("BATCH76 filter100k old_ms={old:?} new_ms={new:?}");
+    }
     use super::*;
 
     fn n(values: &[&str]) -> Vec<String> {

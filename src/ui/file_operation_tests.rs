@@ -42,7 +42,7 @@ fn progress_event_flood_is_processed_in_bounded_ui_frames_without_losing_control
 
 #[test]
 fn background_copy_polling_preserves_capacity_order_and_primary_job() {
-    let (root, ctx, mut app) = fixture("background-capacity");
+    let (root, _ctx, mut app) = fixture("background-capacity");
     let (primary_sender, primary_rx) = mpsc::channel();
     app.job = Some(Job::new(primary_rx, Arc::new(AtomicBool::new(false)), "primary".into()));
     let mut senders = Vec::new();

@@ -178,7 +178,10 @@ impl App {
         self.panes[i].selected.clear();
         for row in rows {
             let path = self.panes[i].entries[row].path.clone();
+            self.panes[i].folder_auto_paths.remove(&path);
+            self.folder_size_cache.remove(&path);
             self.panes[i].folder_sizes.remove(&path);
+            self.panes[i].folder_bytes.remove(&path);
             self.enqueue_folder_size(i, row);
         }
     }

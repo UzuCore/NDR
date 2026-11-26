@@ -230,6 +230,7 @@ fn original_pages(built: Vec<Vec<Row>>, language: &compat::Language, _ko: bool) 
         let view = take(&format!("{side}ViewStyle"), l(&format!("Caption.lViewStyle{n}"), "List Style"));
         file_list.push(combo_texts(view, &format!("ComboBox.cbViewStyle{n}")));
         file_list.push(take(&format!("{side}AlwaysShowFolderSize"), l(&format!("Caption.chkAlwaysShowSize{n}"), "Always Show Size")));
+        file_list.push(take(&format!("{side}AutoFolderSize"), None));
         file_list.push(take(&format!("{side}ScrollStep"), l(&format!("Caption.chkScrollStep{n}"), "Scroll by Page")));
         let sort = take(&format!("{side}SortMode"), l(&format!("Caption.lSort{n}"), "Sort"));
         file_list.push(combo_texts(sort, &format!("ComboBox.cbSort{n}")));
@@ -516,8 +517,8 @@ impl SettingsForm {
             ("RightShowHiddenFiles", "오른쪽 숨김 / 시스템 파일 표시", "Right: show hidden / system files", false),
             ("LeftFolderSortDescending", "왼쪽 폴더 내림차순", "Left folders descending", false),
             ("RightFolderSortDescending", "오른쪽 폴더 내림차순", "Right folders descending", false),
-            ("LeftAutoFolderSize", "왼쪽 폴더 크기를 목록에 표시", "Left: show folder sizes in the list", false),
-            ("RightAutoFolderSize", "오른쪽 폴더 크기를 목록에 표시", "Right: show folder sizes in the list", false),
+            ("LeftAutoFolderSize", "폴더 용량 표시", "Show folder sizes", false),
+            ("RightAutoFolderSize", "폴더 용량 표시", "Show folder sizes", false),
             // Original chkAlwaysShowSize1/2 (alwaysshowsize): the options page placed them, but the rows were missing, so the boxes never showed.
             ("LeftAlwaysShowFolderSize", "왼쪽 항상 파일크기 보기", "Left: always show size", false),
             ("RightAlwaysShowFolderSize", "오른쪽 항상 파일크기 보기", "Right: always show size", false),
@@ -1078,13 +1079,14 @@ fn original_page(ui: &mut egui::Ui, form: &mut SettingsForm, tab: usize, origin:
                 // Thumbnails (3).
                 let view = combo_key(rows, &format!("{side}ViewStyle")).unwrap_or_default();
                 ui.add_enabled_ui(view == "Auto", |ui| put_check(ui, rows, &format!("{side}AlwaysShowFolderSize"), at(vx + x, vy + 230.0, 146.0, 17.0)));
-                ui.add_enabled_ui(view != "Thumbnails", |ui| put_check(ui, rows, &format!("{side}ScrollStep"), at(vx + x, vy + 253.0, 146.0, 17.0)));
-                put_label(ui, at(vx + x, vy + 272.0, 140.0, 15.0), &label_of(rows, &format!("{side}SortMode")));
-                put_combo(ui, rows, &format!("{side}SortMode"), at(vx + x, vy + 290.0, 126.0, 21.0));
-                put_check(ui, rows, &format!("{side}SortDescending"), at(vx + x, vy + 318.0, 143.0, 17.0));
-                put_check(ui, rows, &format!("{side}ShowHiddenFiles"), at(vx + x, vy + 339.0, 143.0, 17.0));
-                put_label(ui, at(vx + x, vy + 362.0, 140.0, 15.0), &label_of(rows, &format!("{side}ColumnCount")));
-                put_combo(ui, rows, &format!("{side}ColumnCount"), at(vx + x, vy + 381.0, 126.0, 21.0));
+                put_check(ui, rows, &format!("{side}AutoFolderSize"), at(vx + x, vy + 251.0, 146.0, 17.0));
+                ui.add_enabled_ui(view != "Thumbnails", |ui| put_check(ui, rows, &format!("{side}ScrollStep"), at(vx + x, vy + 272.0, 146.0, 17.0)));
+                put_label(ui, at(vx + x, vy + 292.0, 140.0, 15.0), &label_of(rows, &format!("{side}SortMode")));
+                put_combo(ui, rows, &format!("{side}SortMode"), at(vx + x, vy + 309.0, 126.0, 21.0));
+                put_check(ui, rows, &format!("{side}SortDescending"), at(vx + x, vy + 334.0, 143.0, 17.0));
+                put_check(ui, rows, &format!("{side}ShowHiddenFiles"), at(vx + x, vy + 354.0, 143.0, 17.0));
+                put_label(ui, at(vx + x, vy + 374.0, 140.0, 15.0), &label_of(rows, &format!("{side}ColumnCount")));
+                put_combo(ui, rows, &format!("{side}ColumnCount"), at(vx + x, vy + 390.0, 126.0, 21.0));
             }
         }
         // tsTree: checkboxes (32, 24/47/70/93), lItemWidth (32,138) eTreeItemWidth (169,135 65) + udTreeItemWidth, "pixel" (257,138), gbTreeFont (32,173 225x96).
@@ -1600,6 +1602,10 @@ impl App {
     /// After OK (the rest of C# ShowOptionsAsync): normalize, language, theme, both panes, hidden display, view, save, refresh both panes.
     pub(super) fn apply_settings(&mut self, settings: ndr::settings::Settings) {
         let previous_single = self.settings.flag("UseSingleInstance", false);
+        // Cancel old automatic results before applying the new visibility/unit settings.
+        self.clear_automatic_folder_sizes(0);
+        self.clear_automatic_folder_sizes(1);
+        self.folder_size_cache.clear();
         self.settings = settings;
         self.settings.normalize();
         let requested = self.settings.text("Language", &self.language);

@@ -688,7 +688,7 @@ fn all_locale_dialog_layout_sweep() {
         std::fs::write(dir.join("legacy-search-theme.lookups.json"), serde_json::to_vec(&ndr::compat::end_locale_lookup_audit()).unwrap()).unwrap();
         // Exercise the compact settings page at two smaller logical sizes.
         // This simulates available space, not a change to the user's OS DPI.
-        for (w, h, scale) in [(768.0, 576.0, 1.25), (640.0, 480.0, 1.5), (480.0, 360.0, 2.0)] {
+        for (w, h, scale) in [(768.0, 576.0, 1.25), (640.0, 480.0, 1.5), (548.0, 411.0, 1.75), (480.0, 360.0, 2.0)] {
             let scaled = || {
                 let mut input = raw(w, h);
                 input.viewports.get_mut(&egui::ViewportId::ROOT).unwrap().native_pixels_per_point = Some(scale);

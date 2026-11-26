@@ -1521,6 +1521,13 @@ fn volume_root(path: &Path) -> Option<(PathBuf, Option<char>)> {
     }
 }
 
+/// Automatic recursive enumeration must never start on a UNC share or mapped
+/// network volume. Query the drive root once for each displayed listing.
+pub fn folder_size_local_volume(path: &Path) -> bool {
+    let Some((root, Some(_))) = volume_root(path) else { return false };
+    matches!(unsafe { GetDriveTypeW(wide(root.as_os_str()).as_ptr()) }, 2 | 3 | 6)
+}
+
 /// Material for the original info bar's (FUN_0048b500) TNXDriveInfo (root, read size = 1): (drive text, free, total).
 /// TNXDriveInfo.Refresh (0x7b7554): GetDiskFreeSpaceExW if the type (GetDriveTypeW) is not 0 or 1. The text is "name " for network (4),
 /// otherwise "name (C:) " (name = GetDriveName). If the size cannot be read it is 0 like the original (TNXDriveInfo starts at 0).

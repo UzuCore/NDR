@@ -403,10 +403,12 @@ fn remote_window_transfers_against_an_owned_ftp_server() {
         assert_eq!(form(&mut app).status, "1개 항목을 다운로드했습니다.");
         // Downloading again is a name conflict (yes/no/cancel); no skips.
         app.remote_action(RemoteAction::Download, &ctx);
-        assert_eq!(boxed(&app), ("이름 충돌".to_owned(), "로컬 폴더에 같은 이름의 파일 1개가 있습니다. 덮어쓸까요?".to_owned()));
+        assert_eq!(boxed(&app), ("이름 충돌".to_owned(), "로컬 폴더에 이름이 같은 항목이 1개 있습니다. 덮어쓸까요?".to_owned()));
+        fs::write(served.join("docs/readme.txt"), b"changed on server").unwrap();
         app.answer_message_box(7, &ctx);
         wait_until(&mut app, &ctx, |app| app.remote_form().is_some_and(|f| f.busy.is_none()) && !app.original_dialogs.iter().any(|d| matches!(d.kind, DialogKind::RemoteTransfer(_))));
-        assert_eq!(form(&mut app).status, "1개 항목을 다운로드했습니다.", "skipped items count as completed");
+        assert_eq!(form(&mut app).status, "0개 항목을 다운로드했습니다.", "skipped items are not downloaded");
+        assert_eq!(fs::read(left.join("readme.txt")).unwrap(), b"hello", "skip preserves local bytes");
         // Upload (▲): local alpha.txt.
         wait_local(&mut app, &ctx);
         select_local(&mut app, "alpha.txt");

@@ -527,6 +527,11 @@ impl App {
         })
     }
 
+    /// Read-only activity check for low-priority background enumeration.
+    pub(super) fn disk_copy_active(&self) -> bool {
+        self.original_dialogs.iter().any(|d| matches!(&d.kind, DialogKind::DiskCopy(form) if form.run.is_some()))
+    }
+
     /// When the main window tries to close: blocks it during work (image creation gets a cancel request) and returns true.
     pub(super) fn disk_copy_blocks_close(&mut self) -> bool {
         let Some(run) = self.disk_copy_form().and_then(|f| f.run.as_ref()) else { return false };

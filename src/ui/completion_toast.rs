@@ -55,10 +55,6 @@ impl App {
         self.push_notice(ko, en, detail, NoticeKind::Warning);
     }
 
-    pub(super) fn error_notice(&mut self, ko: &str, en: &str, detail: impl Into<String>) {
-        self.push_notice(ko, en, detail, NoticeKind::Error);
-    }
-
     pub(super) fn completion_notice_operation(&mut self, title: String, detail: impl Into<String>) {
         self.push_operation_notice(title, detail, NoticeKind::Success);
     }

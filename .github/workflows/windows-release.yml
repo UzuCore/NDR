@@ -52,6 +52,9 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $required = @(
+            'assets/ndr.ico',
+            'assets/ndr-icon.png',
+            'assets/ndr.rc',
             'Resources/Languages/ko.lang',
             'Resources/Languages/en.lang',
             'Resources/Skins/black/conf.ini',

@@ -266,6 +266,9 @@ impl App {
     }
 
     pub(super) fn refresh_vault(&mut self, pane: usize) {
+        self.clear_automatic_folder_sizes(pane);
+        self.panes[pane].folder_cancel.store(true, Ordering::Relaxed);
+        self.panes[pane].folder_cancel = Arc::new(AtomicBool::new(false));
         let policy = SessionPolicy::from_settings(&self.settings);
         let Some(container) = self.panes[pane].vault.as_mut() else { return };
         if container.database.expired(policy)

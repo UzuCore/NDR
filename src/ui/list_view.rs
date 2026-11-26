@@ -43,6 +43,88 @@ pub(super) struct PaneView {
     pub rows: Vec<DetailRow>,
 }
 
+/// Reuse row buffers on refresh, but release oversized allocations
+/// when navigating away from a large directory.
+fn reset_view_buffer<T>(rows: &mut Vec<T>, count: usize) {
+    if rows.capacity() > count.saturating_mul(2).max(1024) {
+        *rows = Vec::with_capacity(count);
+    } else {
+        rows.clear();
+        rows.reserve(count);
+    }
+}
+
+/// Per-rebuild cache, bounded independently of the number of files.
+/// Exact timestamps preserve date/age formatting.
+fn cached_cell<K: Eq + std::hash::Hash>(cache: &mut HashMap<K, String>, key: K, format: impl FnOnce() -> String) -> String {
+    if let Some(value) = cache.get(&key) {
+        return value.clone();
+    }
+    let value = format();
+    if cache.len() < 4096 {
+        cache.insert(key, value.clone());
+    }
+    value
+}
+
+#[cfg(test)]
+#[test]
+fn view_cache_and_buffers_are_bounded_and_reusable() {
+    let mut rows = vec![String::from("old"); 100_000];
+    let ptr = rows.as_ptr();
+    reset_view_buffer(&mut rows, 100_000);
+    assert!(rows.is_empty());
+    assert_eq!(rows.as_ptr(), ptr);
+    reset_view_buffer(&mut rows, 3);
+    assert!(rows.capacity() <= 1024);
+    let mut cache = HashMap::new();
+    for i in 0..5000 {
+        assert_eq!(cached_cell(&mut cache, i, || i.to_string()), i.to_string());
+    }
+    assert_eq!(cache.len(), 4096);
+    assert_eq!(cached_cell(&mut cache, 17, || panic!("cache hit")), "17");
+    assert_eq!(cached_cell(&mut cache, 4999, || "4999".to_owned()), "4999");
+    assert_eq!(cache.len(), 4096);
+}
+
+#[cfg(test)]
+#[test]
+#[ignore = "explicit Release benchmark of bounded display text caches"]
+fn benchmark_display_cell_cache_100k() {
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+    let now = SystemTime::now();
+    for spread in [false, true] {
+        let inputs: Vec<_> = (0..100000u64).map(|i| {
+            let slot = if spread { i } else { i % 64 };
+            (Some(UNIX_EPOCH + Duration::from_secs(1_600_000_000 + slot * 3607)), slot * 301)
+        }).collect();
+        let mut before_ms = Vec::new();
+        let mut after_ms = Vec::new();
+        let date = |modified| ndr::listing::list_date_text(modified, "yyyy-MM-dd", "HH:mm", Some(["Today", "Yesterday", "%d days ago"]), now);
+        let size = |size| ndr::parity::size_to_str(size, "Auto", true);
+        for i in 0..9 {
+            let before = || {
+                let t=Instant::now();
+                let rows: Vec<_>=inputs.iter().map(|&(d,s)| (date(d),size(s))).collect();
+                (t.elapsed().as_secs_f64()*1000.0, rows)
+            };
+            let after = || {
+                let t=Instant::now();
+                let (mut dates,mut sizes)=(HashMap::new(),HashMap::new());
+                let rows: Vec<_>=inputs.iter().map(|&(d,s)| (
+                    cached_cell(&mut dates,d,||date(d)),
+                    cached_cell(&mut sizes,s,||size(s)),
+                )).collect();
+                (t.elapsed().as_secs_f64()*1000.0,rows)
+            };
+            let (a,b)=if i%2==0 {(before(),after())} else {let b=after();(before(),b)};
+            assert_eq!(a.1,b.1);
+            if i>0 {before_ms.push(a.0);after_ms.push(b.0);}
+        }
+        eprintln!("BATCH75 cells100k spread={spread} old_ms={before_ms:?} new_ms={after_ms:?}");
+    }
+}
+
 /// CharacterCase of C# FileNameDisplayConverter: 0 as is, 1 lower, 2 upper, 3 first letter upper.
 /// SFTP permission bits as list text ("drwxr-xr-x"): original OnGetAttrString (FUN_00485aa0) shows the row's permission text (+0x74) as is on FTP panes,
 /// otherwise GetAttrString (width "drwxrwxrwx"). The SFTP adapter builds it in FUN_0045b900: "----------" (0x8ffa42), 'd' for a folder, then
@@ -159,15 +241,17 @@ impl App {
             "NXDRIVE" => drive,
             _ => fore,
         };
+        let count = self.panes[index].entries.len();
+        let mut view = std::mem::take(&mut self.panes[index].view);
+        reset_view_buffer(&mut view.cells, count);
+        reset_view_buffer(&mut view.colors, count);
+        reset_view_buffer(&mut view.rows, count);
         let (extension_colors, _) = self.color_maps();
         let pane = &self.panes[index];
         let sftp_modes = pane.remote.as_ref().filter(|r| r.is_sftp()).and_then(|r| r.modes.lock().ok().map(|m| (r.path.clone(), m.clone())));
         let ftp_permissions = pane.remote.as_ref().filter(|r| !r.is_sftp()).and_then(|r| r.permissions.lock().ok().map(|m| (r.path.clone(), m.clone())));
-        let mut view = PaneView {
-            cells: Vec::with_capacity(pane.entries.len()),
-            colors: Vec::with_capacity(pane.entries.len()),
-            rows: Vec::with_capacity(pane.entries.len()),
-        };
+        let mut date_texts = HashMap::new();
+        let mut size_texts = HashMap::new();
         let mut shell_types = HashMap::<&str, String>::new();
         let mut item_colors = HashMap::<&str, (u8, u8, u8)>::new();
         let local = pane.archive.is_none() && pane.remote.is_none();
@@ -218,8 +302,10 @@ impl App {
                 character_case(stem, case),
                 character_case(extension.trim_start_matches('.'), case),
                 kind,
-                if entry.is_dir { folder_size_text.clone() } else { ndr::parity::size_to_str(entry.size, &unit, thousands) },
-                ndr::listing::list_date_text(entry.modified, &date_format, &time_format, use_age.then(|| [age_labels[0].as_str(), age_labels[1].as_str(), age_labels[2].as_str()]), now),
+                if entry.is_dir { folder_size_text.clone() } else {
+                    cached_cell(&mut size_texts, entry.size, || ndr::parity::size_to_str(entry.size, &unit, thousands))
+                },
+                cached_cell(&mut date_texts, entry.modified, || ndr::listing::list_date_text(entry.modified, &date_format, &time_format, use_age.then(|| [age_labels[0].as_str(), age_labels[1].as_str(), age_labels[2].as_str()]), now)),
                 // Original DrawListItem field 5: FTP and SFTP list items (+0x78) show the permission text (+0x74), others GetAttrString (0x7b50a4, A/H/R/S in "____").
                 // FTP keeps the listing's own text (MLSD "perm" fact, e.g. "eldfmcp"; LIST "drwxr-xr-x"), as seen in the running original.
                 // Fixed: previously the C# text ("RHSA", "-"); FTP panes showed "____".

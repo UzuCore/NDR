@@ -2561,6 +2561,9 @@ fn compact_archive_formats_and_scroll_preserve_real_zip_bytes() {
 #[test]
 fn folder_tree_window_follows_the_original_tffoldertree() {
     let (root, ctx, mut app) = fixture("foldertree", "ko");
+    // This test exercises grandchildren regardless of the absolute depth
+    // of the isolated TEMP root. Depth limiting has its own scan tests.
+    app.settings.values.insert("FolderTreeDepth".into(), serde_json::json!(0));
     let drive = root.join("drive");
     for dir in ["x/a/a1", "x/a/a2", "x/b", "x/c", "y"] {
         fs::create_dir_all(drive.join(dir)).unwrap();

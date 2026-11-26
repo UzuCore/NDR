@@ -991,7 +991,12 @@ mod win {
         state.icon.uID = 1;
         state.icon.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP | NIF_SHOWTIP;
         state.icon.uCallbackMessage = TRAY;
-        state.icon.hIcon = unsafe { LoadIconW(std::ptr::null_mut(), 32512usize as *const u16) };
+        // The executable resource is shared by Explorer and the tray.
+        // LoadIconW returns a shared icon; it must not be destroyed.
+        state.icon.hIcon = unsafe { LoadIconW(instance, 101usize as *const u16) };
+        if state.icon.hIcon.is_null() {
+            state.icon.hIcon = unsafe { LoadIconW(std::ptr::null_mut(), 32512usize as *const u16) };
+        }
         for (i, c) in "NDR".encode_utf16().enumerate() {
             state.icon.szTip[i] = c
         }

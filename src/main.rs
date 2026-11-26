@@ -230,6 +230,8 @@ fn main() {
         }
         let mut viewport = eframe::egui::ViewportBuilder::default()
             .with_title("NDR")
+            .with_icon(eframe::icon_data::from_png_bytes(include_bytes!("../assets/ndr-icon.png"))
+                .map_err(|e| format!("Invalid embedded NDR icon: {e}"))?)
             .with_inner_size([1400.0, 850.0])
             // Original TfMain DFM Constraints.MinWidth/MinHeight = 250 (outer size). Fixed: previously the window could not shrink below 800x480.
             .with_min_inner_size([250.0, 250.0]);

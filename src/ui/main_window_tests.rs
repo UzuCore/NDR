@@ -567,6 +567,39 @@ fn github_update_installs_after_one_approval_without_second_dialog() {
 }
 
 #[test]
+fn update_progress_remains_inside_small_viewports_and_throttles_animation() {
+    use ndr::update::UpdatePhase;
+    let (root, _ctx, mut app) = fixture("update-progress-bounds");
+    for phase in [UpdatePhase::Downloading, UpdatePhase::Verifying, UpdatePhase::Installing, UpdatePhase::Failed] {
+        let ctx = egui::Context::default();
+        app.update_progress = Some(super::main_window::UpdateProgress {
+            tag: "build-99".into(), phase, downloaded: 64, total: 128,
+            error: (phase == UpdatePhase::Failed).then(|| "A deliberately long diagnostic. ".repeat(80)),
+            failed_phase: Some(UpdatePhase::Verifying),
+        });
+        for (w, h, scale) in [(1400.0, 850.0, 1.0), (548.0, 411.0, 1.75), (320.0, 250.0, 2.0)] {
+            let mut delay = Duration::ZERO;
+            for _ in 0..8 {
+                let mut raw = egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(w, h))),
+                    ..Default::default()
+                };
+                raw.viewports.get_mut(&egui::ViewportId::ROOT).unwrap().native_pixels_per_point = Some(scale);
+                let output = ctx.run(raw, |ctx| app.update_progress_ui(ctx));
+                delay = output.viewport_output[&egui::ViewportId::ROOT].repaint_delay;
+            }
+            let area = ctx.memory(|m| m.area_rect(egui::Id::new("ndr-update-progress"))).expect("update window");
+            assert!(area.left() >= -1.0 && area.top() >= -1.0 && area.right() <= w + 1.0 && area.bottom() <= h + 1.0,
+                "{phase:?}: {w}x{h}: {area:?}");
+            assert!(delay >= Duration::from_millis(50),
+                "{phase:?}: update dialog should not request continuous repaint: {delay:?}");
+        }
+    }
+    drop(app);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn github_update_dialog_identifies_installed_and_target_builds() {
     let (root, ctx, mut app) = fixture("github-build-message");
     let installed = ndr::update::current_build();
@@ -990,6 +1023,118 @@ fn names_view_and_adjusted_widths_follow_the_original() {
     // When fewer than 2 columns fit and the column is narrower than one item, name = width − header − Adjusted extension (the extension cell keeps its own width).
     assert!((narrow.0 - (120.0 - ext)).abs() < 0.01, "{narrow:?}");
     assert_eq!(narrow.1[0], Some(fm.max[1] + 10.0));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn folder_size_options_are_on_file_list_page_in_all_40_languages() {
+    use super::settings_window::{Row, SettingsForm};
+    let resources = resource_dir();
+    let codes = compat::available_codes(&resources.join("Languages"));
+    assert_eq!(codes.len(), 40);
+    for code in codes {
+        let language = compat::Language::load(&resources.join("Languages"), &code);
+        let settings = ndr::settings::Settings::default();
+        let mut form = SettingsForm::new(&settings, &language, &resources);
+        for key in ["LeftAutoFolderSize", "RightAutoFolderSize"] {
+            let rows: Vec<_> = form.tabs.iter().enumerate().flat_map(|(tab, rows)| rows.iter().filter_map(move |row| match row {
+                Row::Check { key: k, label, value } if k == key => Some((tab, label, value)),
+                _ => None,
+            })).collect();
+            assert_eq!(rows.len(), 1, "{code} {key}");
+            assert_eq!(rows[0].0, 0, "{code} {key} must be on File List");
+            assert!(!*rows[0].2 && !rows[0].1.is_empty(), "{code} {key}");
+            let expected = language.text(if key.starts_with("Left") { "NDRVault.AutoFolderSizeLeft" } else { "NDRVault.AutoFolderSizeRight" }, "missing");
+            assert_eq!(rows[0].1, &expected, "{code} {key}");
+            assert_ne!(expected, "missing", "{code} missing catalog key");
+        }
+        let Some(Row::Check { value, .. }) = form.row_mut("LeftAutoFolderSize") else { panic!("{code}"); };
+        *value = true;
+        let committed = form.commit().unwrap();
+        assert!(committed.flag("LeftAutoFolderSize", false));
+        assert!(!committed.flag("RightAutoFolderSize", false));
+        let mut reopened = SettingsForm::new(&committed, &language, &resources);
+        assert!(matches!(reopened.row_mut("LeftAutoFolderSize"), Some(Row::Check { value: true, .. })));
+    }
+}
+
+#[test]
+fn automatic_folder_sizes_cache_navigation_and_foreground_priority() {
+    let (root, ctx, mut app) = fixture("auto-folder-size");
+    let left = root.join("left");
+    let folder = left.join("folder");
+    fs::create_dir_all(folder.join("nested")).unwrap();
+    fs::write(folder.join("a.bin"), vec![1u8; 2048]).unwrap();
+    fs::write(folder.join("nested/b.bin"), vec![2u8; 1024]).unwrap();
+    let row = |app: &App| app.panes[0].entries.iter().position(|e| e.path == folder).unwrap();
+    let wait_size = |app: &mut App, bytes: u64| {
+        let end = Instant::now() + Duration::from_secs(15);
+        while app.panes[0].folder_bytes.get(&folder) != Some(&bytes) {
+            assert!(Instant::now() < end, "folder size timed out: {:?}", app.panes[0].folder_sizes);
+            app.poll(&ctx);
+            thread::sleep(Duration::from_millis(5));
+        }
+    };
+    let r = row(&app);
+    app.queue_folder_size(0, r);
+    assert!(!app.folder_size_workers, "default-off must not spawn a worker");
+    app.settings.set_flag("LeftAutoFolderSize", true);
+    app.queue_folder_size(0, r);
+    assert_eq!(app.panes[0].folder_size_display(&folder), None, "keep the localized folder marker until ready");
+    wait_size(&mut app, 3072);
+    assert_eq!(app.panes[0].folder_size_display(&folder).as_deref(), Some("3.00 KB"));
+    assert!(app.panes[0].folder_auto_paths.contains(&folder));
+    assert!(app.folder_size_cache.contains_key(&folder));
+    // Navigate elsewhere and return: a recent complete total is immediately
+    // reused; no recursive scan is launched for this row.
+    app.navigate(0, root.join("right"), true);
+    wait(&mut app, &ctx);
+    app.navigate(0, left.clone(), true);
+    wait(&mut app, &ctx);
+    let r = row(&app);
+    app.queue_folder_size(0, r);
+    assert_eq!(app.panes[0].folder_bytes.get(&folder), Some(&3072));
+    // A foreground file job suppresses automatic scans and invalidates
+    // provisional totals, without cancelling the foreground job.
+    let (_tx, rx) = mpsc::channel();
+    let job_cancel = Arc::new(AtomicBool::new(false));
+    let old_cancel = app.panes[0].folder_auto_cancel.clone();
+    app.job = Some(Job::new(rx, job_cancel.clone(), "fixture copy".into()));
+    app.sync_folder_size_activity();
+    assert!(old_cancel.load(Ordering::Relaxed));
+    assert!(!job_cancel.load(Ordering::Relaxed));
+    assert!(!app.panes[0].folder_sizes.contains_key(&folder));
+    assert!(app.folder_size_cache.is_empty());
+    app.queue_folder_size(0, r);
+    assert!(!app.panes[0].folder_sizes.contains_key(&folder));
+    fs::write(folder.join("nested/b.bin"), vec![3u8; 4096]).unwrap();
+    app.job = None;
+    app.queue_folder_size(0, r);
+    wait_size(&mut app, 6144);
+    // A refresh discards automatic totals but preserves explicit manual
+    // size behavior; modified descendant sizes are recomputed.
+    fs::write(folder.join("nested/b.bin"), vec![4u8; 512]).unwrap();
+    app.refresh(0);
+    wait(&mut app, &ctx);
+    assert!(!app.panes[0].folder_sizes.contains_key(&folder));
+    let r = row(&app);
+    app.queue_folder_size(0, r);
+    wait_size(&mut app, 2560);
+    let mut off = app.settings.clone();
+    off.set_flag("LeftAutoFolderSize", false);
+    app.apply_settings(off);
+    wait(&mut app, &ctx);
+    assert!(!app.panes[0].folder_sizes.contains_key(&folder));
+    let r = row(&app);
+    app.queue_folder_size(0, r);
+    assert!(!app.panes[0].folder_sizes.contains_key(&folder));
+    app.enqueue_folder_size(0, r);
+    wait_size(&mut app, 2560);
+    assert!(!app.panes[0].folder_auto_paths.contains(&folder));
+    assert!(!native::folder_size_local_volume(Path::new(r"\\server\share\folder")));
+    assert!(!native::folder_size_local_volume(Path::new(r"\\?\UNC\server\share\folder")));
+    assert_eq!(fs::metadata(folder.join("nested/b.bin")).unwrap().len(), 512);
+    drop(app);
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -2845,6 +2990,55 @@ fn big_folder_frame_time() {
         eprintln!("{view}: median {:.2} ms, max {:.2} ms", times[times.len() / 2], times[times.len() - 1]);
     }
     let _ = fs::remove_dir_all(root);
+}
+
+/// Repeated refresh/filter/sort/navigation with real files, with a small
+/// directory between the large listings so retained allocations are checked.
+#[test]
+#[ignore = "explicit Release soak test"]
+fn batch78_repeated_navigation_and_selection_soak() {
+    let (root,ctx,mut app)=fixture("batch78-soak");
+    let large=root.join("large");let small=root.join("small");
+    fs::create_dir_all(&large).unwrap();fs::create_dir_all(&small).unwrap();
+    for i in 0..4000 {
+        fs::write(large.join(format!("file{i:05}.{}",if i%2==0{"txt"}else{"log"})), [i as u8]).unwrap();
+    }
+    fs::write(small.join("only.txt"),b"x").unwrap();
+    let start=Instant::now();
+    for cycle in 0..50 {
+        app.navigate(0,large.clone(),false);wait(&mut app,&ctx);
+        app.quick_filter(0,"");wait(&mut app,&ctx);
+        assert_eq!(app.panes[0].entries.len(),4001);
+        app.apply_advanced_select(0,"*.txt;*.txt",true);
+        assert_eq!(app.panes[0].selected.len(),2000);
+        let marked: BTreeSet<_>=app.panes[0].selected.iter().map(|&i| app.panes[0].entries[i].name.clone()).collect();
+        app.dispatch("sort:Size",&ctx);
+        app.dispatch("sortDescending",&ctx);
+        wait(&mut app,&ctx);
+        assert_eq!(marked,app.panes[0].selected.iter().map(|&i|app.panes[0].entries[i].name.clone()).collect());
+        app.quick_filter(0,"*.log");wait(&mut app,&ctx);
+        assert_eq!(app.panes[0].entries.len(),2001);
+        assert!(app.panes[0].entries.iter().all(|e|e.is_parent()||e.name.ends_with(".log")));
+        assert_eq!(app.panes[0].view.cells.len(),2001);
+        let raw=egui::RawInput{screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(1400.0,850.0))),..Default::default()};
+        app.settings.set_text("LeftViewStyle",["Auto","Details","Names","Thumbnails"][cycle%4]);
+        let output=ctx.run(raw,|ctx|{egui::CentralPanel::default().show(ctx,|ui|{app.pane_ui(ui,0,ctx);});});
+        let _=ctx.tessellate(output.shapes,output.pixels_per_point);
+        app.navigate(0,small.clone(),false);wait(&mut app,&ctx);
+        app.quick_filter(0,"");wait(&mut app,&ctx);
+        let pane=&app.panes[0];
+        assert_eq!(pane.entries.len(),2);
+        assert_eq!(pane.view.cells.len(),2);
+        assert!(pane.view.cells.capacity()<=1024);
+        assert!(pane.view.colors.capacity()<=1024);
+        assert!(pane.view.rows.capacity()<=1024);
+        assert!(pane.error.is_none());
+        if (cycle+1)%10==0 {eprintln!("BATCH78 cycles={} elapsed_s={:.3}",cycle+1,start.elapsed().as_secs_f64());}
+    }
+    assert_eq!(fs::read(large.join("file00000.txt")).unwrap(),[0]);
+    assert_eq!(fs::read(small.join("only.txt")).unwrap(),b"x");
+    assert_eq!(fs::read_dir(&large).unwrap().count(),4000);
+    fs::remove_dir_all(root).unwrap();
 }
 
 /// Field widths are GDI widths (original Canvas.TextWidth); egui draws Latin text at most CELL_TEXT_SLACK wider, so it still fits its cell.

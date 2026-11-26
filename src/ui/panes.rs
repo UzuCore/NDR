@@ -231,7 +231,7 @@ impl App {
         let key = {
             use std::hash::{Hash, Hasher};
             let mut h = std::collections::hash_map::DefaultHasher::new();
-            (pane.generation, pane.entries.len(), self.list_font_size.to_bits(), pane.view.cells.len(), pane.view.cells.first().map(|c| c[0].clone()), self.language_pack.text("RES.FIELD_SIZE", "Size")).hash(&mut h);
+            (pane.generation, pane.entries.len(), self.list_font_size.to_bits(), pane.view.cells.len(), pane.view.cells.first().map(|c| c[0].clone()), self.language_pack.text("RES.FIELD_SIZE", "Size"), self.side_flag(index, "AutoFolderSize", false)).hash(&mut h);
             h.finish()
         };
         let id = egui::Id::new(("ndr-original-field-max", index));
@@ -304,6 +304,15 @@ impl App {
             fm.ext_average = (ext_sum / ext_count as f32).floor();
         }
         fm.max[3] = fm.max[3].max(self.list_text_width(ui, &self.language_pack.text("RES.FIELD_SIZE", "Size")));
+        if self.side_flag(index, "AutoFolderSize", false) && pane.entries.iter().any(|e| e.is_dir && !e.drive && !e.is_parent()) {
+            // Reserve the width once per listing; otherwise a folder-only
+            // listing measures only the Size header and clips its totals.
+            let unit = self.settings.text("SizeUnit", "Auto");
+            let comma = self.settings.flag("UseThousandsSeparator", true);
+            let representative = if unit.eq_ignore_ascii_case("Auto") { 1_099_511_627_776_000 } else { 109_951_162_777_600 };
+            let label = format!("≥ {}", ndr::parity::size_to_str(representative, &unit, comma));
+            fm.max[3] = fm.max[3].max(self.list_text_width(ui, &label));
+        }
         ui.data_mut(|d| d.insert_temp(id, (key, fm)));
         fm
     }
@@ -883,6 +892,16 @@ impl App {
     }
 
     fn refresh_inner(&mut self, index: usize, foreground: bool) {
+        // Stop recursive I/O as soon as navigation/refresh starts, not only
+        // when the replacement listing has arrived.
+        let same_folder = !self.folder_size_cache.is_empty() && self.panes[index].listed.as_deref() == Some(location_key(&self.panes[index]).as_str());
+        if same_folder {
+            // Explicit/notification refresh must not reuse stale child totals.
+            let parent = &self.panes[index].path;
+            self.folder_size_cache.retain(|path, _| !path.starts_with(parent) && !parent.starts_with(path));
+        }
+        self.clear_automatic_folder_sizes(index);
+        self.panes[index].folder_cancel.store(true, Ordering::Relaxed);
         if self.panes[index].vault.is_some() {
             return self.refresh_vault(index);
         }
@@ -1373,17 +1392,10 @@ impl App {
         for entry in pane.selected.iter().filter_map(|&i| pane.entries.get(i)) {
             *marked.entry(entry.path.clone()).or_default() |= role(entry);
         }
-        // The original ".." item comes first regardless of sorting.
-        let (mut parents, rest): (Vec<Entry>, Vec<Entry>) = std::mem::take(&mut pane.entries).into_iter().partition(|e| e.is_parent());
-        pane.entries = rest;
-        ndr::listing::sort_entries(&mut pane.entries, &options, &color);
-        ndr::listing::sort_groups(&mut pane.entries, &group_mode, &category_mode, group_descending);
-        // The original drive items (kind 4) sit at the end of the list in TNXDriveList order (alphabetical), regardless of sorting.
-        let (mut items, mut drives): (Vec<Entry>, Vec<Entry>) = std::mem::take(&mut pane.entries).into_iter().partition(|e| !e.drive);
-        drives.sort_by(|a, b| a.path.cmp(&b.path));
-        items.append(&mut drives);
-        parents.append(&mut items);
-        pane.entries = parents;
+        // Keep the Entry allocation and preserve parent/drive ordering,
+        // including grouping and stable ties.
+        ndr::listing::sort_pane_entries(&mut pane.entries, &options, &color,
+            &group_mode, &category_mode, group_descending);
         pane.thumb_content_revision = pane.thumb_content_revision.wrapping_add(1);
         if marked.is_empty() {
             pane.selected.clear();
@@ -1800,8 +1812,10 @@ impl App {
                                 }
                                 DetailRow::Item(row) => *row,
                             };
-                            // C# QueueFolderSizeCalculation: when a visible folder row appears.
-                            self.queue_folder_size(index, row);
+                            // Only count visible rows with a visible size cell.
+                            if columns.iter().zip(&cell_widths).any(|((column, _, _), width)| *column == DetailColumn::Size && width.is_some()) {
+                                self.queue_folder_size(index, row);
+                            }
                             let icon = self.file_icon(ui.ctx(), index, row);
                             let icon = self.row_icon_for_skin(index, row, icon);
                             let pane = &mut self.panes[index];
@@ -1836,7 +1850,7 @@ impl App {
                                     let mut name_response = None;
                                     for ((column, _, _), cell) in columns.iter().zip(&cell_widths) {
                                         let Some(cell) = *cell else { continue };
-                                        let folder_size = (*column == DetailColumn::Size && entry.is_dir).then(|| pane.folder_sizes.get(&entry.path).map(|s| s.clone().unwrap_or_else(|| "…".into()))).flatten();
+                                        let folder_size = (*column == DetailColumn::Size && entry.is_dir).then(|| pane.folder_size_display(&entry.path)).flatten();
                                         let text = folder_size.as_ref().unwrap_or(&cells[column.index()]);
                                         let size = [cell, row_height];
                                         if *column == DetailColumn::Name {

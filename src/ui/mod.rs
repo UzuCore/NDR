@@ -166,6 +166,11 @@ struct Pane {
     folder_bytes: HashMap<PathBuf, u64>,
     /// Flag to stop counting folder sizes for the current listing (C# CancelFolderSizeJobs).
     folder_cancel: Arc<AtomicBool>,
+    /// Automatic jobs have their own cancellation token, so a user-requested
+    /// size calculation remains independent of the automatic display option.
+    folder_auto_cancel: Arc<AtomicBool>,
+    folder_auto_paths: HashSet<PathBuf>,
+    folder_auto_volume: Option<bool>,
     /// Whether the network share connection dialog has already been shown at this location (C# allowNetworkAuthPrompt: once only).
     auth_prompted: bool,
     /// Page info from the last paint (rows per column, visible column count, top item; used by the original ArrowKey).
@@ -235,6 +240,16 @@ struct Pane {
     item_pressed: bool,
 }
 impl Pane {
+    /// Keep the normal localized folder marker until an automatic result is
+    /// ready. Explicit Calculate Folder Size still shows its progress dots.
+    fn folder_size_display(&self, path: &Path) -> Option<String> {
+        match self.folder_sizes.get(path) {
+            Some(Some(text)) => Some(text.clone()),
+            Some(None) if !self.folder_auto_paths.contains(path) => Some("…".into()),
+            _ => None,
+        }
+    }
+
     fn new(path: PathBuf, show_hidden: bool) -> Self {
         Self {
             address: path.to_string_lossy().into_owned(),
@@ -266,6 +281,9 @@ impl Pane {
             folder_sizes: HashMap::new(),
             folder_bytes: HashMap::new(),
             folder_cancel: Arc::new(AtomicBool::new(false)),
+            folder_auto_cancel: Arc::new(AtomicBool::new(false)),
+            folder_auto_paths: HashSet::new(),
+            folder_auto_volume: None,
             auth_prompted: false,
             page: list_keys::ListPage::default(),
             first_column: 0,
@@ -578,7 +596,7 @@ enum AsyncResult {
     /// Remote command result (site number, command, "host:port", output or error).
     RemoteCommand { site: String, command: String, host: String, result: Result<String, String> },
     /// Automatic folder size display result (panel, listing generation, folder, text).
-    FolderSizeRow { pane: usize, generation: u64, path: PathBuf, text: String, bytes: u64 },
+    FolderSizeRow { pane: usize, generation: u64, path: PathBuf, text: String, bytes: u64, automatic: bool, complete: bool, cancel: Arc<AtomicBool> },
     /// Received an update feed.
     /// Update feed result. bool = the silent check at startup (original [+0x54]; for a new version, only the menu bar button).
     Update(Result<ndr::update::HttpResponse, ndr::update::HttpError>, bool),
@@ -789,9 +807,11 @@ pub struct App {
     smoke_tip_window: Option<[f32; 4]>,
     /// The opacity last applied to the window (0.0~1.0). Reapplied when WindowAlpha changes.
     applied_alpha: f32,
-    /// Whether the folder size auto-display work queue and workers (two) have been started.
+    /// One low-priority enumeration worker shared by both panes.
     folder_size_queue: pane_chrome::FolderSizeQueue,
     folder_size_workers: bool,
+    folder_size_cache: HashMap<PathBuf, (u64, Instant)>,
+    folder_auto_busy: bool,
     /// Fetch the update feed (C# UpdateHttpClient). Swapped out in tests.
     http_get: fn(&str, usize) -> Result<ndr::update::HttpResponse, ndr::update::HttpError>,
     /// Name to place the cursor on when the refreshed listing arrives (C# FocusPaneItemByName).
@@ -1052,6 +1072,8 @@ impl App {
             crumb_cache: HashMap::new(),
             folder_size_queue: Arc::new((Mutex::new(std::collections::VecDeque::new()), std::sync::Condvar::new())),
             folder_size_workers: false,
+            folder_size_cache: HashMap::new(),
+            folder_auto_busy: false,
             file_drag: None,
             pending_drag_marks: None,
             folder_rows: Vec::new(),
@@ -1239,6 +1261,9 @@ impl App {
         });
     }
     fn poll(&mut self, ctx: &egui::Context) {
+        // Observe a newly-started foreground job before consuming its
+        // completion event, even for very short copy/move operations.
+        self.sync_folder_size_activity();
         let mut auth_panes = std::mem::take(&mut self.auth_pending);
         // A heavy directory copy can trigger bursts of watcher/listing
         // notifications. Keep the UI frame bounded instead of applying all
@@ -1367,6 +1392,10 @@ impl App {
             pane.summary = None;
             pane.folder_cancel.store(true, Ordering::Relaxed);
             pane.folder_cancel = Arc::new(AtomicBool::new(false));
+            pane.folder_auto_cancel.store(true, Ordering::Relaxed);
+            pane.folder_auto_cancel = Arc::new(AtomicBool::new(false));
+            pane.folder_auto_paths.clear();
+            pane.folder_auto_volume = None;
             pane.folder_sizes.clear();
             pane.folder_bytes.clear();
             pane.cut_marks.clear();
@@ -1396,7 +1425,8 @@ impl App {
                     if !pane.filter.is_empty() {
                         // The original list mask (FUN_00459588) applies to files only: folders stay listed (seen in the running original with "*.txt").
                         // Previously folders whose names did not match were hidden.
-                        entries.retain(|e| e.drive || e.is_dir || ndr::parity::matches_filter(&pane.filter, &e.name));
+                        let filter = ndr::parity::CompiledFilter::new(&pane.filter);
+                        entries.retain(|e| e.drive || e.is_dir || filter.matches(&e.name));
                     }
                     // Original GetList (0x45a34c), archive listing (0x45ecd0), SFTP listing (0x45bb0c), C# ListLocal: ".." first unless at a root.
                     if let Some(mut parent) = parent_item_for(pane) {
@@ -1522,6 +1552,7 @@ impl App {
         self.poll_background_jobs();
         self.poll_disk_copy(ctx);
         self.poll_remote_window(ctx);
+        self.sync_folder_size_activity();
         for result in self.async_rx.try_iter().take(96).collect::<Vec<_>>() {
             match result {
                 AsyncResult::FtpPasteMovedLocal { sequence } => {
@@ -1580,12 +1611,17 @@ impl App {
                 AsyncResult::ArchiveEntriesOpened { pane, archive, password, opened, failures, navigate_archives } => self.archive_entries_opened(pane, archive, password, opened, failures, navigate_archives),
                 AsyncResult::ArchivePassword { archive, reply } => self.password_request = Some(PasswordRequest { archive, reply }),
                 AsyncResult::TextSource { path, edit } => self.text_source_ready(path, edit),
-                AsyncResult::FolderSizeRow { pane, generation, path, text, bytes } => {
+                AsyncResult::FolderSizeRow { pane, generation, path, text, bytes, automatic, complete, cancel } => {
                     // Original FUN_0048ee0c: finds the row whose folder + name equals the counted path (lstrcmpiW), stores the 64-bit size
                     // (+0x20/+0x24) and the count (+0x60), marks it counted (+0x68 = 1) and repaints. Rows are keyed by path here.
-                    if self.panes[pane].generation == generation {
+                    if self.panes[pane].generation == generation && !cancel.load(Ordering::Relaxed)
+                        && (!automatic || self.panes[pane].folder_auto_paths.contains(&path)) {
+                        if automatic && complete {
+                            self.cache_folder_size(path.clone(), bytes);
+                        }
                         self.panes[pane].folder_bytes.insert(path.clone(), bytes);
                         self.panes[pane].folder_sizes.insert(path, Some(text));
+                        ctx.request_repaint();
                     }
                 }
                 AsyncResult::Update(result, silent) => self.update_done(result, silent),
@@ -2215,7 +2251,12 @@ impl eframe::App for App {
                     let items = |p: &Pane| p.entries.len() - p.drive_count();
                     let viewport = ctx.content_rect();
                     let native_scale = ctx.input(|i| i.viewport().native_pixels_per_point);
-                    let report = serde_json::json!({"language":self.language,"frames":self.frames,"leftCount":items(&self.panes[0]),"rightCount":items(&self.panes[1]),"leftDrives":self.panes[0].drive_count(),"rightDrives":self.panes[1].drive_count(),"leftError":self.panes[0].error,"rightError":self.panes[1].error,"leftLoading":self.panes[0].loading,"rightLoading":self.panes[1].loading,"profile":self.profile,"runtime":"Rust","renderer":"OpenGL","foreground":self.smoke_foreground,"repaintCauses":self.smoke_repaint_causes,"slowestFrameMs":(self.smoke_slowest_frame_ms * 10.0).round() / 10.0,"slowFrames":self.smoke_slow_frames,"loadedMs":self.smoke_loaded_ms,"tipWindow":self.smoke_tip_window,"viewportPoints":[viewport.width(),viewport.height()],"nativePixelsPerPoint":native_scale,"pixelsPerPoint":ctx.pixels_per_point()});
+                    let folder_stats = |p: &Pane| {
+                        let completed = p.folder_auto_paths.iter().filter_map(|path| p.folder_bytes.get(path));
+                        let (count, bytes) = completed.fold((0usize, 0u64), |(count, total), size| (count + 1, total.saturating_add(*size)));
+                        serde_json::json!({"completed":count,"pending":p.folder_auto_paths.len().saturating_sub(count),"bytes":bytes})
+                    };
+                    let report = serde_json::json!({"language":self.language,"frames":self.frames,"leftCount":items(&self.panes[0]),"rightCount":items(&self.panes[1]),"leftDrives":self.panes[0].drive_count(),"rightDrives":self.panes[1].drive_count(),"leftError":self.panes[0].error,"rightError":self.panes[1].error,"leftLoading":self.panes[0].loading,"rightLoading":self.panes[1].loading,"profile":self.profile,"runtime":"Rust","renderer":"OpenGL","foreground":self.smoke_foreground,"repaintCauses":self.smoke_repaint_causes,"slowestFrameMs":(self.smoke_slowest_frame_ms * 10.0).round() / 10.0,"slowFrames":self.smoke_slow_frames,"loadedMs":self.smoke_loaded_ms,"tipWindow":self.smoke_tip_window,"viewportPoints":[viewport.width(),viewport.height()],"nativePixelsPerPoint":native_scale,"pixelsPerPoint":ctx.pixels_per_point(),"folderSizes":[folder_stats(&self.panes[0]),folder_stats(&self.panes[1])]});
                     let _ = std::fs::write(
                         path,
                         serde_json::to_vec_pretty(&report).unwrap_or_default(),
@@ -2274,6 +2315,10 @@ impl eframe::App for App {
         ));
     }
     fn on_exit(&mut self, _: Option<&eframe::glow::Context>) {
+        for pane in &self.panes {
+            pane.folder_cancel.store(true, Ordering::Relaxed);
+            pane.folder_auto_cancel.store(true, Ordering::Relaxed);
+        }
         self.vault_dialog = None;
         self.vault_transfer = None;
         #[cfg(feature = "winfsp-vault")]

@@ -103,12 +103,12 @@ impl App {
     /// Original QuickSearch (0x7d5f9c): searches from the current item with the search text; if not found and the typed character is shorter than the search text, searches
     /// again from the next item with that character alone. If still not found, the search text is cleared.
     fn original_search_text(&mut self, pane: usize, mut text: String, typed: String) {
-        let names: Vec<String> = self.panes[pane].entries.iter().map(|e| e.name.clone()).collect();
+        let names = &self.panes[pane].entries;
         let cursor = self.panes[pane].cursor;
-        let mut found = original_quick_search(&names, cursor, &text, true);
+        let mut found = original_quick_search_by(names, |e| &e.name, cursor, &text, true);
         if found.is_none() && typed.chars().count() < text.chars().count() {
             text = typed;
-            found = original_quick_search(&names, cursor, &text, false);
+            found = original_quick_search_by(names, |e| &e.name, cursor, &text, false);
         }
         match found {
             Some(row) => {
@@ -150,8 +150,8 @@ impl App {
             if !result {
                 // Fixed: the original cleared the search text when an intermediate composition character (for example "바" while typing "방") found nothing, which broke Korean search.
                 // NDR keeps the text and the cursor during composition even without a match, and searches by the original rules when the result arrives.
-                let names: Vec<String> = self.panes[pane].entries.iter().map(|e| e.name.clone()).collect();
-                if let Some(row) = original_quick_search(&names, self.panes[pane].cursor, &text, true) {
+                let names = &self.panes[pane].entries;
+                if let Some(row) = original_quick_search_by(names, |e| &e.name, self.panes[pane].cursor, &text, true) {
                     self.panes[pane].cursor = row;
                     self.panes[pane].reveal = true;
                 }
@@ -215,7 +215,12 @@ pub(super) fn original_search_key(c: char, caps_lock: bool, text_empty: bool) ->
 /// Original QuickSearch(text, include current item) (0x7d5ca8). 0 for empty text. From the current item (the next one when not included, the first after the last) to the end
 /// names with the same prefix (StrCmpNIW), then from the first item up to the current one when it did not start at the first, then the same order for names containing the text (StrStrIW).
 /// When it starts at the first item, the containment search is skipped (as in the original).
+#[cfg(test)]
 pub(super) fn original_quick_search(names: &[String], cursor: usize, text: &str, inclusive: bool) -> Option<usize> {
+    original_quick_search_by(names, String::as_str, cursor, text, inclusive)
+}
+
+pub(super) fn original_quick_search_by<T>(names: &[T], name: impl Fn(&T) -> &str, cursor: usize, text: &str, inclusive: bool) -> Option<usize> {
     if names.is_empty() {
         return None;
     }
@@ -224,11 +229,12 @@ pub(super) fn original_quick_search(names: &[String], cursor: usize, text: &str,
     }
     let count = names.len();
     let needle: Vec<char> = text.chars().flat_map(char::to_lowercase).collect();
-    let lower = |name: &str| name.chars().flat_map(char::to_lowercase).collect::<Vec<char>>();
-    let prefix = |i: usize| lower(&names[i]).starts_with(&needle);
-    let contains = |i: usize| {
-        let name = lower(&names[i]);
-        name.windows(needle.len()).any(|w| w == needle.as_slice())
+    let prefix = |i: usize| name(&names[i]).chars().flat_map(char::to_lowercase).take(needle.len()).eq(needle.iter().copied());
+    let mut lower = Vec::new();
+    let mut contains = |i: usize| {
+        lower.clear();
+        lower.extend(name(&names[i]).chars().flat_map(char::to_lowercase));
+        lower.windows(needle.len()).any(|w| w == needle.as_slice())
     };
     let cursor = cursor.min(count - 1);
     let start = if cursor == count - 1 { 0 } else if inclusive { cursor } else { cursor + 1 };
@@ -240,4 +246,61 @@ pub(super) fn original_quick_search(names: &[String], cursor: usize, text: &str,
         return None;
     }
     (0..cursor).find(|&i| prefix(i)).or_else(|| (start..count).find(|&i| contains(i))).or_else(|| (0..cursor).find(|&i| contains(i)))
+}
+
+#[cfg(test)]
+fn old_quick_search(names: &[String], cursor: usize, text: &str, inclusive: bool) -> Option<usize> {
+    if names.is_empty() { return None; }
+    if text.is_empty() { return Some(0); }
+    let count=names.len();
+    let needle: Vec<char>=text.chars().flat_map(char::to_lowercase).collect();
+    let lower=|name:&str| name.chars().flat_map(char::to_lowercase).collect::<Vec<char>>();
+    let prefix=|i:usize| lower(&names[i]).starts_with(&needle);
+    let contains=|i:usize| lower(&names[i]).windows(needle.len()).any(|w|w==needle.as_slice());
+    let cursor=cursor.min(count-1);
+    let start=if cursor==count-1 {0} else if inclusive {cursor} else {cursor+1};
+    let stop=start==0||(!inclusive&&cursor==count-1);
+    if let Some(i)=(start..count).find(|&i|prefix(i)) {return Some(i);}
+    if stop {return None;}
+    (0..cursor).find(|&i|prefix(i)).or_else(||(start..count).find(|&i|contains(i))).or_else(||(0..cursor).find(|&i|contains(i)))
+}
+
+#[test]
+fn borrowed_quick_search_matches_previous_unicode_order() {
+    let names: Vec<String>=["..","alpha","aLPHABET","b","xALPHA","\u{ac00}\u{1f680}","\u{0130}stanbul","i\u{0307}stanbul","\u{03a3}","\u{03c2}",""].iter().map(|s|s.to_string()).collect();
+    for n in 0..=names.len() {
+        for i in 0..=names.len()+1 {
+            for text in ["","a","ALPHA","bet","\u{ac00}","\u{1f680}","\u{0130}","i\u{0307}","\u{03c3}","\u{03c2}","absent"] {
+                for inclusive in [false,true] {
+                    let slice=&names[..n];
+                    assert_eq!(original_quick_search_by(slice,String::as_str,i,text,inclusive),old_quick_search(slice,i,text,inclusive));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "explicit Release benchmark"]
+fn benchmark_borrowed_quick_search_100k() {
+    let names: Vec<_>=(0..100000).map(|i|format!("file-{i:06}.txt")).collect();
+    let (mut old,mut new)=(Vec::new(),Vec::new());
+    for i in 0..13 {
+        let before=|| {
+            let t=std::time::Instant::now();
+            let copy=names.clone();
+            let r=old_quick_search(&copy, 50000, "notfound", true);
+            drop(copy);
+            (t.elapsed().as_secs_f64()*1000.0,r)
+        };
+        let after=|| {
+            let t=std::time::Instant::now();
+            let r=original_quick_search_by(&names,String::as_str,50000,"notfound",true);
+            (t.elapsed().as_secs_f64()*1000.0,r)
+        };
+        let (a,b)=if i%2==0 {(before(),after())}else{let b=after();(before(),b)};
+        assert_eq!(a.1,b.1);
+        if i>0 {old.push(a.0);new.push(b.0);}
+    }
+    eprintln!("BATCH76 quick100k old_ms={old:?} new_ms={new:?}");
 }

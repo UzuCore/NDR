@@ -625,7 +625,8 @@ pub(super) fn remote_ui(ui: &mut egui::Ui, form: &mut RemoteForm, labels: &Remot
             if ui.button("↑").on_hover_text(language.text("RES.FUNC_GOTOPARENT", "Parent folder")).clicked() {
                 action = Some(RemoteAction::LocalUp);
             }
-            let response = ui.add(egui::TextEdit::singleline(&mut form.local_path_box).desired_width(half - 190.0));
+            let response = ui.add(egui::TextEdit::singleline(&mut form.local_path_box).desired_width(half - 190.0))
+                .on_hover_text(&form.local_path_box);
             if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 action = Some(RemoteAction::LocalGo);
             }
@@ -646,7 +647,8 @@ pub(super) fn remote_ui(ui: &mut egui::Ui, form: &mut RemoteForm, labels: &Remot
             if ui.button("↑").clicked() {
                 action = Some(RemoteAction::RemoteUp);
             }
-            let response = ui.add(egui::TextEdit::singleline(&mut form.remote_path_box).desired_width(half - 150.0));
+            let response = ui.add(egui::TextEdit::singleline(&mut form.remote_path_box).desired_width(half - 150.0))
+                .on_hover_text(&form.remote_path_box);
             if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 action = Some(RemoteAction::RemoteGo);
             }
@@ -2032,7 +2034,8 @@ impl App {
                     check(cancel)?;
                     let local = Path::new(&destination).join(safe_local_name(&entry.name).ok_or_else(|| language.text("NDR.NET_UNSAFE_FILENAME", "The remote filename is unsafe."))?);
                     if std::fs::symlink_metadata(&local).is_ok() && !overwrite {
-                        completed += 1;
+                        // A skipped item was handled but not downloaded.
+                        // Keep transfer statistics limited to actual downloads.
                         report(format!("{}: {}", language.text("NDR.NET_SKIPPED", "Skipped"), entry.name), 0, None, completed);
                         continue;
                     }

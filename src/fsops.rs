@@ -416,6 +416,36 @@ mod tests {
     use super::*;
     use std::sync::mpsc;
     use std::thread;
+
+    #[test]
+    fn listing_reuses_native_name_without_changing_path_or_metadata() {
+        use std::os::windows::fs::MetadataExt;
+        let root=fixture();
+        for name in ["ascii.txt","\u{ac00}\u{1f680}.txt","\u{00e9}.log","with spaces.txt"] {
+            fs::write(root.join(name),name.as_bytes()).unwrap();
+        }
+        fs::create_dir(root.join("folder")).unwrap();
+        let hidden=root.join("hidden.txt");
+        fs::write(&hidden,b"h").unwrap();
+        let wide: Vec<u16>=std::os::windows::ffi::OsStrExt::encode_wide(hidden.as_os_str()).chain(Some(0)).collect();
+        assert_ne!(unsafe { windows_sys::Win32::Storage::FileSystem::SetFileAttributesW(wide.as_ptr(), 0x2) },0);
+        for show in [false,true] {
+            let listing=list_dir(&root,show).unwrap();
+            let expected: Vec<_>=fs::read_dir(&root).unwrap().map(|e|e.unwrap()).filter(|e|show||e.metadata().unwrap().file_attributes()&(2|4)==0).collect();
+            assert_eq!(listing.len(),expected.len());
+            for row in &listing {
+                let original=expected.iter().find(|e|e.path()==row.path).unwrap();
+                let m=original.metadata().unwrap();
+                assert_eq!(row.name,original.file_name().to_string_lossy());
+                assert_eq!(row.is_dir,m.is_dir());
+                assert_eq!(row.size,if m.is_dir(){0}else{m.len()});
+                assert_eq!(row.modified,m.modified().ok());
+                assert_eq!(row.attributes,m.file_attributes());
+                assert_eq!(row.hidden,m.file_attributes()&2!=0);
+            }
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
     pub(super) fn fixture() -> PathBuf {
         use std::sync::atomic::AtomicU64;
         static FIXTURE_ID: AtomicU64 = AtomicU64::new(0);
@@ -1304,19 +1334,24 @@ pub fn list_dir(path: &Path, show_hidden: bool) -> Result<Vec<Entry>, String> {
         // On Windows DirEntry::metadata uses the values FindNextFileW gave (attributes, size, times) as is and does not follow links
         // (same meaning as symlink_metadata). Much faster on large folders than symlink_metadata, which opens each file.
         let m = item.metadata().map_err(|e| e.to_string())?;
-        let name = item.file_name().to_string_lossy().into_owned();
         #[cfg(windows)]
         let attributes = {
             use std::os::windows::fs::MetadataExt;
             m.file_attributes()
         };
         #[cfg(not(windows))]
-        let attributes = if name.starts_with('.') { 2 } else { 0 };
+        let attributes = if item.file_name().to_string_lossy().starts_with('.') { 2 } else { 0 };
         let hidden = attributes & 2 != 0;
         // C# ListLocal: with hidden display off, items with hidden or system attributes are skipped (AttributesToSkip Hidden | System).
         if show_hidden || attributes & (2 | 4) == 0 {
+            // DirEntry::path joins the enumeration root and file_name.
+            // Obtain that filename only once, and keep its native spelling
+            // for filesystem operations even when the display is lossy.
+            let file_name = item.file_name();
+            let item_path = path.join(&file_name);
+            let name = file_name.into_string().unwrap_or_else(|s| s.to_string_lossy().into_owned());
             entries.push(Entry {
-                path: item.path(),
+                path: item_path,
                 name,
                 is_dir: m.is_dir(),
                 size: if m.is_dir() { 0 } else { m.len() },

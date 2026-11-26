@@ -345,13 +345,51 @@ fn priority_rank(entry: &Entry) -> u8 {
 
 /// C# SortPaneItems (before grouping): folders (folder mode) then files (priority rank ascending, then the file mode within). The sort is stable, so
 /// "None" is the received order. Descending reverses the whole key except the rank (OrderByDescending.ThenByDescending).
-pub fn sort_entries(entries: &mut Vec<Entry>, options: &SortOptions, color: &dyn Fn(&Entry) -> u32) {
-    let (mut folders, mut files): (Vec<Entry>, Vec<Entry>) = std::mem::take(entries).into_iter().partition(|e| e.is_dir);
+pub fn sort_entries(entries: &mut [Entry], options: &SortOptions, color: &dyn Fn(&Entry) -> u32) {
+    let split = stable_partition_prefix(entries, |e| e.is_dir);
+    let (folders, files) = entries.split_at_mut(split);
     let (folder_mode, folder_descending) = effective_folder_sort(options);
-    sort_group(&mut folders, folder_mode, folder_descending, options.logical, color, false);
-    sort_group(&mut files, &options.file_mode, options.file_descending, options.logical, color, true);
-    entries.extend(folders);
-    entries.extend(files);
+    sort_group(folders, folder_mode, folder_descending, options.logical, color, false);
+    sort_group(files, &options.file_mode, options.file_descending, options.logical, color, true);
+}
+
+/// Stable partition without rebuilding the owned Entry buffer. Already
+/// partitioned lists (including all-file folders) require no allocation or
+/// element moves. For interleaved rows, only a permutation of indices is
+/// allocated; paths and display names remain in their original allocations.
+fn stable_partition_prefix<T>(rows: &mut [T], is_prefix: impl Fn(&T) -> bool) -> usize {
+    let Some(split) = rows.iter().position(|row| !is_prefix(row)) else {
+        return rows.len();
+    };
+    if !rows[split + 1..].iter().any(&is_prefix) {
+        return split;
+    }
+    let tail = &mut rows[split..];
+    let mut order = Vec::with_capacity(tail.len());
+    order.extend(tail.iter().enumerate().filter_map(|(i, row)| is_prefix(row).then_some(i)));
+    let extra = order.len();
+    order.extend(tail.iter().enumerate().filter_map(|(i, row)| (!is_prefix(row)).then_some(i)));
+    apply_order(tail, &mut order);
+    split + extra
+}
+
+/// Preserve the original pane ordering: parents first, ordinary entries
+/// sorted and grouped, appended drives last in alphabetical path order.
+/// Drives participate in the intermediate sort/group pass as before.
+pub fn sort_pane_entries(
+    entries: &mut [Entry],
+    options: &SortOptions,
+    color: &dyn Fn(&Entry) -> u32,
+    group_mode: &str,
+    category_mode: &str,
+    group_descending: bool,
+) {
+    let parents = stable_partition_prefix(entries, Entry::is_parent);
+    let rows = &mut entries[parents..];
+    sort_entries(rows, options, color);
+    sort_groups(rows, group_mode, category_mode, group_descending);
+    let drives = stable_partition_prefix(rows, |e| !e.drive);
+    rows[drives..].sort_by(|a, b| a.path.cmp(&b.path));
 }
 
 /// Folder sort "Auto" = original foldersort 0 (the default). TNXFileList sort FUN_007d3350: with folder type 0 the folders take the file
@@ -373,7 +411,7 @@ pub fn effective_folder_sort(options: &SortOptions) -> (&str, bool) {
 
 /// One group of sort_entries (folders or files). Cache comparison data once,
 /// pooling NUL-terminated UTF-16 keys to avoid two heap allocations per row.
-fn sort_group(list: &mut Vec<Entry>, mode: &str, descending: bool, logical: bool, color: &dyn Fn(&Entry) -> u32, priority: bool) {
+fn sort_group(list: &mut [Entry], mode: &str, descending: bool, logical: bool, color: &dyn Fn(&Entry) -> u32, priority: bool) {
     if list.len() < 2 {
         return;
     }
@@ -691,6 +729,123 @@ mod tests {
     }
     fn options(folder: &str, file: &str, descending: bool) -> SortOptions {
         SortOptions { folder_mode: folder.into(), folder_descending: descending, file_mode: file.into(), file_descending: descending, logical: true }
+    }
+
+    // Batch 73's pane ordering and allocation path, retained only as the
+    // differential oracle. Use the same comparators to isolate partitioning.
+    fn partitioned_pane_reference(
+        entries: &mut Vec<Entry>, options: &SortOptions, color: &dyn Fn(&Entry) -> u32,
+        group: &str, category: &str, descending: bool,
+    ) {
+        let (mut parents, rest): (Vec<_>, Vec<_>) = std::mem::take(entries).into_iter().partition(Entry::is_parent);
+        let (mut folders, mut files): (Vec<_>, Vec<_>) = rest.into_iter().partition(|e| e.is_dir);
+        let (mode, reverse) = effective_folder_sort(options);
+        sort_group(&mut folders, mode, reverse, options.logical, color, false);
+        sort_group(&mut files, &options.file_mode, options.file_descending, options.logical, color, true);
+        let mut rows = Vec::new();
+        rows.extend(folders);
+        rows.extend(files);
+        sort_groups(&mut rows, group, category, descending);
+        let (mut items, mut drives): (Vec<_>, Vec<_>) = rows.into_iter().partition(|e| !e.drive);
+        drives.sort_by(|a, b| a.path.cmp(&b.path));
+        items.append(&mut drives);
+        parents.append(&mut items);
+        *entries = parents;
+    }
+
+    fn assert_same_rows(expected: &[Entry], actual: &[Entry]) {
+        assert_eq!(expected.len(), actual.len());
+        for (a, b) in expected.iter().zip(actual) {
+            assert_eq!((&a.path, &a.name, a.is_dir, a.size, a.modified, a.hidden, a.attributes, a.drive),
+                (&b.path, &b.name, b.is_dir, b.size, b.modified, b.hidden, b.attributes, b.drive));
+        }
+    }
+
+    #[test]
+    fn in_place_pane_sort_matches_batch73_partitioning() {
+        let mut mixed: Vec<_> = (0..87).map(|i| {
+            let mut row = entry(["a1.txt", "a02.TXT", "a1.txt", "b10.zip", ".hidden", "noext", "\u{ac00}\u{1f9ea}.txt", "\u{00c5}3.zip"][i % 8],
+                i % 5 == 0, (i % 7 * 1024) as u64,
+                [0, FILE_ATTRIBUTE_PINNED, FILE_ATTRIBUTE_RECALL_ON_OPEN, FILE_ATTRIBUTE_HIDDEN][i % 4]);
+            row.path = PathBuf::from(i.to_string());
+            row.modified = (i % 4 != 0).then_some(SystemTime::UNIX_EPOCH + Duration::from_secs((i % 9) as u64 * 3_000_000));
+            row
+        }).collect();
+        let drive_path = PathBuf::from(r"Q:\");
+        mixed.insert(7, Entry::parent_item(drive_path.clone(), None));
+        mixed.insert(15, Entry { name: "Q:".into(), drive: true, ..Entry::parent_item(drive_path, None) });
+        mixed.push(Entry { name: "D:".into(), drive: true, ..Entry::parent_item(PathBuf::from(r"D:\"), None) });
+        let files: Vec<_> = mixed.iter().filter(|e| !e.is_dir).cloned().collect();
+        let folders: Vec<_> = mixed.iter().filter(|e| e.is_dir).cloned().collect();
+        let mut ordered = mixed.clone();
+        ordered.sort_by_key(|e| (if e.is_parent() { 0 } else if e.is_dir { 1 } else { 2 }, e.drive));
+        let color = |row: &Entry| (row.size % 3) as u32;
+        for original in [Vec::new(), files, folders, mixed, ordered] {
+            for mode in ["None", "Name", "Extension", "Size", "Modified", "Attributes", "Color"] {
+                for folder in ["Auto", "Name", "None"] {
+                    for reverse in [false, true] {
+                        for logical in [false, true] {
+                            for group in ["None", "Extension", "Category", "Time", "Size"] {
+                                let opts = SortOptions { logical, folder_descending: !reverse, ..options(folder, mode, reverse) };
+                                let category = if reverse { "Separate" } else { "Auto" };
+                                let mut expected = original.clone();
+                                let mut actual = original.clone();
+                                let address = actual.as_ptr();
+                                partitioned_pane_reference(&mut expected, &opts, &color, group, category, !reverse);
+                                sort_pane_entries(&mut actual, &opts, &color, group, category, !reverse);
+                                assert_same_rows(&expected, &actual);
+                                assert_eq!(actual.as_ptr(), address, "entry buffer must stay allocated");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "explicit Release benchmark: 100,000 rows, paired in-place vs Batch 73 partitioning"]
+    fn benchmark_in_place_pane_sort_100k() {
+        use std::time::Instant;
+        for mixed in [false, true] {
+            let mut originals = Vec::with_capacity(100_003);
+            originals.push(Entry::parent_item(PathBuf::from(r"D:\"), None));
+            for i in 0..100_000 {
+                let id = (i * 7919) % 100_000;
+                let is_dir = mixed && id % 17 == 0;
+                originals.push(entry(&format!("file-{id:06}.txt"), is_dir, (id % 37) as u64, 0));
+            }
+            if mixed {
+                originals.push(Entry { name: "D:".into(), drive: true, ..Entry::parent_item(PathBuf::from(r"D:\"), None) });
+            }
+            for mode in ["None", "Name"] {
+                let opts = options("Auto", mode, false);
+                let mut old = Vec::new();
+                let mut new = Vec::new();
+                for i in 0..23 {
+                    let (mut expected, mut actual) = (originals.clone(), originals.clone());
+                    let baseline = |rows: &mut Vec<Entry>| {
+                        let start = Instant::now();
+                        partitioned_pane_reference(rows, &opts, &|_| 0, "None", "Auto", false);
+                        start.elapsed().as_secs_f64() * 1_000.0
+                    };
+                    let improved = |rows: &mut Vec<Entry>| {
+                        let start = Instant::now();
+                        sort_pane_entries(rows, &opts, &|_| 0, "None", "Auto", false);
+                        start.elapsed().as_secs_f64() * 1_000.0
+                    };
+                    let (a, b) = if i % 2 == 0 {
+                        (baseline(&mut expected), improved(&mut actual))
+                    } else {
+                        let b = improved(&mut actual);
+                        (baseline(&mut expected), b)
+                    };
+                    assert_same_rows(&expected, &actual);
+                    if i >= 3 { old.push(a); new.push(b); }
+                }
+                eprintln!("PANE100K mixed={mixed} mode={mode} old_ms={old:?} new_ms={new:?}");
+            }
+        }
     }
 
     // Stage 5 comparator and gather path; baseline for stability and benchmark comparisons.

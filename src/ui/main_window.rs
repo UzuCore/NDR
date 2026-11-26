@@ -28,6 +28,22 @@ impl UpdateProgress {
     }
 }
 
+/// The normal egui spinner requests an immediate repaint on every frame.
+/// Progress changes much less frequently than the display rate. Paint a
+/// time-stepped indicator; the panel schedules the next frame at 100 ms.
+fn update_activity_indicator(ui: &mut egui::Ui) {
+    let size = ui.spacing().interact_size.y.min(20.0);
+    let (rect, _) = ui.allocate_exact_size(egui::Vec2::splat(size), egui::Sense::hover());
+    let tick = (ui.input(|i| i.time) * 10.0).floor() as usize % 8;
+    let color = ui.visuals().strong_text_color();
+    for dot in 0..8 {
+        let angle = dot as f32 * std::f32::consts::TAU / 8.0;
+        let point = rect.center() + egui::vec2(angle.cos(), angle.sin()) * (size * 0.33);
+        let age = (tick + 8 - dot) % 8;
+        ui.painter().circle_filled(point, (size * 0.085).max(1.0), color.gamma_multiply(1.0 - age as f32 * 0.10));
+    }
+}
+
 /// C# PaneState.UpdateSummary (counted once when the list is received).
 #[derive(Clone, Debug, Default)]
 pub(super) struct PaneSummary {
@@ -655,15 +671,21 @@ impl App {
     pub(super) fn update_progress_ui(&mut self, ctx: &egui::Context) {
         use ndr::update::UpdatePhase;
         let Some(progress) = self.update_progress.as_ref() else { return };
+        let active = progress.phase != UpdatePhase::Failed;
+        let screen = ctx.content_rect();
+        let width = (screen.width() - 32.0).clamp(160.0, 420.0);
         let mut dismiss = false;
         egui::Window::new(self.catalog("NDR.UPD_TITLE", "NDR 업데이트", "NDR Update"))
             .id(egui::Id::new("ndr-update-progress"))
             .collapsible(false).resizable(false)
             // Anchoring makes egui windows immovable. Keep the original
             // centered starting location while allowing title-bar dragging.
-            .default_pos(ctx.content_rect().center() - egui::vec2(230.0, 130.0))
+            .default_pos(screen.center() - egui::vec2(width * 0.5 + 20.0, 130.0))
             .movable(true)
-            .min_width(420.0)
+            .min_width(width)
+            .max_width(width)
+            .max_height((screen.height() - 52.0).max(80.0))
+            .vscroll(true)
             .show(ctx, |ui| {
                 ui.add_space(8.0);
                 ui.heading(format!("NDR  {}", progress.tag));
@@ -706,13 +728,13 @@ impl App {
                             .desired_width(ui.available_width()));
                     }
                     UpdatePhase::Verifying | UpdatePhase::Preparing | UpdatePhase::Installing => {
-                        ui.horizontal(|ui| {
-                            ui.spinner();
-                            ui.label(match progress.phase {
+                        ui.horizontal_wrapped(|ui| {
+                            update_activity_indicator(ui);
+                            ui.add(egui::Label::new(match progress.phase {
                                 UpdatePhase::Verifying => self.catalog("NDR.UPD_VERIFY_HASH", "SHA-256 무결성을 확인하고 있습니다...", "Verifying SHA-256..."),
                                 UpdatePhase::Preparing => self.catalog("NDR.UPD_PREPARING", "설치 패키지를 준비하고 있습니다...", "Preparing package..."),
                                 _ => self.catalog("NDR.UPD_INSTALLER_START", "설치 프로그램으로 전환합니다...", "Starting installer..."),
-                            });
+                            }).wrap());
                         });
                         ui.add(egui::ProgressBar::new(1.0).text("ZIP 100%").desired_width(ui.available_width()));
                     }
@@ -734,7 +756,7 @@ impl App {
                 ui.add_space(6.0);
             });
         if dismiss { self.update_progress = None; }
-        else { ctx.request_repaint_after(Duration::from_millis(100)); }
+        else if active { ctx.request_repaint_after(Duration::from_millis(100)); }
     }
 
     pub(super) fn update_done(&mut self, result: Result<ndr::update::HttpResponse, ndr::update::HttpError>, silent: bool) {
