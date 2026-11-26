@@ -741,6 +741,34 @@ fn pick_save_target(_: &str, _: Option<&Path>, _: &str, _: &[(&str, &str)], _: &
 }
 
 #[test]
+fn localized_file_list_exports_unicode_with_custom_separator() {
+    let (root, ctx, mut app) = fixture("localized-listexport", "ja");
+    let filename = "目録.txt";
+    fs::write(root.join("left").join(filename), b"payload").unwrap();
+    app.refresh(0);
+    wait_listing(&mut app, &ctx);
+    app.panes[0].selected = [row(&app, 0, filename)].into_iter().collect();
+    app.save_dialog = pick_save_target;
+    SAVE_TARGET.with(|t| *t.borrow_mut() = Some(root.join("localized")));
+    app.dispatch("saveList", &ctx);
+    assert_eq!(app.original_dialogs[0].title, app.language_pack.primary_raw("formSaveList.Form.Caption").unwrap());
+    frame(&mut app, &ctx, vec![]);
+    app.edit_dialog_kind(|kind| if let DialogKind::ListExport(form) = kind {
+        form.columns = ndr::list_export::Columns { size: true, date: false, time: false, ..Default::default() };
+        form.delimiter = 2;
+        form.custom = "|".into();
+        form.rebuild();
+    });
+    app.submit_list_export(&ctx);
+    let bytes = fs::read(root.join("localized.txt")).unwrap();
+    assert_eq!(&bytes[..2], &[0xff, 0xfe]);
+    let units = bytes[2..].chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect::<Vec<_>>();
+    let exported = String::from_utf16(&units).unwrap();
+    assert!(exported.contains(filename) && exported.contains('|'), "{exported}");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn list_export_window_follows_the_original_savelist() {
     let (root, ctx, mut app) = fixture("listexport", "en");
     let left = root.join("left");

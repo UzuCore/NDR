@@ -487,6 +487,41 @@ mod operation_format_tests {
     use std::time::SystemTime;
 
     #[test]
+    fn bundled_zip_labels_and_archive_preview_keep_runtime_format() {
+        let catalogs = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/Resources/Languages"));
+        let locales = compat::available_codes(catalogs);
+        assert_eq!(locales.len(), 40);
+        for code in locales {
+            let pack = compat::Language::load(catalogs, &code);
+            let primary = |key| pack.primary_raw(key).unwrap_or_else(|| panic!("{code}: {key} is missing"));
+            let title = primary("NDR.OP_ARCHIVE_CREATE_ZIP_ARCHIVE");
+            assert!(title.contains("ZIP"), "{code}: {title:?}");
+            let filter = primary("NDR.OP_ARCHIVE_ZIP_ARCHIVES_ZIP");
+            assert!(filter.ends_with("(*.zip)"), "{code}: {filter:?}");
+            let default_name = primary("NDR.OP_ARCHIVE_NEW_ARCHIVE_ZIP");
+            assert!(default_name.ends_with(".zip"), "{code}: {default_name:?}");
+            assert!(!default_name.contains(['/', '\\', ':', '*', '?', '"', '<', '>', '|']), "{code}: {default_name:?}");
+            let key = "NDR.OP_ARCHIVE_CREATED_THE_ZIP_FILE_0";
+            assert_eq!(primary(key).matches("{0}").count(), 1, "{code}");
+            let file = "archive-{0}.zip";
+            let done = operation_format(&pack, key, "missing", &[&file]);
+            assert_eq!(done.matches(file).count(), 1, "{code}: {done:?}");
+            let key = "NDR.OP_ARCHIVE_MORE";
+            assert!(primary(key).starts_with('\n'), "{code}");
+            let more = operation_format(&pack, key, "missing", &[&12345]);
+            assert!(more.starts_with('\n') && !more.contains('\r'), "{code}: {more:?}");
+            assert_eq!(more.matches('\n').count(), 1, "{code}: {more:?}");
+            assert_eq!(more.matches("12345").count(), 1, "{code}: {more:?}");
+            let key = "NDR.OP_ARCHIVE_EXTERNAL_VOLUME";
+            let warning = primary(key);
+            assert_eq!(warning.matches(".{0}").count(), 1, "{code}: {warning:?}");
+            assert!(!warning.contains("{archive}") && !warning.contains("{sources}"), "{code}: {warning:?}");
+            let displayed = operation_format(&pack, key, "missing", &[&"rar"]);
+            assert!(displayed.contains(".rar") && displayed.contains("ZIP") && displayed.contains("7z"), "{code}: {displayed:?}");
+        }
+    }
+
+    #[test]
     fn operation_catalog_reorders_arguments_and_does_not_interpolate_error_contents() {
         let dir = std::env::temp_dir().join(format!("ndr-op-loc-{}-{}", std::process::id(), SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_nanos()));
         std::fs::create_dir_all(&dir).unwrap();

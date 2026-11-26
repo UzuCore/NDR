@@ -1085,7 +1085,7 @@ impl App {
         ui.put(at(159.0, 2.0, 150.0, 16.0), egui::ProgressBar::new(if running { percent as f32 / 100.0 } else { 0.0 }).desired_height(16.0).corner_radius(0.0));
         if running {
             let speed = ftp_speed(&rows, std::time::Instant::now());
-            let text = ftp_transferred_text(percent, &native::format_byte_size(done), &native::format_byte_size(total), speed);
+            let text = ftp_transferred_text(percent, &localized_byte_size(&self.language_pack, done), &localized_byte_size(&self.language_pack, total), speed);
             super::original_dialogs::put_left(ui, at(315.0, 3.0, (bar.width() - 315.0 - 52.0).max(0.0), 16.0), egui::Label::new(text).truncate());
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
         }

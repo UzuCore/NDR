@@ -2303,6 +2303,30 @@ impl eframe::App for App {
         self.save();
     }
 }
+/// Keep the shell's size rounding, but do not leak the OS language's byte
+/// label into NDR's selected language for sizes below one KiB.
+fn localized_byte_size(language: &compat::Language, bytes: u64) -> String {
+    if bytes >= 1024 {
+        return native::format_byte_size(bytes);
+    }
+    let unit = language.text("NDR.UI_SIZE_BYTES", "bytes");
+    match language.code.as_str() {
+        "ko" | "ja" => format!("{bytes}{unit}"),
+        "en" if bytes == 1 => "1 byte".to_owned(),
+        _ => format!("{bytes} {unit}"),
+    }
+}
+
+#[test]
+fn localized_byte_size_follows_selected_catalog() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Resources/Languages");
+    for (code, expected) in [("en", "15 bytes"), ("de", "15 Bytes"), ("ja", "15バイト"), ("ko", "15바이트")] {
+        let lang = compat::Language::load(&root, code);
+        assert_eq!(localized_byte_size(&lang, 15), expected);
+        assert_eq!(localized_byte_size(&lang, 2048), native::format_byte_size(2048));
+    }
+}
+
 fn format_size(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
     let mut value = bytes as f64;

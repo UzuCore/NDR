@@ -311,7 +311,7 @@ fn original_pages(built: Vec<Vec<Row>>, language: &compat::Language, _ko: bool) 
         Some(Row::Note(format!(
             "{} {}",
             lang("Caption.lApplyAfterRestart", "(Restart required)"),
-            language.localized("NDR.UI_SETTINGS_SHORTCUT_FALLBACK", "Win+문자 조합을 사용할 수 없으면 Win+Shift+문자 조합으로 등록을 시도합니다.", "If Win+letter is unavailable, NDR tries Win+Shift+letter.")
+            language.localized("NDR.UI_SETTINGS_LIKE_THE_ORIGINAL_ONLY_929B45", "원본처럼 Win+문자로만 등록합니다. 다른 프로그램이 그 조합을 쓰고 있으면 등록하지 않고 안내합니다.", "Like the original, only Win+letter is registered. If another program uses it, nothing is registered and a message is shown.")
         ))),
         take("CheckForUpdatesOnStartup", l("Caption.chkCheckUpdate", "Check update when program starts")),
         take("UseDescriptionFile", l("Caption.chkUseION", "Read comment file \"descript.ion\" ")),

@@ -117,7 +117,14 @@ impl Language {
     /// Fetch an explicit catalog key with language-appropriate built-in text
     /// when neither the selected nor its English catalog contains it.
     pub fn localized(&self, key: &str, korean: &str, english: &str) -> String {
-        self.text(key, if self.code == "ko" { korean } else { english })
+        // Korean has its own authoritative source fallback. The English
+        // catalog must not override it just because the Korean key is absent.
+        if self.code == "ko" && !korean.is_empty() {
+            self.primary_raw(key).filter(|text| !text.trim().is_empty())
+                .map_or_else(|| korean.to_owned(), clean_language_text)
+        } else {
+            self.text(key, english)
+        }
     }
 
     /// Accepts RES.KEY, Root.KEY, formMain.Menu.miOpen, Menu.miOpen or a bare root key.
@@ -193,7 +200,11 @@ impl Language {
                     .get(&clean_language_text(english).to_lowercase())
             })
         {
-            self.text(key, fallback)
+            // The reverse index can point to a key found only in a base
+            // catalog. Do not replace an explicit bilingual source fallback
+            // with an unrelated English fallback from that key.
+            self.primary_raw(key).filter(|text| !text.trim().is_empty())
+                .map_or_else(|| fallback.to_owned(), clean_language_text)
         } else {
             fallback.into()
         }
@@ -2426,6 +2437,17 @@ mod tests {
             Language::load(directory, "en").text("Menu.miOpen", "missing"),
             "missing"
         );
+    }
+    #[test]
+    fn missing_base_key_uses_korean_literal_before_english_catalog() {
+        let root = sandbox("korean-missing-key");
+        fs::write(root.join("ko.lang"), "[RES]\nRENAME=이름 바꾸기\n").unwrap();
+        fs::write(root.join("en.lang"), "[NDR]\nSAMPLE=English fallback\n[RES]\nMISSING=English name\n").unwrap();
+        let korean = Language::load(&root, "ko");
+        assert_eq!(korean.localized("NDR.SAMPLE", "한국어 기본 문구", "English literal"), "한국어 기본 문구");
+        assert_eq!(korean.translate_pair("한국어 이름", "English name"), "한국어 이름");
+        assert_eq!(korean.text("NDR.SAMPLE", "Default"), "English fallback");
+        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn language_pair_translation_uses_cached_original_keys_and_custom_fallbacks() {

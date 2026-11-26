@@ -2283,7 +2283,8 @@ fn empty_temp_asks_with_counts_and_empties_only_the_contents_like_the_original()
     wait_until(&mut app, &ctx, |app| !app.msgboxes.is_empty());
     let (title, text) = app.msgboxes.first().map(|m| (m.title.clone(), m.text.clone())).expect("the MSG_EMPTYTEMP question");
     assert_eq!(title, app.language_pack.text("RES.TITLE_EMPTYTEMP", "?"));
-    let expected = app.language_pack.text("RES.MSG_EMPTYTEMP", "?").replacen("%d", "3", 1).replacen("%s", &ndr::native::format_byte_size(9), 1);
+    // The selected English UI must not inherit the Korean OS byte suffix.
+    let expected = app.language_pack.text("RES.MSG_EMPTYTEMP", "?").replacen("%d", "3", 1).replacen("%s", "9 bytes", 1);
     assert_eq!(text, expected);
     assert!(app.original_dialogs.is_empty(), "no cleanup scan window (C# flow) any more");
     // No: unchanged.

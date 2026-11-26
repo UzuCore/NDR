@@ -121,7 +121,10 @@ pub(super) fn split_ui(ui: &mut egui::Ui, form: &mut SplitForm, language: &compa
     });
     if let Some(size) = ndr::split::parse_split_size(&form.size) {
         let template = language.text("RES.SPLITTED_INFO", "Number of splitted files: %d");
-        super::original_dialogs::put_left(ui, at(260.0, 99.0, 200.0, 15.0), egui::Label::new(template.replace("%d", &ndr::split::part_count(form.length, size).to_string())).truncate());
+        let count = ndr::split::part_count(form.length, size);
+        let summary = template.replace("%d", &count.to_string());
+        super::original_dialogs::put_left(ui, at(252.0, 96.0, 208.0, 46.0), egui::Label::new(&summary).wrap())
+            .on_hover_text(summary);
     }
     if ui.put(at(303.0, 151.0, 75.0, 25.0), egui::Button::new(split_text(language, "Caption.btnOk", "OK"))).clicked() {
         choice = Some(0);

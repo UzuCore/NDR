@@ -680,3 +680,45 @@ fn adding_to_a_multivolume_archive_rebuilds_it_like_csharp() {
     assert!(!fs::read_dir(left).unwrap().any(|e| e.unwrap().file_name().to_string_lossy().starts_with(".ndr-multivolume-update-")), "the staging folder is removed");
     fs::remove_dir_all(root).unwrap();
 }
+
+
+#[test]
+fn collision_window_renders_selected_labels_for_every_bundled_locale() {
+    use super::file_operation::ConflictForm;
+    fn collect(shape: &egui::Shape, out: &mut Vec<String>) {
+        match shape {
+            egui::Shape::Text(text) => out.push(text.galley.text().to_owned()),
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| collect(s, out)),
+            _ => {}
+        }
+    }
+
+    let resources = Path::new(env!("CARGO_MANIFEST_DIR")).join("Resources/Languages");
+    let english = compat::Language::load(&resources, "en");
+    let ctx = egui::Context::default();
+    super::set_app_fonts(&ctx, None, false, 1.0);
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1050.0, 700.0));
+    for &(code, _) in compat::BUILTIN_LANGUAGES {
+        let language = compat::Language::load(&resources, code);
+        let mut form = ConflictForm::read(Path::new("source.bin"), Path::new("destination.bin"), true);
+        (form.source_size, form.destination_size) = (Some(23), Some(10));
+        let output = ctx.run(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                assert!(super::file_operation::conflict_ui(ui, &mut form, &language, code == "ko", false).is_none());
+            });
+        });
+        let mut painted = Vec::new();
+        for item in &output.shapes {
+            collect(&item.shape, &mut painted);
+        }
+        for key in ["Caption.btnOverwrite", "Caption.btnResume", "Caption.btnSkip", "Caption.btnOverNewer", "Caption.chkApplyAll"] {
+            let key = format!("formFileExists.{key}");
+            let label = language.primary_raw(&key).unwrap_or_else(|| panic!("{code}: {key} not present"));
+            if code != "en" {
+                assert_ne!(Some(label), english.primary_raw(&key), "{code}: {key} is English");
+            }
+            let caption = super::favorites_dialog::access_key(label).0;
+            assert!(painted.iter().any(|g| g.contains(&caption)), "{code}: {caption:?} is not painted: {painted:?}");
+        }
+    }
+}

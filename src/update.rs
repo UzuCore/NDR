@@ -243,12 +243,23 @@ mod tests {
         for &(locale, _) in crate::compat::BUILTIN_LANGUAGES {
             let selected = crate::compat::Language::load(root, locale);
             let messages = installer_messages(&selected);
-            let primary = selected.primary_raw("NDR.UPD_INSTALL_TITLE").expect("localized installer title");
-            assert_eq!(messages["title"], primary, "{locale}");
             let serialized = serde_json::to_vec(&messages).unwrap();
             let decoded: std::collections::BTreeMap<String, String> = serde_json::from_slice(&serialized).unwrap();
-            assert_eq!(decoded["title"], primary);
-            assert!(!decoded["failed"].is_empty());
+            let english = installer_messages(&crate::compat::Language::load(root, "en"));
+            for (field, key) in [
+                ("title", "TITLE"), ("heading", "HEADING"), ("checking", "CHECKING"),
+                ("extracting", "EXTRACTING"), ("closing", "CLOSING"), ("waiting", "WAITING"),
+                ("installing", "WRITING"), ("finished", "FINISHED"), ("failed", "FAILURE"),
+                ("failureTitle", "FAILURE_TITLE"),
+            ] {
+                let key = format!("NDR.UPD_INSTALL_{key}");
+                let primary = selected.primary_raw(&key).unwrap_or_else(|| panic!("{locale}: {key}"));
+                assert_eq!(decoded[field], primary, "{locale}: {key}");
+                assert!(!primary.trim().is_empty() && !primary.contains('\u{fffd}'), "{locale}: {key}");
+                if locale != "en" {
+                    assert_ne!(decoded[field], english[field], "{locale}: English fallback for {key}");
+                }
+            }
         }
     }
 

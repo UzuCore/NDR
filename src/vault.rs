@@ -1440,7 +1440,14 @@ mod tests {
         let offset=v.item(id).unwrap().blocks[0].offset+RECORD_HEADER as u64;
         drop(v);
         let mut file=OpenOptions::new().read(true).write(true).open(&path).unwrap();
-        file.seek(SeekFrom::Start(offset)).unwrap();file.write_all(&[0xff]).unwrap();file.sync_all().unwrap();drop(file);
+        file.seek(SeekFrom::Start(offset)).unwrap();
+        let mut byte = [0u8];
+        file.read_exact(&mut byte).unwrap();
+        byte[0] ^= 1;
+        file.seek(SeekFrom::Start(offset)).unwrap();
+        file.write_all(&byte).unwrap();
+        file.sync_all().unwrap();
+        drop(file);
         let v=Vault::unlock(&path,"correct secret".into()).unwrap();
         assert!(v.verify_integrity().is_err());
         assert!(v.stream_read_chunk(id,0).is_err());

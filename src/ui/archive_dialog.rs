@@ -476,7 +476,7 @@ impl App {
         if exists && family.len() > 1 {
             // C# multi-volume update: bundled 7-Zip only (7z, zip). Split size = chosen value, otherwise the largest volume (rounded down to MiB).
             if !matches!(extension.as_str(), "7z" | "zip") || program.is_some() {
-                return self.warn_operation(&super::file_commands::operation_format(&self.language_pack, "NDR.OP_ARCHIVE_EXTERNAL_VOLUME", "To update a .{0} multi-volume archive, set an external archive template for {0} with {archive}, {sources} and a volume size placeholder.", &[&extension]));
+                return self.warn_operation(&super::file_commands::operation_format(&self.language_pack, "NDR.OP_ARCHIVE_EXTERNAL_VOLUME", "Updating this split .{0} archive is not supported. Use the built-in ZIP or 7z support to create a new split archive instead.", &[&extension]));
             }
             if choice.volume.is_none() {
                 let largest = family.iter().filter_map(|p| std::fs::metadata(p).ok()).map(|m| m.len()).max().unwrap_or(0);

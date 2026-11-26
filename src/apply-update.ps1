@@ -47,6 +47,13 @@ function Set-InstallProgress([string]$message, [int]$percent) {
     if (-not $script:installerForm) { return }
     $script:installerLabel.Text = ('{0}  ({1}%)' -f $message, $percent)
     $script:installerBar.Value = [Math]::Max(0, [Math]::Min(100, $percent))
+    # Give translated text as many lines as it needs; the bar must stay below it.
+    $script:installerBar.Top = [Math]::Max(88, $script:installerLabel.Bottom + 12)
+    $client = $script:installerForm.ClientSize
+    $minimumHeight = $script:installerBar.Bottom + 18
+    if ($client.Height -lt $minimumHeight) {
+        $script:installerForm.ClientSize = [System.Drawing.Size]::new($client.Width, $minimumHeight)
+    }
     [System.Windows.Forms.Application]::DoEvents()
 }
 if ($ShowProgress -and -not $SkipRestart) {
@@ -55,7 +62,7 @@ if ($ShowProgress -and -not $SkipRestart) {
     [System.Windows.Forms.Application]::EnableVisualStyles()
     $script:installerForm = [System.Windows.Forms.Form]::new()
     $script:installerForm.Text = $script:installerText.title
-    $script:installerForm.Size = [System.Drawing.Size]::new(460, 172)
+    $script:installerForm.ClientSize = [System.Drawing.Size]::new(450, 132)
     $script:installerForm.StartPosition = 'CenterScreen'
     $script:installerForm.FormBorderStyle = 'FixedDialog'
     $script:installerForm.MaximizeBox = $false
@@ -67,11 +74,13 @@ if ($ShowProgress -and -not $SkipRestart) {
     $heading.Text = $script:installerText.heading
     $heading.Font = [System.Drawing.Font]::new('Segoe UI', 12, [System.Drawing.FontStyle]::Bold)
     $heading.Location = [System.Drawing.Point]::new(22, 17)
-    $heading.Size = [System.Drawing.Size]::new(400, 28)
+    $heading.MaximumSize = [System.Drawing.Size]::new(408, 0)
+    $heading.AutoSize = $true
     $script:installerForm.Controls.Add($heading)
     $script:installerLabel = [System.Windows.Forms.Label]::new()
-    $script:installerLabel.Location = [System.Drawing.Point]::new(23, 52)
-    $script:installerLabel.Size = [System.Drawing.Size]::new(410, 24)
+    $script:installerLabel.Location = [System.Drawing.Point]::new(23, [Math]::Max(52, $heading.Bottom + 8))
+    $script:installerLabel.MaximumSize = [System.Drawing.Size]::new(408, 0)
+    $script:installerLabel.AutoSize = $true
     $script:installerLabel.Font = [System.Drawing.Font]::new('Segoe UI', 9)
     $script:installerForm.Controls.Add($script:installerLabel)
     $script:installerBar = [System.Windows.Forms.ProgressBar]::new()
@@ -79,8 +88,9 @@ if ($ShowProgress -and -not $SkipRestart) {
     $script:installerBar.Size = [System.Drawing.Size]::new(408, 16)
     $script:installerBar.Style = 'Continuous'
     $script:installerForm.Controls.Add($script:installerBar)
-    $script:installerForm.Show()
+
     Set-InstallProgress $script:installerText.checking 2
+    $script:installerForm.Show()
 }
 $work = Split-Path -Parent $Archive
 $staging = Join-Path $work 'extracted'
@@ -182,7 +192,8 @@ try {
         $script:installerForm.ControlBox = $true
         Set-InstallProgress $script:installerText.failed 0
         $script:installerForm.TopMost = $false
-        [void][System.Windows.Forms.MessageBox]::Show($script:installerText.failed, $script:installerText.failureTitle)
+        $failureText = $script:installerText.failed + [Environment]::NewLine + [Environment]::NewLine + $LogPath
+        [void][System.Windows.Forms.MessageBox]::Show($script:installerForm, $failureText, $script:installerText.failureTitle)
         $script:installerForm.Close()
         $script:installerForm.Dispose()
     }

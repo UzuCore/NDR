@@ -61,6 +61,8 @@ impl App {
         let tree_waiting = kind == "panetree" && self.tree_requests.iter().any(|key| !self.tree_cache.contains_key(key));
         let sent_id = egui::Id::new("ndr-shot-sent");
         if self.frames >= SHOT_FRAME && !tree_waiting && !ctx.data(|d| d.get_temp::<bool>(sent_id)).unwrap_or(false) {
+            // Record actual rendered text, glyph coverage and clipping, not only successful startup.
+            audit_shot_text(ctx, &path);
             ctx.data_mut(|d| d.insert_temp(sent_id, true));
             ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
         }
@@ -120,7 +122,7 @@ impl App {
                 self.push_original_dialog(text(self, "formDelWarning.Form.Caption"), DialogKind::DeleteWarning { message, show_delete: true, default_button: 1 }, |_, _, _| {});
             }
             "delconfirm" => {
-                self.push_original_dialog(text(self, "formDelConfirm.Form.Caption"), DialogKind::DeleteConfirm { message: format!("{}\n\ndocument.txt", text(self, "formDelConfirm.Caption.lMsg")), attributes: "R  A".into() }, |_, _, _| {});
+                self.push_original_dialog(text(self, "formDelConfirm.Form.Caption"), DialogKind::DeleteConfirm { message: ndr::markup::substitute(&text(self, "RES.QUE_DELCONFIRM"), &["document.txt"]), attributes: "R  A".into() }, |_, _, _| {});
             }
             "conflict" => {
                 let (source, destination) = (folder.join("a").join("document.txt"), folder.join("b").join("document.txt"));
@@ -289,6 +291,9 @@ impl App {
             // C# remote window (not connected): for checking the skin images of the upload/download buttons in the middle.
             "remote" => self.open_remote_window(None, None),
             "search" => self.search_command(),
+            // Isolated screenshot fixture: neither dialog authenticates or creates a container.
+            "vaultcreate" => self.open_vault(folder.join("a"), true),
+            "vaultunlock" => self.open_vault(folder.join("sample.ndr"), false),
             "advselect" => self.advanced_select(false),
             "compareopts" | "compareresult" => {
                 use ndr::folder_compare::{Difference, DifferenceKind};
@@ -354,6 +359,86 @@ impl App {
             }
             _ => self.status = format!("Unknown shot kind: {kind}"),
         }
+    }
+}
+
+fn audit_shot_text(ctx: &egui::Context, path: &Path) {
+    use egui::epaint::Shape;
+    let shapes = ctx.graphics(|g| g.clone().drain(&[], &Default::default()));
+    let screen = ctx.content_rect();
+    fn rect_json(r: egui::Rect) -> [f32; 4] { [r.min.x, r.min.y, r.max.x, r.max.y] }
+    fn visit(ctx: &egui::Context, shape: &Shape, clip: egui::Rect, rows: &mut Vec<serde_json::Value>) {
+        match shape {
+            Shape::Vec(shapes) => for s in shapes { visit(ctx, s, clip, rows); },
+            Shape::Text(t) => {
+                let bounds = t.visual_bounding_rect();
+                if !bounds.is_positive() || !bounds.intersects(clip) { return; }
+                let job = &t.galley.job;
+                let mut missing = std::collections::BTreeSet::new();
+                ctx.fonts_mut(|fonts| {
+                    for section in &job.sections {
+                        if let Some(value) = job.text.get(section.byte_range.clone()) {
+                            for ch in value.chars().filter(|c| !c.is_control() && !c.is_whitespace()) {
+                                if !fonts.has_glyph(&section.format.font_id, ch) { missing.insert(ch); }
+                            }
+                        }
+                    }
+                });
+                let visible = bounds.intersect(clip);
+                let clipped = (bounds.width() - visible.width() > 1.5) || (bounds.height() - visible.height() > 1.5);
+                rows.push(serde_json::json!({"text":job.text,"bounds":rect_json(bounds),"clip":rect_json(clip),"elided":t.galley.elided,"clipped":clipped,"missing":missing.into_iter().collect::<String>(),"rows":t.galley.rows.len()}));
+            }
+            _ => {}
+        }
+    }
+    let mut rows = Vec::new();
+    for item in &shapes { visit(ctx, &item.shape, item.clip_rect.intersect(screen), &mut rows); }
+    let _ = std::fs::write(path.with_extension("layout.json"), serde_json::to_vec_pretty(&rows).unwrap_or_default());
+}
+
+/// Full locale sweep of real dialog widgets without opening desktop windows.
+#[cfg(test)]
+#[test]
+#[ignore = "explicit localization layout QA"]
+fn all_locale_dialog_layout_sweep() {
+    let output = PathBuf::from(std::env::var_os("NDR_LAYOUT_QA_DIR").expect("NDR_LAYOUT_QA_DIR"));
+    std::fs::create_dir_all(&output).unwrap();
+    let kinds = ["prompt", "rename", "delwarning", "delconfirm", "conflict", "ftpquick", "destination", "ftpattr", "checksum", "attributes", "editshortcut", "savelist", "foldertree", "favorites", "funckey", "archive", "advrename", "advrename-delete", "sites", "credentials", "remote", "search", "vaultcreate", "vaultunlock", "advselect", "compareopts", "compareresult"];
+    let raw = || egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 850.0))), ..Default::default() };
+    for &(locale, _) in ndr::compat::BUILTIN_LANGUAGES {
+        let dir = output.join(locale);
+        let left = dir.join("left");
+        let right = dir.join("right");
+        std::fs::create_dir_all(left.join("sample-folder")).unwrap();
+        std::fs::create_dir_all(&right).unwrap();
+        std::fs::write(left.join("document.txt"), b"test").unwrap();
+        let ctx = egui::Context::default();
+        let mut app = App::from_context(&ctx, Options { profile: Some(dir.join("profile")), left: Some(left), right: Some(right), language: Some(locale.into()), ..Default::default() });
+        set_app_fonts(&ctx, None, false, 1.0);
+        let until = Instant::now() + Duration::from_secs(10);
+        while app.panes.iter().any(|p| p.loading) && Instant::now() < until {
+            app.poll(&ctx);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        app.open_shot_sample("settings0");
+        let tabs = app.settings_form().map_or(0, |f| f.tabs.len());
+        let cases: Vec<String> = kinds.iter().map(|s| s.to_string()).chain((0..tabs).map(|i| format!("settings{i}"))).collect();
+        for kind in cases {
+            app.original_dialogs.clear();
+            app.vault_dialog = None;
+            app.msgboxes.clear();
+            app.open_shot_sample(&kind);
+            assert!(!app.original_dialogs.is_empty() || app.vault_dialog.is_some() || !app.msgboxes.is_empty(), "{locale}:{kind}: no dialog");
+            for i in 0..4 {
+                let _ = ctx.run(raw(), |ctx| {
+                    app.vault_window_ui(ctx);
+                    app.original_dialog_ui(ctx);
+                    app.msgbox_ui(ctx);
+                    if i == 3 { audit_shot_text(ctx, &dir.join(format!("{kind}.png"))); }
+                });
+            }
+        }
+        println!("layout sweep {locale}: {} dialogs", kinds.len() + tabs);
     }
 }
 

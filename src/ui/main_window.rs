@@ -309,7 +309,7 @@ impl App {
         let res = |key: &str, fallback: &str| self.language_pack.text(&format!("RES.{key}"), fallback);
         let counts = ndr::markup::substitute(
             &res("FOLDERINFO", "<c000000><b>%d</b></c> Folder, <c000000><b>%d</b></c> File (<b>%s</b>)"),
-            &[&summary.folders.to_string(), &summary.files.to_string(), &native::format_byte_size(summary.bytes)],
+            &[&summary.folders.to_string(), &summary.files.to_string(), &localized_byte_size(&self.language_pack, summary.bytes)],
         );
         let marked: Vec<&Entry> = pane.selected.iter().filter_map(|i| pane.entries.get(*i)).filter(|e| !e.drive && !e.is_parent()).collect();
         if !marked.is_empty() {
@@ -320,7 +320,7 @@ impl App {
         }
         match &pane.disk {
             Some((drive, free, total)) => {
-                let (free, total) = (native::format_byte_size(*free), native::format_byte_size(*total));
+                let (free, total) = (localized_byte_size(&self.language_pack, *free), localized_byte_size(&self.language_pack, *total));
                 let short = ndr::markup::substitute(&res("DISKINFO_SHORT", "<c000000><b>%s</b></c> Free"), &[&free]);
                 let long = ndr::markup::substitute(&res("DISKINFO_LONG", "<c000000><b>%s</b></c> Free (Total <b>%s</b>)"), &[&free, &total]);
                 (counts, drive.clone(), short, ndr::markup::plain_text(&long))
@@ -503,7 +503,7 @@ impl App {
             return Some(match sizes {
                 Some((free, total)) if *kind == 3 => {
                     let label = self.language_pack.text("RES.DISKFREE", "Free");
-                    format!("{name} ({letter}:)  |  {kind_name}  |  {} {label} / {}", native::format_byte_size(*free), native::format_byte_size(*total))
+                    format!("{name} ({letter}:)  |  {kind_name}  |  {} {label} / {}", localized_byte_size(&self.language_pack, *free), localized_byte_size(&self.language_pack, *total))
                 }
                 _ => format!("{name} ({letter}:)  |  {kind_name}"),
             });

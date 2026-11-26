@@ -146,7 +146,14 @@ impl ConflictForm {
 /// Original FUN_00422068: file info text "<b>%s</b> bytes ( long date, time )" (size via FloatToStrF ffNumber = thousands separators).
 /// With highlight, <c0000FF>...</c> like FUN_00422314 (red, the newer side).
 pub(super) fn conflict_file_info(size: Option<u64>, modified: Option<SystemTime>, highlight: bool, language: &compat::Language) -> String {
-    let bytes = size.map(|s| super::file_commands::operation_format(language, "NDR.OP_TRANSFER_CONFLICT_BYTES", "<b>{0}</b> bytes", &[&n0(s as usize)])).unwrap_or_else(|| language.text("NDR.OP_TRANSFER_SIZE_UNAVAILABLE", "Size unavailable"));
+    let bytes = size.map(|s| {
+        let number = n0(s as usize);
+        if language.primary_raw("NDR.OP_TRANSFER_CONFLICT_BYTES").is_some() {
+            super::file_commands::operation_format(language, "NDR.OP_TRANSFER_CONFLICT_BYTES", "<b>{0}</b> bytes", &[&number])
+        } else {
+            format!("<b>{number}</b> {}", language.text("NDR.UI_SIZE_BYTES", "bytes"))
+        }
+    }).unwrap_or_else(|| language.text("NDR.OP_TRANSFER_SIZE_UNAVAILABLE", "Size unavailable"));
     let info = match modified.map(ndr::listing::long_date_and_time) {
         Some((date, time)) => format!("{bytes} ( {date}, {time} )"),
         None => bytes,
@@ -273,9 +280,11 @@ fn conflict_cancel_caption(language: &compat::Language) -> String {
 /// Original TfFileExists (ClientWidth 545 x ClientHeight 253) layout: lMsg (20,13), lFileName (20,34 bold),
 /// Panel1(17,56 396×155: lOrgLabel·imgOrg·lOrgDir·lOrgFile, Bevel1, lNewLabel·imgNew·lNewDir·lNewFile), chkApplyAll(20,221),
 /// right button column (conflict_buttons). Enter = the first enabled button (overwrite), Esc = cancel (close the window).
-pub(super) fn conflict_ui(ui: &mut egui::Ui, form: &mut ConflictForm, language: &compat::Language, ko: bool, enter: bool) -> Option<ConflictChoice> {
+pub(super) fn conflict_ui(ui: &mut egui::Ui, form: &mut ConflictForm, language: &compat::Language, _ko: bool, enter: bool) -> Option<ConflictChoice> {
     let text = |key: &str, fallback: &str| language.text(&format!("formFileExists.{key}"), fallback);
-    let (area, _) = ui.allocate_exact_size(egui::vec2(545.0, 253.0), egui::Sense::hover());
+    // Compound labels can be much wider than the original English buttons.
+    let button_width = (ui.ctx().content_rect().width() - 455.0).clamp(112.0, 238.0);
+    let (area, _) = ui.allocate_exact_size(egui::vec2(433.0 + button_width, 253.0), egui::Sense::hover());
     let at = |x: f32, y: f32, w: f32, h: f32| egui::Rect::from_min_size(area.min + egui::vec2(x, y), egui::vec2(w, h));
     let text_color = ui.visuals().text_color();
     super::original_dialogs::put_left(ui, at(20.0, 13.0, 390.0, 15.0), egui::Label::new(text("Caption.lMsg", "A destination folder already contains a file/folder named")).truncate());
@@ -339,7 +348,9 @@ pub(super) fn conflict_ui(ui: &mut egui::Ui, form: &mut ConflictForm, language: 
             ConflictButton::Rename => raw("Caption.btnRename", "&Rename"),
             ConflictButton::Cancel => conflict_cancel_caption(language),
         };
-        if super::original_dialogs::vcl_button(ui, at(425.0, button.top(), 112.0, 25.0), enabled, &label).1 && chosen.is_none() {
+        let (response, pressed) = super::original_dialogs::vcl_button(ui, at(425.0, button.top(), button_width, 25.0), enabled, &label);
+        response.on_hover_text(super::favorites_dialog::access_key(&label).0);
+        if pressed && chosen.is_none() {
             chosen = Some(button.choice());
         }
     }
@@ -701,7 +712,7 @@ impl App {
         };
         // lRemaining: original FUN_00412558 = remaining bytes (StrFormatByteSizeW), only when the byte total is known. Initially (FUN_00411cbc) empty.
         let remaining = match info.total_bytes.filter(|t| *t > 0) {
-            Some(total) if info.prefer_bytes => ndr::native::format_byte_size(total.saturating_sub(job.bytes)),
+            Some(total) if info.prefer_bytes => localized_byte_size(&self.language_pack, total.saturating_sub(job.bytes)),
             _ => String::new(),
         };
         // lCount: original "(%d)" = remaining items. When the total is unknown, the done count like the C# version.
@@ -798,9 +809,9 @@ impl App {
             } else { None };
             let remaining = match info.total_bytes.filter(|n| *n > 0) {
                 Some(total) if info.prefer_bytes =>
-                    ndr::native::format_byte_size(total.saturating_sub(job.bytes)),
+                    localized_byte_size(&self.language_pack, total.saturating_sub(job.bytes)),
                 None if info.prefer_bytes && job.bytes > 0 =>
-                    ndr::native::format_byte_size(job.bytes),
+                    localized_byte_size(&self.language_pack, job.bytes),
                 _ => String::new(),
             };
             let count = match info.total_files {

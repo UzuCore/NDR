@@ -16,12 +16,7 @@ impl App {
             || (reservation.is_none() && !self.background_jobs.is_empty())
             || (active && self.job.as_ref().is_some_and(|j| j.reservation.is_none()))
         {
-            self.status = self
-                .tr(
-                    "진행 중인 작업을 먼저 마치세요.",
-                    "Finish the current operation first.",
-                )
-                .into();
+            self.status = self.catalog("NDR.OP_JOB_FINISH_FIRST", "진행 중인 작업을 먼저 마치세요.", "Finish the current operation first.");
             return;
         }
         if let Some(request) = &reservation {
@@ -33,21 +28,11 @@ impl App {
                 .filter_map(|job| job.reservation.as_ref())
                 .any(|running| request.overlaps(running));
             if conflicts {
-                self.status = self
-                    .tr(
-                        "동일한 파일을 처리하는 다른 작업이 진행 중입니다.",
-                        "Another operation is using the same file paths.",
-                    )
-                    .into();
+                self.status = self.catalog("NDR.OP_JOB_PATH_BUSY", "같은 파일 경로를 사용하는 다른 작업이 진행 중입니다.", "Another operation is using the same file paths.");
                 return;
             }
             if self.background_jobs.len() + usize::from(active) >= 16 {
-                self.status = self
-                    .tr(
-                        "동시 파일 작업은 최대 16개까지 가능합니다.",
-                        "At most 16 concurrent file operations are allowed.",
-                    )
-                    .into();
+                self.status = self.catalog("NDR.OP_JOB_LIMIT", "파일 작업은 최대 16개까지 동시에 실행할 수 있습니다.", "At most 16 concurrent file operations are allowed.");
                 return;
             }
         }

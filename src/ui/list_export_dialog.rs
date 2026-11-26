@@ -67,14 +67,14 @@ pub(super) fn list_export_ui(ui: &mut egui::Ui, form: &mut ListExportForm, langu
     let labels = text(language, "RadioGroupItems.rgDelimiter", "Tab;Comma;Other:");
     let labels: Vec<&str> = labels.split(';').collect();
     for (index, (fallback, top)) in [("Tab", 33.0), ("Comma", 66.0), ("Other:", 99.0)].into_iter().enumerate() {
-        let rect = at(339.0, top, if index == 2 { 62.0 } else { 185.0 }, 17.0);
+        let rect = at(339.0, top, if index == 2 { 108.0 } else { 185.0 }, 17.0);
         if put_left(ui, rect, egui::RadioButton::new(form.delimiter == index, *labels.get(index).unwrap_or(&fallback))).clicked() && form.delimiter != index {
             form.delimiter = index;
             changed = true;
         }
     }
-    ui.scope_builder(egui::UiBuilder::new().max_rect(at(403.0, 97.0, 101.0, 21.0)), |ui| {
-        changed |= ui.add_enabled(form.delimiter == 2, egui::TextEdit::singleline(&mut form.custom).desired_width(101.0)).changed();
+    ui.scope_builder(egui::UiBuilder::new().max_rect(at(450.0, 97.0, 70.0, 21.0)), |ui| {
+        changed |= ui.add_enabled(form.delimiter == 2, egui::TextEdit::singleline(&mut form.custom).desired_width(70.0)).changed();
     });
     if changed {
         form.rebuild();
@@ -92,7 +92,7 @@ pub(super) fn list_export_ui(ui: &mut egui::Ui, form: &mut ListExportForm, langu
             ui.add(egui::TextEdit::multiline(&mut form.preview).font(egui::TextStyle::Monospace).desired_width(f32::INFINITY).frame(false).layouter(&mut layouter));
         });
     });
-    put_left(ui, at(16.0, 418.0, 340.0, 15.0), egui::Label::new(text(language, "Caption.lHelp", "You can edit before saving the list")).truncate());
+    put_left(ui, at(16.0, 418.0, 340.0, 35.0), egui::Label::new(text(language, "Caption.lHelp", "You can edit before saving the list")).wrap());
     if ui.put(at(368.0, 427.0, 75.0, 25.0), egui::Button::new(text(language, "Caption.btnSave", "Save"))).clicked() {
         choice = Some(0);
     }

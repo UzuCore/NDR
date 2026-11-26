@@ -26,7 +26,7 @@ impl App {
             .language_pack
             .text("RES.MSG_EMPTYTEMP", "Are you sure you want to empty a temporary folder?\n%d files, %s")
             .replacen("%d", &files.to_string(), 1)
-            .replacen("%s", &ndr::native::format_byte_size(bytes), 1);
+            .replacen("%s", &localized_byte_size(&self.language_pack, bytes), 1);
         self.message_box(&title, "", &text, MB_YESNO | MB_ICONQUESTION, move |app, answer, _| {
             if answer != IDYES {
                 return;

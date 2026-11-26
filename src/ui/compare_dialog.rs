@@ -459,9 +459,9 @@ impl App {
         let local = |p: &Pane| p.archive.is_none() && p.remote.is_none();
         if !local(&self.panes[0]) || !local(&self.panes[1]) {
             if synchronize {
-                self.warn_operation(&self.catalog("NDR.UI_COMPARE_SYNC_LOCAL_ONLY", "폴더 동기화는 일반 폴더에서 사용할 수 없습니다.", "Folder synchronization is only available for regular folders."));
+                self.warn_operation(&self.catalog("NDR.UI_COMPARE_SYNC_LOCAL_ONLY", "폴더 동기화는 일반 폴더에서만 사용할 수 있습니다.", "Folder synchronization is only available for regular folders."));
             } else {
-                self.warn_operation(&self.catalog("NDR.UI_COMPARE_LOCAL_ONLY", "폴더 비교는 일반 폴더에서 사용할 수 없습니다.", "Folder comparison is only available for regular folders."));
+                self.warn_operation(&self.catalog("NDR.UI_COMPARE_LOCAL_ONLY", "폴더 비교는 일반 폴더에서만 사용할 수 있습니다.", "Folder comparison is only available for regular folders."));
             }
             return None;
         }
