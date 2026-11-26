@@ -402,7 +402,7 @@ fn read_lines(text: &str) -> Vec<&str> {
 
 /// C# JoinOrderedFiles: concatenates the inputs in order into a temp file, then moves it to the result name (overwrite only with explicit consent).
 /// Joining text files: rewrites every line with CRLF; the output encoding is the last file's (UTF-16BE becomes UTF-16LE), except that when a non-ASCII file exists
-/// and the last one is ASCII, UTF-16LE. The BOM follows the output encoding (none for ASCII). Progress is (files done, bytes written).
+/// and the last one is ASCII, UTF-16LE. The BOM follows the output encoding (none for ASCII). Progress is (files done, input bytes processed).
 /// Original text join FUN_00465588: each file goes through TStringList.LoadFromFile with the encoding from FUN_0046541c and AddStrings, then
 /// SaveToFile with the last encoding, or TEncoding.Unicode when some file was not the default and the last one is. Fixed: FUN_0046541c gives
 /// FF FE and FE FF the same encoding (FUN_00523990, little-endian Unicode), so a big-endian file comes out garbled; NDR decodes it as UTF-16BE.
@@ -428,7 +428,7 @@ pub fn join_ordered_files_with_locale(inputs: &[PathBuf], output: &Path, join_te
     let temporary = directory.join(format!(".{file_name}.{}.tmp", temporary_suffix()));
     let result = (|| {
         let mut out = OpenOptions::new().write(true).create_new(true).open(&temporary).map_err(|e| e.to_string())?;
-        let mut written = 0u64;
+        let mut processed = 0u64;
         if let Some(kinds) = &kinds {
             let non_default = kinds.iter().any(|(k, _)| *k != TextKind::Ascii);
             let last = kinds.last().map(|(k, _)| *k).unwrap_or(TextKind::Ascii);
@@ -443,17 +443,17 @@ pub fn join_ordered_files_with_locale(inputs: &[PathBuf], output: &Path, join_te
                 _ => &[0xFF, 0xFE],
             };
             out.write_all(preamble).map_err(|e| e.to_string())?;
-            written += preamble.len() as u64;
             for (index, (source, (kind, bom))) in sources.iter().zip(kinds).enumerate() {
                 cancelled(cancel)?;
                 let bytes = fs::read(source).map_err(|e| e.to_string())?;
                 let text = decode(&bytes[(*bom).min(bytes.len())..], *kind);
                 for line in read_lines(&text) {
+                    cancelled(cancel)?;
                     let encoded = encode(&format!("{line}\r\n"), output_kind);
                     out.write_all(&encoded).map_err(|e| e.to_string())?;
-                    written += encoded.len() as u64;
                 }
-                progress(index as u64 + 1, written, source);
+                processed += bytes.len() as u64;
+                progress(index as u64 + 1, processed, source);
             }
         } else {
             // Original join engine FUN_00464d2c: opens the result with CREATE_ALWAYS and copies each piece in order (progress kinds 4/3 = totals,
@@ -471,10 +471,10 @@ pub fn join_ordered_files_with_locale(inputs: &[PathBuf], output: &Path, join_te
                         break;
                     }
                     out.write_all(&buffer[..read]).map_err(|e| e.to_string())?;
-                    written += read as u64;
-                    progress(index as u64, written, source);
+                    processed += read as u64;
+                    progress(index as u64, processed, source);
                 }
-                progress(index as u64 + 1, written, source);
+                progress(index as u64 + 1, processed, source);
             }
         }
         cancelled(cancel)?;
@@ -583,7 +583,10 @@ mod tests {
         let mut utf16 = vec![0xFF, 0xFE];
         utf16.extend("가\n".encode_utf16().flat_map(u16::to_le_bytes));
         fs::write(root.join("c.txt"), utf16).unwrap();
-        join_ordered_files(&[root.join("c.txt"), root.join("a.txt")], &root.join("ca.txt"), true, false, &cancel, &mut |_, _, _| {}).unwrap();
+        let mut ticks = Vec::new();
+        let input_bytes = fs::metadata(root.join("c.txt")).unwrap().len();
+        join_ordered_files(&[root.join("c.txt"), root.join("a.txt")], &root.join("ca.txt"), true, false, &cancel, &mut |files, bytes, _| ticks.push((files, bytes))).unwrap();
+        assert_eq!(ticks, vec![(1, input_bytes), (2, input_bytes + 7)], "progress counts input bytes, not UTF-16 output or added CRLF");
         let expected: Vec<u8> = [0xFF, 0xFE].into_iter().chain("가\r\none\r\ntwo\r\n".encode_utf16().flat_map(u16::to_le_bytes)).collect();
         assert_eq!(fs::read(root.join("ca.txt")).unwrap(), expected, "non-ASCII input with an ASCII last file: UTF-16LE");
         fs::remove_dir_all(root).unwrap();

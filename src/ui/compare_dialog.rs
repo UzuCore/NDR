@@ -333,28 +333,61 @@ pub(super) fn result_color(kind: DifferenceKind) -> Color32 {
 pub(super) fn folder_compare_ui(ui: &mut egui::Ui, form: &mut FolderCompareForm, language: &compat::Language, text_color: Color32, enter: bool) -> Option<FolderCompareAction> {
     let text = |key: &str, fallback: &str| language.text(&format!("formCompareFolder.{key}"), fallback).replace('&', "");
     let mut action = None;
-    let (area, _) = ui.allocate_exact_size(egui::vec2(640.0, 505.0), egui::Sense::hover());
-    let at = |x: f32, y: f32, w: f32, h: f32| egui::Rect::from_min_size(area.min + egui::vec2(x, y), egui::vec2(w, h));
+    let screen = ui.ctx().content_rect();
+    let compact = screen.width() < 680.0 || screen.height() < 565.0;
+    let width = if compact { (screen.width() - 40.0).clamp(180.0, 640.0) } else { 640.0 };
+    let height = if compact { (screen.height() - 54.0).clamp(180.0, 505.0) } else { 505.0 };
     let running = form.running.clone();
+    let labels = [if running.is_some() { text("Caption.btnStop", "Stop") } else { text("Caption.btnOk", "Compare") }, text("Caption.btnSave", "Save"), text("Caption.btnCancel", "Close")];
+    let bw = if compact { (width - 24.0) / 3.0 } else { 75.0 };
+    let bh = if compact { super::original_dialogs::compact_button_height(ui, &labels, bw) } else { 25.0 };
+    let check_job = |caption: String| {
+        let mut job = egui::text::LayoutJob::simple(caption, egui::TextStyle::Body.resolve(ui.style()), text_color, (width - 44.0).max(1.0));
+        job.wrap.break_anywhere = true;
+        job
+    };
+    let recursive = check_job(text("Caption.chkRecursive", "Include Subfolders(&R)"));
+    let contents = check_job(text("Caption.chkCompareContents", "&Compare Files Contents - If you uncheck this, compare only file time"));
+    let check_height = |job: &egui::text::LayoutJob| ui.fonts_mut(|f| f.layout_job(job.clone()).size().y).max(17.0) + 3.0;
+    let rh = if compact { check_height(&recursive) } else { 17.0 };
+    let ch = if compact { check_height(&contents) } else { 17.0 };
+    let result_height = if compact && form.result.is_some() && running.is_none() { 34.0 } else { 18.0 };
+    let table_top = if compact { result_height + 6.0 } else { 44.0 };
+    let button_y = if compact { height - bh - 4.0 } else { 475.0 };
+    let contents_y = if compact { button_y - ch - 3.0 } else { 448.0 };
+    let recursive_y = if compact { contents_y - rh - 3.0 } else { 425.0 };
+    let table_height = if compact { (recursive_y - table_top - 4.0).max(44.0) } else { 375.0 };
+    let (area, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+    let at = |x: f32, y: f32, w: f32, h: f32| egui::Rect::from_min_size(area.min + egui::vec2(x, y), egui::vec2(w, h));
     match (&form.result, &running) {
         (Some(result), None) => {
-            super::original_dialogs::put_left(ui, at(12.0, 12.0, 620.0, 18.0), egui::Label::new(super::original_dialogs::markup_job(result, 12.0, text_color, 620.0)));
+            let rect = if compact { at(4.0, 0.0, width - 8.0, result_height) } else { at(12.0, 12.0, 620.0, 18.0) };
+            ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                ui.set_clip_rect(ui.clip_rect().intersect(rect));
+                let mut job = super::original_dialogs::markup_job(result, 12.0, text_color, rect.width());
+                job.wrap.break_anywhere = true;
+                ui.add(egui::Label::new(job)).on_hover_text(ndr::markup::plain_text(result));
+            });
         }
         _ => {
             let percent = running.as_ref().map_or(0, |task| task.percent.load(Ordering::Relaxed).min(100));
-            ui.put(at(8.0, 12.0, 624.0, 16.0), egui::ProgressBar::new(percent as f32 / 100.0).desired_height(16.0).corner_radius(0.0));
+            ui.put(if compact { at(4.0, 0.0, width - 8.0, 16.0) } else { at(8.0, 12.0, 624.0, 16.0) }, egui::ProgressBar::new(percent as f32 / 100.0).desired_height(16.0).corner_radius(0.0));
         }
     }
-    let side = ((LIST_CLIENT_WIDTH - RESULT_COLUMN_WIDTH - 30.0) / 2.0).floor();
     let result_title = language.text("formCompareFolder.ListViewCols.lvList", ";;Result;").split(';').nth(2).unwrap_or("Result").to_owned();
-    let columns = [Column::text("", 30.0), Column::right(form.left_caption.clone(), side), Column::center(result_title, RESULT_COLUMN_WIDTH), Column::text(form.right_caption.clone(), side)];
+    let table = at(if compact { 4.0 } else { 8.0 }, table_top, if compact { width - 8.0 } else { 621.0 }, table_height);
+    let marker = if compact { 12.0 } else { 30.0 };
+    let result_width = if compact { (super::original_dialogs::caption_width(ui, &result_title) + 16.0).clamp(40.0, (table.width() * 0.37).max(40.0)) } else { RESULT_COLUMN_WIDTH };
+    let side = if compact { ((table.width() - 14.0 - result_width - marker) / 2.0).floor() } else { ((LIST_CLIENT_WIDTH - RESULT_COLUMN_WIDTH - 30.0) / 2.0).floor() };
+    let columns = [Column::text("", marker), Column::right(form.left_caption.clone(), side), Column::center(result_title, result_width), Column::text(form.right_caption.clone(), side)];
     let events = ui
-        .scope_builder(egui::UiBuilder::new().max_rect(at(8.0, 44.0, 621.0, 375.0)), |ui| {
-            ui.painter().rect_stroke(at(8.0, 44.0, 621.0, 375.0), 0.0, egui::Stroke::new(1.0_f32, Color32::from_gray(160)), egui::StrokeKind::Inside);
+        .scope_builder(egui::UiBuilder::new().max_rect(table), |ui| {
+            ui.set_clip_rect(ui.clip_rect().intersect(table));
+            ui.painter().rect_stroke(table, 0.0, egui::Stroke::new(1.0_f32, Color32::from_gray(160)), egui::StrokeKind::Inside);
             let FolderCompareForm { rows, grid: state, .. } = form;
             let rows: &Vec<Difference> = rows;
             let color = |row: usize| Some(result_color(rows[row].kind));
-            let view = GridView { id: "folder-compare", columns: &columns, height: 375.0 - 26.0, enabled: true, sortable: true, multi_select: false, keyboard: true, context_menu: None, row_color: Some(&color), background: Some(Color32::WHITE) };
+            let view = GridView { id: "folder-compare", columns: &columns, height: (table_height - 26.0).max(18.0), enabled: true, sortable: true, multi_select: false, keyboard: true, context_menu: None, row_color: Some(&color), background: Some(Color32::WHITE), cell_tooltips: true };
             let cell = |row: usize, column: usize| folder_compare_cell(&rows[row], column);
             grid::show(ui, &view, state, &cell, &|_| false)
         })
@@ -362,31 +395,126 @@ pub(super) fn folder_compare_ui(ui: &mut egui::Ui, form: &mut FolderCompareForm,
     if let Some(column) = events.sort {
         form.sort(column);
     }
-    super::original_dialogs::put_left(ui, at(8.0, 425.0, 609.0, 17.0), egui::Checkbox::new(&mut form.recursive, text("Caption.chkRecursive", "Include Subfolders(&R)")));
-    super::original_dialogs::put_left(ui, at(8.0, 448.0, 609.0, 17.0), egui::Checkbox::new(&mut form.contents, text("Caption.chkCompareContents", "&Compare Files Contents - If you uncheck this, compare only file time")));
+    super::original_dialogs::put_left(ui, at(8.0, recursive_y, width - 16.0, rh), egui::Checkbox::new(&mut form.recursive, recursive));
+    super::original_dialogs::put_left(ui, at(8.0, contents_y, width - 16.0, ch), egui::Checkbox::new(&mut form.contents, contents));
+    let button = |i: usize| at(if compact { 6.0 + i as f32 * (bw + 6.0) } else { 390.0 + 81.0 * i as f32 }, button_y, bw, bh);
     // btnOk and btnStop share one position (both Default). Only btnStop shows while comparing.
     if running.is_some() {
-        if ui.put(at(390.0, 475.0, 75.0, 25.0), egui::Button::new(text("Caption.btnStop", "Stop"))).clicked() || enter {
+        if ui.put(button(0), egui::Button::new(&labels[0]).wrap()).clicked() || enter {
             action = Some(FolderCompareAction::Stop);
         }
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(50));
-    } else if ui.put(at(390.0, 475.0, 75.0, 25.0), egui::Button::new(text("Caption.btnOk", "Compare"))).clicked() || enter {
+    } else if ui.put(button(0), egui::Button::new(&labels[0]).wrap()).clicked() || enter {
         action = Some(FolderCompareAction::Start);
     }
     let save = form.compared && running.is_none();
-    if ui.add_enabled_ui(save, |ui| ui.put(at(471.0, 475.0, 75.0, 25.0), egui::Button::new(text("Caption.btnSave", "Save")))).inner.clicked() {
+    if ui.add_enabled_ui(save, |ui| ui.put(button(1), egui::Button::new(&labels[1]).wrap())).inner.clicked() {
         action = Some(FolderCompareAction::Save);
     }
-    if ui.put(at(552.0, 475.0, 75.0, 25.0), egui::Button::new(text("Caption.btnCancel", "Close"))).clicked() {
+    if ui.put(button(2), egui::Button::new(&labels[2]).wrap()).clicked() {
         action = Some(FolderCompareAction::Close);
     }
     action
 }
 
+/// Compact synchronization preview: keep the action buttons separate from
+/// the scrollable grid. The first visible columns still contain the check,
+/// status, type and relative path; all size/time columns remain reachable.
+fn compact_comparison_ui(ui: &mut egui::Ui, form: &mut ComparisonForm, language: &compat::Language, ko: bool, enter: bool) -> Option<ComparisonAction> {
+    let t = |key, k, e| language.localized(key, k, e);
+    let screen = ui.ctx().content_rect();
+    let width = (screen.width() - 40.0).clamp(180.0, 1096.0);
+    let height = (screen.height() - 54.0).clamp(180.0, 700.0);
+    let sync = form.select_for_sync;
+    let mut labels = Vec::new();
+    if sync {
+        labels.push(t("NDR.UI_COMPARE_SELECT_ALL", "모두 선택", "Select all"));
+        labels.push(t("NDR.UI_COMPARE_CLEAR_ALL", "모두 해제", "Clear all"));
+    }
+    labels.push(language.text("formCompareFolder.Caption.btnSave", "Save Result"));
+    labels.push(if sync { t("NDR.UI_COMPARE_SYNC_SELECTED", "선택 항목 동기화", "Synchronize selected") } else { language.text("formCompareFolder.Caption.btnCancel", "Close") });
+    let bw = (width - 14.0) / 2.0;
+    let row_heights: Vec<f32> = labels.chunks_exact(2).map(|pair| super::original_dialogs::compact_button_height(ui, pair, bw)).collect();
+    let footer_height = row_heights.iter().sum::<f32>() + 4.0 * (row_heights.len() - 1) as f32 + 3.0;
+    let (area, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+    let at = |x, y, w, h| egui::Rect::from_min_size(area.min + egui::vec2(x, y), egui::vec2(w, h));
+    let left = format!("{}: {}", t("NDR.UI_COMPARE_LEFT", "왼쪽", "Left"), form.left);
+    let right = format!("{}: {}", t("NDR.UI_COMPARE_RIGHT", "오른쪽", "Right"), form.right);
+    let status = form.localized_status(Some(language), ko);
+    let summary = ndr::markup::plain_text(&form.original_result(language));
+    let warning = (!form.issues.is_empty()).then(|| fc::render_message(&t("NDR.UI_COMPARE_PARTIAL_WARNING", "주의: {0}개 항목을 읽지 못했습니다. 비교 결과가 부분적입니다.", "Warning: {0} items could not be read. The comparison is partial."), &[&n0(form.issues.len())]));
+    // A single row keeps both paths visible even at the minimum width;
+    // hovering exposes the complete paths, with no loss of direction.
+    let path_font = egui::TextStyle::Body.resolve(ui.style());
+    let line_height = ui.fonts_mut(|f| f.row_height(&path_font)).max(16.0) + 2.0;
+    let path_width = (width - 12.0) / 2.0;
+    for (i, label) in [left, right].into_iter().enumerate() {
+        super::original_dialogs::put_left(ui, at(3.0 + i as f32 * (path_width + 6.0), 0.0, path_width, line_height),
+            egui::Label::new(&label).truncate()).on_hover_text(label);
+    }
+    let mut status_job = egui::text::LayoutJob::simple(status.clone(), path_font.clone(), ui.visuals().text_color(), width - 8.0);
+    status_job.wrap.max_rows = if height - footer_height > 124.0 { 2 } else { 1 };
+    status_job.wrap.break_anywhere = true;
+    let status_height = ui.fonts_mut(|f| f.layout_job(status_job.clone()).size().y).max(line_height);
+    let details = if let Some(warning) = warning { format!("{status}\n{summary}\n{warning}") } else { format!("{status}\n{summary}") };
+    super::original_dialogs::put_left(ui, at(3.0, line_height + 2.0, width - 6.0, status_height + 1.0), egui::Label::new(status_job)).on_hover_text(details);
+    let table_top = line_height + status_height + 6.0;
+    let footer_y = height - footer_height;
+    let table = at(3.0, table_top, width - 6.0, (footer_y - table_top - 4.0).max(44.0));
+    let mut columns = form.columns(Some(language), width);
+    // Budget the leading columns so file selection and the filename
+    // remain visible together, before scrolling to the metadata columns.
+    let lead_width = (table.width() - 16.0).max(150.0);
+    let status_index = usize::from(sync);
+    if sync { columns[0].width = 36.0; }
+    columns[status_index].width = (lead_width * 0.25).clamp(48.0, 120.0);
+    columns[status_index + 1].width = (lead_width * 0.19).clamp(40.0, 64.0);
+    columns[status_index + 2].width = (lead_width - columns[..status_index + 2].iter().map(|c| c.width).sum::<f32>()).max(78.0);
+    let events = ui.scope_builder(egui::UiBuilder::new().max_rect(table), |ui| {
+        ui.set_clip_rect(ui.clip_rect().intersect(table));
+        ui.set_width(table.width());
+        egui::ScrollArea::horizontal().id_salt("compact-compare-horizontal").max_width(table.width()).max_height(table.height()).auto_shrink([false, false]).show(ui, |ui| {
+            let ComparisonForm { rows, grid: state, .. } = form;
+            let color = |row: usize| (!sync).then(|| result_color(rows[row].difference.kind));
+            let view = GridView { id: "compare-grid", columns: &columns, height: (table.height() - 38.0 - ui.spacing().item_spacing.y).max(22.0), enabled: true, sortable: true, multi_select: true, keyboard: true, context_menu: None, row_color: Some(&color), background: (!sync).then_some(Color32::WHITE), cell_tooltips: true };
+            grid::show(ui, &view, state, &|row, column| cell_text(rows, sync, row, column), &|row| rows[row].include)
+        }).inner
+    }).inner;
+    let mut action = apply_comparison_grid_events(form, events);
+    let mut y = footer_y;
+    for (row, pair) in labels.chunks_exact(2).enumerate() {
+        let bh = row_heights[row];
+        for (i, label) in pair.iter().enumerate() {
+            let index = row * 2 + i;
+            if super::original_dialogs::vcl_wrapped_button(ui, at(3.0 + i as f32 * (bw + 8.0), y, bw, bh), true, label).1 {
+                action = Some(match (sync, index) {
+                    (true, 0) => ComparisonAction::SelectAll,
+                    (true, 1) => ComparisonAction::SelectNone,
+                    (true, 3) => ComparisonAction::Commit,
+                    (false, 1) => ComparisonAction::Close,
+                    _ => ComparisonAction::Save,
+                });
+            }
+        }
+        y += bh + 4.0;
+    }
+    if enter && sync && action.is_none() { action = Some(ComparisonAction::Commit); }
+    action
+}
+
+fn apply_comparison_grid_events(form: &mut ComparisonForm, events: grid::GridEvents) -> Option<ComparisonAction> {
+    for row in events.toggled { form.rows[row].include = !form.rows[row].include; }
+    if let Some(column) = events.sort { form.sort_column(column); }
+    events.copy.then(|| ComparisonAction::Copy(form.copy_text()))
+}
+
 /// Draws FolderComparisonWindow: left/right paths, unreadable warning, status line, table (header sort, row selection, copy checkboxes), buttons.
 pub(super) fn comparison_ui(ui: &mut egui::Ui, form: &mut ComparisonForm, language: &compat::Language, ko: bool, enter: bool, size: egui::Vec2) -> Option<ComparisonAction> {
+    let screen = ui.ctx().content_rect();
+    if screen.width() < 960.0 || screen.height() < 680.0 {
+        return compact_comparison_ui(ui, form, language, ko, enter);
+    }
     let t = |key, k, e| language.localized(key, k, e);
-    let mut action = None;
     ui.set_width(size.x);
     ui.add(egui::Label::new(format!("{}: {}", t("NDR.UI_COMPARE_LEFT", "왼쪽", "Left"), form.left)).truncate());
     ui.add(egui::Label::new(format!("{}: {}", t("NDR.UI_COMPARE_RIGHT", "오른쪽", "Right"), form.right)).truncate());
@@ -402,7 +530,7 @@ pub(super) fn comparison_ui(ui: &mut egui::Ui, form: &mut ComparisonForm, langua
     ui.label(form.localized_status(Some(language), ko));
     ui.add_space(6.0);
     let columns = form.columns(Some(language), size.x);
-    let view = GridView { id: "compare-grid", columns: &columns, height: size.y, enabled: true, sortable: true, multi_select: true, keyboard: true, context_menu: None, row_color: None, background: None };
+    let view = GridView { id: "compare-grid", columns: &columns, height: size.y, enabled: true, sortable: true, multi_select: true, keyboard: true, context_menu: None, row_color: None, background: None, cell_tooltips: true };
     let events = {
         let ComparisonForm { rows, grid: state, select_for_sync, .. } = form;
         let (rows, sync): (&Vec<ComparisonRow>, bool) = (rows, *select_for_sync);
@@ -411,15 +539,7 @@ pub(super) fn comparison_ui(ui: &mut egui::Ui, form: &mut ComparisonForm, langua
         let view = GridView { row_color: Some(&color), background: (!sync).then_some(Color32::WHITE), ..view };
         grid::show(ui, &view, state, &|row, column| cell_text(rows, sync, row, column), &|row| rows[row].include)
     };
-    for row in events.toggled {
-        form.rows[row].include = !form.rows[row].include;
-    }
-    if let Some(column) = events.sort {
-        form.sort_column(column);
-    }
-    if events.copy {
-        action = Some(ComparisonAction::Copy(form.copy_text()));
-    }
+    let mut action = apply_comparison_grid_events(form, events);
     ui.add_space(9.0);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
         let close = if form.select_for_sync { t("NDR.UI_COMPARE_SYNC_SELECTED", "선택 항목 동기화", "Synchronize selected").to_owned() } else { language.text("formCompareFolder.Caption.btnCancel", "Close") };

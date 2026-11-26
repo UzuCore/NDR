@@ -37,8 +37,8 @@ pub(super) struct DestinationForm {
     pub selected: usize,
     /// Original drive rows (kind 8): the drive list when the window opened.
     pub drives: Vec<DestinationDrive>,
-    /// Free space text of drive rows (second text of the original "%10s %s", RES.DISKFREE).
-    pub free_label: String,
+    /// Selected locale for drive size text and the detailed capacity tooltip.
+    pub language: compat::Language,
     /// Original FormKeyDown (0x454b8c) Ctrl+D/G/Q/S/O = FUN_0040db88(0-4): Desktop (CSIDL 0x10), Documents (5), Pictures (0x27), Music (0xd),
     /// Videos (0xe); for 1-4 the configured special folder wins. Paths resolved when the window opened (None when missing).
     pub special_folders: [Option<String>; 5],
@@ -192,11 +192,23 @@ pub(super) fn destination_ui_original(ui: &mut egui::Ui, form: &mut DestinationF
     let widest = items.iter().filter(|(item, _)| !matches!(item, DestinationItem::Drive(_))).map(|(item, _)| measure(ui, item.path())).fold(0.0f32, f32::max);
     let drive_width = items.iter().filter_map(|(item, _)| if let DestinationItem::Drive(d) = item { Some(measure(ui, &drive_text(d))) } else { None }).fold(0.0f32, f32::max);
     let sections = items.iter().enumerate().filter(|(i, (_, first))| *i > 0 && *first).count();
-    let width = (widest.ceil() + 28.0).clamp(350.0, 800.0);
-    let height = (items.len() as f32 * 18.0 + sections as f32 * 3.0 + 82.0).clamp(300.0, (screen_height - 50.0).max(300.0));
+    let width = (widest.ceil() + 28.0).clamp(350.0, 800.0).min((ui.ctx().content_rect().width() - 40.0).max(120.0));
+    let compact = width < 350.0 || screen_height < 360.0;
+    let browse_width = if compact { ((width - 16.0) * 0.40).max(40.0) } else { 138.0 };
+    let action_width = if compact { ((width - 16.0 - browse_width) / 2.0).max(32.0) } else { 89.0 };
+    let button_font = egui::TextStyle::Button.resolve(ui.style());
+    let button_height = if compact {
+        [(&form.browse_label, browse_width), (&form.ok_label, action_width), (&form.cancel_label, action_width)].into_iter().map(|(s, w)| {
+            let (display, _) = ndr::msgbox::display_caption(s);
+            ui.fonts_mut(|f| f.layout(display, button_font.clone(), Color32::PLACEHOLDER, (w - 2.0 * ui.spacing().button_padding.x - 2.0).max(1.0)).size().y)
+        }).fold(25.0_f32, |h, y| h.max(y + 2.0 * ui.spacing().button_padding.y + 4.0))
+    } else { 25.0 };
+    let footer_height = 45.0 + button_height;
+    let total_rows_height = items.len() as f32 * 18.0 + sections as f32 * 3.0;
+    let height = (total_rows_height + footer_height + 12.0).max(300.0).min((screen_height - 60.0).max(footer_height + 32.0));
     let (area, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
-    let list_rect = egui::Rect::from_min_size(area.min, egui::vec2(width, height - 70.0));
-    let at = |x: f32, y: f32, w: f32, h: f32| egui::Rect::from_min_size(area.min + egui::vec2(x, height - 70.0 + y), egui::vec2(w, h));
+    let list_rect = egui::Rect::from_min_size(area.min, egui::vec2(width, height - footer_height));
+    let at = |x: f32, y: f32, w: f32, h: f32| egui::Rect::from_min_size(area.min + egui::vec2(x, height - footer_height + y), egui::vec2(w, h));
     let list_id = egui::Id::new("ndr-destination-list");
     let path_id = egui::Id::new("ndr-destination-path");
     ui.painter().rect_filled(list_rect, 0.0, Color32::WHITE);
@@ -211,6 +223,7 @@ pub(super) fn destination_ui_original(ui: &mut egui::Ui, form: &mut DestinationF
         ui.memory_mut(|m| m.set_focus_lock_filter(list_id, egui::EventFilter { vertical_arrows: true, ..Default::default() }));
     }
     // List keys (Up/Down, Delete).
+    let mut reveal_selected = false;
     if list_focused && !items.is_empty() {
         let (up, down, delete) = ui.input(|i| (i.key_pressed(egui::Key::ArrowUp), i.key_pressed(egui::Key::ArrowDown), i.key_pressed(egui::Key::Delete) && !i.modifiers.any()));
         let before = form.selected;
@@ -222,6 +235,7 @@ pub(super) fn destination_ui_original(ui: &mut egui::Ui, form: &mut DestinationF
         }
         if form.selected != before {
             form.path = items[form.selected].0.path().to_owned();
+            reveal_selected = true;
         }
         if delete {
             if let (DestinationItem::Recent(path), _) = &items[form.selected] {
@@ -229,14 +243,58 @@ pub(super) fn destination_ui_original(ui: &mut egui::Ui, form: &mut DestinationF
             }
         }
     }
-    let mut row_top = list_rect.top();
-    ui.scope_builder(egui::UiBuilder::new().max_rect(list_rect), |ui| {
-        ui.set_clip_rect(list_rect);
+    // The owner-drawn original list uses absolute row coordinates. Keep a
+    // single scroll offset for both rendering and hit testing instead of
+    // nesting it in an independently laid-out scrolling container.
+    let max_offset = (total_rows_height - list_rect.height()).max(0.0);
+    let offset_id = ui.id().with("destination-scroll-offset");
+    let mut offset = ui.ctx().data(|d| d.get_temp::<f32>(offset_id)).unwrap_or_default().clamp(0.0, max_offset);
+    let mut rows_rect = list_rect;
+    if max_offset > 0.0 {
+        rows_rect.max.x -= 13.0;
+        if ui.is_enabled() && ui.input(|i| i.pointer.hover_pos().is_some_and(|p| list_rect.contains(p))) {
+            let delta = ui.input_mut(|i| { let y = i.smooth_scroll_delta.y; i.smooth_scroll_delta.y = 0.0; y });
+            offset = (offset - delta).clamp(0.0, max_offset);
+        }
+        if reveal_selected {
+            let top = form.selected as f32 * 18.0 + items.iter().take(form.selected + 1).enumerate().filter(|(i, (_, first))| *i > 0 && *first).count() as f32 * 3.0;
+            if top < offset { offset = top; }
+            if top + 18.0 > offset + rows_rect.height() { offset = top + 18.0 - rows_rect.height(); }
+            offset = offset.clamp(0.0, max_offset);
+        }
+        let track = egui::Rect::from_min_max(egui::pos2(rows_rect.right() + 1.0, list_rect.top() + 1.0), list_rect.right_bottom() - egui::vec2(1.0, 1.0));
+        let thumb_height = (track.height() * rows_rect.height() / total_rows_height).clamp(16.0, track.height());
+        let travel = (track.height() - thumb_height).max(1.0);
+        let thumb_top = track.top() + offset / max_offset * travel;
+        let bar = ui.interact(track, offset_id.with("bar"), egui::Sense::click_and_drag());
+        let grab_id = offset_id.with("grab");
+        if bar.is_pointer_button_down_on() || bar.dragged() {
+            if let Some(pos) = bar.interact_pointer_pos() {
+                if ui.input(|i| i.pointer.primary_pressed()) || ui.ctx().data(|d| d.get_temp::<f32>(grab_id)).is_none() {
+                    let grab = if (thumb_top..=thumb_top + thumb_height).contains(&pos.y) { pos.y - thumb_top } else { thumb_height * 0.5 };
+                    ui.ctx().data_mut(|d| d.insert_temp(grab_id, grab));
+                }
+                let grab = ui.ctx().data(|d| d.get_temp::<f32>(grab_id)).unwrap_or(thumb_height * 0.5);
+                offset = ((pos.y - track.top() - grab) / travel * max_offset).clamp(0.0, max_offset);
+            }
+        } else {
+            ui.ctx().data_mut(|d| d.remove::<f32>(grab_id));
+        }
+        ui.painter().rect_filled(track, 1.0, Color32::from_gray(0xe4));
+        let thumb = egui::Rect::from_min_size(egui::pos2(track.left(), track.top() + offset / max_offset * travel), egui::vec2(track.width(), thumb_height));
+        ui.painter().rect_filled(thumb, 2.0, if bar.hovered() || bar.dragged() { Color32::from_gray(0x85) } else { Color32::from_gray(0xa8) });
+    }
+    ui.ctx().data_mut(|d| d.insert_temp(offset_id, offset));
+    let mut draw_rows = |ui: &mut egui::Ui, contents: egui::Rect| {
+        let width = contents.width();
+        let mut row_top = contents.top();
+        let clip = ui.clip_rect();
         for (index, (item, first)) in items.iter().enumerate() {
             let extra = if index > 0 && *first { 3.0 } else { 0.0 };
-            let row = egui::Rect::from_min_size(egui::pos2(list_rect.left(), row_top), egui::vec2(width, 18.0 + extra));
+            let row = egui::Rect::from_min_size(egui::pos2(contents.left(), row_top), egui::vec2(width, 18.0 + extra));
             row_top += row.height();
-            if row.top() > list_rect.bottom() {
+            if row.bottom() <= clip.top() { continue; }
+            if row.top() >= clip.bottom() {
                 break;
             }
             let content = egui::Rect::from_min_max(egui::pos2(row.left(), row.top() + extra), row.max);
@@ -273,12 +331,15 @@ pub(super) fn destination_ui_original(ui: &mut egui::Ui, form: &mut DestinationF
                 // blended with the window color (FUN_004539ec, 150/255); 50% or less is GRAYTEXT).
                 let text_color = if selected { Color32::WHITE } else { Color32::BLACK };
                 let x = content.left() + 24.0;
-                let galley = ui.fonts_mut(|f| f.layout_no_wrap(drive_text(drive), font.clone(), text_color));
+                let name = drive_text(drive);
+                let shown = super::original_dialogs::path_ellipsis(ui, &name, (content.right() - x - 3.0).max(0.0), &font);
+                let galley = ui.fonts_mut(|f| f.layout_no_wrap(shown, font.clone(), text_color));
                 painter.galley(egui::pos2(x, content.center().y - galley.size().y / 2.0), galley, text_color);
                 if let (3, Some((free, total))) = (drive.kind, drive.sizes) {
                     let x = x + drive_width + 4.0;
-                    let galley = ui.fonts_mut(|f| f.layout_no_wrap(format!("{:>10} {}", ndr::native::format_byte_size(free), form.free_label), font.clone(), text_color));
+                    let galley = ui.fonts_mut(|f| f.layout_no_wrap(localized_byte_size(&form.language, free), font.clone(), text_color));
                     let text_width = galley.size().x;
+                    if x + text_width + 3.0 <= content.right() {
                     painter.galley(egui::pos2(x, content.center().y - galley.size().y / 2.0), galley, text_color);
                     let left = x + text_width + 6.0;
                     let right = if content.right() - left > 80.0 { left + 80.0 } else { content.right() };
@@ -303,8 +364,17 @@ pub(super) fn destination_ui_original(ui: &mut egui::Ui, form: &mut DestinationF
                         let filled = egui::Rect::from_min_max(inner.min, egui::pos2(inner.left() + ((inner.width() - 2.0).max(0.0) * used as f32 / 100.0).floor(), inner.bottom()));
                         painter.rect_filled(filled, 0.0, fill);
                     }
+                    }
                 }
-                let response = ui.interact(row, list_id.with(index), egui::Sense::click());
+                let response = ui.interact(row.intersect(clip), list_id.with(index), egui::Sense::click());
+                let response = if let Some((free, total)) = drive.sizes {
+                    response.on_hover_ui(|ui| {
+                        let (free, total) = (localized_byte_size(&form.language, free), localized_byte_size(&form.language, total));
+                        let details = ndr::markup::substitute(&form.language.text("RES.DISKINFO_LONG", "%s Free / %s Total"), &[&free, &total]);
+                        ui.label(&name);
+                        ui.label(ndr::markup::plain_text(&details));
+                    })
+                } else { response.on_hover_text(&name) };
                 if response.clicked() || super::panes::windows_double_clicked(&response) || response.secondary_clicked() {
                     form.selected = index;
                     if !response.secondary_clicked() {
@@ -343,7 +413,7 @@ pub(super) fn destination_ui_original(ui: &mut egui::Ui, form: &mut DestinationF
             let galley = ui.fonts_mut(|f| f.layout_no_wrap(name.to_owned(), font.clone(), name_color));
             let y = content.center().y - galley.size().y / 2.0;
             painter.galley(egui::pos2(x, y), galley, name_color);
-            let response = ui.interact(row, list_id.with(index), egui::Sense::click());
+            let response = ui.interact(row.intersect(clip), list_id.with(index), egui::Sense::click()).on_hover_text(path);
             if response.clicked() || super::panes::windows_double_clicked(&response) {
                 form.selected = index;
                 form.path = path.to_owned();
@@ -371,6 +441,10 @@ pub(super) fn destination_ui_original(ui: &mut egui::Ui, form: &mut DestinationF
                 });
             }
         }
+    };
+    ui.scope_builder(egui::UiBuilder::new().max_rect(rows_rect), |ui| {
+        ui.set_clip_rect(ui.clip_rect().intersect(rows_rect));
+        draw_rows(ui, rows_rect.translate(egui::vec2(0.0, -offset)));
     });
     // Bottom band: cbPath (key focus when the window opens, original FormShow), browse in btnTree's place, btnOk, btnCancel.
     let edit = ui.put(at(4.0, 7.0, width - 8.0, 21.0), egui::TextEdit::singleline(&mut form.path).id(path_id));
@@ -392,13 +466,15 @@ pub(super) fn destination_ui_original(ui: &mut egui::Ui, form: &mut DestinationF
         }
     }
     // Original btnTree (4,37 138x25, "&Folder Tree") -> btnTreeClick (FUN_00453de4).
-    if super::original_dialogs::access_button(ui, at(4.0, 37.0, 138.0, 25.0), &form.browse_label) {
+    let browse_rect = at(4.0, 37.0, browse_width, button_height);
+    let (job, access) = super::original_dialogs::access_job_colored(ui, &form.browse_label, None);
+    if ui.put(browse_rect, egui::Button::new(job).wrap()).clicked() || super::original_dialogs::take_dialog_char(ui.ctx(), access) {
         action = Some(DestinationAction::Browse);
     }
-    if ui.put(at(width - 188.0, 37.0, 89.0, 25.0), egui::Button::new(&form.ok_label)).clicked() {
+    if ui.put(at(width - 2.0 * action_width - 10.0, 37.0, action_width, button_height), egui::Button::new(&form.ok_label).wrap()).clicked() {
         action = Some(DestinationAction::Accept);
     }
-    if ui.put(at(width - 93.0, 37.0, 89.0, 25.0), egui::Button::new(&form.cancel_label)).clicked() {
+    if ui.put(at(width - action_width - 4.0, 37.0, action_width, button_height), egui::Button::new(&form.cancel_label).wrap()).clicked() {
         action = Some(DestinationAction::Cancel);
     }
     if action.is_none() {
@@ -477,7 +553,7 @@ impl App {
             original: true,
             selected: 0,
             drives,
-            free_label: self.language_pack.text("RES.DISKFREE", "Free"),
+            language: self.language_pack.clone(),
             special_folders,
             initial,
         };

@@ -25,6 +25,17 @@ pub(super) const INTERNAL_COMMANDS: &[(&str, &str)] = &[
     ("#NewTab", "New Tab"), ("#CommandLine", "Command Line"), ("#SplitFile", "Split File"), ("#JoinFiles", "Join Files"), ("#OpenRecycleBin", "Open Recycle Bin"),
 ];
 
+/// Resolve by command ID rather than reverse-matching an English label.
+/// Imported toolbar commands and the function-key editor use the same caption.
+pub(super) fn internal_command_caption(language: &compat::Language, id: &str, fallback: &str) -> String {
+    if id.eq_ignore_ascii_case("#OpenRecycleBin") {
+        let caption = language.text("Menu.miRecycleBin", fallback);
+        caption.split_once(". ").map_or(caption.as_str(), |(_, label)| label).to_owned()
+    } else {
+        language.text(&format!("RES.FUNC_{}", id.trim_start_matches('#').to_ascii_uppercase()), fallback)
+    }
+}
+
 /// C# FunctionKeyBinding (Normalize = trim leading and trailing spaces).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct Binding {
@@ -196,22 +207,29 @@ pub(super) fn function_key_edit_ui(ui: &mut egui::Ui, form: &mut FunctionKeyEdit
     use super::original_dialogs::put_left;
     let text = |key: &str, fallback: &str| language.text(&format!("formEditFunction.{key}"), fallback);
     let raw = |key: &str, fallback: &str| language.raw(&format!("formEditFunction.{key}")).unwrap_or_else(|| fallback.to_owned());
+    let label_width = [text("Caption.lName", "Display Name:"), text("Caption.lCommand", "Command:"), text("Caption.lParams", "Parameter(s):")]
+        .iter().map(|s| super::original_dialogs::caption_width(ui, s) + 8.0).fold(92.0_f32, f32::max);
+    let delta = label_width - 92.0;
     let mut result = None;
-    let (area, _) = ui.allocate_exact_size(egui::vec2(462.0, 223.0), egui::Sense::hover());
-    let at = |x: f32, y: f32, w: f32, h: f32| egui::Rect::from_min_size(area.min + egui::vec2(x, y), egui::vec2(w, h));
+    let (area, _) = ui.allocate_exact_size(egui::vec2(462.0 + delta, 223.0), egui::Sense::hover());
+    let at = |x: f32, y: f32, w: f32, h: f32| {
+        let shift = if x >= 113.0 { delta } else { 0.0 };
+        let expand = if x == 20.0 && w == 92.0 { delta } else { 0.0 };
+        egui::Rect::from_min_size(area.min + egui::vec2(x + shift, y), egui::vec2(w + expand, h))
+    };
     if super::original_dialogs::access_radio(ui, at(20.0, 13.0, 189.0, 17.0), !form.internal, &raw("Caption.rbUserCommand", "User Defined Command")) {
         form.set_internal(false);
     }
     if super::original_dialogs::access_radio(ui, at(229.0, 13.0, 188.0, 17.0), form.internal, &raw("Caption.rbInternalCommand", "Internal Command")) {
         form.set_internal(true);
     }
-    ui.painter().hline(area.min.x + 20.0..=area.min.x + 441.0, area.min.y + 36.0, ui.visuals().widgets.noninteractive.bg_stroke);
+    ui.painter().hline(area.min.x + 20.0..=area.min.x + 441.0 + delta, area.min.y + 36.0, ui.visuals().widgets.noninteractive.bg_stroke);
     put_left(ui, at(20.0, 60.0, 92.0, 15.0), egui::Label::new(text("Caption.lName", "Display Name:")).truncate());
     ui.put(at(113.0, 57.0, 141.0, 21.0), egui::TextEdit::singleline(&mut form.name));
     put_left(ui, at(20.0, 88.0, 92.0, 15.0), egui::Label::new(text("Caption.lCommand", "Command:")).truncate());
     if form.internal {
         // C# LocalizeCommand(name) = TranslateText(name): text in the current language by reverse lookup of language file values.
-        let names: Vec<String> = INTERNAL_COMMANDS.iter().map(|(_, name)| language.translate_pair(name, name)).collect();
+        let names: Vec<String> = INTERNAL_COMMANDS.iter().map(|(id, name)| internal_command_caption(language, id, name)).collect();
         ui.scope_builder(egui::UiBuilder::new().max_rect(at(113.0, 85.0, 294.0, 22.0)), |ui| {
             egui::ComboBox::from_id_salt("function-key-command").width(286.0).selected_text(names[form.internal_command].as_str()).show_opaque(ui, |ui| {
                 for (index, name) in names.iter().enumerate() {
@@ -262,8 +280,8 @@ pub(super) fn function_key_edit_ui(ui: &mut egui::Ui, form: &mut FunctionKeyEdit
             });
         });
         // Original lParamTip (right aligned, right edge 407).
-        ui.scope_builder(egui::UiBuilder::new().max_rect(at(20.0, 143.0, 387.0, 15.0)).layout(egui::Layout::right_to_left(egui::Align::Min)), |ui| {
-            ui.add(egui::Label::new(text("Caption.lParamTip", "* $(???) : Active Pane, $(???1) : Left Pane, $(???2) : Right Pane")).truncate());
+        ui.scope_builder(egui::UiBuilder::new().max_rect(at(20.0, 143.0, 422.0 + delta, 42.0)).layout(egui::Layout::left_to_right(egui::Align::Min)), |ui| {
+            ui.add(egui::Label::new(text("Caption.lParamTip", "* $(???) : Active Pane, $(???1) : Left Pane, $(???2) : Right Pane")).wrap());
         });
     }
     if ui.put(at(285.0, 191.0, 75.0, 25.0), egui::Button::new(text("Caption.btnOk", "OK"))).clicked() {

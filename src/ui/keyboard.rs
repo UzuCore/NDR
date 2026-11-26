@@ -721,7 +721,14 @@ impl App {
                 let _ = tx.send(AsyncResult::Drives(drives));
             });
         }
-        self.drive_cache.as_ref().map(|(_, d)| d.clone()).unwrap_or_default()
+        // Cache OS data, not translated text: changing the language is immediate,
+        // even when an asynchronous drive enumeration is still pending.
+        self.drive_cache.as_ref().map(|(_, drives)| drives.iter().map(|(root, tip)| {
+            let tip = tip.rsplit_once(" · ").map_or_else(|| tip.clone(), |(name, kind)| {
+                format!("{name} · {}", localized_drive_kind(&self.language_pack, kind))
+            });
+            (root.clone(), tip)
+        }).collect()).unwrap_or_default()
     }
 }
 

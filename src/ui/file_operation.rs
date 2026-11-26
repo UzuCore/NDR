@@ -277,10 +277,109 @@ fn conflict_cancel_caption(language: &compat::Language) -> String {
     language.raw(key).unwrap_or_else(|| "&Cancel".into())
 }
 
+fn conflict_button_label(form: &ConflictForm, language: &compat::Language, button: ConflictButton) -> String {
+    let raw = |key: &str, fallback: &str| language.raw(&format!("formFileExists.{key}")).unwrap_or_else(|| fallback.to_owned());
+    match button {
+        ConflictButton::Overwrite if form.source_dir && form.destination_dir => language.raw("RES.MERGE_FOLDER").unwrap_or_else(|| "Mer&ge".into()),
+        ConflictButton::Overwrite => raw("Caption.btnOverwrite", "Over&write"),
+        ConflictButton::Resume => raw("Caption.btnResume", "Res&ume"),
+        ConflictButton::Skip => raw("Caption.btnSkip", "&Skip"),
+        ConflictButton::OverwriteNewer => raw("Caption.btnOverNewer", "Overwrite N&ewer"),
+        ConflictButton::ReplaceFolder => raw("Caption.btnReplace", "Replac&e Folder"),
+        ConflictButton::Rename => raw("Caption.btnRename", "&Rename"),
+        ConflictButton::Cancel => conflict_cancel_caption(language),
+    }
+}
+
+/// Keep every decision and the apply-all checkbox visible on a small viewport.
+/// Both comparison rows remain available in one independently scrolling body.
+fn compact_conflict_ui(ui: &mut egui::Ui, form: &mut ConflictForm, language: &compat::Language, enter: bool) -> Option<ConflictChoice> {
+    use super::original_dialogs::{access_job_colored, compact_button_height, markup_job, take_dialog_char, vcl_wrapped_button};
+    let screen = ui.ctx().content_rect();
+    let width = (screen.width() - 40.0).clamp(120.0, 545.0);
+    let buttons = conflict_buttons(form);
+    let labels: Vec<_> = buttons.iter().map(|(b, _)| conflict_button_label(form, language, *b)).collect();
+    let grid = |columns: usize| {
+        let bw = (width - 12.0 - (columns - 1) as f32 * 6.0) / columns as f32;
+        let heights: Vec<_> = labels.chunks(columns).map(|row| compact_button_height(ui, row, bw)).collect();
+        let h = heights.iter().sum::<f32>() + 5.0 * heights.len() as f32;
+        (bw, heights, h)
+    };
+    let two = grid(2);
+    let three = grid(3);
+    // Choose the shorter footer at very small heights to leave as much
+    // space as possible for comparison details.
+    let (columns, (bw, heights, grid_height)) = if width >= 240.0 && screen.height() < 300.0 && three.2 < two.2 { (3, three) } else { (2, two) };
+    let check = language.raw("formFileExists.Caption.chkApplyAll").unwrap_or_else(|| "&Apply to all".into());
+    let (mut check_job, access) = access_job_colored(ui, &check, None);
+    check_job.wrap.max_width = (width - 34.0).max(1.0);
+    check_job.wrap.break_anywhere = true;
+    let ch = ui.fonts_mut(|f| f.layout_job(check_job.clone()).size().y).max(18.0) + 4.0;
+    let footer = grid_height + ch + 16.0;
+    let body_height = (screen.height() - 62.0 - footer).clamp(32.0, 220.0);
+    let (area, _) = ui.allocate_exact_size(egui::vec2(width, body_height + footer), egui::Sense::hover());
+    let at = |x, y, w, h| egui::Rect::from_min_size(area.min + egui::vec2(x, y), egui::vec2(w, h));
+    let text_color = ui.visuals().text_color();
+    let text = |key: &str, fallback: &str| language.text(&format!("formFileExists.{key}"), fallback);
+    let body_rect = at(6.0, 0.0, width - 12.0, body_height);
+    ui.scope_builder(egui::UiBuilder::new().max_rect(body_rect), |ui| {
+        // egui's default minimum scrolled height is 64 points. It must
+        // not expand into the checkbox or the fixed action area.
+        ui.set_clip_rect(ui.clip_rect().intersect(body_rect));
+        egui::ScrollArea::vertical().id_salt("compact-conflict-details").min_scrolled_height(0.0).max_width(width - 12.0).max_height(body_height).auto_shrink([false, false]).show(ui, |ui| {
+            let wrap = (ui.available_width() - 2.0).max(1.0);
+            let label = |ui: &mut egui::Ui, s: String, bold: bool| {
+                let font = if bold { egui::FontId::new(13.0, egui::FontFamily::Name(super::BOLD_FONT_FAMILY.into())) } else { egui::FontId::proportional(13.0) };
+                let mut job = egui::text::LayoutJob::simple(s, font, text_color, wrap);
+                job.wrap.break_anywhere = true;
+                ui.label(job);
+            };
+            label(ui, text("Caption.lMsg", "An item with this name already exists at the destination:"), false);
+            let newer = match (form.destination_modified, form.source_modified) {
+                (Some(existing), Some(new)) if existing < new => Some(false),
+                (Some(existing), Some(new)) if existing > new => Some(true),
+                _ => None,
+            };
+            for (caption, path, directory, size, modified, highlight) in [
+                (text("Caption.lOrgLabel", "Existing item"), &form.destination, form.destination_dir, form.destination_size, form.destination_modified, newer == Some(true)),
+                (text("Caption.lNewLabel", "Source item"), &form.source, form.source_dir, form.source_size, form.source_modified, newer == Some(false)),
+            ] {
+                ui.separator();
+                label(ui, caption, true);
+                label(ui, path.to_string_lossy().into_owned(), false);
+                if !directory {
+                    let mut job = markup_job(&conflict_file_info(size, modified, highlight, language), 13.0, text_color, wrap);
+                    job.wrap.break_anywhere = true;
+                    ui.label(job);
+                }
+            }
+        });
+    });
+    ui.put(at(6.0, body_height + 3.0, width - 12.0, ch), egui::Checkbox::new(&mut form.apply_all, check_job));
+    if ui.is_enabled() && take_dialog_char(ui.ctx(), access) { form.apply_all = !form.apply_all; }
+    let mut chosen = None;
+    let mut y = body_height + ch + 8.0;
+    for (row, height) in heights.into_iter().enumerate() {
+        for col in 0..columns {
+            let i = row * columns + col;
+            if let Some(&(button, enabled)) = buttons.get(i) {
+                let (_, pressed) = vcl_wrapped_button(ui, at(6.0 + col as f32 * (bw + 6.0), y, bw, height), enabled, &labels[i]);
+                if pressed && chosen.is_none() { chosen = Some(button.choice()); }
+            }
+        }
+        y += height + 5.0;
+    }
+    if enter && chosen.is_none() { chosen = buttons.into_iter().find(|(_, enabled)| *enabled).map(|(button, _)| button.choice()); }
+    chosen
+}
+
 /// Original TfFileExists (ClientWidth 545 x ClientHeight 253) layout: lMsg (20,13), lFileName (20,34 bold),
 /// Panel1(17,56 396×155: lOrgLabel·imgOrg·lOrgDir·lOrgFile, Bevel1, lNewLabel·imgNew·lNewDir·lNewFile), chkApplyAll(20,221),
 /// right button column (conflict_buttons). Enter = the first enabled button (overwrite), Esc = cancel (close the window).
 pub(super) fn conflict_ui(ui: &mut egui::Ui, form: &mut ConflictForm, language: &compat::Language, _ko: bool, enter: bool) -> Option<ConflictChoice> {
+    if ui.ctx().content_rect().width() < 610.0 || ui.ctx().content_rect().height() < 340.0 {
+        return compact_conflict_ui(ui, form, language, enter);
+    }
     let text = |key: &str, fallback: &str| language.text(&format!("formFileExists.{key}"), fallback);
     // Compound labels can be much wider than the original English buttons.
     let button_width = (ui.ctx().content_rect().width() - 455.0).clamp(112.0, 238.0);
@@ -338,16 +437,7 @@ pub(super) fn conflict_ui(ui: &mut egui::Ui, form: &mut ConflictForm, language: 
     let mut chosen = None;
     for (button, enabled) in conflict_buttons(form) {
         // Original FUN_00422314: for a folder conflict the overwrite button text is MERGE_FOLDER ("폴더 합치기(&G)").
-        let label = match button {
-            ConflictButton::Overwrite if form.source_dir && form.destination_dir => language.raw("RES.MERGE_FOLDER").unwrap_or_else(|| "Mer&ge".into()),
-            ConflictButton::Overwrite => raw("Caption.btnOverwrite", "Over&write"),
-            ConflictButton::Resume => raw("Caption.btnResume", "Res&ume"),
-            ConflictButton::Skip => raw("Caption.btnSkip", "&Skip"),
-            ConflictButton::OverwriteNewer => raw("Caption.btnOverNewer", "Overwrite N&ewer"),
-            ConflictButton::ReplaceFolder => raw("Caption.btnReplace", "Replac&e Folder"),
-            ConflictButton::Rename => raw("Caption.btnRename", "&Rename"),
-            ConflictButton::Cancel => conflict_cancel_caption(language),
-        };
+        let label = conflict_button_label(form, language, button);
         let (response, pressed) = super::original_dialogs::vcl_button(ui, at(425.0, button.top(), button_width, 25.0), enabled, &label);
         response.on_hover_text(super::favorites_dialog::access_key(&label).0);
         if pressed && chosen.is_none() {

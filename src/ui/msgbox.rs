@@ -139,22 +139,38 @@ impl App {
         super::keep_opaque(ctx, modal_id);
         super::movable_modal(ctx, modal_id).show(ctx, |ui| {
             let font = FontId::proportional(FONT);
+            let max_text_width = (ctx.content_rect().width() - 124.0).max(180.0).min(840.0);
             let (title_galley, summary_galley, line_galleys, line_height) = ui.fonts_mut(|fonts| {
                 let line_height = fonts.row_height(&font);
                 (
                     fonts.layout_no_wrap(title.clone(), font.clone(), title_color),
                     fonts.layout_no_wrap(summary.clone(), font.clone(), summary_color),
-                    mb::lines(&text).into_iter().map(|line| fonts.layout_no_wrap(line, font.clone(), text_color)).collect::<Vec<_>>(),
+                    mb::lines(&text).into_iter().map(|line| {
+                        let mut job = LayoutJob::single_section(line, egui::TextFormat::simple(font.clone(), text_color));
+                        job.wrap.max_width = max_text_width;
+                        fonts.layout_job(job)
+                    }).collect::<Vec<_>>(),
                     line_height,
                 )
             });
             let text_width = line_galleys.iter().map(|g| g.size().x).fold(0.0, f32::max);
-            let text_height = mb::text_height(line_galleys.len(), line_height);
+            // Preserve the original DFM line height for short messages.
+            // Wrapped rows need the actual galley height.
+            let galley_height = |g: &egui::Galley| if g.rows.len() <= 1 { line_height } else { g.size().y.max(line_height * g.rows.len() as f32) };
+            let text_height = line_galleys.iter().map(|g| galley_height(g)).sum::<f32>() + 4.0 * line_galleys.len().saturating_sub(1) as f32;
             let has_title = !system && !title.is_empty();
             let has_summary = !summary.is_empty();
-            let geometry = mb::layout(has_title, has_summary, title_galley.size().x, summary_galley.size().x, text_width, text_height);
+            let body_limit = (ctx.content_rect().height() - 190.0).max(80.0);
+            let body_height = text_height.min(body_limit);
+            let scroll_body = text_height > body_height + 0.5;
+            let geometry = mb::layout(has_title, has_summary, title_galley.size().x, summary_galley.size().x, text_width + if scroll_body { 14.0 } else { 0.0 }, body_height);
             let visible = specs.iter().filter(|s| s.is_some()).count();
-            let client = vec2(mb::client_width(&geometry, visible), geometry.client_height);
+            let button_width = ui.fonts_mut(|fonts| captions.iter().map(|caption| {
+                fonts.layout_no_wrap(mb::display_caption(caption).0, font.clone(), text_color).size().x.ceil() + 16.0
+            }).fold(78.0_f32, f32::max));
+            let button_min = 8.0 + visible as f32 * (button_width + 3.0) - 3.0 + 15.0;
+            let caption_width = ui.fonts_mut(|fonts| fonts.layout_no_wrap(caption.clone(), font.clone(), title_color).size().x + 44.0);
+            let client = vec2(mb::client_width(&geometry, visible).max(button_min).max(caption_width), geometry.client_height);
 
             // Window title bar (form Caption and close button: closing gives mrCancel). Dragging the bar moves the window.
             if super::modal_title_bar(ui, modal_id, &caption, Some(client.x)) {
@@ -178,14 +194,34 @@ impl App {
             if has_summary {
                 painter.galley(origin + vec2(64.0, geometry.summary_top), summary_galley, summary_color);
             }
-            let line_count = line_galleys.len();
-            for (index, galley) in line_galleys.into_iter().enumerate() {
-                painter.galley(origin + vec2(64.0, geometry.text_top + index as f32 * (line_height + 4.0)), galley, text_color);
+            let line_count = line_galleys.iter().map(|g| g.rows.len().max(1)).sum();
+            if scroll_body {
+                let body = Rect::from_min_size(origin + vec2(64.0, geometry.text_top), vec2(client.x - 74.0, body_height));
+                ui.scope_builder(egui::UiBuilder::new().max_rect(body), |ui| {
+                    ui.set_clip_rect(body.intersect(ui.clip_rect()));
+                    egui::ScrollArea::vertical().id_salt(modal_id.with("message-body")).max_height(body_height).auto_shrink([false, false]).show(ui, |ui| {
+                        let (content, _) = ui.allocate_exact_size(vec2(text_width, text_height), Sense::hover());
+                        let mut y = content.min.y;
+                        for galley in line_galleys {
+                            let height = galley_height(&galley);
+                            ui.painter().galley(egui::pos2(content.min.x, y), galley, text_color);
+                            y += height + 4.0;
+                        }
+                    });
+                });
+            } else {
+                let mut y = geometry.text_top;
+                for galley in line_galleys {
+                    let height = galley_height(&galley);
+                    painter.galley(origin + vec2(64.0, y), galley, text_color);
+                    y += height + 4.0;
+                }
             }
 
             for slot in 0..3 {
                 let Some(spec) = specs[slot] else { continue };
-                let button_rect = Rect::from_min_size(origin + vec2(mb::button_left(client.x, slot), mb::button_top(client.y)), vec2(78.0, 25.0));
+                let left = client.x - 15.0 - button_width - (button_width + 3.0) * (2 - slot) as f32;
+                let button_rect = Rect::from_min_size(origin + vec2(left, mb::button_top(client.y)), vec2(button_width, 25.0));
                 let (display, underline) = mb::display_caption(&captions[slot]);
                 let mut job = LayoutJob::default();
                 for (index, character) in display.chars().enumerate() {
@@ -195,7 +231,7 @@ impl App {
                     }
                     job.append(&character.to_string(), 0.0, format);
                 }
-                let response = ui.put(button_rect, egui::Button::new(job).min_size(vec2(78.0, 25.0)));
+                let response = ui.put(button_rect, egui::Button::new(job).min_size(vec2(button_width, 25.0)));
                 // TfMsgBox: the first button in TabOrder. In place of MessageBoxW (system): MB_DEFBUTTON1..3.
                 let focus_slot = if system { mb::system_default_slot(&specs, flags) } else { mb::first_visible(&specs) };
                 if Some(slot) == focus_slot && !focused {

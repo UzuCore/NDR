@@ -64,7 +64,32 @@ pub struct Language {
     keys_by_text: HashMap<String, String>,
     literal_pairs: HashMap<u64, String>,
 }
+// Opt-in diagnostics for isolated debug/test runs. Release lookups and
+// ordinary debug sessions never allocate trace records.
+#[cfg(debug_assertions)]
+thread_local! {
+    static LOCALE_LOOKUPS: std::cell::RefCell<Option<std::collections::BTreeSet<(String, String, String, String)>>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(debug_assertions)]
+pub fn begin_locale_lookup_audit() {
+    LOCALE_LOOKUPS.with(|log| *log.borrow_mut() = Some(Default::default()));
+}
+
+#[cfg(debug_assertions)]
+pub fn end_locale_lookup_audit() -> Vec<(String, String, String, String)> {
+    LOCALE_LOOKUPS.with(|log| log.borrow_mut().take().unwrap_or_default().into_iter().collect())
+}
+
 impl Language {
+    #[cfg(debug_assertions)]
+    fn audit_lookup(&self, key: &str, source: &str, value: Option<&str>) {
+        LOCALE_LOOKUPS.with(|log| {
+            if let Some(log) = log.borrow_mut().as_mut() {
+                log.insert((self.code.clone(), key.to_ascii_lowercase(), source.to_owned(), value.unwrap_or_default().to_owned()));
+            }
+        });
+    }
     /// Load a catalog and its English fallback. An unknown locale uses Korean.
     pub fn load(directory: &Path, code: &str) -> Self {
         Self::load_impl(directory, code, true)
@@ -130,7 +155,10 @@ impl Language {
     /// Accepts RES.KEY, Root.KEY, formMain.Menu.miOpen, Menu.miOpen or a bare root key.
     /// Original FUN_0040bd74 / FUN_0040bc8c: ReadString(section, key, default) on the language TIniFile (DAT_008d44bc), the default when no file is loaded.
     pub fn text(&self, key: &str, fallback: &str) -> String {
-        clean_language_text(self.raw(key).as_deref().unwrap_or(fallback))
+        let raw = self.raw(key);
+        #[cfg(debug_assertions)]
+        if raw.is_none() { self.audit_lookup(key, "literal-fallback", Some(fallback)); }
+        clean_language_text(raw.as_deref().unwrap_or(fallback))
     }
     /// An equivalent already translated catalog entry can be reused only
     /// when its meaning and format arguments are the same.
@@ -145,8 +173,11 @@ impl Language {
     /// The selected catalog's own string, never the fallback catalog.
     pub fn primary_raw(&self, key: &str) -> Option<&str> {
         let keys = Self::keys(key);
-        keys.iter().find_map(|candidate| self.values.get(candidate).map(String::as_str))
-            .or_else(|| Self::alias(&keys[0]).and_then(|alias| self.values.get(alias).map(String::as_str)))
+        let value = keys.iter().find_map(|candidate| self.values.get(candidate).map(String::as_str))
+            .or_else(|| Self::alias(&keys[0]).and_then(|alias| self.values.get(alias).map(String::as_str)));
+        #[cfg(debug_assertions)]
+        self.audit_lookup(key, if value.is_some() { "primary" } else { "primary-missing" }, value);
+        value
     }
 
     fn keys(key: &str) -> Vec<String> {
@@ -169,9 +200,12 @@ impl Language {
             return Some(local.into());
         }
         let keys = Self::keys(key);
-        keys.iter().find_map(|candidate| self.fallback.get(candidate))
+        let value = keys.iter().find_map(|candidate| self.fallback.get(candidate))
             .or_else(|| Self::alias(&keys[0]).and_then(|alias| self.fallback.get(alias)))
-            .cloned()
+            .cloned();
+        #[cfg(debug_assertions)]
+        self.audit_lookup(key, if value.is_some() { "english-fallback" } else { "missing" }, value.as_deref());
+        value
     }
     /// NDR literal-pair overrides are keyed by source, not by a translated
     /// sentence. They have priority over cross-referenced legacy catalog keys.
@@ -179,7 +213,12 @@ impl Language {
         let hash = korean.bytes().chain([0]).chain(english.bytes()).fold(
             0xcbf29ce484222325_u64, |hash, byte| (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3),
         );
-        self.literal_pairs.get(&hash).map(String::as_str)
+        let value = self.literal_pairs.get(&hash).map(String::as_str);
+        #[cfg(debug_assertions)]
+        if let Some(text) = value {
+            self.audit_lookup(&format!("ndr.ui_pair_{hash:016x}"), "primary-pair", Some(text));
+        }
+        value
     }
 
     /// Resolve either source caption through cached resource keys; performs no filesystem I/O.
@@ -203,9 +242,18 @@ impl Language {
             // The reverse index can point to a key found only in a base
             // catalog. Do not replace an explicit bilingual source fallback
             // with an unrelated English fallback from that key.
-            self.primary_raw(key).filter(|text| !text.trim().is_empty())
-                .map_or_else(|| fallback.to_owned(), clean_language_text)
+            let primary = self.primary_raw(key).filter(|text| !text.trim().is_empty());
+            #[cfg(debug_assertions)]
+            if primary.is_none() { self.audit_lookup(key, "pair-fallback", Some(fallback)); }
+            primary.map_or_else(|| fallback.to_owned(), clean_language_text)
         } else {
+            #[cfg(debug_assertions)]
+            {
+                let hash = korean.bytes().chain([0]).chain(english.bytes()).fold(
+                    0xcbf29ce484222325_u64, |hash, byte| (hash ^ u64::from(byte)).wrapping_mul(0x100000001b3),
+                );
+                self.audit_lookup(&format!("ndr.ui_pair_{hash:016x}"), "pair-fallback", Some(fallback));
+            }
             fallback.into()
         }
     }

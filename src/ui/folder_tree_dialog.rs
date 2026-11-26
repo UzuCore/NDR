@@ -73,6 +73,9 @@ pub(super) struct FolderTreeForm {
     pub favorites_open: bool,
     /// TfSearchFolder (Ctrl+F, tbSearchClick 0x42621c).
     pub search: Option<SearchFolder>,
+    /// First visible drive; independent of the selected drive and local to
+    /// this dialog rather than a context-wide persisted scroll offset.
+    pub top_drive: usize,
     /// TNXFolderTreeView ImageList (+0x2f4): the shell folder icon (index 0) and the pDrives drive-button images (SHGetFileInfoW). Filled when the window is first drawn.
     pub folder_icon: Option<egui::TextureHandle>,
     pub drive_icons: Vec<Option<egui::TextureHandle>>,
@@ -84,6 +87,8 @@ pub(super) struct SearchFolder {
     pub query: String,
     pub results: Vec<String>,
     pub selected: Option<usize>,
+    /// Scrolling the list must not change the item that Enter accepts.
+    pub top_result: usize,
     /// Focus on the result list (otherwise cbSearch).
     pub list_focus: bool,
     pub first_frame: bool,
@@ -93,10 +98,13 @@ impl SearchFolder {
     /// btnSearchClick 0x452204: if there is text, clear the list and add the full path of every item (in forward order) whose name contains the text (StrStrIW).
     /// If there is at least one, select the first row and focus the list.
     pub(super) fn run(&mut self, tree: &Tree) {
+        self.results.clear();
+        self.selected = None;
+        self.top_result = 0;
+        self.list_focus = false;
         if self.query.is_empty() {
             return;
         }
-        self.results.clear();
         let needle = self.query.to_lowercase();
         let mut at = tree.root;
         while let Some(i) = at {
@@ -193,6 +201,7 @@ impl FolderTreeForm {
             favorites: vec![],
             favorites_open: false,
             search: None,
+            top_drive: 0,
             folder_icon: None,
             drive_icons: vec![],
         }
@@ -238,6 +247,11 @@ impl FolderTreeForm {
         }
         self.save();
         self.drive = root.clone();
+        // A keyboard/favorite drive change should reveal its drive button
+        // on the next frame. The caller clamps this to the viewport.
+        if let Some(i) = self.drives.iter().position(|(p, _)| (self.root_of)(&p.to_string_lossy()).eq_ignore_ascii_case(&root)) {
+            self.top_drive = i;
+        }
         self.tree = Tree::default();
         self.focused = None;
         self.top_row = 0;
@@ -722,12 +736,12 @@ fn paint_tree(ui: &egui::Ui, rect: egui::Rect, form: &FolderTreeForm, colors: &T
     // Background text: drive name (100) top-right + volume name (30), in a color between the background and line colors.
     let mark = colors.back.lerp_to_gamma(colors.line, 0.25);
     let drive_text = form.tree.items[root].name.trim_end_matches('\\').to_owned();
-    let big = egui::FontId::proportional(110.0);
+    let big = egui::FontId::proportional(110.0_f32.min(rect.height() * 0.7).max(20.0));
     let galley = painter.layout_no_wrap(drive_text, big, mark);
     let drive_height = galley.size().y;
     painter.galley(egui::pos2(rect.right() - galley.size().x - 20.0, rect.top() + 6.0), galley, mark);
     if !root_label.is_empty() {
-        let label = painter.layout_no_wrap(root_label.to_owned(), egui::FontId::proportional(36.0), mark);
+        let label = painter.layout_no_wrap(root_label.to_owned(), egui::FontId::proportional(36.0_f32.min(rect.height() * 0.2).max(10.0)), mark);
         painter.galley(egui::pos2(rect.right() - label.size().x - 20.0, rect.top() + drive_height + 6.0), label, mark);
     }
     let line = egui::Stroke::new(1.0_f32, colors.line);
@@ -920,6 +934,39 @@ fn function_bar(ui: &mut egui::Ui, rect: egui::Rect, items: &[(String, String)])
     clicked
 }
 
+/// Shared bounded scrollbar for the drive and result lists. Scroll offset is
+/// not selection; wheel, track clicks and thumb drags only move the view.
+fn scroll_list_top(ui: &mut egui::Ui, rect: egui::Rect, id: egui::Id, top: &mut usize, count: usize, visible: usize, step: usize, input: bool) -> usize {
+    let max = count.saturating_sub(visible);
+    *top = (*top).min(max);
+    if max == 0 {
+        return *top;
+    }
+    if input && ui.rect_contains_pointer(rect) {
+        let wheel = ui.input(|i| i.raw_scroll_delta.y);
+        if wheel != 0.0 {
+            *top = if wheel > 0.0 { top.saturating_sub(step) } else { top.saturating_add(step).min(max) };
+        }
+    }
+    let track = egui::Rect::from_min_max(egui::pos2(rect.right() - 7.0, rect.top() + 1.0), rect.max - egui::vec2(1.0, 1.0));
+    let thumb_height = (track.height() * visible as f32 / count as f32).max(12.0).min(track.height());
+    let travel = (track.height() - thumb_height).max(1.0);
+    let response = ui.interact(track, id, if input { egui::Sense::click_and_drag() } else { egui::Sense::hover() });
+    if input && (response.clicked() || response.dragged() || response.drag_started()) {
+        if let Some(p) = response.interact_pointer_pos() {
+            // Click a track position or drag the thumb to it; clamp to the
+            // last complete page instead of allowing empty trailing space.
+            let fraction = ((p.y - track.top() - thumb_height * 0.5) / travel).clamp(0.0, 1.0);
+            *top = (fraction * max as f32).round() as usize;
+        }
+    }
+    let thumb = egui::Rect::from_min_size(track.min + egui::vec2(0.0, travel * *top as f32 / max as f32), egui::vec2(track.width(), thumb_height));
+    let painter = ui.painter().with_clip_rect(rect);
+    painter.rect_filled(track, 2.0, Color32::from_gray(0xE4));
+    painter.rect_filled(thumb, 2.0, if response.hovered() || response.dragged() { Color32::from_gray(0x80) } else { Color32::from_gray(0xAA) });
+    *top
+}
+
 /// The original TfFolderTree window. Returned actions are handled by App. Tree navigation inside the window is handled here.
 pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, language: &compat::Language, colors: &TreeColors, size: egui::Vec2, input: bool, icons: &[Option<egui::TextureHandle>]) -> Option<FolderTreeAction> {
     let text = |key: &str, fallback: &str| language.raw(&format!("formFolderTree.{key}")).unwrap_or_else(|| fallback.to_owned());
@@ -935,16 +982,23 @@ pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, langu
     let (area, _) = ui.allocate_exact_size(size, egui::Sense::hover());
     let at = |x: f32, y: f32, w: f32, h: f32| egui::Rect::from_min_size(area.min + egui::vec2(x, y), egui::vec2(w, h));
     let (w, h) = (size.x, size.y);
+    let compact = w < 657.0 || h < 400.0;
+    let body_top = if compact { 76.0 } else { 51.0 };
+    let actions = [plain("Caption.btnOk", "OK"), plain("Caption.btnCancel", "Cancel")];
+    let bw = if compact { (w - 14.0) / 2.0 } else { 70.0 };
+    let bh = if compact { super::original_dialogs::compact_button_height(ui, &actions, bw) } else { 22.0 };
+    let tree_available = input && form.search.is_none() && !scanning;
+    let tree_input = tree_available && !form.favorites_open;
     let visuals = ui.visuals().clone();
     // tbMainMenu: menu buttons (text).
     let menu_font = egui::FontId::proportional(12.0);
     let mut x = 2.0;
     let mut menu_action: Option<&'static str> = None;
-    for (key, fallback, id) in [("ToolButton.tbFolder", "Fold&er", "folder"), ("ToolButton.tbTree", "&Tree", "tree")] {
+    for (slot, (key, fallback, id)) in [("ToolButton.tbFolder", "Fold&er", "folder"), ("ToolButton.tbTree", "&Tree", "tree")].into_iter().enumerate() {
         let caption = plain(key, fallback);
-        let width = text_width(ui, &caption, &menu_font) + 14.0;
-        ui.scope_builder(egui::UiBuilder::new().max_rect(at(x, 0.0, width, 22.0)), |ui| {
-            ui.add_enabled_ui(!scanning, |ui| {
+        let width = if compact { (w - 8.0) / 2.0 } else { text_width(ui, &caption, &menu_font) + 14.0 };
+        ui.scope_builder(egui::UiBuilder::new().max_rect(at(if compact { 2.0 + slot as f32 * (width + 4.0) } else { x }, 0.0, width, 22.0)), |ui| {
+            ui.add_enabled_ui(tree_input, |ui| {
                 ui.menu_button(caption.as_str(), |ui| {
                     // DFM items (ShortCut shown as text on the right, like VCL). "@levels" = miLevelExpand submenu, "@hidden" = miShowHiddenFolder (checkmark).
                     let items: &[(&str, &str, &str, &str)] = if id == "folder" {
@@ -1017,30 +1071,30 @@ pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, langu
     let favorites_caption = plain("ToolButton.tbFavorites", "Fa&vorites");
     // If the text is wider than the original positions (82·166·344), push it right by that much.
     let favorites_left = x.max(82.0);
-    let favorites_button = at(favorites_left, 0.0, text_width(ui, &favorites_caption, &menu_font) + 22.0, 22.0);
+    let favorites_button = if compact { at(2.0, 22.0, (w - 8.0) / 2.0, 22.0) } else { at(favorites_left, 0.0, text_width(ui, &favorites_caption, &menu_font) + 22.0, 22.0) };
     let shift = (favorites_button.right() - area.min.x + 8.0 - 166.0).max(0.0);
     let favorites_response = ui.interact(favorites_button, egui::Id::new("ndr-tree-favorites"), egui::Sense::click()).on_hover_text("F11");
     if favorites_response.hovered() || form.favorites_open {
         ui.painter().rect_filled(favorites_button, 2.0, visuals.widgets.hovered.weak_bg_fill);
     }
     ui.painter().text(favorites_button.left_center() + egui::vec2(6.0, 0.0), egui::Align2::LEFT_CENTER, format!("{favorites_caption} ▼"), menu_font.clone(), visuals.text_color());
-    if favorites_response.clicked() && !scanning && input {
+    if favorites_response.clicked() && tree_available {
         form.favorites_open = !form.favorites_open;
     }
     // tbSearch(344, Hint Ctrl+F): tbSearchClick.
     let search_caption = plain("ToolButton.tbSearch", "Search");
-    let search_button = at(344.0 + shift, 0.0, text_width(ui, &search_caption, &menu_font) + 14.0, 22.0);
+    let search_button = if compact { at(w / 2.0 + 2.0, 22.0, (w - 8.0) / 2.0, 22.0) } else { at(344.0 + shift, 0.0, text_width(ui, &search_caption, &menu_font) + 14.0, 22.0) };
     let search_response = ui.interact(search_button, egui::Id::new("ndr-tree-search"), egui::Sense::click()).on_hover_text("Ctrl+F");
     if search_response.hovered() {
         ui.painter().rect_filled(search_button, 2.0, visuals.widgets.hovered.weak_bg_fill);
     }
     ui.painter().text(search_button.center(), egui::Align2::CENTER_CENTER, &search_caption, menu_font.clone(), visuals.text_color());
-    let mut open_search = search_response.clicked() && !scanning && input;
+    let mut open_search = search_response.clicked() && tree_input;
     // tbDesktop·tbMyDoc·tbMyPic·tbMyMusic·tbMyVideo (Left 166~302, 34 spacing): SpecialFolderClick.
     let special = [("Hint.tbDesktop", "Desktop (Ctrl+D)", "desktop"), ("Hint.tbMyDoc", "Documents (Ctrl+G)", "documents"), ("Hint.tbMyPic", "Pictures (Ctrl+Q)", "pictures"), ("Hint.tbMyMusic", "Music (Ctrl+S)", "music"), ("Hint.tbMyVideo", "Videos (Ctrl+O)", "videos")];
     let mut special_click = None;
     for (n, (key, fallback, id)) in special.iter().enumerate() {
-        let button = at(166.0 + shift + 34.0 * n as f32, 0.0, 30.0, 22.0);
+        let button = if compact { at(2.0 + n as f32 * 34.0, 44.0, 30.0, 22.0) } else { at(166.0 + shift + 34.0 * n as f32, 0.0, 30.0, 22.0) };
         let response = ui.interact(button, egui::Id::new(("ndr-tree-special", n)), egui::Sense::click()).on_hover_text(text(key, fallback));
         if response.hovered() {
             ui.painter().rect_filled(button, 2.0, visuals.widgets.hovered.weak_bg_fill);
@@ -1050,52 +1104,65 @@ pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, langu
                 ui.painter().image(texture.id(), egui::Rect::from_center_size(button.center(), egui::vec2(18.0, 18.0)), egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
             }
             None => {
-                ui.painter().text(button.center(), egui::Align2::CENTER_CENTER, &text(key, fallback)[..1], egui::FontId::proportional(12.0), visuals.text_color());
+                ui.painter().text(button.center(), egui::Align2::CENTER_CENTER, text(key, fallback).chars().next().unwrap_or('?').to_string(), egui::FontId::proportional(12.0), visuals.text_color());
             }
         }
-        if response.clicked() && !scanning && input {
+        if response.clicked() && tree_input {
             special_click = Some(*id);
         }
     }
-    ui.painter().hline(area.min.x..=area.max.x, area.min.y + 22.0, visuals.widgets.noninteractive.bg_stroke);
+    ui.painter().hline(area.min.x..=area.max.x, area.min.y + if compact { 44.0 } else { 22.0 }, visuals.widgets.noninteractive.bg_stroke);
     // pTop: path field and buttons.
-    ui.painter().text(at(3.0, 29.0, 40.0, 13.0).left_top(), egui::Align2::LEFT_TOP, plain("Caption.lAddress", "Path:"), egui::FontId::proportional(12.0), visuals.text_color());
+    let address_caption = plain("Caption.lAddress", "Path:");
+    let address_left = (text_width(ui, &address_caption, &menu_font) + 16.0).max(49.0).min(if compact { w * 0.60 } else { w - 270.0 });
+    let address_top = if compact { 67.0 } else { 26.0 };
+    let address_label_rect = at(3.0, address_top + 3.0, address_left - 6.0, 16.0);
+    // Use exactly the measured font; a differently sized default Label
+    // font previously elided even short translations.
+    let address_response = ui.interact(address_label_rect, ui.id().with("tree-address-label"), egui::Sense::hover());
+    ui.painter().with_clip_rect(address_label_rect).text(address_label_rect.left_center(), egui::Align2::LEFT_CENTER, &address_caption, menu_font.clone(), visuals.text_color());
+    address_response.on_hover_text(address_caption);
     let address_id = egui::Id::new("ndr-folder-tree-address");
-    let address = ui.put(at(49.0, 26.0, (w - 208.0).max(80.0), 21.0), egui::TextEdit::singleline(&mut form.address).id(address_id));
+    let address = ui.add_enabled_ui(tree_input, |ui| ui.put(at(address_left, address_top, if compact { w - address_left - 3.0 } else { (w - address_left - 159.0).max(80.0) }, 21.0), egui::TextEdit::singleline(&mut form.address).id(address_id))).inner;
     if address.clicked() || address.has_focus() {
         form.tree_focus = false;
     }
     let address_enter = address.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-    let ok = ui.add_enabled_ui(!scanning, |ui| ui.put(at(w - 146.0, 26.0, 70.0, 22.0), egui::Button::new(plain("Caption.btnOk", "OK")))).inner.clicked();
-    let cancel = ui.add_enabled_ui(!scanning, |ui| ui.put(at(w - 70.0, 26.0, 70.0, 22.0), egui::Button::new(plain("Caption.btnCancel", "Cancel")))).inner.clicked();
+    let ok = ui.add_enabled_ui(tree_input, |ui| ui.put(if compact { at(4.0, h - bh - 3.0, bw, bh) } else { at(w - 146.0, 26.0, 70.0, 22.0) }, egui::Button::new(&actions[0]).wrap())).inner.clicked();
+    let cancel = ui.add_enabled_ui(tree_input, |ui| ui.put(if compact { at(w - bw - 4.0, h - bh - 3.0, bw, bh) } else { at(w - 70.0, 26.0, 70.0, 22.0) }, egui::Button::new(&actions[1]).wrap())).inner.clicked();
     // pMain.
-    let main = at(0.0, 51.0, w, (h - 51.0 - 19.0).max(40.0));
+    let top = if compact { body_top + 15.0 } else { body_top };
+    let main = at(0.0, top, w, (h - top - if compact { bh + 7.0 } else { 19.0 }).max(22.0));
     ui.painter().rect_stroke(main, 0.0, visuals.widgets.noninteractive.bg_stroke, egui::StrokeKind::Inside);
     let drives_rect = egui::Rect::from_min_size(main.min + egui::vec2(1.0, 1.0), egui::vec2(43.0, main.height() - 2.0));
     // pDrivesPaint 0x426800: white → F0F0F0 background.
     ui.painter().rect_filled(drives_rect, 0.0, Color32::from_rgb(0xF6, 0xF6, 0xF6));
     ui.painter().vline(drives_rect.right() + 0.5, drives_rect.y_range(), egui::Stroke::new(1.0_f32, Color32::from_rgb(0xE4, 0xE4, 0xE4)));
     let mut picked_drive = None;
-    for (n, (root, _)) in form.drives.iter().enumerate() {
+    let drive_count = form.drives.len();
+    let visible_drives = ((drives_rect.height() / 26.0).floor() as usize).max(1);
+    let first_drive = scroll_list_top(ui, drives_rect, ui.id().with("ndr-tree-drive-scroll"), &mut form.top_drive, drive_count, visible_drives, 1, tree_input && !form.favorites_open);
+    for (n, (root, _)) in form.drives.iter().enumerate().skip(first_drive).take(visible_drives) {
         let caption = root.to_string_lossy().trim_end_matches('\\').to_owned();
-        let button = egui::Rect::from_min_size(drives_rect.min + egui::vec2(1.0, 26.0 * n as f32), egui::vec2(41.0, 24.0));
+        let button = egui::Rect::from_min_size(drives_rect.min + egui::vec2(1.0, 26.0 * (n - first_drive) as f32), egui::vec2(if drive_count > visible_drives { 34.0 } else { 41.0 }, 24.0)).intersect(drives_rect);
         let down = (form.root_of)(&root.to_string_lossy()).eq_ignore_ascii_case(&form.drive);
-        let response = ui.interact(button, egui::Id::new(("ndr-tree-drive", n)), egui::Sense::click());
+        let response = ui.interact(button, egui::Id::new(("ndr-tree-drive", n)), egui::Sense::click()).on_hover_text(format!("{}  {}", root.display(), form.drives[n].1));
         if down || response.hovered() {
             ui.painter().rect(button, 2.0, if down { Color32::from_rgb(0xD8, 0xE6, 0xF8) } else { Color32::from_rgb(0xEC, 0xF2, 0xFB) }, egui::Stroke::new(1.0_f32, Color32::from_rgb(0x9C, 0xB4, 0xD8)), egui::StrokeKind::Inside);
         }
         // FUN_00424ec4: each button has text (drive) and a 16×16 shell icon.
         match form.drive_icons.get(n).cloned().flatten() {
             Some(icon) => {
-                let icon_rect = egui::Rect::from_min_size(egui::pos2(button.left() + 3.0, button.center().y - 8.0), egui::vec2(16.0, 16.0));
+                let icon_size = if drive_count > visible_drives { 12.0 } else { 16.0 };
+                let icon_rect = egui::Rect::from_min_size(egui::pos2(button.left() + if drive_count > visible_drives { 1.0 } else { 3.0 }, button.center().y - icon_size / 2.0), egui::vec2(icon_size, icon_size));
                 ui.painter().image(icon.id(), icon_rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
-                ui.painter().text(egui::pos2(icon_rect.right() + 2.0, button.center().y), egui::Align2::LEFT_CENTER, caption, egui::FontId::proportional(11.0), Color32::BLACK);
+                ui.painter().with_clip_rect(button).text(egui::pos2(icon_rect.right() + 2.0, button.center().y), egui::Align2::LEFT_CENTER, caption, egui::FontId::proportional(11.0), Color32::BLACK);
             }
             None => {
-                ui.painter().text(button.center(), egui::Align2::CENTER_CENTER, caption, egui::FontId::proportional(12.0), Color32::BLACK);
+                ui.painter().with_clip_rect(button).text(button.center(), egui::Align2::CENTER_CENTER, caption, egui::FontId::proportional(12.0), Color32::BLACK);
             }
         }
-        if response.clicked() && !scanning {
+        if response.clicked() && tree_input {
             picked_drive = Some(root.to_string_lossy().into_owned());
         }
     }
@@ -1108,7 +1175,7 @@ pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, langu
     let root_label = form.drives.iter().find(|(r, _)| (form.root_of)(&r.to_string_lossy()).eq_ignore_ascii_case(&form.drive)).map(|(_, l)| l.clone()).unwrap_or_default();
     paint_tree(ui, tree_rect, form, colors, &root_label, &metrics, &font);
     let tree_response = ui.interact(tree_rect, egui::Id::new("ndr-folder-tree-view"), egui::Sense::click());
-    if input && !scanning {
+    if tree_input {
         if tree_response.clicked() || tree_response.double_clicked() || tree_response.secondary_clicked() {
             form.tree_focus = true;
             ui.memory_mut(|m| m.surrender_focus(address_id));
@@ -1148,21 +1215,25 @@ pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, langu
         .filter_map(|p| p.split_once('=').map(|(k, v)| (k.to_owned(), v.to_owned())))
         .collect();
     let bar = at(0.0, h - 19.0, w, 19.0);
-    let bar_click = function_bar(ui, bar, &entries).filter(|_| !scanning && input);
+    // On narrow screens the menu entries and keyboard shortcuts remain
+    // available; the fixed OK/Cancel footer replaces the cramped F-key bar.
+    let bar_click = if compact { None } else { function_bar(ui, bar, &entries).filter(|_| tree_input) };
     // TfTreeScan(547×102): lPath(8,19 531, path elided), lCount(8,43), btnCancel(244,70 75×25).
     let mut scan_cancel = false;
     if let Some(scan) = &form.scan {
-        let window = egui::Rect::from_center_size(tree_rect.center(), egui::vec2(547.0, 128.0));
+        let sw = 547.0_f32.min(w - 8.0);
+        let window = egui::Rect::from_center_size(if compact { area.center() } else { tree_rect.center() }, egui::vec2(sw, 128.0));
         ui.painter().rect(window, 2.0, visuals.window_fill(), visuals.window_stroke(), egui::StrokeKind::Inside);
         let caption = language.raw("formTreeScan.Form.Caption").unwrap_or_else(|| "Scanning...".into());
         ui.painter().text(window.left_top() + egui::vec2(8.0, 5.0), egui::Align2::LEFT_TOP, caption, egui::FontId::proportional(13.0), visuals.strong_text_color());
-        let body = egui::Rect::from_min_size(window.min + egui::vec2(0.0, 26.0), egui::vec2(547.0, 102.0));
+        let body = egui::Rect::from_min_size(window.min + egui::vec2(0.0, 26.0), egui::vec2(sw, 102.0));
         let current = scan.current.lock().map(|c| c.clone()).unwrap_or_default();
-        let shown = super::original_dialogs::path_ellipsis(ui, &current, 531.0, &font);
+        let shown = super::original_dialogs::path_ellipsis(ui, &current, sw - 16.0, &font);
         ui.painter().text(body.min + egui::vec2(8.0, 19.0), egui::Align2::LEFT_TOP, shown, font.clone(), visuals.text_color());
         ui.painter().text(body.min + egui::vec2(8.0, 43.0), egui::Align2::LEFT_TOP, scan.count.load(Ordering::Relaxed).to_string(), font.clone(), visuals.text_color());
         let cancel_caption = super::favorites_dialog::access_key(&language.raw("formTreeScan.Caption.btnCancel").unwrap_or_else(|| "Cancel".into())).0;
-        if ui.put(egui::Rect::from_min_size(body.min + egui::vec2(244.0, 70.0), egui::vec2(75.0, 25.0)), egui::Button::new(cancel_caption)).clicked() {
+        let cancel_width = if compact { (super::original_dialogs::caption_width(ui, &cancel_caption) + 16.0).clamp(75.0, sw - 16.0) } else { 75.0 };
+        if ui.put(egui::Rect::from_min_size(body.min + egui::vec2((sw - cancel_width) / 2.0, 70.0), egui::vec2(cancel_width, 25.0)), egui::Button::new(cancel_caption)).clicked() {
             scan_cancel = true;
         }
     }
@@ -1185,16 +1256,19 @@ pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, langu
     if form.favorites_open {
         let menu = egui::Area::new(egui::Id::new("ndr-tree-favorites-menu")).order(egui::Order::Foreground).fixed_pos(favorites_button.left_bottom()).show(ui.ctx(), |ui| {
             egui::Frame::menu(ui.style()).show(ui, |ui| {
-                ui.set_min_width(220.0);
+                ui.set_min_width(220.0_f32.min(w - 12.0));
+                ui.set_max_width((w - 12.0).min(420.0));
                 if form.favorites.is_empty() {
                     ui.add_enabled(false, egui::Button::new("-"));
                 }
-                for (slot, name, path) in &form.favorites {
-                    let gesture = if *slot < 10 { format!("Shift+F{}", slot + 1) } else { format!("Shift+Ctrl+F{}", slot - 9) };
-                    if ui.add(egui::Button::new(super::favorites_dialog::access_key(name).0).shortcut_text(gesture)).clicked() {
-                        picked_favorite = Some(path.clone());
+                egui::ScrollArea::vertical().max_height((h - 60.0).max(48.0)).show(ui, |ui| {
+                    for (slot, name, path) in &form.favorites {
+                        let gesture = if *slot < 10 { format!("Shift+F{}", slot + 1) } else { format!("Shift+Ctrl+F{}", slot - 9) };
+                        if ui.add(egui::Button::new(super::favorites_dialog::access_key(name).0).shortcut_text(gesture).wrap()).clicked() {
+                            picked_favorite = Some(path.clone());
+                        }
                     }
-                }
+                });
             });
         });
         let outside = ui.input(|i| i.pointer.any_pressed()) && !menu.response.contains_pointer() && !favorites_response.contains_pointer();
@@ -1205,14 +1279,21 @@ pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, langu
     // TfSearchFolder window (on top of the tree window).
     let mut search_accept = None;
     if let Some(search) = form.search.as_mut() {
-        let window = egui::Rect::from_center_size(tree_rect.center(), egui::vec2(545.0, 226.0 + 24.0));
+        let sw = 545.0_f32.min(w - 8.0);
+        let sh = 250.0_f32.min(h - 8.0);
+        let window = egui::Rect::from_center_size(if compact { area.center() } else { tree_rect.center() }, egui::vec2(sw, sh));
         ui.painter().rect(window, 2.0, visuals.window_fill(), visuals.window_stroke(), egui::StrokeKind::Inside);
         let caption = language.raw("formSearchFolder.Form.Caption").unwrap_or_else(|| "Search Folder".into());
-        ui.painter().text(window.left_top() + egui::vec2(8.0, 5.0), egui::Align2::LEFT_TOP, caption, egui::FontId::proportional(13.0), visuals.strong_text_color());
-        let body = egui::Rect::from_min_size(window.min + egui::vec2(0.0, 24.0), egui::vec2(545.0, 226.0));
+        let title_rect = egui::Rect::from_min_size(window.min + egui::vec2(8.0, 4.0), egui::vec2(sw - 40.0, 19.0));
+        super::original_dialogs::put_left(ui, title_rect, egui::Label::new(caption.clone()).truncate()).on_hover_text(caption);
+        let close_search = ui.put(egui::Rect::from_min_size(window.right_top() + egui::vec2(-26.0, 3.0), egui::vec2(22.0, 18.0)), egui::Button::new("×")).clicked() && input;
+        let body = egui::Rect::from_min_size(window.min + egui::vec2(0.0, 24.0), egui::vec2(sw, sh - 24.0));
         let put = |x: f32, y: f32, w: f32, h: f32| egui::Rect::from_min_size(body.min + egui::vec2(x, y), egui::vec2(w, h));
         let edit_id = egui::Id::new("ndr-tree-search-text");
-        let edit = ui.put(put(4.0, 8.0, 441.0, 21.0), egui::TextEdit::singleline(&mut search.query).id(edit_id));
+        let search_label = super::favorites_dialog::access_key(&language.raw("formSearchFolder.Caption.btnSearch").unwrap_or_else(|| "Search".into())).0;
+        let search_bw = if compact { (super::original_dialogs::caption_width(ui, &search_label) + 16.0).clamp(75.0, sw * 0.52) } else { 75.0 };
+        let search_bh = if compact { super::original_dialogs::compact_button_height(ui, std::slice::from_ref(&search_label), search_bw) } else { 25.0 };
+        let edit = ui.put(put(4.0, 8.0, if compact { sw - search_bw - 16.0 } else { 441.0 }, 21.0), egui::TextEdit::singleline(&mut search.query).id(edit_id));
         if search.first_frame {
             edit.request_focus();
             search.first_frame = false;
@@ -1222,8 +1303,7 @@ pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, langu
         }
         // List keys only when the list has focus from the start of this frame (so the list does not re-receive the Enter that ran the search or the ↓ that moved focus to it).
         let list_keys = search.list_focus && !edit.has_focus() && !edit.lost_focus();
-        let search_label = super::favorites_dialog::access_key(&language.raw("formSearchFolder.Caption.btnSearch").unwrap_or_else(|| "Search".into())).0;
-        let mut run = ui.put(put(462.0, 6.0, 75.0, 25.0), egui::Button::new(search_label)).clicked();
+        let mut run = ui.put(put(sw - search_bw - 8.0, 6.0, search_bw, search_bh), egui::Button::new(search_label).wrap()).clicked();
         // cbSearchKeyPress 0x4523bc: Enter = search. cbSearchKeyDown 0x452bcc: ↓ = move to the list.
         if edit.has_focus() || edit.lost_focus() {
             if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
@@ -1241,21 +1321,26 @@ pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, langu
             search.run(&form.tree);
             if search.list_focus {
                 ui.memory_mut(|m| m.surrender_focus(edit_id));
+            } else {
+                edit.request_focus();
             }
         }
         // lbResultDrawItem 0x452660: row height = text height + 6, parent folder (gray) + name (black); the selected row is light text on a dark background.
-        let list = put(4.0, 37.0, 533.0, 181.0);
+        let list_top = (search_bh + 12.0).max(37.0);
+        let list = put(4.0, list_top, sw - 12.0, (body.height() - list_top - 8.0).max(19.0));
         ui.painter().rect(list, 0.0, Color32::WHITE, egui::Stroke::new(1.0_f32, Color32::from_gray(0x90)), egui::StrokeKind::Inside);
         let row_height = 19.0;
         let list_response = ui.interact(list, egui::Id::new("ndr-tree-search-list"), egui::Sense::click());
-        let first = search.selected.map(|s| s.saturating_sub(((list.height() / row_height) as usize).saturating_sub(1))).unwrap_or(0);
-        let painter = ui.painter().with_clip_rect(list.shrink(1.0));
+        let visible = (((list.height() - 2.0) / row_height) as usize).max(1);
+        let first = scroll_list_top(ui, list, ui.id().with("ndr-tree-search-scroll"), &mut search.top_result, search.results.len(), visible, 3, input);
+        let list_body = if search.results.len() > visible { egui::Rect::from_min_max(list.min, egui::pos2(list.right() - 8.0, list.bottom())) } else { list };
+        let painter = ui.painter().with_clip_rect(list_body.shrink(1.0));
         for (n, path) in search.results.iter().enumerate().skip(first) {
             let top = list.top() + 1.0 + (n - first) as f32 * row_height;
-            if top > list.bottom() {
+            if n >= first + visible {
                 break;
             }
-            let row = egui::Rect::from_min_size(egui::pos2(list.left() + 1.0, top), egui::vec2(list.width() - 2.0, row_height));
+            let row = egui::Rect::from_min_size(egui::pos2(list.left() + 1.0, top), egui::vec2(list_body.width() - 2.0, row_height));
             let selected = search.selected == Some(n);
             if selected {
                 painter.rect_filled(row, 0.0, Color32::from_rgb(0x46, 0x46, 0x46));
@@ -1266,12 +1351,14 @@ pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, langu
             };
             let dim = if selected { Color32::from_gray(0xC0) } else { Color32::from_gray(0x80) };
             let strong = if selected { Color32::WHITE } else { Color32::BLACK };
+            let name_width = text_width(ui, name, &font);
+            let folder = if compact { super::original_dialogs::path_ellipsis(ui, folder, (row.width() - name_width - 12.0).max(0.0), &font) } else { folder.to_owned() };
             let drawn = painter.text(row.left_center() + egui::vec2(4.0, 0.0), egui::Align2::LEFT_CENTER, folder, font.clone(), dim);
             painter.text(egui::pos2(drawn.right() + 2.0, row.center().y), egui::Align2::LEFT_CENTER, name, font.clone(), strong);
         }
-        if let Some(pos) = list_response.interact_pointer_pos().filter(|_| list_response.clicked() || list_response.double_clicked()) {
+        if let Some(pos) = list_response.interact_pointer_pos().filter(|p| list_body.contains(*p) && (list_response.clicked() || list_response.double_clicked())) {
             let n = first + ((pos.y - list.top() - 1.0) / row_height).floor().max(0.0) as usize;
-            if n < search.results.len() {
+            if n < search.results.len() && n < first + visible {
                 search.selected = Some(n);
                 search.list_focus = true;
                 ui.memory_mut(|m| m.surrender_focus(edit_id));
@@ -1282,12 +1369,15 @@ pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, langu
         }
         // lbResultKeyDown 0x4523d8: Enter = close with that path, ↑↓ to move.
         if list_keys {
+            let old_selected = search.selected;
             for (key, _) in &keys {
                 match key {
                     egui::Key::ArrowDown => search.selected = search.selected.map(|s| (s + 1).min(search.results.len().saturating_sub(1))).or(Some(0)).filter(|_| !search.results.is_empty()),
                     egui::Key::ArrowUp => search.selected = search.selected.map(|s| s.saturating_sub(1)),
                     egui::Key::Home => search.selected = (!search.results.is_empty()).then_some(0),
                     egui::Key::End => search.selected = search.results.len().checked_sub(1),
+                    egui::Key::PageUp => search.selected = search.selected.map(|s| s.saturating_sub(visible)),
+                    egui::Key::PageDown => search.selected = search.selected.map(|s| (s + visible).min(search.results.len().saturating_sub(1))),
                     egui::Key::Enter => {
                         if let Some(s) = search.selected {
                             search_accept = search.results.get(s).cloned();
@@ -1296,9 +1386,18 @@ pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, langu
                     _ => {}
                 }
             }
+            if old_selected != search.selected {
+                if let Some(s) = search.selected {
+                    if s < search.top_result {
+                        search.top_result = s;
+                    } else if s >= search.top_result + visible {
+                        search.top_result = s + 1 - visible;
+                    }
+                }
+            }
         }
         // FormKeyDown 0x4523a0: Esc = close.
-        let close = keys.iter().any(|(k, _)| *k == egui::Key::Escape);
+        let close = close_search || keys.iter().any(|(k, _)| *k == egui::Key::Escape);
         if close || search_accept.is_some() {
             form.search = None;
         }

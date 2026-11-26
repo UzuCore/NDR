@@ -74,12 +74,74 @@ fn show(app: &mut App, title: &str, text: &str, flags: u32) -> Rc<std::cell::Cel
     app.message_box(title, "", text, flags, move |_, result, _| sink.set(result));
     cell
 }
+#[test]
+fn long_error_messages_fit_small_windows_without_losing_buttons() {
+    let (root, ctx, mut app) = fixture("long-error", "ko");
+    let message = (0..30).map(|i| format!("{} D:\\test\\{}\\document-{i}.bin", app.language_pack.text("NDR.UPD_DETAIL_HASH", "SHA-256 verification failed."), "long-folder-".repeat(18))).collect::<Vec<_>>().join("\n");
+    let result = show(&mut app, "NDR", &message, ndr::msgbox::MB_OK | ndr::msgbox::MB_ICONEXCLAMATION);
+    for _ in 0..4 {
+        let _ = ctx.run(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 480.0))), ..Default::default() }, |ctx| app.msgbox_ui(ctx));
+    }
+    let layout = app.msgboxes[0].layout.clone().unwrap();
+    assert!(layout.client.x < 800.0 && layout.client.y < 450.0, "{:?}", layout.client);
+    assert!(layout.line_count > 30);
+    let button = layout.slots[2].unwrap();
+    assert!(button.max.x <= 800.0 && button.max.y <= 480.0, "{button:?}");
+    app.answer_message_box(ndr::msgbox::IDOK, &ctx);
+    assert_eq!(result.get(), ndr::msgbox::IDOK);
+    fs::remove_dir_all(root).unwrap();
+}
+
 fn cursor_name(app: &App) -> String {
     let pane = &app.panes[0];
     pane.entries[pane.cursor].name.clone()
 }
 fn index_of(app: &App, name: &str) -> usize {
     app.panes[0].entries.iter().position(|e| e.name == name).unwrap()
+}
+
+#[test]
+fn join_single_numbered_part_reports_expanded_input_totals() {
+    let (root, ctx, mut app) = fixture("join-progress", "ko");
+    let source = root.join("data.bin");
+    let payload: Vec<u8> = (0..3000).map(|i| (i % 251) as u8).collect();
+    fs::write(&source, &payload).unwrap();
+    let cancel = AtomicBool::new(false);
+    let result = ndr::split::split_file(&source, 1024, &root.join("left"), &cancel, &mut |_, _, _| {}).unwrap();
+    assert_eq!(result.parts.len(), 3);
+    ndr::split::write_split_metadata(&result.parts[0], &source, result.source_size, &result.crc32).unwrap();
+    app.refresh(0);
+    wait_listing(&mut app, &ctx);
+    app.active = 0;
+    app.panes[0].cursor = index_of(&app, "data.001");
+    app.join_command();
+    let Some(original_dialogs::DialogKind::Join(form)) = app.original_dialogs.last().map(|d| &d.kind) else { panic!("join dialog expected") };
+    assert_eq!(form.files.len(), 1);
+    app.submit_split_or_join(&ctx);
+    let job = app.job.as_ref().unwrap();
+    assert_eq!(job.progress.as_ref().unwrap().total_bytes, None, "do not publish a wrong initial total");
+    let mut totals = None;
+    let mut ticks = Vec::new();
+    loop {
+        match job.receiver.recv_timeout(Duration::from_secs(10)).unwrap() {
+            Event::Totals { files, bytes } => totals = Some((files, bytes)),
+            Event::Progress { files, bytes, .. } => {
+                assert_eq!(totals, Some((Some(3), Some(3000))));
+                assert!(files <= 3 && bytes <= 3000);
+                ticks.push((files, bytes));
+            }
+            Event::Finished { cancelled, .. } => { assert!(!cancelled); break; }
+            Event::Error { message, .. } => panic!("{message}"),
+            _ => {}
+        }
+    }
+    assert!(ticks.contains(&(1, 1024)) && ticks.contains(&(2, 2048)), "{ticks:?}");
+    assert_eq!(ticks.last(), Some(&(3, 3000)));
+    let joined = root.join("left/data.bin");
+    assert_eq!(ndr::tools::checksum(&source, "sha256").unwrap(), ndr::tools::checksum(&joined, "sha256").unwrap());
+    assert_eq!(fs::read(joined).unwrap(), payload);
+    drop(app);
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -467,7 +529,7 @@ fn destination_list_keys_follow_the_original() {
         original: true,
         selected: 0,
         drives: Vec::new(),
-        free_label: String::new(),
+        language: compat::Language::default(),
         special_folders: Default::default(),
     };
     let mut run = |key: egui::Key, modifiers: egui::Modifiers| {
@@ -513,7 +575,7 @@ fn original_destination_list_follows_tfselectdest() {
         original: true,
         selected: 0,
         drives: Vec::new(),
-        free_label: String::new(),
+        language: compat::Language::default(),
         special_folders: [None, None, Some(s(&root.join("pictures"))), None, None],
     };
     let items: Vec<_> = original_items(&form).into_iter().map(|(item, _)| item).collect();
@@ -578,6 +640,77 @@ fn original_destination_list_follows_tfselectdest() {
     assert!(matches!(run(&mut form, vec![key(egui::Key::Z, egui::Modifiers::NONE)]), Some(DestinationAction::MostUsed(p)) if p == "Z:\\"));
     assert!(matches!(run(&mut form, vec![key(egui::Key::C, egui::Modifiers::SHIFT)]), Some(DestinationAction::MostUsed(p)) if p == "C:\\"));
     assert!(run(&mut form, vec![key(egui::Key::Q, egui::Modifiers::NONE)]).is_none(), "no such drive");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn compact_destination_scroll_reaches_last_item_and_keyboard_selection() {
+    use super::destination_dialog::{destination_ui_original, DestinationAction, DestinationForm};
+    let (root, ctx, app) = fixture("compact-destination", "de");
+    let initial = root.join("right");
+    let mut form = DestinationForm {
+        most_used: (0..40).map(|i| (format!("C:\\qa\\Recent-{i:02}"), 1)).collect(),
+        work_folders: Default::default(), browse_label: app.language_pack.raw("formSelectDest.Caption.btnTree").unwrap(),
+        cancel_label: app.language_pack.text("formSelectDest.Caption.btnCancel", "Cancel"),
+        ok_label: app.language_pack.text("formSelectDest.Caption.btnOk", "OK"),
+        remove_label: "Remove".into(), clear_label: "Clear".into(), initial: initial.clone(), path: initial.to_string_lossy().into_owned(),
+        original: true, selected: 0, drives: Vec::new(), language: app.language_pack.clone(), special_folders: Default::default(),
+    };
+    let mut time = 1.0;
+    let mut run = |form: &mut DestinationForm, events, enter| {
+        time += 0.05;
+        let mut action = None;
+        let output = ctx.run(egui::RawInput { time: Some(time), screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(320.0, 250.0))), events, ..Default::default() }, |ctx| {
+            super::panes::windows_double_press(ctx);
+            egui::Area::new(egui::Id::new("compact-dest-test")).fixed_pos(egui::Pos2::ZERO).show(ctx, |ui| action = destination_ui_original(ui, form, enter, None, &[], 250.0));
+        });
+        fn collect(s: &egui::epaint::Shape, clip: egui::Rect, rows: &mut Vec<(String, egui::Rect)>) {
+            match s {
+                egui::epaint::Shape::Vec(shapes) => for s in shapes { collect(s, clip, rows); },
+                egui::epaint::Shape::Text(t) => { let r = t.visual_bounding_rect(); if r.is_positive() && clip.contains_rect(r) { rows.push((t.galley.job.text.clone(), r)); } },
+                _ => {}
+            }
+        }
+        let mut rows = Vec::new();
+        for item in &output.shapes { collect(&item.shape, item.clip_rect, &mut rows); }
+        (action, rows)
+    };
+    let mut painted = Vec::new();
+    for _ in 0..4 { painted = run(&mut form, vec![], false).1; }
+    assert!(painted.iter().any(|(s, _)| s == "Recent-00"));
+    assert!(!painted.iter().any(|(s, _)| s == "Recent-39"));
+    let point = egui::pos2(100.0, 55.0);
+    run(&mut form, vec![egui::Event::PointerMoved(point), egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, -2000.0), modifiers: egui::Modifiers::NONE }], false);
+    for _ in 0..8 { painted = run(&mut form, vec![], false).1; }
+    let last = painted.iter().find(|(s, _)| s == "Recent-39").expect("last history row reachable by wheel").1.center();
+    let click = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    run(&mut form, vec![egui::Event::PointerMoved(last), click(last, true)], false);
+    run(&mut form, vec![click(last, false)], false);
+    assert_eq!(form.path, "C:\\qa\\Recent-39");
+    let up = || egui::Event::Key { key: egui::Key::ArrowUp, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
+    for _ in 0..15 { run(&mut form, vec![up()], false); }
+    for _ in 0..4 { painted = run(&mut form, vec![], false).1; }
+    assert_eq!(form.path, "C:\\qa\\Recent-24");
+    assert!(painted.iter().any(|(s, _)| s == "Recent-24"), "keyboard selection is scrolled into view");
+    let ok = painted.iter().find(|(s, _)| s == &form.ok_label).expect("fixed OK button").1.center();
+    run(&mut form, vec![egui::Event::PointerMoved(ok), click(ok, true)], false);
+    assert!(matches!(run(&mut form, vec![click(ok, false)], false).0, Some(DestinationAction::Accept)));
+    assert_eq!(form.path, "C:\\qa\\Recent-24");
+    // The owner-drawn vertical scrollbar is distinct from the history rows:
+    // clicking its track jumps, and dragging its thumb reaches the end.
+    let top = egui::pos2(273.0, 3.0);
+    run(&mut form, vec![egui::Event::PointerMoved(top), click(top, true)], false);
+    run(&mut form, vec![click(top, false)], false);
+    for _ in 0..3 { painted = run(&mut form, vec![], false).1; }
+    assert!(painted.iter().any(|(s, _)| s == "Recent-00"), "scrollbar track click returns to top");
+    let thumb = egui::pos2(273.0, 8.0);
+    let bottom = egui::pos2(273.0, 135.0);
+    run(&mut form, vec![egui::Event::PointerMoved(thumb), click(thumb, true)], false);
+    run(&mut form, vec![egui::Event::PointerMoved(bottom)], false);
+    run(&mut form, vec![click(bottom, false)], false);
+    for _ in 0..3 { painted = run(&mut form, vec![], false).1; }
+    assert!(painted.iter().any(|(s, _)| s == "Recent-39"), "scrollbar thumb drag reaches the last row");
+    assert_eq!(form.path, "C:\\qa\\Recent-24", "scrolling alone does not change selection");
     fs::remove_dir_all(root).unwrap();
 }
 

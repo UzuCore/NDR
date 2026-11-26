@@ -102,6 +102,122 @@ fn system_error_text(error: u32) -> String {
     ndr::names::system_message(error).unwrap()
 }
 
+/// All 26 retained legacy resource keys must resolve in all 40 catalogs,
+/// including user-supplied captions imported through the real toolbar XML
+/// parser. The old label is not a request to restore its removed command.
+#[test]
+fn legacy_compatibility_catalogs_and_imported_toolbar_captions_are_complete() {
+    const KEYS: &[&str] = &[
+        "formcleanup.caption.btndeselectall", "formcleanup.caption.chkinternetcookie",
+        "formcleanup.caption.chkinternettemp", "formcleanup.caption.chkrecyclebin",
+        "formcleanup.caption.chktemp", "formcleanup.caption.chkuserdefined",
+        "formcleanup.caption.lblcanceling", "formcleanup.caption.lblmatches",
+        "formcleanup.caption.lblscanned", "formcleanup.caption.lblscantitle",
+        "formcleanup.caption.lextensions", "formcleanup.caption.llocation",
+        "formcleanup.caption.lresult", "formcleanup.form.caption",
+        "formcleanup.listviewcols.lvresult", "formmain.menu.pmiclosealltab",
+        "formmain.toolbutton.tbdonation", "formpreferences.caption.chkuseion",
+        "formpreferences.combobox.cbesc", "ndr.ui_settings_shortcut_fallback",
+        "res.emailcopied", "res.lang_applynexttime", "res.msg_cleanup",
+        "res.msg_cleanup_done", "res.msg_pay", "res.title_pay",
+    ];
+    let (root, _ctx, mut app) = fixture("legacy-caption-completeness", "en");
+    let languages = app.resources.join("Languages");
+    let english = compat::Language::load(&languages, "en");
+    let korean = compat::Language::load(&languages, "ko");
+    let mut xml = String::from("<toolbar>");
+    let mut captions = Vec::new();
+    for &key in KEYS {
+        for (source, base) in [("en", &english), ("ko", &korean)] {
+            let caption = base.primary_raw(key).unwrap_or_else(|| panic!("{source} {key} missing")).to_owned();
+            let escaped = caption.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
+            xml.push_str(&format!("<item type=\"InternalCommand\"><command>Back</command><caption>{escaped}</caption></item>"));
+            captions.push((key, source, caption));
+        }
+    }
+    xml.push_str("</toolbar>");
+    let toolbar = ndr::commands::parse_toolbar(xml.as_bytes()).expect("real legacy toolbar import");
+    assert_eq!(toolbar.items.len(), 52);
+    let mut direct_count = 0;
+    let mut imported_count = 0;
+    let mut after = Vec::new();
+    let mut before = Vec::new();
+    // Optional diagnostic compares the verified pre-change snapshot using
+    // the exact same Rust lookup and parser, not a guessed reverse index.
+    let audit = std::env::var_os("NDR_LEGACY_AUDIT_DIR").map(PathBuf::from);
+    let baseline: Option<serde_json::Value> = audit.as_ref().map(|p| serde_json::from_slice(&fs::read(p.join("qa64-legacy-audit.json")).unwrap()).unwrap());
+    for &(locale, _) in compat::BUILTIN_LANGUAGES {
+        app.language_pack = compat::Language::load(&languages, locale);
+        for &key in KEYS {
+            let raw = app.language_pack.primary_raw(key).unwrap_or_else(|| panic!("{locale}: {key}"));
+            assert!(!raw.trim().is_empty());
+            match key {
+                "formcleanup.listviewcols.lvresult" => assert_eq!(raw.split(';').count(), 3, "{locale}"),
+                "formpreferences.combobox.cbesc" => assert_eq!(raw.split(';').count(), 5, "{locale}"),
+                _ => {}
+            }
+            direct_count += 1;
+        }
+        for ((key, source, caption), item) in captions.iter().zip(&toolbar.items) {
+            assert_eq!(&item.caption, caption, "XML decoded source caption");
+            let winner = if *key == "formmain.toolbutton.tbdonation" { "res.title_pay" } else { key };
+            let expected = app.language_pack.text(winner, "");
+            #[cfg(debug_assertions)]
+            compat::begin_locale_lookup_audit();
+            let actual = app.toolbar_label(item);
+            #[cfg(debug_assertions)]
+            let trace = compat::end_locale_lookup_audit();
+            assert_eq!(actual, expected, "{locale}: {source}: {key}");
+            #[cfg(debug_assertions)]
+            {
+                assert!(trace.iter().any(|(_, k, s, _)| k == winner && s == "primary"), "{locale}: {source}: {key}: {trace:?}");
+                assert!(!trace.iter().any(|(_, _, s, _)| s.contains("fallback") || s.contains("missing")), "{locale}: {trace:?}");
+            }
+            after.push(serde_json::json!({"locale":locale,"key":key,"source":source,"input":caption,"winner":winner,"output":actual}));
+            imported_count += 1;
+        }
+        // An old shortcut map can still contain this key. Keep its original
+        // label available; the active tab menu uses Close other tabs.
+        app.settings.set_text("OriginalShortcutMapText", "NEXUSFILESHORTCUT1.0\r\npmiCloseAllTab=Ctrl+Shift+1\r\n");
+        let rows = app.shortcut_rows("");
+        assert_eq!(rows.len(), 1, "{locale}");
+        assert_eq!(rows[0].name, "pmiCloseAllTab");
+        assert_ne!(rows[0].caption, "pmiCloseAllTab");
+        assert!(!rows[0].caption.is_empty());
+
+        if let (Some(dir), Some(evidence)) = (&audit, &baseline) {
+            app.language_pack = compat::Language::load(&dir.join("batch64-original"), locale);
+            for row in evidence["rows"].as_array().unwrap().iter().filter(|r| r["locale"].as_str() == Some(locale)) {
+                let key = row["key"].as_str().unwrap();
+                assert!(app.language_pack.primary_raw(key).is_none(), "{locale}: {key} must be absent in the original snapshot");
+                for ((item_key, source, caption), item) in captions.iter().zip(&toolbar.items).filter(|((k,_,_),_)| *k == key) {
+                    let winner = row["reverse_winners"][*source].as_str().unwrap();
+                    assert!(app.language_pack.primary_raw(winner).is_none());
+                    #[cfg(debug_assertions)]
+                    compat::begin_locale_lookup_audit();
+                    let actual = app.toolbar_label(item);
+                    #[cfg(debug_assertions)]
+                    let trace = compat::end_locale_lookup_audit();
+                    assert_eq!(&actual, caption, "{locale}: original imported {source} {item_key}");
+                    #[cfg(debug_assertions)]
+                    assert!(trace.iter().any(|(_, k, s, _)| k == winner && s == "pair-fallback"), "{locale}: {source} {item_key}: {trace:?}");
+                    before.push(serde_json::json!({"locale":locale,"key":key,"source":source,"winner":winner,"input":caption,"output":actual}));
+                }
+            }
+        }
+    }
+    assert_eq!(direct_count, 1040);
+    assert_eq!(imported_count, 2080);
+    if let Some(dir) = audit {
+        assert_eq!(before.len(), 1538);
+        fs::write(dir.join("qa64-import-runtime.json"), serde_json::to_vec_pretty(&serde_json::json!({
+            "direct_primary":direct_count, "imported_primary":imported_count, "shortcut_import":40,
+            "baseline_fallback":before.len(), "before":before, "after":after
+        })).unwrap()).unwrap();
+    }
+    fs::remove_dir_all(root).unwrap();
+}
+
 #[test]
 fn new_folder_and_empty_file_follow_the_original() {
     let (root, ctx, mut app) = fixture("create", "ko");
@@ -875,6 +991,346 @@ fn f12_shortcut_window_edits_the_double_clicked_line() {
     fs::remove_dir_all(root).unwrap();
 }
 
+#[test]
+fn narrow_shortcut_window_remains_scrollable_after_resize() {
+    let (root, ctx, mut app) = fixture("shortcuts-resize-scroll", "en");
+    let mut text = String::from("NEXUSFILESHORTCUT1.0\r\n");
+    for i in 0..100 { text.push_str(&format!("QA_TEST_COMMAND_{i:03}=F2\r\n")); }
+    app.settings.set_text("OriginalShortcutMapText", text);
+    app.show_shortcut_window();
+    let mut time = 0.0;
+    let mut run = |app: &mut App, width, height, events| {
+        time += 0.1;
+        let out = ctx.run(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, height))), time: Some(time), predicted_dt: 0.1, events, ..Default::default() }, |ctx| app.shortcut_window_ui(ctx));
+        fn collect(shape: &egui::epaint::Shape, texts: &mut Vec<String>) {
+            match shape {
+                egui::epaint::Shape::Vec(shapes) => for s in shapes { collect(s, texts); },
+                egui::epaint::Shape::Text(text) => texts.push(text.galley.job.text.clone()),
+                _ => {}
+            }
+        }
+        let mut texts = Vec::new();
+        for item in &out.shapes { collect(&item.shape, &mut texts); }
+        texts
+    };
+    for _ in 0..4 { run(&mut app, 1400.0, 850.0, vec![]); }
+    let mut initial = Vec::new();
+    for _ in 0..4 { initial = run(&mut app, 320.0, 250.0, vec![]); }
+    assert!(initial.iter().any(|s| s == "QA_TEST_COMMAND_000"));
+    let area = ctx.memory(|m| m.area_rect(egui::Id::new("ndr-shortcut-window"))).unwrap();
+    assert!(area.left() >= -1.0 && area.right() <= 321.0 && area.top() >= -1.0 && area.bottom() <= 251.0, "{area:?}");
+    let pointer = egui::pos2(area.center().x, area.bottom() - 20.0);
+    run(&mut app, 320.0, 250.0, vec![egui::Event::PointerMoved(pointer), egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, -600.0), modifiers: egui::Modifiers::NONE }]);
+    let mut scrolled = Vec::new();
+    for _ in 0..8 { scrolled = run(&mut app, 320.0, 250.0, vec![]); }
+    assert!(!scrolled.iter().any(|s| s == "QA_TEST_COMMAND_000"), "scroll must advance the virtualized list");
+    assert!(scrolled.iter().any(|s| s.starts_with("QA_TEST_COMMAND_")), "the list still renders after scrolling");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn narrow_shortcut_editor_accepts_escape_and_button_clicks_without_closing_list() {
+    let (root, ctx, mut app) = fixture("compact-shortcut-editor", "de");
+    app.settings.set_text("OriginalShortcutMapText", "NEXUSFILESHORTCUT1.0\r\nmiOpen=Enter\r\nmiCopy=F5\r\n");
+    app.show_shortcut_window();
+    let row = app.shortcut_rows("").into_iter().next().unwrap();
+    let mut time = 0.0;
+    let mut run = |app: &mut App, events| {
+        time += 0.05;
+        let out = ctx.run(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(320.0, 250.0))), time: Some(time), predicted_dt: 0.05, events, ..Default::default() }, |ctx| {
+            super::panes::windows_double_press(ctx);
+            app.shortcut_window_ui(ctx);
+            app.original_dialog_ui(ctx);
+        });
+        fn collect(s: &egui::epaint::Shape, clip: egui::Rect, rows: &mut Vec<(String, egui::Rect)>) {
+            match s {
+                egui::epaint::Shape::Vec(shapes) => for s in shapes { collect(s, clip, rows); },
+                egui::epaint::Shape::Text(text) => {
+                    let r = text.visual_bounding_rect();
+                    if r.is_positive() && clip.contains_rect(r) { rows.push((text.galley.job.text.clone(), r)); }
+                }
+                _ => {}
+            }
+        }
+        let mut rows = Vec::new();
+        for item in &out.shapes { collect(&item.shape, item.clip_rect, &mut rows); }
+        rows
+    };
+    let pointer = |p, pressed| egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    let mut painted = Vec::new();
+    for _ in 0..4 { painted = run(&mut app, vec![]); }
+    let point = painted.iter().find(|(t, _)| *t == row.caption).expect("first shortcut is visible").1.center();
+    for _ in 0..2 {
+        run(&mut app, vec![egui::Event::PointerMoved(point), pointer(point, true)]);
+        run(&mut app, vec![pointer(point, false)]);
+    }
+    assert!(matches!(&app.original_dialogs.last().unwrap().kind, DialogKind::EditShortcut(form) if form.caption == row.caption), "actual double click opens editor");
+    for _ in 0..3 { run(&mut app, vec![]); }
+    run(&mut app, vec![key(egui::Key::Escape)]);
+    assert!(app.shortcut_window.is_some(), "Esc is captured by the modal, not the list");
+    assert!(matches!(&app.original_dialogs.last().unwrap().kind, DialogKind::EditShortcut(form) if form.text == "Escape"));
+    let modifiers = egui::Modifiers { ctrl: true, shift: true, ..egui::Modifiers::NONE };
+    run(&mut app, vec![egui::Event::Key { key: egui::Key::K, physical_key: None, pressed: true, repeat: false, modifiers }]);
+    assert!(matches!(&app.original_dialogs.last().unwrap().kind, DialogKind::EditShortcut(form) if form.text == "Ctrl+Shift+K"));
+    let label = app.language_pack.text("formEditShortCut.Caption.btnOk", "OK");
+    for _ in 0..3 { painted = run(&mut app, vec![]); }
+    let point = painted.iter().rev().find(|(t, _)| *t == label).expect("OK is inside the viewport").1.center();
+    run(&mut app, vec![egui::Event::PointerMoved(point), pointer(point, true)]);
+    run(&mut app, vec![pointer(point, false)]);
+    assert!(app.original_dialogs.is_empty(), "mouse click accepts the compact editor");
+    assert!(app.shortcut_window.is_some());
+    assert_eq!(app.shortcut_lines()[row.index], format!("{}=Ctrl+Shift+K", row.name));
+    let remove_label = app.language_pack.text("formEditShortCut.Caption.btnRemove", "Remove");
+    let cancel_label = app.language_pack.text("formEditShortCut.Caption.btnCancel", "Cancel");
+    for save_removal in [false, true] {
+        let current = app.shortcut_rows("").into_iter().find(|r| r.index == row.index).unwrap();
+        app.edit_shortcut(current);
+        for _ in 0..4 { painted = run(&mut app, vec![]); }
+        let point = painted.iter().rev().find(|(t, _)| *t == remove_label).expect("Remove is visible").1.center();
+        run(&mut app, vec![egui::Event::PointerMoved(point), pointer(point, true)]);
+        run(&mut app, vec![pointer(point, false)]);
+        assert!(matches!(&app.original_dialogs.last().unwrap().kind, DialogKind::EditShortcut(form) if form.text.is_empty()));
+        for _ in 0..3 { painted = run(&mut app, vec![]); }
+        let finish = if save_removal { &label } else { &cancel_label };
+        let point = painted.iter().rev().find(|(t, _)| t == finish).expect("Finish is visible").1.center();
+        run(&mut app, vec![egui::Event::PointerMoved(point), pointer(point, true)]);
+        run(&mut app, vec![pointer(point, false)]);
+        assert!(app.original_dialogs.is_empty());
+        assert!(app.shortcut_window.is_some());
+        let expected = if save_removal { "" } else { "Ctrl+Shift+K" };
+        assert_eq!(app.shortcut_lines()[row.index], format!("{}={expected}", row.name));
+    }
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn compact_input_and_rename_preserve_edit_focus_and_confirm_cancel() {
+    let (root, ctx, mut app) = fixture("compact-input-rename", "de");
+    let mut time = 0.0;
+    let mut run = |app: &mut App, events| {
+        time += 0.08;
+        let out = ctx.run(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(320.0, 250.0))), time: Some(time), events, ..Default::default() }, |ctx| { app.original_dialog_ui(ctx); app.msgbox_ui(ctx); });
+        fn collect(s: &egui::epaint::Shape, clip: egui::Rect, rows: &mut Vec<(String, egui::Rect)>) {
+            match s {
+                egui::epaint::Shape::Vec(shapes) => for s in shapes { collect(s, clip, rows); },
+                egui::epaint::Shape::Text(t) => { let r = t.visual_bounding_rect(); if r.is_positive() && clip.contains_rect(r) { rows.push((t.galley.job.text.clone(), r)); } },
+                _ => {}
+            }
+        }
+        let mut rows = Vec::new();
+        for item in &out.shapes { collect(&item.shape, item.clip_rect, &mut rows); }
+        rows
+    };
+    let button = |p, pressed| egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    let mut painted = Vec::new();
+    let long_message = (0..30).map(|i| format!("Line {i} {}", "long-path-".repeat(35))).collect::<Vec<_>>().join("\n");
+    app.prompt("Input", &long_message, "initial", Some(vec!["history item".into()]), false, |app, value, _| { app.settings.set_text("QACompactInput", value.unwrap_or_default()); });
+    for _ in 0..4 { painted = run(&mut app, vec![]); }
+    run(&mut app, vec![egui::Event::Text("replacement".into())]);
+    assert!(matches!(&app.original_dialogs.last().unwrap().kind, DialogKind::Prompt { value, .. } if value == "replacement"));
+    for _ in 0..3 { painted = run(&mut app, vec![]); }
+    let label = app.language_pack.text("formGetText.Caption.btnOk", "OK");
+    let point = painted.iter().rev().find(|(t, _)| t == &label).expect("prompt OK visible").1.center();
+    run(&mut app, vec![egui::Event::PointerMoved(point), button(point, true)]);
+    run(&mut app, vec![button(point, false)]);
+    assert!(app.original_dialogs.is_empty());
+    assert_eq!(app.settings.text("QACompactInput", ""), "replacement");
+    app.panes[0].cursor = row(&app, 0, "alpha.txt");
+    app.dispatch("rename", &ctx);
+    for _ in 0..4 { run(&mut app, vec![]); }
+    run(&mut app, vec![egui::Event::Text("compact".into())]);
+    assert!(matches!(&app.original_dialogs.last().unwrap().kind, DialogKind::Rename { name, extension, .. } if name == "compact" && extension == "txt"));
+    run(&mut app, vec![key(egui::Key::Tab)]);
+    for _ in 0..4 { run(&mut app, vec![]); }
+    run(&mut app, vec![egui::Event::Text("md".into())]);
+    assert!(matches!(&app.original_dialogs.last().unwrap().kind, DialogKind::Rename { name, extension, .. } if name == "compact" && extension == "md"));
+    for _ in 0..3 { painted = run(&mut app, vec![]); }
+    let label = app.language_pack.text("formRename.Caption.btnOK", "OK");
+    let point = painted.iter().rev().find(|(t, _)| t == &label).expect("rename OK visible").1.center();
+    run(&mut app, vec![egui::Event::PointerMoved(point), button(point, true)]);
+    run(&mut app, vec![button(point, false)]);
+    assert!(app.original_dialogs.is_empty());
+    assert!(root.join("left/compact.md").is_file());
+    assert!(!root.join("left/alpha.txt").exists());
+    wait_listing(&mut app, &ctx);
+    app.panes[0].cursor = row(&app, 0, "compact.md");
+    app.dispatch("rename", &ctx);
+    for _ in 0..4 { run(&mut app, vec![]); }
+    run(&mut app, vec![egui::Event::Text("not-saved".into())]);
+    for _ in 0..3 { painted = run(&mut app, vec![]); }
+    let label = app.language_pack.text("formRename.Caption.btnCancel", "Cancel");
+    let point = painted.iter().rev().find(|(t, _)| t == &label).expect("rename Cancel visible").1.center();
+    run(&mut app, vec![egui::Event::PointerMoved(point), button(point, true)]);
+    run(&mut app, vec![button(point, false)]);
+    assert!(app.original_dialogs.is_empty());
+    assert!(root.join("left/compact.md").is_file() && !root.join("left/not-saved.md").exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn compact_confirmation_actions_preserve_files_and_conflict_direction() {
+    let (root, ctx, mut app) = fixture("compact-confirmations", "ko");
+    let mut time = 0.0;
+    let mut run = |app: &mut App, events| {
+        time += 0.08;
+        let output = ctx.run(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(320.0, 250.0))), time: Some(time), events, ..Default::default() }, |ctx| { app.original_dialog_ui(ctx); app.msgbox_ui(ctx); });
+        fn collect(s: &egui::epaint::Shape, clip: egui::Rect, rows: &mut Vec<(String, egui::Rect)>) {
+            match s {
+                egui::epaint::Shape::Vec(shapes) => for s in shapes { collect(s, clip, rows); },
+                egui::epaint::Shape::Text(t) => { let r = t.visual_bounding_rect(); if r.is_positive() && clip.contains_rect(r) { rows.push((t.galley.job.text.clone(), r)); } },
+                _ => {}
+            }
+        }
+        let mut rows = Vec::new();
+        for item in &output.shapes { collect(&item.shape, item.clip_rect, &mut rows); }
+        rows
+    };
+    let mouse = |p, pressed| egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    let label = |app: &App, key: &str| ndr::msgbox::display_caption(&app.language_pack.raw(key).unwrap()).0;
+    let message = (0..30).map(|i| format!("{}-{i}.txt", "long-file-name-".repeat(18))).collect::<Vec<_>>().join("\n");
+    app.push_original_dialog("Delete?".into(), DialogKind::DeleteWarning { message: message.clone(), show_delete: true, default_button: 2 }, |app, result, _| {
+        assert!(matches!(result, DialogResult::DeleteWarning(DeleteWarningChoice::No)));
+        app.settings.set_flag("QACompactDeleteNo", true);
+    });
+    let mut painted = Vec::new();
+    for _ in 0..4 { painted = run(&mut app, vec![]); }
+    let no = label(&app, "formDelWarning.Caption.btnNo");
+    let point = painted.iter().rev().find(|(t, _)| t == &no).expect("No visible with long message").1.center();
+    run(&mut app, vec![egui::Event::PointerMoved(point), mouse(point, true)]);
+    run(&mut app, vec![mouse(point, false)]);
+    assert!(app.original_dialogs.is_empty() && app.settings.flag("QACompactDeleteNo", false));
+    app.delete_confirm(&message, "R H A", |app, result, _| { assert_eq!(result, DeleteConfirmChoice::No); app.settings.set_flag("QACompactProtectedNo", true); });
+    for _ in 0..4 { painted = run(&mut app, vec![]); }
+    run(&mut app, vec![key(egui::Key::Escape)]);
+    assert!(!app.original_dialogs.is_empty(), "protected item confirmation preserves original Esc behavior");
+    let no = label(&app, "formDelConfirm.Caption.btnNo");
+    for _ in 0..3 { painted = run(&mut app, vec![]); }
+    let point = painted.iter().rev().find(|(t, _)| t == &no).expect("protected No visible").1.center();
+    run(&mut app, vec![egui::Event::PointerMoved(point), mouse(point, true)]);
+    run(&mut app, vec![mouse(point, false)]);
+    assert!(app.original_dialogs.is_empty() && app.settings.flag("QACompactProtectedNo", false));
+    let source = root.join("left/alpha.txt");
+    let destination = root.join("right/alpha.txt");
+    fs::write(&destination, b"existing").unwrap();
+    let original = fs::read(&source).unwrap();
+    let form = super::file_operation::ConflictForm::read(&source, &destination, true);
+    // The legacy keys map to destination/existing first, source/new second.
+    assert_eq!(app.language_pack.text("formFileExists.Caption.lOrgLabel", ""), "기존 항목");
+    assert_eq!(app.language_pack.text("formFileExists.Caption.lNewLabel", ""), "원본 항목");
+    let english = compat::Language::load(&app.resources.join("Languages"), "en");
+    assert_eq!(english.text("formFileExists.Caption.lOrgLabel", ""), "Existing item");
+    assert_eq!(english.text("formFileExists.Caption.lNewLabel", ""), "Source item");
+    app.push_original_dialog("Conflict".into(), DialogKind::FileConflict(Box::new(form)), |app, result, _| {
+        assert!(matches!(result, DialogResult::FileConflict(Some((ndr::fsops::ConflictChoice::Skip, true)))));
+        app.settings.set_flag("QACompactConflictSkip", true);
+    });
+    for _ in 0..4 { painted = run(&mut app, vec![]); }
+    let existing_label = app.language_pack.text("formFileExists.Caption.lOrgLabel", "");
+    let source_label = app.language_pack.text("formFileExists.Caption.lNewLabel", "");
+    let mut seen_existing = painted.iter().any(|(t, _)| t == &existing_label);
+    let mut seen_source = painted.iter().any(|(t, _)| t == &source_label);
+    for _ in 0..18 {
+        run(&mut app, vec![egui::Event::PointerMoved(egui::pos2(140.0, 75.0)), egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, -24.0), modifiers: egui::Modifiers::NONE }]);
+        for _ in 0..3 {
+            painted = run(&mut app, vec![]);
+            seen_existing |= painted.iter().any(|(t, _)| t == &existing_label);
+            seen_source |= painted.iter().any(|(t, _)| t == &source_label);
+        }
+        if seen_existing && seen_source { break; }
+    }
+    assert!(seen_existing && seen_source, "both conflict rows are reachable by scrolling: existing={seen_existing}, source={seen_source}");
+    let apply = label(&app, "formFileExists.Caption.chkApplyAll");
+    let point = painted.iter().rev().find(|(t, _)| t == &apply).expect("apply all visible").1.center();
+    run(&mut app, vec![egui::Event::PointerMoved(point), mouse(point, true)]);
+    run(&mut app, vec![mouse(point, false)]);
+    assert!(matches!(&app.original_dialogs.last().unwrap().kind, DialogKind::FileConflict(f) if f.apply_all));
+    for _ in 0..3 { painted = run(&mut app, vec![]); }
+    let skip = label(&app, "formFileExists.Caption.btnSkip");
+    let point = painted.iter().rev().find(|(t, _)| t == &skip).expect("Skip visible").1.center();
+    run(&mut app, vec![egui::Event::PointerMoved(point), mouse(point, true)]);
+    run(&mut app, vec![mouse(point, false)]);
+    assert!(app.original_dialogs.is_empty() && app.settings.flag("QACompactConflictSkip", false));
+    assert_eq!(fs::read(source).unwrap(), original);
+    assert_eq!(fs::read(destination).unwrap(), b"existing");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn compact_split_join_confirm_buttons_roundtrip_bytes() {
+    let (root, ctx, mut app) = fixture("compact-split-join", "ko");
+    let left = root.join("left");
+    let payload = (0..3000u32).map(|i| (i % 251) as u8).collect::<Vec<_>>();
+    fs::write(left.join("compact.bin"), &payload).unwrap();
+    app.refresh(0);
+    wait_listing(&mut app, &ctx);
+    let mut time = 0.0;
+    let mut run = |app: &mut App, events| {
+        time += 0.08;
+        let output = ctx.run(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(320.0, 250.0))), time: Some(time), events, ..Default::default() }, |ctx| { app.original_dialog_ui(ctx); app.msgbox_ui(ctx); });
+        fn collect(s: &egui::epaint::Shape, clip: egui::Rect, rows: &mut Vec<(String, egui::Rect)>) {
+            match s {
+                egui::epaint::Shape::Vec(shapes) => for s in shapes { collect(s, clip, rows); },
+                egui::epaint::Shape::Text(t) => { let r = t.visual_bounding_rect(); if r.is_positive() && clip.contains_rect(r) { rows.push((t.galley.job.text.clone(), r)); } },
+                _ => {}
+            }
+        }
+        let mut rows = Vec::new();
+        for item in &output.shapes { collect(&item.shape, item.clip_rect, &mut rows); }
+        rows
+    };
+    let mouse = |p, pressed| egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    let mut painted = Vec::new();
+    app.panes[0].cursor = row(&app, 0, "compact.bin");
+    app.dispatch("split", &ctx);
+    for _ in 0..4 { painted = run(&mut app, vec![]); }
+    let point = painted.iter().find(|(t, _)| t == "720 KB").expect("split size visible").1.center();
+    run(&mut app, vec![egui::Event::PointerMoved(point), mouse(point, true)]);
+    run(&mut app, vec![mouse(point, false)]);
+    let ctrl = egui::Modifiers { ctrl: true, command: true, ..Default::default() };
+    run(&mut app, vec![egui::Event::Key { key: egui::Key::A, physical_key: None, pressed: true, repeat: false, modifiers: ctrl }, egui::Event::Text("1 KB".into())]);
+    assert!(matches!(&app.original_dialogs.last().unwrap().kind, DialogKind::Split(f) if f.size == "1 KB"));
+    for _ in 0..4 { painted = run(&mut app, vec![]); }
+    let ok = app.language_pack.text("formFileSplit.Caption.btnOk", "OK");
+    let point = painted.iter().rev().find(|(t, _)| t == &ok).expect("split OK visible").1.center();
+    run(&mut app, vec![egui::Event::PointerMoved(point), mouse(point, true)]);
+    run(&mut app, vec![mouse(point, false)]);
+    assert!(app.original_dialogs.is_empty());
+    wait_job(&mut app, &ctx);
+    for (name, size) in [("compact.001",1024),("compact.002",1024),("compact.003",952)] { assert_eq!(fs::metadata(left.join(name)).unwrap().len(), size); }
+    app.panes[0].selected = ["compact.001", "compact.002", "compact.003"].iter().map(|n| row(&app, 0, n)).collect();
+    app.dispatch("join", &ctx);
+    for _ in 0..4 { run(&mut app, vec![]); }
+    run(&mut app, vec![egui::Event::Text("roundtrip.bin".into())]);
+    assert!(matches!(&app.original_dialogs.last().unwrap().kind, DialogKind::Join(f) if f.name == "roundtrip.bin"));
+    for _ in 0..4 { painted = run(&mut app, vec![]); }
+    let first = painted.iter().find(|(t, _)| t.ends_with("compact.001")).expect("first join part visible").1.center();
+    run(&mut app, vec![egui::Event::PointerMoved(first), egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, -800.0), modifiers: egui::Modifiers::NONE }]);
+    for _ in 0..10 { painted = run(&mut app, vec![]); }
+    let last = painted.iter().find(|(t, _)| t.ends_with("compact.003")).expect("last join part reachable").1.center();
+    run(&mut app, vec![egui::Event::PointerMoved(last), mouse(last, true)]);
+    run(&mut app, vec![mouse(last, false)]);
+    assert!(matches!(&app.original_dialogs.last().unwrap().kind, DialogKind::Join(f) if f.selected == Some(2)));
+    for _ in 0..4 { painted = run(&mut app, vec![]); }
+    for (caption, index) in [("formFileJoin.Caption.btnUp", 1usize), ("formFileJoin.Caption.btnDown", 2usize)] {
+        let label = ndr::msgbox::display_caption(&app.language_pack.raw(caption).unwrap()).0;
+        let point = painted.iter().find(|(t, _)| t == &label).expect("join reorder button visible").1.center();
+        run(&mut app, vec![egui::Event::PointerMoved(point), mouse(point, true)]);
+        run(&mut app, vec![mouse(point, false)]);
+        assert!(matches!(&app.original_dialogs.last().unwrap().kind, DialogKind::Join(f) if f.selected == Some(index) && f.files[index].0.ends_with("compact.003")));
+        for _ in 0..4 { painted = run(&mut app, vec![]); }
+    }
+    for _ in 0..4 { painted = run(&mut app, vec![]); }
+    let ok = app.language_pack.text("formFileJoin.Caption.btnOk", "OK");
+    let point = painted.iter().rev().find(|(t, _)| t == &ok).expect("join OK visible").1.center();
+    run(&mut app, vec![egui::Event::PointerMoved(point), mouse(point, true)]);
+    run(&mut app, vec![mouse(point, false)]);
+    assert!(app.original_dialogs.is_empty());
+    wait_job(&mut app, &ctx);
+    assert_eq!(fs::read(left.join("roundtrip.bin")).unwrap(), payload);
+    assert_eq!(fs::read(left.join("compact.bin")).unwrap(), payload);
+    fs::remove_dir_all(root).unwrap();
+}
+
 /// Original FUN_00438034: TfGetText(TITLE_ADVSELECT / TITLE_ADVDESELECT, MSG_ADVSELECT, empty text). PathMatchSpecW per ';'-separated filter,
 /// selects or deselects files only (not folders even if the name matches). The previous selection stays; cancel or empty text does nothing.
 #[test]
@@ -987,11 +1443,11 @@ fn advanced_rename_window_builds_rules_macros_and_renames() {
         DialogKind::AdvancedRename(form) => form.rules.iter().map(|r| super::rename_dialog::rule_display(r, &app.language_pack)).collect::<Vec<_>>(),
         _ => panic!("rename window"),
     };
-    assert_eq!(lines, [format!("{} (new_, First) - name", actions[0]), format!("{} (Start: 1, Step: 1, Digit: 2, Last) - name", actions[4])]);
+    assert_eq!(lines, [format!("{} (new_, 맨 앞에 붙이기) - 파일 이름", actions[0]), format!("{} (시작 번호: 1, 증가 폭: 1, 최소 자릿수: 2, 끝에 붙이기) - 파일 이름", actions[4])]);
     let mut rule = ndr::compat::RenameRule { action: "Delete".into(), delete_from_mode: "Delimiter".into(), find: "-".into(), count: 3, delete_direction: "RightToLeft".into(), target: "Extension".into(), ..Default::default() };
-    assert_eq!(super::rename_dialog::rule_display(&rule, &app.language_pack), format!("{} (From: \"-\", Count: 3, Backward) - extension", actions[2]));
+    assert_eq!(super::rename_dialog::rule_display(&rule, &app.language_pack), format!("{} (지우기 시작 위치: \"-\", 지정한 개수: 3, 오른쪽에서 왼쪽) - 확장자", actions[2]));
     rule = ndr::compat::RenameRule { action: "Replace".into(), find: "a".repeat(101), replace: "b".into(), position: "Last".into(), ..Default::default() };
-    assert_eq!(super::rename_dialog::rule_display(&rule, &app.language_pack), format!("{} ({}... -> b, Last) - name", actions[1], "a".repeat(95)));
+    assert_eq!(super::rename_dialog::rule_display(&rule, &app.language_pack), format!("{} ({}... -> b, 마지막 항목) - 파일 이름", actions[1], "a".repeat(95)));
     frame(&mut app, &ctx, vec![]);
     // Save the rules as a macro, then refuse to replace it.
     app.save_rename_macro();
@@ -1592,6 +2048,512 @@ fn fake_tree_root(path: &str) -> String {
     let root = TREE_ROOT.with(|r| r.borrow().clone());
     let text = root.to_string_lossy().into_owned();
     if path.to_lowercase().starts_with(&text.to_lowercase()) { format!("{text}\\") } else { String::new() }
+}
+
+/// Inspect real widget paint positions and send pointer input on a compact
+/// viewport. The fixture profile and files are isolated from the user.
+struct CompactFlow<'a> {
+    ctx: &'a egui::Context,
+    size: egui::Vec2,
+    time: f64,
+}
+impl<'a> CompactFlow<'a> {
+    fn new(ctx: &'a egui::Context, width: f32, height: f32) -> Self { Self { ctx, size: egui::vec2(width, height), time: 0.0 } }
+    fn frame(&mut self, app: &mut App, events: Vec<egui::Event>, modifiers: egui::Modifiers) -> Vec<(String, egui::Rect)> {
+        self.time += 0.08;
+        let output = self.ctx.run(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, self.size)), time: Some(self.time), events, modifiers, ..Default::default() }, |ctx| { app.original_dialog_ui(ctx); app.msgbox_ui(ctx); });
+        fn collect(s: &egui::epaint::Shape, clip: egui::Rect, rows: &mut Vec<(String, egui::Rect)>) {
+            match s {
+                egui::epaint::Shape::Vec(shapes) => for s in shapes { collect(s, clip, rows); },
+                egui::epaint::Shape::Text(t) => {
+                    let r = t.visual_bounding_rect();
+                    if r.is_positive() && clip.contains_rect(r) { rows.push((t.galley.job.text.clone(), r)); }
+                }
+                _ => {}
+            }
+        }
+        let mut rows = Vec::new();
+        for item in &output.shapes { collect(&item.shape, item.clip_rect, &mut rows); }
+        rows
+    }
+    fn settled(&mut self, app: &mut App) -> Vec<(String, egui::Rect)> {
+        let mut rows = Vec::new();
+        for _ in 0..4 { rows = self.frame(app, vec![], egui::Modifiers::NONE); }
+        rows
+    }
+    fn click(&mut self, app: &mut App, caption: &str) {
+        let rows = self.settled(app);
+        let point = rows.iter().rev().find(|(t, _)| t == caption).unwrap_or_else(|| panic!("missing visible label {caption:?}: {:?}", rows.iter().map(|(t, _)| t).collect::<Vec<_>>())).1.center();
+        self.click_at(app, point);
+    }
+    fn click_at(&mut self, app: &mut App, point: egui::Pos2) {
+        let button = |pressed| egui::Event::PointerButton { pos: point, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        self.frame(app, vec![egui::Event::PointerMoved(point), button(true)], egui::Modifiers::NONE);
+        self.frame(app, vec![button(false)], egui::Modifiers::NONE);
+    }
+    fn wheel_at(&mut self, app: &mut App, point: egui::Pos2, delta: egui::Vec2) {
+        self.frame(app, vec![egui::Event::PointerMoved(point), egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta, modifiers: egui::Modifiers::NONE }], egui::Modifiers::NONE);
+    }
+    fn press(&mut self, app: &mut App, key: egui::Key, modifiers: egui::Modifiers) {
+        self.frame(app, vec![egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }], modifiers);
+    }
+}
+fn compact_caption(app: &App, key: &str) -> String {
+    ndr::msgbox::display_caption(&app.language_pack.raw(key).unwrap()).0
+}
+
+#[test]
+fn compact_folder_tree_search_selects_and_accepts_real_folder() {
+    let (root, ctx, mut app) = fixture("compact-tree", "ko");
+    let drive = root.join("drive");
+    let wanted = drive.join("x").join("needle");
+    fs::create_dir_all(&wanted).unwrap();
+    fs::create_dir_all(drive.join("y")).unwrap();
+    TREE_ROOT.with(|r| *r.borrow_mut() = drive.clone());
+    app.system.tree_root = fake_tree_root;
+    app.navigate(0, drive.clone(), false);
+    wait_listing(&mut app, &ctx);
+    app.active = 0;
+    app.dispatch("folderTree", &ctx);
+    let mut flow = CompactFlow::new(&ctx, 320.0, 250.0);
+    let until = Instant::now() + Duration::from_secs(15);
+    while matches!(app.original_dialogs.last().map(|d| &d.kind), Some(DialogKind::FolderTree(form)) if form.scan.is_some()) {
+        assert!(Instant::now() < until, "isolated tree scan timeout");
+        flow.frame(&mut app, vec![], egui::Modifiers::NONE);
+        thread::sleep(Duration::from_millis(5));
+    }
+    let search = app.language_pack.text("formFolderTree.ToolButton.tbSearch", "Search");
+    flow.click(&mut app, &search);
+    assert!(matches!(app.original_dialogs.last().map(|d| &d.kind), Some(DialogKind::FolderTree(form)) if form.search.is_some()));
+    flow.settled(&mut app);
+    flow.frame(&mut app, vec![egui::Event::Text("needle".into())], egui::Modifiers::NONE);
+    let button = compact_caption(&app, "formSearchFolder.Caption.btnSearch");
+    flow.click(&mut app, &button);
+    assert!(matches!(app.original_dialogs.last().map(|d| &d.kind), Some(DialogKind::FolderTree(form)) if form.search.as_ref().is_some_and(|s| s.results == [wanted.to_string_lossy().into_owned()] && s.selected == Some(0))));
+    flow.press(&mut app, egui::Key::Enter, egui::Modifiers::NONE);
+    assert!(matches!(app.original_dialogs.last().map(|d| &d.kind), Some(DialogKind::FolderTree(form)) if form.search.is_none() && Path::new(&form.address)==wanted));
+    let ok = compact_caption(&app, "formFolderTree.Caption.btnOk");
+    flow.click(&mut app, &ok);
+    assert!(app.original_dialogs.is_empty());
+    wait_listing(&mut app, &ctx);
+    assert_eq!(app.panes[0].path, wanted);
+    assert!(drive.join("y").is_dir());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn compact_advanced_rename_pages_preserve_rules_preview_and_commit() {
+    let (root, ctx, mut app) = fixture("compact-advrename", "ko");
+    let left = root.join("left");
+    app.panes[0].selected = [row(&app, 0, "alpha.txt"), row(&app, 0, "beta.txt")].into_iter().collect();
+    app.dispatch("advancedRename", &ctx);
+    let mut flow = CompactFlow::new(&ctx, 480.0, 360.0);
+    flow.settled(&mut app);
+    for (key, expected) in [(egui::Key::Num2,"Replace"),(egui::Key::Num3,"Delete"),(egui::Key::Num4,"Case"),(egui::Key::Num5,"Number"),(egui::Key::Num6,"Extension"),(egui::Key::Num1,"Insert")] {
+        flow.press(&mut app, key, egui::Modifiers::ALT);
+        assert!(matches!(app.original_dialogs.last().map(|d| &d.kind), Some(DialogKind::AdvancedRename(f)) if f.editor.action==expected && f.compact_page==0));
+    }
+    app.edit_dialog_kind(|k| if let DialogKind::AdvancedRename(f) = k { f.editor.text = "new_".into(); f.editor.position = "Prefix".into(); });
+    let add = compact_caption(&app, "formAdvRename.Caption.btnAddAction");
+    flow.click(&mut app, &add);
+    assert!(matches!(app.original_dialogs.last().map(|d| &d.kind), Some(DialogKind::AdvancedRename(f)) if f.rules.len()==1 && f.compact_page==1));
+    let preview = app.language_pack.text("formAdvRename.Caption.lPreview", "?").replace('&', "");
+    flow.size = egui::vec2(320.0, 250.0);
+    flow.click(&mut app, &preview);
+    let labels = flow.settled(&mut app);
+    assert!(matches!(app.original_dialogs.last().map(|d| &d.kind), Some(DialogKind::AdvancedRename(f)) if f.compact_page==2 && f.rules.len()==1));
+    assert!(labels.iter().any(|(t,_)| t.contains("new_alpha.txt")), "preview shows the real resulting filename");
+    let run = compact_caption(&app, "formAdvRename.Caption.btnRun");
+    flow.click(&mut app, &run);
+    assert!(!app.msgboxes.is_empty(), "rename retains confirmation");
+    assert!(left.join("alpha.txt").is_file() && !left.join("new_alpha.txt").exists());
+    app.answer_message_box(ndr::msgbox::IDYES, &ctx);
+    wait_job(&mut app, &ctx);
+    assert_eq!(fs::read(left.join("new_alpha.txt")).unwrap(), b"alpha.txt");
+    assert_eq!(fs::read(left.join("new_beta.txt")).unwrap(), b"beta.txt");
+    assert!(!left.join("alpha.txt").exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn compact_folder_compare_clicks_compare_save_and_close() {
+    let (root, ctx, mut app) = compare_fixture("compact-compare", "ko");
+    let before = fs::read(root.join("left/beta.txt")).unwrap();
+    let other = fs::read(root.join("right/beta.txt")).unwrap();
+    app.dispatch("compare", &ctx);
+    let mut flow = CompactFlow::new(&ctx, 320.0, 250.0);
+    let caption = |app: &App, key: &str| app.language_pack.text(&format!("formCompareFolder.Caption.{key}"), "?").replace('&', "");
+    let recursive = caption(&app, "chkRecursive");
+    flow.click(&mut app, &recursive);
+    assert!(folder_compare(&app).recursive);
+    let compare = caption(&app, "btnOk");
+    flow.click(&mut app, &compare);
+    wait_compare(&mut app, &ctx);
+    assert!(folder_compare(&app).compared && folder_compare(&app).rows.len() == 6);
+    app.save_dialog = pick_save_target;
+    SAVE_TARGET.with(|t| *t.borrow_mut() = Some(root.join("compact.html")));
+    let save = caption(&app, "btnSave");
+    flow.click(&mut app, &save);
+    let report = fs::read(root.join("compact.html")).unwrap();
+    assert!(report.starts_with(&[0xef,0xbb,0xbf]));
+    let report = String::from_utf8_lossy(&report);
+    assert!(report.contains("beta.txt") && report.contains("omega.txt"));
+    let close = caption(&app, "btnCancel");
+    flow.click(&mut app, &close);
+    assert!(app.original_dialogs.is_empty());
+    assert_eq!(fs::read(root.join("left/beta.txt")).unwrap(), before);
+    assert_eq!(fs::read(root.join("right/beta.txt")).unwrap(), other);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn compact_rename_macro_buttons_save_reload_cancel_and_delete() {
+    let (root, ctx, mut app) = fixture("compact-macro-buttons", "ko");
+    let profile = root.join("profile");
+    let macro_file = profile.join(ndr::rename_macros::FILE_NAME);
+    app.panes[0].selected = [row(&app, 0, "alpha.txt"), row(&app, 0, "beta.txt")].into_iter().collect();
+    app.dispatch("advancedRename", &ctx);
+    let rule = compat::RenameRule { action: "Insert".into(), position: "Prefix".into(), text: "QA_".into(), ..Default::default() };
+    app.edit_dialog_kind(|kind| if let DialogKind::AdvancedRename(form) = kind { form.rules = vec![rule.clone()]; form.compact_page = 1; });
+    let mut flow = CompactFlow::new(&ctx, 480.0, 360.0);
+    let save = compact_caption(&app, "formAdvRename.Button.btnSaveMacro");
+    let delete = compact_caption(&app, "formAdvRename.Button.btnDeleteMacro");
+    flow.click(&mut app, &save);
+    assert!(matches!(app.original_dialogs.last().map(|d| &d.kind), Some(DialogKind::Prompt { .. })));
+    answer_text(&mut app, &ctx, Some("QA first"));
+    assert_eq!(ndr::rename_macros::read(&macro_file).unwrap()[0].rules, vec![rule.clone()]);
+    let first_bytes = fs::read(&macro_file).unwrap();
+    flow.click(&mut app, &save);
+    answer_text(&mut app, &ctx, Some("QA first"));
+    assert!(!app.msgboxes.is_empty());
+    app.answer_message_box(ndr::msgbox::IDNO, &ctx);
+    assert_eq!(fs::read(&macro_file).unwrap(), first_bytes);
+    flow.click(&mut app, &save);
+    answer_text(&mut app, &ctx, Some("QA second"));
+    assert_eq!(ndr::rename_macros::read(&macro_file).unwrap().len(), 2);
+    let both_bytes = fs::read(&macro_file).unwrap();
+    flow.size = egui::vec2(320.0, 250.0);
+    flow.click(&mut app, &delete);
+    assert!(!app.msgboxes.is_empty());
+    app.answer_message_box(ndr::msgbox::IDNO, &ctx);
+    assert_eq!(fs::read(&macro_file).unwrap(), both_bytes);
+    flow.click(&mut app, &delete);
+    assert!(!app.msgboxes.is_empty());
+    app.answer_message_box(ndr::msgbox::IDYES, &ctx);
+    let remaining = ndr::rename_macros::read(&macro_file).unwrap();
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].name, "QA first");
+    assert_eq!(app.settings.values["AdvancedRenameMacros"].as_array().unwrap().len(), 1);
+    let cancel = compact_caption(&app, "formAdvRename.Caption.btnCancel");
+    flow.click(&mut app, &cancel);
+    assert!(app.original_dialogs.is_empty());
+    app.dispatch("advancedRename", &ctx);
+    let applied = compact_caption(&app, "formAdvRename.Caption.lApplyDest");
+    flow.click(&mut app, &applied);
+    let custom = app.language_pack.text("formAdvRename.ComboBox.cbMacroList", "Custom");
+    flow.click(&mut app, &custom);
+    flow.click(&mut app, "QA first");
+    assert!(matches!(app.original_dialogs.last().map(|d| &d.kind), Some(DialogKind::AdvancedRename(f)) if f.macro_name.as_deref()==Some("QA first") && f.rules==[rule.clone()]));
+    flow.click(&mut app, &delete);
+    app.answer_message_box(ndr::msgbox::IDYES, &ctx);
+    assert!(ndr::rename_macros::read(&macro_file).unwrap().is_empty());
+    assert!(app.settings.values["AdvancedRenameMacros"].as_array().unwrap().is_empty());
+    flow.click(&mut app, &cancel);
+    assert_eq!(fs::read(root.join("left/alpha.txt")).unwrap(), b"alpha.txt");
+    assert_eq!(fs::read(root.join("left/beta.txt")).unwrap(), b"beta.txt");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn compact_macro_controls_reachable_in_every_locale() {
+    for &(locale,_) in ndr::compat::BUILTIN_LANGUAGES {
+        let (root,ctx,mut app)=fixture("compact-macro-reach",locale);
+        set_app_fonts(&ctx,None,false,1.0);
+        app.panes[0].selected=[row(&app,0,"alpha.txt")].into_iter().collect();
+        app.dispatch("advancedRename",&ctx);
+        app.edit_dialog_kind(|kind| if let DialogKind::AdvancedRename(f)=kind {
+            f.rules=vec![compat::RenameRule{action:"Insert".into(),text:"QA_".into(),position:"Prefix".into(),..Default::default()}];
+            f.compact_page=1;
+            f.macro_name=Some("QA existing".into());
+        });
+        let mut flow=CompactFlow::new(&ctx,320.0,250.0);
+        let save=compact_caption(&app,"formAdvRename.Button.btnSaveMacro");
+        let delete=compact_caption(&app,"formAdvRename.Button.btnDeleteMacro");
+        let cancel=compact_caption(&app,"formAdvRename.Caption.btnCancel");
+        let remove=compact_caption(&app,"formAdvRename.Caption.btnDeleteAction");
+        let mut labels=flow.settled(&mut app);
+        let point=labels.iter().find(|(t,_)|*t==remove).unwrap_or_else(||panic!("{locale}: rule editor not visible")).1.center();
+        for _ in 0..8 {
+            if labels.iter().any(|(t,_)|*t==save) && labels.iter().any(|(t,_)|*t==delete) {break}
+            flow.wheel_at(&mut app,point,egui::vec2(0.0,-48.0));
+            labels=flow.settled(&mut app);
+        }
+        assert!(labels.iter().any(|(t,_)|*t==save) && labels.iter().any(|(t,_)|*t==delete),"{locale}: macro controls not reachable: {:?}",labels.iter().map(|x|&x.0).collect::<Vec<_>>());
+        assert!(labels.iter().any(|(t,_)|*t==cancel),"{locale}: cancel not fixed");
+        flow.click(&mut app,&save);
+        assert!(matches!(app.original_dialogs.last().map(|d|&d.kind),Some(DialogKind::Prompt{..})),"{locale}: save button not actionable");
+        answer_text(&mut app,&ctx,None);
+        flow.click(&mut app,&delete);
+        assert!(!app.msgboxes.is_empty(),"{locale}: delete button not actionable");
+        app.answer_message_box(ndr::msgbox::IDNO,&ctx);
+        assert!(!root.join("profile").join(ndr::rename_macros::FILE_NAME).exists());
+        flow.click(&mut app,&cancel);
+        assert!(app.original_dialogs.is_empty());
+        fs::remove_dir_all(root).unwrap();
+        println!("macro controls {locale} PASS");
+    }
+}
+
+#[test]
+fn compact_tree_search_scroll_does_not_select_or_accept_stale_results() {
+    let (root, ctx, mut app) = fixture("compact-tree-scroll", "en");
+    let drive = root.join("drive");
+    for n in 0..24 { fs::create_dir_all(drive.join(format!("needle_{n:02}"))).unwrap(); }
+    TREE_ROOT.with(|r| *r.borrow_mut() = drive.clone());
+    app.system.tree_root = fake_tree_root;
+    app.navigate(0, drive.clone(), false);
+    wait_listing(&mut app, &ctx);
+    app.active = 0;
+    app.dispatch("folderTree", &ctx);
+    let mut flow = CompactFlow::new(&ctx, 320.0, 250.0);
+    let until = Instant::now() + Duration::from_secs(15);
+    while matches!(app.original_dialogs.last().map(|d| &d.kind), Some(DialogKind::FolderTree(f)) if f.scan.is_some()) {
+        assert!(Instant::now()<until);
+        flow.frame(&mut app, vec![], egui::Modifiers::NONE);
+        thread::sleep(Duration::from_millis(5));
+    }
+    let search = compact_caption(&app, "formFolderTree.ToolButton.tbSearch");
+    flow.click(&mut app, &search);
+    flow.settled(&mut app);
+    flow.frame(&mut app, vec![egui::Event::Text("needle".into())], egui::Modifiers::NONE);
+    let button = compact_caption(&app, "formSearchFolder.Caption.btnSearch");
+    flow.click(&mut app, &button);
+    let state = |app: &App| match app.original_dialogs.last().map(|d| &d.kind) {
+        Some(DialogKind::FolderTree(f)) => f.search.as_ref().map(|s| (s.results.len(), s.selected, s.top_result)),
+        _ => None,
+    };
+    assert_eq!(state(&app), Some((24,Some(0),0)));
+    let labels = flow.settled(&mut app);
+    let point = labels.iter().rev().find(|(s,_)|s=="needle_00").unwrap().1.center();
+    for _ in 0..6 { flow.wheel_at(&mut app, point, egui::vec2(0.0,-75.0)); }
+    assert!(matches!(state(&app),Some((24,Some(0),top)) if top>0));
+    flow.press(&mut app, egui::Key::End, egui::Modifiers::NONE);
+    let labels = flow.settled(&mut app);
+    assert!(matches!(state(&app),Some((24,Some(23),top)) if top>0));
+    assert!(labels.iter().any(|(s,_)|s=="needle_23"));
+    flow.press(&mut app, egui::Key::Home, egui::Modifiers::NONE);
+    assert_eq!(state(&app),Some((24,Some(0),0)));
+    // New search with no matches clears both the previous selection and offset.
+    app.edit_dialog_kind(|kind| if let DialogKind::FolderTree(f)=kind { f.search.as_mut().unwrap().query="no-such-folder".into(); });
+    flow.click(&mut app, &button);
+    assert_eq!(state(&app),Some((0,None,0)));
+    flow.press(&mut app, egui::Key::Enter, egui::Modifiers::NONE);
+    assert_eq!(state(&app),Some((0,None,0)));
+    app.edit_dialog_kind(|kind| if let DialogKind::FolderTree(f)=kind { f.search.as_mut().unwrap().query="needle".into(); });
+    flow.click(&mut app, &button);
+    assert_eq!(state(&app),Some((24,Some(0),0)));
+    app.edit_dialog_kind(|kind| if let DialogKind::FolderTree(f)=kind { f.search.as_mut().unwrap().query.clear(); });
+    flow.click(&mut app, &button);
+    assert_eq!(state(&app),Some((0,None,0)));
+    flow.press(&mut app, egui::Key::Escape, egui::Modifiers::NONE);
+    assert_eq!(state(&app),None);
+    let cancel=compact_caption(&app,"formFolderTree.Caption.btnCancel");
+    flow.click(&mut app,&cancel);
+    assert!(app.original_dialogs.is_empty());
+    assert_eq!(app.panes[0].path,drive);
+    fs::remove_dir_all(root).unwrap();
+}
+
+fn fake_multi_tree_root(path: &str) -> String {
+    TREE_ROOT.with(|r| {
+        let base = r.borrow();
+        Path::new(path).strip_prefix(&*base).ok().and_then(|p| p.components().next()).map(|c| format!("{}\\",base.join(c.as_os_str()).display())).unwrap_or_default()
+    })
+}
+fn fake_multi_tree_drives() -> Vec<PathBuf> {
+    TREE_ROOT.with(|r| (0..12).map(|n|r.borrow().join(format!("drive_{n:02}"))).collect())
+}
+
+#[test]
+fn compact_tree_multiple_drives_and_favorite_selection_are_bounded() {
+    let (root,ctx,mut app)=fixture("compact-tree-drives","en");
+    let base=root.join("drives");
+    TREE_ROOT.with(|r|*r.borrow_mut()=base.clone());
+    let drives=fake_multi_tree_drives();
+    for p in &drives { fs::create_dir_all(p.join("target")).unwrap(); }
+    app.system.tree_root=fake_multi_tree_root;
+    app.system.ready_drives=fake_multi_tree_drives;
+    app.settings.values.insert("SaveFolderTreeState".into(),true.into());
+    app.settings.set_strings("Favorites",(0..20).map(|n|drives[n%12].join("target").to_string_lossy().into_owned()).collect());
+    app.settings.set_strings("FavoriteNames",(0..20).map(|n|format!("QA favorite {n:02}")).collect());
+    app.navigate(0,drives[0].clone(),false);
+    wait_listing(&mut app,&ctx);
+    app.active=0;
+    app.dispatch("folderTree",&ctx);
+    let mut flow=CompactFlow::new(&ctx,320.0,250.0);
+    fn wait_tree(flow:&mut CompactFlow,app:&mut App) {
+        let until=Instant::now()+Duration::from_secs(15);
+        while matches!(app.original_dialogs.last().map(|d|&d.kind),Some(DialogKind::FolderTree(f)) if f.scan.is_some()) {
+            assert!(Instant::now()<until);
+            flow.frame(app,vec![],egui::Modifiers::NONE);
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
+    wait_tree(&mut flow,&mut app);
+    let state=|app:&App| match app.original_dialogs.last().map(|d|&d.kind) { Some(DialogKind::FolderTree(f))=>(f.drive.clone(),f.top_drive,f.address.clone(),f.favorites_open),_=>panic!("tree") };
+    let initial=state(&app);
+    let addr=compact_caption(&app,"formFolderTree.Caption.lAddress");
+    let labels=flow.settled(&mut app);
+    let p=labels.iter().find(|(t,_)|*t==addr).unwrap().1.left_top()+egui::vec2(15.0,34.0);
+    for _ in 0..16 { flow.wheel_at(&mut app,p,egui::vec2(0.0,-75.0)); }
+    let after=state(&app);
+    assert_eq!(after.0,initial.0);
+    assert!(after.1>=8 && after.1<12,"drive scroll: {after:?}");
+    flow.click_at(&mut app,p);
+    wait_tree(&mut flow,&mut app);
+    assert_ne!(state(&app).0,initial.0,"select a previously hidden drive");
+    let favorite=compact_caption(&app,"formFolderTree.ToolButton.tbFavorites")+" ▼";
+    flow.click(&mut app,&favorite);
+    assert!(state(&app).3);
+    let labels=flow.settled(&mut app);
+    let first=labels.iter().find(|(s,_)|s=="QA favorite 00").unwrap().1.center();
+    for _ in 0..12 { flow.wheel_at(&mut app,first,egui::vec2(0.0,-130.0)); }
+    let labels=flow.settled(&mut app);
+    assert!(labels.iter().any(|(s,_)|s=="QA favorite 19"),"last favorite is reachable: {:?}",labels.iter().map(|x|&x.0).collect::<Vec<_>>());
+    flow.click(&mut app,"QA favorite 19");
+    wait_tree(&mut flow,&mut app);
+    assert!(!state(&app).3);
+    let wanted=drives[7].join("target");
+    assert_eq!(Path::new(&state(&app).2),wanted);
+    let ok=compact_caption(&app,"formFolderTree.Caption.btnOk");
+    flow.click(&mut app,&ok);
+    wait_listing(&mut app,&ctx);
+    assert_eq!(app.panes[0].path,wanted);
+    assert!(drives.iter().all(|p|p.join("target").is_dir()));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn compact_sync_preview_selects_saves_and_copies_only_checked_items() {
+    let (root,ctx,mut app)=compare_fixture("compact-sync-preview","en");
+    app.dispatch("synchronize",&ctx);
+    app.answer_dialog(DialogResult::Choice(Some(0)),&ctx);
+    app.answer_dialog(DialogResult::Choice(Some(1)),&ctx);
+    wait_job(&mut app,&ctx);
+    assert_eq!(comparison(&app).rows.len(),4);
+    let mut flow=CompactFlow::new(&ctx,320.0,250.0);
+    let clear=app.language_pack.text("NDR.UI_COMPARE_CLEAR_ALL","Clear all");
+    let all=app.language_pack.text("NDR.UI_COMPARE_SELECT_ALL","Select all");
+    let commit=app.language_pack.text("NDR.UI_COMPARE_SYNC_SELECTED","Synchronize selected");
+    flow.click(&mut app,&clear);
+    assert!(comparison(&app).included().is_empty());
+    flow.click(&mut app,&commit);
+    assert!(!app.msgboxes.is_empty());
+    assert!(!root.join("right/alpha.txt").exists());
+    app.answer_message_box(1,&ctx);
+    flow.click(&mut app,&all);
+    assert_eq!(comparison(&app).included().len(),4);
+    flow.size=egui::vec2(480.0,360.0);
+    let labels=flow.settled(&mut app);
+    let point=labels.iter().find(|(s,_)|s=="alpha.txt").unwrap().1.center();
+    let left_label=format!("{}: {}",app.language_pack.text("NDR.UI_COMPARE_LEFT","Left"),root.join("left").display());
+    let left_x=labels.iter().find(|(s,_)|*s==left_label).unwrap().1.left();
+    // The first visible column is the 36pt checkbox; clicking its center
+    // must toggle only that one included row.
+    flow.click_at(&mut app,egui::pos2(left_x+18.0,point.y));
+    assert_eq!(comparison(&app).included().len(),3);
+    assert!(!comparison(&app).rows.iter().find(|r|r.difference.relative=="alpha.txt").unwrap().include);
+    flow.wheel_at(&mut app,point,egui::vec2(-1200.0,0.0));
+    let labels=flow.settled(&mut app);
+    let right_modified=app.language_pack.text("NDR.UI_COMPARE_COLUMN_RIGHT_MODIFIED","Right modified");
+    assert!(labels.iter().any(|(s,_)|*s==right_modified),"horizontal metadata column: {:?}",labels.iter().map(|x|&x.0).collect::<Vec<_>>());
+    assert_eq!(comparison(&app).included().len(),3);
+    app.save_dialog=pick_save_target;
+    SAVE_TARGET.with(|t|*t.borrow_mut()=Some(root.join("sync.tsv")));
+    let save=compact_caption(&app,"formCompareFolder.Caption.btnSave");
+    flow.click(&mut app,&save);
+    let report=fs::read(root.join("sync.tsv")).unwrap();
+    assert!(report.starts_with(&[0xef,0xbb,0xbf]));
+    assert!(String::from_utf8_lossy(&report).contains("alpha.txt"));
+    flow.click(&mut app,&commit);
+    app.answer_dialog(DialogResult::Choice(Some(1)),&ctx);
+    assert!(!app.msgboxes.is_empty());
+    assert_eq!(fs::read(root.join("right/beta.txt")).unwrap(),b"BETA.TXT");
+    app.answer_message_box(ndr::msgbox::IDYES,&ctx);
+    wait_job(&mut app,&ctx);
+    assert_eq!(fs::read(root.join("right/beta.txt")).unwrap(),b"beta.txt");
+    assert!(root.join("right/gamma.log").exists() && root.join("right/Alphabet.doc").exists());
+    assert!(!root.join("right/alpha.txt").exists());
+    assert_eq!(fs::read(root.join("right/omega.txt")).unwrap(),b"omega");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn compact_search_scroll_reaches_options_and_runs_real_search() {
+    let (root,ctx,mut app)=fixture("compact-search","ko");
+    fs::write(root.join("left/folder1/inner-alpha.txt"),b"inner").unwrap();
+    app.dispatch("search",&ctx);
+    let mut flow=CompactFlow::new(&ctx,480.0,360.0);
+    let search=app.language_pack.text("RES.SEARCH","Search");
+    let cancel=app.language_pack.text("RES.CANCEL","Cancel");
+    let labels=flow.settled(&mut app);
+    assert!(labels.iter().any(|(t,_)|*t==search) && labels.iter().any(|(t,_)|*t==cancel));
+    // Scroll the body until the filename and bottom options can be edited.
+    let root_label=app.language_pack.text("formNDRSearch.Caption.lRoot","Search in");
+    let p=labels.iter().find(|(t,_)|*t==root_label).unwrap().1.center();
+    for _ in 0..2 { flow.wheel_at(&mut app,p,egui::vec2(0.0,-115.0)); }
+    flow.settled(&mut app);
+    app.edit_dialog_kind(|kind| if let DialogKind::Search(f)=kind {f.patterns="*alpha*".into();f.recursive=true;f.folders=false;});
+    for _ in 0..12 { flow.wheel_at(&mut app,p,egui::vec2(0.0,-180.0)); }
+    let labels=flow.settled(&mut app);
+    let opt=app.language_pack.text("formNDRSearch.Caption.chkMatchCase","Match case");
+    assert!(labels.iter().any(|(t,_)|*t==opt),"bottom search options are reachable: {:?}",labels.iter().map(|x|&x.0).collect::<Vec<_>>());
+    flow.click(&mut app,&opt);
+    assert!(matches!(app.original_dialogs.last().map(|d|&d.kind),Some(DialogKind::Search(f)) if f.match_case));
+    flow.size=egui::vec2(320.0,250.0);
+    flow.click(&mut app,&search);
+    wait_job(&mut app,&ctx);
+    assert!(app.original_dialogs.is_empty());
+    let names: Vec<_>=app.panes[0].entries.iter().filter(|e|!e.is_parent()).map(|e|e.name.clone()).collect();
+    assert!(names.contains(&"alpha.txt".into()) && names.contains(&"inner-alpha.txt".into()),"{names:?}");
+    assert!(!names.contains(&"Alphabet.doc".into()) && !names.contains(&"beta.txt".into()));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn compact_archive_formats_and_scroll_preserve_real_zip_bytes() {
+    let (root,ctx,mut app)=fixture("compact-archive","ko");
+    app.panes[0].selected=[row(&app,0,"alpha.txt"),row(&app,0,"beta.txt")].into_iter().collect();
+    app.dispatch("createArchive",&ctx);
+    let mut flow=CompactFlow::new(&ctx,480.0,360.0);
+    flow.click(&mut app,"7z");
+    assert!(matches!(app.original_dialogs.last().map(|d|&d.kind),Some(DialogKind::ArchiveCreate(f)) if f.file_name.ends_with(".7z")));
+    flow.click(&mut app,"zip");
+    assert!(matches!(app.original_dialogs.last().map(|d|&d.kind),Some(DialogKind::ArchiveCreate(f)) if f.file_name.ends_with(".zip")));
+    app.edit_dialog_kind(|kind| if let DialogKind::ArchiveCreate(f)=kind { f.file_name="compact.zip".into(); f.volume.clear();f.password.clear();});
+    flow.size=egui::vec2(320.0,250.0);
+    let labels=flow.settled(&mut app);
+    let first=compact_caption(&app,"formAddToArchive.Caption.lSecName");
+    let p=labels.iter().find(|(t,_)|*t==first).unwrap().1.center();
+    for _ in 0..8 {flow.wheel_at(&mut app,p,egui::vec2(0.0,-130.0));}
+    let labels=flow.settled(&mut app);
+    let password=compact_caption(&app,"formAddToArchive.Caption.lPassword");
+    assert!(labels.iter().any(|(t,_)|*t==password),"archive password field is reachable: {:?}",labels.iter().map(|x|&x.0).collect::<Vec<_>>());
+    let create=compact_caption(&app,"formAddToArchive.Caption.btnOk");
+    flow.click(&mut app,&create);
+    wait_job(&mut app,&ctx);
+    let archive=root.join("left/compact.zip");
+    assert!(archive.is_file(),"{:?}",app.status);
+    let rows=ndr::archive::list(&archive,None).unwrap();
+    assert_eq!(rows.len(),2);
+    let cancel=std::sync::atomic::AtomicBool::new(false);
+    for (name,bytes) in [("alpha.txt",b"alpha.txt".as_slice()),("beta.txt",b"beta.txt".as_slice())] {
+        let path=ndr::archive::extract_entry_to_temp(&archive,None,name,&cancel).unwrap();
+        assert_eq!(fs::read(&path).unwrap(),bytes);
+        let _=fs::remove_file(path);
+        assert_eq!(fs::read(root.join("left").join(name)).unwrap(),bytes);
+    }
+    fs::remove_dir_all(root).unwrap();
 }
 
 /// Original miFolderTreeClick 0x43c81a -> FUN_0040ca90 -> TfFolderTree: selects the initial path (scans drives when there is no tree file),

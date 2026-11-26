@@ -2557,14 +2557,30 @@ impl VaultDialog {
     /// New Folder / TfGetText. Only the additional password fields make it
     /// taller. No separate heading, grid, or native egui::Window chrome.
     fn draw_create(&mut self, ui: &mut egui::Ui, lang: &compat::Language) -> bool {
-        let (area, _) = ui.allocate_exact_size(egui::vec2(444.0, 250.0), egui::Sense::hover());
+        let folder = lang.text("NDRVault.FolderName", "Folder name");
+        let password = lang.text("NDRVault.Password", "Password");
+        let confirm = lang.text("NDRVault.ConfirmPassword", "Confirm password");
+        let hint = lang.text("NDRVault.CreateHint", "Enter the name of the new encrypted folder.");
+        let note = lang.text("NDRVault.CreateNote", "Names and files are encrypted. Password: at least 6 characters.");
+        let recovery = lang.text("NDRVault.NoRecovery", "A forgotten password cannot be recovered.");
+        let error = (!self.error.is_empty()).then(|| Self::localized_error(lang, &self.error));
+        let label_width = [&folder, &password, &confirm].into_iter().map(|s| super::original_dialogs::caption_width(ui, s) + 8.0).fold(100.0_f32, f32::max);
+        let delta = label_width - 100.0;
+        let content = 411.0 + delta;
+        let small = egui::TextStyle::Small.resolve(ui.style());
+        let line_height = |text: &str| ui.painter().layout(text.to_owned(), small.clone(), Color32::WHITE, content).size().y.ceil().max(19.0);
+        let note_height = line_height(&note);
+        let recovery_height = line_height(&recovery);
+        let error_height = error.as_deref().map_or(18.0, line_height);
+        let extra = note_height - 19.0 + recovery_height - 19.0 + (error_height - 18.0).max(0.0);
+        let (area, _) = ui.allocate_exact_size(egui::vec2(444.0 + delta, 250.0 + extra), egui::Sense::hover());
         let at = |x: f32, y: f32, width: f32, height: f32| {
             egui::Rect::from_min_size(area.min + egui::vec2(x, y), egui::vec2(width, height))
         };
 
-        ui.put(at(18.0, 8.0, 411.0, 25.0), egui::Label::new(lang.text("NDRVault.CreateHint", "Enter the name of the new encrypted folder.")));
-        ui.put(at(18.0, 47.0, 100.0, 21.0), egui::Label::new(lang.text("NDRVault.FolderName", "Folder name")));
-        let response = ui.put(at(122.0, 43.0, 307.0, 23.0),
+        super::original_dialogs::put_left(ui, at(18.0, 8.0, content, 25.0), egui::Label::new(hint).wrap());
+        super::original_dialogs::put_left(ui, at(18.0, 47.0, label_width, 21.0), egui::Label::new(folder));
+        let response = ui.put(at(122.0 + delta, 43.0, 307.0, 23.0),
             egui::TextEdit::singleline(&mut self.folder_name)
                 .id(egui::Id::new("ndr-vault-folder-name")));
         if self.name_select_pending {
@@ -2572,35 +2588,32 @@ impl VaultDialog {
             super::original_dialogs::select_all(ui, response.id, self.folder_name.chars().count());
             self.name_select_pending = false;
         }
-        ui.put(at(18.0, 80.0, 100.0, 21.0), egui::Label::new(lang.text("NDRVault.Password", "Password")));
-        ui.put(at(122.0, 76.0, 307.0, 23.0),
+        super::original_dialogs::put_left(ui, at(18.0, 80.0, label_width, 21.0), egui::Label::new(password));
+        ui.put(at(122.0 + delta, 76.0, 307.0, 23.0),
             egui::TextEdit::singleline(&mut self.password).password(true));
-        ui.put(at(18.0, 113.0, 100.0, 21.0), egui::Label::new(lang.text("NDRVault.ConfirmPassword", "Confirm password")));
-        ui.put(at(122.0, 109.0, 307.0, 23.0),
+        super::original_dialogs::put_left(ui, at(18.0, 113.0, label_width, 21.0), egui::Label::new(confirm));
+        ui.put(at(122.0 + delta, 109.0, 307.0, 23.0),
             egui::TextEdit::singleline(&mut self.confirmation).password(true));
 
-        ui.put(at(18.0, 145.0, 411.0, 19.0), egui::Label::new(
-            egui::RichText::new(lang.text("NDRVault.CreateNote", "Names and files are encrypted. Password: at least 6 characters.")).small().weak()));
-        ui.put(at(18.0, 165.0, 411.0, 19.0), egui::Label::new(
-            egui::RichText::new(lang.text("NDRVault.NoRecovery", "A forgotten password cannot be recovered.")).small().weak()));
+        super::original_dialogs::put_left(ui, at(18.0, 145.0, content, note_height), egui::Label::new(egui::RichText::new(note).small().weak()).wrap());
+        super::original_dialogs::put_left(ui, at(18.0, 146.0 + note_height, content, recovery_height), egui::Label::new(egui::RichText::new(recovery).small().weak()).wrap());
 
         // Align exactly with the bottom-right controls of New Folder:
         // x=265 / 351, width=79, height=25; only Y moves for extra fields.
         let mut close = false;
-        if ui.put(at(265.0, 215.0, 79.0, 25.0), egui::Button::new(lang.text("NDRVault.OK", "OK"))).clicked() {
+        if ui.put(at(265.0 + delta, 215.0 + extra, 79.0, 25.0), egui::Button::new(lang.text("NDRVault.OK", "OK"))).clicked() {
             self.authenticate();
         }
-        if ui.put(at(351.0, 215.0, 79.0, 25.0), egui::Button::new(lang.text("NDRVault.Cancel", "Cancel"))).clicked() {
+        if ui.put(at(351.0 + delta, 215.0 + extra, 79.0, 25.0), egui::Button::new(lang.text("NDRVault.Cancel", "Cancel"))).clicked() {
             close = true;
         }
         if ui.input(|input| input.key_pressed(egui::Key::Escape)) { close = true; }
         if ui.input(|input| input.key_pressed(egui::Key::Enter)) && !close && self.created_path.is_none() {
             self.authenticate();
         }
-        if !self.error.is_empty() {
-            ui.painter().text(at(18.0, 189.0, 411.0, 18.0).left_top(),
-                egui::Align2::LEFT_TOP, Self::localized_error(lang, &self.error),
-                egui::FontId::proportional(11.0), ui.visuals().error_fg_color);
+        if let Some(error) = error {
+            super::original_dialogs::put_left(ui, at(18.0, 151.0 + note_height + recovery_height, content, error_height),
+                egui::Label::new(egui::RichText::new(error).small().color(ui.visuals().error_fg_color)).wrap());
         }
         close || self.created_path.is_some()
     }
@@ -2608,32 +2621,41 @@ impl VaultDialog {
     /// Matches the centered movable original-dialog chrome and 444 px field
     /// alignment used by New Folder and encrypted-folder creation.
     fn draw_unlock(&mut self, ui: &mut egui::Ui, lang: &compat::Language) -> bool {
-        let (area, _) = ui.allocate_exact_size(egui::vec2(444.0, 178.0), egui::Sense::hover());
+        let password = lang.text("NDRVault.Password", "Password");
+        let label_width = (super::original_dialogs::caption_width(ui, &password) + 8.0).max(100.0);
+        let delta = label_width - 100.0;
+        let note = lang.text("NDRVault.PasswordNotStored", "The password is not saved.");
+        let error = (!self.error.is_empty()).then(|| Self::localized_error(lang, &self.error));
+        let content = 411.0 + delta;
+        let small = egui::TextStyle::Small.resolve(ui.style());
+        let line_height = |text: &str| ui.painter().layout(text.to_owned(), small.clone(), Color32::WHITE, content).size().y.ceil();
+        let note_height = line_height(&note).max(22.0);
+        let error_height = error.as_deref().map_or(35.0, |s| line_height(s).max(35.0));
+        let extra = note_height - 22.0 + error_height - 35.0;
+        let (area, _) = ui.allocate_exact_size(egui::vec2(444.0 + delta, 178.0 + extra), egui::Sense::hover());
         let at = |x: f32, y: f32, w: f32, h: f32| {
             egui::Rect::from_min_size(area.min + egui::vec2(x, y), egui::vec2(w, h))
         };
         let display_name = self.path.file_stem().unwrap_or_default().to_string_lossy();
-        ui.put(at(18.0, 8.0, 411.0, 24.0), egui::Label::new(display_name.as_ref()).truncate())
+        ui.put(at(18.0, 8.0, content, 24.0), egui::Label::new(display_name.as_ref()).truncate())
             .on_hover_text(display_name.as_ref());
-        ui.put(at(18.0, 51.0, 100.0, 23.0),
-            egui::Label::new(lang.text("NDRVault.Password", "Password")));
-        let edit = ui.put(at(122.0, 47.0, 307.0, 23.0),
+        super::original_dialogs::put_left(ui, at(18.0, 51.0, label_width, 23.0), egui::Label::new(password));
+        let edit = ui.put(at(122.0 + delta, 47.0, 307.0, 23.0),
             egui::TextEdit::singleline(&mut self.password).password(true)
                 .id(egui::Id::new("ndr-vault-unlock-password")));
         if self.name_select_pending {
             edit.request_focus();
             self.name_select_pending = false;
         }
-        ui.put(at(18.0, 79.0, 411.0, 22.0), egui::Label::new(
-            egui::RichText::new(lang.text("NDRVault.PasswordNotStored", "The password is not saved.")).small().weak()));
-        if !self.error.is_empty() {
-            ui.put(at(18.0, 106.0, 411.0, 35.0), egui::Label::new(
-                egui::RichText::new(Self::localized_error(lang, &self.error)).small().color(ui.visuals().error_fg_color)));
+        super::original_dialogs::put_left(ui, at(18.0, 79.0, content, note_height), egui::Label::new(egui::RichText::new(note).small().weak()).wrap());
+        if let Some(error) = error {
+            super::original_dialogs::put_left(ui, at(18.0, 84.0 + note_height, content, error_height), egui::Label::new(
+                egui::RichText::new(error).small().color(ui.visuals().error_fg_color)).wrap());
         }
         let mut close = false;
-        let submit = ui.put(at(265.0, 145.0, 79.0, 25.0),
+        let submit = ui.put(at(265.0 + delta, 145.0 + extra, 79.0, 25.0),
             egui::Button::new(lang.text("NDRVault.OK", "OK"))).clicked();
-        if ui.put(at(351.0, 145.0, 79.0, 25.0),
+        if ui.put(at(351.0 + delta, 145.0 + extra, 79.0, 25.0),
             egui::Button::new(lang.text("NDRVault.Cancel", "Cancel"))).clicked() {
             close = true;
         }

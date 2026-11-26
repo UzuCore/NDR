@@ -8,8 +8,8 @@ use super::*;
 use ndr::msgbox::{IDYES, MB_ICONEXCLAMATION, MB_ICONQUESTION, MB_OK, MB_YESNO};
 use serde_json::{Map, Value, json};
 
-fn t(ko: bool, korean: &str, english: &str) -> String {
-    if ko { korean.into() } else { english.into() }
+fn display_setting_text(language: &compat::Language, key: &str, korean: &str, english: &str) -> String {
+    language.localized(&format!("NDR.SETTINGS_DISPLAY_{}", key.to_ascii_uppercase()), korean, english)
 }
 
 /// One row (C# AddCheck/AddText/AddFolderPath/AddProgramPath/AddCombo/AddSlider/AddSection and notice text).
@@ -31,7 +31,7 @@ pub(super) enum Row {
 }
 
 pub(super) struct SettingsForm {
-    ko: bool,
+    language: compat::Language,
     pub tab: usize,
     pub tabs: Vec<Vec<Row>>,
     /// Page names (the 8 original TabSheet.ts* + "NDR").
@@ -314,7 +314,7 @@ fn original_pages(built: Vec<Vec<Row>>, language: &compat::Language, _ko: bool) 
             language.localized("NDR.UI_SETTINGS_LIKE_THE_ORIGINAL_ONLY_929B45", "원본처럼 Win+문자로만 등록합니다. 다른 프로그램이 그 조합을 쓰고 있으면 등록하지 않고 안내합니다.", "Like the original, only Win+letter is registered. If another program uses it, nothing is registered and a message is shown.")
         ))),
         take("CheckForUpdatesOnStartup", l("Caption.chkCheckUpdate", "Check update when program starts")),
-        take("UseDescriptionFile", l("Caption.chkUseION", "Read comment file \"descript.ion\" ")),
+        take("UseDescriptionFile", None),
         take("UseSingleInstance", l("Caption.chkRunOnce", "Allow only one NexusFile running")),
         take("UseAlternateDriveHandling", l("Caption.chkHanShiftDrive", "Use Shift + Drive Letter regardless of input mode")),
         take("HideWhenMinimized", l("Caption.chkHideWhenMinimized", "Hide when minimized")),
@@ -383,13 +383,33 @@ fn number_text(settings: &ndr::settings::Settings, key: &str) -> String {
 impl SettingsForm {
     pub(super) fn new(source: &ndr::settings::Settings, language: &compat::Language, resources: &Path) -> Self {
         let draft = source.clone();
-        let ko = draft.text("Language", "ko").eq_ignore_ascii_case("ko");
+        // The active catalog is authoritative, including --language overrides.
+        // The saved draft can still have the previous language until Apply.
+        let ko = language.code == "ko";
         let lang = |key: &str, fallback: &str| language.text(&format!("formPreferences.{key}"), fallback);
         let flag = |key: &str, default: bool| draft.flag(key, default);
         let check = |key: &str, label: String, default: bool| Row::Check { key: key.into(), label, value: draft.flag(key, default) };
         let text = |key: &str, label: String, value: String| Row::Text { key: key.into(), label, value, read_only: false, max: usize::MAX, upper: false };
         let combo = |key: &str, label: String, values: &[&str], selected: &str| {
-            let choices: Vec<(String, String)> = values.iter().map(|v| ((*v).to_owned(), (*v).to_owned())).collect();
+            let choices: Vec<(String, String)> = values.iter().map(|v| {
+                let label = if key == "Theme" {
+                    // Theme identifiers are product names, not translated settings.
+                    (*v).to_owned()
+                } else {
+                    match *v {
+                        "Auto" => language.text("NDR.UI_SETTINGS_AUTO_44B5D1", v),
+                        "Name" => language.text("RES.FIELD_NAME", v),
+                        "Extension" => language.text("RES.FIELD_EXT", v),
+                        "Size" => language.text("RES.FIELD_SIZE", v),
+                        "Modified" => language.text("RES.FIELD_DATEMODIFIED", v),
+                        "Attributes" => language.text("RES.FIELD_ATTR", v),
+                        "None" | "Names" | "Details" | "Thumbnails" | "Time" | "Category" | "Color" =>
+                            language.text(&format!("NDR.SETTINGS_CHOICE_{}", v.to_ascii_uppercase()), v),
+                        _ => (*v).to_owned(),
+                    }
+                };
+                ((*v).to_owned(), label)
+            }).collect();
             let selected = choices.iter().position(|(v, _)| v == selected);
             Row::Combo { key: key.into(), label, choices, selected }
         };
@@ -422,7 +442,7 @@ impl SettingsForm {
         general.push(choice_row("DefaultDeleteButton", lang("Caption.lDefDelBtn", "Default button for a delete warning dialog:"), delete_labels.into_iter().enumerate().map(|(i, l)| (i.to_string(), l)).collect(), &delete_default));
         general.extend([
             check("UseRecycleBin", language.localized("NDR.UI_SETTINGS_DELETE_TO_THE_RECYCLE_B00473", "기본 삭제는 휴지통 사용", "Delete to the Recycle Bin by default"), true),
-            check("UseDescriptionFile", lang("Caption.chkUseION", "Read comment file \"descript.ion\""), true),
+            check("UseDescriptionFile", language.localized("NDR.SETTINGS_READ_DESCRIPTION_FILE", "descript.ion 설명 읽기", "Read descript.ion comments"), true),
             check("UseContentComparison", language.localized("NDR.UI_SETTINGS_COMPARE_FILE_CONTENTS_IN_F5A20C", "폴더 비교에서 파일 내용 확인", "Compare file contents in folder comparison"), true),
             check("ShowHiddenFoldersInTree", language.localized("NDR.UI_SETTINGS_SHOW_HIDDEN_FOLDERS_IN_7A053E", "폴더 트리에서 숨김 폴더 표시", "Show hidden folders in the folder tree"), false),
             check("ShowFolderTreeIcons", language.localized("NDR.UI_SETTINGS_SHOW_FOLDER_TREE_ICONS_E752D8", "폴더 트리 아이콘 표시", "Show folder tree icons"), true),
@@ -444,16 +464,19 @@ impl SettingsForm {
             check("RemoveReadOnlyWhenCopying", language.localized("NDR.UI_SETTINGS_REMOVE_THE_READ_ONLY_F6122F", "CD/DVD에서 복사할 때 읽기 전용 속성 해제", "Remove the read-only attribute when copying from CD/DVD"), true),
             combo("Theme", language.localized("NDR.UI_SETTINGS_THEME_A980E4", "테마", "Theme"), &ndr::styles::THEMES, ndr::styles::canonical_theme_name(&draft.text("Theme", ndr::styles::DEFAULT_THEME))),
         ]);
-        let mut escape_labels: Vec<String> = lang("ComboBox.cbESC", "Minimize;Exit Program;Command Line;Deselect All;Go to Parent").split(';').map(|s| s.trim().to_owned()).collect();
-        if escape_labels.len() != 5 {
-            escape_labels = ["Minimize", "Exit Program", "Command Line", "Deselect All", "Go to Parent"].map(String::from).to_vec();
-        }
+        let escape_labels = [
+            language.localized("NDR.SETTINGS_CHOICE_MINIMIZE", "최소화", "Minimize"),
+            language.localized("NDR.SETTINGS_CHOICE_EXIT_NDR", "NDR 종료", "Exit NDR"),
+            language.text("RES.TITLE_CMD", "Run a command"),
+            language.localized("NDR.SETTINGS_CHOICE_CLEAR_SELECTION", "선택 해제", "Clear selection"),
+            language.text("RES.FUNC_GOTOPARENT", "Parent folder"),
+        ];
         let mut escape: Vec<(String, String)> = vec![("Disabled".into(), language.localized("NDR.UI_SETTINGS_DISABLED_D41047", "사용 안 함", "Disabled"))];
         escape.extend(escape_labels.into_iter().enumerate().map(|(i, label)| (i.to_string(), label)));
         let escape_selected = draft.values.get("EscapeKeyAction").and_then(Value::as_i64).filter(|v| (0..=4).contains(v)).map_or("Disabled".to_owned(), |v| v.to_string());
         general.push(choice_row("EscapeKeyAction", lang("Caption.lESC", "ESC Key Function"), escape, &escape_selected));
         let languages: Vec<(String, String)> = available_languages(resources).into_iter().map(|(code, name)| (code.clone(), format!("{code} — {name}"))).collect();
-        let language_choice = compat::resolve_language_code(&resources.join("Languages"), &draft.text("Language", "ko"));
+        let language_choice = language.code.clone();
         general.push(choice_row("Language", language.localized("NDR.UI_SETTINGS_LANGUAGE", "언어", "Language"), languages, &language_choice));
 
         // Display.
@@ -502,14 +525,14 @@ impl SettingsForm {
             let label = match key {
                 "LeftAutoFolderSize" => language.text("NDRVault.AutoFolderSizeLeft", english),
                 "RightAutoFolderSize" => language.text("NDRVault.AutoFolderSizeRight", english),
-                _ => t(ko, korean, english),
+                _ => display_setting_text(language, key, korean, english),
             };
             display.push(check(key, label, default));
         }
         // Original chkScrollStep1/2 (0x44cfa2: on when the value is 2; 0x44da08: on = 2, off = 1).
         for (key, korean, english) in [("LeftScrollStep", "왼쪽 페이지 단위 스크롤", "Left: scroll by page"), ("RightScrollStep", "오른쪽 페이지 단위 스크롤", "Right: scroll by page")] {
             let by_page = draft.values.get(key).and_then(Value::as_i64).unwrap_or(2) != 1;
-            display.push(Row::Check { key: key.into(), label: t(ko, korean, english), value: by_page });
+            display.push(Row::Check { key: key.into(), label: display_setting_text(language, key, korean, english), value: by_page });
         }
         for (key, korean, english, default) in [
             ("LeftGroupDescending", "왼쪽 그룹 역순", "Left groups reversed", false),
@@ -525,7 +548,7 @@ impl SettingsForm {
             ("ShowColumnLines", "목록 열 구분선 표시", "Show list column lines", true),
             ("ShowRowLines", "목록 행 구분선 표시", "Show list row lines", false),
         ] {
-            display.push(check(key, t(ko, korean, english), default));
+            display.push(check(key, display_setting_text(language, key, korean, english), default));
         }
         display.push(check("UseMenuAlpha", lang("Caption.chkMenuAlpha", "Use Transparent Menu"), true));
         display.push(Row::Section(lang("GroupBox.gbAlpha", "Window Transparency")));
@@ -685,7 +708,7 @@ impl SettingsForm {
         let function_keys = super::function_key_editor::FunctionKeyEditorForm::new(&draft, ko);
         let browse_folder = language.localized("NDR.UI_SETTINGS_BROWSE_FOLDER", "찾아보기...", "Browse...");
         let browse_program = language.localized("NDR.UI_SETTINGS_BROWSE_PROGRAM", "찾아보기…", "Browse…");
-        Self { ko, tab: 0, tabs, tab_titles, draft, color_selected: None, last_color: 0, color_captions, basic_items, button_captions, captions, browse_folder, browse_program, function_keys }
+        Self { language: language.clone(), tab: 0, tabs, tab_titles, draft, color_selected: None, last_color: 0, color_captions, basic_items, button_captions, captions, browse_folder, browse_program, function_keys }
     }
 
     /// After editing the function key list (original btnEditFunc, btnFuncDelete): like the C# version, changes FunctionKeyBindings of the settings copy and removes F1-F12 and ^F1-^F11 of the old FunctionKeys.
@@ -769,7 +792,7 @@ impl SettingsForm {
                             let accepted = match (chars.next(), chars.next()) {
                                 (None, _) => String::new(),
                                 (Some(c), None) if c.is_ascii_alphanumeric() => c.to_ascii_uppercase().to_string(),
-                                _ => return Err(if self.ko { "활성화 단축키에는 영문자 또는 숫자 한 글자만 입력하세요.".into() } else { "Enter one letter or digit for the activation shortcut.".into() }),
+                                _ => return Err(self.language.localized("NDR.SETTINGS_INVALID_ACTIVATION_SHORTCUT", "활성화 단축키에는 영문자 또는 숫자 한 글자만 입력하세요.", "Enter one letter or digit for the activation shortcut.")),
                             };
                             values.insert(key.clone(), Value::String(accepted));
                         }
@@ -798,8 +821,7 @@ impl SettingsForm {
                         }
                         "VaultSessionMinutes" => {
                             let minutes = int(value).filter(|n| (1..=1440).contains(n)).ok_or_else(|| {
-                                if self.ko { "암호화 폴더 세션 시간은 1~1440분으로 입력하세요.".to_owned() }
-                                else { "Enter a session duration from 1 to 1440 minutes.".to_owned() }
+                                self.language.localized("NDR.SETTINGS_INVALID_SESSION_DURATION", "암호화 폴더 세션 시간은 1~1440분으로 입력하세요.", "Enter a session duration from 1 to 1440 minutes.")
                             })?;
                             values.insert(key.clone(), json!(minutes));
                         }
@@ -993,9 +1015,9 @@ fn list_frame(ui: &egui::Ui, rect: egui::Rect) {
 }
 
 /// One original page (TabSheet background = origin). Positions as in the DFM; positions inside a group add the group's Left/Top.
-fn original_page(ui: &mut egui::Ui, form: &mut SettingsForm, tab: usize, origin: egui::Pos2, enter: bool, delete: bool) -> Option<SettingsAction> {
+fn original_page(ui: &mut egui::Ui, form: &mut SettingsForm, tab: usize, origin: egui::Pos2, scale_x: f32, enter: bool, delete: bool) -> Option<SettingsAction> {
     use super::original_dialogs::{group_box, put_left};
-    let at = |x: f32, y: f32, w: f32, h: f32| egui::Rect::from_min_size(origin + egui::vec2(x, y), egui::vec2(w, h));
+    let at = |x: f32, y: f32, w: f32, h: f32| egui::Rect::from_min_size(origin + egui::vec2(x * scale_x, y), egui::vec2(w * scale_x, h));
     let captions = form.captions.clone();
     let cap = |key: &str, fallback: &str| captions.get(key).cloned().unwrap_or_else(|| fallback.to_owned()).replace('&', "");
     let stroke = ui.visuals().widgets.noninteractive.bg_stroke;
@@ -1045,8 +1067,8 @@ fn original_page(ui: &mut egui::Ui, form: &mut SettingsForm, tab: usize, origin:
             put_updown(ui, rows, "ListLineSpace", at(vx + 102.0, vy + 128.0, 40.0, 21.0), 0, 10);
             put_label(ui, at(vx + 166.0, vy + 131.0, 82.0, 15.0), &label_of(rows, "ThumbnailSize"));
             put_updown(ui, rows, "ThumbnailSize", at(vx + 249.0, vy + 128.0, 40.0, 21.0), 64, 300);
-            ui.painter().hline(origin.x + vx + 10.0..=origin.x + vx + 304.0, origin.y + vy + 160.0, stroke);
-            ui.painter().vline(origin.x + vx + 160.0, origin.y + vy + 166.0..=origin.y + vy + 405.0, stroke);
+            ui.painter().hline(origin.x + (vx + 10.0) * scale_x..=origin.x + (vx + 304.0) * scale_x, origin.y + vy + 160.0, stroke);
+            ui.painter().vline(origin.x + (vx + 160.0) * scale_x, origin.y + vy + 166.0..=origin.y + vy + 405.0, stroke);
             for (side, n, x) in [("Left", "1", 10.0), ("Right", "2", 167.0)] {
                 let title = cap(&format!("Caption.lListView{n}"), if n == "1" { "Left Pane" } else { "Right Pane" });
                 put_left(ui, at(vx + x, vy + 164.0, 140.0, 16.0), egui::Label::new(RichText::new(title).strong().family(egui::FontFamily::Name(super::BOLD_FONT_FAMILY.into())).color(blue)));
@@ -1071,9 +1093,11 @@ fn original_page(ui: &mut egui::Ui, form: &mut SettingsForm, tab: usize, origin:
             for (top, key) in [(24.0, "TreeWindowMatchesMainSize"), (47.0, "SaveFolderTreeState"), (70.0, "ShowHiddenFoldersInTree"), (93.0, "ShowFolderTreeIcons")] {
                 put_check(ui, rows, key, at(32.0, top, 470.0, 17.0));
             }
-            put_label(ui, at(32.0, 138.0, 135.0, 15.0), &label_of(rows, "FolderTreeItemWidth"));
-            put_updown(ui, rows, "FolderTreeItemWidth", at(169.0, 135.0, 65.0, 21.0), 60, 400);
-            put_label(ui, at(257.0, 138.0, 60.0, 15.0), &cap("Caption.TntLabel3", "pixel"));
+            let tree_width_label = label_of(rows, "FolderTreeItemWidth");
+            let tree_label_width = ((super::original_dialogs::caption_width(ui, &tree_width_label) + 8.0) / scale_x).max(135.0).min(365.0);
+            put_label(ui, at(32.0, 138.0, tree_label_width, 15.0), &tree_width_label);
+            put_updown(ui, rows, "FolderTreeItemWidth", at(34.0 + tree_label_width, 135.0, 65.0, 21.0), 60, 400);
+            put_label(ui, at(122.0 + tree_label_width, 138.0, 60.0, 15.0), &cap("Caption.TntLabel3", "pixel"));
             group_box(ui, at(32.0, 173.0, 225.0, 96.0), &cap("GroupBox.gbTreeFont", "Font"));
             let tree_style = form.draft.values.get("FolderTreeFontStyle").and_then(Value::as_i64).unwrap_or(0) & 0x0F;
             let font = format!("{} \"{}\",{},{tree_style}", label_of(rows, "FolderTreeFont"), label_value(rows, "FolderTreeFont"), label_value(rows, "FolderTreeFontSize"));
@@ -1261,12 +1285,14 @@ fn original_page(ui: &mut egui::Ui, form: &mut SettingsForm, tab: usize, origin:
         6 => {
             let headers: Vec<String> = cap("ListViewCols.lvFunctionKey", "Key;Name;Command").split(';').map(str::to_owned).collect();
             let header = |i: usize, fallback: &str| headers.get(i).cloned().unwrap_or_else(|| fallback.into());
-            let columns = [super::grid::Column::text(header(0, "Key"), 60.0), super::grid::Column::text(header(1, "Name"), 120.0), super::grid::Column::text(header(2, "Command"), 300.0)];
+            let key_header = header(0, "Key");
+            let key_width = (super::original_dialogs::caption_width(ui, &key_header) + 16.0).max(60.0);
+            let columns = [super::grid::Column::text(key_header, key_width), super::grid::Column::text(header(1, "Name"), 120.0), super::grid::Column::text(header(2, "Command"), (360.0 - key_width).max(200.0))];
             let keys = &mut form.function_keys;
             let rows: Vec<[String; 5]> = (0..keys.bindings.len()).map(|i| keys.row(i)).collect();
             let mut double_clicked = false;
             ui.scope_builder(egui::UiBuilder::new().max_rect(at(20.0, 31.0, 504.0, 360.0)), |ui| {
-                let view = super::grid::GridView { id: "settings-function-keys", columns: &columns, height: 330.0, enabled: true, sortable: false, multi_select: false, keyboard: true, context_menu: None, row_color: None, background: None };
+                let view = super::grid::GridView { id: "settings-function-keys", columns: &columns, height: 330.0, enabled: true, sortable: false, multi_select: false, keyboard: true, context_menu: None, row_color: None, background: None, cell_tooltips: false };
                 let events = super::grid::show(ui, &view, &mut keys.grid, &|row, column| rows[row][[0, 1, 3][column]].clone(), &|_| false);
                 double_clicked = events.double_clicked.is_some();
             });
@@ -1296,23 +1322,37 @@ fn original_page(ui: &mut egui::Ui, form: &mut SettingsForm, tab: usize, origin:
             put_label(ui, at(24.0, 21.0, 350.0, 15.0), &label_of(rows, "MaxRecentFileCount"));
             put_updown(ui, rows, "MaxRecentFileCount", at(377.0, 18.0, 49.0, 21.0), 0, 10);
             put_label(ui, at(24.0, 56.0, 195.0, 15.0), &cap("Caption.lActivateKey", "Bring NexusFile to front:"));
-            put_label(ui, at(221.0, 56.0, 70.0, 15.0), &cap("Caption.lWinKey", "WinKey + "));
-            put_edit(ui, rows, "ExplorerShortcutKey", at(293.0, 51.0, 25.0, 21.0));
-            put_label(ui, at(324.0, 54.0, 225.0, 15.0), &cap("Caption.lApplyAfterRestart", "(Restart required)"));
+            let win_key = cap("Caption.lWinKey", "WinKey + ");
+            let win_width = ((super::original_dialogs::caption_width(ui, &win_key) + 8.0) / scale_x).max(70.0).min(155.0);
+            let delta = win_width - 70.0;
+            put_label(ui, at(221.0, 56.0, win_width, 15.0), &win_key);
+            put_edit(ui, rows, "ExplorerShortcutKey", at(293.0 + delta, 51.0, 25.0, 21.0));
+            let restart = cap("Caption.lApplyAfterRestart", "(Restart required)");
+            if super::original_dialogs::caption_width(ui, &restart) <= (225.0 - delta) * scale_x - 4.0 {
+                put_label(ui, at(324.0 + delta, 54.0, 225.0 - delta, 15.0), &restart);
+            } else {
+                put_label(ui, at(221.0, 72.0, 328.0, 15.0), &restart);
+            }
             for (top, key) in [(87.0, "CheckForUpdatesOnStartup"), (107.0, "UseDescriptionFile"), (128.0, "UseSingleInstance"), (148.0, "UseAlternateDriveHandling"), (169.0, "HideWhenMinimized")] {
                 put_check(ui, rows, key, at(24.0, top, 505.0, 17.0));
             }
-            group_box(ui, at(24.0, 210.0, 211.0, 157.0), &cap("GroupBox.gbAlpha", "Window Transparency"));
-            put_check(ui, rows, "UseWindowAlpha", at(40.0, 244.0, 190.0, 17.0));
+            let minimum = cap("Caption.lTransMin", "Transparent");
+            let maximum = cap("Caption.lTransMax", "Opaque");
+            let measure = |s: &str| super::original_dialogs::caption_width(ui, s);
+            let min_width = (measure(&minimum) + 10.0) / scale_x;
+            let max_width = (measure(&maximum) + 10.0) / scale_x;
+            let alpha_width = (min_width + max_width + 54.0).max(250.0).max((measure(&label_of(rows, "UseWindowAlpha")).max(measure(&label_of(rows, "UseMenuAlpha"))) + 54.0) / scale_x).min(505.0);
+            group_box(ui, at(24.0, 210.0, alpha_width, 157.0), &cap("GroupBox.gbAlpha", "Window Transparency"));
+            put_check(ui, rows, "UseWindowAlpha", at(40.0, 244.0, alpha_width - 32.0, 17.0));
             if let Some(Row::Slider { value, .. }) = index_of(rows, "WindowAlpha").map(|i| &mut rows[i]) {
-                ui.scope_builder(egui::UiBuilder::new().max_rect(at(35.0, 270.0, 189.0, 36.0)), |ui| {
-                    ui.spacing_mut().slider_width = 180.0;
+                ui.scope_builder(egui::UiBuilder::new().max_rect(at(35.0, 270.0, alpha_width - 22.0, 36.0)), |ui| {
+                    ui.spacing_mut().slider_width = (alpha_width - 36.0) * scale_x;
                     ui.add(egui::Slider::new(value, 20.0..=255.0).step_by(1.0).show_value(false));
                 });
             }
-            put_label(ui, at(43.0, 306.0, 110.0, 15.0), &cap("Caption.lTransMin", "Transparent"));
-            put_label(ui, at(177.0, 306.0, 55.0, 15.0), &cap("Caption.lTransMax", "Opaque"));
-            put_check(ui, rows, "UseMenuAlpha", at(40.0, 336.0, 190.0, 17.0));
+            put_label(ui, at(43.0, 306.0, min_width, 15.0), &minimum);
+            put_label(ui, at(24.0 + alpha_width - 17.0 - max_width, 306.0, max_width, 15.0), &maximum);
+            put_check(ui, rows, "UseMenuAlpha", at(40.0, 336.0, alpha_width - 32.0, 17.0));
         }
     }
     action
@@ -1325,10 +1365,12 @@ fn list_page(ui: &mut egui::Ui, form: &mut SettingsForm) -> Option<SettingsActio
     let browse_program = form.browse_program.as_str();
     let tab = form.tab;
     egui::ScrollArea::vertical().id_salt(("settings-tab", tab)).auto_shrink([false, false]).show(ui, |ui| {
+        let label_width = (ui.available_width() * 0.42).clamp(120.0, 280.0);
         let label_cell = |ui: &mut egui::Ui, text: &str| {
-            ui.allocate_ui_with_layout(egui::vec2(200.0, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                ui.set_min_width(200.0);
-                ui.add(egui::Label::new(text.replace('&', "")).truncate());
+            ui.allocate_ui_with_layout(egui::vec2(label_width, 24.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+                ui.set_width(label_width);
+                ui.set_max_width(label_width);
+                ui.add(egui::Label::new(text.replace('&', "")).wrap());
             });
         };
         for (index, row) in form.tabs[tab].iter_mut().enumerate() {
@@ -1376,7 +1418,7 @@ fn list_page(ui: &mut egui::Ui, form: &mut SettingsForm) -> Option<SettingsActio
                     ui.horizontal(|ui| {
                         label_cell(ui, label);
                         let text = selected.and_then(|i| choices.get(i)).map(|(_, d)| d.clone()).unwrap_or_default();
-                        egui::ComboBox::from_id_salt(("settings-combo", key.as_str())).width(300.0).height(340.0).selected_text(text).show_opaque(ui, |ui| {
+                        egui::ComboBox::from_id_salt(("settings-combo", key.as_str())).width((ui.available_width() - 8.0).max(60.0)).height(340.0).selected_text(text).show_opaque(ui, |ui| {
                             for (i, (_, display)) in choices.iter().enumerate() {
                                 ui.selectable_value(selected, Some(i), display.as_str());
                             }
@@ -1389,7 +1431,12 @@ fn list_page(ui: &mut egui::Ui, form: &mut SettingsForm) -> Option<SettingsActio
                         ui.add(egui::Slider::new(value, 0.0..=255.0).step_by(1.0).show_value(false));
                     });
                 }
-                Row::ColorButtons | Row::FunctionKeys | Row::FontButton { .. } => {}
+                Row::FontButton { tree, label } => {
+                    if ui.button(label.as_str()).clicked() {
+                        action = Some(SettingsAction::ChooseFont(*tree));
+                    }
+                }
+                Row::ColorButtons | Row::FunctionKeys => {}
             }
         }
     });
@@ -1400,8 +1447,32 @@ fn list_page(ui: &mut egui::Ui, form: &mut SettingsForm) -> Option<SettingsActio
 /// btnApply (321,480), btnOk (405,480), btnCancel (488,480) 79x25. The page background is inside the PageControl (4,24) and positions within a page follow the DFM.
 pub(super) fn settings_ui(ui: &mut egui::Ui, form: &mut SettingsForm, enter: bool, delete: bool) -> Option<SettingsAction> {
     let mut action = None;
-    let (area, _) = ui.allocate_exact_size(egui::vec2(577.0, 512.0), egui::Sense::hover());
-    let at = |x: f32, y: f32, w: f32, h: f32| egui::Rect::from_min_size(area.min + egui::vec2(x, y), egui::vec2(w, h));
+    // Keep the original grouped layout, but size its columns from the
+    // translated labels rather than assuming Korean/English text widths.
+    let measure = |s: &str| super::original_dialogs::caption_width(ui, s);
+    let tab_width = form.tab_titles.iter().map(|t| measure(t) + 12.0).sum::<f32>() + 24.0;
+    let mut required = tab_width.max(577.0);
+    if let Some(rows) = form.tabs.first() {
+        for row in rows {
+            let (key, label, cell, extra) = match row {
+                Row::Check { key, label, .. } => {
+                    let cell = if key.starts_with("Left") || key.starts_with("Right") { 143.0 }
+                        else if matches!(key.as_str(), "UseDateAge" | "UseThousandsSeparator" | "AttachExtensionToName") { 195.0 }
+                        else { 300.0 };
+                    (key, label, cell, 26.0)
+                }
+                Row::Text { key, label, .. } if matches!(key.as_str(), "DateFormat" | "TimeFormat" | "ListLineSpace" | "ThumbnailSize") => (key, label, 82.0, 6.0),
+                Row::Combo { key, label, .. } if key == "SizeUnit" => (key, label, 88.0, 6.0),
+                _ => continue,
+            };
+            let _ = key;
+            required = required.max(577.0 * (measure(label) + extra) / cell);
+        }
+    }
+    let screen_width = (ui.ctx().content_rect().width() - 36.0).max(577.0);
+    let width = required.min(screen_width).max(577.0);
+    let scale_x = width / 577.0;
+    let reflow_display = required > screen_width;
     // TPageControl: Ctrl+Tab selects the next page and Ctrl+Shift+Tab the previous one, wrapping around (seen in the running original).
     // The keys are consumed so egui does not move the focus instead. Previously Ctrl+Tab only moved the focus between the page tabs.
     let count = form.tab_titles.len();
@@ -1414,18 +1485,81 @@ pub(super) fn settings_ui(ui: &mut egui::Ui, form: &mut SettingsForm, enter: boo
             form.tab = (form.tab + 1) % count;
         }
     }
-    ui.scope_builder(egui::UiBuilder::new().max_rect(at(9.0, 8.0, 557.0, 22.0)).layout(egui::Layout::left_to_right(egui::Align::Center)), |ui| {
-        ui.spacing_mut().item_spacing.x = 1.0;
-        for (index, title) in form.tab_titles.iter().enumerate() {
-            if ui.selectable_label(form.tab == index, title.replace('&', "")).clicked() {
-                form.tab = index;
-            }
+    // On a small logical viewport, scroll the page instead of hiding the
+    // footer outside the modal. Desktop layouts retain the original geometry.
+    let screen = ui.ctx().content_rect();
+    if screen.width() < 620.0 || screen.height() < 600.0 {
+        let viewport_width = (screen.width() - 40.0).max(120.0).min(width);
+        let viewport_height = (screen.height() - 155.0).clamp(60.0, 437.0);
+        ui.set_width(viewport_width);
+        ui.set_max_width(viewport_width);
+        // Follow keyboard tab changes (and the initial selected tab), but
+        // do not fight a user's deliberate horizontal scrolling.
+        let selected_tab = form.tab;
+        let tab_id = ui.id().with("settings-compact-selected-tab");
+        let reveal_tab = ui.ctx().data_mut(|d| {
+            let previous = d.get_temp::<usize>(tab_id);
+            d.insert_temp(tab_id, selected_tab);
+            previous != Some(selected_tab)
+        });
+        egui::ScrollArea::horizontal().id_salt("settings-compact-tabs").max_width(viewport_width).max_height(28.0).auto_shrink([false, true]).animated(false).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                for (index, title) in form.tab_titles.iter().enumerate() {
+                    let response = ui.selectable_label(form.tab == index, title.replace('&', ""));
+                    if reveal_tab && index == selected_tab { response.scroll_to_me(Some(egui::Align::Center)); }
+                    if response.clicked() {
+                        form.tab = index;
+                    }
+                }
+            });
+        });
+        let tab = form.tab.min(form.tabs.len().saturating_sub(1));
+        if tab < 8 && !(tab == 0 && reflow_display) {
+            action = egui::ScrollArea::both().id_salt(("settings-compact-page", tab)).max_width(viewport_width).max_height(viewport_height).auto_shrink([false, false]).show(ui, |ui| {
+                let (page, _) = ui.allocate_exact_size(egui::vec2(553.0 * scale_x, 437.0), egui::Sense::hover());
+                original_page(ui, form, tab, page.min, scale_x, enter, delete)
+            }).inner;
+        } else {
+            // The dynamic page can exceed its requested width when a long
+            // localized combo or label is laid out. Contain that expansion
+            // inside a horizontal scroller, not the modal's outer bounds.
+            action = egui::ScrollArea::horizontal().id_salt(("settings-compact-list", tab)).max_width(viewport_width).max_height(viewport_height).auto_shrink([false, false]).show(ui, |ui| {
+                let (page, _) = ui.allocate_exact_size(egui::vec2(viewport_width, viewport_height), egui::Sense::hover());
+                ui.scope_builder(egui::UiBuilder::new().max_rect(page), |ui| list_page(ui, form)).inner
+            }).inner;
         }
+        ui.separator();
+        let [ok, cancel, apply] = form.button_captions.clone();
+        ui.horizontal_wrapped(|ui| {
+            for (caption, act) in [(apply, SettingsAction::Apply), (ok, SettingsAction::Ok), (cancel, SettingsAction::Cancel)] {
+                if ui.add(egui::Button::new(caption.replace('&', "")).min_size(egui::vec2(70.0, 25.0))).clicked() {
+                    action = Some(act);
+                }
+            }
+        });
+        if enter && action.is_none() && !ui.ctx().wants_keyboard_input() {
+            action = Some(SettingsAction::Ok);
+        }
+        return action;
+    }
+    let (area, _) = ui.allocate_exact_size(egui::vec2(width, 512.0), egui::Sense::hover());
+    let at = |x: f32, y: f32, w: f32, h: f32| egui::Rect::from_min_size(area.min + egui::vec2(x * scale_x, y), egui::vec2(w * scale_x, h));
+    ui.scope_builder(egui::UiBuilder::new().max_rect(at(9.0, 8.0, 557.0, 22.0)), |ui| {
+        egui::ScrollArea::horizontal().id_salt("settings-tabs").max_height(22.0).auto_shrink([false, true]).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 1.0;
+                for (index, title) in form.tab_titles.iter().enumerate() {
+                    if ui.selectable_label(form.tab == index, title.replace('&', "")).clicked() {
+                        form.tab = index;
+                    }
+                }
+            });
+        });
     });
     ui.painter().rect_stroke(at(7.0, 30.0, 561.0, 443.0), 2.0, ui.visuals().widgets.noninteractive.bg_stroke, egui::StrokeKind::Inside);
     let tab = form.tab.min(form.tabs.len().saturating_sub(1));
     let page = at(11.0, 32.0, 553.0, 437.0);
-    let chosen = if tab < 8 { original_page(ui, form, tab, page.min, enter, delete) } else { ui.scope_builder(egui::UiBuilder::new().max_rect(page.shrink(4.0)), |ui| list_page(ui, form)).inner };
+    let chosen = if tab < 8 && !(tab == 0 && reflow_display) { original_page(ui, form, tab, page.min, scale_x, enter, delete) } else { ui.scope_builder(egui::UiBuilder::new().max_rect(page.shrink(4.0)), |ui| list_page(ui, form)).inner };
     if chosen.is_some() {
         action = chosen;
     }
@@ -1514,11 +1648,17 @@ impl App {
                 let Some(form) = self.settings_form() else { return };
                 match form.commit() {
                     Ok(settings) => {
+                        let tab = form.tab;
                         self.apply_settings(settings);
-                        // Keep the window, and use the applied settings as the base (_draft) of the next OK or apply.
-                        let applied = self.settings.clone();
-                        if let Some(form) = self.settings_form() {
-                            form.draft = applied;
+                        // Rebuild the labels from the newly active catalog while keeping the page open.
+                        let mut refreshed = SettingsForm::new(&self.settings, &self.language_pack, &self.resources);
+                        refreshed.tab = tab.min(refreshed.tabs.len().saturating_sub(1));
+                        let title = self.language_pack.text("formPreferences.Form.Caption", "Options");
+                        if let Some(dialog) = self.original_dialogs.last_mut() {
+                            if let DialogKind::Settings(form) = &mut dialog.kind {
+                                **form = refreshed;
+                                dialog.title = title;
+                            }
                         }
                     }
                     Err(error) => {

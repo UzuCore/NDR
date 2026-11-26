@@ -531,7 +531,6 @@ impl App {
             (column_width, [None; 6])
         };
         let drive_extent = self.drive_text_extent(ui, index);
-        let free_label = self.language_pack.text("RES.DISKFREE", "Free");
         let icons_shown = self.settings.flag("ShowIcons", true);
         let active = self.active == index;
         // Cursor bar style follows the list's real focus (see pane_ui).
@@ -624,7 +623,7 @@ impl App {
                         let response = if entry.drive {
                             let info = pane.drive_infos.get(&entry.path).map(|(_, kind, sizes)| (*kind, *sizes));
                             let mut child = ui.new_child(egui::UiBuilder::new().max_rect(name_rect));
-                            super::list_view::drive_row(&mut child, name_rect.size(), icon.as_ref(), &label, name_color, framed, pane.cursor == row, drive_extent, info, &free_label, list_style)
+                            super::list_view::drive_row(&mut child, name_rect.size(), icon.as_ref(), &label, name_color, framed, pane.cursor == row, drive_extent, info, &self.language_pack, list_style)
                         } else {
                             if cursor_row && original.is_some() {
                                 super::panes::note_cursor_name(&self.name_tip, ui, index, row, name_rect, &label, &entry.name, list_style);

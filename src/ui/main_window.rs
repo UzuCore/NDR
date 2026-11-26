@@ -12,12 +12,19 @@ pub(super) struct UpdateProgress {
     pub(super) downloaded: usize,
     pub(super) total: usize,
     pub(super) error: Option<String>,
+    pub(super) failed_phase: Option<ndr::update::UpdatePhase>,
 }
 
 impl UpdateProgress {
     fn new(release: &ndr::update::GithubRelease) -> Self {
         Self { tag: release.tag.clone(), phase: ndr::update::UpdatePhase::Downloading,
-            downloaded: 0, total: release.size, error: None }
+            downloaded: 0, total: release.size, error: None, failed_phase: None }
+    }
+
+    fn fail(&mut self, message: String) {
+        self.failed_phase = Some(self.phase);
+        self.phase = ndr::update::UpdatePhase::Failed;
+        self.error = Some(message);
     }
 }
 
@@ -321,7 +328,7 @@ impl App {
         match &pane.disk {
             Some((drive, free, total)) => {
                 let (free, total) = (localized_byte_size(&self.language_pack, *free), localized_byte_size(&self.language_pack, *total));
-                let short = ndr::markup::substitute(&res("DISKINFO_SHORT", "<c000000><b>%s</b></c> Free"), &[&free]);
+                let short = format!("<c000000><b>{free}</b></c>");
                 let long = ndr::markup::substitute(&res("DISKINFO_LONG", "<c000000><b>%s</b></c> Free (Total <b>%s</b>)"), &[&free, &total]);
                 (counts, drive.clone(), short, ndr::markup::plain_text(&long))
             }
@@ -496,14 +503,13 @@ impl App {
         let entry = pane.entries.get(pane.cursor)?;
         if super::panes::is_drives(&pane.path) || entry.drive {
             // Drive item (+0x3c == 4): a fixed disk shows "%s (%s:)  |  %s  |  %s %s / %s" (DISKFREE), others "%s (%s:)  |  %s".
-            // Type names are the original table 0x9128bc as is (not translated). None without info (C# version text).
+            // Keep the volume name supplied by Windows, but translate the drive type.
             let (name, kind, sizes) = pane.drive_infos.get(&entry.path)?;
             let letter = entry.name.chars().next()?.to_ascii_uppercase();
-            let kind_name = ["", "", "Removable Disk", "Hard Disk", "Network Drive", "CD/DVD", "RAM Disk"].get(*kind as usize).copied().unwrap_or("");
+            let kind_name = localized_drive_kind(&self.language_pack, ["Unknown", "NoRootDirectory", "Removable", "Fixed", "Network", "CDRom", "Ram"].get(*kind as usize).copied().unwrap_or("Unknown"));
             return Some(match sizes {
                 Some((free, total)) if *kind == 3 => {
-                    let label = self.language_pack.text("RES.DISKFREE", "Free");
-                    format!("{name} ({letter}:)  |  {kind_name}  |  {} {label} / {}", localized_byte_size(&self.language_pack, *free), localized_byte_size(&self.language_pack, *total))
+                    format!("{name} ({letter}:)  |  {kind_name}  |  {} / {}", localized_byte_size(&self.language_pack, *free), localized_byte_size(&self.language_pack, *total))
                 }
                 _ => format!("{name} ({letter}:)  |  {kind_name}"),
             });
@@ -625,8 +631,7 @@ impl App {
         match result {
             Err(message) => {
                 if let Some(progress) = self.update_progress.as_mut() {
-                    progress.phase = ndr::update::UpdatePhase::Failed;
-                    progress.error = Some(message);
+                    progress.fail(message);
                 }
             }
             Ok(archive) => {
@@ -638,8 +643,7 @@ impl App {
                     Ok(()) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
                     Err(message) => {
                         if let Some(progress) = self.update_progress.as_mut() {
-                            progress.phase = ndr::update::UpdatePhase::Failed;
-                            progress.error = Some(message);
+                            progress.fail(message);
                         }
                     }
                 }
@@ -663,9 +667,12 @@ impl App {
             .show(ctx, |ui| {
                 ui.add_space(8.0);
                 ui.heading(format!("NDR  {}", progress.tag));
-                ui.label(self.catalog("NDR.UPD_VERIFIED_INIT", "검증된 업데이트를 안전하게 설치합니다.", "Securely installing the verified update."));
+                if matches!(progress.phase, UpdatePhase::Preparing | UpdatePhase::Installing) {
+                    ui.label(self.catalog("NDR.UPD_VERIFIED_INIT", "검증된 업데이트를 안전하게 설치합니다.", "Securely installing the verified update."));
+                }
                 ui.add_space(15.0);
-                let step = match progress.phase {
+                let active_phase = if progress.phase == UpdatePhase::Failed { progress.failed_phase.unwrap_or(UpdatePhase::Downloading) } else { progress.phase };
+                let step = match active_phase {
                     UpdatePhase::Downloading => 0,
                     UpdatePhase::Verifying => 1,
                     UpdatePhase::Preparing => 2,
@@ -681,7 +688,8 @@ impl App {
                     ui.spacing_mut().item_spacing.x = 8.0;
                     for (index, label) in stages.iter().enumerate() {
                         let label = if index < step { format!("✓ {label}") }
-                            else if index == step && progress.phase != UpdatePhase::Failed { format!("● {label}") }
+                            else if index == step && progress.phase == UpdatePhase::Failed { format!("× {label}") }
+                            else if index == step { format!("● {label}") }
                             else { format!("○ {label}") };
                         ui.label(if index <= step { egui::RichText::new(label).strong() }
                             else { egui::RichText::new(label).weak() });
@@ -711,8 +719,9 @@ impl App {
                     UpdatePhase::Failed => {
                         ui.colored_label(ui.visuals().error_fg_color, self.catalog("NDR.UPD_FAILED", "업데이트에 실패했습니다.", "Update failed."));
                         if let Some(detail) = &progress.error {
-                            egui::CollapsingHeader::new(self.catalog("NDR.UPD_ERROR_DETAILS", "오류 세부 정보", "Technical details")).show(ui, |ui| {
-                                ui.label(detail);
+                            let shown = ndr::update::localized_failure(&self.language_pack, detail);
+                            egui::CollapsingHeader::new(self.catalog("NDR.UPD_ERROR_DETAILS", "오류 세부 정보", "Technical details")).default_open(true).show(ui, |ui| {
+                                ui.add(egui::Label::new(shown).wrap());
                             });
                         }
                         if ui.button(self.catalog("NDR.UPD_CLOSE", "닫기", "Close")).clicked() { dismiss = true; }
@@ -762,6 +771,7 @@ impl App {
                 }
                 Err(detail) => {
                     let message = self.catalog("NDR.UPD_RELEASE_FAILURE", "GitHub 릴리스 정보를 확인하지 못했습니다.", "Could not verify the GitHub release.");
+                    let detail = ndr::update::localized_failure(&self.language_pack, &detail);
                     self.system_box(&title, &format!("{message}\n{detail}"), MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
                 }
             }
@@ -793,7 +803,7 @@ impl App {
         }
         let current = ndr::update::parse_version(env!("CARGO_PKG_VERSION")).unwrap_or_else(|| vec![0, 0]);
         match ndr::update::evaluate(&response.body, &current) {
-            Err(message) => warn(self, message),
+            Err(message) => warn(self, ndr::update::localized_failure(&self.language_pack, &message)),
             Ok(Manifest::Invalid(key)) => {
                 let fallback = if key == "InvalidVersion" { "The update feed does not contain a valid version value." } else { "The update feed does not contain a valid HTTPS download URL." };
                 warn(self, self.update_text(key, fallback))

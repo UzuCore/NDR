@@ -264,7 +264,7 @@ impl App {
 /// One row of original DrawListItem kind 4 (left aligned, DT_LEFT): a button-like background when selected, the icon ("▸ " when missing), "C: name",
 /// then `paint_drive_space`. `label_right` is from the row's left to the end of the widest drive name (App::drive_text_extent).
 #[allow(clippy::too_many_arguments)]
-pub(super) fn drive_row(ui: &mut egui::Ui, size: egui::Vec2, icon: Option<&egui::TextureHandle>, text: &str, color: Color32, selected: bool, cursor: bool, label_right: f32, info: Option<(u32, Option<(u64, u64)>)>, free_label: &str, style: u8) -> egui::Response {
+pub(super) fn drive_row(ui: &mut egui::Ui, size: egui::Vec2, icon: Option<&egui::TextureHandle>, text: &str, color: Color32, selected: bool, cursor: bool, label_right: f32, info: Option<(u32, Option<(u64, u64)>)>, language: &compat::Language, style: u8) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
     if ui.is_rect_visible(rect) {
         let visuals = ui.style().interact_selectable(&response, selected);
@@ -294,7 +294,16 @@ pub(super) fn drive_row(ui: &mut egui::Ui, size: egui::Vec2, icon: Option<&egui:
             painter.hline(drawn.x_range(), drawn.center().y, egui::Stroke::new(1.0_f32, color));
         }
         if let Some((kind, sizes)) = info {
-            paint_drive_space(ui, rect, rect.left() + label_right, kind, sizes, cursor, color, free_label, style);
+            paint_drive_space(ui, rect, rect.left() + label_right, kind, sizes, cursor, color, language, style);
+        }
+    }
+    if let Some((3 | 4, Some((free, total)))) = info {
+        if total > 0 {
+            return response.on_hover_ui(|ui| {
+                let (free, total) = (localized_byte_size(language, free), localized_byte_size(language, total));
+                let details = ndr::markup::substitute(&language.text("RES.DISKINFO_LONG", "%s Free / %s Total"), &[&free, &total]);
+                ui.label(ndr::markup::plain_text(&details));
+            });
         }
     }
     response
@@ -302,11 +311,11 @@ pub(super) fn drive_row(ui: &mut egui::Ui, size: egui::Vec2, icon: Option<&egui:
 
 /// Free space of original DrawListItem kind 4 (0x7d8f58): for a fixed disk (type 3) with a known total size, a 70 x min(8, row height) bar drawn
 /// 5 px after the end of the drive name cell (`label_right`), its inner 68 px filled by the used ratio. The bar is drawn only when more than 80 px remain on the right,
-/// and the "free size (StrFormatByteSizeW) DISKFREE" text after it only when more than 80 px remain after that (clipped 5 px before the right edge).
+/// NDR shows just the available size after the bar, without a translated "Free" suffix.
 /// Colors (0x7d9770-0x7d98f2): the border uses the item text color for the cursor item (ItemIndex), otherwise FUN_007d7e6c(NXFORE, NXBACK, 0.3);
 /// the fill is always (NXFORE, NXBACK, 0.2); the text uses the item text color for the cursor item, otherwise NXSIZE (size column color).
 #[allow(clippy::too_many_arguments)]
-pub(super) fn paint_drive_space(ui: &egui::Ui, rect: egui::Rect, label_right: f32, kind: u32, sizes: Option<(u64, u64)>, cursor: bool, item_color: Color32, free_label: &str, style: u8) {
+pub(super) fn paint_drive_space(ui: &egui::Ui, rect: egui::Rect, label_right: f32, kind: u32, sizes: Option<(u64, u64)>, cursor: bool, item_color: Color32, language: &compat::Language, style: u8) {
     // The original draws only fixed disks (3). Fixed: connected network drives whose size was read (drive_item_info) are drawn too.
     let Some((free, total)) = sizes.filter(|_| kind == 3 || kind == 4) else { return };
     let room = rect.right() - label_right;
@@ -327,14 +336,20 @@ pub(super) fn paint_drive_space(ui: &egui::Ui, rect: egui::Rect, label_right: f3
     let outer = egui::Rect::from_min_size(egui::pos2(left, top), egui::vec2(70.0, height));
     painter.rect_stroke(outer, 0.0, egui::Stroke::new(1.0_f32, outline), egui::StrokeKind::Inside);
     painter.rect_filled(egui::Rect::from_min_size(egui::pos2(left + 1.0, top + 1.0), egui::vec2(fill, (height - 2.0).max(0.0))), 0.0, fill_color);
-    if room - 80.0 > 80.0 {
+    if room < 100.0 {
+        return;
+    }
+    let size_text = localized_byte_size(language, free);
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    let size_width = ui.fonts_mut(|f| f.layout_no_wrap(size_text.clone(), font.clone(), text_color).size().x);
+    if room >= 91.0 + size_width {
         let text_rect = egui::Rect::from_min_max(egui::pos2(left + 81.0, rect.top()), egui::pos2(rect.right() - 5.0, rect.bottom()));
         let text_painter = painter.with_clip_rect(text_rect.intersect(ui.clip_rect()));
         let drawn = text_painter.text(
             egui::pos2(text_rect.left(), rect.center().y),
             egui::Align2::LEFT_CENTER,
-            format!("{} {free_label}", native::format_byte_size(free)),
-            egui::TextStyle::Button.resolve(ui.style()),
+            size_text,
+            font,
             text_color,
         );
         // Underline (4) and strikeout (8) of the original ListFont style.
@@ -356,6 +371,30 @@ pub(super) fn blend(a: Color32, b: Color32, t: f32) -> Color32 {
 #[cfg(test)]
 mod tests {
     use super::character_case;
+
+    #[test]
+    fn all_locales_draw_only_capacity_beside_drive_bar() {
+        use super::*;
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("Resources/Languages");
+        let free = 64 * 1024 * 1024;
+        for &(locale, _) in ndr::compat::BUILTIN_LANGUAGES {
+            let language = compat::Language::load(&root, locale);
+            let ctx = egui::Context::default();
+            let expected = localized_byte_size(&language, free);
+            let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 120.0))), ..Default::default() };
+            let output = ctx.run(raw, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let (rect, _) = ui.allocate_exact_size(egui::vec2(500.0, 24.0), egui::Sense::hover());
+                    paint_drive_space(ui, rect, rect.left() + 110.0, 3, Some((free, free * 4)), false, Color32::WHITE, &language, 0);
+                });
+            });
+            let labels: Vec<_> = output.shapes.iter().filter_map(|item| match &item.shape {
+                egui::Shape::Text(text) => Some(text.galley.text()),
+                _ => None,
+            }).collect();
+            assert_eq!(labels, vec![expected.as_str()], "{locale}: drive capacity must not have a Free suffix");
+        }
+    }
 
     #[test]
     fn drive_bar_blend_follows_fun_007d7e6c() {

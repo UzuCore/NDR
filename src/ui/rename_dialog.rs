@@ -24,6 +24,8 @@ pub(super) struct RenameForm {
     pub macro_name: Option<String>,
     /// Row chosen in lvPreview (original lvPreviewKeyDown: Ctrl+C = that row's original name to the clipboard).
     pub preview_selected: Option<usize>,
+    /// Selected section on a compact viewport; stays local to this dialog.
+    pub compact_page: usize,
 }
 
 fn text(language: &compat::Language, key: &str, fallback: &str) -> String {
@@ -68,7 +70,7 @@ fn combo(ui: &mut egui::Ui, id: &str, value: &mut String, options: &[(&'static s
 }
 
 /// Original FUN_0041830c (rule list row): "action (description)" + " - extension"/" - name". Action names are ADVRENAME_ACTIONS split on ';',
-/// descriptions are per rule class (English as is): Insert 0x469e10, Replace 0x46a784, Delete 0x46b030, Case 0x46bb68,
+/// descriptions use the same translated field labels as the rule editor.
 /// Numbering 0x46c170, ChangeExtension 0x46c7ec. Long text is cut with lstrcpynW and gets "..." when longer than the limit.
 pub(super) fn rule_display(rule: &RenameRule, language: &compat::Language) -> String {
     let actions = language.text("RES.ADVRENAME_ACTIONS", "Insert;Find/Replace;Delete;Case;Numbering;Change Extension");
@@ -90,48 +92,57 @@ pub(super) fn rule_display(rule: &RenameRule, language: &compat::Language) -> St
         }
         shown
     };
+    let label = |key: &str, fallback: &str| {
+        let raw = language.raw(&format!("formAdvRename.{key}")).unwrap_or_else(|| fallback.to_owned());
+        let text = raw.rsplit_once("(&").filter(|(_, tail)| tail.chars().count() == 2 && tail.ends_with(')')).map_or(raw.as_str(), |(head, _)| head);
+        ndr::msgbox::display_caption(text).0.trim_end_matches([':', '：']).trim().to_owned()
+    };
+    let del_from = language.text("formAdvRename.ComboBox.cbDelFrom", "Position;Beginning;End;Delimiter");
+    let from_labels: Vec<&str> = del_from.split(';').collect();
+    let from_label = |index: usize, fallback: &'static str| from_labels.get(index).copied().unwrap_or(fallback);
     let place = || match rule.position.as_str() {
-        "Prefix" => "First".to_owned(),
-        "Suffix" => "Last".to_owned(),
-        _ => format!("Pos: {}", rule.index),
+        "Prefix" => label("Caption.rbInsertLocFirst", "Prepend"),
+        "Suffix" => label("Caption.rbInsertLocLast", "Append"),
+        _ => format!("{}: {}", from_label(0, "Position"), rule.index),
     };
     let detail = match rule.action.as_str() {
         "Insert" => format!("{}, {}", clip(&rule.text, 239, 240), place()),
         "Replace" => {
             let occurrence = match rule.position.as_str() {
-                "First" => "First",
-                "Last" => "Last",
-                _ => "All",
+                "First" => label("Caption.rbReplaceFirst", "First occurrence"),
+                "Last" => label("Caption.rbReplaceLast", "Last occurrence"),
+                _ => label("Caption.rbReplaceAll", "Every occurrence"),
             };
             format!("{} -> {}, {occurrence}", clip(&rule.find, 95, 100), clip(&rule.replace, 95, 100))
         }
         "Delete" => {
             let from = match rule.delete_from_mode.as_str() {
-                "FromStart" => "First".to_owned(),
-                "FromEnd" => "Last".to_owned(),
+                "FromStart" => from_label(1, "Beginning").to_owned(),
+                "FromEnd" => from_label(2, "End").to_owned(),
                 "Delimiter" => format!("\"{}\"", clip(&rule.find, 99, 100)),
                 _ => rule.index.to_string(),
             };
             let to = if rule.delete_to_mode == "Delimiter" && !rule.delete_to_delimiter.is_empty() {
-                format!(", ToDelimiter: {}", clip(&rule.delete_to_delimiter, 99, 100))
+                format!(", {}: {}", label("Caption.rbToDelimiter", "Up to delimiter"), clip(&rule.delete_to_delimiter, 99, 100))
             } else {
-                format!(", Count: {}", rule.count)
+                format!(", {}: {}", label("Caption.rbDelCount", "Fixed count"), rule.count)
             };
-            let direction = if rule.delete_direction == "RightToLeft" { ", Backward" } else { ", Forward" };
-            format!("From: {from}{to}{direction}")
+            let directions = language.text("formAdvRename.ComboBox.cbDelDirection", "Right to left;Left to right");
+            let direction = directions.split(';').nth(usize::from(rule.delete_direction != "RightToLeft")).unwrap_or("");
+            format!("{}: {from}{to}, {direction}", label("Caption.lDelFrom", "Remove from"))
         }
         "Case" => match rule.case_mode.as_str() {
-            "Upper" => "UpperCase",
-            "Lower" => "LowerCase",
-            "WordFirst" => "Capitalize Word",
-            _ => "First letter capital",
+            "Upper" => label("Caption.rbCaseUpper", "Uppercase"),
+            "Lower" => label("Caption.rbCaseLower", "Lowercase"),
+            "WordFirst" => label("Caption.rbCaseWordFirst", "Capitalize each word"),
+            _ => label("Caption.rbCaseFirstLetter", "Capitalize first character"),
         }
-        .to_owned(),
-        "Number" => format!("Start: {}, Step: {}, Digit: {}, {}", rule.start, rule.step, rule.digits, place()),
-        _ => format!("New Extension: {}", rule.text),
+        ,
+        "Number" => format!("{}: {}, {}: {}, {}: {}, {}", label("Caption.lNumStart", "Start at"), rule.start, label("Caption.lNumStep", "Increment"), rule.step, label("Caption.lNumDigit", "Minimum digits"), rule.digits, place()),
+        _ => format!("{}: {}", label("Caption.lExtText", "New extension"), rule.text),
     };
-    let target = if rule.target == "Extension" { " - extension" } else { " - name" };
-    format!("{action} ({detail}){target}")
+    let target = if rule.target == "Extension" { label("Caption.rbApplyToExt", "Extension") } else { label("Caption.rbApplyToName", "Base name") };
+    format!("{action} ({detail}) - {target}")
 }
 
 /// Preview: shows the original name even when a rule fails.
@@ -149,13 +160,235 @@ pub(super) fn valid_new_name(form: &RenameForm, index: usize) -> bool {
     }
 }
 
+/// Compact alternative to the original three-column dialog. The existing
+/// rule model, commit/confirmation handlers, macro format and preview
+/// validation are shared; only the presentation changes.
+fn compact_rename_ui(ui: &mut egui::Ui, form: &mut RenameForm, language: &compat::Language) -> Option<usize> {
+    use super::original_dialogs::{access_job_colored, compact_button_height, take_dialog_char, vcl_wrapped_button};
+    let screen = ui.ctx().content_rect();
+    let width = (screen.width() - 40.0).clamp(180.0, 650.0);
+    let height = (screen.height() - 54.0).clamp(180.0, 555.0);
+    let mut selected_page = form.compact_page.min(2);
+    let t = |key: &str, fallback: &str| text(language, key, fallback).replace('&', "");
+    let raw = |key: &str, fallback: &str| language.raw(&format!("formAdvRename.{key}")).unwrap_or_else(|| fallback.to_owned());
+    let titles = [t("Caption.lAction", "1. Choose Action"), t("Caption.lApplyDest", "2. Apply Action"), t("Caption.lPreview", "3. Preview")];
+    let footer = [raw("Caption.btnRun", "&Rename"), t("Caption.btnCancel", "Cancel")];
+    let tab_width = (width - 14.0) / 3.0;
+    let tab_height = compact_button_height(ui, &titles, tab_width);
+    let button_width = (width - 14.0) / 2.0;
+    let button_height = compact_button_height(ui, &footer, button_width);
+    let (area, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+    let at = |x, y, w, h| egui::Rect::from_min_size(area.min + egui::vec2(x, y), egui::vec2(w, h));
+    for (i, title) in titles.iter().enumerate() {
+        let rect = at(3.0 + i as f32 * (tab_width + 4.0), 0.0, tab_width, tab_height);
+        if ui.put(rect, egui::Button::new(title).selected(selected_page == i).wrap()).clicked() {
+            selected_page = i;
+        }
+    }
+    let previous = form.editor.action.clone();
+    let digit_keys = [egui::Key::Num1, egui::Key::Num2, egui::Key::Num3, egui::Key::Num4, egui::Key::Num5, egui::Key::Num6];
+    if let Some(i) = ui.input(|i| if i.modifiers.alt { digit_keys.iter().position(|k| i.key_pressed(*k)) } else { None }) {
+        if let Some((value, _)) = action_choices(language).get(i) {
+            form.editor.action = (*value).to_owned();
+            selected_page = 0;
+        }
+    }
+    let body = at(3.0, tab_height + 5.0, width - 6.0, (height - tab_height - button_height - 15.0).max(40.0));
+    let mut choice = None;
+    ui.scope_builder(egui::UiBuilder::new().max_rect(body), |ui| {
+        ui.set_clip_rect(ui.clip_rect().intersect(body));
+        ui.push_id(selected_page, |ui| {
+            if selected_page == 2 {
+                let headers = t("ListViewCols.lvPreview", "Num;Original Name;New Name");
+                let headers: Vec<_> = headers.split(';').collect();
+                let preview_width = (body.width() - 13.0).max(100.0);
+                let font = egui::FontId::proportional(13.0);
+                let shown = form.paths.len().min(500);
+                let more = form.paths.len() - shown;
+                ui.add(egui::Label::new(format!("{} → {}", headers.get(1).copied().unwrap_or("Original Name"), headers.get(2).copied().unwrap_or("New Name"))).wrap());
+                if let Some(row) = form.preview_selected.filter(|r| *r < shown && ui.ctx().memory(|m| m.focused().is_none())) {
+                    if ui.input(|i| i.modifiers.command && i.key_pressed(egui::Key::C)) || ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Copy))) {
+                        if let Some(name) = form.paths[row].file_name() { ui.ctx().copy_text(name.to_string_lossy().into_owned()); }
+                    }
+                }
+                let remaining = ui.available_height().max(24.0);
+                egui::ScrollArea::vertical().id_salt("compact-rename-preview").max_height(remaining).min_scrolled_height(0.0).auto_shrink([false, false]).show_rows(ui, 40.0, shown + usize::from(more > 0), |ui, range| {
+                    for row in range {
+                        let (rect, response) = ui.allocate_exact_size(egui::vec2(preview_width, 40.0), egui::Sense::click());
+                        if row < shown {
+                            let old = form.paths[row].file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                            let new = preview_name(form, row);
+                            if response.clicked() { form.preview_selected = Some(row); }
+                            if form.preview_selected == Some(row) { ui.painter().rect_filled(rect, 2.0, ui.visuals().selection.bg_fill); }
+                            let fg = ui.visuals().text_color();
+                            let color = if valid_new_name(form, row) { fg } else { Color32::RED };
+                            for (line, value, c) in [(0.0, format!("{}. {}", row + 1, old), fg), (19.0, format!("→ {new}"), color)] {
+                                let value = super::original_dialogs::path_ellipsis(ui, &value, rect.width() - 8.0, &font);
+                                ui.painter().with_clip_rect(rect).text(rect.min + egui::vec2(4.0, line + 2.0), egui::Align2::LEFT_TOP, value, font.clone(), c);
+                            }
+                            response.on_hover_text(format!("{old}\n→ {new}"));
+                        } else {
+                            let notice = super::file_commands::operation_format(language, "NDR.OP_RENAME_MORE_ITEMS", "{0} more items", &[&more]);
+                            ui.painter().with_clip_rect(rect).text(rect.min + egui::vec2(4.0, 2.0), egui::Align2::LEFT_TOP, notice, font.clone(), ui.visuals().text_color());
+                        }
+                    }
+                });
+                return;
+            }
+            egui::ScrollArea::vertical().id_salt("compact-rename-body").max_height(body.height()).min_scrolled_height(0.0).max_width(body.width()).auto_shrink([false, false]).show(ui, |ui| {
+                let field = |ui: &mut egui::Ui, label: &str, value: &mut String, enabled: bool| {
+                    ui.add(egui::Label::new(label).wrap());
+                    ui.add_enabled_ui(enabled, |ui| ui.add_sized([ui.available_width(), 23.0], egui::TextEdit::singleline(value)));
+                };
+                let radio = |ui: &mut egui::Ui, value: &mut String, option: &str, caption: &str| {
+                    let (mut job, access) = access_job_colored(ui, caption, None);
+                    job.wrap.max_width = (ui.available_width() - 22.0).max(1.0);
+                    job.wrap.break_anywhere = true;
+                    if ui.add(egui::RadioButton::new(value.as_str() == option, job)).clicked() || (ui.is_enabled() && take_dialog_char(ui.ctx(), access)) {
+                        *value = option.to_owned();
+                    }
+                };
+                if selected_page == 0 {
+                    let options = action_choices(language);
+                    combo(ui, "compact-rename-action", &mut form.editor.action, &options, (ui.available_width() - 8.0).max(80.0));
+                    if previous != form.editor.action && !position_choices(language, &form.editor.action).iter().any(|(v, _)| *v == form.editor.position) {
+                        form.editor.position = if form.editor.action == "Replace" { "All" } else { "Prefix" }.into();
+                    }
+                    let action = form.editor.action.clone();
+                    let editor = &mut form.editor;
+                    let numbers = &mut form.numbers;
+                    match action.as_str() {
+                        "Insert" | "Number" => {
+                            if action == "Insert" {
+                                field(ui, &t("Caption.lInsText", "A. Text:"), &mut editor.text, true);
+                                ui.label(t("Caption.lInsLoc", "B. Insert Location:"));
+                            } else {
+                                ui.label(t("Caption.lNumFormat", "A. Format"));
+                                field(ui, &t("Caption.lNumStart", "Start:"), &mut numbers[2], true);
+                                field(ui, &t("Caption.lNumStep", "Step:"), &mut numbers[3], true);
+                                field(ui, &t("Caption.lNumDigit", "Digits:"), &mut numbers[4], true);
+                                ui.label(t("Caption.lNumLoc", "B. Location"));
+                            }
+                            let keys = if action == "Insert" {
+                                ["Caption.rbInsertLocPos", "Caption.rbInsertLocFirst", "Caption.rbInsertLocLast"]
+                            } else { ["Caption.rbNumLocPos", "Caption.rbNumLocFirst", "Caption.rbNumLocLast"] };
+                            for (i, option) in ["Position", "Prefix", "Suffix"].into_iter().enumerate() {
+                                radio(ui, &mut editor.position, option, &raw(keys[i], option));
+                                if i == 0 && editor.position == "Position" {
+                                    ui.add_sized([ui.available_width(), 23.0], egui::TextEdit::singleline(&mut numbers[0]));
+                                }
+                            }
+                        }
+                        "Replace" => {
+                            field(ui, &t("Caption.lRepFind", "Find:"), &mut editor.find, true);
+                            field(ui, &t("Caption.lRepReplace", "Replace with:"), &mut editor.replace, true);
+                            for (value, key, label) in [("All", "Caption.rbReplaceAll", "All occurrences"), ("First", "Caption.rbReplaceFirst", "First occurrence"), ("Last", "Caption.rbReplaceLast", "Last occurrence")] {
+                                radio(ui, &mut editor.position, value, &raw(key, label));
+                            }
+                        }
+                        "Delete" => {
+                            ui.label(t("Caption.lDelFrom", "A. From"));
+                            let w = (ui.available_width() - 8.0).max(80.0);
+                            if combo(ui, "compact-delete-from", &mut editor.delete_from_mode, &choices(language, "ComboBox.cbDelFrom", "Position;From Start;From End;Delimiter", &["Position", "FromStart", "FromEnd", "Delimiter"]), w) {
+                                match editor.delete_from_mode.as_str() { "FromStart" => editor.delete_direction = "LeftToRight".into(), "FromEnd" => editor.delete_direction = "RightToLeft".into(), _ => {} }
+                            }
+                            match editor.delete_from_mode.as_str() {
+                                "Position" => { ui.add_sized([ui.available_width(), 23.0], egui::TextEdit::singleline(&mut numbers[0])); }
+                                "Delimiter" => { ui.add_sized([ui.available_width(), 23.0], egui::TextEdit::singleline(&mut editor.find)); }
+                                _ => {}
+                            }
+                            ui.label(t("Caption.lDelDirection", "B. Direction"));
+                            combo(ui, "compact-delete-direction", &mut editor.delete_direction, &choices(language, "ComboBox.cbDelDirection", "right-to-left;left-to-right", &["RightToLeft", "LeftToRight"]), w);
+                            ui.label(t("Caption.lDelTo", "C. To"));
+                            radio(ui, &mut editor.delete_to_mode, "Count", &raw("Caption.rbDelCount", "Count:"));
+                            if editor.delete_to_mode == "Count" { field(ui, &t("Caption.lUnit", "character(s)"), &mut numbers[1], true); }
+                            radio(ui, &mut editor.delete_to_mode, "Delimiter", &raw("Caption.rbToDelimiter", "Delimiter:"));
+                            if editor.delete_to_mode == "Delimiter" { ui.add_sized([ui.available_width(), 23.0], egui::TextEdit::singleline(&mut editor.delete_to_delimiter)); }
+                        }
+                        "Case" => for (value, key, label) in [("Upper", "Caption.rbCaseUpper", "Upper case"), ("Lower", "Caption.rbCaseLower", "Lower case"), ("WordFirst", "Caption.rbCaseWordFirst", "First of each word uppercase"), ("FirstLetter", "Caption.rbCaseFirstLetter", "First letter upper case")] {
+                            radio(ui, &mut editor.case_mode, value, &raw(key, label));
+                        },
+                        _ => field(ui, &t("Caption.lExtText", "New Extension:"), &mut editor.text, true),
+                    }
+                    ui.separator();
+                    ui.add_enabled_ui(action != "Extension", |ui| {
+                        radio(ui, &mut editor.target, "Name", &raw("Caption.rbApplyToName", "Name"));
+                        radio(ui, &mut editor.target, "Extension", &raw("Caption.rbApplyToExt", "Extension"));
+                    });
+                    let caption = raw("Caption.btnAddAction", "&Add >");
+                    let bw = ui.available_width();
+                    let bh = compact_button_height(ui, std::slice::from_ref(&caption), bw);
+                    let (rect, _) = ui.allocate_exact_size(egui::vec2(bw, bh), egui::Sense::hover());
+                    if vcl_wrapped_button(ui, rect, true, &caption).1 { choice = Some(2); }
+                } else {
+                    let selected = form.selected_rule.filter(|i| *i < form.rules.len());
+                    let captions = [raw("Caption.btnDeleteAction", "< &Delete"), raw("Caption.btnUp", "Up"), raw("Caption.btnDown", "Down")];
+                    let bw = (ui.available_width() - 8.0) / 3.0;
+                    let bh = compact_button_height(ui, &captions, bw);
+                    let (row, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), bh), egui::Sense::hover());
+                    for (i, caption) in captions.iter().enumerate() {
+                        let enabled = selected.is_some_and(|n| match i { 0 => true, 1 => n > 0, _ => n + 1 < form.rules.len() });
+                        let rect = egui::Rect::from_min_size(row.min + egui::vec2(i as f32 * (bw + 4.0), 0.0), egui::vec2(bw, bh));
+                        if vcl_wrapped_button(ui, rect, enabled, caption).1 {
+                            if let Some(index) = selected {
+                                if i == 0 { form.rules.remove(index); form.selected_rule = selection_after_remove(index, form.rules.len()); }
+                                else { let next = if i == 1 { index - 1 } else { index + 1 }; form.rules.swap(index, next); form.selected_rule = Some(next); }
+                            }
+                        }
+                    }
+                    let custom = text(language, "ComboBox.cbMacroList", "Custom");
+                    let shown = form.macro_name.clone().unwrap_or_else(|| custom.clone());
+                    let mut picked = None;
+                    egui::ComboBox::from_id_salt("compact-rename-macros").width((ui.available_width() - 8.0).max(80.0)).selected_text(shown).show_opaque(ui, |ui| {
+                        if ui.selectable_label(form.macro_name.is_none(), &custom).clicked() { picked = Some(None); }
+                        for item in &form.macros {
+                            if ui.selectable_label(form.macro_name.as_deref() == Some(item.name.as_str()), &item.name).clicked() { picked = Some(Some(item.name.clone())); }
+                        }
+                    });
+                    if let Some(name) = picked {
+                        if let Some(found) = name.as_ref().and_then(|n| form.macros.iter().find(|m| m.name.eq_ignore_ascii_case(n))) { form.rules = found.rules.clone(); form.selected_rule = None; }
+                        form.macro_name = name;
+                    }
+                    // The tiny glyphs were ambiguous on a narrow display.
+                    // Reuse the localized macro-dialog titles and keep
+                    // the established save/overwrite/delete handlers.
+                    let captions = [t("Button.btnSaveMacro", "Save Macro"), t("Button.btnDeleteMacro", "Delete Macro")];
+                    let hints = [t("Caption.macroSaveTitle", "Save Rename Macro"), t("Caption.macroDeleteTitle", "Delete Rename Macro")];
+                    let bw = (ui.available_width() - 4.0) / 2.0;
+                    let bh = compact_button_height(ui, &captions, bw);
+                    let (row, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), bh), egui::Sense::hover());
+                    for (i, caption) in captions.iter().enumerate() {
+                        let rect = egui::Rect::from_min_size(row.min + egui::vec2(i as f32 * (bw + 4.0), 0.0), egui::vec2(bw, bh));
+                        let enabled = if i == 0 { !form.rules.is_empty() } else { form.macro_name.is_some() };
+                        let (response, pressed) = vcl_wrapped_button(ui, rect, enabled, caption);
+                        response.on_hover_text(&hints[i]);
+                        if pressed { choice = Some(3 + i); }
+                    }
+                    ui.separator();
+                    ui.label(t("Caption.lAppliedList", "Applied Actions"));
+                    for (index, rule) in form.rules.iter().enumerate() {
+                        let description = rule_display(rule, language);
+                        if ui.add(egui::Button::selectable(form.selected_rule == Some(index), &description).wrap()).on_hover_text(&description).clicked() { form.selected_rule = Some(index); }
+                    }
+                }
+            });
+        });
+    });
+    form.compact_page = selected_page;
+    if vcl_wrapped_button(ui, at(3.0, height - button_height - 3.0, button_width, button_height), true, &footer[0]).1 { choice = Some(0); }
+    if ui.put(at(width - button_width - 3.0, height - button_height - 3.0, button_width, button_height), egui::Button::new(&footer[1]).wrap()).clicked() { choice = Some(1); }
+    choice
+}
+
 /// Original TfAdvRename (ClientWidth 650 x ClientHeight 555): lAction "1. choose action" (16,17), pcAction (12,45 353x220: tsInsert, tsReplace,
 /// tsDelete·tsCase·tsNumbering·tsExtension), lApplyDest "2. 동작 적용"(371,17) rbApplyToName(371,69)·rbApplyToExt(371,97),
 /// btnAddAction(371,129 67×25) btnDeleteAction(371,168), lAppliedList(448,45) lbActions(448,64 194×145) btnUp(448,215)·btnDown(549,215) 93×25,
 /// cbMacroList(448,248 141×21) sbtnSave(593,248)·sbtnDelete(619,248) 23×22, lPreview "3. 미리보기"(12,277) lvPreview(12,300 630×213:
 /// number, original name 250, new name 250), btnRun (409,522), btnCancel (529,522) 114x25. Each page's image (Image1-6) is not drawn.
 /// Returns 0 rename, 1 cancel, 2 add action, 3 save macro, 4 delete macro.
-pub(super) fn rename_ui(ui: &mut egui::Ui, form: &mut RenameForm, language: &compat::Language, ko: bool) -> Option<usize> {
+pub(super) fn rename_ui(ui: &mut egui::Ui, form: &mut RenameForm, language: &compat::Language, _ko: bool) -> Option<usize> {
+    let screen = ui.ctx().content_rect();
+    if screen.width() < 690.0 || screen.height() < 610.0 { return compact_rename_ui(ui, form, language); }
     use super::original_dialogs::{put_enabled, put_left};
     let mut choice = None;
     let (area, _) = ui.allocate_exact_size(egui::vec2(650.0, 555.0), egui::Sense::hover());
@@ -312,7 +545,8 @@ pub(super) fn rename_ui(ui: &mut egui::Ui, form: &mut RenameForm, language: &com
     ui.scope_builder(egui::UiBuilder::new().max_rect(list.shrink(2.0)), |ui| {
         egui::ScrollArea::vertical().id_salt("rename-rules").auto_shrink([false, false]).show(ui, |ui| {
             for (index, rule) in form.rules.iter().enumerate() {
-                if ui.add(egui::Button::selectable(form.selected_rule == Some(index), rule_display(rule, language)).truncate()).clicked() {
+                let description = rule_display(rule, language);
+                if ui.add(egui::Button::selectable(form.selected_rule == Some(index), &description).wrap()).on_hover_text(&description).clicked() {
                     form.selected_rule = Some(index);
                 }
             }
@@ -359,11 +593,11 @@ pub(super) fn rename_ui(ui: &mut egui::Ui, form: &mut RenameForm, language: &com
     let ctx = ui.ctx().clone();
     let glyph = |name: &str, bmp: &'static [u8]| glyph_texture(&ctx, name, bmp).map(|t| egui::Image::new(&t).fit_to_exact_size(egui::vec2(16.0, 16.0)));
     let save = glyph("advrename-save", SAVE_GLYPH).map_or_else(|| egui::Button::new("S"), egui::Button::image);
-    if ui.put(at(593.0, 248.0, 23.0, 22.0), save).clicked() {
+    if ui.put(at(593.0, 248.0, 23.0, 22.0), save).on_hover_text(t("Caption.macroSaveTitle", "Save Rename Macro")).clicked() {
         choice = Some(3);
     }
     let delete = glyph("advrename-delete", DELETE_GLYPH).map_or_else(|| egui::Button::new("X"), egui::Button::image);
-    if ui.put(at(619.0, 248.0, 23.0, 22.0), delete).clicked() {
+    if ui.put(at(619.0, 248.0, 23.0, 22.0), delete).on_hover_text(t("Caption.macroDeleteTitle", "Delete Rename Macro")).clicked() {
         choice = Some(4);
     }
     // lvPreview (number, original name, new name, row lines).
@@ -509,7 +743,7 @@ impl App {
         let dirs = paths.iter().map(|p| p.is_dir()).collect();
         // Original DFM: pcAction.ActivePage = tsInsert, rbInsertLocPos.Checked (going to the replace page, UpdateEditor resets to the rbReplaceAll default).
         let editor = RenameRule { action: "Insert".into(), position: "Position".into(), ..RenameRule::default() };
-        let form = RenameForm { paths, dirs, rules: vec![], selected_rule: None, editor, numbers: ["1".into(), "0".into(), "1".into(), "1".into(), "1".into()], macros: loaded, macro_name: None, preview_selected: None };
+        let form = RenameForm { paths, dirs, rules: vec![], selected_rule: None, editor, numbers: ["1".into(), "0".into(), "1".into(), "1".into(), "1".into()], macros: loaded, macro_name: None, preview_selected: None, compact_page: 0 };
         self.push_original_dialog(title, DialogKind::AdvancedRename(Box::new(form)), move |app, result, _| {
             if let DialogResult::AdvancedRename(true) = result {
                 app.refresh(i);
@@ -533,6 +767,7 @@ impl App {
         let mut rule = form.editor.clone();
         (rule.index, rule.count, rule.start, rule.step, rule.digits) = (index, count, start, step, digits as usize);
         form.rules.push(rule);
+        form.compact_page = 1;
     }
 
     /// Original sbtnSaveClick (0x418c7c): TfGetText(window title, RES NAME "Name", empty text) first; then, with no rules, nothing happens; a

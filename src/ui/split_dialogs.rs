@@ -39,6 +39,13 @@ fn join_text(language: &compat::Language, key: &str, fallback: &str) -> String {
     language.text(&format!("formFileJoin.{key}"), fallback)
 }
 
+/// Exact, grouped byte count in the selected application language.
+fn exact_byte_count(language: &compat::Language, bytes: u64) -> String {
+    let number = ndr::parity::format_size(bytes, "B", true).trim_end_matches(" B").to_owned();
+    let template = language.text("NDR.OP_TRANSFER_CONFLICT_BYTES", "<b>{0}</b> bytes");
+    ndr::markup::plain_text(&template.replace("{0}", &number))
+}
+
 impl JoinForm {
     /// AddPath: existing files only, the same path (case-insensitive) once.
     pub(super) fn add(&mut self, path: &Path) {
@@ -71,13 +78,152 @@ impl JoinForm {
         self.selected = (!self.files.is_empty()).then(|| index.min(self.files.len() - 1));
     }
 
-    /// Original UpdateSizeInfo (FUN_00422dd4): the sum of GetFileSize over lbFiles, FloatToStrF(ffNumber, 12, 0) + " bytes" (the same in every language).
-    /// Previously the C# "전체 크기: N바이트" text.
-    fn size_info(&self) -> String {
-        let total: u64 = self.files.iter().filter_map(|(_, l)| *l).sum();
-        let total = ndr::parity::format_size(total, "B", true).trim_end_matches(" B").to_owned();
-        format!("{total} bytes")
+    /// Exact sum of the part sizes, formatted in the selected language.
+    fn size_info(&self, language: &compat::Language) -> String {
+        let total = self.files.iter().filter_map(|(_, l)| *l).fold(0u64, u64::saturating_add);
+        exact_byte_count(language, total)
     }
+}
+
+fn compact_label(ui: &mut egui::Ui, caption: &str, target: egui::Id) {
+    let (mut job, access) = super::original_dialogs::access_job_colored(ui, caption, None);
+    job.wrap.max_width = ui.available_width();
+    job.wrap.break_anywhere = true;
+    ui.label(job);
+    if ui.is_enabled() && super::original_dialogs::take_dialog_char(ui.ctx(), access) {
+        ui.memory_mut(|m| m.request_focus(target));
+    }
+}
+
+fn compact_split_ui(ui: &mut egui::Ui, form: &mut SplitForm, language: &compat::Language, enter: bool, width: f32) -> Option<usize> {
+    let screen = ui.ctx().content_rect();
+    ui.set_width(width);
+    ui.set_max_width(width);
+    let raw = |key: &str, fallback: &str| language.raw(&format!("formFileSplit.{key}")).unwrap_or_else(|| fallback.to_owned());
+    egui::ScrollArea::vertical().id_salt("compact-split-body").max_height((screen.height() - 112.0).max(48.0)).max_width(width).auto_shrink([false, true]).show(ui, |ui| {
+        let name = form.source.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        ui.add(egui::Label::new(format!("{name} ({})", exact_byte_count(language, form.length))).wrap()).on_hover_text(form.source.to_string_lossy());
+        let path_id = egui::Id::new("split-path");
+        let size_id = egui::Id::new("split-size");
+        compact_label(ui, &raw("Caption.lPath", "Save &parts in"), path_id);
+        ui.horizontal(|ui| {
+            let field = (ui.available_width() - 42.0).max(55.0);
+            ui.add_sized([field, 23.0], egui::TextEdit::singleline(&mut form.path).id(path_id).desired_width(field));
+            if ui.add_sized([34.0, 23.0], egui::Button::new("...")).clicked() {
+                let title = format!("{}{}", language.text("RES.FILESPLIT", "Split File"), language.text("RES.SELECTDEST", " - Select a destination"));
+                let initial = Path::new(&form.path).is_dir().then(|| PathBuf::from(&form.path)).or_else(|| form.source.parent().map(Path::to_path_buf));
+                if let Some(folder) = ndr::file_dialogs::browse_folder(&title, initial.as_deref()) { form.path = folder.to_string_lossy().into_owned(); }
+            }
+        });
+        compact_label(ui, &raw("Caption.lSplitSize", "Byte&s per part"), size_id);
+        ui.horizontal(|ui| {
+            let field = (ui.available_width() - 32.0).max(55.0);
+            ui.add_sized([field, 23.0], egui::TextEdit::singleline(&mut form.size).id(size_id).desired_width(field));
+            ui.menu_button("▼", |ui| {
+                egui::ScrollArea::vertical().max_height((screen.height() - 65.0).max(48.0)).show(ui, |ui| {
+                    for preset in ndr::split::SPLIT_SIZE_PRESETS { if ui.button(preset).clicked() { form.size = preset.into(); ui.close(); } }
+                });
+            });
+        });
+        if let Some(size) = ndr::split::parse_split_size(&form.size) {
+            ui.add(egui::Label::new(language.text("RES.SPLITTED_INFO", "Number of splitted files: %d").replace("%d", &ndr::split::part_count(form.length, size).to_string())).wrap());
+        }
+    });
+    ui.separator();
+    let (ok, cancel) = super::original_dialogs::compact_input_buttons(ui, &split_text(language, "Caption.btnOk", "OK"), &split_text(language, "Caption.btnCancel", "Cancel"), width);
+    if cancel { Some(1) } else if ok || enter { Some(0) } else { None }
+}
+
+fn compact_join_ui(ui: &mut egui::Ui, form: &mut JoinForm, language: &compat::Language, first_frame: bool, enter: bool, width: f32) -> Option<usize> {
+    use super::original_dialogs::{access_job_colored, compact_button_height, take_dialog_char, vcl_wrapped_button};
+    let screen = ui.ctx().content_rect();
+    let raw = |key: &str, fallback: &str| language.raw(&format!("formFileJoin.{key}")).unwrap_or_else(|| fallback.to_owned());
+    let labels = [raw("Caption.btnAdd", "&Add"), raw("Caption.btnDelete", "&Delete"), raw("Caption.btnUp", "&Up"), raw("Caption.btnDown", "Do&wn")];
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let (mut name_job, name_access) = access_job_colored(ui, &raw("Caption.lFileName", "&File name:"), None);
+    name_job.wrap.max_width = width - 8.0;
+    name_job.wrap.break_anywhere = true;
+    let name_height = ui.fonts_mut(|f| f.layout_job(name_job.clone()).size().y).max(15.0) + 2.0;
+    let summary = format!("{} · {}", join_text(language, "Caption.lFiles", "Parts in joining order"), form.size_info(language));
+    let mut summary_job = egui::text::LayoutJob::simple(summary, font.clone(), ui.visuals().text_color(), width - 8.0);
+    summary_job.wrap.break_anywhere = true;
+    let summary_height = ui.fonts_mut(|f| f.layout_job(summary_job.clone()).size().y).max(15.0) + 2.0;
+    let grid = |cols: usize| {
+        let bw = (width - 8.0 - 4.0 * (cols - 1) as f32) / cols as f32;
+        let heights: Vec<_> = labels.chunks(cols).map(|r| compact_button_height(ui, r, bw)).collect();
+        let h = heights.iter().sum::<f32>() + 4.0 * (heights.len() - 1) as f32;
+        (bw, heights, h)
+    };
+    let four = grid(4);
+    let two = grid(2);
+    let (cols, (bw, heights, actions_height)) = if four.2 <= two.2 { (4, four) } else { (2, two) };
+    let (mut check_job, check_access) = access_job_colored(ui, &raw("Caption.chkIsText", "Par&ts contain text"), None);
+    check_job.wrap.max_width = (width - 30.0).max(1.0);
+    check_job.wrap.break_anywhere = true;
+    let check_height = ui.fonts_mut(|f| f.layout_job(check_job.clone()).size().y).max(17.0) + 3.0;
+    let ok = join_text(language, "Caption.btnOk", "OK");
+    let cancel = join_text(language, "Caption.btnCancel", "Cancel");
+    let confirm_width = (width - 14.0) / 2.0;
+    let confirm_height = compact_button_height(ui, &[ok.clone(), cancel.clone()], confirm_width);
+    // Only the list scrolls. The output editor and all actions stay fixed;
+    // a click on a scrolled row cannot move the focused text field back into view.
+    let fixed = name_height + 23.0 + summary_height + actions_height + check_height + confirm_height + 24.0;
+    let list_height = (screen.height() - 54.0 - fixed).clamp(23.0, 200.0);
+    let (area, _) = ui.allocate_exact_size(egui::vec2(width, fixed + list_height), egui::Sense::hover());
+    let at = |x, y, w, h| egui::Rect::from_min_size(area.min + egui::vec2(x, y), egui::vec2(w, h));
+    let name_id = egui::Id::new("join-file-name");
+    super::original_dialogs::put_left(ui, at(4.0, 0.0, width - 8.0, name_height), egui::Label::new(name_job).wrap());
+    if ui.is_enabled() && take_dialog_char(ui.ctx(), name_access) { ui.memory_mut(|m| m.request_focus(name_id)); }
+    let mut y = name_height + 2.0;
+    let edit = ui.put(at(4.0, y, width - 46.0, 23.0), egui::TextEdit::singleline(&mut form.name).id(name_id));
+    if first_frame { edit.request_focus(); super::original_dialogs::select_all(ui, name_id, form.name.chars().count()); }
+    if ui.put(at(width - 38.0, y, 34.0, 23.0), egui::Button::new("...")).clicked() {
+        if let Some(chosen) = ndr::file_dialogs::open_any_file("", None, "", &[]) { form.name = chosen.to_string_lossy().into_owned(); }
+    }
+    y += 27.0;
+    super::original_dialogs::put_left(ui, at(4.0, y, width - 8.0, summary_height), egui::Label::new(summary_job).wrap());
+    y += summary_height + 2.0;
+    let list_rect = at(4.0, y, width - 8.0, list_height);
+    ui.painter().rect(list_rect, 0.0, ui.visuals().extreme_bg_color, ui.visuals().widgets.noninteractive.bg_stroke, egui::StrokeKind::Inside);
+    let inner = list_rect.shrink(1.0);
+    ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
+        ui.set_clip_rect(ui.clip_rect().intersect(inner));
+        egui::ScrollArea::vertical().id_salt("compact-join-parts").min_scrolled_height(0.0).max_width(inner.width()).max_height(inner.height()).auto_shrink([false, false]).animated(false).show_rows(ui, 20.0, form.files.len(), |ui, range| {
+            for i in range {
+                let path = form.files[i].0.to_string_lossy();
+                let w = ui.available_width();
+                let shown = super::original_dialogs::path_ellipsis(ui, &path, (w - 14.0).max(1.0), &font);
+                if ui.push_id(i, |ui| ui.add_sized([w, 20.0], egui::Button::selectable(form.selected == Some(i), shown).truncate()).on_hover_text(path).clicked()).inner { form.selected = Some(i); }
+            }
+        });
+    });
+    y += list_height + 4.0;
+    for (row, bh) in heights.into_iter().enumerate() {
+        for col in 0..cols {
+            let i = row * cols + col;
+            if i >= labels.len() { continue; }
+            if vcl_wrapped_button(ui, at(4.0 + col as f32 * (bw + 4.0), y, bw, bh), true, &labels[i]).1 {
+                match i {
+                    0 => {
+                        let title = join_text(language, "Form.Caption", "Join Files");
+                        let initial = form.files.first().and_then(|(p, _)| p.parent().map(Path::to_path_buf));
+                        for path in ndr::file_dialogs::open_files(&title, initial.as_deref()) { form.add(&path); }
+                        if form.selected.is_none() && !form.files.is_empty() { form.selected = Some(0); }
+                    }
+                    1 => form.remove_selected(),
+                    2 => form.move_selected(-1),
+                    _ => form.move_selected(1),
+                }
+            }
+        }
+        y += bh + 4.0;
+    }
+    ui.put(at(4.0, y, width - 8.0, check_height), egui::Checkbox::new(&mut form.join_text, check_job));
+    if ui.is_enabled() && take_dialog_char(ui.ctx(), check_access) { form.join_text = !form.join_text; }
+    y += check_height + 4.0;
+    let ok = ui.put(at(4.0, y, confirm_width, confirm_height), egui::Button::new(ok).wrap()).clicked();
+    let cancel = ui.put(at(width - confirm_width - 4.0, y, confirm_width, confirm_height), egui::Button::new(cancel).wrap()).clicked();
+    if cancel { Some(1) } else if ok || enter { Some(0) } else { None }
 }
 
 /// Draws the split window. Returns Some(0) OK, Some(1) cancel.
@@ -85,21 +231,32 @@ pub(super) fn split_ui(ui: &mut egui::Ui, form: &mut SplitForm, language: &compa
     let mut choice = None;
     // Original TfFileSplit (ClientWidth 469 x ClientHeight 187): lFileName (16,16), lPath (16,59) ePath (103,56 311x21) bBrowse (420,54 41x25),
     // lSplitSize (16,99) cbSplitSize (103,96 138x21, list 1440 KB...100 MB) lSplitCount (260,99), btnOk (303,151) btnCancel (384,151) 75x25.
-    let (area, _) = ui.allocate_exact_size(egui::vec2(469.0, 187.0), egui::Sense::hover());
+    let raw = |key: &str, fallback: &str| language.raw(&format!("formFileSplit.{key}")).unwrap_or_else(|| fallback.to_owned());
+    let measure = |s: &str| super::original_dialogs::caption_width(ui, s);
+    let path_caption = raw("Caption.lPath", "Save &parts in");
+    let size_caption = raw("Caption.lSplitSize", "Byte&s per part");
+    let label_width = (measure(&path_caption).max(measure(&size_caption)) + 10.0).max(85.0);
+    let field = 18.0 + label_width;
+    let ok = split_text(language, "Caption.btnOk", "OK");
+    let cancel = split_text(language, "Caption.btnCancel", "Cancel");
+    let button_width = (measure(&ok).max(measure(&cancel)) + 24.0).max(75.0);
+    let width = (field + 366.0).max(button_width * 2.0 + 32.0);
+    let screen = ui.ctx().content_rect();
+    if width + 40.0 > screen.width() || screen.height() < 265.0 { return compact_split_ui(ui, form, language, enter, (screen.width() - 40.0).clamp(120.0, 469.0)); }
+    let (area, _) = ui.allocate_exact_size(egui::vec2(width, 187.0), egui::Sense::hover());
     let at = |x: f32, y: f32, w: f32, h: f32| egui::Rect::from_min_size(area.min + egui::vec2(x, y), egui::vec2(w, h));
     // Original TntFormShow (0x4236e4): lFileName = "<b>name</b> (size bytes)" (size with thousands separators, FloatToStrF ffNumber 0).
     let name = form.source.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let bytes = ndr::parity::format_size(form.length, "B", true).trim_end_matches(" B").to_owned();
+    let bytes = exact_byte_count(language, form.length);
     let mut job = egui::text::LayoutJob::default();
     let color = ui.visuals().text_color();
     job.append(&name, 0.0, egui::TextFormat { font_id: egui::FontId::new(13.0, egui::FontFamily::Name(super::BOLD_FONT_FAMILY.into())), color, ..Default::default() });
-    job.append(&format!(" ({bytes} bytes)"), 0.0, egui::TextFormat { font_id: egui::FontId::proportional(13.0), color, ..Default::default() });
-    super::original_dialogs::put_left(ui, at(16.0, 16.0, 440.0, 15.0), egui::Label::new(job).truncate()).on_hover_text(form.source.to_string_lossy());
-    let raw = |key: &str, fallback: &str| language.raw(&format!("formFileSplit.{key}")).unwrap_or_else(|| fallback.to_owned());
+    job.append(&format!(" ({bytes})"), 0.0, egui::TextFormat { font_id: egui::FontId::proportional(13.0), color, ..Default::default() });
+    super::original_dialogs::put_left(ui, at(16.0, 16.0, width - 29.0, 15.0), egui::Label::new(job).truncate()).on_hover_text(format!("{} ({bytes})", form.source.display()));
     let (path_id, size_id) = (egui::Id::new("split-path"), egui::Id::new("split-size"));
-    super::original_dialogs::access_label(ui, at(16.0, 59.0, 85.0, 15.0), &raw("Caption.lPath", "&Path to Save:"), path_id);
-    ui.put(at(103.0, 56.0, 311.0, 21.0), egui::TextEdit::singleline(&mut form.path).id(path_id));
-    if ui.put(at(420.0, 54.0, 41.0, 25.0), egui::Button::new("...")).clicked() {
+    super::original_dialogs::access_label(ui, at(16.0, 59.0, label_width, 15.0), &path_caption, path_id);
+    ui.put(at(field, 56.0, width - field - 55.0, 21.0), egui::TextEdit::singleline(&mut form.path).id(path_id));
+    if ui.put(at(width - 49.0, 54.0, 41.0, 25.0), egui::Button::new("...")).clicked() {
         // Original (0x423b8e): FILESPLIT + SELECTDEST.
         let title = format!("{}{}", language.text("RES.FILESPLIT", "Split File"), language.text("RES.SELECTDEST", " - Select a destination"));
         let initial = Path::new(&form.path).is_dir().then(|| PathBuf::from(&form.path)).or_else(|| form.source.parent().map(Path::to_path_buf));
@@ -107,9 +264,9 @@ pub(super) fn split_ui(ui: &mut egui::Ui, form: &mut SplitForm, language: &compa
             form.path = folder.to_string_lossy().into_owned();
         }
     }
-    super::original_dialogs::access_label(ui, at(16.0, 99.0, 85.0, 15.0), &raw("Caption.lSplitSize", "&Split Size:"), size_id);
-    ui.put(at(103.0, 96.0, 116.0, 21.0), egui::TextEdit::singleline(&mut form.size).id(size_id));
-    ui.scope_builder(egui::UiBuilder::new().max_rect(at(219.0, 96.0, 22.0, 21.0)), |ui| {
+    super::original_dialogs::access_label(ui, at(16.0, 99.0, label_width, 15.0), &size_caption, size_id);
+    ui.put(at(field, 96.0, 116.0, 21.0), egui::TextEdit::singleline(&mut form.size).id(size_id));
+    ui.scope_builder(egui::UiBuilder::new().max_rect(at(field + 116.0, 96.0, 22.0, 21.0)), |ui| {
         ui.menu_button("▼", |ui| {
             for preset in ndr::split::SPLIT_SIZE_PRESETS {
                 if ui.button(preset).clicked() {
@@ -123,13 +280,13 @@ pub(super) fn split_ui(ui: &mut egui::Ui, form: &mut SplitForm, language: &compa
         let template = language.text("RES.SPLITTED_INFO", "Number of splitted files: %d");
         let count = ndr::split::part_count(form.length, size);
         let summary = template.replace("%d", &count.to_string());
-        super::original_dialogs::put_left(ui, at(252.0, 96.0, 208.0, 46.0), egui::Label::new(&summary).wrap())
+        super::original_dialogs::put_left(ui, at(field + 149.0, 96.0, width - field - 158.0, 46.0), egui::Label::new(&summary).wrap())
             .on_hover_text(summary);
     }
-    if ui.put(at(303.0, 151.0, 75.0, 25.0), egui::Button::new(split_text(language, "Caption.btnOk", "OK"))).clicked() {
+    if ui.put(at(width - 16.0 - 2.0 * button_width, 151.0, button_width, 25.0), egui::Button::new(ok)).clicked() {
         choice = Some(0);
     }
-    if ui.put(at(384.0, 151.0, 75.0, 25.0), egui::Button::new(split_text(language, "Caption.btnCancel", "Cancel"))).clicked() {
+    if ui.put(at(width - 10.0 - button_width, 151.0, button_width, 25.0), egui::Button::new(cancel)).clicked() {
         choice = Some(1);
     }
     if enter {
@@ -144,40 +301,53 @@ pub(super) fn join_ui(ui: &mut egui::Ui, form: &mut JoinForm, language: &compat:
     // Original TfFileJoin (ClientWidth 501 x ClientHeight 346): lFileName (16,25) eFileName (127,22 323x21) btnBrowse (456,20 33x25),
     // lFiles(16,65) lbFiles(16,84 473×169), btnAdd(16,262) btnDelete(86,262) btnUp(172,262) btnDown(242,262) 64×25,
     // lSizeInfo (right edge 486,267), chkIsText (16,317), btnOk (330,313) btnCancel (411,313) 75x25.
-    let (area, _) = ui.allocate_exact_size(egui::vec2(501.0, 346.0), egui::Sense::hover());
+    let raw = |key: &str, fallback: &str| language.raw(&format!("formFileJoin.{key}")).unwrap_or_else(|| fallback.to_owned());
+    let caption = raw("Caption.lFileName", "&File name:");
+    let labels = [raw("Caption.btnAdd", "&Add"), raw("Caption.btnDelete", "&Delete"), raw("Caption.btnUp", "&Up"), raw("Caption.btnDown", "Do&wn")];
+    let measure = |s: &str| super::original_dialogs::caption_width(ui, s);
+    let field = (measure(&caption) + 27.0).max(127.0);
+    let button_width = labels.iter().map(|s| measure(s) + 20.0).fold(64.0_f32, f32::max);
+    let check = raw("Caption.chkIsText", "Par&ts contain text");
+    let ok = join_text(language, "Caption.btnOk", "OK");
+    let cancel = join_text(language, "Caption.btnCancel", "Cancel");
+    let confirm_width = (measure(&ok).max(measure(&cancel)) + 24.0).max(75.0);
+    let total = form.size_info(language);
+    let width = 501.0_f32.max(field + 374.0).max(4.0 * (button_width + 6.0) + measure(&total) + 40.0)
+        .max(measure(&check) + 2.0 * confirm_width + 76.0);
+    let screen = ui.ctx().content_rect();
+    if width + 40.0 > screen.width() || screen.height() < 420.0 { return compact_join_ui(ui, form, language, first_frame, enter, (screen.width() - 40.0).clamp(120.0, 501.0)); }
+    let (area, _) = ui.allocate_exact_size(egui::vec2(width, 346.0), egui::Sense::hover());
     let at = |x: f32, y: f32, w: f32, h: f32| egui::Rect::from_min_size(area.min + egui::vec2(x, y), egui::vec2(w, h));
     let name_id = egui::Id::new("join-file-name");
-    let caption = language.raw("formFileJoin.Caption.lFileName").unwrap_or_else(|| "&File name:".into());
-    super::original_dialogs::access_label(ui, at(16.0, 25.0, 108.0, 15.0), &caption, name_id);
-    let name_response = ui.put(at(127.0, 22.0, 323.0, 21.0), egui::TextEdit::singleline(&mut form.name).id(name_id));
+    super::original_dialogs::access_label(ui, at(16.0, 25.0, field - 19.0, 15.0), &caption, name_id);
+    let name_response = ui.put(at(field, 22.0, width - field - 51.0, 21.0), egui::TextEdit::singleline(&mut form.name).id(name_id));
     // eFileName is the first control in the tab order: it has the focus with its text selected when the window opens (seen in the running original).
     if first_frame {
         name_response.request_focus();
         super::original_dialogs::select_all(ui, name_id, form.name.chars().count());
     }
-    if ui.put(at(456.0, 20.0, 33.0, 25.0), egui::Button::new("...")).clicked() {
+    if ui.put(at(width - 45.0, 20.0, 33.0, 25.0), egui::Button::new("...")).clicked() {
         // Original btnBrowseClick (0x423444): the window's OpenDialog (no Title, Filter or InitialDir) with ofAllowMultiSelect and ofFileMustExist turned off
         // and FileName cleared, then Execute (an open box). The choice goes into eFileName. Being an open box, there is no overwrite prompt (asked separately when joining).
         if let Some(chosen) = ndr::file_dialogs::open_any_file("", None, "", &[]) {
             form.name = chosen.to_string_lossy().into_owned();
         }
     }
-    super::original_dialogs::put_left(ui, at(16.0, 65.0, 300.0, 15.0), egui::Label::new(join_text(language, "Caption.lFiles", "Files to be joined:")).truncate());
-    let list = at(16.0, 84.0, 473.0, 169.0);
+    super::original_dialogs::put_left(ui, at(16.0, 65.0, width - 28.0, 15.0), egui::Label::new(join_text(language, "Caption.lFiles", "Parts in joining order")));
+    let list = at(16.0, 84.0, width - 28.0, 169.0);
     ui.painter().rect(list, 0.0, ui.visuals().extreme_bg_color, ui.visuals().widgets.noninteractive.bg_stroke, egui::StrokeKind::Inside);
     ui.scope_builder(egui::UiBuilder::new().max_rect(list.shrink(2.0)), |ui| {
         egui::ScrollArea::vertical().id_salt("join-files").auto_shrink([false, false]).show(ui, |ui| {
             // Original lbFiles holds the full paths (Items.Assign of the data item paths).
             for (index, (path, _)) in form.files.iter().enumerate() {
-                if ui.selectable_label(form.selected == Some(index), path.to_string_lossy()).clicked() {
+                if ui.add(egui::Button::selectable(form.selected == Some(index), path.to_string_lossy()).truncate()).on_hover_text(path.to_string_lossy()).clicked() {
                     form.selected = Some(index);
                 }
             }
         });
     });
-    let raw = |key: &str, fallback: &str| language.raw(&format!("formFileJoin.{key}")).unwrap_or_else(|| fallback.to_owned());
-    let button = |ui: &mut egui::Ui, x: f32, enabled: bool, label: String| super::original_dialogs::vcl_button(ui, at(x, 262.0, 64.0, 25.0), enabled, &label).1;
-    if button(ui, 16.0, true, raw("Caption.btnAdd", "&Add")) {
+    let button = |ui: &mut egui::Ui, index: usize| super::original_dialogs::vcl_button(ui, at(16.0 + index as f32 * (button_width + 6.0), 262.0, button_width, 25.0), true, &labels[index]).1;
+    if button(ui, 0) {
         let title = join_text(language, "Form.Caption", "Join Files");
         let initial = form.files.first().and_then(|(p, _)| p.parent().map(Path::to_path_buf));
         for path in ndr::file_dialogs::open_files(&title, initial.as_deref()) {
@@ -189,23 +359,24 @@ pub(super) fn join_ui(ui: &mut egui::Ui, form: &mut JoinForm, language: &compat:
     }
     // Original btnDelete/btnUp/btnDown are always enabled; their handlers (0x42332c, 0x423374, 0x4233c8) do nothing without a usable ItemIndex.
     // Previously they were greyed out.
-    if button(ui, 86.0, true, raw("Caption.btnDelete", "&Delete")) {
+    if button(ui, 1) {
         form.remove_selected();
     }
-    if button(ui, 172.0, true, raw("Caption.btnUp", "&Up")) {
+    if button(ui, 2) {
         form.move_selected(-1);
     }
-    if button(ui, 242.0, true, raw("Caption.btnDown", "Do&wn")) {
+    if button(ui, 3) {
         form.move_selected(1);
     }
-    ui.scope_builder(egui::UiBuilder::new().max_rect(at(312.0, 267.0, 174.0, 15.0)).layout(egui::Layout::right_to_left(egui::Align::Min)), |ui| {
-        ui.add(egui::Label::new(form.size_info()).truncate());
+    let total_left = 22.0 + 4.0 * (button_width + 6.0);
+    ui.scope_builder(egui::UiBuilder::new().max_rect(at(total_left, 267.0, width - total_left - 15.0, 15.0)).layout(egui::Layout::right_to_left(egui::Align::Min)), |ui| {
+        ui.label(form.size_info(language));
     });
-    super::original_dialogs::access_checkbox(ui, at(16.0, 317.0, 300.0, 17.0), &mut form.join_text, &raw("Caption.chkIsText", "Join &text files"));
-    if ui.put(at(330.0, 313.0, 75.0, 25.0), egui::Button::new(join_text(language, "Caption.btnOk", "OK"))).clicked() {
+    super::original_dialogs::access_checkbox(ui, at(16.0, 317.0, width - 2.0 * confirm_width - 46.0, 17.0), &mut form.join_text, &check);
+    if ui.put(at(width - 21.0 - 2.0 * confirm_width, 313.0, confirm_width, 25.0), egui::Button::new(ok)).clicked() {
         choice = Some(0);
     }
-    if ui.put(at(411.0, 313.0, 75.0, 25.0), egui::Button::new(join_text(language, "Caption.btnCancel", "Cancel"))).clicked() {
+    if ui.put(at(width - 15.0 - confirm_width, 313.0, confirm_width, 25.0), egui::Button::new(cancel)).clicked() {
         choice = Some(1);
     }
     if enter {
@@ -350,12 +521,13 @@ impl App {
             }
             let tx = app.async_tx.clone();
             let task_title = app.language_pack.text("formFileJoin.Form.Caption", if app.language.eq_ignore_ascii_case("ko") { "파일 합치기" } else { "Join Files" });
-            let totals = super::file_operation::flat_totals(&options.files);
+            // Resolve the numbered sequence in the worker, before publishing any
+            // totals. A single selected .001 can stand for many input files.
             let progress = super::file_operation::ProgressInfo {
                 from: options.files.first().and_then(|f| super::file_operation::source_folder(f)),
                 to: destination.parent().map(|p| p.to_string_lossy().into_owned()),
-                total_files: totals.map(|t| t.0),
-                total_bytes: totals.map(|t| t.1),
+                total_files: None,
+                total_bytes: None,
                 prefer_bytes: true,
                 caption: Some(app.language_pack.text("RES.JOINING", "Joining files...")),
             };
@@ -371,6 +543,8 @@ impl App {
                     _ => options.files.clone(),
                 };
                 let count = files.len();
+                let totals = super::file_operation::flat_totals(&files);
+                let _ = events.send(Event::Totals { files: Some(count as u64), bytes: totals.map(|t| t.1) });
                 let outcome = ndr::split::join_ordered_files_with_locale(&files, &destination, options.join_text, options.overwrite_confirmed, &cancel, &mut |files, bytes, path| {
                     let _ = events.send(Event::Progress { path: path.to_path_buf(), bytes, files });
                 }, Some(&language));

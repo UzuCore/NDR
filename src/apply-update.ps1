@@ -12,6 +12,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 $script:installerForm = $null
+$script:installerHeading = $null
 $script:installerLabel = $null
 $script:installerBar = $null
 # Standalone/headless test invocation remains possible without a text file.
@@ -27,9 +28,10 @@ $script:installerText = @{
     failed = 'The update failed. See update.log for details.'
     failureTitle = 'NDR update error'
 }
-if ($TextPath -and (Test-Path -LiteralPath $TextPath -PathType Leaf)) {
+function Import-InstallerText([string]$path) {
+if ($path -and (Test-Path -LiteralPath $path -PathType Leaf)) {
     try {
-        $translated = Get-Content -LiteralPath $TextPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $translated = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
         foreach ($key in @($script:installerText.Keys)) {
             $property = $translated.PSObject.Properties[[string]$key]
             if ($property -and $property.Value -is [string] -and -not [string]::IsNullOrWhiteSpace($property.Value)) {
@@ -40,6 +42,8 @@ if ($TextPath -and (Test-Path -LiteralPath $TextPath -PathType Leaf)) {
         # Invalid overlay data must not prevent an otherwise verified update.
     }
 }
+}
+Import-InstallerText $TextPath
 
 # When the NDR window closes, this separate STA PowerShell process keeps a
 # compact, real installation-progress window alive. The QA mode stays headless.
@@ -47,7 +51,11 @@ function Set-InstallProgress([string]$message, [int]$percent) {
     if (-not $script:installerForm) { return }
     $script:installerLabel.Text = ('{0}  ({1}%)' -f $message, $percent)
     $script:installerBar.Value = [Math]::Max(0, [Math]::Min(100, $percent))
-    # Give translated text as many lines as it needs; the bar must stay below it.
+    # Reflow after the actual translated text and font sizes are known, even
+    # after the form's first layout or a DPI/text-size change.
+    $script:installerForm.PerformLayout()
+    $script:installerLabel.Top = [Math]::Max(52, $script:installerHeading.Bottom + 8)
+    $script:installerForm.PerformLayout()
     $script:installerBar.Top = [Math]::Max(88, $script:installerLabel.Bottom + 12)
     $client = $script:installerForm.ClientSize
     $minimumHeight = $script:installerBar.Bottom + 18
@@ -56,7 +64,7 @@ function Set-InstallProgress([string]$message, [int]$percent) {
     }
     [System.Windows.Forms.Application]::DoEvents()
 }
-if ($ShowProgress -and -not $SkipRestart) {
+function New-InstallProgress {
     Add-Type -AssemblyName System.Windows.Forms
     Add-Type -AssemblyName System.Drawing
     [System.Windows.Forms.Application]::EnableVisualStyles()
@@ -71,6 +79,7 @@ if ($ShowProgress -and -not $SkipRestart) {
     $script:installerForm.TopMost = $true
     $script:installerForm.BackColor = [System.Drawing.Color]::FromArgb(245, 247, 251)
     $heading = [System.Windows.Forms.Label]::new()
+    $script:installerHeading = $heading
     $heading.Text = $script:installerText.heading
     $heading.Font = [System.Drawing.Font]::new('Segoe UI', 12, [System.Drawing.FontStyle]::Bold)
     $heading.Location = [System.Drawing.Point]::new(22, 17)
@@ -90,6 +99,9 @@ if ($ShowProgress -and -not $SkipRestart) {
     $script:installerForm.Controls.Add($script:installerBar)
 
     Set-InstallProgress $script:installerText.checking 2
+}
+if ($ShowProgress -and -not $SkipRestart) {
+    New-InstallProgress
     $script:installerForm.Show()
 }
 $work = Split-Path -Parent $Archive

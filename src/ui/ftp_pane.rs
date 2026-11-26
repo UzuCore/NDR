@@ -274,19 +274,35 @@ pub(super) fn ftp_quick_ui(ui: &mut egui::Ui, form: &mut FtpQuickForm, language:
     // Captions keep their '&' so Alt+letter works like the original (lURL &D → cbHost, lPort &P, lUser &U, lPassword &W, chkPassive &S,
     // chkAddToSites &A, btnOk &C). Previously the labels had no access keys, so Alt+U typed into the host box.
     let raw = |key: &str, fallback: &str| language.raw(&format!("formFTPQuickConnect.{key}")).unwrap_or_else(|| fallback.to_owned());
+    let address = raw("Caption.lURL", "A&ddress:");
+    let user = raw("Caption.lUser", "&User:");
+    let password = raw("Caption.lPassword", "&Password:");
+    let port = raw("Caption.lPort", "&Port:");
+    let passive = raw("Caption.chkPassive", "Passive Mode(&S)");
+    let add = raw("Caption.chkAddToSites", "&Add to the FTP site list");
+    let ok = raw("Caption.btnOk", "&Connect");
+    let cancel = raw("Caption.btnCancel", "Cancel");
+    let measure = |s: &str| super::original_dialogs::caption_width(ui, s);
+    let label_width = [&address, &user, &password].into_iter().map(|s| measure(s) + 8.0).fold(81.0_f32, f32::max);
+    let field = 13.0 + label_width;
+    let port_width = (measure(&port) + 6.0).max(44.0);
+    let button_width = (measure(&ok).max(measure(&cancel)) + 22.0).max(75.0);
+    let width = (field + 226.0 + port_width + 60.0).max(13.0 + measure(&passive) + 44.0)
+        .max(13.0 + measure(&add) + 36.0 + 2.0 * button_width + 32.0).max(424.0);
     let mut result = None;
-    let (area, _) = ui.allocate_exact_size(egui::vec2(424.0, 164.0), egui::Sense::hover());
+    let (area, _) = ui.allocate_exact_size(egui::vec2(width, 191.0), egui::Sense::hover());
     let at = |x: f32, y: f32, w: f32, h: f32| egui::Rect::from_min_size(area.min + egui::vec2(x, y), egui::vec2(w, h));
     let (host_id, port_id, user_id, password_id) = (egui::Id::new("ftp-quick-host"), egui::Id::new("ftp-quick-port"), egui::Id::new("ftp-quick-user"), egui::Id::new("ftp-quick-password"));
-    super::original_dialogs::access_label(ui, at(13.0, 22.0, 80.0, 15.0), &raw("Caption.lURL", "A&ddress:"), host_id);
+    super::original_dialogs::access_label(ui, at(13.0, 22.0, label_width - 4.0, 18.0), &address, host_id);
     // Original cbHost is a drop-down combo (▼ even with no recent hosts) and is the first control: it has the focus when the window opens.
     // Previously the ▼ showed only with recent hosts and nothing had the focus.
-    let host = ui.put(at(94.0, 20.0, 198.0, 21.0), egui::TextEdit::singleline(&mut form.host).id(host_id));
+    let host_width = width - field - port_width - 88.0;
+    let host = ui.put(at(field, 20.0, host_width, 21.0), egui::TextEdit::singleline(&mut form.host).id(host_id));
     if first_frame {
         host.request_focus();
     }
     {
-        ui.scope_builder(egui::UiBuilder::new().max_rect(at(292.0, 20.0, 22.0, 21.0)), |ui| {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(at(field + host_width, 20.0, 22.0, 21.0)), |ui| {
             ui.menu_button("▼", |ui| {
                 for host in form.recent_hosts.clone() {
                     if ui.button(&host).clicked() {
@@ -297,18 +313,18 @@ pub(super) fn ftp_quick_ui(ui: &mut egui::Ui, form: &mut FtpQuickForm, language:
             });
         });
     }
-    super::original_dialogs::access_label(ui, at(320.0, 23.0, 42.0, 15.0), &raw("Caption.lPort", "&Port:"), port_id);
-    ui.put(at(364.0, 20.0, 49.0, 21.0), egui::TextEdit::singleline(&mut form.port).id(port_id).horizontal_align(egui::Align::Center));
-    super::original_dialogs::access_label(ui, at(13.0, 59.0, 80.0, 15.0), &raw("Caption.lUser", "&User:"), user_id);
-    ui.put(at(94.0, 57.0, 121.0, 21.0), egui::TextEdit::singleline(&mut form.user).id(user_id));
-    super::original_dialogs::access_label(ui, at(13.0, 86.0, 80.0, 15.0), &raw("Caption.lPassword", "&Password:"), password_id);
-    ui.put(at(94.0, 84.0, 121.0, 21.0), egui::TextEdit::singleline(&mut form.password).id(password_id).password(true));
-    super::original_dialogs::access_checkbox(ui, at(291.0, 88.0, 122.0, 17.0), &mut form.passive, &raw("Caption.chkPassive", "Passive Mode(&S)"));
-    super::original_dialogs::access_checkbox(ui, at(13.0, 132.0, 220.0, 17.0), &mut form.add_to_sites, &raw("Caption.chkAddToSites", "&Add to the FTP site list"));
-    if super::original_dialogs::access_button(ui, at(255.0, 128.0, 75.0, 25.0), &raw("Caption.btnOk", "&Connect")) {
+    super::original_dialogs::access_label(ui, at(width - port_width - 60.0, 23.0, port_width - 2.0, 18.0), &port, port_id);
+    ui.put(at(width - 60.0, 20.0, 49.0, 21.0), egui::TextEdit::singleline(&mut form.port).id(port_id).horizontal_align(egui::Align::Center));
+    super::original_dialogs::access_label(ui, at(13.0, 59.0, label_width - 4.0, 18.0), &user, user_id);
+    ui.put(at(field, 57.0, (width - field - 11.0).min(260.0), 21.0), egui::TextEdit::singleline(&mut form.user).id(user_id));
+    super::original_dialogs::access_label(ui, at(13.0, 86.0, label_width - 4.0, 18.0), &password, password_id);
+    ui.put(at(field, 84.0, (width - field - 11.0).min(260.0), 21.0), egui::TextEdit::singleline(&mut form.password).id(password_id).password(true));
+    super::original_dialogs::access_checkbox(ui, at(13.0, 116.0, width - 24.0, 20.0), &mut form.passive, &passive);
+    super::original_dialogs::access_checkbox(ui, at(13.0, 159.0, width - 2.0 * button_width - 42.0, 20.0), &mut form.add_to_sites, &add);
+    if super::original_dialogs::access_button(ui, at(width - 19.0 - 2.0 * button_width, 155.0, button_width, 25.0), &ok) {
         result = Some(true);
     }
-    if super::original_dialogs::access_button(ui, at(338.0, 128.0, 75.0, 25.0), &raw("Caption.btnCancel", "Cancel")) {
+    if super::original_dialogs::access_button(ui, at(width - 11.0 - button_width, 155.0, button_width, 25.0), &cancel) {
         result = Some(false);
     }
     if enter && result.is_none() {

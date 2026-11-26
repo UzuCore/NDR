@@ -30,6 +30,8 @@ pub struct Options {
     dual: Option<bool>,
     language: Option<String>,
     smoke_seconds: Option<u64>,
+    /// Optional client size in logical points for isolated smoke checks only.
+    smoke_size: Option<[f32; 2]>,
     report: Option<PathBuf>,
     /// For tests: during the (off-screen) startup check, opens a sample of this kind of original window and saves that screen as PNG (`--shot kind file`).
     shot: Option<(String, PathBuf)>,
@@ -136,6 +138,14 @@ impl Options {
                 "--report" => {
                     result.report = Some(PathBuf::from(args.next().ok_or("--report needs a file")?))
                 }
+                "--smoke-size" => {
+                    let mut dimension = || -> Result<f32, String> {
+                        let n: f32 = args.next().ok_or("--smoke-size needs width and height")?.parse().map_err(|_| "Invalid smoke size")?;
+                        if !(250.0..=3000.0).contains(&n) { return Err("Smoke size must be between 250 and 3000 logical points".into()); }
+                        Ok(n)
+                    };
+                    result.smoke_size = Some([dimension()?, dimension()?]);
+                }
                 "--shot" => {
                     let kind = args.next().ok_or("--shot needs a dialog kind")?;
                     let path = PathBuf::from(args.next().ok_or("--shot needs a PNG path")?);
@@ -165,6 +175,9 @@ impl Options {
         }
         if result.shot.is_some() && result.smoke_seconds.is_none() {
             return Err("--shot requires --smoke-seconds".into());
+        }
+        if result.smoke_size.is_some() && result.smoke_seconds.is_none() {
+            return Err("--smoke-size requires --smoke-seconds".into());
         }
         Ok(result)
     }
@@ -247,7 +260,7 @@ fn main() {
         }
         if options.smoke_seconds.is_some() {
             // The startup check opens off screen, without taking focus and without a taskbar entry (it does not cover the user's screen).
-            viewport = viewport.with_position([-30000.0, -30000.0]).with_active(false).with_taskbar(false);
+            viewport = viewport.with_inner_size(options.smoke_size.unwrap_or([1400.0, 850.0])).with_position([-30000.0, -30000.0]).with_active(false).with_taskbar(false);
         } else {
             // Fixed: so folders extracted to %TEMP%\NDR when opening archive items do not pile up, ones unchanged for over 7 days and not in use are deleted.
             std::thread::spawn(|| {

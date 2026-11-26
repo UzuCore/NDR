@@ -9,6 +9,9 @@ fn visual_regression_labels_are_localized_in_all_catalogs() {
         "formmain.menu.miftpdisconnect", "formmain.menu.miftpget", "formmain.menu.miftpput",
         "formcomparefolder.caption.chkcomparecontents", "formcomparefolder.caption.chkrecursive",
         "res.func_recyclebin", "res.func_advrename",
+        "formmain.menu.midropcopy", "formmain.menu.midropmove",
+        "formmain.menu.midropshortcut", "formmain.menu.midropcancel",
+        "formmain.menu.micheckupdate", "formmain.menu.mipopenwith",
     ];
     for &(code, _) in ndr::compat::BUILTIN_LANGUAGES {
         let pack = Language::load(catalogs(), code);
@@ -24,6 +27,35 @@ fn visual_regression_labels_are_localized_in_all_catalogs() {
 
 fn catalogs() -> &'static Path {
     Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/Resources/Languages"))
+}
+
+#[test]
+fn all_split_join_drive_kind_and_work_slot_labels_are_primary() {
+    let keys = [
+        "formfilesplit.caption.lpath", "formfilesplit.caption.lsplitsize",
+        "formfilesplit.caption.btnok", "formfilejoin.caption.btnok",
+        "formfilejoin.caption.btnadd", "formfilejoin.caption.chkistext",
+        "formfilejoin.caption.lfiles", "res.wfgoto", "res.wfset",
+        "ndr.ui_drive_kind_removable", "ndr.ui_drive_kind_fixed",
+        "ndr.ui_drive_kind_network", "ndr.ui_drive_kind_ram",
+        "ndr.ui_drive_kind_unknown", "ndr.ui_drive_kind_noroot",
+        "formmain.menu.miarcmove", "formmain.menu.micleanupdisk",
+        "formmain.menu.midiskcopy", "formmain.menu.mifiltercustom",
+        "formmain.menu.miarcextracttofolder",
+    ];
+    for &(locale, _) in ndr::compat::BUILTIN_LANGUAGES {
+        let pack = Language::load(catalogs(), locale);
+        for key in keys {
+            let value = pack.primary_raw(key).unwrap_or_else(|| panic!("{locale}: {key}"));
+            assert!(!value.trim().is_empty(), "{locale}: {key}");
+        }
+        for key in ["res.wfgoto", "res.wfset"] {
+            let template = pack.primary_raw(key).unwrap();
+            assert_eq!(template.matches("%s").count(), 1, "{locale}: {key}");
+            let value = substitute(template, &["3"]);
+            assert!(value.contains('3') && !value.contains("%s"), "{locale}: {value}");
+        }
+    }
 }
 
 #[test]
@@ -91,6 +123,41 @@ fn completed_operation_and_remote_groups_are_present_and_preserve_format_tokens(
     assert_eq!(ko.primary_raw("NDR.SEC_CHOOSE_A_DESTINATION_INSIDE_THE_ENCRYPTED_FOLDER"), Some("암호화 폴더 안의 대상 위치를 선택하세요."));
     let it = Language::load(catalogs(), "it");
     assert_eq!(it.text("formFTPQuickConnect.Caption.lPassword", "missing"), "Password");
+}
+
+#[test]
+fn every_locale_has_primary_dynamic_error_and_menu_captions() {
+    let errors = [
+        "7ZDLL_LOAD_FAILED", "CANNOT_CREATEFILE", "CANNOT_FIND_NEXTVOLUME",
+        "CANNOT_OPEN_FILE", "CANNOT_READFILE", "WRITE_FAILED",
+        "RAR_INVALIDFILE_OR_CORRUPTED", "UNSUPPORTED_ARCHIVE_FILE",
+        "FTP_PUTCRITERIA", "FTPENGINE_BUSY", "FTPSITE_EXISTS", "FTPSITE_INVALIDINFO",
+        "SHORTCUT_ALREADY_ASSIGNED", "SHORTCUT_PREVENTED", "TITLE_EDITPARAM", "MSG_EDITPARAM",
+    ];
+    let menus = [
+        "miAddRemoveProg", "miAdvDeselect", "miAdvSelect", "miArcAdd",
+        "miArcExtractAuto", "miArcExtractToCurr", "miClearDescriptions", "miCommandLine",
+        "miCompareFolder", "miControlPanel", "miCopyFilename", "miCopyFullPath",
+        "miCopyPath", "miEmptyRecycleBin", "miEmptyTemp", "miFind", "miFTPQuickConnect",
+        "miHelp", "miHomePage", "miNetwork", "miPasteAsShortcut", "miRestoreLastSel",
+        "miSelectSameExt", "miSelectSameName", "miShowDriveButtons", "miShowFolders",
+        "miTextEditor", "miTextViewer", "miToLastDest", "miToTemp", "miViewButtonBar",
+        "miViewFileInfoBar", "miViewFindResult", "miViewFolderInfoBar", "miViewVertBar",
+    ];
+    let english = Language::load(catalogs(), "en");
+    for &(code, _) in ndr::compat::BUILTIN_LANGUAGES {
+        let lang = Language::load(catalogs(), code);
+        for key in errors.iter().map(|key| format!("RES.{key}")) {
+            let selected = lang.primary_raw(&key).unwrap_or_else(|| panic!("{code}: {key}"));
+            assert!(!selected.trim().is_empty(), "{code}: {key}");
+            if code != "en" { assert_ne!(Some(selected), english.primary_raw(&key), "{code}: {key}"); }
+        }
+        for key in menus.iter().map(|key| format!("Menu.{key}")) {
+            let selected = lang.primary_raw(&key).unwrap_or_else(|| panic!("{code}: {key}"));
+            let base = english.primary_raw(&key).unwrap();
+            assert_eq!(ndr::msgbox::display_caption(selected).1, ndr::msgbox::display_caption(base).1, "{code}: {key}");
+        }
+    }
 }
 
 #[test]
@@ -206,7 +273,7 @@ fn all_forty_catalogs_directly_translate_startup_updating_and_common_file_operat
         let (key, _) = line.split_once('=')?;
         (key.starts_with("UPD_") || key.starts_with("UI_STARTUP_")).then(|| format!("NDR.{key}"))
     }).collect();
-    assert_eq!(updater_keys.len(), 33);
+    assert_eq!(updater_keys.len(), 42);
     let file_operations = [
         "OP_TRANSFER_CANCEL", "OP_TRANSFER_VERB_COPY", "OP_TRANSFER_VERB_MOVE", "OP_TRANSFER_VERB_PASTE",
         "OP_TRANSFER_OPERATION_FAILED", "OP_TRANSFER_PREPARING_THE_OPERATION", "OP_TRANSFER_COPY_DONE",

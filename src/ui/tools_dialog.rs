@@ -306,20 +306,29 @@ impl SourceFiles {
 pub(super) fn credentials_ui(ui: &mut egui::Ui, user: &mut String, password: &mut String, language: &compat::Language, enter: bool, first_frame: bool) -> Option<bool> {
     use super::original_dialogs::put_left;
     let text = |key: &str, fallback: &str| language.text(&format!("formPassword.{key}"), fallback).replace('&', "");
+    let user_label = text("Caption.lUser", "User:");
+    let password_label = text("Caption.lPassword", "Password:");
+    let ok = text("Caption.btnOk", "OK");
+    let cancel = text("Caption.btnCancel", "Cancel");
+    let measure = |s: &str| super::original_dialogs::caption_width(ui, s);
+    let label_width = measure(&user_label).max(measure(&password_label)).max(68.0) + 12.0;
+    let field = 12.0 + label_width;
+    let button_width = (measure(&ok).max(measure(&cancel)) + 24.0).max(75.0);
+    let width = (field + 169.0).max(button_width * 2.0 + 52.0);
     let mut result = None;
-    let (area, _) = ui.allocate_exact_size(egui::vec2(249.0, 142.0), egui::Sense::hover());
+    let (area, _) = ui.allocate_exact_size(egui::vec2(width, 142.0), egui::Sense::hover());
     let at = |x: f32, y: f32, w: f32, h: f32| egui::Rect::from_min_size(area.min + egui::vec2(x, y), egui::vec2(w, h));
-    put_left(ui, at(12.0, 24.0, 68.0, 15.0), egui::Label::new(text("Caption.lUser", "User:")).truncate());
-    let response = ui.put(at(82.0, 21.0, 145.0, 21.0), egui::TextEdit::singleline(user));
+    put_left(ui, at(12.0, 24.0, label_width - 4.0, 18.0), egui::Label::new(user_label));
+    let response = ui.put(at(field, 21.0, width - field - 22.0, 21.0), egui::TextEdit::singleline(user));
     if first_frame {
         response.request_focus();
     }
-    put_left(ui, at(12.0, 64.0, 68.0, 15.0), egui::Label::new(text("Caption.lPassword", "Password:")).truncate());
-    ui.put(at(82.0, 61.0, 145.0, 21.0), egui::TextEdit::singleline(password).password(true));
-    if ui.put(at(46.0, 105.0, 75.0, 25.0), egui::Button::new(text("Caption.btnOk", "OK"))).clicked() {
+    put_left(ui, at(12.0, 64.0, label_width - 4.0, 18.0), egui::Label::new(password_label));
+    ui.put(at(field, 61.0, width - field - 22.0, 21.0), egui::TextEdit::singleline(password).password(true));
+    if ui.put(at(width - 30.0 - button_width * 2.0, 105.0, button_width, 25.0), egui::Button::new(ok)).clicked() {
         result = Some(true);
     }
-    if ui.put(at(135.0, 105.0, 75.0, 25.0), egui::Button::new(text("Caption.btnCancel", "Cancel"))).clicked() {
+    if ui.put(at(width - 22.0 - button_width, 105.0, button_width, 25.0), egui::Button::new(cancel)).clicked() {
         result = Some(false);
     }
     if enter && result.is_none() {

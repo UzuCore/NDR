@@ -25,6 +25,19 @@ KEY_PATTERN = re.compile(r'(?:RES|NDR(?:Vault|Update|RemoteSites|Search|SFTPHost
 LANG_BRANCH = re.compile(r'\bif\s+(?:self\.language\s*==\s*"ko"|ko|korean)\s*[{]')
 EQUAL_MNEMONIC = re.compile(r'\s*\(&[A-Za-z0-9]\)')
 
+# These forms construct section-prefixed keys at runtime. Keep the audited
+# call sites explicit so a Caption.* value from another form is never reused
+# merely because its field name happens to match.
+FORM_CONTEXTS = {
+    "settings_window.rs": "formPreferences",
+    "archive_dialog.rs": "formAddToArchive",
+    "remote_sites.rs": "formFTPSiteManager",
+    "ftp_pane.rs": "formFTPQuickConnect",
+    "function_key_editor.rs": "formEditFunction",
+    "search_dialog.rs": "formNDRSearch",
+}
+FORM_SUFFIX = re.compile(r'(?:Caption|ComboBox|RadioGroup|RadioGroupItems|GroupBox|TabSheet|ListViewCols|ListBox|Form|Hint|Dialog|Message|Progress|Status)\.[A-Za-z0-9_]+', re.I)
+
 
 def tokens(text):
     pos = 0
@@ -88,6 +101,18 @@ def scan():
                 kind, key = 'key-reference', 'RES.' + value
             elif left[-2:] == ['raw_menu','('] and re.fullmatch(r'mi[A-Za-z0-9_]+', value):
                 kind, key = 'key-reference', 'Menu.' + value
+            elif path.name == 'drag_drop.rs' and value in ('miDropCopy', 'miDropMove', 'miDropShortcut', 'miDropCancel'):
+                kind, key = 'dynamic-menu-reference', 'formMain.Menu.' + value
+            elif path.name == 'pane_chrome.rs' and value == 'mipOpenWith':
+                kind, key = 'dynamic-menu-reference', 'formMain.Menu.' + value
+            elif path.name == 'menu_data.rs' and value == 'miCheckUpdate':
+                kind, key = 'dynamic-menu-reference', 'formMain.Menu.' + value
+            elif path.name in FORM_CONTEXTS and FORM_SUFFIX.fullmatch(value):
+                kind, key = 'dynamic-form-reference', FORM_CONTEXTS[path.name] + '.' + value
+            elif path.name == 'settings_window.rs' and re.fullmatch(r'(?:Caption|ComboBox)\.[A-Za-z0-9_]+\{n\}', value):
+                # Left/right rows are explicitly generated with n = 1 and 2.
+                for side in ('1', '2'):
+                    rows.append((prefix, src.count("\n", 0, pos) + 1, 'dynamic-form-reference', 'formPreferences.' + value.replace('{n}', side), value))
             if len(left) >= 2 and left[-1] == "(" and left[-2] in PAIR_CALLS:
                 if i+2 < len(ts) and ts[i+1][1] == "," and ts[i+2][2] is not None:
                     key = "NDR." + literal_id(value, ts[i+2][2])
@@ -104,6 +129,27 @@ def scan():
             # A match in comments is not a useful signal.
             if not src[src.rfind("\n", 0, match.start()) + 1:match.start()].lstrip().startswith("//"):
                 rows.append((prefix, src.count("\n", 0, match.start()) + 1, "review-language-branch", "", match[0]))
+        if path.name == "function_key_editor.rs":
+            # INTERNAL_COMMANDS is the finite runtime domain of RES.FUNC_*.
+            commands = src.split("const INTERNAL_COMMANDS:", 1)[1].split("];", 1)[0]
+            start = src.index("const INTERNAL_COMMANDS:")
+            for match in re.finditer(r'\("(#[A-Za-z]+)",\s*"[^"]+"\)', commands):
+                name = match[1][1:]
+                key = "Menu.miRecycleBin" if name == "OpenRecycleBin" else "RES.FUNC_" + name.upper()
+                rows.append((prefix, src.count("\n", 0, start + match.start()) + 1, "dynamic-command-reference", key, match[1]))
+        if path.name == "settings_window.rs":
+            for match in re.finditer(r'\("([A-Za-z]+)",\s*"[^"\n]*[\uac00-\ud7af][^"\n]*",\s*"[^"\n]+"(?:,\s*(?:true|false))?\)', src):
+                name = match[1]
+                if name in ("LeftAutoFolderSize", "RightAutoFolderSize"):
+                    continue
+                rows.append((prefix, src.count("\n", 0, match.start()) + 1, "dynamic-settings-reference", "NDR.SETTINGS_DISPLAY_" + name.upper(), name))
+            for name in ("None", "Names", "Details", "Thumbnails", "Time", "Category", "Color"):
+                rows.append((prefix, 0, "dynamic-settings-reference", "NDR.SETTINGS_CHOICE_" + name.upper(), name))
+        if path.name == "tools_dialog.rs":
+            start = src.index("fn credentials_ui(")
+            end = src.index("\nimpl App", start)
+            for match in re.finditer(r'"((?:Caption|Form)\.[A-Za-z0-9_]+)"', src[start:end]):
+                rows.append((prefix, src.count("\n", 0, start + match.start()) + 1, "dynamic-form-reference", "formPassword." + match[1], match[1]))
     script = ROOT / "src/apply-update.ps1"
     if script.exists():
         src = script.read_text(encoding="utf-8-sig")
@@ -161,6 +207,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True, type=pathlib.Path)
     parser.add_argument("--catalog-ref", help="Read bundled catalogs from a baseline git revision")
+    parser.add_argument("--runtime", type=pathlib.Path, help="Include observed lookup keys from the isolated locale layout sweep")
     args = parser.parse_args()
     rows, coverage = scan()
     args.output.mkdir(parents=True, exist_ok=True)
@@ -169,6 +216,18 @@ def main():
     for file, line, kind, key, value in rows:
         if key and not kind.startswith("test-"):
             references[key.casefold()].append(f"{file}:{line}")
+    if args.runtime:
+        import json
+        observed = collections.defaultdict(set)
+        traces = sorted(args.runtime.glob("*/*.lookups.json"))
+        if not traces:
+            raise SystemExit(f"No runtime lookup traces under {args.runtime}")
+        for trace in traces:
+            for locale, key, source, value in json.loads(trace.read_text(encoding="utf-8")):
+                if source in ("primary", "primary-pair", "english-fallback", "literal-fallback", "pair-fallback"):
+                    observed[key.casefold()].add(trace.name)
+        for key, cases in observed.items():
+            references[key].extend("runtime:" + case for case in sorted(cases))
     # Catalog-only keys are included too: many forms construct their key at
     # run time, so looking at only literal key references would miss them.
     keys = sorted(set(references) | set(cats["en"]) | set(cats["ko"]))

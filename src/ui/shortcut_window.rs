@@ -118,41 +118,83 @@ impl App {
         let mut open = true;
         let mut edit = None;
         let mut close = false;
+        // The edit dialog captures key presses (including Esc). The F12
+        // list underneath must not consume them or steal search focus.
+        let covered = !self.original_dialogs.is_empty() || !self.msgboxes.is_empty() || self.job.as_ref().is_some_and(|job| job.modal.is_some());
         let screen = ctx.content_rect();
+        let font = egui::TextStyle::Body.resolve(&ctx.style());
+        let bold_font = egui::FontId::new(font.size, egui::FontFamily::Name(super::BOLD_FONT_FAMILY.into()));
+        let measure = |s: &str| ctx.fonts_mut(|fonts| fonts.layout_no_wrap(s.to_owned(), font.clone(), Color32::WHITE).size().x);
+        let measure_header = |s: &str| ctx.fonts_mut(|fonts| fonts.layout_no_wrap(s.to_owned(), bold_font.clone(), Color32::WHITE).size().x);
+        let command_width = rows.iter().map(|r| measure(&r.caption) + 16.0).fold((measure_header(&command_header) + 20.0).max(140.0), f32::max);
+        let key_width = rows.iter().map(|r| measure(&r.key_text) + 12.0).fold((measure_header(&key_header) + 20.0).max(115.0), f32::max);
+        let width = (command_width + key_width + 30.0).max(300.0).min((screen.width() - 40.0).max(120.0));
+        let key_width = key_width.min((width * 0.42).max(46.0));
+        let command_width = (width - key_width - 30.0).max(44.0);
+        let height = (screen.height() - 80.0).max(80.0);
+        let compact_rows = screen.width() < 420.0;
+        // Use the actual bold font and explicit column widths. In a narrow
+        // window, wrap headers and up to two lines per row while preserving
+        // show_rows virtualization and the full hover caption.
+        let galley = |text: &str, font: &egui::FontId, width: f32, max_rows: usize| {
+            let mut job = egui::text::LayoutJob::simple(text.to_owned(), font.clone(), Color32::PLACEHOLDER, width.max(1.0));
+            job.wrap.break_anywhere = true;
+            job.wrap.max_rows = max_rows;
+            ctx.fonts_mut(|fonts| fonts.layout_job(job))
+        };
+        let command_heading = galley(&command_header, &bold_font, command_width - 4.0, usize::MAX);
+        let key_heading = galley(&key_header, &bold_font, key_width - 4.0, usize::MAX);
+        let heading_height = command_heading.size().y.max(key_heading.size().y).max(18.0);
         egui::Window::new(title)
             .id(egui::Id::new("ndr-shortcut-window"))
             .open(&mut open)
+            .enabled(!covered)
             .collapsible(false)
             .resizable([false, true])
-            .default_pos(egui::pos2(screen.right() - 310.0, screen.top() + 40.0))
-            .default_size(egui::vec2(300.0, screen.height() - 80.0))
+            .default_pos(egui::pos2(screen.right() - width - 10.0, screen.top() + 40.0))
+            .min_width(width)
+            .max_width(width)
+            .max_height(height)
+            .default_size(egui::vec2(width, height))
             .show(ctx, |ui| {
-                let search = ui.add(egui::TextEdit::singleline(&mut state.filter).desired_width(181.0));
-                if state.focus_search {
+                ui.set_width(width);
+                let search = ui.add(egui::TextEdit::singleline(&mut state.filter).desired_width(181.0_f32.min(width - 14.0)));
+                if state.focus_search && !covered {
                     search.request_focus();
                     state.focus_search = false;
                     state.active = true;
                 }
                 // Original TntFormShortCut (0x455a54): Esc (0x1b) closes regardless of focus (Handled). NDR docks the window inside the main window, so it takes Esc
                 // only when the last click was inside this window (= when this form is active in the original). Fixed: previously the search field needed focus.
-                if ui.input(|i| i.pointer.any_pressed()) {
+                if !covered && ui.input(|i| i.pointer.any_pressed()) {
                     state.active = ui.ctx().pointer_interact_pos().is_some_and(|p| ui.ctx().layer_id_at(p) == Some(ui.layer_id()));
                 }
-                if (state.active || search.has_focus() || search.lost_focus()) && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+                if !covered && (state.active || search.has_focus() || search.lost_focus()) && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
                     close = true;
                 }
-                ui.label(tip);
+                ui.add(egui::Label::new(tip).wrap());
                 ui.horizontal(|ui| {
-                    ui.add_sized([140.0, 18.0], egui::Label::new(RichText::new(&command_header).strong().family(egui::FontFamily::Name(super::BOLD_FONT_FAMILY.into()))));
-                    ui.add_sized([115.0, 18.0], egui::Label::new(RichText::new(&key_header).strong().family(egui::FontFamily::Name(super::BOLD_FONT_FAMILY.into()))));
+                    ui.add_sized([command_width, heading_height], egui::Label::new(command_heading)).on_hover_text(&command_header);
+                    ui.add_sized([key_width, heading_height], egui::Label::new(key_heading)).on_hover_text(&key_header);
                 });
-                egui::ScrollArea::vertical().id_salt("shortcut-rows").show_rows(ui, 20.0, rows.len(), |ui, range| {
+                let pad = ui.spacing().button_padding;
+                let row_height = if compact_rows { (ctx.fonts_mut(|f| f.row_height(&font)) * 2.0 + 2.0 * pad.y + 2.0).ceil().max(36.0) } else { 20.0 };
+                egui::ScrollArea::vertical().id_salt("shortcut-rows").max_height((ui.available_height() - 2.0).max(24.0)).show_rows(ui, row_height, rows.len(), |ui, range| {
                     for row in &rows[range] {
                         let response = ui
                             .horizontal(|ui| {
                                 let selected = state.selected == Some(row.index);
-                                let response = ui.add_sized([140.0, 20.0], egui::Button::selectable(selected, row.caption.as_str()).frame(selected));
-                                ui.add_sized([115.0, 20.0], egui::Label::new(row.key_text.as_str()));
+                                let response = if compact_rows {
+                                    let label = galley(&row.caption, &font, command_width - 2.0 * pad.x - 2.0, 2);
+                                    ui.add_sized([command_width, row_height], egui::Button::selectable(selected, label).frame(selected))
+                                } else {
+                                    ui.add_sized([command_width, row_height], egui::Button::selectable(selected, row.caption.as_str()).frame(selected).truncate())
+                                }.on_hover_text(&row.caption);
+                                if compact_rows {
+                                    ui.add_sized([key_width, row_height], egui::Label::new(galley(&row.key_text, &font, key_width - 4.0, 2))).on_hover_text(&row.key_text);
+                                } else {
+                                    ui.add_sized([key_width, row_height], egui::Label::new(row.key_text.as_str()).truncate()).on_hover_text(&row.key_text);
+                                }
                                 response
                             })
                             .inner;
@@ -226,6 +268,45 @@ pub(super) fn edit_shortcut_ui(ui: &mut egui::Ui, form: &mut EditShortcutForm, l
     let validation = editor::validate(&form.text, &form.original, lines, &editor::Texts { main_form_raw: &raw, resource: &resource });
     let text = |key: &str, fallback: &str| language.text(&format!("formEditShortCut.{key}"), fallback);
     let mut choice = None;
+    let screen = ui.ctx().content_rect();
+    // Keep the capture field, validation, list and all three actions usable
+    // when the original 290x383 dialog cannot fit the viewport. The full-size
+    // DFM geometry below is unchanged.
+    if screen.width() < 335.0 || screen.height() < 440.0 {
+        let width = (screen.width() - 40.0).clamp(120.0, 290.0);
+        ui.set_width(width);
+        ui.set_max_width(width);
+        let ok_label = text("Caption.btnOk", "OK");
+        let cancel_label = text("Caption.btnCancel", "Cancel");
+        let remove_label = text("Caption.btnRemove", "Remove");
+        let button_width = ((width - 2.0 * ui.spacing().item_spacing.x) / 3.0).max(32.0);
+        let font = egui::TextStyle::Button.resolve(ui.style());
+        let button_height = [&ok_label, &cancel_label, &remove_label].into_iter().map(|label| {
+            ui.fonts_mut(|fonts| fonts.layout(label.to_string(), font.clone(), Color32::PLACEHOLDER, (button_width - 2.0 * ui.spacing().button_padding.x).max(1.0)).size().y)
+        }).fold(25.0_f32, |h, text_height| h.max(text_height + 8.0));
+        let body_height = (screen.height() - button_height - 72.0).max(48.0);
+        egui::ScrollArea::vertical().id_salt("compact-shortcut-editor").max_width(width).max_height(body_height).auto_shrink([false, false]).show(ui, |ui| {
+            ui.add(egui::Label::new(RichText::new(&form.caption).strong().family(egui::FontFamily::Name(super::BOLD_FONT_FAMILY.into()))).wrap());
+            ui.add(egui::TextEdit::singleline(&mut form.text.clone()).desired_width(ui.available_width()).interactive(false));
+            if !validation.tip.is_empty() { ui.add(egui::Label::new(RichText::new(&validation.tip).color(Color32::RED)).wrap()); }
+            if !validation.tip2.is_empty() { ui.add(egui::Label::new(&validation.tip2).wrap()); }
+            ui.add(egui::Label::new(text("Caption.lAvailableKeys", "Available Keys")).wrap());
+            for (index, item) in form.available.iter().enumerate() {
+                if ui.selectable_label(form.chosen == Some(index), item).clicked() {
+                    form.chosen = Some(index);
+                    form.text = editor::replace_key_part(&form.text, item);
+                }
+            }
+        });
+        ui.separator();
+        ui.horizontal(|ui| {
+            let size = [button_width, button_height];
+            if ui.add_enabled_ui(validation.ok_enabled, |ui| ui.add_sized(size, egui::Button::new(&ok_label).wrap())).inner.clicked() { choice = Some(0); }
+            if ui.add_sized(size, egui::Button::new(&cancel_label).wrap()).clicked() { choice = Some(1); }
+            if ui.add_sized(size, egui::Button::new(&remove_label).wrap()).clicked() { form.text.clear(); }
+        });
+        return choice;
+    }
     // Original TfEditShortCut (ClientWidth 290 x ClientHeight 383): lCommandName (8,8 bold), eShortCut (8,27 193x21), lTip (8,54 red),
     // lTip2(24,70 174×21), lAvailableKeys(8,99), lbRemainKeys(8,118 193×251), btnOk(207,25) btnCancel(207,56) btnRemove(207,87) 75×25.
     let (area, _) = ui.allocate_exact_size(egui::vec2(290.0, 383.0), egui::Sense::hover());

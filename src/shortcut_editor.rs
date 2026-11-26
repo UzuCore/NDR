@@ -70,24 +70,27 @@ pub fn caption(name: &str, texts: &Texts<'_>, list_variant: bool) -> String {
     let Some(raw) = (texts.main_form_raw)(&format!("Menu.{name}")) else {
         return (texts.resource)(&format!("FUNC_{}", name.to_uppercase()), name);
     };
-    let mut caption: &str = &raw;
-    let owned;
-    if caption.chars().count() >= 4 {
-        if let Some(rest) = caption.strip_prefix('&') {
-            caption = rest;
-            if !caption.starts_with(|c: char| c.is_ascii_digit()) {
-                let mut chars = caption.chars();
-                chars.next();
-                caption = chars.as_str();
+    // A numbered menu mnemonic is specifically "&X. ". Ordinary access
+    // markers ("&Copy", "C&opy", "Copy(&C)") must not eat a letter.
+    let mut caption = raw.as_str();
+    if let Some(rest) = caption.strip_prefix('&') {
+        let mut chars = rest.chars();
+        if chars.next().is_some_and(|c| c.is_alphabetic()) {
+            if let Some(label) = chars.as_str().strip_prefix(". ") {
+                caption = label;
             }
         }
-        caption = caption.strip_prefix('.').unwrap_or(caption);
-        caption = caption.strip_prefix(' ').unwrap_or(caption);
-        owned = caption.replace('&', "").replace("...", "");
-        caption = &owned;
-    } else if !list_variant {
-        return caption.to_owned();
     }
+    if !list_variant && caption.chars().count() < 4 && !name.contains("miGoToWorkFolder") && !name.contains("miWorkFolder") {
+        return crate::msgbox::display_caption(caption).0;
+    }
+    if let Some((label, suffix)) = caption.rsplit_once("(&") {
+        if suffix.strip_suffix(')').is_some_and(|s| s.chars().count() == 1 && s.chars().all(|c| c.is_alphanumeric())) {
+            caption = label.trim_end();
+        }
+    }
+    let owned = crate::msgbox::display_caption(caption).0;
+    let caption = owned.trim_end_matches("...").trim_end_matches('…').trim_end();
     if name.contains("miGoToWorkFolder") {
         return format_s(&(texts.resource)("WFGOTO", "Go to %s"), caption);
     }
@@ -123,7 +126,8 @@ const RESERVED_TEXTS: [&str; 16] = ["Escape", "Left", "Right", "Up", "Down", "Pa
 const LETTERS_AND_DIGITS: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 const PLAIN_PUNCTUATION: [u16; 9] = [0xdb, 0xdd, 0xbb, 0xbd, 0xc0, 0xbc, 0xbe, 0xde, 0xba];
 const SHIFT_PUNCTUATION: [u16; 5] = [0xdb, 0xdd, 0xbb, 0xbd, 0xc0];
-const TOOL_BUTTONS: [&str; 10] = ["tbFile", "tbFolder", "tbEdit", "tbView", "tbSystem", "tbArchive", "tbNetwork", "tbTools", "tbHelp", "tbDonation"];
+// Donation no longer exists in the menu bar and must not reserve an invisible accelerator.
+const TOOL_BUTTONS: [&str; 9] = ["tbFile", "tbFolder", "tbEdit", "tbView", "tbSystem", "tbArchive", "tbNetwork", "tbTools", "tbHelp"];
 
 fn letter_or_digit(key: u16) -> bool {
     char::from_u32(u32::from(key)).is_some_and(|c| LETTERS_AND_DIGITS.contains(c))
@@ -254,8 +258,12 @@ mod tests {
         let raw = |key: &str| match key {
             "Menu.miOpen" => Some("&O. &Open...".to_string()),
             "Menu.miCopy" => Some("Cop".to_string()),
+            "Menu.miDropCopy" => Some("&Copy here".to_string()),
+            "Menu.miDropMove" => Some("Move here(&M)".to_string()),
+            "Menu.miDropCancel" => Some("Cancel && return…".to_string()),
             "Menu.miGoToWorkFolder1" => Some("&1. Work Folder 1".to_string()),
             "ToolButton.tbFile" => Some("&File".to_string()),
+            "ToolButton.tbDonation" => Some("&Donate".to_string()),
             _ => None,
         };
         let resource = |key: &str, fallback: &str| match key {
@@ -274,6 +282,10 @@ mod tests {
         let texts = Texts { main_form_raw: &raw, resource: &resource };
         assert_eq!(caption("miOpen", &texts, true), "Open");
         assert_eq!(caption("miCopy", &texts, false), "Cop", "short captions are kept as they are");
+        assert_eq!(caption("miDropCopy", &texts, true), "Copy here");
+        assert_eq!(caption("miDropMove", &texts, true), "Move here");
+        assert_eq!(caption("miDropCancel", &texts, true), "Cancel & return");
+        assert!(!is_reserved(b'D' as u16, 2, &raw), "removed donation must not reserve Alt+D");
         assert_eq!(caption("miGoToWorkFolder1", &texts, true), "Go to 1. Work Folder 1", "a digit after & is kept with its dot");
         assert_eq!(caption("FindNext", &texts, true), "Find next", "internal commands use FUNC_");
         let lines: Vec<String> = ["miOpen=F3", "miCopy=Ctrl+C", "FindNext=Ctrl+L", "Delete=Shift+Delete", "Delete=Shift+Alt+D"].iter().map(|s| s.to_string()).collect();

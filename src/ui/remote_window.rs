@@ -286,7 +286,7 @@ pub(super) fn list_local(path: &str, show_hidden: bool, language: &compat::Langu
             .filter(|root| root.is_dir())
             .map(|root| LocalRow {
                 name: root.to_string_lossy().into_owned(),
-                kind: native::drive_type_name(&root).into(),
+                kind: localized_drive_kind(language, native::drive_type_name(&root)),
                 size_text: String::new(),
                 modified_text: String::new(),
                 path: root,
@@ -576,7 +576,9 @@ pub(super) fn remote_ui(ui: &mut egui::Ui, form: &mut RemoteForm, labels: &Remot
                 }
             });
             ui.label(&labels.fields[0]);
-            ui.add(egui::TextEdit::singleline(&mut form.host).desired_width(176.0).hint_text(language.text("NDR.NET_HOST_NAME_OR_IP", "Host name or IP")));
+            let host_hint = language.text("NDR.NET_HOST_NAME_OR_IP", "Host name or IP");
+            let host_width = (ui.fonts_mut(|f| f.layout_no_wrap(host_hint.clone(), egui::TextStyle::Body.resolve(ui.style()), Color32::WHITE).size().x) + 20.0).max(176.0);
+            ui.add(egui::TextEdit::singleline(&mut form.host).desired_width(host_width).hint_text(host_hint));
             if !form.recent_hosts.is_empty() {
                 ui.menu_button("▼", |ui| {
                     for host in form.recent_hosts.clone() {
@@ -592,7 +594,8 @@ pub(super) fn remote_ui(ui: &mut egui::Ui, form: &mut RemoteForm, labels: &Remot
             ui.label(&labels.fields[2]);
             ui.add(egui::TextEdit::singleline(&mut form.user).desired_width(140.0).hint_text(language.text("formPassword.Caption.lUser", "User name")));
             ui.label(&labels.fields[3]);
-            ui.add(egui::TextEdit::singleline(&mut form.password).password(true).desired_width(150.0).hint_text(language.text("NDR.NET_PASSWORD_NOT_SAVED", "Password (not saved)")));
+            ui.add(egui::TextEdit::singleline(&mut form.password).password(true).desired_width(150.0).hint_text(language.text("NDRVault.Password", "Password")))
+                .on_hover_text(language.text("NDR.NET_PASSWORD_NOT_SAVED", "Password (not saved)"));
             if ui.add_enabled(form.busy != Some(Busy::Connecting), egui::Button::new(&labels.connect)).clicked() {
                 action = Some(RemoteAction::Connect);
             }
@@ -659,24 +662,37 @@ pub(super) fn remote_ui(ui: &mut egui::Ui, form: &mut RemoteForm, labels: &Remot
     // The two lists.
     let height = 470.0;
     let typing = ui.ctx().wants_keyboard_input();
-    let local_columns = [
+    let mut local_columns = [
         Column::text(language.text("RES.FIELD_NAME", "Name"), half * 0.38),
         Column::text(language.text("NDR.NET_TYPE", "Type"), half * 0.19),
         Column::right(language.text("RES.FIELD_SIZE", "Size"), half * 0.19),
-        Column::text(language.text("formNDRSearch.Caption.TimeModified", "Date modified"), half * 0.24),
+        Column::text(language.text("RES.FIELD_DATEMODIFIED", "Modified"), half * 0.24),
     ];
-    let remote_columns = [
+    let mut remote_columns = [
         Column::text(language.text("RES.FIELD_NAME", "Name"), half * 0.27),
         Column::text(language.text("NDR.NET_TYPE", "Type"), half * 0.13),
         Column::right(language.text("RES.FIELD_SIZE", "Size"), half * 0.13),
-        Column::text(language.text("formNDRSearch.Caption.TimeModified", "Date modified"), half * 0.19),
+        Column::text(language.text("RES.FIELD_DATEMODIFIED", "Modified"), half * 0.19),
         Column::text(language.text("NDR.NET_REMOTE_PATH", "Remote path"), half * 0.28),
     ];
+    // Reserve enough space for the actual translated header before
+    // distributing the rest among the data columns.
+    for columns in [&mut local_columns[..], &mut remote_columns[..]] {
+        let minimums: Vec<f32> = columns.iter().map(|c| ui.fonts_mut(|f| f.layout_no_wrap(c.title.clone(), egui::FontId::proportional(13.0), Color32::WHITE).size().x).ceil() + 14.0).collect();
+        let minimum: f32 = minimums.iter().sum();
+        if minimum <= half && columns.iter().zip(&minimums).any(|(c, m)| c.width < *m) {
+            let extras: Vec<f32> = columns.iter().zip(&minimums).map(|(c, m)| (c.width - m).max(0.0)).collect();
+            let total_extra: f32 = extras.iter().sum();
+            for ((column, min), extra) in columns.iter_mut().zip(minimums).zip(extras) {
+                column.width = min + (half - minimum) * extra / total_extra.max(1.0);
+            }
+        }
+    }
     let menu_labels = labels.menu.clone();
     let menu = move |ui: &mut egui::Ui| -> Option<usize> { menu_labels.iter().position(|label| ui.button(label).clicked()) };
     ui.horizontal_top(|ui| {
         ui.allocate_ui(egui::vec2(half, height + 26.0), |ui| {
-            let view = GridView { id: "remote-local", columns: &local_columns, height, enabled: !form.local_loading, sortable: false, multi_select: true, keyboard: !form.focus_remote && !typing, context_menu: None, row_color: None, background: None };
+            let view = GridView { id: "remote-local", columns: &local_columns, height, enabled: !form.local_loading, sortable: false, multi_select: true, keyboard: !form.focus_remote && !typing, context_menu: None, row_color: None, background: None, cell_tooltips: false };
             let rows = &form.local_items;
             let events = grid::show(ui, &view, &mut form.local_grid, &|row, column| {
                 let r = &rows[row];
@@ -724,7 +740,7 @@ pub(super) fn remote_ui(ui: &mut egui::Ui, form: &mut RemoteForm, labels: &Remot
             }
         });
         ui.allocate_ui(egui::vec2(half, height + 26.0), |ui| {
-            let view = GridView { id: "remote-remote", columns: &remote_columns, height, enabled: true, sortable: false, multi_select: true, keyboard: form.focus_remote && !typing, context_menu: Some(&menu), row_color: None, background: None };
+            let view = GridView { id: "remote-remote", columns: &remote_columns, height, enabled: true, sortable: false, multi_select: true, keyboard: form.focus_remote && !typing, context_menu: Some(&menu), row_color: None, background: None, cell_tooltips: false };
             let rows = &form.items;
             let events = grid::show(ui, &view, &mut form.remote_grid, &|row, column| {
                 let r = &rows[row];
@@ -1003,43 +1019,54 @@ pub(super) fn permission_ui(ui: &mut egui::Ui, form: &mut PermissionForm, langua
     // Original TfFTPAttributes (ClientWidth 355 x ClientHeight 242): lFileName (8,12 bold), gbOwner (8,39), gbGroup (123,39), gbUser (237,39) 110x110
     // (checkboxes at 28/51/74), lEdit (10,167) eAttr (131,164 57x21, three digits), TntBevel1 (8,197 339), btnAll (10,207) btnSkip (90,207)
     // btnOk(192,207) btnCancel(272,207) 75×25.
-    let (area, _) = ui.allocate_exact_size(egui::vec2(355.0, 242.0), egui::Sense::hover());
-    let at = |x: f32, y: f32, w: f32, h: f32| egui::Rect::from_min_size(area.min + egui::vec2(x, y), egui::vec2(w, h));
-    super::original_dialogs::put_left(ui, at(8.0, 12.0, 339.0, 15.0), egui::Label::new(RichText::new(&form.name).strong().family(egui::FontFamily::Name(super::BOLD_FONT_FAMILY.into()))).truncate()).on_hover_text(if form.path.trim().is_empty() { &form.name } else { &form.path });
     let groups = [(8.0, 8.0, "GroupBox.gbOwner", "Owner"), (123.0, 6.0, "GroupBox.gbGroup", "Group"), (237.0, 7.0, "GroupBox.gbUser", "Public")];
     let names = [
         [("Caption.chkORead", "Read(&Q)"), ("Caption.chkOWrite", "Write(&A)"), ("Caption.chkOExecute", "Execute(&Z)")],
         [("Caption.chkGRead", "Read(&W)"), ("Caption.chkGWrite", "Write(&S)"), ("Caption.chkGExecute", "Execute(&X)")],
         [("Caption.chkURead", "Read(&E)"), ("Caption.chkUWrite", "Write(&D)"), ("Caption.chkUExecute", "Execute(&C)")],
     ];
+    let edit_label = text("Caption.lEdit", "Numeric Value(&T):");
+    let edit_width = (super::original_dialogs::caption_width(ui, &edit_label) + 8.0).max(118.0);
+    let measure = |s: &str| super::original_dialogs::caption_width(ui, s);
+    let group_width = groups.iter().map(|(_, _, key, fallback)| measure(&text(key, fallback)) + 22.0)
+        .chain(names.iter().flatten().map(|(key, fallback)| measure(&text(key, fallback)) + 36.0)).fold(110.0_f32, f32::max);
+    let button_width = [("Caption.btnAll", "All"), ("Caption.btnSkip", "Skip"), ("Caption.btnOk", "OK"), ("Caption.btnCancel", "Cancel")]
+        .iter().map(|(key, fallback)| measure(&text(key, fallback)) + 20.0).fold(75.0_f32, f32::max);
+    let width = (group_width * 3.0 + 25.0).max(button_width * 4.0 + 55.0).max(edit_width + 88.0).max(355.0);
+    let (area, _) = ui.allocate_exact_size(egui::vec2(width, 242.0), egui::Sense::hover());
+    let at = |x: f32, y: f32, w: f32, h: f32| egui::Rect::from_min_size(area.min + egui::vec2(x, y), egui::vec2(w, h));
+    super::original_dialogs::put_left(ui, at(8.0, 12.0, width - 16.0, 15.0), egui::Label::new(RichText::new(&form.name).strong().family(egui::FontFamily::Name(super::BOLD_FONT_FAMILY.into()))).truncate()).on_hover_text(if form.path.trim().is_empty() { &form.name } else { &form.path });
+    let group_width = (width - 25.0) / 3.0;
     let mut changed = false;
-    for (group, (left, inset, key, fallback)) in groups.into_iter().enumerate() {
-        super::original_dialogs::group_box(ui, at(left, 39.0, 110.0, 110.0), &text(key, fallback));
+    for (group, (_, inset, key, fallback)) in groups.into_iter().enumerate() {
+        let left = 8.0 + group as f32 * (group_width + 4.5);
+        super::original_dialogs::group_box(ui, at(left, 39.0, group_width, 110.0), &text(key, fallback));
         for permission in 0..3 {
             let (key, fallback) = names[group][permission];
-            let rect = at(left + inset, 39.0 + 28.0 + 23.0 * permission as f32, 98.0, 17.0);
+            let rect = at(left + inset, 39.0 + 28.0 + 23.0 * permission as f32, group_width - inset - 4.0, 17.0);
             changed |= super::original_dialogs::put_left(ui, rect, egui::Checkbox::new(&mut form.bits[group][permission], text(key, fallback))).changed();
         }
     }
     if changed {
         form.mode_text = numeric_value(form.mode()).to_string();
     }
-    super::original_dialogs::put_left(ui, at(10.0, 167.0, 118.0, 15.0), egui::Label::new(text("Caption.lEdit", "Numeric Value(&T):")).truncate());
-    let attr = ui.put(at(131.0, 164.0, 57.0, 21.0), egui::TextEdit::singleline(&mut form.mode_text).char_limit(3));
+    super::original_dialogs::put_left(ui, at(10.0, 167.0, edit_width, 15.0), egui::Label::new(edit_label));
+    let attr = ui.put(at(13.0 + edit_width, 164.0, 57.0, 21.0), egui::TextEdit::singleline(&mut form.mode_text).char_limit(3));
     if attr.changed() {
         form.text_changed();
     }
     // Original FormKeyDown (0x427334, KeyPreview): End (0x23) while eAttr (+0x414) has no focus sets ModalResult = mrAll (btnAll).
     let end = !attr.has_focus() && ui.input(|i| i.key_pressed(egui::Key::End));
-    ui.painter().hline(area.min.x + 8.0..=area.min.x + 347.0, area.min.y + 197.0, ui.visuals().widgets.noninteractive.bg_stroke);
+    ui.painter().hline(area.min.x + 8.0..=area.min.x + width - 8.0, area.min.y + 197.0, ui.visuals().widgets.noninteractive.bg_stroke);
     let buttons = [
         (10.0, "Caption.btnAll", "All", Some(PermissionAction::ApplyAllRemaining)),
         (90.0, "Caption.btnSkip", "Skip", Some(PermissionAction::SkipCurrent)),
         (192.0, "Caption.btnOk", "OK", Some(PermissionAction::ApplyCurrent)),
         (272.0, "Caption.btnCancel", "Cancel", None),
     ];
-    for (left, key, fallback, action) in buttons {
-        let response = ui.put(at(left, 207.0, 75.0, 25.0), egui::Button::new(text(key, fallback)));
+    for (index, (_, key, fallback, action)) in buttons.into_iter().enumerate() {
+        let left = if index < 2 { 10.0 + index as f32 * (button_width + 5.0) } else { width - 8.0 - (4 - index) as f32 * button_width - (3 - index) as f32 * 5.0 };
+        let response = ui.put(at(left, 207.0, button_width, 25.0), egui::Button::new(text(key, fallback)));
         let response = if key == "Caption.btnAll" { response.on_hover_text("Shift+Enter") } else { response };
         if response.clicked() {
             result = Some(action);

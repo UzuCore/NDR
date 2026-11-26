@@ -305,6 +305,27 @@ pub(super) fn markup_job(text: &str, size: f32, color: Color32, wrap: f32) -> La
     job
 }
 
+/// Scroll the message independently of the editable controls and buttons.
+fn compact_input_message(ui: &mut egui::Ui, message: &str, color: Color32, width: f32, height: f32) {
+    egui::ScrollArea::vertical().id_salt("compact-input-message").max_width(width).max_height((height - 145.0).clamp(36.0, 180.0)).auto_shrink([false, true]).show(ui, |ui| {
+        let mut job = markup_job(message, 13.0, color, ui.available_width());
+        job.wrap.break_anywhere = true;
+        ui.label(job);
+    });
+}
+
+pub(super) fn compact_input_buttons(ui: &mut egui::Ui, ok: &str, cancel: &str, width: f32) -> (bool, bool) {
+    let button_width = ((width - ui.spacing().item_spacing.x) / 2.0).max(40.0);
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    let pad = ui.spacing().button_padding;
+    let height = [ok, cancel].into_iter().map(|s| ui.fonts_mut(|f| f.layout(s.to_owned(), font.clone(), Color32::PLACEHOLDER, (button_width - 2.0 * pad.x - 2.0).max(1.0)).size().y)).fold(25.0_f32, |h, y| h.max(y + 2.0 * pad.y + 4.0));
+    ui.horizontal(|ui| {
+        let ok = ui.add_sized([button_width, height], egui::Button::new(ok).wrap()).clicked();
+        let cancel = ui.add_sized([button_width, height], egui::Button::new(cancel).wrap()).clicked();
+        (ok, cancel)
+    }).inner
+}
+
 impl App {
     fn push_dialog(&mut self, title: String, kind: DialogKind, on_result: DialogCallback) {
         self.msgbox_serial += 1;
@@ -663,6 +684,31 @@ impl App {
             let title_row = super::modal_title_start(ui, &title);
             match &mut dialog.kind {
                 DialogKind::Prompt { message, value, history, password, .. } => {
+                    if screen.width() < 500.0 || screen.height() < 230.0 {
+                        let width = (screen.width() - 40.0).clamp(120.0, 444.0);
+                        ui.set_width(width);
+                        ui.set_max_width(width);
+                        compact_input_message(ui, message, text_color, width, screen.height());
+                        let response = ui.horizontal(|ui| {
+                            let edit_width = if history.is_some() { (width - 32.0).max(60.0) } else { width };
+                            let response = ui.add_sized([edit_width, 23.0], egui::TextEdit::singleline(value).password(*password).desired_width(edit_width));
+                            if let Some(items) = history.as_ref() {
+                                ui.menu_button("▼", |ui| {
+                                    egui::ScrollArea::vertical().max_height((screen.height() - 60.0).max(48.0)).show(ui, |ui| {
+                                        for item in items {
+                                            if ui.add(egui::Button::new(item).wrap()).clicked() { *value = item.clone(); ui.close(); }
+                                        }
+                                    });
+                                });
+                            }
+                            response
+                        }).inner;
+                        if first_frame { response.request_focus(); select_all(ui, response.id, value.chars().count()); }
+                        ui.separator();
+                        let (ok, cancel) = compact_input_buttons(ui, &get_text_buttons.0, &get_text_buttons.1, width);
+                        if ok || enter { outcome = Outcome::Ok; }
+                        if cancel { outcome = Outcome::Cancel; }
+                    } else {
                     // Original TfGetText (ClientWidth 444 × ClientHeight 127): lMessage (18,8 411×53, bottom aligned), cbText (16,67 413×21),
                     // btnOK (265,95 79×25, default), btnCancel (351,95 79×25, cancel).
                     let (area, _) = ui.allocate_exact_size(egui::vec2(444.0, 127.0), egui::Sense::hover());
@@ -698,8 +744,30 @@ impl App {
                     if enter {
                         outcome = Outcome::Ok;
                     }
+                    }
                 }
                 DialogKind::Rename { message, name, extension } => {
+                    if screen.width() < 500.0 || screen.height() < 235.0 {
+                        let width = (screen.width() - 40.0).clamp(120.0, 444.0);
+                        ui.set_width(width);
+                        ui.set_max_width(width);
+                        compact_input_message(ui, message, text_color, width, screen.height());
+                        let ext_width = (width * 0.25).clamp(50.0, 90.0);
+                        let name_width = (width - ext_width - 2.0 * ui.spacing().item_spacing.x - 10.0).max(50.0);
+                        let response = ui.horizontal(|ui| {
+                            let response = ui.add_sized([name_width, 23.0], egui::TextEdit::singleline(name).char_limit(260).desired_width(name_width));
+                            ui.label(".");
+                            ui.add_sized([ext_width, 23.0], egui::TextEdit::singleline(extension).desired_width(ext_width));
+                            response
+                        }).inner;
+                        if first_frame { response.request_focus(); select_all(ui, response.id, name.chars().count()); }
+                        let ok_label = self.language_pack.text("formRename.Caption.btnOK", "OK");
+                        let cancel_label = self.language_pack.text("formRename.Caption.btnCancel", "Cancel");
+                        ui.separator();
+                        let (ok, cancel) = compact_input_buttons(ui, &ok_label, &cancel_label, width);
+                        if ok || enter { outcome = Outcome::Ok; }
+                        if cancel { outcome = Outcome::Cancel; }
+                    } else {
                     // Original TfRename (444 × 132): lMessage (18,8 410×53, bottom aligned), cbName (16,67 334×21, 260 chars), Label1 "." (355,70),
                     // cbExt (362,67 69×21), btnOK (270,100 75×25), btnCancel (357,99 75×25).
                     let (area, _) = ui.allocate_exact_size(egui::vec2(444.0, 132.0), egui::Sense::hover());
@@ -723,6 +791,7 @@ impl App {
                     if enter {
                         outcome = Outcome::Ok;
                     }
+                    }
                 }
                 DialogKind::DeleteWarning { message, show_delete, default_button } => {
                     // Original TfDelWarning (443 × 119): Image1 (13,16), lMsg (64,16 364×62), btnDelete (64,86 75×25, hidden initially),
@@ -732,35 +801,47 @@ impl App {
                     // grows when there are many lines and scrolls on overflow). Changed: previously the width was fixed at 443, so a long name wrapped.
                     let natural = ui.painter().layout_job(markup_job(message, 13.0, text_color, f32::INFINITY)).size().x;
                     // Subtracting the bsDialog border (2 × SM_CXDLGFRAME 3) from the outer width gives the inner width. (+0x50 is the Left seen via SetBounds 0x662c80.)
-                    let width = (natural + 64.0 + 20.0).min(screen.width() - 50.0).max(350.0) - 6.0;
-                    let message_width = width - 79.0;
-                    let galley = ui.painter().layout_job(markup_job(message, 13.0, text_color, message_width));
-                    let extra = (galley.size().y.min(560.0) - 62.0).max(0.0);
-                    let (area, _) = ui.allocate_exact_size(egui::vec2(width, 119.0 + extra), egui::Sense::hover());
+                    let width = ((natural + 64.0 + 20.0).min(screen.width() - 50.0).max(350.0) - 6.0).min((screen.width() - 40.0).max(120.0));
+                    let compact = width < 344.0 || screen.height() < 360.0;
+                    let raw = |key: &str, fallback: &str| self.language_pack.raw(&format!("formDelWarning.{key}")).unwrap_or_else(|| fallback.to_owned());
+                    let labels = [raw("Caption.btnDelete", "&Delete"), raw("Caption.btnYes", "&Yes"), raw("Caption.btnNo", "&No")];
+                    let count = if *show_delete { 3.0 } else { 2.0 };
+                    let bw = if compact { (width - 12.0 - 6.0 * (count - 1.0)) / count } else { 75.0 };
+                    let bh = if compact { compact_button_height(ui, &labels[if *show_delete { 0 } else { 1 }..], bw) } else { 25.0 };
+                    let left = if compact { 42.0 } else { 64.0 };
+                    let message_width = width - left - 15.0;
+                    let mut job = markup_job(message, 13.0, text_color, (message_width - 10.0).max(1.0));
+                    job.wrap.break_anywhere = true;
+                    let galley = ui.painter().layout_job(job.clone());
+                    let body_height = galley.size().y.max(if compact { 36.0 } else { 62.0 }).min(560.0_f32.min((screen.height() - 92.0 - bh).max(36.0)));
+                    let button_y = body_height + 24.0;
+                    let (area, _) = ui.allocate_exact_size(egui::vec2(width, button_y + bh + 8.0), egui::Sense::hover());
                     let at = |x: f32, y: f32, w: f32, h: f32| egui::Rect::from_min_size(area.min + egui::vec2(x, y), egui::vec2(w, h));
                     if let Some(icon) = warning_icon.clone() {
-                        ui.painter().image(icon.id(), at(13.0, 16.0, 32.0, 32.0), egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
+                        ui.painter().image(icon.id(), if compact { at(5.0, 16.0, 28.0, 28.0) } else { at(13.0, 16.0, 32.0, 32.0) }, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
                     }
-                    ui.scope_builder(egui::UiBuilder::new().max_rect(at(64.0, 16.0, message_width, 62.0 + extra)), |ui| {
-                        egui::ScrollArea::vertical().max_height(62.0 + extra).show(ui, |ui| {
-                            ui.label(markup_job(message, 13.0, text_color, message_width));
+                    let message_rect = at(left, 16.0, message_width, body_height);
+                    ui.scope_builder(egui::UiBuilder::new().max_rect(message_rect), |ui| {
+                        ui.set_clip_rect(ui.clip_rect().intersect(message_rect));
+                        egui::ScrollArea::vertical().min_scrolled_height(0.0).max_width(message_width).max_height(body_height).show(ui, |ui| {
+                            ui.label(job);
                         });
                     });
                     // Navigate the *actual* button focus, not egui's spatial
                     // search: the large gap before Delete can lose focus.
                     // No parallel focus index, event queue or extra frame.
                     let focus_slot = if *show_delete { *default_button } else if *default_button == 2 { 2 } else { 1 };
-                    let raw = |key: &str, fallback: &str| self.language_pack.raw(&format!("formDelWarning.{key}")).unwrap_or_else(|| fallback.to_owned());
+                    let button_at = |slot: usize| at(if compact { 6.0 + (slot - usize::from(!*show_delete)) as f32 * (bw + 6.0) } else { [64.0, width - 171.0, width - 90.0][slot] }, button_y, bw, bh);
                     let delete_id = if *show_delete {
-                        let (delete, pressed) = vcl_button(ui, at(64.0, 86.0 + extra, 75.0, 25.0), true, &raw("Caption.btnDelete", "&Delete"));
+                        let (delete, pressed) = vcl_wrapped_button(ui, button_at(0), true, &labels[0]);
                         if first_frame && focus_slot == 0 { delete.request_focus(); }
                         if pressed {
                             outcome = Outcome::Choice(0);
                         }
                         Some(delete.id)
                     } else { None };
-                    let (yes, yes_pressed) = vcl_button(ui, at(width - 171.0, 86.0 + extra, 75.0, 25.0), true, &raw("Caption.btnYes", "&Yes"));
-                    let (no, no_pressed) = vcl_button(ui, at(width - 90.0, 86.0 + extra, 75.0, 25.0), true, &raw("Caption.btnNo", "&No"));
+                    let (yes, yes_pressed) = vcl_wrapped_button(ui, button_at(1), true, &labels[1]);
+                    let (no, no_pressed) = vcl_wrapped_button(ui, button_at(2), true, &labels[2]);
                     if first_frame && focus_slot == 1 { yes.request_focus(); }
                     if first_frame && focus_slot == 2 { no.request_focus(); }
                     if !waiting {
@@ -903,8 +984,12 @@ impl App {
                 }
                 DialogKind::FolderTree(form) => {
                     // FUN_00423e00: if tmainwndsize, use the file list window size; otherwise if tmaximized, maximize; otherwise twidth×theight (outer size).
-                    let full = egui::vec2((screen.width() - 24.0).max(657.0), (screen.height() - 64.0).max(400.0));
-                    let size = if self.settings.flag("TreeWindowMatchesMainSize", true) || self.settings.flag("TreeWindowMaximized", false) {
+                    let full = if screen.width() < 697.0 || screen.height() < 464.0 {
+                        egui::vec2((screen.width() - 40.0).max(180.0), (screen.height() - 54.0).max(180.0))
+                    } else {
+                        egui::vec2(screen.width() - 24.0, screen.height() - 64.0)
+                    };
+                    let size = if full.x < 657.0 || full.y < 400.0 || self.settings.flag("TreeWindowMatchesMainSize", true) || self.settings.flag("TreeWindowMaximized", false) {
                         full
                     } else {
                         let number = |key: &str, default: f64| self.settings.values.get(key).and_then(|v| v.as_f64()).unwrap_or(default) as f32;
@@ -1003,18 +1088,40 @@ impl App {
                 DialogKind::DeleteConfirm { message, attributes } => {
                     // Original TfDelConfirm (434 × 138): Image1 (16,13), lMsg (80,13 337×58), lAttributes (80,80),
                     // btnAll (172,101 75×25), btnYes (256,101), btnNo (342,101).
-                    let (area, _) = ui.allocate_exact_size(egui::vec2(434.0, 138.0), egui::Sense::hover());
+                    let compact = screen.width() < 490.0 || screen.height() < 240.0;
+                    let width = if compact { (screen.width() - 40.0).clamp(120.0, 434.0) } else { 434.0 };
+                    let raw = |key: &str, fallback: &str| self.language_pack.raw(&format!("formDelConfirm.{key}")).unwrap_or_else(|| fallback.to_owned());
+                    let labels = [raw("Caption.btnAll", "Yes to &All"), raw("Caption.btnYes", "&Yes"), raw("Caption.btnNo", "&No")];
+                    let bw = if compact { (width - 24.0) / 3.0 } else { 75.0 };
+                    let bh = if compact { compact_button_height(ui, &labels, bw) } else { 25.0 };
+                    let msg_height = if compact { (screen.height() - 118.0 - bh).clamp(35.0, 140.0) } else { 58.0 };
+                    let button_y = if compact { msg_height + 36.0 } else { 101.0 };
+                    let (area, _) = ui.allocate_exact_size(egui::vec2(width, button_y + bh + 12.0), egui::Sense::hover());
                     let at = |x: f32, y: f32, w: f32, h: f32| egui::Rect::from_min_size(area.min + egui::vec2(x, y), egui::vec2(w, h));
                     if let Some(icon) = warning_icon.clone() {
-                        ui.painter().image(icon.id(), at(16.0, 13.0, 32.0, 32.0), egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
+                        ui.painter().image(icon.id(), if compact { at(5.0, 8.0, 28.0, 28.0) } else { at(16.0, 13.0, 32.0, 32.0) }, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
                     }
-                    super::original_dialogs::put_left(ui, at(80.0, 13.0, 337.0, 58.0), egui::Label::new(message.as_str()).wrap());
-                    super::original_dialogs::put_left(ui, at(80.0, 80.0, 337.0, 15.0), egui::Label::new(attributes.as_str()).truncate());
-                    let raw = |key: &str, fallback: &str| self.language_pack.raw(&format!("formDelConfirm.{key}")).unwrap_or_else(|| fallback.to_owned());
+                    if compact {
+                        let mw = width - 64.0;
+                        let message_rect = at(54.0, 8.0, mw, msg_height);
+                        ui.scope_builder(egui::UiBuilder::new().max_rect(message_rect), |ui| {
+                            ui.set_clip_rect(ui.clip_rect().intersect(message_rect));
+                            egui::ScrollArea::vertical().min_scrolled_height(0.0).max_width(mw).max_height(msg_height).show(ui, |ui| {
+                                let mut job = egui::text::LayoutJob::simple(message.to_owned(), egui::TextStyle::Body.resolve(ui.style()), text_color, (mw - 12.0).max(1.0));
+                                job.wrap.break_anywhere = true;
+                                ui.label(job);
+                            });
+                        });
+                        put_left(ui, at(54.0, msg_height + 14.0, mw, 16.0), egui::Label::new(attributes.as_str()).truncate()).on_hover_text(attributes.as_str());
+                    } else {
+                        put_left(ui, at(80.0, 13.0, 337.0, 58.0), egui::Label::new(message.as_str()).wrap());
+                        put_left(ui, at(80.0, 80.0, 337.0, 15.0), egui::Label::new(attributes.as_str()).truncate());
+                    }
                     // Original: btnAll with tab order 0 takes focus first (TntFormShow 0x41ea78 does not call SetFocus), so Enter = Yes to All.
                     // Changed: previously there was no focus, so Enter did nothing.
-                    for (left, slot, key, fallback) in [(172.0, 0, "Caption.btnAll", "Yes to &All"), (256.0, 1, "Caption.btnYes", "&Yes"), (342.0, 2, "Caption.btnNo", "&No")] {
-                        let (button, pressed) = vcl_button(ui, at(left, 101.0, 75.0, 25.0), true, &raw(key, fallback));
+                    for (slot, label) in labels.iter().enumerate() {
+                        let left = if compact { 6.0 + slot as f32 * (bw + 6.0) } else { [172.0, 256.0, 342.0][slot] };
+                        let (button, pressed) = vcl_wrapped_button(ui, at(left, button_y, bw, bh), true, label);
                         if first_frame && slot == 0 {
                             button.request_focus();
                         }
@@ -1242,6 +1349,52 @@ pub(super) fn vcl_button(ui: &mut egui::Ui, rect: egui::Rect, enabled: bool, cap
     (response, pressed)
 }
 
+/// Measure mnemonic-aware buttons before allocating a fixed footer.
+pub(super) fn compact_button_height(ui: &egui::Ui, labels: &[String], width: f32) -> f32 {
+    labels.iter().map(|label| {
+        let (mut job, _) = access_job(ui, label);
+        job.wrap.max_width = (width - 2.0 * ui.spacing().button_padding.x - 2.0).max(1.0);
+        job.wrap.break_anywhere = true;
+        ui.fonts_mut(|f| f.layout_job(job).size().y) + 2.0 * ui.spacing().button_padding.y + 4.0
+    }).fold(25.0, f32::max)
+}
+
+/// Shared narrow form frame. The body scrolls independently of the two
+/// permanently visible confirmation buttons.
+pub(super) fn compact_scroll_form<R>(ui: &mut egui::Ui, id: &'static str, max_size: egui::Vec2, labels: &[String; 2], body: impl FnOnce(&mut egui::Ui) -> R) -> (R, Option<usize>) {
+    let screen = ui.ctx().content_rect();
+    let width = (screen.width() - 40.0).clamp(180.0, max_size.x);
+    let height = (screen.height() - 54.0).clamp(180.0, max_size.y);
+    let bw = (width - 14.0) / 2.0;
+    let bh = compact_button_height(ui, labels, bw);
+    let (area, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+    let at = |x, y, w, h| egui::Rect::from_min_size(area.min + egui::vec2(x, y), egui::vec2(w, h));
+    let content = at(3.0, 0.0, width - 6.0, (height - bh - 8.0).max(40.0));
+    let result = ui.scope_builder(egui::UiBuilder::new().max_rect(content), |ui| {
+        ui.set_clip_rect(ui.clip_rect().intersect(content));
+        egui::ScrollArea::vertical().id_salt(id).max_height(content.height()).min_scrolled_height(0.0).max_width(content.width()).auto_shrink([false, false]).show(ui, |ui| {
+            ui.set_width((content.width() - 12.0).max(80.0));
+            body(ui)
+        }).inner
+    }).inner;
+    let mut choice = None;
+    for (i, label) in labels.iter().enumerate() {
+        if vcl_wrapped_button(ui, at(3.0 + i as f32 * (bw + 8.0), height - bh - 3.0, bw, bh), true, label).1 {
+            choice = Some(i);
+        }
+    }
+    (result, choice)
+}
+
+pub(super) fn vcl_wrapped_button(ui: &mut egui::Ui, rect: egui::Rect, enabled: bool, caption: &str) -> (egui::Response, bool) {
+    let (mut job, access) = access_job(ui, caption);
+    job.wrap.max_width = (rect.width() - 2.0 * ui.spacing().button_padding.x - 2.0).max(1.0);
+    job.wrap.break_anywhere = true;
+    let response = put_enabled(ui, rect, enabled, egui::Button::new(job).wrap());
+    let pressed = response.clicked() || (enabled && ui.is_enabled() && take_dialog_char(ui.ctx(), access));
+    (response, pressed)
+}
+
 /// VCL TButton ('&' accelerator character in Caption). true if clicked or the accelerator character is typed.
 pub(super) fn access_button(ui: &mut egui::Ui, rect: egui::Rect, caption: &str) -> bool {
     vcl_button(ui, rect, true, caption).1
@@ -1257,10 +1410,16 @@ pub(super) fn access_radio(ui: &mut egui::Ui, rect: egui::Rect, selected: bool, 
 /// VCL TLabel ('&' accelerator character in Caption, FocusControl): typing the accelerator character gives focus to the `target` field.
 pub(super) fn access_label(ui: &mut egui::Ui, rect: egui::Rect, caption: &str, target: egui::Id) {
     let (job, access) = access_job(ui, caption);
-    put_left(ui, rect, egui::Label::new(job).truncate());
+    put_left(ui, rect, egui::Label::new(job).truncate()).on_hover_text(caption.replace('&', ""));
     if ui.is_enabled() && take_dialog_char(ui.ctx(), access) {
         ui.memory_mut(|m| m.request_focus(target));
     }
+}
+
+/// Measure the actual mnemonic-aware text before reserving a label or button cell.
+pub(super) fn caption_width(ui: &egui::Ui, caption: &str) -> f32 {
+    let (job, _) = access_job(ui, caption);
+    ui.fonts_mut(|fonts| fonts.layout_job(job).size().x).ceil()
 }
 
 /// VCL TCheckBox ('&' accelerator character in Caption): typing the accelerator character toggles the value. true if it changed.

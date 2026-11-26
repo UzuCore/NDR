@@ -120,10 +120,28 @@ impl App {
         // (Width - SizeGrip * 18) / count; ItemRect 0x7c1dfc: (width * i, 1) .. ((i + 1) * width - 2, Height), the last one ends at Width - 18.
         const SIZE_GRIP: f32 = 18.0;
         let count = cells.len().max(1);
-        let item_width = ((rect.width() - SIZE_GRIP) / count as f32).floor().max(1.0);
+        let available = (rect.width() - SIZE_GRIP).max(count as f32);
+        let item_width = (available / count as f32).floor().max(1.0);
+        let measure = |s: &str| ui.fonts_mut(|f| f.layout_no_wrap(s.to_owned(), font.clone(), Color32::WHITE).size().x).ceil();
+        let desired: Vec<f32> = cells.iter().map(|(key, name)| measure(key) + measure(name) + 21.0).collect();
+        let natural: f32 = desired.iter().sum();
+        // Preserve the original equal cells when they fit. Longer translations
+        // can borrow space from shorter neighbors without reducing the font.
+        // On narrow windows, the full action remains available as a tooltip.
+        let adaptive = desired.iter().any(|&w| w > item_width) && self.language != "ko" && self.language != "en";
+        let widths: Vec<f32> = if adaptive && natural <= available {
+            desired.iter().map(|w| w + (available - natural) / count as f32).collect()
+        } else if adaptive {
+            let minimum: Vec<f32> = cells.iter().map(|(key, _)| measure(key) + 32.0).collect();
+            let base: f32 = minimum.iter().sum();
+            let extra: f32 = desired.iter().zip(&minimum).map(|(want, min)| (want - min).max(0.0)).sum();
+            if available >= base && extra > 0.0 {
+                desired.iter().zip(&minimum).map(|(want, min)| min + (available - base) * (want - min).max(0.0) / extra).collect()
+            } else { vec![item_width; count] }
+        } else { vec![item_width; count] };
         let item_rect = |index: usize| {
-            let left = rect.left() + item_width * index as f32;
-            let right = if index + 1 == count { rect.right() - SIZE_GRIP } else { rect.left() + item_width * (index + 1) as f32 - 2.0 };
+            let left = rect.left() + widths[..index].iter().sum::<f32>();
+            let right = if index + 1 == count { rect.right() - SIZE_GRIP } else { left + widths[index] - 2.0 };
             egui::Rect::from_min_max(egui::pos2(left, rect.top() + 1.0), egui::pos2(right.max(left), rect.bottom()))
         };
         let mut clicked = None;
@@ -143,6 +161,7 @@ impl App {
             let mut job = egui::text::LayoutJob::single_section(name.clone(), egui::TextFormat::simple(font.clone(), if response.hovered() || pressed { over_color } else { text_color }));
             job.wrap = egui::text::TextWrapping { max_width: (cell.right() - 2.0 - name_left).max(0.0), max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
             let galley = ui.painter().layout_job(job);
+            let elided = galley.elided;
             let name_top = cell.center().y - galley.size().y / 2.0;
             ui.painter().with_clip_rect(cell.with_max_x(cell.right() - 2.0 + shift.x)).galley(egui::pos2(name_left, name_top) + shift, galley, text_color);
             if let Some(divider) = &divider {
@@ -157,6 +176,9 @@ impl App {
             // (FUN_004308a0, no menu appears).
             if response.secondary_clicked() && !(modifiers.alt || modifiers.ctrl) {
                 clicked = Some(key.clone());
+            }
+            if elided {
+                response.on_hover_text(format!("{key} {name}"));
             }
         }
         // Size grip (MouseMove 0x7c1c24 / MouseDown 0x7c1b6c): past Width - 20 the cursor is crSizeNWSE and a left press resizes the

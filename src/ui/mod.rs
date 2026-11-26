@@ -2213,7 +2213,9 @@ impl eframe::App for App {
                 if let Some(path) = &self.options.report {
                     // leftCount/rightCount = list items (drive items appended at the end are counted separately in leftDrives/rightDrives).
                     let items = |p: &Pane| p.entries.len() - p.drive_count();
-                    let report = serde_json::json!({"language":self.language,"frames":self.frames,"leftCount":items(&self.panes[0]),"rightCount":items(&self.panes[1]),"leftDrives":self.panes[0].drive_count(),"rightDrives":self.panes[1].drive_count(),"leftError":self.panes[0].error,"rightError":self.panes[1].error,"leftLoading":self.panes[0].loading,"rightLoading":self.panes[1].loading,"profile":self.profile,"runtime":"Rust","renderer":"OpenGL","foreground":self.smoke_foreground,"repaintCauses":self.smoke_repaint_causes,"slowestFrameMs":(self.smoke_slowest_frame_ms * 10.0).round() / 10.0,"slowFrames":self.smoke_slow_frames,"loadedMs":self.smoke_loaded_ms,"tipWindow":self.smoke_tip_window});
+                    let viewport = ctx.content_rect();
+                    let native_scale = ctx.input(|i| i.viewport().native_pixels_per_point);
+                    let report = serde_json::json!({"language":self.language,"frames":self.frames,"leftCount":items(&self.panes[0]),"rightCount":items(&self.panes[1]),"leftDrives":self.panes[0].drive_count(),"rightDrives":self.panes[1].drive_count(),"leftError":self.panes[0].error,"rightError":self.panes[1].error,"leftLoading":self.panes[0].loading,"rightLoading":self.panes[1].loading,"profile":self.profile,"runtime":"Rust","renderer":"OpenGL","foreground":self.smoke_foreground,"repaintCauses":self.smoke_repaint_causes,"slowestFrameMs":(self.smoke_slowest_frame_ms * 10.0).round() / 10.0,"slowFrames":self.smoke_slow_frames,"loadedMs":self.smoke_loaded_ms,"tipWindow":self.smoke_tip_window,"viewportPoints":[viewport.width(),viewport.height()],"nativePixelsPerPoint":native_scale,"pixelsPerPoint":ctx.pixels_per_point()});
                     let _ = std::fs::write(
                         path,
                         serde_json::to_vec_pretty(&report).unwrap_or_default(),
@@ -2303,6 +2305,19 @@ impl eframe::App for App {
         self.save();
     }
 }
+/// Drive type is application text; volume labels are OS/user data.
+fn localized_drive_kind(language: &compat::Language, kind: &str) -> String {
+    match kind {
+        "Removable" => language.text("NDR.UI_DRIVE_KIND_REMOVABLE", "Removable Disk"),
+        "Fixed" => language.text("NDR.UI_DRIVE_KIND_FIXED", "Hard Disk"),
+        "Network" => language.text("NDR.UI_DRIVE_KIND_NETWORK", "Network Drive"),
+        "Ram" => language.text("NDR.UI_DRIVE_KIND_RAM", "RAM Disk"),
+        "CDRom" => "CD/DVD".into(),
+        "NoRootDirectory" => language.text("NDR.UI_DRIVE_KIND_NOROOT", "No root directory"),
+        _ => language.text("NDR.UI_DRIVE_KIND_UNKNOWN", "Unknown drive"),
+    }
+}
+
 /// Keep the shell's size rounding, but do not leak the OS language's byte
 /// label into NDR's selected language for sizes below one KiB.
 fn localized_byte_size(language: &compat::Language, bytes: u64) -> String {

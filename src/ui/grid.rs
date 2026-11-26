@@ -70,6 +70,8 @@ pub(super) struct GridView<'a> {
     pub row_color: Option<&'a dyn Fn(usize) -> Option<Color32>>,
     /// Row background (original TListView Color). None uses the theme background with striped rows.
     pub background: Option<Color32>,
+    /// Keep long cell values accessible without widening the table.
+    pub cell_tooltips: bool,
 }
 
 pub(super) const ROW_HEIGHT: f32 = 22.0;
@@ -161,9 +163,18 @@ fn show_rows_top_down(ui: &mut egui::Ui, view: &GridView, state: &mut GridState,
             Some((sorted, descending)) if sorted == c => if descending { " ▼" } else { " ▲" },
             _ => "",
         };
-        ui.painter().with_clip_rect(cell.shrink2(egui::vec2(4.0, 0.0))).text(cell.left_center() + egui::vec2(6.0, 0.0), egui::Align2::LEFT_CENTER, format!("{}{arrow}", column.title), font.clone(), weak(visuals.strong_text_color()));
+        let caption = format!("{}{arrow}", column.title);
+        let color = weak(visuals.strong_text_color());
+        let mut job = egui::text::LayoutJob::single_section(caption.clone(), egui::TextFormat::simple(font.clone(), color));
+        job.wrap = egui::text::TextWrapping { max_width: (cell.width() - 12.0).max(0.0), max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
+        let galley = ui.painter().layout_job(job);
+        let elided = galley.elided;
+        ui.painter().with_clip_rect(cell.shrink2(egui::vec2(4.0, 0.0))).galley(egui::pos2(cell.left() + 6.0, cell.center().y - galley.size().y / 2.0), galley, color);
         if response.clicked() {
             events.sort = Some(c);
+        }
+        if elided {
+            response.on_hover_text(caption);
         }
         x += column.width;
     }
@@ -252,7 +263,20 @@ fn show_rows_top_down(ui: &mut egui::Ui, view: &GridView, state: &mut GridState,
                         } else {
                             (cell.left_center() + egui::vec2(6.0, 0.0), egui::Align2::LEFT_CENTER)
                         };
-                        ui.painter().with_clip_rect(cell.shrink2(egui::vec2(4.0, 0.0))).text(anchor, align, text(row, c), font.clone(), color);
+                        let value = text(row, c);
+                        let painter = ui.painter().with_clip_rect(cell.shrink2(egui::vec2(4.0, 0.0)));
+                        if view.cell_tooltips {
+                            let mut job = egui::text::LayoutJob::single_section(value.clone(), egui::TextFormat::simple(font.clone(), color));
+                            job.wrap = egui::text::TextWrapping { max_width: (cell.width() - 12.0).max(0.0), max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
+                            let galley = painter.layout_job(job);
+                            let pos = align.anchor_size(anchor, galley.size()).min;
+                            if galley.elided && response.hovered() && ui.rect_contains_pointer(cell) {
+                                response.clone().on_hover_text(value);
+                            }
+                            painter.galley(pos, galley, color);
+                        } else {
+                            painter.text(anchor, align, value, font.clone(), color);
+                        }
                     }
                     x += column.width;
                 }

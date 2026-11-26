@@ -246,7 +246,96 @@ impl SearchForm {
 }
 
 /// Draws the window.
+/// Narrow search form: the existing criteria, validation and search
+/// commands are reused. Each group has its own bounded controls.
+fn compact_search_ui(ui: &mut egui::Ui, form: &mut SearchForm, language: &compat::Language, enter: bool) -> Option<SearchAction> {
+    let t = |key, en, ko| search_text(language, key, en, ko);
+    let labels = [language.text("RES.SEARCH", "Search"), language.text("RES.CANCEL", "Cancel")];
+    let (mut action, choice) = super::original_dialogs::compact_scroll_form(ui, "compact-search-body", egui::vec2(750.0, 720.0), &labels, |ui| {
+        let mut action = None;
+        let field = |ui: &mut egui::Ui, label: String, value: &mut String| {
+            ui.add(egui::Label::new(label).wrap());
+            ui.add_sized([ui.available_width(), 23.0], egui::TextEdit::singleline(value))
+        };
+        field(ui, t("Caption.lRoot", "Search in", "검색 위치"), &mut form.root);
+        ui.horizontal_wrapped(|ui| {
+            if ui.add(egui::Button::new(t("Caption.btnBrowse", "Browse…", "찾아보기…")).wrap()).clicked() { action=Some(SearchAction::Browse); }
+            if ui.add(egui::Button::new(t("Caption.btnAdd", "Add", "추가")).wrap()).clicked() { action=Some(SearchAction::Add); }
+        });
+        let presets = [language.text("NDRSearch.AllLocalDrives", "All local drives"), language.text("NDRSearch.DriveC", "C:"), language.text("NDRSearch.DriveD", "D:"), language.text("NDRSearch.DriveE", "E:"), language.text("NDRSearch.DriveF", "F:"), language.text("NDRSearch.Documents", "Documents"), language.text("NDRSearch.Custom2", "Custom 2")];
+        egui::ComboBox::from_id_salt("search-presets").width((ui.available_width()-8.0).max(80.0)).selected_text("").show_opaque(ui, |ui| {
+            for (i,label) in presets.iter().enumerate() { if ui.selectable_label(false,label).clicked() { action=Some(SearchAction::Preset(i)); } }
+        });
+        egui::ScrollArea::vertical().id_salt("compact-search-locations").max_height(90.0).min_scrolled_height(0.0).auto_shrink([false,true]).show(ui,|ui| {
+            for (i,location) in form.locations.iter().enumerate() {
+                if ui.add(egui::Button::selectable(form.selected_location==Some(i),location).wrap()).on_hover_text(location).clicked() { form.selected_location=Some(i); }
+            }
+        });
+        ui.horizontal_wrapped(|ui| {
+            for (label,value) in [(t("Caption.btnMoveUp", "Up", "위로"), SearchAction::Up),(t("Caption.btnMoveDown", "Down", "아래로"), SearchAction::Down),(t("Caption.btnRemove", "Remove", "제거"), SearchAction::Remove),(t("Caption.btnSaveLocations", "Save locations", "위치 저장"), SearchAction::SaveLocations)] {
+                if ui.add(egui::Button::new(label).wrap()).clicked() { action=Some(value); }
+            }
+        });
+        ui.separator();
+        ui.add(egui::Label::new(t("Caption.lName","File name","파일 이름")).wrap());
+        ui.horizontal(|ui| {
+            let w=if form.history.is_empty(){ui.available_width()}else{(ui.available_width()-34.0).max(40.0)};
+            ui.add_sized([w,23.0],egui::TextEdit::singleline(&mut form.patterns));
+            if !form.history.is_empty() { ui.menu_button("▼",|ui| { for item in form.history.clone() { if ui.button(&item).clicked() { form.patterns=item;ui.close(); } } }); }
+        });
+        ui.add(egui::Label::new(t("Caption.lCategory","Category","범주")).wrap());
+        let categories=[("Caption.CategoryAll","All files","모든 파일"),("Caption.CategoryDocuments","Documents","문서"),("Caption.CategoryPictures","Pictures and images","사진 및 이미지"),("Caption.CategoryAudio","Audio","오디오"),("Caption.CategoryVideo","Video","동영상"),("Caption.CategoryArchives","Archives","압축 파일"),("Caption.CategoryApplications","Programs","프로그램 파일"),("Caption.CategoryFolders","Folders only","폴더만"),("Caption.CategoryOther","Other files","기타 파일")].map(|(key,en,ko)|t(key,en,ko));
+        egui::ComboBox::from_id_salt("search-category").width((ui.available_width()-8.0).max(80.0)).selected_text(&categories[form.category.min(8)]).show_opaque(ui, |ui| {
+            for (i,label) in categories.iter().enumerate(){ui.selectable_value(&mut form.category,i,label);}
+        });
+        field(ui,t("Caption.lExtension","Extensions","확장자"),&mut form.extensions).on_hover_text(t("Hint.extension","e.g. TXT; DOC; *.PDF (empty: every extension)","예: TXT; DOC; *.PDF (비우면 모든 확장자)"));
+        field(ui,t("Caption.lContent","Containing text","파일 내용 포함"),&mut form.content);
+        ui.separator();
+        ui.strong(t("Caption.lSize","Size range","크기 범위"));
+        let bytes=language.text("NDR.UI_SIZE_BYTES","bytes");
+        let units=[bytes.as_str(),"KiB","MiB","GiB"];
+        for (id,label,value,unit) in [("search-min-unit",t("Caption.btnMinimum","minimum","최소"),&mut form.minimum,&mut form.minimum_unit),("search-max-unit",t("Caption.btnMaximum","maximum","최대"),&mut form.maximum,&mut form.maximum_unit)] {
+            ui.add(egui::Label::new(label).wrap());
+            ui.horizontal(|ui| {
+                let w=(ui.available_width()-94.0).max(40.0);
+                ui.add_sized([w,23.0],egui::TextEdit::singleline(value));
+                egui::ComboBox::from_id_salt(id).width(75.0).selected_text(units[(*unit).min(3)]).show_opaque(ui,|ui| {
+                    for (i,u) in units.iter().enumerate(){ui.selectable_value(unit,i,*u);}
+                });
+            });
+        }
+        ui.separator();
+        ui.strong(t("Caption.lDateRange","Date/time range","날짜/시간 범위"));
+        for (label,date,time) in [(t("Caption.btnFrom","from","부터"),&mut form.date_from,&mut form.time_from),(t("Caption.btnTo","to","까지"),&mut form.date_to,&mut form.time_to)] {
+            ui.add(egui::Label::new(label).wrap());
+            ui.horizontal(|ui| {
+                let w=ui.available_width()-ui.spacing().item_spacing.x;
+                ui.add_sized([w*0.60,23.0],egui::TextEdit::singleline(date).hint_text("yyyy-MM-dd"));
+                ui.add_sized([w*0.40,23.0],egui::TextEdit::singleline(time).hint_text("HH:mm"));
+            });
+        }
+        ui.add(egui::Label::new(t("Caption.lDateKind","Date kind","날짜 기준")).wrap());
+        let kinds=[("Caption.TimeAll","Any date","모든 날짜"),("Caption.TimeModified","Date modified","수정한 날짜"),("Caption.TimeCreated","Date created","만든 날짜"),("Caption.TimeAccessed","Date accessed","마지막 액세스 날짜")].map(|(key,en,ko)|t(key,en,ko));
+        egui::ComboBox::from_id_salt("search-time-kind").width((ui.available_width()-8.0).max(80.0)).selected_text(&kinds[form.time_kind.min(3)]).show_opaque(ui,|ui| {
+            for(i,label) in kinds.iter().enumerate(){ui.selectable_value(&mut form.time_kind,i,label);}
+        });
+        ui.separator();
+        ui.strong(t("Caption.lOptions","Options","검색 옵션"));
+        for (value,label) in [(&mut form.recursive,t("Caption.chkRecursive","Include subfolders","하위 폴더 포함")),(&mut form.hidden,t("Caption.chkHidden","Include hidden and system items","숨김·시스템 항목 포함")),(&mut form.files,t("Caption.chkFiles","Files","파일")),(&mut form.folders,t("Caption.chkFolders","Folders","폴더")),(&mut form.match_case,t("Caption.chkMatchCase","Match case","대소문자 구분"))] {
+            let mut job=egui::text::LayoutJob::simple(label,egui::TextStyle::Body.resolve(ui.style()),ui.visuals().text_color(),(ui.available_width()-24.0).max(1.0));
+            job.wrap.break_anywhere=true;
+            ui.add(egui::Checkbox::new(value,job));
+        }
+        action
+    });
+    if let Some(choice)=choice { action=Some(if choice==0{SearchAction::Search}else{SearchAction::Cancel}); }
+    if enter && action.is_none(){action=Some(SearchAction::Search);}
+    action
+}
+
 pub(super) fn search_ui(ui: &mut egui::Ui, form: &mut SearchForm, language: &compat::Language, _ko: bool, enter: bool) -> Option<SearchAction> {
+    let screen=ui.ctx().content_rect();
+    if screen.width()<850.0 || screen.height()<690.0 { return compact_search_ui(ui,form,language,enter); }
     let t = |key, en, ko| search_text(language, key, en, ko);
     let mut action = None;
     ui.set_width(750.0);

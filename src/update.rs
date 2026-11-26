@@ -81,6 +81,45 @@ pub fn download_github_update_with_progress(
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UpdatePhase { Downloading, Verifying, Preparing, Installing, Failed }
 
+/// Translate NDR-owned update diagnostics at the UI boundary. Keep external
+/// OS/network diagnostics verbatim for troubleshooting.
+pub fn localized_failure(language: &crate::compat::Language, raw: &str) -> String {
+    let key = match raw {
+        "GitHub did not return a published stable release" | "Missing release tag" |
+        "Invalid build tag" | "Release assets missing" | "Complete NDR ZIP missing" =>
+            Some(("NDR.UPD_DETAIL_RELEASE_INVALID", "The release information is invalid or incomplete.")),
+        "Unexpected release download URL" | "Unsafe release ZIP size" |
+        "Release ZIP has no trustworthy SHA-256 digest" | "Update download was not secure or HTTP 200" =>
+            Some(("NDR.UPD_DETAIL_UNTRUSTED", "The update package could not be verified as trustworthy.")),
+        "Update ZIP size differs from GitHub release" =>
+            Some(("NDR.UPD_DETAIL_SIZE", "The downloaded ZIP size does not match the release.")),
+        "Update SHA-256 verification failed" =>
+            Some(("NDR.UPD_DETAIL_HASH", "SHA-256 verification of the update failed.")),
+        "Installation directory not found" | "Run the updater from a complete installed NDR folder" =>
+            Some(("NDR.UPD_DETAIL_INSTALL_DIR", "Run the updater from a complete NDR installation.")),
+        "Update staging folder missing" =>
+            Some(("NDR.UPD_DETAIL_STAGING", "Could not prepare the update files.")),
+        "The NexusFile update feed is malformed and has no valid version record." |
+        "The NexusFile update feed contains unsupported extra records." =>
+            Some(("NDR.UPD_DETAIL_FEED_INVALID", "The update feed is malformed.")),
+        "Download failed: Timeout" =>
+            Some(("NDRUpdate.RequestTimedOut", "The update server did not respond within 15 seconds.")),
+        "Download failed: TooLarge" =>
+            Some(("NDR.UPD_DETAIL_DOWNLOAD_LIMIT", "The update package exceeds the supported size limit.")),
+        _ => None,
+    };
+    if let Some((key, fallback)) = key {
+        return language.text(key, fallback);
+    }
+    if let Some(detail) = raw.strip_prefix("Could not launch updater: ") {
+        return format!("{}\n{}", language.text("NDR.UPD_DETAIL_LAUNCH", "Could not start the installer."), detail);
+    }
+    if let Some(detail) = raw.strip_prefix("Download failed: ") {
+        return format!("{}\n{}", language.text("NDRUpdate.RequestFailed", "Could not contact the update server. Check your connection and update feed."), detail);
+    }
+    raw.to_owned()
+}
+
 fn write_installer_script(path: &Path) -> std::io::Result<()> {
     // Windows PowerShell 5.1 treats BOM-less -File scripts as ANSI.
     std::fs::write(path, format!("\u{feff}{}", include_str!("apply-update.ps1")))
@@ -233,7 +272,8 @@ mod tests {
         assert!(bytes.starts_with(&[0xef, 0xbb, 0xbf]));
         let content = std::str::from_utf8(&bytes[3..]).unwrap();
         assert_eq!(content, include_str!("apply-update.ps1"));
-        assert!(content.contains("Get-Content -LiteralPath $TextPath -Raw -Encoding UTF8"));
+        assert!(content.contains("Get-Content -LiteralPath $path -Raw -Encoding UTF8"));
+        assert!(content.contains("Import-InstallerText $TextPath"));
         assert!(content.contains("$script:installerText"));
     }
 
@@ -244,6 +284,11 @@ mod tests {
             let selected = crate::compat::Language::load(root, locale);
             let messages = installer_messages(&selected);
             let serialized = serde_json::to_vec(&messages).unwrap();
+            if let Some(dir) = std::env::var_os("NDR_INSTALLER_QA_DIR") {
+                let dir = PathBuf::from(dir);
+                std::fs::create_dir_all(&dir).unwrap();
+                std::fs::write(dir.join(format!("{locale}.json")), &serialized).unwrap();
+            }
             let decoded: std::collections::BTreeMap<String, String> = serde_json::from_slice(&serialized).unwrap();
             let english = installer_messages(&crate::compat::Language::load(root, "en"));
             for (field, key) in [
@@ -260,6 +305,32 @@ mod tests {
                     assert_ne!(decoded[field], english[field], "{locale}: English fallback for {key}");
                 }
             }
+        }
+    }
+
+    #[test]
+    fn updater_owned_failures_are_localized_in_every_language() {
+        let root = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/Resources/Languages"));
+        let cases = [
+            ("Missing release tag", "RELEASE_INVALID"),
+            ("Unexpected release download URL", "UNTRUSTED"),
+            ("Update ZIP size differs from GitHub release", "SIZE"),
+            ("Update SHA-256 verification failed", "HASH"),
+            ("Run the updater from a complete installed NDR folder", "INSTALL_DIR"),
+            ("Update staging folder missing", "STAGING"),
+            ("The NexusFile update feed is malformed and has no valid version record.", "FEED_INVALID"),
+            ("Download failed: TooLarge", "DOWNLOAD_LIMIT"),
+        ];
+        for &(locale, _) in crate::compat::BUILTIN_LANGUAGES {
+            let language = crate::compat::Language::load(root, locale);
+            for (raw, suffix) in cases {
+                let key = format!("NDR.UPD_DETAIL_{suffix}");
+                let primary = language.primary_raw(&key).unwrap();
+                assert_eq!(localized_failure(&language, raw), primary, "{locale}: {key}");
+            }
+            let launch = localized_failure(&language, "Could not launch updater: OS error 5");
+            assert_eq!(launch, format!("{}\nOS error 5", language.primary_raw("NDR.UPD_DETAIL_LAUNCH").unwrap()));
+            assert_eq!(localized_failure(&language, "OS error 112"), "OS error 112");
         }
     }
 

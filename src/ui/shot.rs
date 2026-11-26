@@ -53,7 +53,7 @@ impl App {
         ctx.request_repaint();
         if self.frames == OPEN_FRAME {
             self.open_shot_sample(&kind);
-            if kind == "narrowpane" {
+            if matches!(kind.as_str(), "narrowpane" | "error-long") {
                 ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(800.0, 480.0)));
             }
         }
@@ -99,6 +99,12 @@ impl App {
         let image = ctx.input(|i| i.raw.events.iter().find_map(|e| if let egui::Event::Screenshot { image, .. } = e { Some(image.clone()) } else { None }));
         if let Some(image) = image {
             let _ = save_png(&path, image.width() as u32, image.height() as u32, image.as_raw());
+            // The progress samples own a presentation-only job with no worker.
+            // Release it after capture so normal close guards do not keep the
+            // isolated smoke-test instance alive indefinitely.
+            if kind.starts_with("progress-") {
+                self.job = None;
+            }
             self.options.shot = None;
         }
     }
@@ -109,6 +115,87 @@ impl App {
         let _ = std::fs::create_dir_all(folder.join("b"));
         let text = |app: &App, key: &str| app.language_pack.text(key, key);
         match kind {
+            "progress-copy" | "progress-move" | "progress-delete" | "progress-recycle" | "progress-active" | "progress-archive" => {
+                // Presentation-only fixtures. Never start an actual filesystem job.
+                let (_, receiver) = std::sync::mpsc::channel();
+                let mut job = Job::new(receiver, std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), text(self, "RES.COPYING"));
+                use super::file_operation::{JobReport, ProgressInfo, TransferReservation};
+                let source = folder.join("a").join("document.bin");
+                let destination = folder.join("b");
+                job.progress = Some(ProgressInfo {
+                    from: Some(folder.join("a").to_string_lossy().into_owned()),
+                    to: (!matches!(kind, "progress-delete" | "progress-recycle")).then(|| destination.to_string_lossy().into_owned()),
+                    total_files: Some(57), total_bytes: Some(12345678), prefer_bytes: true,
+                    caption: None,
+                });
+                job.report = match kind {
+                    "progress-delete" | "progress-recycle" => JobReport::Delete { recycle: kind == "progress-recycle", skipped: 0 },
+                    "progress-archive" => JobReport::Generic,
+                    _ => JobReport::Transfer { verb: if kind == "progress-move" { ("이동", "move") } else { ("복사", "copy") }, requested: 57, clear_clipboard: false },
+                };
+                if matches!(kind, "progress-copy" | "progress-move" | "progress-active") {
+                    job.reservation = TransferReservation::from_operation(&Operation::Copy { sources: vec![source.clone()], destination, move_files: kind == "progress-move" });
+                }
+                if kind == "progress-active" {
+                    job.path = source.to_string_lossy().into_owned();
+                    job.bytes = 6543210;
+                    job.files = 23;
+                }
+                if kind == "progress-archive" {
+                    job.title = text(self, "RES.EXTRACTING");
+                    job.archive_clipboard_started = Some(Instant::now() - Duration::from_secs(1));
+                }
+                self.job = Some(job);
+            }
+            "update-download" | "update-verify" | "update-prepare" | "update-install" | "update-failed" => {
+                use ndr::update::UpdatePhase;
+                let phase = match kind {
+                    "update-download" => UpdatePhase::Downloading,
+                    "update-verify" => UpdatePhase::Verifying,
+                    "update-prepare" => UpdatePhase::Preparing,
+                    "update-install" => UpdatePhase::Installing,
+                    _ => UpdatePhase::Failed,
+                };
+                self.update_progress = Some(super::main_window::UpdateProgress {
+                    tag: "build-9999".into(), phase, downloaded: 7340032, total: 14680064,
+                    error: (phase == UpdatePhase::Failed).then(|| "Update SHA-256 verification failed".into()),
+                    failed_phase: (phase == UpdatePhase::Failed).then_some(UpdatePhase::Verifying),
+                });
+            }
+            "error-transfer" | "error-archive" | "error-update" | "error-retry" | "error-continue" | "error-long" => {
+                let (title, message) = match kind {
+                    "error-transfer" => (text(self, "NDR.OP_TRANSFER_OPERATION_FAILED"), text(self, "NDR.OP_TRANSFER_PARTIAL_DETAIL").replace("{0}", "2").replace("{1}", "1").replace("{2}", "3")),
+                    "error-archive" => ("NDR".into(), text(self, "RES.RAR_INVALIDFILE_OR_CORRUPTED")),
+                    _ => (text(self, "NDR.UPD_TITLE"), text(self, "NDR.UPD_RELEASE_FAILURE")),
+                };
+                let flags = match kind {
+                    "error-retry" => ndr::msgbox::MB_ABORTRETRYIGNORE,
+                    "error-continue" => ndr::msgbox::MB_CANCELTRYCONTINUE,
+                    _ => ndr::msgbox::MB_OK,
+                };
+                let message = if kind == "error-long" {
+                    (0..30).map(|i| format!("{message}\nD:\\test\\{}\\document-{i}.bin", "long-folder-".repeat(18))).collect::<Vec<_>>().join("\n")
+                } else { message };
+                self.system_box(&title, &message, flags | ndr::msgbox::MB_ICONEXCLAMATION, |_, _, _| {});
+            }
+            "split" => {
+                let source = folder.join("a").join("document.bin");
+                let form = super::split_dialogs::SplitForm { source, length: 12345678, path: folder.join("b").to_string_lossy().into_owned(), size: "1 MB".into() };
+                self.push_original_dialog(text(self, "formFileSplit.Form.Caption"), DialogKind::Split(form), |_, _, _| {});
+            }
+            "join" => {
+                let form = super::split_dialogs::JoinForm {
+                    files: vec![(folder.join("a").join("document.001"), Some(1234567)), (folder.join("a").join("document.002"), Some(7654321))],
+                    selected: Some(0), join_text: false, name: "document.bin".into(),
+                };
+                self.push_original_dialog(text(self, "formFileJoin.Form.Caption"), DialogKind::Join(form), |_, _, _| {});
+            }
+            "shortcuts" => self.show_shortcut_window(),
+            "dropmenu" => {
+                let source = folder.join("a").join("document.txt");
+                let _ = std::fs::write(&source, b"isolated drop menu fixture");
+                self.show_drop_menu(1, vec![source], folder.join("b"), egui::pos2(120.0, 100.0));
+            }
             "prompt" => {
                 let (title, message) = (text(self, "RES.TITLE_FIND"), text(self, "RES.MSG_FIND"));
                 self.prompt(&title, &message, "report", Some(vec!["one".into(), "two".into()]), false, |_, _, _| {});
@@ -124,11 +211,12 @@ impl App {
             "delconfirm" => {
                 self.push_original_dialog(text(self, "formDelConfirm.Form.Caption"), DialogKind::DeleteConfirm { message: ndr::markup::substitute(&text(self, "RES.QUE_DELCONFIRM"), &["document.txt"]), attributes: "R  A".into() }, |_, _, _| {});
             }
-            "conflict" => {
+            "conflict" | "conflict-resume" | "conflict-folder" => {
                 let (source, destination) = (folder.join("a").join("document.txt"), folder.join("b").join("document.txt"));
                 let _ = std::fs::write(&source, b"new contents");
                 let _ = std::fs::write(&destination, b"old");
-                let form = super::file_operation::ConflictForm::read(&source, &destination, false);
+                let mut form = super::file_operation::ConflictForm::read(&source, &destination, kind == "conflict-resume");
+                if kind == "conflict-folder" { form.source_dir = true; form.destination_dir = true; }
                 self.push_original_dialog(text(self, "formFileExists.Form.Caption"), DialogKind::FileConflict(Box::new(form)), |_, _, _| {});
             }
             "ftpquick" => self.ftp_quick_connect("ftp://ftp.example.com".into()),
@@ -189,7 +277,7 @@ impl App {
                 self.push_original_dialog(text(self, "formChangeAttr.Form.Caption"), DialogKind::Attributes(form), |_, _, _| {});
             }
             "editshortcut" => {
-                let form = super::shortcut_window::EditShortcutForm { caption: "Copy".into(), original: "Ctrl+C".into(), text: "Ctrl+C".into(), last_state: None, available: vec!["Ctrl+Q".into(), "Ctrl+W".into()], chosen: None };
+                let form = super::shortcut_window::EditShortcutForm { caption: text(self, "RES.COPY"), original: "Ctrl+C".into(), text: "Ctrl+C".into(), last_state: None, available: vec!["Ctrl+Q".into(), "Ctrl+W".into()], chosen: None };
                 self.push_original_dialog(text(self, "formEditShortCut.Form.Caption"), DialogKind::EditShortcut(form), |_, _, _| {});
             }
             "savelist" => {
@@ -197,18 +285,31 @@ impl App {
                 let form = super::list_export_dialog::ListExportForm::new(rows);
                 self.push_original_dialog(text(self, "formSaveList.Form.Caption"), DialogKind::ListExport(Box::new(form)), |_, _, _| {});
             }
-            "foldertree" => {
-                let lines: Vec<ndr::folder_tree::Line> = [
+            "foldertree" | "foldertree-search" | "foldertree-search-many" | "foldertree-favorites" => {
+                let mut lines: Vec<ndr::folder_tree::Line> = [
                     (true, 0, "C:\\"), (true, 1, "Program Files"), (true, 2, "Common Files"), (false, 2, "Internet Explorer"), (true, 2, "Windows NT"),
                     (true, 3, "Accessories"), (true, 1, "Users"), (true, 2, "user"), (true, 3, "Documents"), (true, 3, "Downloads"), (true, 3, "Pictures"),
                     (true, 2, "Public"), (true, 1, "Windows"), (false, 2, "System32"), (false, 2, "Temp"),
                 ].iter().map(|(e, l, n)| (*e, *l, n.to_string())).collect();
+                if kind == "foldertree-search-many" {
+                    lines.extend((0..24).map(|n| (false, 1, format!("needle_{n:02}"))));
+                }
                 let drives = vec![(PathBuf::from("C:\\"), "Local Disk".to_owned()), (PathBuf::from("D:\\"), "Data".to_owned())];
                 let mut form = super::folder_tree_dialog::FolderTreeForm::new(&self.settings, &self.profile, drives, vec!["C:\\Users\\user\\Downloads".into()]);
                 form.tree = ndr::folder_tree::Tree::from_lines(&lines).unwrap_or_default();
                 form.drive = "C:\\".into();
                 let target = form.tree.find_path("C:\\Users\\user\\Pictures");
                 form.focus(target, 1);
+                if kind == "foldertree-search" || kind == "foldertree-search-many" {
+                    let mut search = super::folder_tree_dialog::SearchFolder { query: if kind == "foldertree-search-many" { "needle".into() } else { "user".into() }, ..Default::default() };
+                    search.run(&form.tree);
+                    if kind == "foldertree-search-many" { search.top_result = 16; }
+                    form.search = Some(search);
+                }
+                if kind == "foldertree-favorites" {
+                    form.favorites = (0..20).map(|n| (n, format!("QA favorite {n:02}"), "C:\\Users\\user\\Pictures".into())).collect();
+                    form.favorites_open = true;
+                }
                 self.push_original_dialog(text(self, "formFolderTree.Form.Caption"), DialogKind::FolderTree(Box::new(form)), |_, _, _| {});
             }
             "tabs" => {
@@ -264,7 +365,7 @@ impl App {
                     Ok(())
                 });
             }
-            "advrename" | "advrename-delete" => {
+            "advrename" | "advrename-delete" | "advrename-replace" | "advrename-case" | "advrename-number" | "advrename-extension" | "advrename-rules" | "advrename-preview" => {
                 self.active = 0;
                 // Item 0 is ".." (since r106) and cannot be renamed. The first ordinary item.
                 self.panes[0].cursor = self.panes[0].entries.iter().position(|e| !e.is_parent() && !e.drive).unwrap_or(0);
@@ -273,8 +374,15 @@ impl App {
                     form.editor.text = "new_".into();
                     form.rules.push(form.editor.clone());
                     form.selected_rule = Some(0);
-                    if kind == "advrename-delete" {
-                        form.editor.action = "Delete".into();
+                    match kind {
+                        "advrename-delete" => form.editor.action = "Delete".into(),
+                        "advrename-replace" => { form.editor.action = "Replace".into(); form.editor.position = "All".into(); }
+                        "advrename-case" => form.editor.action = "Case".into(),
+                        "advrename-number" => form.editor.action = "Number".into(),
+                        "advrename-extension" => form.editor.action = "Extension".into(),
+                        "advrename-rules" => form.compact_page = 1,
+                        "advrename-preview" => form.compact_page = 2,
+                        _ => {}
                     }
                 }
             }
@@ -287,7 +395,10 @@ impl App {
                 form.load(Some(0));
                 self.push_original_dialog(text(self, "formFTPSiteManager.Form.Caption"), DialogKind::RemoteSites(Box::new(form)), |_, _, _| {});
             }
-            "credentials" => self.credentials_dialog("Network drive credentials", |_, _| {}),
+            "credentials" => {
+                let title = self.language_pack.text("NDR.UI_TOOLS_NETWORK_CREDENTIALS", "Network drive credentials");
+                self.credentials_dialog(&title, |_, _| {});
+            }
             // C# remote window (not connected): for checking the skin images of the upload/download buttons in the middle.
             "remote" => self.open_remote_window(None, None),
             "search" => self.search_command(),
@@ -295,6 +406,19 @@ impl App {
             "vaultcreate" => self.open_vault(folder.join("a"), true),
             "vaultunlock" => self.open_vault(folder.join("sample.ndr"), false),
             "advselect" => self.advanced_select(false),
+            "syncpreview" => {
+                use ndr::folder_compare::{Difference, DifferenceKind};
+                let now = Some(std::time::SystemTime::now());
+                let rows = ["alpha.txt", "folder\\a_long_filename_for_the_synchronization_preview.txt", "beta.txt", "omega.txt"].into_iter().enumerate().map(|(i, name)| Difference {
+                    relative: name.into(), right_relative: name.into(),
+                    kind: if i == 2 { DifferenceKind::Different } else { DifferenceKind::LeftOnly },
+                    left_size: 1234, right_size: if i == 2 { 4321 } else { 0 },
+                    left_modified: now, right_modified: if i == 2 { now } else { None },
+                    left_dir: false, right_dir: false,
+                }).collect();
+                let form = super::compare_dialog::ComparisonForm::new(folder.join("a").to_string_lossy().into_owned(), folder.join("b").to_string_lossy().into_owned(), rows, true, vec![], &self.language_pack);
+                self.push_original_dialog(text(self, "NDR.UI_COMPARE_SYNC_PREVIEW"), DialogKind::Comparison(Box::new(form)), |_, _, _| {});
+            }
             "compareopts" | "compareresult" => {
                 use ndr::folder_compare::{Difference, DifferenceKind};
                 let mut form = super::compare_dialog::FolderCompareForm::new(folder.join("a"), folder.join("b"), true);
@@ -397,14 +521,14 @@ fn audit_shot_text(ctx: &egui::Context, path: &Path) {
 }
 
 /// Full locale sweep of real dialog widgets without opening desktop windows.
-#[cfg(test)]
+#[cfg(all(test, debug_assertions))]
 #[test]
 #[ignore = "explicit localization layout QA"]
 fn all_locale_dialog_layout_sweep() {
     let output = PathBuf::from(std::env::var_os("NDR_LAYOUT_QA_DIR").expect("NDR_LAYOUT_QA_DIR"));
     std::fs::create_dir_all(&output).unwrap();
-    let kinds = ["prompt", "rename", "delwarning", "delconfirm", "conflict", "ftpquick", "destination", "ftpattr", "checksum", "attributes", "editshortcut", "savelist", "foldertree", "favorites", "funckey", "archive", "advrename", "advrename-delete", "sites", "credentials", "remote", "search", "vaultcreate", "vaultunlock", "advselect", "compareopts", "compareresult"];
-    let raw = || egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 850.0))), ..Default::default() };
+    let kinds = ["prompt", "rename", "delwarning", "delconfirm", "conflict", "ftpquick", "destination", "ftpattr", "checksum", "attributes", "editshortcut", "savelist", "foldertree", "favorites", "funckey", "archive", "advrename", "advrename-delete", "sites", "credentials", "remote", "search", "vaultcreate", "vaultunlock", "advselect", "compareopts", "compareresult", "syncpreview", "split", "join", "shortcuts", "progress-copy", "progress-move", "progress-delete", "progress-recycle", "progress-active", "progress-archive", "update-download", "update-verify", "update-prepare", "update-install", "update-failed", "error-transfer", "error-archive", "error-update", "error-retry", "error-continue", "error-long"];
+    let raw = |width, height| egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, height))), ..Default::default() };
     for &(locale, _) in ndr::compat::BUILTIN_LANGUAGES {
         let dir = output.join(locale);
         let left = dir.join("left");
@@ -413,6 +537,7 @@ fn all_locale_dialog_layout_sweep() {
         std::fs::create_dir_all(&right).unwrap();
         std::fs::write(left.join("document.txt"), b"test").unwrap();
         let ctx = egui::Context::default();
+        ndr::compat::begin_locale_lookup_audit();
         let mut app = App::from_context(&ctx, Options { profile: Some(dir.join("profile")), left: Some(left), right: Some(right), language: Some(locale.into()), ..Default::default() });
         set_app_fonts(&ctx, None, false, 1.0);
         let until = Instant::now() + Duration::from_secs(10);
@@ -422,23 +547,216 @@ fn all_locale_dialog_layout_sweep() {
         }
         app.open_shot_sample("settings0");
         let tabs = app.settings_form().map_or(0, |f| f.tabs.len());
-        let cases: Vec<String> = kinds.iter().map(|s| s.to_string()).chain((0..tabs).map(|i| format!("settings{i}"))).collect();
+        std::fs::write(dir.join("startup.lookups.json"), serde_json::to_vec(&ndr::compat::end_locale_lookup_audit()).unwrap()).unwrap();
+        let cases: Vec<String> = kinds.iter().map(|s| s.to_string()).chain(std::iter::once("dropmenu".to_owned())).chain((0..tabs).map(|i| format!("settings{i}"))).collect();
         for kind in cases {
+            ndr::compat::begin_locale_lookup_audit();
             app.original_dialogs.clear();
             app.vault_dialog = None;
             app.msgboxes.clear();
+            app.shortcut_window = None;
+            app.popup = None;
+            app.job = None;
+            app.update_progress = None;
             app.open_shot_sample(&kind);
-            assert!(!app.original_dialogs.is_empty() || app.vault_dialog.is_some() || !app.msgboxes.is_empty(), "{locale}:{kind}: no dialog");
+            assert!(!app.original_dialogs.is_empty() || app.vault_dialog.is_some() || !app.msgboxes.is_empty() || app.shortcut_window.is_some() || app.job.is_some() || app.update_progress.is_some() || app.popup.is_some(), "{locale}:{kind}: no dialog");
             for i in 0..4 {
-                let _ = ctx.run(raw(), |ctx| {
+                let _ = ctx.run(raw(1400.0, 850.0), |ctx| {
                     app.vault_window_ui(ctx);
                     app.original_dialog_ui(ctx);
                     app.msgbox_ui(ctx);
+                    app.shortcut_window_ui(ctx);
+                    app.popup_menu_ui(ctx);
+                    app.file_progress_ui(ctx);
+                    app.concurrent_transfers_ui(ctx);
+                    app.update_progress_ui(ctx);
                     if i == 3 { audit_shot_text(ctx, &dir.join(format!("{kind}.png"))); }
                 });
             }
+            std::fs::write(dir.join(format!("{kind}.lookups.json")), serde_json::to_vec(&ndr::compat::end_locale_lookup_audit()).unwrap()).unwrap();
         }
-        println!("layout sweep {locale}: {} dialogs", kinds.len() + tabs);
+        // The function key bar is sensitive to available width and long
+        // translated actions. Exercise it without mutating user bindings.
+        app.original_dialogs.clear();
+        app.vault_dialog = None;
+        app.msgboxes.clear();
+        app.job = None;
+        app.update_progress = None;
+        for &(title, ko, en, _) in super::menu_data::MENUS {
+            ndr::compat::begin_locale_lookup_audit();
+            egui::Popup::close_all(&ctx);
+            let caption = app.language_pack.raw(title).unwrap_or_else(|| if locale == "ko" { ko.into() } else { en.into() });
+            app.menu_access = super::favorites_dialog::access_key(&caption).1.map(|c| c.to_ascii_lowercase());
+            for i in 0..4 {
+                let _ = ctx.run(raw(1400.0, 850.0), |ctx| {
+                    egui::TopBottomPanel::top("audit-menu").show(ctx, |ui| app.menu(ui));
+                    if i == 3 { audit_shot_text(ctx, &dir.join(format!("menu-{title}.png"))); }
+                });
+            }
+            std::fs::write(dir.join(format!("menu-{title}.lookups.json")), serde_json::to_vec(&ndr::compat::end_locale_lookup_audit()).unwrap()).unwrap();
+        }
+        egui::Popup::close_all(&ctx);
+        app.shortcut_window = None;
+        // Main window controls, including tooltips resolved while drawing
+        // the vertical bar and menu labels built only for right-clicks.
+        ndr::compat::begin_locale_lookup_audit();
+        let _ = ctx.run(raw(1400.0, 850.0), |ctx| {
+            if let Some(skin) = app.current_skin() {
+                egui::TopBottomPanel::top("audit-toolbar").exact_height(51.0).frame(egui::Frame::NONE).show(ctx, |ui| app.skin_toolbar(ui, ctx, &skin));
+            }
+            egui::SidePanel::left("audit-centerbar").exact_width(18.0).frame(egui::Frame::NONE).show(ctx, |ui| app.vertical_bar(ui, ctx));
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let saved = app.panes[0].cursor;
+                for folder in [false, true] {
+                    if let Some(row) = app.panes[0].entries.iter().position(|e| e.is_dir == folder && !e.is_parent() && !e.drive) {
+                        app.panes[0].cursor = row;
+                        for (label, _, _) in app.list_menu_items(0).into_iter().flatten() {
+                            ui.label(ndr::msgbox::display_caption(&label).0);
+                        }
+                    }
+                }
+                app.panes[0].cursor = saved;
+                let _ = app.sort_items(ui, locale == "ko");
+            });
+            audit_shot_text(ctx, &dir.join("main-controls.png"));
+        });
+        std::fs::write(dir.join("main-controls.lookups.json"), serde_json::to_vec(&ndr::compat::end_locale_lookup_audit()).unwrap()).unwrap();
+        for width in [800.0, 1400.0] {
+            ndr::compat::begin_locale_lookup_audit();
+            let _ = ctx.run(raw(width, 850.0), |ctx| {
+                egui::TopBottomPanel::bottom("audit-function-bar").exact_height(24.0).show(ctx, |ui| {
+                    if let Some(skin) = app.current_skin() {
+                        app.skin_function_key_bar(ui, ctx, &skin);
+                    }
+                });
+                audit_shot_text(ctx, &dir.join(format!("functionbar-{width}.png")));
+            });
+            std::fs::write(dir.join(format!("functionbar-{width}.lookups.json")), serde_json::to_vec(&ndr::compat::end_locale_lookup_audit()).unwrap()).unwrap();
+        }
+        // Imported profiles can contain legacy menu IDs that the default
+        // shortcut map no longer lists. Test captions without executing them.
+        let original_map = app.settings.values.get("OriginalShortcutMapText").cloned();
+        app.settings.set_text("OriginalShortcutMapText", "NEXUSFILESHORTCUT1.0\r\nmiViewWorkWnd=Alt+F9\r\nmiSynchronizeFolder=Alt+F10\r\nmiEmail=Alt+F11\r\nmiDropCopy=Ctrl+Shift+1\r\nmiDropMove=Ctrl+Shift+2\r\nmiDropShortcut=Ctrl+Shift+3\r\nmiDropCancel=Ctrl+Shift+4\r\n");
+        ndr::compat::begin_locale_lookup_audit();
+        let imported = app.shortcut_rows("");
+        assert_eq!(imported.len(), 7, "{locale}: imported rows");
+        for row in &imported {
+            let key = format!("formMain.Menu.{}", row.name);
+            assert!(app.language_pack.primary_raw(&key).is_some(), "{locale}: {key}");
+            assert!(!row.caption.is_empty() && row.caption != row.name, "{locale}: {row:?}");
+        }
+        app.open_shot_sample("shortcuts");
+        for i in 0..4 {
+            let _ = ctx.run(raw(1400.0, 850.0), |ctx| {
+                app.shortcut_window_ui(ctx);
+                if i == 3 { audit_shot_text(ctx, &dir.join("legacy-shortcuts.png")); }
+            });
+        }
+        std::fs::write(dir.join("legacy-shortcuts.lookups.json"), serde_json::to_vec(&ndr::compat::end_locale_lookup_audit()).unwrap()).unwrap();
+        app.shortcut_window = None;
+        match original_map { Some(value) => { app.settings.values.insert("OriginalShortcutMapText".into(), value); }, None => { app.settings.values.remove("OriginalShortcutMapText"); } }
+        // The internal command toolbar follows the same ID-based catalog as
+        // the function key editor, including rare imported commands.
+        ndr::compat::begin_locale_lookup_audit();
+        for &(id, fallback) in super::function_key_editor::INTERNAL_COMMANDS {
+            let name = id.trim_start_matches('#');
+            let item = ndr::commands::ToolbarItem { kind: ndr::commands::ToolbarKind::Command, action: format!("function:{name}"), caption: String::new(), icon: String::new(), align_right: false, width: 1.0, children: Vec::new() };
+            let key = if id == "#OpenRecycleBin" { "Menu.miRecycleBin".to_owned() } else { format!("RES.FUNC_{}", name.to_ascii_uppercase()) };
+            assert!(app.language_pack.primary_raw(&key).is_some(), "{locale}: {key}");
+            assert_eq!(app.toolbar_label(&item), super::function_key_editor::internal_command_caption(&app.language_pack, id, fallback), "{locale}: {id}");
+        }
+        std::fs::write(dir.join("imported-toolbar.lookups.json"), serde_json::to_vec(&ndr::compat::end_locale_lookup_audit()).unwrap()).unwrap();
+        // The toolbar also accepts a user-supplied caption. Its reverse
+        // catalog lookup can reach compatibility keys without a literal
+        // resource reference in the Rust source.
+        ndr::compat::begin_locale_lookup_audit();
+        for (key, source) in [("RES.FIELD_LOCATION", "Location"), ("RES.SELECT_FOLDER", "Choose a folder"), ("RES.FOLDER_EXISTS", "A folder with that name already exists."), ("RES.SRCISDEST", "The source and destination are the same."),
+            ("RES.RENAME_WITHEXT", "Include the extension"), ("RES.CHARMAP", "Character Map"), ("RES.DISKDISKFREE", "Available space"), ("RES.SELDEST_DRIVE", "Drives"), ("RES.SELDEST_MOSTUSED", "Frequent destinations"), ("RES.SELDEST_RECENTS", "Recent destinations"), ("RES.SELDEST_WORKFOLDER", "Work slots"), ("formSelectDest.Form.Caption", "Choose destination"),
+            ("formNDRDestination.Browse.Title", "Select destination folder"), ("formNDRDestination.Button.Browse", "Browse another folder…"), ("formNDRDestination.Title.Copy", "Choose a copy destination"), ("formNDRDestination.Title.Extract", "Choose an extraction destination"), ("formNDRDestination.Title.Move", "Choose a move destination"), ("formNDRDestination.Hint.WorkFolders", "Click a saved work folder or press 1–5. Browse below to choose another folder."), ("formSelectDest.Caption.lHelp", "Choose a drive to browse its folders."), ("formProgress.Caption.lFileName", "File:"), ("formProgress.Caption.lFrom", "From:"), ("formProgress.Caption.lTo", "To:"), ("formProgress.Caption.lRemaining", "Remaining:")] {
+            let item = ndr::commands::ToolbarItem { kind: ndr::commands::ToolbarKind::Command, action: "newFolder".into(), caption: source.into(), icon: String::new(), align_right: false, width: 1.0, children: Vec::new() };
+            assert!(app.language_pack.primary_raw(key).is_some(), "{locale}: {key}");
+            assert_eq!(app.toolbar_label(&item), app.language_pack.text(key, source), "{locale}: imported caption {key}");
+        }
+        std::fs::write(dir.join("imported-captions.lookups.json"), serde_json::to_vec(&ndr::compat::end_locale_lookup_audit()).unwrap()).unwrap();
+        // Old folder-search and theme/disk resources are retained for
+        // compatibility. Validate the primary entry without reviving the
+        // obsolete UI or assuming every template is a runtime reference.
+        ndr::compat::begin_locale_lookup_audit();
+        for key in ["formFolderTree.Caption.lQuickSearchPrompt", "formFolderTree.Caption.lQuickSearchScanning", "formFolderTree.Caption.lQuickSearchMatch", "formFolderTree.Caption.lQuickSearchNoMatch", "formFolderTree.Caption.lQuickSearchCancelled", "formFolderTree.Caption.lQuickSearchFailed", "RES.TITLE_DISKCOPY", "RES.MSG_DISKCOPY", "RES.INVALID_SKIN", "RES.MSG_SETSKIN"] {
+            assert!(app.language_pack.primary_raw(key).is_some_and(|s| !s.is_empty()), "{locale}: {key}");
+        }
+        std::fs::write(dir.join("legacy-search-theme.lookups.json"), serde_json::to_vec(&ndr::compat::end_locale_lookup_audit()).unwrap()).unwrap();
+        // Exercise the compact settings page at two smaller logical sizes.
+        // This simulates available space, not a change to the user's OS DPI.
+        for (w, h, scale) in [(768.0, 576.0, 1.25), (640.0, 480.0, 1.5), (480.0, 360.0, 2.0)] {
+            let scaled = || {
+                let mut input = raw(w, h);
+                input.viewports.get_mut(&egui::ViewportId::ROOT).unwrap().native_pixels_per_point = Some(scale);
+                input
+            };
+            for tab in 0..tabs {
+                ndr::compat::begin_locale_lookup_audit();
+                app.original_dialogs.clear();
+                app.open_shot_sample(&format!("settings{tab}"));
+                for i in 0..4 {
+                    let _ = ctx.run(scaled(), |ctx| {
+                        assert!((ctx.pixels_per_point() - scale).abs() < 0.01);
+                        app.original_dialog_ui(ctx);
+                        if i == 3 { audit_shot_text(ctx, &dir.join(format!("compact-settings{tab}-{w}x{h}-{scale}.png"))); }
+                    });
+                }
+                std::fs::write(dir.join(format!("compact-settings{tab}-{w}x{h}-{scale}.lookups.json")), serde_json::to_vec(&ndr::compat::end_locale_lookup_audit()).unwrap()).unwrap();
+            }
+        }
+        app.original_dialogs.clear();
+        ndr::compat::begin_locale_lookup_audit();
+        app.open_shot_sample("shortcuts");
+        // Resize an already-open F12 window, not just a fresh one.
+        for (w, h, scale) in [(1400.0, 850.0, 1.0), (480.0, 360.0, 2.0), (320.0, 250.0, 2.0)] {
+            for i in 0..4 {
+                let mut input = raw(w, h);
+                input.viewports.get_mut(&egui::ViewportId::ROOT).unwrap().native_pixels_per_point = Some(scale);
+                let _ = ctx.run(input, |ctx| {
+                    app.shortcut_window_ui(ctx);
+                    if i == 3 { audit_shot_text(ctx, &dir.join(format!("compact-shortcuts-{w}x{h}.png"))); }
+                });
+            }
+            let area = ctx.memory(|m| m.area_rect(egui::Id::new("ndr-shortcut-window"))).expect("shortcut area");
+            assert!(area.left() >= -1.0 && area.top() >= -1.0 && area.right() <= w + 1.0 && area.bottom() <= h + 1.0, "{locale}: {w}x{h}: {area:?}");
+        }
+        std::fs::write(dir.join("compact-shortcuts.lookups.json"), serde_json::to_vec(&ndr::compat::end_locale_lookup_audit()).unwrap()).unwrap();
+        app.shortcut_window = None;
+        for (w, h, scale) in [(480.0, 360.0, 2.0), (320.0, 250.0, 2.0)] {
+            ndr::compat::begin_locale_lookup_audit();
+            app.original_dialogs.clear();
+            app.open_shot_sample("editshortcut");
+            for i in 0..4 {
+                let mut input = raw(w, h);
+                input.viewports.get_mut(&egui::ViewportId::ROOT).unwrap().native_pixels_per_point = Some(scale);
+                let _ = ctx.run(input, |ctx| {
+                    app.original_dialog_ui(ctx);
+                    if i == 3 { audit_shot_text(ctx, &dir.join(format!("compact-editshortcut-{w}x{h}.png"))); }
+                });
+            }
+            std::fs::write(dir.join(format!("compact-editshortcut-{w}x{h}.lookups.json")), serde_json::to_vec(&ndr::compat::end_locale_lookup_audit()).unwrap()).unwrap();
+        }
+        for (w, h, scale) in [(480.0, 360.0, 2.0), (320.0, 250.0, 2.0)] {
+            for kind in ["prompt", "rename", "destination", "delwarning", "delconfirm", "conflict", "conflict-resume", "conflict-folder", "split", "join", "foldertree", "foldertree-search", "advrename", "advrename-delete", "advrename-replace", "advrename-case", "advrename-number", "advrename-extension", "advrename-rules", "advrename-preview", "compareopts", "compareresult", "syncpreview", "foldertree-search-many", "foldertree-favorites", "search", "archive"] {
+                ndr::compat::begin_locale_lookup_audit();
+                app.original_dialogs.clear();
+                app.open_shot_sample(kind);
+                for i in 0..4 {
+                    let mut input = raw(w, h);
+                    input.viewports.get_mut(&egui::ViewportId::ROOT).unwrap().native_pixels_per_point = Some(scale);
+                    let _ = ctx.run(input, |ctx| {
+                        app.original_dialog_ui(ctx);
+                        if i == 3 { audit_shot_text(ctx, &dir.join(format!("compact-{kind}-{w}x{h}.png"))); }
+                    });
+                }
+                std::fs::write(dir.join(format!("compact-{kind}-{w}x{h}.lookups.json")), serde_json::to_vec(&ndr::compat::end_locale_lookup_audit()).unwrap()).unwrap();
+            }
+        }
+        println!("layout sweep {locale}: {} dialogs plus legacy shortcuts and compact settings/inputs", kinds.len() + tabs + 1);
     }
 }
 

@@ -1688,7 +1688,6 @@ impl App {
                 }
                 // Original drive item (kind 4): the end of the name cell (the widest drive name) and the DISKFREE text.
                 let drive_extent = self.drive_text_extent(ui, index);
-                let free_label = self.language_pack.text("RES.DISKFREE", "Free");
                 let icons_shown = self.settings.flag("ShowIcons", true);
                 let view_cache = std::mem::take(&mut self.panes[index].view);
                 let (rows, texts) = (&view_cache.rows, &view_cache);
@@ -1832,7 +1831,7 @@ impl App {
                                     // Original DrawListItem kind 4: a drive item draws, on one line regardless of columns, the name ("C: name") and the remaining space.
                                     if entry.drive {
                                         let info = pane.drive_infos.get(&entry.path).map(|(_, kind, sizes)| (*kind, *sizes));
-                                        return super::list_view::drive_row(ui, egui::vec2(width, row_height), icon.as_ref(), &cells[0], name_color, framed, pane.cursor == row, drive_extent, info, &free_label, list_style);
+                                        return super::list_view::drive_row(ui, egui::vec2(width, row_height), icon.as_ref(), &cells[0], name_color, framed, pane.cursor == row, drive_extent, info, &self.language_pack, list_style);
                                     }
                                     let mut name_response = None;
                                     for ((column, _, _), cell) in columns.iter().zip(&cell_widths) {

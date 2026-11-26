@@ -98,9 +98,9 @@ impl App {
         }
         if let Some(name) = item.action.strip_prefix("function:") {
             let id = format!("#{name}");
-            if let Some((_, command)) = function_key_editor::INTERNAL_COMMANDS.iter().find(|(candidate, _)| candidate.eq_ignore_ascii_case(&id)) {
+            if let Some((canonical_id, command)) = function_key_editor::INTERNAL_COMMANDS.iter().find(|(candidate, _)| candidate.eq_ignore_ascii_case(&id)) {
                 if !command.trim().is_empty() {
-                    return language.translate_pair(command, command);
+                    return function_key_editor::internal_command_caption(language, canonical_id, command);
                 }
             }
         }

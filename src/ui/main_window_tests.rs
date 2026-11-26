@@ -458,9 +458,9 @@ fn main_window_frame_info_bars_tabs_and_address_follow_csharp() {
     app.panes[0].disk = Some(("로컬 디스크 (C:) ".into(), 2048, 4096));
     let (_, drive, right, hint) = app.folder_info(0);
     let (free, total) = (native::format_byte_size(2048), native::format_byte_size(4096));
-    assert_eq!((drive.as_str(), right), ("로컬 디스크 (C:) ", format!("남은 공간 <c000000><b>{free}</b></c>")));
+    assert_eq!((drive.as_str(), right), ("로컬 디스크 (C:) ", format!("<c000000><b>{free}</b></c>")));
     assert_eq!(hint, format!("남은 공간 {free} / 전체 {total}"));
-    assert_eq!(app.info_texts(0)[0], format!("{counts}  로컬 디스크 (C:) 남은 공간 <c000000><b>{free}</b></c>"));
+    assert_eq!(app.info_texts(0)[0], format!("{counts}  로컬 디스크 (C:) <c000000><b>{free}</b></c>"));
     app.panes[0].selected = (0..app.panes[0].entries.len()).collect();
     let [folder, file, extension] = app.info_texts(0);
     // Original FUN_00484b24: when there are marked items, SELECTED_INFO (count, byte count + "+" if a folder is included) replaces the disk text.
@@ -546,7 +546,7 @@ fn github_update_installs_after_one_approval_without_second_dialog() {
     };
     app.update_progress = Some(super::main_window::UpdateProgress {
         tag: "build-99".into(), phase: ndr::update::UpdatePhase::Preparing,
-        downloaded: 1024, total: 1024, error: None,
+        downloaded: 1024, total: 1024, error: None, failed_phase: None,
     });
     app.update_package_done(Ok(PathBuf::from("mock-update.zip")), &ctx);
     assert_eq!(app.msgboxes.len(), before, "no second install confirmation");
@@ -555,11 +555,12 @@ fn github_update_installs_after_one_approval_without_second_dialog() {
     app.update_launcher = |_, _| Err("installer start error".into());
     app.update_progress = Some(super::main_window::UpdateProgress {
         tag: "build-99".into(), phase: ndr::update::UpdatePhase::Preparing,
-        downloaded: 1024, total: 1024, error: None,
+        downloaded: 1024, total: 1024, error: None, failed_phase: None,
     });
     app.update_package_done(Ok(PathBuf::from("mock-update.zip")), &ctx);
     assert_eq!(app.msgboxes.len(), before, "failure stays in progress window");
     assert_eq!(app.update_progress.as_ref().unwrap().phase, ndr::update::UpdatePhase::Failed);
+    assert_eq!(app.update_progress.as_ref().unwrap().failed_phase, Some(ndr::update::UpdatePhase::Installing));
     assert_eq!(app.update_progress.as_ref().unwrap().error.as_deref(), Some("installer start error"));
     drop(app);
     fs::remove_dir_all(root).unwrap();
