@@ -528,8 +528,7 @@ fn sort_group(list: &mut [Entry], mode: &str, descending: bool, logical: bool, c
             rank: if priority { priority_rank(entry) } else { 0 },
         }
     }).collect();
-    let mut order: Vec<usize> = (0..list.len()).collect();
-    order.sort_by(|&i, &j| {
+    let compare=|i:usize,j:usize| {
         let (ka, kb) = (&keys[i], &keys[j]);
         ka.rank.cmp(&kb.rank).then_with(|| {
             let (a, b) = (&list[i], &list[j]);
@@ -549,8 +548,14 @@ fn sort_group(list: &mut [Entry], mode: &str, descending: bool, logical: bool, c
             };
             if descending { by_mode.reverse() } else { by_mode }
         })
-    });
-    apply_order(list, &mut order);
+    };
+    // Local NTFS enumeration is often already ordered. Avoid allocating
+    // and applying a 100k-element identity permutation. Use the *same*
+    // native comparator and priority ranks, not an approximate sort key.
+    if list.len()>=4096 && (1..list.len()).all(|i|compare(i-1,i)!=Ordering::Greater){return;}
+    let mut order:Vec<usize>=(0..list.len()).collect();
+    order.sort_by(|&i,&j|compare(i,j));
+    apply_order(list,&mut order);
 }
 
 /// Move rows in place; the order maps destination indices to source indices.

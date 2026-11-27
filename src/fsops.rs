@@ -2108,9 +2108,10 @@ impl Job {
         if skipped.iter().any(|root| same_or_inside(p, root)) {
             return Ok(Disposition::Skipped);
         }
-        if let Some(parent) = p.parent() {
-            ensure_plain_path(parent)?;
-        }
+        #[cfg(windows)]
+        for parent in p.ancestors().skip(1) { check_plain_ancestor_windows(parent)?; }
+        #[cfg(not(windows))]
+        if let Some(parent)=p.parent(){ensure_plain_path(parent)?;}
         let m = match fs::symlink_metadata(p) {
             Ok(m) => m,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Disposition::Deleted),

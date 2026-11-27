@@ -239,44 +239,46 @@ impl FieldMaxPlan {
 /// row order of the width accumulation so the layout math remains identical.
 fn measure_field_cells(entries: &[Entry], view: &PaneView,
     measure: impl FnOnce(&[&str]) -> Option<Vec<f32>>, cancel: Option<&AtomicBool>) -> Option<FieldMax> {
-    use std::borrow::Cow;
-    let mut known: HashMap<Cow<'_, str>, usize> = HashMap::new();
-    let mut measured: Vec<(u8, usize)> = Vec::new();
-    fn add<'a>(known: &mut HashMap<Cow<'a, str>, usize>, measured: &mut Vec<(u8, usize)>,
-        field: u8, text: Cow<'a, str>) {
-        let slot = known.len();
-        measured.push((field, *known.entry(text).or_insert(slot)));
+    // Key includes whether the date separator must expand. All keys
+    // borrow cell text; normalize a unique date only once after collecting.
+    let mut known: HashMap<(&str,bool),usize> = HashMap::new();
+    let mut masks: Vec<u8> = Vec::new();
+    let mut names=Vec::<usize>::with_capacity(entries.len());
+    let mut extensions=Vec::<usize>::with_capacity(entries.len());
+    fn add<'a>(known:&mut HashMap<(&'a str,bool),usize>,masks:&mut Vec<u8>,field:u8,text:&'a str,gap:bool)->usize{
+        let len=known.len();
+        let slot=*known.entry((text,gap)).or_insert(len);
+        if slot==len{masks.push(0);}
+        masks[slot]|=1<<field;
+        slot
     }
-    for (row, (entry, cells)) in entries.iter().zip(&view.cells).enumerate() {
-        if row % 256 == 0 && cancel.is_some_and(|c| c.load(Ordering::Relaxed)) { return None; }
-        if entry.drive { continue; }
-        add(&mut known, &mut measured, 0, Cow::Borrowed(&cells[0]));
-        if !entry.is_dir {
-            add(&mut known, &mut measured, 1, Cow::Borrowed(&cells[1]));
-            if entry.size > 0 { add(&mut known, &mut measured, 3, Cow::Borrowed(&cells[3])); }
+    for (row,(entry,cells)) in entries.iter().zip(&view.cells).enumerate(){
+        if row%256==0 && cancel.is_some_and(|c|c.load(Ordering::Relaxed)){return None;}
+        if entry.drive{continue;}
+        names.push(add(&mut known,&mut masks,0,&cells[0],false));
+        if !entry.is_dir{
+            extensions.push(add(&mut known,&mut masks,1,&cells[1],false));
+            if entry.size>0{add(&mut known,&mut masks,3,&cells[3],false);}
         }
-        let date = if cells[4].contains(ndr::listing::LIST_DATE_TIME_GAP) {
-            Cow::Owned(cells[4].replace(ndr::listing::LIST_DATE_TIME_GAP, "  "))
-        } else { Cow::Borrowed(cells[4].as_str()) };
-        add(&mut known, &mut measured, 4, date);
-        add(&mut known, &mut measured, 6, Cow::Borrowed(&cells[6]));
+        add(&mut known,&mut masks,4,&cells[4],cells[4].contains(ndr::listing::LIST_DATE_TIME_GAP));
+        add(&mut known,&mut masks,6,&cells[6],false);
     }
-    let mut texts = vec![""; known.len()];
-    for (text, &slot) in &known { texts[slot] = text.as_ref(); }
-    if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) { return None; }
-    let widths = measure(&texts)?;
-    let mut fm = FieldMax::default();
-    let (mut ext_sum, mut ext_count) = (0f32, 0usize);
-    for (field, slot) in measured {
-        let width = widths[slot];
-        fm.max[field as usize] = fm.max[field as usize].max(width);
-        match field {
-            0 => { fm.name_sum += width; fm.items += 1; }
-            1 if width > 0.0 => { ext_sum += width; ext_count += 1; }
-            _ => {}
-        }
+    let mut texts=vec![std::borrow::Cow::Borrowed("");known.len()];
+    for ((text,gap),&slot) in &known{
+        texts[slot]=if *gap{std::borrow::Cow::Owned(text.replace(ndr::listing::LIST_DATE_TIME_GAP,"  "))}
+            else{std::borrow::Cow::Borrowed(*text)};
     }
-    if ext_count > 0 { fm.ext_average = (ext_sum / ext_count as f32).floor(); }
+    let borrowed:Vec<&str>=texts.iter().map(|t|t.as_ref()).collect();
+    if cancel.is_some_and(|c|c.load(Ordering::Relaxed)){return None;}
+    let widths=measure(&borrowed)?;
+    let mut fm=FieldMax::default();
+    for (slot,mask) in masks.into_iter().enumerate(){
+        for field in [0,1,3,4,6]{if mask&(1<<field)!=0{fm.max[field]=fm.max[field].max(widths[slot]);}}
+    }
+    for slot in names{fm.name_sum+=widths[slot];fm.items+=1;}
+    let (mut ext_sum,mut ext_count)=(0f32,0usize);
+    for slot in extensions{let width=widths[slot];if width>0.0{ext_sum+=width;ext_count+=1;}}
+    if ext_count>0{fm.ext_average=(ext_sum/ext_count as f32).floor();}
     Some(fm)
 }
 
@@ -917,6 +919,41 @@ pub(super) fn row_pressed(pane: &mut Pane, row: usize, modifiers: egui::Modifier
     pane.cursor = row;
 }
 
+type ListingWork=Box<dyn FnOnce()+Send+'static>;
+type ListingSlot=Arc<Mutex<Option<ListingWork>>>;
+
+/// One running and at most one pending request per local pane. Remote,
+/// archive and unsupported volumes retain their independent workers.
+#[derive(Default)]
+pub(super) struct ListingLane {
+    worker:Option<(ListingSlot,mpsc::SyncSender<()>)>,
+}
+impl ListingLane {
+    pub(super) fn submit(&mut self,work:ListingWork){
+        if self.worker.is_none(){
+            let slot:ListingSlot=Arc::new(Mutex::new(None));
+            let (tx,rx)=mpsc::sync_channel(1);
+            let pending=slot.clone();
+            if thread::Builder::new().name("ndr-local-listing".into()).spawn(move||{
+                while rx.recv().is_ok(){
+                    let work=pending.lock().unwrap_or_else(|e|e.into_inner()).take();
+                    if let Some(work)=work{work();}
+                }
+            }).is_err(){
+                thread::spawn(work);return;
+            }
+            self.worker=Some((slot,tx));
+        }
+        let (slot,tx)=self.worker.as_ref().unwrap();
+        *slot.lock().unwrap_or_else(|e|e.into_inner())=Some(work);
+        if let Err(mpsc::TrySendError::Disconnected(_))=tx.try_send(()){
+            let work=slot.lock().unwrap_or_else(|e|e.into_inner()).take();
+            self.worker=None;
+            if let Some(work)=work{thread::spawn(work);}
+        }
+    }
+}
+
 /// A worker may finish the expensive sorting and presentation for large
 /// local lists before handing a single owned result to the UI.
 #[derive(Clone, Debug, PartialEq)]
@@ -933,6 +970,7 @@ pub(super) struct PreparedLocalListing {
     pub(super) plan: LocalListingPlan,
     pub(super) view: super::list_view::PaneView,
     pub(super) field: Option<(FieldMaxPlan, FieldMax)>,
+    pub(super) summary: super::main_window::PaneSummary,
 }
 impl LocalListingPlan {
     pub(super) fn capture(app: &App, index: usize) -> Self {
@@ -978,20 +1016,28 @@ impl LocalListingPlan {
             None, None, true, true, super::list_view::PaneView::default(), Some(cancel))?;
         let field = self.field.measure(entries, &view, cancel).map(|fm| (self.field.clone(), fm));
         if cancel.load(Ordering::Relaxed) { return None; }
-        Some(PreparedLocalListing { plan: self, view, field })
+        let summary=super::main_window::summarize(entries);
+        if cancel.load(Ordering::Relaxed) { return None; }
+        Some(PreparedLocalListing { plan: self, view, field, summary })
     }
 }
 
 impl App {
     pub(super) fn refresh(&mut self, index: usize) {
-        self.refresh_inner(index, true);
+        self.refresh_inner(index, true, false);
     }
 
     pub(super) fn refresh_after_startup(&mut self, index: usize) {
-        self.refresh_inner(index, false);
+        self.refresh_inner(index, false, false);
     }
 
-    fn refresh_inner(&mut self, index: usize, foreground: bool) {
+    pub(super) fn refresh_after_folder_change(&mut self, index: usize) {
+        // Watch-triggered updates may reuse a validated snapshot. Explicit
+        // same-folder refresh (F5, operations, option changes) always reads.
+        self.refresh_inner(index, false, true);
+    }
+
+    fn refresh_inner(&mut self, index: usize, foreground: bool, from_watch: bool) {
         self.panes[index].listing_cancel.store(true, Ordering::Relaxed);
         let presentation = (self.panes[index].vault.is_none() && self.panes[index].archive.is_none()
             && self.panes[index].remote.is_none() && !is_drives(&self.panes[index].path))
@@ -1064,6 +1110,14 @@ impl App {
         let ready_drives = self.system.ready_drives;
         let drive_item = self.system.drive_item;
         let drive_list = self.drive_list.clone();
+        let listing_cache = self.listing_cache.clone();
+        let cache_enabled = !cfg!(test) && self.watch_folders
+            && self.panes.iter().all(|p| p.vault.is_none()) && !self.folder_auto_busy
+            && self.job.as_ref().is_none_or(|job| job.finished);
+        #[cfg(feature="winfsp-vault")]
+        let cache_enabled=cache_enabled && self.vault_mounts.is_empty() && self.vault_trees.is_empty();
+        let coalesce= !cfg!(test) && local && !drives_view && ndr::listing_cache::supported_local_path(&path);
+        let reuse_listing = !same_folder || from_watch;
         // Tests keep fake drives per thread, so they bypass the cache (the cache itself is the cached_drive_items test).
         let drive_items = move |cache: &std::sync::Arc<std::sync::Mutex<DriveListCache>>| {
             if cfg!(test) { ready_drives().into_iter().map(|root| { let info = drive_item(&root); (root, info) }).collect() } else { cached_drive_items(cache, ready_drives, drive_item) }
@@ -1077,7 +1131,7 @@ impl App {
         // 0x45ff70, RegisterMessageEvent 0x4602b0 / UnregisterMessageEvent 0x460850 keep a message → handler std::map (0x460478 / 0x460a24),
         // Dispatch 0x46091c calls the handler, destructor 0x460204). Here a std::thread sends the listing over a channel and wakes egui.
         let repaint = self.egui_ctx.clone();
-        thread::spawn(move || {
+        let work=Box::new(move || {
             if listing_cancel.load(Ordering::Relaxed) { return; }
             // The original TNXDriveList is created once at startup and held (it does not re-query drives per listing). NDR changed the per-pane-listing
             // drive read into a cache (use as-is within 5 seconds, use as-is after and re-read in the background). So even if a drive's volume info arrives late,
@@ -1159,7 +1213,7 @@ impl App {
                     listed
                 })
             } else {
-                fsops::list_dir_with_cancel(&path, show_hidden, Some(&listing_cancel)).map(|mut entries| {
+                listing_cache.read(&path, show_hidden, reuse_listing, cache_enabled, &listing_cancel).map(|mut entries| {
                     // The drive item name is "%s:" (letter + ':'), like the original DrawListItem.
                     entries.extend(appended.iter().map(|root| Entry {
                         name: root.to_string_lossy().trim_end_matches('\\').to_owned(),
@@ -1202,6 +1256,8 @@ impl App {
             // user next clicks or moves the mouse.
             repaint.request_repaint();
         });
+        if coalesce {self.listing_lanes[index].submit(work);}
+        else{thread::spawn(work);}
         // Do not block the UI for up to 3 seconds on slow directory/archive
         // scans. Fast listings still swap in place; slower scans finish on the
         // worker thread while the pane remains responsive (the result is

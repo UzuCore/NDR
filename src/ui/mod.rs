@@ -750,6 +750,7 @@ pub struct App {
     show_results: bool,
     /// The ListFont name and bold/italic currently in the "list" font family (fonts are rebuilt when changed).
     list_font_name: Option<String>,
+    prepared_list_font:Option<startup::PreparedListFont>,
     /// Original ListFont style (TFontStyles byte: 1 bold, 2 italic, 4 underline, 8 strikethrough). Underline/strikethrough are applied directly to the list text.
     list_font_style: u8,
     /// C# Closing's WindowLeft/Top/Width/Height: the outer position and outer size (points) of the last normal (not maximized/minimized) window seen.
@@ -913,6 +914,7 @@ pub struct App {
     smoke_slow_frames: u32,
     smoke_initial_max_ms: f64,
     smoke_prepared_lists: u64,
+    smoke_startup:serde_json::Value,
     /// When both panel listings were first fully read in the startup check (ms from start).
     smoke_loaded_ms: Option<u64>,
     /// Diagnostics ("tipwindow" sample): screen position of a separately shown tooltip window (left, top, width, height). Checks whether the window was actually created.
@@ -1001,6 +1003,8 @@ pub struct App {
     drive_cache: Option<(Instant, Vec<(PathBuf, String)>)>,
     /// Drive list cache of the panel list (original TNXDriveList slot, shared with the listing thread).
     drive_list: Arc<Mutex<panes::DriveListCache>>,
+    listing_cache: Arc<ndr::listing_cache::ListingCache>,
+    listing_lanes:[panes::ListingLane;2],
     drive_cache_pending: bool,
 }
 mod startup;
@@ -1072,7 +1076,8 @@ impl App {
     }
 
     fn from_prepared_context(ctx: &egui::Context, options: Options, prepared: startup::PreparedStartup, foreground: bool) -> Self {
-        let startup::PreparedStartup { profile, settings, error, language, dual, panes_init, resources, language_pack, toolbar } = prepared;
+        let startup::PreparedStartup { profile, settings, error, language, dual, panes_init, resources, language_pack, toolbar,list_font,.. } = prepared;
+        let (_,initial_style,initial_size,_)=startup::list_font_config(&settings,&language);
         let [left, right] = panes_init.map(|(tabs, tab, show_hidden)| {
             let mut pane = Pane::new(tabs[tab].clone(), show_hidden);
             pane.tabs = tabs;
@@ -1103,10 +1108,11 @@ impl App {
             pane_message: None,
             show_results: false,
             list_font_name: None,
-            list_font_style: 0,
+            prepared_list_font:list_font,
+            list_font_style: initial_style,
             window_bounds: None,
             window_maximized: None,
-            list_font_size: ndr::settings::DEFAULT_LIST_FONT_PIXELS as f32,
+            list_font_size: initial_size,
             results_collapsed: false,
             favorites_button: None,
             watch_folders: !cfg!(test),
@@ -1216,6 +1222,7 @@ impl App {
             smoke_slow_frames: 0,
             smoke_initial_max_ms: 0.0,
             smoke_prepared_lists: 0,
+            smoke_startup:serde_json::Value::Null,
             smoke_loaded_ms: None,
             smoke_tip_window: None,
             applied_alpha: -1.0,
@@ -1255,6 +1262,8 @@ impl App {
             remote_hooks: remote_window::RemoteHooks::default(),
             drive_cache: None,
             drive_list: Default::default(),
+            listing_cache: Default::default(),
+            listing_lanes:Default::default(),
             drive_cache_pending: false,
         };
         for pane in 0..2 {
@@ -1430,7 +1439,7 @@ impl App {
                         self.panes[index].change_due = None;
                         // When re-reading due to a change notification, preserve the typed quick-search text (the original FUN_00487ce8 does not touch the search text).
                         let typed = std::mem::take(&mut self.typed_search[index]);
-                        self.refresh(index);
+                        self.refresh_after_folder_change(index);
                         self.typed_search[index] = typed;
                     }
                 } else {
@@ -1608,6 +1617,7 @@ impl App {
                 let pane = &mut self.panes[listing.pane];
                 pane.thumb_content_revision = pane.thumb_content_revision.wrapping_add(1);
                 pane.view = prepared.view;
+                pane.summary=Some(prepared.summary);
                 pane.prepared_field_max = prepared.field.map(|(plan, fm)| (pane.thumb_content_revision, plan, fm));
                 self.smoke_prepared_lists += 1;
             } else {
@@ -2147,15 +2157,20 @@ pub(super) fn set_app_fonts(ctx: &egui::Context, list_font: Option<(&'static [u8
     // Optional Windows CJK fonts keep their autonyms readable in every UI
     // language without shipping a large FontCollection or changing Latin metrics.
     let windows = std::env::var_os("WINDIR").map(PathBuf::from).unwrap_or_else(|| "C:/Windows".into());
-    let reference = native::mapped_file(&windows.join("Fonts").join("malgun.ttf"))
-        .and_then(|bytes| cjk_ink_center(bytes, 0)).unwrap_or(0.03);
+    static CJK_TWEAKS:std::sync::OnceLock<[Option<(&'static [u8],egui::FontTweak)>;3]>=std::sync::OnceLock::new();
+    let cjk=CJK_TWEAKS.get_or_init(||{
+        let reference=native::mapped_file(&windows.join("Fonts").join("malgun.ttf"))
+            .and_then(|bytes|cjk_ink_center(bytes,0)).unwrap_or(0.03);
+        ["YuGothM.ttc","msyh.ttc","msjh.ttc"].map(|file|{
+            let bytes=native::mapped_file(&windows.join("Fonts").join(file))?;
+            Some((bytes,cjk_vertical_tweak(bytes,reference)))
+        })
+    });
     let preferred = preferred_cjk_font(language);
     let mut script_fallbacks = Vec::new();
-    for (name, filename) in [("Japanese", "YuGothM.ttc"), ("ChineseSimplified", "msyh.ttc"), ("ChineseTraditional", "msjh.ttc")] {
-        let file = windows.join("Fonts").join(filename);
-        if let Some(bytes) = native::mapped_file(&file) {
-            let tweak = cjk_vertical_tweak(bytes, reference);
-            fonts.font_data.insert(name.into(), Arc::new(egui::FontData::from_static(bytes).tweak(tweak)));
+    for (name, data) in ["Japanese","ChineseSimplified","ChineseTraditional"].into_iter().zip(cjk) {
+        if let Some((bytes,tweak))=data {
+            fonts.font_data.insert(name.into(), Arc::new(egui::FontData::from_static(bytes).tweak(*tweak)));
             script_fallbacks.push(name.to_owned());
         }
     }
@@ -2531,7 +2546,7 @@ impl eframe::App for App {
                         let (count, bytes) = completed.fold((0usize, 0u64), |(count, total), size| (count + 1, total.saturating_add(*size)));
                         serde_json::json!({"completed":count,"pending":p.folder_auto_pending.len(),"bytes":bytes,"requests":p.folder_auto_requests,"scans":p.folder_auto_scans,"visited":p.folder_auto_visited,"reused":p.folder_auto_reused,"hints":p.folder_auto_hints,"displayed":p.folder_auto_paths.len()})
                     };
-                    let report = serde_json::json!({"language":self.language,"frames":self.frames,"leftCount":items(&self.panes[0]),"rightCount":items(&self.panes[1]),"leftDrives":self.panes[0].drive_count(),"rightDrives":self.panes[1].drive_count(),"leftError":self.panes[0].error,"rightError":self.panes[1].error,"leftLoading":self.panes[0].loading,"rightLoading":self.panes[1].loading,"profile":self.profile,"runtime":"Rust","renderer":"OpenGL","foreground":self.smoke_foreground,"repaintCauses":self.smoke_repaint_causes,"slowestFrameMs":(self.smoke_slowest_frame_ms * 10.0).round() / 10.0,"slowFrames":self.smoke_slow_frames,"initialMaxFrameMs":self.smoke_initial_max_ms,"preparedLists":self.smoke_prepared_lists,"loadedMs":self.smoke_loaded_ms,"tipWindow":self.smoke_tip_window,"viewportPoints":[viewport.width(),viewport.height()],"nativePixelsPerPoint":native_scale,"pixelsPerPoint":ctx.pixels_per_point(),"folderSizes":[folder_stats(&self.panes[0]),folder_stats(&self.panes[1])],"folderLabelTrace":self.smoke_folder_labels.each_ref().map(FolderLabelTrace::report),"folderCacheEntries":self.folder_size_cache.len(),"folderCacheWatches":self.folder_size_cache.values().filter(|v|v.watch.is_some()).count()});
+                    let report = serde_json::json!({"language":self.language,"frames":self.frames,"leftCount":items(&self.panes[0]),"rightCount":items(&self.panes[1]),"leftDrives":self.panes[0].drive_count(),"rightDrives":self.panes[1].drive_count(),"leftError":self.panes[0].error,"rightError":self.panes[1].error,"leftLoading":self.panes[0].loading,"rightLoading":self.panes[1].loading,"profile":self.profile,"runtime":"Rust","renderer":"OpenGL","foreground":self.smoke_foreground,"repaintCauses":self.smoke_repaint_causes,"slowestFrameMs":(self.smoke_slowest_frame_ms * 10.0).round() / 10.0,"slowFrames":self.smoke_slow_frames,"initialMaxFrameMs":self.smoke_initial_max_ms,"preparedLists":self.smoke_prepared_lists,"listingCache":self.listing_cache.report(),"startup":self.smoke_startup,"loadedMs":self.smoke_loaded_ms,"tipWindow":self.smoke_tip_window,"viewportPoints":[viewport.width(),viewport.height()],"nativePixelsPerPoint":native_scale,"pixelsPerPoint":ctx.pixels_per_point(),"folderSizes":[folder_stats(&self.panes[0]),folder_stats(&self.panes[1])],"folderLabelTrace":self.smoke_folder_labels.each_ref().map(FolderLabelTrace::report),"folderCacheEntries":self.folder_size_cache.len(),"folderCacheWatches":self.folder_size_cache.values().filter(|v|v.watch.is_some()).count()});
                     let _ = std::fs::write(
                         path,
                         serde_json::to_vec_pretty(&report).unwrap_or_default(),

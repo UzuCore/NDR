@@ -56,7 +56,10 @@ pub(super) struct PaneSummary {
 
 pub(super) fn summarize(entries: &[Entry]) -> PaneSummary {
     let mut summary = PaneSummary::default();
-    let mut extensions: Vec<(String, usize)> = Vec::new();
+    // Preserve first spelling while aggregating in O(N) even when every
+    // entry has a different extension. ASCII folding matches the old key.
+    let mut extension_indices: HashMap<String,usize> = HashMap::new();
+    let mut extensions:Vec<(String,usize)>=Vec::new();
     // Original FUN_0048aa30 counts with FUN_007d2f80 every item of kind 1 and 3, so ".." is counted as a folder ("5 폴더" for four folders,
     // seen in the running original). Fixed: ".." (and drive items) are not counted.
     for entry in entries {
@@ -69,13 +72,16 @@ pub(super) fn summarize(entries: &[Entry]) -> PaneSummary {
         }
         summary.files += 1;
         summary.bytes = summary.bytes.saturating_add(entry.size);
-        let extension = ndr::parity::list_extension(&entry.name).to_owned();
-        match extensions.iter_mut().find(|(k, _)| k.eq_ignore_ascii_case(&extension)) {
-            Some((_, count)) => *count += 1,
-            None => extensions.push((extension, 1)),
-        }
+        let extension=ndr::parity::list_extension(&entry.name);
+        // Fold ASCII only (the original used eq_ignore_ascii_case). Use
+        // a borrowed lookup for the usual lowercase extensions.
+        let key=if extension.bytes().any(|c|c.is_ascii_uppercase()){
+            std::borrow::Cow::Owned(extension.to_ascii_lowercase())
+        }else{std::borrow::Cow::Borrowed(extension)};
+        if let Some(&i)=extension_indices.get(key.as_ref()){extensions[i].1+=1;}
+        else{extension_indices.insert(key.into_owned(),extensions.len());extensions.push((extension.to_owned(),1));}
     }
-    extensions.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase())));
+    extensions.sort_by_cached_key(|(name,count)|(std::cmp::Reverse(*count),name.to_lowercase()));
     summary.extensions = extensions;
     summary
 }
@@ -328,7 +334,8 @@ impl App {
     /// the tooltip is the DISKINFO_LONG (free, total) text without tags.
     pub(super) fn folder_info(&self, index: usize) -> (String, String, String, String) {
         let pane = &self.panes[index];
-        let summary = pane.summary.clone().unwrap_or_default();
+        let empty=PaneSummary::default();
+        let summary = pane.summary.as_ref().unwrap_or(&empty);
         let res = |key: &str, fallback: &str| self.language_pack.text(&format!("RES.{key}"), fallback);
         let counts = ndr::markup::substitute(
             &res("FOLDERINFO", "<c000000><b>%d</b></c> Folder, <c000000><b>%d</b></c> File (<b>%s</b>)"),

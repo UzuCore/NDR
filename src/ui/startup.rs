@@ -15,6 +15,34 @@ pub(super) struct PreparedStartup {
     pub(super) resources: PathBuf,
     pub(super) language_pack: compat::Language,
     pub(super) toolbar: ndr::commands::ToolbarConfig,
+    pub(super) list_font:Option<PreparedListFont>,
+    pub(super) prepare_ms:u64,
+}
+
+pub(super) struct PreparedListFont{
+    pub(super) key:String,
+    pub(super) data:Option<(&'static [u8],u32)>,
+    pub(super) korean_scale:f32,
+}
+pub(super) fn list_font_config(settings:&Settings,language:&str)->(String,u8,f32,String){
+    let face=settings.text("ListFont","Segoe UI");
+    let style=(settings.values.get("ListFontStyle").and_then(|v|v.as_i64()).unwrap_or(0)&0x0F) as u8;
+    let size=settings.values.get("ListFontSize").and_then(|v|v.as_f64())
+        .unwrap_or(ndr::settings::DEFAULT_LIST_FONT_PIXELS).clamp(8.0,32.0) as f32;
+    let pixels=size.round() as i32;
+    let key=format!("{face}\u{0}{}\u{0}{pixels}\u{0}{}",style&3,super::preferred_cjk_font(language).unwrap_or(""));
+    (face,style,size,key)
+}
+pub(super) fn prepare_list_font(face:&str,style:u8,size:f32,key:String,find:fn(&str)->Option<(PathBuf,u32)>)->PreparedListFont{
+    let data=native::styled_font_names(face,style).iter().find_map(|name|find(name))
+        .and_then(|(path,index)|native::mapped_file(&path).map(|bytes|(bytes,index)));
+    let hangul="\u{ac00}".repeat(10);
+    let pixels=size.round() as i32;
+    let korean_scale=native::gdi_text_widths(face,pixels,style,&[hangul.as_str()])
+        .zip(native::gdi_text_widths("Malgun Gothic",pixels,style,&[hangul.as_str()]))
+        .map(|(a,b)|a[0] as f32/b[0].max(1) as f32)
+        .filter(|s|(0.5..=1.5).contains(s)).unwrap_or(1.0);
+    PreparedListFont{key,data,korean_scale}
 }
 
 fn startup_language(options: &Options, settings: Option<&Settings>) -> String {
@@ -23,6 +51,7 @@ fn startup_language(options: &Options, settings: Option<&Settings>) -> String {
 
 impl PreparedStartup {
     pub(super) fn prepare(options: &Options, profile: PathBuf, loaded: Result<Settings, String>) -> Self {
+        let start=Instant::now();
         let error = loaded.as_ref().err().cloned();
         let settings = loaded.unwrap_or_default();
         let language = startup_language(options, Some(&settings));
@@ -78,7 +107,12 @@ impl PreparedStartup {
         let language_pack = compat::Language::load(&resources.join("Languages"), &language);
         let language = language_pack.code.clone();
         let toolbar = ndr::commands::load_toolbar(&profile);
-        Self { profile, settings, error, language, dual, panes_init: [left, right], resources, language_pack, toolbar }
+        let list_font=(!cfg!(test)).then(||{
+            let (face,style,size,key)=list_font_config(&settings,&language);
+            prepare_list_font(&face,style,size,key,native::font_file)
+        });
+        Self { profile, settings, error, language, dual, panes_init: [left, right], resources, language_pack, toolbar,
+            list_font,prepare_ms:start.elapsed().as_millis() as u64 }
     }
 }
 
@@ -95,6 +129,8 @@ struct Pending {
     hwnd: Option<isize>,
     prepared: Receiver<PreparedStartup>,
     painted: bool,
+    created:Instant,
+    shell_ms:u64,
     loading_text: String,
     failure_text: String,
 }
@@ -112,6 +148,7 @@ impl StartupApp {
         navigation: Option<Navigation>,
         guard: Option<ndr::lifecycle::InstanceGuard>,
     ) -> Self {
+        let created=Instant::now();
         let ctx = &cc.egui_ctx;
         let hwnd = cc.window_handle().ok().and_then(|handle| match handle.as_raw() {
             RawWindowHandle::Win32(handle) => Some(handle.hwnd.get()),
@@ -160,7 +197,7 @@ impl StartupApp {
             let _ = tx.send(data);
             repaint.request_repaint();
         });
-        Self { phase: StartupPhase::Loading(Box::new(Pending { options, navigation, guard, hwnd, prepared, painted: false, loading_text, failure_text })) }
+        Self { phase: StartupPhase::Loading(Box::new(Pending { options, navigation, guard, hwnd, prepared, painted: false, created,shell_ms:0, loading_text, failure_text })) }
     }
 
     fn draw_loading(ctx: &egui::Context, message: &str, failed: bool) {
@@ -196,6 +233,7 @@ impl eframe::App for StartupApp {
                 // startup worker has not returned or already finished.
                 pending.painted = true;
                 Self::draw_loading(ctx, &pending.loading_text, false);
+                pending.shell_ms=pending.created.elapsed().as_millis() as u64;
                 ctx.request_repaint();
                 return;
             }
@@ -204,10 +242,13 @@ impl eframe::App for StartupApp {
         let StartupPhase::Loading(pending) = &mut self.phase else { unreachable!() };
         match pending.prepared.try_recv() {
             Ok(prepared) => {
+                let prepare_ms=prepared.prepare_ms;
                 let mut app = Box::new(App::finish_startup(
                     ctx, std::mem::take(&mut pending.options), prepared,
                     pending.navigation.take(), pending.guard.take(), pending.hwnd,
                 ));
+                app.smoke_startup=serde_json::json!({"shellSubmittedMs":pending.shell_ms,
+                    "workerPrepareMs":prepare_ms,"handoffMs":pending.created.elapsed().as_millis() as u64});
                 app.update(ctx, frame);
                 self.phase = StartupPhase::Ready(app);
             }

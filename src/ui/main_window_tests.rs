@@ -4099,3 +4099,23 @@ fn overlay_cache_evicts_one_old_entry_without_resetting_all_others() {
     drop(app);
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn local_listing_lane_discards_superseded_pending_work() {
+    let mut lane=super::panes::ListingLane::default();
+    let (started_tx,started_rx)=mpsc::channel();
+    let (release_tx,release_rx)=mpsc::channel();
+    let (done_tx,done_rx)=mpsc::channel();
+    lane.submit(Box::new(move||{
+        started_tx.send(()).unwrap();
+        release_rx.recv().unwrap();
+    }));
+    started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    for i in 0..64 {
+        let tx=done_tx.clone();
+        lane.submit(Box::new(move||{tx.send(i).unwrap();}));
+    }
+    release_tx.send(()).unwrap();
+    assert_eq!(done_rx.recv_timeout(Duration::from_secs(2)).unwrap(),63);
+    assert!(done_rx.recv_timeout(Duration::from_millis(80)).is_err());
+}

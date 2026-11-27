@@ -92,7 +92,9 @@ pub fn spawn_folder_watch(path: PathBuf, stop: std::sync::Arc<std::sync::atomic:
     use windows_sys::Win32::System::Threading::WaitForSingleObject;
     let path = wide(path.as_os_str());
     // SAFETY: the path buffer lives through the call; the returned change handle is moved to the watch thread and closed there.
-    let handle = unsafe { FindFirstChangeNotificationW(path.as_ptr(), 0, FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME | FILE_NOTIFY_CHANGE_SIZE) };
+    let handle = unsafe { FindFirstChangeNotificationW(path.as_ptr(), 0,
+        FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME | FILE_NOTIFY_CHANGE_SIZE |
+        FILE_NOTIFY_CHANGE_ATTRIBUTES | FILE_NOTIFY_CHANGE_LAST_WRITE | FILE_NOTIFY_CHANGE_CREATION | FILE_NOTIFY_CHANGE_SECURITY) };
     if handle == INVALID_HANDLE_VALUE || handle.is_null() {
         return;
     }
@@ -243,17 +245,35 @@ pub fn gdi_text_height(face: &str, pixels: i32, style: u8) -> Option<i32> {
 /// cached (measuring every string took about 24 µs each with font fallback, 2.4 s for 100,000 names).
 /// The original list layout (GetFieldMaxWidth, GetAdjustedNameWidth, column counts) is built on these widths.
 pub fn gdi_text_widths<S: AsRef<str>>(face: &str, pixels: i32, style: u8, texts: &[S]) -> Option<Vec<i32>> {
-    use std::{collections::HashMap, sync::Mutex};
+    use std::{cell::RefCell, collections::HashMap};
     use windows_sys::Win32::Foundation::SIZE;
     use windows_sys::Win32::Graphics::Gdi::{CreateFontW, DeleteObject, GetDC, GetTextExtentPoint32W, ReleaseDC, SelectObject, DEFAULT_CHARSET, HDC, HFONT};
-    type Widths = HashMap<char, i32>;
-    static CACHE: Mutex<Option<HashMap<(String, i32, u8), Option<Widths>>>> = Mutex::new(None);
+    struct Widths { ascii: [i32;128], other: HashMap<char,i32> }
+    impl Default for Widths {
+        fn default()->Self { Self { ascii:[i32::MIN;128], other:HashMap::new() } }
+    }
+    impl Widths {
+        fn get(&self,ch:char)->Option<i32>{
+            if ch.is_ascii(){let w=self.ascii[ch as usize];(w!=i32::MIN).then_some(w)}
+            else{self.other.get(&ch).copied()}
+        }
+        fn insert(&mut self,ch:char,width:i32){
+            if ch.is_ascii(){self.ascii[ch as usize]=width;}
+            else if self.other.len()<4096{self.other.insert(ch,width);}
+        }
+    }
+    type Cache=HashMap<(String,i32,u8),Option<Widths>>;
+    thread_local! { static CACHE:RefCell<Cache>=RefCell::new(HashMap::new()); }
     if face.contains('\0') || pixels <= 0 {
         return None;
     }
-    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
-    let fonts = cache.get_or_insert_with(HashMap::new);
-    let widths = fonts.entry((face.to_owned(), pixels, style & 3)).or_insert_with(|| Some(HashMap::new())).as_mut()?;
+    CACHE.with(|cache| {
+    let mut fonts=cache.borrow_mut();
+    let key=(face.to_owned(),pixels,style&3);
+    if fonts.len()>=16 && !fonts.contains_key(&key){
+        if let Some(old)=fonts.keys().next().cloned(){fonts.remove(&old);}
+    }
+    let widths=fonts.entry(key.clone()).or_insert_with(||Some(Widths::default())).as_mut()?;
     // The screen DC with the font selected, created only when a character is missing from the cache.
     let mut gdi: Option<(HDC, HFONT, *mut core::ffi::c_void)> = None;
     let mut failed = false;
@@ -262,7 +282,7 @@ pub fn gdi_text_widths<S: AsRef<str>>(face: &str, pixels: i32, style: u8, texts:
     for text in texts {
         let mut total = 0;
         for ch in text.as_ref().chars() {
-            if let Some(width) = widths.get(&ch) {
+            if let Some(width) = widths.get(ch) {
                 total += width;
                 continue;
             }
@@ -308,10 +328,11 @@ pub fn gdi_text_widths<S: AsRef<str>>(face: &str, pixels: i32, style: u8, texts:
         }
     }
     if failed {
-        *fonts.get_mut(&(face.to_owned(), pixels, style & 3)).unwrap() = None;
+        *fonts.get_mut(&key).unwrap() = None;
         return None;
     }
     Some(result)
+    })
 }
 
 /// The ".." entry the file system reports in FindFirstFileW(folder\*), as original GetList (0x45a34c) adds it: its dwFileAttributes and

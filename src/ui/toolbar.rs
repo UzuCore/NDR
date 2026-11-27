@@ -183,29 +183,36 @@ impl App {
         if let Some(cached) = self.toolbar_icons.get(&key) {
             return cached.clone();
         }
-        let texture = ndr::styles::Skin::load(&self.resources.join("Skins"), &theme)
-            .ok()
-            .and_then(|skin| {
-                // Bundled skins use one horizontal strip. Older and custom
-                // skins can still supply individual PNGs.
-                let atlas_icon = icon.replace('\\', "/");
-                let atlas_icon = atlas_icon.rsplit('/').next().unwrap_or("");
-                let from_atlas = TOOLBAR_ICON_NAMES.iter().position(|name| name.eq_ignore_ascii_case(atlas_icon))
-                    .and_then(|index| skin.image_path("toolbar-icons.png")
-                        .and_then(|path| decode_png(&path).ok())
-                        .and_then(|(width, height, rgba)| {
-                            if width == 0 || height == 0 || width % TOOLBAR_ICON_NAMES.len() != 0 { return None; }
-                            let cell_width = width / TOOLBAR_ICON_NAMES.len();
-                            let mut icon_rgba = Vec::with_capacity(cell_width * height * 4);
-                            for y in 0..height {
-                                let start = (y * width + index * cell_width) * 4;
-                                icon_rgba.extend_from_slice(&rgba[start..start + cell_width * 4]);
-                            }
-                            Some((cell_width, height, icon_rgba))
-                        }));
-                from_atlas.or_else(|| skin.image_path(icon).and_then(|path| decode_png(&path).ok()))
-            })
-            .map(|(width, height, rgba)| ctx.load_texture(format!("toolbar:{key}"), egui::ColorImage::from_rgba_unmultiplied([width, height], &rgba), egui::TextureOptions::LINEAR));
+        let skin=self.current_skin();
+        let basename=icon.replace('\\',"/");
+        let basename=basename.rsplit('/').next().unwrap_or("");
+        if let Some(index)=TOOLBAR_ICON_NAMES.iter().position(|name|name.eq_ignore_ascii_case(basename)){
+            let canonical=format!("{theme}|{}",TOOLBAR_ICON_NAMES[index]);
+            if let Some(texture)=self.toolbar_icons.get(&canonical).and_then(Clone::clone){
+                self.toolbar_icons.insert(key,Some(texture.clone()));
+                return Some(texture);
+            }
+            if let Some((w,h,rgba))=skin.as_ref().and_then(|s|s.image_path("toolbar-icons.png")).and_then(|p|decode_png(&p).ok())
+                && w>0 && h>0 && w%TOOLBAR_ICON_NAMES.len()==0 {
+                let cell=w/TOOLBAR_ICON_NAMES.len();
+                for (i,name) in TOOLBAR_ICON_NAMES.iter().enumerate(){
+                    let cache_key=format!("{theme}|{name}");
+                    if self.toolbar_icons.get(&cache_key).is_some_and(Option::is_some){continue;}
+                    let mut pixels=Vec::with_capacity(cell*h*4);
+                    for y in 0..h{let start=(y*w+i*cell)*4;pixels.extend_from_slice(&rgba[start..start+cell*4]);}
+                    let texture=ctx.load_texture(format!("toolbar:{cache_key}"),
+                        egui::ColorImage::from_rgba_unmultiplied([cell,h],&pixels),egui::TextureOptions::LINEAR);
+                    self.toolbar_icons.insert(cache_key,Some(texture));
+                }
+                if let Some(texture)=self.toolbar_icons.get(&canonical).and_then(Clone::clone){
+                    self.toolbar_icons.insert(key,Some(texture.clone()));
+                    return Some(texture);
+                }
+            }
+        }
+        let texture=skin.and_then(|s|s.image_path(icon)).and_then(|p|decode_png(&p).ok())
+            .map(|(w,h,rgba)|ctx.load_texture(format!("toolbar:{key}"),
+                egui::ColorImage::from_rgba_unmultiplied([w,h],&rgba),egui::TextureOptions::LINEAR));
         self.toolbar_icons.insert(key, texture.clone());
         texture
     }
