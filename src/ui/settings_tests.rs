@@ -605,3 +605,14 @@ fn applying_options_on_a_fresh_profile_keeps_default_on_settings() {
     }
     let _ = fs::remove_dir_all(root);
 }
+
+#[test]
+fn ndr_page_does_not_expose_internal_update_feed_or_last_pane_paths() {
+    let (root, _ctx, app)=fixture("ndr-no-debug-options","ko");
+    let mut form=super::settings_window::SettingsForm::new(&app.settings,&app.language_pack,&app.resources);
+    for key in ["UpdateManifestUrl","LeftPath","RightPath"] { assert!(form.row_mut(key).is_none(),"{key}"); }
+    for key in ["LeftStartPathEnabled","LeftStartPath","RightStartPathEnabled","RightStartPath","LeftAutoFolderSize","RightAutoFolderSize","CheckForUpdatesOnStartup","ShowCompletionToast","FolderTreeDepth"] {
+        assert!(form.row_mut(key).is_some(),"{key}");
+    }
+    drop(app);let _=fs::remove_dir_all(root);
+}

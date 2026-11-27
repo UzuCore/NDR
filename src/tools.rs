@@ -388,6 +388,43 @@ pub struct FolderSizeSummary {
     pub folders: u64,
     /// Unreadable items (up to 100, "path: message").
     pub errors: Vec<String>,
+    pub(crate) links: Vec<crate::native::FolderLinkProbe>,
+    pub(crate) link_overflow: bool,
+}
+impl FolderSizeSummary {
+    pub(crate) fn add_bytes(&mut self,bytes:u64) {
+        match self.total_bytes.checked_add(bytes) {
+            Some(n)=>self.total_bytes=n,
+            None=>{
+                self.total_bytes=u64::MAX;
+                if self.errors.len()<100{self.errors.push("Folder size exceeds u64".into());}
+            }
+        }
+    }
+    pub(crate) fn add_file(&mut self,path:&Path,index_bytes:u64,verify:bool,wide:&mut Vec<u16>) {
+        let (id,bytes,links)=if verify {
+            match crate::listing_cache::folder_file_stat(path,wide) {
+                Ok(stat)=>stat,
+                Err(e)=>{
+                    if self.errors.len()<100{self.errors.push(format!("{}: {e}",path.display()));}
+                    return
+                }
+            }
+        }else{(0,index_bytes,1)};
+        self.add_bytes(bytes);self.files+=1;
+        if links>1 {
+            if self.links.len()<crate::native::FOLDER_LINK_LIMIT&&path.as_os_str().len()<=1024 {
+                self.links.push(crate::native::FolderLinkProbe{path:path.to_path_buf(),id,bytes});
+            }else{self.link_overflow=true;}
+        }
+    }
+    pub(crate) fn merge(&mut self,child:Self) {
+        self.add_bytes(child.total_bytes);
+        self.files+=child.files;self.folders+=child.folders;
+        self.errors.extend(child.errors.into_iter().take(100usize.saturating_sub(self.errors.len())));
+        self.link_overflow|=child.link_overflow||self.links.len()+child.links.len()>crate::native::FOLDER_LINK_LIMIT;
+        self.links.extend(child.links.into_iter().take(crate::native::FOLDER_LINK_LIMIT.saturating_sub(self.links.len())));
+    }
 }
 
 /// C# FolderSizeService.CalculateAsync: skips reparse points per root, counts a file root as one file and a folder root as one folder,
@@ -418,24 +455,23 @@ pub fn folder_size_summary(roots: &[PathBuf], cancel: &AtomicBool) -> Option<Fol
             continue;
         }
         if attributes & DIRECTORY == 0 {
-            summary.total_bytes += metadata.len();
-            summary.files += 1;
+            summary.add_file(root,metadata.len(),crate::native::folder_size_local_volume(root),&mut Vec::new());
             continue;
         }
-        scan_known_directory(root, cancel, &mut summary)?;
+        scan_known_directory(root, cancel, &mut summary,crate::native::folder_size_local_volume(root))?;
     }
     Some(summary)
 }
 
 /// The parent enumeration already supplied non-reparse directory metadata.
 /// Reuse the exact original iterative traversal rather than query that root twice.
-pub(crate) fn folder_size_summary_known_directory(root: &Path, cancel: &AtomicBool) -> Option<FolderSizeSummary> {
+pub(crate) fn folder_size_summary_known_directory(root: &Path, cancel: &AtomicBool,verify:bool) -> Option<FolderSizeSummary> {
     let mut summary = FolderSizeSummary::default();
-    scan_known_directory(root, cancel, &mut summary)?;
+    scan_known_directory(root, cancel, &mut summary,verify)?;
     Some(summary)
 }
 
-fn scan_known_directory(root: &Path, cancel: &AtomicBool, summary: &mut FolderSizeSummary) -> Option<()> {
+fn scan_known_directory(root: &Path, cancel: &AtomicBool, summary: &mut FolderSizeSummary,verify:bool) -> Option<()> {
     use std::os::windows::fs::MetadataExt;
     const REPARSE: u32 = 0x400;
     const DIRECTORY: u32 = 0x10;
@@ -444,9 +480,18 @@ fn scan_known_directory(root: &Path, cancel: &AtomicBool, summary: &mut FolderSi
     };
     summary.folders += 1;
     let mut pending = vec![root.to_path_buf()];
+    let mut wide=Vec::new();
     while let Some(folder) = pending.pop() {
         if check_cancel(cancel).is_err() {
             return None;
+        }
+        // A directory could have become a junction after its parent's
+        // enumeration. Recheck immediately before descending; never
+        // intentionally enumerate a reparse target.
+        match fs::symlink_metadata(&folder){
+            Ok(m) if m.file_attributes()&REPARSE==0&&m.is_dir()=>{},
+            Ok(_)=>{error(summary,&folder,"Directory identity changed".into());continue},
+            Err(e)=>{error(summary,&folder,e.to_string());continue},
         }
         let entries = match fs::read_dir(&folder) {
             Ok(entries) => entries,
@@ -485,8 +530,7 @@ fn scan_known_directory(root: &Path, cancel: &AtomicBool, summary: &mut FolderSi
                 summary.folders += 1;
                 children.push(entry.path());
             } else {
-                summary.total_bytes += metadata.len();
-                summary.files += 1;
+                summary.add_file(&entry.path(),metadata.len(),verify,&mut wide);
             }
         }
         // It is a stack, so push in reverse to descend in list order.

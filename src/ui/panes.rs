@@ -196,6 +196,8 @@ pub(super) struct FieldMax {
     pub name_sum: f32,
     pub items: usize,
     pub ext_average: f32,
+    pub ext_sum: f32,
+    pub ext_count: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -239,45 +241,56 @@ impl FieldMaxPlan {
 /// row order of the width accumulation so the layout math remains identical.
 fn measure_field_cells(entries: &[Entry], view: &PaneView,
     measure: impl FnOnce(&[&str]) -> Option<Vec<f32>>, cancel: Option<&AtomicBool>) -> Option<FieldMax> {
-    // Key includes whether the date separator must expand. All keys
-    // borrow cell text; normalize a unique date only once after collecting.
+    // Filenames are usually unique: measure them directly in row order
+    // instead of building a large hash table and a second string vector.
+    // Other columns deduplicate text, with an exact consecutive hit check.
     let mut known: HashMap<(&str,bool),usize> = HashMap::new();
     let mut masks: Vec<u8> = Vec::new();
-    let mut names=Vec::<usize>::with_capacity(entries.len());
+    let mut names=Vec::<&str>::with_capacity(entries.len());
     let mut extensions=Vec::<usize>::with_capacity(entries.len());
-    fn add<'a>(known:&mut HashMap<(&'a str,bool),usize>,masks:&mut Vec<u8>,field:u8,text:&'a str,gap:bool)->usize{
+    let mut last:[Option<(&str,bool,usize)>;7]=[None;7];
+    fn add<'a>(known:&mut HashMap<(&'a str,bool),usize>,masks:&mut Vec<u8>,last:&mut [Option<(&'a str,bool,usize)>;7],field:u8,text:&'a str,gap:bool)->usize{
+        let index=field as usize;
+        if let Some((old,expand,slot))=last[index]{
+            if expand==gap&&(std::ptr::eq(old,text)||old==text){return slot;}
+        }
         let len=known.len();
         let slot=*known.entry((text,gap)).or_insert(len);
         if slot==len{masks.push(0);}
         masks[slot]|=1<<field;
+        last[index]=Some((text,gap,slot));
         slot
     }
     for (row,(entry,cells)) in entries.iter().zip(&view.cells).enumerate(){
         if row%256==0 && cancel.is_some_and(|c|c.load(Ordering::Relaxed)){return None;}
         if entry.drive{continue;}
-        names.push(add(&mut known,&mut masks,0,&cells[0],false));
+        names.push(&cells[0]);
         if !entry.is_dir{
-            extensions.push(add(&mut known,&mut masks,1,&cells[1],false));
-            if entry.size>0{add(&mut known,&mut masks,3,&cells[3],false);}
+            extensions.push(add(&mut known,&mut masks,&mut last,1,&cells[1],false));
+            if entry.size>0{add(&mut known,&mut masks,&mut last,3,&cells[3],false);}
         }
-        add(&mut known,&mut masks,4,&cells[4],cells[4].contains(ndr::listing::LIST_DATE_TIME_GAP));
-        add(&mut known,&mut masks,6,&cells[6],false);
+        add(&mut known,&mut masks,&mut last,4,&cells[4],cells[4].contains(ndr::listing::LIST_DATE_TIME_GAP));
+        add(&mut known,&mut masks,&mut last,6,&cells[6],false);
     }
+    let n=names.len();
     let mut texts=vec![std::borrow::Cow::Borrowed("");known.len()];
     for ((text,gap),&slot) in &known{
         texts[slot]=if *gap{std::borrow::Cow::Owned(text.replace(ndr::listing::LIST_DATE_TIME_GAP,"  "))}
             else{std::borrow::Cow::Borrowed(*text)};
     }
-    let borrowed:Vec<&str>=texts.iter().map(|t|t.as_ref()).collect();
+    names.reserve(texts.len());
+    names.extend(texts.iter().map(|t|t.as_ref()));
     if cancel.is_some_and(|c|c.load(Ordering::Relaxed)){return None;}
-    let widths=measure(&borrowed)?;
+    let widths=measure(&names)?;
+    if widths.len()!=names.len(){return None;}
     let mut fm=FieldMax::default();
+    for &width in &widths[..n]{fm.max[0]=fm.max[0].max(width);fm.name_sum+=width;fm.items+=1;}
     for (slot,mask) in masks.into_iter().enumerate(){
-        for field in [0,1,3,4,6]{if mask&(1<<field)!=0{fm.max[field]=fm.max[field].max(widths[slot]);}}
+        for field in [1,3,4,6]{if mask&(1<<field)!=0{fm.max[field]=fm.max[field].max(widths[n+slot]);}}
     }
-    for slot in names{fm.name_sum+=widths[slot];fm.items+=1;}
     let (mut ext_sum,mut ext_count)=(0f32,0usize);
-    for slot in extensions{let width=widths[slot];if width>0.0{ext_sum+=width;ext_count+=1;}}
+    for slot in extensions{let width=widths[n+slot];if width>0.0{ext_sum+=width;ext_count+=1;}}
+    fm.ext_sum=ext_sum;fm.ext_count=ext_count;
     if ext_count>0{fm.ext_average=(ext_sum/ext_count as f32).floor();}
     Some(fm)
 }
@@ -330,7 +343,7 @@ impl App {
             use std::hash::{Hash, Hasher};
             let mut h = std::collections::hash_map::DefaultHasher::new();
             (pane.generation, pane.thumb_content_revision, pane.entries.len(), pane.view.cells.len(),
-                pane.view.cells.first().map(|c| c[0].as_str()), &plan).hash(&mut h);
+                pane.view.cells.first().map(|c| c[0].as_ref()), &plan).hash(&mut h);
             h.finish()
         };
         let id = egui::Id::new(("ndr-original-field-max", index));
@@ -966,11 +979,105 @@ pub(super) struct LocalListingPlan {
     view: super::list_view::ViewPlan,
     field: FieldMaxPlan,
 }
+pub(super) struct DisplayedSnapshot{
+    pub(super) revision:u64,
+    pub(super) content_revision:u64,
+    pub(super) plan:LocalListingPlan,
+    pub(super) day:chrono::NaiveDate,
+}
+pub(super) struct PartialLocalListing{
+    base:u64,
+    plan:LocalListingPlan,
+    parent:Option<Entry>,
+    view:PaneView,
+    day:chrono::NaiveDate,
+    pub(super) removed:Vec<std::ffi::OsString>,
+    pub(super) structural:bool,
+}
 pub(super) struct PreparedLocalListing {
     pub(super) plan: LocalListingPlan,
+    pub(super) day:chrono::NaiveDate,
+    pub(super) stage_us:[u64;4],
+    pub(super) shared:bool,
     pub(super) view: super::list_view::PaneView,
     pub(super) field: Option<(FieldMaxPlan, FieldMax)>,
     pub(super) summary: super::main_window::PaneSummary,
+}
+// A single in-flight twin preparation. Only equal, cache-verified
+// revisions and exact presentation plans may share immutable cell strings.
+// The two panes keep their own Entry/row arrays and independent selection.
+#[derive(Default)]
+pub(super) struct TwinPreparation{
+    slot:Mutex<Option<TwinSlot>>,
+    ready:std::sync::Condvar,
+    serial:std::sync::atomic::AtomicU64,
+}
+#[derive(PartialEq)]
+struct TwinKey{
+    revision:u64,
+    plan:LocalListingPlan,
+    day:chrono::NaiveDate,
+    parent:Option<(PathBuf,u32,Option<std::time::SystemTime>)>,
+    len:usize,
+}
+struct TwinSlot{
+    key:TwinKey,
+    token:u64,
+    waiting:bool,
+    result:Option<PreparedLocalListing>,
+}
+struct TwinOwner<'a>{pool:&'a TwinPreparation,token:u64}
+enum TwinClaim<'a>{Owner(TwinOwner<'a>),Shared(PreparedLocalListing),Independent}
+impl TwinPreparation{
+    fn claim(&self,key:TwinKey,cancel:&AtomicBool)->TwinClaim<'_>{
+        let Ok(mut slot)=self.slot.lock()else{return TwinClaim::Independent};
+        if slot.is_none(){
+            let token=self.serial.fetch_add(1,Ordering::Relaxed);
+            *slot=Some(TwinSlot{key,token,waiting:false,result:None});
+            return TwinClaim::Owner(TwinOwner{pool:self,token})
+        }
+        let current=slot.as_mut().unwrap();
+        if current.key!=key||current.waiting{return TwinClaim::Independent}
+        current.waiting=true;let token=current.token;
+        let deadline=Instant::now()+Duration::from_millis(180);
+        loop{
+            if let Some(current)=slot.as_mut().filter(|s|s.token==token){
+                if let Some(result)=current.result.take(){
+                    *slot=None;
+                    return TwinClaim::Shared(result)
+                }
+                if cancel.load(Ordering::Relaxed)||Instant::now()>=deadline{
+                    current.waiting=false;return TwinClaim::Independent
+                }
+            }else{return TwinClaim::Independent}
+            let wait=deadline.saturating_duration_since(Instant::now()).min(Duration::from_millis(10));
+            match self.ready.wait_timeout(slot,wait){
+                Ok((next,_))=>slot=next,Err(_)=>return TwinClaim::Independent,
+            }
+        }
+    }
+}
+impl TwinOwner<'_>{
+    fn publish(&self,result:&PreparedLocalListing){
+        if let Ok(mut slot)=self.pool.slot.lock(){
+            if let Some(s)=slot.as_mut().filter(|s|s.token==self.token&&s.waiting){
+                s.result=Some(PreparedLocalListing{
+                    plan:result.plan.clone(),day:result.day,stage_us:[0;4],shared:true,
+                    view:result.view.clone_local_shared(),field:result.field.clone(),
+                    summary:result.summary.clone(),
+                });
+                self.pool.ready.notify_all();
+            }
+        }
+    }
+}
+impl Drop for TwinOwner<'_>{
+    fn drop(&mut self){
+        if let Ok(mut slot)=self.pool.slot.lock(){
+            if slot.as_ref().is_some_and(|s|s.token==self.token&&s.result.is_none()){*slot=None;}
+            self.pool.ready.notify_all();
+        }
+    }
 }
 impl LocalListingPlan {
     pub(super) fn capture(app: &App, index: usize) -> Self {
@@ -990,9 +1097,23 @@ impl LocalListingPlan {
             field: FieldMaxPlan::capture(app, index),
         }
     }
+    pub(super) fn supports_partial(&self)->bool{
+        self.filter.is_empty()
+            && matches!(self.options.file_mode.as_str(),"Name"|"Extension"|"Attributes"|"Color"|"None")
+            && matches!(self.view.group_mode.as_str(),"None"|"Extension"|"Category")
+    }
+    pub(super) fn prepare_partial(self,path:&Path,entries:&[Entry],descriptions:&HashMap<String,String>,
+        drive_infos:&HashMap<PathBuf,(String,u32,Option<(u64,u64)>)>,cancel:&AtomicBool,base:u64)->Option<PartialLocalListing>{
+        let day=chrono::Local::now().date_naive();
+        let view=super::list_view::build_view(&self.view,entries,descriptions,drive_infos,
+            None,None,true,true,PaneView::default(),Some(cancel))?;
+        Some(PartialLocalListing{base,plan:self,parent:local_parent_item(path),view,day,removed:Vec::new(),structural:false})
+    }
     fn prepare(self, path: &Path, entries: &mut Vec<Entry>, descriptions: &HashMap<String, String>,
-        drive_infos: &HashMap<PathBuf, (String, u32, Option<(u64, u64)>)>, cancel: &AtomicBool) -> Option<PreparedLocalListing> {
+        drive_infos: &HashMap<PathBuf, (String, u32, Option<(u64, u64)>)>, cancel: &AtomicBool,
+        twin:Option<(&TwinPreparation,u64)>) -> Option<PreparedLocalListing> {
         if cancel.load(Ordering::Relaxed) { return None; }
+        let sorting=Instant::now();
         for entry in entries.iter_mut() {
             if !entry.is_dir && !entry.drive && entry.path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("ndr")) {
                 entry.is_dir = true;
@@ -1012,13 +1133,35 @@ impl LocalListingPlan {
             self.view.extension_colors.as_ref(), self.nexus_colors.as_ref(), &self.theme);
         ndr::listing::sort_pane_entries(entries, &self.options, &color, &self.view.group_mode,
             &self.view.category_mode, self.group_descending);
+        let sort_us=sorting.elapsed().as_micros() as u64;
+        let viewing=Instant::now();
+        let day=chrono::Local::now().date_naive();
+        let owner=if let Some((pool,revision))=twin.filter(|_|descriptions.is_empty()&&drive_infos.is_empty()){
+            let parent=entries.first().filter(|e|e.is_parent()).map(|e|(e.path.clone(),e.attributes,e.modified));
+            match pool.claim(TwinKey{revision,plan:self.clone(),day,parent,len:entries.len()},cancel){
+                TwinClaim::Owner(owner)=>Some(owner),
+                TwinClaim::Shared(mut result)=>{
+                    result.stage_us[0]=sort_us;
+                    result.stage_us[1]=viewing.elapsed().as_micros() as u64;
+                    return (!cancel.load(Ordering::Relaxed)).then_some(result)
+                }
+                TwinClaim::Independent=>None,
+            }
+        }else{None};
         let view = super::list_view::build_view(&self.view, entries, descriptions, drive_infos,
             None, None, true, true, super::list_view::PaneView::default(), Some(cancel))?;
+        let view_us=viewing.elapsed().as_micros() as u64;
+        let measuring=Instant::now();
         let field = self.field.measure(entries, &view, cancel).map(|fm| (self.field.clone(), fm));
+        let field_us=measuring.elapsed().as_micros() as u64;
         if cancel.load(Ordering::Relaxed) { return None; }
+        let summarizing=Instant::now();
         let summary=super::main_window::summarize(entries);
+        let summary_us=summarizing.elapsed().as_micros() as u64;
         if cancel.load(Ordering::Relaxed) { return None; }
-        Some(PreparedLocalListing { plan: self, view, field, summary })
+        let result=PreparedLocalListing { plan: self, day, stage_us:[sort_us,view_us,field_us,summary_us],shared:false,view, field, summary };
+        if let Some(owner)=owner{owner.publish(&result);}
+        Some(result)
     }
 }
 
@@ -1045,24 +1188,32 @@ impl App {
         // Stop recursive I/O as soon as navigation/refresh starts, not only
         // when the replacement listing has arrived.
         let same_folder = self.panes[index].listed.as_deref() == Some(location_key(&self.panes[index]).as_str());
+        if !same_folder{self.panes[index].link_recheck=None;}
         if same_folder {
-            // A relist is not proof that any child subtree changed. Keep
-            // completed displays and let the recursive observation decide.
-            let parent = self.panes[index].path.clone();
-            for (path, observation) in &mut self.folder_size_cache {
-                if native::folder_paths_related(path, &parent) { observation.invalidate_verification(); }
+            // A normal parent relist does not invalidate a recursive
+            // observation or require starting its scan again. Recursive
+            // watches and operation scopes handle real changes. Keep
+            // pending jobs, deadlines and the last completed presentation.
+            // An explicit refresh checks cached identity on the worker.
+            if foreground {
+                let parent = self.panes[index].path.clone();
+                for (path, observation) in &mut self.folder_size_cache {
+                    if native::folder_paths_related(path, &parent) {
+                        observation.invalidate_verification();
+                    }
+                }
+                for pane in &mut self.panes {
+                    pane.folder_auto_times.retain(|path, _| !native::folder_paths_related(path, &parent));
+                }
             }
-            let other = 1 - index;
-            if native::folder_paths_related(&self.panes[other].path, &parent) {
-                self.panes[other].folder_auto_times.clear();
-            }
-            self.panes[index].cancel_automatic_folder_jobs();
-            self.folder_size_queue.0.lock().unwrap_or_else(|e| e.into_inner()).retain(|job| !job.cancel.load(Ordering::Relaxed));
         } else {
-            self.clear_automatic_folder_sizes(index);
+            // The old rows can still be painted until the next listing
+            // arrives. Cancel their jobs, but leave their last labels intact
+            // until apply_listing replaces the rows atomically.
+            self.panes[index].cancel_automatic_folder_jobs();
+            self.panes[index].folder_auto_volume=None;
+            self.panes[index].cancel_manual_folder_jobs();
         }
-        self.panes[index].folder_cancel.store(true, Ordering::Relaxed);
-        self.panes[index].folder_manual_pending.clear();
         if self.panes[index].vault.is_some() {
             return self.refresh_vault(index);
         }
@@ -1082,6 +1233,9 @@ impl App {
         // expanded state of children that still exist (FolderExists) and restores the selected and top nodes. NDR drops the cached
         // child list of that folder; expansion is kept by key in `tree_open`, so the same rows reopen.
         let current = self.panes[index].path.clone();
+        let twin_eligible=self.panes[1-index].path==current&&self.panes[1-index].vault.is_none()
+            &&self.panes[1-index].archive.is_none()&&self.panes[1-index].remote.is_none();
+        let twin=self.listing_twin.clone();
         self.tree_cache.retain(|(key, _), _| !ndr::shell_tree::same_key(key, &current));
         self.tree_requests.retain(|(key, _)| !ndr::shell_tree::same_key(key, &current));
         self.tree_cache_revision = self.tree_cache_revision.wrapping_add(1);
@@ -1107,6 +1261,12 @@ impl App {
         // Original FUN_00486474: if "show disk drive list in the list" (ini showdrivelist, initial value 1 = 0x46eed9) is on,
         // append an item for each TNXDriveList drive (attribute 0x40000 → kind 4) to the end of the normal folder listing. The read happens on the listing thread.
         let append_drives = local && !drives_view && show_drive_list;
+        let partial_base=if from_watch && same_folder && !append_drives && self.pending_focus[index].is_none(){
+            pane.local_snapshot.as_ref().filter(|s|s.content_revision==pane.thumb_content_revision
+                && s.day==chrono::Local::now().date_naive()
+                && presentation.as_ref().is_some_and(|plan|plan==&s.plan && plan.supports_partial()))
+                .map(|s|s.revision)
+        }else{None};
         let ready_drives = self.system.ready_drives;
         let drive_item = self.system.drive_item;
         let drive_list = self.drive_list.clone();
@@ -1148,6 +1308,12 @@ impl App {
             let drive_infos = listed.into_iter().filter_map(|(root, info)| info.map(|info| (root, info))).collect();
             if listing_cancel.load(Ordering::Relaxed) { return; }
             let mut skipped_device_names = 0usize;
+            let mut cache_revision=None;
+            let mut partial_read=false;
+            let mut hardlinks=false;
+            let mut removed=Vec::new();
+            let mut structural=false;
+            let reading=Instant::now();
             let mut result = if let Some(remote) = remote {
                 super::ftp_pane::list_remote(&remote, show_hidden)
             } else if let Some(drives) = drives {
@@ -1213,7 +1379,10 @@ impl App {
                     listed
                 })
             } else {
-                listing_cache.read(&path, show_hidden, reuse_listing, cache_enabled, &listing_cancel).map(|mut entries| {
+                listing_cache.read_revision(&path, show_hidden, reuse_listing, cache_enabled, &listing_cancel,partial_base).map(|read| {
+                    cache_revision=read.revision;
+                    partial_read=read.partial;hardlinks=read.hardlinks;removed=read.removed;structural=read.structural;
+                    let mut entries=read.entries;
                     // The drive item name is "%s:" (letter + ':'), like the original DrawListItem.
                     entries.extend(appended.iter().map(|root| Entry {
                         name: root.to_string_lossy().trim_end_matches('\\').to_owned(),
@@ -1229,24 +1398,39 @@ impl App {
                 })
             };
             if listing_cancel.load(Ordering::Relaxed) { return; }
+            let read_us=reading.elapsed().as_micros() as u64;
+            let describing=Instant::now();
             // C# ListLocal: descriptions are read together with the listing (descript.dat always, descript.ion when UseDescriptionFile).
             let descriptions = if local && result.is_ok() && !is_drives(&path) {
                 compat::read_descriptions(&path, include_legacy).map(|map| map.into_iter().map(|(k, v)| (k.to_lowercase(), v)).collect()).unwrap_or_default()
             } else {
                 HashMap::new()
             };
+            let descriptions_us=describing.elapsed().as_micros() as u64;
+            let preparing=Instant::now();
+            let mut partial=None;
             let prepared = match (presentation, result.as_mut()) {
+                (Some(plan),Ok(entries)) if partial_read=>{
+                    partial=plan.prepare_partial(&path,entries,&descriptions,&drive_infos,&listing_cancel,partial_base.unwrap());
+                    let Some(p)=partial.as_mut()else{return};p.removed=removed;p.structural=structural;
+                    None
+                }
                 (Some(plan), Ok(entries)) if entries.len() >= 4096 => {
-                    plan.prepare(&path, entries, &descriptions, &drive_infos, &listing_cancel)
+                    plan.prepare(&path, entries, &descriptions, &drive_infos, &listing_cancel,cache_revision.filter(|_|twin_eligible).map(|r|(&*twin,r)))
                 }
                 _ => None,
             };
             if listing_cancel.load(Ordering::Relaxed) { return; }
+            let [sort_us,view_us,field_us,summary_us]=prepared.as_ref().map(|p|p.stage_us).unwrap_or([0,preparing.elapsed().as_micros() as u64,0,0]);
             let _ = tx.send(Listing {
                 pane: index,
                 generation,
                 result,
                 prepared,
+                cache_revision,
+                hardlinks,
+                partial,
+                timing_us:[read_us,descriptions_us,sort_us,view_us,field_us,summary_us],
                 skipped_device_names,
                 descriptions,
                 drive_infos,
@@ -2035,7 +2219,7 @@ impl App {
                                     for ((column, _, _), cell) in columns.iter().zip(&cell_widths) {
                                         let Some(cell) = *cell else { continue };
                                         let folder_size = (*column == DetailColumn::Size && entry.is_dir).then(|| pane.folder_size_display(&entry.path)).flatten();
-                                        let text = folder_size.as_ref().unwrap_or(&cells[column.index()]);
+                                        let text = folder_size.as_deref().unwrap_or(cells[column.index()].as_ref());
                                         let size = [cell, row_height];
                                         if *column == DetailColumn::Name {
                                             name_response = Some(App::name_cell(ui, egui::vec2(cell, row_height), icon.as_ref(), icons_shown, text, name_color, list_style));
@@ -2051,7 +2235,7 @@ impl App {
                                             let (rect, _) = ui.allocate_exact_size(egui::vec2(cell, row_height), egui::Sense::hover());
                                             paint_original_cell(ui, rect, *column, text, cell_color, cursor_row, &o, list_style);
                                         } else {
-                                            ui.add_sized(size, egui::Label::new(super::list_text(text.as_str(), list_style).color(if *column == DetailColumn::Description { Color32::from_rgb(0x36, 0x82, 0xAF) } else { ui.visuals().weak_text_color() })).truncate());
+                                            ui.add_sized(size, egui::Label::new(super::list_text(text, list_style).color(if *column == DetailColumn::Description { Color32::from_rgb(0x36, 0x82, 0xAF) } else { ui.visuals().weak_text_color() })).truncate());
                                         }
                                     }
                                     name_response.expect("the name column is always shown")
@@ -2232,5 +2416,261 @@ impl App {
             });
         ui.spacing_mut().item_spacing.y = outer_spacing;
         self.pane_rects[index] = shown.response.rect;
+    }
+}
+
+
+// The worker has produced only the changed metadata rows. Keep existing
+// row order, marks, selection, scroll position, folder totals and other
+// view allocations. If a width maximum disappears, a plan changes, a
+// parent changes, or a row cannot be proven identical except for metadata,
+// fall back to a full enumeration and the existing rebuild logic.
+impl App {
+    pub(super) fn try_apply_partial_listing(&mut self,listing:Listing)->bool{
+        let index=listing.pane;
+        if self.apply_partial_listing_inner(listing){
+            if self.settings.flag("ShowFolderDiskInfoBar",true){self.update_disk_capacity(index);}
+            true
+        }else{
+            self.panes[index].local_snapshot=None;
+            self.refresh_after_startup(index);
+            false
+        }
+    }
+    /// Apply bounded ordinary-file insert/delete/rename edits without
+    /// regenerating all row texts or performing another directory read.
+    /// The native Name comparator and verified old revision are required.
+    /// Ambiguous collation ties, groups, filters, and maximum-width
+    /// contraction without a proven surviving maximum use a full refresh.
+    fn apply_structural_listing(&mut self,index:usize,revision:u64,plan:LocalListingPlan,
+        partial:PartialLocalListing,changed:Vec<Entry>,field_plan:FieldMaxPlan,mut fm:FieldMax)->bool{
+        use std::cmp::Ordering as Cmp;
+        use super::list_view::DetailRow;
+        if plan.options.file_mode!="Name"||plan.view.group_mode!="None"||
+            changed.len().saturating_add(partial.removed.len())>16{return false}
+        let pane=&self.panes[index];
+        let old_len=pane.entries.len();
+        if pane.view.rows.len()!=old_len || !pane.view.rows.iter().enumerate()
+            .all(|(i,row)|matches!(row,DetailRow::Item(n) if *n==i)){return false}
+        let ordinary=|entry:&Entry| !entry.is_dir&&!entry.drive&&entry.attributes&0x400==0&&
+            !entry.path.extension().is_some_and(|x|x.eq_ignore_ascii_case("ndr"));
+        if changed.iter().any(|e|!ordinary(e)||e.path.parent()!=Some(pane.path.as_path())){return false}
+        let deleting:HashSet<PathBuf>=partial.removed.iter().map(|name|pane.path.join(name)).collect();
+        let adding:HashMap<&Path,usize>=changed.iter().enumerate().map(|(i,e)|(e.path.as_path(),i)).collect();
+        if deleting.len()!=partial.removed.len()||adding.len()!=changed.len()||
+            deleting.iter().any(|p|adding.contains_key(p.as_path())){return false}
+        let mut removed=Vec::new();
+        let mut replaces=vec![None;changed.len()];let mut deleted_count=0;
+        for (row,entry) in pane.entries.iter().enumerate(){
+            let add=adding.get(entry.path.as_path()).copied();
+            let del=deleting.contains(&entry.path);
+            if add.is_none()&&!del{continue}
+            if !ordinary(entry){return false}
+            if let Some(i)=add{
+                if replaces[i].replace(row).is_some(){return false}
+            }
+            if del{deleted_count+=1;}
+            removed.push(row);
+        }
+        if deleted_count!=deleting.len(){return false}
+        // Sort only the small patch; compare insertion points using the
+        // exact comparator already used by the full Name sort.
+        let cmp=|a:&Entry,b:&Entry|ndr::listing::compare_name_files(a,b,&plan.options);
+        let mut order:Vec<usize>=(0..changed.len()).collect();
+        order.sort_by(|&a,&b|cmp(&changed[a],&changed[b]));
+        if order.windows(2).any(|w|cmp(&changed[w[0]],&changed[w[1]])==Cmp::Equal){return false}
+        let compare=|a:&Entry,b:&Entry| if a.drive{Cmp::Greater}else if a.is_dir{Cmp::Less}else{cmp(a,b)};
+        let mut inserts=Vec::with_capacity(changed.len());
+        for (offset,&source) in order.iter().enumerate(){
+            let new=&changed[source];
+            let pos=pane.entries.partition_point(|e|compare(e,new)==Cmp::Less);
+            let mut at=pos;
+            while at<old_len&&compare(&pane.entries[at],new)==Cmp::Equal{
+                // Received-order ties cannot be inferred from a patch.
+                if removed.binary_search(&at).is_err(){return false}
+                at+=1;
+            }
+            let target=pos-removed.partition_point(|&i|i<pos)+offset;
+            inserts.push((target,source));
+        }
+        // Measure only edited cells. Preserve exact width averages, and
+        // fall back if removing the last known maximum requires a rescan.
+        const FIELDS:[usize;5]=[0,1,3,4,6];
+        let mut texts=Vec::with_capacity((removed.len()+changed.len())*5);
+        fn row_texts(entry:&Entry,cells:&[Arc<str>;7])->[String;5]{
+            [cells[0].to_string(),cells[1].to_string(),
+                if entry.size==0{String::new()}else{cells[3].to_string()},
+                cells[4].replace(ndr::listing::LIST_DATE_TIME_GAP,"  "),cells[6].to_string()]
+        }
+        for &row in &removed{texts.extend(row_texts(&pane.entries[row],&pane.view.cells[row]));}
+        for (entry,cells) in changed.iter().zip(&partial.view.cells){texts.extend(row_texts(entry,cells));}
+        let Some(widths)=self.gdi_list_widths(&texts)else{return false};
+        if widths.len()!=texts.len(){return false}
+        let (old_widths,new_widths)=widths.split_at(removed.len()*5);
+        let mut new_max=[0f32;5];
+        for w in new_widths.chunks_exact(5){
+            for f in 0..5{new_max[f]=new_max[f].max(w[f]);}
+        }
+        if fm.name_sum>16_000_000.0||fm.ext_sum>16_000_000.0{return false}
+        for (&row,w) in removed.iter().zip(old_widths.chunks_exact(5)){
+            for (j,&field) in FIELDS.iter().enumerate(){
+                if w[j]>0.0&&w[j]>=fm.max[field]&&new_max[j]<fm.max[field]{
+                    let remains=pane.entries.iter().enumerate().any(|(i,e)|
+                        removed.binary_search(&i).is_err()&&!e.drive&&
+                        (field!=1||!e.is_dir)&&(field!=3||(!e.is_dir&&e.size>0))&&
+                        pane.view.cells[i][field]==pane.view.cells[row][field]);
+                    if !remains{return false}
+                }
+            }
+            fm.name_sum-=w[0];
+            let Some(items)=fm.items.checked_sub(1)else{return false};fm.items=items;
+            if w[1]>0.0{
+                let Some(count)=fm.ext_count.checked_sub(1)else{return false};
+                fm.ext_count=count;fm.ext_sum-=w[1];
+            }
+        }
+        for w in new_widths.chunks_exact(5){
+            fm.name_sum+=w[0];fm.items+=1;
+            if w[1]>0.0{fm.ext_sum+=w[1];fm.ext_count+=1;}
+        }
+        if fm.name_sum<0.0||fm.ext_sum<0.0||fm.name_sum>16_000_000.0||fm.ext_sum>16_000_000.0{return false}
+        fm.ext_average=if fm.ext_count==0{0.0}else{(fm.ext_sum/fm.ext_count as f32).floor()};
+        for (j,&field) in FIELDS.iter().enumerate(){fm.max[field]=fm.max[field].max(new_max[j]);}
+        // Remap marked/cursor/top row indices once, keeping unchanged rows
+        // and the existing allocated display strings. Only removed paths
+        // lose their marks; an upsert at the same path retains them.
+        let replacement:HashMap<usize,usize>=inserts.iter().filter_map(|&(target,i)|replaces[i].map(|row|(row,target))).collect();
+        let remap=|old:usize|->Option<usize>{
+            if old>=old_len{return None}
+            if removed.binary_search(&old).is_ok(){return replacement.get(&old).copied()}
+            let mut row=old-removed.partition_point(|&i|i<old);
+            for &(target,_) in &inserts{if target<=row{row+=1;}else{break}}
+            Some(row)
+        };
+        let final_len=old_len-removed.len()+changed.len();
+        let clamp=|n:usize|n.min(final_len.saturating_sub(1));
+        let selected=pane.selected.iter().filter_map(|&i|remap(i)).collect();
+        let cursor=remap(pane.cursor).unwrap_or_else(||clamp(pane.cursor));
+        let anchor=remap(pane.anchor).unwrap_or(cursor);
+        let shift_anchor=pane.shift_anchor.and_then(remap);
+        let top=remap(pane.page.top).unwrap_or_else(||clamp(pane.page.top));
+        let typed_cursor=self.typed_search[index].cursor.and_then(remap);
+        let inserted_count=changed.len()-replacement.len();
+        let pane=&mut self.panes[index];
+        let mut additions:Vec<_>=changed.into_iter().zip(partial.view.cells)
+            .zip(partial.view.colors).map(Some).collect();
+        for &row in removed.iter().rev(){
+            pane.entries.remove(row);pane.view.cells.remove(row);pane.view.colors.remove(row);
+        }
+        for (target,i) in inserts{
+            let ((entry,cells),color)=additions[i].take().unwrap();
+            pane.entries.insert(target,entry);pane.view.cells.insert(target,cells);pane.view.colors.insert(target,color);
+        }
+        pane.view.rows.clear();pane.view.rows.extend((0..final_len).map(DetailRow::Item));
+        pane.selected=selected;pane.cursor=cursor;pane.anchor=anchor;pane.shift_anchor=shift_anchor;
+        pane.adjust=Some((top,false));pane.reveal=false;
+        pane.cut_marks.retain(|p|!deleting.contains(p));
+        self.typed_search[index].cursor=typed_cursor;
+        pane.summary=Some(super::main_window::summarize(&pane.entries));
+        pane.thumb_content_revision=pane.thumb_content_revision.wrapping_add(1);
+        pane.prepared_field_max=Some((pane.thumb_content_revision,field_plan,fm));
+        pane.local_snapshot=Some(DisplayedSnapshot{revision,content_revision:pane.thumb_content_revision,plan,day:partial.day});
+        pane.loading=false;pane.error=None;pane.auth_prompted=false;
+        self.smoke_partial_lists+=1;self.smoke_partial_rows+=(inserted_count+deleted_count+replacement.len()) as u64;
+        self.smoke_structural_lists+=1;self.smoke_inserted_rows+=inserted_count as u64;self.smoke_removed_rows+=deleted_count as u64;
+        true
+    }
+
+    pub(super) fn apply_partial_listing_inner(&mut self,listing:Listing)->bool{
+        let index=listing.pane;
+        let (Some(partial),Some(revision),Ok(changed))=(listing.partial,listing.cache_revision,listing.result)else{return false};
+        let plan=LocalListingPlan::capture(self,index);
+        if !plan.supports_partial()||partial.plan!=plan||self.pending_focus[index].is_some(){return false}
+        let pane=&self.panes[index];
+        let Some(snapshot)=&pane.local_snapshot else{return false};
+        if snapshot.revision!=partial.base||snapshot.content_revision!=pane.thumb_content_revision||
+            snapshot.plan!=plan||snapshot.day!=partial.day||partial.day!=chrono::Local::now().date_naive()||
+            pane.listed.as_deref()!=Some(location_key(pane).as_str())||pane.vault.is_some()||pane.archive.is_some()||
+            pane.remote.is_some()||pane.descriptions!=listing.descriptions||pane.drive_infos!=listing.drive_infos||
+            !pane.drive_infos.is_empty()||pane.entries.len()!=pane.view.cells.len()||
+            pane.entries.len()!=pane.view.colors.len()||changed.len()!=partial.view.cells.len()||
+            changed.len()!=partial.view.colors.len(){return false}
+        let same_entry=|a:&Entry,b:&Entry|a.path==b.path&&a.name==b.name&&a.is_dir==b.is_dir&&
+            a.size==b.size&&a.modified==b.modified&&a.attributes==b.attributes&&a.hidden==b.hidden&&a.drive==b.drive;
+        let parent=pane.entries.first().filter(|e|e.is_parent());
+        match (parent,partial.parent.as_ref()){
+            (Some(a),Some(b)) if same_entry(a,b)=>{},
+            (None,None)=>{},
+            _=>return false,
+        }
+        let Some((field_revision,field_plan,mut fm))=pane.prepared_field_max.clone()else{return false};
+        if field_revision!=pane.thumb_content_revision||field_plan!=plan.field{return false}
+        let Some(summary)=pane.summary.as_ref()else{return false};
+        if summary.bytes==u64::MAX{return false}
+        if partial.structural{
+            return self.apply_structural_listing(index,revision,plan,partial,changed,field_plan,fm);
+        }
+        if !partial.removed.is_empty(){return false}
+        let mut bytes=summary.bytes;
+        if changed.is_empty(){
+            let pane=&mut self.panes[index];
+            pane.local_snapshot=Some(DisplayedSnapshot{revision,content_revision:pane.thumb_content_revision,plan,day:partial.day});
+            pane.loading=false;pane.error=None;pane.auth_prompted=false;
+            self.smoke_partial_lists+=1;
+            return true;
+        }
+        let lookup:HashMap<&Path,usize>=changed.iter().enumerate().map(|(i,e)|(e.path.as_path(),i)).collect();
+        if lookup.len()!=changed.len(){return false}
+        let mut positions=vec![usize::MAX;changed.len()];
+        let mut widths=Vec::with_capacity(changed.len()*4);
+        // At most 128 names: one pass over the old list, no cloned paths.
+        for (row,old) in pane.entries.iter().enumerate(){
+            let Some(&i)=lookup.get(old.path.as_path())else{continue};
+            let new=&changed[i];
+            if positions[i]!=usize::MAX||old.name!=new.name||old.is_dir||new.is_dir||old.drive||new.drive||
+                old.attributes!=new.attributes||old.hidden!=new.hidden||
+                old.path.extension().is_some_and(|e|e.eq_ignore_ascii_case("ndr"))||
+                ndr::listing::group_key_cow(old,&plan.view.group_mode,&plan.view.category_mode)
+                    !=ndr::listing::group_key_cow(new,&plan.view.group_mode,&plan.view.category_mode){return false}
+            let before=&pane.view.cells[row];let after=&partial.view.cells[i];
+            if [0,1,2,5,6].iter().any(|&c|before[c]!=after[c])||pane.view.colors[row]!=partial.view.colors[i]{return false}
+            let Some(total)=bytes.checked_sub(old.size).and_then(|b|b.checked_add(new.size))else{return false};
+            bytes=total;positions[i]=row;
+        }
+        if positions.contains(&usize::MAX){return false}
+        for (i,&row) in positions.iter().enumerate(){
+            let before=&pane.view.cells[row];let after=&partial.view.cells[i];
+            widths.push(if pane.entries[row].size==0{String::new()}else{before[3].to_string()});
+            widths.push(if changed[i].size==0{String::new()}else{after[3].to_string()});
+            widths.push(before[4].replace(ndr::listing::LIST_DATE_TIME_GAP,"  "));
+            widths.push(after[4].replace(ndr::listing::LIST_DATE_TIME_GAP,"  "));
+        }
+        let Some(measured)=self.gdi_list_widths(&widths)else{return false};
+        // A new maximum can be raised locally. Removing any old maximum
+        // requires an exact rescan, even if another equal maximum may exist.
+        for pair in measured.chunks_exact(4){
+            for (field,old,new) in [(3,pair[0],pair[1]),(4,pair[2],pair[3])]{
+                if old>=fm.max[field] && new<old{return false}
+                fm.max[field]=fm.max[field].max(new);
+            }
+        }
+        let pane=&mut self.panes[index];
+        let count=changed.len();
+        for ((row,entry),cells) in positions.into_iter().zip(changed).zip(partial.view.cells){
+            pane.entries[row]=entry;
+            for col in [3,4]{
+                if pane.view.cells[row][col]!=cells[col]{pane.view.cells[row][col]=cells[col].clone();}
+            }
+        }
+        pane.summary.as_mut().unwrap().bytes=bytes;
+        pane.thumb_content_revision=pane.thumb_content_revision.wrapping_add(1);
+        pane.prepared_field_max=Some((pane.thumb_content_revision,field_plan,fm));
+        pane.local_snapshot=Some(DisplayedSnapshot{revision,content_revision:pane.thumb_content_revision,plan,day:partial.day});
+        pane.loading=false;
+        pane.error=None;
+        pane.auth_prompted=false;
+        self.smoke_partial_lists+=1;
+        self.smoke_partial_rows+=count as u64;
+        true
     }
 }

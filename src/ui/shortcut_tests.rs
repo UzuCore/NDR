@@ -657,7 +657,7 @@ fn drive_items_follow_the_original_list_end() {
     assert_eq!(drives, [false, false, false, false, true, true], "\"..\", folder1, a.txt, b.txt, then two drives");
     let summary = super::main_window::summarize(&app.panes[0].entries);
     assert_eq!((summary.folders, summary.files), (1, 2), "drives and \"..\" are not counted");
-    assert_eq!(app.panes[0].view.cells[4][0], format!("{} Disk", app.panes[0].entries[4].name));
+    assert_eq!(app.panes[0].view.cells[4][0].as_ref(), format!("{} Disk", app.panes[0].entries[4].name));
     press(&mut app, &ctx, egui::Key::End, CTRL);
     assert_eq!(app.panes[0].cursor, 3, "Ctrl+End = last file before the drives");
     press(&mut app, &ctx, egui::Key::OpenBracket, NONE);
@@ -1053,9 +1053,9 @@ fn language_switch_rebuilds_both_panes_without_navigation() {
     let before = app.panes[0].view.cells[indices[0]][2].clone();
     app.apply_language("ja");
     let expected = app.language_pack.text("RES.FOLDER", "missing");
-    assert_ne!(before, expected);
+    assert_ne!(before.as_ref(), expected);
     for (index, row) in indices.into_iter().enumerate() {
-        assert_eq!(app.panes[index].view.cells[row][2], expected);
+        assert_eq!(app.panes[index].view.cells[row][2].as_ref(), expected);
         assert_eq!(app.panes[index].path, pane_paths[index]);
     }
     assert_eq!(app.panes[0].cursor, indices[0]);

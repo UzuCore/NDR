@@ -30,6 +30,7 @@ impl DetailColumn {
     }
 }
 
+#[derive(Clone)]
 pub(super) enum DetailRow {
     Header(String),
     Item(usize),
@@ -38,9 +39,35 @@ pub(super) enum DetailRow {
 /// Per list row the column texts (7 cells, DetailColumn order) and name color, plus the row order with group headers inserted.
 #[derive(Default)]
 pub(super) struct PaneView {
-    pub cells: Vec<[String; 7]>,
+    // Repeated extension, kind, size, date and attribute texts share
+    // immutable allocations. Vault rows deliberately use unique allocations.
+    pub cells: Vec<[Arc<str>; 7]>,
     pub colors: Vec<Option<(u8, u8, u8)>>,
     pub rows: Vec<DetailRow>,
+    sensitive: bool,
+}
+
+impl PaneView {
+    pub(super) fn clone_local_shared(&self)->Self{
+        assert!(!self.sensitive,"Vault cells cannot be shared");
+        Self{cells:self.cells.clone(),colors:self.colors.clone(),rows:self.rows.clone(),sensitive:false}
+    }
+    // Every sensitive cell is uniquely owned. Ordinary lists may share
+    // non-sensitive text; they are only released, not overwritten here.
+    pub(super) fn wipe_sensitive_cells(&mut self) {
+        if !self.sensitive{return;}
+        for row in &mut self.cells {
+            for cell in row {
+                if let Some(text)=Arc::get_mut(cell) {
+                    // SAFETY: replacing UTF-8 bytes with NULs preserves UTF-8.
+                    use zeroize::Zeroize;
+                    unsafe { text.as_bytes_mut().zeroize(); }
+                } else {
+                    debug_assert!(cell.is_empty(),"shared sensitive cell");
+                }
+            }
+        }
+    }
 }
 
 /// Reuse row buffers on refresh, but release oversized allocations
@@ -57,20 +84,20 @@ fn reset_view_buffer<T>(rows: &mut Vec<T>, count: usize) {
 /// Adaptive per-rebuild cache. High-cardinality listings should not pay
 /// for hashing/cloning unique values. Re-sample periodically so a later
 /// repetitive region (e.g. grouped folders) can still benefit.
-struct CellCache<K> {
-    entries: HashMap<K, String>,
+struct CellCache<K,V=String> {
+    entries: HashMap<K, V>,
     samples: usize,
     hits: usize,
     skip: usize,
 }
 
-impl<K> Default for CellCache<K> {
+impl<K,V> Default for CellCache<K,V> {
     fn default() -> Self {
         Self { entries: HashMap::new(), samples: 0, hits: 0, skip: 0 }
     }
 }
 
-fn cached_cell<K: Eq + std::hash::Hash>(cache: &mut CellCache<K>, key: K, format: impl FnOnce() -> String) -> String {
+fn cached_cell<K: Eq + std::hash::Hash,V:Clone>(cache: &mut CellCache<K,V>, key: K, format: impl FnOnce() -> V) -> V {
     if cache.skip != 0 {
         cache.skip -= 1;
         return format();
@@ -102,6 +129,29 @@ fn cached_cell<K: Eq + std::hash::Hash>(cache: &mut CellCache<K>, key: K, format
         cache.hits = 0;
     }
     value
+}
+
+fn shared_cell<K:Copy+Eq+std::hash::Hash>(cache:&mut CellCache<K,Arc<str>>,
+    last:&mut Option<(K,Arc<str>)>,key:K,format:impl FnOnce()->Arc<str>)->Arc<str>{
+    if let Some((old,value))=last.as_ref(){if *old==key{return value.clone();}}
+    let value=cached_cell(cache,key,format);
+    *last=Some((key,value.clone()));value
+}
+
+#[cfg(test)]
+#[test]
+fn repeated_cells_share_and_sensitive_cells_are_unique(){
+    let mut cache=CellCache::<u64,Arc<str>>::default();
+    let mut last=None;
+    let a=shared_cell(&mut cache,&mut last,1,||Arc::from("same"));
+    let b=shared_cell(&mut cache,&mut last,1,||panic!("repeated"));
+    assert!(Arc::ptr_eq(&a,&b));
+    let mut view=PaneView::default();
+    view.cells.push(std::array::from_fn(|_|Arc::from("secret")));
+    view.sensitive=true;
+    assert!(view.cells.iter().flatten().all(|text|Arc::strong_count(text)==1));
+    view.wipe_sensitive_cells();
+    assert!(view.cells.iter().flatten().all(|text|text.as_bytes().iter().all(|&b|b==0)));
 }
 
 #[cfg(test)]
@@ -315,7 +365,7 @@ impl App {
         let font = egui::TextStyle::Button.resolve(ui.style());
         let widest = ui.fonts_mut(|fonts| {
             pane.view.cells.iter().rev().take(drives)
-                .map(|cells| fonts.layout_no_wrap(cells[0].clone(), font.clone(), Color32::WHITE).size().x)
+                .map(|cells| fonts.layout_no_wrap(cells[0].to_string(), font.clone(), Color32::WHITE).size().x)
                 .fold(0.0f32, f32::max)
         });
         App::list_header_width(icons) + 5.0 + widest
@@ -391,16 +441,40 @@ pub(super) fn build_view(plan: &ViewPlan, entries: &[Entry], descriptions: &Hash
     let basic = move |key: &str| match key {
         "NXFOLDER" => folder, "NXDRIVE" => drive, _ => fore,
     };
+    let sensitive=local && !detect_vault;
+    view.wipe_sensitive_cells();
+    view.sensitive=sensitive;
+    let cell=|mut text:String|->Arc<str>{
+        let value=Arc::from(text.as_str());
+        if sensitive{use zeroize::Zeroize;text.zeroize();}
+        value
+    };
+    let case_cell=|text:&str|->Arc<str>{
+        if case==0{Arc::from(text)}else{cell(character_case(text,case))}
+    };
+    let empty:Arc<str>=Arc::from("");
+    let folder_kind:Arc<str>=Arc::from(folder_type.as_str());
+    let vault_kind:Arc<str>=Arc::from(vault_type.as_str());
+    let dir_size:Arc<str>=Arc::from(folder_size_text.as_str());
+    let owned=|text:&Arc<str>|->Arc<str>{
+        if sensitive{Arc::from(text.as_ref())}else{text.clone()}
+    };
     let count = entries.len();
     reset_view_buffer(&mut view.cells, count);
     reset_view_buffer(&mut view.colors, count);
     reset_view_buffer(&mut view.rows, count);
     let now = std::time::SystemTime::now();
-    let mut date_texts = CellCache::default();
-    let mut size_texts = CellCache::default();
+    let mut date_texts = CellCache::<_,Arc<str>>::default();
+    let mut size_texts = CellCache::<_,Arc<str>>::default();
+    let mut last_size=None;
+    let mut last_date=None;
     let mut date_formatter = ndr::listing::ListDateFormatter::new(&date_format, &time_format, use_age.then(|| [age_labels[0].as_str(), age_labels[1].as_str(), age_labels[2].as_str()]), now);
-    let mut shell_types = HashMap::<&str, String>::new();
-    let mut item_colors = HashMap::<&str, (u8, u8, u8)>::new();
+    // One bounded lookup per exact extension, with a consecutive-hit
+    // shortcut for sorted/grouped directories.
+    type ExtDisplay=(Arc<str>,Arc<str>,(u8,u8,u8));
+    let mut extension_cells=HashMap::<&str,ExtDisplay>::new();
+    let mut last_extension:Option<(&str,ExtDisplay)>=None;
+    let mut attr_cells=HashMap::<u32,Arc<str>>::new();
     let grouped = group_mode != "None" && show_group_name;
     let mut previous = None;
     for (row, entry) in entries.iter().enumerate() {
@@ -417,57 +491,54 @@ pub(super) fn build_view(plan: &ViewPlan, entries: &[Entry], descriptions: &Hash
             // Original DrawListItem kind 4: the drive name (item+8) after "%s:". Other cells (extension, size, date, attributes, description) are not drawn.
             let label = drive_infos.get(&entry.path).map(|(name, _, _)| name.as_str()).unwrap_or("");
             let name = if label.is_empty() { entry.name.clone() } else { format!("{} {label}", entry.name) };
-            view.cells.push([name, String::new(), String::new(), String::new(), String::new(), String::new(), String::new()]);
+            view.cells.push([cell(name),owned(&empty),owned(&empty),owned(&empty),owned(&empty),owned(&empty),owned(&empty)]);
             view.colors.push(Some(drive));
             continue;
         }
         let extension = if entry.is_dir { "" } else { ndr::parity::list_extension(&entry.name) };
         let stem = if attach { &entry.name } else { &entry.name[..entry.name.len() - extension.len()] };
-        let description = if descriptions.is_empty() { String::new() } else { descriptions.get(&entry.name.to_lowercase()).cloned().unwrap_or_default() };
-        // Original DrawListItem description cell (field 6, 0x7da043): when the description (+0x10) is empty and showfiletype (+0x384) is on, the file type text (+0xc).
-        // The type text of original GetList (0x45a34c) is the shell name (SHGetFileInfoW SHGFI_TYPENAME|USEFILEATTRIBUTES, once per extension,
-        // none for ".."). Archive and FTP lists never call SetFileType, so it is empty.
-        // Only .ndr candidates need a filesystem probe. Ordinary folders
-        // already have their type in the listing and may be on a slow disk.
-        let vault_item = detect_vault && entry.is_dir
+        let description=if descriptions.is_empty(){None}else{descriptions.get(&entry.name.to_lowercase()).filter(|d|!d.is_empty())};
+        // Vault rows never share an Arc, even for identical cells. Do not
+        // cache decrypted names, extensions, sizes or dates in this branch.
+        let vault_item=detect_vault && entry.is_dir
             && entry.path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("ndr"))
             && entry.path.is_file();
-        let kind = if vault_item {
-            vault_type.clone()
-        } else if !local || entry.name == ".." {
-            String::new()
-        } else if entry.is_dir {
-            folder_type.clone()
-        } else {
-            shell_types.entry(extension)
-                .or_insert_with(|| native::shell_type_name(&extension.to_lowercase(), false))
-                .clone()
+        let ext_display=|| {
+            let ext=case_cell(extension.trim_start_matches('.'));
+            let kind=if !local{owned(&empty)}else{cell(native::shell_type_name(&extension.to_lowercase(),false))};
+            let color=ndr::listing::original_item_color(entry,extension_colors.as_ref(),basic);
+            (ext,kind,color)
         };
-        let description = if description.is_empty() && show_file_type { kind.clone() } else { description };
-        view.cells.push([
-            character_case(stem, case),
-            character_case(extension.trim_start_matches('.'), case),
-            kind,
-            if entry.is_dir { folder_size_text.clone() } else {
-                cached_cell(&mut size_texts, entry.size, || ndr::parity::size_to_str(entry.size, &unit, thousands))
-            },
-            cached_cell(&mut date_texts, entry.modified, || date_formatter.format(entry.modified)),
-            // Original DrawListItem field 5: FTP and SFTP list items (+0x78) show the permission text (+0x74), others GetAttrString (0x7b50a4, A/H/R/S in "____").
-            // FTP keeps the listing's own text (MLSD "perm" fact, e.g. "eldfmcp"; LIST "drwxr-xr-x"), as seen in the running original.
-            // Fixed: previously the C# text ("RHSA", "-"); FTP panes showed "____".
-            match (&sftp_modes, &ftp_permissions) {
-                (Some((directory, modes)), _) => modes.get(&super::ftp_pane::join_remote(directory, &entry.name)).map(|mode| permission_text(entry.is_dir, *mode)).unwrap_or_default(),
-                (None, Some((directory, texts))) => texts.get(&super::ftp_pane::join_remote(directory, &entry.name)).cloned().unwrap_or_default(),
-                (None, None) => ndr::listing::attr_string(entry.attributes),
-            },
-            description,
-        ]);
-        view.colors.push(Some(if entry.is_dir {
-            folder
-        } else {
-            *item_colors.entry(extension)
-                .or_insert_with(|| ndr::listing::original_item_color(entry, extension_colors.as_ref(), basic))
-        }));
+        let (extension_text,kind,color)=if entry.is_dir{
+            let kind=if vault_item{owned(&vault_kind)}else if !local||entry.name==".."{owned(&empty)}else{owned(&folder_kind)};
+            (owned(&empty),kind,folder)
+        }else if sensitive{ext_display()}
+        else if let Some((_,value))=last_extension.as_ref().filter(|(key,_)|*key==extension){
+            value.clone()
+        }else{
+            let value=if let Some(value)=extension_cells.get(extension){value.clone()}
+                else{
+                    let value=ext_display();
+                    if extension_cells.len()<4096{extension_cells.insert(extension,value.clone());}
+                    value
+                };
+            last_extension=Some((extension,value.clone()));value
+        };
+        let description=if let Some(d)=description{Arc::from(d.as_str())}
+            else if show_file_type{owned(&kind)}else{owned(&empty)};
+        let size=if entry.is_dir{owned(&dir_size)}
+            else if sensitive{cell(ndr::parity::size_to_str(entry.size,&unit,thousands))}
+            else{shared_cell(&mut size_texts,&mut last_size,entry.size,||cell(ndr::parity::size_to_str(entry.size,&unit,thousands)))};
+        let date=if sensitive{cell(date_formatter.format(entry.modified))}
+            else{shared_cell(&mut date_texts,&mut last_date,entry.modified,||cell(date_formatter.format(entry.modified)))};
+        let attr=match (&sftp_modes,&ftp_permissions){
+            (Some((directory,modes)),_)=>cell(modes.get(&super::ftp_pane::join_remote(directory,&entry.name)).map(|mode|permission_text(entry.is_dir,*mode)).unwrap_or_default()),
+            (None,Some((directory,texts)))=>texts.get(&super::ftp_pane::join_remote(directory,&entry.name)).map(|s|Arc::from(s.as_str())).unwrap_or_else(||owned(&empty)),
+            (None,None) if sensitive=>cell(ndr::listing::attr_string(entry.attributes)),
+            (None,None)=>attr_cells.entry(entry.attributes&0x27).or_insert_with(||cell(ndr::listing::attr_string(entry.attributes))).clone(),
+        };
+        view.cells.push([case_cell(stem),extension_text,kind,size,date,attr,description]);
+        view.colors.push(Some(color));
     }
     Some(view)
 }

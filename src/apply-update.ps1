@@ -261,7 +261,7 @@ try {
     "Update installed: $files files" | Set-Content -LiteralPath $LogPath -Encoding UTF8
     Set-InstallProgress $script:installerText.finished 100
     if (-not $SkipRestart) {
-        Start-Process -FilePath (Join-Path $root 'NDR.exe') -WorkingDirectory $root
+        Start-Process -FilePath (Join-Path $root 'NDR.exe') -WorkingDirectory $root -ArgumentList @('--updated')
     }
     Clear-VerifiedPayload
     if ($script:installerForm) { $script:installerForm.Close(); $script:installerForm.Dispose() }

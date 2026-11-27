@@ -204,13 +204,17 @@ impl ScanEngine {
         }
         let mut staged = Vec::new();
         let mut work = ScanWork::default();
-        let summary = self.branch(path, 0, false, &mut staged, cancel, force_full, &mut work, policy)?;
+        let summary = self.branch(path, 0, false, &mut staged, cancel, force_full, &mut work, policy,native::folder_size_local_volume(path))?;
         // The root watch was armed BEFORE enumeration. This lets us arm
         // child watches only AFTER finding useful branches, with no
         // unmonitored gap: discard all staged checkpoints on root changes.
         work.root_stable = !cancel.load(Ordering::Relaxed) && root_watch.matches_path(path);
         if summary.errors.is_empty() && work.root_stable {
-            for (p, checkpoint) in staged { self.insert(&p, checkpoint); }
+            root_watch.remember_links(&summary.links,summary.link_overflow);
+            // Verify the known aliases once more before publishing. An
+            // overflow is still a valid complete scan, but is not reusable.
+            if !summary.link_overflow && !root_watch.reusable(path){work.root_stable=false;}
+            if work.root_stable{for (p, checkpoint) in staged { self.insert(&p, checkpoint); }}
         }
         Some((summary, work))
     }
@@ -220,11 +224,11 @@ impl ScanEngine {
         }
         self.checkpoints.insert(path.to_path_buf(), checkpoint);
     }
-    fn branch(&mut self, path: &Path, depth: usize, known_directory: bool, staged: &mut Vec<(PathBuf, Checkpoint)>, cancel: &AtomicBool, force_full: bool, work: &mut ScanWork, policy: ScanPolicy) -> Option<FolderSizeSummary> {
+    fn branch(&mut self, path: &Path, depth: usize, known_directory: bool, staged: &mut Vec<(PathBuf, Checkpoint)>, cancel: &AtomicBool, force_full: bool, work: &mut ScanWork, policy: ScanPolicy,verify:bool) -> Option<FolderSizeSummary> {
         if cancel.load(Ordering::Relaxed) { return None; }
         if depth > 0 && !force_full {
             if let Some(previous) = self.checkpoints.get_mut(path) {
-                if previous.measured.elapsed() < FULL_AUDIT_AGE && previous.watch.matches_path(path) {
+                if previous.measured.elapsed() < FULL_AUDIT_AGE && previous.watch.reusable(path) {
                     previous.used = Instant::now();
                     work.reused += 1;
                     return Some(previous.summary.clone());
@@ -238,7 +242,7 @@ impl ScanEngine {
         // Root and checkpoint candidates can split at their immediate child
         // directories. Everything else uses the original iterative scan.
         let summary = if depth > 0 && (!eligible || depth == policy.depth) {
-            let summary = folder_size_summary_known_directory(path, cancel)?;
+            let summary = folder_size_summary_known_directory(path, cancel,verify)?;
             work.visited += summary.files + summary.folders;
             summary
         } else {
@@ -246,15 +250,18 @@ impl ScanEngine {
             let error = |s: &mut FolderSizeSummary, p: &Path, e: std::io::Error| {
                 if s.errors.len() < 100 { s.errors.push(format!("{}: {e}", p.display())); }
             };
-            if !known_directory {
+            {
                 let meta = match fs::symlink_metadata(path) {
                     Ok(m) => m,
                     Err(e) => { error(&mut summary, path, e); return Some(summary); }
                 };
-                if meta.file_attributes() & 0x400 != 0 { return Some(summary); }
+                if meta.file_attributes() & 0x400 != 0 || known_directory&&!meta.is_dir() {
+                    if known_directory{error(&mut summary,path,std::io::Error::other("Directory identity changed"));}
+                    return Some(summary)
+                }
                 if !meta.is_dir() {
                     work.visited += 1;
-                    summary.total_bytes = meta.len(); summary.files = 1; return Some(summary);
+                    summary.add_file(path,meta.len(),verify,&mut Vec::new()); return Some(summary);
                 }
             }
             work.visited += 1;
@@ -263,22 +270,18 @@ impl ScanEngine {
                 Ok(e) => e,
                 Err(e) => { error(&mut summary, path, e); return Some(summary); }
             };
+            let mut wide=Vec::new();
             for entry in entries {
                 if cancel.load(Ordering::Relaxed) { return None; }
                 let entry = match entry { Ok(e) => e, Err(e) => { error(&mut summary, path, e); break; } };
                 let meta = match entry.metadata() { Ok(m) => m, Err(e) => { error(&mut summary, &entry.path(), e); continue; } };
                 if meta.file_attributes() & 0x400 != 0 { continue; }
                 if meta.is_dir() {
-                    let child = self.branch(&entry.path(), depth + 1, true, staged, cancel, force_full, work, policy)?;
-                    summary.total_bytes += child.total_bytes;
-                    summary.files += child.files;
-                    summary.folders += child.folders;
-                    let remaining = 100usize.saturating_sub(summary.errors.len());
-                    summary.errors.extend(child.errors.into_iter().take(remaining));
+                    let child = self.branch(&entry.path(), depth + 1, true, staged, cancel, force_full, work, policy,verify)?;
+                    summary.merge(child);
                 } else {
                     work.visited += 1;
-                    summary.total_bytes += meta.len();
-                    summary.files += 1;
+                    summary.add_file(&entry.path(),meta.len(),verify,&mut wide);
                 }
             }
             summary
@@ -292,7 +295,10 @@ impl ScanEngine {
             if child_items < (summary.files + summary.folders).saturating_mul(9) / 10 {
                 if let Some(watch) = FolderSizeWatch::open(path) {
                     if watch.unchanged() {
-                        staged.push((path.to_path_buf(), Checkpoint { watch, summary: summary.clone(), measured: started, used: Instant::now() }));
+                        watch.remember_links(&summary.links,summary.link_overflow);
+                        if !summary.link_overflow&&watch.reusable(path) {
+                            staged.push((path.to_path_buf(), Checkpoint { watch, summary: summary.clone(), measured: started, used: Instant::now() }));
+                        }
                     }
                 }
             }
@@ -318,6 +324,55 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
     }
+    #[test]
+    fn verified_totals_count_actual_cross_directory_hardlinks_and_probe_changes(){
+        let base=fixture("hardlink-logical");
+        let root=base.join("root");let branch=root.join("branch");let other=base.join("other");
+        fs::create_dir_all(&branch).unwrap();fs::create_dir_all(&other).unwrap();
+        let a=other.join("original.bin");let b=branch.join("alias.bin");
+        fs::write(&a,vec![1;100]).unwrap();fs::hard_link(&a,&b).unwrap();
+        fs::write(&a,vec![2;32768]).unwrap();
+        for i in 0..160{fs::write(branch.join(format!("{i}.bin")),[1u8;10]).unwrap();}
+        let cancel=AtomicBool::new(false);let mut engine=ScanEngine::default();
+        let watch=FolderSizeWatch::open(&root).unwrap();
+        let (first,work)=engine.scan(&root,&cancel,true,&watch).unwrap();
+        assert!(work.root_stable&&first.errors.is_empty());
+        assert_eq!(first.total_bytes,34368);assert_eq!(first.links.len(),1);
+        assert_eq!(folder_size_summary(&[root.clone()],&cancel).unwrap().total_bytes,34368);
+        assert!(watch.reusable(&root));
+        fs::write(&a,vec![3;65536]).unwrap();
+        assert!(!watch.reusable(&root),"external writes must invalidate known alias proof");
+        let new_watch=FolderSizeWatch::open(&root).unwrap();
+        let (next,work)=engine.scan(&root,&cancel,false,&new_watch).unwrap();
+        assert!(work.root_stable&&next.errors.is_empty());
+        assert_eq!(next.total_bytes,67136);
+        assert!(new_watch.reusable(&root));
+        drop((watch,new_watch,engine));fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn known_alias_probe_overflow_is_bounded_and_cannot_be_reused(){
+        let base=fixture("many-hardlinks");
+        let root=base.join("root");fs::create_dir(&root).unwrap();
+        let a=base.join("source.bin");fs::write(&a,[0;123]).unwrap();
+        for i in 0..40{fs::hard_link(&a,root.join(format!("alias-{i}"))).unwrap();}
+        let cancel=AtomicBool::new(false);let mut engine=ScanEngine::default();
+        let watch=FolderSizeWatch::open(&root).unwrap();
+        let (summary,work)=engine.scan(&root,&cancel,true,&watch).unwrap();
+        assert!(work.root_stable&&summary.errors.is_empty());
+        assert_eq!(summary.total_bytes,40*123);assert!(summary.link_overflow);
+        assert_eq!(summary.links.len(),native::FOLDER_LINK_LIMIT);
+        assert!(!watch.reusable(&root));
+        drop((watch,engine));fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn folder_size_overflow_is_reported_instead_of_wrapping(){
+        let mut summary=FolderSizeSummary::default();
+        summary.add_bytes(u64::MAX-1);summary.add_bytes(2);
+        assert_eq!(summary.total_bytes,u64::MAX);assert!(!summary.errors.is_empty());
+    }
+
     #[test]
     fn fixed_records_are_bounded_checksummed_and_expire() {
         let now = now_seconds();

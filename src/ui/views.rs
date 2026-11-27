@@ -27,6 +27,14 @@ pub(super) struct ThumbnailKey {
     attributes: u32,
 }
 impl ThumbnailKey {
+    /// Do not spend time generating a thumbnail for an ordinary local file
+    /// whose queued version has already been removed or replaced.
+    pub(super) fn still_current(&self) -> bool {
+        use std::os::windows::fs::MetadataExt;
+        if self.attributes & (0x10 | 0x400) != 0 || !ndr::listing_cache::supported_local_path(&self.path) { return true; }
+        std::fs::symlink_metadata(&self.path).is_ok_and(|m| m.is_file() && m.len() == self.size
+            && m.modified().ok() == self.modified && m.file_attributes() == self.attributes)
+    }
     pub(super) fn new(entry: &Entry, side: u32) -> Self {
         Self { path: entry.path.clone(), side: side.clamp(16,256), size: entry.size,
             modified: entry.modified, attributes: entry.attributes }
@@ -58,7 +66,10 @@ impl App {
             let repaint = ctx.clone();
             thread::spawn(move || {
                 for key in rx {
-                    let image = native::thumbnail(&key.path, key.side);
+                    let image = if key.still_current() {
+                        let image = native::thumbnail(&key.path, key.side);
+                        if key.still_current() { image } else { Err("Thumbnail source changed".into()) }
+                    } else { Err("Thumbnail source changed".into()) };
                     if result.send(AsyncResult::Image { key, image }).is_err() { break; }
                     repaint.request_repaint_after(Duration::from_millis(16));
                 }
@@ -99,7 +110,7 @@ impl App {
         if self.overlay_icons.contains_key(incoming) || self.overlay_icons.len() < 512 { return; }
         let oldest = self.overlay_icons.keys().min_by_key(|k| self.overlay_last_used.get(*k).copied()).cloned();
         if let Some(oldest) = oldest {
-            if let Some(Some(texture)) = self.overlay_icons.remove(&oldest) { self.ghost_icons.remove(&texture.id()); }
+            if let Some(Some(texture)) = self.overlay_icons.remove(&oldest) { self.release_overlay_texture(texture.id()); }
             self.overlay_last_used.remove(&oldest);
             self.overlay_icon_failed_at.remove(&oldest);
         }
@@ -245,6 +256,7 @@ impl App {
     }
 
     pub(super) fn file_icon(&mut self, ctx: &egui::Context, index: usize, row: usize) -> Option<egui::TextureHandle> {
+        if !self.settings.flag("ShowIcons", true) { return None; }
         let entry = self.panes[index].entries.get(row)?;
         // The authenticated vault exposes real WinFsp paths, but shell icon
         // resolution can be expensive. Use the same per-extension icon cache
@@ -441,6 +453,33 @@ impl App {
     }
 
     /// Upload the shell icon image, and also build the original dimmed icon (ImageList_DrawEx ILD_BLEND50, rgbFg white = blend the color halfway with white, keeping alpha).
+    /// Exact-pixel interning for small shell icons. Paths still own their
+    /// independent cache entries; a ghost texture lives until its last owner.
+    pub(super) fn shared_overlay_texture(&mut self, ctx: &egui::Context, path: &Path, width: usize, height: usize, rgba: Vec<u8>) -> egui::TextureHandle {
+        if width > 64 || height > 64 {
+            return self.icon_texture(ctx, format!("ndr-overlay|{}", path.display()), width, height, &rgba);
+        }
+        let key = (width, height, rgba);
+        if let Some((texture, refs)) = self.overlay_texture_pool.get_mut(&key) {
+            *refs += 1;
+            return texture.clone();
+        }
+        let texture = self.icon_texture(ctx, format!("ndr-overlay|{}", path.display()), width, height, &key.2);
+        self.overlay_texture_pool.insert(key, (texture.clone(), 1));
+        texture
+    }
+
+    pub(super) fn release_overlay_texture(&mut self, id: egui::TextureId) {
+        let mut shared = false;
+        self.overlay_texture_pool.retain(|_, (texture, refs)| {
+            if texture.id() != id { return true; }
+            *refs = refs.saturating_sub(1);
+            shared = *refs != 0;
+            shared
+        });
+        if !shared { self.ghost_icons.remove(&id); }
+    }
+
     pub(super) fn icon_texture(&mut self, ctx: &egui::Context, name: String, width: usize, height: usize, rgba: &[u8]) -> egui::TextureHandle {
         let texture = ctx.load_texture(name.clone(), egui::ColorImage::from_rgba_unmultiplied([width, height], rgba), egui::TextureOptions::LINEAR);
         let ghost: Vec<u8> = rgba.chunks_exact(4).flat_map(|p| [((p[0] as u16 + 255) / 2) as u8, ((p[1] as u16 + 255) / 2) as u8, ((p[2] as u16 + 255) / 2) as u8, p[3]]).collect();

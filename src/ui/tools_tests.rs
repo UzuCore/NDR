@@ -1208,7 +1208,7 @@ fn system_commands_follow_csharp() {
     let (_, about) = boxed(&app);
     let build = ndr::update::build_label(ndr::update::current_build()).unwrap_or_else(|| "Local build".into());
     assert!(about.starts_with(&format!("NDR {build}")) && about.contains(&app.profile.display().to_string()), "{about}");
-    assert!(about.contains(&format!("App version: {}", env!("CARGO_PKG_VERSION"))), "{about}");
+    assert!(about.contains("RAM: ") && about.contains("CPU: ") && !about.contains("App version:"), "{about}");
     // User request: version 1.0.0, homepage = the NDR repository.
     assert_eq!(env!("CARGO_PKG_VERSION"), "1.0.0");
     assert_eq!(app.menu_label("homepage", "Homepage"), "W. NDR project page");
@@ -2383,7 +2383,7 @@ fn closing_while_working_asks_the_original_question_and_columns_use_field_names(
     assert_eq!(cells[DetailColumn::Description.index()], cells[DetailColumn::Kind.index()]);
     // Original GetList: the type text is the shell name (SHGetFileInfoW SHGFI_TYPENAME).
     let entry = &app.panes[0].entries[file];
-    assert_eq!(cells[DetailColumn::Kind.index()], native::shell_type_name(ndr::parity::dotnet_extension(&entry.name), false));
+    assert_eq!(cells[DetailColumn::Kind.index()].as_ref(), native::shell_type_name(ndr::parity::dotnet_extension(&entry.name), false));
     // Original FormCloseQuery (0x42a798): during a job STILL_HAVE_OPERATION (TITLE_INFO, 0x2124). No = keep, yes = stop and close.
     assert!(app.start_task("long".into(), |_, cancel| {
         while !cancel.load(std::sync::atomic::Ordering::Relaxed) {

@@ -59,8 +59,11 @@ impl App {
         }
         // The pane folder tree reads the shell namespace separately, so the shot waits until expanded items are read.
         let tree_waiting = kind == "panetree" && self.tree_requests.iter().any(|key| !self.tree_cache.contains_key(key));
+        // About is live, so capture its first measured CPU sample rather
+        // than the initial not-yet-sampled placeholder.
+        let about_waiting = self.msgboxes.iter().any(|b| b.program_icon && !b.text.lines().any(|l| l.starts_with("CPU: ") && l.ends_with('%'))) && self.started.elapsed() < Duration::from_secs(3);
         let sent_id = egui::Id::new("ndr-shot-sent");
-        if self.frames >= SHOT_FRAME && !tree_waiting && !ctx.data(|d| d.get_temp::<bool>(sent_id)).unwrap_or(false) {
+        if self.frames >= SHOT_FRAME && !tree_waiting && !about_waiting && !ctx.data(|d| d.get_temp::<bool>(sent_id)).unwrap_or(false) {
             // Record actual rendered text, glyph coverage and clipping, not only successful startup.
             audit_shot_text(ctx, &path);
             ctx.data_mut(|d| d.insert_temp(sent_id, true));

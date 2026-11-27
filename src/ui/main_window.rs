@@ -428,7 +428,7 @@ impl App {
         } else {
             pane.selected.iter().copied().filter(|i| *i < pane.entries.len()).collect()
         };
-        let modified = |row: usize| pane.view.cells.get(row).map(|c| c[DetailColumn::Modified.index()].clone()).unwrap_or_default();
+        let modified = |row: usize| pane.view.cells.get(row).map(|c| c[DetailColumn::Modified.index()].to_string()).unwrap_or_default();
         let original_file = if pane.loading {
             None
         } else {
@@ -597,7 +597,9 @@ impl App {
     /// silent = the original quiet check ([+0x54] == 1, at startup): only the result is used, without notice or error boxes.
     pub(super) fn start_update_check(&mut self, silent: bool) {
         if self.update_progress.is_some() { return; }
-        let configured = self.settings.text("UpdateManifestUrl", "");
+        // Production updates always use the official endpoint. Keep the
+        // injectable feed only in unit tests, not as a public preference.
+        let configured = if cfg!(test) { self.settings.text("UpdateManifestUrl", "") } else { String::new() };
         let feed = if configured.trim().is_empty() {
             ndr::update::GITHUB_LATEST_URL.to_owned()
         } else { configured.trim().to_owned() };

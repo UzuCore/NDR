@@ -30,6 +30,8 @@ pub struct Options {
     dual: Option<bool>,
     language: Option<String>,
     smoke_seconds: Option<u64>,
+    /// One launch after a successfully installed update.
+    updated: bool,
     /// Optional client size in logical points for isolated smoke checks only.
     smoke_size: Option<[f32; 2]>,
     /// Opt-in taskbar visibility for isolated real Windows shell diagnostics.
@@ -149,6 +151,7 @@ impl Options {
                     result.smoke_size = Some([dimension()?, dimension()?]);
                 }
                 "--smoke-taskbar" => result.smoke_taskbar = true,
+                "--updated" => result.updated = true,
                 "--shot" => {
                     let kind = args.next().ok_or("--shot needs a dialog kind")?;
                     let path = PathBuf::from(args.next().ok_or("--shot needs a PNG path")?);
@@ -366,4 +369,10 @@ mod options_tests {
         assert_eq!(super::beside_profile(&fresh, &[root.join("none")]), fresh);
         std::fs::remove_dir_all(&root).unwrap();
     }
+}
+
+#[test]
+fn updated_flag_is_explicit_and_not_the_normal_startup_default() {
+    assert!(!Options::parse_from(std::iter::empty()).unwrap().updated);
+    assert!(Options::parse_from(["--updated".to_owned()].into_iter()).unwrap().updated);
 }

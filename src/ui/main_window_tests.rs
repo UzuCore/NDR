@@ -2542,10 +2542,10 @@ fn back_wheel_and_dot_files_follow_the_user_requests() {
     // Dot files: name cell = whole name, extension cell empty. ".config.json" is ".config" + "json".
     app.compute_view(0);
     let cells = |app: &App, name: &str| app.panes[0].view.cells[row(app, name)].clone();
-    assert_eq!((cells(&app, ".gitconfig")[0].as_str(), cells(&app, ".gitconfig")[1].as_str()), (".gitconfig", ""));
-    assert_eq!((cells(&app, ".config.json")[0].as_str(), cells(&app, ".config.json")[1].as_str()), (".config", "json"));
+    assert_eq!((cells(&app, ".gitconfig")[0].as_ref(), cells(&app, ".gitconfig")[1].as_ref()), (".gitconfig", ""));
+    assert_eq!((cells(&app, ".config.json")[0].as_ref(), cells(&app, ".config.json")[1].as_ref()), (".config", "json"));
     // Original GetAttrString: A/H/R/S into "____" (the folder dir000 has no attributes).
-    assert_eq!(cells(&app, "dir000")[5], "____");
+    assert_eq!(cells(&app, "dir000")[5].as_ref(), "____");
     assert_eq!(super::list_view::permission_text(true, 0o755), "drwxr-xr-x");
     assert_eq!(super::list_view::permission_text(false, 0o640), "-rw-r-----");
     let run = |app: &mut App, events: Vec<egui::Event>| {
@@ -3876,9 +3876,9 @@ fn automatic_folder_display_never_reverts_or_publishes_partial_totals() {
         p.folder_auto_pending.insert(path.clone(), token.clone());
         token
     };
-    let publish = |app: &mut App, cancel: Arc<AtomicBool>, bytes, text: &str, complete, stable| {
+    let publish = |app: &mut App, cancel: Arc<AtomicBool>, bytes, _text: &str, complete, stable| {
         app.async_tx.send(AsyncResult::FolderSizeRow {
-            pane:0, generation:app.panes[0].generation, path:path.clone(), text:text.into(), bytes,
+            pane:0, path:path.clone(), bytes,
             automatic:true, complete, stable, watch:None, scanned:true,
             work:ndr::folder_cache::ScanWork::default(), audit_at:Instant::now(),
             media:native::FolderSizeMedia::Fast, cancel,
@@ -3902,7 +3902,7 @@ fn automatic_folder_display_never_reverts_or_publishes_partial_totals() {
     // successful measurement, but is never counted as fresh folder_bytes.
     let token = schedule(&mut app);
     app.async_tx.send(AsyncResult::FolderSizeHint {
-        pane:0, generation:app.panes[0].generation, path:path.clone(), text:"3.00 KB".into(), cancel:token.clone(),
+        pane:0, path:path.clone(), bytes:3072, cancel:token.clone(),
     }).unwrap();
     app.poll(&ctx);
     assert_display(&app, Some("3.00 KB"));
@@ -3944,7 +3944,7 @@ fn automatic_folder_display_never_reverts_or_publishes_partial_totals() {
     // Previously this path cleared the old folder_sizes map entirely.
     let generation = app.panes[0].generation;
     app.apply_listing(Listing {pane:0,generation,result:Err("temporary listing failure".into()),
-        prepared:None,skipped_device_names:0,descriptions:HashMap::new(),drive_infos:HashMap::new()},&mut Vec::new());
+        prepared:None,cache_revision:None,hardlinks:false,partial:None,timing_us:[0;6],skipped_device_names:0,descriptions:HashMap::new(),drive_infos:HashMap::new()},&mut Vec::new());
     assert_display(&app, Some("3.00 KB"));
     app.panes[0].folder_auto_visible.insert(path.clone());
     trace.sample(&app.panes[0]);
@@ -4118,4 +4118,319 @@ fn local_listing_lane_discards_superseded_pending_work() {
     release_tx.send(()).unwrap();
     assert_eq!(done_rx.recv_timeout(Duration::from_secs(2)).unwrap(),63);
     assert!(done_rx.recv_timeout(Duration::from_millis(80)).is_err());
+}
+
+#[test]
+fn metadata_partial_matches_full_layout_and_preserves_marks(){
+    let (root,ctx,mut app)=fixture("partial-layout");
+    let left=root.join("left");
+    let file=left.join("partial-test.bin");
+    fs::write(&file,vec![1;100]).unwrap();
+    // Same-file length changes keep the name sort stable.
+    for i in 0..4096{fs::write(left.join(format!("partial-{i:04}.bin")),vec![2;100]).unwrap();}
+    app.settings.set_flag("ShowDriveList",false);
+    app.settings.set_text("LeftSortMode","Name");
+    app.settings.set_text("LeftGroupMode","None");
+    app.refresh(0);wait(&mut app,&ctx);
+    let plan=panes::LocalListingPlan::capture(&app,0);
+    assert!(plan.supports_partial());
+    let row=app.panes[0].entries.iter().position(|e|e.path==file).unwrap();
+    app.panes[0].cursor=row;
+    app.panes[0].selected.insert(row);
+    let cells_ptr=app.panes[0].view.cells.as_ptr();
+    let entries_ptr=app.panes[0].entries.as_ptr();
+    let revision=app.panes[0].thumb_content_revision;
+    let old_time=fs::metadata(&file).unwrap().modified().unwrap();
+    let old_bytes=app.panes[0].summary.as_ref().unwrap().bytes;
+    app.panes[0].local_snapshot=Some(panes::DisplayedSnapshot{
+        revision:1,content_revision:revision,plan:plan.clone(),day:chrono::Local::now().date_naive()});
+    fs::write(&file,vec![3;101]).unwrap();
+    filetime::set_file_mtime(&file,filetime::FileTime::from_system_time(old_time)).unwrap();
+    let changed=fsops::list_dir(&left,false).unwrap().into_iter().filter(|e|e.path==file).collect::<Vec<_>>();
+    assert_eq!(changed.len(),1);
+    let descriptions=app.panes[0].descriptions.clone();
+    let drive_infos=app.panes[0].drive_infos.clone();
+    let partial=plan.prepare_partial(&left,&changed,&descriptions,&drive_infos,&AtomicBool::new(false),1).unwrap();
+    let generation=app.panes[0].generation;
+    let listing=Listing{pane:0,generation,result:Ok(changed),prepared:None,cache_revision:Some(2),hardlinks:false,
+        partial:Some(partial),timing_us:[0;6],skipped_device_names:0,descriptions,drive_infos};
+    assert!(app.apply_partial_listing_inner(listing));
+    assert_eq!(app.panes[0].entries.as_ptr(),entries_ptr);
+    assert_eq!(app.panes[0].view.cells.as_ptr(),cells_ptr);
+    assert_eq!(app.panes[0].entries[row].size,101);
+    assert_eq!(app.panes[0].summary.as_ref().unwrap().bytes,old_bytes+1);
+    assert_eq!(app.panes[0].cursor,row);
+    assert!(app.panes[0].selected.contains(&row));
+    let cells=app.panes[0].view.cells.clone();
+    let field=app.panes[0].prepared_field_max.as_ref().unwrap().2;
+    app.refresh(0);wait(&mut app,&ctx);
+    assert_eq!(app.panes[0].view.cells,cells);
+    assert_eq!(app.panes[0].prepared_field_max.as_ref().unwrap().2,field);
+    drop(app);fs::remove_dir_all(root).unwrap();
+}
+
+
+#[test]
+fn structural_partial_insert_rename_remove_matches_full_view_and_selection(){
+    let (root,ctx,mut app)=fixture("structural-partial");
+    let left=root.join("left");
+    for i in 0..4096{fs::write(left.join(format!("ordinary-{i:05}.txt")),vec![1;100]).unwrap();}
+    fs::write(left.join("very-long-name-that-keeps-the-column-maximum.txt"),vec![1;10000]).unwrap();
+    app.settings.set_flag("ShowDriveList",false);
+    app.settings.set_text("LeftSortMode","Name");
+    app.settings.set_text("LeftGroupMode","None");
+    app.settings.set_text("SizeUnit","B");
+    app.refresh(0);wait(&mut app,&ctx);
+    let keep=left.join("ordinary-02000.txt");
+    let row=app.panes[0].entries.iter().position(|e|e.path==keep).unwrap();
+    app.panes[0].cursor=row;app.panes[0].selected.insert(row);
+    let original_len=app.panes[0].entries.len();
+    let mut revision=1;
+    for (new,removed) in [(Some("aa.txt"),None),(Some("ab.txt"),Some("aa.txt")),(None,Some("ab.txt"))]{
+        let name_cell=app.panes[0].view.cells[app.panes[0].cursor][0].clone();
+        match (new,removed){
+            (Some(n),None)=>fs::write(left.join(n),b"small").unwrap(),
+            (Some(n),Some(o))=>fs::rename(left.join(o),left.join(n)).unwrap(),
+            (None,Some(o))=>fs::remove_file(left.join(o)).unwrap(),
+            _=>unreachable!(),
+        }
+        let plan=panes::LocalListingPlan::capture(&app,0);
+        app.panes[0].local_snapshot=Some(panes::DisplayedSnapshot{revision,
+            content_revision:app.panes[0].thumb_content_revision,plan:plan.clone(),day:chrono::Local::now().date_naive()});
+        let changed:Vec<_>=fsops::list_dir(&left,false).unwrap().into_iter().filter(|e|new==Some(e.name.as_str())).collect();
+        let descriptions=app.panes[0].descriptions.clone();let drive_infos=app.panes[0].drive_infos.clone();
+        let mut partial=plan.prepare_partial(&left,&changed,&descriptions,&drive_infos,&AtomicBool::new(false),revision).unwrap();
+        partial.structural=true;partial.removed=removed.into_iter().map(std::ffi::OsString::from).collect();
+        revision+=1;
+        let listing=Listing{pane:0,generation:app.panes[0].generation,result:Ok(changed),prepared:None,
+            cache_revision:Some(revision),hardlinks:false,partial:Some(partial),timing_us:[0;6],
+            skipped_device_names:0,descriptions,drive_infos};
+        assert!(app.apply_partial_listing_inner(listing),"structural edit {new:?}/{removed:?}");
+        let pane=&app.panes[0];let row=pane.entries.iter().position(|e|e.path==keep).unwrap();
+        assert_eq!(pane.cursor,row);assert!(pane.selected.contains(&row));assert!(Arc::ptr_eq(&name_cell,&pane.view.cells[row][0]));
+        assert_eq!(pane.entries.len(),original_len+usize::from(new.is_some()));
+        assert_eq!(pane.view.cells.len(),pane.entries.len());
+        if let Some(n)=new{assert!(pane.entries.iter().any(|e|e.name==n));}
+        if let Some(n)=removed{assert!(!pane.entries.iter().any(|e|e.name==n));}
+        let cells=pane.view.cells.clone();
+        let field=pane.prepared_field_max.as_ref().unwrap().2;
+        let order:Vec<_>=pane.entries.iter().map(|e|(e.path.clone(),e.size,e.modified,e.attributes)).collect();
+        let bytes=pane.summary.as_ref().unwrap().bytes;
+        app.refresh(0);wait(&mut app,&ctx);
+        assert_eq!(app.panes[0].view.cells,cells);
+        assert_eq!(app.panes[0].prepared_field_max.as_ref().unwrap().2,field);
+        assert_eq!(app.panes[0].entries.iter().map(|e|(e.path.clone(),e.size,e.modified,e.attributes)).collect::<Vec<_>>(),order);
+        assert_eq!(app.panes[0].summary.as_ref().unwrap().bytes,bytes);
+        // A full refresh intentionally rebuilds strings; record the next
+        // unchanged allocation before the following edit.
+        if new.is_some(){
+            let row=app.panes[0].entries.iter().position(|e|e.path==keep).unwrap();
+            app.panes[0].cursor=row;app.panes[0].selected.insert(row);
+        }
+    }
+    drop(app);fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn equal_overlay_pixels_share_texture_and_release_only_last_owner() {
+    let (root,ctx,mut app)=fixture("overlay-shared-pixels");
+    let a=app.shared_overlay_texture(&ctx,&root.join("a"),16,16,vec![255;1024]);
+    let b=app.shared_overlay_texture(&ctx,&root.join("b"),16,16,vec![255;1024]);
+    let c=app.shared_overlay_texture(&ctx,&root.join("c"),16,16,vec![127;1024]);
+    assert_eq!(a.id(),b.id());assert_ne!(a.id(),c.id());
+    assert_eq!(app.overlay_texture_pool.len(),2);
+    app.release_overlay_texture(a.id());assert!(app.ghost_icons.contains_key(&b.id()));
+    app.release_overlay_texture(b.id());assert!(!app.ghost_icons.contains_key(&b.id()));
+    app.release_overlay_texture(c.id());assert!(app.overlay_texture_pool.is_empty());
+    drop(app);fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn queued_thumbnail_checks_real_file_version() {
+    use std::os::windows::fs::MetadataExt;
+    let (root,_ctx,app)=fixture("thumbnail-current-version");
+    let path=root.join("left/a.txt");
+    let entry=app.panes[0].entries.iter().find(|e|e.path==path).unwrap().clone();
+    let key=super::views::ThumbnailKey::new(&entry,120);
+    assert!(key.still_current());
+    fs::write(&path,b"new and longer version").unwrap();assert!(!key.still_current());
+    let mut replacement=entry;let m=fs::metadata(&path).unwrap();replacement.size=m.len();replacement.modified=m.modified().ok();replacement.attributes=m.file_attributes();
+    let key=super::views::ThumbnailKey::new(&replacement,120);assert!(key.still_current());
+    fs::remove_file(&path).unwrap();assert!(!key.still_current());
+    drop(app);fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn folder_size_pending_job_and_cooldown_survive_same_location_watch_relists() {
+    let (root,ctx,mut app)=fixture("folder-relist-pending");
+    let folder=root.join("left/folder");
+    fs::write(folder.join("actual.bin"),vec![7;4096]).unwrap();
+    app.settings.set_flag("LeftAutoFolderSize",true);
+    app.folder_size_workers=true; // deterministic delayed delivery
+    let row=app.panes[0].entries.iter().position(|e|e.path==folder).unwrap();
+    app.queue_folder_size(0,row);
+    let generation=app.panes[0].generation;
+    let token=app.panes[0].folder_auto_pending[&folder].clone();
+    for n in 0..4 {
+        fs::write(root.join("left").join(format!("unrelated-{n}.txt")),b"x").unwrap();
+        app.refresh_after_folder_change(0);
+        wait(&mut app,&ctx);
+        assert!(Arc::ptr_eq(&app.panes[0].folder_auto_pending[&folder],&token));
+        assert!(!token.load(Ordering::Relaxed));
+    }
+    assert!(app.panes[0].generation>generation);
+    app.async_tx.send(AsyncResult::FolderSizeRow {
+        pane:0,path:folder.clone(),bytes:4096,
+        automatic:true,complete:true,watch:native::FolderSizeWatch::open(&folder).map(Arc::new),stable:true,scanned:true,
+        work:ndr::folder_cache::ScanWork::default(),audit_at:Instant::now(),
+        media:native::FolderSizeMedia::Fast,cancel:token.clone()
+    }).unwrap();
+    app.poll(&ctx);
+    assert_eq!(app.panes[0].folder_size_display(&folder).as_deref(),Some("4.00 KB"));
+    let due=app.panes[0].folder_auto_times[&folder];
+    let metadata=|app:&App|app.panes[0].entries.iter().find(|e|e.path==folder).map(|e|(e.attributes,e.modified)).unwrap();
+    let before=metadata(&app);
+    app.refresh_after_folder_change(0);wait(&mut app,&ctx);
+    if before==metadata(&app){
+        assert_eq!(app.panes[0].folder_auto_times.get(&folder),Some(&due));
+    }else{
+        // Windows can publish the directory's own modified timestamp
+        // after the child write. A changed root schedules only a metadata
+        // verification; it must not remove the measured display.
+        assert!(!app.panes[0].folder_auto_times.contains_key(&folder));
+        assert!(app.folder_size_cache[&folder].watch.as_ref().unwrap().reusable(&folder));
+    }
+    assert_eq!(app.panes[0].folder_size_display(&folder).as_deref(),Some("4.00 KB"));
+    assert_eq!(app.panes[0].folder_auto_scans,1);
+    drop(app);fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn dirty_folder_observation_replays_size_on_return_and_updates_after_scan() {
+    let (root,ctx,mut app)=fixture("folder-dirty-return");
+    let left=root.join("left");let folder=left.join("folder");let file=folder.join("actual.bin");
+    fs::write(&file,vec![1;4096]).unwrap();
+    app.settings.set_flag("LeftAutoFolderSize",true);
+    let row=app.panes[0].entries.iter().position(|e|e.path==folder).unwrap();
+    app.queue_folder_size(0,row);wait_for_folder_idle(&mut app,&ctx,0);
+    assert_eq!(app.panes[0].folder_size_display(&folder).as_deref(),Some("4.00 KB"));
+    app.navigate(0,root.join("right"),true);wait(&mut app,&ctx);
+    fs::write(&file,vec![2;8192]).unwrap();wait_for_folder_watch_change(&app,&folder);
+    app.navigate(0,left,true);wait(&mut app,&ctx);
+    let row=app.panes[0].entries.iter().position(|e|e.path==folder).unwrap();
+    app.queue_folder_size(0,row);
+    assert_eq!(app.panes[0].folder_size_display(&folder).as_deref(),Some("4.00 KB"));
+    assert!(app.panes[0].folder_auto_pending.contains_key(&folder));
+    wait_for_folder_idle(&mut app,&ctx,0);
+    assert_eq!(app.panes[0].folder_size_display(&folder).as_deref(),Some("8.00 KB"));
+    let scans=app.panes[0].folder_auto_scans;
+    let mut draft=app.settings.clone();draft.set_text("SizeUnit","B");
+    app.apply_settings(draft);wait(&mut app,&ctx);
+    let expected=ndr::parity::size_to_str(8192,"B",app.settings.flag("UseThousandsSeparator",true));
+    assert_eq!(app.panes[0].folder_size_display(&folder).as_deref(),Some(expected.as_str()));
+    app.queue_folder_size(0,row);wait_for_folder_idle(&mut app,&ctx,0);
+    assert_eq!(app.panes[0].folder_auto_scans,scans,"formatting and clean relist do not rescan descendants");
+    drop(app);fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn about_uses_live_process_ram_and_cpu_without_semantic_version() {
+    let (root,ctx,mut app)=fixture("about-live-process");
+    app.about_command();
+    let first=app.msgboxes[0].text.clone();
+    assert!(first.contains("RAM: ")&&first.contains(" MiB")&&first.contains("CPU: "));
+    assert!(!first.contains(env!("CARGO_PKG_VERSION")));
+    thread::sleep(Duration::from_millis(1100));
+    let _=ctx.run(egui::RawInput::default(),|ctx|app.msgbox_ui(ctx));
+    let text=&app.msgboxes[0].text;
+    let cpu=text.lines().find_map(|l|l.strip_prefix("CPU: ")).unwrap().strip_suffix('%').unwrap().parse::<f64>().unwrap();
+    let ram=text.lines().find_map(|l|l.strip_prefix("RAM: ")).unwrap().strip_suffix(" MiB").unwrap().parse::<f64>().unwrap();
+    assert!(ram>0.0&&(0.0..=100.0).contains(&cpu),"{text}");
+    app.answer_message_box(1,&ctx);
+    assert!(app.msgboxes.is_empty());
+    drop(app);fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn manual_folder_measurement_survives_relist_and_keeps_automatic_tracking(){
+    let (root,ctx,mut app)=fixture("manual-folder-tracked");
+    let folder=root.join("left/folder");let file=folder.join("actual.bin");
+    fs::write(&file,vec![1;1024]).unwrap();
+    app.settings.set_flag("LeftAutoFolderSize",true);
+    let row=app.panes[0].entries.iter().position(|e|e.path==folder).unwrap();
+    app.panes[0].cursor=row;app.active=0;
+    app.calculate_folder_size();
+    let end=Instant::now()+Duration::from_secs(20);
+    while !app.panes[0].folder_manual_pending.is_empty(){
+        assert!(Instant::now()<end);
+        app.poll(&ctx);thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(app.panes[0].folder_bytes.get(&folder),Some(&1024));
+    assert!(app.panes[0].folder_auto_paths.contains(&folder));
+    assert!(app.folder_size_cache[&folder].watch.is_some());
+    fs::write(&file,vec![2;8192]).unwrap();
+    wait_for_folder_watch_change(&app,&folder);
+    app.refresh_after_folder_change(0);wait(&mut app,&ctx);
+    let row=app.panes[0].entries.iter().position(|e|e.path==folder).unwrap();
+    assert_eq!(app.panes[0].folder_size_display(&folder),Some("1.00 KB"));
+    app.panes[0].folder_auto_times.remove(&folder);
+    app.queue_folder_size(0,row);wait_for_folder_idle(&mut app,&ctx,0);
+    assert_eq!(app.panes[0].folder_bytes.get(&folder),Some(&8192));
+    drop(app);fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn manual_pending_and_exact_bytes_are_not_lost_on_same_folder_refresh(){
+    let (root,ctx,mut app)=fixture("manual-folder-pending-relist");
+    let folder=root.join("left/folder");
+    app.folder_size_workers=true;
+    let row=app.panes[0].entries.iter().position(|e|e.path==folder).unwrap();
+    app.enqueue_folder_size(0,row);
+    let token=app.panes[0].folder_manual_pending[&folder].clone();
+    for n in 0..3{
+        fs::write(root.join("left").join(format!("change-{n}.txt")),b"x").unwrap();
+        app.refresh_after_folder_change(0);wait(&mut app,&ctx);
+        assert!(Arc::ptr_eq(&token,&app.panes[0].folder_manual_pending[&folder]));
+        assert!(app.panes[0].folder_manual_pending.contains_key(&folder));
+    }
+    let publish=|a:&mut App,bytes,complete|{
+        a.async_tx.send(AsyncResult::FolderSizeRow {pane:0,path:folder.clone(),bytes,automatic:false,complete,
+            stable:true,watch:None,scanned:true,work:Default::default(),audit_at:Instant::now(),
+            media:native::FolderSizeMedia::Fast,cancel:token.clone()}).unwrap();a.poll(&ctx);
+    };
+    publish(&mut app,1024,false);
+    assert!(!app.panes[0].folder_bytes.contains_key(&folder));
+    assert!(app.panes[0].folder_size_display(&folder).unwrap().starts_with('\u{2265}'));
+    let newer=Arc::new(AtomicBool::new(false));
+    app.panes[0].folder_manual_pending.insert(folder.clone(),newer.clone());
+    publish(&mut app,99999,true); // completed old job cannot overwrite a new token
+    assert!(!app.panes[0].folder_bytes.contains_key(&folder));
+    assert!(Arc::ptr_eq(&newer,&app.panes[0].folder_manual_pending[&folder]));
+    app.panes[0].folder_manual_pending.insert(folder.clone(),token.clone());publish(&mut app,4096,true);
+    assert_eq!(app.panes[0].folder_bytes.get(&folder),Some(&4096));
+    app.panes[0].folder_manual_pending.insert(folder.clone(),token.clone());publish(&mut app,1024,false);
+    assert_eq!(app.panes[0].folder_bytes.get(&folder),Some(&4096));
+    assert_eq!(app.panes[0].folder_size_display(&folder),Some("4.00 KB"));
+    drop(app);fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn folder_disk_hint_reformats_without_restarting_pending_scan(){
+    let (root,ctx,mut app)=fixture("folder-hint-format");
+    let folder=root.join("left/folder");
+    app.settings.set_flag("LeftAutoFolderSize",true);
+    app.folder_size_workers=true;
+    let row=app.panes[0].entries.iter().position(|e|e.path==folder).unwrap();
+    app.queue_folder_size(0,row);
+    let token=app.panes[0].folder_auto_pending[&folder].clone();
+    app.async_tx.send(AsyncResult::FolderSizeHint {pane:0,path:folder.clone(),bytes:3072,cancel:token.clone()}).unwrap();
+    app.poll(&ctx);
+    assert_eq!(app.panes[0].folder_size_display(&folder),Some("3.00 KB"));
+    assert!(!app.panes[0].folder_bytes.contains_key(&folder));
+    let mut settings=app.settings.clone();settings.set_text("SizeUnit","B");
+    app.apply_settings(settings);wait(&mut app,&ctx);
+    assert!(Arc::ptr_eq(&token,&app.panes[0].folder_auto_pending[&folder]));
+    let expected=ndr::parity::size_to_str(3072,"B",app.settings.flag("UseThousandsSeparator",true));
+    assert_eq!(app.panes[0].folder_size_display(&folder),Some(expected.as_str()));
+    drop(app);fs::remove_dir_all(root).unwrap();
 }

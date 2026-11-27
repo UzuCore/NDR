@@ -25,6 +25,45 @@ pub fn build_label(build: u64) -> Option<String> {
     (build > 0).then(|| format!("build-{build}"))
 }
 
+/// One-shot compatibility for an update launched by a previous installer
+/// that did not pass --updated. Only a matching, recent successful build
+/// session is eligible. Never modify user settings or create a cache on a
+/// normal first launch without an existing completed session.
+pub fn consume_recent_update(updates:&Path, build:u64, executable:&Path)->bool {
+    use std::{fs,io::Read,time::{SystemTime,Duration}};
+    if build==0 || crate::fsops::ensure_plain_path(updates).is_err(){return false}
+    let Ok(installed)=fs::metadata(executable).and_then(|m|m.modified())else{return false};
+    let Ok(items)=fs::read_dir(updates)else{return false};
+    let prefix=format!("ndr-update-build-{build}-");
+    let mut newest:Option<(SystemTime,PathBuf)>=None;
+    let now=SystemTime::now();
+    for item in items.flatten().take(512){
+        let name=item.file_name();let Some(name)=name.to_str()else{continue};
+        let Some(suffix)=name.strip_prefix(&prefix)else{continue};
+        let Some((pid,stamp))=suffix.split_once('-')else{continue};
+        if pid.parse::<u32>().ok().filter(|n|*n>0).is_none() ||
+            stamp.parse::<u128>().ok().filter(|n|*n>0).is_none(){continue}
+        let path=item.path();
+        let log=path.join("update.log");
+        if crate::fsops::ensure_plain_path(&log).is_err(){continue}
+        let Ok(m)=fs::metadata(&log)else{continue};
+        if !m.is_file()||m.len()>256{continue}
+        let Ok(at)=m.modified()else{continue};
+        if at<installed||!now.duration_since(at).is_ok_and(|d|d<=Duration::from_secs(600)){continue}
+        let mut text=String::new();
+        if fs::File::open(&log).and_then(|f|f.take(256).read_to_string(&mut text)).is_err(){continue}
+        if !text.trim_start_matches('\u{feff}').trim().strip_prefix("Update installed: ")
+            .and_then(|s|s.strip_suffix(" files")).is_some_and(|n|n.parse::<u32>().is_ok_and(|n|n>0)){continue}
+        if newest.as_ref().is_none_or(|(old,_)|at>*old){newest=Some((at,path));}
+    }
+    let Some((_,session))=newest else{return false};
+    let receipt=session.join(".ndr-about-shown");
+    if crate::fsops::ensure_plain_path(&receipt).is_err(){return false}
+    // create_new prevents duplicate popups if two instances race, and
+    // never truncates a user file or follows a substituted hard link.
+    fs::OpenOptions::new().write(true).create_new(true).open(receipt).is_ok()
+}
+
 /// Refuse untrusted asset URLs, malformed digests, prereleases and downgrades.
 pub fn parse_github_release(body: &[u8], installed: u64) -> Result<Option<GithubRelease>, String> {
     let json: serde_json::Value = serde_json::from_slice(body).map_err(|e| e.to_string())?;
@@ -409,4 +448,21 @@ mod tests {
         assert!(evaluate(b"NXUPDATEINFO1\n12\n5.4\n", &current).is_err());
         assert!(evaluate(b"not json", &current).is_err());
     }
+}
+
+#[test]
+fn completed_update_receipt_matches_build_success_and_is_consumed_once() {
+    use std::fs;
+    let root=std::env::temp_dir().join(format!("ndr-completed-update-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    let updates=root.join("updates");fs::create_dir_all(&updates).unwrap();
+    let exe=root.join("NDR.exe");fs::write(&exe,b"fixture").unwrap();
+    let session=updates.join("ndr-update-build-123-42-1700000000");fs::create_dir(&session).unwrap();
+    let log=session.join("update.log");fs::write(&log,b"Update failed: invalid package").unwrap();
+    assert!(!consume_recent_update(&updates,123,&exe));
+    fs::write(&log,b"\xef\xbb\xbfUpdate installed: 42 files\r\n").unwrap();
+    assert!(!consume_recent_update(&updates,122,&exe));
+    assert!(consume_recent_update(&updates,123,&exe));
+    assert!(!consume_recent_update(&updates,123,&exe));
+    assert!(session.join(".ndr-about-shown").is_file());
+    fs::remove_dir_all(root).unwrap();
 }

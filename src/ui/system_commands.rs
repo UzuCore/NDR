@@ -500,15 +500,14 @@ impl App {
     pub(super) fn about_command(&mut self) {
         let build = ndr::update::build_label(ndr::update::current_build())
             .unwrap_or_else(|| self.catalog("NDR.UPD_LOCAL_BUILD", "로컬 빌드", "Local build"));
-        let text = format!(
-            "NDR {build}\n{}: {}\nWindows 10/11 · 64-bit\n{}: {}",
-            self.catalog("NDR.UI_ABOUT_APP_VERSION", "앱 버전", "App version"),
-            env!("CARGO_PKG_VERSION"),
+        let prefix=format!("NDR {build}");
+        let suffix=format!(
+            "Windows 10/11 · 64-bit\n{}: {}",
             self.catalog("NDR.UI_ABOUT_SETTINGS_LOCATION", "사용자 설정", "User settings"),
             self.profile.display()
         );
         let caption = self.catalog("NDR.UI_ABOUT_TITLE", "NDR 정보", "About NDR");
-        self.program_info_box(&caption, &text);
+        self.program_info_box(&caption, prefix, suffix);
     }
 }
 

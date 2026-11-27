@@ -428,6 +428,16 @@ fn priority_rank(entry: &Entry) -> u8 {
     }
 }
 
+/// Same ordering as the ordinary-file Name branch of sort_group.
+pub fn compare_name_files(a:&Entry,b:&Entry,options:&SortOptions)->Ordering{
+    debug_assert!(!a.is_dir&&!b.is_dir&&!a.drive&&!b.drive);
+    priority_rank(a).cmp(&priority_rank(b)).then_with(||{
+        let by=compare_text(sort_base(a),sort_base(b),options.logical)
+            .then_with(||compare_text(sort_extension(a),sort_extension(b),false));
+        if options.file_descending{by.reverse()}else{by}
+    })
+}
+
 /// C# SortPaneItems (before grouping): folders (folder mode) then files (priority rank ascending, then the file mode within). The sort is stable, so
 /// "None" is the received order. Descending reverses the whole key except the rank (OrderByDescending.ThenByDescending).
 pub fn sort_entries(entries: &mut [Entry], options: &SortOptions, color: &dyn Fn(&Entry) -> u32) {
@@ -510,11 +520,13 @@ fn sort_group(list: &mut [Entry], mode: &str, descending: bool, logical: bool, c
     struct Key {
         start: usize,
         extension: usize,
-        end: usize,
         color: u32,
         rank: u8,
     }
-    let mut words = Vec::with_capacity(list.len().saturating_mul(24));
+    // UTF-8 byte length is an upper bound on the UTF-16 units of
+    // these two slices; the two terminators are the only extra units.
+    let capacity=list.iter().fold(0usize,|sum,e|sum.saturating_add(e.name.len().saturating_add(2)));
+    let mut words = Vec::with_capacity(capacity);
     let keys: Vec<Key> = list.iter().map(|entry| {
         let start = words.len();
         words.extend(sort_base(entry).encode_utf16().chain(Some(0)));
@@ -523,7 +535,6 @@ fn sort_group(list: &mut [Entry], mode: &str, descending: bool, logical: bool, c
         Key {
             start,
             extension,
-            end: words.len(),
             color: if mode == "Color" { color(entry) } else { 0 },
             rank: if priority { priority_rank(entry) } else { 0 },
         }
@@ -534,7 +545,8 @@ fn sort_group(list: &mut [Entry], mode: &str, descending: bool, logical: bool, c
             let (a, b) = (&list[i], &list[j]);
             let base = || compare_wide(&words[ka.start..ka.extension], &words[kb.start..kb.extension], logical);
             let ext = || {
-                let (a, b) = (&words[ka.extension..ka.end], &words[kb.extension..kb.end]);
+                let end=|index:usize|keys.get(index+1).map_or(words.len(),|k|k.start);
+                let (a, b) = (&words[ka.extension..end(i)], &words[kb.extension..end(j)]);
                 if a == b { Ordering::Equal } else { compare_wide(a, b, false) }
             };
             let by_mode = match mode {

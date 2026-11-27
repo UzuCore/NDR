@@ -34,7 +34,63 @@ pub(super) struct MsgBox {
     pub system: bool,
     /// Only About NDR uses the embedded application artwork.
     pub program_icon: bool,
+    about_usage: Option<AboutUsage>,
     on_result: Option<MsgBoxCallback>,
+}
+
+/// A process-local sample; no system-wide utilization or other processes
+/// are queried. CPU is normalized to the logical processor count, as in
+/// Task Manager. The first sample has no delta yet.
+struct AboutUsage {
+    last: Instant,
+    ticks: Option<u64>,
+    ram: Option<usize>,
+    cpu: Option<f64>,
+    prefix: String,
+    suffix: String,
+}
+impl AboutUsage {
+    fn read() -> (Option<u64>, Option<usize>) {
+        use windows_sys::Win32::{Foundation::FILETIME,
+            System::{Threading::{GetCurrentProcess,GetProcessTimes},
+            ProcessStatus::{K32GetProcessMemoryInfo,PROCESS_MEMORY_COUNTERS}}};
+        unsafe {
+            let process=GetCurrentProcess();
+            let mut created:FILETIME=std::mem::zeroed();
+            let mut exited:FILETIME=std::mem::zeroed();
+            let mut kernel:FILETIME=std::mem::zeroed();
+            let mut user:FILETIME=std::mem::zeroed();
+            let filetime=|t:FILETIME| (u64::from(t.dwHighDateTime)<<32)|u64::from(t.dwLowDateTime);
+            let ticks=(GetProcessTimes(process,&mut created,&mut exited,&mut kernel,&mut user)!=0)
+                .then(||filetime(kernel).saturating_add(filetime(user)));
+            let mut mem:PROCESS_MEMORY_COUNTERS=std::mem::zeroed();
+            mem.cb=std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+            let ram=(K32GetProcessMemoryInfo(process,&mut mem,mem.cb)!=0).then_some(mem.WorkingSetSize);
+            (ticks,ram)
+        }
+    }
+    fn new(prefix:String,suffix:String)->Self {
+        let (ticks,ram)=Self::read();
+        Self{last:Instant::now(),ticks,ram,cpu:None,prefix,suffix}
+    }
+    fn sample(&mut self)->bool {
+        let now=Instant::now();
+        let elapsed=now.saturating_duration_since(self.last);
+        if elapsed<Duration::from_secs(1){return false}
+        let (ticks,ram)=Self::read();
+        let cores=std::thread::available_parallelism().map_or(1,usize::from);
+        self.cpu=match (self.ticks,ticks){
+            (Some(old),Some(new)) if new>=old=>
+                Some(((new-old) as f64*0.000_01/elapsed.as_secs_f64()/cores as f64).clamp(0.0,100.0)),
+            _=>None,
+        };
+        self.ticks=ticks;self.ram=ram;self.last=now;true
+    }
+    fn text(&self)->String {
+        let ram=self.ram.map(|n|format!("{:.1} MiB",n as f64/1048576.0)).unwrap_or_else(||"—".into());
+        let cpu=self.cpu.map(|n|format!("{n:.2}%")).unwrap_or_else(||"—".into());
+        format!("{}\nRAM: {ram}\nCPU: {cpu}\n{}",self.prefix,self.suffix)
+    }
 }
 
 const FONT: f32 = 12.0;
@@ -60,6 +116,7 @@ impl App {
             layout: None,
             system: false,
             program_icon: false,
+            about_usage: None,
             on_result: Some(Box::new(on_result)),
         });
     }
@@ -79,10 +136,12 @@ impl App {
         }
     }
 
-    pub(super) fn program_info_box(&mut self, caption: &str, text: &str) {
-        self.system_box(caption, text, mb::MB_OK, |_, _, _| {});
+    pub(super) fn program_info_box(&mut self, caption: &str, prefix:String, suffix:String) {
+        let usage=AboutUsage::new(prefix,suffix);
+        self.system_box(caption, &usage.text(), mb::MB_OK, |_, _, _| {});
         if let Some(last) = self.msgboxes.last_mut() {
             last.program_icon = true;
+            last.about_usage=Some(usage);
         }
     }
 
@@ -129,9 +188,13 @@ impl App {
     }
 
     pub(super) fn msgbox_ui(&mut self, ctx: &egui::Context) {
-        let Some(current) = self.msgboxes.first() else {
+        let Some(current) = self.msgboxes.first_mut() else {
             return;
         };
+        if let Some(usage)=current.about_usage.as_mut(){
+            if usage.sample(){current.text=usage.text();}
+            ctx.request_repaint_after(Duration::from_secs(1).saturating_sub(usage.last.elapsed()));
+        }
         let (title, summary, text, flags, serial, focused, system, program_icon) = (
             current.title.clone(),
             current.summary.clone(),

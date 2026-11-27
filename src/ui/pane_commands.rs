@@ -185,8 +185,12 @@ impl App {
             self.panes[i].folder_auto_visible.remove(&path);
             self.panes[i].folder_auto_paths.remove(&path);
             self.folder_size_cache.remove(&path);
-            self.panes[i].folder_sizes.remove(&path);
-            self.panes[i].folder_bytes.remove(&path);
+            // Preserve a completed value until the explicit calculation
+            // finishes; only a never-measured row uses the progress marker.
+            if !self.panes[i].folder_sizes.get(&path).is_some_and(Option::is_some) {
+                self.panes[i].folder_sizes.remove(&path);
+                self.panes[i].folder_bytes.remove(&path);
+            }
             self.enqueue_folder_size(i, row);
         }
     }

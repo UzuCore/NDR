@@ -128,7 +128,16 @@ pub fn spawn_folder_watch(path: PathBuf, stop: std::sync::Arc<std::sync::atomic:
 pub struct FolderSizeWatch {
     handle: usize,
     identity: (u32, u64, u64),
+    links: std::sync::Mutex<(Vec<FolderLinkProbe>,bool)>,
 }
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct FolderLinkProbe {
+    pub path: PathBuf,
+    pub id: u64,
+    pub bytes: u64,
+}
+pub(crate) const FOLDER_LINK_LIMIT:usize=16;
+
 
 /// The directory notification handle follows the original object if it is
 /// renamed. Check the actual path's volume/file ID and creation time too.
@@ -161,7 +170,7 @@ impl FolderSizeWatch {
             FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME |
             FILE_NOTIFY_CHANGE_SIZE |
             FILE_NOTIFY_CHANGE_ATTRIBUTES) };
-        if handle.is_null() || handle == INVALID_HANDLE_VALUE { None } else { Some(Self { handle: handle as usize, identity }) }
+        if handle.is_null() || handle == INVALID_HANDLE_VALUE { None } else { Some(Self { handle: handle as usize, identity, links:Default::default() }) }
     }
 
     pub fn unchanged(&self) -> bool {
@@ -171,6 +180,20 @@ impl FolderSizeWatch {
     pub fn matches_path(&self, path: &Path) -> bool {
         self.unchanged() && folder_size_identity(path) == Some(self.identity) && self.unchanged()
     }
+    /// Only the worker calls this metadata check. A known external alias
+    /// can change without a notification in this subtree.
+    pub(crate) fn remember_links(&self, probes: &[FolderLinkProbe], overflow:bool) {
+        *self.links.lock().unwrap_or_else(|e|e.into_inner())=(probes.to_vec(),overflow);
+    }
+    pub fn reusable(&self,path:&Path)->bool {
+        if !self.matches_path(path){return false}
+        let links=self.links.lock().unwrap_or_else(|e|e.into_inner());
+        if links.1{return false}
+        let mut wide=Vec::new();
+        links.0.iter().all(|probe|crate::listing_cache::folder_file_stat(&probe.path,&mut wide)
+            .is_ok_and(|(id,bytes,_)|id==probe.id&&bytes==probe.bytes))&&self.unchanged()
+    }
+
 }
 
 #[test]

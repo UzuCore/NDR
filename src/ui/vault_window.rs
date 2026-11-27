@@ -107,9 +107,7 @@ impl App {
         state.selected.clear();
         state.cursor = 0;
         state.summary = None;
-        for row in &mut state.view.cells {
-            for cell in row { cell.zeroize(); }
-        }
+        state.view.wipe_sensitive_cells();
         for row in &mut state.view.rows {
             if let super::list_view::DetailRow::Header(label) = row { label.zeroize(); }
         }
@@ -117,6 +115,7 @@ impl App {
         state.descriptions.clear();
         state.folder_sizes.clear();
         state.folder_bytes.clear();
+        state.folder_hint_bytes.clear();
         if let Some(key) = state.listed.as_mut() { key.zeroize(); }
         state.listed = None;
         state.address.zeroize();
@@ -267,11 +266,9 @@ impl App {
 
     pub(super) fn refresh_vault(&mut self, pane: usize) {
         self.panes[pane].listing_cancel.store(true, Ordering::Relaxed);
-        self.panes[pane].folder_manual_pending.clear();
+        self.panes[pane].cancel_manual_folder_jobs();
         self.clear_automatic_folder_sizes(pane);
-        self.panes[pane].folder_cancel.store(true, Ordering::Relaxed);
-        self.panes[pane].folder_cancel = Arc::new(AtomicBool::new(false));
-        let policy = SessionPolicy::from_settings(&self.settings);
+            let policy = SessionPolicy::from_settings(&self.settings);
         let Some(container) = self.panes[pane].vault.as_mut() else { return };
         if container.database.expired(policy)
             || self.settings.flag("VaultLockOnMinimize", false)
@@ -342,6 +339,7 @@ impl App {
         state.descriptions.clear();
         state.folder_sizes.clear();
         state.folder_bytes.clear();
+        state.folder_hint_bytes.clear();
         self.sort_pane(pane);
         self.panes[pane].selected = self.panes[pane].entries.iter().enumerate()
             .filter(|(_, entry)| selected_names.contains(&entry.name))

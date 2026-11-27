@@ -91,6 +91,20 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// Deliver background results with an event-driven repaint, rather than
+/// requiring the settled UI to poll the channel every second.
+struct WakeSender<T> { tx: Sender<T>, ctx: egui::Context }
+impl<T> Clone for WakeSender<T> {
+    fn clone(&self) -> Self { Self { tx: self.tx.clone(), ctx: self.ctx.clone() } }
+}
+impl<T> WakeSender<T> {
+    fn send(&self, value: T) -> Result<(), mpsc::SendError<T>> {
+        self.tx.send(value)?;
+        self.ctx.request_repaint_after(Duration::from_millis(16));
+        Ok(())
+    }
+}
+
 /// Original TNXShellChangeNotify constructor (0x7b3304): Delay(+0x40) = 0x5dc = 1500ms.
 const FOLDER_CHANGE_DELAY: Duration = Duration::from_millis(1500);
 
@@ -154,6 +168,8 @@ struct Pane {
     /// Column text/color/grouping rows drawn on screen (rebuilt in sort_pane).
     view: PaneView,
     prepared_field_max: Option<(u64, panes::FieldMaxPlan, panes::FieldMax)>,
+    local_snapshot: Option<panes::DisplayedSnapshot>,
+    link_recheck: Option<Instant>,
     /// Listing summary for the info bar (C# PaneState.UpdateSummary). None when a new listing arrives.
     summary: Option<main_window::PaneSummary>,
     /// Original info bar disk data (drive letter "Name (C:) ", free, total). None if it could not be read.
@@ -167,12 +183,12 @@ struct Pane {
     folder_sizes: HashMap<PathBuf, Option<String>>,
     /// Counted folder sizes (bytes). The original file info bar (FUN_0048a5cc) shows the entry size via FloatToStrF(ffNumber).
     folder_bytes: HashMap<PathBuf, u64>,
+    folder_hint_bytes: HashMap<PathBuf,u64>,
     /// Flag to stop counting folder sizes for the current listing (C# CancelFolderSizeJobs).
-    folder_cancel: Arc<AtomicBool>,
     /// Per-job automatic cancellation: scrolling can stop off-screen work
     /// without interrupting a visible row or an explicit manual calculation.
     folder_auto_pending: HashMap<PathBuf, Arc<AtomicBool>>,
-    folder_manual_pending: HashSet<PathBuf>,
+    folder_manual_pending: HashMap<PathBuf,Arc<AtomicBool>>,
     folder_auto_visible: HashSet<PathBuf>,
     folder_auto_times: HashMap<PathBuf, Instant>,
     folder_auto_paths: HashSet<PathBuf>,
@@ -251,6 +267,9 @@ struct Pane {
     item_pressed: bool,
 }
 impl Pane {
+    fn cancel_manual_folder_jobs(&mut self){
+        for (_,token) in self.folder_manual_pending.drain(){token.store(true,Ordering::Relaxed);}
+    }
     fn cancel_automatic_folder_jobs(&mut self) {
         for (path, cancel) in self.folder_auto_pending.drain() {
             cancel.store(true, Ordering::Relaxed);
@@ -265,10 +284,10 @@ impl Pane {
 
     /// Keep the normal localized folder marker until an automatic result is
     /// ready. Explicit Calculate Folder Size still shows its progress dots.
-    fn folder_size_display(&self, path: &Path) -> Option<String> {
+    fn folder_size_display(&self, path: &Path) -> Option<&str> {
         match self.folder_sizes.get(path) {
-            Some(Some(text)) => Some(text.clone()),
-            Some(None) if !self.folder_auto_paths.contains(path) => Some("…".into()),
+            Some(Some(text)) => Some(text.as_str()),
+            Some(None) if !self.folder_auto_paths.contains(path) => Some("…"),
             _ => None,
         }
     }
@@ -299,15 +318,17 @@ impl Pane {
             descriptions: HashMap::new(),
             view: PaneView::default(),
             prepared_field_max: None,
+            local_snapshot: None,
+            link_recheck: None,
             summary: None,
             disk: None,
             drive_infos: HashMap::new(),
             address_editing: false,
             folder_sizes: HashMap::new(),
             folder_bytes: HashMap::new(),
-            folder_cancel: Arc::new(AtomicBool::new(false)),
+            folder_hint_bytes:HashMap::new(),
             folder_auto_pending: HashMap::new(),
-            folder_manual_pending: HashSet::new(),
+            folder_manual_pending: HashMap::new(),
             folder_auto_visible: HashSet::new(),
             folder_auto_times: HashMap::new(),
             folder_auto_paths: HashSet::new(),
@@ -512,9 +533,9 @@ impl FolderLabelTrace {
                         self.approximate_samples += 1;
                     }
                     if let Some(previous) = self.last.get_mut(path) {
-                        if previous != &label {
+                        if previous.as_str() != label {
                             self.value_changes += 1;
-                            *previous = label;
+                            *previous = label.to_owned();
                         }
                     } else {
                         if self.last.len() >= 512 {
@@ -524,7 +545,7 @@ impl FolderLabelTrace {
                         }
                         // The trace is bounded by the same small per-pane
                         // budget plus the actually visible rows.
-                        self.last.insert(path.clone(), label);
+                        self.last.insert(path.clone(), label.to_owned());
                         self.first_values += 1;
                     }
                 }
@@ -547,6 +568,10 @@ struct Listing {
     generation: u64,
     result: Result<Vec<Entry>, String>,
     prepared: Option<panes::PreparedLocalListing>,
+    cache_revision: Option<u64>,
+    hardlinks: bool,
+    partial: Option<panes::PartialLocalListing>,
+    timing_us: [u64;6],
     /// Entries with Windows reserved device names omitted safely from this
     /// archive listing (the rest of the archive remains navigable).
     skipped_device_names: usize,
@@ -698,8 +723,8 @@ enum AsyncResult {
     /// Remote command result (site number, command, "host:port", output or error).
     RemoteCommand { site: String, command: String, host: String, result: Result<String, String> },
     /// Automatic folder size display result (panel, listing generation, folder, text).
-    FolderSizeHint { pane: usize, generation: u64, path: PathBuf, text: String, cancel: Arc<AtomicBool> },
-    FolderSizeRow { pane: usize, generation: u64, path: PathBuf, text: String, bytes: u64, automatic: bool, complete: bool, watch: Option<Arc<native::FolderSizeWatch>>, stable: bool, scanned: bool, work: ndr::folder_cache::ScanWork, audit_at: Instant, media: native::FolderSizeMedia, cancel: Arc<AtomicBool> },
+    FolderSizeHint { pane: usize, path: PathBuf, bytes:u64, cancel: Arc<AtomicBool> },
+    FolderSizeRow { pane: usize, path: PathBuf, bytes: u64, automatic: bool, complete: bool, watch: Option<Arc<native::FolderSizeWatch>>, stable: bool, scanned: bool, work: ndr::folder_cache::ScanWork, audit_at: Instant, media: native::FolderSizeMedia, cancel: Arc<AtomicBool> },
     /// Received an update feed.
     /// Update feed result. bool = the silent check at startup (original [+0x54]; for a new version, only the menu bar button).
     Update(Result<ndr::update::HttpResponse, ndr::update::HttpError>, bool),
@@ -776,7 +801,7 @@ pub struct App {
     dark: bool,
     listing_tx: Sender<Listing>,
     listing_rx: Receiver<Listing>,
-    async_tx: Sender<AsyncResult>,
+    async_tx: WakeSender<AsyncResult>,
     async_rx: Receiver<AsyncResult>,
     job: Option<Job>,
     /// Independent local file jobs; the primary job keeps legacy operations compatible.
@@ -850,6 +875,7 @@ pub struct App {
     per_file_icon_types: HashMap<String, bool>,
     /// C# ShellOverlayIconCache (per path, cleared when it exceeds 512) plus the pending paths and where to send to the overlay worker thread (STA).
     overlay_icons: HashMap<PathBuf, Option<egui::TextureHandle>>,
+    overlay_texture_pool: HashMap<(usize, usize, Vec<u8>), (egui::TextureHandle, usize)>,
     /// Local per-path shell/overlay icons may fail while Explorer is busy.
     /// Cache successes; retry failures only after a short backoff.
     overlay_icon_failed_at: HashMap<PathBuf, Instant>,
@@ -913,7 +939,15 @@ pub struct App {
     /// Number of frames in the startup check that took longer than 50ms.
     smoke_slow_frames: u32,
     smoke_initial_max_ms: f64,
+    smoke_partial_lists: u64,
+    smoke_listing_timing: [Option<[u64;7]>;2],
+    smoke_first_listing_ms:[Option<u64>;2],
+    smoke_partial_rows: u64,
+    smoke_structural_lists:u64,
+    smoke_inserted_rows:u64,
+    smoke_removed_rows:u64,
     smoke_prepared_lists: u64,
+    smoke_shared_preparations:u64,
     smoke_startup:serde_json::Value,
     /// When both panel listings were first fully read in the startup check (ms from start).
     smoke_loaded_ms: Option<u64>,
@@ -1005,6 +1039,7 @@ pub struct App {
     drive_list: Arc<Mutex<panes::DriveListCache>>,
     listing_cache: Arc<ndr::listing_cache::ListingCache>,
     listing_lanes:[panes::ListingLane;2],
+    listing_twin:Arc<panes::TwinPreparation>,
     drive_cache_pending: bool,
 }
 mod startup;
@@ -1059,6 +1094,16 @@ impl App {
                 Err(error) => app.status = error,
             }
         }
+        // A normal startup never opens About; the successful updater
+        // passes a one-shot flag. Also recognize a recent completed managed
+        // update from a previous release that did not pass that flag.
+        let prior_update = if app.options.smoke_seconds.is_none() {
+            std::env::current_exe().ok().is_some_and(|exe|
+                ndr::update::consume_recent_update(&app.profile.join("cache").join("updates"), ndr::update::current_build(), &exe))
+        } else { false };
+        if app.options.updated || prior_update {
+            app.about_command();
+        }
         // C# startup: if CheckForUpdatesOnStartup and a feed exists, check for updates (except in the startup check run).
         // The silent check of the original FUN_00441dd8 ([+0x54] == 1): no box; for a new version, only the "New update" button on the menu bar.
         // Original initial value [Operation] checkupdate=1. If there is no feed (UpdateManifestUrl), no check is done.
@@ -1094,6 +1139,7 @@ impl App {
         if foreground { set_app_fonts(ctx, None, false, 1.0, &language); }
         let (listing_tx, listing_rx) = mpsc::channel();
         let (async_tx, async_rx) = mpsc::channel();
+        let async_tx = WakeSender { tx: async_tx, ctx: ctx.clone() };
         let active = usize::from(settings.flag("StartWithRightPaneActive", false));
         let mut app = Self {
             options,
@@ -1173,6 +1219,7 @@ impl App {
             skin_crumb_press: false,
             per_file_icon_types: HashMap::new(),
             overlay_icons: HashMap::new(),
+            overlay_texture_pool: HashMap::new(),
             overlay_icon_failed_at: HashMap::new(),
             overlay_pending: HashSet::new(),
             overlay_last_used: HashMap::new(),
@@ -1221,7 +1268,13 @@ impl App {
             smoke_slowest_frame_ms: 0.0,
             smoke_slow_frames: 0,
             smoke_initial_max_ms: 0.0,
+            smoke_partial_lists: 0,
+            smoke_listing_timing:[None,None],
+            smoke_first_listing_ms:[None,None],
+            smoke_partial_rows: 0,
+            smoke_structural_lists:0,smoke_inserted_rows:0,smoke_removed_rows:0,
             smoke_prepared_lists: 0,
+            smoke_shared_preparations:0,
             smoke_startup:serde_json::Value::Null,
             smoke_loaded_ms: None,
             smoke_tip_window: None,
@@ -1262,8 +1315,9 @@ impl App {
             remote_hooks: remote_window::RemoteHooks::default(),
             drive_cache: None,
             drive_list: Default::default(),
-            listing_cache: Default::default(),
+            listing_cache: if cfg!(test){Default::default()}else{ndr::listing_cache::ListingCache::managed()},
             listing_lanes:Default::default(),
+            listing_twin:Default::default(),
             drive_cache_pending: false,
         };
         for pane in 0..2 {
@@ -1429,7 +1483,7 @@ impl App {
         for index in 0..self.panes.len() {
             let wanted = self.watch_wanted(index);
             if self.panes[index].watch.as_ref().map(|(p, _)| p) != wanted.as_ref() {
-                self.arm_folder_watch(index, wanted, ctx);
+                self.arm_folder_watch(index, wanted.clone(), ctx);
             }
             if let Some((due, _)) = self.panes[index].change_due {
                 if due <= now {
@@ -1444,6 +1498,17 @@ impl App {
                     }
                 } else {
                     ctx.request_repaint_after(due - now);
+                }
+            } else if wanted.is_some() {
+                // A write through another hard-link name need not notify
+                // this directory. Only panes with observed links poll.
+                if let Some(due)=self.panes[index].link_recheck {
+                    if due<=now&&!self.panes[index].loading {
+                        self.panes[index].link_recheck=Some(now+Duration::from_secs(5));
+                        let typed=std::mem::take(&mut self.typed_search[index]);
+                        self.refresh_after_folder_change(index);
+                        self.typed_search[index]=typed;
+                    }else if !self.panes[index].loading{ctx.request_repaint_after(due.saturating_duration_since(now));}
                 }
             }
         }
@@ -1497,6 +1562,19 @@ impl App {
         if self.panes[listing.pane].generation != listing.generation {
             return;
         }
+        let applying=Instant::now();
+        let index=listing.pane;
+        let timing=listing.timing_us;
+        if listing.result.is_ok(){self.panes[index].link_recheck=listing.hardlinks.then(||Instant::now()+Duration::from_secs(5));}
+        else{self.panes[index].link_recheck=None;}
+        if listing.partial.is_some(){
+            // Any ambiguity initiates a full enumeration inside this helper.
+            if self.try_apply_partial_listing(listing){
+                self.record_listing_timing(index,timing,applying);
+            }
+            return;
+        }
+        self.panes[listing.pane].local_snapshot=None;
         if listing.prepared.as_ref().is_some_and(|prepared| prepared.plan != panes::LocalListingPlan::capture(self, listing.pane)) {
             // The original received order matters for "None" and stable
             // ties. Never re-sort a stale worker ordering after an option
@@ -1543,18 +1621,18 @@ impl App {
             // their last displayed totals too, not just successful relists.
             let kept = (skin && pane.listed.as_deref() == Some(location_key(pane).as_str())).then(|| {
                 let marks: Vec<String> = pane.selected.iter().filter_map(|&row| pane.entries.get(row)).filter(|e| !e.drive && !e.is_parent()).map(|e| e.name.clone()).collect();
-                let sizes: Vec<(PathBuf, String, Option<u64>, bool)> = pane.folder_sizes.iter().filter_map(|(path, size)| size.clone().map(|s| (path.clone(), s, pane.folder_bytes.get(path).copied(), pane.folder_auto_paths.contains(path)))).collect();
-                (marks, sizes, pane.first_column, pane.cursor, self.pending_focus[listing.pane].is_some())
+                (marks, pane.first_column, pane.cursor, self.pending_focus[listing.pane].is_some())
             });
             pane.summary = None;
-            pane.folder_cancel.store(true, Ordering::Relaxed);
-            pane.folder_cancel = Arc::new(AtomicBool::new(false));
-            pane.cancel_automatic_folder_jobs();
-            pane.folder_manual_pending.clear();
-            pane.folder_auto_paths.clear();
-            pane.folder_auto_volume = None;
-            pane.folder_sizes.clear();
-            pane.folder_bytes.clear();
+            if kept.is_none() {
+                pane.cancel_manual_folder_jobs();
+                pane.cancel_automatic_folder_jobs();
+                pane.folder_auto_paths.clear();
+                pane.folder_auto_volume=None;
+                pane.folder_sizes.clear();
+                pane.folder_bytes.clear();
+                pane.folder_hint_bytes.clear();
+            }
             pane.cut_marks.clear();
             pane.disk = None;
             match listing.result {
@@ -1595,6 +1673,19 @@ impl App {
                             entries.insert(0, parent);
                         }
                     }
+                    if kept.is_some()&&!pane.folder_auto_paths.is_empty(){
+                        // The root's own metadata can change without a
+                        // recursive notification (rename/replacement). Drop
+                        // only the deadline, not the displayed last value.
+                        let old:HashMap<&Path,_>=pane.entries.iter().filter(|e|pane.folder_auto_paths.contains(&e.path))
+                            .map(|e|(e.path.as_path(),(e.attributes,e.modified))).collect();
+                        for e in &entries {
+                            if old.get(e.path.as_path()).is_some_and(|v|*v!=(e.attributes,e.modified)){
+                                pane.folder_auto_times.remove(&e.path);
+                                if let Some(observation)=self.folder_size_cache.get_mut(&e.path){observation.invalidate_verification();}
+                            }
+                        }
+                    }
                     pane.entries = entries;
                     pane.first_column = 0;
                     pane.shift_anchor = None;
@@ -1619,7 +1710,14 @@ impl App {
                 pane.view = prepared.view;
                 pane.summary=Some(prepared.summary);
                 pane.prepared_field_max = prepared.field.map(|(plan, fm)| (pane.thumb_content_revision, plan, fm));
+                if let Some(revision)=listing.cache_revision.filter(|_|pane.prepared_field_max.is_some()){
+                    pane.local_snapshot=Some(panes::DisplayedSnapshot{
+                        revision,content_revision:pane.thumb_content_revision,plan:prepared.plan,
+                        day:prepared.day
+                    });
+                }
                 self.smoke_prepared_lists += 1;
+                self.smoke_shared_preparations+=u64::from(prepared.shared);
             } else {
                 self.sort_pane(listing.pane);
             }
@@ -1633,7 +1731,7 @@ impl App {
             let mut focused = false;
             // When rereading the same location with no chosen name (original FUN_00487ce8 param_2, empty param_4), the original does SetItemIndex then
             // SetScrollTop (old position): Details and Thumbnails keep the old position, only column-flowing lists do AdjustPage + SetItemIndex.
-            let restore_top = kept.as_ref().is_some_and(|k| !k.4);
+            let restore_top = kept.as_ref().is_some_and(|k| !k.3);
             if let Some(name) = self.pending_focus[listing.pane].take() {
                 if let Some(row) = pane.entries.iter().position(|e| ndr::names::equals_ignore_case(&e.name, &name)) {
                     pane.cursor = row;
@@ -1649,7 +1747,7 @@ impl App {
             if kept.is_none() {
                 pane.reveal = true;
             }
-            if let Some((marks, sizes, first_column, old_cursor, explicit)) = kept {
+            if let Some((marks, first_column, old_cursor, explicit)) = kept {
                 if !focused && !explicit && !pane.entries.is_empty() {
                     let drives = pane.entries.iter().filter(|e| e.drive).count();
                     pane.cursor = if old_cursor < pane.entries.len() { old_cursor } else { (pane.entries.len() - drives).saturating_sub(1) };
@@ -1672,29 +1770,41 @@ impl App {
                         }
                     }
                 }
-                // Preserve cached folder sizes in O(N + M) instead of
-                // walking all N entries for every cached folder (M).
-                // Path identity remains exact, matching the previous logic.
-                let directories: std::collections::HashMap<&Path, bool> = if sizes.is_empty() {
+                // Keep automatic scans and deadlines only for rows that
+                // still exist, even if a relist completed while a scan ran.
+                // Do not remove observations just because a filter or the
+                // other pane temporarily hides the same directory.
+                let directories: std::collections::HashMap<&Path, bool> = if pane.folder_sizes.is_empty() && pane.folder_auto_paths.is_empty() && pane.folder_manual_pending.is_empty() {
                     HashMap::new()
                 } else {
                     pane.entries.iter().filter(|e| e.is_dir && !e.is_parent())
-                        .map(|e| (e.path.as_path(), !e.drive && e.attributes & 0x400 == 0)).collect()
+                        .map(|e| (e.path.as_path(), !e.drive && e.attributes & 0x410 == 0x10)).collect()
                 };
-                for (path, size, bytes, automatic) in sizes {
-                    if let Some(&ordinary) = directories.get(path.as_path()) {
-                        if automatic {
-                            if !ordinary { continue; }
-                            pane.folder_auto_paths.insert(path.clone());
+                for path in &pane.folder_auto_paths {
+                    if directories.get(path.as_path()) != Some(&true) {
+                        if let Some(observation)=self.folder_size_cache.get_mut(path) {
+                            observation.invalidate_verification();
                         }
-                        if let Some(bytes) = bytes {
-                            pane.folder_bytes.insert(path.clone(), bytes);
-                        }
-                        pane.folder_sizes.insert(path, Some(size));
-                    } else if automatic {
-                        self.folder_size_cache.remove(&path);
                     }
                 }
+                pane.folder_sizes.retain(|path,_|!pane.folder_auto_paths.contains(path)||directories.get(path.as_path())==Some(&true));
+                pane.folder_auto_pending.retain(|path, token| {
+                    let keep = directories.get(path.as_path()) == Some(&true);
+                    if !keep { token.store(true, Ordering::Relaxed); }
+                    keep
+                });
+                pane.folder_auto_paths.retain(|path| directories.get(path.as_path()) == Some(&true));
+                pane.folder_auto_times.retain(|path, _| pane.folder_auto_paths.contains(path));
+                pane.folder_auto_visible.retain(|path| directories.get(path.as_path()) == Some(&true));
+                pane.folder_manual_pending.retain(|path,token|{
+                    let keep=directories.contains_key(path.as_path());
+                    if !keep{token.store(true,Ordering::Relaxed);}
+                    keep
+                });
+                pane.folder_sizes.retain(|path, _|directories.contains_key(path.as_path()));
+                pane.folder_bytes.retain(|path, _|pane.folder_sizes.contains_key(path));
+                pane.folder_hint_bytes.retain(|path,_|pane.folder_sizes.contains_key(path)&&!pane.folder_bytes.contains_key(path));
+
                 pane.first_column = first_column;
                 // Original FileListChanged (0x7d79c8) -> AdjustPage (old cursor index, clamped to the list length), then FUN_00487ce8 does SetItemIndex.
                 // Details and Thumbnails then restore SetScrollTop (old position), so only column-flowing lists change position (second value of adjust).
@@ -1702,6 +1812,13 @@ impl App {
                     pane.adjust = Some((old_cursor.min(pane.entries.len() - 1), true));
                 }
             }
+        }
+        if self.panes[index].error.is_none(){self.record_listing_timing(index,timing,applying);}
+    }
+    fn record_listing_timing(&mut self,index:usize,timing:[u64;6],applying:Instant){
+        self.smoke_listing_timing[index]=Some([timing[0],timing[1],timing[2],timing[3],timing[4],timing[5],applying.elapsed().as_micros() as u64]);
+        if self.smoke_first_listing_ms[index].is_none(){
+            self.smoke_first_listing_ms[index]=Some(self.started.elapsed().as_millis() as u64);
         }
     }
     /// Work after the list is put in (network share authentication etc.). Called by poll.
@@ -1778,25 +1895,36 @@ impl App {
                 AsyncResult::ArchiveEntriesOpened { pane, archive, password, opened, failures, navigate_archives } => self.archive_entries_opened(pane, archive, password, opened, failures, navigate_archives),
                 AsyncResult::ArchivePassword { archive, reply } => self.password_request = Some(PasswordRequest { archive, reply }),
                 AsyncResult::TextSource { path, edit } => self.text_source_ready(path, edit),
-                AsyncResult::FolderSizeHint { pane, generation, path, text, cancel } => {
+                AsyncResult::FolderSizeHint { pane, path, bytes, cancel } => {
+                    let text=ndr::parity::size_to_str(bytes,&self.settings.text("SizeUnit","Auto"),self.settings.flag("UseThousandsSeparator",true));
                     let p = &mut self.panes[pane];
                     // A disk hint is a previously completed observation of
                     // this identity. It is presentation only until verified;
                     // do not insert it into folder_bytes or suppress a scan.
-                    if p.generation == generation && !cancel.load(Ordering::Relaxed)
+                    if !cancel.load(Ordering::Relaxed)
                         && p.folder_auto_pending.get(&path).is_some_and(|token| Arc::ptr_eq(token, &cancel))
                         && !p.folder_sizes.get(&path).is_some_and(Option::is_some) {
                         p.folder_auto_hints += 1;
+                        p.folder_hint_bytes.insert(path.clone(),bytes);
                         p.folder_sizes.insert(path, Some(text));
                         ctx.request_repaint();
                     }
                 }
-                AsyncResult::FolderSizeRow { pane, generation, path, text, bytes, automatic, complete, watch, stable, scanned, work, audit_at, media, cancel } => {
+                AsyncResult::FolderSizeRow { pane, path, bytes, automatic, complete, watch, stable, scanned, work, audit_at, media, cancel } => {
                     // Original FUN_0048ee0c: finds the row whose folder + name equals the counted path (lstrcmpiW), stores the 64-bit size
                     // (+0x20/+0x24) and the count (+0x60), marks it counted (+0x68 = 1) and repaints. Rows are keyed by path here.
-                    if self.panes[pane].generation == generation && !cancel.load(Ordering::Relaxed)
-                        && (!automatic || self.panes[pane].folder_auto_pending.get(&path).is_some_and(|token| Arc::ptr_eq(token, &cancel))) {
-                        if automatic && complete && stable {
+                    // An automatic job is tied to its unique token and
+                    // exact path, not the unrelated listing generation.
+                    // Navigation, hiding/removal, and cancellation retire
+                    // the token. Manual jobs still use the listing epoch.
+                    let valid = if automatic {
+                        self.panes[pane].folder_auto_pending.get(&path).is_some_and(|token| Arc::ptr_eq(token, &cancel))
+                    } else { self.panes[pane].folder_manual_pending.get(&path).is_some_and(|token|Arc::ptr_eq(token,&cancel)) };
+                    if valid && !cancel.load(Ordering::Relaxed) {
+                        let auto_enabled=self.settings.flag(if pane==0{"LeftAutoFolderSize"}else{"RightAutoFolderSize"},false);
+                        let track=automatic||auto_enabled&&watch.is_some()&&self.panes[pane].vault.is_none()
+                            &&self.panes[pane].archive.is_none()&&self.panes[pane].remote.is_none();
+                        if track && complete && stable {
                             self.cache_folder_size(path.clone(), bytes, watch, audit_at, media);
                         }
                         if automatic {
@@ -1819,17 +1947,34 @@ impl App {
                             }
                         } else {
                             self.panes[pane].folder_manual_pending.remove(&path);
-                            if self.panes[pane].folder_auto_paths.contains(&path) {
-                                // An explicit calculation of an already
-                                // automatically measured row takes priority.
-                                self.folder_size_cache.remove(&path);
+                            if track {
+                                self.panes[pane].folder_auto_paths.insert(path.clone());
+                                let interval=if complete&&stable{media.check_interval()}else{media.verify_interval()};
+                                let due=self.folder_check_deadline(interval);
+                                self.record_folder_size_time(pane,&path,due);
+                            }else if auto_enabled {
+                                // A watchless result or an option changed
+                                // while the manual scan ran. Let automatic
+                                // verification enroll the row on the next paint.
                                 self.panes[pane].folder_auto_times.remove(&path);
-                                self.folder_size_recent_reset.store(true, Ordering::Relaxed);
+                            }
+                            if !complete||!stable {
+                                // A partial manual sum is not an exact byte
+                                // total. Keep a prior complete display if any.
+                                let p=&mut self.panes[pane];
+                                if p.folder_sizes.get(&path).is_some_and(Option::is_some){continue}
+                                if !stable{p.folder_sizes.remove(&path);continue}
+                                let size=ndr::parity::size_to_str(bytes,&self.settings.text("SizeUnit","Auto"),self.settings.flag("UseThousandsSeparator",true));
+                                p.folder_sizes.insert(path,Some(format!("≥ {size}")));
+                                ctx.request_repaint();
+                                continue
                             }
                         }
-                        // Metadata-only revalidations with unchanged values
-                        // need no extra formatting or row replacement.
+                        // Always format on delivery using the CURRENT
+                        // settings, not the unit captured before a long scan.
+                        let text=ndr::parity::size_to_str(bytes,&self.settings.text("SizeUnit","Auto"),self.settings.flag("UseThousandsSeparator",true));
                         let p = &mut self.panes[pane];
+                        p.folder_hint_bytes.remove(&path);
                         if p.folder_bytes.get(&path) != Some(&bytes) || p.folder_sizes.get(&path).and_then(Option::as_ref) != Some(&text) {
                             p.folder_bytes.insert(path.clone(), bytes);
                             p.folder_sizes.insert(path, Some(text));
@@ -1863,12 +2008,15 @@ impl App {
                 AsyncResult::FtpReply { result } => self.ftp_reply(result),
                 AsyncResult::OverlayIcon { path, image } => {
                     self.overlay_pending.remove(&path);
+                    if let Some(Some(old)) = self.overlay_icons.remove(&path) {
+                        self.release_overlay_texture(old.id());
+                    }
                     self.trim_overlay_icons(&path);
                     self.overlay_last_used.insert(path.clone(), Instant::now());
                     let texture = image.filter(|(width, height, rgba)| {
                         views::valid_small_icon_pixels(*width, *height, rgba)
                     }).map(|(width, height, rgba)| {
-                        self.icon_texture(ctx, format!("ndr-overlay|{}", path.display()), width, height, &rgba)
+                        self.shared_overlay_texture(ctx, &path, width, height, rgba)
                     });
                     if texture.is_some() {
                         self.overlay_icon_failed_at.remove(&path);
@@ -2535,7 +2683,10 @@ impl eframe::App for App {
             if self.smoke_loaded_ms.is_none() && self.panes.iter().all(|p| !p.loading) {
                 self.smoke_loaded_ms = Some(self.started.elapsed().as_millis() as u64);
             }
-            if self.started.elapsed() > Duration::from_secs(seconds) {
+            if self.started.elapsed() < Duration::from_secs(seconds) {
+                ctx.request_repaint_after(Duration::from_secs(seconds).saturating_sub(self.started.elapsed()));
+            }
+            if self.started.elapsed() >= Duration::from_secs(seconds) {
                 if let Some(path) = &self.options.report {
                     // leftCount/rightCount = list items (drive items appended at the end are counted separately in leftDrives/rightDrives).
                     let items = |p: &Pane| p.entries.len() - p.drive_count();
@@ -2546,7 +2697,14 @@ impl eframe::App for App {
                         let (count, bytes) = completed.fold((0usize, 0u64), |(count, total), size| (count + 1, total.saturating_add(*size)));
                         serde_json::json!({"completed":count,"pending":p.folder_auto_pending.len(),"bytes":bytes,"requests":p.folder_auto_requests,"scans":p.folder_auto_scans,"visited":p.folder_auto_visited,"reused":p.folder_auto_reused,"hints":p.folder_auto_hints,"displayed":p.folder_auto_paths.len()})
                     };
-                    let report = serde_json::json!({"language":self.language,"frames":self.frames,"leftCount":items(&self.panes[0]),"rightCount":items(&self.panes[1]),"leftDrives":self.panes[0].drive_count(),"rightDrives":self.panes[1].drive_count(),"leftError":self.panes[0].error,"rightError":self.panes[1].error,"leftLoading":self.panes[0].loading,"rightLoading":self.panes[1].loading,"profile":self.profile,"runtime":"Rust","renderer":"OpenGL","foreground":self.smoke_foreground,"repaintCauses":self.smoke_repaint_causes,"slowestFrameMs":(self.smoke_slowest_frame_ms * 10.0).round() / 10.0,"slowFrames":self.smoke_slow_frames,"initialMaxFrameMs":self.smoke_initial_max_ms,"preparedLists":self.smoke_prepared_lists,"listingCache":self.listing_cache.report(),"startup":self.smoke_startup,"loadedMs":self.smoke_loaded_ms,"tipWindow":self.smoke_tip_window,"viewportPoints":[viewport.width(),viewport.height()],"nativePixelsPerPoint":native_scale,"pixelsPerPoint":ctx.pixels_per_point(),"folderSizes":[folder_stats(&self.panes[0]),folder_stats(&self.panes[1])],"folderLabelTrace":self.smoke_folder_labels.each_ref().map(FolderLabelTrace::report),"folderCacheEntries":self.folder_size_cache.len(),"folderCacheWatches":self.folder_size_cache.values().filter(|v|v.watch.is_some()).count()});
+                    let mut report = serde_json::json!({"language":self.language,"frames":self.frames,"leftCount":items(&self.panes[0]),"rightCount":items(&self.panes[1]),"leftDrives":self.panes[0].drive_count(),"rightDrives":self.panes[1].drive_count(),"leftError":self.panes[0].error,"rightError":self.panes[1].error,"leftLoading":self.panes[0].loading,"rightLoading":self.panes[1].loading,"profile":self.profile,"runtime":"Rust","renderer":"OpenGL","foreground":self.smoke_foreground,"repaintCauses":self.smoke_repaint_causes,"slowestFrameMs":(self.smoke_slowest_frame_ms * 10.0).round() / 10.0,"slowFrames":self.smoke_slow_frames,"initialMaxFrameMs":self.smoke_initial_max_ms,"preparedLists":self.smoke_prepared_lists,"sharedPreparations":self.smoke_shared_preparations,"partialLists":self.smoke_partial_lists,"partialRows":self.smoke_partial_rows,"structuralLists":self.smoke_structural_lists,"insertedRows":self.smoke_inserted_rows,"removedRows":self.smoke_removed_rows,"firstListingMs":self.smoke_first_listing_ms,
+                        "listingTimingColumns":["read","descriptions","sort","view","field","summary","apply"],"listingTimingUs":self.smoke_listing_timing,
+                        "paneSummary":self.panes.each_ref().map(|p|p.summary.as_ref().map(|s|serde_json::json!({"bytes":s.bytes,"files":s.files,"folders":s.folders}))),"listingCache":self.listing_cache.report(),"startup":self.smoke_startup,"loadedMs":self.smoke_loaded_ms,"tipWindow":self.smoke_tip_window,"viewportPoints":[viewport.width(),viewport.height()],"nativePixelsPerPoint":native_scale,"pixelsPerPoint":ctx.pixels_per_point(),"folderSizes":[folder_stats(&self.panes[0]),folder_stats(&self.panes[1])],"folderLabelTrace":self.smoke_folder_labels.each_ref().map(FolderLabelTrace::report),"folderCacheEntries":self.folder_size_cache.len(),"folderCacheWatches":self.folder_size_cache.values().filter(|v|v.watch.is_some()).count()});
+                    report["folderRows"]=serde_json::json!(self.panes.each_ref().map(|p|p.folder_sizes.iter().map(|(path,label)|
+                        serde_json::json!({"path":path.to_string_lossy(),"label":label,"bytes":p.folder_bytes.get(path),"hintBytes":p.folder_hint_bytes.get(path),"pending":p.folder_auto_pending.contains_key(path)||p.folder_manual_pending.contains_key(path)})).collect::<Vec<_>>()));
+                    report["overlayPaths"] = self.overlay_icons.len().into();
+                    report["overlaySharedTextures"] = self.overlay_texture_pool.len().into();
+                    report["aboutText"]=serde_json::json!(self.msgboxes.iter().find(|b|b.program_icon).map(|b|&b.text));
                     let _ = std::fs::write(
                         path,
                         serde_json::to_vec_pretty(&report).unwrap_or_default(),
@@ -2606,13 +2764,13 @@ impl eframe::App for App {
             || self.pending_shell_menu.is_some();
         #[cfg(feature = "winfsp-vault")]
         let interactive = interactive || !self.vault_trees.is_empty() || !self.vault_mounts.is_empty();
-        let heartbeat = if fast { 33 } else if interactive { 500 } else { 1000 };
+        let heartbeat = if fast { 33 } else if interactive { 500 } else { 2000 };
         ctx.request_repaint_after(Duration::from_millis(heartbeat));
     }
     fn on_exit(&mut self, _: Option<&eframe::glow::Context>) {
-        for pane in &self.panes {
+        for pane in &mut self.panes {
             pane.listing_cancel.store(true, Ordering::Relaxed);
-            pane.folder_cancel.store(true, Ordering::Relaxed);
+            pane.cancel_manual_folder_jobs();
             for cancel in pane.folder_auto_pending.values() {
                 cancel.store(true, Ordering::Relaxed);
             }

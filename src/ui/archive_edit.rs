@@ -310,7 +310,7 @@ impl App {
         self.archive_transfer_out_location(location, keys, destination, into, moving, None);
     }
 
-    fn archive_transfer_out_location(&mut self, location: ArchiveLocation, keys: Vec<String>, destination: PathBuf, into: Option<EditableArchive>, moving: bool, notify: Option<(Sender<AsyncResult>, u32)>) {
+    fn archive_transfer_out_location(&mut self, location: ArchiveLocation, keys: Vec<String>, destination: PathBuf, into: Option<EditableArchive>, moving: bool, notify: Option<(WakeSender<AsyncResult>, u32)>) {
         let file = ndr::archive::first_volume_path(&location.file);
         if moving && !ndr::archive::can_modify(&file) {
             return self.archive_read_only_notice();

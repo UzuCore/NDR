@@ -341,11 +341,11 @@ impl App {
                                         for (metric, column) in METRICS.iter().enumerate() {
                                             if let Some(w) = widths[metric] {
                                                 let folder_size = (*column == DetailColumn::Size && entry.is_dir).then(|| pane.folder_size_display(&entry.path)).flatten();
-                                                let text = folder_size.as_ref().unwrap_or(&texts[column.index()]);
+                                                let text = folder_size.as_deref().unwrap_or(texts[column.index()].as_ref());
                                                 // Original DrawListItem: an uncounted folder's RES DIR text keeps the item color (counted sizes use the size colors).
                                                 let color_column = if *column == DetailColumn::Size && entry.is_dir && folder_size.is_none() { DetailColumn::Name } else { *column };
                                                 let metric_color = original.map_or(ui.visuals().weak_text_color(), |o| o.cell(color_column, color, entry.attributes, cursor_row, bar_focus));
-                                                ui.add_sized([w, row_height], egui::Label::new(super::list_text(text.as_str(), list_style).color(metric_color)).truncate());
+                                                ui.add_sized([w, row_height], egui::Label::new(super::list_text(text, list_style).color(metric_color)).truncate());
                                             }
                                         }
                                         response
@@ -597,7 +597,7 @@ impl App {
                         let texts = &pane.view.cells[row];
                         let default = if entry.is_dir { Color32::from_rgb(228, 188, 85) } else if entry.hidden { Color32::GRAY } else { ui.visuals().text_color() };
                         let color = pane.view.colors[row].map_or(default, |(r, g, b)| Color32::from_rgb(r, g, b));
-                        let label = if auto || entry.drive || original.is_some() { texts[0].clone() } else { entry.name.clone() };
+                        let label = if auto || entry.drive || original.is_some() { texts[0].to_string() } else { entry.name.clone() };
                         if let Some(o) = original.filter(|_| cursor_row || marked) {
                             let bar = super::skin_pane::focus_bar(color, o.back, o.select, cursor_row, marked, bar_focus);
                             ui.painter().extend(super::skin_pane::focus_bar_shapes(cell, &bar));
@@ -616,7 +616,7 @@ impl App {
                             let ext = widths[0].unwrap_or(0.0);
                             let size = widths[2].map_or(0.0, |size_width| {
                                 let counted = pane.folder_size_display(&entry.path);
-                                let size_text = counted.as_deref().unwrap_or(texts[DetailColumn::Size.index()].as_str());
+                                let size_text = counted.as_deref().unwrap_or(texts[DetailColumn::Size.index()].as_ref());
                                 (size_width - self.list_text_width(ui, size_text) - 5.0).max(0.0)
                             });
                             (name_width + ext + size).min(column_width)
@@ -638,7 +638,7 @@ impl App {
                         for (metric, column) in METRICS.iter().enumerate().filter(|_| !entry.drive) {
                             if let Some(w) = widths[metric] {
                                 let folder_size = (*column == DetailColumn::Size && entry.is_dir).then(|| pane.folder_size_display(&entry.path)).flatten();
-                                let text = folder_size.as_ref().unwrap_or(&texts[column.index()]);
+                                let text = folder_size.as_deref().unwrap_or(texts[column.index()].as_ref());
                                 // Original DrawListItem: an uncounted folder's RES DIR text keeps the item color (counted sizes use the size colors).
                                 let color_column = if *column == DetailColumn::Size && entry.is_dir && folder_size.is_none() { DetailColumn::Name } else { *column };
                                 let metric_color = original.map_or(ui.visuals().weak_text_color(), |o| o.cell(color_column, color, entry.attributes, cursor_row, bar_focus));
@@ -647,7 +647,7 @@ impl App {
                                     // Original DrawListItem cell alignment (size right, date/time at both ends, the rest left).
                                     Some(o) => super::panes::paint_original_cell(ui, metric_rect, *column, text, metric_color, cursor_row, o, list_style),
                                     None => {
-                                        ui.put(metric_rect, egui::Label::new(super::list_text(text.as_str(), list_style).color(metric_color)).truncate());
+                                        ui.put(metric_rect, egui::Label::new(super::list_text(text, list_style).color(metric_color)).truncate());
                                     }
                                 }
                                 x += w;

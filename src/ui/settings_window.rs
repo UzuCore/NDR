@@ -576,8 +576,6 @@ impl SettingsForm {
         let special = object(&draft, "SpecialFolderPaths");
         let special_value = |name: &str| special.get(name).and_then(Value::as_str).unwrap_or("").to_owned();
         let mut paths = vec![
-            text("LeftPath", language.localized("NDR.UI_SETTINGS_START_PATH_LEFT_830B58", "시작 경로 — 왼쪽", "Start path — left"), text_of(&draft, "LeftPath")),
-            text("RightPath", language.localized("NDR.UI_SETTINGS_START_PATH_RIGHT_504484", "시작 경로 — 오른쪽", "Start path — right"), text_of(&draft, "RightPath")),
             Row::Section(lang("GroupBox.gbMyFolders", "User Folders Location")),
         ];
         for (name, key, fallback, default) in [
@@ -634,7 +632,6 @@ impl SettingsForm {
             Row::Program { key: "TextViewerPath".into(), label: language.localized("NDR.UI_SETTINGS_TEXT_VIEWER_PROGRAM_BF3C33", "텍스트 보기 프로그램", "Text viewer program"), value: text_of(&draft, "TextViewerPath") },
             Row::Program { key: "TextEditorPath".into(), label: language.localized("NDR.UI_SETTINGS_TEXT_EDITOR_PROGRAM_0EF879", "텍스트 편집 프로그램", "Text editor program"), value: text_of(&draft, "TextEditorPath") },
             Row::Program { key: "CopyHandlerPath".into(), label: language.text("NDRCopyHandler.Path", "External copy/move handler path (TeraCopy or KillCopy)"), value: text_of(&draft, "CopyHandlerPath") },
-            text("UpdateManifestUrl", language.localized("NDR.UI_SETTINGS_UPDATE_JSON_FEED_HTTPS_C1FD01", "업데이트 JSON 피드 (HTTPS)", "Update JSON feed (HTTPS)"), text_of(&draft, "UpdateManifestUrl")),
         ];
         programs.push(Row::Section(language.text("formPreferences.TabSheet.tsFunctionKey", "Function Keys")));
         programs.push(Row::Note(language.localized("NDR.UI_SETTINGS_EDIT_THE_DISPLAY_NAME_B78A0F", "F1–F12별 표시 이름, 내부 동작 또는 사용자 프로그램/문서와 실행 인자를 편집합니다. 기존 NexusFile 기능키 설정도 자동으로 불러옵니다.", "Edit the display name, internal action or user program/document, and launch parameters for F1–F12. Existing NexusFile function key settings are imported automatically.")));
@@ -781,8 +778,7 @@ impl SettingsForm {
                             let colors = parse_extension_colors(value)?;
                             values.insert(key.clone(), Value::Object(colors.into_iter().map(|(k, v)| (k, Value::String(v))).collect()));
                         }
-                        "LeftPath" | "RightPath" | "DateFormat" | "TimeFormat" | "ListFont" | "TextViewerPath" | "TextEditorPath" | "CopyHandlerPath"
-                        | "UpdateManifestUrl" | "FolderTreeFont" => {
+                        "DateFormat" | "TimeFormat" | "ListFont" | "TextViewerPath" | "TextEditorPath" | "CopyHandlerPath" | "FolderTreeFont" => {
                             values.insert(key.clone(), Value::String(value.into()));
                         }
                         "LeftStartPath" | "RightStartPath" => {
@@ -1607,8 +1603,15 @@ impl App {
         let changed_units = settings.text("SizeUnit", "Auto") != self.settings.text("SizeUnit", "Auto")
             || settings.flag("UseThousandsSeparator", true) != self.settings.flag("UseThousandsSeparator", true);
         for index in 0..2 {
-            if changed_units || !settings.flag(if index == 0 { "LeftAutoFolderSize" } else { "RightAutoFolderSize" }, false) {
+            if !settings.flag(if index==0{"LeftAutoFolderSize"}else{"RightAutoFolderSize"},false) {
                 self.clear_automatic_folder_sizes(index);
+            }
+            if changed_units {
+                let pane=&mut self.panes[index];
+                for (path,bytes) in pane.folder_bytes.iter().chain(&pane.folder_hint_bytes) {
+                    pane.folder_sizes.insert(path.clone(),Some(ndr::parity::size_to_str(
+                        *bytes,&settings.text("SizeUnit","Auto"),settings.flag("UseThousandsSeparator",true))));
+                }
             }
         }
         if !settings.flag("LeftAutoFolderSize", false) && !settings.flag("RightAutoFolderSize", false) {
