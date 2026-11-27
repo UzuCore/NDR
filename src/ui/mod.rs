@@ -666,7 +666,7 @@ enum AsyncResult {
     },
 
     Image {
-        path: PathBuf,
+        key: views::ThumbnailKey,
         image: Result<(usize, usize, Vec<u8>), String>,
     },
     Tree {
@@ -828,7 +828,9 @@ pub struct App {
     status_seen: Option<(String, Instant)>,
     /// When the cursor arrived on that row, per panel (start of the original tooltip timer).
     tip_since: [Option<(usize, Instant)>; 2],
-    images: HashMap<PathBuf, egui::TextureHandle>,
+    images: HashMap<views::ThumbnailKey, views::CachedThumbnail>,
+    image_bytes: usize,
+    thumbnail_tx: Option<Sender<views::ThumbnailKey>>,
     /// C# FileVisualConverter.IconCache: a small shell icon per extension (lowercase, folder = "<DIR>"). None is remembered if unreadable.
     file_icons: HashMap<String, Option<egui::TextureHandle>>,
     /// A transient Windows shell icon failure must not permanently hide an
@@ -851,8 +853,9 @@ pub struct App {
     /// Cache successes; retry failures only after a short backoff.
     overlay_icon_failed_at: HashMap<PathBuf, Instant>,
     overlay_pending: HashSet<PathBuf>,
+    overlay_last_used: HashMap<PathBuf, Instant>,
     overlay_tx: Option<Sender<(PathBuf, u8)>>,
-    image_requests: HashSet<PathBuf>,
+    image_requests: HashSet<views::ThumbnailKey>,
     /// Panel folder tree subfolders: (shell key, hidden folders included) -> children. Because the original miShowHiddenClick (0x4348e0) -> FUN_0048e564 changes
     /// the tree's hidden view (+0x3f8 bit 4) and rebuilds it, this is kept separately per panel hidden view.
     tree_cache: HashMap<(PathBuf, bool), Vec<ndr::shell_tree::ShellNode>>,
@@ -1154,6 +1157,8 @@ impl App {
             status_seen: None,
             tip_since: [None, None],
             images: HashMap::new(),
+            image_bytes: 0,
+            thumbnail_tx: None,
             file_icons: HashMap::new(),
             file_icon_failed_at: HashMap::new(),
             ghost_icons: HashMap::new(),
@@ -1164,6 +1169,7 @@ impl App {
             overlay_icons: HashMap::new(),
             overlay_icon_failed_at: HashMap::new(),
             overlay_pending: HashSet::new(),
+            overlay_last_used: HashMap::new(),
             overlay_tx: None,
             image_requests: HashSet::new(),
             tree_cache: HashMap::new(),
@@ -1398,7 +1404,9 @@ impl App {
         // A heavy directory copy can trigger bursts of watcher/listing
         // notifications. Keep the UI frame bounded instead of applying all
         // queued filesystem changes before handling pointer input.
-        for listing in self.listing_rx.try_iter().take(16).collect::<Vec<_>>() {
+        let listings = self.listing_rx.try_iter().take(16).collect::<Vec<_>>();
+        if listings.len() == 16 { ctx.request_repaint(); }
+        for listing in listings {
             self.apply_listing(listing, &mut auth_panes);
         }
         self.after_listings(auth_panes, ctx);
@@ -1711,7 +1719,9 @@ impl App {
         self.poll_disk_copy(ctx);
         self.poll_remote_window(ctx);
         self.sync_folder_size_activity();
-        for result in self.async_rx.try_iter().take(96).collect::<Vec<_>>() {
+        let results = self.async_rx.try_iter().take(96).collect::<Vec<_>>();
+        if results.len() == 96 { ctx.request_repaint(); }
+        for result in results {
             match result {
                 AsyncResult::FtpPasteMovedLocal { sequence } => {
                     if self.clipboard_sequence == Some(sequence) {
@@ -1731,19 +1741,8 @@ impl App {
                 AsyncResult::Text { title, text } => {
                     self.text = Some(TextDocument { title, text })
                 }
-                AsyncResult::Image { path, image } => {
-                    if let Ok((width, height, rgba)) = image {
-                        if self.images.len() >= 512 {
-                            self.images.clear();
-                            self.image_requests.clear();
-                        }
-                        let texture = ctx.load_texture(
-                            path.to_string_lossy(),
-                            egui::ColorImage::from_rgba_unmultiplied([width, height], &rgba),
-                            egui::TextureOptions::LINEAR,
-                        );
-                        self.images.insert(path, texture);
-                    }
+                AsyncResult::Image { key, image } => {
+                    self.finish_thumbnail(ctx, key, image);
                 }
                 AsyncResult::Tree { path, hidden, directories } => {
                     self.tree_cache.insert((path, hidden), directories);
@@ -1854,12 +1853,8 @@ impl App {
                 AsyncResult::FtpReply { result } => self.ftp_reply(result),
                 AsyncResult::OverlayIcon { path, image } => {
                     self.overlay_pending.remove(&path);
-                    if self.overlay_icons.len() >= 512 {
-                        self.overlay_icons.clear();
-                        self.overlay_icon_failed_at.clear();
-                        let kept: HashSet<egui::TextureId> = self.file_icons.values().flatten().map(|t| t.id()).collect();
-                        self.ghost_icons.retain(|id, _| kept.contains(id));
-                    }
+                    self.trim_overlay_icons(&path);
+                    self.overlay_last_used.insert(path.clone(), Instant::now());
                     let texture = image.filter(|(width, height, rgba)| {
                         views::valid_small_icon_pixels(*width, *height, rgba)
                     }).map(|(width, height, rgba)| {

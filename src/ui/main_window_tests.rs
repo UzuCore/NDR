@@ -907,8 +907,8 @@ fn foreground_listing_wait_prioritizes_network_ui_responsiveness() {
     use super::panes::foreground_listing_wait;
     assert_eq!(foreground_listing_wait(Path::new(r"\\server\share\slow")), Duration::from_millis(8));
     assert_eq!(foreground_listing_wait(Path::new(r"\\?\UNC\server\share")), Duration::from_millis(8));
-    assert_eq!(foreground_listing_wait(Path::new(r"relative\local\folder")), Duration::from_millis(120));
-    assert_eq!(foreground_listing_wait(Path::new(r"C:\local\folder")), Duration::from_millis(120));
+    assert_eq!(foreground_listing_wait(Path::new(r"relative\local\folder")), Duration::from_millis(24));
+    assert_eq!(foreground_listing_wait(Path::new(r"C:\local\folder")), Duration::from_millis(24));
 }
 
 #[test]
@@ -4017,6 +4017,85 @@ fn automatic_folder_replays_clean_cached_value_while_io_busy() {
     assert!(!app.folder_size_workers);
     app.job=None;
     app.poll(&ctx);
+    drop(app);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn bounded_thumbnail_queue_reuses_keys_and_evicts_only_old_entries() {
+    use super::views::ThumbnailKey;
+    let (root,ctx,mut app) = fixture("bounded-thumbnails");
+    let mut entry=app.panes[0].entries.iter().find(|e|e.name=="a.txt").unwrap().clone();
+    let (tx,rx)=mpsc::channel();
+    app.thumbnail_tx=Some(tx);
+    let first=ThumbnailKey::new(&entry,120);
+    assert!(app.thumbnail_for(&ctx,&entry,120).is_none());
+    for _ in 0..30 { assert!(app.thumbnail_for(&ctx,&entry,120).is_none()); }
+    assert_eq!(rx.try_iter().count(),1);
+    for i in 1..40 {
+        entry.path=root.join(format!("image-{i}.png"));
+        app.thumbnail_for(&ctx,&entry,120);
+    }
+    assert_eq!(app.image_requests.len(),16);
+    assert_eq!(rx.try_iter().count(),15);
+    app.finish_thumbnail(&ctx,first.clone(),Ok((16,16,vec![255;16*16*4])));
+    assert!(app.images.contains_key(&first));
+    assert_eq!(app.image_bytes,16*16*4);
+    // A result with no matching pending job must be ignored.
+    let unknown=ThumbnailKey::new(&entry,256);
+    app.finish_thumbnail(&ctx,unknown.clone(),Ok((16,16,vec![255;16*16*4])));
+    assert!(!app.images.contains_key(&unknown));
+    app.image_requests.clear();
+    // 520 lightweight positive results plus the first entry. The old
+    // implementation dropped the entire cache at the 512nd insertion.
+    for i in 0..520 {
+        entry.path=root.join(format!("cached-{i}.png"));
+        let key=ThumbnailKey::new(&entry,120);
+        app.image_requests.insert(key.clone());
+        app.finish_thumbnail(&ctx,key,Ok((16,16,vec![255;16*16*4])));
+    }
+    assert_eq!(app.images.len(),512);
+    assert_eq!(app.image_bytes,512*16*16*4);
+    let current=ThumbnailKey::new(&entry,120);
+    assert!(app.images.contains_key(&current));
+    assert!(!app.images.contains_key(&first));
+    let changed=ThumbnailKey::new(&entry,256);
+    assert_ne!(current,changed);
+    entry.size+=1;
+    assert_ne!(current,ThumbnailKey::new(&entry,120));
+    // Pixel budget independently bounds oversized provider responses.
+    for i in 0..10 {
+        entry.path=root.join(format!("large-{i}.png"));
+        let key=ThumbnailKey::new(&entry,256);
+        app.image_requests.insert(key.clone());
+        app.finish_thumbnail(&ctx,key,Ok((1024,1024,vec![255;1024*1024*4])));
+    }
+    assert!(app.image_bytes<=32*1024*1024);
+    assert!(app.images.len()<=512);
+    assert!(app.image_requests.is_empty());
+    drop(app);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn overlay_cache_evicts_one_old_entry_without_resetting_all_others() {
+    let (root,_ctx,mut app)=fixture("overlay-lru");
+    let now=Instant::now();
+    for i in 0..512 {
+        let path=root.join(format!("icon-{i}"));
+        app.overlay_icons.insert(path.clone(),None);
+        app.overlay_icon_failed_at.insert(path.clone(),now);
+        app.overlay_last_used.insert(path,now+Duration::from_millis(i));
+    }
+    let incoming=root.join("new-icon");
+    app.trim_overlay_icons(&incoming);
+    assert_eq!(app.overlay_icons.len(),511);
+    assert!(!app.overlay_icons.contains_key(&root.join("icon-0")));
+    assert!(app.overlay_icons.contains_key(&root.join("icon-511")));
+    assert_eq!(app.overlay_icon_failed_at.len(),511);
+    assert_eq!(app.overlay_last_used.len(),511);
+    app.trim_overlay_icons(&root.join("icon-511"));
+    assert_eq!(app.overlay_icons.len(),511);
     drop(app);
     fs::remove_dir_all(root).unwrap();
 }

@@ -28,7 +28,7 @@ pub(super) fn foreground_listing_wait(path: &Path) -> Duration {
     {
         return Duration::from_millis(8);
     }
-    Duration::from_millis(120)
+    Duration::from_millis(24)
 }
 
 /// Original GetSelAreaAt(0x7dae7c): in non-thumbnail views, the left 12 pixels of the item cell (GetItemRect's left ~ left + 0xc).
@@ -104,6 +104,7 @@ pub(super) struct DriveListCache {
     at: Option<Instant>,
     items: Vec<(PathBuf, Option<DriveInfo>)>,
     refreshing: bool,
+    revision: u64,
     /// The functions that filled it (SystemHooks ready_drives, drive_item). If they change (e.g. test fakes), re-read.
     source: Option<(usize, usize)>,
 }
@@ -113,6 +114,8 @@ impl DriveListCache {
     pub(super) fn invalidate(cache: &std::sync::Arc<std::sync::Mutex<DriveListCache>>) {
         if let Ok(mut guard) = cache.lock() {
             guard.at = None;
+            guard.refreshing = false;
+            guard.revision = guard.revision.wrapping_add(1);
         }
     }
 }
@@ -121,9 +124,17 @@ impl DriveListCache {
 pub(super) fn cached_drive_items(cache: &std::sync::Arc<std::sync::Mutex<DriveListCache>>, ready: fn() -> Vec<PathBuf>, item: fn(&Path) -> Option<DriveInfo>) -> Vec<(PathBuf, Option<DriveInfo>)> {
     let read = move || ready().into_iter().map(|root| { let info = item(&root); (root, info) }).collect::<Vec<_>>();
     let source = Some((ready as usize, item as usize));
+    let revision;
     {
         let Ok(mut guard) = cache.lock() else { return read() };
-        let at = guard.at.filter(|_| guard.source == source);
+        if guard.source != source {
+            guard.at = None;
+            guard.refreshing = false;
+            guard.revision = guard.revision.wrapping_add(1);
+            guard.source = source;
+        }
+        revision = guard.revision;
+        let at = guard.at;
         match at {
             Some(at) if at.elapsed() < Duration::from_secs(5) => return guard.items.clone(),
             Some(_) => {
@@ -133,7 +144,7 @@ pub(super) fn cached_drive_items(cache: &std::sync::Arc<std::sync::Mutex<DriveLi
                     let cache = cache.clone();
                     thread::spawn(move || {
                         let fresh = read();
-                        if let Ok(mut guard) = cache.lock() {
+                        if let Ok(mut guard) = cache.lock() && guard.revision == revision {
                             guard.items = fresh;
                             guard.at = Some(Instant::now());
                             guard.refreshing = false;
@@ -147,7 +158,7 @@ pub(super) fn cached_drive_items(cache: &std::sync::Arc<std::sync::Mutex<DriveLi
         }
     }
     let fresh = read();
-    if let Ok(mut guard) = cache.lock() {
+    if let Ok(mut guard) = cache.lock() && guard.revision == revision {
         guard.items = fresh.clone();
         guard.at = Some(Instant::now());
         guard.source = source;
@@ -1067,6 +1078,7 @@ impl App {
         // Dispatch 0x46091c calls the handler, destructor 0x460204). Here a std::thread sends the listing over a channel and wakes egui.
         let repaint = self.egui_ctx.clone();
         thread::spawn(move || {
+            if listing_cancel.load(Ordering::Relaxed) { return; }
             // The original TNXDriveList is created once at startup and held (it does not re-query drives per listing). NDR changed the per-pane-listing
             // drive read into a cache (use as-is within 5 seconds, use as-is after and re-read in the background). So even if a drive's volume info arrives late,
             // like a disconnected network drive, you don't wait for it every time you change folders.
@@ -1080,6 +1092,7 @@ impl App {
             let appended: Vec<PathBuf> = if append_drives { roots } else { Vec::new() };
             // The original My PC drive item's TNXDriveInfo (name, kind, and size for fixed disks).
             let drive_infos = listed.into_iter().filter_map(|(root, info)| info.map(|info| (root, info))).collect();
+            if listing_cancel.load(Ordering::Relaxed) { return; }
             let mut skipped_device_names = 0usize;
             let mut result = if let Some(remote) = remote {
                 super::ftp_pane::list_remote(&remote, show_hidden)

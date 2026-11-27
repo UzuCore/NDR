@@ -188,44 +188,47 @@ pub fn join_files(parts: &[PathBuf], output: &Path, cancel: &AtomicBool) -> Resu
     let _ = fs::remove_file(stage);
     result
 }
-fn contains(path: &Path, text: &str, cancel: &AtomicBool) -> Result<bool, String> {
-    // Empty text is found everywhere (windows(0) panics, so return first).
-    if text.is_empty() {
-        return Ok(true);
+/// Compile encoded needles once per search, and reuse a bounded I/O
+/// buffer. memmem uses the optimized byte search, including matches that
+/// span chunk boundaries. Preserve the legacy UTF-8/UTF-16/EUC-KR semantics.
+struct ByteContentSearch {
+    finders: Vec<memchr::memmem::Finder<'static>>,
+    overlap: usize,
+    buffer: Vec<u8>,
+    carry: Vec<u8>,
+}
+impl ByteContentSearch {
+    fn new(text: &str) -> Self {
+        let mut needles = vec![text.as_bytes().to_vec(),
+            text.encode_utf16().flat_map(u16::to_le_bytes).collect(),
+            text.encode_utf16().flat_map(u16::to_be_bytes).collect()];
+        let (encoded, _, errors) = encoding_rs::EUC_KR.encode(text);
+        if !errors { needles.push(encoded.into_owned()); }
+        needles.sort();
+        needles.dedup();
+        let overlap = needles.iter().map(Vec::len).max().unwrap_or(1).saturating_sub(1);
+        let finders = needles.iter().map(|n| memchr::memmem::Finder::new(n).into_owned()).collect();
+        Self { finders, overlap, buffer: Vec::new(), carry: Vec::new() }
     }
-    let mut needles = vec![
-        text.as_bytes().to_vec(),
-        text.encode_utf16().flat_map(u16::to_le_bytes).collect(),
-        text.encode_utf16().flat_map(u16::to_be_bytes).collect(),
-    ];
-    let (encoded, _, errors) = encoding_rs::EUC_KR.encode(text);
-    if !errors {
-        needles.push(encoded.into_owned())
-    }
-    let overlap = needles
-        .iter()
-        .map(Vec::len)
-        .max()
-        .unwrap_or(1)
-        .saturating_sub(1);
-    let mut input = open_read(path)?;
-    let mut buf = vec![0; 64 * 1024];
-    let mut carry = Vec::new();
-    loop {
-        check_cancel(cancel)?;
-        let n = input.read(&mut buf).map_err(|e| e.to_string())?;
-        if n == 0 {
-            return Ok(false);
+    fn contains(&mut self, path: &Path, cancel: &AtomicBool) -> Result<bool, String> {
+        if self.finders.iter().any(|f| f.needle().is_empty()) { return Ok(true); }
+        ensure_plain_path(path)?;
+        let mut input = open_read(path)?;
+        if self.buffer.is_empty() { self.buffer.resize(64*1024, 0); }
+        self.carry.clear();
+        loop {
+            check_cancel(cancel)?;
+            let n = input.read(&mut self.buffer).map_err(|e| e.to_string())?;
+            if n == 0 { return Ok(false); }
+            self.carry.extend_from_slice(&self.buffer[..n]);
+            if self.finders.iter().any(|f| f.find(&self.carry).is_some()) {
+                return Ok(true);
+            }
+            let keep = self.overlap.min(self.carry.len());
+            let start = self.carry.len()-keep;
+            self.carry.copy_within(start.., 0);
+            self.carry.truncate(keep);
         }
-        carry.extend_from_slice(&buf[..n]);
-        if needles
-            .iter()
-            .any(|needle| carry.windows(needle.len()).any(|w| w == needle))
-        {
-            return Ok(true);
-        }
-        let keep = overlap.min(carry.len());
-        carry.drain(..carry.len() - keep);
     }
 }
 pub fn search(
@@ -254,23 +257,19 @@ pub fn search(
     }
     let mut pending = vec![root.to_owned()];
     let mut found = Vec::new();
+    let mut search = ByteContentSearch::new(content);
     while let Some(dir) = pending.pop() {
         check_cancel(cancel)?;
-        for e in fsops::list_dir(&dir, true)? {
-            check_cancel(cancel)?;
-            let m = fs::symlink_metadata(&e.path).map_err(|e| e.to_string())?;
-            if fsops::is_reparse(&m) {
-                continue;
-            }
-            if e.is_dir && recursive {
-                pending.push(e.path.clone())
-            }
+        fsops::visit_dir_with_metadata(&dir, true, Some(cancel), |e, m| {
+            if fsops::is_reparse(&m) { return Ok(()); }
+            if e.is_dir && recursive { pending.push(e.path.clone()); }
             if (masks.is_empty() || masks.iter().any(|m| m.is_match(&e.name)))
-                && (content.is_empty() || (!e.is_dir && contains(&e.path, content, cancel)?))
+                && (content.is_empty() || (!e.is_dir && search.contains(&e.path, cancel)?))
             {
                 found.push(e)
             }
-        }
+            Ok(())
+        })?;
     }
     Ok(found)
 }
@@ -813,9 +812,11 @@ fn decode_chunks(
     let mut decoder = encoding.new_decoder_without_bom_handling();
     let mut pending = &buffer[skip..first];
     let mut eof = first == 0;
+    let mut text = String::with_capacity(pending.len() * 4 + 16);
     loop {
         check_cancel(cancel)?;
-        let mut text = String::with_capacity(pending.len() * 4 + 16);
+        text.clear();
+        text.reserve(pending.len() * 4 + 16);
         let (result, used, errors) = decoder.decode_to_string(pending, &mut text, eof);
         if errors {
             return Err(format!(
@@ -843,20 +844,11 @@ fn decode_chunks(
         eof = n == 0;
     }
 }
-fn contains_text(
-    path: &Path,
-    text: &str,
-    match_case: bool,
-    cancel: &AtomicBool,
-) -> Result<bool, String> {
-    if match_case {
-        return contains(path, text, cancel);
-    }
-    let needle = text.to_lowercase();
+fn contains_folded(path: &Path, needle: &str, cancel: &AtomicBool) -> Result<bool, String> {
     let mut carry = String::new();
     decode_chunks(path, cancel, |chunk| {
         carry.push_str(&chunk.to_lowercase());
-        if carry.contains(&needle) {
+        if carry.contains(needle) {
             return Ok(true);
         }
         let keep = needle.len().saturating_sub(1).min(carry.len());
@@ -908,6 +900,8 @@ pub fn search_advanced_with_progress(
     let mut visited = std::collections::HashSet::new();
     let mut found = Vec::new();
     let mut scanned = 0usize;
+    let mut byte_search = ByteContentSearch::new(&criteria.content);
+    let folded = criteria.content.to_lowercase();
     while let Some(root) = pending.pop() {
         check_cancel(cancel)?;
         ensure_plain_path(&root)?;
@@ -916,15 +910,13 @@ pub fn search_advanced_with_progress(
             continue;
         }
         progress(scanned, found.len(), &root);
-        for entry in fsops::list_dir(&root, criteria.include_hidden)? {
-            check_cancel(cancel)?;
+        fsops::visit_dir_with_metadata(&root, criteria.include_hidden, Some(cancel), |entry, metadata| {
             scanned += 1;
             if scanned & 255 == 0 {
                 progress(scanned, found.len(), &root);
             }
-            let metadata = fs::symlink_metadata(&entry.path).map_err(|e| e.to_string())?;
             if fsops::is_reparse(&metadata) {
-                continue;
+                return Ok(());
             }
             if entry.is_dir && criteria.recursive {
                 pending.push(entry.path.clone())
@@ -937,7 +929,7 @@ pub fn search_advanced_with_progress(
                 || !category_matches(criteria.category, &entry)
                 || (!name_masks.is_empty() && !name_masks.iter().any(|m| m.is_match(&entry.name)))
             {
-                continue;
+                return Ok(());
             }
             if !entry.is_dir {
                 let ext = entry
@@ -946,38 +938,38 @@ pub fn search_advanced_with_progress(
                     .and_then(|e| e.to_str())
                     .unwrap_or("");
                 if !ext_masks.is_empty() && !ext_masks.iter().any(|m| m.is_match(ext)) {
-                    continue;
+                    return Ok(());
                 }
                 if criteria.minimum_bytes.is_some_and(|n| entry.size < n)
                     || criteria.maximum_bytes.is_some_and(|n| entry.size > n)
                 {
-                    continue;
+                    return Ok(());
                 }
             }
             if criteria.date_from.is_some() || criteria.date_to.is_some() {
                 let times = match criteria.time_kind {
-                    SearchTimeKind::Modified => vec![metadata.modified()],
-                    SearchTimeKind::Created => vec![metadata.created()],
-                    SearchTimeKind::Accessed => vec![metadata.accessed()],
-                    SearchTimeKind::Any => {
-                        vec![metadata.modified(), metadata.created(), metadata.accessed()]
-                    }
+                    SearchTimeKind::Modified => [metadata.modified().ok(), None, None],
+                    SearchTimeKind::Created => [metadata.created().ok(), None, None],
+                    SearchTimeKind::Accessed => [metadata.accessed().ok(), None, None],
+                    SearchTimeKind::Any => [metadata.modified().ok(), metadata.created().ok(), metadata.accessed().ok()],
                 };
-                if !times.into_iter().filter_map(Result::ok).any(|t| {
+                if !times.into_iter().flatten().any(|t| {
                     criteria.date_from.is_none_or(|d| t >= d)
                         && criteria.date_to.is_none_or(|d| t <= d)
                 }) {
-                    continue;
+                    return Ok(());
                 }
             }
             if !criteria.content.is_empty()
                 && (entry.is_dir
-                    || !contains_text(&entry.path, &criteria.content, criteria.match_case, cancel)?)
+                    || if criteria.match_case { !byte_search.contains(&entry.path, cancel)? }
+                       else { !contains_folded(&entry.path, &folded, cancel)? })
             {
-                continue;
+                return Ok(());
             }
             found.push(entry);
-        }
+            Ok(())
+        })?;
     }
     progress(scanned, found.len(), Path::new(""));
     Ok(found)
@@ -1285,5 +1277,37 @@ mod advanced_tests {
             fs::read(p.join("merged")).unwrap()
         );
         fs::remove_dir_all(p).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod optimized_search_tests {
+    use super::*;
+    #[test]
+    fn encoded_search_reuses_matchers_without_losing_boundary_or_unicode_matches() {
+        let root=std::env::temp_dir().join(format!("ndr-search-reuse-{}-{}",std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        fs::create_dir(&root).unwrap();
+        let text="\u{d55c}\u{ae00}Search-needle";
+        let mut search=ByteContentSearch::new(text);
+        let cancel=AtomicBool::new(false);
+        let (legacy,_,errors)=encoding_rs::EUC_KR.encode(text);
+        assert!(!errors);
+        for (i,needle) in [text.as_bytes().to_vec(),text.encode_utf16().flat_map(u16::to_le_bytes).collect(),
+            text.encode_utf16().flat_map(u16::to_be_bytes).collect(),legacy.into_owned()].into_iter().enumerate() {
+            let path=root.join(format!("encoded-{i}.txt"));
+            let mut bytes=vec![b'x';65535];bytes.extend_from_slice(&needle);bytes.extend_from_slice(b"tail");
+            fs::write(&path,bytes).unwrap();
+            assert!(search.contains(&path,&cancel).unwrap(),"encoding {i}");
+            fs::write(&path,b"unrelated text").unwrap();
+            assert!(!search.contains(&path,&cancel).unwrap(),"carry from earlier file must not leak");
+            fs::write(&path,needle).unwrap();
+        }
+        let criteria=SearchCriteria {roots:vec![root.clone()],name_patterns:"encoded-?.txt".into(),
+            content:text.into(),match_case:true,..Default::default()};
+        assert_eq!(search_advanced(&criteria,&cancel).unwrap().len(),4);
+        cancel.store(true,std::sync::atomic::Ordering::Relaxed);
+        assert!(search_advanced(&criteria,&cancel).is_err());
+        fs::remove_dir_all(root).unwrap();
     }
 }

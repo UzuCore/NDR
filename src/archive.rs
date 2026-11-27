@@ -874,12 +874,14 @@ fn copy_tree(source: &Path, target: &Path, cancel: &AtomicBool, buffer: &mut Vec
         if metadata.is_dir() {
             fs::create_dir(&target).map_err(|e| e.to_string())?;
             for e in fs::read_dir(&source).map_err(|e| e.to_string())? {
+                check_cancel(cancel)?;
                 let e = e.map_err(|e| e.to_string())?;
-                pending.push((e.path(), target.join(e.file_name())));
+                let name = e.file_name();
+                pending.push((source.join(&name), target.join(name)));
             }
             directories.push((target, metadata));
         } else if metadata.is_file() {
-            let mut input = crate::fsops::open_read(&source)?;
+            let mut input = crate::fsops::open_read_sequential(&source, metadata.len())?;
             let mut output = fs::OpenOptions::new()
                 .write(true)
                 .create_new(true)
@@ -893,9 +895,10 @@ fn copy_tree(source: &Path, target: &Path, cancel: &AtomicBool, buffer: &mut Vec
                 buffer.resize(buffer_len, 0);
             }
             let mut copied = 0;
-            loop {
+            while copied < metadata.len() {
                 check_cancel(cancel)?;
-                let n = input.read(&mut buffer[..buffer_len]).map_err(|e| e.to_string())?;
+                let want = (metadata.len()-copied).min(buffer_len as u64) as usize;
+                let n = input.read(&mut buffer[..want]).map_err(|e| e.to_string())?;
                 if n == 0 {
                     break;
                 }

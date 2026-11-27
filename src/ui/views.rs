@@ -10,6 +10,102 @@ pub(super) fn valid_small_icon_pixels(width: usize, height: usize, rgba: &[u8]) 
 }
 
 const ICON_RETRY_INTERVAL: Duration = Duration::from_secs(3);
+// Windows' thumbnail provider already serializes extraction globally. A
+// single reusable worker avoids dozens of blocked threads per viewport.
+const THUMBNAIL_PENDING_LIMIT: usize = 16;
+const THUMBNAIL_CACHE_LIMIT: usize = 512;
+const THUMBNAIL_BYTES_LIMIT: usize = 32 * 1024 * 1024;
+const THUMBNAIL_RETRY: Duration = Duration::from_secs(15);
+const OVERLAY_PENDING_LIMIT: usize = 64;
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+pub(super) struct ThumbnailKey {
+    path: PathBuf,
+    side: u32,
+    size: u64,
+    modified: Option<std::time::SystemTime>,
+    attributes: u32,
+}
+impl ThumbnailKey {
+    pub(super) fn new(entry: &Entry, side: u32) -> Self {
+        Self { path: entry.path.clone(), side: side.clamp(16,256), size: entry.size,
+            modified: entry.modified, attributes: entry.attributes }
+    }
+}
+pub(super) struct CachedThumbnail {
+    texture: Option<egui::TextureHandle>,
+    bytes: usize,
+    used: Instant,
+    completed: Instant,
+}
+
+impl App {
+    pub(super) fn thumbnail_for(&mut self, ctx: &egui::Context, entry: &Entry, side: u32) -> Option<egui::TextureHandle> {
+        let key = ThumbnailKey::new(entry, side);
+        let now = Instant::now();
+        if let Some(cached) = self.images.get_mut(&key) {
+            cached.used = now;
+            if cached.texture.is_some() || now.duration_since(cached.completed) < THUMBNAIL_RETRY {
+                return cached.texture.clone();
+            }
+        }
+        if self.image_requests.len() >= THUMBNAIL_PENDING_LIMIT || self.image_requests.contains(&key) {
+            return None;
+        }
+        if self.thumbnail_tx.is_none() {
+            let (tx, rx) = mpsc::channel::<ThumbnailKey>();
+            let result = self.async_tx.clone();
+            let repaint = ctx.clone();
+            thread::spawn(move || {
+                for key in rx {
+                    let image = native::thumbnail(&key.path, key.side);
+                    if result.send(AsyncResult::Image { key, image }).is_err() { break; }
+                    repaint.request_repaint_after(Duration::from_millis(16));
+                }
+            });
+            self.thumbnail_tx = Some(tx);
+        }
+        if self.thumbnail_tx.as_ref().is_some_and(|tx| tx.send(key.clone()).is_ok()) {
+            self.image_requests.insert(key);
+        } else {
+            self.thumbnail_tx = None;
+            self.image_requests.clear();
+        }
+        None
+    }
+
+    pub(super) fn finish_thumbnail(&mut self, ctx: &egui::Context, key: ThumbnailKey, image: Result<(usize,usize,Vec<u8>),String>) {
+        if !self.image_requests.remove(&key) { return; }
+        let image = image.ok().filter(|(w,h,p)| *w > 0 && *h > 0 && *w <= 1024 && *h <= 1024
+            && w.checked_mul(*h).and_then(|n| n.checked_mul(4)) == Some(p.len()));
+        let bytes = image.as_ref().map_or(0, |(_,_,pixels)| pixels.len());
+        if let Some(old) = self.images.remove(&key) { self.image_bytes = self.image_bytes.saturating_sub(old.bytes); }
+        while self.images.len() >= THUMBNAIL_CACHE_LIMIT || self.image_bytes.saturating_add(bytes) > THUMBNAIL_BYTES_LIMIT {
+            let Some(oldest) = self.images.iter().min_by_key(|(_,v)| v.used).map(|(k,_)| k.clone()) else { break };
+            if let Some(old) = self.images.remove(&oldest) { self.image_bytes = self.image_bytes.saturating_sub(old.bytes); }
+        }
+        let texture = image.map(|(w,h,p)| ctx.load_texture(key.path.to_string_lossy(),
+            egui::ColorImage::from_rgba_unmultiplied([w,h], &p), egui::TextureOptions::LINEAR));
+        let now = Instant::now();
+        self.image_bytes += bytes;
+        self.images.insert(key, CachedThumbnail { texture, bytes, used: now, completed: now });
+        // A failed handler remains a placeholder; allow a bounded retry.
+        if bytes == 0 { ctx.request_repaint_after(THUMBNAIL_RETRY); }
+    }
+
+    pub(super) fn trim_overlay_icons(&mut self, incoming: &Path) {
+        // Replace one least-recently-used entry instead of discarding all
+        // 512 textures and causing another burst of shell lookups.
+        if self.overlay_icons.contains_key(incoming) || self.overlay_icons.len() < 512 { return; }
+        let oldest = self.overlay_icons.keys().min_by_key(|k| self.overlay_last_used.get(*k).copied()).cloned();
+        if let Some(oldest) = oldest {
+            if let Some(Some(texture)) = self.overlay_icons.remove(&oldest) { self.ghost_icons.remove(&texture.id()); }
+            self.overlay_last_used.remove(&oldest);
+            self.overlay_icon_failed_at.remove(&oldest);
+        }
+    }
+}
+
 
 /// Pane folder tree level width (VCL TCustomTreeView Indent default 19, matching the captured original).
 const TREE_INDENT: f32 = 19.0;
@@ -142,6 +238,9 @@ impl App {
         }
         let Some(extension) = path.extension().map(|e| e.to_string_lossy().to_lowercase()) else { return false };
         let hook = self.system.per_file_icon;
+        if self.per_file_icon_types.len() >= 256 && !self.per_file_icon_types.contains_key(&extension) {
+            if let Some(old) = self.per_file_icon_types.keys().next().cloned() { self.per_file_icon_types.remove(&old); }
+        }
         *self.per_file_icon_types.entry(extension).or_insert_with_key(|e| hook(e))
     }
 
@@ -164,6 +263,7 @@ impl App {
             let local = self.panes[index].archive.is_none() && self.panes[index].remote.is_none() && path.is_absolute();
             let real_path = self.settings.flag("UseOverlayIcons", true) || path.parent().is_none();
             if self.settings.flag("ShowIcons", true) && local && real_path {
+                if let Some(t) = self.overlay_last_used.get_mut(&path) { *t = Instant::now(); }
                 match self.overlay_icons.get(&path) {
                     Some(Some(texture)) => return Some(texture.clone()),
                     Some(None) | None => self.queue_overlay_icon_if_due(path, true),
@@ -198,6 +298,7 @@ impl App {
         let own_folder_icon = directory && local && !overlays && !drive && attributes & (FILE_ATTRIBUTE_READONLY | FILE_ATTRIBUTE_SYSTEM) != 0;
         let real_path = drive || (overlays && local) || own_icon || own_folder_icon;
         if self.settings.flag("ShowIcons", true) && real_path {
+            if let Some(t) = self.overlay_last_used.get_mut(&path) { *t = Instant::now(); }
             match self.overlay_icons.get(&path) {
                 Some(Some(texture)) => return Some(texture.clone()),
                 Some(None) | None => self.queue_overlay_icon_if_due(path.clone(), overlays || drive),
@@ -211,6 +312,7 @@ impl App {
         if !self.settings.flag("ShowIcons", true) {
             return None;
         }
+        if let Some(t) = self.overlay_last_used.get_mut(root) { *t = Instant::now(); }
         match self.overlay_icons.get(root) {
             Some(Some(texture)) => return Some(texture.clone()),
             Some(None) | None => self.queue_overlay_icon_if_due(root.to_path_buf(), false),
@@ -235,12 +337,13 @@ impl App {
 
     /// Icon job: 0 = the file's shell icon, 1 = overlay icon, 2 = shell key (desktop or virtual folders in the pane's folder tree).
     fn queue_icon_job(&mut self, path: PathBuf, mode: u8) {
-        if !self.overlay_pending.insert(path.clone()) {
+        if self.overlay_pending.len() >= OVERLAY_PENDING_LIMIT || !self.overlay_pending.insert(path.clone()) {
             return;
         }
         if self.overlay_tx.is_none() {
             let (tx, rx) = std::sync::mpsc::channel::<(PathBuf, u8)>();
             let (with_overlay, plain, results) = (self.system.overlay_icon, self.system.path_icon, self.async_tx.clone());
+            let repaint = self.egui_ctx.clone();
             thread::spawn(move || {
                 native::com_sta_init();
                 for (path, mode) in rx {
@@ -252,12 +355,14 @@ impl App {
                     if results.send(AsyncResult::OverlayIcon { path, image }).is_err() {
                         break;
                     }
+                    repaint.request_repaint_after(Duration::from_millis(16));
                 }
             });
             self.overlay_tx = Some(tx);
         }
-        if let Some(tx) = &self.overlay_tx {
-            let _ = tx.send((path, mode));
+        if self.overlay_tx.as_ref().is_none_or(|tx| tx.send((path, mode)).is_err()) {
+            self.overlay_tx = None;
+            self.overlay_pending.clear();
         }
     }
 
@@ -265,6 +370,7 @@ impl App {
     /// The running original shows these icons with both the list's showicon=0 and [Tree] tshowicon=0 (that key is the F10 window's), so the
     /// list's ShowIcons does not apply. Fixed: previously the tree lost its icons with the list icons turned off.
     pub(super) fn shell_node_icon(&mut self, ctx: &egui::Context, node: &ndr::shell_tree::ShellNode) -> Option<egui::TextureHandle> {
+        if let Some(t) = self.overlay_last_used.get_mut(&node.key) { *t = Instant::now(); }
         match self.overlay_icons.get(&node.key) {
             Some(Some(texture)) => Some(texture.clone()),
             Some(None) => {
@@ -323,6 +429,12 @@ impl App {
         } else {
             self.file_icon_failed_at.insert(key.clone(), Instant::now());
             ctx.request_repaint_after(ICON_RETRY_INTERVAL);
+        }
+        if self.file_icons.len() >= 256 && !self.file_icons.contains_key(&key) {
+            if let Some(old) = self.file_icons.keys().find(|k| k.as_str() != "<DIR>").cloned() {
+                if let Some(Some(t)) = self.file_icons.remove(&old) { self.ghost_icons.remove(&t.id()); }
+                self.file_icon_failed_at.remove(&old);
+            }
         }
         self.file_icons.insert(key, texture.clone());
         texture
@@ -576,19 +688,12 @@ impl App {
                                 break;
                             }
                             let entry = self.panes[index].entries[row].clone();
-                            if thumbnails
+                            let thumbnail_image = if thumbnails
                                 && self.panes[index].archive.is_none()
                                 && self.panes[index].remote.is_none()
-                                && !self.image_requests.contains(&entry.path)
                             {
-                                self.image_requests.insert(entry.path.clone());
-                                let path = entry.path.clone();
-                                let tx = self.async_tx.clone();
-                                thread::spawn(move || {
-                                    let image = native::thumbnail(&path, thumb as u32);
-                                    let _ = tx.send(AsyncResult::Image { path, image });
-                                });
-                            }
+                                self.thumbnail_for(ui.ctx(), &entry, thumb as u32)
+                            } else { None };
                             let selected = self.panes[index].selected.contains(&row)
                                 || (self.active == index && self.panes[index].cursor == row);
                             let icon = self.file_icon(ui.ctx(), index, row);
@@ -635,7 +740,7 @@ impl App {
                                             if thumbnails {
                                                 // Original: for a dimmed item, the image uses alpha 0x55 (AlphaBlend SourceConstantAlpha), and the icon uses ILD_BLEND50 (dimmed icon image). Skin theme only.
                                                 let tint = if ghosted { Color32::from_white_alpha(0x55) } else { Color32::WHITE };
-                                                if let Some(texture) = self.images.get(&entry.path)
+                                                if let Some(texture) = thumbnail_image.as_ref()
                                                 {
                                                     ui.add(egui::Image::new((
                                                         texture.id(),

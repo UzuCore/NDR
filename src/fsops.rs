@@ -199,6 +199,7 @@ pub fn run_with_locale(
         language,
         quiet: false,
         last_copy_progress: None,
+        last_progress: None,
         copy_buffer: Vec::new(),
         skipped_count: 0,
     };
@@ -1401,9 +1402,21 @@ pub fn list_dir(path: &Path, show_hidden: bool) -> Result<Vec<Entry>, String> {
     list_dir_with_cancel(path, show_hidden, None)
 }
 pub fn list_dir_with_cancel(path: &Path, show_hidden: bool, cancel: Option<&AtomicBool>) -> Result<Vec<Entry>, String> {
+    let mut entries = Vec::new();
+    visit_dir_with_metadata(path, show_hidden, cancel, |entry, _| {
+        entries.push(entry);
+        Ok(())
+    })?;
+    Ok(entries)
+}
+
+/// Read-only enumeration: Windows DirEntry metadata already contains the
+/// no-follow attributes, file size and timestamps. Consumers that mutate
+/// files must still perform fresh path/handle validation before writing.
+pub(crate) fn visit_dir_with_metadata(path: &Path, show_hidden: bool, cancel: Option<&AtomicBool>,
+    mut visit: impl FnMut(Entry, fs::Metadata) -> Result<(), String>) -> Result<(), String> {
     if let Some(cancel) = cancel { check_cancel(cancel)?; }
     ensure_plain_path(path)?;
-    let mut entries = Vec::new();
     for item in fs::read_dir(path).map_err(|e| e.to_string())? {
         if let Some(cancel) = cancel { check_cancel(cancel)?; }
         let item = item.map_err(|e| e.to_string())?;
@@ -1426,7 +1439,7 @@ pub fn list_dir_with_cancel(path: &Path, show_hidden: bool, cancel: Option<&Atom
             let file_name = item.file_name();
             let item_path = path.join(&file_name);
             let name = file_name.into_string().unwrap_or_else(|s| s.to_string_lossy().into_owned());
-            entries.push(Entry {
+            visit(Entry {
                 path: item_path,
                 name,
                 is_dir: m.is_dir(),
@@ -1435,10 +1448,10 @@ pub fn list_dir_with_cancel(path: &Path, show_hidden: bool, cancel: Option<&Atom
                 hidden,
                 attributes,
                 drive: false,
-            });
+            }, m)?;
         }
     }
-    Ok(entries)
+    Ok(())
 }
 pub(crate) fn check_cancel(cancel: &AtomicBool) -> Result<(), String> {
     if cancel.load(Ordering::Relaxed) {
@@ -1449,12 +1462,21 @@ pub(crate) fn check_cancel(cancel: &AtomicBool) -> Result<(), String> {
 }
 /// Keep ordinary source content stable against concurrent Windows writers.
 pub(crate) fn open_read(path: &Path) -> Result<File, String> {
+    open_read_with_hint(path, false)
+}
+pub(crate) fn open_read_sequential(path: &Path, bytes: u64) -> Result<File, String> {
+    open_read_with_hint(path, bytes >= 1024 * 1024)
+}
+fn open_read_with_hint(path: &Path, sequential: bool) -> Result<File, String> {
     let mut options = OpenOptions::new();
     options.read(true);
     #[cfg(windows)]
     {
         use std::os::windows::fs::OpenOptionsExt;
         options.share_mode(1);
+        if sequential {
+            options.custom_flags(0x08000000); // FILE_FLAG_SEQUENTIAL_SCAN
+        }
     }
     options.open(path).map_err(|e| e.to_string())
 }
@@ -1586,6 +1608,7 @@ struct Job {
     events: Sender<Event>,
     cancel: Arc<AtomicBool>,
     last_copy_progress: Option<Instant>,
+    last_progress: Option<Instant>,
     copy_buffer: Vec<u8>,
     skipped_count: usize,
     files: u64,
@@ -1712,6 +1735,15 @@ impl Job {
             destination: destination.to_path_buf(),
         });
         self.progress(source);
+    }
+
+    fn delete_progress(&mut self, p: &Path) {
+        let now = Instant::now();
+        if self.last_progress.is_some_and(|previous| now.duration_since(previous) < Duration::from_millis(40)) {
+            return;
+        }
+        self.last_progress = Some(now);
+        self.progress(p);
     }
 
     fn progress(&self, p: &Path) {
@@ -1969,7 +2001,7 @@ impl Job {
             return Err(Diag::FileToFolder.render(self.language.as_ref()));
         }
         self.copy_progress(s, &d);
-        let mut input = open_read(s)?;
+        let mut input = open_read_sequential(s, m.len())?;
         let (stage, mut out) = create_copy_stage(d.parent().ok_or("No destination parent")?)?;
         let buffer_len = m.len().clamp(4096, 1024 * 1024) as usize;
         if self.copy_buffer.len() < buffer_len {
@@ -1977,9 +2009,13 @@ impl Job {
         }
         let result = (|| {
             let mut copied = 0u64;
-            loop {
+            // The read handle denies concurrent writers. Stop at the
+            // expected length rather than issuing an extra EOF read for
+            // every tiny file. The final source metadata check remains.
+            while copied < m.len() {
                 self.check()?;
-                let n = input.read(&mut self.copy_buffer[..buffer_len]).map_err(|e| e.to_string())?;
+                let want = (m.len()-copied).min(buffer_len as u64) as usize;
+                let n = input.read(&mut self.copy_buffer[..want]).map_err(|e| e.to_string())?;
                 if n == 0 {
                     break;
                 }
@@ -2086,17 +2122,22 @@ impl Job {
         if is_reparse(&m) {
             remove_link(p, attribute_directory(&m))?;
             self.files += 1;
-            self.progress(p);
+            self.delete_progress(p);
             return Ok(Disposition::Deleted);
         }
         if m.is_dir() {
             let mut kept = None;
-            let children: Vec<PathBuf> = fs::read_dir(p)
-                .map_err(|e| e.to_string())?
-                .map(|item| item.map(|i| i.path()).map_err(|e| e.to_string()))
-                .collect::<Result<_, _>>()?;
+            // Snapshot the names before deleting (mutating a live directory
+            // enumeration can skip entries), but do not duplicate the full
+            // parent path for every child or ignore cancellation while reading.
+            let mut children = Vec::new();
+            for item in fs::read_dir(p).map_err(|e| e.to_string())? {
+                self.check()?;
+                children.push(item.map_err(|e| e.to_string())?.file_name());
+            }
             let count = children.len();
-            for (index, child) in children.into_iter().enumerate() {
+            for (index, name) in children.into_iter().enumerate() {
+                let child = p.join(name);
                 let child_boundary = boundary || index + 1 < count;
                 match self.delete_filtered(&child, skipped, depth + 1, child_boundary) {
                     Ok(Disposition::Deleted) => {}
@@ -2121,7 +2162,7 @@ impl Job {
             self.files += 1;
             self.bytes += m.len();
         }
-        self.progress(p);
+        self.delete_progress(p);
         Ok(Disposition::Deleted)
     }
     /// C# ShredEntry; overwrite and naming follow the original (see below). Folders are emptied depth first and removed; links are removed
@@ -2982,5 +3023,26 @@ fn attribute_directory(m: &fs::Metadata) -> bool {
     #[cfg(not(windows))]
     {
         m.is_dir()
+    }
+}
+
+#[cfg(test)]
+mod optimized_delete_tests {
+    use super::*;
+    #[test]
+    fn permanent_delete_coalesces_progress_and_preserves_final_counts() {
+        let root=std::env::temp_dir().join(format!("ndr-delete-budget-{}-{}",std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        fs::create_dir_all(root.join("files")).unwrap();
+        for i in 0..320 { fs::write(root.join("files").join(format!("{i:04}.txt")),b"data").unwrap(); }
+        let (tx,rx)=mpsc::channel();
+        let start=Instant::now();
+        run(Operation::Delete {sources:vec![root.join("files")],recycle:false},tx,Arc::new(AtomicBool::new(false)));
+        let events:Vec<_>=rx.try_iter().collect();
+        let count=events.iter().filter(|e|matches!(e,Event::Progress{..})).count();
+        assert!(count>0 && count as u128<=start.elapsed().as_millis()/40+1, "{count}");
+        assert!(matches!(events.last(),Some(Event::Finished{cancelled:false,files:321,bytes:1280})));
+        assert!(!root.join("files").exists());
+        fs::remove_dir_all(root).unwrap();
     }
 }

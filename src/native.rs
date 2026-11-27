@@ -1001,7 +1001,7 @@ pub fn thumbnail(path: &Path, side: u32) -> Result<(usize, usize, Vec<u8>), Stri
             Foundation::SIZE,
             System::Com::*,
             UI::Shell::{
-                IShellItemImageFactory, SHCreateItemFromParsingName, SIIGBF_BIGGERSIZEOK,
+                IShellItemImageFactory, SHCreateItemFromParsingName,
                 SIIGBF_RESIZETOFIT,
             },
         },
@@ -1023,7 +1023,7 @@ pub fn thumbnail(path: &Path, side: u32) -> Result<(usize, usize, Vec<u8>), Stri
                     .map_err(|e| e.to_string())?;
             let mut tries = 0;
             loop {
-                match factory.GetImage(SIZE { cx: side, cy: side }, SIIGBF_BIGGERSIZEOK | SIIGBF_RESIZETOFIT) {
+                match factory.GetImage(SIZE { cx: side, cy: side }, SIIGBF_RESIZETOFIT) {
                     Err(e) if e.code().0 as u32 == 0x8000_000A && tries < 20 => {
                         tries += 1;
                         std::thread::sleep(std::time::Duration::from_millis(25));
@@ -2556,6 +2556,16 @@ pub fn system_color(index: i32) -> (u8, u8, u8) {
 /// C# FileInformationService.GetShellTypeName: SHGetFileInfoW("folder" | "file" | "file.ext", folder/normal attributes,
 /// SHGFI_TYPENAME | SHGFI_USEFILEATTRIBUTES). Empty string on failure.
 pub fn shell_type_name(extension: &str, is_dir: bool) -> String {
+    use std::time::{Duration, Instant};
+    type Types = std::collections::HashMap<(String,bool),(Instant,String)>;
+    static CACHE: std::sync::LazyLock<std::sync::Mutex<Types>> =
+        std::sync::LazyLock::new(|| std::sync::Mutex::new(Types::new()));
+    let key = (extension.to_ascii_lowercase(), is_dir);
+    if let Ok(cache) = CACHE.lock() {
+        if let Some((at, value)) = cache.get(&key) {
+            if at.elapsed() < Duration::from_secs(30) { return value.clone(); }
+        }
+    }
     let lookup = if is_dir { "folder".to_owned() } else if extension.is_empty() { "file".to_owned() } else { format!("file{extension}") };
     let name = wide(&lookup);
     let mut info: SHFILEINFOW = unsafe { std::mem::zeroed() };
@@ -2566,7 +2576,16 @@ pub fn shell_type_name(extension: &str, is_dir: bool) -> String {
         return String::new();
     }
     let length = info.szTypeName.iter().position(|c| *c == 0).unwrap_or(info.szTypeName.len());
-    String::from_utf16_lossy(&info.szTypeName[..length]).trim().to_owned()
+    let value = String::from_utf16_lossy(&info.szTypeName[..length]).trim().to_owned();
+    if !value.is_empty() {
+        if let Ok(mut cache) = CACHE.lock() {
+            if cache.len() >= 256 && !cache.contains_key(&key) {
+                if let Some(old) = cache.iter().min_by_key(|(_, (at,_))| *at).map(|(k,_)| k.clone()) { cache.remove(&old); }
+            }
+            cache.insert(key, (Instant::now(), value.clone()));
+        }
+    }
+    value
 }
 
 /// C# IsWindowsLightTheme: HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize's AppsUseLightTheme (1 if absent) != 0.

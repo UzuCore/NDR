@@ -9,6 +9,7 @@ default = ["winfsp-vault"]
 winfsp-vault = ["dep:winfsp", "dep:widestring"]
 
 [dependencies]
+memchr = "=2.8.3"
 ab_glyph = "=0.2.32"
 eframe = { version = "=0.33.3", default-features = false, features = ["glow", "default_fonts", "accesskit"] }
 serde = { version = "1", features = ["derive"] }
