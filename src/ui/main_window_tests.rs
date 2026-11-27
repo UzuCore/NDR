@@ -4509,3 +4509,23 @@ fn narrow_auto_folder_size_cells_never_cross_column_boundary(){
     });
     drop(app);fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn dropping_app_without_on_exit_retires_both_folder_workers(){
+    let (root,ctx,mut app)=fixture("folder-worker-owner-drop");
+    let folder=root.join("left/folder");
+    fs::write(folder.join("data.bin"),[1u8;1024]).unwrap();
+    app.settings.set_flag("LeftAutoFolderSize",true);
+    let row=app.panes[0].entries.iter().position(|e|e.path==folder).unwrap();
+    app.queue_folder_size(0,row);
+    assert_eq!(app.folder_size_done.len(),2);
+    let shutdown=app.folder_size_shutdown.clone();
+    let queue=app.folder_size_queue.clone();
+    let done=std::mem::take(&mut app.folder_size_done);
+    drop(app);
+    assert!(shutdown.load(Ordering::Relaxed));
+    for lane in done{lane.recv_timeout(Duration::from_secs(3)).unwrap();}
+    assert!(queue.0.lock().unwrap().is_empty());
+    assert!(queue.2.lock().unwrap().is_empty());
+    drop(ctx);fs::remove_dir_all(root).unwrap();
+}

@@ -563,7 +563,7 @@ fn wait_ftp_clipboard(app: &mut App, ctx: &egui::Context) {
     wait_until(app, ctx, |app| {
         app.job.as_ref().is_some_and(|j| j.finished)
             && !app.panes[1].remote.as_ref().unwrap().busy.load(Ordering::Relaxed)
-            && !app.panes[1].loading
+            && app.panes.iter().all(|pane| !pane.loading)
     });
     for _ in 0..4 { app.poll(ctx); }
 }
@@ -612,16 +612,26 @@ fn archive_ctrl_c_and_ctrl_x_paste_into_ftp_preserve_then_move_archive_entries()
     wait_until(&mut app, &ctx, |app| !app.panes[0].loading);
     app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == "alpha.txt").unwrap();
     app.dispatch("copy", &ctx);
-    wait_until(&mut app, &ctx, |app| app.archive_clipboard.is_some());
+    // Archive preparation emits its clipboard result before the job finishes.
+    wait_until(&mut app, &ctx, |app| {
+        app.archive_clipboard.is_some() && app.job.as_ref().is_some_and(|j| j.finished)
+            && app.panes.iter().all(|pane| !pane.loading)
+    });
     app.active = 1;
     app.dispatch("paste", &ctx);
     wait_ftp_clipboard(&mut app, &ctx);
     assert_eq!(FAKE_FTP.lock().unwrap()["/pub/alpha.txt"].1, b"alpha");
     assert!(ndr::archive::list(&zip, None).unwrap().iter().any(|e| e.key == "alpha.txt"));
 
+    // FTP completion refreshes both panes, including the source archive.
     app.active = 0;
+    app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == "alpha.txt").unwrap();
     app.dispatch("cut", &ctx);
-    wait_until(&mut app, &ctx, |app| app.archive_clipboard.as_ref().is_some_and(|c| c.moving));
+    wait_until(&mut app, &ctx, |app| {
+        app.archive_clipboard.as_ref().is_some_and(|c| c.moving)
+            && app.job.as_ref().is_some_and(|j| j.finished)
+            && app.panes.iter().all(|pane| !pane.loading)
+    });
     // Remove the remote copy so the cut is an unambiguous successful upload.
     FAKE_FTP.lock().unwrap().remove("/pub/alpha.txt");
     app.active = 1;

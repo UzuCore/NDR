@@ -1164,6 +1164,11 @@ impl App {
         }
     }
     fn start_folder_lane(&mut self,quick:bool)->bool{
+        if self.folder_size_owner.is_none(){
+            self.folder_size_owner=Some(FolderWorkerOwner{
+                shared:self.folder_size_queue.clone(),shutdown:self.folder_size_shutdown.clone()
+            });
+        }
         let shared=self.folder_size_queue.clone();
         let tx=self.async_tx.clone();let ctx=self.egui_ctx.clone();
         let profile=self.profile.clone();
@@ -1291,8 +1296,29 @@ pub(super) struct FolderSizeJob {
 }
 
 pub(super) type FolderSizeQueue = Arc<(Mutex<std::collections::VecDeque<FolderSizeJob>>,
-    std::sync::Condvar,Mutex<HashMap<PathBuf,bool>>)>;
+    std::sync::Condvar,Mutex<HashMap<PathBuf,(bool,Arc<AtomicBool>)>>)>;
 use std::sync::atomic::AtomicU64;
+
+/// The UI owns this guard; workers own only its shared resources. This
+/// handles both ordinary window exit and App destruction without on_exit.
+/// Do not infer ownership from Arc counts: two workers plus reservations
+/// hold their own references even after the UI no longer exists.
+pub(super) struct FolderWorkerOwner{
+    shared:FolderSizeQueue,
+    shutdown:Arc<AtomicBool>,
+}
+impl Drop for FolderWorkerOwner{
+    fn drop(&mut self){
+        self.shutdown.store(true,Ordering::Relaxed);
+        let mut queue=self.shared.0.lock().unwrap_or_else(|e|e.into_inner());
+        for job in queue.iter(){job.cancel.store(true,Ordering::Relaxed);}
+        queue.clear();
+        for (_,cancel) in self.shared.2.lock().unwrap_or_else(|e|e.into_inner()).values(){
+            cancel.store(true,Ordering::Relaxed);
+        }
+        self.shared.1.notify_all();
+    }
+}
 
 #[derive(Default)]
 pub(super) struct FolderWorkerStats {
@@ -1327,8 +1353,8 @@ impl Drop for ActiveFolderJob {
     }
 }
 fn select_folder_job(jobs:&std::collections::VecDeque<FolderSizeJob>,
-    active:&HashMap<PathBuf,bool>,quick:bool)->Option<usize>{
-    if quick&&(active.values().any(|automatic|!*automatic)||jobs.iter().any(|j|!j.automatic&&!j.cancel.load(Ordering::Relaxed))){
+    active:&HashMap<PathBuf,(bool,Arc<AtomicBool>)>,quick:bool)->Option<usize>{
+    if quick&&(active.values().any(|(automatic,_)|!*automatic)||jobs.iter().any(|j|!j.automatic&&!j.cancel.load(Ordering::Relaxed))){
         return None
     }
     jobs.iter().position(|j|{
@@ -1339,6 +1365,7 @@ fn select_folder_job(jobs:&std::collections::VecDeque<FolderSizeJob>,
 fn defer_folder_job(queue:&Mutex<std::collections::VecDeque<FolderSizeJob>>,mut job:FolderSizeJob,stats:&FolderWorkerStats){
     if job.cancel.load(Ordering::Relaxed){return}
     let mut jobs=queue.lock().unwrap_or_else(|e|e.into_inner());
+    if job.cancel.load(Ordering::Relaxed){return}
     for other in jobs.iter_mut().filter(|j|j.automatic&&j.path==job.path){other.bulk_only=true;}
     job.bulk_only=true;job.hint_needed=false;jobs.push_back(job);
     stats.quick_deferred.fetch_add(1,Ordering::Relaxed);
@@ -1389,15 +1416,15 @@ fn short_lane_skips_active_aliases_deferred_jobs_and_manual_work(){
         cancel:Arc::new(AtomicBool::new(false)),automatic,track:automatic,prior:None,hint_needed:false,bulk_only};
     let mut jobs=std::collections::VecDeque::from([job("big",true,true),job("big",true,false),
         job("busy",true,false),job("small",true,false)]);
-    let mut active=HashMap::from([(PathBuf::from("busy"),true)]);
+    let mut active=HashMap::from([(PathBuf::from("busy"),(true,Arc::new(AtomicBool::new(false))))]);
     assert_eq!(select_folder_job(&jobs,&active,true),Some(3));
     assert_eq!(select_folder_job(&jobs,&active,false),Some(0));
-    active.insert(PathBuf::from("big"),true);
+    active.insert(PathBuf::from("big"),(true,Arc::new(AtomicBool::new(false))));
     assert_eq!(select_folder_job(&jobs,&active,false),Some(3));
     jobs.push_front(job("manual",false,true));
     assert_eq!(select_folder_job(&jobs,&active,true),None);
     assert_eq!(select_folder_job(&jobs,&active,false),Some(0));
-    active.insert(PathBuf::from("manual"),false);jobs.pop_front();
+    active.insert(PathBuf::from("manual"),(false,Arc::new(AtomicBool::new(false))));jobs.pop_front();
     assert_eq!(select_folder_job(&jobs,&active,true),None);
 }
 
@@ -1435,11 +1462,12 @@ fn folder_size_worker(shared: FolderSizeQueue, tx: WakeSender<AsyncResult>, ctx:
         if recent.as_ref().is_some_and(|(_, _, _, _, _, at)| at.elapsed() >= Duration::from_secs(3)) { recent = None; }
         let (mut job,_active_job) = {
             let mut jobs = queue.lock().unwrap_or_else(|e| e.into_inner());
+            if shutdown.load(Ordering::Relaxed){drop(jobs);continue}
             jobs.retain(|j|!j.cancel.load(Ordering::Relaxed));
             let mut running=active.lock().unwrap_or_else(|e|e.into_inner());
             if let Some(index)=select_folder_job(&jobs,&running,quick){
                 let job=jobs.remove(index).expect("selected queue position");
-                running.insert(job.path.clone(),job.automatic);
+                running.insert(job.path.clone(),(job.automatic,job.cancel.clone()));
                 stats.peak_active.fetch_max(running.len() as u64,Ordering::Relaxed);
                 let guard=ActiveFolderJob{shared:shared.clone(),path:job.path.clone()};
                 (job,guard)

@@ -967,6 +967,7 @@ pub struct App {
     /// Bounded short scan lane plus the existing full recursive worker.
     folder_size_queue: pane_chrome::FolderSizeQueue,
     folder_size_workers: bool,
+    folder_size_owner:Option<pane_chrome::FolderWorkerOwner>,
     folder_size_helper_started: bool,
     folder_worker_stats:Arc<pane_chrome::FolderWorkerStats>,
     folder_size_shutdown: Arc<AtomicBool>,
@@ -1262,6 +1263,7 @@ impl App {
             crumb_cache: HashMap::new(),
             folder_size_queue: Arc::new((Mutex::new(std::collections::VecDeque::new()), std::sync::Condvar::new(),Mutex::new(HashMap::new()))),
             folder_size_workers: false,
+            folder_size_owner:None,
             folder_size_helper_started:false,
             folder_worker_stats:Arc::new(pane_chrome::FolderWorkerStats::default()),
             folder_size_shutdown: Arc::new(AtomicBool::new(false)),
