@@ -758,7 +758,7 @@ impl App {
         // C# RunArchiveExtractionWithProgress: the built-in path is FileOperationProgressWindow.Run (source = archive, destination, pausable),
         // external programs are "external extraction" (allowPause: false).
         let external = programs.iter().any(Option::is_some);
-        let progress = super::file_operation::ProgressInfo { from: archives.first().map(|a| a.to_string_lossy().into_owned()), to: Some(base.to_string_lossy().into_owned()), caption: Some(self.language_pack.text("RES.EXTRACTING", "Extracting...")), ..Default::default() };
+        let progress = super::file_operation::ProgressInfo { from: archives.first().map(|a| a.to_string_lossy().into_owned()), to: Some(base.to_string_lossy().into_owned()), caption: Some(self.language_pack.text("RES.EXTRACTING", "Extracting...")), prefer_bytes: true, ..Default::default() };
         let language = self.language_pack.clone();
         let work = move |events: Sender<Event>, cancel: Arc<AtomicBool>| -> Result<(), String> {
             let password = (!password.is_empty()).then_some(password);
@@ -767,19 +767,27 @@ impl App {
                 let mut passwords = |archive: &Path, _: Option<&str>| super::commands::ask_password(&events, &cancel, archive);
                 let mut destination = base.clone();
                 let mut known = password.clone();
+                let mut prepared = None;
+                let mut new_destination = false;
                 match mode {
-                    ExtractMode::NewFolder => destination = archive::create_unique_extract_folder(&base, &archive::extract_folder_name(archive_path))?,
+                    ExtractMode::NewFolder => {
+                        destination = archive::available_extract_folder(&base, &archive::extract_folder_name(archive_path))?;
+                        new_destination = true;
+                    }
                     ExtractMode::Auto => {
-                        let single = match archive::list_with_passwords(archive_path, known.as_deref(), &cancel, &mut passwords) {
-                            Ok((entries, used)) => {
-                                known = used;
-                                archive::has_single_root_folder(&entries)
+                        let single = match archive::prepare_extraction(archive_path, known.as_deref(), &cancel, &mut passwords, Some(&language)) {
+                            Ok(plan) => {
+                                known = plan.password().map(str::to_owned);
+                                let single = plan.single_root_folder();
+                                prepared = Some(plan);
+                                single
                             }
                             Err(error) if error == "Archive password request cancelled" => return Ok(()),
                             Err(_) => false,
                         };
                         if !single {
-                            destination = archive::create_unique_extract_folder(&base, &archive::extract_folder_name(archive_path))?;
+                            destination = archive::available_extract_folder(&base, &archive::extract_folder_name(archive_path))?;
+                            new_destination = true;
                         }
                     }
                     _ => std::fs::create_dir_all(&base).map_err(|e| e.to_string())?,
@@ -787,15 +795,37 @@ impl App {
                 // Progress window: bar = extracted items / total (known after reading the listing), lFileName = item just extracted, lTo = its folder.
                 // Fixed: previously only the archive name showed and the bar did not move.
                 let mut announced = None;
+                let engine_bytes = std::cell::Cell::new(None::<u64>);
+                let _ = events.send(Event::Totals { files: None, bytes: Some(0) });
                 // Original 0x439593: when the next volume is missing, ask with ARC_CHANGEVOL and retry on OK (cancel ends with that error).
                 loop {
-                    let outcome = archive::extract_entries_with_locale(archive_path, &destination, &keys, known.as_deref(), &cancel, &mut conflicts, &mut passwords, program.as_ref(), &mut |done, total, key| {
-                        if announced != Some(total) {
-                            announced = Some(total);
-                            let _ = events.send(Event::Totals { files: Some(total as u64), bytes: None });
-                        }
-                        let _ = events.send(Event::Progress { path: destination.join(key.replace('/', "\\")), bytes: 0, files: done as u64 });
-                    }, Some(&language));
+                    let plan = match prepared.take() {
+                        Some(plan) => Ok(plan),
+                        None => archive::prepare_extraction(archive_path, known.as_deref(), &cancel, &mut passwords, Some(&language)),
+                    };
+                    let outcome = plan.and_then(|plan| {
+                        known = plan.password().map(str::to_owned);
+                        archive::extract_prepared_with_locale(plan, &destination, &keys, &cancel,
+                            &mut conflicts, &mut passwords, program.as_ref(), &mut |done, total, key| {
+                                if announced != Some(total) {
+                                    announced = Some(total);
+                                    let _ = events.send(Event::Totals { files: Some(total as u64), bytes: None });
+                                }
+                                let bytes = if done == total && total > 0 { engine_bytes.get().unwrap_or(0) } else { 0 };
+                                let _ = events.send(Event::Progress { path: destination.join(key.replace('/', "\\")), bytes, files: done as u64 });
+                            }, &mut |percent, total_bytes, key| {
+                                if engine_bytes.get() != total_bytes {
+                                    engine_bytes.set(total_bytes);
+                                    let _ = events.send(Event::Totals { files: None, bytes: Some(total_bytes.unwrap_or(0)) });
+                                }
+                                if let Some(bytes) = total_bytes {
+                                    // Engine percentage is an estimate of
+                                    // unpacked bytes, not a completed file count.
+                                    let done = (bytes as u128 * percent as u128 / 100) as u64;
+                                    let _ = events.send(Event::Progress { path: destination.join(key.replace('/', "\\")), bytes: done, files: 0 });
+                                }
+                            }, new_destination, Some(&language))
+                    });
                     match outcome {
                         Err(error) if !cancel.load(Ordering::Relaxed) => {
                             if let Some(volume) = archive::missing_volume(&error) {

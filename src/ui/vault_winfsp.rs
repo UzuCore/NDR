@@ -506,7 +506,8 @@ impl VaultMount {
         params.filesystem_name("NDRVAULT").sector_size(512)
             .sectors_per_allocation_unit(8).case_sensitive_search(false)
             .case_preserved_names(true).unicode_on_disk(true)
-            .persistent_acls(false).file_info_timeout(0);
+            .persistent_acls(false).file_info_timeout(0)
+            .flush_and_purge_on_cleanup(true);
         let config = FileSystemParams { use_dir_info_by_name: false,
             volume_params: params, debug_mode: DebugMode::none() };
         let mut host = FileSystemHost::<SingleFileFs, FineGuard>::new_with_options(

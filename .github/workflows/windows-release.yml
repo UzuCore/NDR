@@ -8,6 +8,11 @@ on:
         required: false
         default: false
         type: boolean
+      archive_benchmark:
+        description: 'Run the isolated archive decoder A/B benchmark'
+        required: false
+        default: false
+        type: boolean
 
 # GitHub Releases use the built-in GITHUB_TOKEN; no personal token or secret is needed.
 permissions:
@@ -84,6 +89,10 @@ jobs:
 
       - name: Test NDR library, UI and native components
         run: cargo test --release --locked
+
+      - name: Compare archive decoder paths on the Windows runner
+        if: inputs.archive_benchmark
+        run: cargo test --release --locked --lib archive::tests::batch398_archive_decoder_benchmark -- --exact --ignored --nocapture --test-threads=1
 
       - name: Build optimized Windows x64 NDR.exe
         shell: pwsh

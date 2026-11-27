@@ -5,7 +5,7 @@ use crate::fsops::{
     unique_path,
 };
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs,
     io::Read,
     path::{Path, PathBuf},
@@ -185,6 +185,56 @@ pub fn create_with_program(
 }
 
 /// create_with_program plus progress reporting (`progress`): passes -bsp1 to the archive step (`a`) of the bundled 7-Zip and reports its percentage and file name.
+
+#[cfg(windows)]
+struct DirectArchiveInputs {
+    directory: PathBuf,
+    paths: Vec<PathBuf>,
+    _guards: Vec<fs::File>,
+}
+
+#[cfg(windows)]
+fn direct_archive_inputs(sources: &[PathBuf], output: &Path, cancel: &AtomicBool) -> Result<Option<DirectArchiveInputs>, String> {
+    use std::os::windows::fs::OpenOptionsExt;
+    let mut directory = None;
+    let mut paths = Vec::with_capacity(sources.len());
+    let mut guards = Vec::with_capacity(sources.len());
+    // Bound the number of open handles. The safe snapshot path still
+    // handles larger selections, directories, virtual volumes and aliases.
+    if sources.len() > 512 { return Ok(None); }
+    let output_existing = fs::canonicalize(output).ok();
+    for source in sources {
+        check_cancel(cancel)?;
+        ensure_plain_path(source)?;
+        let canonical = match fs::canonicalize(source) { Ok(p) => p, Err(_) => return Ok(None) };
+        let Some(parent) = canonical.parent() else { return Ok(None) };
+        if canonical.file_name() != source.file_name()
+            || output_existing.as_ref().is_some_and(|p| p == &canonical)
+            || directory.as_ref().is_some_and(|p: &PathBuf| p != parent) {
+            return Ok(None);
+        }
+        let before = fs::symlink_metadata(&canonical).map_err(|e| e.to_string())?;
+        if !before.is_file() || is_reparse(&before) { return Ok(None); }
+        // FILE_SHARE_READ only; FILE_FLAG_OPEN_REPARSE_POINT prevents a
+        // link substituted at the final component from being followed.
+        let guard = match fs::OpenOptions::new().read(true).share_mode(1)
+            .custom_flags(0x00200000).open(&canonical) {
+            Ok(f) => f, Err(_) => return Ok(None),
+        };
+        let m = guard.metadata().map_err(|e| e.to_string())?;
+        if !m.is_file() || is_reparse(&m) || m.len()!=before.len()
+            || m.modified().ok()!=before.modified().ok() { return Ok(None); }
+        if directory.is_none() { directory = Some(parent.to_owned()); }
+        paths.push(canonical);
+        guards.push(guard);
+    }
+    Ok(directory.map(|directory| DirectArchiveInputs { directory, paths, _guards: guards }))
+}
+#[cfg(not(windows))]
+struct DirectArchiveInputs { directory: PathBuf, paths: Vec<PathBuf> }
+#[cfg(not(windows))]
+fn direct_archive_inputs(_: &[PathBuf], _: &Path, _: &AtomicBool) -> Result<Option<DirectArchiveInputs>, String> { Ok(None) }
+
 pub fn create_with_progress(
     sources: &[PathBuf],
     output: &Path,
@@ -239,6 +289,13 @@ pub fn create_with_progress(
         std::env::temp_dir()
     };
     ensure_plain_path(&temporary)?;
+    let allow_direct = true;
+    #[cfg(test)]
+    let allow_direct = allow_direct && !ARCHIVE_TEST_FORCE_SNAPSHOT.with(|flag| flag.get());
+    let direct = if allow_direct && program.is_none() && wrapped.is_none() && !options.append
+        && matches!(extension.as_str(), "7z" | "zip" | "tar" | "gz" | "bz2" | "xz") {
+        direct_archive_inputs(sources, output, cancel)?
+    } else { None };
     let snapshot = unique_path(&temporary, "archive-input");
     fs::create_dir(&snapshot).map_err(|e| e.to_string())?;
     let output_stage = unique_path(parent, "archive-output");
@@ -246,9 +303,15 @@ pub fn create_with_progress(
         let mut names = HashSet::new();
         let mut source_paths = Vec::with_capacity(sources.len());
         let mut copy_buffer = Vec::new();
-        for source in sources {
-            let canonical = resolve_archive_path(source).map_err(|e| e.to_string())?;
-            if snapshot.starts_with(&canonical) {
+        let snapshot_canonical = resolve_archive_path(&snapshot)?;
+        for (index, source) in sources.iter().enumerate() {
+            ensure_plain_path(source)?;
+            let canonical = if let Some(direct) = &direct {
+                direct.paths[index].clone()
+            } else {
+                resolve_archive_path(source).map_err(|e| e.to_string())?
+            };
+            if snapshot_canonical.starts_with(&canonical) {
                 return Err("Archive staging directory lies inside a selected source".into());
             }
             let name = source
@@ -261,9 +324,13 @@ pub fn create_with_progress(
             if !names.insert(text.to_lowercase()) {
                 return Err("Duplicate archive source names".into());
             }
-            let target = snapshot.join(name);
-            copy_tree(source, &target, cancel, &mut copy_buffer)?;
-            source_paths.push(target);
+            if direct.is_some() {
+                source_paths.push(canonical);
+            } else {
+                let target = snapshot.join(name);
+                copy_tree(source, &target, cancel, &mut copy_buffer)?;
+                source_paths.push(target);
+            }
         }
         fs::create_dir(&output_stage).map_err(|e| e.to_string())?;
         let output_stage_abs = resolve_archive_path(&output_stage).map_err(|e| e.to_string())?;
@@ -277,12 +344,13 @@ pub fn create_with_progress(
             fs::set_permissions(&archive, permissions).map_err(|e| e.to_string())?;
         }
         let snapshot_abs = resolve_archive_path(&snapshot).map_err(|e| e.to_string())?;
+        let input_dir = direct.as_ref().map_or(&snapshot_abs, |d| &d.directory);
         let source_paths: Vec<_> = source_paths
             .iter()
-            .map(|p| snapshot_abs.join(p.file_name().unwrap_or_default()))
+            .map(|p| input_dir.join(p.file_name().unwrap_or_default()))
             .collect();
         let mut cmd = program_command(program)?;
-        cmd.current_dir(&snapshot_abs);
+        cmd.current_dir(input_dir);
         // Progress reporting only for the bundled 7-Zip (-bsp1: percentage and file name to standard output).
         let sink = progress.filter(|_| program.is_none());
         let bsp: &[&str] = if sink.is_some() { &["-bsp1"] } else { &[] };
@@ -322,7 +390,7 @@ pub fn create_with_progress(
             if extension != "tar" {
                 cmd.arg(format!("-mx={}", options.level.clamp(0, 9)));
             }
-            if options.recursive {
+            if options.recursive && direct.is_none() {
                 cmd.arg("-r");
             } else {
                 cmd.arg("-r-");
@@ -338,12 +406,17 @@ pub fn create_with_progress(
                     cmd.arg("-mem=AES256");
                 }
             }
-            cmd.args(bsp).arg("--").arg(&archive);
-            for path in &source_paths {
-                cmd.arg(path.file_name().ok_or("Archive source name missing")?);
-            }
+            // Use a UTF-8 literal list to avoid Windows command-line length
+            // limits and accidental @listfile / wildcard interpretation.
+            let listfile = unique_path(&snapshot_abs, "source-list");
+            write_archive_listfile(&listfile, source_paths.iter().map(|path|
+                path.file_name().unwrap_or_default().to_string_lossy().into_owned()))?;
+            cmd.args(["-scsUTF-8", "-spd"])
+                .arg(format!("-i@{}", listfile.display()))
+                .args(bsp).arg("--").arg(&archive);
         }
         execute_capture_progress(cmd, cancel, program.is_none(), sink)?;
+        // Keep direct-source read locks through the integrity test below.
         inspect_tree(&output_stage)?;
         let mut generated = Vec::new();
         for e in fs::read_dir(&output_stage).map_err(|e| e.to_string())? {
@@ -380,6 +453,7 @@ pub fn create_with_progress(
         verify.arg("--").arg(first);
         execute(verify, cancel)?;
         check_cancel(cancel)?;
+        drop(direct);
         commit_artifacts(&output_stage, parent, expected, cancel)
     })();
     let _ = fs::remove_dir_all(&snapshot);
@@ -454,7 +528,7 @@ pub fn parse_seven_zip_progress(segment: &str) -> Option<(u8, String)> {
     let digits: String = segment[..percent_at].chars().rev().take_while(|c| c.is_ascii_digit()).collect::<Vec<_>>().into_iter().rev().collect();
     let percent: u8 = digits.parse::<u32>().ok()?.min(100) as u8;
     let rest = &segment[percent_at + 1..];
-    let name = rest.split_once(" + ").or_else(|| rest.split_once(" U ")).map(|(_, name)| name.trim().to_owned()).unwrap_or_default();
+    let name = rest.split_once(" + ").or_else(|| rest.split_once(" U ")).or_else(|| rest.split_once(" - ")).map(|(_, name)| name.trim().to_owned()).unwrap_or_default();
     Some((percent, name))
 }
 
@@ -467,13 +541,32 @@ fn execute_capture(
 }
 
 fn execute_capture_progress(
-    mut command: Command,
+    command: Command,
     cancel: &AtomicBool,
     strict_utf8: bool,
     progress: Option<ProgressSink>,
 ) -> Result<String, String> {
+    execute_capture_polled(command, cancel, strict_utf8, progress, &mut || {})
+}
+
+#[cfg(test)]
+thread_local! {
+    static ARCHIVE_PROCESS_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static ARCHIVE_TEST_FORCE_INDIVIDUAL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static ARCHIVE_TEST_FORCE_SNAPSHOT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn execute_capture_polled(
+    mut command: Command,
+    cancel: &AtomicBool,
+    strict_utf8: bool,
+    progress: Option<ProgressSink>,
+    poll_progress: &mut dyn FnMut(),
+) -> Result<String, String> {
     check_cancel(cancel)?;
     let mut child = command.spawn().map_err(|e| e.to_string())?;
+    #[cfg(test)]
+    ARCHIVE_PROCESS_COUNT.with(|count| count.set(count.get() + 1));
     let stdout = child.stdout.take().ok_or("Missing stdout")?;
     let stderr = child.stderr.take().ok_or("Missing stderr")?;
     let read = |mut pipe: Box<dyn Read + Send>, progress: Option<ProgressSink>| {
@@ -512,6 +605,7 @@ fn execute_capture_progress(
     let out = read(Box::new(stdout), progress);
     let err = read(Box::new(stderr), None);
     let status = loop {
+        poll_progress();
         if check_cancel(cancel).is_err() {
             let _ = child.kill();
             let _ = child.wait();
@@ -555,6 +649,7 @@ fn execute_capture_progress(
         .join()
         .map_err(|_| "Archive error reader failed")?
         .map_err(|e| e.to_string())?;
+    poll_progress();
     if large || large_err {
         return Err("Archive tool output exceeded 64 MiB".into());
     }
@@ -962,6 +1057,30 @@ impl Commit {
     ) -> Result<(), String> {
         self.merge_entry(stage, dest, backup, cancel, resolver, false)
     }
+    fn install_tree(&mut self, stage: &Path, dest: &Path, cancel: &AtomicBool) -> Result<(), String> {
+        let mut files = Vec::new();
+        let mut dirs = Vec::new();
+        let mut pending = vec![(stage.to_owned(), dest.to_owned())];
+        while let Some((source, target)) = pending.pop() {
+            check_cancel(cancel)?;
+            let m = fs::symlink_metadata(&source).map_err(|e| e.to_string())?;
+            if is_reparse(&m) { return Err("Reparse point rejected".into()); }
+            if m.is_dir() {
+                dirs.push(target.clone());
+                for child in fs::read_dir(&source).map_err(|e| e.to_string())? {
+                    let child = child.map_err(|e| e.to_string())?;
+                    pending.push((child.path(), target.join(child.file_name())));
+                }
+            } else if m.is_file() { files.push(target); }
+            else { return Err("Non-file archive entry rejected".into()); }
+        }
+        check_cancel(cancel)?;
+        rename_new(stage, dest)?;
+        self.installed.extend(files);
+        self.dirs.extend(dirs);
+        Ok(())
+    }
+
     fn merge_entry(
         &mut self,
         stage: &Path,
@@ -988,25 +1107,26 @@ impl Commit {
                         }
                         ConflictChoice::Rename => {
                             let candidate = renamed_destination(dest)?;
-                            rename_new(stage, &candidate)?;
-                            self.installed.push(candidate);
-                            return Ok(());
+                            return self.install_tree(stage, &candidate, cancel);
                         }
                         ConflictChoice::ReplaceFolder => {
+                            // Only a subtree that will actually be replaced
+                            // needs recursive destination validation.
+                            inspect_tree(dest)?;
                             let saved = unique_path(backup, "folder");
                             rename_new(dest, &saved)?;
                             self.backups.push((dest.to_owned(), saved));
                             check_cancel(cancel)?;
-                            rename_new(stage, dest)?;
-                            self.installed.push(dest.to_owned());
-                            return Ok(());
+                            return self.install_tree(stage, dest, cancel);
                         }
                         ConflictChoice::Overwrite | ConflictChoice::OverwriteNewer | ConflictChoice::Resume => {}
                     }
                 }
             } else {
-                fs::create_dir(dest).map_err(|e| e.to_string())?;
-                self.dirs.push(dest.to_owned());
+                // The source and target are on the same volume. A complete
+                // validated subtree can be published as one no-replace move.
+                // Keep the rollback journal at the subtree root.
+                return self.install_tree(stage, dest, cancel);
             }
             for e in fs::read_dir(stage).map_err(|e| e.to_string())? {
                 let e = e.map_err(|e| e.to_string())?;
@@ -1080,27 +1200,23 @@ impl Commit {
     fn rollback(&self) -> Result<(), String> {
         let mut errors = Vec::new();
         for p in self.installed.iter().rev() {
-            let result = if p.is_dir() {
-                fs::remove_dir_all(p)
-            } else {
-                fs::remove_file(p)
-            };
+            let result = fs::remove_file(p);
             if let Err(e) = result {
                 errors.push(e.to_string())
-            }
-        }
-        for (p, saved) in self.backups.iter().rev() {
-            if let Err(e) = fs::rename(saved, p) {
-                errors.push(format!(
-                    "{} retained at {}: {e}",
-                    p.display(),
-                    saved.display()
-                ))
             }
         }
         for p in self.dirs.iter().rev() {
             if let Err(e) = fs::remove_dir(p) {
                 errors.push(e.to_string())
+            }
+        }
+        for (p, saved) in self.backups.iter().rev() {
+            if let Err(e) = rename_new(saved, p) {
+                errors.push(format!(
+                    "{} retained at {}: {e}",
+                    p.display(),
+                    saved.display()
+                ))
             }
         }
         if errors.is_empty() {
@@ -1131,12 +1247,23 @@ fn commit_aggregate(
     resolver: &mut dyn FnMut(&Path, &Path) -> ConflictChoice,
 ) -> Result<(), String> {
     inspect_tree(stage)?;
+    commit_checked_aggregate(stage, destination, cancel, resolver)
+}
+
+fn commit_checked_aggregate(
+    stage: &Path,
+    destination: &Path,
+    cancel: &AtomicBool,
+    resolver: &mut dyn FnMut(&Path, &Path) -> ConflictChoice,
+) -> Result<(), String> {
+    ensure_plain_path(stage)?;
     ensure_plain_path(destination)?;
     check_cancel(cancel)?;
     if !destination.exists() {
         return rename_new(stage, destination);
     }
-    inspect_tree(destination)?;
+    // Each destination actually touched is checked by merge_entry.
+    // Unrelated directory trees are neither scanned nor modified.
     if !destination.is_dir() {
         return Err("Extraction destination is not a directory".into());
     }
@@ -1367,6 +1494,24 @@ pub fn create_unique_extract_folder(parent: &Path, name: &str) -> Result<PathBuf
         }
     }
     Err(format!("압축 풀기 폴더 이름을 정할 수 없습니다: {base}"))
+}
+
+/// Choose the same numbered folder name without creating an empty target.
+/// Publication uses a no-replace rename; if a competing process creates the
+/// name meanwhile, the job fails without merging into that foreign folder.
+pub fn available_extract_folder(parent: &Path, name: &str) -> Result<PathBuf, String> {
+    ensure_plain_path(parent)?;
+    validate_key(name)?;
+    if name.contains(['/', '\\']) { return Err("Invalid extraction folder name".into()); }
+    for number in 1..=100_000u32 {
+        let candidate = parent.join(if number == 1 { name.to_owned() } else { format!("{name}({number})") });
+        match fs::symlink_metadata(&candidate) {
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(candidate),
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+    Err("No unused archive extraction folder".into())
 }
 
 /// C# GetArchiveBaseName (set name).
@@ -1889,23 +2034,19 @@ pub fn list_with_passwords(archive: &Path, initial: Option<&str>, cancel: &Atomi
 
 /// Decision of C# GetAutoExtractLayoutAsync: whether there is a single top item and it is a folder.
 pub fn has_single_root_folder(entries: &[ArchiveEntry]) -> bool {
-    let mut roots: Vec<(String, bool)> = vec![];
+    let mut first: Option<String> = None;
+    let mut directory = false;
     for entry in entries {
         let key = entry.key.replace('\\', "/");
         let key = key.trim_matches('/');
-        if key.is_empty() {
-            continue;
-        }
-        let (root, nested) = match key.split_once('/') {
-            Some((root, _)) => (root.to_lowercase(), true),
-            None => (key.to_lowercase(), entry.is_dir),
-        };
-        match roots.iter_mut().find(|(name, _)| *name == root) {
-            Some(known) => known.1 |= nested,
-            None => roots.push((root, nested)),
-        }
+        if key.is_empty() { continue; }
+        let (root, nested) = key.split_once('/').map_or((key, entry.is_dir), |(root, _)| (root, true));
+        let root = root.to_lowercase();
+        if first.as_ref().is_some_and(|known| known != &root) { return false; }
+        if first.is_none() { first = Some(root); }
+        directory |= nested;
     }
-    roots.len() == 1 && roots[0].1
+    first.is_some() && directory
 }
 
 /// C# GetArchiveSummary: (file count, folder count (including implied folders), unpacked size).
@@ -2121,16 +2262,60 @@ pub fn extract_whole_with_program_with_passwords(
 /// Progress is (items done, items chosen, key).
 /// Remove the selected archive folder prefix case-insensitively, without
 /// indexing UTF-8 using case-folded byte lengths (which are not stable).
-fn selected_output_relative(key: &str, parents: &[String]) -> String {
-    let relative = key.replace('\\', "/");
-    let folded = relative.to_lowercase();
-    for parent in parents.iter().filter(|p| !p.is_empty()) {
-        if folded.starts_with(&parent.to_lowercase()) {
-            let depth = parent.bytes().filter(|c| *c == b'/').count();
-            return relative.split('/').skip(depth).collect::<Vec<_>>().join("/");
+fn selected_owner<'a>(folded: &'a str, wanted: &HashSet<String>) -> Option<&'a str> {
+    let mut prefix = folded;
+    loop {
+        if wanted.contains(prefix) { return Some(prefix); }
+        let (parent, _) = prefix.rsplit_once('/')?;
+        prefix = parent;
+    }
+}
+
+fn select_extraction_entries(
+    entries: Vec<ArchiveEntry>, keys: &[String], cancel: &AtomicBool,
+    language: Option<&crate::compat::Language>,
+) -> Result<(Vec<ArchiveEntry>, Vec<String>, Vec<String>), String> {
+    let wanted: Vec<String> = keys.iter().map(|k| k.replace('\\', "/").trim_end_matches('/').to_lowercase()).collect();
+    let mut set = HashSet::with_capacity(wanted.len());
+    for key in &wanted {
+        check_cancel(cancel)?;
+        if key.is_empty() { return Err(Diag::ArchiveEmptySelection.render(language)); }
+        validate_key(key)?;
+        if !set.insert(key.clone()) {
+            return Err(Diag::ArchiveOverlapSelection(key).render(language));
         }
     }
-    relative
+    for key in &wanted {
+        if key.rsplit_once('/').is_some_and(|(parent, _)| selected_owner(parent, &set).is_some()) {
+            return Err(Diag::ArchiveOverlapSelection(key).render(language));
+        }
+    }
+    let mut matched = HashSet::with_capacity(wanted.len());
+    let mut selected = Vec::new();
+    let mut placements = Vec::new();
+    let mut projected = HashSet::new();
+    for entry in entries {
+        check_cancel(cancel)?;
+        let relative = entry.key.replace('\\', "/");
+        let folded = relative.to_lowercase();
+        let placed = if wanted.is_empty() {
+            relative
+        } else if let Some(owner) = selected_owner(&folded, &set) {
+            matched.insert(owner.to_owned());
+            let depth = owner.bytes().filter(|&c| c == b'/').count();
+            // Use component counts, not folded UTF-8 byte offsets.
+            relative.split('/').skip(depth).collect::<Vec<_>>().join("/")
+        } else { continue; };
+        if !projected.insert(placed.to_lowercase()) {
+            return Err(Diag::ArchiveDestinationCollision(&placed).render(language));
+        }
+        selected.push(entry);
+        placements.push(placed);
+    }
+    for key in &wanted {
+        if !matched.contains(key) { return Err(Diag::ArchiveMissingSelection(key).render(language)); }
+    }
+    Ok((selected, wanted, placements))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2148,6 +2333,221 @@ pub fn extract_entries_with_program(
     extract_entries_with_locale(archive, destination, keys, initial_password, cancel, conflicts, passwords, program, progress, None)
 }
 
+
+/// Exact output manifest, including implicit directories in ZIP/TAR listings.
+/// Case-folded keys match Windows semantics; a file cannot be an ancestor.
+fn extraction_manifest(entries: &[ArchiveEntry]) -> Result<HashMap<String, (bool, Option<u64>)>, String> {
+    let mut expected: HashMap<String, (bool, Option<u64>)> = HashMap::with_capacity(entries.len());
+    for entry in entries {
+        let name = entry.key.replace('\\', "/").to_lowercase();
+        let mut parent = name.as_str();
+        while let Some((ancestor, _)) = parent.rsplit_once('/') {
+            match expected.entry(ancestor.to_owned()) {
+                std::collections::hash_map::Entry::Occupied(e) if !e.get().0 => {
+                    return Err(format!("Archive file/directory collision: {ancestor}"));
+                }
+                std::collections::hash_map::Entry::Occupied(_) => {}
+                std::collections::hash_map::Entry::Vacant(e) => { e.insert((true, None)); }
+            }
+            parent = ancestor;
+        }
+        let value = (entry.is_dir, (!entry.is_dir && entry.size_known).then_some(entry.size));
+        if let Some(old) = expected.insert(name.clone(), value) {
+            if old.0 != value.0 || !value.0 {
+                return Err(format!("Archive file/directory collision: {name}"));
+            }
+        }
+    }
+    Ok(expected)
+}
+
+fn verify_extracted_manifest(
+    root: &Path, mut expected: HashMap<String, (bool, Option<u64>)>, cancel: &AtomicBool,
+) -> Result<(), String> {
+    ensure_plain_path(root)?;
+    let mut pending = vec![(root.to_owned(), String::new())];
+    while let Some((dir, prefix)) = pending.pop() {
+        check_cancel(cancel)?;
+        ensure_plain_path(&dir)?;
+        for child in fs::read_dir(&dir).map_err(|e| e.to_string())? {
+            check_cancel(cancel)?;
+            let child = child.map_err(|e| e.to_string())?;
+            let name = child.file_name();
+            let name = name.to_str().ok_or("Non-Unicode decoded archive entry")?;
+            let relative = if prefix.is_empty() { name.to_owned() } else { format!("{prefix}/{name}") };
+            validate_key(&relative)?;
+            let path = child.path();
+            let m = fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
+            if is_reparse(&m) || (!m.is_file() && !m.is_dir()) {
+                return Err(format!("Unsafe decoded archive entry: {relative}"));
+            }
+            let (is_dir, size) = expected.remove(&relative.to_lowercase())
+                .ok_or_else(|| format!("Unexpected decoded archive entry: {relative}"))?;
+            if m.is_dir() != is_dir || size.is_some_and(|n| n != m.len()) {
+                return Err(format!("Extracted entry mismatch: {relative}"));
+            }
+            if is_dir { pending.push((path, relative)); }
+        }
+    }
+    if let Some(name) = expected.keys().next() {
+        return Err(format!("Missing decoded archive entry: {name}"));
+    }
+    Ok(())
+}
+
+/// Project the selected roots, not every individual file. This preserves
+/// the original archive capitalization and moves directory trees once.
+fn selected_root_moves(entries: &[ArchiveEntry], wanted: &[String]) -> Result<Vec<(String, String)>, String> {
+    if wanted.is_empty() { return Ok(Vec::new()); }
+    let wanted: HashSet<&str> = wanted.iter().map(String::as_str).collect();
+    let mut roots = HashMap::with_capacity(wanted.len());
+    let mut destinations = HashSet::with_capacity(wanted.len());
+    for entry in entries {
+        let actual = entry.key.replace('\\', "/");
+        let folded = actual.to_lowercase();
+        let mut prefix = folded.as_str();
+        loop {
+            if wanted.contains(prefix) {
+                if !roots.contains_key(prefix) {
+                    let depth = prefix.bytes().filter(|&b| b == b'/').count() + 1;
+                    let root = actual.split('/').take(depth).collect::<Vec<_>>().join("/");
+                    let name = root.rsplit('/').next().unwrap().to_owned();
+                    if !destinations.insert(name.to_lowercase()) {
+                        return Err(format!("Selected archive destinations collide: {name}"));
+                    }
+                    roots.insert(prefix.to_owned(), (root, name));
+                }
+                break;
+            }
+            let Some((parent, _)) = prefix.rsplit_once('/') else { break; };
+            prefix = parent;
+        }
+    }
+    if roots.len() != wanted.len() { return Err("Missing archive selection".into()); }
+    let mut moves: Vec<_> = roots.into_values().collect();
+    moves.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(moves)
+}
+
+fn write_archive_listfile(path: &Path, names: impl Iterator<Item = String>) -> Result<(), String> {
+    use std::io::Write;
+    let file = fs::OpenOptions::new().write(true).create_new(true).open(path).map_err(|e| e.to_string())?;
+    let mut writer = std::io::BufWriter::new(file);
+    for name in names {
+        // The validated list contains literal names, not switches or lines.
+        if name.contains(['\r', '\n', '\0', '"']) { return Err("Unsafe archive list name".into()); }
+        // 7-Zip trims unquoted leading spaces in list files. Quoted literal
+        // names also preserve names starting with @ or -.
+        writer.write_all(b"\"").and_then(|_| writer.write_all(name.as_bytes()))
+            .and_then(|_| writer.write_all(b"\"\n")).map_err(|e| e.to_string())?;
+    }
+    writer.flush().map_err(|e| e.to_string())
+}
+
+enum BatchExtraction { Complete, RetryIndividually }
+
+#[allow(clippy::too_many_arguments)]
+fn extract_batch(
+    archive: &Path, destination: &Path, entries: &[ArchiveEntry], wanted: &[String],
+    password: Option<&str>, iso9660_fallback: bool, skipped_devices: &[String],
+    may_need_password_retry: bool, new_destination: bool, cancel: &AtomicBool, conflicts: &mut dyn FnMut(&Path, &Path) -> ConflictChoice,
+    progress: &mut dyn FnMut(usize, usize, &str),
+    engine_progress: &mut dyn FnMut(u8, Option<u64>, &str),
+) -> Result<BatchExtraction, String> {
+    let expected = extraction_manifest(entries)?;
+    let moves = selected_root_moves(entries, wanted)?;
+    let total = entries.len();
+    let unpacked_bytes = entries.iter().try_fold(0u64, |sum, entry| {
+        if entry.is_dir { Some(sum) }
+        else if entry.size_known { sum.checked_add(entry.size) }
+        else { None }
+    }).filter(|&bytes| bytes > 0);
+    engine_progress(0, unpacked_bytes, "");
+    let parent = stage_parent(destination);
+    ensure_plain_path(parent)?;
+    fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    let work = unique_path(parent, "batch-extract");
+    fs::create_dir(&work).map_err(|e| e.to_string())?;
+    let result = (|| {
+        let decoded = work.join("decoded");
+        fs::create_dir(&decoded).map_err(|e| e.to_string())?;
+        let absolute = resolve_archive_path(&decoded)?;
+        let work_absolute = resolve_archive_path(&work)?;
+        let mut cmd = command()?;
+        cmd.current_dir(&absolute)
+            .args(["x", "-y", "-sccUTF-8", "-scsUTF-8", "-spd", "-snl-", "-bso0", "-bsp1", "-bse2"])
+            .arg(format!("-o{}", absolute.display()));
+        if iso9660_fallback { cmd.arg("-tiso"); }
+        if !wanted.is_empty() {
+            let include = work_absolute.join("include.txt");
+            write_archive_listfile(&include, entries.iter().map(|e| e.key.clone()))?;
+            cmd.arg(format!("-i@{}", include.display()));
+        }
+        if !skipped_devices.is_empty() {
+            let exclude = work_absolute.join("exclude.txt");
+            write_archive_listfile(&exclude, skipped_devices.iter().cloned())?;
+            cmd.arg(format!("-x@{}", exclude.display()));
+        }
+        password_arg(&mut cmd, password)?;
+        cmd.arg("--").arg(archive);
+        let latest = std::sync::Arc::new(std::sync::Mutex::new(None::<(u8, String)>));
+        let writer = latest.clone();
+        let sink: ProgressSink = std::sync::Arc::new(move |p, name| {
+            if let Ok(mut slot) = writer.lock() { *slot = Some((p, name.to_owned())); }
+        });
+        let mut reported = 0;
+        let mut poll = || {
+            if let Some((percent, name)) = latest.lock().ok().and_then(|mut slot| slot.take()) {
+                let percent = percent.min(99);
+                if percent > reported {
+                    reported = percent;
+                    engine_progress(percent, unpacked_bytes, &name);
+                }
+            }
+        };
+        match execute_capture_polled(cmd, cancel, true, Some(sink), &mut poll) {
+            Ok(_) => {}
+            Err(error) => {
+                // Preserve per-member password recovery and legacy handling
+                // of exceptional decoder failures. Cancel never retries.
+                check_cancel(cancel)?;
+                if may_need_password_retry || password_failure(&error) {
+                    engine_progress(0, None, "");
+                    return Ok(BatchExtraction::RetryIndividually);
+                }
+                return Err(error);
+            }
+        }
+        check_cancel(cancel)?;
+        verify_extracted_manifest(&decoded, expected, cancel)?;
+        let aggregate = if moves.iter().all(|(from, to)| from == to) {
+            decoded
+        } else {
+            let aggregate = work.join("selected");
+            fs::create_dir(&aggregate).map_err(|e| e.to_string())?;
+            for (from, to) in moves {
+                check_cancel(cancel)?;
+                rename_new(&decoded.join(from), &aggregate.join(to))?;
+            }
+            aggregate
+        };
+        check_cancel(cancel)?;
+        // Commit errors must NEVER trigger a second decode/retry.
+        if new_destination {
+            ensure_plain_path(destination)?;
+            rename_new(&aggregate, destination)?;
+        } else {
+            commit_checked_aggregate(&aggregate, destination, cancel, conflicts)?;
+        }
+        let last = entries.last().map_or("", |e| e.key.as_str());
+        engine_progress(100, unpacked_bytes, last);
+        progress(total, total, last);
+        Ok(BatchExtraction::Complete)
+    })();
+    let _ = fs::remove_dir_all(&work);
+    result
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn extract_entries_with_locale(
     archive: &Path,
@@ -2161,20 +2561,59 @@ pub fn extract_entries_with_locale(
     progress: &mut dyn FnMut(usize, usize, &str),
     language: Option<&crate::compat::Language>,
 ) -> Result<(), String> {
+    let prepared = prepare_extraction(archive, initial_password, cancel, passwords, language)?;
+    extract_prepared_with_locale(prepared, destination, keys, cancel, conflicts, passwords, program,
+        progress, &mut |_, _, _| {}, false, language)
+}
+
+pub struct PreparedExtraction {
+    archive: PathBuf,
+    header_password: Option<String>,
+    entries: Vec<ArchiveEntry>,
+    encrypted: HashSet<String>,
+    iso9660_fallback: bool,
+    skipped_devices: Vec<String>,
+    _source_guard: Option<fs::File>,
+}
+impl PreparedExtraction {
+    pub fn single_root_folder(&self) -> bool { has_single_root_folder(&self.entries) }
+    pub fn password(&self) -> Option<&str> { self.header_password.as_deref() }
+}
+
+pub fn prepare_extraction(
+    archive: &Path, initial_password: Option<&str>, cancel: &AtomicBool,
+    passwords: &mut dyn FnMut(&Path, Option<&str>) -> Option<String>,
+    language: Option<&crate::compat::Language>,
+) -> Result<PreparedExtraction, String> {
     use std::sync::atomic::Ordering;
     check_cancel(cancel)?;
-    if program.is_none() && !bundled_can_browse(archive) {
+    if !bundled_can_browse(archive) {
         return Err(Diag::ArchiveUnsupported(archive).render(language));
     }
-    ensure_plain_path(destination)?;
+    ensure_plain_path(archive)?;
     let archive = resolve_archive_path(archive).map_err(|e| e.to_string())?;
+    #[cfg(windows)]
+    let source_guard = {
+        use std::os::windows::fs::OpenOptionsExt;
+        if fs::canonicalize(&archive).is_ok() {
+            let guard = fs::OpenOptions::new().read(true).share_mode(1)
+                .custom_flags(0x00200000).open(&archive).map_err(|e| e.to_string())?;
+            let metadata = guard.metadata().map_err(|e| e.to_string())?;
+            if !metadata.is_file() || is_reparse(&metadata) {
+                return Err("Archive source is not an ordinary file".into());
+            }
+            Some(guard)
+        } else { None }
+    };
+    #[cfg(not(windows))]
+    let source_guard = None;
     let mut header_password = initial_password.map(str::to_owned);
-    let (entries, encrypted, iso9660_fallback, _skipped_devices) = loop {
+    let (entries, encrypted, iso9660_fallback, skipped_devices) = loop {
         match list_details(&archive, header_password.as_deref(), cancel) {
             Ok(details) => break details,
             Err(error) if password_failure(&error) => match passwords(&archive, None) {
-                Some(value) => header_password = Some(value),
-                None => {
+                Some(value) if !value.is_empty() => header_password = Some(value),
+                _ => {
                     cancel.store(true, Ordering::Relaxed);
                     return Err("Archive password request cancelled".into());
                 }
@@ -2182,58 +2621,64 @@ pub fn extract_entries_with_locale(
             Err(error) => return Err(error),
         }
     };
-    let wanted: Vec<String> = keys.iter().map(|k| k.replace('\\', "/").trim_end_matches('/').to_lowercase()).filter(|k| !k.is_empty()).collect();
-    // Previously, a stale or misspelled selection produced no matches but
-    // returned Ok(()): Ctrl+C/V and copy/move could report success without
-    // transferring any file. Validate all requests before creating a stage.
-    if !keys.is_empty() {
-        if wanted.len() != keys.len() {
-            return Err(Diag::ArchiveEmptySelection.render(language));
-        }
-        for key in &wanted {
-            validate_key(key)?;
-            if !entries.iter().any(|entry| {
-                let candidate = entry.key.replace('\\', "/").trim_end_matches('/').to_lowercase();
-                candidate == *key || candidate.starts_with(&format!("{key}/"))
-            }) {
-                return Err(Diag::ArchiveMissingSelection(key).render(language));
-            }
-        }
-        for (index, key) in wanted.iter().enumerate() {
-            if wanted.iter().enumerate().any(|(other_index, other)| {
-                index != other_index && (key == other || key.starts_with(&format!("{other}/")))
-            }) {
-                return Err(Diag::ArchiveOverlapSelection(key).render(language));
-            }
-        }
-    }
-    let parents: Vec<String> = keys
-        .iter()
-        .map(|k| {
-            let k = k.replace('\\', "/");
-            let k = k.trim_end_matches('/');
-            k.rfind('/').map(|i| k[..=i].to_owned()).unwrap_or_default()
-        })
-        .collect();
-    let entries: Vec<ArchiveEntry> = entries
-        .into_iter()
-        .filter(|e| {
-            let key = e.key.replace('\\', "/").trim_end_matches('/').to_lowercase();
-            wanted.is_empty() || wanted.iter().any(|w| key == *w || key.starts_with(&format!("{w}/")))
-        })
-        .collect();
-    // Distinct selected subfolders can contain files with the same basename.
-    // Flattening them would collide after earlier work had already run.
-    // Refuse before creating a staging directory or publishing partial data.
-    let mut projected = HashSet::new();
-    for entry in &entries {
-        let placed = selected_output_relative(&entry.key, &parents);
-        if !projected.insert(placed.to_lowercase()) {
-            return Err(Diag::ArchiveDestinationCollision(&placed).render(language));
-        }
-    }
+    Ok(PreparedExtraction { archive, header_password, entries, encrypted, iso9660_fallback, skipped_devices, _source_guard: source_guard })
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn extract_prepared_with_locale(
+    prepared: PreparedExtraction, destination: &Path, keys: &[String], cancel: &AtomicBool,
+    conflicts: &mut dyn FnMut(&Path, &Path) -> ConflictChoice,
+    passwords: &mut dyn FnMut(&Path, Option<&str>) -> Option<String>,
+    program: Option<&ExternalProgram>,
+    progress: &mut dyn FnMut(usize, usize, &str),
+    engine_progress: &mut dyn FnMut(u8, Option<u64>, &str),
+    new_destination: bool,
+    language: Option<&crate::compat::Language>,
+) -> Result<(), String> {
+    use std::sync::atomic::Ordering;
+    check_cancel(cancel)?;
+    ensure_plain_path(destination)?;
+    let PreparedExtraction { archive, mut header_password, entries, encrypted, iso9660_fallback, skipped_devices, _source_guard } = prepared;
+    let (entries, wanted, placements) = select_extraction_entries(entries, keys, cancel, language)?;
     let total = entries.len();
     progress(0, total, "");
+    if new_destination && total == 0 {
+        check_cancel(cancel)?;
+        return fs::create_dir(destination).map_err(|e| e.to_string());
+    }
+    if new_destination && destination.exists() {
+        return Err("Extraction destination already exists".into());
+    }
+    // Restrict the optimized path to formats with a named multi-member
+    // decoder. Single-stream wrappers and unusual disk-image handlers retain
+    // the existing member decoder, which has format-specific compatibility
+    // behavior and no N-times launch cost for one stream.
+    let named_archive = archive_format(&archive).is_some_and(|f|
+        matches!(f.as_str(), "7z" | "zip" | "zipx" | "rar" | "arj" | "alz" | "egg" | "tar" | "iso" | "cab" | "wim" | "swm" | "esd"));
+    let use_bulk = program.is_none() && named_archive && total > 0;
+    #[cfg(test)]
+    let use_bulk = use_bulk && !ARCHIVE_TEST_FORCE_INDIVIDUAL.with(|flag| flag.get());
+    let encrypted_files = entries.iter().filter(|e| !e.is_dir && encrypted.contains(&e.key)).count();
+    let files = entries.iter().filter(|e| !e.is_dir).count();
+    if use_bulk && header_password.is_none() && encrypted_files > 0 && encrypted_files == files {
+        let first = entries.iter().find(|e| !e.is_dir).unwrap();
+        match passwords(&archive, Some(&first.key)) {
+            Some(value) if !value.is_empty() => header_password = Some(value),
+            _ => {
+                cancel.store(true, Ordering::Relaxed);
+                return Err("Archive password request cancelled".into());
+            }
+        }
+    }
+    // Known-password archives are tried as one set. On a mixed-password
+    // diagnostic the previous per-member retries preserve successful entries.
+    if use_bulk && (encrypted_files == 0 || header_password.is_some()) {
+        match extract_batch(&archive, destination, &entries, &wanted, header_password.as_deref(),
+            iso9660_fallback, &skipped_devices, !encrypted.is_empty(), new_destination, cancel, conflicts, progress, engine_progress)? {
+            BatchExtraction::Complete => return Ok(()),
+            BatchExtraction::RetryIndividually => progress(0, total, ""),
+        }
+    }
     let parent = stage_parent(destination);
     ensure_plain_path(parent)?;
     fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -2242,7 +2687,7 @@ pub fn extract_entries_with_locale(
     let mut known = vec![header_password];
     let mut completed = 0usize;
     let mut stopped = None;
-    for entry in &entries {
+    for (entry, placed) in entries.iter().zip(&placements) {
         if let Err(error) = check_cancel(cancel) {
             stopped = Some(error);
             break;
@@ -2250,8 +2695,7 @@ pub fn extract_entries_with_locale(
         let relative = entry.key.replace('\\', "/");
         // Fixed: extracting items chosen in an archive subfolder recreated that subfolder path ("dir/sub/c.txt" -> destination\dir\sub\c.txt).
         // Now the parent path of chosen items is removed so they land directly under the destination (destination\c.txt). Full extraction (no keys) is unchanged.
-        let placed = selected_output_relative(&relative, &parents);
-        let target = aggregate.join(&placed);
+        let target = aggregate.join(placed);
         if entry.is_dir {
             if let Err(e) = fs::create_dir_all(&target) {
                 stopped = Some(e.to_string());
@@ -2363,17 +2807,25 @@ pub fn extract_entries_with_locale(
         }
     }
     let result = (|| {
-        if completed > 0 {
+        if completed > 0 && !(new_destination && stopped.as_deref().and_then(missing_volume).is_some()) {
             let finish_cancel = AtomicBool::new(false);
             let commit_cancel = if cancel.load(Ordering::Relaxed) {
                 &finish_cancel
             } else {
                 cancel
             };
-            commit_aggregate(&aggregate, destination, commit_cancel, conflicts)?;
+            if new_destination {
+                inspect_tree(&aggregate)?;
+                ensure_plain_path(destination)?;
+                check_cancel(commit_cancel)?;
+                rename_new(&aggregate, destination)?;
+            } else {
+                commit_aggregate(&aggregate, destination, commit_cancel, conflicts)?;
+            }
         }
         if let Some(error) = stopped {
-            Err(Diag::ArchivePartial(&error, completed).render(language))
+            let preserved = if new_destination && missing_volume(&error).is_some() { 0 } else { completed };
+            Err(Diag::ArchivePartial(&error, preserved).render(language))
         } else {
             Ok(())
         }
@@ -2777,6 +3229,300 @@ mod tests {
         fs::create_dir_all(&p).unwrap();
         p
     }
+    fn batch_process_count() -> usize { ARCHIVE_PROCESS_COUNT.with(|n| n.get()) }
+
+    #[test]
+    fn batch393_solid_and_zip_decode_once_with_exact_data() {
+        let root=fixture();
+        let src=root.join("inputs");
+        fs::create_dir_all(src.join("left/nested")).unwrap();
+        fs::create_dir_all(src.join("right/empty")).unwrap();
+        for i in 0..32 {
+            fs::write(src.join(format!("left/nested/file-{i:03}.bin")),vec![i as u8; 4096]).unwrap();
+        }
+        fs::write(src.join("right/ leading.txt"),b"leading").unwrap();
+        fs::write(src.join("right/@literal.txt"),b"literal").unwrap();
+        let cancel=AtomicBool::new(false);
+        for ext in ["7z","zip"] {
+            let archive=root.join(format!("solid.{ext}"));
+            create(&[src.join("left"),src.join("right")],&archive,None,&cancel).unwrap();
+            let original=fs::read(&archive).unwrap();
+            let out=root.join(format!("all-{ext}"));
+            let before=batch_process_count();
+            let mut steps=Vec::new();
+            extract_entries_with_program(&archive,&out,&[],None,&cancel,&mut |_,_|ConflictChoice::Cancel,
+                &mut |_,_|panic!("unexpected password"),None,&mut |done,total,_|steps.push((done,total))).unwrap();
+            assert_eq!(batch_process_count()-before,2,"one listing and one decoder: {ext}");
+            assert!(steps.windows(2).all(|w|w[0].0<=w[1].0));
+            assert_eq!(steps.last().unwrap().0,steps.last().unwrap().1);
+            assert!(out.join("right/empty").is_dir());
+            for i in 0..32 { assert_eq!(fs::read(out.join(format!("left/nested/file-{i:03}.bin"))).unwrap(),vec![i as u8;4096]); }
+            assert_eq!(fs::read(out.join("right/ leading.txt")).unwrap(),b"leading");
+            assert_eq!(fs::read(out.join("right/@literal.txt")).unwrap(),b"literal");
+            let picked=root.join(format!("picked-{ext}"));
+            let before=batch_process_count();
+            extract_entries_with_program(&archive,&picked,&["LEFT/NESTED".into(),"right/ leading.txt".into(),"right/@literal.txt".into()],None,&cancel,
+                &mut |_,_|ConflictChoice::Cancel,&mut |_,_|None,None,&mut |_,_,_|{}).unwrap();
+            assert_eq!(batch_process_count()-before,2,"one selected-set decode");
+            assert!(!picked.join("left").exists() && !picked.join("right").exists());
+            assert_eq!(fs::read(picked.join("nested/file-031.bin")).unwrap(),vec![31u8;4096]);
+            assert_eq!(fs::read(picked.join(" leading.txt")).unwrap(),b"leading");
+            assert_eq!(fs::read(picked.join("@literal.txt")).unwrap(),b"literal");
+            assert_eq!(fs::read(&archive).unwrap(),original);
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn batch397_prepared_listing_reuse_and_cancel_preserve_existing_data() {
+        let root=fixture();
+        let src=root.join("payload");
+        fs::create_dir(&src).unwrap();
+        fs::write(src.join("one"),b"one").unwrap();
+        fs::write(src.join("two"),b"two").unwrap();
+        let archive=root.join("a.7z");
+        let cancel=AtomicBool::new(false);
+        create(&[src],&archive,None,&cancel).unwrap();
+        let before=batch_process_count();
+        let plan=prepare_extraction(&archive,None,&cancel,&mut |_,_|None,None).unwrap();
+        assert!(plan.single_root_folder());
+        #[cfg(windows)]
+        assert!(fs::OpenOptions::new().write(true).open(&archive).is_err());
+        let dest=root.join("out");
+        fs::create_dir_all(dest.join("payload")).unwrap();
+        fs::write(dest.join("payload/one"),b"old").unwrap();
+        let result=extract_prepared_with_locale(plan,&dest,&[],&cancel,&mut |_,_|ConflictChoice::Overwrite,
+            &mut |_,_|None,None,&mut |_,_,_|{},&mut |percent,_,_|{
+                if percent==0 {cancel.store(true,std::sync::atomic::Ordering::Relaxed);}
+            },false,None);
+        assert!(result.is_err());
+        assert_eq!(batch_process_count()-before,1,"cancel before decode; no second listing");
+        assert_eq!(fs::read(dest.join("payload/one")).unwrap(),b"old");
+        assert!(!dest.join("payload/two").exists());
+        cancel.store(false,std::sync::atomic::Ordering::Relaxed);
+        let before=batch_process_count();
+        let plan=prepare_extraction(&archive,None,&cancel,&mut |_,_|None,None).unwrap();
+        let mut counts=Vec::new();
+        let mut percentages=Vec::new();
+        extract_prepared_with_locale(plan,&dest,&[],&cancel,&mut |_,_|ConflictChoice::Overwrite,
+            &mut |_,_|None,None,&mut |n,t,_|counts.push((n,t)),&mut |p,_,_|percentages.push(p),false,None).unwrap();
+        assert_eq!(batch_process_count()-before,2);
+        assert_eq!(counts.first().unwrap().0,0);
+        assert_eq!(counts.last(),Some(&(3,3)));
+        assert_eq!(percentages.last(),Some(&100));
+        assert_eq!(fs::read(dest.join("payload/one")).unwrap(),b"one");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Controlled A/B runs in the GitHub Windows runner (not in parallel
+    /// with the test suite). Assertions concern correctness/launch count,
+    /// never timing thresholds on a potentially noisy hosted machine.
+    #[test]
+    #[ignore = "Opt-in archive performance comparison on an idle machine or CI"]
+    fn batch398_archive_decoder_benchmark() {
+        use std::time::Instant;
+        let root=fixture();
+        let input=root.join("payload");
+        fs::create_dir(&input).unwrap();
+        let files=96usize;
+        for i in 0..files {
+            let data:Vec<u8>=(0..16384).map(|n| ((n*31+i*17)%251) as u8).collect();
+            fs::write(input.join(format!("f{i:03}.bin")),data).unwrap();
+        }
+        let cancel=AtomicBool::new(false);
+        for ext in ["7z","zip"] {
+            let archive=root.join(format!("sample.{ext}"));
+            let mut cmd=command().unwrap();
+            cmd.current_dir(&root).args(["a","-y","-sccUTF-8","-mx=3"]).arg(format!("-t{ext}"));
+            if ext=="7z" {cmd.arg("-ms=on");}
+            cmd.arg("--").arg(&archive).arg("payload");
+            execute(cmd,&cancel).unwrap();
+            let original=fs::read(&archive).unwrap();
+            for round in 0..3 {
+                let order=if round%2==0 {["legacy","bulk","direct"]} else {["direct","bulk","legacy"]};
+                for mode in order {
+                    let out=root.join(format!("bench-{ext}-{round}-{mode}"));
+                    let before=batch_process_count();
+                    let start=Instant::now();
+                    if mode=="direct" {
+                        fs::create_dir(&out).unwrap();
+                        let mut cmd=command().unwrap();
+                        cmd.args(["x","-y","-sccUTF-8","-snl-","-spd","-bso0"])
+                            .arg(format!("-o{}",out.display())).arg("--").arg(&archive);
+                        execute(cmd,&cancel).unwrap();
+                    } else {
+                        ARCHIVE_TEST_FORCE_INDIVIDUAL.with(|flag|flag.set(mode=="legacy"));
+                        extract_entries_with_program(&archive,&out,&[],None,&cancel,&mut |_,_|ConflictChoice::Cancel,
+                            &mut |_,_|None,None,&mut |_,_,_|{}).unwrap();
+                        ARCHIVE_TEST_FORCE_INDIVIDUAL.with(|flag|flag.set(false));
+                    }
+                    let ms=start.elapsed().as_secs_f64()*1000.;
+                    let launches=batch_process_count()-before;
+                    assert_eq!(launches,match mode {"legacy"=>files+1,"bulk"=>2,_=>1});
+                    for i in 0..files {
+                        let name=format!("f{i:03}.bin");
+                        assert_eq!(fs::read(out.join("payload").join(&name)).unwrap(),fs::read(input.join(name)).unwrap());
+                    }
+                    assert_eq!(fs::read(&archive).unwrap(),original);
+                    println!("NDR_ARCHIVE_BENCH format={ext} round={round} mode={mode} files={files} launches={launches} ms={ms:.3}");
+                    fs::remove_dir_all(out).unwrap();
+                }
+            }
+        }
+        // Creation: compare the previous snapshot path with guarded direct
+        // inputs, retaining listing and full archive CRC tests in both.
+        let single=root.join("single.bin");
+        let mut x=0x12345678u32;
+        let data:Vec<u8>=(0..16*1024*1024).map(|_|{x^=x<<13;x^=x>>17;x^=x<<5;x as u8}).collect();
+        fs::write(&single,&data).unwrap();
+        let options=crate::commands::ArchiveOptions{extension:"7z".into(),level:1,password:String::new(),volume_bytes:None,recursive:true,append:false};
+        for round in 0..3 {
+            let order=if round%2==0 {["snapshot","direct"]} else {["direct","snapshot"]};
+            for mode in order {
+                ARCHIVE_TEST_FORCE_SNAPSHOT.with(|flag|flag.set(mode=="snapshot"));
+                let out=root.join(format!("create-{round}-{mode}.7z"));
+                let before=batch_process_count();
+                let start=Instant::now();
+                create_configured(std::slice::from_ref(&single),&out,&options,&cancel).unwrap();
+                let ms=start.elapsed().as_secs_f64()*1000.;
+                let launches=batch_process_count()-before;
+                ARCHIVE_TEST_FORCE_SNAPSHOT.with(|flag|flag.set(false));
+                let unpack=root.join(format!("verify-{round}-{mode}"));
+                extract(&out,&unpack,None,&cancel).unwrap();
+                assert_eq!(fs::read(unpack.join("single.bin")).unwrap(),data);
+                assert_eq!(fs::read(&single).unwrap(),data);
+                assert_eq!(launches,3,"creation, listing, CRC test");
+                println!("NDR_ARCHIVE_CREATE_BENCH round={round} mode={mode} bytes={} launches={launches} ms={ms:.3}",data.len());
+                fs::remove_dir_all(unpack).unwrap();
+                fs::remove_file(out).unwrap();
+            }
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn batch399_new_folder_publish_never_merges_into_a_racing_target() {
+        let root=fixture();
+        fs::write(root.join("data"),b"data").unwrap();
+        fs::write(root.join("second"),b"two").unwrap();
+        let archive=root.join("a.zip");
+        let cancel=AtomicBool::new(false);
+        create(&[root.join("data"),root.join("second")],&archive,None,&cancel).unwrap();
+        let dest=available_extract_folder(&root,"out").unwrap();
+        assert!(!dest.exists());
+        let plan=prepare_extraction(&archive,None,&cancel,&mut |_,_|None,None).unwrap();
+        let result=extract_prepared_with_locale(plan,&dest,&[],&cancel,&mut |_,_|panic!("must not merge"),
+            &mut |_,_|None,None,&mut |_,_,_|{},&mut |percent,_,_|{
+                if percent==0 && !dest.exists() {fs::create_dir(&dest).unwrap();fs::write(dest.join("foreign"),b"foreign").unwrap();}
+            },true,None);
+        assert!(result.is_err());
+        assert_eq!(fs::read(dest.join("foreign")).unwrap(),b"foreign");
+        assert!(!dest.join("data").exists());
+        let next=available_extract_folder(&root,"out").unwrap();
+        assert_eq!(next,root.join("out(2)"));
+        let plan=prepare_extraction(&archive,None,&cancel,&mut |_,_|None,None).unwrap();
+        extract_prepared_with_locale(plan,&next,&[],&cancel,&mut |_,_|panic!("no collision"),&mut |_,_|None,None,
+            &mut |_,_,_|{},&mut |_,_,_|{},true,None).unwrap();
+        assert_eq!(fs::read(next.join("data")).unwrap(),b"data");
+        assert_eq!(fs::read(next.join("second")).unwrap(),b"two");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn batch399_uniform_password_zip_uses_one_decoder_after_prompt() {
+        let root=fixture();
+        let source=root.join("encrypted");
+        fs::create_dir(&source).unwrap();
+        for i in 0..8 {fs::write(source.join(format!("f{i}")),vec![i as u8;32]).unwrap();}
+        let archive=root.join("encrypted.zip");
+        let cancel=AtomicBool::new(false);
+        create(&[source],&archive,Some("secret123"),&cancel).unwrap();
+        let mut asked=0;
+        let before=batch_process_count();
+        let dest=root.join("out");
+        extract_entries_with_program(&archive,&dest,&[],None,&cancel,&mut |_,_|ConflictChoice::Cancel,
+            &mut |_,key|{assert!(key.is_some());asked+=1;Some("secret123".into())},None,&mut |_,_,_|{}).unwrap();
+        assert_eq!(asked,1);
+        assert_eq!(batch_process_count()-before,2);
+        for i in 0..8 {assert_eq!(fs::read(dest.join(format!("encrypted/f{i}"))).unwrap(),vec![i as u8;32]);}
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn batch394_selection_owner_preserves_distinct_parent_projection() {
+        let entries=vec![
+            ArchiveEntry{key:"A/first.txt".into(),is_dir:false,size:1,size_known:true,modified:None},
+            ArchiveEntry{key:"A/B/second.txt".into(),is_dir:false,size:2,size_known:true,modified:None},
+        ];
+        let (entries,wanted,placed)=select_extraction_entries(entries,&["a/first.txt".into(),"a/b/second.txt".into()],
+            &AtomicBool::new(false),None).unwrap();
+        assert_eq!(placed,["first.txt","second.txt"]);
+        assert_eq!(selected_root_moves(&entries,&wanted).unwrap(),[("A/B/second.txt".into(),"second.txt".into()),("A/first.txt".into(),"first.txt".into())]);
+    }
+
+    #[test]
+    fn batch395_subtree_rollback_does_not_remove_unrelated_additions() {
+        let root=fixture();
+        let stage=root.join("stage");
+        let dest=root.join("dest");
+        fs::create_dir_all(stage.join("sub")).unwrap();
+        fs::write(stage.join("sub/ours"),b"ours").unwrap();
+        let cancel=AtomicBool::new(false);
+        let mut commit=Commit{installed:Vec::new(),backups:Vec::new(),dirs:Vec::new()};
+        commit.install_tree(&stage,&dest,&cancel).unwrap();
+        fs::write(dest.join("sub/foreign"),b"foreign").unwrap();
+        assert!(commit.rollback().is_err(),"directory not empty is retained");
+        assert_eq!(fs::read(dest.join("sub/foreign")).unwrap(),b"foreign");
+        assert!(!dest.join("sub/ours").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn batch395_manifest_rejects_extra_missing_and_wrong_size() {
+        let root=fixture();
+        let entry=ArchiveEntry{key:"sub/file".into(),is_dir:false,size:3,size_known:true,modified:None};
+        let cancel=AtomicBool::new(false);
+        fs::create_dir(root.join("sub")).unwrap();
+        fs::write(root.join("sub/file"),b"abc").unwrap();
+        verify_extracted_manifest(&root,extraction_manifest(std::slice::from_ref(&entry)).unwrap(),&cancel).unwrap();
+        fs::write(root.join("extra"),b"unexpected").unwrap();
+        assert!(verify_extracted_manifest(&root,extraction_manifest(std::slice::from_ref(&entry)).unwrap(),&cancel).is_err());
+        fs::remove_file(root.join("extra")).unwrap();
+        fs::write(root.join("sub/file"),b"short!").unwrap();
+        assert!(verify_extracted_manifest(&root,extraction_manifest(std::slice::from_ref(&entry)).unwrap(),&cancel).is_err());
+        fs::remove_file(root.join("sub/file")).unwrap();
+        assert!(verify_extracted_manifest(&root,extraction_manifest(std::slice::from_ref(&entry)).unwrap(),&cancel).is_err());
+        let mut collision=entry.clone();collision.key="sub".into();
+        assert!(extraction_manifest(&[entry,collision]).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn batch396_direct_file_locks_preserve_inputs_and_exact_selection() {
+        let root=fixture();
+        let src=root.join("src");
+        fs::create_dir_all(src.join("sub")).unwrap();
+        for name in ["a.bin"," leading.txt","@literal.txt","-switch.txt"] {fs::write(src.join(name),name.as_bytes()).unwrap();}
+        fs::write(src.join("sub/a.bin"),b"must not include nested file").unwrap();
+        let cancel=AtomicBool::new(false);
+        let sources:Vec<_>=["a.bin"," leading.txt","@literal.txt","-switch.txt"].iter().map(|name|src.join(name)).collect();
+        let archive=root.join("new.7z");
+        let guards=direct_archive_inputs(&sources,&archive,&cancel).unwrap().expect("same-directory ordinary inputs");
+        assert!(fs::OpenOptions::new().write(true).open(&sources[0]).is_err());
+        assert!(fs::rename(&sources[0],src.join("renamed")).is_err());
+        drop(guards);
+        assert!(direct_archive_inputs(&[src.clone()],&archive,&cancel).unwrap().is_none());
+        create(&sources,&archive,None,&cancel).unwrap();
+        let entries=list(&archive,None).unwrap();
+        assert_eq!(entries.len(),4);
+        let out=root.join("out");
+        extract_entries_with_program(&archive,&out,&[],None,&cancel,&mut |_,_|ConflictChoice::Cancel,&mut |_,_|None,None,&mut |_,_,_|{}).unwrap();
+        for path in &sources {assert_eq!(fs::read(out.join(path.file_name().unwrap())).unwrap(),fs::read(path).unwrap());}
+        assert!(!out.join("sub").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn snapshot_reuses_growing_buffer_without_changing_data_or_times() {
         use std::sync::atomic::Ordering;
@@ -2953,6 +3699,25 @@ mod safety_tests {
         w(&mut bytes, 0);
         fs::write(path, bytes).unwrap();
     }
+    #[test]
+    fn batch399_corrupt_bulk_decode_does_not_publish_any_output() {
+        let p=super::tests::fixture();
+        let archive=p.join("corrupt.zip");
+        zip(&archive,"payload",b"payload data",0x81a40000);
+        let mut data=fs::read(&archive).unwrap();
+        data[30+"payload".len()]^=0x33;
+        fs::write(&archive,data).unwrap();
+        let destination=p.join("out");
+        fs::create_dir(&destination).unwrap();
+        fs::write(destination.join("payload"),b"original").unwrap();
+        let result=extract_entries_with_program(&archive,&destination,&[],None,&AtomicBool::new(false),
+            &mut |_,_|ConflictChoice::Overwrite,&mut |_,_|None,None,&mut |_,_,_|{});
+        assert!(result.is_err());
+        assert_eq!(fs::read(destination.join("payload")).unwrap(),b"original");
+        assert!(fs::read_dir(&p).unwrap().all(|e|!e.unwrap().file_name().to_string_lossy().starts_with(".ndr-")));
+        fs::remove_dir_all(p).unwrap();
+    }
+
     #[test]
     fn malicious_zip_paths_and_symlinks_rejected_before_extraction() {
         let p = super::tests::fixture();

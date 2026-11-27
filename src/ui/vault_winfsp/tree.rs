@@ -610,7 +610,8 @@ impl VaultTreeMount {
         params.filesystem_name("NDRVAULT").sector_size(512)
             .sectors_per_allocation_unit(8).case_sensitive_search(false)
             .case_preserved_names(true).unicode_on_disk(true)
-            .persistent_acls(false).file_info_timeout(0);
+            .persistent_acls(false).file_info_timeout(0)
+            .flush_and_purge_on_cleanup(true);
         let config = FileSystemParams {
             use_dir_info_by_name: false, volume_params: params,
             debug_mode: DebugMode::none(),
@@ -718,6 +719,65 @@ impl VaultTreeMount {
 mod tests {
     use super::*;
     #[test]
+    #[ignore = "Real WinFsp: external backing rename with uncommitted mounted data"]
+    fn batch391_renamed_backing_retains_open_writer_edits() {
+        use std::io::{Read,Seek,SeekFrom,Write};
+        let base=std::env::var_os("NDR_QA_VAULT_ROOT").map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir);
+        let root=base.join(format!("NDR-QA-391-dirty-rename-{}-{}",std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir(&root).unwrap();
+        struct Own(std::path::PathBuf);
+        impl Drop for Own {fn drop(&mut self){let _=std::fs::remove_dir_all(&self.0);}}
+        let own=Own(root);
+        let path=own.0.join("original.ndr");
+        let moved=own.0.join("moved.ndr");
+        let mut db=Vault::create(&path,"test rename active edit".into()).unwrap();
+        db.add_file(1,"edit.bin",b"original text").unwrap();
+        let mut mount=VaultTreeMount::start(path.clone(),&db,Arc::new(Mutex::new(())),&[]).unwrap();
+        let disk=mount.mount_root.clone();
+        let target=disk.join("edit.bin");
+        let mut file=std::fs::OpenOptions::new().read(true).write(true).open(&target).unwrap();
+        let page=vec![0x62u8;256*1024];
+        file.seek(SeekFrom::Start(0)).unwrap();
+        for _ in 0..(3*PAGE/page.len() as u64){file.write_all(&page).unwrap();}
+        file.set_len(3*PAGE).unwrap();
+        std::fs::rename(&path,&moved).unwrap();
+        assert!(mount.backing_removed());
+        // A new object at the former name must never receive the old edits.
+        std::fs::write(&path,b"unrelated replacement").unwrap();
+        mount.revoke();
+        assert!(std::fs::File::open(&target).is_err());
+        assert!(mount.finish().is_err(),"active writer may not be disconnected");
+        file.seek(SeekFrom::Start(PAGE+17)).unwrap();
+        file.write_all(b"edited").unwrap();
+        file.sync_all().unwrap();
+        let mut check=[0u8;6];file.seek(SeekFrom::Start(PAGE+17)).unwrap();file.read_exact(&mut check).unwrap();
+        assert_eq!(&check,b"edited");
+        let start=std::time::Instant::now();drop(file);
+        let deadline=start+Duration::from_secs(10);
+        while mount.has_open_files(){
+            assert!(std::time::Instant::now()<deadline,"busy writer did not close");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        mount.finish().unwrap();drop(mount);drop(db);
+        assert!(!disk.exists());
+        assert_eq!(std::fs::read(&path).unwrap(),b"unrelated replacement");
+        let reopened=Vault::unlock(&moved,"test rename active edit".into()).unwrap();
+        reopened.verify_integrity().unwrap();
+        let id=reopened.find_child(1,"edit.bin").unwrap().unwrap().id;
+        assert_eq!(reopened.stream_file_size(id).unwrap(),3*PAGE);
+        for i in 0..3{
+            let b=reopened.stream_read_chunk(id,i).unwrap().unwrap();
+            if i==1{
+                assert_eq!(&b[17..23],b"edited");
+                assert!(b[..17].iter().chain(b[23..].iter()).all(|&v|v==0x62));
+            } else {assert!(b.iter().all(|&v|v==0x62));}
+        }
+        println!("DIRTY_RENAME_PASS close_ms={:.3}",start.elapsed().as_secs_f64()*1000.);
+        drop(reopened);drop(own);
+    }
+
+    #[test]
     #[ignore = "Real WinFsp 64 MiB write/edit/truncate; disposable encrypted test data"]
     fn batch385_real_mount_large_write_and_partial_save() {
         use std::io::{Read,Seek,SeekFrom,Write};
@@ -764,12 +824,19 @@ mod tests {
         assert_eq!(&read[..5],&[0x57;5]);assert!(read[5..].iter().all(|&v|v==0));
         file.seek(SeekFrom::Start(4*PAGE+42)).unwrap();file.write_all(b"retained").unwrap();
         file.sync_all().unwrap();
+        let close_start=std::time::Instant::now();
         drop(file);
-        let deadline=std::time::Instant::now()+Duration::from_secs(10);
+        let deadline=close_start+Duration::from_secs(10);
         while mount.has_open_files(){
-            assert!(std::time::Instant::now()<deadline,"real WinFsp close callback did not drain");
+            if std::time::Instant::now()>=deadline {
+                let tree=mount.state.lock().unwrap();
+                let files:Vec<_>=tree.files.values().filter_map(|f|f.lock().ok().map(|f|
+                    (f.open_files,f.dirty,f.last_error.is_some()))).collect();
+                panic!("real WinFsp close callback did not drain: handles={} files={files:?}",tree.open_handles);
+            }
             std::thread::sleep(Duration::from_millis(20));
         }
+        println!("REAL_VAULT_CLOSE ms={:.3}",close_start.elapsed().as_secs_f64()*1000.);
         mount.finish().unwrap();drop(mount);drop(db);
         let reopened=Vault::unlock(&path,"real mounted large test".into()).unwrap();
         let id=reopened.find_child(1,"large.bin").unwrap().unwrap().id;
