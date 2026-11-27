@@ -1747,6 +1747,11 @@ fn apply_renames_inner(
                 .push((old, new));
         }
     }
+    // Keep the metadata snapshot, commit and rollback isolated from
+    // other NDR comment writers, including writers through an alias path.
+    // Do not acquire the lock again inside the transaction.
+    let _description_write = if descriptions.is_empty() { None }
+        else { Some(description_write_guard()?) };
     let mut backups = BTreeMap::new();
     for parent in descriptions.keys() {
         let path = parent.join("descript.dat");
@@ -1783,7 +1788,7 @@ fn apply_renames_inner(
         }
         for (parent, renames) in &descriptions {
             touched.push(parent.join("descript.dat"));
-            rename_descriptions(parent, renames, true)?;
+            rename_descriptions_locked(parent, renames, true)?;
         }
         Ok::<_, String>(())
     })();
@@ -1823,6 +1828,16 @@ fn apply_renames_inner(
         return Err(errors.join("\n"));
     }
     Ok(())
+}
+
+// Atomic replacement prevents torn files, but not lost read-modify-write
+// updates. All NDR metadata mutations share this process-local lock.
+// The lock is path-independent: different spellings, junctions, or drive
+// aliases cannot bypass it. Ordinary listing/metadata reads stay lock-free.
+// External applications and separate NDR processes are not covered.
+fn description_write_guard() -> Result<std::sync::MutexGuard<'static, ()>, String> {
+    static WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    WRITE.lock().map_err(|_| "Description write lock poisoned".to_owned())
 }
 
 pub fn is_description_file(name: &str) -> bool {
@@ -1911,6 +1926,7 @@ pub fn set_description(
     if name.contains('=') {
         return Err("Description names cannot contain '='".into());
     }
+    let _write = description_write_guard()?;
     let mut entries = description_data(directory)?;
     entries.retain(|(n, _)| !n.eq_ignore_ascii_case(name));
     if let Some(value) = normalized_description(value) {
@@ -1925,6 +1941,17 @@ pub fn set_description(
     write_descriptions(directory, &entries)
 }
 pub fn rename_descriptions(
+    directory: &Path,
+    renames: &[(String, String)],
+    include_legacy: bool,
+) -> Result<(), String> {
+    let _write = description_write_guard()?;
+    rename_descriptions_locked(directory, renames, include_legacy)
+}
+
+/// Caller must hold the shared description write guard for the entire
+/// metadata transaction (including any file-rename rollback).
+fn rename_descriptions_locked(
     directory: &Path,
     renames: &[(String, String)],
     include_legacy: bool,
@@ -1972,6 +1999,8 @@ pub fn rename_descriptions(
 /// Original FUN_0040f020 (after a delete): drops the deleted names from that folder's descript.dat and saves it (attributes 0x20, then
 /// 0x22) or deletes it when empty.
 pub fn remove_descriptions(directory: &Path, names: &[String]) -> Result<(), String> {
+    if names.is_empty() { return Ok(()); }
+    let _write = description_write_guard()?;
     let mut entries = description_data(directory)?;
     let count = entries.len();
     entries.retain(|(name, _)| !names.iter().any(|n| n.eq_ignore_ascii_case(name)));
@@ -1980,7 +2009,62 @@ pub fn remove_descriptions(directory: &Path, names: &[String]) -> Result<(), Str
     }
     Ok(())
 }
+/// Deferred permanent-delete cleanup, with the same process-local write
+/// guard as all other description writers. Only confirmed missing names
+/// in the original directory may lose their comments. A recreated file,
+/// replaced directory, reparse point or ambiguous I/O error is not proof
+/// of deletion. Separate processes can still race the filesystem itself.
+#[cfg(windows)]
+pub(crate) fn remove_deleted_descriptions(
+    directory: &Path, identity: (u32, u64, u64), names: &[String],
+) -> Result<(), String> {
+    if names.is_empty() { return Ok(()); }
+    let _write = description_write_guard()?;
+    let check_directory = || -> Result<(), String> {
+        crate::fsops::ensure_plain_path(directory)?;
+        if crate::native::folder_size_identity(directory) != Some(identity) {
+            return Err(format!("Description directory changed: {}", directory.display()));
+        }
+        Ok(())
+    };
+    check_directory()?;
+    let metadata_path = directory.join("descript.dat");
+    match fs::symlink_metadata(&metadata_path) {
+        Ok(m) if crate::fsops::is_reparse(&m) || !m.is_file() =>
+            return Err(format!("Description file is not an ordinary file: {}", metadata_path.display())),
+        Ok(_) => {},
+        Err(e) if e.kind()==std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e.to_string()),
+    }
+    let mut entries = description_data(directory)?;
+    let present: HashSet<_> = entries.iter().map(|(name, _)| name.to_ascii_lowercase()).collect();
+    let mut missing = HashSet::with_capacity(names.len());
+    for name in names {
+        let key = name.to_ascii_lowercase();
+        if !present.contains(&key) || missing.contains(&key) { continue; }
+        // The queue contains only basename components, never arbitrary
+        // paths. Keep case-insensitive DAT semantics from remove_descriptions.
+        if Path::new(name).file_name().and_then(|n| n.to_str()) != Some(name.as_str()) {
+            return Err("Invalid deleted description name".into());
+        }
+        match fs::symlink_metadata(directory.join(name)) {
+            Ok(_) => {}, // restored or recreated since the successful delete
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => { missing.insert(key); },
+            Err(e) => return Err(format!("{}: {e}", directory.join(name).display())),
+        }
+    }
+    if missing.is_empty() { return Ok(()); }
+    let count = entries.len();
+    entries.retain(|(name, _)| !missing.contains(&name.to_ascii_lowercase()));
+    if entries.len() != count {
+        check_directory()?;
+        write_descriptions(directory, &entries)?;
+    }
+    Ok(())
+}
+
 pub fn clear_descriptions(directory: &Path) -> Result<(), String> {
+    let _write = description_write_guard()?;
     remove_description_file(&directory.join("descript.dat"))
 }
 
@@ -2037,6 +2121,7 @@ pub fn apply_description_transfers(transfers: &[DescriptionTransfer]) -> Vec<Str
     let mut errors = Vec::new();
     for changes in directories.into_values() {
         let result = (|| {
+            let _write = description_write_guard()?;
             let entries = description_data(&changes.directory)?;
             let original = entries.len();
             let mut entries: Vec<_> = entries
@@ -2080,6 +2165,7 @@ pub fn migrate_legacy_descriptions(
     if !include_legacy {
         return Ok(());
     }
+    let _write = description_write_guard()?;
     let mut entries = description_data(directory)?;
     let mut known: HashSet<_> = entries.iter().map(|(n, _)| n.to_lowercase()).collect();
     let mut legacy = BTreeMap::new();
@@ -2813,6 +2899,110 @@ mod tests {
         assert_eq!(entries.iter().map(|e| e["Path"].as_str().unwrap_or("")).collect::<Vec<_>>(), [r"D:\slash"]);
         assert!(positional_date_time("2026.10.31 22:05:09").is_some() && positional_date_time("2026-10-3").is_none());
     }
+    #[cfg(windows)]
+    #[test]
+    fn deferred_delete_preserves_recreated_names_and_refuses_replaced_directory() {
+        let root = sandbox("description-deferred-identity");
+        let dir = root.join("folder");
+        fs::create_dir(&dir).unwrap();
+        let identity = crate::native::folder_size_identity(&dir).unwrap();
+        for name in ["gone.txt","again.txt","keep.txt"] {
+            fs::write(dir.join(name),b"old").unwrap();
+            set_description(&dir,name,"old note",false).unwrap();
+        }
+        fs::remove_file(dir.join("gone.txt")).unwrap();
+        fs::remove_file(dir.join("again.txt")).unwrap();
+        fs::write(dir.join("again.txt"),b"new file").unwrap();
+        set_description(&dir,"again.txt","new note",false).unwrap();
+        remove_deleted_descriptions(&dir,identity,&["gone.txt".into(),"again.txt".into()]).unwrap();
+        let actual=read_descriptions(&dir,false).unwrap();
+        assert!(!actual.contains_key("gone.txt"));
+        assert_eq!(actual.get("again.txt").map(String::as_str),Some("new note"));
+        assert_eq!(actual.get("keep.txt").map(String::as_str),Some("old note"));
+        assert_eq!(fs::read(dir.join("again.txt")).unwrap(),b"new file");
+        let previous=root.join("previous");
+        fs::rename(&dir,&previous).unwrap();
+        fs::create_dir(&dir).unwrap();
+        set_description(&dir,"gone.txt","replacement note",false).unwrap();
+        let old_bytes=fs::read(previous.join("descript.dat")).unwrap();
+        let new_bytes=fs::read(dir.join("descript.dat")).unwrap();
+        assert!(remove_deleted_descriptions(&dir,identity,&["gone.txt".into()]).is_err());
+        assert_eq!(fs::read(dir.join("descript.dat")).unwrap(),new_bytes);
+        assert_eq!(fs::read(previous.join("descript.dat")).unwrap(),old_bytes);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn concurrent_description_writers_do_not_lose_unrelated_updates() {
+        use std::sync::{Arc, Barrier};
+        let root = sandbox("description-concurrent");
+        set_description(&root, "keep.txt", "unrelated", false).unwrap();
+        for i in 0..12 {
+            set_description(&root, &format!("remove-{i}.txt"), "remove", false).unwrap();
+        }
+        let barrier = Arc::new(Barrier::new(6));
+        std::thread::scope(|scope| {
+            for worker in 0..6 {
+                let barrier = barrier.clone();
+                let root = &root;
+                scope.spawn(move || {
+                    barrier.wait();
+                    for i in 0..4 {
+                        let name = format!("worker-{worker}-{i}.txt");
+                        set_description(root, &name, "new note", false).unwrap();
+                        if worker < 3 {
+                            remove_descriptions(root, &[format!("remove-{}.txt", worker * 4 + i)]).unwrap();
+                        }
+                    }
+                });
+            }
+        });
+        let actual = read_descriptions(&root, false).unwrap();
+        assert_eq!(actual.len(), 25);
+        assert_eq!(actual.get("keep.txt").map(String::as_str), Some("unrelated"));
+        for worker in 0..6 {
+            for i in 0..4 {
+                assert_eq!(actual.get(&format!("worker-{worker}-{i}.txt")).map(String::as_str), Some("new note"));
+            }
+        }
+        assert!(!actual.keys().any(|key| key.starts_with("remove-")));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn concurrent_rename_transfer_migration_and_set_preserve_all_notes() {
+        use std::sync::{Arc, Barrier};
+        let root = sandbox("description-concurrent-mixed");
+        fs::write(root.join("rename.txt"), b"source").unwrap();
+        fs::write(root.join("descript.ion"), b"legacy.txt old note\r\n").unwrap();
+        set_description(&root, "rename.txt", "rename note", false).unwrap();
+        set_description(&root, "copy.txt", "copy note", false).unwrap();
+        let barrier = Arc::new(Barrier::new(4));
+        std::thread::scope(|scope| {
+            let b=barrier.clone(); let r=&root;
+            scope.spawn(move||{b.wait();apply_renames(&[r.join("rename.txt")], &["renamed.txt".into()]).unwrap();});
+            let b=barrier.clone(); let r=&root;
+            scope.spawn(move||{b.wait();assert!(apply_description_transfers(&[DescriptionTransfer{
+                source_directory:r.clone(),source_name:"copy.txt".into(),
+                destination_directory:r.clone(),destination_name:"copied.txt".into(),
+                description:Some("copy note".into()),move_entry:false
+            }]).is_empty());});
+            let b=barrier.clone(); let r=&root;
+            scope.spawn(move||{b.wait();migrate_legacy_descriptions(r,&["legacy.txt".into()],true).unwrap();});
+            let b=barrier.clone(); let r=&root;
+            scope.spawn(move||{b.wait();set_description(r,"unrelated.txt","keep",true).unwrap();});
+        });
+        let actual=read_descriptions(&root,false).unwrap();
+        for (name,note) in [("renamed.txt","rename note"),("copy.txt","copy note"),
+            ("copied.txt","copy note"),("legacy.txt","old note"),("unrelated.txt","keep")] {
+            assert_eq!(actual.get(name).map(String::as_str),Some(note),"{name}");
+        }
+        assert_eq!(actual.len(),5);
+        assert_eq!(fs::read(root.join("renamed.txt")).unwrap(),b"source");
+        assert_eq!(fs::read(root.join("descript.ion")).unwrap(),b"legacy.txt old note\r\n");
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn description_transfers_preserve_unrelated_entries_and_migrate_legacy() {
         let root = sandbox("transfers");

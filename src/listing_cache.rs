@@ -369,8 +369,8 @@ fn verify_chunk(parent:&Path,rows:&mut [Entry],ids:&[u64],cancel:&AtomicBool)->R
     }
     Ok((links,unverified))
 }
+static VERIFICATION_BUDGET:crate::listing_budget::VerificationBudget=crate::listing_budget::VerificationBudget::new();
 fn verify_regulars(path:&Path,entries:&mut [Entry],ids:&[u64],cancel:&AtomicBool)->Result<(HashSet<OsString>,usize),String>{
-    static BUDGET:crate::listing_budget::VerificationBudget=crate::listing_budget::VerificationBudget::new();
     // Keep exact native ID/link-count verification for every regular file.
     // On fast media the measured workload benefits from additional workers;
     // unknown/seek media retain conservative limits. The caller participates.
@@ -383,7 +383,7 @@ fn verify_regulars(path:&Path,entries:&mut [Entry],ids:&[u64],cancel:&AtomicBool
         }
     }else{1};
     let parallelism=std::thread::available_parallelism().map_or(1,usize::from);
-    let permit=BUDGET.acquire(requested,parallelism);
+    let permit=VERIFICATION_BUDGET.acquire(requested,parallelism);
     let workers=permit.workers();
     if workers<=1{return verify_chunk(path,entries,ids,cancel)}
     let chunk=entries.len().div_ceil(workers).max(1);
@@ -416,6 +416,7 @@ fn scan_ids(path:&Path,show_hidden:bool,cancel:&AtomicBool)->Result<Option<Scan>
     let mut fs_name=[0u16;32];
     if unsafe{GetVolumeInformationByHandleW(directory.as_raw_handle(),ptr::null_mut(),0,ptr::null_mut(),ptr::null_mut(),ptr::null_mut(),fs_name.as_mut_ptr(),fs_name.len() as u32)}==0
         || fs_name[..5]!=[78,84,70,83,0]{return Ok(None)}
+    let _verification_scan=VERIFICATION_BUDGET.begin_scan();
     let mut buffer=vec![0u64;8192];
     let capacity=buffer.len()*std::mem::size_of::<u64>();
     let header=std::mem::offset_of!(FILE_ID_BOTH_DIR_INFO,FileName);

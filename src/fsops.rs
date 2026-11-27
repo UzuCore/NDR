@@ -218,6 +218,8 @@ pub fn run_with_locale(
         bytes: 0,
         descriptions: std::collections::BTreeMap::new(),
         transfers: Vec::new(),
+        #[cfg(windows)]
+        deleted_descriptions: None,
         options,
         language,
         quiet: false,
@@ -321,6 +323,7 @@ pub fn run_with_locale(
                 for (index, p) in sources.into_iter().enumerate() {
                     j.check()?;
                     let boundary = index + 1 < count;
+                    if !use_bin { j.prepare_description_delete(&p); }
                     let result = if use_bin {
                         if fs::symlink_metadata(&p).is_err() {
                             continue;
@@ -336,11 +339,13 @@ pub fn run_with_locale(
                         j.delete_filtered(&p, &[], 0, boundary)
                     };
                     match result {
+                        Ok(Disposition::Deleted) if !use_bin => j.queue_deleted_description(&p),
                         Ok(Disposition::Deleted) => j.remove_description(&p),
                         // A child may have failed after earlier children were
                         // removed. The parent still exists: keep its comment.
                         Ok(Disposition::Skipped | Disposition::Failed) => {},
                         Err(message) => {
+                            j.flush_deleted_descriptions();
                             if j.cancel.load(Ordering::Relaxed) {
                                 return Err(message);
                             }
@@ -357,10 +362,12 @@ pub fn run_with_locale(
                 for (index, p) in sources.into_iter().enumerate() {
                     j.check()?;
                     let boundary = index + 1 < count;
+                    j.prepare_description_delete(&p);
                     match j.delete_filtered(&p, &skipped, 0, boundary) {
-                        Ok(Disposition::Deleted) => j.remove_description(&p),
+                        Ok(Disposition::Deleted) => j.queue_deleted_description(&p),
                         Ok(_) => {}
                         Err(message) => {
+                            j.flush_deleted_descriptions();
                             if j.cancel.load(Ordering::Relaxed) {
                                 return Err(message);
                             }
@@ -429,6 +436,9 @@ pub fn run_with_locale(
     if let Err(message) = result && !j.cancel.load(Ordering::Relaxed) {
         let _ = j.events.send(Event::Fatal(message));
     }
+    // Flush successful deletes even if a later item failed or the user
+    // cancelled. Finished never races an unfinished metadata write.
+    j.flush_deleted_descriptions();
     j.flush_descriptions();
     if j.skipped_count != 0 {
         let _ = j.events.send(Event::SkippedCount { count: j.skipped_count });
@@ -1180,6 +1190,77 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn batched_delete_flushes_successes_when_interactive_failure_cancels() {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
+        let root=fixture();
+        let gone=root.join("gone.txt");
+        let locked=root.join("locked.txt");
+        let later=root.join("later.txt");
+        for p in [&gone,&locked,&later] {
+            fs::write(p,b"content").unwrap();
+            compat::set_description(&root,p.file_name().unwrap().to_str().unwrap(),"note",false).unwrap();
+        }
+        let hold=fs::OpenOptions::new().read(true).share_mode(FILE_SHARE_READ).open(&locked).unwrap();
+        let (tx,rx)=mpsc::channel();
+        let cancel=Arc::new(AtomicBool::new(false));
+        let c=cancel.clone();let sources=vec![gone.clone(),locked.clone(),later.clone()];
+        let worker=thread::spawn(move||run_with_options(Operation::Delete{sources,recycle:false},tx,c,
+            OperationOptions{interactive_errors:true,..Default::default()}));
+        let mut finished=false;
+        for event in rx {
+            match event {
+                Event::Failure{reply,..}=> {
+                    let notes=compat::read_descriptions(&root,false).unwrap();
+                    assert!(!notes.contains_key("gone.txt"),"prior success flushed before asking");
+                    reply.send(false).unwrap();
+                },
+                Event::Finished{cancelled,..}=>{assert!(cancelled);finished=true;},
+                _=>{}
+            }
+        }
+        worker.join().unwrap(); assert!(finished);
+        assert!(!gone.exists());assert_eq!(fs::read(&locked).unwrap(),b"content");
+        assert_eq!(fs::read(&later).unwrap(),b"content");
+        let notes=compat::read_descriptions(&root,false).unwrap();
+        assert!(!notes.contains_key("gone.txt"));
+        assert_eq!(notes.get("locked.txt").map(String::as_str),Some("note"));
+        assert_eq!(notes.get("later.txt").map(String::as_str),Some("note"));
+        drop(hold);fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn batched_delete_crosses_boundaries_without_recreating_metadata_file() {
+        let root=fixture();
+        let first=root.join("first");let second=root.join("second");
+        fs::create_dir(&first).unwrap();fs::create_dir(&second).unwrap();
+        let mut sources=Vec::new();
+        for dir in [&first,&second] {
+            let mut text=String::from("keep.txt=keep\r\n");
+            fs::write(dir.join("keep.txt"),b"preserve").unwrap();
+            for i in 0..DELETE_DESCRIPTION_BATCH_LIMIT+5 {
+                let name=format!("gone-{i:04}.txt");let p=dir.join(&name);
+                fs::write(&p,b"delete").unwrap();sources.push(p);
+                text.push_str(&format!("{name}=remove\r\n"));
+            }
+            let mut bytes=vec![255,254];bytes.extend(text.encode_utf16().flat_map(u16::to_le_bytes));
+            fs::write(dir.join("descript.dat"),bytes).unwrap();
+        }
+        sources.push(second.join("descript.dat"));
+        let events=run_events(Operation::Delete{sources: sources.clone(),recycle:false});
+        assert!(!events.iter().any(|e|matches!(e,Event::Error{..}|Event::Failure{..}|Event::Fatal(_))),"{events:?}");
+        assert!(sources.iter().all(|p|!p.exists()));
+        let notes=compat::read_descriptions(&first,false).unwrap();
+        assert_eq!(notes.len(),1);assert_eq!(notes.get("keep.txt").map(String::as_str),Some("keep"));
+        assert!(!second.join("descript.dat").exists());
+        assert_eq!(fs::read(first.join("keep.txt")).unwrap(),b"preserve");
+        assert_eq!(fs::read(second.join("keep.txt")).unwrap(),b"preserve");
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn permanent_delete_skips_kept_items_and_clears_read_only() {
         let p = fixture();
@@ -1619,14 +1700,17 @@ pub(crate) fn rename_new(source: &Path, target: &Path) -> Result<(), String> {
 }
 
 pub(crate) fn preserve_times(file: &File, metadata: &fs::Metadata) -> Result<(), String> {
-    let mut times = fs::FileTimes::new();
-    if let Ok(t) = metadata.modified() {
-        times = times.set_modified(t);
+    #[cfg(not(windows))]
+    {
+        let mut times = fs::FileTimes::new();
+        if let Ok(t) = metadata.modified() {
+            times = times.set_modified(t);
+        }
+        if let Ok(t) = metadata.accessed() {
+            times = times.set_accessed(t);
+        }
+        file.set_times(times).map_err(|e| e.to_string())?;
     }
-    if let Ok(t) = metadata.accessed() {
-        times = times.set_accessed(t);
-    }
-    file.set_times(times).map_err(|e| e.to_string())?;
     #[cfg(windows)]
     {
         use std::os::windows::{fs::MetadataExt, io::AsRawHandle};
@@ -1644,17 +1728,19 @@ pub(crate) fn preserve_times(file: &File, metadata: &fs::Metadata) -> Result<(),
                 modified: *const FileTime,
             ) -> i32;
         }
-        let time = metadata.creation_time();
-        let created = FileTime {
-            low: time as u32,
-            high: (time >> 32) as u32,
-        };
+        // The same handle and FILETIME values were previously set in
+        // two calls. Preserve all three timestamps in one native call.
+        // Retain the previous optional-access/modified semantics.
+        let ft = |time: u64| FileTime { low: time as u32, high: (time >> 32) as u32 };
+        let created = ft(metadata.creation_time());
+        let accessed = metadata.accessed().ok().map(|_| ft(metadata.last_access_time()));
+        let modified = metadata.modified().ok().map(|_| ft(metadata.last_write_time()));
         if unsafe {
             SetFileTime(
                 file.as_raw_handle(),
                 &created,
-                std::ptr::null(),
-                std::ptr::null(),
+                accessed.as_ref().map_or(std::ptr::null(), |t| t as *const FileTime),
+                modified.as_ref().map_or(std::ptr::null(), |t| t as *const FileTime),
             )
         } == 0
         {
@@ -1663,6 +1749,18 @@ pub(crate) fn preserve_times(file: &File, metadata: &fs::Metadata) -> Result<(),
     }
     Ok(())
 }
+#[cfg(windows)]
+struct DeletedDescriptionBatch {
+    directory: PathBuf,
+    identity: (u32, u64, u64),
+    names: Vec<String>,
+    started: Instant,
+}
+#[cfg(windows)]
+const DELETE_DESCRIPTION_BATCH_LIMIT: usize = 128;
+#[cfg(windows)]
+const DELETE_DESCRIPTION_BATCH_AGE: Duration = Duration::from_millis(250);
+
 struct Job {
     events: Sender<Event>,
     cancel: Arc<AtomicBool>,
@@ -1677,6 +1775,8 @@ struct Job {
     // cache scoped to this job so external edits remain visible to new jobs.
     descriptions: std::collections::BTreeMap<PathBuf, std::collections::HashMap<String, String>>,
     transfers: Vec<DescriptionTransfer>,
+    #[cfg(windows)]
+    deleted_descriptions: Option<DeletedDescriptionBatch>,
     options: OperationOptions,
     language: Option<crate::compat::Language>,
     /// Original flags 0x40|0x80 (EmptyFolder): errors are neither asked about nor reported.
@@ -1763,6 +1863,68 @@ impl Job {
             });
         }
         success
+    }
+    /// Before a top-level permanent delete, flush a previous directory or
+    /// an expired group. Flush before explicitly deleting a metadata file:
+    /// it must never be recreated by a queued update.
+    fn prepare_description_delete(&mut self, path: &Path) {
+        #[cfg(windows)]
+        {
+            if !self.options.use_descriptions { return; }
+            let Some(name)=path.file_name().and_then(|s|s.to_str()) else {
+                self.flush_deleted_descriptions(); return;
+            };
+            let parent=path.parent().filter(|p|!p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+            let metadata=compat::is_description_file(name);
+            if self.deleted_descriptions.as_ref().is_some_and(|batch|
+                batch.directory!=parent || metadata || batch.started.elapsed()>=DELETE_DESCRIPTION_BATCH_AGE) {
+                self.flush_deleted_descriptions();
+            }
+            if !metadata && self.deleted_descriptions.is_none() {
+                // Some virtual/remote volumes cannot report a stable
+                // nonzero file identity. Preserve immediate cleanup there.
+                if let Some(identity)=crate::native::folder_size_identity(parent)
+                    .filter(|(_,id,created)| *id!=0 && *created!=0) {
+                    self.deleted_descriptions=Some(DeletedDescriptionBatch {
+                        directory:parent.to_owned(),identity,names:Vec::new(),started:Instant::now(),
+                    });
+                }
+            }
+        }
+        #[cfg(not(windows))]
+        let _=path;
+    }
+    fn queue_deleted_description(&mut self, path: &Path) {
+        #[cfg(windows)]
+        {
+            if !self.options.use_descriptions { return; }
+            if let Some(name)=path.file_name().and_then(|s|s.to_str()) {
+                if compat::is_description_file(name) { return; }
+                if let Some(batch)=self.deleted_descriptions.as_mut() {
+                    let parent=path.parent().filter(|p|!p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+                    if batch.directory==parent {
+                        batch.names.push(name.into());
+                        if batch.names.len()>=DELETE_DESCRIPTION_BATCH_LIMIT || batch.started.elapsed()>=DELETE_DESCRIPTION_BATCH_AGE {
+                            self.flush_deleted_descriptions();
+                        }
+                        return;
+                    }
+                }
+            }
+        }
+        // Filesystems that cannot prove directory identity keep the
+        // established immediate cleanup path; do not batch unproven paths.
+        self.remove_description(path);
+    }
+    fn flush_deleted_descriptions(&mut self) {
+        #[cfg(windows)]
+        if let Some(batch)=self.deleted_descriptions.take() {
+            if !batch.names.is_empty() {
+                if let Err(message)=compat::remove_deleted_descriptions(&batch.directory,batch.identity,&batch.names) {
+                    let _=self.events.send(Event::Error{path:batch.directory.join("descript.dat"),message});
+                }
+            }
+        }
     }
     fn remove_description(&self, path: &Path) {
         if !self.options.use_descriptions {
@@ -2176,6 +2338,15 @@ impl Job {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Disposition::Deleted),
             Err(e) => return Err(e.to_string()),
         };
+        // A recursive directory operation may be slow or ask about a
+        // locked child. Commit earlier successful file updates before it.
+        // Keep the parent identity for the top-level directory's own note.
+        #[cfg(windows)]
+        if depth==0 && m.is_dir() && self.deleted_descriptions.as_ref()
+            .is_some_and(|batch| !batch.names.is_empty()) {
+            self.flush_deleted_descriptions();
+            self.prepare_description_delete(p);
+        }
         if !is_reparse(&m) {
             clear_read_only(p, &m);
         }
@@ -2867,6 +3038,29 @@ mod safety_tests {
         assert_eq!(fs::read(p.join("out/source/nested/new")).unwrap(), b"new");
         fs::remove_dir_all(p).unwrap();
     }
+    #[cfg(windows)]
+    #[test]
+    fn native_copy_preserves_all_three_raw_filetimes_and_bytes() {
+        use std::os::windows::fs::MetadataExt;
+        let root=tests::fixture();
+        let src=root.join("source.bin");
+        fs::write(&src,b"copy payload").unwrap(); let file=fs::OpenOptions::new().write(true).open(&src).unwrap();
+        let time=SystemTime::UNIX_EPOCH+Duration::from_secs(1_600_000_000);
+        file.set_times(fs::FileTimes::new().set_modified(time).set_accessed(time+Duration::from_secs(42))).unwrap();
+        drop(file);
+        let expected=fs::metadata(&src).unwrap();
+        let destination=root.join("dest");
+        let (tx,rx)=mpsc::channel(); run(Operation::Copy{sources:vec![src.clone()],destination:destination.clone(),move_files:false},tx,Arc::new(AtomicBool::new(false))); let events=rx.into_iter().collect::<Vec<_>>();
+        assert!(!events.iter().any(|e|matches!(e,Event::Error{..}|Event::Failure{..}|Event::Fatal(_))),"{events:?}");
+        let target=destination.join("source.bin");
+        let actual=fs::metadata(&target).unwrap();
+        assert_eq!(actual.creation_time(),expected.creation_time());
+        assert_eq!(actual.last_access_time(),expected.last_access_time());
+        assert_eq!(actual.last_write_time(),expected.last_write_time());
+        assert_eq!(fs::read(&src).unwrap(),fs::read(&target).unwrap());
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn directory_copy_preserves_timestamps_and_children() {
         let p = tests::fixture();

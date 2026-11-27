@@ -5,14 +5,29 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 pub(crate) struct VerificationBudget {
     used: AtomicUsize,
+    scans: AtomicUsize,
 }
 impl VerificationBudget {
-    pub(crate) const fn new() -> Self { Self { used: AtomicUsize::new(0) } }
+    pub(crate) const fn new() -> Self {
+        Self { used: AtomicUsize::new(0), scans: AtomicUsize::new(0) }
+    }
+    /// Register before directory enumeration so overlapping scans can
+    /// see the other reader even before it begins exact metadata checks.
+    pub(crate) fn begin_scan(&self) -> VerificationScan<'_> {
+        self.scans.fetch_add(1, Ordering::AcqRel);
+        VerificationScan { budget:self }
+    }
     pub(crate) fn acquire(&self, requested: usize, parallelism: usize) -> VerificationPermit<'_> {
         // The caller always contributes one worker. Preserve capacity for
         // a second listing caller and cap all extra workers across panes.
-        let limit = parallelism.saturating_sub(2).min(10);
-        let wanted = requested.saturating_sub(1).min(limit);
+        let scans = self.scans.load(Ordering::Acquire).max(1);
+        let limit = parallelism.saturating_sub(scans.max(2)).min(10);
+        // Keep the original single-reader limit. If several enumerators
+        // already overlap, reserve a fair share rather than letting the
+        // first verifier consume the whole budget. Existing permits are
+        // never revoked; late arrivals may receive fewer workers.
+        let fair = limit.div_ceil(scans);
+        let wanted = requested.saturating_sub(1).min(fair);
         let mut current = self.used.load(Ordering::Relaxed);
         loop {
             let reserve = wanted.min(limit.saturating_sub(current));
@@ -24,6 +39,13 @@ impl VerificationBudget {
         }
     }
 }
+pub(crate) struct VerificationScan<'a> {
+    budget: &'a VerificationBudget,
+}
+impl Drop for VerificationScan<'_> {
+    fn drop(&mut self) { self.budget.scans.fetch_sub(1, Ordering::AcqRel); }
+}
+
 pub(crate) struct VerificationPermit<'a> {
     budget: &'a VerificationBudget,
     extra: usize,
@@ -59,6 +81,34 @@ mod tests {
         assert_eq!(b.acquire(12,2).workers(),1);
         assert_eq!(b.acquire(1,128).workers(),1);
     }
+    #[test]
+    fn overlapping_enumerations_share_capacity_before_first_verifier() {
+        let b=VerificationBudget::new();
+        let first=b.begin_scan();
+        let second=b.begin_scan();
+        let a=b.acquire(12,12);
+        let c=b.acquire(12,12);
+        assert_eq!(a.workers(),6);
+        assert_eq!(c.workers(),6);
+        drop((a,c,second));
+        assert_eq!(b.acquire(12,12).workers(),11);
+        drop(first);
+        assert_eq!(b.scans.load(Ordering::Relaxed),0);
+    }
+
+    #[test]
+    fn late_scan_does_not_revoke_existing_exact_metadata_workers() {
+        let b=VerificationBudget::new();
+        let first=b.begin_scan();
+        let a=b.acquire(12,12);
+        let second=b.begin_scan();
+        let c=b.acquire(12,12);
+        assert_eq!((a.workers(),c.workers()),(11,1));
+        drop((a,c,first,second));
+        assert_eq!(b.scans.load(Ordering::Relaxed),0);
+        assert_eq!(b.used.load(Ordering::Relaxed),0);
+    }
+
     #[test]
     fn concurrent_reservations_remain_bounded() {
         let b=VerificationBudget::new();
