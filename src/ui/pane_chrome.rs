@@ -725,10 +725,13 @@ impl App {
             return;
         }
         let pane = &mut self.panes[index];
-        if pane.loading || pane.vault.is_some() || pane.remote.is_some() || pane.archive.is_some() { return; }
+        if pane.vault.is_some() || pane.remote.is_some() || pane.archive.is_some() { return; }
         let Some(entry) = pane.entries.get(row).filter(|e| e.is_dir && !e.drive && !e.is_parent() && e.attributes & 0x400 == 0) else { return };
         let path = &entry.path;
+        // Old rows can remain visible during a same-location relist. Protect
+        // their known values from eviction, without starting any new I/O.
         pane.folder_auto_visible.insert(path.clone());
+        if pane.loading { return; }
         if pane.folder_auto_pending.contains_key(path) || pane.folder_manual_pending.contains(path) {
             return;
         }
@@ -737,9 +740,9 @@ impl App {
         }
         if pane.folder_sizes.contains_key(path) && !pane.folder_auto_paths.contains(path) { return; }
         self.sync_folder_size_activity();
-        if !self.folder_auto_busy {
-            self.enqueue_folder_size_job(index, row, true);
-        }
+        // Even while foreground I/O is busy, replay an already known total.
+        // enqueue_folder_size_job itself will defer new scans.
+        self.enqueue_folder_size_job(index, row, true);
     }
 
     /// Keep only pending scans for rows painted during this frame. The worker
@@ -761,6 +764,25 @@ impl App {
                 cancelled = true;
                 false
             });
+            // At this point the *entire* visible set is known. Evicting
+            // inside a row's paint can drop the next visible row before
+            // it is added to that set (and recreate marker/size flicker).
+            const MAX_PANE_TOTALS: usize = 512;
+            let excess = pane.folder_auto_paths.len().saturating_sub(MAX_PANE_TOTALS);
+            if excess > 0 {
+                let mut evictable: Vec<_> = pane.folder_auto_paths.iter()
+                    .filter(|p| !pane.folder_auto_pending.contains_key(*p)
+                        && !pane.folder_manual_pending.contains(*p) && !pane.folder_auto_visible.contains(*p))
+                    .collect();
+                evictable.sort_unstable_by_key(|p| pane.folder_auto_times.get(*p));
+                let evict: Vec<_> = evictable.into_iter().take(excess).cloned().collect();
+                for path in evict {
+                    pane.folder_auto_times.remove(&path);
+                    pane.folder_auto_paths.remove(&path);
+                    pane.folder_sizes.remove(&path);
+                    pane.folder_bytes.remove(&path);
+                }
+            }
         }
         // One deadline per frame, not one repaint request per visible row.
         // Align stable observations onto shared ticks to prevent dozens of
@@ -783,19 +805,7 @@ impl App {
     }
 
     pub(super) fn record_folder_size_time(&mut self, index: usize, path: &Path, time: Instant) {
-        const MAX_PANE_TOTALS: usize = 512;
-        let pane = &mut self.panes[index];
-        if pane.folder_auto_paths.len() > MAX_PANE_TOTALS {
-            if let Some(oldest) = pane.folder_auto_paths.iter()
-                .filter(|p| p.as_path() != path && !pane.folder_auto_pending.contains_key(*p) && !pane.folder_auto_visible.contains(*p))
-                .min_by_key(|p| pane.folder_auto_times.get(*p)).cloned() {
-                pane.folder_auto_times.remove(&oldest);
-                pane.folder_auto_paths.remove(&oldest);
-                pane.folder_sizes.remove(&oldest);
-                pane.folder_bytes.remove(&oldest);
-            }
-        }
-        pane.folder_auto_times.insert(path.to_path_buf(), time);
+        self.panes[index].folder_auto_times.insert(path.to_path_buf(), time);
     }
 
     /// Coalesce the periodic checks of all visible rows. A notification may
@@ -972,7 +982,12 @@ impl App {
                     let interval = if observation.watch.is_some() { observation.media.check_interval() }
                         else { observation.media.verify_interval() };
                     let deadline = coalesced_folder_deadline(epoch, Instant::now(), interval);
-                    self.record_folder_size_time(index, &path, deadline);
+                    // Foreground I/O may change a cached folder immediately
+                    // after this replay. Do not arm a new cooldown during
+                    // that busy period: the first idle paint must recheck.
+                    if !self.folder_auto_busy {
+                        self.record_folder_size_time(index, &path, deadline);
+                    }
                     return;
                 }
                 if let Some(watch) = observation.watch.as_ref() {
@@ -989,6 +1004,7 @@ impl App {
                 }
             }
         }
+        if automatic && self.folder_auto_busy { return; }
         let (queue, signal) = &*self.folder_size_queue;
         let mut jobs = queue.lock().unwrap_or_else(|e| e.into_inner());
         // At most 48 waiting jobs plus one running scan. A fast scroll
@@ -1221,7 +1237,8 @@ fn folder_size_worker(shared: FolderSizeQueue, tx: Sender<AsyncResult>, ctx: egu
         if job.automatic {
             let disk = store.get_or_insert_with(|| DiskStore::open(&profile, !cfg!(test)));
             // Warm all queued visible rows before a potentially huge scan.
-            // Only metadata-validated prior-session hints are published.
+            // Only metadata-validated prior-session totals are published.
+            // They are last-known display values, not new measurements.
             let mut hints = Vec::new();
             let mut add_hint = |j: &FolderSizeJob| {
                 if j.automatic && j.hint_needed && !j.cancel.load(Ordering::Relaxed) {
@@ -1242,7 +1259,7 @@ fn folder_size_worker(shared: FolderSizeQueue, tx: Sender<AsyncResult>, ctx: egu
             for (pane, generation, path, cancel, unit, thousands) in hints {
                 if !cancel.load(Ordering::Relaxed) {
                     if let Some(bytes) = disk.hint(&path) {
-                        let text = format!("~{}", ndr::parity::size_to_str(bytes, &unit, thousands));
+                        let text = ndr::parity::size_to_str(bytes, &unit, thousands);
                         if tx.send(AsyncResult::FolderSizeHint { pane, generation, path, text, cancel }).is_ok() { hinted = true; }
                     }
                 }

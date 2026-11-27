@@ -2157,13 +2157,47 @@ pub fn file_drag_pointer(hwnd: isize, secondary: bool) -> Option<(bool, bool)> {
     let hwnd = hwnd as HWND;
     let mut point = POINT { x: 0, y: 0 };
     let mut rect: RECT = unsafe { std::mem::zeroed() };
-    if unsafe { GetCursorPos(&mut point) == 0 || ScreenToClient(hwnd, &mut point) == 0 || GetClientRect(hwnd, &mut rect) == 0 } {
+    if unsafe { GetCursorPos(&mut point) == 0 } {
         return None;
     }
-    let outside = point.x < rect.left || point.x >= rect.right || point.y < rect.top || point.y >= rect.bottom;
+    // A different application may cover part of this window, including a
+    // maximized NDR. The cursor is then inside our client rectangle but over
+    // another process's actual drop target. Hit-test in screen coordinates
+    // before converting to client coordinates. WindowFromPoint ignores mouse
+    // capture; it resolves the window at that physical point.
+    let external_window = unsafe {
+        let hit = WindowFromPoint(point);
+        if hit.is_null() || hit == hwnd {
+            false
+        } else {
+            let mut source_pid = 0;
+            let mut target_pid = 0;
+            GetWindowThreadProcessId(hwnd, &mut source_pid) != 0
+                && GetWindowThreadProcessId(hit, &mut target_pid) != 0
+                && external_drag_target(source_pid, target_pid)
+        }
+    };
+    if unsafe { ScreenToClient(hwnd, &mut point) == 0 || GetClientRect(hwnd, &mut rect) == 0 } {
+        return None;
+    }
+    let outside = external_window || point.x < rect.left || point.x >= rect.right || point.y < rect.top || point.y >= rect.bottom;
     let vk = if secondary { VK_RBUTTON } else { VK_LBUTTON };
     let held = unsafe { (GetAsyncKeyState(vk as i32) as u16 & 0x8000) != 0 };
     Some((outside, held))
+}
+
+fn external_drag_target(source_pid: u32, target_pid: u32) -> bool {
+    // Another NDR instance is external too. Same-process floating
+    // tooltips and dialogs must not trigger the OLE handoff.
+    source_pid != 0 && target_pid != 0 && source_pid != target_pid
+}
+
+#[test]
+fn overlapping_drag_target_requires_a_distinct_process() {
+    assert!(external_drag_target(42, 43));
+    assert!(!external_drag_target(42, 42));
+    assert!(!external_drag_target(42, 0));
+    assert!(!external_drag_target(0, 43));
 }
 
 #[windows::core::implement(windows::Win32::System::Ole::IDropSource)]

@@ -486,6 +486,62 @@ struct TypedSearch {
     /// Original WMIMEComposition (0x7d584c) in-composition display (+0x3dd): the search text before composition started.
     ime_base: Option<String>,
 }
+/// Smoke-test only: audit the label actually consumed by every visible
+/// file-list row, not merely the final sum at application shutdown.
+#[derive(Default)]
+struct FolderLabelTrace {
+    last: HashMap<PathBuf, String>,
+    samples: u64,
+    first_values: u64,
+    markers_after_value: u64,
+    approximate_samples: u64,
+    value_changes: u64,
+}
+impl FolderLabelTrace {
+    fn sample(&mut self, pane: &Pane) {
+        for path in &pane.folder_auto_visible {
+            // Manual size calculations deliberately retain their own
+            // progress and incomplete-result notation.
+            if pane.folder_sizes.contains_key(path) && !pane.folder_auto_paths.contains(path) {
+                continue;
+            }
+            self.samples += 1;
+            match pane.folder_size_display(path) {
+                Some(label) => {
+                    if label.starts_with('~') || label.starts_with('\u{2248}') {
+                        self.approximate_samples += 1;
+                    }
+                    if let Some(previous) = self.last.get_mut(path) {
+                        if previous != &label {
+                            self.value_changes += 1;
+                            *previous = label;
+                        }
+                    } else {
+                        if self.last.len() >= 512 {
+                            if let Some(old) = self.last.keys().find(|p| !pane.folder_auto_visible.contains(*p)).cloned() {
+                                self.last.remove(&old);
+                            }
+                        }
+                        // The trace is bounded by the same small per-pane
+                        // budget plus the actually visible rows.
+                        self.last.insert(path.clone(), label);
+                        self.first_values += 1;
+                    }
+                }
+                None => {
+                    if self.last.contains_key(path) {
+                        self.markers_after_value += 1;
+                    }
+                }
+            }
+        }
+    }
+    fn report(&self) -> serde_json::Value {
+        serde_json::json!({"samples":self.samples,"firstValues":self.first_values,
+            "markersAfterValue":self.markers_after_value,"approximateSamples":self.approximate_samples,
+            "valueChanges":self.value_changes})
+    }
+}
 struct Listing {
     pane: usize,
     generation: u64,
@@ -845,6 +901,7 @@ pub struct App {
     hwnd: isize,
     /// Whether it ever became the foreground window (GetForegroundWindow) during the startup check. Report's foreground.
     smoke_foreground: bool,
+    smoke_folder_labels: [FolderLabelTrace; 2],
     /// Repaint causes counted in the startup check (--smoke-seconds) (file:line -> paint count).
     smoke_repaint_causes: std::collections::BTreeMap<String, u32>,
     /// Slowest frame in the startup check (ms).
@@ -1147,6 +1204,7 @@ impl App {
             allow_drag_out: !cfg!(test),
             hwnd: 0,
             smoke_foreground: false,
+            smoke_folder_labels: Default::default(),
             smoke_repaint_causes: Default::default(),
             smoke_slowest_frame_ms: 0.0,
             smoke_slow_frames: 0,
@@ -1464,7 +1522,9 @@ impl App {
             // RestoreSelection, by name), counted folder sizes (+0x20/+0x24/+0x60 of kind-1 items with +0x68 restored by name), and the top position
             // (SetScrollTop); when the cursor name is gone it uses the old index (the last item before the drives when beyond the list). Cut marks (+100)
             // disappear because the items are new. C# RefreshPaneAsync clears everything, so only the skin theme does this.
-            let kept = (skin && listing.result.is_ok() && pane.listed.as_deref() == Some(location_key(pane).as_str())).then(|| {
+            // A failed same-location relist keeps the existing rows. Keep
+            // their last displayed totals too, not just successful relists.
+            let kept = (skin && pane.listed.as_deref() == Some(location_key(pane).as_str())).then(|| {
                 let marks: Vec<String> = pane.selected.iter().filter_map(|&row| pane.entries.get(row)).filter(|e| !e.drive && !e.is_parent()).map(|e| e.name.clone()).collect();
                 let sizes: Vec<(PathBuf, String, Option<u64>, bool)> = pane.folder_sizes.iter().filter_map(|(path, size)| size.clone().map(|s| (path.clone(), s, pane.folder_bytes.get(path).copied(), pane.folder_auto_paths.contains(path)))).collect();
                 (marks, sizes, pane.first_column, pane.cursor, self.pending_focus[listing.pane].is_some())
@@ -1711,6 +1771,9 @@ impl App {
                 AsyncResult::TextSource { path, edit } => self.text_source_ready(path, edit),
                 AsyncResult::FolderSizeHint { pane, generation, path, text, cancel } => {
                     let p = &mut self.panes[pane];
+                    // A disk hint is a previously completed observation of
+                    // this identity. It is presentation only until verified;
+                    // do not insert it into folder_bytes or suppress a scan.
                     if p.generation == generation && !cancel.load(Ordering::Relaxed)
                         && p.folder_auto_pending.get(&path).is_some_and(|token| Arc::ptr_eq(token, &cancel))
                         && !p.folder_sizes.get(&path).is_some_and(Option::is_some) {
@@ -1732,22 +1795,18 @@ impl App {
                             if scanned { self.panes[pane].folder_auto_scans += 1; }
                             self.panes[pane].folder_auto_visited += work.visited;
                             self.panes[pane].folder_auto_reused += work.reused;
-                            let due = self.folder_check_deadline(if complete { media.check_interval() } else { media.verify_interval() });
+                            let interval = if !complete { media.verify_interval() }
+                                else if !stable { media.check_interval() * 2 }
+                                else { media.check_interval() };
+                            let due = self.folder_check_deadline(interval);
                             self.record_folder_size_time(pane, &path, due);
-                            if !stable {
-                                // A write overlapped enumeration. Retain the previous
-                                // display and retry, never publish a mixed snapshot.
-                                // The visible-row deadline is scheduled once at the end of the frame.
+                            // Automatic displays are last-known-good values.
+                            // Never publish partial sums, or change a known
+                            // value to a tilde/marker while auditing it. A
+                            // first-time unreadable folder keeps its normal
+                            // marker; retries use the deadline above.
+                            if !stable || !complete {
                                 continue;
-                            }
-                            if !complete {
-                                if let Some(&old) = self.panes[pane].folder_bytes.get(&path) {
-                                    let label = format!("~{}", ndr::parity::size_to_str(old,
-                                        &self.settings.text("SizeUnit", "Auto"),
-                                        self.settings.flag("UseThousandsSeparator", true)));
-                                    self.panes[pane].folder_sizes.insert(path, Some(label));
-                                    continue;
-                                }
                             }
                         } else {
                             self.panes[pane].folder_manual_pending.remove(&path);
@@ -2438,6 +2497,11 @@ impl eframe::App for App {
         self.completion_toasts_ui(ctx);
         self.fade_menus(ctx);
         if let Some(seconds) = self.options.smoke_seconds {
+            if self.options.report.is_some() {
+                for (trace, pane) in self.smoke_folder_labels.iter_mut().zip(&self.panes) {
+                    trace.sample(pane);
+                }
+            }
             self.shot_step(ctx);
             // The startup check must run behind other windows (if it becomes the foreground window, the report records it and the release script stops).
             if self.hwnd != 0 && native::is_foreground(self.hwnd) {
@@ -2472,7 +2536,7 @@ impl eframe::App for App {
                         let (count, bytes) = completed.fold((0usize, 0u64), |(count, total), size| (count + 1, total.saturating_add(*size)));
                         serde_json::json!({"completed":count,"pending":p.folder_auto_pending.len(),"bytes":bytes,"requests":p.folder_auto_requests,"scans":p.folder_auto_scans,"visited":p.folder_auto_visited,"reused":p.folder_auto_reused,"hints":p.folder_auto_hints,"displayed":p.folder_auto_paths.len()})
                     };
-                    let report = serde_json::json!({"language":self.language,"frames":self.frames,"leftCount":items(&self.panes[0]),"rightCount":items(&self.panes[1]),"leftDrives":self.panes[0].drive_count(),"rightDrives":self.panes[1].drive_count(),"leftError":self.panes[0].error,"rightError":self.panes[1].error,"leftLoading":self.panes[0].loading,"rightLoading":self.panes[1].loading,"profile":self.profile,"runtime":"Rust","renderer":"OpenGL","foreground":self.smoke_foreground,"repaintCauses":self.smoke_repaint_causes,"slowestFrameMs":(self.smoke_slowest_frame_ms * 10.0).round() / 10.0,"slowFrames":self.smoke_slow_frames,"initialMaxFrameMs":self.smoke_initial_max_ms,"preparedLists":self.smoke_prepared_lists,"loadedMs":self.smoke_loaded_ms,"tipWindow":self.smoke_tip_window,"viewportPoints":[viewport.width(),viewport.height()],"nativePixelsPerPoint":native_scale,"pixelsPerPoint":ctx.pixels_per_point(),"folderSizes":[folder_stats(&self.panes[0]),folder_stats(&self.panes[1])],"folderCacheEntries":self.folder_size_cache.len(),"folderCacheWatches":self.folder_size_cache.values().filter(|v|v.watch.is_some()).count()});
+                    let report = serde_json::json!({"language":self.language,"frames":self.frames,"leftCount":items(&self.panes[0]),"rightCount":items(&self.panes[1]),"leftDrives":self.panes[0].drive_count(),"rightDrives":self.panes[1].drive_count(),"leftError":self.panes[0].error,"rightError":self.panes[1].error,"leftLoading":self.panes[0].loading,"rightLoading":self.panes[1].loading,"profile":self.profile,"runtime":"Rust","renderer":"OpenGL","foreground":self.smoke_foreground,"repaintCauses":self.smoke_repaint_causes,"slowestFrameMs":(self.smoke_slowest_frame_ms * 10.0).round() / 10.0,"slowFrames":self.smoke_slow_frames,"initialMaxFrameMs":self.smoke_initial_max_ms,"preparedLists":self.smoke_prepared_lists,"loadedMs":self.smoke_loaded_ms,"tipWindow":self.smoke_tip_window,"viewportPoints":[viewport.width(),viewport.height()],"nativePixelsPerPoint":native_scale,"pixelsPerPoint":ctx.pixels_per_point(),"folderSizes":[folder_stats(&self.panes[0]),folder_stats(&self.panes[1])],"folderLabelTrace":self.smoke_folder_labels.each_ref().map(FolderLabelTrace::report),"folderCacheEntries":self.folder_size_cache.len(),"folderCacheWatches":self.folder_size_cache.values().filter(|v|v.watch.is_some()).count()});
                     let _ = std::fs::write(
                         path,
                         serde_json::to_vec_pretty(&report).unwrap_or_default(),

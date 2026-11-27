@@ -119,8 +119,9 @@ impl DiskStore {
         if !self.enabled { return None; }
         let record = self.records.get(&key(path))?;
         if !live(record, now_seconds()) || native::folder_size_identity(path)? != record.identity { return None; }
-        // The prior process cannot prove that descendants are unchanged.
-        // The UI renders this as an approximate hint until a live scan.
+        // The prior process cannot prove descendants are unchanged. This
+        // is the last successful observation for the matching identity,
+        // for display only until a live scan validates the current total.
         Some(record.bytes)
     }
     pub fn record(&mut self, path: &Path, watch: &FolderSizeWatch, bytes: u64) {

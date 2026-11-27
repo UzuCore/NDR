@@ -3859,3 +3859,164 @@ fn default_theme_list_colors_match_nexus_and_old_cyan_profile_is_normalized() {
     drop(app);
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn automatic_folder_display_never_reverts_or_publishes_partial_totals() {
+    let (root, ctx, mut app) = fixture("stable-folder-label");
+    let path = root.join("left/folder");
+    app.settings.set_flag("LeftAutoFolderSize", true);
+    app.folder_size_workers = true; // Deterministic asynchronous result injection.
+    let mut trace = FolderLabelTrace::default();
+    let schedule = |app: &mut App| {
+        let p = &mut app.panes[0];
+        let token = Arc::new(AtomicBool::new(false));
+        p.folder_auto_paths.insert(path.clone());
+        p.folder_auto_visible.insert(path.clone());
+        p.folder_sizes.entry(path.clone()).or_insert(None);
+        p.folder_auto_pending.insert(path.clone(), token.clone());
+        token
+    };
+    let publish = |app: &mut App, cancel: Arc<AtomicBool>, bytes, text: &str, complete, stable| {
+        app.async_tx.send(AsyncResult::FolderSizeRow {
+            pane:0, generation:app.panes[0].generation, path:path.clone(), text:text.into(), bytes,
+            automatic:true, complete, stable, watch:None, scanned:true,
+            work:ndr::folder_cache::ScanWork::default(), audit_at:Instant::now(),
+            media:native::FolderSizeMedia::Fast, cancel,
+        }).unwrap();
+        app.poll(&ctx);
+    };
+    let assert_display = |app: &App, expected: Option<&str>| {
+        assert_eq!(app.panes[0].folder_size_display(&path).as_deref(), expected);
+    };
+
+    // A cold folder with inaccessible descendants must not publish a
+    // partial count or even mark partial bytes as a completed total.
+    let token = schedule(&mut app);
+    publish(&mut app, token, 1024, "\u{2248}1.00 KB", false, true);
+    assert_display(&app, None);
+    assert!(!app.panes[0].folder_bytes.contains_key(&path));
+    assert!(app.panes[0].folder_auto_times[&path] >= Instant::now()+Duration::from_secs(10));
+    trace.sample(&app.panes[0]);
+
+    // A previous-session verified snapshot has the same label as a new
+    // successful measurement, but is never counted as fresh folder_bytes.
+    let token = schedule(&mut app);
+    app.async_tx.send(AsyncResult::FolderSizeHint {
+        pane:0, generation:app.panes[0].generation, path:path.clone(), text:"3.00 KB".into(), cancel:token.clone(),
+    }).unwrap();
+    app.poll(&ctx);
+    assert_display(&app, Some("3.00 KB"));
+    assert!(!app.panes[0].folder_bytes.contains_key(&path));
+    trace.sample(&app.panes[0]);
+    publish(&mut app, token, 2048, "\u{2248}2.00 KB", false, true);
+    assert_display(&app, Some("3.00 KB"));
+    assert!(!app.panes[0].folder_bytes.contains_key(&path));
+    trace.sample(&app.panes[0]);
+
+    let token = schedule(&mut app);
+    publish(&mut app, token, 3072, "3.00 KB", true, true);
+    assert_eq!(app.panes[0].folder_bytes.get(&path), Some(&3072));
+    trace.sample(&app.panes[0]);
+    // Repeated incomplete, unstable and cancelled results cannot
+    // change a known size even for one sampled frame.
+    for _ in 0..12 {
+        let token = schedule(&mut app);
+        trace.sample(&app.panes[0]); // pending
+        publish(&mut app, token, 1024, "\u{2248}1.00 KB", false, true);
+        assert_display(&app, Some("3.00 KB"));
+        trace.sample(&app.panes[0]);
+        let token = schedule(&mut app);
+        publish(&mut app, token, 4096, "4.00 KB", true, false);
+        assert_display(&app, Some("3.00 KB"));
+        trace.sample(&app.panes[0]);
+        let token = schedule(&mut app);
+        token.store(true, Ordering::Relaxed);
+        publish(&mut app, token, 8192, "8.00 KB", true, true);
+        assert_display(&app, Some("3.00 KB"));
+        trace.sample(&app.panes[0]);
+        app.panes[0].cancel_automatic_folder_jobs();
+        app.panes[0].folder_auto_visible.insert(path.clone());
+        trace.sample(&app.panes[0]);
+    }
+    assert_eq!(app.panes[0].folder_bytes.get(&path), Some(&3072));
+
+    // A temporary read failure leaves the original listing visible.
+    // Previously this path cleared the old folder_sizes map entirely.
+    let generation = app.panes[0].generation;
+    app.apply_listing(Listing {pane:0,generation,result:Err("temporary listing failure".into()),
+        prepared:None,skipped_device_names:0,descriptions:HashMap::new(),drive_infos:HashMap::new()},&mut Vec::new());
+    assert_display(&app, Some("3.00 KB"));
+    app.panes[0].folder_auto_visible.insert(path.clone());
+    trace.sample(&app.panes[0]);
+    app.refresh(0);
+    assert_display(&app, Some("3.00 KB"));
+    wait(&mut app,&ctx);
+    assert_display(&app, Some("3.00 KB"));
+    app.panes[0].folder_auto_visible.insert(path.clone());
+    trace.sample(&app.panes[0]);
+
+    // The sole visible change is a newly verified different total.
+    let token = schedule(&mut app);
+    publish(&mut app, token, 6144, "6.00 KB", true, true);
+    assert_display(&app, Some("6.00 KB"));
+    assert_eq!(app.panes[0].folder_bytes.get(&path), Some(&6144));
+    trace.sample(&app.panes[0]);
+    assert_eq!((trace.first_values, trace.markers_after_value, trace.approximate_samples, trace.value_changes),(1,0,0,1));
+    assert!(trace.samples >= 50);
+    drop(app);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn automatic_folder_cache_eviction_never_drops_later_visible_rows() {
+    let (root,ctx,mut app) = fixture("stable-folder-eviction");
+    let now=Instant::now();
+    let first=root.join("left/folder");
+    let late=root.join("left/later-visible");
+    {
+        let pane=&mut app.panes[0];
+        for n in 0..514 {
+            let path=match n {0=>late.clone(),513=>first.clone(),_=>root.join(format!("left/folder-{n:03}"))};
+            pane.folder_auto_paths.insert(path.clone());
+            pane.folder_bytes.insert(path.clone(),1024);
+            pane.folder_sizes.insert(path.clone(),Some("1.00 KB".into()));
+            pane.folder_auto_times.insert(path,now+Duration::from_millis(n));
+        }
+        pane.folder_auto_visible.insert(first.clone());
+    }
+    // Simulate the first painted row hitting its cache before the later
+    // visible row has been encountered by the renderer.
+    app.record_folder_size_time(0,&first,now+Duration::from_secs(2));
+    assert_eq!(app.panes[0].folder_size_display(&late).as_deref(),Some("1.00 KB"));
+    app.panes[0].folder_auto_visible.insert(late.clone());
+    app.finish_visible_folder_size_frame(&ctx);
+    assert_eq!(app.panes[0].folder_auto_paths.len(),512);
+    assert_eq!(app.panes[0].folder_sizes.len(),512);
+    assert_eq!(app.panes[0].folder_size_display(&late).as_deref(),Some("1.00 KB"));
+    assert_eq!(app.panes[0].folder_size_display(&first).as_deref(),Some("1.00 KB"));
+    drop(app);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn automatic_folder_replays_clean_cached_value_while_io_busy() {
+    let (root,ctx,mut app)=fixture("stable-folder-busy-cache");
+    let folder=root.join("left/folder");
+    app.settings.set_flag("LeftAutoFolderSize",true);
+    let row=app.panes[0].entries.iter().position(|e|e.path==folder).unwrap();
+    app.cache_folder_size(folder.clone(), 4096, native::FolderSizeWatch::open(&folder).map(Arc::new),
+        Instant::now(),native::FolderSizeMedia::Fast);
+    // Exercise enqueue's foreground guard directly through real app job state.
+    let cancel=Arc::new(AtomicBool::new(false));
+    let (_tx,rx)=mpsc::channel();
+    app.job=Some(Job::new(rx,cancel,"fixture".into()));
+    app.queue_folder_size(0,row);
+    assert!(app.folder_auto_busy);
+    assert_eq!(app.panes[0].folder_size_display(&folder).as_deref(),Some("4.00 KB"));
+    assert_eq!(app.panes[0].folder_auto_pending.len(),0);
+    assert!(!app.folder_size_workers);
+    app.job=None;
+    app.poll(&ctx);
+    drop(app);
+    fs::remove_dir_all(root).unwrap();
+}
