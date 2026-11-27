@@ -6,18 +6,23 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 pub(crate) struct VerificationBudget {
     used: AtomicUsize,
     scans: AtomicUsize,
+    light_scans: AtomicUsize,
 }
 impl VerificationBudget {
     pub(crate) const fn new() -> Self {
-        Self { used: AtomicUsize::new(0), scans: AtomicUsize::new(0) }
+        Self { used: AtomicUsize::new(0), scans: AtomicUsize::new(0), light_scans: AtomicUsize::new(0) }
     }
     /// Register before directory enumeration so overlapping scans can
     /// see the other reader even before it begins exact metadata checks.
     pub(crate) fn begin_scan(&self) -> VerificationScan<'_> {
         self.scans.fetch_add(1, Ordering::AcqRel);
-        VerificationScan { budget:self }
+        VerificationScan { budget:self,light:false }
     }
-    pub(crate) fn acquire(&self, requested: usize, parallelism: usize) -> VerificationPermit<'_> {
+    #[cfg(test)]
+    fn acquire(&self,requested:usize,parallelism:usize)->VerificationPermit<'_>{
+        self.acquire_for(requested,parallelism,false)
+    }
+    fn acquire_for(&self, requested: usize, parallelism: usize, light:bool) -> VerificationPermit<'_> {
         // The caller always contributes one worker. Preserve capacity for
         // a second listing caller and cap all extra workers across panes.
         let scans = self.scans.load(Ordering::Acquire).max(1);
@@ -26,7 +31,17 @@ impl VerificationBudget {
         // already overlap, reserve a fair share rather than letting the
         // first verifier consume the whole budget. Existing permits are
         // never revoked; late arrivals may receive fewer workers.
-        let fair = limit.div_ceil(scans);
+        let known_light=self.light_scans.load(Ordering::Acquire).min(scans);
+        let heavy=scans-known_light;
+        // An enumerator with no completed count is still treated as
+        // heavy. For a verified smaller/slow-media scan, leave capacity
+        // for a large scan rather than capping both at half. With two
+        // scans on 12 logical CPUs this is 4+8 total workers (callers
+        // included). Equal large scans still get 6+6. No revocation.
+        let fair=if known_light>0 && heavy>0 {
+            let total=known_light.saturating_mul(3).saturating_add(heavy.saturating_mul(7));
+            (limit * if light{3}else{7}).div_ceil(total)
+        }else{limit.div_ceil(scans)};
         let wanted = requested.saturating_sub(1).min(fair);
         let mut current = self.used.load(Ordering::Relaxed);
         loop {
@@ -41,9 +56,26 @@ impl VerificationBudget {
 }
 pub(crate) struct VerificationScan<'a> {
     budget: &'a VerificationBudget,
+    light:bool,
+}
+impl<'a> VerificationScan<'a>{
+    pub(crate) fn acquire(&mut self,requested:usize,parallelism:usize)->VerificationPermit<'a>{
+        // The requested worker count already accounts for row count,
+        // exact native stat availability and storage media.
+        let light=requested<=8;
+        if light!=self.light{
+            if light{self.budget.light_scans.fetch_add(1,Ordering::AcqRel);}
+            else{self.budget.light_scans.fetch_sub(1,Ordering::AcqRel);}
+            self.light=light;
+        }
+        self.budget.acquire_for(requested,parallelism,light)
+    }
 }
 impl Drop for VerificationScan<'_> {
-    fn drop(&mut self) { self.budget.scans.fetch_sub(1, Ordering::AcqRel); }
+    fn drop(&mut self) {
+        if self.light{self.budget.light_scans.fetch_sub(1,Ordering::AcqRel);}
+        self.budget.scans.fetch_sub(1, Ordering::AcqRel);
+    }
 }
 
 pub(crate) struct VerificationPermit<'a> {
@@ -107,6 +139,33 @@ mod tests {
         drop((a,c,first,second));
         assert_eq!(b.scans.load(Ordering::Relaxed),0);
         assert_eq!(b.used.load(Ordering::Relaxed),0);
+    }
+
+    #[test]
+    fn small_scan_leaves_capacity_for_large_scan_and_releases_classification(){
+        let b=VerificationBudget::new();
+        let mut small=b.begin_scan();let mut large=b.begin_scan();
+        let a=small.acquire(8,12);let c=large.acquire(12,12);
+        assert_eq!((a.workers(),c.workers()),(4,8));
+        assert_eq!(b.used.load(Ordering::Relaxed),10);
+        drop((a,c,small,large));
+        assert_eq!(b.used.load(Ordering::Relaxed),0);
+        assert_eq!(b.light_scans.load(Ordering::Relaxed),0);
+        assert_eq!(b.scans.load(Ordering::Relaxed),0);
+        let mut only=b.begin_scan();
+        assert_eq!(only.acquire(8,12).workers(),8);
+    }
+    #[test]
+    fn weighted_late_arrival_never_revokes_or_overbooks(){
+        let b=VerificationBudget::new();
+        let mut large=b.begin_scan();let mut small=b.begin_scan();
+        let a=large.acquire(12,12);let c=small.acquire(8,12);
+        assert_eq!((a.workers(),c.workers()),(6,4));
+        assert!(b.used.load(Ordering::Relaxed)<=10);
+        drop((a,c,large,small));
+        let mut first=b.begin_scan();let mut second=b.begin_scan();
+        let a=first.acquire(12,12);let c=second.acquire(12,12);
+        assert_eq!((a.workers(),c.workers()),(6,6));
     }
 
     #[test]

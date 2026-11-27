@@ -2545,7 +2545,7 @@ fn back_wheel_and_dot_files_follow_the_user_requests() {
     let row = |app: &App, name: &str| app.panes[0].entries.iter().position(|e| e.name == name).unwrap();
     // Dot files: name cell = whole name, extension cell empty. ".config.json" is ".config" + "json".
     app.compute_view(0);
-    let cells = |app: &App, name: &str| app.panes[0].view.cells[row(app, name)].clone();
+    let cells = |app: &App, name: &str| app.panes[0].view.cells.owned_row(row(app, name));
     assert_eq!((cells(&app, ".gitconfig")[0].as_ref(), cells(&app, ".gitconfig")[1].as_ref()), (".gitconfig", ""));
     assert_eq!((cells(&app, ".config.json")[0].as_ref(), cells(&app, ".config.json")[1].as_ref()), (".config", "json"));
     // Original GetAttrString: A/H/R/S into "____" (the folder dir000 has no attributes).
@@ -4214,7 +4214,7 @@ fn structural_partial_insert_rename_remove_matches_full_view_and_selection(){
     let original_len=app.panes[0].entries.len();
     let mut revision=1;
     for (new,removed) in [(Some("aa.txt"),None),(Some("ab.txt"),Some("aa.txt")),(None,Some("ab.txt"))]{
-        let name_cell=app.panes[0].view.cells[app.panes[0].cursor][0].clone();
+        let name_cell=app.panes[0].view.cells.cell(app.panes[0].cursor,0).clone();
         match (new,removed){
             (Some(n),None)=>fs::write(left.join(n),b"small").unwrap(),
             (Some(n),Some(o))=>fs::rename(left.join(o),left.join(n)).unwrap(),
@@ -4234,7 +4234,7 @@ fn structural_partial_insert_rename_remove_matches_full_view_and_selection(){
             skipped_device_names:0,descriptions,drive_infos};
         assert!(app.apply_partial_listing_inner(listing),"structural edit {new:?}/{removed:?}");
         let pane=&app.panes[0];let row=pane.entries.iter().position(|e|e.path==keep).unwrap();
-        assert_eq!(pane.cursor,row);assert!(pane.selected.contains(&row));assert!(Arc::ptr_eq(&name_cell,&pane.view.cells[row][0]));
+        assert_eq!(pane.cursor,row);assert!(pane.selected.contains(&row));assert!(Arc::ptr_eq(&name_cell,pane.view.cells.cell(row,0)));
         assert_eq!(pane.entries.len(),original_len+usize::from(new.is_some()));
         assert_eq!(pane.view.cells.len(),pane.entries.len());
         if let Some(n)=new{assert!(pane.entries.iter().any(|e|e.name==n));}
@@ -4281,7 +4281,7 @@ fn sorted_partial_edits_match_full_order_in_extension_size_modified_and_attribut
             let keep=left.join("ordinary-00128.txt");
             let row=app.panes[0].entries.iter().position(|e|e.path==keep).unwrap();
             app.panes[0].cursor=row;app.panes[0].selected.insert(row);
-            let text=app.panes[0].view.cells[row][0].clone();
+            let text=app.panes[0].view.cells.cell(row,0).clone();
             let new=left.join("new-small.bin");fs::write(&new,b"12345").unwrap();
             let changed_path=if matches!(mode,"Size"|"Modified"){
                 fs::remove_file(&new).unwrap();
@@ -4299,7 +4299,7 @@ fn sorted_partial_edits_match_full_order_in_extension_size_modified_and_attribut
             assert!(app.apply_partial_listing_inner(listing),"{mode}/{desc}");
             let pane=&app.panes[0];let row=pane.entries.iter().position(|e|e.path==keep).unwrap();
             assert_eq!(pane.cursor,row);assert!(pane.selected.contains(&row));
-            if changed_path!=keep{assert!(Arc::ptr_eq(&text,&pane.view.cells[row][0]));}
+            if changed_path!=keep{assert!(Arc::ptr_eq(&text,pane.view.cells.cell(row,0)));}
             let cells=pane.view.cells.clone();let field=pane.prepared_field_max.as_ref().unwrap().2;
             let order:Vec<_>=pane.entries.iter().map(|e|(e.path.clone(),e.size,e.modified,e.attributes)).collect();
             app.refresh(0);wait(&mut app,&ctx);

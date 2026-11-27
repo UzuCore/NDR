@@ -239,8 +239,26 @@ impl FieldMaxPlan {
 /// Borrow names, extensions and descriptions instead of cloning every cell.
 /// Date gap expansion is needed only for the date field. Keep the original
 /// row order of the width accumulation so the layout math remains identical.
+const FIELD_MEASURE_ROWS:usize=16_384;
 fn measure_field_cells(entries: &[Entry], view: &PaneView,
-    measure: impl FnOnce(&[&str]) -> Option<Vec<f32>>, cancel: Option<&AtomicBool>) -> Option<FieldMax> {
+    mut measure: impl FnMut(&[&str]) -> Option<Vec<f32>>, cancel: Option<&AtomicBool>) -> Option<FieldMax> {
+    let mut fm=FieldMax::default();
+    // Bound temporary name pointers, distinct text tables and the width
+    // result to a small block even when every description/date is unique.
+    // Accumulate directly into the same FieldMax across blocks; summing
+    // block totals would change the original floating-point row order.
+    let count=entries.len().min(view.cells.len());
+    for offset in (0..count).step_by(FIELD_MEASURE_ROWS) {
+        let end=(offset+FIELD_MEASURE_ROWS).min(count);
+        measure_field_block(&entries[offset..end],view.cells.range(offset..end),&mut measure,cancel,&mut fm)?;
+    }
+    if cancel.is_some_and(|c|c.load(Ordering::Relaxed)){return None;}
+    if fm.ext_count>0{fm.ext_average=(fm.ext_sum/fm.ext_count as f32).floor();}
+    Some(fm)
+}
+fn measure_field_block<'a>(entries: &[Entry], cells: impl Iterator<Item=super::cell_rows::CellRowRef<'a>>,
+    measure: &mut impl FnMut(&[&str]) -> Option<Vec<f32>>, cancel: Option<&AtomicBool>,
+    fm:&mut FieldMax) -> Option<()> {
     // Filenames are usually unique: measure them directly in row order
     // instead of building a large hash table and a second string vector.
     // Other columns deduplicate text, with an exact consecutive hit check.
@@ -264,12 +282,12 @@ fn measure_field_cells(entries: &[Entry], view: &PaneView,
         last[index]=Some((text,gap,slot));
         slot
     }
-    for (row,(entry,cells)) in entries.iter().zip(&view.cells).enumerate(){
+    for (row,(entry,cells)) in entries.iter().zip(cells).enumerate(){
         if row%256==0 && cancel.is_some_and(|c|c.load(Ordering::Relaxed)){return None;}
         if entry.drive{continue;}
-        names.push(&cells[0]);
+        names.push(cells[0].as_ref());
         if !entry.is_dir{
-            let slot=add(&mut known,&mut masks,&mut last,1,&cells[1],false);
+            let slot=add(&mut known,&mut masks,&mut last,1,cells[1].as_ref(),false);
             if !extensions.is_empty(){extensions.push(slot);}
             else if let Some((first,count))=uniform_extension.as_mut(){
                 if *first==slot{*count+=1;}else{
@@ -277,10 +295,10 @@ fn measure_field_cells(entries: &[Entry], view: &PaneView,
                     uniform_extension=None;
                 }
             }else{uniform_extension=Some((slot,1));}
-            if entry.size>0{add(&mut known,&mut masks,&mut last,3,&cells[3],false);}
+            if entry.size>0{add(&mut known,&mut masks,&mut last,3,cells[3].as_ref(),false);}
         }
-        add(&mut known,&mut masks,&mut last,4,&cells[4],cells[4].contains(ndr::listing::LIST_DATE_TIME_GAP));
-        add(&mut known,&mut masks,&mut last,6,&cells[6],false);
+        add(&mut known,&mut masks,&mut last,4,cells[4].as_ref(),cells[4].contains(ndr::listing::LIST_DATE_TIME_GAP));
+        add(&mut known,&mut masks,&mut last,6,cells[6].as_ref(),false);
     }
     let n=names.len();
     let mut texts=vec![std::borrow::Cow::Borrowed("");known.len()];
@@ -288,30 +306,26 @@ fn measure_field_cells(entries: &[Entry], view: &PaneView,
         texts[slot]=if *gap{std::borrow::Cow::Owned(text.replace(ndr::listing::LIST_DATE_TIME_GAP,"  "))}
             else{std::borrow::Cow::Borrowed(*text)};
     }
-    // Avoid geometric growth of the million-name pointer buffer when
-    // only a handful of additional unique column strings are appended.
+    // Avoid geometric growth of this block's name pointer buffer when
+    // appending a handful of additional unique column strings.
     names.reserve_exact(texts.len());
     names.extend(texts.iter().map(|t|t.as_ref()));
     if cancel.is_some_and(|c|c.load(Ordering::Relaxed)){return None;}
     let widths=measure(&names)?;
     if widths.len()!=names.len(){return None;}
-    let mut fm=FieldMax::default();
     for &width in &widths[..n]{fm.max[0]=fm.max[0].max(width);fm.name_sum+=width;fm.items+=1;}
     for (slot,mask) in masks.into_iter().enumerate(){
         for field in [1,3,4,6]{if mask&(1<<field)!=0{fm.max[field]=fm.max[field].max(widths[n+slot]);}}
     }
-    let (mut ext_sum,mut ext_count)=(0f32,0usize);
     if let Some((slot,count))=uniform_extension{
         let width=widths[n+slot];
         if width>0.0{
             // Preserve the exact floating-point accumulation order.
-            for _ in 0..count{ext_sum+=width;}ext_count=count;
+            for _ in 0..count{fm.ext_sum+=width;}fm.ext_count+=count;
         }
     }
-    for slot in extensions{let width=widths[n+slot];if width>0.0{ext_sum+=width;ext_count+=1;}}
-    fm.ext_sum=ext_sum;fm.ext_count=ext_count;
-    if ext_count>0{fm.ext_average=(ext_sum/ext_count as f32).floor();}
-    Some(fm)
+    for slot in extensions{let width=widths[n+slot];if width>0.0{fm.ext_sum+=width;fm.ext_count+=1;}}
+    Some(())
 }
 
 #[test]
@@ -332,6 +346,54 @@ fn field_extension_uniform_and_mixed_measurements_preserve_row_order(){
         assert_eq!(measured.max[1],extensions.iter().map(|s|s.len()).max().unwrap_or(0) as f32);
         assert_eq!(measured.items,entries.len());
     }
+}
+
+#[test]
+fn field_measurement_blocks_match_reference_and_bound_unique_text() {
+    let mut entries=Vec::new();
+    let mut view=PaneView::default();
+    let count=FIELD_MEASURE_ROWS*2+19;
+    let width=|s:&str|s.chars().fold(0.0f32,|acc,c|acc+(c as u32%19) as f32*0.17);
+    let mut expected=FieldMax::default();
+    for i in 0..count {
+        let mut e=Entry::parent_item(PathBuf::from(format!("file-{i}")),None);
+        e.drive=i%97==0; e.is_dir=i%13==0; e.size=if i%9==0{0}else{i as u64};
+        let cells:[Arc<str>;7]=[
+            Arc::from(format!("name-{i}")),
+            Arc::from(if i<FIELD_MEASURE_ROWS{"txt"}else if i%3==0{""}else{"png"}),
+            Arc::from("kind"),Arc::from(format!("{}",e.size)),
+            Arc::from(format!("day-{i}{}time",ndr::listing::LIST_DATE_TIME_GAP)),
+            Arc::from("A"),Arc::from(format!("note-{i}")),
+        ];
+        if !e.drive {
+            let w=width(&cells[0]);expected.max[0]=expected.max[0].max(w);
+            expected.name_sum+=w;expected.items+=1;
+            if !e.is_dir {
+                let w=width(&cells[1]);expected.max[1]=expected.max[1].max(w);
+                if w>0.0{expected.ext_sum+=w;expected.ext_count+=1;}
+                if e.size>0{expected.max[3]=expected.max[3].max(width(&cells[3]));}
+            }
+            expected.max[4]=expected.max[4].max(width(&cells[4].replace(ndr::listing::LIST_DATE_TIME_GAP,"  ")));
+            expected.max[6]=expected.max[6].max(width(&cells[6]));
+        }
+        entries.push(e);view.cells.push(cells);
+    }
+    expected.ext_average=(expected.ext_sum/expected.ext_count as f32).floor();
+    let mut calls=0;let mut peak=0;
+    let got=measure_field_cells(&entries,&view,|texts|{
+        calls+=1;peak=peak.max(texts.len());
+        Some(texts.iter().map(|s|width(s)).collect())
+    },None).unwrap();
+    assert_eq!(got,expected);
+    assert_eq!(calls,3);
+    assert!(peak<=FIELD_MEASURE_ROWS*5);
+    let cancelled=AtomicBool::new(false);
+    let mut calls=0;
+    assert!(measure_field_cells(&entries,&view,|texts|{
+        calls+=1;cancelled.store(true,Ordering::Relaxed);
+        Some(texts.iter().map(|s|width(s)).collect())
+    },Some(&cancelled)).is_none());
+    assert_eq!(calls,1);
 }
 
 impl App {
@@ -388,10 +450,12 @@ impl App {
         let id = egui::Id::new(("ndr-original-field-max", index));
         if let Some((_, fm)) = ui.data(|d| d.get_temp::<(u64, FieldMax)>(id)).filter(|c| c.0 == key) { return fm; }
         let font = egui::FontId::new(self.list_font_size, egui::FontFamily::Name(super::LIST_FONT_FAMILY.into()));
-        let mut fm = measure_field_cells(&pane.entries, &pane.view, |texts| {
-            Some(self.gdi_list_widths(texts).unwrap_or_else(|| ui.fonts_mut(|fonts|
-                texts.iter().map(|t| t.chars().map(|c| fonts.glyph_width(&font, c)).sum::<f32>().ceil()).collect())))
-        }, None).unwrap_or_default();
+        let mut fm = measure_field_cells(&pane.entries, &pane.view, |texts| self.gdi_list_widths(texts), None)
+            // If native font measurement fails on any block, restart with
+            // one consistent fallback rather than mixing two width systems.
+            .or_else(|| measure_field_cells(&pane.entries, &pane.view, |texts| Some(ui.fonts_mut(|fonts|
+                texts.iter().map(|t| t.chars().map(|c| fonts.glyph_width(&font, c)).sum::<f32>().ceil()).collect())),None))
+            .unwrap_or_default();
         for text in plan.size_labels(&pane.entries) {
             fm.max[3] = fm.max[3].max(self.list_text_width(ui, &text));
         }
@@ -1416,7 +1480,7 @@ impl App {
             } else if let Some(drives) = drives {
                 Ok(drives
                     .into_iter()
-                    .map(|root| Entry { name: root.to_string_lossy().into_owned(), path: root, is_dir: true, size: 0, modified: None, hidden: false, attributes: 0x10, drive: false })
+                    .map(|root| Entry { name: root.to_string_lossy().into_owned(), path: root, is_dir: true, size: 0, modified: None, hidden: false, attributes: 0x10, drive: true })
                     .collect())
             } else if let Some(location) = archive {
                 ndr::archive::list_with_skipped_devices(
@@ -2293,7 +2357,7 @@ impl App {
                                 ui.visuals().text_color()
                             };
                             let color = texts.colors[row].map_or(default, |(r, g, b)| Color32::from_rgb(r, g, b));
-                            let cells = &texts.cells[row];
+                            let cells = texts.cells.row(row);
                             let cursor_row = pane.cursor == row;
                             let bar_slot = original.map(|_| ui.painter().add(egui::Shape::Noop));
                             let framed = false;
@@ -2602,13 +2666,13 @@ impl App {
         // fall back if removing the last known maximum requires a rescan.
         const FIELDS:[usize;5]=[0,1,3,4,6];
         let mut texts=Vec::with_capacity((removed.len()+changed.len())*5);
-        fn row_texts(entry:&Entry,cells:&[Arc<str>;7])->[String;5]{
+        fn row_texts(entry:&Entry,cells:super::cell_rows::CellRowRef<'_>)->[String;5]{
             [cells[0].to_string(),cells[1].to_string(),
                 if entry.size==0{String::new()}else{cells[3].to_string()},
                 cells[4].replace(ndr::listing::LIST_DATE_TIME_GAP,"  "),cells[6].to_string()]
         }
-        for &row in &removed{texts.extend(row_texts(&pane.entries[row],&pane.view.cells[row]));}
-        for (entry,cells) in changed.iter().zip(&partial.view.cells){texts.extend(row_texts(entry,cells));}
+        for &row in &removed{texts.extend(row_texts(&pane.entries[row],pane.view.cells.row(row)));}
+        for (entry,cells) in changed.iter().zip(partial.view.cells.iter()){texts.extend(row_texts(entry,cells));}
         let Some(widths)=self.gdi_list_widths(&texts)else{return false};
         if widths.len()!=texts.len(){return false}
         let (old_widths,new_widths)=widths.split_at(removed.len()*5);
@@ -2623,7 +2687,7 @@ impl App {
                     let remains=pane.entries.iter().enumerate().any(|(i,e)|
                         removed.binary_search(&i).is_err()&&!e.drive&&
                         (field!=1||!e.is_dir)&&(field!=3||(!e.is_dir&&e.size>0))&&
-                        pane.view.cells[i][field]==pane.view.cells[row][field]);
+                        pane.view.cells.cell(i,field)==pane.view.cells.cell(row,field));
                     if !remains{return false}
                 }
             }
@@ -2662,7 +2726,7 @@ impl App {
         let typed_cursor=self.typed_search[index].cursor.and_then(remap);
         let inserted_count=changed.len()-replacement.len();
         let pane=&mut self.panes[index];
-        let mut additions:Vec<_>=changed.into_iter().zip(partial.view.cells)
+        let mut additions:Vec<_>=changed.into_iter().zip(partial.view.cells.into_rows())
             .zip(partial.view.colors).map(Some).collect();
         for &row in removed.iter().rev(){
             pane.entries.remove(row);pane.view.cells.remove(row);pane.view.colors.remove(row);
@@ -2740,14 +2804,14 @@ impl App {
                 old.path.extension().is_some_and(|e|e.eq_ignore_ascii_case("ndr"))||
                 ndr::listing::group_key_cow(old,&plan.view.group_mode,&plan.view.category_mode)
                     !=ndr::listing::group_key_cow(new,&plan.view.group_mode,&plan.view.category_mode){return false}
-            let before=&pane.view.cells[row];let after=&partial.view.cells[i];
+            let before=pane.view.cells.row(row);let after=partial.view.cells.row(i);
             if [0,1,2,5,6].iter().any(|&c|before[c]!=after[c])||pane.view.colors[row]!=partial.view.colors[i]{return false}
             let Some(total)=bytes.checked_sub(old.size).and_then(|b|b.checked_add(new.size))else{return false};
             bytes=total;positions[i]=row;
         }
         if positions.contains(&usize::MAX){return false}
         for (i,&row) in positions.iter().enumerate(){
-            let before=&pane.view.cells[row];let after=&partial.view.cells[i];
+            let before=pane.view.cells.row(row);let after=partial.view.cells.row(i);
             widths.push(if pane.entries[row].size==0{String::new()}else{before[3].to_string()});
             widths.push(if changed[i].size==0{String::new()}else{after[3].to_string()});
             widths.push(before[4].replace(ndr::listing::LIST_DATE_TIME_GAP,"  "));
@@ -2764,10 +2828,10 @@ impl App {
         }
         let pane=&mut self.panes[index];
         let count=changed.len();
-        for ((row,entry),cells) in positions.into_iter().zip(changed).zip(partial.view.cells){
+        for ((row,entry),cells) in positions.into_iter().zip(changed).zip(partial.view.cells.into_rows()){
             pane.entries[row]=entry;
             for col in [3,4]{
-                if pane.view.cells[row][col]!=cells[col]{pane.view.cells[row][col]=cells[col].clone();}
+                if pane.view.cells.cell(row,col)!=&cells[col]{pane.view.cells.set(row,col,cells[col].clone());}
             }
         }
         pane.summary.as_mut().unwrap().bytes=bytes;

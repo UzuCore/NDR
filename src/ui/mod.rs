@@ -24,6 +24,7 @@ mod job_scheduler;
 mod list_export_dialog;
 mod list_keys;
 mod detail_rows;
+mod cell_rows;
 mod list_view;
 mod main_window;
 mod menu_data;
@@ -910,6 +911,7 @@ pub struct App {
     vault_dialog: Option<vault_window::VaultDialog>,
     /// Authenticated SQLCipher connections retained in memory between visits.
     vault_sessions: HashMap<PathBuf, ndr::vault::Vault>,
+    vault_backing_check_at: Option<Instant>,
     #[cfg(feature = "winfsp-vault")]
     vault_mounts: Vec<vault_winfsp::VaultMount>,
     /// Authenticated whole-container filesystem mounts, one per unlocked .ndr.
@@ -1258,6 +1260,7 @@ impl App {
             original_dialogs: Vec::new(),
             vault_dialog: None,
             vault_sessions: HashMap::new(),
+            vault_backing_check_at: None,
             #[cfg(feature = "winfsp-vault")]
             vault_mounts: Vec::new(),
             #[cfg(feature = "winfsp-vault")]

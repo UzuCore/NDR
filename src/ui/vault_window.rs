@@ -92,12 +92,18 @@ impl App {
             let ctx = self.egui_ctx.clone();
             self.vault_transfer_tick(&ctx);
         }
+        self.forget_vault_pane(pane, true);
+    }
+
+    /// Wipe the decrypted presentation and optionally retain authentication.
+    /// An externally removed container must never enter the session cache.
+    fn forget_vault_pane(&mut self, pane: usize, keep_session: bool) {
         let Some(mut container) = self.panes[pane].vault.take() else { return };
         for (_, name) in &mut container.stack { name.zeroize(); }
         // Keep only the authenticated SQLCipher connection, never the
         // decrypted pane view or editor text. No password is stored on disk.
         let policy = SessionPolicy::from_settings(&self.settings);
-        if !container.database.expired(policy) {
+        if keep_session && !container.database.expired(policy) && !container.database.backing_removed() {
             let key = std::fs::canonicalize(&container.file).unwrap_or(container.file.clone());
             self.vault_sessions.insert(key, container.database);
         }
@@ -122,7 +128,79 @@ impl App {
         self.pending_focus[pane] = None;
     }
 
+    fn vault_removed_backing_tick(&mut self, ctx: &egui::Context) {
+        let mut active = !self.vault_sessions.is_empty() || self.panes.iter().any(|p| p.vault.is_some());
+        #[cfg(feature = "winfsp-vault")]
+        { active |= !self.vault_trees.is_empty() || !self.vault_mounts.is_empty(); }
+        if !active { self.vault_backing_check_at = None; return; }
+        let interval = Duration::from_millis(500);
+        ctx.request_repaint_after(interval);
+        if self.vault_backing_check_at.is_some_and(|at| at.elapsed() < interval) { return; }
+        self.vault_backing_check_at = Some(Instant::now());
+
+        // Revoke first so Explorer cannot open new decrypted objects while
+        // the pane/clipboard is being purged. Existing editor handles keep
+        // the established safe flush/close policy.
+        #[cfg(feature = "winfsp-vault")]
+        {
+            for tree in &self.vault_trees {
+                if tree.backing_removed() { tree.revoke(); }
+            }
+            for mount in &self.vault_mounts {
+                if mount.backing_removed() { mount.revoke(); }
+            }
+        }
+        let removed: [bool; 2] = std::array::from_fn(|i|
+            self.panes[i].vault.as_ref().is_some_and(|v| v.database.backing_removed()));
+        let mut removed_paths: Vec<PathBuf> = self.panes.iter().enumerate()
+            .filter_map(|(i,p)| removed[i].then(|| p.vault.as_ref().unwrap().file.clone())).collect();
+        self.vault_sessions.retain(|_, database| {
+            if database.backing_removed() { removed_paths.push(database.file.clone()); false } else { true }
+        });
+        if !removed_paths.is_empty() {
+            if self.vault_clipboard.as_ref().is_some_and(|(_, path, _, _, _, _)|
+                removed_paths.iter().any(|p| ndr::fsops::same_or_inside(path,p) && ndr::fsops::same_or_inside(p,path))) {
+                if let Some((_, _, _, mut names, _, _)) = self.vault_clipboard.take() {
+                    for name in &mut names { name.zeroize(); }
+                }
+            }
+            if removed.iter().any(|&v| v) {
+                self.file_drag = None;
+            }
+            // Roll back pending stream work before dropping its authenticated
+            // owner; never cancel an unrelated transfer.
+            if self.vault_transfer.as_ref().is_some_and(|job| job.finished.is_none()
+                && (removed[job.source] || removed[job.target])) {
+                if let Some(job) = self.vault_transfer.as_mut() { job.cancelled = true; }
+                self.vault_transfer_tick(ctx);
+            }
+            for pane in 0..2 {
+                if !removed[pane] { continue; }
+                let parent = self.panes[pane].vault.as_ref().and_then(|v| v.file.parent())
+                    .unwrap_or_else(|| Path::new(".")).to_path_buf();
+                self.forget_vault_pane(pane, false);
+                let target = parent.ancestors().find(|p| p.is_dir()).unwrap_or(&parent).to_path_buf();
+                self.navigate(pane, target, false);
+            }
+            self.status = self.language_pack.text("NDRVault.StatusLocked", "Encrypted folder locked. Reopen to authenticate.");
+        }
+        #[cfg(feature = "winfsp-vault")]
+        {
+            let mut index = 0;
+            while index < self.vault_mounts.len() {
+                if !self.vault_mounts[index].is_revoked() || self.vault_mounts[index].has_open_files() {
+                    index += 1; continue;
+                }
+                match self.vault_mounts[index].finish() {
+                    Ok(()) => { self.vault_mounts.remove(index); }
+                    Err(error) => { eprintln!("NDR removed encrypted mount finalization failed: {error}"); index += 1; }
+                }
+            }
+        }
+    }
+
     pub(super) fn vault_security_tick(&mut self, ctx: &egui::Context) {
+        self.vault_removed_backing_tick(ctx);
         let policy = SessionPolicy::from_settings(&self.settings);
         let minimized = self.settings.flag("VaultLockOnMinimize", false)
             && ctx.input(|i| i.viewport().minimized.unwrap_or(false));
@@ -197,6 +275,7 @@ impl App {
             return;
         }
         let Some(vault) = self.panes[pane].vault.as_ref() else { return };
+        if vault.database.backing_removed() { return; }
         if self.vault_trees.iter().any(|m| m.vault_path == vault.file && !m.is_revoked()) {
             return;
         }
@@ -1550,6 +1629,11 @@ mod tests {
             "editing a different file must not erase NDR's new directory");
         assert!(state.database.find_child(1, "imported.txt").unwrap().is_some(),
             "editing a different file must not erase Explorer imports");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while app.vault_trees.iter().any(|tree| tree.has_open_files()) {
+            assert!(Instant::now() < deadline, "WinFsp close callback did not drain");
+            std::thread::sleep(Duration::from_millis(25));
+        }
         for tree in &mut app.vault_trees { tree.finish().unwrap(); }
         app.vault_trees.clear();
         drop(app);
@@ -2308,6 +2392,69 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn batch373_external_delete_logs_out_active_and_cached_vault() {
+        let (root, ctx, mut app) = super::super::tools_tests::fixture("external-vault-delete", "ko");
+        let active = root.join("right/active.ndr");
+        let mut db = Vault::create(&active, "external delete fixture".into()).unwrap();
+        db.add_file(1,"secret.txt",b"secret").unwrap();
+        app.attach_vault(1, PaneVault::new(active.clone(), db));
+        std::fs::remove_file(&active).unwrap();
+        app.vault_backing_check_at = None;
+        app.vault_security_tick(&ctx);
+        assert!(app.panes[1].vault.is_none());
+        assert!(app.vault_sessions.is_empty());
+        assert!(!app.panes[1].entries.iter().any(|e| e.name == "secret.txt"));
+        assert!(!active.exists());
+
+        let cached = root.join("right/cached.ndr");
+        let db = Vault::create(&cached, "external delete fixture".into()).unwrap();
+        app.attach_vault(1, PaneVault::new(cached.clone(), db));
+        app.exit_vault(1);
+        assert!(app.vault_sessions.values().any(|db| db.file == cached));
+        std::fs::remove_file(&cached).unwrap();
+        app.vault_backing_check_at = None;
+        app.vault_security_tick(&ctx);
+        assert!(app.vault_sessions.is_empty());
+        assert!(!cached.exists());
+        drop(app);std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(feature = "winfsp-vault")]
+    #[test]
+    #[ignore = "Real WinFsp driver; disposable encrypted container and unused drive letter"]
+    fn batch373_external_delete_revokes_and_unmounts_real_drive() {
+        let (root, ctx, mut app) = super::super::tools_tests::fixture("external-vault-mount-delete", "ko");
+        let path = root.join("right/removed.ndr");
+        let mut db = Vault::create(&path, "external mount delete fixture".into()).unwrap();
+        db.add_file(1,"secret.txt",b"secret").unwrap();
+        app.attach_vault(1, PaneVault::new(path.clone(),db));
+        let tree = super::super::vault_winfsp::VaultTreeMount::start(
+            path.clone(), &app.panes[1].vault.as_ref().unwrap().database,
+            std::sync::Arc::new(std::sync::Mutex::new(())), &[]).unwrap();
+        let drive = tree.mount_root.clone();
+        app.vault_trees.push(tree);
+        let held = std::fs::File::open(drive.join("secret.txt")).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        app.vault_backing_check_at = None;
+        app.vault_security_tick(&ctx);
+        assert!(app.panes[1].vault.is_none() && app.vault_sessions.is_empty());
+        assert_eq!(app.vault_trees.len(),1,"busy mount must not be forced closed");
+        assert!(app.vault_trees[0].is_revoked());
+        assert!(std::fs::File::open(drive.join("secret.txt")).is_err());
+        drop(held);
+        let deadline=Instant::now()+Duration::from_secs(10);
+        while !app.vault_trees.is_empty() {
+            app.vault_security_tick(&ctx);
+            assert!(Instant::now()<deadline,"removed vault failed to unmount");
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        assert!(!path.exists());
+        assert!(!drive.exists());
+        drop(app);std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn leaving_vault_clears_all_decrypted_pane_buffers() {
         let (root, _ctx, mut app) = super::super::tools_tests::fixture("vault-clear", "ko");
@@ -2674,7 +2821,7 @@ impl App {
         if !creating {
             let key = std::fs::canonicalize(&path).unwrap_or(path.clone());
             if let Some(mut database) = self.vault_sessions.remove(&key) {
-                if !database.expired(SessionPolicy::from_settings(&self.settings)) {
+                if !database.expired(SessionPolicy::from_settings(&self.settings)) && !database.backing_removed() {
                     match database.reload_after_mount() {
                         Ok(()) => {
                             self.vault_dialog = None;

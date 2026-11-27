@@ -3,6 +3,45 @@
 //! The unit of progress/cancellation is one selected root file/folder.
 use super::*;
 use std::io::{Read, Write};
+
+/// Read a full logical page, not just the first successful OS read.
+fn read_import_page(input: &mut impl Read, buffer: &mut [u8], remaining: u64) -> Result<usize,String> {
+    let want = remaining.min(buffer.len() as u64) as usize;
+    let mut read = 0;
+    while read < want {
+        match input.read(&mut buffer[read..want]) {
+            Ok(0) => return Err("Input file changed or ended unexpectedly; transaction rolled back".into()),
+            Ok(n) => read += n,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    Ok(read)
+}
+
+#[test]
+fn batch385_short_import_reads_fill_pages_and_reject_early_eof() {
+    struct Short { bytes: std::io::Cursor<Vec<u8>>, interrupted: bool }
+    impl Read for Short {
+        fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+            if !self.interrupted {
+                self.interrupted=true;
+                return Err(std::io::ErrorKind::Interrupted.into());
+            }
+            let n=out.len().min(7);
+            self.bytes.read(&mut out[..n])
+        }
+    }
+    let source:Vec<u8>=(0..100).collect();
+    let mut input=Short{bytes:std::io::Cursor::new(source.clone()),interrupted:false};
+    let mut page=[0u8;64];
+    assert_eq!(read_import_page(&mut input,&mut page,100).unwrap(),64);
+    assert_eq!(&page[..],&source[..64]);
+    assert_eq!(read_import_page(&mut input,&mut page,36).unwrap(),36);
+    assert_eq!(&page[..36],&source[64..]);
+    assert!(read_import_page(&mut input,&mut page,1).is_err());
+}
+
 use zeroize::Zeroizing;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -634,7 +673,9 @@ impl App {
                 None
             };
             let amount = if let Some(input) = stream.input.as_mut() {
-                input.read(&mut stream.buffer).map_err(|e| e.to_string())?
+                // A short OS read is not a full encrypted page. Fill the
+                // expected chunk (or the final remainder) before publishing.
+                read_import_page(input, &mut stream.buffer, stream.total - stream.done)?
             } else { fetched.as_ref().map_or(0, |v| v.len()) };
             if amount == 0 { return Err("Input file changed or ended unexpectedly; transaction rolled back".into()); }
             // Option::map_or eagerly evaluates its default argument; for an

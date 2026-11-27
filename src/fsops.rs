@@ -226,6 +226,7 @@ pub fn run_with_locale(
         last_copy_progress: None,
         last_progress: None,
         copy_buffer: Vec::new(),
+        verify_buffer: Vec::new(),
         skipped_count: 0,
     };
     let result = (|| -> Result<(), String> {
@@ -241,10 +242,10 @@ pub fn run_with_locale(
                 // previous order created `source/subdir/...` first and only
                 // then detected that copying `source` there was recursive.
                 // Even a refused copy therefore changed the user's source.
+                let destination_absolute = absolute_preflight_path(&destination);
                 for source in &sources {
-                    if fs::symlink_metadata(source).is_ok_and(|meta| meta.is_dir())
-                        && inside(source, &destination)?
-                    {
+                    j.check()?;
+                    if recursive_transfer(source, &destination, destination_absolute.as_deref())? {
                         return Err(Diag::RecursiveTransfer(source, &destination).render(j.language.as_ref()));
                     }
                 }
@@ -262,7 +263,9 @@ pub fn run_with_locale(
                     let result = (|| {
                         let name = s.file_name().ok_or_else(|| Diag::CopyRoot.render(j.language.as_ref()))?;
                         let mut target = destination.join(name);
-                        if absolute(&s)?.to_string_lossy().eq_ignore_ascii_case(&absolute(&target)?.to_string_lossy()) {
+                        let mut source_absolute=absolute(&s)?;
+                        let mut target_absolute=absolute(&target)?;
+                        if source_absolute.to_string_lossy().eq_ignore_ascii_case(&target_absolute.to_string_lossy()) {
                             // A move in place has nothing to do.
                             if move_files {
                                 return Ok(());
@@ -290,8 +293,12 @@ pub fn run_with_locale(
                                     return Ok(());
                                 }
                             }
+                            // The only path-changing branch is the explicit
+                            // same-folder copy rename. Recompute its target.
+                            source_absolute=absolute(&s)?;
+                            target_absolute=absolute(&target)?;
                         }
-                        if inside(&s, &target)? {
+                        if inside_absolute(&source_absolute,&target_absolute) {
                             return Err(Diag::RecursiveItem.render(j.language.as_ref()));
                         }
                         j.copy(&s, &target, move_files, boundary).map(|_| ())
@@ -810,6 +817,100 @@ mod tests {
     }
 
     /// Original GetFileListToWork (FUN_00413ac4) + FUN_004138d4: the totals of a folder copy are known before the first file.
+
+    #[test]
+    fn batch361_recursive_preflight_matches_legacy_with_absolute_and_relative_paths() {
+        let root = fixture();
+        let source = root.join("source");
+        fs::create_dir(&source).unwrap();
+        let file = source.join("data.bin");
+        fs::write(&file, b"data").unwrap();
+        for source in [&source, &file, &root.join("missing"), &root.join("source/../source"), &PathBuf::from(".")] {
+            for destination in [&root.join("other"), &root.join("source/child"), &root.join("source"), &PathBuf::from(".")] {
+                let legacy = fs::symlink_metadata(source).is_ok_and(|meta| meta.is_dir())
+                    && inside(source, destination).unwrap();
+                assert_eq!(recursive_transfer(source, destination, absolute_preflight_path(destination).as_deref()).unwrap(), legacy);
+            }
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn batch364_verified_move_handle_deletes_only_opened_link_and_keeps_locked_source() {
+        let root = fixture();
+        let source = root.join("source.bin");
+        let alias = root.join("hardlink.bin");
+        let target = root.join("target.bin");
+        let replaced = root.join("renamed.bin");
+        fs::write(&source, b"verified data").unwrap();
+        fs::hard_link(&source, &alias).unwrap();
+        let (mut input, right) = open_transfer_source(&source, 13, true).unwrap();
+        assert!(right.is_ok());
+        assert!(rename_new(&source, &replaced).is_err());
+        assert!(fs::remove_file(&source).is_err());
+        let mut data = Vec::new();
+        input.read_to_end(&mut data).unwrap();
+        fs::write(&target, &data).unwrap();
+        finish_transfer_source(input, &source, right).unwrap();
+        assert!(!source.exists());
+        assert_eq!(fs::read(&alias).unwrap(), b"verified data");
+        assert_eq!(fs::read(&target).unwrap(), b"verified data");
+        fs::write(&source, b"locked reader").unwrap();
+        let reader = open_read(&source).unwrap();
+        let (input, right) = open_transfer_source(&source, 13, true).unwrap();
+        assert!(right.is_err());
+        assert!(finish_transfer_source(input, &source, right).is_err());
+        drop(reader);
+        assert_eq!(fs::read(&source).unwrap(), b"locked reader");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn batch364_overwrite_move_commits_data_then_removes_only_source_link() {
+        let root = fixture();
+        fs::create_dir(root.join("in")).unwrap();
+        fs::create_dir(root.join("out")).unwrap();
+        let source = root.join("in/a");
+        let alias = root.join("in/alias");
+        fs::write(&source, b"new content").unwrap();
+        fs::hard_link(&source, &alias).unwrap();
+        fs::write(root.join("out/a"), b"old destination").unwrap();
+        let events = copy(&root, true, false, ConflictChoice::Overwrite);
+        assert!(!events.iter().any(|e| matches!(e, Event::Fatal(_) | Event::Error { .. } | Event::Failure { .. })), "{events:?}");
+        assert!(!source.exists());
+        assert_eq!(fs::read(&alias).unwrap(), b"new content");
+        assert_eq!(fs::read(root.join("out/a")).unwrap(), b"new content");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+
+    #[cfg(windows)]
+    #[test]
+    fn batch364_resume_move_preserves_hardlink_and_rejects_mismatching_prefix() {
+        let root = fixture();
+        fs::create_dir(root.join("in")).unwrap();
+        fs::create_dir(root.join("out")).unwrap();
+        let source = root.join("in/a");
+        let alias = root.join("in/alias");
+        let target = root.join("out/a");
+        fs::write(&source, b"abcdefgh").unwrap();
+        fs::hard_link(&source, &alias).unwrap();
+        fs::write(&target, b"wrong").unwrap();
+        let events = copy(&root, true, false, ConflictChoice::Resume);
+        assert!(events.iter().any(|e| matches!(e, Event::Fatal(_) | Event::Error { .. } | Event::Failure { .. })));
+        assert_eq!(fs::read(&source).unwrap(), b"abcdefgh");
+        assert_eq!(fs::read(&target).unwrap(), b"wrong");
+        fs::write(&target, b"abcd").unwrap();
+        let events = copy(&root, true, false, ConflictChoice::Resume);
+        assert!(!events.iter().any(|e| matches!(e, Event::Fatal(_) | Event::Error { .. } | Event::Failure { .. })), "{events:?}");
+        assert!(!source.exists());
+        assert_eq!(fs::read(&alias).unwrap(), b"abcdefgh");
+        assert_eq!(fs::read(&target).unwrap(), b"abcdefgh");
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn recursive_copy_and_move_are_rejected_before_creating_destination_folders() {
         let root = fixture();
@@ -1620,6 +1721,66 @@ fn open_read_with_hint(path: &Path, sequential: bool) -> Result<File, String> {
     }
     options.open(path).map_err(|e| e.to_string())
 }
+
+/// Acquire DELETE on the same source handle used for copying. If a
+/// competing reader or filesystem denies it, copy without deleting the
+/// source rather than later deleting an unverified path.
+fn open_transfer_source(path: &Path, bytes: u64, moving: bool) -> Result<(File, Result<(), String>), String> {
+    #[cfg(windows)]
+    if moving {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::{
+            Foundation::GENERIC_READ,
+            Storage::FileSystem::{DELETE, FILE_FLAG_OPEN_REPARSE_POINT, FILE_FLAG_SEQUENTIAL_SCAN, FILE_SHARE_READ},
+        };
+        let mut options = OpenOptions::new();
+        let flags = FILE_FLAG_OPEN_REPARSE_POINT | if bytes >= 1024 * 1024 { FILE_FLAG_SEQUENTIAL_SCAN } else { 0 };
+        options.read(true).share_mode(FILE_SHARE_READ).custom_flags(flags).access_mode(GENERIC_READ | DELETE);
+        let (file, delete_right) = match options.open(path) {
+            Ok(file) => (file, Ok(())),
+            Err(error) => {
+                options.access_mode(GENERIC_READ);
+                (options.open(path).map_err(|e| e.to_string())?, Err(error.to_string()))
+            }
+        };
+        let actual = file.metadata().map_err(|e| e.to_string())?;
+        if !actual.is_file() || is_reparse(&actual) {
+            return Err("Only ordinary files and directories can be copied".into());
+        }
+        return Ok((file, delete_right));
+    }
+    #[cfg(not(windows))]
+    let _ = moving;
+    Ok((open_read_sequential(path, bytes)?, Ok(())))
+}
+
+fn finish_transfer_source(file: File, source: &Path, delete_right: Result<(), String>) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Storage::FileSystem::{FILE_DISPOSITION_INFO, FileDispositionInfo, SetFileInformationByHandle};
+        let _ = source;
+        // Keep the original operating-system error (including the sharing
+        // violation or access denial) instead of adding an untranslated UI string.
+        delete_right?;
+        let disposition = FILE_DISPOSITION_INFO { DeleteFile: true };
+        // The source read handle still excludes competing writes and deletes.
+        // Mark precisely the opened link for deletion after target commit.
+        if unsafe { SetFileInformationByHandle(file.as_raw_handle(), FileDispositionInfo,
+            (&disposition as *const FILE_DISPOSITION_INFO).cast(), std::mem::size_of_val(&disposition) as u32) } == 0 {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        drop(file);
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = delete_right;
+        drop(file);
+        fs::remove_file(source).map_err(|e| e.to_string())
+    }
+}
+
 pub(crate) fn unique_path(parent: &Path, prefix: &str) -> PathBuf {
     // Skip names left by an earlier process that used the same number (PID) (e.g. %TEMP%\NDR\.ndr-entry-PID-0).
     // Numbers never collide within one process, and two processes with the same PID cannot exist at once.
@@ -1767,6 +1928,7 @@ struct Job {
     last_copy_progress: Option<Instant>,
     last_progress: Option<Instant>,
     copy_buffer: Vec<u8>,
+    verify_buffer: Vec<u8>,
     skipped_count: usize,
     files: u64,
     bytes: u64,
@@ -1944,6 +2106,16 @@ impl Job {
             }
         }
     }
+    // The same bounded buffers serve ordinary copy, resume-prefix
+    // verification, and verified folder-replacement cleanup. Small files
+    // no longer allocate and zero two fresh 1 MiB buffers for each entry.
+    fn prepare_transfer_buffers(&mut self, length: u64, compare: bool) -> usize {
+        let len = length.clamp(4096, 1024 * 1024) as usize;
+        if self.copy_buffer.len() < len { self.copy_buffer.resize(len, 0); }
+        if compare && self.verify_buffer.len() < len { self.verify_buffer.resize(len, 0); }
+        len
+    }
+
     fn copy_progress(&mut self, source: &Path, destination: &Path) {
         let now = Instant::now();
         if self.last_copy_progress.is_some_and(|previous|
@@ -2222,12 +2394,9 @@ impl Job {
             return Err(Diag::FileToFolder.render(self.language.as_ref()));
         }
         self.copy_progress(s, &d);
-        let mut input = open_read_sequential(s, m.len())?;
+        let (mut input, delete_right) = open_transfer_source(s, m.len(), moving)?;
         let (stage, mut out) = create_copy_stage(d.parent().ok_or("No destination parent")?)?;
-        let buffer_len = m.len().clamp(4096, 1024 * 1024) as usize;
-        if self.copy_buffer.len() < buffer_len {
-            self.copy_buffer.resize(buffer_len, 0);
-        }
+        let buffer_len = self.prepare_transfer_buffers(m.len(), false);
         let result = (|| {
             let mut copied = 0u64;
             // The read handle denies concurrent writers. Stop at the
@@ -2259,8 +2428,14 @@ impl Job {
             }
             out.set_permissions(permissions)
                 .map_err(|e| e.to_string())?;
-            // Ordinary copies use the OS write cache. Publish the staged
-            // file after validating the source and applying its metadata.
+            // Ordinary copies retain the OS write-cache policy. A
+            // copy/delete move additionally flushes the staged file before
+            // the only source copy can be removed. A failed flush keeps the
+            // source and the original destination intact.
+            if moving {
+                self.check()?;
+                out.sync_all().map_err(|e| e.to_string())?;
+            }
             drop(out);
             check_cancel(&self.cancel)?;
             // Original FUN_004134e0 (overwrite): clears the existing destination's attributes (SetFileAttributesW 0x20) and replaces it regardless of the setting.
@@ -2292,13 +2467,12 @@ impl Job {
                 }
                 return Err(error);
             }
-            drop(input);
             self.files += 1;
             self.copy_progress(s, &d);
             self.record_description(s, &d, description, false);
             if moving {
                 check_cancel(&self.cancel)?;
-                fs::remove_file(s).map_err(|e| e.to_string())?;
+                finish_transfer_source(input, s, delete_right)?;
                 if let Some(transfer) = self.transfers.last_mut() {
                     if transfer.source_directory.join(&transfer.source_name) == s {
                         transfer.move_entry = true;
@@ -2469,18 +2643,17 @@ impl Job {
         if existing > m.len() {
             return Err(Diag::ResumeLarger.render(self.language.as_ref()));
         }
-        let mut input = open_read(s)?;
+        let (mut input, delete_right) = open_transfer_source(s, m.len(), moving)?;
         {
             let mut current = open_read(d)?;
-            let mut left = vec![0; 1024 * 1024];
-            let mut right = vec![0; 1024 * 1024];
+            let chunk = self.prepare_transfer_buffers(existing, true);
             let mut remaining = existing;
             while remaining > 0 {
                 self.check()?;
-                let n = remaining.min(left.len() as u64) as usize;
-                input.read_exact(&mut left[..n]).map_err(|e| e.to_string())?;
-                current.read_exact(&mut right[..n]).map_err(|e| e.to_string())?;
-                if left[..n] != right[..n] {
+                let n = remaining.min(chunk as u64) as usize;
+                input.read_exact(&mut self.copy_buffer[..n]).map_err(|e| e.to_string())?;
+                current.read_exact(&mut self.verify_buffer[..n]).map_err(|e| e.to_string())?;
+                if self.copy_buffer[..n] != self.verify_buffer[..n] {
                     return Err(Diag::ResumeMismatch.render(self.language.as_ref()));
                 }
                 remaining -= n as u64;
@@ -2495,17 +2668,25 @@ impl Job {
         let mut out = OpenOptions::new().write(true).open(d).map_err(|e| e.to_string())?;
         let written = (|| -> Result<(), String> {
             out.seek(std::io::SeekFrom::Start(existing)).map_err(|e| e.to_string())?;
-            let mut buf = vec![0; 1024 * 1024];
-            loop {
+            let chunk = self.prepare_transfer_buffers(m.len().saturating_sub(existing), false);
+            let mut copied = existing;
+            while copied < m.len() {
                 self.check()?;
-                let n = input.read(&mut buf).map_err(|e| e.to_string())?;
+                let want = (m.len()-copied).min(chunk as u64) as usize;
+                let n = input.read(&mut self.copy_buffer[..want]).map_err(|e| e.to_string())?;
                 if n == 0 {
                     break;
                 }
-                out.write_all(&buf[..n]).map_err(|e| e.to_string())?;
+                out.write_all(&self.copy_buffer[..n]).map_err(|e| e.to_string())?;
                 self.bytes += n as u64;
+                copied = copied.saturating_add(n as u64);
                 self.copy_progress(s, d);
             }
+            let actual = input.metadata().map_err(|e| e.to_string())?;
+            if copied != m.len() || actual.len() != m.len() || actual.modified().ok() != m.modified().ok() {
+                return Err(Diag::SourceChanged.render(self.language.as_ref()));
+            }
+            self.check()?;
             out.sync_all().map_err(|e| e.to_string())
         })();
         if let Err(error) = written {
@@ -2527,13 +2708,12 @@ impl Job {
             permissions.set_readonly(false);
         }
         fs::set_permissions(d, permissions).map_err(|e| e.to_string())?;
-        drop(input);
         self.files += 1;
         self.copy_progress(s, d);
         self.record_description(s, d, description, false);
         if moving {
             self.check()?;
-            fs::remove_file(s).map_err(|e| e.to_string())?;
+            finish_transfer_source(input, s, delete_right)?;
             if let Some(transfer) = self.transfers.last_mut() {
                 if transfer.source_directory.join(&transfer.source_name) == s {
                     transfer.move_entry = true;
@@ -2614,7 +2794,7 @@ impl Job {
         result
     }
     fn remove_verified_source(
-        &self,
+        &mut self,
         source: &Path,
         target: &Path,
         depth: usize,
@@ -2647,37 +2827,42 @@ impl Job {
             }
             fs::remove_dir(source).map_err(|e| e.to_string())?;
         } else {
-            let mut a = File::open(source).map_err(|e| e.to_string())?;
-            let mut b = File::open(target).map_err(|e| e.to_string())?;
-            let mut left = vec![0; 1024 * 1024];
-            let mut right = vec![0; 1024 * 1024];
+            let (mut a, delete_right) = open_transfer_source(source, metadata.len(), true)?;
+            // Hold the committed target against changes while verifying and
+            // deleting the exact opened source, not a reopened pathname.
+            let mut b = open_read(target)?;
+            // Reject a different length immediately while retaining both
+            // opened handles, then compare all expected bytes as before.
+            if b.metadata().map_err(|e| e.to_string())?.len() != metadata.len() {
+                return Err("Source changed while replacing folder; source retained".into());
+            }
+            let chunk = self.prepare_transfer_buffers(metadata.len(), true);
             let mut total = 0;
             loop {
                 check_cancel(&self.cancel)?;
-                let n = a.read(&mut left).map_err(|e| e.to_string())?;
+                let n = a.read(&mut self.copy_buffer[..chunk]).map_err(|e| e.to_string())?;
                 if n == 0 {
                     if b.read(&mut [0; 1]).map_err(|e| e.to_string())? != 0 {
                         return Err("Source changed while replacing folder; source retained".into());
                     }
                     break;
                 }
-                b.read_exact(&mut right[..n]).map_err(|e| e.to_string())?;
-                if left[..n] != right[..n] {
+                b.read_exact(&mut self.verify_buffer[..n]).map_err(|e| e.to_string())?;
+                if self.copy_buffer[..n] != self.verify_buffer[..n] {
                     return Err("Source changed while replacing folder; source retained".into());
                 }
                 total += n as u64;
             }
-            let now = fs::metadata(source).map_err(|e| e.to_string())?;
+            let now = a.metadata().map_err(|e| e.to_string())?;
             if total != metadata.len()
                 || now.len() != metadata.len()
                 || now.modified().ok() != metadata.modified().ok()
             {
                 return Err("Source changed while replacing folder; source retained".into());
             }
-            drop(a);
-            drop(b);
             check_cancel(&self.cancel)?;
-            fs::remove_file(source).map_err(|e| e.to_string())?;
+            finish_transfer_source(a, source, delete_right)?;
+            drop(b);
         }
         Ok(())
     }
@@ -2703,7 +2888,7 @@ fn available_target(path: &Path, directory: bool) -> Result<PathBuf, String> {
 }
 fn absolute(path: &Path) -> Result<PathBuf, String> {
     let p = std::path::absolute(path).map_err(|e| e.to_string())?;
-    let mut clean = PathBuf::new();
+    let mut clean = PathBuf::with_capacity(p.as_os_str().len());
     for c in p.components() {
         match c {
             std::path::Component::ParentDir => {
@@ -2716,18 +2901,38 @@ fn absolute(path: &Path) -> Result<PathBuf, String> {
     Ok(clean)
 }
 fn inside(source: &Path, target: &Path) -> Result<bool, String> {
-    let s = absolute(source)?;
-    let t = absolute(target)?;
+    Ok(inside_absolute(&absolute(source)?,&absolute(target)?))
+}
+/// Skip a redundant preflight stat only when two absolute lexical paths
+/// prove that the legacy containment rule cannot match. Relative or
+/// unnormalizable paths retain the metadata-first behavior.
+fn absolute_preflight_path(path: &Path) -> Option<PathBuf> {
+    path.is_absolute().then(|| absolute(path)).and_then(Result::ok)
+}
+
+fn recursive_transfer(source: &Path, destination: &Path, destination_absolute: Option<&Path>) -> Result<bool, String> {
+    let candidate = match (destination_absolute, absolute_preflight_path(source)) {
+        (Some(d), Some(s)) => inside_absolute(&s, d),
+        _ => true,
+    };
+    if candidate && fs::symlink_metadata(source).is_ok_and(|meta| meta.is_dir()) {
+        inside(source, destination)
+    } else {
+        Ok(false)
+    }
+}
+/// Same lexical containment rule as inside, but accepts already-cleaned
+/// absolute paths. Do not use it as a substitute for reparse/handle checks.
+fn inside_absolute(source:&Path,target:&Path)->bool{
     #[cfg(windows)]
     {
-        Ok(t.to_string_lossy()
-            .to_lowercase()
-            .starts_with(&(s.to_string_lossy().to_lowercase() + "\\"))
-            || s.to_string_lossy().to_lowercase() == t.to_string_lossy().to_lowercase())
+        let s=source.to_string_lossy().to_lowercase();
+        let t=target.to_string_lossy().to_lowercase();
+        s==t || t.strip_prefix(s.as_str()).is_some_and(|suffix|suffix.starts_with('\\'))
     }
     #[cfg(not(windows))]
     {
-        Ok(t.starts_with(s))
+        target.starts_with(source)
     }
 }
 fn recycle(path: &Path) -> Result<(), String> {
@@ -2778,6 +2983,23 @@ fn recycle(path: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod safety_tests {
     use super::*;
+    #[cfg(windows)]
+    #[test]
+    fn normalized_containment_matches_legacy_for_copy_and_move_paths() {
+        let paths=[r"C:\data",r"C:\data\x",r"C:\data2",r"c:\DATA\x",
+            r"C:\data\..\other",r"C:\",r".\a",r".\a\..\b","C:\\\u{00c9}","C:\\\u{00e9}",
+            r"\\server\share\folder",r"\\server\share\folder\item"];
+        for source in paths {
+            for target in paths {
+                let s=absolute(Path::new(source)).unwrap();
+                let t=absolute(Path::new(target)).unwrap();
+                let old=t.to_string_lossy().to_lowercase().starts_with(&(s.to_string_lossy().to_lowercase()+"\\"))
+                    || s.to_string_lossy().to_lowercase()==t.to_string_lossy().to_lowercase();
+                assert_eq!(inside_absolute(&s,&t),old,"{source} -> {target}");
+                assert_eq!(inside(Path::new(source),Path::new(target)).unwrap(),old);
+            }
+        }
+    }
     #[test]
     fn same_volume_move_preserves_readonly_files_without_copy_delete_failure() {
         let p = tests::fixture();

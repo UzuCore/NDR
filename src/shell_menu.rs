@@ -56,7 +56,17 @@ fn prepare_paths(paths: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
             }
         }
         if path.file_name().is_none() {
-            return Err("Select an item inside a filesystem folder".into());
+            // A drive root is a shell child of This PC, not a child of a
+            // filesystem directory. Accept exactly one drive, never mix a
+            // root PIDL with ordinary sibling items or an arbitrary UNC root.
+            let mut parts = path.components();
+            let drive_root = matches!(parts.next(), Some(Component::Prefix(p)) if
+                matches!(p.kind(), std::path::Prefix::Disk(_) | std::path::Prefix::VerbatimDisk(_)))
+                && matches!(parts.next(), Some(Component::RootDir)) && parts.next().is_none();
+            if paths.len() == 1 && drive_root {
+                return Ok(vec![path]);
+            }
+            return Err("Select an item inside a filesystem folder or one drive".into());
         }
         std::fs::symlink_metadata(&path).map_err(|e| format!("{}: {e}", path.display()))?;
         let folder = path
@@ -517,6 +527,38 @@ mod tests {
         assert_eq!(prepare_paths(&[first.clone(), second]).unwrap().len(), 2);
         assert!(prepare_paths(&[first, third]).is_err());
         std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn batch371_single_drive_root_has_a_shell_namespace_parent() {
+        let root = PathBuf::from(r"C:\");
+        assert_eq!(prepare_paths(&[root.clone()]).unwrap(), vec![root.clone()]);
+        assert!(prepare_paths(&[root.clone(), root]).is_err());
+        assert!(prepare_paths(&[PathBuf::from(r"\\invalid\share\")]).is_err());
+    }
+    #[test]
+    #[ignore = "Real drive shell menu construction only; does not show or invoke commands"]
+    fn batch371_real_drive_context_menu_construction() {
+        let _apartment = Apartment::enter().unwrap();
+        let owner = unsafe {
+            CreateWindowExW(WINDOW_EX_STYLE::default(), windows::core::w!("STATIC"),
+                windows::core::w!("NDR drive shell-menu fixture"), WS_POPUP,
+                0,0,100,100,None,None,None,None).unwrap()
+        };
+        let roots = crate::native::ready_drives();
+        let targets: Vec<_> = roots.into_iter().filter(|p| {
+            let name = p.to_string_lossy().to_ascii_uppercase();
+            name == "C:\\" || name == "F:\\" || name == "N:\\"
+        }).collect();
+        assert!(!targets.is_empty());
+        for root in targets {
+            let paths = prepare_paths(&[root.clone()]).unwrap();
+            let selection = ShellSelection::bind(owner,&paths).unwrap();
+            let popup = selection.popup().unwrap();
+            let count = unsafe { GetMenuItemCount(Some(popup.0)) };
+            assert!(count > 0,"No shell commands for {root:?}");
+            println!("DRIVE_MENU {root:?} entries={count}");
+        }
+        let _ = unsafe { DestroyWindow(owner) };
     }
     #[test]
     fn foreign_process_and_foreign_ui_thread_are_rejected() {

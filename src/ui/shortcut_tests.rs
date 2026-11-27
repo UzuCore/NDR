@@ -612,6 +612,17 @@ fn list_right_click_menu_follows_the_original_context_popup() {
     app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == "folder1").unwrap();
     let commands: Vec<&str> = app.list_menu_items(0).iter().flatten().map(|(_, c, _)| *c).collect();
     assert!(!commands.contains(&"openWith") && commands.contains(&"openInNewTab"), "a folder: open in new tab, no open with: {commands:?}");
+    // My PC is a drive-only listing, not a set of ordinary folders.
+    app.navigate(0, PathBuf::from(super::remote_window::DRIVES), false);
+    wait(&mut app, &ctx);
+    assert!(!app.panes[0].entries.is_empty());
+    assert!(app.panes[0].entries.iter().all(|e| e.drive));
+    assert_eq!(app.panes[0].drive_count(), app.panes[0].entries.len());
+    app.panes[0].selected.clear();
+    app.panes[0].cursor = 0;
+    let path = app.panes[0].entries[0].path.clone();
+    assert!(matches!(app.list_menu_kind(0), ListMenu::Shell(ref p) if *p == [path.clone()]));
+    assert!(matches!(app.rocker_menu_kind(0), ListMenu::Shell(ref p) if *p == [path]));
     fs::remove_dir_all(root).unwrap();
     for drive in fake_drive_roots() {
         let _ = fs::remove_dir_all(drive);
@@ -657,7 +668,7 @@ fn drive_items_follow_the_original_list_end() {
     assert_eq!(drives, [false, false, false, false, true, true], "\"..\", folder1, a.txt, b.txt, then two drives");
     let summary = super::main_window::summarize(&app.panes[0].entries);
     assert_eq!((summary.folders, summary.files), (1, 2), "drives and \"..\" are not counted");
-    assert_eq!(app.panes[0].view.cells[4][0].as_ref(), format!("{} Disk", app.panes[0].entries[4].name));
+    assert_eq!(app.panes[0].view.cells.cell(4,0).as_ref(), format!("{} Disk", app.panes[0].entries[4].name));
     press(&mut app, &ctx, egui::Key::End, CTRL);
     assert_eq!(app.panes[0].cursor, 3, "Ctrl+End = last file before the drives");
     press(&mut app, &ctx, egui::Key::OpenBracket, NONE);
@@ -1050,12 +1061,12 @@ fn language_switch_rebuilds_both_panes_without_navigation() {
     app.panes[0].cursor = indices[0];
     let pane_paths = [app.panes[0].path.clone(), app.panes[1].path.clone()];
     app.compute_view(0);
-    let before = app.panes[0].view.cells[indices[0]][2].clone();
+    let before = app.panes[0].view.cells.cell(indices[0],2).clone();
     app.apply_language("ja");
     let expected = app.language_pack.text("RES.FOLDER", "missing");
     assert_ne!(before.as_ref(), expected);
     for (index, row) in indices.into_iter().enumerate() {
-        assert_eq!(app.panes[index].view.cells[row][2].as_ref(), expected);
+        assert_eq!(app.panes[index].view.cells.cell(row,2).as_ref(), expected);
         assert_eq!(app.panes[index].path, pane_paths[index]);
     }
     assert_eq!(app.panes[0].cursor, indices[0]);

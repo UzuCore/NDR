@@ -1,7 +1,7 @@
 //! Bounded, read-only directory snapshot reuse on local Windows volumes.
 //! Never used to authorize an operation: writers still validate each path.
 use crate::{fsops::{self,Entry}, native};
-use std::{collections::{HashMap,HashSet}, ffi::OsString, fs, os::windows::{ffi::{OsStrExt,OsStringExt}, fs::{MetadataExt,OpenOptionsExt}, io::AsRawHandle}, path::{Component,Path,PathBuf,Prefix}, ptr, sync::{Arc,Condvar,Mutex,OnceLock,atomic::{AtomicBool,AtomicU64,Ordering}}, time::{Duration,Instant}};
+use std::{collections::{HashMap,HashSet}, ffi::{OsStr,OsString}, fs, os::windows::{ffi::{OsStrExt,OsStringExt}, fs::{MetadataExt,OpenOptionsExt}, io::AsRawHandle}, path::{Component,Path,PathBuf,Prefix}, ptr, sync::{Arc,Condvar,Mutex,OnceLock,atomic::{AtomicBool,AtomicU64,Ordering}}, time::{Duration,Instant}};
 use windows_sys::Win32::{Foundation::{CloseHandle,GetLastError,HANDLE,ERROR_IO_INCOMPLETE,ERROR_IO_PENDING,ERROR_NO_MORE_FILES}, Storage::FileSystem::*, System::{IO::{CancelIoEx,GetOverlappedResult,OVERLAPPED}, Threading::{CreateEventW,ResetEvent}}};
 
 const CACHE_BYTES: usize=16*1024*1024;
@@ -139,7 +139,8 @@ impl Drop for ChangeWatch{
 // from the native OsString only when a caller actually needs a full list.
 #[derive(Debug)]
 struct CachedEntry {
-    name:OsString,
+    // Immutable native filenames need no Vec capacity word or spare capacity.
+    name:Box<OsStr>,
     size:u64,
     modified:Option<std::time::SystemTime>,
     attributes:u32,
@@ -147,11 +148,11 @@ struct CachedEntry {
 }
 impl CachedEntry {
     fn from_entry(entry:&Entry)->Option<Self>{
-        Some(Self{name:entry.path.file_name()?.to_os_string(),size:entry.size,
+        Some(Self{name:Box::from(entry.path.file_name()?),size:entry.size,
             modified:entry.modified,attributes:entry.attributes,is_dir:entry.is_dir})
     }
     fn materialize(&self,path:&Path)->Entry{
-        Entry{path:fsops::listing_child_path(path,&self.name),name:self.name.to_string_lossy().into_owned(),
+        Entry{path:fsops::listing_child_path(path,self.name.as_ref()),name:self.name.to_string_lossy().into_owned(),
             size:self.size,modified:self.modified,attributes:self.attributes,
             is_dir:self.is_dir,hidden:self.attributes&2!=0,drive:false}
     }
@@ -370,28 +371,63 @@ fn verify_chunk(parent:&Path,rows:&mut [Entry],ids:&[u64],cancel:&AtomicBool)->R
     Ok((links,unverified))
 }
 static VERIFICATION_BUDGET:crate::listing_budget::VerificationBudget=crate::listing_budget::VerificationBudget::new();
-fn verify_regulars(path:&Path,entries:&mut [Entry],ids:&[u64],cancel:&AtomicBool)->Result<(HashSet<OsString>,usize),String>{
+/// Partition by expensive regular-file work, not the total number of
+/// visible rows. A folder-first or reparse-heavy enumeration should not
+/// assign every regular-file probe to a single worker. All rows remain
+/// covered exactly once, including leading and trailing directories.
+fn verification_chunk_ends(entries:&[Entry],regulars:usize,workers:usize)->Vec<usize>{
+    debug_assert!(regulars>0&&regulars<=entries.len()&&workers>0);
+    let target=regulars.div_ceil(workers).max(1);
+    if regulars==entries.len(){
+        return (target..entries.len()).step_by(target).chain(Some(entries.len())).collect()
+    }
+    let mut ends=Vec::with_capacity(workers);
+    let mut seen=0usize;
+    let mut in_chunk=0usize;
+    for (i,row) in entries.iter().enumerate(){
+        if !row.is_dir&&row.attributes&FILE_ATTRIBUTE_REPARSE_POINT==0{
+            seen+=1;in_chunk+=1;
+            if in_chunk==target&&seen<regulars&&ends.len()+1<workers{
+                ends.push(i+1);in_chunk=0;
+            }
+        }
+    }
+    debug_assert_eq!(seen,regulars);
+    ends.push(entries.len());
+    ends
+}
+fn verify_regulars(path:&Path,entries:&mut [Entry],ids:&[u64],regulars:usize,cancel:&AtomicBool,
+    scan:&mut crate::listing_budget::VerificationScan<'_>)->Result<(HashSet<OsString>,usize),String>{
     // Keep exact native ID/link-count verification for every regular file.
     // On fast media the measured workload benefits from additional workers;
     // unknown/seek media retain conservative limits. The caller participates.
-    let requested=if entries.len()>=4096&&by_name_fn().is_some(){
-        match native::folder_size_media(path){
-            native::FolderSizeMedia::Seek=>1,
-            native::FolderSizeMedia::Fast if entries.len()>=16_384=>12,
-            native::FolderSizeMedia::Fast=>8,
-            _=>4,
-        }
-    }else{1};
+    if regulars==0{
+        fsops::check_cancel(cancel)?;
+        return Ok((HashSet::new(),0))
+    }
+    let by_name=by_name_fn().is_some();
+    let media=if regulars>=4096&&by_name{native::folder_size_media(path)}
+        else{native::FolderSizeMedia::Unknown};
+    let requested=media.verification_workers(regulars,by_name);
     let parallelism=std::thread::available_parallelism().map_or(1,usize::from);
-    let permit=VERIFICATION_BUDGET.acquire(requested,parallelism);
+    let permit=scan.acquire(requested,parallelism);
     let workers=permit.workers();
     if workers<=1{return verify_chunk(path,entries,ids,cancel)}
-    let chunk=entries.len().div_ceil(workers).max(1);
+    let ends=verification_chunk_ends(entries,regulars,workers);
+    debug_assert_eq!(entries.len(),ids.len());
     std::thread::scope(|scope|{
-        let mut chunks=entries.chunks_mut(chunk).zip(ids.chunks(chunk));
-        let (local_rows,local_ids)=chunks.next().expect("parallel verification has rows");
-        let tasks:Vec<_>=chunks.map(|(rows,ids)|scope.spawn(move||verify_chunk(path,rows,ids,cancel))).collect();
-        let local=verify_chunk(path,local_rows,local_ids,cancel);
+        let first=ends[0];
+        let (local_rows,mut remaining)=entries.split_at_mut(first);
+        let mut start=first;
+        let mut tasks=Vec::with_capacity(ends.len()-1);
+        for end in ends.into_iter().skip(1){
+            let (rows,rest)=remaining.split_at_mut(end-start);
+            remaining=rest;
+            let row_ids=&ids[start..end];
+            tasks.push(scope.spawn(move||verify_chunk(path,rows,row_ids,cancel)));
+            start=end;
+        }
+        let local=verify_chunk(path,local_rows,&ids[..first],cancel);
         // Join every worker even when the caller or another worker failed.
         let joined:Vec<_>=tasks.into_iter().map(|t|t.join()).collect();
         let (mut linked,mut unverified)=local?;
@@ -416,12 +452,13 @@ fn scan_ids(path:&Path,show_hidden:bool,cancel:&AtomicBool)->Result<Option<Scan>
     let mut fs_name=[0u16;32];
     if unsafe{GetVolumeInformationByHandleW(directory.as_raw_handle(),ptr::null_mut(),0,ptr::null_mut(),ptr::null_mut(),ptr::null_mut(),fs_name.as_mut_ptr(),fs_name.len() as u32)}==0
         || fs_name[..5]!=[78,84,70,83,0]{return Ok(None)}
-    let _verification_scan=VERIFICATION_BUDGET.begin_scan();
+    let mut verification_scan=VERIFICATION_BUDGET.begin_scan();
     let mut buffer=vec![0u64;8192];
     let capacity=buffer.len()*std::mem::size_of::<u64>();
     let header=std::mem::offset_of!(FILE_ID_BOTH_DIR_INFO,FileName);
     let mut entries=Vec::new();
     let mut ids=Vec::<u64>::new();
+    let mut regulars=0usize;
     loop{
         fsops::check_cancel(cancel)?;
         let ok=unsafe{GetFileInformationByHandleEx(directory.as_raw_handle(),FileIdBothDirectoryInfo,
@@ -456,6 +493,7 @@ fn scan_ids(path:&Path,show_hidden:bool,cancel:&AtomicBool)->Result<Option<Scan>
                     let is_dir=attr&FILE_ATTRIBUTE_DIRECTORY!=0;
                     (attr,is_dir,if is_dir{0}else{info.EndOfFile.max(0) as u64},windows_ticks(info.LastWriteTime))
                 };
+                if !is_dir&&attr&FILE_ATTRIBUTE_REPARSE_POINT==0{regulars+=1;}
                 ids.push(info.FileId as u64);
                 entries.push(Entry{path:item_path,name,is_dir,size,modified,
                     hidden:attr&FILE_ATTRIBUTE_HIDDEN!=0,attributes:attr,drive:false});
@@ -466,7 +504,7 @@ fn scan_ids(path:&Path,show_hidden:bool,cancel:&AtomicBool)->Result<Option<Scan>
             offset+=next;
         }
     }
-    let (linked,unverified)=verify_regulars(path,&mut entries,&ids,cancel)?;
+    let (linked,unverified)=verify_regulars(path,&mut entries,&ids,regulars,cancel,&mut verification_scan)?;
     if !show_hidden{entries.retain(|e|e.attributes&(FILE_ATTRIBUTE_HIDDEN|FILE_ATTRIBUTE_SYSTEM)==0);}
     Ok(Some(Scan{entries,linked,unverified}))
 }
@@ -481,7 +519,7 @@ fn scan_read(scan:Scan)->ListingRead{
 }
 fn weight(entries:&Vec<CachedEntry>)->usize{
     entries.iter().fold(32768usize.saturating_add(entries.capacity().saturating_mul(std::mem::size_of::<CachedEntry>())),|sum,e|
-        sum.saturating_add(e.name.capacity()+32))
+        sum.saturating_add(e.name.len()+32))
 }
 fn may_list(path:&Path)->bool{
     // Old notification handles cannot authorize access after ACL changes.
@@ -495,15 +533,15 @@ fn update_modified(path:&Path, entries:&mut [CachedEntry],names:&HashSet<OsStrin
     let mut found=HashSet::new();let mut changed=HashSet::new();let mut wide=Vec::new();
     for (i,entry) in entries.iter_mut().enumerate(){
         if i%256==0 && cancel.load(Ordering::Relaxed){return Err(())}
-        if !names.contains(&entry.name){continue}
-        if !found.insert(entry.name.clone())||entry.is_dir||entry.attributes&FILE_ATTRIBUTE_REPARSE_POINT!=0{return Err(())}
-        let m=fresh_regular(&path.join(&entry.name),&mut wide).map_err(|_|())?;
+        if !names.contains(entry.name.as_ref()){continue}
+        if !found.insert(entry.name.to_os_string())||entry.is_dir||entry.attributes&FILE_ATTRIBUTE_REPARSE_POINT!=0{return Err(())}
+        let m=fresh_regular(&path.join(entry.name.as_ref()),&mut wide).map_err(|_|())?;
         if !show_hidden&&m.attributes&6!=0{return Err(())}
-        if m.links>1{linked.insert(entry.name.clone());}
-        else{linked.remove(&entry.name);}
+        if m.links>1{linked.insert(entry.name.to_os_string());}
+        else{linked.remove(entry.name.as_ref());}
         if entry.size!=m.size||entry.modified!=m.modified||entry.attributes!=m.attributes{
             entry.size=m.size;entry.modified=m.modified;entry.attributes=m.attributes;
-            changed.insert(entry.name.clone());
+            changed.insert(entry.name.to_os_string());
         }
     }
     for name in names.difference(&found){
@@ -534,7 +572,7 @@ fn exact_present(path:&Path,name:&OsString)->Result<bool,()>{
 }
 fn ordinary_cached(e:&CachedEntry)->bool{
     !e.is_dir&&e.attributes&FILE_ATTRIBUTE_REPARSE_POINT==0
-        &&!Path::new(&e.name).extension().is_some_and(|x|x.eq_ignore_ascii_case("ndr"))
+        &&!Path::new(e.name.as_ref()).extension().is_some_and(|x|x.eq_ignore_ascii_case("ndr"))
 }
 // Reconcile the final state of a bounded event batch. Never mutate the
 // snapshot until every touched path has been validated. Unknown case/short
@@ -546,8 +584,8 @@ fn reconcile_structural(path:&Path,old:&mut Snapshot,events:&[(u32,OsString)],
     let mut states:HashMap<OsString,(bool,bool)>=touched.into_iter().map(|name|(name.clone(),(false,false))).collect();
     for (i,row) in old.entries.iter().enumerate(){
         if i%256==0&&cancel.load(Ordering::Relaxed){return Err(())}
-        if let Some(state)=states.get_mut(&row.name){
-            if state.0||!ordinary_cached(row)||old.linked.contains(&row.name){return Err(())}
+        if let Some(state)=states.get_mut(row.name.as_ref()){
+            if state.0||!ordinary_cached(row)||old.linked.contains(row.name.as_ref()){return Err(())}
             *state=(true,true);
         }
     }
@@ -568,15 +606,15 @@ fn reconcile_structural(path:&Path,old:&mut Snapshot,events:&[(u32,OsString)],
         if *exists{
             let fresh=fresh_regular(&path.join(name),&mut wide).map_err(|_|())?;
             if fresh.links!=1||(!show_hidden&&fresh.attributes&6!=0){return Err(())}
-            updates.insert(name.clone(),CachedEntry{name:name.clone(),size:fresh.size,
+            updates.insert(name.clone(),CachedEntry{name:Box::from(name.as_os_str()),size:fresh.size,
                 modified:fresh.modified,attributes:fresh.attributes,is_dir:false});
         }else if *was{removed.push(name.clone());}
     }
     let changed:HashSet<_>=updates.keys().cloned().collect();
     let final_len=old.entries.len().checked_sub(removed.len()).and_then(|n|n.checked_add(states.values().filter(|&&(was,exists)|!was&&exists).count())).ok_or(())?;
     if final_len>MAX_ROWS{return Err(())}
-    old.entries.retain(|row|!states.get(&row.name).is_some_and(|state|!state.1));
-    for row in &mut old.entries{if let Some(new)=updates.remove(&row.name){*row=new;}}
+    old.entries.retain(|row|!states.get(row.name.as_ref()).is_some_and(|state|!state.1));
+    for row in &mut old.entries{if let Some(new)=updates.remove(row.name.as_ref()){*row=new;}}
     old.entries.extend(updates.into_values());
     old.order_dirty=true;
     Ok((changed,removed))
@@ -737,7 +775,7 @@ impl ListingCache {
                     if clean&&old.entries.len()<=ALIAS_AUDIT_ROWS&&old.alias_audited.elapsed()>=ALIAS_AUDIT_AGE{
                         let names:HashSet<_>=old.entries.iter()
                             .filter(|e|!e.is_dir&&e.attributes&FILE_ATTRIBUTE_REPARSE_POINT==0)
-                            .map(|e|e.name.clone()).collect();
+                            .map(|e|e.name.to_os_string()).collect();
                         match update_modified(path,&mut old.entries,&names,&mut old.linked,show_hidden,cancel){
                             Ok(changed)=>{
                                 changed_names.extend(changed);
@@ -772,7 +810,7 @@ impl ListingCache {
                             old.last_delta=Some(LastDelta{base:previous,changed:changed_names.clone(),removed:removed.clone(),structural});
                         }
                         let entries=if partial&&changed_names.is_empty(){Vec::new()}
-                            else{old.entries.iter().filter(|e|!partial||changed_names.contains(&e.name)).map(|e|e.materialize(path)).collect()};
+                            else{old.entries.iter().filter(|e|!partial||changed_names.contains(e.name.as_ref())).map(|e|e.materialize(path)).collect()};
                         old.verified=Instant::now();
                         let revision=old.revision;
                         let hardlinks=!old.linked.is_empty();
@@ -849,6 +887,37 @@ mod tests{
         [0u32.to_le_bytes().as_slice(),action.to_le_bytes().as_slice(),(wide.len() as u32).to_le_bytes().as_slice(),&wide].concat()
     }
     #[test]
+    fn verification_chunks_balance_actual_regular_file_work(){
+        fn row(i:usize,dir:bool,reparse:bool)->Entry{
+            Entry{path:PathBuf::from(format!("item-{i}")),name:format!("item-{i}"),
+                is_dir:dir,size:0,modified:None,hidden:false,
+                attributes:if reparse{FILE_ATTRIBUTE_REPARSE_POINT}else{0},drive:false}
+        }
+        for layout in 0..4{
+            let rows:Vec<_>=(0..12_301).map(|i|match layout{
+                0=>row(i,false,false),
+                1=>row(i,i<8000,i>=12_101),
+                2=>row(i,i%5==0,i%7==0),
+                _=>row(i,i>=4101,false),
+            }).collect();
+            let regulars=rows.iter().filter(|e|!e.is_dir&&e.attributes&FILE_ATTRIBUTE_REPARSE_POINT==0).count();
+            for workers in [1,2,4,8,11]{
+                let ends=verification_chunk_ends(&rows,regulars,workers);
+                assert!(ends.len()<=workers);
+                assert_eq!(ends.last(),Some(&rows.len()));
+                let mut start=0;let mut covered=0;
+                let target=regulars.div_ceil(workers);
+                for end in ends{
+                    assert!(end>start);
+                    let count=rows[start..end].iter().filter(|e|!e.is_dir&&e.attributes&FILE_ATTRIBUTE_REPARSE_POINT==0).count();
+                    assert!((1..=target).contains(&count));
+                    covered+=count;start=end;
+                }
+                assert_eq!(covered,regulars);assert_eq!(start,rows.len());
+            }
+        }
+    }
+    #[test]
     fn native_directory_ids_correct_stale_hardlink_metadata(){
         let root=std::env::temp_dir().join(format!("ndr-link-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
         fs::create_dir(&root).unwrap();
@@ -918,6 +987,9 @@ mod tests{
         let entry=Entry{path:root.join(&native),name:native.to_string_lossy().into_owned(),
             is_dir:false,size:42,modified:None,hidden:true,attributes:2,drive:false};
         let compact=CachedEntry::from_entry(&entry).unwrap();
+        assert_eq!(compact.name.as_ref(),native.as_os_str());
+        assert_eq!(std::mem::size_of::<Box<OsStr>>(),2*std::mem::size_of::<usize>());
+        assert!(std::mem::size_of::<Box<OsStr>>()<std::mem::size_of::<OsString>());
         let rebuilt=compact.materialize(&root);
         assert_eq!(rebuilt.path,entry.path);assert_eq!(rebuilt.name,entry.name);
         assert_eq!(rebuilt.size,42);assert!(rebuilt.hidden);

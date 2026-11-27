@@ -531,7 +531,7 @@ impl App {
             let letter = entry.name.chars().next()?.to_ascii_uppercase();
             let kind_name = localized_drive_kind(&self.language_pack, ["Unknown", "NoRootDirectory", "Removable", "Fixed", "Network", "CDRom", "Ram"].get(*kind as usize).copied().unwrap_or("Unknown"));
             return Some(match sizes {
-                Some((free, total)) if *kind == 3 => {
+                Some((free, total)) if matches!(*kind, 2 | 3 | 4) => {
                     format!("{name} ({letter}:)  |  {kind_name}  |  {} / {}", localized_byte_size(&self.language_pack, *free), localized_byte_size(&self.language_pack, *total))
                 }
                 _ => format!("{name} ({letter}:)  |  {kind_name}"),

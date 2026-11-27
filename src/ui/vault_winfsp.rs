@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::ffi::c_void;
 use std::sync::{Arc, Mutex};
 use ndr::vault::{Vault, VaultItem, STREAM_CHUNK_SIZE};
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 use widestring::U16CStr;
 use winfsp::{FspError, filesystem::{DirInfo, DirMarker, FileInfo, FileSecurity, FileSystemContext, OpenFileInfo, VolumeInfo, WideNameInfo}, host::{DebugMode, FileSystemHost, FileSystemParams, FineGuard, VolumeParams}};
 
@@ -42,6 +42,30 @@ pub(super) fn runtime_available() -> bool {
     load_installed_winfsp_dll() && winfsp::winfsp_init().is_ok()
 }
 
+// Per open file: at most two dirty pages in plaintext. Cold dirty pages
+// are appended as unpublished GCM records to the original encrypted file.
+// A two-page read cache also prevents alternating-page read amplification.
+const DIRTY_PAGE_LIMIT: usize = 2;
+/// Grow a sensitive page without releasing an unwiped old allocation.
+fn resize_plain_page(page: &mut Zeroizing<Vec<u8>>, len: usize) {
+    debug_assert!(len <= STREAM_CHUNK_SIZE);
+    if len < page.len() {
+        page[len..].zeroize();
+        page.truncate(len);
+    } else if len > page.capacity() {
+        let mut next = Zeroizing::new(Vec::with_capacity(len.next_power_of_two().min(STREAM_CHUNK_SIZE)));
+        next.extend_from_slice(page);
+        next.resize(len, 0);
+        *page = next;
+    } else {
+        page.resize(len, 0);
+    }
+}
+struct StagedPage {
+    chunk: ndr::vault::StagedVaultChunk,
+    valid: usize,
+}
+
 struct MountData {
     vault: Vault,
     id: i64,
@@ -50,7 +74,9 @@ struct MountData {
     size: u64,
     original_size: u64,
     pages: BTreeMap<u64, Zeroizing<Vec<u8>>>,
+    staged_pages: BTreeMap<u64, StagedPage>,
     read_cache: Option<(u64, Zeroizing<Vec<u8>>)>,
+    previous_read: Option<(u64, Zeroizing<Vec<u8>>)>,
     truncate_floor: Option<u64>,
     dirty: bool,
     last_error: Option<String>,
@@ -62,6 +88,37 @@ struct MountData {
 }
 
 impl MountData {
+    fn clear_read_cache(&mut self) {
+        self.read_cache = None;
+        self.previous_read = None;
+    }
+
+    fn original_visible_size(&self) -> u64 {
+        self.original_size.min(self.truncate_floor.unwrap_or(u64::MAX))
+    }
+
+    /// Only immutable or unpublished encrypted records reach this cache.
+    /// Dirty resident pages take precedence; logical truncation masks bytes
+    /// of a staged record without changing the record's authenticated bytes.
+    fn cached_page(&mut self, page: u64) -> Result<&[u8], String> {
+        if self.read_cache.as_ref().is_some_and(|(index, _)| *index == page) {
+            return Ok(&self.read_cache.as_ref().unwrap().1);
+        }
+        if self.previous_read.as_ref().is_some_and(|(index, _)| *index == page) {
+            std::mem::swap(&mut self.read_cache, &mut self.previous_read);
+            return Ok(&self.read_cache.as_ref().unwrap().1);
+        }
+        let plain = if let Some(staged) = self.staged_pages.get(&page) {
+            self.vault.read_staged_chunk(&staged.chunk)?
+        } else {
+            self.vault.stream_read_chunk(self.id, page as i64)?
+                .unwrap_or_else(|| Zeroizing::new(Vec::new()))
+        };
+        self.previous_read = self.read_cache.take();
+        self.read_cache = Some((page, plain));
+        Ok(&self.read_cache.as_ref().unwrap().1)
+    }
+
     fn read_at(&mut self, buffer: &mut [u8], offset: u64) -> Result<usize, String> {
         if offset >= self.size { return Ok(0); }
         let length = buffer.len().min(self.size.saturating_sub(offset) as usize);
@@ -71,24 +128,22 @@ impl MountData {
             let page = position / PAGE;
             let within = (position % PAGE) as usize;
             let take = (length - done).min(STREAM_CHUNK_SIZE - within);
-            buffer[done..done + take].fill(0);
+            let out = &mut buffer[done..done + take];
+            out.fill(0);
             if let Some(staged) = self.pages.get(&page) {
-                if within < staged.len() {
-                    let available = take.min(staged.len() - within);
-                    buffer[done..done + available].copy_from_slice(&staged[within..within + available]);
+                let available = take.min(staged.len().saturating_sub(within));
+                if available > 0 {
+                    out[..available].copy_from_slice(&staged[within..within + available]);
                 }
-            } else if position < self.original_size {
-                // Repeated 64 KiB reads of a large video should not decrypt
-                // the same 8 MiB GCM record on every filesystem callback.
-                if self.read_cache.as_ref().is_none_or(|(cached, _)| *cached != page) {
-                    self.read_cache = self.vault.stream_read_chunk(self.id, page as i64)?
-                        .map(|data| (page, data));
-                }
-                if let Some((_, plaintext)) = self.read_cache.as_ref() {
-                    if within < plaintext.len() {
-                        let available = take.min(plaintext.len() - within)
-                            .min(self.truncate_floor.unwrap_or(u64::MAX).saturating_sub(position) as usize);
-                        buffer[done..done + available].copy_from_slice(&plaintext[within..within + available]);
+            } else {
+                let visible = self.staged_pages.get(&page).map_or_else(
+                    || self.original_visible_size().saturating_sub(page * PAGE).min(PAGE) as usize,
+                    |staged| staged.valid);
+                if within < visible {
+                    let plaintext = self.cached_page(page)?;
+                    let available = take.min(visible - within).min(plaintext.len().saturating_sub(within));
+                    if available > 0 {
+                        out[..available].copy_from_slice(&plaintext[within..within + available]);
                     }
                 }
             }
@@ -97,11 +152,51 @@ impl MountData {
         Ok(done)
     }
 
+    /// Append a cold dirty page before removing its only plaintext copy.
+    /// A failed append leaves the page and all prior successful writes intact.
+    fn evict_dirty_page(&mut self) -> Result<(), String> {
+        if self.pages.len() < DIRTY_PAGE_LIMIT { return Ok(()); }
+        let page = *self.pages.keys().next().unwrap();
+        let bytes = &self.pages[&page];
+        let chunk = self.vault.stage_chunk(bytes)?;
+        let valid = bytes.len();
+        self.staged_pages.insert(page, StagedPage { chunk, valid });
+        self.pages.remove(&page);
+        Ok(())
+    }
+
+    fn load_dirty_page(&mut self, page: u64, full_overwrite: bool) -> Result<(), String> {
+        if self.pages.contains_key(&page) { return Ok(()); }
+        self.evict_dirty_page()?;
+        let visible = self.staged_pages.get(&page).map_or_else(
+            || self.original_visible_size().saturating_sub(page * PAGE).min(PAGE) as usize,
+            |staged| staged.valid);
+        let mut plain = if full_overwrite || visible == 0 {
+            Zeroizing::new(Vec::new())
+        } else if self.read_cache.as_ref().is_some_and(|(index, _)| *index == page) {
+            self.read_cache.take().unwrap().1
+        } else if self.previous_read.as_ref().is_some_and(|(index, _)| *index == page) {
+            self.previous_read.take().unwrap().1
+        } else if let Some(staged) = self.staged_pages.get(&page) {
+            self.vault.read_staged_chunk(&staged.chunk)?
+        } else {
+            self.vault.stream_read_chunk(self.id, page as i64)?
+                .unwrap_or_else(|| Zeroizing::new(Vec::new()))
+        };
+        if plain.len() > visible {
+            plain[visible..].zeroize();
+            plain.truncate(visible);
+        }
+        self.clear_read_cache();
+        self.pages.insert(page, plain);
+        self.staged_pages.remove(&page);
+        Ok(())
+    }
+
     fn write_at(&mut self, buffer: &[u8], offset: u64) -> Result<usize, String> {
         if buffer.is_empty() { return Ok(0); }
         let end = offset.checked_add(buffer.len() as u64).ok_or("File offset overflow")?;
-        // Guard against a malicious application requesting arbitrarily huge
-        // sparse files and consuming unbounded resources during commit.
+        // Preserve the existing sparse-file safety limit.
         if end > (1u64 << 40) { return Err("Virtual file exceeds 1 TiB safety limit".into()); }
         let mut done = 0;
         while done < buffer.len() {
@@ -109,23 +204,54 @@ impl MountData {
             let page = position / PAGE;
             let within = (position % PAGE) as usize;
             let take = (buffer.len() - done).min(STREAM_CHUNK_SIZE - within);
-            if !self.pages.contains_key(&page) {
-                let mut original = self.vault.stream_read_chunk(self.id, page as i64)?
-                    .map_or_else(|| Zeroizing::new(Vec::new()), |v| v);
-                original.resize(STREAM_CHUNK_SIZE, 0);
-                if let Some(cutoff) = self.truncate_floor {
-                    let from = cutoff.saturating_sub(page * PAGE).min(PAGE) as usize;
-                    original[from..].fill(0);
-                }
-                self.pages.insert(page, original);
+            if let Err(error) = self.load_dirty_page(page, within == 0 && take == STREAM_CHUNK_SIZE) {
+                // Return a short successful write if earlier pages were
+                // accepted. The OS can retry the rest without losing them.
+                if done > 0 { return Ok(done); }
+                return Err(error);
             }
             let staged = self.pages.get_mut(&page).unwrap();
+            if staged.len() < within + take { resize_plain_page(staged, within + take); }
             staged[within..within + take].copy_from_slice(&buffer[done..done + take]);
             done += take;
+            self.size = self.size.max(offset + done as u64);
+            self.dirty = true;
         }
-        self.size = self.size.max(end);
-        self.dirty = true;
         Ok(done)
+    }
+
+    fn resize(&mut self, new_size: u64) {
+        if new_size < self.size {
+            self.truncate_floor = Some(self.truncate_floor.map_or(new_size, |old| old.min(new_size)));
+            // The historical floor applies only to original data. Later
+            // writes below a new EOF must survive a second shrink/grow.
+            self.pages.retain(|index, bytes| {
+                let valid = new_size.saturating_sub(index * PAGE).min(PAGE) as usize;
+                if valid < bytes.len() {
+                    bytes[valid..].zeroize();
+                    bytes.truncate(valid);
+                }
+                valid > 0
+            });
+            self.staged_pages.retain(|index, staged| {
+                staged.valid = staged.valid.min(new_size.saturating_sub(index * PAGE).min(PAGE) as usize);
+                staged.valid > 0
+            });
+            self.clear_read_cache();
+        }
+        if new_size != self.size {
+            self.size = new_size;
+            self.dirty = true;
+        }
+    }
+
+    fn overwrite(&mut self) {
+        self.resize(0);
+        self.truncate_floor = Some(0);
+        self.pages.clear();
+        self.staged_pages.clear();
+        self.clear_read_cache();
+        self.dirty = true;
     }
 
     fn commit(&mut self) -> Result<(), String> {
@@ -140,28 +266,53 @@ impl MountData {
     fn commit_with_gate(&mut self) -> Result<(), String> {
         if !self.dirty { return Ok(()); }
         self.vault.reload_after_mount()?;
-        // The original authenticated chunks must remain available even after
-        // begin_stream_file logically replaces the old index entry.
-        let snapshot = self.vault.fork_for_mount()?;
+        // Do not replace a different file that happens to occupy this name.
+        if self.vault.find_child(self.parent, &self.name)?.is_none_or(|item| item.id != self.id) {
+            return Err("Encrypted file changed while open; unsaved edits retained".into());
+        }
+        // The transaction's old authenticated index supplies original
+        // references. No full index fork or second writer cursor is needed.
         let new_id = self.vault.begin_stream_file(self.parent, &self.name, true)?;
         let result = (|| -> Result<(), String> {
             let blocks = self.size.div_ceil(PAGE);
+            let original_visible = self.original_visible_size();
+            self.clear_read_cache();
             for index in 0..blocks {
                 let length = (self.size - index * PAGE).min(PAGE) as usize;
-                let mut plain = if let Some(page) = self.pages.get(&index) {
-                    Zeroizing::new(page[..length].to_vec())
-                } else if index * PAGE < self.original_size {
-                    snapshot.stream_read_chunk(self.id, index as i64)?
-                        .unwrap_or_else(|| Zeroizing::new(Vec::new()))
-                } else { Zeroizing::new(Vec::new()) };
-                plain.resize(length, 0);
-                if let Some(cutoff) = self.truncate_floor {
-                    if !self.pages.contains_key(&index) {
-                        let from = cutoff.saturating_sub(index * PAGE).min(length as u64) as usize;
-                        plain[from..].fill(0);
+                if let Some(page) = self.pages.get_mut(&index) {
+                    // Borrow dirty bytes directly. Do not copy another 8 MiB.
+                    resize_plain_page(page, length);
+                    self.vault.stream_write_chunk(new_id, index as i64, page)?;
+                } else if let Some(staged) = self.staged_pages.get(&index) {
+                    if staged.valid == length && staged.chunk.len() == length {
+                        self.vault.stream_use_staged_chunk(new_id, index as i64, &staged.chunk)?;
+                    } else {
+                        let mut plain = self.vault.read_staged_chunk(&staged.chunk)?;
+                        let keep = staged.valid.min(length);
+                        if keep < plain.len() {
+                            plain[keep..].zeroize();
+                            plain.truncate(keep);
+                        }
+                        resize_plain_page(&mut plain, length);
+                        self.vault.stream_write_chunk(new_id, index as i64, &plain)?;
                     }
+                } else if index * PAGE + length as u64 <= original_visible
+                    && self.vault.stream_reuse_previous_chunk(new_id,index as i64,self.id,length)? {
+                    // Authenticate and reference, rather than re-encrypt,
+                    // the unchanged original record at its immutable offset.
+                } else {
+                    let keep = original_visible.saturating_sub(index * PAGE).min(length as u64) as usize;
+                    let mut plain = if keep > 0 {
+                        self.vault.stream_read_previous_chunk(self.id, index as i64)?
+                            .unwrap_or_else(|| Zeroizing::new(Vec::new()))
+                    } else { Zeroizing::new(Vec::new()) };
+                    if keep < plain.len() {
+                        plain[keep..].zeroize();
+                        plain.truncate(keep);
+                    }
+                    resize_plain_page(&mut plain, length);
+                    self.vault.stream_write_chunk(new_id, index as i64, &plain)?;
                 }
-                self.vault.stream_write_chunk(new_id, index as i64, &plain)?;
             }
             self.vault.commit_stream_file()?;
             Ok(())
@@ -174,7 +325,8 @@ impl MountData {
         self.id = new_id;
         self.original_size = self.size;
         self.pages.clear();
-        self.read_cache = None;
+        self.staged_pages.clear();
+        self.clear_read_cache();
         self.truncate_floor = None;
         self.dirty = false;
         self.last_error = None;
@@ -269,17 +421,7 @@ impl FileSystemContext for SingleFileFs {
         if new_size > (1u64 << 40) { return Err(fs_error(ACCESS_DENIED)); }
         if allocation_only { *info = self.info(true); return Ok(()); }
         let mut state = self.state.lock().unwrap();
-        if new_size < state.size {
-            let floor = state.truncate_floor.map_or(new_size, |old| old.min(new_size));
-            state.truncate_floor = Some(floor);
-            for (index, data) in &mut state.pages {
-                let from = floor.saturating_sub(index * PAGE).min(PAGE) as usize;
-                data[from..].fill(0);
-            }
-        }
-        state.size = new_size;
-        state.pages.retain(|index, _| index.saturating_mul(PAGE) < new_size);
-        state.dirty = true;
+        state.resize(new_size);
         drop(state);
         *info = self.info(true); Ok(())
     }
@@ -288,10 +430,7 @@ impl FileSystemContext for SingleFileFs {
         _extra: Option<&[u8]>, info: &mut FileInfo) -> winfsp::Result<()> {
         if !matches!(context, Handle::File) { return Err(fs_error(ACCESS_DENIED)); }
         let mut state = self.state.lock().unwrap();
-        state.size = 0;
-        state.truncate_floor = Some(0);
-        state.pages.clear();
-        state.dirty = true;
+        state.overwrite();
         drop(state);
         *info = self.info(true); Ok(())
     }
@@ -361,7 +500,7 @@ impl VaultMount {
         let state = Arc::new(Mutex::new(MountData {
             vault: original.fork_for_mount()?, id: item.id, parent, name: item.name.clone(),
             size: item.size.max(0) as u64, original_size: item.size.max(0) as u64,
-            pages: BTreeMap::new(), read_cache: None, truncate_floor: None, dirty: false, last_error: None, saved_revision: 0, open_files: 0, closing: false, writer_gate,
+            pages: BTreeMap::new(), staged_pages: BTreeMap::new(), read_cache: None, previous_read: None, truncate_floor: None, dirty: false, last_error: None, saved_revision: 0, open_files: 0, closing: false, writer_gate,
         }));
         let mut params = VolumeParams::new();
         params.filesystem_name("NDRVAULT").sector_size(512)
@@ -408,6 +547,15 @@ impl VaultMount {
         self.state.lock().map_or(0, |state| state.saved_revision)
     }
 
+    pub fn backing_removed(&self) -> bool {
+        self.state.try_lock().is_ok_and(|state| state.vault.backing_removed())
+    }
+    pub fn revoke(&self) {
+        if let Ok(mut state) = self.state.lock() { state.closing = true; }
+    }
+    pub fn is_revoked(&self) -> bool {
+        self.state.lock().is_ok_and(|state| state.closing)
+    }
     pub fn has_open_files(&self) -> bool {
         self.state.lock().is_ok_and(|state| state.open_files > 0)
     }
@@ -547,7 +695,7 @@ mod tests {
         let mut mounted = MountData {
             vault: original.fork_for_mount().unwrap(), id, parent: 1, name: "picture.png".into(),
             size: plain.len() as u64, original_size: plain.len() as u64,
-            pages: BTreeMap::new(), read_cache: None, truncate_floor: None, dirty: false, last_error: None, saved_revision: 0, open_files: 0, closing: false, writer_gate: Arc::new(Mutex::new(())),
+            pages: BTreeMap::new(), staged_pages: BTreeMap::new(), read_cache: None, previous_read: None, truncate_floor: None, dirty: false, last_error: None, saved_revision: 0, open_files: 0, closing: false, writer_gate: Arc::new(Mutex::new(())),
         };
         let mut before = vec![0; plain.len()];
         mounted.read_at(&mut before, 0).unwrap();
@@ -571,6 +719,47 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
+    fn batch384_dirty_pages_are_bounded_and_truncation_retains_later_writes() {
+        let root = std::env::temp_dir().join(format!("ndr-winfsp-b384-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir(&root).unwrap();
+        let path = root.join("test.ndr");
+        let mut vault = Vault::create(&path, "test bounded staging password".into()).unwrap();
+        let id = vault.add_file(1,"large.bin",&[]).unwrap();
+        let mut file = MountData {
+            vault:vault.fork_for_mount().unwrap(),id,parent:1,name:"large.bin".into(),
+            size:0,original_size:0,pages:BTreeMap::new(),staged_pages:BTreeMap::new(),
+            read_cache:None,previous_read:None,truncate_floor:None,dirty:false,last_error:None,
+            saved_revision:0,open_files:0,closing:false,writer_gate:Arc::new(Mutex::new(())),
+        };
+        let page=vec![71;STREAM_CHUNK_SIZE];
+        for i in 0..5u64 {
+            assert_eq!(file.write_at(&page,i*PAGE).unwrap(),page.len());
+            assert!(file.pages.len()<=DIRTY_PAGE_LIMIT);
+        }
+        assert_eq!(file.staged_pages.len(),3);
+        vault.reload_after_mount().unwrap();
+        assert_eq!(vault.stream_file_size(id).unwrap(),0,"uncommitted spill must not publish metadata");
+        file.resize(PAGE+8);
+        file.resize(3*PAGE);
+        file.write_at(b"preserved",2*PAGE+4).unwrap();
+        file.resize(2*PAGE+32);
+        file.resize(5*PAGE);
+        let mut read=vec![0;64];
+        file.read_at(&mut read,PAGE).unwrap();
+        assert_eq!(&read[..8],&[71;8]);assert_eq!(&read[8..],&[0;56]);
+        file.read_at(&mut read,2*PAGE).unwrap();
+        assert_eq!(&read[4..13],b"preserved");assert_eq!(&read[13..],&[0;51]);
+        file.commit().unwrap();
+        assert!(file.pages.is_empty()&&file.staged_pages.is_empty());
+        vault.reload_after_mount().unwrap();vault.verify_integrity().unwrap();
+        assert_eq!(vault.stream_file_size(file.id).unwrap(),5*PAGE);
+        let third=vault.stream_read_chunk(file.id,2).unwrap().unwrap();
+        assert_eq!(&third[4..13],b"preserved");assert!(third[13..].iter().all(|&b|b==0));
+        drop((file,vault));std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn shrinking_then_growing_file_does_not_restore_truncated_plaintext() {
         let root = std::env::temp_dir().join(format!("ndr-winfsp-truncate-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
@@ -579,7 +768,7 @@ mod tests {
         let id = original.add_file(1, "video.bin", b"ABCDEFGHIJKLMNOP").unwrap();
         let state = Arc::new(Mutex::new(MountData {
             vault: original.fork_for_mount().unwrap(), id, parent: 1, name: "video.bin".into(),
-            size: 16, original_size: 16, pages: BTreeMap::new(), read_cache: None,
+            size: 16, original_size: 16, pages: BTreeMap::new(), staged_pages: BTreeMap::new(), read_cache: None, previous_read: None,
             truncate_floor: None, dirty: false, last_error: None, saved_revision: 0, open_files: 0, closing: false, writer_gate: Arc::new(Mutex::new(())),
         }));
         let fs = SingleFileFs { state: Arc::clone(&state) };
@@ -611,7 +800,7 @@ mod tests {
         let state = Arc::new(Mutex::new(MountData {
             vault: vault.fork_for_mount().unwrap(), id, parent: 1, name: "photo.png".into(),
             size: original.len() as u64, original_size: original.len() as u64,
-            pages: BTreeMap::new(), read_cache: None, truncate_floor: None, dirty: false, last_error: None, saved_revision: 0, open_files: 0, closing: false, writer_gate: Arc::new(Mutex::new(())),
+            pages: BTreeMap::new(), staged_pages: BTreeMap::new(), read_cache: None, previous_read: None, truncate_floor: None, dirty: false, last_error: None, saved_revision: 0, open_files: 0, closing: false, writer_gate: Arc::new(Mutex::new(())),
         }));
         let fs = SingleFileFs { state: Arc::clone(&state) };
         let mut info = FileInfo::default();

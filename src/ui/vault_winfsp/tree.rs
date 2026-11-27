@@ -103,7 +103,7 @@ impl TreeData {
         let file = Arc::new(Mutex::new(MountData {
             vault, id: node.id, parent, name: node.name.clone(),
             size: node.size.max(0) as u64, original_size: node.size.max(0) as u64,
-            pages: BTreeMap::new(), read_cache: None, truncate_floor: None,
+            pages: BTreeMap::new(), staged_pages: BTreeMap::new(), read_cache: None, previous_read: None, truncate_floor: None,
             dirty: false, last_error: None, saved_revision: 0,
             open_files: 1, closing: false, writer_gate: Arc::clone(&self.gate),
         }));
@@ -362,17 +362,7 @@ impl FileSystemContext for TreeFs {
         if new_size > 1u64 << 40 { return Err(fs_error(ACCESS_DENIED)); }
         if !allocation_only {
             self.with_file(handle, |file| {
-                if new_size < file.size {
-                    let floor = file.truncate_floor.map_or(new_size, |old| old.min(new_size));
-                    file.truncate_floor = Some(floor);
-                    for (index, bytes) in &mut file.pages {
-                        let from = floor.saturating_sub(index * PAGE).min(PAGE) as usize;
-                        bytes[from..].fill(0);
-                    }
-                }
-                file.size = new_size;
-                file.pages.retain(|index, _| index.saturating_mul(PAGE) < new_size);
-                file.dirty = true;
+                file.resize(new_size);
                 Ok(())
             })?;
         }
@@ -384,11 +374,7 @@ impl FileSystemContext for TreeFs {
         _replace: bool, _allocation_size: u64, _extra: Option<&[u8]>,
         info: &mut FileInfo) -> winfsp::Result<()> {
         self.with_file(handle, |file| {
-            file.size = 0;
-            file.truncate_floor = Some(0);
-            file.pages.clear();
-            file.read_cache = None;
-            file.dirty = true;
+            file.overwrite();
             Ok(())
         })?;
         *info = self.stat_handle(handle)?;
@@ -667,6 +653,9 @@ impl VaultTreeMount {
         }
         Ok(TransferReservation(busy))
     }
+    pub fn backing_removed(&self) -> bool {
+        self.state.try_lock().is_ok_and(|state| state.vault.backing_removed())
+    }
     pub fn has_open_files(&self) -> bool {
         self.state.lock().is_ok_and(|s| s.open_handles != 0)
     }
@@ -728,6 +717,77 @@ impl VaultTreeMount {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[ignore = "Real WinFsp 64 MiB write/edit/truncate; disposable encrypted test data"]
+    fn batch385_real_mount_large_write_and_partial_save() {
+        use std::io::{Read,Seek,SeekFrom,Write};
+        let base=std::env::var_os("NDR_QA_VAULT_ROOT").map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir);
+        let dir=base.join(format!("NDR-QA-381-390-winfsp-{}-{}",std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir(&dir).unwrap();
+        struct Owned(std::path::PathBuf);
+        impl Drop for Owned {fn drop(&mut self){let _=std::fs::remove_dir_all(&self.0);}}
+        let owned=Owned(dir);
+        let path=owned.0.join("large.ndr");
+        let mut db=Vault::create(&path,"real mounted large test".into()).unwrap();
+        let mut mount=VaultTreeMount::start(path.clone(),&db,Arc::new(Mutex::new(())),&[]).unwrap();
+        let disk=mount.mount_root.clone();
+        let target=disk.join("large.bin");
+        let mut file=std::fs::OpenOptions::new().create_new(true).read(true).write(true).open(&target).unwrap();
+        let buf=vec![0x57u8;256*1024];
+        let total=8*PAGE;
+        let start=std::time::Instant::now();
+        for _ in 0..(total/buf.len() as u64){file.write_all(&buf).unwrap();}
+        file.sync_all().unwrap();
+        println!("REAL_VAULT_INITIAL bytes={total} ms={:.3}",start.elapsed().as_secs_f64()*1000.);
+        db.reload_after_mount().unwrap();
+        let id=db.find_child(1,"large.bin").unwrap().unwrap().id;
+        assert_eq!(db.stream_file_size(id).unwrap(),total);
+        // Change one page; the remaining seven must not be rewritten.
+        let before=std::fs::metadata(&path).unwrap().len();
+        file.seek(SeekFrom::Start(PAGE+1234)).unwrap();
+        file.write_all(&[0x91;4096]).unwrap();
+        let start=std::time::Instant::now();file.sync_all().unwrap();
+        let growth=std::fs::metadata(&path).unwrap().len()-before;
+        println!("REAL_VAULT_PATCH growth={growth} ms={:.3}",start.elapsed().as_secs_f64()*1000.);
+        assert!(growth<3*PAGE,"partial edit rewrote too many pages");
+        db.reload_after_mount().unwrap();
+        let id=db.find_child(1,"large.bin").unwrap().unwrap().id;
+        let page=db.stream_read_chunk(id,1).unwrap().unwrap();
+        assert_eq!(&page[1234..1234+4096],&[0x91;4096]);
+        assert_eq!(page[0],0x57);assert_eq!(page[8192],0x57);
+        drop(page);
+        file.set_len(PAGE+5).unwrap();
+        file.set_len(5*PAGE).unwrap();
+        file.seek(SeekFrom::Start(PAGE)).unwrap();
+        let mut read=[0u8;64];file.read_exact(&mut read).unwrap();
+        assert_eq!(&read[..5],&[0x57;5]);assert!(read[5..].iter().all(|&v|v==0));
+        file.seek(SeekFrom::Start(4*PAGE+42)).unwrap();file.write_all(b"retained").unwrap();
+        file.sync_all().unwrap();
+        drop(file);
+        let deadline=std::time::Instant::now()+Duration::from_secs(10);
+        while mount.has_open_files(){
+            assert!(std::time::Instant::now()<deadline,"real WinFsp close callback did not drain");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        mount.finish().unwrap();drop(mount);drop(db);
+        let reopened=Vault::unlock(&path,"real mounted large test".into()).unwrap();
+        let id=reopened.find_child(1,"large.bin").unwrap().unwrap().id;
+        assert_eq!(reopened.stream_file_size(id).unwrap(),5*PAGE);
+        reopened.verify_integrity().unwrap();
+        for i in 0..5 {
+            let p=reopened.stream_read_chunk(id,i).unwrap().unwrap();
+            if i==0{assert!(p.iter().all(|&v|v==0x57));}
+            else if i==1{assert_eq!(&p[..5],&[0x57;5]);assert!(p[5..].iter().all(|&v|v==0));}
+            else if i==4{assert_eq!(&p[42..50],b"retained");assert!(p[..42].iter().chain(p[50..].iter()).all(|&v|v==0));}
+            else{assert!(p.iter().all(|&v|v==0));}
+        }
+        drop(reopened);
+        drop(owned);
+        assert!(!disk.exists());
+        println!("REAL_VAULT_LARGE_PASS");
+    }
+
     #[test]
     #[ignore = "requires installed WinFsp and unused drive letter; disposable encrypted test data"]
     fn full_tree_mount_supports_explorer_create_copy_rename_and_delete() {

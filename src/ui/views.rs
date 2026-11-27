@@ -833,7 +833,7 @@ impl App {
                                             }
                                             // Original: for a fixed disk (kind 3) whose total size is known, a bar of width thumbnail size − 16 and height 4.
                                             // The total is FUN_007d7e6c(NXFORE, NXBACK, 0.3), and the used portion is (NXFORE, NXBACK, 0.5).
-                                            if let Some((_, 3, Some((free, total)))) = drive_info.as_ref().map(|(l, k, s)| (l, *k, *s)) {
+                                            if let Some((_, 2 | 3 | 4, Some((free, total)))) = drive_info.as_ref().map(|(l, k, s)| (l, *k, *s)) {
                                                 if total > 0 {
                                                     let (rect, _) = ui.allocate_exact_size(egui::vec2(thumb - 16.0, 8.0), egui::Sense::hover());
                                                     let bar = egui::Rect::from_min_size(egui::pos2(rect.left(), rect.top() + 2.0), egui::vec2(thumb - 16.0, 4.0));

@@ -332,7 +332,7 @@ impl App {
                                         let entry = &pane.entries[row];
                                         let marked = pane.selected.contains(&row);
                                         let cursor_row = pane.cursor == row;
-                                        let texts = &pane.view.cells[row];
+                                        let texts = pane.view.cells.row(row);
                                         let default = if entry.is_dir { Color32::from_rgb(228, 188, 85) } else if entry.hidden { Color32::GRAY } else { ui.visuals().text_color() };
                                         let color = pane.view.colors[row].map_or(default, |(r, g, b)| Color32::from_rgb(r, g, b));
                                         bar_state = Some((color, cursor_row, marked));
@@ -600,7 +600,7 @@ impl App {
                         let entry = &pane.entries[row];
                         let marked = pane.selected.contains(&row);
                         let cursor_row = pane.cursor == row;
-                        let texts = &pane.view.cells[row];
+                        let texts = pane.view.cells.row(row);
                         let default = if entry.is_dir { Color32::from_rgb(228, 188, 85) } else if entry.hidden { Color32::GRAY } else { ui.visuals().text_color() };
                         let color = pane.view.colors[row].map_or(default, |(r, g, b)| Color32::from_rgb(r, g, b));
                         let label = if auto || entry.drive || original.is_some() { texts[0].as_ref() } else { entry.name.as_str() };

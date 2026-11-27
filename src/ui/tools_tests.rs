@@ -2379,7 +2379,7 @@ fn closing_while_working_asks_the_original_question_and_columns_use_field_names(
     // Original DrawListItem description cell: the file type text when there is no description and showfiletype is on.
     app.compute_view(0);
     let file = app.panes[0].entries.iter().position(|e| !e.is_dir && !e.drive).expect("a file");
-    let cells = app.panes[0].view.cells[file].clone();
+    let cells = app.panes[0].view.cells.owned_row(file);
     assert_eq!(cells[DetailColumn::Description.index()], cells[DetailColumn::Kind.index()]);
     // Original GetList: the type text is the shell name (SHGetFileInfoW SHGFI_TYPENAME).
     let entry = &app.panes[0].entries[file];

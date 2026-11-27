@@ -1786,11 +1786,20 @@ pub fn connected_network_drive(root: &Path) -> bool {
 /// if empty or removable, the shell display name (SHGetFileInfoW SHGFI_DISPLAYNAME) truncated at one character before the last '('.
 /// Fix: for a network drive whose volume can be read, the name built from the connection target instead of the shell name ("disconnected network drive").
 pub fn drive_name(root: &Path) -> String {
-    let removable = drive_type_name(root) == "Removable";
-    if let Some(label) = (!removable).then(|| volume_label(root)).flatten().filter(|l| !l.is_empty()) {
-        return label;
+    let kind = unsafe { GetDriveTypeW(wide(root.as_os_str()).as_ptr()) };
+    let label = (kind != 2).then(|| volume_label(root)).flatten();
+    drive_name_with_volume(root, kind, label.as_deref())
+}
+
+/// Use the same provider response for readiness, display name and quota.
+/// Never repeat a slow volume-info query just because the label is empty.
+fn drive_name_with_volume(root: &Path, kind: u32, label: Option<&str>) -> String {
+    if kind != 2 {
+        if let Some(label) = label.filter(|l| !l.is_empty()) {
+            return label.to_owned();
+        }
     }
-    if connected_network_drive(root)
+    if kind == 4 && label.is_some()
         && let Some(name) = drive_unc_target(root).as_deref().and_then(network_drive_name)
     {
         return name;
@@ -1808,7 +1817,7 @@ pub fn drive_name(root: &Path) -> String {
     shown
 }
 
-/// The TNXDriveInfo (read size = 0) of an original This PC drive item: (GetDriveName, GetDriveTypeW, (free, total) for a fixed disk (3)).
+/// The TNXDriveInfo of a This PC drive item: (label, type, provider-reported free/total when available).
 /// Refresh (0x7b7554) does not read the size if the type is 0 or 1, and reads only fixed disks when there is no display.
 pub fn drive_item_info(root: &Path) -> Option<(String, u32, Option<(u64, u64)>)> {
     use windows_sys::Win32::Storage::FileSystem::{GetDiskFreeSpaceExW, GetDriveTypeW};
@@ -1818,14 +1827,39 @@ pub fn drive_item_info(root: &Path) -> Option<(String, u32, Option<(u64, u64)>)>
     let (mut free, mut total) = (0u64, 0u64);
     // Fix (user request): the original reads the size only for fixed disks, but connected (volume-readable) network drives are read too.
     // Disconnected network drives can be slow, so they are not read, like the original.
-    let label = drive_name(root);
-    let connected = kind == 4 && connected_network_drive(root);
+    let volume = volume_label(root);
+    let label = drive_name_with_volume(root, kind, volume.as_deref());
+    let connected = kind == 4 && volume.is_some();
     // SAFETY: NUL-terminated root string; out pointers refer to live locals.
-    let sizes = ((kind == 3 || connected) && unsafe { GetDiskFreeSpaceExW(name.as_ptr(), &mut free, &mut total, ptr::null_mut()) } != 0).then_some((free, total));
+    // MYBOX and some USB volumes report DRIVE_REMOVABLE (2) despite
+    // having an online filesystem with a real provider-reported quota.
+    // Do not query empty card readers; ready removable volumes use the
+    // same Win32 free-space API as fixed disks.
+    let removable_ready = kind == 2 && volume.is_some();
+    let sizes = ((kind == 3 || connected || removable_ready)
+        && unsafe { GetDiskFreeSpaceExW(name.as_ptr(), &mut free, &mut total, ptr::null_mut()) } != 0
+        && total > 0 && free <= total).then_some((free, total));
     Some((label, kind, sizes))
 }
 
-/// Original PathStripToRootW: "X:\" or "\\server\share\" (and the drive letter).
+#[cfg(test)]
+#[test]
+#[ignore = "Read-only live drive capacity probe; requires connected MYBOX N: and USB SSD F:"]
+fn batch372_live_removable_and_usb_capacity() {
+    for letter in ['N', 'F'] {
+        let root = PathBuf::from(format!("{letter}:\\"));
+        let (label, kind, sizes) = drive_item_info(&root).expect("drive info");
+        let (free, total) = sizes.expect("provider reports capacity");
+        let direct = disk_capacity(&root).expect("direct capacity");
+        assert_eq!(total, direct.1);
+        // Free space can change between the two calls.
+        assert!(free <= total && direct.0 <= total);
+        if letter == 'N' { assert_eq!(kind, 2); }
+        println!("LIVE_CAPACITY {letter}: label={label:?} kind={kind} free={free} total={total} direct_free={}",direct.0);
+    }
+}
+
+/// Original PathStripToRootW: "X:\\" or "\\\\server\\share\\" (and the drive letter).
 fn volume_root(path: &Path) -> Option<(PathBuf, Option<char>)> {
     use std::path::{Component, Prefix};
     let Some(Component::Prefix(prefix)) = path.components().next() else { return None };
@@ -1843,48 +1877,149 @@ fn volume_root(path: &Path) -> Option<(PathBuf, Option<char>)> {
 /// a directory. Device queries use zero desired access, no elevation and
 /// no writes. Unknown/virtual volumes use the conservative default.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum FolderSizeMedia { Fast, Seek, #[default] Unknown }
+pub enum FolderSizeMedia { Fast, Seek, External, #[default] Unknown }
 
 impl FolderSizeMedia {
     pub fn verify_interval(self) -> std::time::Duration {
-        std::time::Duration::from_secs(if self == Self::Seek { 30 } else { 15 })
+        std::time::Duration::from_secs(if matches!(self,Self::Seek|Self::External) { 30 } else { 15 })
     }
     pub fn check_interval(self) -> std::time::Duration {
-        std::time::Duration::from_secs(if self == Self::Seek { 2 } else { 1 })
+        std::time::Duration::from_secs(if matches!(self,Self::Seek|Self::External) { 2 } else { 1 })
+    }
+    /// Additional verification workers are worthwhile only for actual
+    /// regular files. Do not count directories or reparse points.
+    pub(crate) fn verification_workers(self,regulars:usize,by_name:bool)->usize{
+        if regulars<4096 || !by_name{return 1}
+        match self{
+            Self::Fast if regulars>=16_384=>12,
+            Self::Fast=>8,
+            Self::Seek=>1,
+            Self::External=>2,
+            Self::Unknown=>4,
+        }
     }
 }
-/// Called only by the low-priority worker, and cached by parent listing.
+
+/// Decode the complete documented descriptor header. Treat short,
+/// malformed or unsupported replies as unknown, not a non-seeking disk.
+fn storage_descriptor_words(words:&[u32],returned:u32,min_size:usize)->Option<&[u32]>{
+    let bytes=returned as usize;
+    if bytes<min_size || min_size<8 || bytes>words.len().saturating_mul(4){return None}
+    let version=*words.first()? as usize;
+    let size=*words.get(1)? as usize;
+    if version<min_size || size<version || size>bytes{return None}
+    Some(&words[..bytes/4])
+}
+fn storage_seek_penalty(words:&[u32],returned:u32)->Option<bool>{
+    let desc=storage_descriptor_words(words,returned,12)?;
+    // BOOLEAN is a byte; avoid interpreting untrusted driver bytes as
+    // Rust bool values. Padding in the DWORD is not significant.
+    match desc[2]&0xff{0=>Some(false),1=>Some(true),_=>None}
+}
+fn storage_bus_type(words:&[u32],returned:u32)->Option<u32>{
+    // STORAGE_DEVICE_DESCRIPTOR BusType sits at byte 28, after the
+    // four string offsets. No vendor/product/serial data is retained.
+    storage_descriptor_words(words,returned,32)?.get(7).copied()
+}
+fn storage_media_policy(kind:u32,seek:Option<bool>,bus:Option<u32>)->FolderSizeMedia{
+    match kind{
+        6=>FolderSizeMedia::Fast,
+        2=>FolderSizeMedia::Seek,
+        3=>{
+            if seek==Some(true){return FolderSizeMedia::Seek}
+            // USB, IEEE 1394, SD and MMC transports are capped even if
+            // the device reports no mechanical seek penalty.
+            let external=matches!(bus,Some(4|7|12|13));
+            match (seek,external){
+                (Some(false),true)=>FolderSizeMedia::External,
+                (None,true)=>FolderSizeMedia::Seek,
+                (Some(false),false)=>FolderSizeMedia::Fast,
+                _=>FolderSizeMedia::Unknown,
+            }
+        }
+        _=>FolderSizeMedia::Unknown,
+    }
+}
+
+/// Called only by low-priority workers. Reject UNC/mapped network paths
+/// before querying a volume path or attempting any device IOCTL.
 pub fn folder_size_media(path: &Path) -> FolderSizeMedia {
-    use windows_sys::Win32::System::{IO::DeviceIoControl, Ioctl::{DEVICE_SEEK_PENALTY_DESCRIPTOR, IOCTL_STORAGE_QUERY_PROPERTY, STORAGE_PROPERTY_QUERY, StorageDeviceSeekPenaltyProperty, PropertyStandardQuery}};
+    use windows_sys::Win32::System::{IO::DeviceIoControl, Ioctl::{IOCTL_STORAGE_QUERY_PROPERTY, STORAGE_PROPERTY_QUERY, STORAGE_PROPERTY_ID, StorageDeviceSeekPenaltyProperty, StorageDeviceProperty, PropertyStandardQuery}};
+    let Some((drive_root,Some(_)))=volume_root(path)else{return FolderSizeMedia::Unknown};
+    if !path.is_absolute(){return FolderSizeMedia::Unknown}
+    let kind=unsafe{GetDriveTypeW(wide(drive_root.as_os_str()).as_ptr())};
+    if !matches!(kind,2|3|6){return FolderSizeMedia::Unknown}
+    // Resolve nested mount points as before: the root drive's class
+    // alone does not prove the actual storage device for this path.
     let mut root = [0u16; 1024];
     if unsafe { GetVolumePathNameW(wide(path.as_os_str()).as_ptr(), root.as_mut_ptr(), root.len() as u32) } == 0 {
         return FolderSizeMedia::Unknown;
     }
     let len = root.iter().position(|&c| c == 0).unwrap_or(root.len());
     let kind = unsafe { GetDriveTypeW(root.as_ptr()) };
-    if kind == 6 { return FolderSizeMedia::Fast; }
-    if kind == 2 { return FolderSizeMedia::Seek; }
-    // Mount-point and network/virtual volumes need not expose a physical
-    // device; don't guess from a drive letter or open raw disk data.
-    if kind != 3 || len != 3 || root[1] != b':' as u16 { return FolderSizeMedia::Unknown; }
+    if kind!=3{return storage_media_policy(kind,None,None)}
+    if len != 3 || root[1] != b':' as u16 { return FolderSizeMedia::Unknown; }
     let device = [b'\\' as u16, b'\\' as u16, b'.' as u16, b'\\' as u16, root[0], b':' as u16, 0];
     let h = unsafe { CreateFileW(device.as_ptr(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
         ptr::null(), OPEN_EXISTING, 0, ptr::null_mut()) };
     if h == INVALID_HANDLE_VALUE || h.is_null() { return FolderSizeMedia::Unknown; }
-    let query = STORAGE_PROPERTY_QUERY { PropertyId: StorageDeviceSeekPenaltyProperty,
-        QueryType: PropertyStandardQuery, AdditionalParameters: [0] };
-    let mut out: DEVICE_SEEK_PENALTY_DESCRIPTOR = unsafe { std::mem::zeroed() };
-    let mut returned = 0u32;
-    let ok = unsafe {
-        let ok = DeviceIoControl(h, IOCTL_STORAGE_QUERY_PROPERTY, &query as *const _ as _,
-            size_of::<STORAGE_PROPERTY_QUERY>() as u32, &mut out as *mut _ as _,
-            size_of::<DEVICE_SEEK_PENALTY_DESCRIPTOR>() as u32, &mut returned, ptr::null_mut());
-        CloseHandle(h);
-        ok != 0
+    let read=|property:STORAGE_PROPERTY_ID,out:&mut [u32]|->u32{
+        let query=STORAGE_PROPERTY_QUERY{PropertyId:property,QueryType:PropertyStandardQuery,AdditionalParameters:[0]};
+        let mut returned=0u32;
+        let ok=unsafe{DeviceIoControl(h,IOCTL_STORAGE_QUERY_PROPERTY,&query as *const _ as _,
+            size_of::<STORAGE_PROPERTY_QUERY>() as u32,out.as_mut_ptr().cast(),
+            std::mem::size_of_val(out) as u32,&mut returned,ptr::null_mut())};
+        if ok!=0{returned}else{0}
     };
-    if !ok || returned < size_of::<DEVICE_SEEK_PENALTY_DESCRIPTOR>() as u32 {
-        FolderSizeMedia::Unknown
-    } else if out.IncursSeekPenalty { FolderSizeMedia::Seek } else { FolderSizeMedia::Fast }
+    let mut seek_words=[0u32;3];
+    let seek_bytes=read(StorageDeviceSeekPenaltyProperty,&mut seek_words);
+    let seek=storage_seek_penalty(&seek_words,seek_bytes);
+    // A confirmed seeking device already has the strictest policy.
+    // Query the transport only when it can affect the classification.
+    let bus=if seek!=Some(true){
+        let mut device_words=[0u32;1024];
+        let bytes=read(StorageDeviceProperty,&mut device_words);
+        storage_bus_type(&device_words,bytes)
+    }else{None};
+    unsafe{CloseHandle(h);}
+    storage_media_policy(kind,seek,bus)
+}
+
+#[test]
+fn storage_policy_rejects_malformed_descriptors_and_caps_external_workers(){
+    use FolderSizeMedia::*;
+    assert_eq!(storage_seek_penalty(&[12,12,0],12),Some(false));
+    assert_eq!(storage_seek_penalty(&[12,12,0xaabbcc01],12),Some(true));
+    for (words,bytes) in [([0,12,0],12),([12,16,0],12),([12,12,2],12),([12,12,0],8),([12,12,0],16)]{
+        assert_eq!(storage_seek_penalty(&words,bytes),None);
+    }
+    let mut descriptor=[0u32;10];descriptor[0]=40;descriptor[1]=40;descriptor[7]=7;
+    assert_eq!(storage_bus_type(&descriptor,40),Some(7));
+    assert_eq!(storage_bus_type(&descriptor,28),None);
+    descriptor[1]=100;assert_eq!(storage_bus_type(&descriptor,40),None);
+    for bus in [4,7,12,13]{
+        assert_eq!(storage_media_policy(3,Some(false),Some(bus)),External);
+        assert_eq!(storage_media_policy(3,None,Some(bus)),Seek);
+        assert_eq!(storage_media_policy(3,Some(true),Some(bus)),Seek);
+    }
+    assert_eq!(storage_media_policy(3,None,None),Unknown);
+    assert_eq!(storage_media_policy(3,None,Some(17)),Unknown);
+    assert_eq!(storage_media_policy(3,Some(false),Some(17)),Fast);
+    assert_eq!(storage_media_policy(3,Some(false),None),Fast);
+    assert_eq!(storage_media_policy(4,Some(false),Some(17)),Unknown);
+    assert_eq!(storage_media_policy(2,None,None),Seek);
+    assert_eq!(storage_media_policy(6,None,None),Fast);
+    for media in [Fast,Seek,External,Unknown]{
+        assert_eq!(media.verification_workers(4095,true),1);
+        assert_eq!(media.verification_workers(100_000,false),1);
+    }
+    assert_eq!(Fast.verification_workers(4096,true),8);
+    assert_eq!(Fast.verification_workers(16_384,true),12);
+    assert_eq!(External.verification_workers(100_000,true),2);
+    assert_eq!(Seek.verification_workers(100_000,true),1);
+    assert_eq!(Unknown.verification_workers(100_000,true),4);
+    assert_eq!(External.verify_interval().as_secs(),30);
+    assert_eq!(External.check_interval().as_secs(),2);
 }
 
 /// Automatic recursive enumeration must never start on a UNC share or mapped

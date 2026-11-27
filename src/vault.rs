@@ -169,6 +169,18 @@ struct TemporaryEncryptedFile(PathBuf);
 impl Drop for TemporaryEncryptedFile {
     fn drop(&mut self) { let _ = fs::remove_file(&self.0); }
 }
+/// An unpublished, authenticated data record, bound to the shared physical
+/// writer identity. It cannot be constructed from an arbitrary file offset.
+/// Dropping it leaves only unreachable ciphertext in the append-only vault.
+pub struct StagedVaultChunk {
+    block: Block,
+    owner: std::sync::Arc<std::sync::Mutex<()>>,
+}
+impl StagedVaultChunk {
+    pub fn len(&self) -> usize { self.block.size as usize }
+    pub fn is_empty(&self) -> bool { self.block.size == 0 }
+}
+
 pub struct Vault {
     /// Append/index writer. Cloned mounts share this Windows file cursor.
     handle: File,
@@ -179,6 +191,11 @@ pub struct Vault {
     pub file: PathBuf, key: Zeroizing<[u8;32]>, index: Index,
     generation: u64, pending: Option<Index>, opened: Instant, last_used: Instant,
     gate: Option<VaultGate>,
+    // All forked Windows writer handles share a synchronous seek cursor.
+    // Serialize the whole physical append and slot update independently
+    // of the higher-level writer reservation (unpublished pages may be
+    // appended between NDR transfer chunks, but never change its index).
+    writer_io: std::sync::Arc<std::sync::Mutex<()>>,
 }
 /// Windows FILETIME (100 ns ticks from 1601-01-01 UTC).
 fn current_filetime() -> u64 {
@@ -224,10 +241,101 @@ fn exclusive(options: &mut OpenOptions) -> &mut OpenOptions {
         use std::os::windows::fs::OpenOptionsExt;
         // Read-only metadata probes and backup readers remain possible, but
         // other read-write openers cannot acquire a writer handle.
-        options.share_mode(1);
+        // Continue to deny concurrent writers, but allow Explorer to
+        // rename or delete the physical encrypted container. All writes
+        // stay on the authenticated handle, never a replacement pathname.
+        options.share_mode(1 | 4);
     }
     options
 }
+#[cfg(windows)]
+fn file_identity(handle: &File) -> Option<(u32, u64)> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION};
+    let mut info = unsafe { std::mem::zeroed::<BY_HANDLE_FILE_INFORMATION>() };
+    (unsafe { GetFileInformationByHandle(handle.as_raw_handle(), &mut info) } != 0)
+        .then_some((info.dwVolumeSerialNumber, ((info.nFileIndexHigh as u64) << 32) | info.nFileIndexLow as u64))
+}
+
+#[cfg(windows)]
+fn reopen_handle(handle: &File, access: u32, share: u32) -> Result<File, String> {
+    use std::os::windows::io::{AsRawHandle, FromRawHandle};
+    use windows_sys::Win32::{Foundation::INVALID_HANDLE_VALUE, Storage::FileSystem::ReOpenFile};
+    let opened = unsafe { ReOpenFile(handle.as_raw_handle(), access, share, 0) };
+    if opened == INVALID_HANDLE_VALUE { return Err(std::io::Error::last_os_error().to_string()); }
+    Ok(unsafe { File::from_raw_handle(opened) })
+}
+
+/// A separate synchronous file object, not a duplicate shared seek cursor.
+/// Reopening the original handle avoids accidentally reading a replacement
+/// file if Explorer renames or removes the container during authentication.
+fn independent_reader(handle: &File, path: &Path) -> Result<File, String> {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::GENERIC_READ;
+        if let Ok(file) = reopen_handle(handle, GENERIC_READ, 1 | 2 | 4) {
+            return Ok(file);
+        }
+        // Some providers do not implement ReOpenFile. Accept a pathname
+        // reader only after both handles report the same identity.
+        let file = File::open(path).map_err(|e| e.to_string())?;
+        if file_identity(handle).is_some_and(|id| file_identity(&file) == Some(id)) {
+            return Ok(file);
+        }
+        Err("Encrypted container file identity changed".into())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = handle;
+        File::open(path).map_err(|e| e.to_string())
+    }
+}
+
+/// An ordinary session may be removed externally, but compaction and
+/// initialization must not replace a different file at the original name.
+/// Hold a metadata-only, delete-denying guard during the preparation phase.
+fn protect_backing_name(handle: &File, path: &Path) -> Result<File, String> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        let mut options = OpenOptions::new();
+        options.read(true).share_mode(1 | 2);
+        let guard = options.open(path).map_err(|e| e.to_string())?;
+        if !file_identity(handle).is_some_and(|id| file_identity(&guard) == Some(id)) {
+            return Err("Encrypted container file identity changed".into());
+        }
+        Ok(guard)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = handle;
+        File::open(path).map_err(|e| e.to_string())
+    }
+}
+
+/// Clean up only the newly created file object on initialization failure.
+/// Never remove a pathname that another process could have replaced.
+fn discard_failed_creation(handle: &File, path: &Path) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Storage::FileSystem::{DELETE, FILE_DISPOSITION_INFO, FileDispositionInfo, SetFileInformationByHandle};
+        let _ = path;
+        if let Ok(delete) = reopen_handle(handle, DELETE, 1 | 2 | 4) {
+            let info = FILE_DISPOSITION_INFO { DeleteFile: true };
+            unsafe { SetFileInformationByHandle(delete.as_raw_handle(), FileDispositionInfo,
+                (&info as *const FILE_DISPOSITION_INFO).cast(), std::mem::size_of_val(&info) as u32); }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if let (Ok(a), Ok(b)) = (handle.metadata(), fs::symlink_metadata(path)) {
+            if (a.dev(), a.ino()) == (b.dev(), b.ino()) { let _ = fs::remove_file(path); }
+        }
+    }
+}
+
 fn record_size(len: usize) -> Result<u64, String> {
     u64::try_from(RECORD_HEADER.checked_add(len).ok_or("Encrypted record length overflow")?)
         .map_err(|e| e.to_string())
@@ -251,8 +359,13 @@ fn put_record(handle: &mut File, key: &[u8;32], kind: u8, plaintext: &[u8]) -> R
     let mut tag = [0u8;16];
     let cipher = encrypt_aead(Cipher::aes_256_gcm(), key, Some(&nonce), &record_aad, plaintext, &mut tag)
         .map_err(|e| format!("Encryption failed: {e}"))?;
-    handle.write_all(&aad).and_then(|_| handle.write_all(&nonce))
-        .and_then(|_| handle.write_all(&tag)).and_then(|_| handle.write_all(&cipher))
+    // The wire format is unchanged. Reduce three small header writes
+    // to a single write, especially useful on high-latency media.
+    let mut header = [0u8; RECORD_HEADER];
+    header[..5].copy_from_slice(&aad);
+    header[5..17].copy_from_slice(&nonce);
+    header[17..].copy_from_slice(&tag);
+    handle.write_all(&header).and_then(|_| handle.write_all(&cipher))
         .map_err(|e| e.to_string())?;
     Ok(Block { offset, size: length })
 }
@@ -285,17 +398,18 @@ fn get_record(handle: &File, key: &[u8;32], block: &Block, expected: u8) -> Resu
     if block.offset < HEADER_SIZE || block.offset.checked_add(record_size(block.size as usize)?).is_none_or(|end| end > size) {
         return Err("Encrypted block points outside container".into());
     }
-    let mut header = [0u8;RECORD_HEADER];
-    read_exact_at(handle, &mut header, block.offset)?;
+    // Fetch the contiguous authenticated header and ciphertext together.
+    // Bounds and GCM authentication remain identical to NDRV3.
+    let mut record = vec![0u8; RECORD_HEADER + block.size as usize];
+    read_exact_at(handle, &mut record, block.offset)?;
+    let (header, cipher) = record.split_at(RECORD_HEADER);
     if header[0] != expected || u32::from_le_bytes(header[1..5].try_into().unwrap()) != block.size {
         return Err("Encrypted record header mismatch".into());
     }
-    let mut cipher = vec![0u8; block.size as usize];
-    read_exact_at(handle, &mut cipher, block.offset + RECORD_HEADER as u64)?;
     let mut record_aad = [0u8;13];
     record_aad[..5].copy_from_slice(&header[..5]);
     record_aad[5..].copy_from_slice(&block.offset.to_le_bytes());
-    let plain = decrypt_aead(Cipher::aes_256_gcm(), key, Some(&header[5..17]), &record_aad, &cipher, &header[17..33])
+    let plain = decrypt_aead(Cipher::aes_256_gcm(), key, Some(&header[5..17]), &record_aad, cipher, &header[17..33])
         .map_err(|_| "Wrong password, damaged encrypted container, or authentication failure".to_owned())?;
     Ok(Zeroizing::new(plain))
 }
@@ -347,11 +461,11 @@ impl Vault {
         if self.pending.is_some() { return Err("An encrypted transfer is already in progress".into()); }
         Ok(Self {
             handle: self.handle.try_clone().map_err(|e| e.to_string())?,
-            read_handle: File::open(&self.file).map_err(|e| e.to_string())?,
+            read_handle: independent_reader(&self.handle, &self.file)?,
             file: self.file.clone(), key: Zeroizing::new(*self.key),
             index: self.index.clone(), generation: self.generation,
             pending: None, opened: self.opened, last_used: self.last_used,
-            gate: None,
+            gate: None, writer_io: self.writer_io.clone(),
         })
     }
 
@@ -360,9 +474,13 @@ impl Vault {
     pub fn reload_after_mount(&mut self) -> Result<(), String> {
         if self.pending.is_some() { return Err("Cannot refresh during encrypted transfer".into()); }
         let mut header = [0u8;128];
-        read_exact_at(&self.read_handle, &mut header, 0)?;
+        let len = {
+            let io = self.writer_io.clone();
+            let _io = io.lock().map_err(|_| "Encrypted writer lock poisoned")?;
+            read_exact_at(&self.read_handle, &mut header, 0)?;
+            self.handle.metadata().map_err(|e| e.to_string())?.len()
+        };
         if &header[..8] != MAGIC { return Err("Encrypted container header changed".into()); }
-        let len = self.handle.metadata().map_err(|e| e.to_string())?.len();
         let first = read_slot(&header, 0, len, &self.key)?;
         let second = read_slot(&header, 1, len, &self.key)?;
         if first.0.abs_diff(second.0)>1 ||
@@ -404,6 +522,8 @@ impl Vault {
         options.read(true).write(true).create_new(true);
         let mut handle = exclusive(&mut options).open(path).map_err(|e| e.to_string())?;
         let gate = VaultGate::acquire(path)?;
+        let creation_guard = protect_backing_name(&handle, path)?;
+        let cleanup_handle = handle.try_clone().map_err(|e| e.to_string())?;
         let result = (|| {
             let mut header = [0u8;128];
             header[..8].copy_from_slice(MAGIC);
@@ -411,13 +531,15 @@ impl Vault {
             header[24..28].copy_from_slice(&(KDF_ITERATIONS as u32).to_le_bytes());
             handle.write_all(&header).map_err(|e| e.to_string())?;
             let key = derive((*password).clone(), &header[8..24])?;
-            let read_handle = File::open(path).map_err(|e| e.to_string())?;
+            let read_handle = independent_reader(&handle, path)?;
             let mut result = Self {handle,read_handle,file:path.to_path_buf(),key,index:Index::empty(),
-                generation:0,pending:None,opened:Instant::now(),last_used:Instant::now(),gate:Some(gate)};
+                generation:0,pending:None,opened:Instant::now(),last_used:Instant::now(),gate:Some(gate),writer_io:Default::default()};
             result.commit_index()?;
             Ok::<_,String>(result)
         })();
-        if result.is_err() { let _ = fs::remove_file(path); }
+        drop(creation_guard);
+        if result.is_err() { discard_failed_creation(&cleanup_handle, path); }
+        drop(cleanup_handle);
         result
     }
     pub fn unlock(path: &Path, password: String) -> Result<Self, String> {
@@ -457,12 +579,16 @@ impl Vault {
             }
         }
         handle.seek(SeekFrom::End(0)).map_err(|e|e.to_string())?;
-        let read_handle = File::open(&file).map_err(|e| e.to_string())?;
-        Ok(Self{handle,read_handle,file,key,index,generation,pending:None,opened:Instant::now(),last_used:Instant::now(),gate:Some(gate)})
+        let read_handle = independent_reader(&handle, &file)?;
+        Ok(Self{handle,read_handle,file,key,index,generation,pending:None,opened:Instant::now(),last_used:Instant::now(),gate:Some(gate),writer_io:Default::default()})
     }    fn commit_index(&mut self) -> Result<(), String> {
         self.index.check()?;
         let data = Zeroizing::new(serde_json::to_vec(&self.index).map_err(|e| e.to_string())?);
         if data.len() > MAX_META { return Err("Encrypted folder index exceeds 64 MiB".into()); }
+        // Hold through both durability barriers and the authenticated slot
+        // update: no fork may move the writer cursor during publication.
+        let io = self.writer_io.clone();
+        let _io = io.lock().map_err(|_| "Encrypted writer lock poisoned")?;
         let block = put_record(&mut self.handle,&self.key,KIND_META,&data)?;
         self.handle.sync_data().map_err(|e| e.to_string())?;
         let generation = self.generation.checked_add(1).ok_or("Encrypted generation overflow")?;
@@ -488,6 +614,26 @@ impl Vault {
         self.touch();
         Ok(())
     }
+    fn append_data(&mut self, bytes: &[u8]) -> Result<Block,String> {
+        let io = self.writer_io.clone();
+        let _io = io.lock().map_err(|_| "Encrypted writer lock poisoned")?;
+        put_record(&mut self.handle, &self.key, KIND_DATA, bytes)
+    }
+
+    /// Write only ciphertext to this container. No plaintext scratch file,
+    /// metadata publication, generation update or durability claim.
+    pub fn stage_chunk(&mut self, bytes: &[u8]) -> Result<StagedVaultChunk,String> {
+        if self.pending.is_some() { return Err("Cannot stage data during this encrypted stream".into()); }
+        let block = self.append_data(bytes)?;
+        Ok(StagedVaultChunk { block, owner: self.writer_io.clone() })
+    }
+    pub fn read_staged_chunk(&self, chunk: &StagedVaultChunk) -> Result<Zeroizing<Vec<u8>>,String> {
+        if !std::sync::Arc::ptr_eq(&self.writer_io,&chunk.owner) {
+            return Err("Encrypted staged chunk belongs to a different container".into());
+        }
+        get_record(&self.read_handle,&self.key,&chunk.block,KIND_DATA)
+    }
+
     fn transaction<T>(&mut self, operation: impl FnOnce(&mut Self) -> Result<T,String>) -> Result<T,String> {
         if self.pending.is_some() { return Err("Encrypted file stream is in progress".into()); }
         let old = self.index.clone();
@@ -496,6 +642,39 @@ impl Vault {
             Err(error) => {self.index = old;Err(error)}
         }
     }
+    /// Detect both Windows delete-pending (the directory entry can remain
+    /// until the last handle closes) and Explorer recycle/rename/replacement.
+    /// Access-denied or provider errors alone are not proof of deletion.
+    pub fn backing_removed(&self) -> bool {
+        #[cfg(windows)]
+        {
+            use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
+            use windows_sys::Win32::Storage::FileSystem::{GetFileInformationByHandleEx, FILE_STANDARD_INFO, FileStandardInfo, FILE_FLAG_OPEN_REPARSE_POINT};
+            let mut info = unsafe { std::mem::zeroed::<FILE_STANDARD_INFO>() };
+            if unsafe { GetFileInformationByHandleEx(self.handle.as_raw_handle(), FileStandardInfo,
+                (&mut info as *mut FILE_STANDARD_INFO).cast(), std::mem::size_of_val(&info) as u32) } != 0
+                && info.DeletePending { return true; }
+            let mut options = OpenOptions::new();
+            options.access_mode(0).share_mode(1 | 2 | 4).custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+            match options.open(&self.file) {
+                Ok(file) => match (file_identity(&self.handle), file_identity(&file)) {
+                    (Some(old), Some(current)) => old != current,
+                    _ => false,
+                },
+                Err(error) => matches!(error.raw_os_error(), Some(2 | 3 | 303)),
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            use std::os::unix::fs::MetadataExt;
+            match (self.handle.metadata(), fs::metadata(&self.file)) {
+                (Ok(old), Ok(current)) => (old.dev(), old.ino()) != (current.dev(), current.ino()),
+                (_, Err(error)) => error.kind() == std::io::ErrorKind::NotFound,
+                _ => false,
+            }
+        }
+    }
+
     pub fn expired(&self, policy: SessionPolicy) -> bool { policy.expired(self.opened,self.last_used,Instant::now()) }
     pub fn touch(&mut self) { self.last_used = Instant::now(); }
     fn folder(&self,id:i64) -> Result<(),String> {
@@ -686,7 +865,7 @@ impl Vault {
             let mut copied=Vec::with_capacity(entry.blocks.len());
             for block in &entry.blocks{
                 let plain=get_record(&source.read_handle,&source.key,block,KIND_DATA)?;
-                copied.push(put_record(&mut self.handle,&self.key,KIND_DATA,&plain)?);
+                copied.push(self.append_data(&plain)?);
             }
             let target=self.index.items.get_mut(&id).unwrap();target.size=entry.size;target.blocks=copied;
             return Ok(1);
@@ -777,7 +956,7 @@ impl Vault {
         self.transaction(|this|{
             let id=this.new_item(parent,name,false)?;
             for chunk in data.chunks(STREAM_CHUNK_SIZE){
-                let block=put_record(&mut this.handle,&this.key,KIND_DATA,chunk)?;
+                let block=this.append_data(chunk)?;
                 let item=this.index.items.get_mut(&id).unwrap();
                 item.blocks.push(block);item.size+=chunk.len() as u64;
             }
@@ -812,9 +991,51 @@ impl Vault {
         if ordinal<0 || bytes.len()>STREAM_CHUNK_SIZE{return Err("Invalid encrypted chunk".into());}
         let entry=self.item(id)?;
         if entry.folder || entry.blocks.len()!=ordinal as usize{return Err("Encrypted stream chunk order is invalid".into());}
-        let block=put_record(&mut self.handle,&self.key,KIND_DATA,bytes)?;
-        let item=self.index.items.get_mut(&id).unwrap();item.blocks.push(block);item.size+=bytes.len() as u64;Ok(())
+        let block=self.append_data(bytes)?;
+        self.push_stream_block(id,ordinal,block)
     }
+
+    fn push_stream_block(&mut self,id:i64,ordinal:i64,block:Block)->Result<(),String>{
+        if self.pending.is_none() || ordinal < 0 { return Err("No encrypted stream open".into()); }
+        let item=self.index.items.get_mut(&id).ok_or("Encrypted item not found")?;
+        if item.folder || item.blocks.len()!=ordinal as usize {return Err("Encrypted stream chunk order is invalid".into());}
+        item.size=item.size.checked_add(block.size as u64).ok_or("Encrypted file size overflow")?;
+        item.blocks.push(block);
+        Ok(())
+    }
+
+    /// Adopt a staged ciphertext block without encrypting and writing it
+    /// twice. Authenticate it again before publishing the index.
+    pub fn stream_use_staged_chunk(&mut self,id:i64,ordinal:i64,chunk:&StagedVaultChunk)->Result<(),String>{
+        let plain=self.read_staged_chunk(chunk)?;
+        drop(plain);
+        self.push_stream_block(id,ordinal,chunk.block.clone())
+    }
+
+    fn previous_stream_block(&self,original_id:i64,ordinal:i64)->Result<Option<&Block>,String>{
+        if ordinal < 0 {return Err("Invalid encrypted chunk ordinal".into());}
+        let previous=self.pending.as_ref().ok_or("No encrypted stream open")?
+            .items.get(&original_id).ok_or("Encrypted source item not found")?;
+        if previous.folder{return Err("Encrypted item is a folder".into());}
+        Ok(previous.blocks.get(ordinal as usize))
+    }
+
+    pub fn stream_read_previous_chunk(&self,original_id:i64,ordinal:i64)->Result<Option<Zeroizing<Vec<u8>>>,String>{
+        self.previous_stream_block(original_id,ordinal)?
+            .map(|block|get_record(&self.read_handle,&self.key,block,KIND_DATA)).transpose()
+    }
+
+    /// Immutable records are already bound to their physical offset by GCM.
+    /// Preserve existing corruption checks, but do not append duplicate
+    /// ciphertext for a completely unchanged page.
+    pub fn stream_reuse_previous_chunk(&mut self,id:i64,ordinal:i64,original_id:i64,length:usize)->Result<bool,String>{
+        let Some(block)=self.previous_stream_block(original_id,ordinal)?.filter(|b| b.size as usize==length).cloned() else {return Ok(false)};
+        let plain=get_record(&self.read_handle,&self.key,&block,KIND_DATA)?;
+        drop(plain);
+        self.push_stream_block(id,ordinal,block)?;
+        Ok(true)
+    }
+
     pub fn stream_file_size(&self,id:i64)->Result<u64,String>{
         let item=self.item(id)?;
         if item.folder{return Err("Encrypted item is a folder".into());}Ok(item.size)
@@ -865,7 +1086,7 @@ impl Vault {
                     }
                 }
                 if length == 0 { break; }
-                let result = put_record(&mut self.handle, &self.key, KIND_DATA, &buffer[..length]);
+                let result = self.append_data(&buffer[..length]);
                 buffer[..length].zeroize();
                 let block = result?;
                 let item=self.index.items.get_mut(&id).unwrap();
@@ -985,7 +1206,7 @@ impl Vault {
         self.transaction(|this|{
             let mut blocks=Vec::new();
             for chunk in data.chunks(STREAM_CHUNK_SIZE){
-                blocks.push(put_record(&mut this.handle,&this.key,KIND_DATA,chunk)?);
+                blocks.push(this.append_data(chunk)?);
             }
             let item=this.index.items.get_mut(&id).unwrap();item.size=data.len() as u64;item.blocks=blocks;Ok(())
         })
@@ -1036,6 +1257,7 @@ impl Vault {
         self.verify_integrity()?;
         self.check_compaction_file_safety()?;
         let original=self.file.clone();
+        let name_guard=protect_backing_name(&self.handle, &original)?;
         let parent=original.parent().ok_or("Encrypted container has no parent folder")?;
         let mut random=[0u8;16];
         rand_bytes(&mut random).map_err(|e|e.to_string())?;
@@ -1057,11 +1279,11 @@ impl Vault {
         // are fresh, independently generated. No plaintext disk staging.
         header[32..].fill(0);
         temp.write_all(&header).map_err(|e|e.to_string())?;
-        let stage_read = File::open(&stage).map_err(|e| e.to_string())?;
+        let stage_read = independent_reader(&temp, &stage)?;
         let mut rebuilt=Self {
             handle:temp,read_handle:stage_read,file:stage.clone(),key:Zeroizing::new(*self.key),
             index:self.index.clone(),generation:0,pending:None,
-            opened:self.opened,last_used:self.last_used,gate:None,
+            opened:self.opened,last_used:self.last_used,gate:None,writer_io:Default::default(),
         };
         // Several internal copies can share the same authenticated ciphertext
         // block. Keep that relationship while re-encrypting each LIVE block once.
@@ -1086,7 +1308,10 @@ impl Vault {
         // The OS semaphore remains owned throughout the brief handle swap.
         let gate=self.gate.take().ok_or("Encrypted folder session lock is missing")?;
         let key=Zeroizing::new(*self.key);
+        // Refuse a removed/replaced name before releasing the guard.
+        if self.backing_removed() { return Err("Encrypted container file identity changed".into()); }
         drop(self);
+        drop(name_guard);
         atomic_replace_encrypted(&stage,&original)?;
         drop(rebuilt);
         let mut options=OpenOptions::new();options.read(true).write(true);
@@ -1429,6 +1654,79 @@ mod tests {
     }
 
     #[test]
+    fn batch381_staged_chunks_are_private_until_commit_and_bound_to_container() {
+        let root=fixture("staged-pages");let path=root.join("main.ndr");let other=root.join("other.ndr");
+        let mut vault=Vault::create(&path,"test staged data password".into()).unwrap();
+        let mut peer=vault.fork_for_mount().unwrap();
+        let mut different=Vault::create(&other,"test staged data password".into()).unwrap();
+        let original=vault.add_file(1,"sample.bin",b"previous").unwrap();
+        let staged=peer.stage_chunk(b"new content").unwrap();
+        assert!(different.read_staged_chunk(&staged).is_err());
+        assert_eq!(&*vault.read_staged_chunk(&staged).unwrap(),b"new content");
+        peer.reload_after_mount().unwrap();
+        assert_eq!(peer.read_file(original).unwrap(),b"previous");
+        let id=peer.begin_stream_file(1,"sample.bin",true).unwrap();
+        peer.stream_use_staged_chunk(id,0,&staged).unwrap();
+        peer.rollback_stream_file().unwrap();
+        vault.reload_after_mount().unwrap();
+        assert_eq!(vault.read_file(original).unwrap(),b"previous");
+        let id=peer.begin_stream_file(1,"sample.bin",true).unwrap();
+        peer.stream_use_staged_chunk(id,0,&staged).unwrap();
+        peer.commit_stream_file().unwrap();
+        vault.reload_after_mount().unwrap();
+        assert_eq!(vault.read_file(id).unwrap(),b"new content");
+        drop((different,peer,vault));std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn batch381_previous_block_reuse_authenticates_and_preserves_ciphertext() {
+        let root=fixture("reuse-pages");let path=root.join("main.ndr");
+        let mut vault=Vault::create(&path,"test unchanged data password".into()).unwrap();
+        let data=vec![42u8;STREAM_CHUNK_SIZE];
+        let old=vault.add_file(1,"sample.bin",&data).unwrap();
+        let before=vault.item(old).unwrap().blocks[0].offset;
+        let old_len=std::fs::metadata(&path).unwrap().len();
+        let id=vault.begin_stream_file(1,"sample.bin",true).unwrap();
+        assert!(vault.stream_reuse_previous_chunk(id,0,old,data.len()).unwrap());
+        vault.commit_stream_file().unwrap();
+        assert_eq!(vault.item(id).unwrap().blocks[0].offset,before);
+        assert!(std::fs::metadata(&path).unwrap().len()-old_len<65536);
+        assert_eq!(vault.read_file(id).unwrap(),data);
+        // Authentication still rejects a damaged unchanged block.
+        vault.handle.seek(SeekFrom::Start(before+RECORD_HEADER as u64)).unwrap();
+        let mut byte=[0u8;1];vault.handle.read_exact(&mut byte).unwrap();byte[0]^=1;
+        vault.handle.seek(SeekFrom::Start(before+RECORD_HEADER as u64)).unwrap();
+        vault.handle.write_all(&byte).unwrap();
+        let replaced=vault.begin_stream_file(1,"sample.bin",true).unwrap();
+        assert!(vault.stream_reuse_previous_chunk(replaced,0,id,data.len()).is_err());
+        vault.rollback_stream_file().unwrap();
+        drop(vault);std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn batch381_unpublished_append_and_peer_stream_share_writer_cursor() {
+        let root=fixture("shared-writer-io");let path=root.join("main.ndr");
+        let mut vault=Vault::create(&path,"test cursor lock password".into()).unwrap();
+        let mut stage=vault.fork_for_mount().unwrap();
+        let worker=std::thread::spawn(move|| {
+            let mut tokens=Vec::new();
+            for i in 0..64u8{tokens.push((i,stage.stage_chunk(&vec![i;64*1024]).unwrap()));}
+            for (i,token) in tokens {assert_eq!(&*stage.read_staged_chunk(&token).unwrap(),&vec![i;64*1024]);}
+        });
+        // A separate pending stream may publish its own metadata while the
+        // mounted writer appends data-only records.
+        let id=vault.begin_stream_file(1,"peer.bin",false).unwrap();
+        let page=vec![0x39u8;STREAM_CHUNK_SIZE];
+        for i in 0..4{vault.stream_write_chunk(id,i,&page).unwrap();}
+        vault.commit_stream_file().unwrap();
+        worker.join().unwrap();
+        vault.verify_integrity().unwrap();
+        drop(vault);let reopened=Vault::unlock(&path,"test cursor lock password".into()).unwrap();
+        assert_eq!(reopened.stream_file_size(id).unwrap(),4*STREAM_CHUNK_SIZE as u64);
+        drop(reopened);std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn streamed_24mib_rollback_and_export() {
         let root=fixture("stream");let path=root.join("stream.ndr");
         let mut v=Vault::create(&path,"correct secret".into()).unwrap();
@@ -1569,6 +1867,40 @@ mod tests {
             "tampered latest pointer must fail closed, not resurrect older deleted data");
         fs::remove_dir_all(root).unwrap();
     }
+    #[cfg(windows)]
+    #[test]
+    fn batch373_external_delete_is_allowed_and_detected_on_all_handles() {
+        let root=fixture("external-delete");let path=root.join("delete.ndr");
+        let mut vault=Vault::create(&path,"test delete passphrase".into()).unwrap();
+        vault.add_file(1,"secret.txt",b"encrypted").unwrap();
+        let mounted=vault.fork_for_mount().unwrap();
+        assert!(!vault.backing_removed());
+        assert!(Vault::unlock(&path,"test delete passphrase".into()).is_err());
+        fs::remove_file(&path).unwrap();
+        assert!(vault.backing_removed() && mounted.backing_removed());
+        drop(mounted);drop(vault);
+        assert!(!path.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[cfg(windows)]
+    #[test]
+    fn batch373_replaced_name_never_reopens_unrelated_file() {
+        let root=fixture("external-rename");let path=root.join("old.ndr");let moved=root.join("moved.ndr");
+        let mut vault=Vault::create(&path,"test rename passphrase".into()).unwrap();
+        let id=vault.add_file(1,"secret.txt",b"original bytes").unwrap();
+        fs::rename(&path,&moved).unwrap();
+        fs::write(&path,b"unrelated replacement").unwrap();
+        assert!(vault.backing_removed());
+        if let Ok(mut snapshot)=vault.fork_for_mount() {
+            assert_eq!(snapshot.read_file(id).unwrap(),b"original bytes");
+        }
+        assert_eq!(fs::read(&path).unwrap(),b"unrelated replacement");
+        drop(vault);
+        let mut reopened=Vault::unlock(&moved,"test rename passphrase".into()).unwrap();
+        assert_eq!(reopened.read_file(id).unwrap(),b"original bytes");
+        drop(reopened);fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn a_second_writer_is_rejected_until_the_first_closes() {
         let root=fixture("writer-lock");let path=root.join("locked.ndr");

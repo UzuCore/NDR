@@ -74,7 +74,7 @@ impl<'a,T:Clone> IntoIterator for &'a mut SharedRows<T>{
 pub(super) struct PaneView {
     // Repeated extension, kind, size, date and attribute texts share
     // immutable allocations. Vault rows deliberately use unique allocations.
-    pub cells: SharedRows<[Arc<str>; 7]>,
+    pub cells: super::cell_rows::CellRows,
     pub colors: SharedRows<Option<(u8, u8, u8)>>,
     pub rows: DetailRows,
     sensitive: bool,
@@ -89,17 +89,7 @@ impl PaneView {
     // non-sensitive text; they are only released, not overwritten here.
     pub(super) fn wipe_sensitive_cells(&mut self) {
         if !self.sensitive{return;}
-        for row in &mut self.cells {
-            for cell in row {
-                if let Some(text)=Arc::get_mut(cell) {
-                    // SAFETY: replacing UTF-8 bytes with NULs preserves UTF-8.
-                    use zeroize::Zeroize;
-                    unsafe { text.as_bytes_mut().zeroize(); }
-                } else {
-                    debug_assert!(cell.is_empty(),"shared sensitive cell");
-                }
-            }
-        }
+        self.cells.wipe_sensitive();
     }
 }
 
@@ -202,15 +192,15 @@ fn local_twin_arrays_share_and_detach_without_copying_unchanged_columns(){
     assert_eq!(a.rows.explicit_ptr(),b.rows.explicit_ptr());
     // Changing one cell detaches only the changed array. Immutable texts
     // for the unaffected rows are still shared.
-    b.cells[0][3]=Arc::from("123");
+    b.cells.set(0,3,Arc::from("123"));
     assert_ne!(a.cells.as_ptr(),b.cells.as_ptr());
-    assert_eq!(a.cells[0][3].as_ref(),"row-0");
-    assert_eq!(b.cells[0][3].as_ref(),"123");
-    assert!(Arc::ptr_eq(&a.cells[20][0],&b.cells[20][0]));
+    assert_eq!(a.cells.cell(0,3).as_ref(),"row-0");
+    assert_eq!(b.cells.cell(0,3).as_ref(),"123");
+    assert!(Arc::ptr_eq(a.cells.cell(20,0),b.cells.cell(20,0)));
     assert_eq!(a.colors.as_ptr(),b.colors.as_ptr());
     let old=a.rows.explicit_ptr();b.rows.reset(0,false);
     assert_eq!(a.rows.explicit_ptr(),old);assert_eq!(a.rows.len(),4096);assert_eq!(b.rows.len(),0);
-    b.cells.reset(1);assert!(b.cells.is_empty());assert_eq!(a.cells.len(),4096);
+    b.cells.reset_for_build(1,true);assert!(b.cells.is_empty());assert_eq!(a.cells.len(),4096);
 }
 #[cfg(test)]
 #[test]
@@ -518,7 +508,7 @@ pub(super) fn build_view(plan: &ViewPlan, entries: &[Entry], descriptions: &Hash
         if sensitive{Arc::from(text.as_ref())}else{text.clone()}
     };
     let count = entries.len();
-    view.cells.reset(count);
+    view.cells.reset_for_build(count,local && !sensitive);
     view.colors.reset(count);
     let grouped = group_mode != "None" && show_group_name;
     view.rows.reset(count,grouped);
@@ -637,7 +627,7 @@ pub(super) fn drive_row(ui: &mut egui::Ui, size: egui::Vec2, icon: Option<&egui:
             paint_drive_space(ui, rect, rect.left() + label_right, kind, sizes, cursor, color, language, style);
         }
     }
-    if let Some((3 | 4, Some((free, total)))) = info {
+    if let Some((2 | 3 | 4, Some((free, total)))) = info {
         if total > 0 {
             return response.on_hover_ui(|ui| {
                 let (free, total) = (localized_byte_size(language, free), localized_byte_size(language, total));
@@ -657,7 +647,7 @@ pub(super) fn drive_row(ui: &mut egui::Ui, size: egui::Vec2, icon: Option<&egui:
 #[allow(clippy::too_many_arguments)]
 pub(super) fn paint_drive_space(ui: &egui::Ui, rect: egui::Rect, label_right: f32, kind: u32, sizes: Option<(u64, u64)>, cursor: bool, item_color: Color32, language: &compat::Language, style: u8) {
     // The original draws only fixed disks (3). Fixed: connected network drives whose size was read (drive_item_info) are drawn too.
-    let Some((free, total)) = sizes.filter(|_| kind == 3 || kind == 4) else { return };
+    let Some((free, total)) = sizes.filter(|_| matches!(kind, 2 | 3 | 4)) else { return };
     let room = rect.right() - label_right;
     if total == 0 || room <= 79.0 {
         return;

@@ -527,24 +527,46 @@ fn sort_group(list: &mut [Entry], mode: &str, descending: bool, logical: bool, c
         }
         return;
     }
-    struct Key {
-        start: usize,
-        extension: usize,
-        color: u32,
-        rank: u8,
-    }
-    // UTF-8 byte length is an upper bound on the UTF-16 units of
-    // these two slices; the two terminators are the only extra units.
+    // UTF-8 byte length bounds the UTF-16 pool, including both
+    // terminators. Most directories fit 32-bit word offsets even when
+    // they contain millions of rows. Keep a full-width fallback instead
+    // of truncating offsets for exceptionally large lists.
     let capacity=list.iter().fold(0usize,|sum,e|sum.saturating_add(e.name.len().saturating_add(2)));
+    if u32::try_from(capacity).is_ok(){
+        sort_group_words::<u32>(list,mode,descending,logical,color,priority,capacity);
+    }else{
+        sort_group_words::<usize>(list,mode,descending,logical,color,priority,capacity);
+    }
+}
+trait WordOffset:Copy{
+    fn from_offset(value:usize)->Self;
+    fn offset(self)->usize;
+}
+impl WordOffset for u32{
+    fn from_offset(value:usize)->Self{u32::try_from(value).expect("bounded sort word offset")}
+    fn offset(self)->usize{self as usize}
+}
+impl WordOffset for usize{
+    fn from_offset(value:usize)->Self{value}
+    fn offset(self)->usize{self}
+}
+struct SortWordKey<I>{
+    start:I,
+    extension:I,
+    color:u32,
+    rank:u8,
+}
+fn sort_group_words<I:WordOffset>(list:&mut [Entry],mode:&str,descending:bool,logical:bool,
+    color:&dyn Fn(&Entry)->u32,priority:bool,capacity:usize){
     let mut words = Vec::with_capacity(capacity);
-    let keys: Vec<Key> = list.iter().map(|entry| {
+    let keys: Vec<SortWordKey<I>> = list.iter().map(|entry| {
         let start = words.len();
         words.extend(sort_base(entry).encode_utf16().chain(Some(0)));
         let extension = words.len();
         words.extend(sort_extension(entry).encode_utf16().chain(Some(0)));
-        Key {
-            start,
-            extension,
+        SortWordKey {
+            start:I::from_offset(start),
+            extension:I::from_offset(extension),
             color: if mode == "Color" { color(entry) } else { 0 },
             rank: if priority { priority_rank(entry) } else { 0 },
         }
@@ -553,10 +575,10 @@ fn sort_group(list: &mut [Entry], mode: &str, descending: bool, logical: bool, c
         let (ka, kb) = (&keys[i], &keys[j]);
         ka.rank.cmp(&kb.rank).then_with(|| {
             let (a, b) = (&list[i], &list[j]);
-            let base = || compare_wide(&words[ka.start..ka.extension], &words[kb.start..kb.extension], logical);
+            let base = || compare_wide(&words[ka.start.offset()..ka.extension.offset()], &words[kb.start.offset()..kb.extension.offset()], logical);
             let ext = || {
-                let end=|index:usize|keys.get(index+1).map_or(words.len(),|k|k.start);
-                let (a, b) = (&words[ka.extension..end(i)], &words[kb.extension..end(j)]);
+                let end=|index:usize|keys.get(index+1).map_or(words.len(),|k|k.start.offset());
+                let (a, b) = (&words[ka.extension.offset()..end(i)], &words[kb.extension.offset()..end(j)]);
                 if a == b { Ordering::Equal } else { compare_wide(a, b, false) }
             };
             let by_mode = match mode {
@@ -1040,6 +1062,38 @@ mod tests {
     }
 
 
+    #[test]
+    fn compact_and_wide_sort_offsets_preserve_all_native_orders() {
+        assert_eq!(std::mem::size_of::<SortWordKey<u32>>(),16);
+        #[cfg(target_pointer_width="64")]
+        assert_eq!(std::mem::size_of::<SortWordKey<usize>>(),24);
+        let names=["a1.txt","A01.txt","a10.TXT","a02.txt",".hidden","noext",
+            "\u{ac00}\u{1f9ea}.zip","\u{00c5}.txt","file-\u{1f4c1}","a1.txt"];
+        let mut initial:Vec<_>=(0..4613).map(|i|{
+            let mut e=entry(names[(i*37+11)%names.len()],i%17==0,(i%11) as u64,
+                [0,FILE_ATTRIBUTE_PINNED,FILE_ATTRIBUTE_RECALL_ON_OPEN,FILE_ATTRIBUTE_HIDDEN][i%4]);
+            e.path=PathBuf::from(format!("unique-{i}"));
+            e.modified=(i%5!=0).then_some(SystemTime::UNIX_EPOCH+Duration::from_secs((i%7) as u64));
+            e
+        }).collect();
+        // Stable ties must retain paths even when all other values match.
+        initial.reverse();
+        let cap=initial.iter().map(|e|e.name.len()+2).sum();
+        let color=|e:&Entry|e.attributes%19;
+        for mode in ["Name","Extension","Size","Modified","Attributes","Color"]{
+            for descending in [false,true]{
+                for logical in [false,true]{
+                    for priority in [false,true]{
+                        let mut compact=initial.clone();
+                        let mut wide=initial.clone();
+                        sort_group_words::<u32>(&mut compact,mode,descending,logical,&color,priority,cap);
+                        sort_group_words::<usize>(&mut wide,mode,descending,logical,&color,priority,cap);
+                        assert_same_rows(&compact,&wide);
+                    }
+                }
+            }
+        }
+    }
     #[test]
     fn pooled_sort_preserves_stable_ties_and_windows_order() {
         let mut original: Vec<_> = (0..137).map(|i| {

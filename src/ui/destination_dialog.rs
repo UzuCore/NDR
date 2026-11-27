@@ -335,7 +335,7 @@ pub(super) fn destination_ui_original(ui: &mut egui::Ui, form: &mut DestinationF
                 let shown = super::original_dialogs::path_ellipsis(ui, &name, (content.right() - x - 3.0).max(0.0), &font);
                 let galley = ui.fonts_mut(|f| f.layout_no_wrap(shown, font.clone(), text_color));
                 painter.galley(egui::pos2(x, content.center().y - galley.size().y / 2.0), galley, text_color);
-                if let (3, Some((free, total))) = (drive.kind, drive.sizes) {
+                if let (2 | 3 | 4, Some((free, total))) = (drive.kind, drive.sizes) {
                     let x = x + drive_width + 4.0;
                     let galley = ui.fonts_mut(|f| f.layout_no_wrap(localized_byte_size(&form.language, free), font.clone(), text_color));
                     let text_width = galley.size().x;

@@ -1549,7 +1549,11 @@ impl App {
             }
             let text_pos = egui::pos2(image_x + icon_width + 2.0, button.top() + ((button.height() - caption.size().y) / 2.0).trunc());
             painter.galley(text_pos, caption, label_color);
-            if response.on_hover_text(tip).clicked() {
+            let response = response.on_hover_text(tip);
+            if response.secondary_clicked() {
+                self.active = index;
+                self.request_shell_menu(ctx, vec![root.clone()]);
+            } else if response.clicked() {
                 chosen = Some(root.clone());
             }
         }

@@ -23,7 +23,7 @@ impl ScanPolicy {
     fn for_media(media: native::FolderSizeMedia) -> Self {
         match media {
             native::FolderSizeMedia::Fast => Self { budget: CHECKPOINTS_PER_SCAN, depth: CHECKPOINT_DEPTH, min_items: MIN_CHECKPOINT_ITEMS },
-            native::FolderSizeMedia::Seek => Self { budget: 16, depth: 1, min_items: MIN_CHECKPOINT_ITEMS },
+            native::FolderSizeMedia::Seek | native::FolderSizeMedia::External => Self { budget: 16, depth: 1, min_items: MIN_CHECKPOINT_ITEMS },
             native::FolderSizeMedia::Unknown => Self { budget: 24, depth: 2, min_items: MIN_CHECKPOINT_ITEMS },
         }
     }
