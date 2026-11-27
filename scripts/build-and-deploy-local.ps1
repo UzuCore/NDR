@@ -11,12 +11,12 @@ $project = Split-Path -Parent $PSScriptRoot
 $source = Join-Path $project 'target\release\ndr.exe'
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $backupDir = Join-Path $Release 'old'
-$reportDir = Join-Path (Split-Path -Parent $project) 'analysis'
+$reportDir = Join-Path $project 'target\local-deploy'
 New-Item -ItemType Directory -Path $backupDir, $reportDir -Force | Out-Null
 Push-Location $project
 try {
     $env:NDR_RESOURCE_DIR = $Release
-    $strawberryPerl = 'D:\NDRworks\work\tools\strawberry-perl-5.42.3.1\perl\bin'
+    $strawberryPerl = Join-Path $project '.cargo\build-tools\perl\bin'
     if (Test-Path -LiteralPath $strawberryPerl) {
         $env:PATH = "$strawberryPerl;$env:PATH"
     }

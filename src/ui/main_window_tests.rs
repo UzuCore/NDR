@@ -646,6 +646,45 @@ fn github_update_dialog_identifies_installed_and_target_builds() {
 }
 
 #[test]
+fn about_dialog_uses_large_ndr_artwork_and_preserves_localized_layout() {
+    let (root, ctx, mut app) = fixture("about-icon");
+    for &(locale, _) in ndr::compat::BUILTIN_LANGUAGES {
+        app.apply_language(locale);
+        for (width, height, icon_size) in [(1400.0, 850.0, 96.0), (548.0, 411.0, 96.0), (320.0, 250.0, 64.0)] {
+            app.msgboxes.clear();
+            app.about_command();
+            assert!(app.msgboxes[0].program_icon, "{locale}");
+            assert_eq!(ndr::msgbox::icon_id(app.msgboxes[0].flags), 0);
+            let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, height));
+            for _ in 0..3 {
+                let _ = ctx.run(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ctx| {
+                    app.msgbox_ui(ctx);
+                });
+            }
+            let box_layout = app.msgboxes[0].layout.as_ref().unwrap();
+            let icon = box_layout.icon_rect.expect("embedded NDR artwork");
+            let button = box_layout.slots[2].expect("close button");
+            assert_eq!(icon.size(), egui::vec2(icon_size, icon_size), "{locale}");
+            assert!(screen.contains_rect(icon) && screen.contains_rect(button), "{locale} {width}x{height}: {icon:?}, {button:?}");
+            assert!(icon.right() + 8.0 <= box_layout.origin.x + box_layout.text_left, "{locale}");
+            assert!(icon.bottom() <= button.top(), "{locale}");
+            assert_eq!(app.msgbox_icons[&101].size(), [256, 256]);
+            app.answer_message_box(1, &ctx);
+            assert!(app.msgboxes.is_empty());
+        }
+    }
+    // Other information boxes keep their original icon and geometry.
+    app.system_box("NDR", "Information", ndr::msgbox::MB_OK | ndr::msgbox::MB_ICONASTERISK, |_, _, _| {});
+    assert!(!app.msgboxes[0].program_icon);
+    let _ = ctx.run(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 850.0))), ..Default::default() }, |ctx| app.msgbox_ui(ctx));
+    assert_eq!(app.msgboxes[0].layout.as_ref().unwrap().text_left, 64.0);
+    assert_eq!(app.msgboxes[0].layout.as_ref().unwrap().icon_rect.unwrap().size(), egui::vec2(32.0, 32.0));
+    app.answer_message_box(1, &ctx);
+    drop(app);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn all_forty_locale_choices_open_their_own_update_dialog_and_save_canonical_id() {
     let (root, ctx, mut app) = fixture("all-forty-update-dialogs");
     let build = ndr::update::current_build() + 10;
@@ -1098,10 +1137,8 @@ fn automatic_folder_sizes_cache_navigation_and_foreground_priority() {
     // provisional totals, without cancelling the foreground job.
     let (_tx, rx) = mpsc::channel();
     let job_cancel = Arc::new(AtomicBool::new(false));
-    let old_cancel = app.panes[0].folder_auto_cancel.clone();
     app.job = Some(Job::new(rx, job_cancel.clone(), "fixture copy".into()));
     app.sync_folder_size_activity();
-    assert!(old_cancel.load(Ordering::Relaxed));
     assert!(!job_cancel.load(Ordering::Relaxed));
     assert!(!app.panes[0].folder_sizes.contains_key(&folder));
     assert!(app.folder_size_cache.is_empty());
@@ -1134,6 +1171,94 @@ fn automatic_folder_sizes_cache_navigation_and_foreground_priority() {
     assert!(!native::folder_size_local_volume(Path::new(r"\\server\share\folder")));
     assert!(!native::folder_size_local_volume(Path::new(r"\\?\UNC\server\share\folder")));
     assert_eq!(fs::metadata(folder.join("nested/b.bin")).unwrap().len(), 512);
+    drop(app);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn automatic_folder_sizes_expire_live_and_invalidate_both_panes() {
+    let (root, ctx, mut app) = fixture("auto-folder-freshness");
+    let left = root.join("left");
+    let folder = left.join("deep");
+    fs::create_dir_all(folder.join("child")).unwrap();
+    let file = folder.join("child/data.bin");
+    fs::write(&file, vec![1u8; 1024]).unwrap();
+    app.refresh(0);
+    wait(&mut app, &ctx);
+    app.settings.set_flag("LeftAutoFolderSize", true);
+    app.settings.set_flag("RightAutoFolderSize", true);
+    let row = |app: &App, pane: usize| app.panes[pane].entries.iter().position(|e| e.path == folder).unwrap();
+    let wait_size = |app: &mut App, bytes: u64| {
+        let end = Instant::now() + Duration::from_secs(15);
+        while app.panes[0].folder_bytes.get(&folder) != Some(&bytes) {
+            assert!(Instant::now() < end, "automatic refresh timed out");
+            app.poll(&ctx);
+            thread::sleep(Duration::from_millis(5));
+        }
+    };
+    let r = row(&app, 0);
+    app.queue_folder_size(0, r);
+    wait_size(&mut app, 1024);
+    let original_generation = app.panes[0].generation;
+    // A change inside a descendant does not require a root listing refresh.
+    fs::write(&file, vec![2u8; 4096]).unwrap();
+    let expired = Instant::now() - super::pane_chrome::FOLDER_SIZE_TTL - Duration::from_millis(5);
+    app.panes[0].folder_auto_times.insert(folder.clone(), expired);
+    app.folder_size_cache.get_mut(&folder).unwrap().1 = expired;
+    app.queue_folder_size(0, r);
+    wait_size(&mut app, 4096);
+    assert_eq!(app.panes[0].generation, original_generation);
+    app.navigate(1, left, true);
+    wait(&mut app, &ctx);
+    let right_row = row(&app, 1);
+    app.queue_folder_size(1, right_row);
+    assert_eq!(app.panes[1].folder_bytes.get(&folder), Some(&4096));
+    app.refresh(0);
+    assert!(!app.panes[1].folder_auto_times.contains_key(&folder));
+    assert!(!app.panes[1].folder_sizes.contains_key(&folder));
+    wait(&mut app, &ctx);
+    drop(app);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn scrolling_cancels_obsolete_automatic_jobs_but_not_manual_requests() {
+    let (root, ctx, mut app) = fixture("auto-folder-scroll");
+    let left = root.join("left");
+    for i in 0..80 {
+        fs::create_dir_all(left.join(format!("scroll-{i:03}"))).unwrap();
+    }
+    app.refresh(0);
+    wait(&mut app, &ctx);
+    app.settings.set_flag("LeftAutoFolderSize", true);
+    // A deterministic queue-only fixture: no worker can race these assertions.
+    app.folder_size_workers = true;
+    let rows: Vec<_> = app.panes[0].entries.iter().enumerate()
+        .filter_map(|(i, e)| e.name.starts_with("scroll-").then_some(i)).collect();
+    assert_eq!(rows.len(), 80);
+    app.enqueue_folder_size(0, rows[79]);
+    let manual = app.panes[0].entries[rows[79]].path.clone();
+    for &r in &rows[..60] { app.queue_folder_size(0, r); }
+    assert_eq!(app.panes[0].folder_auto_pending.len(), 25);
+    let abandoned = app.panes[0].entries[rows[0]].path.clone();
+    let token = app.panes[0].folder_auto_pending[&abandoned].clone();
+    app.panes[0].folder_auto_visible.clear();
+    for &r in &rows[60..79] { app.queue_folder_size(0, r); }
+    app.finish_visible_folder_size_frame(&ctx);
+    assert!(token.load(Ordering::Relaxed));
+    assert!(!app.panes[0].folder_sizes.contains_key(&abandoned));
+    assert_eq!(app.panes[0].folder_sizes.get(&manual), Some(&None));
+    for &r in &rows[60..79] { app.queue_folder_size(0, r); }
+    app.finish_visible_folder_size_frame(&ctx);
+    assert_eq!(app.panes[0].folder_auto_pending.len(), 19);
+    let (queue, _) = &*app.folder_size_queue;
+    {
+        let queue = queue.lock().unwrap();
+        assert_eq!(queue.len(), 20);
+        assert_eq!(queue.front().unwrap().path, manual);
+        assert!(!queue.front().unwrap().automatic);
+        assert!(queue.iter().all(|job| !job.cancel.load(Ordering::Relaxed)));
+    }
     drop(app);
     fs::remove_dir_all(root).unwrap();
 }

@@ -894,11 +894,15 @@ impl App {
     fn refresh_inner(&mut self, index: usize, foreground: bool) {
         // Stop recursive I/O as soon as navigation/refresh starts, not only
         // when the replacement listing has arrived.
-        let same_folder = !self.folder_size_cache.is_empty() && self.panes[index].listed.as_deref() == Some(location_key(&self.panes[index]).as_str());
+        let same_folder = self.panes[index].listed.as_deref() == Some(location_key(&self.panes[index]).as_str());
         if same_folder {
             // Explicit/notification refresh must not reuse stale child totals.
-            let parent = &self.panes[index].path;
-            self.folder_size_cache.retain(|path, _| !path.starts_with(parent) && !parent.starts_with(path));
+            let parent = self.panes[index].path.clone();
+            self.folder_size_cache.retain(|path, _| !native::folder_paths_related(path, &parent));
+            let other = 1 - index;
+            if native::folder_paths_related(&self.panes[other].path, &parent) {
+                self.clear_automatic_folder_sizes(other);
+            }
         }
         self.clear_automatic_folder_sizes(index);
         self.panes[index].folder_cancel.store(true, Ordering::Relaxed);

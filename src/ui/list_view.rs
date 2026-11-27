@@ -54,15 +54,45 @@ fn reset_view_buffer<T>(rows: &mut Vec<T>, count: usize) {
     }
 }
 
-/// Per-rebuild cache, bounded independently of the number of files.
-/// Exact timestamps preserve date/age formatting.
-fn cached_cell<K: Eq + std::hash::Hash>(cache: &mut HashMap<K, String>, key: K, format: impl FnOnce() -> String) -> String {
-    if let Some(value) = cache.get(&key) {
-        return value.clone();
+/// Adaptive per-rebuild cache. High-cardinality listings should not pay
+/// for hashing/cloning unique values. Re-sample periodically so a later
+/// repetitive region (e.g. grouped folders) can still benefit.
+struct CellCache<K> {
+    entries: HashMap<K, String>,
+    samples: usize,
+    hits: usize,
+    skip: usize,
+}
+
+impl<K> Default for CellCache<K> {
+    fn default() -> Self {
+        Self { entries: HashMap::new(), samples: 0, hits: 0, skip: 0 }
     }
-    let value = format();
-    if cache.len() < 4096 {
-        cache.insert(key, value.clone());
+}
+
+fn cached_cell<K: Eq + std::hash::Hash>(cache: &mut CellCache<K>, key: K, format: impl FnOnce() -> String) -> String {
+    if cache.skip != 0 {
+        cache.skip -= 1;
+        return format();
+    }
+    cache.samples += 1;
+    let value = if let Some(value) = cache.entries.get(&key) {
+        cache.hits += 1;
+        value.clone()
+    } else {
+        let value = format();
+        if cache.entries.len() < 4096 {
+            cache.entries.insert(key, value.clone());
+        }
+        value
+    };
+    if cache.samples == 128 {
+        if cache.hits < 8 {
+            cache.entries.clear();
+            cache.skip = 4096;
+        }
+        cache.samples = 0;
+        cache.hits = 0;
     }
     value
 }
@@ -77,14 +107,25 @@ fn view_cache_and_buffers_are_bounded_and_reusable() {
     assert_eq!(rows.as_ptr(), ptr);
     reset_view_buffer(&mut rows, 3);
     assert!(rows.capacity() <= 1024);
-    let mut cache = HashMap::new();
+    let mut cache = CellCache::default();
     for i in 0..5000 {
         assert_eq!(cached_cell(&mut cache, i, || i.to_string()), i.to_string());
     }
-    assert_eq!(cache.len(), 4096);
-    assert_eq!(cached_cell(&mut cache, 17, || panic!("cache hit")), "17");
-    assert_eq!(cached_cell(&mut cache, 4999, || "4999".to_owned()), "4999");
-    assert_eq!(cache.len(), 4096);
+    assert!(cache.entries.len() <= 128 && cache.skip > 0);
+    for _ in 0..cache.skip {
+        cached_cell(&mut cache, 17, || "17".to_owned());
+    }
+    for _ in 0..512 {
+        assert_eq!(cached_cell(&mut cache, 17, || "17".to_owned()), "17");
+    }
+    assert_eq!(cached_cell(&mut cache, 17, || panic!("cache hit after re-probe")), "17");
+    // A highly repetitive workload can still admit up to the same cap,
+    // without sacrificing the exact text of uncached unique rows.
+    for i in 0..5000 {
+        assert_eq!(cached_cell(&mut cache, i, || i.to_string()), i.to_string());
+        assert_eq!(cached_cell(&mut cache, i, || i.to_string()), i.to_string());
+    }
+    assert!(cache.entries.len() <= 4096);
 }
 
 #[cfg(test)]
@@ -93,9 +134,15 @@ fn view_cache_and_buffers_are_bounded_and_reusable() {
 fn benchmark_display_cell_cache_100k() {
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
     let now = SystemTime::now();
-    for spread in [false, true] {
+    for spread in ["repeated", "unique", "blocks", "mixed"] {
         let inputs: Vec<_> = (0..100000u64).map(|i| {
-            let slot = if spread { i } else { i % 64 };
+            let slot = match spread {
+                "repeated" => i % 64,
+                "unique" => i,
+                "blocks" if i / 10_000 % 2 == 0 => i % 64,
+                "mixed" if i % 3 != 0 => i % 64,
+                _ => i + 100_000,
+            };
             (Some(UNIX_EPOCH + Duration::from_secs(1_600_000_000 + slot * 3607)), slot * 301)
         }).collect();
         let mut before_ms = Vec::new();
@@ -110,7 +157,7 @@ fn benchmark_display_cell_cache_100k() {
             };
             let after = || {
                 let t=Instant::now();
-                let (mut dates,mut sizes)=(HashMap::new(),HashMap::new());
+                let (mut dates,mut sizes)=(CellCache::default(),CellCache::default());
                 let rows: Vec<_>=inputs.iter().map(|&(d,s)| (
                     cached_cell(&mut dates,d,||date(d)),
                     cached_cell(&mut sizes,s,||size(s)),
@@ -121,7 +168,7 @@ fn benchmark_display_cell_cache_100k() {
             assert_eq!(a.1,b.1);
             if i>0 {before_ms.push(a.0);after_ms.push(b.0);}
         }
-        eprintln!("BATCH75 cells100k spread={spread} old_ms={before_ms:?} new_ms={after_ms:?}");
+        eprintln!("BATCH87 cells100k spread={spread} old_ms={before_ms:?} new_ms={after_ms:?}");
     }
 }
 
@@ -250,8 +297,8 @@ impl App {
         let pane = &self.panes[index];
         let sftp_modes = pane.remote.as_ref().filter(|r| r.is_sftp()).and_then(|r| r.modes.lock().ok().map(|m| (r.path.clone(), m.clone())));
         let ftp_permissions = pane.remote.as_ref().filter(|r| !r.is_sftp()).and_then(|r| r.permissions.lock().ok().map(|m| (r.path.clone(), m.clone())));
-        let mut date_texts = HashMap::new();
-        let mut size_texts = HashMap::new();
+        let mut date_texts = CellCache::default();
+        let mut size_texts = CellCache::default();
         let mut shell_types = HashMap::<&str, String>::new();
         let mut item_colors = HashMap::<&str, (u8, u8, u8)>::new();
         let local = pane.archive.is_none() && pane.remote.is_none();

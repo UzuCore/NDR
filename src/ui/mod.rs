@@ -166,9 +166,11 @@ struct Pane {
     folder_bytes: HashMap<PathBuf, u64>,
     /// Flag to stop counting folder sizes for the current listing (C# CancelFolderSizeJobs).
     folder_cancel: Arc<AtomicBool>,
-    /// Automatic jobs have their own cancellation token, so a user-requested
-    /// size calculation remains independent of the automatic display option.
-    folder_auto_cancel: Arc<AtomicBool>,
+    /// Per-job automatic cancellation: scrolling can stop off-screen work
+    /// without interrupting a visible row or an explicit manual calculation.
+    folder_auto_pending: HashMap<PathBuf, Arc<AtomicBool>>,
+    folder_auto_visible: HashSet<PathBuf>,
+    folder_auto_times: HashMap<PathBuf, Instant>,
     folder_auto_paths: HashSet<PathBuf>,
     folder_auto_volume: Option<bool>,
     /// Whether the network share connection dialog has already been shown at this location (C# allowNetworkAuthPrompt: once only).
@@ -240,6 +242,14 @@ struct Pane {
     item_pressed: bool,
 }
 impl Pane {
+    fn cancel_automatic_folder_jobs(&mut self) {
+        for (_, cancel) in self.folder_auto_pending.drain() {
+            cancel.store(true, Ordering::Relaxed);
+        }
+        self.folder_auto_visible.clear();
+        self.folder_auto_times.clear();
+    }
+
     /// Keep the normal localized folder marker until an automatic result is
     /// ready. Explicit Calculate Folder Size still shows its progress dots.
     fn folder_size_display(&self, path: &Path) -> Option<String> {
@@ -281,7 +291,9 @@ impl Pane {
             folder_sizes: HashMap::new(),
             folder_bytes: HashMap::new(),
             folder_cancel: Arc::new(AtomicBool::new(false)),
-            folder_auto_cancel: Arc::new(AtomicBool::new(false)),
+            folder_auto_pending: HashMap::new(),
+            folder_auto_visible: HashSet::new(),
+            folder_auto_times: HashMap::new(),
             folder_auto_paths: HashSet::new(),
             folder_auto_volume: None,
             auth_prompted: false,
@@ -1392,8 +1404,7 @@ impl App {
             pane.summary = None;
             pane.folder_cancel.store(true, Ordering::Relaxed);
             pane.folder_cancel = Arc::new(AtomicBool::new(false));
-            pane.folder_auto_cancel.store(true, Ordering::Relaxed);
-            pane.folder_auto_cancel = Arc::new(AtomicBool::new(false));
+            pane.cancel_automatic_folder_jobs();
             pane.folder_auto_paths.clear();
             pane.folder_auto_volume = None;
             pane.folder_sizes.clear();
@@ -1615,9 +1626,13 @@ impl App {
                     // Original FUN_0048ee0c: finds the row whose folder + name equals the counted path (lstrcmpiW), stores the 64-bit size
                     // (+0x20/+0x24) and the count (+0x60), marks it counted (+0x68 = 1) and repaints. Rows are keyed by path here.
                     if self.panes[pane].generation == generation && !cancel.load(Ordering::Relaxed)
-                        && (!automatic || self.panes[pane].folder_auto_paths.contains(&path)) {
+                        && (!automatic || self.panes[pane].folder_auto_pending.get(&path).is_some_and(|token| Arc::ptr_eq(token, &cancel))) {
                         if automatic && complete {
                             self.cache_folder_size(path.clone(), bytes);
+                        }
+                        if automatic {
+                            self.panes[pane].folder_auto_pending.remove(&path);
+                            self.record_folder_size_time(pane, &path, Instant::now());
                         }
                         self.panes[pane].folder_bytes.insert(path.clone(), bytes);
                         self.panes[pane].folder_sizes.insert(path, Some(text));
@@ -2132,6 +2147,9 @@ impl eframe::App for App {
         self.pane_rects = [egui::Rect::NOTHING; 2];
         self.folder_rows.clear();
         self.tree_drop_rows.clear();
+        for pane in &mut self.panes {
+            pane.folder_auto_visible.clear();
+        }
         // Original TfMain: panes (frames) fill the space between pToolbar (alTop) and bbFunctions (alBottom) without gaps (FUN_0043d7c0: pane width = window width -
         // visible VertSplitter and pVertBar widths). Fixed: previously the egui default panel margin (8) and gaps left 13 px above, 9 below and 16 in the middle.
         egui::CentralPanel::default().frame(egui::Frame::central_panel(&ctx.style()).inner_margin(0.0)).show(ctx, |ui| {
@@ -2206,6 +2224,7 @@ impl eframe::App for App {
                 self.pane_ui(ui, self.active, ctx);
             }
         });
+        self.finish_visible_folder_size_frame(ctx);
         self.drag_drop_frame(ctx);
         self.dialogs(ctx);
         self.popup_menu_ui(ctx);
@@ -2317,7 +2336,9 @@ impl eframe::App for App {
     fn on_exit(&mut self, _: Option<&eframe::glow::Context>) {
         for pane in &self.panes {
             pane.folder_cancel.store(true, Ordering::Relaxed);
-            pane.folder_auto_cancel.store(true, Ordering::Relaxed);
+            for cancel in pane.folder_auto_pending.values() {
+                cancel.store(true, Ordering::Relaxed);
+            }
         }
         self.vault_dialog = None;
         self.vault_transfer = None;

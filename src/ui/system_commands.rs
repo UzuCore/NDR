@@ -3,7 +3,7 @@
 //! PasteShortcutAsync (original 0x4340d4), GoToSystemFolderAsync/GoToDownloadsAsync, ShowProperties, ShowFileInformation
 //! (FileInformationService), SelectThemeAsync/ApplyTheme, SelectLanguageAsync, ShowAbout, OpenNexusFileHelp, OpenProgramHomepage.
 use super::*;
-use ndr::msgbox::{MB_ICONASTERISK, MB_ICONEXCLAMATION, MB_OK};
+use ndr::msgbox::{MB_ICONEXCLAMATION, MB_OK};
 
 /// Original skins (skin\ folder names): black, classic.
 use ndr::styles::THEMES;
@@ -492,7 +492,7 @@ impl App {
         }
     }
 
-    /// C# ShowAbout: "NDR {version}\nWindows 10/11 · 64-bit\nUser settings: {profile}", caption "About NDR", information icon.
+    /// ShowAbout keeps the localized system-message layout with the NDR artwork.
     pub(super) fn about_command(&mut self) {
         let build = ndr::update::build_label(ndr::update::current_build())
             .unwrap_or_else(|| self.catalog("NDR.UPD_LOCAL_BUILD", "로컬 빌드", "Local build"));
@@ -504,7 +504,7 @@ impl App {
             self.profile.display()
         );
         let caption = self.catalog("NDR.UI_ABOUT_TITLE", "NDR 정보", "About NDR");
-        self.system_box(&caption, &text, MB_OK | MB_ICONASTERISK, |_, _, _| {});
+        self.program_info_box(&caption, &text);
     }
 }
 

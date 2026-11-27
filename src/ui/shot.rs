@@ -115,6 +115,7 @@ impl App {
         let _ = std::fs::create_dir_all(folder.join("b"));
         let text = |app: &App, key: &str| app.language_pack.text(key, key);
         match kind {
+            "about" => self.about_command(),
             "progress-copy" | "progress-move" | "progress-delete" | "progress-recycle" | "progress-active" | "progress-archive" => {
                 // Presentation-only fixtures. Never start an actual filesystem job.
                 let (_, receiver) = std::sync::mpsc::channel();
@@ -527,7 +528,7 @@ fn audit_shot_text(ctx: &egui::Context, path: &Path) {
 fn all_locale_dialog_layout_sweep() {
     let output = PathBuf::from(std::env::var_os("NDR_LAYOUT_QA_DIR").expect("NDR_LAYOUT_QA_DIR"));
     std::fs::create_dir_all(&output).unwrap();
-    let kinds = ["prompt", "rename", "delwarning", "delconfirm", "conflict", "ftpquick", "destination", "ftpattr", "checksum", "attributes", "editshortcut", "savelist", "foldertree", "favorites", "funckey", "archive", "advrename", "advrename-delete", "sites", "credentials", "remote", "search", "vaultcreate", "vaultunlock", "advselect", "compareopts", "compareresult", "syncpreview", "split", "join", "shortcuts", "progress-copy", "progress-move", "progress-delete", "progress-recycle", "progress-active", "progress-archive", "update-download", "update-verify", "update-prepare", "update-install", "update-failed", "error-transfer", "error-archive", "error-update", "error-retry", "error-continue", "error-long"];
+    let kinds = ["about", "prompt", "rename", "delwarning", "delconfirm", "conflict", "ftpquick", "destination", "ftpattr", "checksum", "attributes", "editshortcut", "savelist", "foldertree", "favorites", "funckey", "archive", "advrename", "advrename-delete", "sites", "credentials", "remote", "search", "vaultcreate", "vaultunlock", "advselect", "compareopts", "compareresult", "syncpreview", "split", "join", "shortcuts", "progress-copy", "progress-move", "progress-delete", "progress-recycle", "progress-active", "progress-archive", "update-download", "update-verify", "update-prepare", "update-install", "update-failed", "error-transfer", "error-archive", "error-update", "error-retry", "error-continue", "error-long"];
     let raw = |width, height| egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, height))), ..Default::default() };
     for &(locale, _) in ndr::compat::BUILTIN_LANGUAGES {
         let dir = output.join(locale);

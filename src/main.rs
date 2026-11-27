@@ -32,6 +32,8 @@ pub struct Options {
     smoke_seconds: Option<u64>,
     /// Optional client size in logical points for isolated smoke checks only.
     smoke_size: Option<[f32; 2]>,
+    /// Opt-in taskbar visibility for isolated real Windows shell diagnostics.
+    smoke_taskbar: bool,
     report: Option<PathBuf>,
     /// For tests: during the (off-screen) startup check, opens a sample of this kind of original window and saves that screen as PNG (`--shot kind file`).
     shot: Option<(String, PathBuf)>,
@@ -146,6 +148,7 @@ impl Options {
                     };
                     result.smoke_size = Some([dimension()?, dimension()?]);
                 }
+                "--smoke-taskbar" => result.smoke_taskbar = true,
                 "--shot" => {
                     let kind = args.next().ok_or("--shot needs a dialog kind")?;
                     let path = PathBuf::from(args.next().ok_or("--shot needs a PNG path")?);
@@ -176,8 +179,8 @@ impl Options {
         if result.shot.is_some() && result.smoke_seconds.is_none() {
             return Err("--shot requires --smoke-seconds".into());
         }
-        if result.smoke_size.is_some() && result.smoke_seconds.is_none() {
-            return Err("--smoke-size requires --smoke-seconds".into());
+        if (result.smoke_size.is_some() || result.smoke_taskbar) && result.smoke_seconds.is_none() {
+            return Err("--smoke-size and --smoke-taskbar require --smoke-seconds".into());
         }
         Ok(result)
     }
@@ -208,6 +211,16 @@ fn user_directory(value: &str) -> Result<PathBuf, String> {
 fn main() {
     let result = (|| -> Result<(), String> {
         let mut options = Options::parse()?;
+        // Register before eframe or the shell creates any window.
+        if options.smoke_seconds.is_none() || options.smoke_taskbar {
+            if let Ok(executable) = std::env::current_exe() {
+                match ndr::native::register_ndr_taskbar_identity(&executable) {
+                    Ok(id) if options.smoke_taskbar => eprintln!("NDR taskbar identity: {id}"),
+                    Ok(_) => {},
+                    Err(error) => log::warn!("Could not register NDR taskbar identity: {error}"),
+                }
+            }
+        }
         let profile = options.profile_directory();
         let loaded = ndr::settings::Settings::load(&profile.join("settings.json"));
         let defaults = ndr::settings::Settings::default();
@@ -262,7 +275,7 @@ fn main() {
         }
         if options.smoke_seconds.is_some() {
             // The startup check opens off screen, without taking focus and without a taskbar entry (it does not cover the user's screen).
-            viewport = viewport.with_inner_size(options.smoke_size.unwrap_or([1400.0, 850.0])).with_position([-30000.0, -30000.0]).with_active(false).with_taskbar(false);
+            viewport = viewport.with_inner_size(options.smoke_size.unwrap_or([1400.0, 850.0])).with_position([-30000.0, -30000.0]).with_active(false).with_taskbar(options.smoke_taskbar);
         } else {
             // Fixed: so folders extracted to %TEMP%\NDR when opening archive items do not pile up, ones unchanged for over 7 days and not in use are deleted.
             std::thread::spawn(|| {

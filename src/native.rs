@@ -19,6 +19,64 @@ fn wide(value: impl AsRef<OsStr>) -> Vec<u16> {
     value.as_ref().encode_wide().chain(Some(0)).collect()
 }
 
+/// Windows ordinal case-insensitive component comparison, rather than a
+/// string prefix ("folder2" is not inside "folder"). Used only to invalidate
+/// cached folder-size observations, not for filesystem authorization.
+pub fn folder_paths_related(a: &Path, b: &Path) -> bool {
+    use windows_sys::Win32::Globalization::{CompareStringOrdinal, CSTR_EQUAL};
+    let mut a = a.components();
+    let mut b = b.components();
+    loop {
+        match (a.next(), b.next()) {
+            (Some(x), Some(y)) => {
+                let x = wide(x.as_os_str());
+                let y = wide(y.as_os_str());
+                if unsafe { CompareStringOrdinal(x.as_ptr(), (x.len() - 1) as i32, y.as_ptr(), (y.len() - 1) as i32, 1) } != CSTR_EQUAL {
+                    return false;
+                }
+            }
+            _ => return true,
+        }
+    }
+}
+
+#[test]
+fn folder_invalidation_matches_windows_case_and_component_boundaries() {
+    assert!(folder_paths_related(Path::new(r"D:\Folder"), Path::new(r"d:\FOLDER\Child")));
+    assert!(folder_paths_related(Path::new(r"D:\Folder\Child"), Path::new(r"D:\folder")));
+    assert!(!folder_paths_related(Path::new(r"D:\Folder"), Path::new(r"D:\Folder2")));
+    assert!(!folder_paths_related(Path::new(r"C:\Folder"), Path::new(r"D:\Folder")));
+}
+
+/// Stable across updates of one portable installation, while independently
+/// installed copies remain in separate taskbar groups.
+fn ndr_taskbar_id(executable: &Path) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(executable.to_string_lossy().to_lowercase().as_bytes());
+    let suffix: String = digest[..8].iter().map(|b| format!("{b:02x}")).collect();
+    format!("UzuCore.NDR.{suffix}")
+}
+
+#[test]
+fn taskbar_identity_is_case_insensitive_and_distinguishes_installations() {
+    let id = ndr_taskbar_id(Path::new(r"D:\NDR\ndr.exe"));
+    assert_eq!(id, "UzuCore.NDR.0cdc38e81d7cb25a");
+    assert_eq!(id, ndr_taskbar_id(Path::new(r"d:\ndr\NDR.EXE")));
+    assert_ne!(id, ndr_taskbar_id(Path::new(r"D:\Other NDR\ndr.exe")));
+    assert_eq!(id.len(), 28);
+}
+
+/// Set the process AppUserModelID before creating any window. Explorer can
+/// resolve the embedded executable icon instead of reusing a generic cached
+/// taskbar group. No shortcuts or global icon caches are modified.
+pub fn register_ndr_taskbar_identity(executable: &Path) -> Result<String, String> {
+    let id = ndr_taskbar_id(executable);
+    let buffer = wide(&id);
+    unsafe { windows::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID(windows::core::PCWSTR(buffer.as_ptr())) }
+        .map_err(|error| error.to_string())?;
+    Ok(id)
+}
+
 /// Original TNXShellChangeNotify thread (ResetThread 0x7b37b8 → FUN_007b3060): watches a single folder (not subfolders, SetSubFolder default 0)
 /// with filter 0x0B (file name / folder name / size changes, constructor 0x7b3304) and calls `on_change` when something changes. Stops when `stop` is set.
 /// If the watch cannot be started (missing folder, etc.) it does nothing. The handle is created on the calling thread, so changes after it returns are not missed.

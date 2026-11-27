@@ -1323,6 +1323,47 @@ mod tests {
         drop(v);fs::remove_dir_all(root).unwrap();
     }
     #[test]
+    #[ignore = "explicit repeated encrypted commit and compaction soak"]
+    fn batch89_repeated_authenticated_commits_and_reopen() {
+        let root = fixture("batch89-soak");
+        let path = root.join("data.ndr");
+        let password = "correct secret";
+        let mut vault = Vault::create(&path, password.into()).unwrap();
+        let sentinel = vault.add_file(1, "sentinel.txt", b"must survive").unwrap();
+        let a = vault.add_folder(1, "A").unwrap();
+        let b = vault.add_folder(1, "B").unwrap();
+        let mut data = vec![0u8; 1024 * 1024];
+        for round in 0..32u8 {
+            data.fill(round);
+            let id = vault.add_file(a, "payload.bin", &data).unwrap();
+            vault.transfer_one(a, "payload.bin", b, "copy.bin", false, false).unwrap();
+            let copied = vault.find_child(b, "copy.bin").unwrap().unwrap().id;
+            assert_eq!(vault.read_file(copied).unwrap(), data);
+            vault.remove(id).unwrap();
+            vault.rename(copied, "edited.bin").unwrap();
+            data[0] = round.wrapping_add(1);
+            vault.update_file(copied, &data).unwrap();
+            if round % 8 == 7 {
+                drop(vault);
+                vault = Vault::unlock(&path, password.into()).unwrap();
+            }
+            assert_eq!(vault.read_file(copied).unwrap(), data);
+            assert_eq!(vault.read_file(sentinel).unwrap(), b"must survive");
+            vault.remove(copied).unwrap();
+            assert!(vault.list(a).unwrap().is_empty() && vault.list(b).unwrap().is_empty());
+        }
+        vault = vault.compact().unwrap();
+        assert_eq!(vault.read_file(sentinel).unwrap(), b"must survive");
+        drop(vault);
+        let mut vault = Vault::unlock(&path, password.into()).unwrap();
+        assert_eq!(vault.read_file(sentinel).unwrap(), b"must survive");
+        assert!(vault.list(a).unwrap().is_empty() && vault.list(b).unwrap().is_empty());
+        drop(vault);
+        eprintln!("BATCH89 32 rounds, 4 reopens, final compaction and authentication: PASS");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn unicode_names_share_lookup_collision_and_rename_rules() {
         let root = fixture("unicode-names");
         let path = root.join("names.ndr");

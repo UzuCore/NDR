@@ -717,25 +717,81 @@ impl App {
         chosen
     }
 
-    /// Count only visible folder rows, never during an active file operation.
+    /// Expire visible completed results without a directory relist. Invisible
+    /// folders do not generate recurring I/O. Manual totals are unaffected.
     pub(super) fn queue_folder_size(&mut self, index: usize, row: usize) {
         if !self.settings.flag(if index == 0 { "LeftAutoFolderSize" } else { "RightAutoFolderSize" }, false) {
             return;
         }
-        let pane = &self.panes[index];
-        if !pane.entries.get(row).is_some_and(|e| e.is_dir && !e.drive && !e.is_parent() && !pane.folder_sizes.contains_key(&e.path)) {
+        let pane = &mut self.panes[index];
+        let Some(entry) = pane.entries.get(row).filter(|e| e.is_dir && !e.drive && !e.is_parent()) else { return };
+        let path = &entry.path;
+        if pane.folder_auto_pending.contains_key(path) {
+            pane.folder_auto_visible.insert(path.clone());
             return;
         }
+        if let Some(time) = pane.folder_auto_times.get(path) {
+            let age = time.elapsed();
+            if age < FOLDER_SIZE_TTL {
+                self.egui_ctx.request_repaint_after(FOLDER_SIZE_TTL.saturating_sub(age));
+                return;
+            }
+            pane.folder_auto_times.remove(path);
+            pane.folder_auto_paths.remove(path);
+            pane.folder_sizes.remove(path);
+            pane.folder_bytes.remove(path);
+        }
+        if pane.folder_sizes.contains_key(path) { return; }
         self.sync_folder_size_activity();
         if !self.folder_auto_busy {
             self.enqueue_folder_size_job(index, row, true);
         }
     }
 
+    /// Keep only pending scans for rows painted during this frame. The worker
+    /// checks each job's token between directory entries, so even an ongoing
+    /// large off-screen scan yields to the newly visible rows.
+    pub(super) fn finish_visible_folder_size_frame(&mut self, ctx: &egui::Context) {
+        let mut cancelled = false;
+        for pane in &mut self.panes {
+            pane.folder_auto_pending.retain(|path, token| {
+                if pane.folder_auto_visible.contains(path) {
+                    return true;
+                }
+                token.store(true, Ordering::Relaxed);
+                pane.folder_auto_paths.remove(path);
+                pane.folder_sizes.remove(path);
+                pane.folder_bytes.remove(path);
+                cancelled = true;
+                false
+            });
+        }
+        if cancelled {
+            let (queue, _) = &*self.folder_size_queue;
+            queue.lock().unwrap_or_else(|e| e.into_inner()).retain(|j| !j.cancel.load(Ordering::Relaxed));
+            // A full previous queue may have prevented the new rows from
+            // being queued in this paint. Retry immediately.
+            ctx.request_repaint();
+        }
+    }
+
+    pub(super) fn record_folder_size_time(&mut self, index: usize, path: &Path, time: Instant) {
+        const MAX_PANE_TOTALS: usize = 512;
+        let pane = &mut self.panes[index];
+        if pane.folder_auto_times.len() >= MAX_PANE_TOTALS && !pane.folder_auto_times.contains_key(path) {
+            if let Some(oldest) = pane.folder_auto_times.iter().min_by_key(|(_, time)| *time).map(|(p, _)| p.clone()) {
+                pane.folder_auto_times.remove(&oldest);
+                pane.folder_auto_paths.remove(&oldest);
+                pane.folder_sizes.remove(&oldest);
+                pane.folder_bytes.remove(&oldest);
+            }
+        }
+        pane.folder_auto_times.insert(path.to_path_buf(), time);
+    }
+
     pub(super) fn clear_automatic_folder_sizes(&mut self, index: usize) {
         let pane = &mut self.panes[index];
-        pane.folder_auto_cancel.store(true, Ordering::Relaxed);
-        pane.folder_auto_cancel = Arc::new(AtomicBool::new(false));
+        pane.cancel_automatic_folder_jobs();
         for path in pane.folder_auto_paths.drain() {
             pane.folder_sizes.remove(&path);
             pane.folder_bytes.remove(&path);
@@ -751,7 +807,9 @@ impl App {
         let busy = self.job.as_ref().is_some_and(|j| !j.finished)
             || self.background_jobs.iter().any(|j| !j.finished)
             || self.vault_transfer.is_some()
-            || self.disk_copy_active();
+            || self.disk_copy_active()
+            || self.panes.iter().any(|p| p.remote.as_ref().is_some_and(|r| r.busy.load(Ordering::Relaxed)))
+            || self.original_dialogs.iter().any(|d| matches!(&d.kind, super::original_dialogs::DialogKind::RemoteTransfer(_)));
         if busy && !self.folder_auto_busy {
             // A scan interrupted by a write could otherwise combine sizes
             // measured before and after the write. Restart it when idle.
@@ -764,7 +822,7 @@ impl App {
 
     pub(super) fn cache_folder_size(&mut self, path: PathBuf, bytes: u64) {
         const MAX_CACHED: usize = 256;
-        self.folder_size_cache.retain(|_, (_, time)| time.elapsed() < Duration::from_secs(15));
+        self.folder_size_cache.retain(|_, (_, time)| time.elapsed() < FOLDER_SIZE_TTL);
         if self.folder_size_cache.len() >= MAX_CACHED && !self.folder_size_cache.contains_key(&path) {
             if let Some(oldest) = self.folder_size_cache.iter().min_by_key(|(_, (_, time))| *time).map(|(path, _)| path.clone()) {
                 self.folder_size_cache.remove(&oldest);
@@ -802,11 +860,14 @@ impl App {
                 return;
             }
             if let Some(&(bytes, time)) = self.folder_size_cache.get(&entry.path) {
-                if time.elapsed() < Duration::from_secs(15) {
+                if time.elapsed() < FOLDER_SIZE_TTL {
                     let text = ndr::parity::size_to_str(bytes, &self.settings.text("SizeUnit", "Auto"), self.settings.flag("UseThousandsSeparator", true));
                     pane.folder_auto_paths.insert(entry.path.clone());
                     pane.folder_bytes.insert(entry.path.clone(), bytes);
                     pane.folder_sizes.insert(entry.path.clone(), Some(text));
+                    let path = entry.path.clone();
+                    self.record_folder_size_time(index, &path, time);
+                    self.egui_ctx.request_repaint_after(FOLDER_SIZE_TTL.saturating_sub(time.elapsed()));
                     return;
                 }
             }
@@ -815,18 +876,21 @@ impl App {
         let mut jobs = queue.lock().unwrap_or_else(|e| e.into_inner());
         // At most 48 waiting jobs plus one running scan. A fast scroll
         // cannot create an unbounded backlog of expensive I/O.
-        if automatic && jobs.len() >= 48 {
+        if automatic && (jobs.len() >= 48 || pane.folder_auto_pending.len() >= 25) {
             return;
         }
         pane.folder_sizes.insert(entry.path.clone(), None);
+        let cancel = if automatic { Arc::new(AtomicBool::new(false)) } else { pane.folder_cancel.clone() };
         if automatic {
             pane.folder_auto_paths.insert(entry.path.clone());
+            pane.folder_auto_visible.insert(entry.path.clone());
+            pane.folder_auto_pending.insert(entry.path.clone(), cancel.clone());
         }
         let job = FolderSizeJob {
             pane: index,
             generation: pane.generation,
             path: entry.path.clone(),
-            cancel: if automatic { pane.folder_auto_cancel.clone() } else { pane.folder_cancel.clone() },
+            cancel,
             automatic,
             unit: self.settings.text("SizeUnit", "Auto"),
             thousands: self.settings.flag("UseThousandsSeparator", true),
@@ -844,12 +908,14 @@ impl App {
     }
 }
 
+pub(super) const FOLDER_SIZE_TTL: Duration = Duration::from_secs(15);
+
 pub(super) struct FolderSizeJob {
     pane: usize,
     generation: u64,
-    path: PathBuf,
-    cancel: Arc<AtomicBool>,
-    automatic: bool,
+    pub(super) path: PathBuf,
+    pub(super) cancel: Arc<AtomicBool>,
+    pub(super) automatic: bool,
     unit: String,
     thousands: bool,
 }

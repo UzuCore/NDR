@@ -130,12 +130,21 @@ impl StartupApp {
             // egui-winit sets ICON_SMALL from the viewport PNG, but not
             // ICON_BIG on Windows. Use the embedded executable icon for
             // the taskbar and Alt+Tab before the first visible frame.
-            use windows_sys::Win32::UI::WindowsAndMessaging::{LoadIconW, SendMessageW, WM_SETICON, ICON_BIG};
+            use windows_sys::Win32::UI::WindowsAndMessaging::{LoadIconW, SendMessageW, SetClassLongPtrW, WM_GETICON, WM_SETICON, ICON_BIG, ICON_SMALL, GCLP_HICON, GCLP_HICONSM};
             if let Ok(module) = unsafe { windows::Win32::System::LibraryLoader::GetModuleHandleW(windows::core::PCWSTR::null()) } {
                 // LoadIconW returns a shared resource handle, not owned by us.
                 let icon = unsafe { LoadIconW(module.0, 101usize as *const u16) };
                 if !icon.is_null() {
-                    unsafe { SendMessageW(hwnd as _, WM_SETICON, ICON_BIG as usize, icon as isize); }
+                    unsafe {
+                        // Supply a class-icon fallback as well as the window
+                        // icon, using shared handles with process lifetime.
+                        SetClassLongPtrW(hwnd as _, GCLP_HICON, icon as isize);
+                        SendMessageW(hwnd as _, WM_SETICON, ICON_BIG as usize, icon as isize);
+                        let small = SendMessageW(hwnd as _, WM_GETICON, ICON_SMALL as usize, 0);
+                        if small != 0 {
+                            SetClassLongPtrW(hwnd as _, GCLP_HICONSM, small);
+                        }
+                    }
                 }
             }
             palette.apply_window_caption(ctx, hwnd);

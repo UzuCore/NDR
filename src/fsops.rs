@@ -723,6 +723,54 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    #[test]
+    #[ignore = "explicit 1 GiB local disk regression; owned temporary data only"]
+    fn batch90_large_copy_integrity_and_pre_cancel() {
+        use std::io::Write;
+        use sha2::{Digest, Sha256};
+        const BYTES: u64 = 1024 * 1024 * 1024;
+        let root = fixture();
+        let source = root.join("large.bin");
+        let mut file = fs::File::create(&source).unwrap();
+        let mut block: Vec<u8> = (0..1024 * 1024).map(|i| ((i * 73 + 31) % 251) as u8).collect();
+        let mut expected = Sha256::new();
+        for i in 0..1024u64 {
+            block[..8].copy_from_slice(&i.to_le_bytes());
+            file.write_all(&block).unwrap();
+            expected.update(&block);
+        }
+        file.sync_all().unwrap();
+        drop(file);
+        let target = root.join("destination");
+        let (tx, rx) = mpsc::channel();
+        let started = Instant::now();
+        run_with_options(Operation::Copy { sources: vec![source.clone()], destination: target.clone(), move_files: false }, tx,
+            Arc::new(AtomicBool::new(false)), OperationOptions { use_descriptions: false, ..Default::default() });
+        let elapsed = started.elapsed();
+        let events: Vec<_> = rx.into_iter().collect();
+        assert!(!events.iter().any(|event| matches!(event, Event::Fatal(_) | Event::Error { .. } | Event::Failure { .. })));
+        assert!(events.iter().any(|event| matches!(event, Event::Finished { cancelled: false, files: 1, bytes: BYTES })));
+        let mut actual = Sha256::new();
+        let mut file = fs::File::open(target.join("large.bin")).unwrap();
+        loop {
+            let n = file.read(&mut block).unwrap();
+            if n == 0 { break; }
+            actual.update(&block[..n]);
+        }
+        assert_eq!(actual.finalize(), expected.finalize());
+        assert_eq!(fs::metadata(&source).unwrap().len(), BYTES);
+        let cancelled = root.join("cancelled");
+        let (tx, rx) = mpsc::channel();
+        run_with_options(Operation::Copy { sources: vec![source.clone()], destination: cancelled.clone(), move_files: true }, tx,
+            Arc::new(AtomicBool::new(true)), OperationOptions { use_descriptions: false, ..Default::default() });
+        let events: Vec<_> = rx.into_iter().collect();
+        assert!(events.iter().any(|event| matches!(event, Event::Finished { cancelled: true, .. })));
+        assert!(source.is_file() && !cancelled.join("large.bin").exists());
+        drop(file);
+        eprintln!("BATCH90 1GiB copy duration_ms={:.3} sha256=match pre_cancel_move=preserved", elapsed.as_secs_f64() * 1000.0);
+        fs::remove_dir_all(root).unwrap();
+    }
+
     /// Original GetFileListToWork (FUN_00413ac4) + FUN_004138d4: the totals of a folder copy are known before the first file.
     #[test]
     fn recursive_copy_and_move_are_rejected_before_creating_destination_folders() {

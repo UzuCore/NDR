@@ -178,6 +178,11 @@ impl App {
         self.panes[i].selected.clear();
         for row in rows {
             let path = self.panes[i].entries[row].path.clone();
+            if let Some(token) = self.panes[i].folder_auto_pending.remove(&path) {
+                token.store(true, Ordering::Relaxed);
+            }
+            self.panes[i].folder_auto_times.remove(&path);
+            self.panes[i].folder_auto_visible.remove(&path);
             self.panes[i].folder_auto_paths.remove(&path);
             self.folder_size_cache.remove(&path);
             self.panes[i].folder_sizes.remove(&path);
