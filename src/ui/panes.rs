@@ -644,7 +644,14 @@ pub(super) fn drag_begins(response: &egui::Response, button: egui::PointerButton
     if !response.dragged_by(button) {
         return false;
     }
-    let (origin, pos) = response.ctx.input(|i| (i.pointer.press_origin(), i.pointer.latest_pos()));
+    let (origin, pos, inner) = response.ctx.input(|i| (i.pointer.press_origin(), i.pointer.latest_pos(), i.viewport().inner_rect));
+    // The captured pointer can leave the client between two frames.
+    let pos = pos.or_else(|| if cfg!(test) { None } else {
+        native::cursor_position().zip(inner).map(|((x, y), rect)| {
+            let scale = response.ctx.pixels_per_point();
+            egui::pos2(x as f32 / scale - rect.min.x, y as f32 / scale - rect.min.y)
+        })
+    });
     let (Some(origin), Some(pos)) = (origin, pos) else { return false };
     !selection_area(response.rect).contains(origin) && ((pos.x - origin.x).abs() > 8.0 || (pos.y - origin.y).abs() > 8.0)
 }

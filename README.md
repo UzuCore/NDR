@@ -134,7 +134,7 @@ legacy bilingual literal entries and merging new catalog keys.
 
 ## Bundled resources and compatibility
 
-New profiles start with GitHub. Nexus (formerly Black), Classic, and Cyan remain available; existing profiles keep their choice.
+New profiles start with GitHub, using the Nexus file-list colors. Nexus (formerly Black) and Classic remain available; old Cyan profiles return to GitHub.
 
 NDR's bundled themes, color presets, completion cue, and UI strings are
 maintained as NDR resources. Its built-in toolbar and key bindings are defined

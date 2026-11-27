@@ -436,7 +436,7 @@ fn conflict_buttons_follow_the_original_tffileexists() {
     assert_eq!(conflict_buttons(&form("C:\\a\\x.txt", "c:\\A\\X.TXT", false, false)), [(B::Overwrite, false), (B::Skip, true), (B::OverwriteNewer, false), (B::Rename, true), (B::Cancel, true)]);
     // Enter presses the focused (first enabled) button: overwrite for a plain file, skip when overwriting the same path is impossible.
     let ctx = egui::Context::default();
-    super::set_app_fonts(&ctx, None, false, 1.0);
+    super::set_app_fonts(&ctx, None, false, 1.0, "en");
     let _ = ctx.run(egui::RawInput::default(), |_| {});
     let language = ndr::compat::Language::default();
     for (mut conflict, expected) in [(form("c:\\a\\x.txt", "c:\\b\\x.txt", false, false), ndr::fsops::ConflictChoice::Overwrite), (form("C:\\a\\x.txt", "c:\\A\\X.TXT", false, false), ndr::fsops::ConflictChoice::Skip)] {
@@ -696,7 +696,7 @@ fn collision_window_renders_selected_labels_for_every_bundled_locale() {
     let resources = Path::new(env!("CARGO_MANIFEST_DIR")).join("Resources/Languages");
     let english = compat::Language::load(&resources, "en");
     let ctx = egui::Context::default();
-    super::set_app_fonts(&ctx, None, false, 1.0);
+    super::set_app_fonts(&ctx, None, false, 1.0, "en");
     let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1050.0, 700.0));
     for &(code, _) in compat::BUILTIN_LANGUAGES {
         let language = compat::Language::load(&resources, code);

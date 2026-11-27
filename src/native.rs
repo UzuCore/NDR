@@ -569,7 +569,7 @@ pub fn clipboard_text(text: &str) -> Result<(), String> {
         )
     }
 }
-pub fn clipboard_files(paths: &[PathBuf], cut: bool) -> Result<(), String> {
+fn file_drop_bytes(paths: &[PathBuf]) -> Result<Vec<u8>, String> {
     let mut names = Vec::<u16>::new();
     for path in paths {
         reject_nul(&path.to_string_lossy())?;
@@ -592,6 +592,10 @@ pub fn clipboard_files(paths: &[PathBuf], cut: bool) -> Result<(), String> {
     data.extend_from_slice(unsafe {
         std::slice::from_raw_parts(names.as_ptr().cast::<u8>(), names.len() * 2)
     });
+    Ok(data)
+}
+pub fn clipboard_files(paths: &[PathBuf], cut: bool) -> Result<(), String> {
+    let data = file_drop_bytes(paths)?;
     let effect = if cut { 2u32 } else { 1u32 };
     let registered = wide("Preferred DropEffect");
     let _clipboard = Clipboard::open()?;
@@ -2144,57 +2148,251 @@ pub fn drop_modifiers() -> (bool, bool) {
     unsafe { ((GetKeyState(VK_CONTROL as i32) as u16 & 0x8000) != 0, (GetKeyState(VK_SHIFT as i32) as u16 & 0x8000) != 0) }
 }
 
+/// Authoritative pointer/button state during an outgoing file drag. egui
+/// emits PointerGone at the window boundary, so its latest_pos can be None.
+pub fn file_drag_pointer(hwnd: isize, secondary: bool) -> Option<(bool, bool)> {
+    use windows_sys::Win32::{Graphics::Gdi::ScreenToClient,
+        UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_RBUTTON}};
+    if hwnd == 0 { return None; }
+    let hwnd = hwnd as HWND;
+    let mut point = POINT { x: 0, y: 0 };
+    let mut rect: RECT = unsafe { std::mem::zeroed() };
+    if unsafe { GetCursorPos(&mut point) == 0 || ScreenToClient(hwnd, &mut point) == 0 || GetClientRect(hwnd, &mut rect) == 0 } {
+        return None;
+    }
+    let outside = point.x < rect.left || point.x >= rect.right || point.y < rect.top || point.y >= rect.bottom;
+    let vk = if secondary { VK_RBUTTON } else { VK_LBUTTON };
+    let held = unsafe { (GetAsyncKeyState(vk as i32) as u16 & 0x8000) != 0 };
+    Some((outside, held))
+}
+
 #[windows::core::implement(windows::Win32::System::Ole::IDropSource)]
-struct FileDropSource;
+struct FileDropSource { initiating: u32 }
 
 #[allow(non_snake_case)]
 impl windows::Win32::System::Ole::IDropSource_Impl for FileDropSource_Impl {
     fn QueryContinueDrag(&self, escape: windows::core::BOOL, keys: windows::Win32::System::SystemServices::MODIFIERKEYS_FLAGS) -> windows::core::HRESULT {
-        use windows::Win32::Foundation::{DRAGDROP_S_CANCEL, DRAGDROP_S_DROP};
-        if escape.as_bool() {
-            DRAGDROP_S_CANCEL
-        } else if keys.0 & windows::Win32::System::SystemServices::MK_LBUTTON.0 == 0 {
-            DRAGDROP_S_DROP
-        } else {
-            windows::core::HRESULT(0)
-        }
+        file_drop_continue(self.initiating, escape.as_bool(), keys.0)
     }
     fn GiveFeedback(&self, _effect: windows::Win32::System::Ole::DROPEFFECT) -> windows::core::HRESULT {
         windows::Win32::Foundation::DRAGDROP_S_USEDEFAULTCURSORS
     }
 }
 
-/// C# FileList_PreviewMouseMove's DoDragDrop(FileDrop, Copy | Move | Link): drags out of NDR (to Explorer, etc.) via a shell data object.
-/// The drop target does the copy/move/shortcut. Returns the resulting effect (DROPEFFECT bits, 0 = cancelled).
-pub fn drag_files_out(paths: &[PathBuf]) -> Result<u32, String> {
-    use windows::Win32::System::Com::IDataObject;
-    use windows::Win32::System::Ole::{DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_LINK, DROPEFFECT_MOVE, DoDragDrop, IDropSource};
-    use windows::Win32::UI::Shell::{BHID_DataObject, ILCreateFromPathW, ILFree, IShellItemArray, SHCreateShellItemArrayFromIDLists};
-    use windows::core::PCWSTR;
-    if paths.is_empty() {
-        return Ok(0);
+fn file_drop_continue(initiating: u32, escape: bool, keys: u32) -> windows::core::HRESULT {
+    use windows::Win32::Foundation::{DRAGDROP_S_CANCEL, DRAGDROP_S_DROP};
+    if escape { DRAGDROP_S_CANCEL }
+    else if keys & initiating == 0 { DRAGDROP_S_DROP }
+    else { windows::core::HRESULT(0) }
+}
+
+// Each outgoing drag owns a balanced STA OLE initialization, even when
+// winit already initialized OLE on the window thread (S_FALSE is success).
+struct DragOle;
+impl DragOle {
+    fn new() -> Result<Self, String> {
+        unsafe { windows::Win32::System::Ole::OleInitialize(None) }.map_err(|e| e.to_string())?;
+        Ok(Self)
     }
-    // SAFETY: every PIDL comes from ILCreateFromPathW and is freed once; COM objects are released by their wrappers.
-    unsafe {
-        let pidls: Vec<_> = paths.iter().map(|p| ILCreateFromPathW(PCWSTR(wide(p.as_os_str()).as_ptr()))).collect();
-        let result = (|| -> Result<u32, String> {
-            if pidls.iter().any(|p| p.is_null()) {
-                return Err("Could not resolve a dragged item".into());
-            }
-            let list: Vec<*const _> = pidls.iter().map(|p| *p as *const _).collect();
-            let array: IShellItemArray = SHCreateShellItemArrayFromIDLists(&list).map_err(|e| e.to_string())?;
-            let data: IDataObject = array.BindToHandler(None, &BHID_DataObject).map_err(|e| e.to_string())?;
-            let source: IDropSource = FileDropSource.into();
-            let mut effect = DROPEFFECT(0);
-            let _ = DoDragDrop(&data, &source, DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK, &mut effect);
-            Ok(effect.0)
-        })();
-        for pidl in pidls {
-            if !pidl.is_null() {
-                ILFree(Some(pidl));
-            }
+}
+impl Drop for DragOle {
+    fn drop(&mut self) { unsafe { windows::Win32::System::Ole::OleUninitialize() }; }
+}
+
+// A real CF_HDROP IDataObject: some Shell item-array handlers advertise
+// the format via QueryGetData but fail when a non-Shell client calls
+// GetData. Supply the same Unicode DROPFILES payload as clipboard copy,
+// without reading or writing the user's clipboard.
+use windows::Win32::System::Com::{IDataObject, FORMATETC, STGMEDIUM, DVASPECT_CONTENT, TYMED_HGLOBAL};
+
+fn drag_format(id: u16) -> FORMATETC {
+    FORMATETC { cfFormat: id, ptd: ptr::null_mut(), dwAspect: DVASPECT_CONTENT.0,
+        lindex: -1, tymed: TYMED_HGLOBAL.0 as u32 }
+}
+
+fn validate_drag_format(format: *const FORMATETC) -> Result<u16, windows::core::HRESULT> {
+    use windows::Win32::Foundation::{E_POINTER, DV_E_FORMATETC, DV_E_DVASPECT, DV_E_LINDEX, DV_E_TYMED};
+    let f = unsafe { format.as_ref() }.ok_or(E_POINTER)?;
+    if !f.ptd.is_null() { return Err(DV_E_FORMATETC); }
+    if f.dwAspect != DVASPECT_CONTENT.0 { return Err(DV_E_DVASPECT); }
+    if f.lindex != -1 { return Err(DV_E_LINDEX); }
+    if f.tymed & TYMED_HGLOBAL.0 as u32 == 0 { return Err(DV_E_TYMED); }
+    Ok(f.cfFormat)
+}
+
+#[windows::core::implement(windows::Win32::System::Com::IDataObject)]
+struct FileDropData {
+    formats: Vec<(u16, Vec<u8>)>,
+    // Explorer reports performed/logical effects; the target owns transfer.
+    // Never delete any sources based on these notifications.
+    feedback: Vec<u16>,
+}
+
+#[allow(non_snake_case)]
+impl windows::Win32::System::Com::IDataObject_Impl for FileDropData_Impl {
+    fn GetData(&self, format: *const FORMATETC) -> windows::core::Result<STGMEDIUM> {
+        use windows::Win32::{Foundation::{DV_E_FORMATETC, E_OUTOFMEMORY, HGLOBAL}, System::Com::STGMEDIUM_0};
+        let id = validate_drag_format(format).map_err(windows::core::Error::from)?;
+        let bytes = &self.formats.iter().find(|(f, _)| *f == id).ok_or(DV_E_FORMATETC)?.1;
+        unsafe {
+            let memory = GlobalAlloc(GMEM_MOVEABLE, bytes.len());
+            if memory.is_null() { return Err(E_OUTOFMEMORY.into()); }
+            let target = GlobalLock(memory);
+            if target.is_null() { GlobalFree(memory); return Err(E_OUTOFMEMORY.into()); }
+            ptr::copy_nonoverlapping(bytes.as_ptr(), target.cast::<u8>(), bytes.len());
+            GlobalUnlock(memory);
+            // Every GetData gets its own handle, owned by the caller via
+            // ReleaseStgMedium. No borrowed pointer into self escapes.
+            Ok(STGMEDIUM { tymed: TYMED_HGLOBAL.0 as u32,
+                u: STGMEDIUM_0 { hGlobal: HGLOBAL(memory) },
+                pUnkForRelease: std::mem::ManuallyDrop::new(None) })
         }
-        result
+    }
+    fn GetDataHere(&self, _: *const FORMATETC, _: *mut STGMEDIUM) -> windows::core::Result<()> {
+        Err(windows::Win32::Foundation::E_NOTIMPL.into())
+    }
+    fn QueryGetData(&self, format: *const FORMATETC) -> windows::core::HRESULT {
+        match validate_drag_format(format) {
+            Ok(id) if self.formats.iter().any(|(f, _)| *f == id) => windows::core::HRESULT(0),
+            Ok(_) => windows::Win32::Foundation::DV_E_FORMATETC,
+            Err(hr) => hr,
+        }
+    }
+    fn GetCanonicalFormatEtc(&self, input: *const FORMATETC, output: *mut FORMATETC) -> windows::core::HRESULT {
+        use windows::Win32::Foundation::{DATA_S_SAMEFORMATETC, E_POINTER};
+        if output.is_null() { return E_POINTER; }
+        let hr = self.QueryGetData(input);
+        if hr.is_err() { return hr; }
+        unsafe { output.write(drag_format((*input).cfFormat)); }
+        DATA_S_SAMEFORMATETC
+    }
+    fn SetData(&self, format: *const FORMATETC, medium: *const STGMEDIUM, release: windows::core::BOOL) -> windows::core::Result<()> {
+        use windows::Win32::{Foundation::{DV_E_FORMATETC, DV_E_TYMED, E_POINTER}, System::Ole::ReleaseStgMedium};
+        let id = validate_drag_format(format).map_err(windows::core::Error::from)?;
+        if !self.feedback.contains(&id) { return Err(DV_E_FORMATETC.into()); }
+        let m = unsafe { medium.as_ref() }.ok_or(E_POINTER)?;
+        if m.tymed != TYMED_HGLOBAL.0 as u32 || unsafe { m.u.hGlobal.0.is_null() } { return Err(DV_E_TYMED.into()); }
+        if release.as_bool() {
+            // The success contract transfers the storage ownership. Release
+            // the transferred contents, not the caller's stack allocation.
+            unsafe { let mut owned = ptr::read(medium); ReleaseStgMedium(&mut owned); }
+        }
+        Ok(())
+    }
+    fn EnumFormatEtc(&self, direction: u32) -> windows::core::Result<windows::Win32::System::Com::IEnumFORMATETC> {
+        use windows::Win32::{Foundation::E_NOTIMPL, System::Com::{DATADIR_GET, DATADIR_SET}, UI::Shell::SHCreateStdEnumFmtEtc};
+        let formats: Vec<_> = if direction == DATADIR_GET.0 as u32 {
+            self.formats.iter().map(|(id, _)| drag_format(*id)).collect()
+        } else if direction == DATADIR_SET.0 as u32 {
+            self.feedback.iter().map(|id| drag_format(*id)).collect()
+        } else { return Err(E_NOTIMPL.into()); };
+        unsafe { SHCreateStdEnumFmtEtc(&formats) }
+    }
+    fn DAdvise(&self, _: *const FORMATETC, _: u32, _: windows::core::Ref<'_, windows::Win32::System::Com::IAdviseSink>) -> windows::core::Result<u32> {
+        Err(windows::Win32::Foundation::OLE_E_ADVISENOTSUPPORTED.into())
+    }
+    fn DUnadvise(&self, _: u32) -> windows::core::Result<()> {
+        Err(windows::Win32::Foundation::OLE_E_ADVISENOTSUPPORTED.into())
+    }
+    fn EnumDAdvise(&self) -> windows::core::Result<windows::Win32::System::Com::IEnumSTATDATA> {
+        Err(windows::Win32::Foundation::OLE_E_ADVISENOTSUPPORTED.into())
+    }
+}
+
+fn file_drop_data(paths: &[PathBuf]) -> Result<IDataObject, String> {
+    if paths.is_empty() || paths.iter().any(|p| !p.is_absolute()) {
+        return Err("Dragged files must have absolute paths".into());
+    }
+    let mut formats = vec![(15, file_drop_bytes(paths)?)];
+    let register = |name: &str| unsafe { RegisterClipboardFormatW(wide(name).as_ptr()) as u16 };
+    // The existing CIDA generator is valid only for one common parent.
+    // Avoid resolving thousands of PIDLs for a huge selection; CF_HDROP
+    // remains sufficient for filesystem copy/move/link in Explorer.
+    if paths.len() <= 256 {
+        if let Some(list) = shell_id_list(paths) {
+            let id = register("Shell IDList Array");
+            if id != 0 { formats.push((id, list)); }
+        }
+    }
+    let feedback = ["Performed DropEffect", "Logical Performed DropEffect", "Paste Succeeded"]
+        .into_iter().map(register).filter(|id| *id != 0).collect();
+    Ok(FileDropData { formats, feedback }.into())
+}
+
+/// Real OLE drag to another application. No source deletion: the native
+/// target owns copy/move/link. A cancelled or rejected drop returns zero.
+pub fn drag_files_out(paths: &[PathBuf], secondary: bool, allowed: u8) -> Result<u32, String> {
+    use windows::Win32::Foundation::{DRAGDROP_S_CANCEL, DRAGDROP_S_DROP};
+    use windows::Win32::System::{Ole::{DROPEFFECT, DoDragDrop, IDropSource}, SystemServices::{MK_LBUTTON, MK_RBUTTON}};
+    let allowed = u32::from(allowed & 7);
+    if paths.is_empty() || allowed == 0 { return Ok(0); }
+    let _ole = DragOle::new()?;
+    let data = file_drop_data(paths)?;
+    let source: IDropSource = FileDropSource { initiating: if secondary { MK_RBUTTON.0 } else { MK_LBUTTON.0 } }.into();
+    let mut effect = DROPEFFECT(0);
+    let result = unsafe { DoDragDrop(&data, &source, DROPEFFECT(allowed), &mut effect) };
+    if result == DRAGDROP_S_DROP { Ok(effect.0 & allowed) }
+    else if result == DRAGDROP_S_CANCEL { Ok(0) }
+    else { result.ok().map_err(|e| e.to_string()).map(|_| 0) }
+}
+
+#[cfg(test)]
+mod outgoing_drag_tests {
+    use super::*;
+    use windows::Win32::{Foundation::{DRAGDROP_S_CANCEL, DRAGDROP_S_DROP}, System::{Ole::ReleaseStgMedium, SystemServices::{MK_LBUTTON, MK_RBUTTON}}};
+
+    #[test]
+    fn both_drag_buttons_wait_for_their_own_release_and_escape_cancels() {
+        for (own, other) in [(MK_LBUTTON.0, MK_RBUTTON.0), (MK_RBUTTON.0, MK_LBUTTON.0)] {
+            assert_eq!(file_drop_continue(own, false, own), windows::core::HRESULT(0));
+            assert_eq!(file_drop_continue(own, false, other), DRAGDROP_S_DROP);
+            assert_eq!(file_drop_continue(own, true, own), DRAGDROP_S_CANCEL);
+        }
+    }
+
+    #[test]
+    fn shell_data_object_returns_real_unicode_hdrop_for_multiple_directories() {
+        use std::os::windows::ffi::OsStringExt;
+        let root = std::env::temp_dir().join(format!("ndr-ole-data-{}-{}", std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let paths = vec![root.join("one").join("a file.txt"), root.join("two").join("\u{d55c}\u{ae00} \u{d30c}\u{c77c}.txt"), root.join("folder")];
+        for p in &paths[..2] { std::fs::create_dir_all(p.parent().unwrap()).unwrap(); std::fs::write(p, b"fixture").unwrap(); }
+        std::fs::create_dir_all(&paths[2]).unwrap();
+        {
+            let _ole = DragOle::new().unwrap();
+            let data = file_drop_data(&paths).unwrap();
+            let format = drag_format(15);
+            assert!(unsafe { data.QueryGetData(&format) }.is_ok());
+            let mut invalid = format.clone();
+            invalid.lindex = 1;
+            assert_eq!(unsafe { data.QueryGetData(&invalid) }, windows::Win32::Foundation::DV_E_LINDEX);
+            assert!(unsafe { data.GetData(&invalid) }.is_err());
+            let enumerator = unsafe { data.EnumFormatEtc(1) }.unwrap();
+            let mut formats = [FORMATETC::default(); 4];
+            let mut fetched = 0;
+            unsafe { let _ = enumerator.Next(&mut formats, Some(&mut fetched)); }
+            assert!(formats[..fetched as usize].iter().any(|f| f.cfFormat == 15));
+            let mut medium = unsafe { data.GetData(&format).unwrap() };
+            let mut second = unsafe { data.GetData(&format).unwrap() };
+            assert_ne!(unsafe { medium.u.hGlobal.0 }, unsafe { second.u.hGlobal.0 });
+            unsafe { ReleaseStgMedium(&mut second); }
+            let actual = unsafe {
+                let drop = medium.u.hGlobal.0 as HDROP;
+                let count = DragQueryFileW(drop, u32::MAX, ptr::null_mut(), 0);
+                let mut found = Vec::new();
+                for i in 0..count {
+                    let len = DragQueryFileW(drop, i, ptr::null_mut(), 0);
+                    let mut buf = vec![0u16; len as usize + 1];
+                    assert_eq!(DragQueryFileW(drop, i, buf.as_mut_ptr(), buf.len() as u32), len);
+                    found.push(PathBuf::from(std::ffi::OsString::from_wide(&buf[..len as usize])));
+                }
+                ReleaseStgMedium(&mut medium);
+                found
+            };
+            assert_eq!(actual.len(), paths.len());
+            for p in &paths { assert!(actual.contains(p), "{p:?}: {actual:?}"); }
+        }
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
 

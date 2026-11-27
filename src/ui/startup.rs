@@ -151,7 +151,7 @@ impl StartupApp {
         }
         // Install all font families before the first paint; the full app
         // can render immediately on handoff without a missing list family.
-        set_app_fonts(ctx, None, false, 1.0);
+        set_app_fonts(ctx, None, false, 1.0, &startup_language(&options, settings));
         let (tx, prepared) = mpsc::channel();
         let worker_options = options.clone();
         let repaint = ctx.clone();

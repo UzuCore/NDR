@@ -540,7 +540,7 @@ fn all_locale_dialog_layout_sweep() {
         let ctx = egui::Context::default();
         ndr::compat::begin_locale_lookup_audit();
         let mut app = App::from_context(&ctx, Options { profile: Some(dir.join("profile")), left: Some(left), right: Some(right), language: Some(locale.into()), ..Default::default() });
-        set_app_fonts(&ctx, None, false, 1.0);
+        set_app_fonts(&ctx, None, false, 1.0, locale);
         let until = Instant::now() + Duration::from_secs(10);
         while app.panes.iter().any(|p| p.loading) && Instant::now() < until {
             app.poll(&ctx);

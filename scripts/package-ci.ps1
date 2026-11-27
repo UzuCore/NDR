@@ -34,8 +34,6 @@ $required = @(
     'Resources/Skins/black/toolbar-icons.png',
     'Resources/Skins/classic/conf.ini',
     'Resources/Skins/classic/toolbar-icons.png',
-    'Resources/Skins/cyan/conf.ini',
-    'Resources/Skins/cyan/toolbar-icons.png',
     'Resources/Skins/github/conf.ini',
     'Resources/Skins/github/toolbar-icons.png',
     'Resources/Tools/7zip/7za.exe',

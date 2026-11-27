@@ -825,6 +825,9 @@ pub struct App {
     crumb_cache: HashMap<(PathBuf, bool), Vec<(PathBuf, String)>>,
     /// The panel item being dragged, the folder row under it (panel, folder), and this frame's two panel areas.
     file_drag: Option<drag_drop::FileDrag>,
+    // OLE's modal loop can consume the mouse-up before winit sees it.
+    // Retire only the initiating button in the next raw input batch.
+    native_drag_reset: Option<egui::PointerButton>,
     /// Items dropped from a panel drag that have not been moved yet (source panel, dragged items). When moving via the confirm box/drop menu, clears the marks in the source panel.
     pending_drag_marks: Option<(usize, Vec<PathBuf>)>,
     /// Folder rows drawn this frame (panel, row area, folder). Used to find a drop target. Cleared each frame.
@@ -1023,7 +1026,7 @@ impl App {
         let dark = palette.dark();
         ctx.set_theme(palette.egui_theme());
         ctx.set_visuals(system_commands::palette_visuals(&palette));
-        if foreground { set_app_fonts(ctx, None, false, 1.0); }
+        if foreground { set_app_fonts(ctx, None, false, 1.0, &language); }
         let (listing_tx, listing_rx) = mpsc::channel();
         let (async_tx, async_rx) = mpsc::channel();
         let active = usize::from(settings.flag("StartWithRightPaneActive", false));
@@ -1134,6 +1137,7 @@ impl App {
             folder_size_cache: HashMap::new(),
             folder_auto_busy: false,
             file_drag: None,
+            native_drag_reset: None,
             pending_drag_marks: None,
             folder_rows: Vec::new(),
             tree_drop_rows: Vec::new(),
@@ -2014,7 +2018,47 @@ pub(super) fn list_text(text: impl Into<String>, style: u8) -> RichText {
 /// With list_font (font file, TTC index) the "list" family = that font -> Malgun Gothic -> defaults. Without it the "list" family equals the normal font.
 /// With list_bold (bold of the original ListFont style), Korean in the "list" family is drawn with Malgun Gothic Bold (malgunbd.ttf, when present).
 /// `list_korean_scale` scales the "list" family's Korean glyphs (the GDI linked-font size relative to Malgun Gothic, 1.0 = unchanged).
-pub(super) fn set_app_fonts(ctx: &egui::Context, list_font: Option<(&'static [u8], u32)>, list_bold: bool, list_korean_scale: f32) {
+/// Locale-specific priority avoids mixing Korean Hanja with Japanese kana
+/// or with simplified/traditional Han glyphs for the selected UI language.
+pub(super) fn preferred_cjk_font(language: &str) -> Option<&'static str> {
+    match language.replace('_', "-").to_ascii_lowercase().as_str() {
+        "ja" | "ja-jp" => Some("Japanese"),
+        "zh-cn" | "zh-hans" => Some("ChineseSimplified"),
+        "zh-tw" | "zh-hant" => Some("ChineseTraditional"),
+        _ => None,
+    }
+}
+
+// epaint centers fallback line boxes, not glyph ink. Yu Gothic's large
+// line gap can put ideographs several pixels above Malgun/Segoe at 12pt.
+// Calculate the actual median ink center relative to the font's line box;
+// use the exact metrics epaint obtains from ab_glyph, not a fixed OS offset.
+fn cjk_ink_center(bytes: &[u8], index: u32) -> Option<f32> {
+    use ab_glyph::{Font, FontRef};
+    let font = FontRef::try_from_slice_and_index(bytes, index).ok()?;
+    let em = font.units_per_em()?;
+    if em <= 0.0 { return None; }
+    let line = font.height_unscaled() + font.line_gap_unscaled();
+    // Common ideographs, excluding punctuation and small kana which have
+    // deliberately different optical centers.
+    let mut centers: Vec<f32> = "\u{4e2d}\u{6587}\u{65e5}\u{672c}\u{76ee}\u{5b57}\u{4ef6}\u{540d}\u{8a00}\u{8a9e}\u{6848}\u{8cc7}"
+        .chars().filter_map(|c| {
+            let id = font.glyph_id(c);
+            if id.0 == 0 { return None; }
+            let bounds = font.outline(id)?.bounds;
+            Some((font.ascent_unscaled() - (bounds.min.y + bounds.max.y) * 0.5 - line * 0.5) / em)
+        }).collect();
+    if centers.len() < 4 { return None; }
+    centers.sort_by(f32::total_cmp);
+    let mid = centers.len() / 2;
+    Some(if centers.len() % 2 == 0 { (centers[mid-1] + centers[mid]) * 0.5 } else { centers[mid] })
+}
+fn cjk_vertical_tweak(bytes: &[u8], reference: f32) -> egui::FontTweak {
+    let y = cjk_ink_center(bytes, 0).map_or(0.0, |center| (reference - center).clamp(-0.35, 0.35));
+    egui::FontTweak { y_offset_factor: y, ..Default::default() }
+}
+
+pub(super) fn set_app_fonts(ctx: &egui::Context, list_font: Option<(&'static [u8], u32)>, list_bold: bool, list_korean_scale: f32, language: &str) {
     // Font files are memory-mapped (native::mapped_file) and passed as 'static: egui does not copy borrowed fonts (a Vec would be copied once more).
     let font = |path: &str| native::mapped_file(Path::new(path)).map(|bytes| Arc::new(egui::FontData::from_static(bytes)));
     let scaled = |path: &str| {
@@ -2049,18 +2093,33 @@ pub(super) fn set_app_fonts(ctx: &egui::Context, list_font: Option<(&'static [u8
     // Optional Windows CJK fonts keep their autonyms readable in every UI
     // language without shipping a large FontCollection or changing Latin metrics.
     let windows = std::env::var_os("WINDIR").map(PathBuf::from).unwrap_or_else(|| "C:/Windows".into());
+    let reference = native::mapped_file(&windows.join("Fonts").join("malgun.ttf"))
+        .and_then(|bytes| cjk_ink_center(bytes, 0)).unwrap_or(0.03);
+    let preferred = preferred_cjk_font(language);
     let mut script_fallbacks = Vec::new();
     for (name, filename) in [("Japanese", "YuGothM.ttc"), ("ChineseSimplified", "msyh.ttc"), ("ChineseTraditional", "msjh.ttc")] {
         let file = windows.join("Fonts").join(filename);
         if let Some(bytes) = native::mapped_file(&file) {
-            fonts.font_data.insert(name.into(), Arc::new(egui::FontData::from_static(bytes)));
+            let tweak = cjk_vertical_tweak(bytes, reference);
+            fonts.font_data.insert(name.into(), Arc::new(egui::FontData::from_static(bytes).tweak(tweak)));
             script_fallbacks.push(name.to_owned());
         }
     }
+    let add_fallbacks = |family: &mut Vec<String>| {
+        // Keep Latin UI and explicit user-selected list fonts first; the
+        // preferred CJK face precedes Korean only for these three locales.
+        for name in &script_fallbacks {
+            if Some(name.as_str()) == preferred {
+                let before_korean = family.iter().position(|n| matches!(n.as_str(), "Korean" | "ListKorean" | "KoreanBold"))
+                    .unwrap_or(family.len());
+                family.insert(before_korean, name.clone());
+            } else { family.push(name.clone()); }
+        }
+    };
     for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
-        fonts.families.entry(family).or_default().extend(script_fallbacks.iter().cloned());
+        add_fallbacks(fonts.families.entry(family).or_default());
     }
-    korean_first.extend(script_fallbacks);
+    add_fallbacks(&mut korean_first);
     let list = match list_font {
         Some((bytes, index)) => {
             let mut data = egui::FontData::from_static(bytes);
@@ -2078,7 +2137,10 @@ pub(super) fn set_app_fonts(ctx: &egui::Context, list_font: Option<(&'static [u8
     for (name, file) in [("KoreanBoldUI", "C:/Windows/Fonts/malgunbd.ttf"), ("UIBold", "C:/Windows/Fonts/segoeuib.ttf")] {
         if let Some(data) = font(file) {
             fonts.font_data.insert(name.into(), data);
-            bold.insert(0, name.into());
+            let position = if name == "KoreanBoldUI" && preferred.is_some() {
+                bold.iter().position(|n| Some(n.as_str()) == preferred).map_or(0, |i| i + 1)
+            } else { 0 };
+            bold.insert(position, name.into());
         }
     }
     fonts.families.insert(egui::FontFamily::Name(BOLD_FONT_FAMILY.into()), bold);
@@ -2093,6 +2155,14 @@ impl eframe::App for App {
     /// and drops paste when the clipboard has no text. When no text field has focus they are turned back into key events so the original shortcuts
     /// (miEditCopy, miEditCut, miEditPaste) receive them.
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        if let Some(button) = self.native_drag_reset.take() {
+            // Outside every widget, before any new physical input. Never
+            // let the synthetic release click a row or repeat the drop.
+            raw_input.events.splice(0..0, [
+                egui::Event::PointerButton { pos: egui::pos2(-100.0, -100.0), button, pressed: false, modifiers: raw_input.modifiers },
+                egui::Event::PointerGone,
+            ]);
+        }
         // Memory: the egui glyph atlas width is the GPU maximum texture size (NVIDIA 32768 -> 16384), so a few more rows cost tens of MB.
         // At 2048 it grows downward only as needed (the real limit on the rendering side stays the same).
         raw_input.max_texture_side = Some(raw_input.max_texture_side.unwrap_or(2048).min(2048));

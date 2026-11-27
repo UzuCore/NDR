@@ -2268,7 +2268,7 @@ fn compact_rename_macro_buttons_save_reload_cancel_and_delete() {
 fn compact_macro_controls_reachable_in_every_locale() {
     for &(locale,_) in ndr::compat::BUILTIN_LANGUAGES {
         let (root,ctx,mut app)=fixture("compact-macro-reach",locale);
-        set_app_fonts(&ctx,None,false,1.0);
+        set_app_fonts(&ctx,None,false,1.0,locale);
         app.panes[0].selected=[row(&app,0,"alpha.txt")].into_iter().collect();
         app.dispatch("advancedRename",&ctx);
         app.edit_dialog_kind(|kind| if let DialogKind::AdvancedRename(f)=kind {

@@ -98,12 +98,6 @@ SKINS = {
         "accent": "245FAD", "amber": "90541F", "active": "DDE5F0", "back": "FAFAFB",
         "local": "8D9197", "network": "478139", "archive": "6D602D", "hover": "DADDE2",
     },
-    "cyan": {
-        "surface": "161C23", "chrome": "202933", "raised": "2D3946", "edge": "4B5B6C",
-        "ink": "D4DEE8", "strong": "F4FAFF", "soft": "A5B6C8", "muted": "78899C",
-        "accent": "8FE5D2", "amber": "F2BD72", "active": "344C56", "back": "11171E",
-        "local": "5AAFA2", "network": "70A9DB", "archive": "AD8751", "hover": "324553",
-    },
     "github": {
         "surface": "161B22", "chrome": "21262D", "raised": "30363D", "edge": "3D444D",
         "ink": "E6EDF3", "strong": "F0F6FC", "soft": "A0ABB7", "muted": "8B949E",
@@ -501,11 +495,11 @@ def complete():
 
 
 if __name__ == "__main__":
-    for name in ("classic", "black", "cyan", "github"):
+    for name in ("classic", "black", "github"):
         create_skin(name, SKINS[name])
     # Both themes intentionally share the Classic 20px glyph artwork.
     toolbar = (RES / "Skins/classic/toolbar-icons.png").read_bytes()
-    for theme in ("black", "cyan", "github"):
+    for theme in ("black", "github"):
         (RES / "Skins" / theme / "toolbar-icons.png").write_bytes(toolbar)
     colors()
     macro_glyphs()

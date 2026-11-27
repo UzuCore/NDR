@@ -46,7 +46,6 @@ pub(super) fn theme_palette(theme: &str) -> ThemePalette {
     match ndr::styles::canonical_theme_name(theme) {
         "Classic" => ThemePalette { app: [0xEB, 0xEB, 0xED], panel: [0xEF, 0xEF, 0xF0], raised: [0xFB, 0xFB, 0xFC], border: [0xAD, 0xAF, 0xB3], text: [0x19, 0x1A, 0x1B], muted: [0x56, 0x59, 0x5E], accent: [0x24, 0x5F, 0xAD] },
         "GitHub" => ThemePalette { app: [0x21, 0x26, 0x2D], panel: [0x16, 0x1B, 0x22], raised: [0x30, 0x36, 0x3D], border: [0x3D, 0x44, 0x4D], text: [0xE6, 0xED, 0xF3], muted: [0xA0, 0xAB, 0xB7], accent: [0x58, 0xA6, 0xFF] },
-        "Cyan" => ThemePalette { app: [0x20, 0x29, 0x33], panel: [0x16, 0x1C, 0x23], raised: [0x2D, 0x39, 0x46], border: [0x4B, 0x5B, 0x6C], text: [0xD4, 0xDE, 0xE8], muted: [0xA5, 0xB6, 0xC8], accent: [0x8F, 0xE5, 0xD2] },
         _ => ThemePalette { app: [0x2B, 0x2C, 0x2E], panel: [0x19, 0x1A, 0x1C], raised: [0x25, 0x26, 0x29], border: [0x49, 0x4A, 0x4D], text: [0xC5, 0xC6, 0xC8], muted: [0xA1, 0xA2, 0xA5], accent: [0x53, 0x8B, 0xE5] },
     }
 }
@@ -439,8 +438,13 @@ impl App {
     /// does not change. Rebuild them without navigating or dropping selection.
     pub(super) fn refresh_language(&mut self, code: &str) {
         let language = compat::Language::load(&self.resources.join("Languages"), code);
+        let font_changed = super::preferred_cjk_font(&self.language) != super::preferred_cjk_font(&language.code);
         self.language = language.code.clone();
         self.language_pack = language;
+        if font_changed {
+            self.preferences_dirty = true;
+            self.egui_ctx.request_repaint();
+        }
         for index in 0..self.panes.len() {
             self.compute_view(index);
         }

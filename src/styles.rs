@@ -6,13 +6,14 @@ use std::{
 pub type Rgba = [u8; 4];
 
 pub const DEFAULT_THEME: &str = "GitHub";
-pub const THEMES: [&str; 4] = ["GitHub", "Nexus", "Classic", "Cyan"];
+pub const THEMES: [&str; 3] = ["GitHub", "Nexus", "Classic"];
 
 /// Black is the prior name of Nexus and still uses its existing resource path.
 pub fn canonical_theme_name(value: &str) -> &'static str {
     match value.trim().to_ascii_lowercase().as_str() {
         "classic" => "Classic",
-        "cyan" => "Cyan",
+        // Removed theme: restore existing profiles to the default skin.
+        "cyan" => DEFAULT_THEME,
         "black" | "nexus" | "dark" | "gray" | "grey" => "Nexus",
         _ => DEFAULT_THEME,
     }
@@ -23,7 +24,6 @@ pub fn theme_skin_directory(theme: &str) -> Option<&'static str> {
         "github" => Some("github"),
         "black" | "nexus" => Some("black"),
         "classic" => Some("classic"),
-        "cyan" => Some("cyan"),
         _ => None,
     }
 }
@@ -76,18 +76,37 @@ pub fn default_element_color(key: &str) -> Option<&'static str> {
     DEFAULT_ELEMENTS.iter().find(|(name, _)| name.eq_ignore_ascii_case(key)).map(|(_, value)| *value)
 }
 
-const CYAN_ELEMENTS: [&str; 20] = ["151B24", "DBE4EE", "8EDDCF", "AEC9FB", "F3CF7D", "DB9EA2", "A9BBD0", "E8BD8A", "F1A276", "AAC3D5", "A7B5CA", "AEBFCE", "B9E0E9", "2A3748", "111722", "D5E0ED", "ABE6D9", "8FC5F0", "42536A", "A3AFBF"];
-const GITHUB_ELEMENTS: [&str; 20] = ["0D1117", "E6EDF3", "80BBFA", "79C0FF", "E3B341", "F28B82", "9AC4EC", "FFAB70", "FF7B72", "9DA9B5", "9DA9B5", "9DA9B5", "B6D8FF", "30363D", "0D1117", "E6EDF3", "80BBFA", "79C0FF", "46515E", "A0ABB7"];
+// GitHub keeps its chrome, backgrounds, separators and dark tree palette.
+// The file-list roles themselves share Nexus defaults, including attributes,
+// size, selection and unrecognized file extensions.
+const GITHUB_SURFACE_ELEMENTS: &[(&str, &str)] = &[
+    ("NXBACK", "0D1117"), ("NXLINE", "30363D"),
+    ("NXTBACK", "0D1117"), ("NXTFORE", "E6EDF3"),
+    ("NXTOPENED", "80BBFA"), ("NXTFOCUSED", "79C0FF"),
+    ("NXTLINE", "46515E"), ("NXTHINT", "A0ABB7"),
+];
 
 /// Theme defaults are only used when a user override does not supply the role.
 pub fn theme_element_color(theme: &str, key: &str) -> Option<&'static str> {
-    let (index, (_, fallback)) = DEFAULT_ELEMENTS.iter().enumerate()
-        .find(|(_, (name, _))| name.eq_ignore_ascii_case(key))?;
-    Some(match canonical_theme_name(theme) {
-        "Cyan" => CYAN_ELEMENTS[index],
-        "GitHub" => GITHUB_ELEMENTS[index],
-        _ => fallback,
-    })
+    if canonical_theme_name(theme) == "GitHub" {
+        if let Some((_, color)) = GITHUB_SURFACE_ELEMENTS.iter().find(|(name, _)| name.eq_ignore_ascii_case(key)) {
+            return Some(*color);
+        }
+    }
+    default_element_color(key)
+}
+
+#[test]
+fn default_theme_shares_nexus_file_and_folder_roles_and_migrates_cyan() {
+    for (key, _) in DEFAULT_ELEMENTS.iter().take(14) {
+        if matches!(*key, "NXBACK" | "NXLINE") { continue; }
+        assert_eq!(theme_element_color(DEFAULT_THEME, key), theme_element_color("Nexus", key), "{key}");
+    }
+    assert_eq!(theme_element_color(DEFAULT_THEME, "NXBACK"), Some("0D1117"));
+    assert_eq!(canonical_theme_name(" Cyan "), DEFAULT_THEME);
+    assert_eq!(THEMES, ["GitHub", "Nexus", "Classic"]);
+    assert_eq!(theme_skin_directory("cyan"), None);
+    assert!(theme_element_color(DEFAULT_THEME, "unknown").is_none());
 }
 
 fn rgb_color_section(section: &str) -> bool {

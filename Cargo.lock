@@ -1849,6 +1849,7 @@ dependencies = [
 name = "ndr"
 version = "1.0.0"
 dependencies = [
+ "ab_glyph",
  "base64",
  "chrono",
  "crc32fast",

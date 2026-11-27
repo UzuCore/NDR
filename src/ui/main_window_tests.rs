@@ -3755,3 +3755,107 @@ fn pane_tree_label_edit_renames_the_folder() {
     assert!(app.tree_edit_due(0, start + Duration::from_secs(5)).is_none() && app.panes[0].tree_edit.is_none());
     let _ = fs::remove_dir_all(root);
 }
+
+
+#[test]
+fn cjk_fallback_ink_centers_match_at_multiple_sizes_and_dpi() {
+    let windows = std::env::var_os("WINDIR").map(PathBuf::from).unwrap_or_else(|| "C:/Windows".into());
+    let Some(reference_bytes) = native::mapped_file(&windows.join("Fonts/malgun.ttf")) else {
+        println!("SKIP missing Malgun reference");
+        return;
+    };
+    let reference = super::cjk_ink_center(reference_bytes, 0).unwrap();
+    let latin = native::mapped_file(&windows.join("Fonts/segoeui.ttf")).map(|b| (b, 0));
+    // Test the same outlines the real renderer uses, not Windows font
+    // metadata alone. These shared full-size characters isolate alignment
+    // from the intentional placement of punctuation and small kana.
+    let sample = "\u{4e2d}\u{6587}\u{65e5}\u{672c}\u{76ee}\u{5b57}\u{4ef6}\u{540d}\u{8a00}\u{8a9e}\u{6848}\u{8cc7}";
+    let mut checked = 0;
+    for (locale, file) in [("ja", "YuGothM.ttc"), ("zh-CN", "msyh.ttc"), ("zh-TW", "msjh.ttc")] {
+        let Some(bytes) = native::mapped_file(&windows.join("Fonts").join(file)) else {
+            println!("SKIP missing {file}");
+            continue;
+        };
+        let uncorrected = super::cjk_ink_center(bytes, 0).unwrap();
+        let tweak = super::cjk_vertical_tweak(bytes, reference);
+        assert!((uncorrected + tweak.y_offset_factor - reference).abs() < 0.015,
+            "{locale}: metric normalization outside safety limit");
+        println!("CJK {locale} raw={uncorrected:.4} reference={reference:.4} offset={:.4}", tweak.y_offset_factor);
+        use ab_glyph::{Font, FontRef};
+        let face = FontRef::try_from_slice_and_index(bytes, 0).unwrap();
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            let ctx = egui::Context::default();
+            super::set_app_fonts(&ctx, latin, false, 1.0, locale);
+            ctx.set_pixels_per_point(scale);
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                for family in [egui::FontFamily::Proportional, egui::FontFamily::Name(super::LIST_FONT_FAMILY.into()),
+                    egui::FontFamily::Name(super::BOLD_FONT_FAMILY.into())] {
+                    for size in [12.0, 14.0, 20.0] {
+                        let font = egui::FontId::new(size, family.clone());
+                        ctx.fonts_mut(|fonts| {
+                            let g = fonts.layout_no_wrap(sample.to_owned(), font.clone(), Color32::WHITE);
+                            let row = &g.rows[0];
+                            let mut centers = Vec::new();
+                            for glyph in &row.glyphs {
+                                if face.glyph_id(glyph.chr).0 == 0 { continue; }
+                                assert!(fonts.has_glyph(&font, glyph.chr), "{locale} missing {}", glyph.chr);
+                                let target_ascent = size * face.ascent_unscaled() / face.units_per_em().unwrap();
+                                assert!((glyph.font_impl_ascent-target_ascent).abs() < 0.8, "{locale} wrong fallback U+{:04X} {family:?} size={size} dpi={scale}: actual={} expected={target_ascent} impl_height={} font_height={}", glyph.chr as u32, glyph.font_impl_ascent,glyph.font_impl_height,glyph.font_height);
+                                let center = glyph.pos.y + glyph.uv_rect.offset.y + glyph.uv_rect.size.y * 0.5 - row.height() * 0.5;
+                                centers.push(center);
+                                let top = glyph.pos.y + glyph.uv_rect.offset.y;
+                                let bottom = top + glyph.uv_rect.size.y;
+                                assert!(top >= -1.1 && bottom <= row.height()+1.1, "{locale} {size} {scale} {} outside row {top}..{bottom}, height {}", glyph.chr,row.height());
+                            }
+                            assert!(centers.len() >= 8);
+                            centers.sort_by(f32::total_cmp);
+                            let mid = centers[centers.len()/2];
+                            assert!((mid-reference*size).abs() <= 1.5, "{locale} {family:?} size={size} dpi={scale} ink={mid}, expected={}", reference*size);
+                            checked += centers.len();
+                        });
+                    }
+                }
+            });
+        }
+    }
+    println!("CJK glyph positions checked: {checked}");
+}
+
+#[test]
+fn outgoing_drag_reset_retires_only_initiating_button_before_new_input() {
+    let (root, ctx, mut app) = fixture("native-drag-reset");
+    let start = egui::pos2(50.0, 50.0);
+    let primary = egui::PointerButton::Primary;
+    let secondary = egui::PointerButton::Secondary;
+    let button_event = |button, pressed| egui::Event::PointerButton { pos: start, button, pressed, modifiers: Default::default() };
+    let _ = ctx.run(egui::RawInput { events:vec![egui::Event::PointerMoved(start), button_event(primary,true), button_event(secondary,true)], ..Default::default() }, |_| {});
+    app.native_drag_reset = Some(primary);
+    let mut raw = egui::RawInput { events: vec![egui::Event::PointerMoved(start)], ..Default::default() };
+    eframe::App::raw_input_hook(&mut app, &ctx, &mut raw);
+    assert!(matches!(raw.events.first(), Some(egui::Event::PointerButton{button: egui::PointerButton::Primary,pressed:false,..})));
+    assert!(matches!(raw.events.get(1), Some(egui::Event::PointerGone)));
+    assert!(app.native_drag_reset.is_none());
+    let _ = ctx.run(raw, |ctx| assert!(!ctx.input(|i| i.pointer.primary_down())));
+    assert!(ctx.input(|i| i.pointer.secondary_down()));
+    drop(app);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn default_theme_list_colors_match_nexus_and_old_cyan_profile_is_normalized() {
+    let (root, _ctx, mut app) = fixture("nexus-default-palette");
+    app.settings.set_flag("UseNexusFileColorMap", false);
+    app.apply_theme("GitHub");
+    let a = app.panes[0].view.colors.clone();
+    let colors = ["NXFORE","NXFOLDER","NXDRIVE","NXREADONLY","NXHIDDEN","NXDESC","NXMB","NXGB","NXSIZE","NXTIME","NXATTR","NXSELECT"];
+    let palette: Vec<_> = colors.iter().map(|c| app.basic_list_color(c)).collect();
+    app.apply_theme("Nexus");
+    assert_eq!(a, app.panes[0].view.colors);
+    assert_eq!(palette,colors.iter().map(|c|app.basic_list_color(c)).collect::<Vec<_>>());
+    app.settings.set_text("Theme","Cyan");
+    app.settings.normalize();
+    assert_eq!(app.settings.text("Theme",""), ndr::styles::DEFAULT_THEME);
+    assert_eq!(app.skin_names(), ["GitHub","Nexus","Classic"]);
+    drop(app);
+    fs::remove_dir_all(root).unwrap();
+}

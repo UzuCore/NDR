@@ -366,7 +366,7 @@ impl App {
             .unwrap_or(ndr::settings::DEFAULT_LIST_FONT_PIXELS)
             .clamp(8.0, 32.0) as f32;
         let pixels = self.list_font_size.round() as i32;
-        let key = format!("{list_font}\u{0}{}\u{0}{pixels}", style & 3);
+        let key = format!("{list_font}\u{0}{}\u{0}{pixels}\u{0}{}", style & 3, super::preferred_cjk_font(&self.language).unwrap_or(""));
         self.list_font_style = style;
         if self.list_font_name.as_deref() != Some(key.as_str()) {
             let data = native::styled_font_names(&list_font, style)
@@ -381,7 +381,7 @@ impl App {
                 .map(|(face, malgun)| face[0] as f32 / malgun[0].max(1) as f32)
                 .filter(|scale| (0.5..=1.5).contains(scale))
                 .unwrap_or(1.0);
-            super::set_app_fonts(ctx, data, style & 1 != 0, korean_scale);
+            super::set_app_fonts(ctx, data, style & 1 != 0, korean_scale, &self.language);
             self.list_font_name = Some(key);
         }
         ctx.style_mut(|style| {

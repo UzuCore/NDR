@@ -66,7 +66,7 @@ impl App {
             _ => 7,
         };
         let pane = &self.panes[index];
-        if pane.archive.is_some() || pane.loading {
+        if pane.archive.is_some() || pane.remote.is_some() || pane.loading {
             return;
         }
         let rows: Vec<usize> = if !pane.selected.is_empty() {
@@ -91,9 +91,10 @@ impl App {
             return;
         }
         // Neither C# BeginFileDragTracking nor the original includes ".." (IsParent).
+        let mut unique = HashSet::with_capacity(rows.len());
         for path in rows.iter().filter_map(|r| pane.entries.get(*r)).filter(|e| !e.drive && !e.is_parent()).map(|e| e.path.clone()).filter(|p| p.exists()) {
             let full = std::path::absolute(&path).unwrap_or(path);
-            if !paths.iter().any(|p| p.to_string_lossy().eq_ignore_ascii_case(&full.to_string_lossy())) {
+            if unique.insert(full.to_string_lossy().to_ascii_lowercase()) {
                 paths.push(full);
             }
         }
@@ -232,8 +233,9 @@ impl App {
 
     /// At the end of every frame: while dragging, a count next to the pointer; on drop, drop on that pane (on a folder row, that folder). Also files dropped from Explorer or a shell drag.
     pub(super) fn drag_drop_frame(&mut self, ctx: &egui::Context) {
-        let (pointer, released, modifiers, dropped, inner) = ctx.input(|i| {
-            (i.pointer.latest_pos(), i.pointer.any_released(), i.modifiers, i.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect::<Vec<_>>(), i.viewport().inner_rect)
+        let button = if self.file_drag.as_ref().is_some_and(|d| d.secondary) { egui::PointerButton::Secondary } else { egui::PointerButton::Primary };
+        let (pointer, released, modifiers, dropped, inner, escape) = ctx.input(|i| {
+            (i.pointer.latest_pos(), i.pointer.button_released(button), i.modifiers, i.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect::<Vec<_>>(), i.viewport().inner_rect, i.key_pressed(egui::Key::Escape))
         });
         if !dropped.is_empty() {
             // During a shell drag the egui pointer does not move: convert the screen mouse position to window coordinates and take Ctrl/Shift as they are now (C# e.KeyStates).
@@ -270,19 +272,44 @@ impl App {
         let Some(drag) = &self.file_drag else { return };
         // Dragging out of the window hands over to a shell drag (C# DoDragDrop). The drop target (Explorer etc.) does the copy, move or shortcut.
         // Dropping back on this window, the dropped-file handling above finds the target from the mouse position.
-        let outside = pointer.is_some_and(|p| !ctx.content_rect().contains(p));
-        if !released && outside && self.allow_drag_out {
-            let (paths, source) = (drag.paths.clone(), drag.source);
+        let native_pointer = self.allow_drag_out.then(|| native::file_drag_pointer(self.hwnd, drag.secondary)).flatten();
+        let outside = native_pointer.map_or_else(|| pointer.is_some_and(|p| !ctx.content_rect().contains(p)), |(outside, _)| outside);
+        if escape || (!released && native_pointer.is_some_and(|(_, held)| !held)) {
             self.file_drag = None;
-            match native::drag_files_out(&paths) {
-                // Original FUN_004856d8: when Execute ends with copy, move or shortcut (< 3), the dragging pane's marks are saved as the last selection and cleared.
-                Ok(effect) if effect != 0 => self.take_drag_marks(source),
-                Ok(_) => {}
-                Err(error) => self.status = error,
-            }
-            self.refresh(0);
-            self.refresh(1);
+            self.tree_drop_hover = None;
+            self.drag_scroll_tick = None;
+            ctx.stop_dragging();
             return;
+        }
+        if outside && self.allow_drag_out {
+            // If the physical button was released before handoff, do not
+            // accidentally drop into a stale pane or start a new shell drag.
+            let drag = self.file_drag.take().expect("checked above");
+            self.tree_drop_hover = None;
+            self.drag_scroll_tick = None;
+            if !released && native_pointer.is_none_or(|(_, held)| held) {
+                // OLE owns capture until the modal drag loop finishes.
+                // The original egui drag will not resume on its mouse-up.
+                ctx.stop_dragging();
+                self.native_drag_reset = Some(button);
+                match native::drag_files_out(&drag.paths, drag.secondary, drag.allowed) {
+                    Ok(effect) if effect != 0 => {
+                        self.take_drag_marks(drag.source);
+                        self.refresh(0);
+                        self.refresh(1);
+                    }
+                    Ok(_) => {}
+                    Err(error) => self.status = error,
+                }
+            }
+            ctx.stop_dragging();
+            ctx.request_repaint();
+            return;
+        }
+        if !released && self.allow_drag_out {
+            // CursorGone may suppress further pointer events. Continue
+            // checking the physical cursor while our drag is active.
+            ctx.request_repaint_after(Duration::from_millis(16));
         }
         if !released {
             // Original DoDragDrop pointer: the target's effect (copy, move, shortcut), or the no-drop shape. A right-button drag opens the drop menu, so it uses the normal drag shape.

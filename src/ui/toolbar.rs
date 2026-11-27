@@ -464,7 +464,7 @@ mod tests {
     #[test]
     fn toolbar_icons_from_the_shipped_skins_decode() {
         let skins = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Resources").join("Skins");
-        for (theme, cell) in [("Nexus", 20), ("Classic", 20), ("Cyan", 20), ("GitHub", 20)] {
+        for (theme, cell) in [("Nexus", 20), ("Classic", 20), ("GitHub", 20)] {
             let skin = ndr::styles::Skin::load(&skins, theme).unwrap();
             let path = skin.image_path("toolbar-icons.png").expect("the toolbar strip ships in the skin");
             let (width, height, rgba) = decode_png(&path).unwrap();
