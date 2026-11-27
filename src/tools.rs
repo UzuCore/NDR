@@ -411,6 +411,9 @@ impl FolderSizeSummary {
                 }
             }
         }else{(0,index_bytes,1)};
+        self.record_verified(path,id,bytes,links);
+    }
+    fn record_verified(&mut self,path:&Path,id:u64,bytes:u64,links:u32){
         self.add_bytes(bytes);self.files+=1;
         if links>1 {
             if self.links.len()<crate::native::FOLDER_LINK_LIMIT&&path.as_os_str().len()<=1024 {
@@ -427,6 +430,33 @@ impl FolderSizeSummary {
     }
 }
 
+/// Reuse the UTF-16 directory prefix for sibling metadata probes.
+/// For the common one-link case no full child PathBuf or parallel queue
+/// is needed. Unsupported APIs and failed probes retain the original
+/// authoritative handle fallback and error semantics.
+pub(crate) struct FolderEntryProbe{
+    verify:bool,
+    path_probe:Option<crate::listing_cache::FolderPathProbe>,
+    wide:Vec<u16>,
+}
+impl FolderEntryProbe{
+    pub(crate) fn new(parent:&Path,verify:bool)->Self{
+        Self{verify,path_probe:if verify{crate::listing_cache::FolderPathProbe::new(parent)}else{None},
+            wide:Vec::new()}
+    }
+    pub(crate) fn add(&mut self,entry:&fs::DirEntry,index_bytes:u64,summary:&mut FolderSizeSummary){
+        if !self.verify{
+            summary.add_bytes(index_bytes);summary.files+=1;return
+        }
+        if let Some(stat)=self.path_probe.as_mut().and_then(|probe|probe.stat(&entry.file_name())){
+            let (id,bytes,links)=stat;
+            if links==1{summary.add_bytes(bytes);summary.files+=1;}
+            else{summary.record_verified(&entry.path(),id,bytes,links);}
+        }else{
+            summary.add_file(&entry.path(),index_bytes,true,&mut self.wide);
+        }
+    }
+}
 /// C# FolderSizeService.CalculateAsync: skips reparse points per root, counts a file root as one file and a folder root as one folder,
 /// then descends depth first (links are not followed). Collects up to 100 errors. None when cancelled.
 pub fn folder_size_summary(roots: &[PathBuf], cancel: &AtomicBool) -> Option<FolderSizeSummary> {
@@ -458,7 +488,8 @@ pub fn folder_size_summary(roots: &[PathBuf], cancel: &AtomicBool) -> Option<Fol
             summary.add_file(root,metadata.len(),crate::native::folder_size_local_volume(root),&mut Vec::new());
             continue;
         }
-        scan_known_directory(root, cancel, &mut summary,crate::native::folder_size_local_volume(root),None)?;
+        let verify=crate::native::folder_size_local_volume(root);
+        scan_known_directory(root,cancel,&mut summary,verify,None)?;
     }
     Some(summary)
 }
@@ -467,7 +498,7 @@ pub fn folder_size_summary(roots: &[PathBuf], cancel: &AtomicBool) -> Option<Fol
 /// Reuse the exact original iterative traversal rather than query that root twice.
 pub(crate) fn folder_size_summary_known_directory(root: &Path, cancel: &AtomicBool,verify:bool) -> Option<FolderSizeSummary> {
     let mut summary = FolderSizeSummary::default();
-    scan_known_directory(root, cancel, &mut summary,verify,None)?;
+    scan_known_directory(root,cancel,&mut summary,verify,None)?;
     Some(summary)
 }
 
@@ -497,7 +528,6 @@ fn scan_known_directory(root: &Path, cancel: &AtomicBool, summary: &mut FolderSi
     };
     summary.folders += 1;
     let mut pending = vec![root.to_path_buf()];
-    let mut wide=Vec::new();
     while let Some(folder) = pending.pop() {
         if check_cancel(cancel).is_err() || !take_budget() {
             return None;
@@ -517,7 +547,8 @@ fn scan_known_directory(root: &Path, cancel: &AtomicBool, summary: &mut FolderSi
                 continue;
             }
         };
-        let mut children = Vec::new();
+        let mut children=Vec::new();
+        let mut files=FolderEntryProbe::new(&folder,verify);
         for entry in entries {
             // A single huge directory can contain millions of files.
             // Navigation and foreground file operations must cancel
@@ -547,7 +578,7 @@ fn scan_known_directory(root: &Path, cancel: &AtomicBool, summary: &mut FolderSi
                 summary.folders += 1;
                 children.push(entry.path());
             } else {
-                summary.add_file(&entry.path(),metadata.len(),verify,&mut wide);
+                files.add(&entry,metadata.len(),summary);
             }
         }
         // It is a stack, so push in reverse to descend in list order.

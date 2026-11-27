@@ -40,6 +40,10 @@ impl ThumbnailKey {
             modified: entry.modified, attributes: entry.attributes }
     }
 }
+pub(super) struct ThumbnailRequest{
+    pub(super) key:ThumbnailKey,
+    pub(super) cancel:Arc<AtomicBool>,
+}
 pub(super) struct CachedThumbnail {
     texture: Option<egui::TextureHandle>,
     bytes: usize,
@@ -57,36 +61,46 @@ impl App {
                 return cached.texture.clone();
             }
         }
-        if self.image_requests.len() >= THUMBNAIL_PENDING_LIMIT || self.image_requests.contains(&key) {
-            return None;
-        }
+        self.thumbnail_visible.insert(key.clone());
+        if self.image_requests.len()>=THUMBNAIL_PENDING_LIMIT||self.image_requests.contains_key(&key){return None}
         if self.thumbnail_tx.is_none() {
-            let (tx, rx) = mpsc::channel::<ThumbnailKey>();
+            let (tx,rx)=mpsc::sync_channel::<ThumbnailRequest>(THUMBNAIL_PENDING_LIMIT);
             let result = self.async_tx.clone();
             let repaint = ctx.clone();
             thread::spawn(move || {
-                for key in rx {
-                    let image = if key.still_current() {
-                        let image = native::thumbnail(&key.path, key.side);
-                        if key.still_current() { image } else { Err("Thumbnail source changed".into()) }
-                    } else { Err("Thumbnail source changed".into()) };
-                    if result.send(AsyncResult::Image { key, image }).is_err() { break; }
+                for ThumbnailRequest{key,cancel} in rx {
+                    let image=if !cancel.load(Ordering::Relaxed)&&key.still_current(){
+                        let image=native::thumbnail(&key.path,key.side);
+                        if !cancel.load(Ordering::Relaxed)&&key.still_current(){image}else{Err("Thumbnail request expired".into())}
+                    }else{Err("Thumbnail request expired".into())};
+                    if result.send(AsyncResult::Image{key,cancel,image}).is_err(){break}
                     repaint.request_repaint_after(Duration::from_millis(16));
                 }
             });
             self.thumbnail_tx = Some(tx);
         }
-        if self.thumbnail_tx.as_ref().is_some_and(|tx| tx.send(key.clone()).is_ok()) {
-            self.image_requests.insert(key);
-        } else {
-            self.thumbnail_tx = None;
-            self.image_requests.clear();
+        let cancel=Arc::new(AtomicBool::new(false));
+        match self.thumbnail_tx.as_ref().unwrap().try_send(ThumbnailRequest{key:key.clone(),cancel:cancel.clone()}){
+            Ok(())=>{self.image_requests.insert(key,cancel);}
+            Err(mpsc::TrySendError::Full(_))=>{}, // never block a paint
+            Err(mpsc::TrySendError::Disconnected(_))=>{
+                self.thumbnail_tx=None;
+                for (_,token) in self.image_requests.drain(){token.store(true,Ordering::Relaxed);}
+            }
         }
         None
     }
 
-    pub(super) fn finish_thumbnail(&mut self, ctx: &egui::Context, key: ThumbnailKey, image: Result<(usize,usize,Vec<u8>),String>) {
-        if !self.image_requests.remove(&key) { return; }
+    pub(super) fn retire_offscreen_thumbnails(&mut self){
+        self.image_requests.retain(|key,cancel|{
+            let keep=self.thumbnail_visible.contains(key);
+            if !keep{cancel.store(true,Ordering::Relaxed);}
+            keep
+        });
+    }
+    pub(super) fn finish_thumbnail(&mut self,ctx:&egui::Context,key:ThumbnailKey,cancel:Arc<AtomicBool>,image:Result<(usize,usize,Vec<u8>),String>){
+        if cancel.load(Ordering::Relaxed)||!self.image_requests.get(&key).is_some_and(|token|Arc::ptr_eq(token,&cancel)){return}
+        self.image_requests.remove(&key);
         let image = image.ok().filter(|(w,h,p)| *w > 0 && *h > 0 && *w <= 1024 && *h <= 1024
             && w.checked_mul(*h).and_then(|n| n.checked_mul(4)) == Some(p.len()));
         let bytes = image.as_ref().map_or(0, |(_,_,pixels)| pixels.len());

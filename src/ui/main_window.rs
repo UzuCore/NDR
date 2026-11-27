@@ -684,8 +684,13 @@ impl App {
         let screen = ctx.content_rect();
         let width = (screen.width() - 32.0).clamp(160.0, 420.0);
         let mut dismiss = false;
-        egui::Window::new(self.catalog("NDR.UPD_TITLE", "NDR 업데이트", "NDR Update"))
-            .id(egui::Id::new("ndr-update-progress"))
+        let title = self.catalog("NDR.UPD_TITLE", "NDR 업데이트", "NDR Update");
+        let window_id = egui::Id::new("ndr-update-progress");
+        super::keep_opaque(ctx, window_id);
+        egui::Window::new(&title)
+            .id(window_id)
+            .title_bar(false)
+            .frame(egui::Frame::popup(&ctx.style()))
             .collapsible(false).resizable(false)
             // Anchoring makes egui windows immovable. Keep the original
             // centered starting location while allowing title-bar dragging.
@@ -696,6 +701,10 @@ impl App {
             .max_height((screen.height() - 52.0).max(80.0))
             .vscroll(true)
             .show(ctx, |ui| {
+                // An active update remains non-dismissible, as before.
+                if super::popup_title_row(ui, &title, Some(width), !active).0 {
+                    dismiss = true;
+                }
                 ui.add_space(8.0);
                 ui.heading(format!("NDR  {}", progress.tag));
                 if matches!(progress.phase, UpdatePhase::Preparing | UpdatePhase::Installing) {

@@ -243,6 +243,11 @@ impl App {
                 self.push_original_dialog(text(self, "formFileJoin.Form.Caption"), DialogKind::Join(form), |_, _, _| {});
             }
             "shortcuts" => self.show_shortcut_window(),
+            "completion-toast" => {
+                let title = self.language_pack.text("NDR.OP_TRANSFER_EXTERNAL_FILE_OPERATION_COMPLETED", "External file operation completed");
+                self.completion_notice_operation(title, "4 files");
+                self.warning_notice_operation(self.catalog("NDR.OP_TRANSFER_OPERATION_FAILED", "Operation failed", "Operation failed"), "1 file");
+            },
             "dropmenu" => {
                 let source = folder.join("a").join("document.txt");
                 let _ = std::fs::write(&source, b"isolated drop menu fixture");

@@ -574,6 +574,8 @@ fn update_progress_remains_inside_small_viewports_and_throttles_animation() {
     let (root, _ctx, mut app) = fixture("update-progress-bounds");
     for phase in [UpdatePhase::Downloading, UpdatePhase::Verifying, UpdatePhase::Installing, UpdatePhase::Failed] {
         let ctx = egui::Context::default();
+        // Actual NDR installs the named bold font used by its common popup title.
+        super::set_app_fonts(&ctx, None, false, 1.0, &app.language);
         app.update_progress = Some(super::main_window::UpdateProgress {
             tag: "build-99".into(), phase, downloaded: 64, total: 128,
             error: (phase == UpdatePhase::Failed).then(|| "A deliberately long diagnostic. ".repeat(80)),
@@ -1304,7 +1306,7 @@ fn large_local_listing_worker_matches_synchronous_rows_and_widths() {
     let expected_paths: Vec<_> = app.panes[0].entries.iter().map(|e| e.path.clone()).collect();
     let expected_cells = app.panes[0].view.cells.clone();
     let expected_colors = app.panes[0].view.colors.clone();
-    let expected_headers: Vec<_> = app.panes[0].view.rows.iter().filter_map(|row| match row { DetailRow::Header(s) => Some(s.clone()), _ => None }).collect();
+    let expected_headers: Vec<_> = app.panes[0].view.rows.headers().map(str::to_owned).collect();
     let expected_fm = app.panes[0].prepared_field_max.as_ref().unwrap().2;
     let filter = ndr::parity::CompiledFilter::new("*.txt");
     let mut raw = fsops::list_dir(&left, app.panes[0].show_hidden).unwrap();
@@ -1315,7 +1317,7 @@ fn large_local_listing_worker_matches_synchronous_rows_and_widths() {
     assert_eq!(app.panes[0].entries.iter().map(|e| e.path.clone()).collect::<Vec<_>>(), expected_paths);
     assert_eq!(app.panes[0].view.cells, expected_cells);
     assert_eq!(app.panes[0].view.colors, expected_colors);
-    assert_eq!(app.panes[0].view.rows.iter().filter_map(|row| match row { DetailRow::Header(s) => Some(s.clone()), _ => None }).collect::<Vec<_>>(), expected_headers);
+    assert_eq!(app.panes[0].view.rows.headers().map(str::to_owned).collect::<Vec<_>>(), expected_headers);
     let mut fm = None;
     let _ = ctx.run(egui::RawInput::default(), |ctx| {
         egui::CentralPanel::default().show(ctx, |ui| { fm = Some(app.original_field_max(ui, 0)); });
@@ -4028,7 +4030,7 @@ fn bounded_thumbnail_queue_reuses_keys_and_evicts_only_old_entries() {
     use super::views::ThumbnailKey;
     let (root,ctx,mut app) = fixture("bounded-thumbnails");
     let mut entry=app.panes[0].entries.iter().find(|e|e.name=="a.txt").unwrap().clone();
-    let (tx,rx)=mpsc::channel();
+    let (tx,rx)=mpsc::sync_channel(16);
     app.thumbnail_tx=Some(tx);
     let first=ThumbnailKey::new(&entry,120);
     assert!(app.thumbnail_for(&ctx,&entry,120).is_none());
@@ -4040,12 +4042,13 @@ fn bounded_thumbnail_queue_reuses_keys_and_evicts_only_old_entries() {
     }
     assert_eq!(app.image_requests.len(),16);
     assert_eq!(rx.try_iter().count(),15);
-    app.finish_thumbnail(&ctx,first.clone(),Ok((16,16,vec![255;16*16*4])));
+    let token=app.image_requests[&first].clone();
+    app.finish_thumbnail(&ctx,first.clone(),token,Ok((16,16,vec![255;16*16*4])));
     assert!(app.images.contains_key(&first));
     assert_eq!(app.image_bytes,16*16*4);
     // A result with no matching pending job must be ignored.
     let unknown=ThumbnailKey::new(&entry,256);
-    app.finish_thumbnail(&ctx,unknown.clone(),Ok((16,16,vec![255;16*16*4])));
+    app.finish_thumbnail(&ctx,unknown.clone(),Arc::new(AtomicBool::new(false)),Ok((16,16,vec![255;16*16*4])));
     assert!(!app.images.contains_key(&unknown));
     app.image_requests.clear();
     // 520 lightweight positive results plus the first entry. The old
@@ -4053,8 +4056,8 @@ fn bounded_thumbnail_queue_reuses_keys_and_evicts_only_old_entries() {
     for i in 0..520 {
         entry.path=root.join(format!("cached-{i}.png"));
         let key=ThumbnailKey::new(&entry,120);
-        app.image_requests.insert(key.clone());
-        app.finish_thumbnail(&ctx,key,Ok((16,16,vec![255;16*16*4])));
+        let token=Arc::new(AtomicBool::new(false));app.image_requests.insert(key.clone(),token.clone());
+        app.finish_thumbnail(&ctx,key,token,Ok((16,16,vec![255;16*16*4])));
     }
     assert_eq!(app.images.len(),512);
     assert_eq!(app.image_bytes,512*16*16*4);
@@ -4069,14 +4072,36 @@ fn bounded_thumbnail_queue_reuses_keys_and_evicts_only_old_entries() {
     for i in 0..10 {
         entry.path=root.join(format!("large-{i}.png"));
         let key=ThumbnailKey::new(&entry,256);
-        app.image_requests.insert(key.clone());
-        app.finish_thumbnail(&ctx,key,Ok((1024,1024,vec![255;1024*1024*4])));
+        let token=Arc::new(AtomicBool::new(false));app.image_requests.insert(key.clone(),token.clone());
+        app.finish_thumbnail(&ctx,key,token,Ok((1024,1024,vec![255;1024*1024*4])));
     }
     assert!(app.image_bytes<=32*1024*1024);
     assert!(app.images.len()<=512);
     assert!(app.image_requests.is_empty());
     drop(app);
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn thumbnail_scroll_cancels_old_queue_and_rejects_late_same_key_result(){
+    use super::views::ThumbnailKey;
+    let (root,ctx,mut app)=fixture("thumbnail-cancel-scroll");
+    let entry=app.panes[0].entries.iter().find(|e|e.name=="a.txt").unwrap().clone();
+    let (tx,rx)=mpsc::sync_channel(16);app.thumbnail_tx=Some(tx);
+    let key=ThumbnailKey::new(&entry,120);
+    app.thumbnail_for(&ctx,&entry,120);
+    let old=rx.try_recv().unwrap();
+    assert_eq!(old.key,key);
+    app.thumbnail_visible.clear();app.retire_offscreen_thumbnails();
+    assert!(old.cancel.load(Ordering::Relaxed));assert!(app.image_requests.is_empty());
+    app.thumbnail_for(&ctx,&entry,120);
+    let new=rx.try_recv().unwrap();assert_eq!(new.key,key);
+    app.finish_thumbnail(&ctx,key.clone(),old.cancel,Ok((16,16,vec![255;1024])));
+    assert!(Arc::ptr_eq(&app.image_requests[&key],&new.cancel));
+    assert!(!app.images.contains_key(&key));
+    app.finish_thumbnail(&ctx,key.clone(),new.cancel,Ok((16,16,vec![255;1024])));
+    assert!(app.images.contains_key(&key));
+    drop(app);fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -4228,6 +4253,60 @@ fn structural_partial_insert_rename_remove_matches_full_view_and_selection(){
         if new.is_some(){
             let row=app.panes[0].entries.iter().position(|e|e.path==keep).unwrap();
             app.panes[0].cursor=row;app.panes[0].selected.insert(row);
+        }
+    }
+    drop(app);fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn twin_preparation_waits_for_large_owner_without_rebuilding_or_stale_retention(){
+    use super::panes::test_large_twin_rendezvous;
+    let (root,_ctx,app)=fixture("twin-rendezvous");
+    test_large_twin_rendezvous(&app);
+    drop(app);fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn sorted_partial_edits_match_full_order_in_extension_size_modified_and_attributes(){
+    let (root,ctx,mut app)=fixture("ordered-partial-modes");
+    let left=root.join("left");
+    for i in 0..4096{fs::write(left.join(format!("ordinary-{i:05}.txt")),vec![1u8;100+i%10]).unwrap();}
+    fs::write(left.join("very-long-name-that-keeps-the-column-maximum.verylongextension"),vec![1u8;10000]).unwrap();
+    app.settings.set_flag("ShowDriveList",false);
+    app.settings.set_text("LeftGroupMode","None");app.settings.set_text("SizeUnit","B");
+    for mode in ["Extension","Size","Modified","Attributes"]{
+        for desc in [false,true]{
+            app.settings.set_text("LeftSortMode",mode);app.settings.set_flag("LeftSortDescending",desc);
+            app.refresh(0);wait(&mut app,&ctx);
+            let keep=left.join("ordinary-00128.txt");
+            let row=app.panes[0].entries.iter().position(|e|e.path==keep).unwrap();
+            app.panes[0].cursor=row;app.panes[0].selected.insert(row);
+            let text=app.panes[0].view.cells[row][0].clone();
+            let new=left.join("new-small.bin");fs::write(&new,b"12345").unwrap();
+            let changed_path=if matches!(mode,"Size"|"Modified"){
+                fs::remove_file(&new).unwrap();
+                fs::write(&keep,[1u8;90]).unwrap();keep.clone()
+            }else{new.clone()};
+            let plan=panes::LocalListingPlan::capture(&app,0);
+            app.panes[0].local_snapshot=Some(panes::DisplayedSnapshot{revision:1,
+                content_revision:app.panes[0].thumb_content_revision,plan:plan.clone(),day:chrono::Local::now().date_naive()});
+            let changed:Vec<_>=fsops::list_dir(&left,false).unwrap().into_iter().filter(|e|e.path==changed_path).collect();
+            let descriptions=app.panes[0].descriptions.clone();let drive_infos=app.panes[0].drive_infos.clone();
+            let mut partial=plan.prepare_partial(&left,&changed,&descriptions,&drive_infos,&AtomicBool::new(false),1).unwrap();
+            partial.structural=changed_path==new;
+            let listing=Listing{pane:0,generation:app.panes[0].generation,result:Ok(changed),prepared:None,
+                cache_revision:Some(2),hardlinks:false,partial:Some(partial),timing_us:[0;6],skipped_device_names:0,descriptions,drive_infos};
+            assert!(app.apply_partial_listing_inner(listing),"{mode}/{desc}");
+            let pane=&app.panes[0];let row=pane.entries.iter().position(|e|e.path==keep).unwrap();
+            assert_eq!(pane.cursor,row);assert!(pane.selected.contains(&row));
+            if changed_path!=keep{assert!(Arc::ptr_eq(&text,&pane.view.cells[row][0]));}
+            let cells=pane.view.cells.clone();let field=pane.prepared_field_max.as_ref().unwrap().2;
+            let order:Vec<_>=pane.entries.iter().map(|e|(e.path.clone(),e.size,e.modified,e.attributes)).collect();
+            app.refresh(0);wait(&mut app,&ctx);
+            assert_eq!(app.panes[0].view.cells,cells,"{mode}/{desc}");
+            assert_eq!(app.panes[0].prepared_field_max.as_ref().unwrap().2,field);
+            assert_eq!(app.panes[0].entries.iter().map(|e|(e.path.clone(),e.size,e.modified,e.attributes)).collect::<Vec<_>>(),order);
+            if new.exists(){fs::remove_file(new).unwrap();}
         }
     }
     drop(app);fs::remove_dir_all(root).unwrap();
@@ -4528,4 +4607,49 @@ fn dropping_app_without_on_exit_retires_both_folder_workers(){
     assert!(queue.0.lock().unwrap().is_empty());
     assert!(queue.2.lock().unwrap().is_empty());
     drop(ctx);fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn watcher_loading_indicator_never_moves_the_list_or_scroll_geometry() {
+    let (root,ctx,mut app)=fixture("stable-loading-geometry");
+    for side in 0..2 {
+        for style in ["Details","Auto","Names","Thumbnails"] {
+            app.settings.set_text(&App::side_key(side,"ViewStyle"),style);
+            let draw=|app:&mut App, loading:bool|{
+                app.panes[side].loading=loading;
+                let input=egui::RawInput{screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(800.0,600.0))),..Default::default()};
+                let _=ctx.run(input,|ctx|egui::CentralPanel::default().show(ctx,|ui|app.pane_ui(ui,side,ctx)).inner);
+                app.panes[side].list_rect.unwrap()
+            };
+            // Let egui scrollbars and measurements settle.
+            for _ in 0..4 { draw(&mut app,false); }
+            let stable=draw(&mut app,false);
+            app.panes[side].adjust=None;
+            for loading in [true,false,true,false,true,false] {
+                let rect=draw(&mut app,loading);
+                assert_eq!(rect,stable,"side={side} view={style} loading={loading}");
+                assert_eq!(app.panes[side].list_shape.as_ref().unwrap().0,stable.size());
+            }
+        }
+    }
+    app.panes[0].loading=false;app.panes[1].loading=false;
+    drop(app);let _=fs::remove_dir_all(root);
+}
+
+#[test]
+fn completion_notice_overlay_is_lifted_compact_and_stacks_without_overlap() {
+    let (root,ctx,mut app)=fixture("completion-notice-layout");
+    app.settings.set_flag("ShowCompletionToast",true);
+    app.settings.set_flag("ShowFunctionBar",true);
+    app.completion_toasts.push_at("Completed","Copied 4 files",super::completion_toast::NoticeKind::Success,Instant::now());
+    app.completion_toasts.push_at("Second","",super::completion_toast::NoticeKind::Warning,Instant::now());
+    let raw=||egui::RawInput{screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(800.0,600.0))),..Default::default()};
+    for _ in 0..4 {let _=ctx.run(raw(),|ctx|app.completion_toasts_ui(ctx));}
+    let older=ctx.memory(|m|m.area_rect(egui::Id::new(("ndr_completion_toast",0usize)))).unwrap();
+    let newer=ctx.memory(|m|m.area_rect(egui::Id::new(("ndr_completion_toast",1usize)))).unwrap();
+    assert!((newer.bottom()-553.0).abs()<=1.0,"{newer:?}");
+    assert!((newer.top()-older.bottom()-9.0).abs()<=1.0,"{older:?} {newer:?}");
+    assert!(older.height()<69.0 && newer.height()<older.height(),"{older:?} {newer:?}");
+    assert_eq!(older.right(),newer.right());
+    drop(app);let _=fs::remove_dir_all(root);
 }

@@ -126,9 +126,12 @@ impl App {
         let bold_font = egui::FontId::new(font.size, egui::FontFamily::Name(super::BOLD_FONT_FAMILY.into()));
         let measure = |s: &str| ctx.fonts_mut(|fonts| fonts.layout_no_wrap(s.to_owned(), font.clone(), Color32::WHITE).size().x);
         let measure_header = |s: &str| ctx.fonts_mut(|fonts| fonts.layout_no_wrap(s.to_owned(), bold_font.clone(), Color32::WHITE).size().x);
-        let command_width = rows.iter().map(|r| measure(&r.caption) + 16.0).fold((measure_header(&command_header) + 20.0).max(140.0), f32::max);
+        // The command column takes the remaining space; captions wrap or
+        // truncate with the full text available on hover.
         let key_width = rows.iter().map(|r| measure(&r.key_text) + 12.0).fold((measure_header(&key_header) + 20.0).max(115.0), f32::max);
-        let width = (command_width + key_width + 30.0).max(300.0).min((screen.width() - 40.0).max(120.0));
+        // Keep the window width stable while filtering; the contents may
+        // become shorter, but the window chrome must not jump.
+        let width = 560.0_f32.min((screen.width() - 40.0).max(120.0));
         let key_width = key_width.min((width * 0.42).max(46.0));
         let command_width = (width - key_width - 30.0).max(44.0);
         let height = (screen.height() - 80.0).max(80.0);
@@ -145,10 +148,14 @@ impl App {
         let command_heading = galley(&command_header, &bold_font, command_width - 4.0, usize::MAX);
         let key_heading = galley(&key_header, &bold_font, key_width - 4.0, usize::MAX);
         let heading_height = command_heading.size().y.max(key_heading.size().y).max(18.0);
-        egui::Window::new(title)
-            .id(egui::Id::new("ndr-shortcut-window"))
+        let window_id = egui::Id::new("ndr-shortcut-window");
+        super::keep_opaque(ctx, window_id);
+        egui::Window::new(&title)
+            .id(window_id)
             .open(&mut open)
             .enabled(!covered)
+            .title_bar(false)
+            .frame(egui::Frame::popup(&ctx.style()))
             .collapsible(false)
             .resizable([false, true])
             .default_pos(egui::pos2(screen.right() - width - 10.0, screen.top() + 40.0))
@@ -158,6 +165,11 @@ impl App {
             .default_size(egui::vec2(width, height))
             .show(ctx, |ui| {
                 ui.set_width(width);
+                // Same bold title and small close button as NDR About.
+                // The list remains a non-modal, movable, resizable window.
+                if super::popup_title_row(ui, &title, Some(width), true).0 {
+                    close = true;
+                }
                 let search = ui.add(egui::TextEdit::singleline(&mut state.filter).desired_width(181.0_f32.min(width - 14.0)));
                 if state.focus_search && !covered {
                     search.request_focus();

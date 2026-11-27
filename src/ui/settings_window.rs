@@ -328,7 +328,23 @@ fn original_pages(built: Vec<Vec<Row>>, language: &compat::Language, _ko: bool) 
         let index = pool.iter().position(|r| matches!(r, Some(Row::FunctionKeys)));
         vec![index.and_then(|i| pool[i].take())]
     };
-    // Remaining rows (only in the C# version). Headers and notices only when their group still has rows.
+    // These preferences already have a direct command in the original
+    // View / Skin / Language menus. Keep the stored value intact and do
+    // not offer a second UI for it in the NDR-only settings page.
+    // ShowFavoritesBar is an old unused C# placeholder (no renderer).
+    const REDUNDANT_NDR_ROWS: &[&str] = &[
+        "DualPaneMode", "ShowToolBar", "ShowFunctionBar", "ShowVerticalBar",
+        "ShowDriveButtons", "ShowFolderDiskInfoBar", "ShowFileInfoBar",
+        "ShowExtensionInfoBar", "ShowLeftFolderTree", "ShowRightFolderTree",
+        "Theme", "Language", "ShowFavoritesBar",
+    ];
+    for slot in &mut pool {
+        if slot.as_ref().and_then(row_key).is_some_and(|key| REDUNDANT_NDR_ROWS.contains(&key)) {
+            *slot = None;
+        }
+    }
+    // Remaining rows are useful NDR-only preferences. Headers and notices
+    // only survive when their group still contains settings.
     let mut rest = Vec::new();
     for (i, row) in pool.iter().enumerate() {
         let Some(row) = row else { continue };

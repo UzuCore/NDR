@@ -428,12 +428,22 @@ fn priority_rank(entry: &Entry) -> u8 {
     }
 }
 
-/// Same ordering as the ordinary-file Name branch of sort_group.
-pub fn compare_name_files(a:&Entry,b:&Entry,options:&SortOptions)->Ordering{
+/// Comparator for the ordinary-file ordered branches of sort_group.
+/// Insertion is valid only for these modes and no grouping. Exact ties
+/// must fall back because the original full ordering is stable.
+pub fn compare_ordered_files(a:&Entry,b:&Entry,options:&SortOptions)->Ordering{
     debug_assert!(!a.is_dir&&!b.is_dir&&!a.drive&&!b.drive);
+    debug_assert!(matches!(options.file_mode.as_str(),"Name"|"Extension"|"Size"|"Modified"|"Attributes"));
     priority_rank(a).cmp(&priority_rank(b)).then_with(||{
-        let by=compare_text(sort_base(a),sort_base(b),options.logical)
-            .then_with(||compare_text(sort_extension(a),sort_extension(b),false));
+        let base=||compare_text(sort_base(a),sort_base(b),options.logical);
+        let ext=||compare_text(sort_extension(a),sort_extension(b),false);
+        let by=match options.file_mode.as_str(){
+            "Extension"=>ext().then_with(base),
+            "Size"=>a.size.cmp(&b.size).then_with(base).then_with(ext),
+            "Modified"=>a.modified.cmp(&b.modified).then_with(base).then_with(ext),
+            "Attributes"=>a.attributes.cmp(&b.attributes).then_with(base).then_with(ext),
+            _=>base().then_with(ext),
+        };
         if options.file_descending{by.reverse()}else{by}
     })
 }
@@ -565,9 +575,28 @@ fn sort_group(list: &mut [Entry], mode: &str, descending: bool, logical: bool, c
     // and applying a 100k-element identity permutation. Use the *same*
     // native comparator and priority ranks, not an approximate sort key.
     if list.len()>=4096 && (1..list.len()).all(|i|compare(i-1,i)!=Ordering::Greater){return;}
-    let mut order:Vec<usize>=(0..list.len()).collect();
-    order.sort_by(|&i,&j|compare(i,j));
-    apply_order(list,&mut order);
+    // Most lists need only 32-bit row indices. Keep the same stable native
+    // comparator, while halving the permutation and its sort scratch space.
+    if let Ok(count)=u32::try_from(list.len()){
+        let mut order:Vec<u32>=(0..count).collect();
+        order.sort_by(|&i,&j|compare(i as usize,j as usize));
+        apply_small_order(list,&mut order);
+    }else{
+        let mut order:Vec<usize>=(0..list.len()).collect();
+        order.sort_by(|&i,&j|compare(i,j));
+        apply_order(list,&mut order);
+    }
+}
+
+fn apply_small_order<T>(rows:&mut [T],order:&mut [u32]){
+    for start in 0..order.len(){
+        let mut current=start;
+        loop{
+            let next=std::mem::replace(&mut order[current],current as u32) as usize;
+            if next==start{break;}
+            rows.swap(current,next);current=next;
+        }
+    }
 }
 
 /// Move rows in place; the order maps destination indices to source indices.
@@ -708,9 +737,27 @@ pub fn sort_groups(entries: &mut [Entry], mode: &str, folder_category_mode: &str
         // Give them the same rank so their rows keep their original order.
         rank[b] = if compare(a, b).is_eq() { rank[a] } else { i + 1 };
     }
-    let mut order: Vec<_> = (0..entries.len()).collect();
-    order.sort_by_key(|&row| rank[row_groups[row]]);
-    apply_order(entries, &mut order);
+    // Once the exact culture ranks are known, a stable counting pass is
+    // sufficient. Equal collation ranks retain input order, even if their
+    // spellings differ. An already grouped list needs no permutation.
+    if row_groups.windows(2).all(|w|rank[w[0]]<=rank[w[1]]){return;}
+    let mut offsets=vec![0usize;groups.len()];
+    for &id in &row_groups{offsets[rank[id]]+=1;}
+    let mut next=0;
+    for offset in &mut offsets{let count=*offset;*offset=next;next+=count;}
+    if let Ok(count)=u32::try_from(entries.len()){
+        let mut order=vec![0u32;count as usize];
+        for (row,&id) in row_groups.iter().enumerate(){
+            let dest=&mut offsets[rank[id]];order[*dest]=row as u32;*dest+=1;
+        }
+        apply_small_order(entries,&mut order);
+    }else{
+        let mut order=vec![0usize;entries.len()];
+        for (row,&id) in row_groups.iter().enumerate(){
+            let dest=&mut offsets[rank[id]];order[*dest]=row;*dest+=1;
+        }
+        apply_order(entries,&mut order);
+    }
 }
 
 /// Header text of GroupHeaderNameConverter: "Folders" is [RES] FOLDERS, known names use language item keys, others the name as is.

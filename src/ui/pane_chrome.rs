@@ -811,16 +811,21 @@ impl App {
         for path in &paths{self.folder_hint_checked.insert(path.clone(),now);}
         let profile=self.profile.clone();
         let tx=self.async_tx.clone();let stop=self.folder_size_shutdown.clone();let epoch=self.folder_hint_epoch;
+        let stats=self.folder_worker_stats.clone();
         let spawned=thread::Builder::new().name("ndr-folder-hint-batch".into()).spawn(move||{
             unsafe{
                 use windows_sys::Win32::System::Threading::{GetCurrentThread,SetThreadPriority,THREAD_MODE_BACKGROUND_BEGIN};
                 SetThreadPriority(GetCurrentThread(),THREAD_MODE_BACKGROUND_BEGIN as i32);
             }
-            let disk=ndr::folder_cache::DiskStore::open(&profile,true);
+            let hints={
+                let mut store=stats.disk.lock().unwrap_or_else(|e|e.into_inner());
+                let disk=store.get_or_insert_with(||ndr::folder_cache::DiskStore::open(&profile,true));
+                paths.into_iter().filter_map(|p|disk.candidate_hint(&p).map(|hint|(p,hint))).collect::<Vec<_>>()
+            };
             let mut values=Vec::new();
-            for path in paths{
+            for (path,hint) in hints{
                 if stop.load(Ordering::Relaxed){break}
-                if let Some(bytes)=disk.hint(&path){values.push((path,bytes));}
+                if let Some(bytes)=hint.validated(&path){values.push((path,bytes));}
             }
             let _=tx.send(AsyncResult::FolderHintBatch{epoch,values});
         });
@@ -1331,6 +1336,65 @@ pub(super) struct FolderWorkerStats {
     // Both lanes use one bounded disk cache. Otherwise two delayed
     // flushes within the same second could publish an older total.
     disk:Mutex<Option<ndr::folder_cache::DiskStore>>,
+    recent:Mutex<RecentFolderProofs>,
+}
+struct SharedFolderRecent{
+    path:PathBuf,bytes:u64,watch:Arc<native::FolderSizeWatch>,audit_at:Instant,
+    media:native::FolderSizeMedia,at:Instant,purge:u64,reset:u64,
+}
+// A short bounded handoff history prevents a burst of visible sibling
+// results from overwriting the one proof another pane is about to request.
+// Reuse still checks the path identity, known links and original audit age.
+const RECENT_FOLDER_LIMIT:usize=8;
+const RECENT_FOLDER_AGE:Duration=Duration::from_secs(3);
+#[derive(Default)]
+struct RecentFolderProofs{
+    items:std::collections::VecDeque<SharedFolderRecent>,
+}
+impl RecentFolderProofs{
+    fn prune(&mut self,purge:u64,reset:u64){
+        self.items.retain(|r|r.purge==purge&&r.reset==reset&&r.at.elapsed()<RECENT_FOLDER_AGE&&r.watch.unchanged());
+    }
+    fn remember(&mut self,proof:SharedFolderRecent){
+        self.prune(proof.purge,proof.reset);
+        self.items.retain(|r|r.path!=proof.path);
+        if self.items.len()>=RECENT_FOLDER_LIMIT{self.items.pop_front();}
+        self.items.push_back(proof);
+    }
+    fn find(&self,path:&Path,purge:u64,reset:u64)->Option<&SharedFolderRecent>{
+        self.items.iter().rev().find(|r|r.path==path&&r.purge==purge&&r.reset==reset
+            &&r.at.elapsed()<RECENT_FOLDER_AGE&&r.watch.unchanged())
+    }
+}
+#[test]
+fn recent_folder_proofs_are_bounded_and_discard_changed_or_expired_paths(){
+    let root=std::env::temp_dir().join(format!("ndr-recent-proof-{}-{}",std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    fs::create_dir_all(&root).unwrap();
+    let mut recent=RecentFolderProofs::default();
+    let paths:Vec<_>=(0..10).map(|i|root.join(i.to_string())).collect();
+    for path in &paths{fs::create_dir(path).unwrap();}
+    let now=Instant::now();
+    for (i,path) in paths.iter().enumerate(){
+        let watch=Arc::new(native::FolderSizeWatch::open(path).unwrap());
+        recent.remember(SharedFolderRecent{path:path.clone(),bytes:i as u64,watch,
+            audit_at:now,media:native::FolderSizeMedia::Fast,at:now,purge:1,reset:2});
+    }
+    assert_eq!(recent.items.len(),RECENT_FOLDER_LIMIT);
+    assert!(recent.find(&paths[0],1,2).is_none());
+    assert_eq!(recent.find(&paths[2],1,2).unwrap().bytes,2);
+    assert!(recent.find(&paths[2],1,3).is_none());
+    assert_eq!(recent.find(&paths[9],1,2).unwrap().audit_at,now);
+    recent.items.front_mut().unwrap().at=now-RECENT_FOLDER_AGE;
+    recent.prune(1,2);assert!(recent.find(&paths[2],1,2).is_none());
+    fs::write(paths[3].join("changed"),b"new").unwrap();
+    let deadline=Instant::now()+Duration::from_secs(2);
+    while recent.find(&paths[3],1,2).is_some(){
+        assert!(Instant::now()<deadline);std::thread::sleep(Duration::from_millis(10));
+    }
+    recent.prune(1,2);assert!(recent.items.iter().all(|r|r.path!=paths[3]));
+    recent.prune(1,3);assert!(recent.items.is_empty());
+    drop(recent);fs::remove_dir_all(root).unwrap();
 }
 impl FolderWorkerStats{
     pub(super) fn report(&self)->serde_json::Value{
@@ -1434,7 +1498,6 @@ fn folder_size_worker(shared: FolderSizeQueue, tx: WakeSender<AsyncResult>, ctx:
     use ndr::folder_cache::{DiskStore, ScanEngine, ScanWork, FULL_AUDIT_AGE};
     let mut engine = ScanEngine::default();
     let mut last_flush = Instant::now();
-    let mut recent: Option<(PathBuf, u64, Arc<native::FolderSizeWatch>, Instant, native::FolderSizeMedia, Instant)> = None;
     let mut media_by_parent: HashMap<PathBuf, (native::FolderSizeMedia, Instant)> = HashMap::new();
     // Keep interactive foreground I/O responsive even while a scan is active.
     unsafe {
@@ -1451,15 +1514,18 @@ fn folder_size_worker(shared: FolderSizeQueue, tx: WakeSender<AsyncResult>, ctx:
         }
         let new_purge=purge.load(Ordering::Relaxed);
         let new_reset=recent_reset.load(Ordering::Relaxed);
-        if new_purge!=purge_seen{engine=ScanEngine::default();recent=None;purge_seen=new_purge;}
-        if new_reset!=reset_seen{recent=None;reset_seen=new_reset;}
+        if new_purge!=purge_seen{engine=ScanEngine::default();purge_seen=new_purge;}
+        if new_reset!=reset_seen{reset_seen=new_reset;}
+        {
+            let mut recent=stats.recent.lock().unwrap_or_else(|e|e.into_inner());
+            recent.prune(purge_seen,reset_seen);
+        }
         if last_flush.elapsed() >= Duration::from_secs(10) {
             if let Some(store)=stats.disk.lock().unwrap_or_else(|e|e.into_inner()).as_mut(){let _=store.flush();}
             engine.prune_idle();
             media_by_parent.retain(|_, (_, when)| when.elapsed() < Duration::from_secs(60));
             last_flush = Instant::now();
         }
-        if recent.as_ref().is_some_and(|(_, _, _, _, _, at)| at.elapsed() >= Duration::from_secs(3)) { recent = None; }
         let (mut job,_active_job) = {
             let mut jobs = queue.lock().unwrap_or_else(|e| e.into_inner());
             if shutdown.load(Ordering::Relaxed){drop(jobs);continue}
@@ -1474,7 +1540,7 @@ fn folder_size_worker(shared: FolderSizeQueue, tx: WakeSender<AsyncResult>, ctx:
             }else{
                 drop(running);
                 let wait = Duration::from_secs(10).saturating_sub(last_flush.elapsed()).max(Duration::from_millis(100));
-                let wait = if recent.is_some() { wait.min(Duration::from_secs(3)) } else { wait };
+                let wait=if !stats.recent.lock().unwrap_or_else(|e|e.into_inner()).items.is_empty(){wait.min(RECENT_FOLDER_AGE)}else{wait};
                 drop(signal.wait_timeout(jobs, wait).unwrap_or_else(|e| e.into_inner()));
                 continue;
             }
@@ -1483,8 +1549,6 @@ fn folder_size_worker(shared: FolderSizeQueue, tx: WakeSender<AsyncResult>, ctx:
             continue;
         }
         if job.automatic {
-            let mut store=stats.disk.lock().unwrap_or_else(|e|e.into_inner());
-            let disk = store.get_or_insert_with(|| DiskStore::open(&profile, !cfg!(test)));
             // Warm all queued visible rows before a potentially huge scan.
             // Only metadata-validated prior-session totals are published.
             // They are last-known display values, not new measurements.
@@ -1504,23 +1568,28 @@ fn folder_size_worker(shared: FolderSizeQueue, tx: WakeSender<AsyncResult>, ctx:
                     j.hint_needed = false;
                 }
             }
+            let hints={
+                let mut store=stats.disk.lock().unwrap_or_else(|e|e.into_inner());
+                let disk=store.get_or_insert_with(||DiskStore::open(&profile,!cfg!(test)));
+                hints.into_iter().filter_map(|(pane,path,cancel)|disk.candidate_hint(&path)
+                    .map(|hint|(pane,path,cancel,hint))).collect::<Vec<_>>()
+            };
             let mut hinted = false;
-            for (pane, path, cancel) in hints {
+            for (pane,path,cancel,hint) in hints {
                 if !cancel.load(Ordering::Relaxed) {
-                    if let Some(bytes) = disk.hint(&path) {
-                        if tx.send(AsyncResult::FolderSizeHint { pane, path, bytes, cancel }).is_ok() { hinted = true; }
+                    if let Some(bytes)=hint.validated(&path){
+                        if tx.send(AsyncResult::FolderSizeHint{pane,path,bytes,cancel}).is_ok(){hinted=true;}
                     }
                 }
             }
-            drop(store);
             if hinted { ctx.request_repaint(); }
             // A second-pane job can arrive just after the worker posted
             // its first result, but before the UI applied that result.
-            // Share the one recent observation rather than scan twice.
-            if let Some((p, bytes, watch, audit_at, media, _)) = recent.as_ref().filter(|(p, _, _, _, _, _)| p == &job.path) {
-                let _ = p;
-                if job.prior.is_none() && recent_reset.load(Ordering::Relaxed)==reset_seen && watch.unchanged() {
-                    job.prior = Some((*bytes, watch.clone(), *audit_at, *media));
+            // Share a bounded recent observation rather than scan twice.
+            if job.prior.is_none(){
+                let recent=stats.recent.lock().unwrap_or_else(|e|e.into_inner());
+                if let Some(r)=recent.find(&job.path,purge_seen,reset_seen){
+                    job.prior=Some((r.bytes,r.watch.clone(),r.audit_at,r.media));
                 }
             }
         }
@@ -1548,7 +1617,14 @@ fn folder_size_worker(shared: FolderSizeQueue, tx: WakeSender<AsyncResult>, ctx:
                 }
                 let watch = if job.track { native::FolderSizeWatch::open(&job.path).map(Arc::new) } else { None };
                 let identity=if watch.is_none()&&job.track{native::folder_size_identity(&job.path)}else{None};
-                let (summary, work) = if quick{
+                let promoted=if !quick&&job.automatic&&job.prior.is_none(){
+                    watch.as_ref().and_then(|w|engine.reuse_checkpoint(&job.path,&job.cancel,w))
+                }else{None};
+                let mut promoted_audit=None;
+                let (summary, work) = if let Some((summary,measured))=promoted{
+                    promoted_audit=Some(measured);
+                    (summary,ScanWork{visited:0,reused:1,root_stable:true})
+                }else if quick{
                     let result=watch.as_ref().and_then(|w|ScanEngine::quick_scan(&job.path,&job.cancel,w,256,Duration::from_millis(60)));
                     let Some(result)=result else{defer_folder_job(queue,job,&stats);continue};
                     stats.quick_completed.fetch_add(1,Ordering::Relaxed);
@@ -1567,8 +1643,8 @@ fn folder_size_worker(shared: FolderSizeQueue, tx: WakeSender<AsyncResult>, ctx:
                 // enumeration and before committing child checkpoints.
                 let stable = work.root_stable && watch.as_ref().is_none_or(|watch| watch.matches_path(&job.path))
                     &&identity.is_none_or(|id|native::folder_size_identity(&job.path)==Some(id));
-                let audit_at = if force_full { Instant::now() } else { job.prior.as_ref().unwrap().2 };
-                (summary.total_bytes, summary.errors.is_empty(), watch, stable, true, work, audit_at, media)
+                let audit_at = promoted_audit.unwrap_or_else(||if force_full{Instant::now()}else{job.prior.as_ref().unwrap().2});
+                (summary.total_bytes,summary.errors.is_empty(),watch,stable,promoted_audit.is_none(),work,audit_at,media)
             };
         if job.cancel.load(Ordering::Relaxed) {
             continue;
@@ -1581,14 +1657,15 @@ fn folder_size_worker(shared: FolderSizeQueue, tx: WakeSender<AsyncResult>, ctx:
         }
         if job.track && complete && stable {
             if let Some(watch) = &watch {
-                recent = Some((job.path.clone(), bytes, watch.clone(), audit_at, media, Instant::now()));
+                stats.recent.lock().unwrap_or_else(|e|e.into_inner()).remember(SharedFolderRecent{
+                    path:job.path.clone(),bytes,watch:watch.clone(),audit_at,media,at:Instant::now(),purge:purge_seen,reset:reset_seen});
                 if scanned {
                     stats.disk.lock().unwrap_or_else(|e|e.into_inner())
                         .get_or_insert_with(||DiskStore::open(&profile,!cfg!(test))).record(&job.path,watch,bytes);
                 }
             }
         } else if !job.automatic {
-            recent = None;
+            stats.recent.lock().unwrap_or_else(|e|e.into_inner()).items.clear();
         }
         let job_automatic = job.automatic;
         let matches = take_matching_automatic_jobs(&mut queue.lock().unwrap_or_else(|e| e.into_inner()), &job, complete && stable);

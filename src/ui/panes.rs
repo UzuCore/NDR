@@ -247,7 +247,10 @@ fn measure_field_cells(entries: &[Entry], view: &PaneView,
     let mut known: HashMap<(&str,bool),usize> = HashMap::new();
     let mut masks: Vec<u8> = Vec::new();
     let mut names=Vec::<&str>::with_capacity(entries.len());
-    let mut extensions=Vec::<usize>::with_capacity(entries.len());
+    // Uniform extensions are common in large directories. Keep only a
+    // count until a different measured extension is encountered.
+    let mut uniform_extension:Option<(usize,usize)>=None;
+    let mut extensions=Vec::<usize>::new();
     let mut last:[Option<(&str,bool,usize)>;7]=[None;7];
     fn add<'a>(known:&mut HashMap<(&'a str,bool),usize>,masks:&mut Vec<u8>,last:&mut [Option<(&'a str,bool,usize)>;7],field:u8,text:&'a str,gap:bool)->usize{
         let index=field as usize;
@@ -266,7 +269,14 @@ fn measure_field_cells(entries: &[Entry], view: &PaneView,
         if entry.drive{continue;}
         names.push(&cells[0]);
         if !entry.is_dir{
-            extensions.push(add(&mut known,&mut masks,&mut last,1,&cells[1],false));
+            let slot=add(&mut known,&mut masks,&mut last,1,&cells[1],false);
+            if !extensions.is_empty(){extensions.push(slot);}
+            else if let Some((first,count))=uniform_extension.as_mut(){
+                if *first==slot{*count+=1;}else{
+                    extensions.reserve(entries.len());extensions.resize(*count,*first);extensions.push(slot);
+                    uniform_extension=None;
+                }
+            }else{uniform_extension=Some((slot,1));}
             if entry.size>0{add(&mut known,&mut masks,&mut last,3,&cells[3],false);}
         }
         add(&mut known,&mut masks,&mut last,4,&cells[4],cells[4].contains(ndr::listing::LIST_DATE_TIME_GAP));
@@ -278,7 +288,9 @@ fn measure_field_cells(entries: &[Entry], view: &PaneView,
         texts[slot]=if *gap{std::borrow::Cow::Owned(text.replace(ndr::listing::LIST_DATE_TIME_GAP,"  "))}
             else{std::borrow::Cow::Borrowed(*text)};
     }
-    names.reserve(texts.len());
+    // Avoid geometric growth of the million-name pointer buffer when
+    // only a handful of additional unique column strings are appended.
+    names.reserve_exact(texts.len());
     names.extend(texts.iter().map(|t|t.as_ref()));
     if cancel.is_some_and(|c|c.load(Ordering::Relaxed)){return None;}
     let widths=measure(&names)?;
@@ -289,10 +301,37 @@ fn measure_field_cells(entries: &[Entry], view: &PaneView,
         for field in [1,3,4,6]{if mask&(1<<field)!=0{fm.max[field]=fm.max[field].max(widths[n+slot]);}}
     }
     let (mut ext_sum,mut ext_count)=(0f32,0usize);
+    if let Some((slot,count))=uniform_extension{
+        let width=widths[n+slot];
+        if width>0.0{
+            // Preserve the exact floating-point accumulation order.
+            for _ in 0..count{ext_sum+=width;}ext_count=count;
+        }
+    }
     for slot in extensions{let width=widths[n+slot];if width>0.0{ext_sum+=width;ext_count+=1;}}
     fm.ext_sum=ext_sum;fm.ext_count=ext_count;
     if ext_count>0{fm.ext_average=(ext_sum/ext_count as f32).floor();}
     Some(fm)
+}
+
+#[test]
+fn field_extension_uniform_and_mixed_measurements_preserve_row_order(){
+    for extensions in [vec!["txt";4097],vec!["", "a","a","long","a",""],vec!["";8],vec![]]{
+        let mut entries=Vec::new();let mut view=PaneView::default();
+        for ext in &extensions{
+            let mut entry=Entry::parent_item(PathBuf::from("x"),None);entry.is_dir=false;entry.name="x".into();
+            entries.push(entry);
+            let mut cells:[Arc<str>;7]=std::array::from_fn(|_|Arc::from(""));
+            cells[0]=Arc::from("x");cells[1]=Arc::from(*ext);view.cells.push(cells);
+        }
+        let measured=measure_field_cells(&entries,&view,|texts|Some(texts.iter().map(|s|s.len() as f32).collect()),None).unwrap();
+        let expected_sum=extensions.iter().fold(0f32,|sum,s|sum+s.len() as f32);
+        let count=extensions.iter().filter(|s|!s.is_empty()).count();
+        assert_eq!(measured.ext_sum,expected_sum);assert_eq!(measured.ext_count,count);
+        assert_eq!(measured.ext_average,if count==0{0.0}else{(expected_sum/count as f32).floor()});
+        assert_eq!(measured.max[1],extensions.iter().map(|s|s.len()).max().unwrap_or(0) as f32);
+        assert_eq!(measured.items,entries.len());
+    }
 }
 
 impl App {
@@ -1025,30 +1064,52 @@ struct TwinSlot{
     token:u64,
     waiting:bool,
     result:Option<PreparedLocalListing>,
+    published:Option<Instant>,
 }
 struct TwinOwner<'a>{pool:&'a TwinPreparation,token:u64}
 enum TwinClaim<'a>{Owner(TwinOwner<'a>),Shared(PreparedLocalListing),Independent}
 impl TwinPreparation{
+    pub(super) fn retire_ready(&self,settled:bool){
+        if let Ok(mut slot)=self.slot.try_lock(){
+            if slot.as_ref().is_some_and(|s|!s.waiting&&s.published.is_some_and(|at|
+                settled||at.elapsed()>=Duration::from_secs(1))){*slot=None;}
+        }
+    }
     fn claim(&self,key:TwinKey,cancel:&AtomicBool)->TwinClaim<'_>{
         let Ok(mut slot)=self.slot.lock()else{return TwinClaim::Independent};
+        if cancel.load(Ordering::Relaxed){return TwinClaim::Independent}
+        // Only one completed pair may be retained. If the matching
+        // consumer was slower to read/sort, let it reuse the O(1)
+        // immutable snapshot during a short handoff window.
+        if slot.as_ref().is_some_and(|s|!s.waiting&&s.published.is_some_and(|at|
+            at.elapsed()>=Duration::from_secs(1)||s.key!=key)){*slot=None;}
         if slot.is_none(){
             let token=self.serial.fetch_add(1,Ordering::Relaxed);
-            *slot=Some(TwinSlot{key,token,waiting:false,result:None});
+            *slot=Some(TwinSlot{key,token,waiting:false,result:None,published:None});
             return TwinClaim::Owner(TwinOwner{pool:self,token})
         }
         let current=slot.as_mut().unwrap();
         if current.key!=key||current.waiting{return TwinClaim::Independent}
         current.waiting=true;let token=current.token;
-        let deadline=Instant::now()+Duration::from_millis(180);
+        let wait_ms=match current.key.len{
+            0..=16_384=>220,
+            16_385..=65_536=>550,
+            _=>1000,
+        };
+        let deadline=Instant::now()+Duration::from_millis(wait_ms);
         loop{
             if let Some(current)=slot.as_mut().filter(|s|s.token==token){
+                if cancel.load(Ordering::Relaxed){
+                    // The owner may already have published. Do not retain
+                    // a result for a cancelled consumer indefinitely.
+                    if current.result.is_some(){*slot=None;}else{current.waiting=false;}
+                    return TwinClaim::Independent
+                }
                 if let Some(result)=current.result.take(){
                     *slot=None;
                     return TwinClaim::Shared(result)
                 }
-                if cancel.load(Ordering::Relaxed)||Instant::now()>=deadline{
-                    current.waiting=false;return TwinClaim::Independent
-                }
+                if Instant::now()>=deadline{current.waiting=false;return TwinClaim::Independent}
             }else{return TwinClaim::Independent}
             let wait=deadline.saturating_duration_since(Instant::now()).min(Duration::from_millis(10));
             match self.ready.wait_timeout(slot,wait){
@@ -1060,7 +1121,8 @@ impl TwinPreparation{
 impl TwinOwner<'_>{
     fn publish(&self,result:&PreparedLocalListing){
         if let Ok(mut slot)=self.pool.slot.lock(){
-            if let Some(s)=slot.as_mut().filter(|s|s.token==self.token&&s.waiting){
+            if let Some(s)=slot.as_mut().filter(|s|s.token==self.token){
+                s.published=Some(Instant::now());
                 s.result=Some(PreparedLocalListing{
                     plan:result.plan.clone(),day:result.day,stage_us:[0;4],shared:true,
                     view:result.view.clone_local_shared(),field:result.field.clone(),
@@ -1079,6 +1141,40 @@ impl Drop for TwinOwner<'_>{
         }
     }
 }
+#[cfg(test)]
+pub(super) fn test_large_twin_rendezvous(app:&App){
+    let pool=TwinPreparation::default();let cancel=AtomicBool::new(false);
+    let plan=LocalListingPlan::capture(app,0);let day=chrono::Local::now().date_naive();
+    let key=||TwinKey{revision:1,plan:plan.clone(),day,parent:None,len:100_000};
+    let TwinClaim::Owner(owner)=pool.claim(key(),&cancel)else{panic!("missing owner")};
+    let result=PreparedLocalListing{plan:plan.clone(),day,stage_us:[0;4],shared:false,
+        view:PaneView::default(),field:None,summary:super::main_window::PaneSummary::default()};
+    std::thread::scope(|scope|{
+        let worker=scope.spawn(||matches!(pool.claim(key(),&cancel),TwinClaim::Shared(_)));
+        let until=Instant::now()+Duration::from_secs(2);
+        while !pool.slot.lock().unwrap().as_ref().is_some_and(|s|s.waiting){
+            assert!(Instant::now()<until);std::thread::sleep(Duration::from_millis(1));
+        }
+        // Longer than the old 180ms limit, but below the large-list bound.
+        std::thread::sleep(Duration::from_millis(300));owner.publish(&result);
+        assert!(worker.join().unwrap());
+    });
+    drop(owner);assert!(pool.slot.lock().unwrap().is_none());
+    // Owner finishes before the second worker reaches the rendezvous.
+    let TwinClaim::Owner(owner)=pool.claim(key(),&cancel)else{panic!("slot not released")};
+    owner.publish(&result);drop(owner);
+    assert!(matches!(pool.claim(key(),&cancel),TwinClaim::Shared(_)));
+    assert!(pool.slot.lock().unwrap().is_none());
+    let TwinClaim::Owner(owner)=pool.claim(key(),&cancel)else{panic!("slot not released")};
+    owner.publish(&result);drop(owner);pool.retire_ready(true);
+    assert!(pool.slot.lock().unwrap().is_none());
+    let TwinClaim::Owner(owner)=pool.claim(key(),&cancel)else{panic!("slot not released")};
+    owner.publish(&result);drop(owner);
+    let mut next=key();next.revision=2;
+    let TwinClaim::Owner(owner)=pool.claim(next,&cancel)else{panic!("stale revision reused")};
+    drop(owner);assert!(pool.slot.lock().unwrap().is_none());
+}
+
 impl LocalListingPlan {
     pub(super) fn capture(app: &App, index: usize) -> Self {
         Self {
@@ -1098,9 +1194,10 @@ impl LocalListingPlan {
         }
     }
     pub(super) fn supports_partial(&self)->bool{
-        self.filter.is_empty()
-            && matches!(self.options.file_mode.as_str(),"Name"|"Extension"|"Attributes"|"Color"|"None")
-            && matches!(self.view.group_mode.as_str(),"None"|"Extension"|"Category")
+        self.filter.is_empty()&&(
+            matches!(self.options.file_mode.as_str(),"Name"|"Extension"|"Attributes"|"Color"|"None")
+                &&matches!(self.view.group_mode.as_str(),"None"|"Extension"|"Category")
+            ||matches!(self.options.file_mode.as_str(),"Size"|"Modified")&&self.view.group_mode=="None")
     }
     pub(super) fn prepare_partial(self,path:&Path,entries:&[Entry],descriptions:&HashMap<String,String>,
         drive_infos:&HashMap<PathBuf,(String,u32,Option<(u64,u64)>)>,cancel:&AtomicBool,base:u64)->Option<PartialLocalListing>{
@@ -1639,7 +1736,7 @@ impl App {
             let mut rows = self.settings.strings("ExecutableHistory");
             ndr::command_line::remember_opened_executable(&mut rows, &entry.path.to_string_lossy());
             self.settings.set_strings("ExecutableHistory", rows);
-            if let Err(e) = native::shell_open(&entry.path, None, "open") {
+            if let Err(e) = native::open_default_file(&entry.path) {
                 self.status = e;
             }
         }
@@ -2013,9 +2110,9 @@ impl App {
                 if let Some(error) = &self.panes[index].error {
                     ui.colored_label(Color32::LIGHT_RED, self.archive_error_text(error));
                 }
-                if self.panes[index].loading {
-                    ui.spinner();
-                }
+                // A watcher refresh must not insert a new row above the
+                // list: that changes list_shape, triggers AdjustPage and
+                // visibly jumps both the list and its scroll position.
                 // Like C#, filtering happens when a listing arrives; every
                 // entry is visible. Do not allocate a 0..N index vector on
                 // every frame just to render the thumbnail grid.
@@ -2126,7 +2223,7 @@ impl App {
                         self.panes[index].detail_x = 0.0;
                         ui.ctx().request_repaint();
                     }
-                    if let Some(line) = rows.iter().position(|r| matches!(r, DetailRow::Item(i) if *i == item)).filter(|_| !reload) {
+                    if let Some(line) = rows.line_for_item(item).filter(|_| !reload) {
                         let (top, bottom) = (line as f32 * stride, line as f32 * stride + row_height);
                         if by_page {
                             offset = (line / page_rows) as f32 * page_px;
@@ -2139,7 +2236,7 @@ impl App {
                 }
                 if std::mem::take(&mut self.panes[index].reveal) && wheel.is_none() {
                     let cursor = self.panes[index].cursor;
-                    if let Some(line) = rows.iter().position(|r| matches!(r, DetailRow::Item(i) if *i == cursor)) {
+                    if let Some(line) = rows.line_for_item(cursor) {
                         let (top, bottom) = (line as f32 * stride, line as f32 * stride + row_height);
                         if top < offset || bottom > offset + height {
                             offset = if by_page {
@@ -2152,11 +2249,10 @@ impl App {
                         }
                     }
                 }
-                let item = |r: &DetailRow| if let DetailRow::Item(i) = r { Some(*i) } else { None };
                 let first_line = (offset / stride - 0.01).ceil().max(0.0) as usize;
                 let last_line = (((offset + height - row_height).max(0.0) / stride).floor() as usize).max(first_line);
-                let top_item = rows.iter().skip(first_line).find_map(item).unwrap_or(0);
-                let last_item = rows.iter().take(last_line + 1).rev().find_map(item).unwrap_or(top_item).max(top_item);
+                let top_item = rows.first_item_from(first_line).unwrap_or(0);
+                let last_item = rows.last_item_through(last_line).unwrap_or(top_item).max(top_item);
                 self.panes[index].page = list_keys::ListPage { style: list_keys::ListStyle::Details, rows: page_rows, columns: 1, top: top_item, last: last_item };
                 if (offset - current).abs() > 0.5 {
                     area = area.vertical_scroll_offset(offset);
@@ -2174,11 +2270,11 @@ impl App {
                         for visible_index in range {
                             let Some(detail_row) = rows.get(visible_index) else { continue };
                             let row = match detail_row {
-                                DetailRow::Header(label) => {
+                                super::detail_rows::DetailRowRef::Header(label) => {
                                     ui.add_sized([width, row_height], egui::Label::new(RichText::new(label).strong().family(egui::FontFamily::Name(super::BOLD_FONT_FAMILY.into())).color(ui.visuals().weak_text_color())));
                                     continue;
                                 }
-                                DetailRow::Item(row) => *row,
+                                super::detail_rows::DetailRowRef::Item(row) => row,
                             };
                             // Only count visible rows with a visible size cell.
                             if columns.iter().zip(&cell_widths).any(|((column, _, _), width)| *column == DetailColumn::Size && width.is_some()) {
@@ -2344,6 +2440,17 @@ impl App {
                 ui.spacing_mut().item_spacing.y = saved_spacing;
                 }
                 ui.style_mut().text_styles = saved_text_styles;
+                if self.panes[index].loading && list_rect.width() >= 30.0 && list_rect.height() >= 24.0 {
+                    // Non-interactive paint only. Keep the native list
+                    // geometry, header, scrollbar and cursor positions stable.
+                    let indicator = egui::Rect::from_center_size(
+                        egui::pos2(list_rect.right() - 14.0, list_rect.top() + 13.0),
+                        egui::vec2(16.0, 16.0));
+                    let fill = skin.as_ref().map_or(ui.visuals().panel_fill, |skin|
+                        super::skin_pane::skin_color(skin, "lback", ui.visuals().panel_fill));
+                    ui.painter_at(list_rect).circle_filled(indicator.center(), 10.0, fill);
+                    egui::Spinner::new().size(16.0).paint_at(ui, indicator);
+                }
                 // The list right-button menu (every paint, regardless of whether rows were drawn). The original OnContextPopup(FUN_00484e8c) chooses what to show.
                 // The key (Apps, MousePos -1, -1) is for the current pane only: if there is no selection and the cursor item is "..", do not show it, and the position is the bottom-left of the cursor item's cell.
                 let mouse_menu = super::skin_pane::take_pane_menu_request(ctx, index);
@@ -2439,19 +2546,17 @@ impl App {
     }
     /// Apply bounded ordinary-file insert/delete/rename edits without
     /// regenerating all row texts or performing another directory read.
-    /// The native Name comparator and verified old revision are required.
+    /// The native ordered-file comparator and verified old revision are required.
     /// Ambiguous collation ties, groups, filters, and maximum-width
     /// contraction without a proven surviving maximum use a full refresh.
     fn apply_structural_listing(&mut self,index:usize,revision:u64,plan:LocalListingPlan,
         partial:PartialLocalListing,changed:Vec<Entry>,field_plan:FieldMaxPlan,mut fm:FieldMax)->bool{
         use std::cmp::Ordering as Cmp;
-        use super::list_view::DetailRow;
-        if plan.options.file_mode!="Name"||plan.view.group_mode!="None"||
+        if !matches!(plan.options.file_mode.as_str(),"Name"|"Extension"|"Size"|"Modified"|"Attributes")||plan.view.group_mode!="None"||
             changed.len().saturating_add(partial.removed.len())>16{return false}
         let pane=&self.panes[index];
         let old_len=pane.entries.len();
-        if pane.view.rows.len()!=old_len || !pane.view.rows.iter().enumerate()
-            .all(|(i,row)|matches!(row,DetailRow::Item(n) if *n==i)){return false}
+        if !pane.view.rows.is_identity(old_len){return false}
         let ordinary=|entry:&Entry| !entry.is_dir&&!entry.drive&&entry.attributes&0x400==0&&
             !entry.path.extension().is_some_and(|x|x.eq_ignore_ascii_case("ndr"));
         if changed.iter().any(|e|!ordinary(e)||e.path.parent()!=Some(pane.path.as_path())){return false}
@@ -2472,10 +2577,10 @@ impl App {
             if del{deleted_count+=1;}
             removed.push(row);
         }
-        if deleted_count!=deleting.len(){return false}
+        if deleted_count!=deleting.len()||!partial.structural&&replaces.iter().any(Option::is_none){return false}
         // Sort only the small patch; compare insertion points using the
-        // exact comparator already used by the full Name sort.
-        let cmp=|a:&Entry,b:&Entry|ndr::listing::compare_name_files(a,b,&plan.options);
+        // exact comparator already used by the full ordered sort.
+        let cmp=|a:&Entry,b:&Entry|ndr::listing::compare_ordered_files(a,b,&plan.options);
         let mut order:Vec<usize>=(0..changed.len()).collect();
         order.sort_by(|&a,&b|cmp(&changed[a],&changed[b]));
         if order.windows(2).any(|w|cmp(&changed[w[0]],&changed[w[1]])==Cmp::Equal){return false}
@@ -2566,7 +2671,7 @@ impl App {
             let ((entry,cells),color)=additions[i].take().unwrap();
             pane.entries.insert(target,entry);pane.view.cells.insert(target,cells);pane.view.colors.insert(target,color);
         }
-        pane.view.rows.clear();pane.view.rows.extend((0..final_len).map(DetailRow::Item));
+        pane.view.rows.reset(final_len,false);
         pane.selected=selected;pane.cursor=cursor;pane.anchor=anchor;pane.shift_anchor=shift_anchor;
         pane.adjust=Some((top,false));pane.reveal=false;
         pane.cut_marks.retain(|p|!deleting.contains(p));
@@ -2610,7 +2715,7 @@ impl App {
         if field_revision!=pane.thumb_content_revision||field_plan!=plan.field{return false}
         let Some(summary)=pane.summary.as_ref()else{return false};
         if summary.bytes==u64::MAX{return false}
-        if partial.structural{
+        if partial.structural||!changed.is_empty()&&matches!(plan.options.file_mode.as_str(),"Size"|"Modified"){
             return self.apply_structural_listing(index,revision,plan,partial,changed,field_plan,fm);
         }
         if !partial.removed.is_empty(){return false}

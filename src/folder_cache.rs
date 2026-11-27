@@ -1,7 +1,7 @@
 //! Bounded automatic folder-size acceleration. No per-file persistent index:
 //! disk records are fixed-size path hashes and last verified totals; live
 //! subtree checkpoints own a bounded number of change notification handles.
-use crate::{cache, native::{self, FolderSizeWatch}, tools::{FolderSizeSummary, folder_size_summary_known_directory}};
+use crate::{cache, native::{self, FolderSizeWatch}, tools::{FolderSizeSummary,FolderEntryProbe,folder_size_summary_known_directory}};
 use sha2::{Digest, Sha256};
 use std::{collections::HashMap, fs, io::{Read, Write}, os::windows::{ffi::OsStrExt, fs::{MetadataExt, OpenOptionsExt}}, path::{Path, PathBuf}, sync::atomic::{AtomicBool, Ordering}, time::{Duration, Instant, SystemTime, UNIX_EPOCH}};
 
@@ -100,7 +100,17 @@ fn read_records(path: &Path) -> Records {
     decode(&data, now_seconds()).unwrap_or_default()
 }
 
-/// Owned only by the low-priority folder worker. Cache failure never
+/// Immutable copy of a cache record. Identity verification can perform
+/// filesystem I/O without holding the shared disk-cache mutex.
+#[derive(Clone,Copy)]
+pub struct DiskHint(Record);
+impl DiskHint{
+    pub fn validated(self,path:&Path)->Option<u64>{
+        (live(&self.0,now_seconds())&&native::folder_size_identity(path)==Some(self.0.identity)).then_some(self.0.bytes)
+    }
+}
+
+/// Shared by the low-priority folder workers. Cache failure never
 /// prevents calculation. A fixed staging name is protected by an exclusive
 /// Windows file handle; concurrent instances merge rather than overwrite.
 pub struct DiskStore {
@@ -115,14 +125,14 @@ impl DiskStore {
         let records = if enabled { read_records(&root.join("folder_sizes.db")) } else { Records::new() };
         Self { root, records, dirty: Records::new(), enabled }
     }
-    pub fn hint(&self, path: &Path) -> Option<u64> {
-        if !self.enabled { return None; }
-        let record = self.records.get(&key(path))?;
-        if !live(record, now_seconds()) || native::folder_size_identity(path)? != record.identity { return None; }
-        // The prior process cannot prove descendants are unchanged. This
-        // is the last successful observation for the matching identity,
-        // for display only until a live scan validates the current total.
-        Some(record.bytes)
+    pub fn candidate_hint(&self,path:&Path)->Option<DiskHint>{
+        if !self.enabled{return None}
+        self.records.get(&key(path)).filter(|r|live(r,now_seconds())).copied().map(DiskHint)
+    }
+    pub fn hint(&self,path:&Path)->Option<u64>{
+        // The prior process cannot prove descendants are unchanged.
+        // A matching identity supplies presentation-only last-known bytes.
+        self.candidate_hint(path)?.validated(path)
     }
     pub fn record(&mut self, path: &Path, watch: &FolderSizeWatch, bytes: u64) {
         if !self.enabled { return; }
@@ -207,6 +217,19 @@ impl ScanEngine {
         }
         Some((summary,work))
     }
+    /// A child measured while scanning its parent is already a complete
+    /// proof. Opening that child as a new visible root need not rescan it.
+    /// Return the original measurement time, never renew the audit age.
+    pub fn reuse_checkpoint(&mut self,path:&Path,cancel:&AtomicBool,root_watch:&FolderSizeWatch)
+        ->Option<(FolderSizeSummary,Instant)>{
+        let previous=self.checkpoints.get_mut(path)?;
+        if cancel.load(Ordering::Relaxed)||previous.measured.elapsed()>=FULL_AUDIT_AGE
+            ||previous.watch.identity()!=root_watch.identity()||!previous.watch.reusable(path){return None}
+        root_watch.remember_links(&previous.summary.links,previous.summary.link_overflow);
+        if !root_watch.reusable(path)||!previous.watch.unchanged()||cancel.load(Ordering::Relaxed){return None}
+        previous.used=Instant::now();
+        Some((previous.summary.clone(),previous.measured))
+    }
     pub fn prune_idle(&mut self) {
         self.checkpoints.retain(|_, c| c.used.elapsed() < CHECKPOINT_IDLE && c.measured.elapsed() < FULL_AUDIT_AGE && c.watch.unchanged());
     }
@@ -219,7 +242,8 @@ impl ScanEngine {
         }
         let mut staged = Vec::new();
         let mut work = ScanWork::default();
-        let summary = self.branch(path, 0, false, &mut staged, cancel, force_full, &mut work, policy,native::folder_size_local_volume(path))?;
+        let mut oldest=Instant::now();
+        let summary = self.branch(path, 0, false, &mut staged, cancel, force_full, &mut work,policy,native::folder_size_local_volume(path),&mut oldest)?;
         // The root watch was armed BEFORE enumeration. This lets us arm
         // child watches only AFTER finding useful branches, with no
         // unmonitored gap: discard all staged checkpoints on root changes.
@@ -239,12 +263,13 @@ impl ScanEngine {
         }
         self.checkpoints.insert(path.to_path_buf(), checkpoint);
     }
-    fn branch(&mut self, path: &Path, depth: usize, known_directory: bool, staged: &mut Vec<(PathBuf, Checkpoint)>, cancel: &AtomicBool, force_full: bool, work: &mut ScanWork, policy: ScanPolicy,verify:bool) -> Option<FolderSizeSummary> {
+    fn branch(&mut self, path: &Path, depth: usize, known_directory: bool, staged: &mut Vec<(PathBuf, Checkpoint)>, cancel: &AtomicBool, force_full: bool, work:&mut ScanWork,policy:ScanPolicy,verify:bool,oldest:&mut Instant) -> Option<FolderSizeSummary> {
         if cancel.load(Ordering::Relaxed) { return None; }
         if depth > 0 && !force_full {
             if let Some(previous) = self.checkpoints.get_mut(path) {
                 if previous.measured.elapsed() < FULL_AUDIT_AGE && previous.watch.reusable(path) {
                     previous.used = Instant::now();
+                    *oldest=(*oldest).min(previous.measured);
                     work.reused += 1;
                     return Some(previous.summary.clone());
                 }
@@ -257,7 +282,7 @@ impl ScanEngine {
         // Root and checkpoint candidates can split at their immediate child
         // directories. Everything else uses the original iterative scan.
         let summary = if depth > 0 && (!eligible || depth == policy.depth) {
-            let summary = folder_size_summary_known_directory(path, cancel,verify)?;
+            let summary = folder_size_summary_known_directory(path,cancel,verify)?;
             work.visited += summary.files + summary.folders;
             summary
         } else {
@@ -285,18 +310,18 @@ impl ScanEngine {
                 Ok(e) => e,
                 Err(e) => { error(&mut summary, path, e); return Some(summary); }
             };
-            let mut wide=Vec::new();
+            let mut files=FolderEntryProbe::new(path,verify);
             for entry in entries {
                 if cancel.load(Ordering::Relaxed) { return None; }
                 let entry = match entry { Ok(e) => e, Err(e) => { error(&mut summary, path, e); break; } };
                 let meta = match entry.metadata() { Ok(m) => m, Err(e) => { error(&mut summary, &entry.path(), e); continue; } };
                 if meta.file_attributes() & 0x400 != 0 { continue; }
                 if meta.is_dir() {
-                    let child = self.branch(&entry.path(), depth + 1, true, staged, cancel, force_full, work, policy,verify)?;
+                    let child = self.branch(&entry.path(), depth + 1, true, staged, cancel, force_full, work,policy,verify,oldest)?;
                     summary.merge(child);
                 } else {
                     work.visited += 1;
-                    summary.add_file(&entry.path(),meta.len(),verify,&mut wide);
+                    files.add(&entry,meta.len(),&mut summary);
                 }
             }
             summary
@@ -312,7 +337,7 @@ impl ScanEngine {
                     if watch.unchanged() {
                         watch.remember_links(&summary.links,summary.link_overflow);
                         if !summary.link_overflow&&watch.reusable(path) {
-                            staged.push((path.to_path_buf(), Checkpoint { watch, summary: summary.clone(), measured: started, used: Instant::now() }));
+                            staged.push((path.to_path_buf(), Checkpoint { watch, summary: summary.clone(), measured:started.min(*oldest),used:Instant::now() }));
                         }
                     }
                 }
@@ -359,6 +384,51 @@ mod tests {
         cancel.store(true,Ordering::Relaxed);
         assert!(ScanEngine::quick_scan(&small,&cancel,&watch,16,Duration::from_secs(5)).is_none());
         drop((watch,large_watch));fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn prefix_probe_preserves_authoritative_totals_unicode_and_failed_entries(){
+        let base=fixture("prefix-verified");
+        let root=base.join("root");fs::create_dir(&root).unwrap();
+        let outside=base.join("source.bin");fs::write(&outside,[0u8;17]).unwrap();
+        let mut expected=0;
+        for i in 0..4100 {
+            let path=root.join(format!("{i}-\u{d55c}\u{ae00}.bin"));let n=(i%13) as u64;
+            fs::write(&path,vec![1u8;n as usize]).unwrap();expected+=n;
+        }
+        let alias=root.join("alias.bin");fs::hard_link(&outside,&alias).unwrap();
+        fs::write(&outside,vec![2u8;65536]).unwrap();
+        let cancel=AtomicBool::new(false);
+        let summary=folder_size_summary(&[root.clone()],&cancel).unwrap();
+        assert_eq!(summary.files,4101);assert_eq!(summary.total_bytes,expected+65536);
+        assert!(summary.errors.is_empty());assert_eq!(summary.links.len(),1);
+        // Probe a real enumeration record after its file was deleted.
+        let path=root.join("gone.bin");fs::write(&path,b"123").unwrap();
+        let entry=fs::read_dir(&root).unwrap().map(Result::unwrap).find(|e|e.path()==path).unwrap();
+        fs::remove_file(&path).unwrap();
+        let mut probe=FolderEntryProbe::new(&root,true);
+        let mut failed=FolderSizeSummary::default();probe.add(&entry,3,&mut failed);
+        assert_eq!(failed.total_bytes,0);assert_eq!(failed.files,0);assert_eq!(failed.errors.len(),1);
+        cancel.store(true,Ordering::Relaxed);
+        assert!(folder_size_summary(&[root],&cancel).is_none());
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn descendant_checkpoint_reuse_preserves_age_and_rejects_changed_identity(){
+        let root=fixture("child-promotion");let child=root.join("child");fs::create_dir(&child).unwrap();
+        for i in 0..144{fs::write(child.join(format!("{i}.bin")),[1u8;8]).unwrap();}
+        let cancel=AtomicBool::new(false);let mut engine=ScanEngine::default();
+        let watch=FolderSizeWatch::open(&root).unwrap();
+        engine.scan(&root,&cancel,true,&watch).unwrap();
+        let measured=engine.checkpoints[&child].measured;
+        let child_watch=FolderSizeWatch::open(&child).unwrap();
+        let (result,audit)=engine.reuse_checkpoint(&child,&cancel,&child_watch).unwrap();
+        assert_eq!(result.total_bytes,1152);assert_eq!(audit,measured);
+        fs::write(child.join("0.bin"),[2u8;16]).unwrap();
+        wait_changed(&engine.checkpoints[&child].watch);
+        assert!(engine.reuse_checkpoint(&child,&cancel,&FolderSizeWatch::open(&child).unwrap()).is_none());
+        drop((watch,child_watch,engine));fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

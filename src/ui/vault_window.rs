@@ -108,9 +108,7 @@ impl App {
         state.cursor = 0;
         state.summary = None;
         state.view.wipe_sensitive_cells();
-        for row in &mut state.view.rows {
-            if let super::list_view::DetailRow::Header(label) = row { label.zeroize(); }
-        }
+        state.view.rows.for_each_header_mut(|label|label.zeroize());
         state.view = PaneView::default();
         state.descriptions.clear();
         state.folder_sizes.clear();

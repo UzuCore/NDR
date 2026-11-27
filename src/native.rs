@@ -303,8 +303,22 @@ pub fn gdi_text_widths<S: AsRef<str>>(face: &str, pixels: i32, style: u8, texts:
     let name = wide(face);
     let mut result = Vec::with_capacity(texts.len());
     for text in texts {
+        let text=text.as_ref();
+        // Hot ASCII filenames need no UTF-8 decoding, hash lookup or
+        // font creation once every character is present in the font cache.
+        // A missing byte falls back to the exact original Unicode path.
+        if text.is_ascii(){
+            let mut total=0;
+            let mut complete=true;
+            for &byte in text.as_bytes(){
+                let width=widths.ascii[byte as usize];
+                if width==i32::MIN{complete=false;break;}
+                total+=width;
+            }
+            if complete{result.push(total);continue;}
+        }
         let mut total = 0;
-        for ch in text.as_ref().chars() {
+        for ch in text.chars() {
             if let Some(width) = widths.get(ch) {
                 total += width;
                 continue;
@@ -356,6 +370,18 @@ pub fn gdi_text_widths<S: AsRef<str>>(face: &str, pixels: i32, style: u8, texts:
     }
     Some(result)
     })
+}
+
+#[test]
+fn hot_ascii_gdi_widths_match_individual_unicode_glyphs() {
+    let samples=["abc123.txt","A-a_0 123","", "x\u{ac00}\u{1f9ea}y", "new#@!"];
+    for style in [0,1,2,3]{
+        let expected:Vec<i32>=samples.iter().map(|s|{
+            let chars:Vec<String>=s.chars().map(|c|c.to_string()).collect();
+            gdi_text_widths("Tahoma",17,style,&chars).unwrap().into_iter().sum()
+        }).collect();
+        for _ in 0..3{assert_eq!(gdi_text_widths("Tahoma",17,style,&samples).unwrap(),expected);}
+    }
 }
 
 /// The ".." entry the file system reports in FindFirstFileW(folder\*), as original GetList (0x45a34c) adds it: its dwFileAttributes and
@@ -500,6 +526,112 @@ pub fn shell_open(path: &Path, args: Option<&str>, verb: &str) -> Result<(), Str
         Err(std::io::Error::last_os_error().to_string())
     } else {
         Ok(())
+    }
+}
+
+/// Read the actual default association selected in Windows, not the
+/// Open With candidate list. No registry writes or association changes.
+fn association_text(association: &str, kind: ASSOCSTR, flags: ASSOCF) -> Option<String> {
+    let association = wide(association);
+    let mut length = 0u32;
+    unsafe { AssocQueryStringW(flags, kind, association.as_ptr(), ptr::null(), ptr::null_mut(), &mut length) };
+    if length == 0 || length > 32768 { return None; }
+    let mut value = vec![0u16; length as usize];
+    let result = unsafe { AssocQueryStringW(flags, kind, association.as_ptr(), ptr::null(), value.as_mut_ptr(), &mut length) };
+    if result != 0 { return None; }
+    let end = value.iter().position(|c| *c == 0).unwrap_or(value.len());
+    String::from_utf16(&value[..end]).ok().filter(|s| !s.is_empty())
+}
+
+fn is_photos_app_id(id: &str) -> bool {
+    id.split_once('!').is_some_and(|(family, app)|
+        family.eq_ignore_ascii_case("Microsoft.Windows.Photos_8wekyb3d8bbwe") && !app.is_empty())
+}
+
+fn is_photos_association(app_id: Option<&str>, prog_id: Option<&str>) -> bool {
+    // If Windows can resolve the AUMID, it takes precedence over a legacy
+    // ProgID. The fallback is the known Photos file-association ProgID.
+    if let Some(id) = app_id { return is_photos_app_id(id); }
+    prog_id.is_some_and(|id| {
+        id.eq_ignore_ascii_case("AppX43hnxtbyyps62jhe9sqpdzxn1790zetc")
+            || id.eq_ignore_ascii_case("AppX4mntx4h978m1v9gtzv0ewksfd6pmwsre")
+    })
+}
+
+fn photos_view_uri(path: &Path) -> Option<String> {
+    if !path.is_absolute() { return None; }
+    let path = path.to_str()?;
+    if path.contains('\0') { return None; }
+    let mut uri = String::with_capacity(26 + path.len() * 3);
+    uri.push_str("ms-photos:viewer?fileName=");
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    for b in path.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
+            uri.push(char::from(b));
+        } else {
+            uri.push('%');
+            uri.push(char::from(HEX[(b >> 4) as usize]));
+            uri.push(char::from(HEX[(b & 15) as usize]));
+        }
+    }
+    Some(uri)
+}
+
+/// Windows Photos can lose folder browsing context when launched with the
+/// ordinary file verb. Its documented viewer URI opens the selected image
+/// with the app's gallery navigation. Only use it for the actual default
+/// Photos association; every other default application retains the file verb.
+/// https://learn.microsoft.com/windows/apps/develop/launch/launch-default-app#photos-app-uri-scheme
+pub fn open_default_file(path: &Path) -> Result<(), String> {
+    let extension = path.extension().and_then(OsStr::to_str);
+    if let Some(extension) = extension.filter(|e| !e.is_empty() && !e.contains('\0')) {
+        let association = format!(".{extension}");
+        let app_id = association_text(&association, ASSOCSTR_APPID, 0);
+        let prog_id = if app_id.is_none() { association_text(&association, ASSOCSTR_PROGID, 0) } else { None };
+        if is_photos_association(app_id.as_deref(), prog_id.as_deref()) {
+            if let Some(uri) = photos_view_uri(path) {
+                // If a different app explicitly owns the protocol, do not
+                // route the user's image to it. If the association cannot be
+                // queried, the shell call may fail and use the normal verb.
+                let protocol_id = association_text("ms-photos", ASSOCSTR_APPID, ASSOCF_IS_PROTOCOL);
+                if protocol_id.as_deref().is_none_or(is_photos_app_id) {
+                    let uri = wide(uri);
+                    let mut info: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
+                    info.cbSize = size_of::<SHELLEXECUTEINFOW>() as u32;
+                    info.fMask = SEE_MASK_FLAG_NO_UI | SEE_MASK_NOASYNC;
+                    info.lpFile = uri.as_ptr();
+                    info.nShow = SW_SHOWNORMAL;
+                    if unsafe { ShellExecuteExW(&mut info) } != 0 { return Ok(()); }
+                }
+            }
+        }
+    }
+    shell_open(path, None, "open")
+}
+
+#[cfg(test)]
+mod photos_open_tests {
+    use super::*;
+
+    #[test]
+    fn photos_uri_encodes_absolute_unicode_and_query_delimiters() {
+        let path=Path::new("C:\\Photo Folder\\\u{D55C}\u{AE00} #&+%.jpg");
+        assert_eq!(photos_view_uri(path).as_deref(),
+            Some("ms-photos:viewer?fileName=C%3A%5CPhoto%20Folder%5C%ED%95%9C%EA%B8%80%20%23%26%2B%25.jpg"));
+        assert!(photos_view_uri(Path::new("relative.jpg")).is_none());
+        assert_eq!(photos_view_uri(Path::new(r"\\server\share\a.png")).as_deref(),
+            Some("ms-photos:viewer?fileName=%5C%5Cserver%5Cshare%5Ca.png"));
+    }
+
+    #[test]
+    fn only_the_actual_microsoft_photos_default_uses_the_protocol() {
+        assert!(is_photos_association(Some("Microsoft.Windows.Photos_8wekyb3d8bbwe!App"),None));
+        assert!(is_photos_association(None,Some("AppX43hnxtbyyps62jhe9sqpdzxn1790zetc")));
+        assert!(is_photos_association(None,Some("AppX4mntx4h978m1v9gtzv0ewksfd6pmwsre")));
+        assert!(!is_photos_association(Some("Microsoft.Windows.Photos.Legacy_8wekyb3d8bbwe!App"),None));
+        assert!(!is_photos_association(Some("Other.Viewer!App"),Some("AppX43hnxtbyyps62jhe9sqpdzxn1790zetc")));
+        assert!(!is_photos_association(None,Some("jpegfile")));
+        assert!(!is_photos_association(None,None));
     }
 }
 

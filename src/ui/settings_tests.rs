@@ -164,7 +164,8 @@ fn settings_window_commits_like_csharp() {
         assert!(matches!(&form.tabs[3][0], Row::Check { key, label, .. } if key == "SelectFolders" && label == "모두 선택할 때 폴더 포함"));
         assert!(form.tabs[2].iter().any(|row| matches!(row, Row::ColorButtons)));
         assert!(form.tabs[6].iter().any(|row| matches!(row, Row::FunctionKeys)));
-        assert!(matches!(&form.tabs[8][0], Row::Check { key, label, .. } if key == "DualPaneMode" && label == "두 패널 표시"));
+        assert!(form.row_mut("DualPaneMode").is_none(), "the View menu owns this setting");
+        assert!(form.tabs[8].iter().any(|r| matches!(r, Row::Check{key,..} if key=="ShowCompletionToast")));
         // Original ComboBox text (values unchanged): cbSort1.
         assert!(form.tabs[0].iter().any(|row| matches!(row, Row::Combo { key, choices, .. } if key == "LeftSortMode" && choices[1] == ("Name".to_owned(), "이름".to_owned()))));
         // Original cbColumn1: "자동;1열;...;6열", and the NDR-only 7-19 columns use the same form.
@@ -477,9 +478,11 @@ fn title_bar_follows_skin_with_opposite_system_theme() {
         let output = ctx.run(input, |ctx| {
             app.preferences_dirty = false;
             if via_settings {
-                app.open_settings_window();
-                set_combo(&mut app, "Theme", skin);
-                app.settings_action(SettingsAction::Apply, ctx);
+                // The theme selector now belongs only to the Skin menu.
+                // Retain coverage of the settings application/import path.
+                let mut settings = app.settings.clone();
+                settings.set_text("Theme", skin);
+                app.apply_settings(settings);
             } else {
                 app.apply_theme(skin);
             }
@@ -594,15 +597,20 @@ fn line_space_and_grid_lines_follow_the_original_file_list() {
 fn applying_options_on_a_fresh_profile_keeps_default_on_settings() {
     let (root, ctx, mut app) = fixture("fresh-defaults", "ko");
     // Settings whose C# NdrSettings and original ini default is on stay on when the window is applied unchanged (previously the window default was off, so applying turned them off).
-    let keys = ["UseTabs", "ShowFolderDiskInfoBar", "ShowFileInfoBar", "ShowFavoritesBar", "RemoveReadOnlyWhenCopying", "ShowColumnLines", "ShowDeleteButton"];
+    let keys = ["UseTabs", "RemoveReadOnlyWhenCopying", "ShowColumnLines", "ShowDeleteButton"];
+    let menu_keys = ["ShowFolderDiskInfoBar", "ShowFileInfoBar"];
     for key in keys {
         app.settings.values.remove(key);
     }
+    for key in menu_keys { app.settings.set_flag(key, false); }
+    app.settings.set_flag("ShowFavoritesBar", false);
     app.dispatch("options", &ctx);
     app.settings_action(SettingsAction::Apply, &ctx);
     for key in keys {
         assert!(app.settings.flag(key, false), "{key} stays on");
     }
+    for key in menu_keys { assert!(!app.settings.flag(key, true), "{key} remains off"); }
+    assert!(!app.settings.flag("ShowFavoritesBar", true), "unused setting is not rewritten");
     let _ = fs::remove_dir_all(root);
 }
 
@@ -610,8 +618,14 @@ fn applying_options_on_a_fresh_profile_keeps_default_on_settings() {
 fn ndr_page_does_not_expose_internal_update_feed_or_last_pane_paths() {
     let (root, _ctx, app)=fixture("ndr-no-debug-options","ko");
     let mut form=super::settings_window::SettingsForm::new(&app.settings,&app.language_pack,&app.resources);
-    for key in ["UpdateManifestUrl","LeftPath","RightPath"] { assert!(form.row_mut(key).is_none(),"{key}"); }
-    for key in ["LeftStartPathEnabled","LeftStartPath","RightStartPathEnabled","RightStartPath","LeftAutoFolderSize","RightAutoFolderSize","CheckForUpdatesOnStartup","ShowCompletionToast","FolderTreeDepth"] {
+    for key in ["UpdateManifestUrl","LeftPath","RightPath","DualPaneMode","ShowToolBar",
+        "ShowFunctionBar","ShowVerticalBar","ShowDriveButtons","ShowFolderDiskInfoBar",
+        "ShowFileInfoBar","ShowExtensionInfoBar","ShowLeftFolderTree","ShowRightFolderTree",
+        "Theme","Language","ShowFavoritesBar"] { assert!(form.row_mut(key).is_none(),"{key}"); }
+    for key in ["LeftStartPathEnabled","LeftStartPath","RightStartPathEnabled","RightStartPath","LeftAutoFolderSize","RightAutoFolderSize","CheckForUpdatesOnStartup","ShowCompletionToast","FolderTreeDepth","VaultSessionPolicy","VaultSessionMinutes",
+        "VaultLockOnMinimize","ShowDeleteToolbarButton","UseOverlayIcons","UseContentComparison",
+        "LeftGroupMode","RightGroupMode","LeftFolderSortMode","RightFolderSortMode",
+        "CopyHandlerPath","TreeExcludedPaths"] {
         assert!(form.row_mut(key).is_some(),"{key}");
     }
     drop(app);let _=fs::remove_dir_all(root);

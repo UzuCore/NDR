@@ -13,6 +13,7 @@ const MAX_AGE:Duration=Duration::from_secs(30);
 // the original snapshot. Large lists retain the existing known-link checks
 // and explicit fresh reads rather than repeatedly stat every file.
 pub const ALIAS_AUDIT_ROWS:usize=2048;
+pub const ALIAS_FULL_AUDIT_ROWS:usize=MAX_ROWS;
 const ALIAS_AUDIT_AGE:Duration=Duration::from_secs(10);
 const NOTIFY_FILTER:u32=FILE_NOTIFY_CHANGE_FILE_NAME|FILE_NOTIFY_CHANGE_DIR_NAME|
  FILE_NOTIFY_CHANGE_ATTRIBUTES|FILE_NOTIFY_CHANGE_SIZE|FILE_NOTIFY_CHANGE_LAST_WRITE|
@@ -150,7 +151,7 @@ impl CachedEntry {
             modified:entry.modified,attributes:entry.attributes,is_dir:entry.is_dir})
     }
     fn materialize(&self,path:&Path)->Entry{
-        Entry{path:path.join(&self.name),name:self.name.to_string_lossy().into_owned(),
+        Entry{path:fsops::listing_child_path(path,&self.name),name:self.name.to_string_lossy().into_owned(),
             size:self.size,modified:self.modified,attributes:self.attributes,
             is_dir:self.is_dir,hidden:self.attributes&2!=0,drive:false}
     }
@@ -261,15 +262,61 @@ fn by_name_fn()->Option<ByNameFn>{
     })
 }
 struct FreshFile{id:u64,size:u64,modified:Option<std::time::SystemTime>,attributes:u32,links:u32}
-fn fresh_regular(path:&Path,wide:&mut Vec<u16>)->Result<FreshFile,std::io::Error>{
-    if let Some(f)=by_name_fn(){
-        wide.clear();wide.extend(path.as_os_str().encode_wide());wide.push(0);
-        let mut stat=ByNameStat::default();
-        if unsafe{f(wide.as_ptr(),0,&mut stat,std::mem::size_of::<ByNameStat>() as u32)}!=0
-            && stat.size>=0 && stat.links>0 && stat.attributes&(FILE_ATTRIBUTE_DIRECTORY|FILE_ATTRIBUTE_REPARSE_POINT)==0{
-            return Ok(FreshFile{id:stat.id as u64,size:stat.size as u64,modified:windows_ticks(stat.write),attributes:stat.attributes,links:stat.links})
-        }
+fn regular_by_name_wide(wide:&[u16])->Option<ByNameStat>{
+    let f=by_name_fn()?;
+    if wide.last()!=Some(&0){return None}
+    let mut stat=ByNameStat::default();
+    (unsafe{f(wide.as_ptr(),0,&mut stat,std::mem::size_of::<ByNameStat>() as u32)}!=0
+        &&stat.size>=0&&stat.links>0&&stat.attributes&(FILE_ATTRIBUTE_DIRECTORY|FILE_ATTRIBUTE_REPARSE_POINT)==0)
+        .then_some(stat)
+}
+fn regular_by_name(path:&Path,wide:&mut Vec<u16>)->Option<ByNameStat>{
+    if by_name_fn().is_none(){return None}
+    wide.clear();wide.extend(path.as_os_str().encode_wide());wide.push(0);
+    regular_by_name_wide(wide)
+}
+/// A recursive walk enumerates siblings under one directory prefix.
+/// Avoid converting or allocating that prefix for each file. Exact
+/// native size and link-count verification are still mandatory.
+pub(crate) struct FolderPathProbe{
+    wide:Vec<u16>,
+    prefix:usize,
+}
+impl FolderPathProbe{
+    pub(crate) fn new(parent:&Path)->Option<Self>{
+        by_name_fn()?;
+        // Limit the fast path to ordinary absolute drive paths. Other
+        // namespace forms use the previous full-path/handle route.
+        let mut components=parent.components();
+        if !matches!(components.next(),Some(Component::Prefix(p)) if matches!(p.kind(),Prefix::Disk(_)|Prefix::VerbatimDisk(_)))
+            ||!parent.is_absolute(){return None}
+        let mut wide:Vec<u16>=parent.as_os_str().encode_wide().collect();
+        if !matches!(wide.last(),Some(92|47)){wide.push(92)}
+        let prefix=wide.len();
+        Some(Self{wide,prefix})
     }
+    fn stat_raw(&mut self,name:&std::ffi::OsStr)->Option<ByNameStat>{
+        self.wide.truncate(self.prefix);
+        self.wide.extend(name.encode_wide());self.wide.push(0);
+        regular_by_name_wide(&self.wide)
+    }
+    pub(crate) fn stat(&mut self,name:&std::ffi::OsStr)->Option<(u64,u64,u32)>{
+        let stat=self.stat_raw(name)?;
+        Some((stat.id as u64,stat.size as u64,stat.links))
+    }
+    fn fresh(&mut self,name:&std::ffi::OsStr)->Option<FreshFile>{
+        self.stat_raw(name).map(fresh_from_stat)
+    }
+}
+fn fresh_from_stat(stat:ByNameStat)->FreshFile{
+    FreshFile{id:stat.id as u64,size:stat.size as u64,modified:windows_ticks(stat.write),
+        attributes:stat.attributes,links:stat.links}
+}
+fn fresh_regular(path:&Path,wide:&mut Vec<u16>)->Result<FreshFile,std::io::Error>{
+    if let Some(stat)=regular_by_name(path,wide){return Ok(fresh_from_stat(stat))}
+    fresh_regular_handle(path)
+}
+fn fresh_regular_handle(path:&Path)->Result<FreshFile,std::io::Error>{
     // Older Windows versions and unsupported requests retain the normal
     // read-attributes handle path; never open a reparse target.
     let file=fs::OpenOptions::new().access_mode(FILE_READ_ATTRIBUTES)
@@ -287,7 +334,12 @@ fn fresh_regular(path:&Path,wide:&mut Vec<u16>)->Result<FreshFile,std::io::Error
 }
 /// The NTFS filename index can retain a stale size for a hard-link alias.
 pub(crate) fn folder_file_stat(path:&Path,wide:&mut Vec<u16>)->Result<(u64,u64,u32),std::io::Error>{
-    let fresh=fresh_regular(path,wide)?;
+    // Recursive size accounting does not need FILETIME conversion or
+    // presentation fields. Preserve the authoritative handle fallback.
+    if let Some(stat)=regular_by_name(path,wide){
+        return Ok((stat.id as u64,stat.size as u64,stat.links))
+    }
+    let fresh=fresh_regular_handle(path)?;
     Ok((fresh.id,fresh.size,fresh.links))
 }
 fn apply_fresh(entry:&mut Entry,fresh:&FreshFile){
@@ -298,12 +350,16 @@ struct Scan{entries:Vec<Entry>,linked:HashSet<OsString>,unverified:usize}
 // The directory index cannot identify links in a different directory.
 // Verify regular rows without retaining a file handle per row. Keep
 // inaccessible/racing rows visible as before but do not cache them.
-fn verify_chunk(rows:&mut [Entry],ids:&[u64],cancel:&AtomicBool)->Result<(HashSet<OsString>,usize),String>{
+fn verify_chunk(parent:&Path,rows:&mut [Entry],ids:&[u64],cancel:&AtomicBool)->Result<(HashSet<OsString>,usize),String>{
     let mut links=HashSet::new();let mut unverified=0;let mut wide=Vec::with_capacity(512);
+    let mut probe=FolderPathProbe::new(parent);
     for (row,&id) in rows.iter_mut().zip(ids){
         fsops::check_cancel(cancel)?;
         if row.is_dir||row.attributes&FILE_ATTRIBUTE_REPARSE_POINT!=0{continue}
-        match fresh_regular(&row.path,&mut wide){
+        let fresh=if let Some(probe)=probe.as_mut(){
+            row.path.file_name().and_then(|name|probe.fresh(name)).map_or_else(||fresh_regular_handle(&row.path),Ok)
+        }else{fresh_regular(&row.path,&mut wide)};
+        match fresh{
             Ok(fresh) if id==0||fresh.id==id=>{
                 apply_fresh(row,&fresh);
                 if fresh.links>1{if let Some(name)=row.path.file_name(){links.insert(name.to_os_string());}}
@@ -314,22 +370,33 @@ fn verify_chunk(rows:&mut [Entry],ids:&[u64],cancel:&AtomicBool)->Result<(HashSe
     Ok((links,unverified))
 }
 fn verify_regulars(path:&Path,entries:&mut [Entry],ids:&[u64],cancel:&AtomicBool)->Result<(HashSet<OsString>,usize),String>{
-    let workers=if entries.len()>=4096&&by_name_fn().is_some(){
-        let limit=match native::folder_size_media(path){
+    static BUDGET:crate::listing_budget::VerificationBudget=crate::listing_budget::VerificationBudget::new();
+    // Keep exact native ID/link-count verification for every regular file.
+    // On fast media the measured workload benefits from additional workers;
+    // unknown/seek media retain conservative limits. The caller participates.
+    let requested=if entries.len()>=4096&&by_name_fn().is_some(){
+        match native::folder_size_media(path){
             native::FolderSizeMedia::Seek=>1,
-            native::FolderSizeMedia::Fast if entries.len()>=16_384=>8,
+            native::FolderSizeMedia::Fast if entries.len()>=16_384=>12,
+            native::FolderSizeMedia::Fast=>8,
             _=>4,
-        };
-        std::thread::available_parallelism().map_or(1,usize::from).min(limit)
+        }
     }else{1};
-    if workers<=1{return verify_chunk(entries,ids,cancel)}
+    let parallelism=std::thread::available_parallelism().map_or(1,usize::from);
+    let permit=BUDGET.acquire(requested,parallelism);
+    let workers=permit.workers();
+    if workers<=1{return verify_chunk(path,entries,ids,cancel)}
     let chunk=entries.len().div_ceil(workers).max(1);
     std::thread::scope(|scope|{
-        let tasks:Vec<_>=entries.chunks_mut(chunk).zip(ids.chunks(chunk))
-            .map(|(rows,ids)|scope.spawn(move||verify_chunk(rows,ids,cancel))).collect();
-        let mut linked=HashSet::new();let mut unverified=0;
-        for t in tasks{
-            let (names,count)=t.join().map_err(|_|"File metadata worker failed".to_owned())??;
+        let mut chunks=entries.chunks_mut(chunk).zip(ids.chunks(chunk));
+        let (local_rows,local_ids)=chunks.next().expect("parallel verification has rows");
+        let tasks:Vec<_>=chunks.map(|(rows,ids)|scope.spawn(move||verify_chunk(path,rows,ids,cancel))).collect();
+        let local=verify_chunk(path,local_rows,local_ids,cancel);
+        // Join every worker even when the caller or another worker failed.
+        let joined:Vec<_>=tasks.into_iter().map(|t|t.join()).collect();
+        let (mut linked,mut unverified)=local?;
+        for result in joined{
+            let (names,count)=result.map_err(|_|"File metadata worker failed".to_owned())??;
             linked.extend(names);unverified+=count;
         }
         Ok((linked,unverified))
@@ -375,7 +442,7 @@ fn scan_ids(path:&Path,show_hidden:bool,cancel:&AtomicBool)->Result<Option<Scan>
             let units=unsafe{std::slice::from_raw_parts(raw.add(header).cast::<u16>(),length/2)};
             if units!=[46] && units!=[46,46]{
                 let filename=OsString::from_wide(units);
-                let item_path=path.join(&filename);
+                let item_path=fsops::listing_child_path(path,&filename);
                 let name=filename.into_string().unwrap_or_else(|name|name.to_string_lossy().into_owned());
                 // Win32 directory attributes alone do not distinguish a
                 // directory symlink from a normal directory. Keep Rust's
@@ -432,6 +499,7 @@ fn update_modified(path:&Path, entries:&mut [CachedEntry],names:&HashSet<OsStrin
         let m=fresh_regular(&path.join(&entry.name),&mut wide).map_err(|_|())?;
         if !show_hidden&&m.attributes&6!=0{return Err(())}
         if m.links>1{linked.insert(entry.name.clone());}
+        else{linked.remove(&entry.name);}
         if entry.size!=m.size||entry.modified!=m.modified||entry.attributes!=m.attributes{
             entry.size=m.size;entry.modified=m.modified;entry.attributes=m.attributes;
             changed.insert(entry.name.clone());
@@ -628,6 +696,8 @@ impl ListingCache {
                     // (size and last-write time). Drain a bounded number of
                     // batches and reconcile again, rather than mistaking the
                     // second notification for a journal overflow.
+                    let linked_before=link_weight(&old.linked);
+                    let delta_before=old.last_delta.as_ref().map_or(0,LastDelta::bytes);
                     let mut changed_names=HashSet::new();let mut removed=Vec::new();
                     let mut events=Vec::new();let mut structural=false;
                     let mut clean=false;
@@ -700,11 +770,14 @@ impl ListingCache {
                             old.revision=self.serial.fetch_add(1,Ordering::Relaxed)+1;
                             old.last_delta=Some(LastDelta{base:previous,changed:changed_names.clone(),removed:removed.clone(),structural});
                         }
-                        let entries=old.entries.iter().filter(|e|!partial||changed_names.contains(&e.name)).map(|e|e.materialize(path)).collect();
+                        let entries=if partial&&changed_names.is_empty(){Vec::new()}
+                            else{old.entries.iter().filter(|e|!partial||changed_names.contains(&e.name)).map(|e|e.materialize(path)).collect()};
                         old.verified=Instant::now();
                         let revision=old.revision;
                         let hardlinks=!old.linked.is_empty();
-                        old.bytes=weight(&old.entries).saturating_add(link_weight(&old.linked))
+                        let base_weight=if structural{weight(&old.entries)}
+                            else{old.bytes.saturating_sub(linked_before).saturating_sub(delta_before)};
+                        old.bytes=base_weight.saturating_add(link_weight(&old.linked))
                             .saturating_add(old.last_delta.as_ref().map_or(0,LastDelta::bytes));
                         self.put(&lease,old);
                         if partial{self.partial.fetch_add(1,Ordering::Relaxed);}

@@ -23,6 +23,7 @@ mod keyboard;
 mod job_scheduler;
 mod list_export_dialog;
 mod list_keys;
+mod detail_rows;
 mod list_view;
 mod main_window;
 mod menu_data;
@@ -71,7 +72,7 @@ mod user_commands;
 mod views;
 
 use crate::Options;
-use list_view::{DetailColumn, DetailRow, PaneView};
+use list_view::{DetailColumn, PaneView};
 use eframe::egui::{self, Color32, RichText};
 use ndr::{
     compat,
@@ -699,6 +700,7 @@ enum AsyncResult {
 
     Image {
         key: views::ThumbnailKey,
+        cancel:Arc<AtomicBool>,
         image: Result<(usize, usize, Vec<u8>), String>,
     },
     Tree {
@@ -864,7 +866,8 @@ pub struct App {
     tip_since: [Option<(usize, Instant)>; 2],
     images: HashMap<views::ThumbnailKey, views::CachedThumbnail>,
     image_bytes: usize,
-    thumbnail_tx: Option<Sender<views::ThumbnailKey>>,
+    thumbnail_tx: Option<mpsc::SyncSender<views::ThumbnailRequest>>,
+    thumbnail_visible:HashSet<views::ThumbnailKey>,
     /// C# FileVisualConverter.IconCache: a small shell icon per extension (lowercase, folder = "<DIR>"). None is remembered if unreadable.
     file_icons: HashMap<String, Option<egui::TextureHandle>>,
     /// A transient Windows shell icon failure must not permanently hide an
@@ -890,7 +893,7 @@ pub struct App {
     overlay_pending: HashSet<PathBuf>,
     overlay_last_used: HashMap<PathBuf, Instant>,
     overlay_tx: Option<Sender<(PathBuf, u8)>>,
-    image_requests: HashSet<views::ThumbnailKey>,
+    image_requests: HashMap<views::ThumbnailKey,Arc<AtomicBool>>,
     /// Panel folder tree subfolders: (shell key, hidden folders included) -> children. Because the original miShowHiddenClick (0x4348e0) -> FUN_0048e564 changes
     /// the tree's hidden view (+0x3f8 bit 4) and rebuilds it, this is kept separately per panel hidden view.
     tree_cache: HashMap<(PathBuf, bool), Vec<ndr::shell_tree::ShellNode>>,
@@ -1229,6 +1232,7 @@ impl App {
             images: HashMap::new(),
             image_bytes: 0,
             thumbnail_tx: None,
+            thumbnail_visible:HashSet::new(),
             file_icons: HashMap::new(),
             file_icon_failed_at: HashMap::new(),
             ghost_icons: HashMap::new(),
@@ -1242,7 +1246,7 @@ impl App {
             overlay_pending: HashSet::new(),
             overlay_last_used: HashMap::new(),
             overlay_tx: None,
-            image_requests: HashSet::new(),
+            image_requests: HashMap::new(),
             tree_cache: HashMap::new(),
             tree_cache_revision: 0,
             shell_desktop: None,
@@ -1500,6 +1504,7 @@ impl App {
             self.apply_listing(listing, &mut auth_panes);
         }
         self.after_listings(auth_panes, ctx);
+        self.listing_twin.retire_ready(self.panes.iter().all(|p|!p.loading));
         self.update_folder_watches(ctx);
     }
 
@@ -1595,9 +1600,14 @@ impl App {
         if let Ok(entries)=listing.result.as_ref(){
             let pane=&self.panes[index];
             let rows=if listing.partial.is_some(){&pane.entries}else{entries};
-            let discover=listing.cache_revision.is_some()&&rows.len()<=ndr::listing_cache::ALIAS_AUDIT_ROWS+1
+            let discover=listing.cache_revision.is_some()&&rows.len()<=ndr::listing_cache::ALIAS_FULL_AUDIT_ROWS+1
                 &&rows.iter().any(|e|!e.is_dir&&!e.drive&&e.attributes&0x400==0);
-            let interval=if listing.hardlinks{Some(5)}else if discover{Some(12)}else{None};
+            // A large cached listing gets a sparse full audit, not a
+            // 12-second full enumeration. The 30s cache age ensures an
+            // authoritative read after that deadline.
+            let interval=if listing.hardlinks{Some(5)}else if discover{
+                Some(if rows.len()<=ndr::listing_cache::ALIAS_AUDIT_ROWS+1{12}else{120})
+            }else{None};
             self.panes[index].link_recheck=interval.map(|seconds|Instant::now()+Duration::from_secs(seconds));
         }else{self.panes[index].link_recheck=None;}
         if listing.partial.is_some(){
@@ -1715,6 +1725,9 @@ impl App {
                         for e in &entries {
                             if old.get(e.path.as_path()).is_some_and(|v|*v!=(e.attributes,e.modified)){
                                 pane.folder_auto_times.remove(&e.path);
+                                self.folder_size_hints.remove(&e.path);
+                                self.folder_hint_checked.remove(&e.path);
+                                self.folder_hint_epoch=self.folder_hint_epoch.wrapping_add(1);
                                 if let Some(observation)=self.folder_size_cache.get_mut(&e.path){observation.invalidate_verification();}
                             }
                         }
@@ -1901,8 +1914,8 @@ impl App {
                 AsyncResult::Text { title, text } => {
                     self.text = Some(TextDocument { title, text })
                 }
-                AsyncResult::Image { key, image } => {
-                    self.finish_thumbnail(ctx, key, image);
+                AsyncResult::Image { key, image, cancel } => {
+                    self.finish_thumbnail(ctx,key,cancel,image);
                 }
                 AsyncResult::Tree { path, hidden, directories } => {
                     self.tree_cache.insert((path, hidden), directories);
@@ -2165,14 +2178,14 @@ pub(super) fn drag_title(ui: &egui::Ui, id: egui::Id, rect: egui::Rect) {
 }
 
 /// Title row that does not widen the window (original dialogs have the DFM client width). Draws the bold title now; `modal_title_finish`, called
-/// after the contents, puts the close button at the contents' right edge and draws the line under the row. Previously the title row's right-to-left
-/// part and the separator took egui's default area width (600 px), so a 444 px TfRename showed about 600 px wide.
+/// after the contents, puts the close button at the contents' right edge.
+/// Use the same plain title/header as the About popup, without a separator.
+/// The deferred width keeps compact original dialogs from growing to the default 600 px.
 pub(super) fn modal_title_start(ui: &mut egui::Ui, title: &str) -> egui::Rect {
     let row = ui.horizontal(|ui| {
         ui.label(RichText::new(title).strong().family(egui::FontFamily::Name(BOLD_FONT_FAMILY.into())));
         ui.add_space(ui.spacing().interact_size.y + 4.0);
     });
-    ui.add_space(ui.spacing().item_spacing.y + 1.0);
     row.response.rect
 }
 
@@ -2182,14 +2195,12 @@ pub(super) fn modal_title_finish(ui: &mut egui::Ui, id: egui::Id, row: egui::Rec
     let side = row.height();
     let button = egui::Rect::from_min_size(egui::pos2(right - side, row.top()), egui::vec2(side, side));
     let close = ui.put(button, egui::Button::new("×").small()).clicked();
-    let line_y = row.bottom() + (ui.spacing().item_spacing.y + 1.0) / 2.0;
-    ui.painter().hline(row.left()..=right, line_y, ui.visuals().widgets.noninteractive.bg_stroke);
     drag_title(ui, id, egui::Rect::from_min_max(row.min, egui::pos2(button.left() - 2.0, row.bottom())));
     close
 }
 
 /// One title bar row (bold title + close button on the right). Dragging the row moves the window. True when the close button is pressed.
-pub(super) fn modal_title_bar(ui: &mut egui::Ui, id: egui::Id, title: &str, width: Option<f32>) -> bool {
+pub(super) fn popup_title_row(ui: &mut egui::Ui, title: &str, width: Option<f32>, closable: bool) -> (bool, egui::Rect) {
     let mut close = false;
     let mut button_left = None;
     let row = ui.horizontal(|ui| {
@@ -2197,16 +2208,23 @@ pub(super) fn modal_title_bar(ui: &mut egui::Ui, id: egui::Id, title: &str, widt
             ui.set_width(width);
         }
         ui.label(RichText::new(title).strong().family(egui::FontFamily::Name(BOLD_FONT_FAMILY.into())));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let response = ui.small_button("×");
-            button_left = Some(response.rect.left());
-            close = response.clicked();
-        });
+        if closable {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let response = ui.small_button("×");
+                button_left = Some(response.rect.left());
+                close = response.clicked();
+            });
+        }
     });
     let mut rect = row.response.rect;
     if let Some(left) = button_left {
         rect.max.x = (left - 2.0).max(rect.min.x);
     }
+    (close, rect)
+}
+
+pub(super) fn modal_title_bar(ui: &mut egui::Ui, id: egui::Id, title: &str, width: Option<f32>) -> bool {
+    let (close, rect) = popup_title_row(ui, title, width, true);
     drag_title(ui, id, rect);
     close
 }
@@ -2606,6 +2624,7 @@ impl eframe::App for App {
         self.pane_rects = [egui::Rect::NOTHING; 2];
         self.folder_rows.clear();
         self.tree_drop_rows.clear();
+        self.thumbnail_visible.clear();
         for pane in &mut self.panes {
             pane.folder_auto_visible.clear();
             pane.folder_auto_candidates.clear();
@@ -2685,6 +2704,7 @@ impl eframe::App for App {
             }
         });
         self.finish_visible_folder_size_frame(ctx);
+        self.retire_offscreen_thumbnails();
         self.drag_drop_frame(ctx);
         self.dialogs(ctx);
         self.popup_menu_ui(ctx);

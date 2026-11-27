@@ -29,6 +29,7 @@ pub mod folder_tree;
 pub mod command_line;
 pub mod list_export;
 pub mod listing;
+mod listing_budget;
 pub mod listing_cache;
 pub mod markup;
 pub mod shortcut_bindings;

@@ -36,6 +36,29 @@ impl Entry {
         Self { path, name: "..".into(), is_dir: true, size: 0, modified, hidden: false, attributes: 0x10, drive: false }
     }
 }
+/// Preserve Path::join semantics, but reserve the complete native path once.
+/// Directory enumerators supply a single native file name (possibly WTF-8).
+pub(crate) fn listing_child_path(parent: &Path, name: &std::ffi::OsStr) -> PathBuf {
+    let mut path = PathBuf::with_capacity(parent.as_os_str().len().saturating_add(name.len()).saturating_add(1));
+    path.push(parent);
+    path.push(name);
+    path
+}
+#[test]
+fn reserved_listing_child_path_preserves_native_join() {
+    use std::os::windows::ffi::OsStringExt;
+    let names=[std::ffi::OsString::from("file.txt"),std::ffi::OsString::from("\u{ac00}\u{1f9ea}.zip"),
+        std::ffi::OsString::from_wide(&[0x0061,0xd800,0x002e,0x0062])];
+    for parent in [r"C:\",r"D:\deep\folder",r"\\?\D:\deep\folder",r"\\server\share\folder",r"relative\folder"]{
+        let parent=Path::new(parent);
+        for name in &names{
+            let expected=parent.join(name);
+            let actual=listing_child_path(parent,name);
+            assert_eq!(actual.as_os_str(),expected.as_os_str());
+            assert!(actual.capacity()>=actual.as_os_str().len());
+        }
+    }
+}
 #[derive(Debug)]
 pub enum Operation {
     Copy {
@@ -307,12 +330,16 @@ pub fn run_with_locale(
                         recycle(&p).map(|_| {
                             j.files += 1;
                             j.progress(&p);
+                            Disposition::Deleted
                         })
                     } else {
-                        j.delete_filtered(&p, &[], 0, boundary).map(|_| ())
+                        j.delete_filtered(&p, &[], 0, boundary)
                     };
                     match result {
-                        Ok(()) => j.remove_description(&p),
+                        Ok(Disposition::Deleted) => j.remove_description(&p),
+                        // A child may have failed after earlier children were
+                        // removed. The parent still exists: keep its comment.
+                        Ok(Disposition::Skipped | Disposition::Failed) => {},
                         Err(message) => {
                             if j.cancel.load(Ordering::Relaxed) {
                                 return Err(message);
@@ -1121,6 +1148,38 @@ mod tests {
         run(operation, tx, Arc::new(AtomicBool::new(false)));
         rx.into_iter().collect()
     }
+    #[cfg(windows)]
+    #[test]
+    fn permanent_delete_partial_failure_preserves_parent_description_and_successful_cleanup() {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
+        let root=fixture();
+        let folder=root.join("tree");
+        fs::create_dir(&folder).unwrap();
+        let locked_path=folder.join("locked.bin");
+        fs::write(&locked_path,b"preserved").unwrap();
+        fs::write(folder.join("other.bin"),b"remove").unwrap();
+        let sibling=root.join("sibling.txt");
+        fs::write(&sibling,b"remove this too").unwrap();
+        compat::set_description(&root,"tree","folder note",true).unwrap();
+        compat::set_description(&root,"sibling.txt","file note",true).unwrap();
+        let lock=fs::OpenOptions::new().read(true).share_mode(FILE_SHARE_READ).open(&locked_path).unwrap();
+        let events=run_events(Operation::Delete{sources:vec![folder.clone(),sibling.clone()],recycle:false});
+        assert!(events.iter().any(|e|matches!(e,Event::Error{..}|Event::Failure{..}|Event::Fatal(_))),"{events:?}");
+        assert!(folder.is_dir());
+        assert_eq!(fs::read(&locked_path).unwrap(),b"preserved");
+        assert!(!sibling.exists());
+        let notes=compat::read_descriptions(&root,true).unwrap();
+        assert_eq!(notes.get("tree").map(String::as_str),Some("folder note"));
+        assert!(!notes.contains_key("sibling.txt"));
+        drop(lock);
+        let retry=run_events(Operation::Delete{sources:vec![folder.clone()],recycle:false});
+        assert!(!retry.iter().any(|e|matches!(e,Event::Error{..}|Event::Failure{..}|Event::Fatal(_))),"{retry:?}");
+        assert!(!folder.exists());
+        assert!(!compat::read_descriptions(&root,true).unwrap().contains_key("tree"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn permanent_delete_skips_kept_items_and_clears_read_only() {
         let p = fixture();
@@ -1437,7 +1496,7 @@ pub(crate) fn visit_dir_with_metadata(path: &Path, show_hidden: bool, cancel: Op
             // Obtain that filename only once, and keep its native spelling
             // for filesystem operations even when the display is lossy.
             let file_name = item.file_name();
-            let item_path = path.join(&file_name);
+            let item_path = listing_child_path(path, &file_name);
             let name = file_name.into_string().unwrap_or_else(|s| s.to_string_lossy().into_owned());
             visit(Entry {
                 path: item_path,

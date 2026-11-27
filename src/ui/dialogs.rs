@@ -23,10 +23,20 @@ impl App {
         if let Some(document) = &mut self.text {
             let mut close = false;
             let close_label = self.language_pack.text("formCleanup.Caption.btnClose", "Close");
-            egui::Window::new(&document.title)
+            let window_id = egui::Id::new("ndr-result-document");
+            super::keep_opaque(ctx, window_id);
+            let title = document.title.clone();
+            egui::Window::new(&title)
+                .id(window_id)
+                .title_bar(false)
+                .collapsible(false)
+                .frame(egui::Frame::popup(&ctx.style()))
                 .default_width(900.0)
                 .default_height(580.0)
                 .show(ctx, |ui| {
+                    if super::popup_title_row(ui, &title, Some(ui.available_width()), true).0 {
+                        close = true;
+                    }
                     egui::ScrollArea::both().show(ui, |ui| {
                         let edit = egui::TextEdit::multiline(&mut document.text)
                             .font(egui::TextStyle::Monospace)

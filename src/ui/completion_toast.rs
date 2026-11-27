@@ -6,7 +6,10 @@ const MAX_TOASTS: usize = 5;
 const VISIBLE: Duration = Duration::from_secs(4);
 const FADE: Duration = Duration::from_millis(250);
 const WIDTH: f32 = 270.0;
-const HEIGHT: f32 = 69.0;
+const PAD_X: f32 = 12.0;
+const PAD_Y: f32 = 9.0;
+const TEXT_GAP: f32 = 3.0;
+const ICON_SIZE: f32 = 19.0;
 const GAP: f32 = 9.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -88,7 +91,12 @@ impl App {
         let len = self.completion_toasts.entries.len();
         let mut dismiss = None;
         let mut next_repaint = Duration::from_secs(5);
-        for (position, notice) in self.completion_toasts.entries.iter().enumerate() {
+        // Anchor above the function-key row and leave a little breathing
+        // room. New notices stack upward using their actual painted height.
+        let mut bottom = 27.0 + if self.settings.flag("ShowFunctionBar", true) { 20.0 } else { 0.0 };
+        let width = WIDTH.min((ctx.content_rect().width() - 30.0).max(80.0));
+        for position in (0..len).rev() {
+            let notice = &self.completion_toasts.entries[position];
             let elapsed = now.saturating_duration_since(notice.since);
             let opacity = alpha(elapsed).clamp(0.0, 1.0);
             if elapsed >= VISIBLE {
@@ -96,50 +104,53 @@ impl App {
             } else {
                 next_repaint = next_repaint.min(VISIBLE - elapsed);
             }
-            // First notification stays at the top; new notifications appear
-            // at bottom. Older notifications individually expire and slide out.
-            let above = len - 1 - position;
-            let bottom = 15.0 + above as f32 * (HEIGHT + GAP);
             let (symbol, accent) = match notice.kind {
                 NoticeKind::Success => ("✓", Color32::from_rgb(75, 190, 128)),
                 NoticeKind::Warning => ("!", Color32::from_rgb(240, 181, 76)),
                 NoticeKind::Error => ("×", Color32::from_rgb(231, 100, 100)),
             };
             let foreground = Color32::from_white_alpha((248.0 * opacity) as u8);
-            let secondary = Color32::from_white_alpha((190.0 * opacity) as u8);
-            let fill = Color32::from_rgba_unmultiplied(33, 37, 44, (240.0 * opacity) as u8);
+            let secondary = Color32::from_white_alpha((205.0 * opacity) as u8);
+            let fill = Color32::from_rgba_unmultiplied(33, 37, 44, (222.0 * opacity) as u8);
             let stroke = Color32::from_rgba_unmultiplied(126, 136, 152, (135.0 * opacity) as u8);
             let layer_id = egui::Id::new(("ndr_completion_toast", position));
             super::keep_opaque(ctx, layer_id);
+            let text_x = PAD_X + ICON_SIZE + 9.0;
+            let text_width = (width - text_x - PAD_X).max(1.0);
+            let (symbol, title, detail) = ctx.fonts_mut(|fonts| {
+                let one_line = |text: &str, font: egui::FontId, color| {
+                    let mut job = egui::text::LayoutJob::simple(text.to_owned(), font, color, text_width);
+                    job.wrap.max_rows = 1;
+                    job.wrap.break_anywhere = true;
+                    job
+                };
+                let symbol = fonts.layout_no_wrap(symbol.to_owned(), egui::FontId::proportional(ICON_SIZE), accent.gamma_multiply(opacity));
+                let title = fonts.layout_job(one_line(&notice.title, egui::FontId::new(13.0, egui::FontFamily::Name(super::BOLD_FONT_FAMILY.into())), foreground));
+                let detail = (!notice.detail.is_empty()).then(|| fonts.layout_job(one_line(&notice.detail, egui::FontId::proportional(11.0), secondary)));
+                (symbol, title, detail)
+            });
+            let text_height = title.size().y + detail.as_ref().map_or(0.0, |g| TEXT_GAP + g.size().y);
+            let height = (text_height.max(symbol.size().y) + 2.0 * PAD_Y).ceil();
             let area = egui::Area::new(layer_id)
                 .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-15.0, -bottom))
                 .order(egui::Order::Foreground)
                 .interactable(true);
             let response = area.show(ctx, |ui| {
-                egui::Frame::new()
-                    .fill(fill)
-                    .stroke(egui::Stroke::new(1.0_f32, stroke))
-                    .corner_radius(egui::CornerRadius::same(9))
-                    .inner_margin(egui::Margin::symmetric(12, 9))
-                    .show(ui, |ui| {
-                        ui.set_width(WIDTH - 24.0);
-                        ui.set_height(HEIGHT - 18.0);
-                        ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new(symbol).color(accent.gamma_multiply(opacity)).size(19.0).strong());
-                            ui.vertical(|ui| {
-                                ui.add(egui::Label::new(
-                                    egui::RichText::new(&notice.title).color(foreground).size(13.0).strong()
-                                ).truncate());
-                                ui.add(egui::Label::new(
-                                    egui::RichText::new(&notice.detail).color(secondary).size(11.0)
-                                ).truncate());
-                            });
-                        });
-                    });
+                let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+                let painter = ui.painter_at(rect);
+                painter.rect(rect, 9.0, fill, egui::Stroke::new(1.0_f32, stroke), egui::StrokeKind::Inside);
+                painter.galley(egui::pos2(rect.left() + PAD_X + (ICON_SIZE - symbol.size().x) * 0.5, rect.center().y - symbol.size().y * 0.5), symbol, accent);
+                let top = rect.center().y - text_height * 0.5;
+                let y = top + title.size().y + TEXT_GAP;
+                painter.galley(egui::pos2(rect.left() + text_x, top), title, foreground);
+                if let Some(detail) = detail {
+                    painter.galley(egui::pos2(rect.left() + text_x, y), detail, secondary);
+                }
             });
             if response.response.interact(egui::Sense::click()).clicked() {
                 dismiss = Some(position);
             }
+            bottom += height + GAP;
         }
         if let Some(index) = dismiss {
             self.completion_toasts.entries.remove(index);

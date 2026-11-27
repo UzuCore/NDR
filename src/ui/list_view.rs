@@ -30,10 +30,43 @@ impl DetailColumn {
     }
 }
 
-#[derive(Clone)]
-pub(super) enum DetailRow {
-    Header(String),
-    Item(usize),
+pub(super) use super::detail_rows::{DetailRow, DetailRows};
+
+/// Immutable local display arrays can be shared by identical pane snapshots.
+/// Mutation detaches the array, never the other pane's selection or rows.
+/// Sensitive views never enter the explicit twin sharing path.
+#[derive(Clone,Debug,PartialEq,Eq)]
+pub(super) struct SharedRows<T:Clone>(Arc<Vec<T>>);
+impl<T:Clone> Default for SharedRows<T>{
+    fn default()->Self{Self(Arc::new(Vec::new()))}
+}
+impl<T:Clone> std::ops::Deref for SharedRows<T>{
+    type Target=Vec<T>;
+    fn deref(&self)->&Self::Target{&self.0}
+}
+impl<T:Clone> std::ops::DerefMut for SharedRows<T>{
+    fn deref_mut(&mut self)->&mut Self::Target{Arc::make_mut(&mut self.0)}
+}
+impl<T:Clone> SharedRows<T>{
+    fn reset(&mut self,count:usize){
+        if let Some(rows)=Arc::get_mut(&mut self.0){reset_view_buffer(rows,count)}
+        else{self.0=Arc::new(Vec::with_capacity(count));}
+    }
+}
+impl<T:Clone> IntoIterator for SharedRows<T>{
+    type Item=T;
+    type IntoIter=std::vec::IntoIter<T>;
+    fn into_iter(self)->Self::IntoIter{Arc::unwrap_or_clone(self.0).into_iter()}
+}
+impl<'a,T:Clone> IntoIterator for &'a SharedRows<T>{
+    type Item=&'a T;
+    type IntoIter=std::slice::Iter<'a,T>;
+    fn into_iter(self)->Self::IntoIter{self.0.iter()}
+}
+impl<'a,T:Clone> IntoIterator for &'a mut SharedRows<T>{
+    type Item=&'a mut T;
+    type IntoIter=std::slice::IterMut<'a,T>;
+    fn into_iter(self)->Self::IntoIter{Arc::make_mut(&mut self.0).iter_mut()}
 }
 
 /// Per list row the column texts (7 cells, DetailColumn order) and name color, plus the row order with group headers inserted.
@@ -41,9 +74,9 @@ pub(super) enum DetailRow {
 pub(super) struct PaneView {
     // Repeated extension, kind, size, date and attribute texts share
     // immutable allocations. Vault rows deliberately use unique allocations.
-    pub cells: Vec<[Arc<str>; 7]>,
-    pub colors: Vec<Option<(u8, u8, u8)>>,
-    pub rows: Vec<DetailRow>,
+    pub cells: SharedRows<[Arc<str>; 7]>,
+    pub colors: SharedRows<Option<(u8, u8, u8)>>,
+    pub rows: DetailRows,
     sensitive: bool,
 }
 
@@ -154,6 +187,31 @@ fn repeated_cells_share_and_sensitive_cells_are_unique(){
     assert!(view.cells.iter().flatten().all(|text|text.as_bytes().iter().all(|&b|b==0)));
 }
 
+#[cfg(test)]
+#[test]
+fn local_twin_arrays_share_and_detach_without_copying_unchanged_columns(){
+    let mut a=PaneView::default();
+    a.rows.reset(4096,true);
+    for i in 0..4096{
+        a.cells.push(std::array::from_fn(|_|Arc::from(format!("row-{i}"))));
+        a.colors.push(Some((10,20,30)));a.rows.push(DetailRow::Item(i));
+    }
+    let mut b=a.clone_local_shared();
+    assert_eq!(a.cells.as_ptr(),b.cells.as_ptr());
+    assert_eq!(a.colors.as_ptr(),b.colors.as_ptr());
+    assert_eq!(a.rows.explicit_ptr(),b.rows.explicit_ptr());
+    // Changing one cell detaches only the changed array. Immutable texts
+    // for the unaffected rows are still shared.
+    b.cells[0][3]=Arc::from("123");
+    assert_ne!(a.cells.as_ptr(),b.cells.as_ptr());
+    assert_eq!(a.cells[0][3].as_ref(),"row-0");
+    assert_eq!(b.cells[0][3].as_ref(),"123");
+    assert!(Arc::ptr_eq(&a.cells[20][0],&b.cells[20][0]));
+    assert_eq!(a.colors.as_ptr(),b.colors.as_ptr());
+    let old=a.rows.explicit_ptr();b.rows.reset(0,false);
+    assert_eq!(a.rows.explicit_ptr(),old);assert_eq!(a.rows.len(),4096);assert_eq!(b.rows.len(),0);
+    b.cells.reset(1);assert!(b.cells.is_empty());assert_eq!(a.cells.len(),4096);
+}
 #[cfg(test)]
 #[test]
 fn view_cache_and_buffers_are_bounded_and_reusable() {
@@ -460,9 +518,10 @@ pub(super) fn build_view(plan: &ViewPlan, entries: &[Entry], descriptions: &Hash
         if sensitive{Arc::from(text.as_ref())}else{text.clone()}
     };
     let count = entries.len();
-    reset_view_buffer(&mut view.cells, count);
-    reset_view_buffer(&mut view.colors, count);
-    reset_view_buffer(&mut view.rows, count);
+    view.cells.reset(count);
+    view.colors.reset(count);
+    let grouped = group_mode != "None" && show_group_name;
+    view.rows.reset(count,grouped);
     let now = std::time::SystemTime::now();
     let mut date_texts = CellCache::<_,Arc<str>>::default();
     let mut size_texts = CellCache::<_,Arc<str>>::default();
@@ -475,7 +534,6 @@ pub(super) fn build_view(plan: &ViewPlan, entries: &[Entry], descriptions: &Hash
     let mut extension_cells=HashMap::<&str,ExtDisplay>::new();
     let mut last_extension:Option<(&str,ExtDisplay)>=None;
     let mut attr_cells=HashMap::<u32,Arc<str>>::new();
-    let grouped = group_mode != "None" && show_group_name;
     let mut previous = None;
     for (row, entry) in entries.iter().enumerate() {
         if row % 128 == 0 && cancel.is_some_and(|c| c.load(Ordering::Relaxed)) { return None; }
@@ -486,7 +544,7 @@ pub(super) fn build_view(plan: &ViewPlan, entries: &[Entry], descriptions: &Hash
                 previous = Some(key);
             }
         }
-        view.rows.push(DetailRow::Item(row));
+        if grouped { view.rows.push(DetailRow::Item(row)); }
         if entry.drive {
             // Original DrawListItem kind 4: the drive name (item+8) after "%s:". Other cells (extension, size, date, attributes, description) are not drawn.
             let label = drive_infos.get(&entry.path).map(|(name, _, _)| name.as_str()).unwrap_or("");
