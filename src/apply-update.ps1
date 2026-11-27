@@ -7,6 +7,7 @@ param(
     [Parameter(Mandatory=$true)][string]$LogPath,
     [switch]$SkipRestart,
     [switch]$ShowProgress,
+    [switch]$ManagedCache,
     [string]$TextPath
 )
 $ErrorActionPreference = 'Stop'
@@ -100,14 +101,80 @@ function New-InstallProgress {
 
     Set-InstallProgress $script:installerText.checking 2
 }
-if ($ShowProgress -and -not $SkipRestart) {
-    New-InstallProgress
-    $script:installerForm.Show()
+# An updater can outlive its originating NDR PID. A separate, exclusive
+# session handle protects its working data from cache maintenance and a
+# second installer invocation. Never truncate an existing lock file.
+$work = Split-Path -Parent ([IO.Path]::GetFullPath($Archive))
+$lockPath = Join-Path $work '.ndr-install.lock'
+if (Test-Path -LiteralPath $lockPath) {
+    $lockItem = Get-Item -LiteralPath $lockPath -Force
+    if ($lockItem.PSIsContainer -or ($lockItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+        throw 'Invalid update session lock'
+    }
 }
-$work = Split-Path -Parent $Archive
+$installerLock = [IO.File]::Open($lockPath, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+# A successful session is immutable and must not be started again while
+# another instance is pruning its redundant ZIP/extracted payload.
+if ((Test-Path -LiteralPath $LogPath -PathType Leaf) -and
+    ((Get-Content -LiteralPath $LogPath -Raw -Encoding UTF8).Trim() -match '^Update installed: [0-9]+ files$')) {
+    $installerLock.Dispose()
+    throw 'Update session is already complete'
+}
 $staging = Join-Path $work 'extracted'
 $backup = Join-Path $work 'backup'
+# Only the app's own dedicated cache session is eligible for immediate
+# payload removal. Standalone invocations keep their caller-owned ZIP.
+function Test-PlainTree([string]$path) {
+    try {
+        $todo = [Collections.Generic.Stack[string]]::new()
+        $todo.Push($path)
+        while ($todo.Count -gt 0) {
+            $item = Get-Item -LiteralPath ($todo.Pop()) -Force -ErrorAction Stop
+            if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { return $false }
+            if ($item.PSIsContainer) {
+                foreach ($child in @(Get-ChildItem -LiteralPath $item.FullName -Force -ErrorAction Stop)) {
+                    $todo.Push($child.FullName)
+                }
+            }
+        }
+        return $true
+    } catch { return $false }
+}
+function Clear-VerifiedPayload {
+    if (-not $ManagedCache) { return }
+    try {
+        $updates = Split-Path -Parent $work
+        $cache = Split-Path -Parent $updates
+        if ((Split-Path -Leaf $work) -notmatch '^ndr-update-build-[1-9][0-9]*-[1-9][0-9]*-[0-9]+$' -or
+            (Split-Path -Leaf $updates) -ne 'updates' -or (Split-Path -Leaf $cache) -ne 'cache' -or
+            [IO.Path]::GetFullPath($Archive) -ne (Join-Path $work 'NDR-windows-x64.zip') -or
+            [IO.Path]::GetFullPath($LogPath) -ne (Join-Path $work 'update.log') -or
+            -not (Test-Path -LiteralPath (Join-Path $backup 'NDR.exe') -PathType Leaf)) { return }
+        # Never follow a junction in the cache ancestry or payload tree.
+        $parent = $work
+        while ($parent) {
+            $item = Get-Item -LiteralPath $parent -Force
+            if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { return }
+            $next = Split-Path -Parent $parent
+            if ($next -eq $parent) { break }
+            $parent = $next
+        }
+        if ((Test-Path -LiteralPath $staging -PathType Container) -and (Test-PlainTree $staging)) {
+            Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction Stop
+        }
+        if ((Test-Path -LiteralPath $Archive -PathType Leaf) -and (Test-PlainTree $Archive)) {
+            Remove-Item -LiteralPath $Archive -Force -ErrorAction Stop
+        }
+    } catch {
+        # Cleanup is optional; do not turn a completed installation into
+        # a failure or discard its rollback merely because a file is busy.
+    }
+}
 try {
+    if ($ShowProgress -and -not $SkipRestart) {
+        New-InstallProgress
+        $script:installerForm.Show()
+    }
     if (-not (Test-Path -LiteralPath $Archive -PathType Leaf)) { throw 'Verified update ZIP missing' }
     $root = [IO.Path]::GetFullPath($Destination).TrimEnd('\') + '\'
     if (-not (Test-Path -LiteralPath (Join-Path $root 'NDR.exe') -PathType Leaf)) { throw 'NDR installation missing' }
@@ -196,6 +263,7 @@ try {
     if (-not $SkipRestart) {
         Start-Process -FilePath (Join-Path $root 'NDR.exe') -WorkingDirectory $root
     }
+    Clear-VerifiedPayload
     if ($script:installerForm) { $script:installerForm.Close(); $script:installerForm.Dispose() }
     exit 0
 } catch {
@@ -210,4 +278,6 @@ try {
         $script:installerForm.Dispose()
     }
     exit 1
+} finally {
+    $installerLock.Dispose()
 }

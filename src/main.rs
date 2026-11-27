@@ -282,10 +282,7 @@ fn main() {
             // The startup check opens off screen, without taking focus and without a taskbar entry (it does not cover the user's screen).
             viewport = viewport.with_inner_size(options.smoke_size.unwrap_or([1400.0, 850.0])).with_position([-30000.0, -30000.0]).with_active(false).with_taskbar(options.smoke_taskbar);
         } else {
-            // Age out only NDR-owned extracted preview entries under cache.
-            std::thread::spawn(|| {
-                ndr::archive::clean_stale_temp_entries(&ndr::archive::temp_entry_root(), std::time::Duration::from_secs(7 * 24 * 3600), std::time::SystemTime::now());
-            });
+            ndr::cache::schedule_maintenance();
         }
         let native = eframe::NativeOptions {
             viewport,

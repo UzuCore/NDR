@@ -1957,6 +1957,8 @@ pub fn extract_entry_to_temp(archive: &Path, password: Option<&str>, key: &str, 
     })();
     if result.is_err() {
         let _ = fs::remove_dir_all(&folder);
+    } else if !cfg!(test) {
+        crate::cache::schedule_maintenance();
     }
     result
 }
@@ -1966,52 +1968,10 @@ pub fn temp_entry_root() -> PathBuf {
     crate::cache::archive_entries()
 }
 
-/// Fixed (the C# version and earlier Rust versions never removed them, so they piled up): removes ".ndr-entry-*" folders under `root` whose contents are all
-/// older than `max_age`. Each is first renamed to ".ndr-trash-*" (skipped when it fails because of an open file),
-/// and only renamed ones are deleted. Leftover ".ndr-trash-*" from a previous run are deleted too. Returns the number of folders removed.
+/// Removes only safely identifiable, inactive preview sessions. Quotas
+/// never override live owners, locked files, or the minimum retention age.
 pub fn clean_stale_temp_entries(root: &Path, max_age: std::time::Duration, now: std::time::SystemTime) -> usize {
-    fn newest(path: &Path) -> Option<std::time::SystemTime> {
-        let meta = fs::symlink_metadata(path).ok()?;
-        if is_reparse(&meta) { return None; }
-        let mut latest = meta.modified().ok()?;
-        if meta.is_dir() {
-            for entry in fs::read_dir(path).ok()? {
-                let time = newest(&entry.ok()?.path())?;
-                latest = latest.max(time);
-            }
-        }
-        Some(latest)
-    }
-    if ensure_plain_path(root).is_err() { return 0; }
-    let Ok(items) = fs::read_dir(root) else { return 0 };
-    let mut removed = 0;
-    for item in items.flatten() {
-        let name = item.file_name().to_string_lossy().into_owned();
-        let path = item.path();
-        if fs::symlink_metadata(&path).is_ok_and(|m| is_reparse(&m)) { continue; }
-        if !item.file_type().is_ok_and(|t| t.is_dir()) {
-            continue;
-        }
-        if name.starts_with(".ndr-trash-") {
-            if fs::remove_dir_all(&path).is_ok() {
-                removed += 1;
-            }
-            continue;
-        }
-        if !name.starts_with(".ndr-entry-") {
-            continue;
-        }
-        // With an unreadable item the age is unknown, so it is kept.
-        let Some(latest) = newest(&path) else { continue };
-        if now.duration_since(latest).map_or(true, |age| age < max_age) {
-            continue;
-        }
-        let trash = root.join(format!(".ndr-trash-{}", &name[".ndr-entry-".len()..]));
-        if fs::rename(&path, &trash).is_ok() && fs::remove_dir_all(&trash).is_ok() {
-            removed += 1;
-        }
-    }
-    removed
+    crate::cache::clean_previews(root, max_age, now, crate::cache::PREVIEW_SOFT_BYTES, crate::cache::PREVIEW_SOFT_COUNT).removed
 }
 
 /// Shaped like C# ExtractExternalWithPasswordPromptAsync: on a password error asks again through `passwords` (None on cancel) and extracts again.

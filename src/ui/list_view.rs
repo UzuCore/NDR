@@ -307,17 +307,15 @@ impl App {
     /// (head width + 5 + text, the same margin as `drive_row`). 0 without drive items.
     pub(super) fn drive_text_extent(&self, ui: &egui::Ui, index: usize) -> f32 {
         let pane = &self.panes[index];
-        if !pane.entries.iter().any(|e| e.drive) {
+        let drives = pane.drive_count();
+        if drives == 0 || pane.entries.len() != pane.view.cells.len() {
             return 0.0;
         }
         let icons = self.settings.flag("ShowIcons", true);
         let font = egui::TextStyle::Button.resolve(ui.style());
         let widest = ui.fonts_mut(|fonts| {
-            pane.entries
-                .iter()
-                .zip(&pane.view.cells)
-                .filter(|(e, _)| e.drive)
-                .map(|(_, cells)| fonts.layout_no_wrap(cells[0].clone(), font.clone(), Color32::WHITE).size().x)
+            pane.view.cells.iter().rev().take(drives)
+                .map(|cells| fonts.layout_no_wrap(cells[0].clone(), font.clone(), Color32::WHITE).size().x)
                 .fold(0.0f32, f32::max)
         });
         App::list_header_width(icons) + 5.0 + widest

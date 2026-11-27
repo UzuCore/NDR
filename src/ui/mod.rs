@@ -371,13 +371,21 @@ impl Pane {
     }
     /// Number of drive entries at the end of the list (original kind 4).
     pub(super) fn drive_count(&self) -> usize {
-        self.entries.iter().filter(|e| e.drive).count()
+        // sort_pane_entries always places the (small) drive suffix last.
+        self.entries.iter().rev().take_while(|e| e.drive).count()
     }
     /// Original Select (0x7dc834): drive entries and ".." are not selected (+0x67). Remove them from marked rows.
     pub(super) fn drop_drive_marks(&mut self) {
-        if self.selected.iter().any(|i| self.entries.get(*i).is_some_and(|e| e.drive || e.is_parent())) {
-            let entries = &self.entries;
-            self.selected.retain(|i| entries.get(*i).is_none_or(|e| !e.drive && !e.is_parent()));
+        if self.selected.is_empty() { return; }
+        // Parent and drive rows are stable prefix/suffix partitions.
+        // Do not traverse tens of thousands of valid marked file indices
+        // on every pointer movement or idle heartbeat.
+        if self.entries.first().is_some_and(Entry::is_parent) {
+            self.selected.remove(&0);
+        }
+        let end = self.entries.len();
+        for index in end - self.drive_count()..end {
+            self.selected.remove(&index);
         }
     }
 }
@@ -1321,7 +1329,7 @@ impl App {
             self.prune_folder_observations();
             self.folder_size_prune_at = Instant::now();
         }
-        if self.folder_size_cache.values().any(|o| o.watch.is_some()) {
+        if !self.folder_size_cache.is_empty() {
             ctx.request_repaint_after(Duration::from_secs(30).saturating_sub(self.folder_size_prune_at.elapsed()));
         }
         let mut auth_panes = std::mem::take(&mut self.auth_pending);
@@ -1720,11 +1728,12 @@ impl App {
                             if scanned { self.panes[pane].folder_auto_scans += 1; }
                             self.panes[pane].folder_auto_visited += work.visited;
                             self.panes[pane].folder_auto_reused += work.reused;
-                            self.record_folder_size_time(pane, &path, Instant::now() + if complete { media.check_interval() } else { media.verify_interval() });
+                            let due = self.folder_check_deadline(if complete { media.check_interval() } else { media.verify_interval() });
+                            self.record_folder_size_time(pane, &path, due);
                             if !stable {
                                 // A write overlapped enumeration. Retain the previous
                                 // display and retry, never publish a mixed snapshot.
-                                ctx.request_repaint_after(media.check_interval());
+                                // The visible-row deadline is scheduled once at the end of the frame.
                                 continue;
                             }
                             if !complete {
@@ -1733,7 +1742,6 @@ impl App {
                                         &self.settings.text("SizeUnit", "Auto"),
                                         self.settings.flag("UseThousandsSeparator", true)));
                                     self.panes[pane].folder_sizes.insert(path, Some(label));
-                                    ctx.request_repaint_after(media.verify_interval());
                                     continue;
                                 }
                             }
@@ -2441,16 +2449,21 @@ impl eframe::App for App {
                 }
             }
         }
-        ctx.request_repaint_after(Duration::from_millis(
-            if self.panes.iter().any(|p| p.loading)
-                || self.job.as_ref().is_some_and(|j| !j.finished)
-                || self.background_jobs.iter().any(|j| !j.finished)
-            {
-                33
-            } else {
-                500
-            },
-        ));
+        // Keep polling workers without explicit wake callbacks. A settled
+        // local pane can use a slower safety heartbeat: user input, native
+        // watches, listing results and folder-size results all wake it.
+        let fast = self.panes.iter().any(|p| p.loading)
+            || self.job.as_ref().is_some_and(|j| !j.finished)
+            || self.background_jobs.iter().any(|j| !j.finished);
+        let interactive = self.panes.iter().any(|p| p.remote.is_some() || p.vault.is_some())
+            || !self.original_dialogs.is_empty() || self.update_progress.is_some()
+            || !self.vault_sessions.is_empty() || self.vault_transfer.is_some()
+            || self.disk_copy_active() || self.password_request.is_some()
+            || self.pending_shell_menu.is_some();
+        #[cfg(feature = "winfsp-vault")]
+        let interactive = interactive || !self.vault_trees.is_empty() || !self.vault_mounts.is_empty();
+        let heartbeat = if fast { 33 } else if interactive { 500 } else { 1000 };
+        ctx.request_repaint_after(Duration::from_millis(heartbeat));
     }
     fn on_exit(&mut self, _: Option<&eframe::glow::Context>) {
         for pane in &self.panes {

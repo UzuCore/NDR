@@ -732,11 +732,8 @@ impl App {
         if pane.folder_auto_pending.contains_key(path) || pane.folder_manual_pending.contains(path) {
             return;
         }
-        if let Some(time) = pane.folder_auto_times.get(path) {
-            if let Some(remaining) = time.checked_duration_since(Instant::now()) {
-                self.egui_ctx.request_repaint_after(remaining);
-                return;
-            }
+        if pane.folder_auto_times.get(path).is_some_and(|time| *time > Instant::now()) {
+            return;
         }
         if pane.folder_sizes.contains_key(path) && !pane.folder_auto_paths.contains(path) { return; }
         self.sync_folder_size_activity();
@@ -765,6 +762,17 @@ impl App {
                 false
             });
         }
+        // One deadline per frame, not one repaint request per visible row.
+        // Align stable observations onto shared ticks to prevent dozens of
+        // slightly offset timers from keeping a large folder list animated.
+        let now = Instant::now();
+        let next = self.panes.iter().flat_map(|pane| pane.folder_auto_visible.iter()
+            .filter(|path| !pane.folder_auto_pending.contains_key(*path) && !pane.folder_manual_pending.contains(*path))
+            .filter_map(|path| pane.folder_auto_times.get(path).copied()))
+            .filter(|due| *due > now).min();
+        if let Some(due) = next {
+            ctx.request_repaint_after(due.saturating_duration_since(now).max(Duration::from_millis(25)));
+        }
         if cancelled {
             let (queue, _) = &*self.folder_size_queue;
             queue.lock().unwrap_or_else(|e| e.into_inner()).retain(|j| !j.cancel.load(Ordering::Relaxed));
@@ -788,6 +796,13 @@ impl App {
             }
         }
         pane.folder_auto_times.insert(path.to_path_buf(), time);
+    }
+
+    /// Coalesce the periodic checks of all visible rows. A notification may
+    /// be observed slightly before or after the nominal interval, but
+    /// directory identity audits still run on the low-priority worker.
+    pub(super) fn folder_check_deadline(&self, interval: Duration) -> Instant {
+        coalesced_folder_deadline(self.started, Instant::now(), interval)
     }
 
     pub(super) fn clear_automatic_folder_sizes(&mut self, index: usize) {
@@ -919,6 +934,7 @@ impl App {
 
     fn enqueue_folder_size_job(&mut self, index: usize, row: usize, automatic: bool) {
         let can_use_filesystem = self.vault_has_filesystem(index);
+        let epoch = self.started;
         let pane = &mut self.panes[index];
         if !can_use_filesystem || pane.loading || pane.archive.is_some() || pane.remote.is_some() {
             return;
@@ -953,9 +969,10 @@ impl App {
                         pane.folder_sizes.insert(entry.path.clone(), Some(text));
                     }
                     let path = entry.path.clone();
-                    let interval = observation.media.check_interval();
-                    self.record_folder_size_time(index, &path, Instant::now() + interval);
-                    self.egui_ctx.request_repaint_after(interval);
+                    let interval = if observation.watch.is_some() { observation.media.check_interval() }
+                        else { observation.media.verify_interval() };
+                    let deadline = coalesced_folder_deadline(epoch, Instant::now(), interval);
+                    self.record_folder_size_time(index, &path, deadline);
                     return;
                 }
                 if let Some(watch) = observation.watch.as_ref() {
@@ -1022,6 +1039,26 @@ impl App {
             });
         }
     }
+}
+
+fn coalesced_folder_deadline(epoch: Instant, now: Instant, interval: Duration) -> Instant {
+    let period = interval.as_millis().max(1) as u64;
+    let elapsed = now.saturating_duration_since(epoch).as_millis() as u64;
+    // Minimum lead avoids an immediate repaint when a batch completes
+    // a few milliseconds before the common tick.
+    let next = ((elapsed.saturating_add(150) / period) + 1).saturating_mul(period);
+    epoch + Duration::from_millis(next)
+}
+
+#[test]
+fn folder_deadlines_share_ticks_and_have_minimum_lead() {
+    let epoch = Instant::now();
+    let interval = Duration::from_secs(1);
+    for ms in [10, 100, 400, 700, 849] {
+        assert_eq!(coalesced_folder_deadline(epoch, epoch + Duration::from_millis(ms), interval), epoch + interval);
+    }
+    assert_eq!(coalesced_folder_deadline(epoch, epoch+Duration::from_millis(900), interval), epoch+interval*2);
+    assert_eq!(coalesced_folder_deadline(epoch, epoch+Duration::from_millis(1300), interval*2), epoch+interval*2);
 }
 
 #[cfg(test)]
@@ -1172,7 +1209,9 @@ fn folder_size_worker(shared: FolderSizeQueue, tx: Sender<AsyncResult>, ctx: egu
         let mut job = {
             let mut jobs = queue.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(job) = jobs.pop_front() { job } else {
-                drop(signal.wait_timeout(jobs, Duration::from_millis(500)).unwrap_or_else(|e| e.into_inner()));
+                let wait = Duration::from_secs(10).saturating_sub(last_flush.elapsed()).max(Duration::from_millis(100));
+                let wait = if recent.is_some() { wait.min(Duration::from_secs(3)) } else { wait };
+                drop(signal.wait_timeout(jobs, wait).unwrap_or_else(|e| e.into_inner()));
                 continue;
             }
         };
@@ -1266,6 +1305,7 @@ fn folder_size_worker(shared: FolderSizeQueue, tx: Sender<AsyncResult>, ctx: egu
         } else if !job.automatic {
             recent = None;
         }
+        let job_automatic = job.automatic;
         let matches = take_matching_automatic_jobs(&mut queue.lock().unwrap_or_else(|e| e.into_inner()), &job, complete && stable);
         for job in std::iter::once(job).chain(matches) {
             if job.cancel.load(Ordering::Relaxed) { continue; }
@@ -1276,6 +1316,12 @@ fn folder_size_worker(shared: FolderSizeQueue, tx: Sender<AsyncResult>, ctx: egu
                 return;
             }
         }
-        ctx.request_repaint();
+        // Unchanged metadata-only results need to retire their pending
+        // tokens, but do not need an immediate separate frame per folder.
+        if scanned || !complete || !stable || !job_automatic {
+            ctx.request_repaint();
+        } else {
+            ctx.request_repaint_after(Duration::from_millis(50));
+        }
     }
 }

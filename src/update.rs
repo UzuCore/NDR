@@ -76,7 +76,14 @@ pub fn download_github_update_with_progress(
             .map_err(|e| e.to_string())?.as_nanos()));
     std::fs::create_dir(&folder).map_err(|e| e.to_string())?;
     let archive = folder.join("NDR-windows-x64.zip");
-    std::fs::write(&archive, &response.body).map_err(|e| e.to_string())?;
+    if let Err(error) = std::fs::write(&archive, &response.body) {
+        // This folder was created by this request and is not an installer
+        // or recovery session yet. Do not accumulate partial downloads.
+        let _ = std::fs::remove_file(&archive);
+        let _ = std::fs::remove_dir(&folder);
+        return Err(error.to_string());
+    }
+    if !cfg!(test) { crate::cache::schedule_maintenance(); }
     Ok(archive)
 }
 
@@ -152,9 +159,12 @@ pub fn launch_update(archive: &Path, language: &crate::compat::Language) -> Resu
         return Err("Run the updater from a complete installed NDR folder".into());
     }
     let folder = archive.parent().ok_or("Update staging folder missing")?;
+    crate::fsops::ensure_plain_path(archive)?;
     let script = folder.join("apply-update.ps1");
+    crate::fsops::ensure_plain_path(&script)?;
     write_installer_script(&script).map_err(|e| e.to_string())?;
     let messages = folder.join("installer-locale.json");
+    crate::fsops::ensure_plain_path(&messages)?;
     let locale = serde_json::to_vec(&installer_messages(language)).map_err(|e| e.to_string())?;
     std::fs::write(&messages, locale).map_err(|e| e.to_string())?;
     std::process::Command::new("powershell.exe")
@@ -165,6 +175,7 @@ pub fn launch_update(archive: &Path, language: &crate::compat::Language) -> Resu
         .arg("-LogPath").arg(folder.join("update.log"))
         .arg("-TextPath").arg(&messages)
         .arg("-ShowProgress")
+        .arg("-ManagedCache")
         .spawn().map_err(|e| format!("Could not launch updater: {e}"))?;
     Ok(())
 }
