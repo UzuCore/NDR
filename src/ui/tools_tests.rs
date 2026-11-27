@@ -1250,7 +1250,7 @@ fn archive_entry_opening_asks_for_the_password_like_csharp() {
     let opened = launched();
     assert_eq!(opened.len(), 1, "{opened:?}");
     let path = PathBuf::from(&opened[0].0);
-    assert!(path.starts_with(std::env::temp_dir().join("NDR")) && path.ends_with("alpha.txt"), "{path:?}");
+    assert!(path.starts_with(ndr::archive::temp_entry_root()) && path.ends_with("alpha.txt"), "{path:?}");
     assert_eq!(fs::read_to_string(&path).unwrap(), "alpha.txt");
     // cancelling the prompt opens nothing and shows nothing
     app.panes[0].archive.as_mut().unwrap().password = "wrong".into();

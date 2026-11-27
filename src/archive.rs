@@ -1926,13 +1926,13 @@ pub fn summary(entries: &[ArchiveEntry]) -> (usize, usize, u64) {
     }
     (files, folders.len(), bytes)
 }
-/// C# ExtractEntryToTempAsync: extracts a single item (no wildcards) into %TEMP%\NDR\<new name> and returns that file path.
+/// Extract a single item (no wildcards) into NDR's private disk cache.
 pub fn extract_entry_to_temp(archive: &Path, password: Option<&str>, key: &str, cancel: &AtomicBool) -> Result<PathBuf, String> {
     check_cancel(cancel)?;
     ensure_plain_path(archive)?;
     validate_key(key)?;
     let root = temp_entry_root();
-    fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+    crate::cache::prepare(&root)?;
     let folder = unique_path(&root, "entry");
     fs::create_dir(&folder).map_err(|e| e.to_string())?;
     // Fixed: when extraction fails (wrong password, cancel etc.) the created folder is removed. Previously a folder was left behind for every failed attempt.
@@ -1961,11 +1961,9 @@ pub fn extract_entry_to_temp(archive: &Path, password: Option<&str>, key: &str, 
     result
 }
 
-/// Temp folder where archive items are extracted one by one (%TEMP%\NDR).
-/// The original FUN_0040d9b8 uses %TEMP%\NexusFileTmp (created when missing); NDR keeps its own name so a running NexusFile
-/// and its cleanup never share the folder.
+/// Archive preview/extracted-entry cache, isolated from other applications.
 pub fn temp_entry_root() -> PathBuf {
-    std::env::temp_dir().join("NDR")
+    crate::cache::archive_entries()
 }
 
 /// Fixed (the C# version and earlier Rust versions never removed them, so they piled up): removes ".ndr-entry-*" folders under `root` whose contents are all
@@ -1974,6 +1972,7 @@ pub fn temp_entry_root() -> PathBuf {
 pub fn clean_stale_temp_entries(root: &Path, max_age: std::time::Duration, now: std::time::SystemTime) -> usize {
     fn newest(path: &Path) -> Option<std::time::SystemTime> {
         let meta = fs::symlink_metadata(path).ok()?;
+        if is_reparse(&meta) { return None; }
         let mut latest = meta.modified().ok()?;
         if meta.is_dir() {
             for entry in fs::read_dir(path).ok()? {
@@ -1983,11 +1982,13 @@ pub fn clean_stale_temp_entries(root: &Path, max_age: std::time::Duration, now: 
         }
         Some(latest)
     }
+    if ensure_plain_path(root).is_err() { return 0; }
     let Ok(items) = fs::read_dir(root) else { return 0 };
     let mut removed = 0;
     for item in items.flatten() {
         let name = item.file_name().to_string_lossy().into_owned();
         let path = item.path();
+        if fs::symlink_metadata(&path).is_ok_and(|m| is_reparse(&m)) { continue; }
         if !item.file_type().is_ok_and(|t| t.is_dir()) {
             continue;
         }
@@ -3294,8 +3295,8 @@ mod entry_tests {
         let inner = keys.iter().find(|k| k.ends_with("b.txt")).unwrap().clone();
         let extracted = extract_entry_to_temp(&output, None, &inner, &cancel).unwrap();
         assert_eq!(fs::read(&extracted).unwrap(), b"inside");
-        let folder = extracted.ancestors().find(|p| p.parent() == Some(&std::env::temp_dir().join("NDR"))).unwrap().to_path_buf();
-        assert!(folder.file_name().unwrap().to_string_lossy().starts_with(".ndr-entry-"), "a new folder under %TEMP%\\NDR");
+        let folder = extracted.ancestors().find(|p| p.parent() == Some(temp_entry_root().as_path())).unwrap().to_path_buf();
+        assert!(folder.file_name().unwrap().to_string_lossy().starts_with(".ndr-entry-"), "a new folder under the archive cache");
         fs::remove_dir_all(&folder).unwrap();
         let wild = extract_entry_to_temp(&output, None, "a[1].txt", &cancel).unwrap();
         assert_eq!(fs::read(&wild).unwrap(), b"wild", "-spd: brackets are not wildcards");

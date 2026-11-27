@@ -1,5 +1,7 @@
 //! Rust implementation of NDR's services and compatibility behavior.
 pub mod settings;
+pub mod cache;
+pub mod folder_cache;
 pub mod compat;
 pub mod fsops;
 mod operation_diagnostic;

@@ -43,6 +43,7 @@ impl App {
         self.next_job_serial = self.next_job_serial.wrapping_add(1);
         job.serial = self.next_job_serial;
         job.reservation = reservation;
+        job.folder_mutations = Some(pane_chrome::FolderMutationScope::from_operation(&operation));
         // C# ErrorResolver: copy/move/delete ask on each error (wipe asks all at once at the end).
         let options = fsops::OperationOptions {
             remove_read_only: self.settings.flag("RemoveReadOnlyWhenCopying", true),
@@ -58,7 +59,6 @@ impl App {
             copy_conflict_policy: job.reservation.as_ref().map(|r| Arc::clone(&r.conflict_policy)),
         };
         let language = self.language_pack.clone();
-        thread::spawn(move || fsops::run_with_locale(operation, tx, flag, options, Some(language)));
         if !active {
             self.conflict_all = None;
         }
@@ -69,6 +69,9 @@ impl App {
         } else {
             self.job = Some(job);
         }
+        // Cancel speculative recursive I/O before launching the writer.
+        self.sync_folder_size_activity();
+        thread::spawn(move || fsops::run_with_locale(operation, tx, flag, options, Some(language)));
     }
     pub(super) fn poll_active_job_events(&mut self) {
         let mut finished = None;
@@ -177,6 +180,11 @@ impl App {
                     }
                     finished = Some(cancelled);
                 }
+            }
+        }
+        if close_modal || finished.is_some() {
+            if let Some(scope) = self.job.as_mut().and_then(|job| job.folder_mutations.take()) {
+                self.invalidate_folder_mutations(&scope);
             }
         }
         if close_modal {

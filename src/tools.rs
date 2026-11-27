@@ -423,58 +423,77 @@ pub fn folder_size_summary(roots: &[PathBuf], cancel: &AtomicBool) -> Option<Fol
             summary.files += 1;
             continue;
         }
-        summary.folders += 1;
-        let mut pending = vec![root.clone()];
-        while let Some(folder) = pending.pop() {
+        scan_known_directory(root, cancel, &mut summary)?;
+    }
+    Some(summary)
+}
+
+/// The parent enumeration already supplied non-reparse directory metadata.
+/// Reuse the exact original iterative traversal rather than query that root twice.
+pub(crate) fn folder_size_summary_known_directory(root: &Path, cancel: &AtomicBool) -> Option<FolderSizeSummary> {
+    let mut summary = FolderSizeSummary::default();
+    scan_known_directory(root, cancel, &mut summary)?;
+    Some(summary)
+}
+
+fn scan_known_directory(root: &Path, cancel: &AtomicBool, summary: &mut FolderSizeSummary) -> Option<()> {
+    use std::os::windows::fs::MetadataExt;
+    const REPARSE: u32 = 0x400;
+    const DIRECTORY: u32 = 0x10;
+    let error = |summary: &mut FolderSizeSummary, path: &Path, message: String| {
+        if summary.errors.len() < 100 { summary.errors.push(format!("{}: {message}", path.display())); }
+    };
+    summary.folders += 1;
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(folder) = pending.pop() {
+        if check_cancel(cancel).is_err() {
+            return None;
+        }
+        let entries = match fs::read_dir(&folder) {
+            Ok(entries) => entries,
+            Err(e) => {
+                error(summary, &folder, e.to_string());
+                continue;
+            }
+        };
+        let mut children = Vec::new();
+        for entry in entries {
+            // A single huge directory can contain millions of files.
+            // Navigation and foreground file operations must cancel
+            // automatic enumeration without waiting for that whole folder.
             if check_cancel(cancel).is_err() {
                 return None;
             }
-            let entries = match fs::read_dir(&folder) {
-                Ok(entries) => entries,
+            let entry = match entry {
+                Ok(entry) => entry,
                 Err(e) => {
-                    error(&mut summary, &folder, e.to_string());
+                    error(summary, &folder, e.to_string());
+                    break;
+                }
+            };
+            let metadata = match entry.metadata() {
+                Ok(m) => m,
+                Err(e) => {
+                    error(summary, &entry.path(), e.to_string());
                     continue;
                 }
             };
-            let mut children = Vec::new();
-            for entry in entries {
-                // A single huge directory can contain millions of files.
-                // Navigation and foreground file operations must cancel
-                // automatic enumeration without waiting for that whole folder.
-                if check_cancel(cancel).is_err() {
-                    return None;
-                }
-                let entry = match entry {
-                    Ok(entry) => entry,
-                    Err(e) => {
-                        error(&mut summary, &folder, e.to_string());
-                        break;
-                    }
-                };
-                let metadata = match entry.metadata() {
-                    Ok(m) => m,
-                    Err(e) => {
-                        error(&mut summary, &entry.path(), e.to_string());
-                        continue;
-                    }
-                };
-                let attributes = metadata.file_attributes();
-                if attributes & REPARSE != 0 {
-                    continue;
-                }
-                if attributes & DIRECTORY != 0 {
-                    summary.folders += 1;
-                    children.push(entry.path());
-                } else {
-                    summary.total_bytes += metadata.len();
-                    summary.files += 1;
-                }
+            let attributes = metadata.file_attributes();
+            if attributes & REPARSE != 0 {
+                continue;
             }
-            // It is a stack, so push in reverse to descend in list order.
-            pending.extend(children.into_iter().rev());
+            if attributes & DIRECTORY != 0 {
+                summary.folders += 1;
+                children.push(entry.path());
+            } else {
+                summary.total_bytes += metadata.len();
+                summary.files += 1;
+            }
         }
+        // It is a stack, so push in reverse to descend in list order.
+        pending.extend(children.into_iter().rev());
     }
-    Some(summary)
+    Some(())
 }
 
 /// C# FileAttributeChanges: tri-state attributes (None = unchanged), modification time to set, include subfolders, apply to folders too.

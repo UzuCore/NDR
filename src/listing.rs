@@ -398,7 +398,7 @@ pub(crate) fn compare_wide(a: &[u16], b: &[u16], logical: bool) -> Ordering {
 }
 
 /// Settings of SortPaneItems (per pane): folder and file sort modes with descending flags, logical sort.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SortOptions {
     pub folder_mode: String,
     pub folder_descending: bool,

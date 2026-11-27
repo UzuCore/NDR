@@ -266,6 +266,8 @@ impl App {
     }
 
     pub(super) fn refresh_vault(&mut self, pane: usize) {
+        self.panes[pane].listing_cancel.store(true, Ordering::Relaxed);
+        self.panes[pane].folder_manual_pending.clear();
         self.clear_automatic_folder_sizes(pane);
         self.panes[pane].folder_cancel.store(true, Ordering::Relaxed);
         self.panes[pane].folder_cancel = Arc::new(AtomicBool::new(false));

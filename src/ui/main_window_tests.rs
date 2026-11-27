@@ -1124,6 +1124,26 @@ fn automatic_folder_sizes_cache_navigation_and_foreground_priority() {
     assert_eq!(app.panes[0].folder_size_display(&folder).as_deref(), Some("3.00 KB"));
     assert!(app.panes[0].folder_auto_paths.contains(&folder));
     assert!(app.folder_size_cache.contains_key(&folder));
+    assert!(app.folder_size_cache[&folder].watch.is_some(), "local fixture requires recursive change notification");
+    let original_scans = app.panes[0].folder_auto_scans;
+    // Expiry validates the root identity without walking a clean subtree.
+    let expired = Instant::now() - super::pane_chrome::FOLDER_SIZE_TTL - Duration::from_millis(5);
+    app.folder_size_cache.get_mut(&folder).unwrap().observed_at = expired;
+    app.panes[0].folder_auto_times.insert(folder.clone(), expired);
+    app.queue_folder_size(0, r);
+    assert_eq!(app.panes[0].folder_size_display(&folder).as_deref(), Some("3.00 KB"));
+    wait_for_folder_idle(&mut app, &ctx, 0);
+    assert_eq!(app.panes[0].folder_auto_scans, original_scans);
+    // An unrelated change in the parent listing must not invalidate a
+    // recursive observation of this folder.
+    fs::write(left.join("unrelated.txt"), b"outside the watched subtree").unwrap();
+    app.refresh(0);
+    wait(&mut app, &ctx);
+    let r = row(&app);
+    assert_eq!(app.panes[0].folder_size_display(&folder).as_deref(), Some("3.00 KB"));
+    app.queue_folder_size(0, r);
+    wait_for_folder_idle(&mut app, &ctx, 0);
+    assert_eq!(app.panes[0].folder_auto_scans, original_scans);
     // Navigate elsewhere and return: a recent complete total is immediately
     // reused; no recursive scan is launched for this row.
     app.navigate(0, root.join("right"), true);
@@ -1133,27 +1153,29 @@ fn automatic_folder_sizes_cache_navigation_and_foreground_priority() {
     let r = row(&app);
     app.queue_folder_size(0, r);
     assert_eq!(app.panes[0].folder_bytes.get(&folder), Some(&3072));
-    // A foreground file job suppresses automatic scans and invalidates
-    // provisional totals, without cancelling the foreground job.
+    // A foreground file job suppresses automatic scans, but never
+    // removes an already displayed total or cancels the foreground job.
     let (_tx, rx) = mpsc::channel();
     let job_cancel = Arc::new(AtomicBool::new(false));
     app.job = Some(Job::new(rx, job_cancel.clone(), "fixture copy".into()));
     app.sync_folder_size_activity();
     assert!(!job_cancel.load(Ordering::Relaxed));
-    assert!(!app.panes[0].folder_sizes.contains_key(&folder));
-    assert!(app.folder_size_cache.is_empty());
+    assert_eq!(app.panes[0].folder_bytes.get(&folder), Some(&3072));
+    assert!(app.folder_size_cache.contains_key(&folder));
     app.queue_folder_size(0, r);
-    assert!(!app.panes[0].folder_sizes.contains_key(&folder));
+    assert_eq!(app.panes[0].folder_bytes.get(&folder), Some(&3072));
     fs::write(folder.join("nested/b.bin"), vec![3u8; 4096]).unwrap();
+    wait_for_folder_watch_change(&app, &folder);
     app.job = None;
     app.queue_folder_size(0, r);
+    assert_eq!(app.panes[0].folder_bytes.get(&folder), Some(&3072), "never blank while refreshing");
     wait_size(&mut app, 6144);
-    // A refresh discards automatic totals but preserves explicit manual
-    // size behavior; modified descendant sizes are recomputed.
+    // A refresh retains old totals until the changed descendant is counted.
     fs::write(folder.join("nested/b.bin"), vec![4u8; 512]).unwrap();
+    wait_for_folder_watch_change(&app, &folder);
     app.refresh(0);
     wait(&mut app, &ctx);
-    assert!(!app.panes[0].folder_sizes.contains_key(&folder));
+    assert_eq!(app.panes[0].folder_bytes.get(&folder), Some(&6144));
     let r = row(&app);
     app.queue_folder_size(0, r);
     wait_size(&mut app, 2560);
@@ -1171,6 +1193,146 @@ fn automatic_folder_sizes_cache_navigation_and_foreground_priority() {
     assert!(!native::folder_size_local_volume(Path::new(r"\\server\share\folder")));
     assert!(!native::folder_size_local_volume(Path::new(r"\\?\UNC\server\share\folder")));
     assert_eq!(fs::metadata(folder.join("nested/b.bin")).unwrap().len(), 512);
+    drop(app);
+    fs::remove_dir_all(root).unwrap();
+}
+
+fn wait_for_folder_idle(app: &mut App, ctx: &egui::Context, pane: usize) {
+    let end = Instant::now() + Duration::from_secs(15);
+    while !app.panes[pane].folder_auto_pending.is_empty() {
+        assert!(Instant::now() < end, "folder validation timed out");
+        app.poll(ctx);
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+
+fn wait_for_folder_watch_change(app: &App, folder: &Path) {
+    let watch = app.folder_size_cache[folder].watch.as_ref().expect("local folder change watch");
+    let end = Instant::now() + Duration::from_secs(10);
+    while watch.unchanged() {
+        assert!(Instant::now() < end, "recursive notification not received for {folder:?}");
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn folder_cache_job_scope_updates_only_affected_totals() {
+    let (root, ctx, mut app) = fixture("folder-operation-scope");
+    let left = root.join("left");
+    let a = left.join("a");
+    let b = left.join("b");
+    fs::create_dir(&a).unwrap();
+    fs::create_dir(&b).unwrap();
+    fs::write(a.join("original"), [1u8; 100]).unwrap();
+    fs::write(b.join("other"), [2u8; 200]).unwrap();
+    let input = root.join("right/input.bin");
+    fs::write(&input, [3u8; 300]).unwrap();
+    app.settings.set_flag("LeftAutoFolderSize", true);
+    app.settings.set_flag("PlayCompletionSound", false);
+    app.refresh(0);
+    wait(&mut app, &ctx);
+    let update = |app: &mut App, a_bytes, b_bytes| {
+        for p in [&a, &b] {
+            let row = app.panes[0].entries.iter().position(|e| &e.path == p).unwrap();
+            app.queue_folder_size(0, row);
+        }
+        wait_for_folder_idle(app, &ctx, 0);
+        assert_eq!(app.panes[0].folder_bytes.get(&a), Some(&a_bytes));
+        assert_eq!(app.panes[0].folder_bytes.get(&b), Some(&b_bytes));
+    };
+    let run = |app: &mut App, operation| {
+        app.start_job("fixture operation".into(), operation, super::file_operation::JobReport::Generic, None);
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while app.job.as_ref().is_some_and(|job| !job.finished) {
+            assert!(Instant::now() < deadline);
+            app.poll_active_job_events();
+            app.poll(&ctx);
+            thread::sleep(Duration::from_millis(5));
+        }
+        app.poll(&ctx);
+        wait(app, &ctx);
+    };
+    update(&mut app, 100, 200);
+    let scans = app.panes[0].folder_auto_scans;
+    run(&mut app, Operation::Copy { sources: vec![input.clone()], destination: a.clone(), move_files: false });
+    assert_eq!(app.panes[0].folder_bytes.get(&a), Some(&100), "retain display during foreground copy");
+    update(&mut app, 400, 200);
+    assert_eq!(app.panes[0].folder_auto_scans, scans + 1, "unchanged sibling must not be recursively scanned");
+    run(&mut app, Operation::Copy { sources: vec![a.join("input.bin")], destination: b.clone(), move_files: true });
+    update(&mut app, 100, 500);
+    run(&mut app, Operation::Delete { sources: vec![b.join("input.bin")], recycle: false });
+    update(&mut app, 100, 200);
+    assert_eq!(fs::metadata(input).unwrap().len(), 300);
+    drop(app);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn folder_observation_handles_are_bounded_without_losing_totals() {
+    let (root, _ctx, mut app) = fixture("folder-watch-budget");
+    let folder = root.join("left/folder");
+    let watch = Arc::new(native::FolderSizeWatch::open(&folder).unwrap());
+    for i in 0..150 {
+        app.cache_folder_size(root.join(format!("cached-{i}")), i, Some(watch.clone()), Instant::now(), native::FolderSizeMedia::Fast);
+    }
+    assert_eq!(app.folder_size_cache.len(), 150);
+    assert!(app.folder_size_cache.values().filter(|o| o.watch.is_some()).count() <= 128);
+    for i in 0..150 { assert_eq!(app.folder_size_cache[&root.join(format!("cached-{i}"))].bytes, i); }
+    drop((watch, app));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn large_local_listing_worker_matches_synchronous_rows_and_widths() {
+    let (root, ctx, mut app) = fixture("prepared-large-list");
+    let left = root.join("left");
+    for i in 0..4100 {
+        fs::write(left.join(format!("item-{i:04}.{}", if i % 3 == 0 { "txt" } else { "log" })), vec![1u8; i % 23]).unwrap();
+    }
+    app.settings.set_flag("ShowDriveList", false);
+    app.settings.set_text("LeftGroupMode", "Extension");
+    app.settings.set_text("LeftSortMode", "Modified");
+    app.settings.set_flag("LeftSortDescending", true);
+    app.settings.set_flag("LeftAutoFolderSize", true);
+    app.panes[0].filter = "*.txt".into();
+    app.refresh(0);
+    wait(&mut app, &ctx);
+    assert!(app.smoke_prepared_lists >= 1);
+    assert!(app.panes[0].prepared_field_max.is_some());
+    let expected_paths: Vec<_> = app.panes[0].entries.iter().map(|e| e.path.clone()).collect();
+    let expected_cells = app.panes[0].view.cells.clone();
+    let expected_colors = app.panes[0].view.colors.clone();
+    let expected_headers: Vec<_> = app.panes[0].view.rows.iter().filter_map(|row| match row { DetailRow::Header(s) => Some(s.clone()), _ => None }).collect();
+    let expected_fm = app.panes[0].prepared_field_max.as_ref().unwrap().2;
+    let filter = ndr::parity::CompiledFilter::new("*.txt");
+    let mut raw = fsops::list_dir(&left, app.panes[0].show_hidden).unwrap();
+    raw.retain(|e| e.is_dir || filter.matches(&e.name));
+    raw.insert(0, parent_item_for(&app.panes[0]).unwrap());
+    app.panes[0].entries = raw;
+    app.sort_pane(0);
+    assert_eq!(app.panes[0].entries.iter().map(|e| e.path.clone()).collect::<Vec<_>>(), expected_paths);
+    assert_eq!(app.panes[0].view.cells, expected_cells);
+    assert_eq!(app.panes[0].view.colors, expected_colors);
+    assert_eq!(app.panes[0].view.rows.iter().filter_map(|row| match row { DetailRow::Header(s) => Some(s.clone()), _ => None }).collect::<Vec<_>>(), expected_headers);
+    let mut fm = None;
+    let _ = ctx.run(egui::RawInput::default(), |ctx| {
+        egui::CentralPanel::default().show(ctx, |ui| { fm = Some(app.original_field_max(ui, 0)); });
+    });
+    assert_eq!(fm, Some(expected_fm));
+    // Reject an obsolete ordering rather than derive an unsorted result from it.
+    app.refresh_after_startup(0);
+    app.settings.set_text("LeftSortMode", "None");
+    app.settings.set_text("LeftGroupMode", "None");
+    wait(&mut app, &ctx);
+    let mut original = fsops::list_dir(&left, app.panes[0].show_hidden).unwrap();
+    original.retain(|e| e.is_dir || filter.matches(&e.name));
+    original.insert(0, parent_item_for(&app.panes[0]).unwrap());
+    // The None mode still places the parent, folders and priority buckets first.
+    original.sort_by_key(|e| if e.is_parent() { 0 } else if e.is_dir { 1 } else { 2 });
+    assert_eq!(app.panes[0].entries.iter().map(|e| e.path.clone()).collect::<Vec<_>>(),
+        original.into_iter().map(|e| e.path).collect::<Vec<_>>());
+    let stopped = AtomicBool::new(true);
+    assert!(fsops::list_dir_with_cancel(&left, true, Some(&stopped)).is_err());
     drop(app);
     fs::remove_dir_all(root).unwrap();
 }
@@ -1202,10 +1364,11 @@ fn automatic_folder_sizes_expire_live_and_invalidate_both_panes() {
     let original_generation = app.panes[0].generation;
     // A change inside a descendant does not require a root listing refresh.
     fs::write(&file, vec![2u8; 4096]).unwrap();
+    wait_for_folder_watch_change(&app, &folder);
     let expired = Instant::now() - super::pane_chrome::FOLDER_SIZE_TTL - Duration::from_millis(5);
     app.panes[0].folder_auto_times.insert(folder.clone(), expired);
-    app.folder_size_cache.get_mut(&folder).unwrap().1 = expired;
     app.queue_folder_size(0, r);
+    assert_eq!(app.panes[0].folder_bytes.get(&folder), Some(&1024));
     wait_size(&mut app, 4096);
     assert_eq!(app.panes[0].generation, original_generation);
     app.navigate(1, left, true);
@@ -1215,8 +1378,22 @@ fn automatic_folder_sizes_expire_live_and_invalidate_both_panes() {
     assert_eq!(app.panes[1].folder_bytes.get(&folder), Some(&4096));
     app.refresh(0);
     assert!(!app.panes[1].folder_auto_times.contains_key(&folder));
-    assert!(!app.panes[1].folder_sizes.contains_key(&folder));
+    assert_eq!(app.panes[1].folder_bytes.get(&folder), Some(&4096));
     wait(&mut app, &ctx);
+    app.queue_folder_size(0, row(&app, 0));
+    assert_eq!(app.panes[0].folder_bytes.get(&folder), Some(&4096));
+    app.queue_folder_size(1, right_row);
+    wait_for_folder_idle(&mut app, &ctx, 0);
+    wait_for_folder_idle(&mut app, &ctx, 1);
+    assert_eq!(app.panes[1].folder_auto_scans, 0, "second pane reuses clean watch");
+    // The same path's fallback cache must also retain its display during
+    // revalidation if recursive notifications are unsupported.
+    app.cache_folder_size(folder.clone(), 4096, None, Instant::now(), native::FolderSizeMedia::Unknown);
+    app.folder_size_cache.get_mut(&folder).unwrap().observed_at = expired;
+    app.panes[0].folder_auto_times.insert(folder.clone(), expired);
+    app.folder_size_workers = true;
+    app.queue_folder_size(0, row(&app, 0));
+    assert_eq!(app.panes[0].folder_bytes.get(&folder), Some(&4096));
     drop(app);
     fs::remove_dir_all(root).unwrap();
 }

@@ -1398,9 +1398,14 @@ pub fn is_reparse(m: &fs::Metadata) -> bool {
     }
 }
 pub fn list_dir(path: &Path, show_hidden: bool) -> Result<Vec<Entry>, String> {
+    list_dir_with_cancel(path, show_hidden, None)
+}
+pub fn list_dir_with_cancel(path: &Path, show_hidden: bool, cancel: Option<&AtomicBool>) -> Result<Vec<Entry>, String> {
+    if let Some(cancel) = cancel { check_cancel(cancel)?; }
     ensure_plain_path(path)?;
     let mut entries = Vec::new();
     for item in fs::read_dir(path).map_err(|e| e.to_string())? {
+        if let Some(cancel) = cancel { check_cancel(cancel)?; }
         let item = item.map_err(|e| e.to_string())?;
         // On Windows DirEntry::metadata uses the values FindNextFileW gave (attributes, size, times) as is and does not follow links
         // (same meaning as symlink_metadata). Much faster on large folders than symlink_metadata, which opens each file.

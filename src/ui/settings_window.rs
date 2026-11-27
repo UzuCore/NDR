@@ -1602,10 +1602,20 @@ impl App {
     /// After OK (the rest of C# ShowOptionsAsync): normalize, language, theme, both panes, hidden display, view, save, refresh both panes.
     pub(super) fn apply_settings(&mut self, settings: ndr::settings::Settings) {
         let previous_single = self.settings.flag("UseSingleInstance", false);
-        // Cancel old automatic results before applying the new visibility/unit settings.
-        self.clear_automatic_folder_sizes(0);
-        self.clear_automatic_folder_sizes(1);
-        self.folder_size_cache.clear();
+        // The observations store bytes, not formatted labels. Unrelated
+        // settings changes must not discard them or blank the folder column.
+        let changed_units = settings.text("SizeUnit", "Auto") != self.settings.text("SizeUnit", "Auto")
+            || settings.flag("UseThousandsSeparator", true) != self.settings.flag("UseThousandsSeparator", true);
+        for index in 0..2 {
+            if changed_units || !settings.flag(if index == 0 { "LeftAutoFolderSize" } else { "RightAutoFolderSize" }, false) {
+                self.clear_automatic_folder_sizes(index);
+            }
+        }
+        if !settings.flag("LeftAutoFolderSize", false) && !settings.flag("RightAutoFolderSize", false) {
+            self.folder_size_cache.clear();
+            self.folder_size_purge.store(true, Ordering::Relaxed);
+            self.folder_size_queue.1.notify_one();
+        }
         self.settings = settings;
         self.settings.normalize();
         let requested = self.settings.text("Language", &self.language);

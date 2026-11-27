@@ -69,7 +69,9 @@ pub fn download_github_update_with_progress(
     let digest = format!("{:x}", Sha256::digest(&response.body));
     if digest != release.sha256 { return Err("Update SHA-256 verification failed".into()); }
     phase(UpdatePhase::Preparing);
-    let folder = std::env::temp_dir().join(format!("ndr-update-{}-{}-{}", release.tag,
+    let cache = crate::cache::updates();
+    crate::cache::prepare(&cache)?;
+    let folder = cache.join(format!("ndr-update-{}-{}-{}", release.tag,
         std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
             .map_err(|e| e.to_string())?.as_nanos()));
     std::fs::create_dir(&folder).map_err(|e| e.to_string())?;

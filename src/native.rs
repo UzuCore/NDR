@@ -29,6 +29,13 @@ pub fn folder_paths_related(a: &Path, b: &Path) -> bool {
     loop {
         match (a.next(), b.next()) {
             (Some(x), Some(y)) => {
+                if x == y { continue; }
+                let xa = x.as_os_str().as_encoded_bytes();
+                let ya = y.as_os_str().as_encoded_bytes();
+                if xa.is_ascii() && ya.is_ascii() {
+                    if xa.eq_ignore_ascii_case(ya) { continue; }
+                    return false;
+                }
                 let x = wide(x.as_os_str());
                 let y = wide(y.as_os_str());
                 if unsafe { CompareStringOrdinal(x.as_ptr(), (x.len() - 1) as i32, y.as_ptr(), (y.len() - 1) as i32, 1) } != CSTR_EQUAL {
@@ -113,6 +120,79 @@ pub fn spawn_folder_watch(path: PathBuf, stop: std::sync::Arc<std::sync::atomic:
         unsafe { FindCloseChangeNotification(handle) };
     });
 }
+/// Level-triggered recursive change observation for a cached folder total.
+/// Arm before enumerating; a signalled handle is never reset or reused.
+/// A bounded cache owns the handles, without a thread per folder.
+pub struct FolderSizeWatch {
+    handle: usize,
+    identity: (u32, u64, u64),
+}
+
+/// The directory notification handle follows the original object if it is
+/// renamed. Check the actual path's volume/file ID and creation time too.
+/// This is metadata-only and must run on the folder-size worker, not paint.
+pub fn folder_size_identity(path: &Path) -> Option<(u32, u64, u64)> {
+    use std::os::windows::{fs::OpenOptionsExt, io::AsRawHandle};
+    let file = std::fs::OpenOptions::new()
+        .access_mode(FILE_READ_ATTRIBUTES)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path).ok()?;
+    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+    if unsafe { GetFileInformationByHandle(file.as_raw_handle(), &mut info) } == 0
+        || info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY == 0
+        || info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return None;
+    }
+    let index = (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow);
+    let created = (u64::from(info.ftCreationTime.dwHighDateTime) << 32) | u64::from(info.ftCreationTime.dwLowDateTime);
+    Some((info.dwVolumeSerialNumber, index, created))
+}
+
+impl FolderSizeWatch {
+    pub fn identity(&self) -> (u32, u64, u64) { self.identity }
+
+    pub fn open(path: &Path) -> Option<Self> {
+        let identity = folder_size_identity(path)?;
+        let path = wide(path.as_os_str());
+        let handle = unsafe { FindFirstChangeNotificationW(path.as_ptr(), 1,
+            FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME |
+            FILE_NOTIFY_CHANGE_SIZE |
+            FILE_NOTIFY_CHANGE_ATTRIBUTES) };
+        if handle.is_null() || handle == INVALID_HANDLE_VALUE { None } else { Some(Self { handle: handle as usize, identity }) }
+    }
+
+    pub fn unchanged(&self) -> bool {
+        unsafe { windows_sys::Win32::System::Threading::WaitForSingleObject(self.handle as HANDLE, 0) == WAIT_TIMEOUT }
+    }
+
+    pub fn matches_path(&self, path: &Path) -> bool {
+        self.unchanged() && folder_size_identity(path) == Some(self.identity) && self.unchanged()
+    }
+}
+
+#[test]
+fn folder_size_watch_rejects_replaced_root_without_subtree_signal() {
+    let base = std::env::temp_dir().join(format!("ndr-watch-{}-{}", std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    let path = base.join("folder");
+    std::fs::create_dir_all(&path).unwrap();
+    let watch = FolderSizeWatch::open(&path).expect("local watch");
+    assert!(watch.matches_path(&path));
+    std::fs::rename(&path, base.join("renamed")).unwrap();
+    std::fs::create_dir(&path).unwrap();
+    assert!(!watch.matches_path(&path), "a new object at the same path cannot reuse the total");
+    assert!(FolderSizeWatch::open(&path).unwrap().matches_path(&path));
+    drop(watch);
+    std::fs::remove_dir_all(base).unwrap();
+}
+
+impl Drop for FolderSizeWatch {
+    fn drop(&mut self) {
+        unsafe { FindCloseChangeNotification(self.handle as HANDLE); }
+    }
+}
+
 pub fn reject_nul(text: &str) -> Result<(), String> {
     if text.contains('\0') {
         Err("Embedded NUL is not allowed".into())
@@ -1577,6 +1657,54 @@ fn volume_root(path: &Path) -> Option<(PathBuf, Option<char>)> {
         Prefix::UNC(server, share) | Prefix::VerbatimUNC(server, share) => Some((PathBuf::from(format!("\\\\{}\\{}\\", server.to_string_lossy(), share.to_string_lossy())), None)),
         _ => None,
     }
+}
+
+/// Storage policy is a performance hint, never a prerequisite for reading
+/// a directory. Device queries use zero desired access, no elevation and
+/// no writes. Unknown/virtual volumes use the conservative default.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FolderSizeMedia { Fast, Seek, #[default] Unknown }
+
+impl FolderSizeMedia {
+    pub fn verify_interval(self) -> std::time::Duration {
+        std::time::Duration::from_secs(if self == Self::Seek { 30 } else { 15 })
+    }
+    pub fn check_interval(self) -> std::time::Duration {
+        std::time::Duration::from_secs(if self == Self::Seek { 2 } else { 1 })
+    }
+}
+/// Called only by the low-priority worker, and cached by parent listing.
+pub fn folder_size_media(path: &Path) -> FolderSizeMedia {
+    use windows_sys::Win32::System::{IO::DeviceIoControl, Ioctl::{DEVICE_SEEK_PENALTY_DESCRIPTOR, IOCTL_STORAGE_QUERY_PROPERTY, STORAGE_PROPERTY_QUERY, StorageDeviceSeekPenaltyProperty, PropertyStandardQuery}};
+    let mut root = [0u16; 1024];
+    if unsafe { GetVolumePathNameW(wide(path.as_os_str()).as_ptr(), root.as_mut_ptr(), root.len() as u32) } == 0 {
+        return FolderSizeMedia::Unknown;
+    }
+    let len = root.iter().position(|&c| c == 0).unwrap_or(root.len());
+    let kind = unsafe { GetDriveTypeW(root.as_ptr()) };
+    if kind == 6 { return FolderSizeMedia::Fast; }
+    if kind == 2 { return FolderSizeMedia::Seek; }
+    // Mount-point and network/virtual volumes need not expose a physical
+    // device; don't guess from a drive letter or open raw disk data.
+    if kind != 3 || len != 3 || root[1] != b':' as u16 { return FolderSizeMedia::Unknown; }
+    let device = [b'\\' as u16, b'\\' as u16, b'.' as u16, b'\\' as u16, root[0], b':' as u16, 0];
+    let h = unsafe { CreateFileW(device.as_ptr(), 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        ptr::null(), OPEN_EXISTING, 0, ptr::null_mut()) };
+    if h == INVALID_HANDLE_VALUE || h.is_null() { return FolderSizeMedia::Unknown; }
+    let query = STORAGE_PROPERTY_QUERY { PropertyId: StorageDeviceSeekPenaltyProperty,
+        QueryType: PropertyStandardQuery, AdditionalParameters: [0] };
+    let mut out: DEVICE_SEEK_PENALTY_DESCRIPTOR = unsafe { std::mem::zeroed() };
+    let mut returned = 0u32;
+    let ok = unsafe {
+        let ok = DeviceIoControl(h, IOCTL_STORAGE_QUERY_PROPERTY, &query as *const _ as _,
+            size_of::<STORAGE_PROPERTY_QUERY>() as u32, &mut out as *mut _ as _,
+            size_of::<DEVICE_SEEK_PENALTY_DESCRIPTOR>() as u32, &mut returned, ptr::null_mut());
+        CloseHandle(h);
+        ok != 0
+    };
+    if !ok || returned < size_of::<DEVICE_SEEK_PENALTY_DESCRIPTOR>() as u32 {
+        FolderSizeMedia::Unknown
+    } else if out.IncursSeekPenalty { FolderSizeMedia::Seek } else { FolderSizeMedia::Fast }
 }
 
 /// Automatic recursive enumeration must never start on a UNC share or mapped

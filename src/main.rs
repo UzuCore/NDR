@@ -241,6 +241,11 @@ fn main() {
                 ndr::lifecycle::InstanceOutcome::Forwarded => return Ok(()),
             }
         }
+        // The portable profile owns all NDR disk caches. Cache creation is
+        // nonfatal for ordinary file management (e.g. a read-only install).
+        if let Err(error) = ndr::cache::configure(&profile) {
+            log::warn!("Could not initialize NDR cache: {error}");
+        }
         let mut viewport = eframe::egui::ViewportBuilder::default()
             .with_title("NDR")
             .with_icon(eframe::icon_data::from_png_bytes(include_bytes!("../assets/ndr-icon.png"))
@@ -277,7 +282,7 @@ fn main() {
             // The startup check opens off screen, without taking focus and without a taskbar entry (it does not cover the user's screen).
             viewport = viewport.with_inner_size(options.smoke_size.unwrap_or([1400.0, 850.0])).with_position([-30000.0, -30000.0]).with_active(false).with_taskbar(options.smoke_taskbar);
         } else {
-            // Fixed: so folders extracted to %TEMP%\NDR when opening archive items do not pile up, ones unchanged for over 7 days and not in use are deleted.
+            // Age out only NDR-owned extracted preview entries under cache.
             std::thread::spawn(|| {
                 ndr::archive::clean_stale_temp_entries(&ndr::archive::temp_entry_root(), std::time::Duration::from_secs(7 * 24 * 3600), std::time::SystemTime::now());
             });

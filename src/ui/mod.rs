@@ -141,6 +141,7 @@ struct Pane {
     show_hidden: bool,
     loading: bool,
     generation: u64,
+    listing_cancel: Arc<AtomicBool>,
     error: Option<String>,
     archive: Option<ArchiveLocation>,
     /// Open SQLCipher container presented as a directory inside this pane.
@@ -152,6 +153,7 @@ struct Pane {
     descriptions: HashMap<String, String>,
     /// Column text/color/grouping rows drawn on screen (rebuilt in sort_pane).
     view: PaneView,
+    prepared_field_max: Option<(u64, panes::FieldMaxPlan, panes::FieldMax)>,
     /// Listing summary for the info bar (C# PaneState.UpdateSummary). None when a new listing arrives.
     summary: Option<main_window::PaneSummary>,
     /// Original info bar disk data (drive letter "Name (C:) ", free, total). None if it could not be read.
@@ -160,7 +162,8 @@ struct Pane {
     drive_infos: HashMap<PathBuf, (String, u32, Option<(u64, u64)>)>,
     /// Editing the address bar as a text field (C# _addressEditing).
     address_editing: bool,
-    /// Automatic folder size display (path -> None = counting, Some(text)). Cleared when a new listing arrives.
+    /// Last displayed folder total. A background refresh keeps Some(text)
+    /// until a new result arrives; None is only for the first calculation.
     folder_sizes: HashMap<PathBuf, Option<String>>,
     /// Counted folder sizes (bytes). The original file info bar (FUN_0048a5cc) shows the entry size via FloatToStrF(ffNumber).
     folder_bytes: HashMap<PathBuf, u64>,
@@ -169,10 +172,16 @@ struct Pane {
     /// Per-job automatic cancellation: scrolling can stop off-screen work
     /// without interrupting a visible row or an explicit manual calculation.
     folder_auto_pending: HashMap<PathBuf, Arc<AtomicBool>>,
+    folder_manual_pending: HashSet<PathBuf>,
     folder_auto_visible: HashSet<PathBuf>,
     folder_auto_times: HashMap<PathBuf, Instant>,
     folder_auto_paths: HashSet<PathBuf>,
     folder_auto_volume: Option<bool>,
+    folder_auto_requests: u64,
+    folder_auto_scans: u64,
+    folder_auto_visited: u64,
+    folder_auto_reused: u64,
+    folder_auto_hints: u64,
     /// Whether the network share connection dialog has already been shown at this location (C# allowNetworkAuthPrompt: once only).
     auth_prompted: bool,
     /// Page info from the last paint (rows per column, visible column count, top item; used by the original ArrowKey).
@@ -243,8 +252,12 @@ struct Pane {
 }
 impl Pane {
     fn cancel_automatic_folder_jobs(&mut self) {
-        for (_, cancel) in self.folder_auto_pending.drain() {
+        for (path, cancel) in self.folder_auto_pending.drain() {
             cancel.store(true, Ordering::Relaxed);
+            if !self.folder_sizes.get(&path).is_some_and(Option::is_some) {
+                self.folder_auto_paths.remove(&path);
+                self.folder_sizes.remove(&path);
+            }
         }
         self.folder_auto_visible.clear();
         self.folder_auto_times.clear();
@@ -277,6 +290,7 @@ impl Pane {
             show_hidden,
             loading: false,
             generation: 0,
+            listing_cancel: Arc::new(AtomicBool::new(false)),
             error: None,
             archive: None,
             vault: None,
@@ -284,6 +298,7 @@ impl Pane {
             ftp_log_height: ftp_pane::FTP_LOG_HEIGHT,
             descriptions: HashMap::new(),
             view: PaneView::default(),
+            prepared_field_max: None,
             summary: None,
             disk: None,
             drive_infos: HashMap::new(),
@@ -292,10 +307,16 @@ impl Pane {
             folder_bytes: HashMap::new(),
             folder_cancel: Arc::new(AtomicBool::new(false)),
             folder_auto_pending: HashMap::new(),
+            folder_manual_pending: HashSet::new(),
             folder_auto_visible: HashSet::new(),
             folder_auto_times: HashMap::new(),
             folder_auto_paths: HashSet::new(),
             folder_auto_volume: None,
+            folder_auto_requests: 0,
+            folder_auto_scans: 0,
+            folder_auto_visited: 0,
+            folder_auto_reused: 0,
+            folder_auto_hints: 0,
             auth_prompted: false,
             page: list_keys::ListPage::default(),
             first_column: 0,
@@ -430,20 +451,22 @@ fn parent_item_for(pane: &Pane) -> Option<Entry> {
         let modified = std::fs::metadata(&location.file).and_then(|m| m.modified()).ok();
         return Some(Entry::parent_item(location.file.parent().map(Path::to_path_buf).unwrap_or_default(), modified));
     }
-    if panes::is_drives(&pane.path) {
-        return None;
-    }
-    let parent = pane.path.parent()?;
+    local_parent_item(&pane.path)
+}
+
+fn local_parent_item(path: &Path) -> Option<Entry> {
+    if panes::is_drives(path) { return None; }
+    let parent = path.parent()?;
     // Original GetList (0x45a34c) keeps the ".." that FindFirstFileW(folder\*) reports, with its attributes and last write time (the parent
     // folder's on NTFS: "_H_S" below a drive root). Only when the listing has none does it add ".." with attribute 0x10 and GetFolderTime.
     // Previously NDR always used the current folder's time and attribute 0x10.
-    if let Some((attributes, modified)) = native::dot_dot_entry(&pane.path) {
+    if let Some((attributes, modified)) = native::dot_dot_entry(path) {
         let mut entry = Entry::parent_item(parent.to_path_buf(), modified);
         entry.attributes = attributes;
         entry.hidden = attributes & ndr::listing::FILE_ATTRIBUTE_HIDDEN != 0;
         return Some(entry);
     }
-    let modified = std::fs::metadata(&pane.path).and_then(|m| m.modified()).ok();
+    let modified = std::fs::metadata(path).and_then(|m| m.modified()).ok();
     Some(Entry::parent_item(parent.to_path_buf(), modified))
 }
 /// The search text of the original TNXCustomFileListView quick search (+0x3e0).
@@ -459,6 +482,7 @@ struct Listing {
     pane: usize,
     generation: u64,
     result: Result<Vec<Entry>, String>,
+    prepared: Option<panes::PreparedLocalListing>,
     /// Entries with Windows reserved device names omitted safely from this
     /// archive listing (the rest of the archive remains navigable).
     skipped_device_names: usize,
@@ -469,6 +493,7 @@ struct Listing {
 struct Job {
     serial: u64,
     reservation: Option<file_operation::TransferReservation>,
+    folder_mutations: Option<pane_chrome::FolderMutationScope>,
     /// Apply-to-all conflicts are scoped to one copy job, never shared across
     /// concurrently running copy/move workers.
     conflict_policy: Option<ConflictChoice>,
@@ -510,6 +535,7 @@ impl Job {
         Self {
             serial: 0,
             reservation: None,
+            folder_mutations: None,
             conflict_policy: None,
             receiver,
             cancel,
@@ -608,7 +634,8 @@ enum AsyncResult {
     /// Remote command result (site number, command, "host:port", output or error).
     RemoteCommand { site: String, command: String, host: String, result: Result<String, String> },
     /// Automatic folder size display result (panel, listing generation, folder, text).
-    FolderSizeRow { pane: usize, generation: u64, path: PathBuf, text: String, bytes: u64, automatic: bool, complete: bool, cancel: Arc<AtomicBool> },
+    FolderSizeHint { pane: usize, generation: u64, path: PathBuf, text: String, cancel: Arc<AtomicBool> },
+    FolderSizeRow { pane: usize, generation: u64, path: PathBuf, text: String, bytes: u64, automatic: bool, complete: bool, watch: Option<Arc<native::FolderSizeWatch>>, stable: bool, scanned: bool, work: ndr::folder_cache::ScanWork, audit_at: Instant, media: native::FolderSizeMedia, cancel: Arc<AtomicBool> },
     /// Received an update feed.
     /// Update feed result. bool = the silent check at startup (original [+0x54]; for a new version, only the menu bar button).
     Update(Result<ndr::update::HttpResponse, ndr::update::HttpError>, bool),
@@ -813,6 +840,8 @@ pub struct App {
     smoke_slowest_frame_ms: f64,
     /// Number of frames in the startup check that took longer than 50ms.
     smoke_slow_frames: u32,
+    smoke_initial_max_ms: f64,
+    smoke_prepared_lists: u64,
     /// When both panel listings were first fully read in the startup check (ms from start).
     smoke_loaded_ms: Option<u64>,
     /// Diagnostics ("tipwindow" sample): screen position of a separately shown tooltip window (left, top, width, height). Checks whether the window was actually created.
@@ -822,7 +851,12 @@ pub struct App {
     /// One low-priority enumeration worker shared by both panes.
     folder_size_queue: pane_chrome::FolderSizeQueue,
     folder_size_workers: bool,
-    folder_size_cache: HashMap<PathBuf, (u64, Instant)>,
+    folder_size_shutdown: Arc<AtomicBool>,
+    folder_size_purge: Arc<AtomicBool>,
+    folder_size_recent_reset: Arc<AtomicBool>,
+    folder_size_prune_at: Instant,
+    folder_size_done: Option<Receiver<()>>,
+    folder_size_cache: HashMap<PathBuf, pane_chrome::FolderSizeObservation>,
     folder_auto_busy: bool,
     /// Fetch the update feed (C# UpdateHttpClient). Swapped out in tests.
     http_get: fn(&str, usize) -> Result<ndr::update::HttpResponse, ndr::update::HttpError>,
@@ -1084,6 +1118,11 @@ impl App {
             crumb_cache: HashMap::new(),
             folder_size_queue: Arc::new((Mutex::new(std::collections::VecDeque::new()), std::sync::Condvar::new())),
             folder_size_workers: false,
+            folder_size_shutdown: Arc::new(AtomicBool::new(false)),
+            folder_size_purge: Arc::new(AtomicBool::new(false)),
+            folder_size_recent_reset: Arc::new(AtomicBool::new(false)),
+            folder_size_prune_at: Instant::now(),
+            folder_size_done: None,
             folder_size_cache: HashMap::new(),
             folder_auto_busy: false,
             file_drag: None,
@@ -1099,6 +1138,8 @@ impl App {
             smoke_repaint_causes: Default::default(),
             smoke_slowest_frame_ms: 0.0,
             smoke_slow_frames: 0,
+            smoke_initial_max_ms: 0.0,
+            smoke_prepared_lists: 0,
             smoke_loaded_ms: None,
             smoke_tip_window: None,
             applied_alpha: -1.0,
@@ -1276,6 +1317,13 @@ impl App {
         // Observe a newly-started foreground job before consuming its
         // completion event, even for very short copy/move operations.
         self.sync_folder_size_activity();
+        if self.folder_size_prune_at.elapsed() >= Duration::from_secs(30) {
+            self.prune_folder_observations();
+            self.folder_size_prune_at = Instant::now();
+        }
+        if self.folder_size_cache.values().any(|o| o.watch.is_some()) {
+            ctx.request_repaint_after(Duration::from_secs(30).saturating_sub(self.folder_size_prune_at.elapsed()));
+        }
         let mut auth_panes = std::mem::take(&mut self.auth_pending);
         // A heavy directory copy can trigger bursts of watcher/listing
         // notifications. Keep the UI frame bounded instead of applying all
@@ -1362,6 +1410,14 @@ impl App {
         if self.panes[listing.pane].generation != listing.generation {
             return;
         }
+        if listing.prepared.as_ref().is_some_and(|prepared| prepared.plan != panes::LocalListingPlan::capture(self, listing.pane)) {
+            // The original received order matters for "None" and stable
+            // ties. Never re-sort a stale worker ordering after an option
+            // changed; obtain a fresh listing with the new snapshot.
+            self.refresh_after_startup(listing.pane);
+            return;
+        }
+        let mut prepared = listing.prepared;
         // A failed archive open previously left the pane in archive mode with
         // stale rows and a red error above them. It could appear trapped: no
         // archive parent row existed and opening entries kept failing. Return
@@ -1398,13 +1454,14 @@ impl App {
             // disappear because the items are new. C# RefreshPaneAsync clears everything, so only the skin theme does this.
             let kept = (skin && listing.result.is_ok() && pane.listed.as_deref() == Some(location_key(pane).as_str())).then(|| {
                 let marks: Vec<String> = pane.selected.iter().filter_map(|&row| pane.entries.get(row)).filter(|e| !e.drive && !e.is_parent()).map(|e| e.name.clone()).collect();
-                let sizes: Vec<(PathBuf, String, Option<u64>)> = pane.folder_sizes.iter().filter_map(|(path, size)| size.clone().map(|s| (path.clone(), s, pane.folder_bytes.get(path).copied()))).collect();
+                let sizes: Vec<(PathBuf, String, Option<u64>, bool)> = pane.folder_sizes.iter().filter_map(|(path, size)| size.clone().map(|s| (path.clone(), s, pane.folder_bytes.get(path).copied(), pane.folder_auto_paths.contains(path)))).collect();
                 (marks, sizes, pane.first_column, pane.cursor, self.pending_focus[listing.pane].is_some())
             });
             pane.summary = None;
             pane.folder_cancel.store(true, Ordering::Relaxed);
             pane.folder_cancel = Arc::new(AtomicBool::new(false));
             pane.cancel_automatic_folder_jobs();
+            pane.folder_manual_pending.clear();
             pane.folder_auto_paths.clear();
             pane.folder_auto_volume = None;
             pane.folder_sizes.clear();
@@ -1415,7 +1472,7 @@ impl App {
                 Ok(mut entries) => {
                     // A SQLCipher container is a folder inside NDR, never an
                     // exposed document. Its on-disk .ndr file remains intact.
-                    if pane.archive.is_none() && pane.remote.is_none() {
+                    if prepared.is_none() && pane.archive.is_none() && pane.remote.is_none() {
                         for entry in &mut entries {
                             if !entry.is_dir && !entry.drive
                                 && entry.path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("ndr")) {
@@ -1433,19 +1490,21 @@ impl App {
                     pane.listed = Some(location);
                     // An archive subfolder listing carries its own ".." with the current folder's time (panes.rs); keep that time.
                     let listed_parent_time = pane.archive.as_ref().and_then(|_| entries.iter().find(|e| e.is_parent()).map(|e| e.modified));
-                    if !pane.filter.is_empty() {
+                    if prepared.is_none() && !pane.filter.is_empty() {
                         // The original list mask (FUN_00459588) applies to files only: folders stay listed (seen in the running original with "*.txt").
                         // Previously folders whose names did not match were hidden.
                         let filter = ndr::parity::CompiledFilter::new(&pane.filter);
                         entries.retain(|e| e.drive || e.is_dir || filter.matches(&e.name));
                     }
                     // Original GetList (0x45a34c), archive listing (0x45ecd0), SFTP listing (0x45bb0c), C# ListLocal: ".." first unless at a root.
-                    if let Some(mut parent) = parent_item_for(pane) {
-                        if let Some(modified) = listed_parent_time {
-                            parent.modified = modified;
+                    if prepared.is_none() {
+                        if let Some(mut parent) = parent_item_for(pane) {
+                            if let Some(modified) = listed_parent_time {
+                                parent.modified = modified;
+                            }
+                            entries.retain(|e| !e.is_parent());
+                            entries.insert(0, parent);
                         }
-                        entries.retain(|e| !e.is_parent());
-                        entries.insert(0, parent);
                     }
                     pane.entries = entries;
                     pane.first_column = 0;
@@ -1465,7 +1524,15 @@ impl App {
                     }
                 }
             }
-            self.sort_pane(listing.pane);
+            if let Some(prepared) = prepared.take() {
+                let pane = &mut self.panes[listing.pane];
+                pane.thumb_content_revision = pane.thumb_content_revision.wrapping_add(1);
+                pane.view = prepared.view;
+                pane.prepared_field_max = prepared.field.map(|(plan, fm)| (pane.thumb_content_revision, plan, fm));
+                self.smoke_prepared_lists += 1;
+            } else {
+                self.sort_pane(listing.pane);
+            }
             let pane = &mut self.panes[listing.pane];
             // A new list starts at the top after sorting (sort_pane follows the cursor item, so set it again).
             pane.cursor = 0;
@@ -1518,16 +1585,24 @@ impl App {
                 // Preserve cached folder sizes in O(N + M) instead of
                 // walking all N entries for every cached folder (M).
                 // Path identity remains exact, matching the previous logic.
-                let directories: std::collections::HashSet<&Path> = pane.entries.iter()
-                    .filter(|e| e.is_dir && !e.is_parent())
-                    .map(|e| e.path.as_path())
-                    .collect();
-                for (path, size, bytes) in sizes {
-                    if directories.contains(path.as_path()) {
+                let directories: std::collections::HashMap<&Path, bool> = if sizes.is_empty() {
+                    HashMap::new()
+                } else {
+                    pane.entries.iter().filter(|e| e.is_dir && !e.is_parent())
+                        .map(|e| (e.path.as_path(), !e.drive && e.attributes & 0x400 == 0)).collect()
+                };
+                for (path, size, bytes, automatic) in sizes {
+                    if let Some(&ordinary) = directories.get(path.as_path()) {
+                        if automatic {
+                            if !ordinary { continue; }
+                            pane.folder_auto_paths.insert(path.clone());
+                        }
                         if let Some(bytes) = bytes {
                             pane.folder_bytes.insert(path.clone(), bytes);
                         }
                         pane.folder_sizes.insert(path, Some(size));
+                    } else if automatic {
+                        self.folder_size_cache.remove(&path);
                     }
                 }
                 pane.first_column = first_column;
@@ -1622,21 +1697,64 @@ impl App {
                 AsyncResult::ArchiveEntriesOpened { pane, archive, password, opened, failures, navigate_archives } => self.archive_entries_opened(pane, archive, password, opened, failures, navigate_archives),
                 AsyncResult::ArchivePassword { archive, reply } => self.password_request = Some(PasswordRequest { archive, reply }),
                 AsyncResult::TextSource { path, edit } => self.text_source_ready(path, edit),
-                AsyncResult::FolderSizeRow { pane, generation, path, text, bytes, automatic, complete, cancel } => {
+                AsyncResult::FolderSizeHint { pane, generation, path, text, cancel } => {
+                    let p = &mut self.panes[pane];
+                    if p.generation == generation && !cancel.load(Ordering::Relaxed)
+                        && p.folder_auto_pending.get(&path).is_some_and(|token| Arc::ptr_eq(token, &cancel))
+                        && !p.folder_sizes.get(&path).is_some_and(Option::is_some) {
+                        p.folder_auto_hints += 1;
+                        p.folder_sizes.insert(path, Some(text));
+                        ctx.request_repaint();
+                    }
+                }
+                AsyncResult::FolderSizeRow { pane, generation, path, text, bytes, automatic, complete, watch, stable, scanned, work, audit_at, media, cancel } => {
                     // Original FUN_0048ee0c: finds the row whose folder + name equals the counted path (lstrcmpiW), stores the 64-bit size
                     // (+0x20/+0x24) and the count (+0x60), marks it counted (+0x68 = 1) and repaints. Rows are keyed by path here.
                     if self.panes[pane].generation == generation && !cancel.load(Ordering::Relaxed)
                         && (!automatic || self.panes[pane].folder_auto_pending.get(&path).is_some_and(|token| Arc::ptr_eq(token, &cancel))) {
-                        if automatic && complete {
-                            self.cache_folder_size(path.clone(), bytes);
+                        if automatic && complete && stable {
+                            self.cache_folder_size(path.clone(), bytes, watch, audit_at, media);
                         }
                         if automatic {
                             self.panes[pane].folder_auto_pending.remove(&path);
-                            self.record_folder_size_time(pane, &path, Instant::now());
+                            if scanned { self.panes[pane].folder_auto_scans += 1; }
+                            self.panes[pane].folder_auto_visited += work.visited;
+                            self.panes[pane].folder_auto_reused += work.reused;
+                            self.record_folder_size_time(pane, &path, Instant::now() + if complete { media.check_interval() } else { media.verify_interval() });
+                            if !stable {
+                                // A write overlapped enumeration. Retain the previous
+                                // display and retry, never publish a mixed snapshot.
+                                ctx.request_repaint_after(media.check_interval());
+                                continue;
+                            }
+                            if !complete {
+                                if let Some(&old) = self.panes[pane].folder_bytes.get(&path) {
+                                    let label = format!("~{}", ndr::parity::size_to_str(old,
+                                        &self.settings.text("SizeUnit", "Auto"),
+                                        self.settings.flag("UseThousandsSeparator", true)));
+                                    self.panes[pane].folder_sizes.insert(path, Some(label));
+                                    ctx.request_repaint_after(media.verify_interval());
+                                    continue;
+                                }
+                            }
+                        } else {
+                            self.panes[pane].folder_manual_pending.remove(&path);
+                            if self.panes[pane].folder_auto_paths.contains(&path) {
+                                // An explicit calculation of an already
+                                // automatically measured row takes priority.
+                                self.folder_size_cache.remove(&path);
+                                self.panes[pane].folder_auto_times.remove(&path);
+                                self.folder_size_recent_reset.store(true, Ordering::Relaxed);
+                            }
                         }
-                        self.panes[pane].folder_bytes.insert(path.clone(), bytes);
-                        self.panes[pane].folder_sizes.insert(path, Some(text));
-                        ctx.request_repaint();
+                        // Metadata-only revalidations with unchanged values
+                        // need no extra formatting or row replacement.
+                        let p = &mut self.panes[pane];
+                        if p.folder_bytes.get(&path) != Some(&bytes) || p.folder_sizes.get(&path).and_then(Option::as_ref) != Some(&text) {
+                            p.folder_bytes.insert(path.clone(), bytes);
+                            p.folder_sizes.insert(path, Some(text));
+                            ctx.request_repaint();
+                        }
                     }
                 }
                 AsyncResult::Update(result, silent) => self.update_done(result, silent),
@@ -2252,9 +2370,10 @@ impl eframe::App for App {
             for cause in causes {
                 *self.smoke_repaint_causes.entry(cause).or_insert(0) += 1;
             }
-            // Diagnostics: the slowest frame (ms; the first 3 frames are excluded because they prepare fonts and icons).
+            // Keep the historical metric and record initial frames too.
+            let ms = frame_started.elapsed().as_secs_f64() * 1000.0;
+            if self.frames <= 3 { self.smoke_initial_max_ms = self.smoke_initial_max_ms.max(ms); }
             if self.frames > 3 {
-                let ms = frame_started.elapsed().as_secs_f64() * 1000.0;
                 self.smoke_slowest_frame_ms = self.smoke_slowest_frame_ms.max(ms);
                 if ms > 50.0 {
                     self.smoke_slow_frames += 1;
@@ -2273,9 +2392,9 @@ impl eframe::App for App {
                     let folder_stats = |p: &Pane| {
                         let completed = p.folder_auto_paths.iter().filter_map(|path| p.folder_bytes.get(path));
                         let (count, bytes) = completed.fold((0usize, 0u64), |(count, total), size| (count + 1, total.saturating_add(*size)));
-                        serde_json::json!({"completed":count,"pending":p.folder_auto_paths.len().saturating_sub(count),"bytes":bytes})
+                        serde_json::json!({"completed":count,"pending":p.folder_auto_pending.len(),"bytes":bytes,"requests":p.folder_auto_requests,"scans":p.folder_auto_scans,"visited":p.folder_auto_visited,"reused":p.folder_auto_reused,"hints":p.folder_auto_hints,"displayed":p.folder_auto_paths.len()})
                     };
-                    let report = serde_json::json!({"language":self.language,"frames":self.frames,"leftCount":items(&self.panes[0]),"rightCount":items(&self.panes[1]),"leftDrives":self.panes[0].drive_count(),"rightDrives":self.panes[1].drive_count(),"leftError":self.panes[0].error,"rightError":self.panes[1].error,"leftLoading":self.panes[0].loading,"rightLoading":self.panes[1].loading,"profile":self.profile,"runtime":"Rust","renderer":"OpenGL","foreground":self.smoke_foreground,"repaintCauses":self.smoke_repaint_causes,"slowestFrameMs":(self.smoke_slowest_frame_ms * 10.0).round() / 10.0,"slowFrames":self.smoke_slow_frames,"loadedMs":self.smoke_loaded_ms,"tipWindow":self.smoke_tip_window,"viewportPoints":[viewport.width(),viewport.height()],"nativePixelsPerPoint":native_scale,"pixelsPerPoint":ctx.pixels_per_point(),"folderSizes":[folder_stats(&self.panes[0]),folder_stats(&self.panes[1])]});
+                    let report = serde_json::json!({"language":self.language,"frames":self.frames,"leftCount":items(&self.panes[0]),"rightCount":items(&self.panes[1]),"leftDrives":self.panes[0].drive_count(),"rightDrives":self.panes[1].drive_count(),"leftError":self.panes[0].error,"rightError":self.panes[1].error,"leftLoading":self.panes[0].loading,"rightLoading":self.panes[1].loading,"profile":self.profile,"runtime":"Rust","renderer":"OpenGL","foreground":self.smoke_foreground,"repaintCauses":self.smoke_repaint_causes,"slowestFrameMs":(self.smoke_slowest_frame_ms * 10.0).round() / 10.0,"slowFrames":self.smoke_slow_frames,"initialMaxFrameMs":self.smoke_initial_max_ms,"preparedLists":self.smoke_prepared_lists,"loadedMs":self.smoke_loaded_ms,"tipWindow":self.smoke_tip_window,"viewportPoints":[viewport.width(),viewport.height()],"nativePixelsPerPoint":native_scale,"pixelsPerPoint":ctx.pixels_per_point(),"folderSizes":[folder_stats(&self.panes[0]),folder_stats(&self.panes[1])],"folderCacheEntries":self.folder_size_cache.len(),"folderCacheWatches":self.folder_size_cache.values().filter(|v|v.watch.is_some()).count()});
                     let _ = std::fs::write(
                         path,
                         serde_json::to_vec_pretty(&report).unwrap_or_default(),
@@ -2335,11 +2454,14 @@ impl eframe::App for App {
     }
     fn on_exit(&mut self, _: Option<&eframe::glow::Context>) {
         for pane in &self.panes {
+            pane.listing_cancel.store(true, Ordering::Relaxed);
             pane.folder_cancel.store(true, Ordering::Relaxed);
             for cancel in pane.folder_auto_pending.values() {
                 cancel.store(true, Ordering::Relaxed);
             }
         }
+        self.folder_size_shutdown.store(true, Ordering::Relaxed);
+        self.folder_size_queue.1.notify_all();
         self.vault_dialog = None;
         self.vault_transfer = None;
         #[cfg(feature = "winfsp-vault")]
@@ -2369,6 +2491,8 @@ impl eframe::App for App {
         ndr::command_line::prune_missing(&mut rows, self.last_command_directory.as_deref());
         self.settings.set_strings("ExecutableHistory", rows);
         self.save();
+        // Cache is disposable: never let a slow volume hold up exit.
+        if let Some(done) = self.folder_size_done.take() { let _ = done.recv_timeout(Duration::from_millis(300)); }
     }
 }
 /// Drive type is application text; volume labels are OS/user data.

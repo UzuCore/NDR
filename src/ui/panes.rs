@@ -187,6 +187,88 @@ pub(super) struct FieldMax {
     pub ext_average: f32,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(super) struct FieldMaxPlan {
+    face: String,
+    pixels_bits: u32,
+    style: u8,
+    size_header: String,
+    auto: bool,
+    unit: String,
+    comma: bool,
+}
+impl FieldMaxPlan {
+    pub(super) fn capture(app: &App, index: usize) -> Self {
+        Self { face: app.settings.text("ListFont", "Segoe UI"), pixels_bits: app.list_font_size.to_bits(),
+            style: app.list_font_style, size_header: app.language_pack.text("RES.FIELD_SIZE", "Size"),
+            auto: app.side_flag(index, "AutoFolderSize", false), unit: app.settings.text("SizeUnit", "Auto"),
+            comma: app.settings.flag("UseThousandsSeparator", true) }
+    }
+    fn size_labels(&self, entries: &[Entry]) -> Vec<String> {
+        let mut labels = vec![self.size_header.clone()];
+        if self.auto && entries.iter().any(|e| e.is_dir && !e.drive && !e.is_parent()) {
+            let representative = if self.unit.eq_ignore_ascii_case("Auto") { 1_099_511_627_776_000 } else { 109_951_162_777_600 };
+            labels.push(format!("\u{2265} {}", ndr::parity::size_to_str(representative, &self.unit, self.comma)));
+        }
+        labels
+    }
+    fn measure(&self, entries: &[Entry], view: &PaneView, cancel: &AtomicBool) -> Option<FieldMax> {
+        let widths = |texts: &[&str]| native::gdi_text_widths(&self.face, f32::from_bits(self.pixels_bits).round() as i32, self.style, texts)
+            .map(|values| values.into_iter().map(|w| w as f32).collect());
+        let mut fm = measure_field_cells(entries, view, widths, Some(cancel))?;
+        let labels = self.size_labels(entries);
+        let texts: Vec<&str> = labels.iter().map(String::as_str).collect();
+        for width in widths(&texts)? { fm.max[3] = fm.max[3].max(width); }
+        Some(fm)
+    }
+}
+
+/// Borrow names, extensions and descriptions instead of cloning every cell.
+/// Date gap expansion is needed only for the date field. Keep the original
+/// row order of the width accumulation so the layout math remains identical.
+fn measure_field_cells(entries: &[Entry], view: &PaneView,
+    measure: impl FnOnce(&[&str]) -> Option<Vec<f32>>, cancel: Option<&AtomicBool>) -> Option<FieldMax> {
+    use std::borrow::Cow;
+    let mut known: HashMap<Cow<'_, str>, usize> = HashMap::new();
+    let mut measured: Vec<(u8, usize)> = Vec::new();
+    fn add<'a>(known: &mut HashMap<Cow<'a, str>, usize>, measured: &mut Vec<(u8, usize)>,
+        field: u8, text: Cow<'a, str>) {
+        let slot = known.len();
+        measured.push((field, *known.entry(text).or_insert(slot)));
+    }
+    for (row, (entry, cells)) in entries.iter().zip(&view.cells).enumerate() {
+        if row % 256 == 0 && cancel.is_some_and(|c| c.load(Ordering::Relaxed)) { return None; }
+        if entry.drive { continue; }
+        add(&mut known, &mut measured, 0, Cow::Borrowed(&cells[0]));
+        if !entry.is_dir {
+            add(&mut known, &mut measured, 1, Cow::Borrowed(&cells[1]));
+            if entry.size > 0 { add(&mut known, &mut measured, 3, Cow::Borrowed(&cells[3])); }
+        }
+        let date = if cells[4].contains(ndr::listing::LIST_DATE_TIME_GAP) {
+            Cow::Owned(cells[4].replace(ndr::listing::LIST_DATE_TIME_GAP, "  "))
+        } else { Cow::Borrowed(cells[4].as_str()) };
+        add(&mut known, &mut measured, 4, date);
+        add(&mut known, &mut measured, 6, Cow::Borrowed(&cells[6]));
+    }
+    let mut texts = vec![""; known.len()];
+    for (text, &slot) in &known { texts[slot] = text.as_ref(); }
+    if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) { return None; }
+    let widths = measure(&texts)?;
+    let mut fm = FieldMax::default();
+    let (mut ext_sum, mut ext_count) = (0f32, 0usize);
+    for (field, slot) in measured {
+        let width = widths[slot];
+        fm.max[field as usize] = fm.max[field as usize].max(width);
+        match field {
+            0 => { fm.name_sum += width; fm.items += 1; }
+            1 if width > 0.0 => { ext_sum += width; ext_count += 1; }
+            _ => {}
+        }
+    }
+    if ext_count > 0 { fm.ext_average = (ext_sum / ext_count as f32).floor(); }
+    Some(fm)
+}
+
 impl App {
     /// Text width measured in the list font (original GetTextWidth = Canvas.TextWidth, GDI). egui only when GDI is unavailable.
     /// Previously egui's shaping was used, which differs from GDI by a few pixels per name and changed the original Auto column count.
@@ -223,95 +305,30 @@ impl App {
         ndr::native::gdi_text_widths(&face, self.list_font_size.round() as i32, self.list_font_style, texts).map(|w| w.into_iter().map(|w| w as f32).collect())
     }
 
-    /// Values recorded by the original GetFieldMaxWidth(0x7df9d8) (FieldMax). Re-measured only when the listing changes (original local_48[2] cache).
-    /// Name is measured on folders/files (kind 1/3), extension on files, size on files whose size is non-zero, and date/description on folders/files.
-    /// The size column is never narrower than its header (FIELD_SIZE, original GetString). The extension average is the integer average of non-empty extension widths (+0x350).
+    /// The worker measures large lists using GDI and the same text inputs.
+    /// Keep the egui fallback for machines where a GDI font cannot be used.
     pub(super) fn original_field_max(&self, ui: &egui::Ui, index: usize) -> FieldMax {
         let pane = &self.panes[index];
+        let plan = FieldMaxPlan::capture(self, index);
+        if let Some((revision, prepared_plan, measured)) = &pane.prepared_field_max {
+            if *revision == pane.thumb_content_revision && prepared_plan == &plan { return *measured; }
+        }
         let key = {
             use std::hash::{Hash, Hasher};
             let mut h = std::collections::hash_map::DefaultHasher::new();
-            (pane.generation, pane.entries.len(), self.list_font_size.to_bits(), pane.view.cells.len(), pane.view.cells.first().map(|c| c[0].clone()), self.language_pack.text("RES.FIELD_SIZE", "Size"), self.side_flag(index, "AutoFolderSize", false)).hash(&mut h);
+            (pane.generation, pane.thumb_content_revision, pane.entries.len(), pane.view.cells.len(),
+                pane.view.cells.first().map(|c| c[0].as_str()), &plan).hash(&mut h);
             h.finish()
         };
         let id = egui::Id::new(("ndr-original-field-max", index));
-        if let Some((_, fm)) = ui.data(|d| d.get_temp::<(u64, FieldMax)>(id)).filter(|c| c.0 == key) {
-            return fm;
-        }
-        // Fix (performance): previously each item was measured by text layout (layout_no_wrap, building paint shapes), about 60ms for 20,000 files, and the folder
-        // watcher stalled that long every time the listing was re-read. The original GetTextWidth is Canvas.TextWidth (GDI): measure the distinct texts in one
-        // GDI pass (same font, one DC), falling back to the sum of egui glyph widths without GDI. Previously egui widths were used, a few pixels off per name,
-        // which changed the original Auto column count (Documents: two columns in the original, one in NDR).
+        if let Some((_, fm)) = ui.data(|d| d.get_temp::<(u64, FieldMax)>(id)).filter(|c| c.0 == key) { return fm; }
         let font = egui::FontId::new(self.list_font_size, egui::FontFamily::Name(super::LIST_FONT_FAMILY.into()));
-        let mut fm = FieldMax::default();
-        let (mut ext_sum, mut ext_count) = (0f32, 0usize);
-        // (field, text index) per measured cell; texts are deduplicated.
-        // Keep each distinct string only once. The old dedup map cloned
-        // every input into the map and then retained a second owned copy in
-        // `texts`, doubling unique-string allocations on large listings.
-        let mut known: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-        let mut cells_measured: Vec<(u8, usize)> = Vec::new();
-        let mut add = |field: u8, text: String, cells_measured: &mut Vec<(u8, usize)>| {
-            let next_slot = known.len();
-            let slot = *known.entry(text).or_insert(next_slot);
-            cells_measured.push((field, slot));
-        };
-        for (entry, cells) in pane.entries.iter().zip(&pane.view.cells) {
-            if entry.drive {
-                continue;
-            }
-            add(0, cells[0].clone(), &mut cells_measured);
-            if !entry.is_dir {
-                add(1, cells[1].clone(), &mut cells_measured);
-                if entry.size > 0 {
-                    add(3, cells[3].clone(), &mut cells_measured);
-                }
-            }
-            // Original GetFieldMaxWidth field 4: GetTextWidth(wsprintf("%s  %s", DateToStr, TimeToStr)) (0x92dba4, two spaces). The cell keeps one
-            // LIST_DATE_TIME_GAP between them, so measure that as two spaces. Fixed: one gap left the column too narrow for the date at the left
-            // and the time at the right, and the cell fell back to "2009-06-11 05:...".
-            add(4, cells[4].replace(ndr::listing::LIST_DATE_TIME_GAP, "  "), &mut cells_measured);
-            add(6, cells[6].clone(), &mut cells_measured);
-        }
-        // Reconstruct measurement order using borrowed map keys, without
-        // allocating or copying the names again.
-        let mut texts = vec![""; known.len()];
-        for (text, &slot) in &known {
-            texts[slot] = text.as_str();
-        }
-        let widths = self
-            .gdi_list_widths(&texts)
-            .unwrap_or_else(|| ui.fonts_mut(|fonts| texts.iter().map(|t| t.chars().map(|c| fonts.glyph_width(&font, c)).sum::<f32>().ceil()).collect()));
-        for (field, slot) in cells_measured {
-            let width = widths[slot];
-            match field {
-                0 => {
-                    fm.max[0] = fm.max[0].max(width);
-                    fm.name_sum += width;
-                    fm.items += 1;
-                }
-                1 => {
-                    fm.max[1] = fm.max[1].max(width);
-                    if width > 0.0 {
-                        ext_sum += width;
-                        ext_count += 1;
-                    }
-                }
-                field => fm.max[field as usize] = fm.max[field as usize].max(width),
-            }
-        }
-        if ext_count > 0 {
-            fm.ext_average = (ext_sum / ext_count as f32).floor();
-        }
-        fm.max[3] = fm.max[3].max(self.list_text_width(ui, &self.language_pack.text("RES.FIELD_SIZE", "Size")));
-        if self.side_flag(index, "AutoFolderSize", false) && pane.entries.iter().any(|e| e.is_dir && !e.drive && !e.is_parent()) {
-            // Reserve the width once per listing; otherwise a folder-only
-            // listing measures only the Size header and clips its totals.
-            let unit = self.settings.text("SizeUnit", "Auto");
-            let comma = self.settings.flag("UseThousandsSeparator", true);
-            let representative = if unit.eq_ignore_ascii_case("Auto") { 1_099_511_627_776_000 } else { 109_951_162_777_600 };
-            let label = format!("≥ {}", ndr::parity::size_to_str(representative, &unit, comma));
-            fm.max[3] = fm.max[3].max(self.list_text_width(ui, &label));
+        let mut fm = measure_field_cells(&pane.entries, &pane.view, |texts| {
+            Some(self.gdi_list_widths(texts).unwrap_or_else(|| ui.fonts_mut(|fonts|
+                texts.iter().map(|t| t.chars().map(|c| fonts.glyph_width(&font, c)).sum::<f32>().ceil()).collect())))
+        }, None).unwrap_or_default();
+        for text in plan.size_labels(&pane.entries) {
+            fm.max[3] = fm.max[3].max(self.list_text_width(ui, &text));
         }
         ui.data_mut(|d| d.insert_temp(id, (key, fm)));
         fm
@@ -882,6 +899,71 @@ pub(super) fn row_pressed(pane: &mut Pane, row: usize, modifiers: egui::Modifier
     pane.cursor = row;
 }
 
+/// A worker may finish the expensive sorting and presentation for large
+/// local lists before handing a single owned result to the UI.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct LocalListingPlan {
+    options: ndr::listing::SortOptions,
+    theme: String,
+    group_descending: bool,
+    filter: String,
+    nexus_colors: Option<serde_json::Map<String, serde_json::Value>>,
+    view: super::list_view::ViewPlan,
+    field: FieldMaxPlan,
+}
+pub(super) struct PreparedLocalListing {
+    pub(super) plan: LocalListingPlan,
+    pub(super) view: super::list_view::PaneView,
+    pub(super) field: Option<(FieldMaxPlan, FieldMax)>,
+}
+impl LocalListingPlan {
+    pub(super) fn capture(app: &App, index: usize) -> Self {
+        Self {
+            options: ndr::listing::SortOptions {
+                folder_mode: app.side_text(index, "FolderSortMode", "Auto"),
+                folder_descending: app.side_flag(index, "FolderSortDescending", false),
+                file_mode: app.side_text(index, "SortMode", "Name"),
+                file_descending: app.side_flag(index, "SortDescending", false),
+                logical: app.settings.flag("UseLogicalSort", true),
+            },
+            theme: app.settings.text("Theme", ndr::styles::DEFAULT_THEME),
+            group_descending: app.side_flag(index, "GroupDescending", false),
+            filter: app.panes[index].filter.clone(),
+            nexus_colors: app.color_maps().1.cloned(),
+            view: super::list_view::ViewPlan::capture(app, index),
+            field: FieldMaxPlan::capture(app, index),
+        }
+    }
+    fn prepare(self, path: &Path, entries: &mut Vec<Entry>, descriptions: &HashMap<String, String>,
+        drive_infos: &HashMap<PathBuf, (String, u32, Option<(u64, u64)>)>, cancel: &AtomicBool) -> Option<PreparedLocalListing> {
+        if cancel.load(Ordering::Relaxed) { return None; }
+        for entry in entries.iter_mut() {
+            if !entry.is_dir && !entry.drive && entry.path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("ndr")) {
+                entry.is_dir = true;
+                entry.attributes |= 0x10;
+                entry.name = entry.path.file_stem().unwrap_or_default().to_string_lossy().into_owned();
+            }
+        }
+        if !self.filter.is_empty() {
+            let filter = ndr::parity::CompiledFilter::new(&self.filter);
+            entries.retain(|e| e.drive || e.is_dir || filter.matches(&e.name));
+        }
+        if let Some(parent) = local_parent_item(path) {
+            entries.retain(|e| !e.is_parent());
+            entries.insert(0, parent);
+        }
+        let color = |entry: &Entry| ndr::listing::color_sort_key_with_palette(entry,
+            self.view.extension_colors.as_ref(), self.nexus_colors.as_ref(), &self.theme);
+        ndr::listing::sort_pane_entries(entries, &self.options, &color, &self.view.group_mode,
+            &self.view.category_mode, self.group_descending);
+        let view = super::list_view::build_view(&self.view, entries, descriptions, drive_infos,
+            None, None, true, true, super::list_view::PaneView::default(), Some(cancel))?;
+        let field = self.field.measure(entries, &view, cancel).map(|fm| (self.field.clone(), fm));
+        if cancel.load(Ordering::Relaxed) { return None; }
+        Some(PreparedLocalListing { plan: self, view, field })
+    }
+}
+
 impl App {
     pub(super) fn refresh(&mut self, index: usize) {
         self.refresh_inner(index, true);
@@ -892,20 +974,31 @@ impl App {
     }
 
     fn refresh_inner(&mut self, index: usize, foreground: bool) {
+        self.panes[index].listing_cancel.store(true, Ordering::Relaxed);
+        let presentation = (self.panes[index].vault.is_none() && self.panes[index].archive.is_none()
+            && self.panes[index].remote.is_none() && !is_drives(&self.panes[index].path))
+            .then(|| LocalListingPlan::capture(self, index));
         // Stop recursive I/O as soon as navigation/refresh starts, not only
         // when the replacement listing has arrived.
         let same_folder = self.panes[index].listed.as_deref() == Some(location_key(&self.panes[index]).as_str());
         if same_folder {
-            // Explicit/notification refresh must not reuse stale child totals.
+            // A relist is not proof that any child subtree changed. Keep
+            // completed displays and let the recursive observation decide.
             let parent = self.panes[index].path.clone();
-            self.folder_size_cache.retain(|path, _| !native::folder_paths_related(path, &parent));
+            for (path, observation) in &mut self.folder_size_cache {
+                if native::folder_paths_related(path, &parent) { observation.invalidate_verification(); }
+            }
             let other = 1 - index;
             if native::folder_paths_related(&self.panes[other].path, &parent) {
-                self.clear_automatic_folder_sizes(other);
+                self.panes[other].folder_auto_times.clear();
             }
+            self.panes[index].cancel_automatic_folder_jobs();
+            self.folder_size_queue.0.lock().unwrap_or_else(|e| e.into_inner()).retain(|job| !job.cancel.load(Ordering::Relaxed));
+        } else {
+            self.clear_automatic_folder_sizes(index);
         }
-        self.clear_automatic_folder_sizes(index);
         self.panes[index].folder_cancel.store(true, Ordering::Relaxed);
+        self.panes[index].folder_manual_pending.clear();
         if self.panes[index].vault.is_some() {
             return self.refresh_vault(index);
         }
@@ -931,6 +1024,9 @@ impl App {
         // The original refresh resets the selection to the name (apply_listing), so keep the current selection until the new listing arrives.
         let pane = &mut self.panes[index];
         pane.generation += 1;
+        pane.listing_cancel.store(true, Ordering::Relaxed);
+        pane.listing_cancel = Arc::new(AtomicBool::new(false));
+        let listing_cancel = pane.listing_cancel.clone();
         pane.loading = true;
         let generation = pane.generation;
         let path = pane.path.clone();
@@ -978,7 +1074,7 @@ impl App {
             // The original My PC drive item's TNXDriveInfo (name, kind, and size for fixed disks).
             let drive_infos = listed.into_iter().filter_map(|(root, info)| info.map(|info| (root, info))).collect();
             let mut skipped_device_names = 0usize;
-            let result = if let Some(remote) = remote {
+            let mut result = if let Some(remote) = remote {
                 super::ftp_pane::list_remote(&remote, show_hidden)
             } else if let Some(drives) = drives {
                 Ok(drives
@@ -1043,7 +1139,7 @@ impl App {
                     listed
                 })
             } else {
-                fsops::list_dir(&path, show_hidden).map(|mut entries| {
+                fsops::list_dir_with_cancel(&path, show_hidden, Some(&listing_cancel)).map(|mut entries| {
                     // The drive item name is "%s:" (letter + ':'), like the original DrawListItem.
                     entries.extend(appended.iter().map(|root| Entry {
                         name: root.to_string_lossy().trim_end_matches('\\').to_owned(),
@@ -1058,16 +1154,25 @@ impl App {
                     entries
                 })
             };
+            if listing_cancel.load(Ordering::Relaxed) { return; }
             // C# ListLocal: descriptions are read together with the listing (descript.dat always, descript.ion when UseDescriptionFile).
             let descriptions = if local && result.is_ok() && !is_drives(&path) {
                 compat::read_descriptions(&path, include_legacy).map(|map| map.into_iter().map(|(k, v)| (k.to_lowercase(), v)).collect()).unwrap_or_default()
             } else {
                 HashMap::new()
             };
+            let prepared = match (presentation, result.as_mut()) {
+                (Some(plan), Ok(entries)) if entries.len() >= 4096 => {
+                    plan.prepare(&path, entries, &descriptions, &drive_infos, &listing_cancel)
+                }
+                _ => None,
+            };
+            if listing_cancel.load(Ordering::Relaxed) { return; }
             let _ = tx.send(Listing {
                 pane: index,
                 generation,
                 result,
+                prepared,
                 skipped_device_names,
                 descriptions,
                 drive_infos,
@@ -1400,7 +1505,6 @@ impl App {
         // including grouping and stable ties.
         ndr::listing::sort_pane_entries(&mut pane.entries, &options, &color,
             &group_mode, &category_mode, group_descending);
-        pane.thumb_content_revision = pane.thumb_content_revision.wrapping_add(1);
         if marked.is_empty() {
             pane.selected.clear();
         } else {

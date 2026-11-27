@@ -288,128 +288,19 @@ impl App {
         }
     }
 
-    /// Rebuilds list texts, colors and group rows (called at the end of sort_pane).
+    /// The same builder handles UI re-sorts and worker-prepared listings.
     pub(super) fn compute_view(&mut self, index: usize) {
-        let attach = self.settings.flag("AttachExtensionToName", false);
-        let case = self.settings.values.get("CharacterCase").and_then(|v| v.as_i64()).unwrap_or(0).clamp(0, 3);
-        let date_format = self.settings.text("DateFormat", "yyyy-MM-dd");
-        let time_format = self.settings.text("TimeFormat", "HH:mm");
-        // Original default [Display] usedateage=1.
-        let use_age = self.settings.flag("UseDateAge", true);
-        // GetString of original DateToStr (TODAY / YESTERDAY / DATEAGE).
-        let age_labels = [
-            self.language_pack.text("RES.TODAY", "Today"),
-            self.language_pack.text("RES.YESTERDAY", "Yesterday"),
-            self.language_pack.text("RES.DATEAGE", "%d days ago"),
-        ];
-        let unit = self.settings.text("SizeUnit", "Auto");
-        let thousands = self.settings.flag("UseThousandsSeparator", true);
-        // Original DrawListItem field 3 for a folder whose size was not counted (+0x60 == -1): GetString RES DIR ("[폴더]", "[DIR]"), right-aligned
-        // in the folder color, ".." included.
-        let folder_size_text = self.language_pack.text("RES.DIR", "[DIR]");
-        let vault_type = self.language_pack.text("NDRVault.TextEditorTitle", "Encrypted folder");
-        let folder_type = self.language_pack.text("RES.FOLDER", "Folder");
-        let group_mode = self.settings.text(&Self::side_key(index, "GroupMode"), "None");
-        let category_mode = self.settings.text(&Self::side_key(index, "FolderCategoryMode"), "Auto");
-        let show_group_name = self.settings.flag(&Self::side_key(index, "ShowGroupName"), true);
-        let now = std::time::SystemTime::now();
-        // Skin theme: original item colors (original_item_color). The three base colors are resolved once.
-        // Original [Display] showfiletype (default 1).
-        let show_file_type = self.settings.flag("ShowFileType", true);
-        let rgb = |key: &str| {
-            let c = self.basic_list_color(key);
-            (c.r(), c.g(), c.b())
-        };
-        let (folder, drive, fore) = (rgb("NXFOLDER"), rgb("NXDRIVE"), rgb("NXFORE"));
-        let basic = move |key: &str| match key {
-            "NXFOLDER" => folder,
-            "NXDRIVE" => drive,
-            _ => fore,
-        };
-        let count = self.panes[index].entries.len();
-        let mut view = std::mem::take(&mut self.panes[index].view);
-        reset_view_buffer(&mut view.cells, count);
-        reset_view_buffer(&mut view.colors, count);
-        reset_view_buffer(&mut view.rows, count);
-        let (extension_colors, _) = self.color_maps();
+        let plan = ViewPlan::capture(self, index);
+        let view = std::mem::take(&mut self.panes[index].view);
         let pane = &self.panes[index];
         let sftp_modes = pane.remote.as_ref().filter(|r| r.is_sftp()).and_then(|r| r.modes.lock().ok().map(|m| (r.path.clone(), m.clone())));
         let ftp_permissions = pane.remote.as_ref().filter(|r| !r.is_sftp()).and_then(|r| r.permissions.lock().ok().map(|m| (r.path.clone(), m.clone())));
-        let mut date_texts = CellCache::default();
-        let mut size_texts = CellCache::default();
-        let mut date_formatter = ndr::listing::ListDateFormatter::new(&date_format, &time_format, use_age.then(|| [age_labels[0].as_str(), age_labels[1].as_str(), age_labels[2].as_str()]), now);
-        let mut shell_types = HashMap::<&str, String>::new();
-        let mut item_colors = HashMap::<&str, (u8, u8, u8)>::new();
         let local = pane.archive.is_none() && pane.remote.is_none();
-        let detect_vault = local && pane.vault.is_none();
-        let grouped = group_mode != "None" && show_group_name;
-        let mut previous = None;
-        for (row, entry) in pane.entries.iter().enumerate() {
-            if grouped && !entry.drive {
-                let key = ndr::listing::group_key_cow(entry, &group_mode, &category_mode);
-                if previous.as_ref() != Some(&key) {
-                    view.rows.push(DetailRow::Header(self.group_caption(&key)));
-                    previous = Some(key);
-                }
-            }
-            view.rows.push(DetailRow::Item(row));
-            if entry.drive {
-                // Original DrawListItem kind 4: the drive name (item+8) after "%s:". Other cells (extension, size, date, attributes, description) are not drawn.
-                let label = pane.drive_infos.get(&entry.path).map(|(name, _, _)| name.as_str()).unwrap_or("");
-                let name = if label.is_empty() { entry.name.clone() } else { format!("{} {label}", entry.name) };
-                view.cells.push([name, String::new(), String::new(), String::new(), String::new(), String::new(), String::new()]);
-                view.colors.push(Some(drive));
-                continue;
-            }
-            let extension = if entry.is_dir { "" } else { ndr::parity::list_extension(&entry.name) };
-            let stem = if attach { &entry.name } else { &entry.name[..entry.name.len() - extension.len()] };
-            let description = if pane.descriptions.is_empty() { String::new() } else { pane.descriptions.get(&entry.name.to_lowercase()).cloned().unwrap_or_default() };
-            // Original DrawListItem description cell (field 6, 0x7da043): when the description (+0x10) is empty and showfiletype (+0x384) is on, the file type text (+0xc).
-            // The type text of original GetList (0x45a34c) is the shell name (SHGetFileInfoW SHGFI_TYPENAME|USEFILEATTRIBUTES, once per extension,
-            // none for ".."). Archive and FTP lists never call SetFileType, so it is empty.
-            // Only .ndr candidates need a filesystem probe. Ordinary folders
-            // already have their type in the listing and may be on a slow disk.
-            let vault_item = detect_vault && entry.is_dir
-                && entry.path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("ndr"))
-                && entry.path.is_file();
-            let kind = if vault_item {
-                vault_type.clone()
-            } else if !local || entry.name == ".." {
-                String::new()
-            } else if entry.is_dir {
-                folder_type.clone()
-            } else {
-                shell_types.entry(extension)
-                    .or_insert_with(|| native::shell_type_name(&extension.to_lowercase(), false))
-                    .clone()
-            };
-            let description = if description.is_empty() && show_file_type { kind.clone() } else { description };
-            view.cells.push([
-                character_case(stem, case),
-                character_case(extension.trim_start_matches('.'), case),
-                kind,
-                if entry.is_dir { folder_size_text.clone() } else {
-                    cached_cell(&mut size_texts, entry.size, || ndr::parity::size_to_str(entry.size, &unit, thousands))
-                },
-                cached_cell(&mut date_texts, entry.modified, || date_formatter.format(entry.modified)),
-                // Original DrawListItem field 5: FTP and SFTP list items (+0x78) show the permission text (+0x74), others GetAttrString (0x7b50a4, A/H/R/S in "____").
-                // FTP keeps the listing's own text (MLSD "perm" fact, e.g. "eldfmcp"; LIST "drwxr-xr-x"), as seen in the running original.
-                // Fixed: previously the C# text ("RHSA", "-"); FTP panes showed "____".
-                match (&sftp_modes, &ftp_permissions) {
-                    (Some((directory, modes)), _) => modes.get(&super::ftp_pane::join_remote(directory, &entry.name)).map(|mode| permission_text(entry.is_dir, *mode)).unwrap_or_default(),
-                    (None, Some((directory, texts))) => texts.get(&super::ftp_pane::join_remote(directory, &entry.name)).cloned().unwrap_or_default(),
-                    (None, None) => ndr::listing::attr_string(entry.attributes),
-                },
-                description,
-            ]);
-            view.colors.push(Some(if entry.is_dir {
-                folder
-            } else {
-                *item_colors.entry(extension)
-                    .or_insert_with(|| ndr::listing::original_item_color(entry, extension_colors, basic))
-            }));
-        }
+        let view = build_view(&plan, &pane.entries, &pane.descriptions, &pane.drive_infos,
+            sftp_modes, ftp_permissions, local, local && pane.vault.is_none(), view, None).expect("uncancellable UI view");
         self.panes[index].view = view;
+        self.panes[index].prepared_field_max = None;
+        self.panes[index].thumb_content_revision = self.panes[index].thumb_content_revision.wrapping_add(1);
     }
 
     /// 0x368 of original UpdateDisplay (0x7e01f8): the widest drive item name text, from the item's left edge to the end of that text
@@ -431,6 +322,156 @@ impl App {
         });
         App::list_header_width(icons) + 5.0 + widest
     }
+}
+
+/// Only presentation-affecting values are copied into a worker snapshot.
+/// No user histories, settings file I/O, or egui state is needed there.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct ViewPlan {
+    attach: bool,
+    case: i64,
+    date_format: String,
+    time_format: String,
+    use_age: bool,
+    age_labels: [String; 3],
+    unit: String,
+    thousands: bool,
+    folder_size_text: String,
+    vault_type: String,
+    folder_type: String,
+    pub(super) group_mode: String,
+    pub(super) category_mode: String,
+    show_group_name: bool,
+    show_file_type: bool,
+    folder: (u8, u8, u8),
+    drive: (u8, u8, u8),
+    fore: (u8, u8, u8),
+    pub(super) extension_colors: Option<serde_json::Map<String, serde_json::Value>>,
+    group_labels: HashMap<String, String>,
+}
+impl ViewPlan {
+    pub(super) fn capture(app: &App, index: usize) -> Self {
+        let group_mode = app.side_text(index, "GroupMode", "None");
+        let show_group_name = app.side_flag(index, "ShowGroupName", true);
+        let group_labels = if group_mode != "None" && show_group_name {
+            ["Folders","Archives","Documents","Spreadsheets","Presentations","Images","Audio","Video","Programs","Code","Other",
+                "No extension","Unknown date","Empty","Under 1 KB","1 KB\u{2013}1 MB","1\u{2013}100 MB","100 MB\u{2013}1 GB","1 GB and larger"]
+                .into_iter().map(|label| (label.to_owned(), app.group_caption(label))).collect()
+        } else { HashMap::new() };
+        let rgb = |key: &str| { let c = app.basic_list_color(key); (c.r(), c.g(), c.b()) };
+        Self {
+            attach: app.settings.flag("AttachExtensionToName", false),
+            case: app.settings.values.get("CharacterCase").and_then(|v| v.as_i64()).unwrap_or(0).clamp(0, 3),
+            date_format: app.settings.text("DateFormat", "yyyy-MM-dd"),
+            time_format: app.settings.text("TimeFormat", "HH:mm"),
+            use_age: app.settings.flag("UseDateAge", true),
+            age_labels: [
+                app.language_pack.text("RES.TODAY", "Today"),
+                app.language_pack.text("RES.YESTERDAY", "Yesterday"),
+                app.language_pack.text("RES.DATEAGE", "%d days ago"),
+            ],
+            unit: app.settings.text("SizeUnit", "Auto"),
+            thousands: app.settings.flag("UseThousandsSeparator", true),
+            folder_size_text: app.language_pack.text("RES.DIR", "[DIR]"),
+            vault_type: app.language_pack.text("NDRVault.TextEditorTitle", "Encrypted folder"),
+            folder_type: app.language_pack.text("RES.FOLDER", "Folder"),
+            group_mode, category_mode: app.side_text(index, "FolderCategoryMode", "Auto"),
+            show_group_name, show_file_type: app.settings.flag("ShowFileType", true),
+            folder: rgb("NXFOLDER"), drive: rgb("NXDRIVE"), fore: rgb("NXFORE"),
+            extension_colors: app.color_maps().0.cloned(), group_labels,
+        }
+    }
+}
+
+pub(super) fn build_view(plan: &ViewPlan, entries: &[Entry], descriptions: &HashMap<String, String>,
+    drive_infos: &HashMap<PathBuf, (String, u32, Option<(u64, u64)>)>,
+    sftp_modes: Option<(String, HashMap<String, u32>)>, ftp_permissions: Option<(String, HashMap<String, String>)>,
+    local: bool, detect_vault: bool, mut view: PaneView, cancel: Option<&AtomicBool>) -> Option<PaneView> {
+    let ViewPlan { attach, case, date_format, time_format, use_age, age_labels, unit, thousands,
+        folder_size_text, vault_type, folder_type, group_mode, category_mode, show_group_name,
+        show_file_type, folder, drive, fore, extension_colors, group_labels } = plan.clone();
+    let basic = move |key: &str| match key {
+        "NXFOLDER" => folder, "NXDRIVE" => drive, _ => fore,
+    };
+    let count = entries.len();
+    reset_view_buffer(&mut view.cells, count);
+    reset_view_buffer(&mut view.colors, count);
+    reset_view_buffer(&mut view.rows, count);
+    let now = std::time::SystemTime::now();
+    let mut date_texts = CellCache::default();
+    let mut size_texts = CellCache::default();
+    let mut date_formatter = ndr::listing::ListDateFormatter::new(&date_format, &time_format, use_age.then(|| [age_labels[0].as_str(), age_labels[1].as_str(), age_labels[2].as_str()]), now);
+    let mut shell_types = HashMap::<&str, String>::new();
+    let mut item_colors = HashMap::<&str, (u8, u8, u8)>::new();
+    let grouped = group_mode != "None" && show_group_name;
+    let mut previous = None;
+    for (row, entry) in entries.iter().enumerate() {
+        if row % 128 == 0 && cancel.is_some_and(|c| c.load(Ordering::Relaxed)) { return None; }
+        if grouped && !entry.drive {
+            let key = ndr::listing::group_key_cow(entry, &group_mode, &category_mode);
+            if previous.as_ref() != Some(&key) {
+                view.rows.push(DetailRow::Header(group_labels.get(ndr::listing::group_caption_key(&key).0).cloned().unwrap_or_else(|| ndr::listing::group_caption_key(&key).0.to_owned())));
+                previous = Some(key);
+            }
+        }
+        view.rows.push(DetailRow::Item(row));
+        if entry.drive {
+            // Original DrawListItem kind 4: the drive name (item+8) after "%s:". Other cells (extension, size, date, attributes, description) are not drawn.
+            let label = drive_infos.get(&entry.path).map(|(name, _, _)| name.as_str()).unwrap_or("");
+            let name = if label.is_empty() { entry.name.clone() } else { format!("{} {label}", entry.name) };
+            view.cells.push([name, String::new(), String::new(), String::new(), String::new(), String::new(), String::new()]);
+            view.colors.push(Some(drive));
+            continue;
+        }
+        let extension = if entry.is_dir { "" } else { ndr::parity::list_extension(&entry.name) };
+        let stem = if attach { &entry.name } else { &entry.name[..entry.name.len() - extension.len()] };
+        let description = if descriptions.is_empty() { String::new() } else { descriptions.get(&entry.name.to_lowercase()).cloned().unwrap_or_default() };
+        // Original DrawListItem description cell (field 6, 0x7da043): when the description (+0x10) is empty and showfiletype (+0x384) is on, the file type text (+0xc).
+        // The type text of original GetList (0x45a34c) is the shell name (SHGetFileInfoW SHGFI_TYPENAME|USEFILEATTRIBUTES, once per extension,
+        // none for ".."). Archive and FTP lists never call SetFileType, so it is empty.
+        // Only .ndr candidates need a filesystem probe. Ordinary folders
+        // already have their type in the listing and may be on a slow disk.
+        let vault_item = detect_vault && entry.is_dir
+            && entry.path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("ndr"))
+            && entry.path.is_file();
+        let kind = if vault_item {
+            vault_type.clone()
+        } else if !local || entry.name == ".." {
+            String::new()
+        } else if entry.is_dir {
+            folder_type.clone()
+        } else {
+            shell_types.entry(extension)
+                .or_insert_with(|| native::shell_type_name(&extension.to_lowercase(), false))
+                .clone()
+        };
+        let description = if description.is_empty() && show_file_type { kind.clone() } else { description };
+        view.cells.push([
+            character_case(stem, case),
+            character_case(extension.trim_start_matches('.'), case),
+            kind,
+            if entry.is_dir { folder_size_text.clone() } else {
+                cached_cell(&mut size_texts, entry.size, || ndr::parity::size_to_str(entry.size, &unit, thousands))
+            },
+            cached_cell(&mut date_texts, entry.modified, || date_formatter.format(entry.modified)),
+            // Original DrawListItem field 5: FTP and SFTP list items (+0x78) show the permission text (+0x74), others GetAttrString (0x7b50a4, A/H/R/S in "____").
+            // FTP keeps the listing's own text (MLSD "perm" fact, e.g. "eldfmcp"; LIST "drwxr-xr-x"), as seen in the running original.
+            // Fixed: previously the C# text ("RHSA", "-"); FTP panes showed "____".
+            match (&sftp_modes, &ftp_permissions) {
+                (Some((directory, modes)), _) => modes.get(&super::ftp_pane::join_remote(directory, &entry.name)).map(|mode| permission_text(entry.is_dir, *mode)).unwrap_or_default(),
+                (None, Some((directory, texts))) => texts.get(&super::ftp_pane::join_remote(directory, &entry.name)).cloned().unwrap_or_default(),
+                (None, None) => ndr::listing::attr_string(entry.attributes),
+            },
+            description,
+        ]);
+        view.colors.push(Some(if entry.is_dir {
+            folder
+        } else {
+            *item_colors.entry(extension)
+                .or_insert_with(|| ndr::listing::original_item_color(entry, extension_colors.as_ref(), basic))
+        }));
+    }
+    Some(view)
 }
 
 /// One row of original DrawListItem kind 4 (left aligned, DT_LEFT): a button-like background when selected, the icon ("▸ " when missing), "C: name",
