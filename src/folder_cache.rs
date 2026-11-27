@@ -192,6 +192,21 @@ impl ScanEngine {
     pub fn scan(&mut self, path: &Path, cancel: &AtomicBool, force_full: bool, root_watch: &FolderSizeWatch) -> Option<(FolderSizeSummary, ScanWork)> {
         self.scan_for_media(path, cancel, force_full, root_watch, native::FolderSizeMedia::Fast)
     }
+    /// Small, cold local folders may complete on a separate bounded
+    /// lane while the normal worker is enumerating a huge subtree. The
+    /// root proof and hardlink validation are identical to a full scan.
+    /// No child checkpoints, partial totals or additional disk format.
+    pub fn quick_scan(path:&Path,cancel:&AtomicBool,root_watch:&FolderSizeWatch,
+        limit:usize,budget:Duration)->Option<(FolderSizeSummary,ScanWork)>{
+        let summary=crate::tools::folder_size_summary_bounded(path,cancel,limit,Instant::now()+budget)?;
+        let mut work=ScanWork{visited:summary.files+summary.folders,reused:0,
+            root_stable:!cancel.load(Ordering::Relaxed)&&root_watch.matches_path(path)};
+        if summary.errors.is_empty()&&work.root_stable{
+            root_watch.remember_links(&summary.links,summary.link_overflow);
+            if !summary.link_overflow&&!root_watch.reusable(path){work.root_stable=false;}
+        }
+        Some((summary,work))
+    }
     pub fn prune_idle(&mut self) {
         self.checkpoints.retain(|_, c| c.used.elapsed() < CHECKPOINT_IDLE && c.measured.elapsed() < FULL_AUDIT_AGE && c.watch.unchanged());
     }
@@ -324,6 +339,28 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
     }
+    #[test]
+    fn bounded_scan_never_returns_partial_totals_and_keeps_exact_link_proof(){
+        let base=fixture("bounded-quick");
+        let small=base.join("small");let large=base.join("large");
+        fs::create_dir(&small).unwrap();fs::create_dir(&large).unwrap();
+        let source=base.join("source.bin");fs::write(&source,[1u8;12]).unwrap();
+        fs::hard_link(&source,small.join("alias.bin")).unwrap();
+        fs::write(&source,vec![2u8;4096]).unwrap();
+        for i in 0..80{fs::write(large.join(format!("{i}.bin")),[0u8;1]).unwrap();}
+        let cancel=AtomicBool::new(false);
+        let watch=FolderSizeWatch::open(&small).unwrap();
+        let (summary,work)=ScanEngine::quick_scan(&small,&cancel,&watch,16,Duration::from_secs(5)).unwrap();
+        assert!(work.root_stable&&summary.errors.is_empty());assert_eq!(summary.total_bytes,4096);
+        fs::write(&source,vec![3u8;8192]).unwrap();assert!(!watch.reusable(&small));
+        let large_watch=FolderSizeWatch::open(&large).unwrap();
+        assert!(ScanEngine::quick_scan(&large,&cancel,&large_watch,16,Duration::from_secs(5)).is_none());
+        assert!(ScanEngine::quick_scan(&large,&cancel,&large_watch,1000,Duration::ZERO).is_none());
+        cancel.store(true,Ordering::Relaxed);
+        assert!(ScanEngine::quick_scan(&small,&cancel,&watch,16,Duration::from_secs(5)).is_none());
+        drop((watch,large_watch));fs::remove_dir_all(base).unwrap();
+    }
+
     #[test]
     fn verified_totals_count_actual_cross_directory_hardlinks_and_probe_changes(){
         let base=fixture("hardlink-logical");

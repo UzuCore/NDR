@@ -9,6 +9,11 @@ const MAX_SNAPSHOTS:usize=4;
 const MAX_ROWS:usize=100_000;
 const MAX_CHANGED:usize=128;
 const MAX_AGE:Duration=Duration::from_secs(30);
+// Bounded discovery of hard links created through another directory after
+// the original snapshot. Large lists retain the existing known-link checks
+// and explicit fresh reads rather than repeatedly stat every file.
+pub const ALIAS_AUDIT_ROWS:usize=2048;
+const ALIAS_AUDIT_AGE:Duration=Duration::from_secs(10);
 const NOTIFY_FILTER:u32=FILE_NOTIFY_CHANGE_FILE_NAME|FILE_NOTIFY_CHANGE_DIR_NAME|
  FILE_NOTIFY_CHANGE_ATTRIBUTES|FILE_NOTIFY_CHANGE_SIZE|FILE_NOTIFY_CHANGE_LAST_WRITE|
  FILE_NOTIFY_CHANGE_CREATION|FILE_NOTIFY_CHANGE_SECURITY;
@@ -159,6 +164,7 @@ struct Snapshot {
     bytes:usize,
     revision:u64,
     linked:HashSet<OsString>,
+    alias_audited:Instant,
     order_dirty:bool,
     last_delta:Option<LastDelta>,
 }
@@ -199,6 +205,7 @@ pub struct ListingCache {
     unverified:AtomicU64,
     structural:AtomicU64,
     replays:AtomicU64,
+    alias_audits:AtomicU64,
     enumerate_us:AtomicU64,
     compact_us:AtomicU64,
     reuse_us:AtomicU64,
@@ -306,9 +313,14 @@ fn verify_chunk(rows:&mut [Entry],ids:&[u64],cancel:&AtomicBool)->Result<(HashSe
     }
     Ok((links,unverified))
 }
-fn verify_regulars(entries:&mut [Entry],ids:&[u64],cancel:&AtomicBool)->Result<(HashSet<OsString>,usize),String>{
+fn verify_regulars(path:&Path,entries:&mut [Entry],ids:&[u64],cancel:&AtomicBool)->Result<(HashSet<OsString>,usize),String>{
     let workers=if entries.len()>=4096&&by_name_fn().is_some(){
-        std::thread::available_parallelism().map_or(1,usize::from).min(4)
+        let limit=match native::folder_size_media(path){
+            native::FolderSizeMedia::Seek=>1,
+            native::FolderSizeMedia::Fast if entries.len()>=16_384=>8,
+            _=>4,
+        };
+        std::thread::available_parallelism().map_or(1,usize::from).min(limit)
     }else{1};
     if workers<=1{return verify_chunk(entries,ids,cancel)}
     let chunk=entries.len().div_ceil(workers).max(1);
@@ -386,7 +398,7 @@ fn scan_ids(path:&Path,show_hidden:bool,cancel:&AtomicBool)->Result<Option<Scan>
             offset+=next;
         }
     }
-    let (linked,unverified)=verify_regulars(&mut entries,&ids,cancel)?;
+    let (linked,unverified)=verify_regulars(path,&mut entries,&ids,cancel)?;
     if !show_hidden{entries.retain(|e|e.attributes&(FILE_ATTRIBUTE_HIDDEN|FILE_ATTRIBUTE_SYSTEM)==0);}
     Ok(Some(Scan{entries,linked,unverified}))
 }
@@ -647,6 +659,23 @@ impl ListingCache {
                             }
                         }
                     }
+                    // A different folder can acquire the FIRST additional
+                    // alias without notifying this directory. For small
+                    // cached listings, periodically verify all displayed
+                    // ordinary files, not just already-known aliases.
+                    if clean&&old.entries.len()<=ALIAS_AUDIT_ROWS&&old.alias_audited.elapsed()>=ALIAS_AUDIT_AGE{
+                        let names:HashSet<_>=old.entries.iter()
+                            .filter(|e|!e.is_dir&&e.attributes&FILE_ATTRIBUTE_REPARSE_POINT==0)
+                            .map(|e|e.name.clone()).collect();
+                        match update_modified(path,&mut old.entries,&names,&mut old.linked,show_hidden,cancel){
+                            Ok(changed)=>{
+                                changed_names.extend(changed);
+                                old.alias_audited=Instant::now();
+                                self.alias_audits.fetch_add(1,Ordering::Relaxed);
+                            }
+                            Err(_)=>clean=false,
+                        }
+                    }
                     if clean&&!old.linked.is_empty(){
                         let names=old.linked.clone();
                         match update_modified(path,&mut old.entries,&names,&mut old.linked,show_hidden,cancel){
@@ -718,7 +747,7 @@ impl ListingCache {
                         if bytes<=CACHE_BYTES && !cancel.load(Ordering::Relaxed) && watch.clean(){
                             let id=self.serial.fetch_add(1,Ordering::Relaxed)+1;
                             revision=Some(id);
-                            self.put(&lease,Snapshot{entries:compact,watch,identity,verified:Instant::now(),created,bytes,revision:id,linked,order_dirty:false,last_delta:None});
+                            self.put(&lease,Snapshot{entries:compact,watch,identity,verified:Instant::now(),created,bytes,revision:id,linked,alias_audited:Instant::now(),order_dirty:false,last_delta:None});
                         }
                     }
                 }
@@ -734,7 +763,7 @@ impl ListingCache {
             "entries":store.items.len(),"estimatedBytes":store.bytes,"activeReads":store.active.len(),"coalescedReads":self.coalesced.load(Ordering::Relaxed),"partialReads":self.partial.load(Ordering::Relaxed),
             "leasedBytes":store.leased,"peakStoredAndLeasedEstimate":store.peak,
             "enumerateUs":self.enumerate_us.load(Ordering::Relaxed),"compactUs":self.compact_us.load(Ordering::Relaxed),
-            "reuseUs":self.reuse_us.load(Ordering::Relaxed),"aliasRows":self.alias_rows.load(Ordering::Relaxed),"unverifiedRows":self.unverified.load(Ordering::Relaxed),"structuralReads":self.structural.load(Ordering::Relaxed),"deltaReplays":self.replays.load(Ordering::Relaxed)})
+            "reuseUs":self.reuse_us.load(Ordering::Relaxed),"aliasRows":self.alias_rows.load(Ordering::Relaxed),"aliasAudits":self.alias_audits.load(Ordering::Relaxed),"unverifiedRows":self.unverified.load(Ordering::Relaxed),"structuralReads":self.structural.load(Ordering::Relaxed),"deltaReplays":self.replays.load(Ordering::Relaxed)})
     }
 }
 
@@ -787,6 +816,26 @@ mod tests{
         assert_eq!(next.entries[0].size,65536);assert!(next.hardlinks);
         drop(cache);fs::remove_dir_all(root).unwrap();
     }
+    #[test]
+    fn periodic_alias_audit_discovers_a_new_external_hardlink(){
+        let root=std::env::temp_dir().join(format!("ndr-late-link-{}-{}",std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let left=root.join("left");let outside=root.join("outside");
+        fs::create_dir_all(&left).unwrap();fs::create_dir_all(&outside).unwrap();
+        let a=left.join("a.bin");let b=outside.join("alias.bin");fs::write(&a,[0u8;100]).unwrap();
+        let cache=ListingCache::default();let cancel=AtomicBool::new(false);
+        let initial=cache.read_revision(&left,true,true,true,&cancel,None).unwrap();
+        assert!(!initial.hardlinks);assert_eq!(initial.entries[0].size,100);
+        fs::hard_link(&a,&b).unwrap();fs::write(&b,vec![1u8;65536]).unwrap();
+        // Age the audit timestamp, not the directory snapshot. This is the
+        // same path as the real 10-second background verification.
+        {let mut store=cache.store.lock().unwrap();
+         store.items.get_mut(&(left.clone(),true)).unwrap().alias_audited=Instant::now()-ALIAS_AUDIT_AGE;}
+        let changed=cache.read_revision(&left,true,true,true,&cancel,initial.revision).unwrap();
+        assert!(changed.hardlinks);assert_eq!(changed.entries[0].size,65536);
+        assert_eq!(cache.report()["aliasAudits"],1);
+        drop(cache);fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn compact_native_name_and_single_owner(){
         use std::os::windows::ffi::OsStringExt;

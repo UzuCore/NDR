@@ -1616,8 +1616,11 @@ impl App {
         }
         if !settings.flag("LeftAutoFolderSize", false) && !settings.flag("RightAutoFolderSize", false) {
             self.folder_size_cache.clear();
-            self.folder_size_purge.store(true, Ordering::Relaxed);
-            self.folder_size_queue.1.notify_one();
+            self.folder_size_hints.clear();
+            self.folder_hint_checked.clear();
+            self.folder_hint_epoch=self.folder_hint_epoch.wrapping_add(1);
+            self.folder_size_purge.fetch_add(1, Ordering::Relaxed);
+            self.folder_size_queue.1.notify_all();
         }
         self.settings = settings;
         self.settings.normalize();

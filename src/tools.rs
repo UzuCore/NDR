@@ -458,7 +458,7 @@ pub fn folder_size_summary(roots: &[PathBuf], cancel: &AtomicBool) -> Option<Fol
             summary.add_file(root,metadata.len(),crate::native::folder_size_local_volume(root),&mut Vec::new());
             continue;
         }
-        scan_known_directory(root, cancel, &mut summary,crate::native::folder_size_local_volume(root))?;
+        scan_known_directory(root, cancel, &mut summary,crate::native::folder_size_local_volume(root),None)?;
     }
     Some(summary)
 }
@@ -467,11 +467,28 @@ pub fn folder_size_summary(roots: &[PathBuf], cancel: &AtomicBool) -> Option<Fol
 /// Reuse the exact original iterative traversal rather than query that root twice.
 pub(crate) fn folder_size_summary_known_directory(root: &Path, cancel: &AtomicBool,verify:bool) -> Option<FolderSizeSummary> {
     let mut summary = FolderSizeSummary::default();
-    scan_known_directory(root, cancel, &mut summary,verify)?;
+    scan_known_directory(root, cancel, &mut summary,verify,None)?;
     Some(summary)
 }
 
-fn scan_known_directory(root: &Path, cancel: &AtomicBool, summary: &mut FolderSizeSummary,verify:bool) -> Option<()> {
+// A bounded attempt returns None without publishing any partial total.
+// The caller can defer that job to the ordinary checkpoint-aware worker.
+pub(crate) fn folder_size_summary_bounded(root:&Path,cancel:&AtomicBool,limit:usize,
+    deadline:std::time::Instant)->Option<FolderSizeSummary>{
+    let mut summary=FolderSizeSummary::default();
+    let mut budget=(limit,deadline);
+    scan_known_directory(root,cancel,&mut summary,true,Some(&mut budget))?;
+    Some(summary)
+}
+fn scan_known_directory(root: &Path, cancel: &AtomicBool, summary: &mut FolderSizeSummary,
+    verify:bool,mut budget:Option<&mut (usize,std::time::Instant)>) -> Option<()> {
+    let mut take_budget=||{
+        if let Some((remaining,deadline))=budget.as_deref_mut(){
+            if *remaining==0||std::time::Instant::now()>=*deadline{return false}
+            *remaining-=1;
+        }
+        true
+    };
     use std::os::windows::fs::MetadataExt;
     const REPARSE: u32 = 0x400;
     const DIRECTORY: u32 = 0x10;
@@ -482,7 +499,7 @@ fn scan_known_directory(root: &Path, cancel: &AtomicBool, summary: &mut FolderSi
     let mut pending = vec![root.to_path_buf()];
     let mut wide=Vec::new();
     while let Some(folder) = pending.pop() {
-        if check_cancel(cancel).is_err() {
+        if check_cancel(cancel).is_err() || !take_budget() {
             return None;
         }
         // A directory could have become a junction after its parent's
@@ -505,7 +522,7 @@ fn scan_known_directory(root: &Path, cancel: &AtomicBool, summary: &mut FolderSi
             // A single huge directory can contain millions of files.
             // Navigation and foreground file operations must cancel
             // automatic enumeration without waiting for that whole folder.
-            if check_cancel(cancel).is_err() {
+            if check_cancel(cancel).is_err() || !take_budget() {
                 return None;
             }
             let entry = match entry {

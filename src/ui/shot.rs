@@ -62,8 +62,9 @@ impl App {
         // About is live, so capture its first measured CPU sample rather
         // than the initial not-yet-sampled placeholder.
         let about_waiting = self.msgboxes.iter().any(|b| b.program_icon && !b.text.lines().any(|l| l.starts_with("CPU: ") && l.ends_with('%'))) && self.started.elapsed() < Duration::from_secs(3);
+        let folder_tour_waiting = kind=="folder-tour" && !self.folder_tour_step(ctx);
         let sent_id = egui::Id::new("ndr-shot-sent");
-        if self.frames >= SHOT_FRAME && !tree_waiting && !about_waiting && !ctx.data(|d| d.get_temp::<bool>(sent_id)).unwrap_or(false) {
+        if self.frames >= SHOT_FRAME && !tree_waiting && !about_waiting && !folder_tour_waiting && !ctx.data(|d| d.get_temp::<bool>(sent_id)).unwrap_or(false) {
             // Record actual rendered text, glyph coverage and clipping, not only successful startup.
             audit_shot_text(ctx, &path);
             ctx.data_mut(|d| d.insert_temp(sent_id, true));
@@ -110,6 +111,53 @@ impl App {
             }
             self.options.shot = None;
         }
+    }
+
+    // Isolated real-rendering navigation/column regression. Only enabled by
+    // --smoke-seconds with an explicit test left path and --shot folder-tour.
+    fn folder_tour_step(&mut self,ctx:&egui::Context)->bool{
+        let Some(root)=self.options.left.clone()else{return true};
+        let id=egui::Id::new("ndr-folder-tour-stage");
+        let (stage,since)=ctx.data(|d|d.get_temp::<(u8,Instant)>(id))
+            .unwrap_or((0,self.started));
+        if stage>=5{return true}
+        if self.panes[0].loading{return false}
+        let pane=&self.panes[0];
+        let ready=!pane.folder_auto_visible.is_empty()&&pane.folder_auto_visible.iter().all(|p|pane.folder_bytes.contains_key(p));
+        let due=since.elapsed();
+        let action=match stage{
+            0 if (ready&&due>=Duration::from_secs(2))||due>=Duration::from_secs(10)=>"initial",
+            1=>"inside",
+            2=>"return-first",
+            3 if ready||due>=Duration::from_secs(8)=>"scroll-settled",
+            4=>"scroll-return-first",
+            _=>return false,
+        };
+        let mut paths:Vec<_>=pane.folder_auto_visible.iter().collect();paths.sort();
+        self.smoke_folder_tour.push(serde_json::json!({"step":action,"path":pane.path.to_string_lossy(),
+            "rows":pane.page.rows,"columns":pane.page.columns,"first":pane.first_column,
+            "visible":paths.into_iter().map(|p|serde_json::json!({"path":p.to_string_lossy(),
+                "label":pane.folder_size_display(p),"bytes":pane.folder_bytes.get(p),"hint":pane.folder_hint_bytes.get(p)})).collect::<Vec<_>>()}));
+        ctx.data_mut(|d|d.insert_temp(id,(stage+1,Instant::now())));
+        match stage{
+            0=>{
+                let child=self.panes[0].entries.iter().find(|e|e.is_dir&&!e.is_parent()&&!e.drive&&e.attributes&0x400==0&&e.path.parent()==Some(root.as_path())).map(|e|e.path.clone());
+                if let Some(child)=child{self.navigate(0,child,true);}else{return true}
+            }
+            1=>self.navigate(0,root,true),
+            2=>{
+                let pane=&mut self.panes[0];
+                pane.first_column=pane.page.columns;
+                pane.cursor=(pane.page.rows*pane.page.columns).min(pane.entries.len().saturating_sub(1));
+                pane.reveal=true;pane.adjust=None;
+            }
+            3=>{
+                let pane=&mut self.panes[0];
+                pane.first_column=0;pane.cursor=0;pane.reveal=true;pane.adjust=None;
+            }
+            _=>return true,
+        }
+        false
     }
 
     fn open_shot_sample(&mut self, kind: &str) {

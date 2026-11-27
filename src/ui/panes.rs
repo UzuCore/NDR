@@ -60,8 +60,8 @@ pub(super) fn paint_original_cell(ui: &mut egui::Ui, rect: egui::Rect, column: D
     match column {
         DetailColumn::Size => {
             let (number, unit) = if cursor_row { (text, "") } else { super::skin_pane::split_size_text(text) };
-            let upper = text.to_uppercase();
-            let unit_color = if upper.contains('G') { o.gb } else if upper.contains('M') { o.mb } else { cell_color };
+            let has=|letter:u8|text.as_bytes().iter().any(|b|b.to_ascii_uppercase()==letter);
+            let unit_color = if has(b'G') { o.gb } else if has(b'M') { o.mb } else { cell_color };
             let galley = layout(ui, &[(number, cell_color), (unit, unit_color)]);
             painter.galley(egui::pos2(inner.right() - galley.size().x, top(galley.size().y)), galley, cell_color);
         }
@@ -1264,7 +1264,7 @@ impl App {
         let partial_base=if from_watch && same_folder && !append_drives && self.pending_focus[index].is_none(){
             pane.local_snapshot.as_ref().filter(|s|s.content_revision==pane.thumb_content_revision
                 && s.day==chrono::Local::now().date_naive()
-                && presentation.as_ref().is_some_and(|plan|plan==&s.plan && plan.supports_partial()))
+                && presentation.as_ref().is_some_and(|plan|plan==&s.plan))
                 .map(|s|s.revision)
         }else{None};
         let ready_drives = self.system.ready_drives;
@@ -2182,7 +2182,7 @@ impl App {
                             };
                             // Only count visible rows with a visible size cell.
                             if columns.iter().zip(&cell_widths).any(|((column, _, _), width)| *column == DetailColumn::Size && width.is_some()) {
-                                self.queue_folder_size(index, row);
+                                self.note_visible_folder_size(index,row,row);
                             }
                             let icon = self.file_icon(ui.ctx(), index, row);
                             let icon = self.row_icon_for_skin(index, row, icon);
@@ -2585,7 +2585,10 @@ impl App {
         let index=listing.pane;
         let (Some(partial),Some(revision),Ok(changed))=(listing.partial,listing.cache_revision,listing.result)else{return false};
         let plan=LocalListingPlan::capture(self,index);
-        if !plan.supports_partial()||partial.plan!=plan||self.pending_focus[index].is_some(){return false}
+        if partial.plan!=plan||self.pending_focus[index].is_some(){return false}
+        // An unchanged snapshot is safe for every sort/group/filter. For
+        // actual edits retain the existing proven subset of partial modes.
+        if (!changed.is_empty()||partial.structural||!partial.removed.is_empty())&&!plan.supports_partial(){return false}
         let pane=&self.panes[index];
         let Some(snapshot)=&pane.local_snapshot else{return false};
         if snapshot.revision!=partial.base||snapshot.content_revision!=pane.thumb_content_revision||

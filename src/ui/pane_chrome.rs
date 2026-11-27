@@ -720,28 +720,135 @@ impl App {
     /// Revalidate visible cached totals without clearing their display.
     /// A clean recursive watch needs no filesystem enumeration, even after
     /// the fallback TTL has elapsed. Manual totals are unaffected.
-    pub(super) fn queue_folder_size(&mut self, index: usize, row: usize) {
-        if !self.settings.flag(if index == 0 { "LeftAutoFolderSize" } else { "RightAutoFolderSize" }, false) {
-            return;
-        }
-        let pane = &mut self.panes[index];
-        if pane.vault.is_some() || pane.remote.is_some() || pane.archive.is_some() { return; }
-        let Some(entry) = pane.entries.get(row).filter(|e| e.is_dir && !e.drive && !e.is_parent() && e.attributes & 0x410 == 0x10) else { return };
-        let path = &entry.path;
-        // Old rows can remain visible during a same-location relist. Protect
-        // their known values from eviction, without starting any new I/O.
+    /// Painting and admission are separate: a full first-column queue
+    /// must not prevent another visible column from replaying its sizes.
+    fn observe_visible_folder_size(&mut self,index:usize,row:usize)->bool{
+        if !self.settings.flag(if index==0{"LeftAutoFolderSize"}else{"RightAutoFolderSize"},false){return false}
+        let pane=&mut self.panes[index];
+        if pane.vault.is_some()||pane.remote.is_some()||pane.archive.is_some(){return false}
+        let Some(entry)=pane.entries.get(row).filter(|e|e.is_dir&&!e.drive&&!e.is_parent()&&e.attributes&0x410==0x10)else{return false};
+        // Encrypted containers have a virtual directory attribute in the
+        // display Entry. The ordinary folder path must not scan them.
+        if entry.path.extension().is_some_and(|e|e.eq_ignore_ascii_case("ndr"))
+            &&entry.path.file_name().is_some_and(|n|n.to_string_lossy()!=entry.name){return false}
+        let path=&entry.path;
         pane.folder_auto_visible.insert(path.clone());
-        if pane.loading { return; }
-        if pane.folder_auto_pending.contains_key(path) || pane.folder_manual_pending.contains_key(path) {
-            return;
+        if pane.loading||pane.error.is_some(){return false}
+        let local=*pane.folder_auto_volume.get_or_insert_with(||native::folder_size_local_volume(&pane.path));
+        if !local{return false}
+        // Always restore a known display before checking cooldown, busy
+        // state or pending tokens. This is also the very first paint after
+        // navigation. No filesystem access or recursive scan is required.
+        if let Some(observation)=self.folder_size_cache.get_mut(path){
+            observation.last_used=Instant::now();
+            let bytes=observation.bytes;
+            let no_value=!pane.folder_sizes.get(path).is_some_and(Option::is_some);
+            let newer= pane.folder_bytes.get(path)!=Some(&bytes)&&observation.current();
+            if no_value||newer {
+                let text=ndr::parity::size_to_str(bytes,&self.settings.text("SizeUnit","Auto"),self.settings.flag("UseThousandsSeparator",true));
+                pane.folder_auto_paths.insert(path.clone());
+                pane.folder_hint_bytes.remove(path);
+                pane.folder_bytes.insert(path.clone(),bytes);
+                pane.folder_sizes.insert(path.clone(),Some(text));
+            }
+        }else if !pane.folder_sizes.get(path).is_some_and(Option::is_some){
+            if let Some((bytes,at))=self.folder_size_hints.get_mut(path){
+                *at=Instant::now();
+                pane.folder_auto_paths.insert(path.clone());
+                pane.folder_hint_bytes.insert(path.clone(),*bytes);
+                pane.folder_sizes.insert(path.clone(),Some(ndr::parity::size_to_str(*bytes,&self.settings.text("SizeUnit","Auto"),self.settings.flag("UseThousandsSeparator",true))));
+            }
         }
-        if pane.folder_auto_times.get(path).is_some_and(|time| *time > Instant::now()) {
-            return;
+        !pane.folder_auto_pending.contains_key(path)&&!pane.folder_manual_pending.contains_key(path)
+            &&!pane.folder_auto_times.get(path).is_some_and(|time|*time>Instant::now())
+    }
+    /// rank is visual row-major order even when rendering fills columns
+    /// top-to-bottom. A separate admission pass sees both complete panes.
+    pub(super) fn note_visible_folder_size(&mut self,index:usize,row:usize,rank:usize){
+        if self.observe_visible_folder_size(index,row){
+            let pane=&mut self.panes[index];pane.folder_auto_candidates.push((pane.generation,rank,row));
         }
-        if cfg!(test){self.sync_folder_size_activity();}
-        // Even while foreground I/O is busy, replay an already known total.
-        // enqueue_folder_size_job itself will defer new scans.
-        self.enqueue_folder_size_job(index, row, true);
+    }
+    #[cfg(test)]
+    pub(super) fn queue_folder_size(&mut self,index:usize,row:usize){
+        self.sync_folder_size_activity();
+        if self.observe_visible_folder_size(index,row){self.enqueue_folder_size_job(index,row,true);}
+    }
+    pub(super) fn insert_folder_hint(hints:&mut HashMap<PathBuf,(u64,Instant)>,path:PathBuf,bytes:u64){
+        if hints.len()>=2048&&!hints.contains_key(&path){
+            if let Some(old)=hints.iter().min_by_key(|(_,(_,at))|*at).map(|(p,_)|p.clone()){hints.remove(&old);}
+        }
+        hints.insert(path,(bytes,Instant::now()));
+    }
+    pub(super) fn remember_folder_hint(&mut self,path:PathBuf,bytes:u64){
+        Self::insert_folder_hint(&mut self.folder_size_hints,path,bytes);
+    }
+    /// A prior-session cache hint is much cheaper than a recursive scan.
+    /// Warm every visible column independently of the 25-scan admission
+    /// cap. At most one short-lived batch is active; no idle worker or
+    /// additional persistent database. An absent hint is retried no more
+    /// than once per 30 seconds.
+    fn warm_visible_folder_hints(&mut self){
+        if cfg!(test)||self.folder_hint_pending{return}
+        let now=Instant::now();
+        self.folder_hint_checked.retain(|_,at|now.saturating_duration_since(*at)<Duration::from_secs(30));
+        let mut paths=Vec::new();
+        for pane in &self.panes{
+            if pane.loading||pane.error.is_some()||pane.folder_auto_volume!=Some(true)||pane.vault.is_some()||pane.remote.is_some()||pane.archive.is_some(){continue}
+            for path in &pane.folder_auto_visible{
+                if paths.len()>=256{break}
+                if pane.folder_sizes.get(path).is_some_and(Option::is_some)||self.folder_size_cache.contains_key(path)
+                    ||self.folder_size_hints.contains_key(path)||self.folder_hint_checked.contains_key(path)||paths.contains(path){continue}
+                paths.push(path.clone());
+            }
+        }
+        if paths.is_empty(){return}
+        if self.folder_hint_checked.len()+paths.len()>2048{
+            let mut oldest:Vec<_>=self.folder_hint_checked.iter().map(|(p,t)|(p.clone(),*t)).collect();
+            oldest.sort_unstable_by_key(|(_,t)|*t);
+            for (p,_) in oldest.into_iter().take(self.folder_hint_checked.len()+paths.len()-2048){self.folder_hint_checked.remove(&p);}
+        }
+        for path in &paths{self.folder_hint_checked.insert(path.clone(),now);}
+        let profile=self.profile.clone();
+        let tx=self.async_tx.clone();let stop=self.folder_size_shutdown.clone();let epoch=self.folder_hint_epoch;
+        let spawned=thread::Builder::new().name("ndr-folder-hint-batch".into()).spawn(move||{
+            unsafe{
+                use windows_sys::Win32::System::Threading::{GetCurrentThread,SetThreadPriority,THREAD_MODE_BACKGROUND_BEGIN};
+                SetThreadPriority(GetCurrentThread(),THREAD_MODE_BACKGROUND_BEGIN as i32);
+            }
+            let disk=ndr::folder_cache::DiskStore::open(&profile,true);
+            let mut values=Vec::new();
+            for path in paths{
+                if stop.load(Ordering::Relaxed){break}
+                if let Some(bytes)=disk.hint(&path){values.push((path,bytes));}
+            }
+            let _=tx.send(AsyncResult::FolderHintBatch{epoch,values});
+        });
+        self.folder_hint_pending=spawned.is_ok();
+    }
+    pub(super) fn admit_visible_folder_sizes(&mut self){
+        // A never-measured row wins over recurring checks. Equal urgency
+        // is interleaved across columns and panes rather than favoring
+        // whichever column/pane is drawn first.
+        let mut candidates=Vec::new();
+        for index in 0..2{
+            let pane=&mut self.panes[index];
+            for (generation,rank,row) in pane.folder_auto_candidates.drain(..){
+                if generation!=pane.generation{continue}
+                if let Some(e)=pane.entries.get(row){
+                    let measured=pane.folder_sizes.get(&e.path).is_some_and(Option::is_some);
+                    candidates.push((measured,rank,(index+2-self.folder_schedule_turn)%2,index,row));
+                }
+            }
+        }
+        candidates.sort_unstable();
+        self.folder_schedule_turn^=1;
+        // enqueue handles the 48 queued/25 per-pane cap, a clean cached
+        // observation, foreground activity and duplicate tokens. In the
+        // next frame unmeasured rows still rank ahead of measured rows.
+        for (_,_,_,index,row) in candidates{
+            self.enqueue_folder_size_job(index,row,true);
+        }
     }
 
     /// Keep only pending scans for rows painted during this frame. The worker
@@ -784,6 +891,11 @@ impl App {
                 }
             }
         }
+        if cancelled {
+            self.folder_size_queue.0.lock().unwrap_or_else(|e|e.into_inner()).retain(|j|!j.cancel.load(Ordering::Relaxed));
+        }
+        self.warm_visible_folder_hints();
+        self.admit_visible_folder_sizes();
         // One deadline per frame, not one repaint request per visible row.
         // Align stable observations onto shared ticks to prevent dozens of
         // slightly offset timers from keeping a large folder list animated.
@@ -795,13 +907,7 @@ impl App {
         if let Some(due) = next {
             ctx.request_repaint_after(due.saturating_duration_since(now).max(Duration::from_millis(25)));
         }
-        if cancelled {
-            let (queue, _) = &*self.folder_size_queue;
-            queue.lock().unwrap_or_else(|e| e.into_inner()).retain(|j| !j.cancel.load(Ordering::Relaxed));
-            // A full previous queue may have prevented the new rows from
-            // being queued in this paint. Retry immediately.
-            ctx.request_repaint();
-        }
+        if cancelled { ctx.request_repaint(); }
     }
 
     pub(super) fn record_folder_size_time(&mut self, index: usize, path: &Path, time: Instant) {
@@ -825,7 +931,7 @@ impl App {
         }
         pane.folder_auto_volume = None;
         if self.folder_size_workers {
-            let (queue, _) = &*self.folder_size_queue;
+            let (queue, _, _) = &*self.folder_size_queue;
             queue.lock().unwrap_or_else(|e| e.into_inner()).retain(|j| !j.cancel.load(Ordering::Relaxed));
         }
     }
@@ -838,7 +944,7 @@ impl App {
             || self.panes.iter().any(|p| p.remote.as_ref().is_some_and(|r| r.busy.load(Ordering::Relaxed)))
             || self.original_dialogs.iter().any(|d| matches!(&d.kind, super::original_dialogs::DialogKind::RemoteTransfer(_)));
         if busy && !self.folder_auto_busy {
-            self.folder_size_recent_reset.store(true, Ordering::Relaxed);
+            self.folder_size_recent_reset.fetch_add(1, Ordering::Relaxed);
             // A scan interrupted by a write could otherwise combine sizes
             // measured before and after the write. Restart it when idle.
             for pane in &mut self.panes {
@@ -850,7 +956,7 @@ impl App {
             }
         }
         if !busy && self.folder_auto_busy {
-            self.folder_size_recent_reset.store(true, Ordering::Relaxed);
+            self.folder_size_recent_reset.fetch_add(1, Ordering::Relaxed);
             // Notification-free volumes might have changed after the last
             // verification. Revalidate as soon as foreground I/O ends.
             for pane in &mut self.panes { pane.folder_auto_times.clear(); }
@@ -866,7 +972,7 @@ impl App {
     /// cancelled operations. If a notification is unavailable or missing,
     /// force a full audit rather than treating a silent handle as proof.
     pub(super) fn invalidate_folder_mutations(&mut self, scope: &FolderMutationScope) {
-        self.folder_size_recent_reset.store(true, Ordering::Relaxed);
+        self.folder_size_recent_reset.fetch_add(1, Ordering::Relaxed);
         for (path, observation) in &mut self.folder_size_cache {
             if scope.affects(path) {
                 observation.invalidate_verification();
@@ -944,7 +1050,7 @@ impl App {
                 }
             }
         }
-        let (queue, _) = &*self.folder_size_queue;
+        let (queue, _, _) = &*self.folder_size_queue;
         queue.lock().unwrap_or_else(|e| e.into_inner()).retain(|job| !job.cancel.load(Ordering::Relaxed));
         self.enqueue_folder_size_job(index, row, false);
     }
@@ -953,11 +1059,12 @@ impl App {
         let can_use_filesystem = self.vault_has_filesystem(index);
         let epoch = self.started;
         let pane = &mut self.panes[index];
-        if !can_use_filesystem || pane.loading || pane.archive.is_some() || pane.remote.is_some() {
+        if !can_use_filesystem || pane.loading || pane.error.is_some() || pane.archive.is_some() || pane.remote.is_some() {
             return;
         }
         let Some(entry) = pane.entries.get(row).filter(|e| e.is_dir && !e.drive && !e.is_parent()) else { return };
-        if pane.folder_manual_pending.contains_key(&entry.path) { return; }
+        if pane.folder_manual_pending.contains_key(&entry.path)
+            || automatic && pane.folder_auto_pending.contains_key(&entry.path) { return; }
         if entry.path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("ndr")) && entry.attributes&0x10==0 {
             return; // The encrypted container is already a file on disk.
         }
@@ -1012,7 +1119,7 @@ impl App {
             }
         }
         if automatic && self.folder_auto_busy { return; }
-        let (queue, signal) = &*self.folder_size_queue;
+        let (queue, signal, _) = &*self.folder_size_queue;
         let mut jobs = queue.lock().unwrap_or_else(|e| e.into_inner());
         // At most 48 waiting jobs plus one running scan. A fast scroll
         // cannot create an unbounded backlog of expensive I/O.
@@ -1032,6 +1139,7 @@ impl App {
         }
         let hint_needed = automatic && !pane.folder_sizes.get(&entry.path).is_some_and(Option::is_some);
         let job = FolderSizeJob {
+            bulk_only:!automatic,
             hint_needed,
             pane: index,
             path: entry.path.clone(),
@@ -1044,22 +1152,44 @@ impl App {
         };
         if automatic { jobs.push_back(job); } else { jobs.push_front(job); }
         drop(jobs);
-        signal.notify_one();
+        signal.notify_all();
         if !self.folder_size_workers {
             self.folder_size_workers = true;
-            let shared = self.folder_size_queue.clone();
-            let tx = self.async_tx.clone();
-            let ctx = self.egui_ctx.clone();
-            let profile = self.profile.clone();
-            let shutdown = self.folder_size_shutdown.clone();
-            let purge = self.folder_size_purge.clone();
-            let recent_reset = self.folder_size_recent_reset.clone();
-            let (done, finished) = mpsc::channel();
-            self.folder_size_done = Some(finished);
-            thread::spawn(move || {
-                folder_size_worker(shared, tx, ctx, profile, shutdown, purge, recent_reset);
-                let _ = done.send(());
-            });
+            self.start_folder_lane(false);
+        }
+        // Unit tests can deliberately set folder_size_workers without
+        // spawning a worker in order to inspect a deterministic queue.
+        if automatic&&!self.folder_size_helper_started&&!self.folder_size_done.is_empty(){
+            self.folder_size_helper_started=self.start_folder_lane(true);
+        }
+    }
+    fn start_folder_lane(&mut self,quick:bool)->bool{
+        let shared=self.folder_size_queue.clone();
+        let tx=self.async_tx.clone();let ctx=self.egui_ctx.clone();
+        let profile=self.profile.clone();
+        let shutdown=self.folder_size_shutdown.clone();
+        let purge=self.folder_size_purge.clone();
+        let recent_reset=self.folder_size_recent_reset.clone();
+        let stats=self.folder_worker_stats.clone();
+        let (done,finished)=mpsc::channel();
+        let name=if quick{"ndr-folder-short"}else{"ndr-folder-full"};
+        if thread::Builder::new().name(name.into()).spawn(move||{
+            folder_size_worker(shared,tx,ctx,profile,shutdown,purge,recent_reset,stats,quick);
+            let _=done.send(());
+        }).is_ok(){
+            self.folder_size_done.push(finished);true
+        }else{
+            // If the optional short lane cannot start, the normal lane
+            // still drains all work. If the full lane cannot start, retire
+            // its tokens and allow the next frame to retry.
+            if !quick{
+                self.folder_size_workers=false;
+                for pane in &mut self.panes{
+                    pane.cancel_automatic_folder_jobs();pane.cancel_manual_folder_jobs();
+                }
+                self.folder_size_queue.0.lock().unwrap_or_else(|e|e.into_inner()).clear();
+            }
+            false
         }
     }
 }
@@ -1150,6 +1280,7 @@ impl FolderSizeObservation {
 }
 
 pub(super) struct FolderSizeJob {
+    bulk_only:bool,
     pane: usize,
     pub(super) path: PathBuf,
     pub(super) cancel: Arc<AtomicBool>,
@@ -1159,7 +1290,60 @@ pub(super) struct FolderSizeJob {
     hint_needed: bool,
 }
 
-pub(super) type FolderSizeQueue = Arc<(Mutex<std::collections::VecDeque<FolderSizeJob>>, std::sync::Condvar)>;
+pub(super) type FolderSizeQueue = Arc<(Mutex<std::collections::VecDeque<FolderSizeJob>>,
+    std::sync::Condvar,Mutex<HashMap<PathBuf,bool>>)>;
+use std::sync::atomic::AtomicU64;
+
+#[derive(Default)]
+pub(super) struct FolderWorkerStats {
+    quick_completed:AtomicU64,
+    quick_deferred:AtomicU64,
+    full_scans:AtomicU64,
+    shared_results:AtomicU64,
+    peak_active:AtomicU64,
+    quick_while_full:AtomicU64,
+    // Both lanes use one bounded disk cache. Otherwise two delayed
+    // flushes within the same second could publish an older total.
+    disk:Mutex<Option<ndr::folder_cache::DiskStore>>,
+}
+impl FolderWorkerStats{
+    pub(super) fn report(&self)->serde_json::Value{
+        serde_json::json!({"quickCompleted":self.quick_completed.load(Ordering::Relaxed),
+            "quickDeferred":self.quick_deferred.load(Ordering::Relaxed),
+            "fullScans":self.full_scans.load(Ordering::Relaxed),
+            "sharedResults":self.shared_results.load(Ordering::Relaxed),
+            "peakActive":self.peak_active.load(Ordering::Relaxed),
+            "quickWhileFull":self.quick_while_full.load(Ordering::Relaxed)})
+    }
+}
+/// The queue lock precedes the active-map lock everywhere. Keep a path
+/// reserved until its result has been posted and queued aliases coalesced.
+struct ActiveFolderJob { shared:FolderSizeQueue,path:PathBuf }
+impl Drop for ActiveFolderJob {
+    fn drop(&mut self){
+        let _queue=self.shared.0.lock().unwrap_or_else(|e|e.into_inner());
+        self.shared.2.lock().unwrap_or_else(|e|e.into_inner()).remove(&self.path);
+        self.shared.1.notify_all();
+    }
+}
+fn select_folder_job(jobs:&std::collections::VecDeque<FolderSizeJob>,
+    active:&HashMap<PathBuf,bool>,quick:bool)->Option<usize>{
+    if quick&&(active.values().any(|automatic|!*automatic)||jobs.iter().any(|j|!j.automatic&&!j.cancel.load(Ordering::Relaxed))){
+        return None
+    }
+    jobs.iter().position(|j|{
+        !j.cancel.load(Ordering::Relaxed)&&!active.contains_key(&j.path)&&
+        (!quick||j.automatic&&!j.bulk_only&&!jobs.iter().any(|other|other.path==j.path&&other.bulk_only&&!other.cancel.load(Ordering::Relaxed)))
+    })
+}
+fn defer_folder_job(queue:&Mutex<std::collections::VecDeque<FolderSizeJob>>,mut job:FolderSizeJob,stats:&FolderWorkerStats){
+    if job.cancel.load(Ordering::Relaxed){return}
+    let mut jobs=queue.lock().unwrap_or_else(|e|e.into_inner());
+    for other in jobs.iter_mut().filter(|j|j.automatic&&j.path==job.path){other.bulk_only=true;}
+    job.bulk_only=true;job.hint_needed=false;jobs.push_back(job);
+    stats.quick_deferred.fetch_add(1,Ordering::Relaxed);
+}
+
 
 /// Satisfy queued automatic observations of the same folder with one
 /// completed scan. Explicit, incomplete or cancelled work is independent.
@@ -1178,8 +1362,8 @@ fn take_matching_automatic_jobs(queue: &mut std::collections::VecDeque<FolderSiz
 
 #[test]
 fn matching_folder_size_jobs_only_reuse_complete_live_automatic_results() {
-    let job = |pane, path: &str, automatic, cancelled| FolderSizeJob {
-        pane, path: PathBuf::from(path), cancel: Arc::new(AtomicBool::new(cancelled)),
+    let job = |pane, path: &str, automatic:bool, cancelled| FolderSizeJob {
+        bulk_only:!automatic,pane, path: PathBuf::from(path), cancel: Arc::new(AtomicBool::new(cancelled)),
         automatic, track:automatic, prior: None, hint_needed: false,
     };
     let mut queue = std::collections::VecDeque::from([
@@ -1199,10 +1383,28 @@ fn matching_folder_size_jobs_only_reuse_complete_live_automatic_results() {
     assert_eq!(queue[2].path, PathBuf::from("other"));
 }
 
+#[test]
+fn short_lane_skips_active_aliases_deferred_jobs_and_manual_work(){
+    let job=|path:&str,automatic,bulk_only|FolderSizeJob{pane:0,path:path.into(),
+        cancel:Arc::new(AtomicBool::new(false)),automatic,track:automatic,prior:None,hint_needed:false,bulk_only};
+    let mut jobs=std::collections::VecDeque::from([job("big",true,true),job("big",true,false),
+        job("busy",true,false),job("small",true,false)]);
+    let mut active=HashMap::from([(PathBuf::from("busy"),true)]);
+    assert_eq!(select_folder_job(&jobs,&active,true),Some(3));
+    assert_eq!(select_folder_job(&jobs,&active,false),Some(0));
+    active.insert(PathBuf::from("big"),true);
+    assert_eq!(select_folder_job(&jobs,&active,false),Some(3));
+    jobs.push_front(job("manual",false,true));
+    assert_eq!(select_folder_job(&jobs,&active,true),None);
+    assert_eq!(select_folder_job(&jobs,&active,false),Some(0));
+    active.insert(PathBuf::from("manual"),false);jobs.pop_front();
+    assert_eq!(select_folder_job(&jobs,&active,true),None);
+}
+
 fn folder_size_worker(shared: FolderSizeQueue, tx: WakeSender<AsyncResult>, ctx: egui::Context, profile: PathBuf,
-    shutdown: Arc<AtomicBool>, purge: Arc<AtomicBool>, recent_reset: Arc<AtomicBool>) {
+    shutdown: Arc<AtomicBool>, purge: Arc<AtomicU64>, recent_reset: Arc<AtomicU64>,
+    stats:Arc<FolderWorkerStats>,quick:bool) {
     use ndr::folder_cache::{DiskStore, ScanEngine, ScanWork, FULL_AUDIT_AGE};
-    let mut store: Option<DiskStore> = None;
     let mut engine = ScanEngine::default();
     let mut last_flush = Instant::now();
     let mut recent: Option<(PathBuf, u64, Arc<native::FolderSizeWatch>, Instant, native::FolderSizeMedia, Instant)> = None;
@@ -1212,24 +1414,37 @@ fn folder_size_worker(shared: FolderSizeQueue, tx: WakeSender<AsyncResult>, ctx:
         use windows_sys::Win32::System::Threading::{GetCurrentThread, SetThreadPriority, THREAD_MODE_BACKGROUND_BEGIN};
         SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN as i32);
     }
-    let (queue, signal) = &*shared;
+    let (queue, signal, active) = &*shared;
+    let mut purge_seen=purge.load(Ordering::Relaxed);
+    let mut reset_seen=recent_reset.load(Ordering::Relaxed);
     loop {
-        if shutdown.load(Ordering::Relaxed) || Arc::strong_count(&shared) == 1 {
-            if let Some(store) = &mut store { let _ = store.flush(); }
+        if shutdown.load(Ordering::Relaxed) {
+            if let Some(store)=stats.disk.lock().unwrap_or_else(|e|e.into_inner()).as_mut(){let _=store.flush();}
             return;
         }
-        if purge.swap(false, Ordering::Relaxed) { engine = ScanEngine::default(); recent = None; }
-        if recent_reset.swap(false, Ordering::Relaxed) { recent = None; }
+        let new_purge=purge.load(Ordering::Relaxed);
+        let new_reset=recent_reset.load(Ordering::Relaxed);
+        if new_purge!=purge_seen{engine=ScanEngine::default();recent=None;purge_seen=new_purge;}
+        if new_reset!=reset_seen{recent=None;reset_seen=new_reset;}
         if last_flush.elapsed() >= Duration::from_secs(10) {
-            if let Some(store) = &mut store { let _ = store.flush(); }
+            if let Some(store)=stats.disk.lock().unwrap_or_else(|e|e.into_inner()).as_mut(){let _=store.flush();}
             engine.prune_idle();
             media_by_parent.retain(|_, (_, when)| when.elapsed() < Duration::from_secs(60));
             last_flush = Instant::now();
         }
         if recent.as_ref().is_some_and(|(_, _, _, _, _, at)| at.elapsed() >= Duration::from_secs(3)) { recent = None; }
-        let mut job = {
+        let (mut job,_active_job) = {
             let mut jobs = queue.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(job) = jobs.pop_front() { job } else {
+            jobs.retain(|j|!j.cancel.load(Ordering::Relaxed));
+            let mut running=active.lock().unwrap_or_else(|e|e.into_inner());
+            if let Some(index)=select_folder_job(&jobs,&running,quick){
+                let job=jobs.remove(index).expect("selected queue position");
+                running.insert(job.path.clone(),job.automatic);
+                stats.peak_active.fetch_max(running.len() as u64,Ordering::Relaxed);
+                let guard=ActiveFolderJob{shared:shared.clone(),path:job.path.clone()};
+                (job,guard)
+            }else{
+                drop(running);
                 let wait = Duration::from_secs(10).saturating_sub(last_flush.elapsed()).max(Duration::from_millis(100));
                 let wait = if recent.is_some() { wait.min(Duration::from_secs(3)) } else { wait };
                 drop(signal.wait_timeout(jobs, wait).unwrap_or_else(|e| e.into_inner()));
@@ -1240,6 +1455,7 @@ fn folder_size_worker(shared: FolderSizeQueue, tx: WakeSender<AsyncResult>, ctx:
             continue;
         }
         if job.automatic {
+            let mut store=stats.disk.lock().unwrap_or_else(|e|e.into_inner());
             let disk = store.get_or_insert_with(|| DiskStore::open(&profile, !cfg!(test)));
             // Warm all queued visible rows before a potentially huge scan.
             // Only metadata-validated prior-session totals are published.
@@ -1268,19 +1484,20 @@ fn folder_size_worker(shared: FolderSizeQueue, tx: WakeSender<AsyncResult>, ctx:
                     }
                 }
             }
+            drop(store);
             if hinted { ctx.request_repaint(); }
             // A second-pane job can arrive just after the worker posted
             // its first result, but before the UI applied that result.
             // Share the one recent observation rather than scan twice.
             if let Some((p, bytes, watch, audit_at, media, _)) = recent.as_ref().filter(|(p, _, _, _, _, _)| p == &job.path) {
                 let _ = p;
-                if job.prior.is_none() && !recent_reset.load(Ordering::Relaxed) && watch.unchanged() {
+                if job.prior.is_none() && recent_reset.load(Ordering::Relaxed)==reset_seen && watch.unchanged() {
                     job.prior = Some((*bytes, watch.clone(), *audit_at, *media));
                 }
             }
         }
         let force_full = job.prior.as_ref().is_none_or(|(_, _, audit_at, _)| audit_at.elapsed() >= FULL_AUDIT_AGE);
-        let (bytes, complete, watch, stable, scanned, work, audit_at, media) =
+        let (bytes, complete, watch, mut stable, scanned, work, audit_at, media) =
             if let Some((bytes, watch, audit_at, media)) = job.prior.as_ref().filter(|(_, watch, _, _)| !force_full && watch.reusable(&job.path)) {
                 (*bytes, true, Some(watch.clone()), true, false, ScanWork::default(), *audit_at, *media)
             } else {
@@ -1298,13 +1515,23 @@ fn folder_size_worker(shared: FolderSizeQueue, tx: WakeSender<AsyncResult>, ctx:
                             media
                         }
                     };
+                if quick&&(media!=native::FolderSizeMedia::Fast||job.prior.is_some()){
+                    defer_folder_job(queue,job,&stats);continue
+                }
                 let watch = if job.track { native::FolderSizeWatch::open(&job.path).map(Arc::new) } else { None };
                 let identity=if watch.is_none()&&job.track{native::folder_size_identity(&job.path)}else{None};
-                let (summary, work) = if let Some(watch) = &watch {
+                let (summary, work) = if quick{
+                    let result=watch.as_ref().and_then(|w|ScanEngine::quick_scan(&job.path,&job.cancel,w,256,Duration::from_millis(60)));
+                    let Some(result)=result else{defer_folder_job(queue,job,&stats);continue};
+                    stats.quick_completed.fetch_add(1,Ordering::Relaxed);
+                    result
+                }else if let Some(watch) = &watch {
                     let Some(result) = engine.scan_for_media(&job.path, &job.cancel, force_full, watch, media) else { continue };
+                    stats.full_scans.fetch_add(1,Ordering::Relaxed);
                     result
                 } else {
                     let Some(summary) = ndr::tools::folder_size_summary(std::slice::from_ref(&job.path), &job.cancel) else { continue };
+                    stats.full_scans.fetch_add(1,Ordering::Relaxed);
                     let work = ScanWork { visited: summary.files + summary.folders, reused: 0, root_stable: true };
                     (summary, work)
                 };
@@ -1318,11 +1545,18 @@ fn folder_size_worker(shared: FolderSizeQueue, tx: WakeSender<AsyncResult>, ctx:
         if job.cancel.load(Ordering::Relaxed) {
             continue;
         }
+        if job.track&&(purge.load(Ordering::Relaxed)!=purge_seen||recent_reset.load(Ordering::Relaxed)!=reset_seen){
+            stable=false; // a mutation raced the scan or its reuse proof
+        }
+        if quick&&scanned&&complete&&stable&&active.lock().unwrap_or_else(|e|e.into_inner()).len()>1{
+            stats.quick_while_full.fetch_add(1,Ordering::Relaxed);
+        }
         if job.track && complete && stable {
             if let Some(watch) = &watch {
                 recent = Some((job.path.clone(), bytes, watch.clone(), audit_at, media, Instant::now()));
                 if scanned {
-                    store.get_or_insert_with(||DiskStore::open(&profile,!cfg!(test))).record(&job.path,watch,bytes);
+                    stats.disk.lock().unwrap_or_else(|e|e.into_inner())
+                        .get_or_insert_with(||DiskStore::open(&profile,!cfg!(test))).record(&job.path,watch,bytes);
                 }
             }
         } else if !job.automatic {
@@ -1330,6 +1564,7 @@ fn folder_size_worker(shared: FolderSizeQueue, tx: WakeSender<AsyncResult>, ctx:
         }
         let job_automatic = job.automatic;
         let matches = take_matching_automatic_jobs(&mut queue.lock().unwrap_or_else(|e| e.into_inner()), &job, complete && stable);
+        stats.shared_results.fetch_add(matches.len() as u64,Ordering::Relaxed);
         for job in std::iter::once(job).chain(matches) {
             if job.cancel.load(Ordering::Relaxed) { continue; }
             // Carry raw bytes only; render with the current settings.

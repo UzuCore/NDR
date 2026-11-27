@@ -141,6 +141,7 @@ fn large_marked_list_survives_refresh_and_ignores_removed_names() {
 
 /// Draws the menu, the favorites row, and both panes once (to check there are no errors while drawing).
 fn draw(app: &mut App, ctx: &egui::Context) {
+    for pane in &mut app.panes{pane.folder_auto_visible.clear();pane.folder_auto_candidates.clear();}
     let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 850.0))), ..Default::default() };
     let _ = ctx.run(raw, |ctx| {
         egui::TopBottomPanel::top("menu").show(ctx, |ui| app.menu(ui));
@@ -150,6 +151,7 @@ fn draw(app: &mut App, ctx: &egui::Context) {
                 app.pane_ui(&mut columns[1], 1, ctx);
             });
         });
+        app.finish_visible_folder_size_frame(ctx);
     });
 }
 
@@ -1428,7 +1430,7 @@ fn scrolling_cancels_obsolete_automatic_jobs_but_not_manual_requests() {
     for &r in &rows[60..79] { app.queue_folder_size(0, r); }
     app.finish_visible_folder_size_frame(&ctx);
     assert_eq!(app.panes[0].folder_auto_pending.len(), 19);
-    let (queue, _) = &*app.folder_size_queue;
+    let (queue, _, _) = &*app.folder_size_queue;
     {
         let queue = queue.lock().unwrap();
         assert_eq!(queue.len(), 20);
@@ -3896,7 +3898,7 @@ fn automatic_folder_display_never_reverts_or_publishes_partial_totals() {
     assert_display(&app, None);
     assert!(!app.panes[0].folder_bytes.contains_key(&path));
     assert!(app.panes[0].folder_auto_times[&path] >= Instant::now()+Duration::from_secs(10));
-    trace.sample(&app.panes[0]);
+    trace.sample(&app.panes[0],Duration::ZERO);
 
     // A previous-session verified snapshot has the same label as a new
     // successful measurement, but is never counted as fresh folder_bytes.
@@ -3907,36 +3909,36 @@ fn automatic_folder_display_never_reverts_or_publishes_partial_totals() {
     app.poll(&ctx);
     assert_display(&app, Some("3.00 KB"));
     assert!(!app.panes[0].folder_bytes.contains_key(&path));
-    trace.sample(&app.panes[0]);
+    trace.sample(&app.panes[0],Duration::ZERO);
     publish(&mut app, token, 2048, "\u{2248}2.00 KB", false, true);
     assert_display(&app, Some("3.00 KB"));
     assert!(!app.panes[0].folder_bytes.contains_key(&path));
-    trace.sample(&app.panes[0]);
+    trace.sample(&app.panes[0],Duration::ZERO);
 
     let token = schedule(&mut app);
     publish(&mut app, token, 3072, "3.00 KB", true, true);
     assert_eq!(app.panes[0].folder_bytes.get(&path), Some(&3072));
-    trace.sample(&app.panes[0]);
+    trace.sample(&app.panes[0],Duration::ZERO);
     // Repeated incomplete, unstable and cancelled results cannot
     // change a known size even for one sampled frame.
     for _ in 0..12 {
         let token = schedule(&mut app);
-        trace.sample(&app.panes[0]); // pending
+        trace.sample(&app.panes[0],Duration::ZERO); // pending
         publish(&mut app, token, 1024, "\u{2248}1.00 KB", false, true);
         assert_display(&app, Some("3.00 KB"));
-        trace.sample(&app.panes[0]);
+        trace.sample(&app.panes[0],Duration::ZERO);
         let token = schedule(&mut app);
         publish(&mut app, token, 4096, "4.00 KB", true, false);
         assert_display(&app, Some("3.00 KB"));
-        trace.sample(&app.panes[0]);
+        trace.sample(&app.panes[0],Duration::ZERO);
         let token = schedule(&mut app);
         token.store(true, Ordering::Relaxed);
         publish(&mut app, token, 8192, "8.00 KB", true, true);
         assert_display(&app, Some("3.00 KB"));
-        trace.sample(&app.panes[0]);
+        trace.sample(&app.panes[0],Duration::ZERO);
         app.panes[0].cancel_automatic_folder_jobs();
         app.panes[0].folder_auto_visible.insert(path.clone());
-        trace.sample(&app.panes[0]);
+        trace.sample(&app.panes[0],Duration::ZERO);
     }
     assert_eq!(app.panes[0].folder_bytes.get(&path), Some(&3072));
 
@@ -3947,20 +3949,20 @@ fn automatic_folder_display_never_reverts_or_publishes_partial_totals() {
         prepared:None,cache_revision:None,hardlinks:false,partial:None,timing_us:[0;6],skipped_device_names:0,descriptions:HashMap::new(),drive_infos:HashMap::new()},&mut Vec::new());
     assert_display(&app, Some("3.00 KB"));
     app.panes[0].folder_auto_visible.insert(path.clone());
-    trace.sample(&app.panes[0]);
+    trace.sample(&app.panes[0],Duration::ZERO);
     app.refresh(0);
     assert_display(&app, Some("3.00 KB"));
     wait(&mut app,&ctx);
     assert_display(&app, Some("3.00 KB"));
     app.panes[0].folder_auto_visible.insert(path.clone());
-    trace.sample(&app.panes[0]);
+    trace.sample(&app.panes[0],Duration::ZERO);
 
     // The sole visible change is a newly verified different total.
     let token = schedule(&mut app);
     publish(&mut app, token, 6144, "6.00 KB", true, true);
     assert_display(&app, Some("6.00 KB"));
     assert_eq!(app.panes[0].folder_bytes.get(&path), Some(&6144));
-    trace.sample(&app.panes[0]);
+    trace.sample(&app.panes[0],Duration::ZERO);
     assert_eq!((trace.first_values, trace.markers_after_value, trace.approximate_samples, trace.value_changes),(1,0,0,1));
     assert!(trace.samples >= 50);
     drop(app);
@@ -4432,5 +4434,78 @@ fn folder_disk_hint_reformats_without_restarting_pending_scan(){
     assert!(Arc::ptr_eq(&token,&app.panes[0].folder_auto_pending[&folder]));
     let expected=ndr::parity::size_to_str(3072,"B",app.settings.flag("UseThousandsSeparator",true));
     assert_eq!(app.panes[0].folder_size_display(&folder),Some(expected.as_str()));
+    drop(app);fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn auto_folder_admission_interleaves_two_columns_and_prefers_missing_sizes(){
+    let (root,ctx,mut app)=fixture("folder-fair-columns");
+    let left=root.join("left");
+    for n in 0..80{fs::create_dir(left.join(format!("dir-{n:03}"))).unwrap();}
+    app.settings.set_flag("LeftAutoFolderSize",true);
+    app.settings.set_text("LeftSortMode","Name");
+    app.refresh(0);wait(&mut app,&ctx);
+    app.folder_size_workers=true; // inspect real admission order without I/O
+    let rows:Vec<_>=(0..80).map(|n|app.panes[0].entries.iter().position(|e|e.name==format!("dir-{n:03}")).unwrap()).collect();
+    // Every first-column item has a measured value and an expired check.
+    for &row in &rows[..40]{
+        let path=app.panes[0].entries[row].path.clone();
+        app.panes[0].folder_auto_paths.insert(path.clone());
+        app.panes[0].folder_bytes.insert(path.clone(),1024);
+        app.panes[0].folder_sizes.insert(path,Some("1.00 KB".into()));
+    }
+    for col in 0..2{for line in 0..40{
+        app.note_visible_folder_size(0,rows[col*40+line],line*2+col);
+    }}
+    app.finish_visible_folder_size_frame(&ctx);
+    assert_eq!(app.panes[0].folder_auto_visible.len(),80);
+    let jobs=app.folder_size_queue.0.lock().unwrap();
+    assert_eq!(jobs.len(),25);
+    for (i,job) in jobs.iter().enumerate(){
+        assert_eq!(job.path,left.join(format!("dir-{:03}",40+i)));
+    }
+    drop(jobs);drop(app);fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn navigation_replays_both_complete_and_hint_sizes_before_admission(){
+    let (root,ctx,mut app)=fixture("folder-return-before-admission");
+    let left=root.join("left");let right=root.join("right");
+    let folder=left.join("folder");let hint=left.join("hint");
+    fs::create_dir(&hint).unwrap();app.refresh(0);wait(&mut app,&ctx);
+    app.settings.set_flag("LeftAutoFolderSize",true);
+    app.cache_folder_size(folder.clone(),8192,native::FolderSizeWatch::open(&folder).map(Arc::new),Instant::now(),native::FolderSizeMedia::Fast);
+    app.folder_size_hints.insert(hint.clone(),(4096,Instant::now()));
+    app.navigate(0,right,true);wait(&mut app,&ctx);
+    app.navigate(0,left,true);wait(&mut app,&ctx);
+    app.folder_auto_busy=true;
+    for path in [&folder,&hint]{
+        let row=app.panes[0].entries.iter().position(|e|&e.path==path).unwrap();
+        app.note_visible_folder_size(0,row,row);
+    }
+    assert_eq!(app.panes[0].folder_size_display(&folder),Some("8.00 KB"));
+    assert_eq!(app.panes[0].folder_size_display(&hint),Some("4.00 KB"));
+    assert_eq!(app.panes[0].folder_hint_bytes.get(&hint),Some(&4096));
+    assert!(!app.panes[0].folder_bytes.contains_key(&hint));
+    assert!(app.panes[0].folder_auto_pending.is_empty());
+    app.finish_visible_folder_size_frame(&ctx);
+    assert!(app.panes[0].folder_auto_pending.is_empty());
+    drop(app);fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn narrow_auto_folder_size_cells_never_cross_column_boundary(){
+    let (root,ctx,mut app)=fixture("narrow-auto-size-column");
+    app.settings.set_flag("LeftAutoFolderSize",true);
+    app.settings.set_text("SizeUnit","B");
+    let _=ctx.run(egui::RawInput::default(),|ctx|{
+        egui::CentralPanel::default().show(ctx,|ui|{
+            for width in [90.0,120.0,180.0,220.0,345.0,600.0]{
+                let (name,fields)=app.original_auto_fields(ui,0,width);
+                assert!(name+fields.iter().flatten().sum::<f32>()<=width+0.01,"{width}: {name} {fields:?}");
+                assert!(fields[2].is_some(),"size missing: {width}");
+            }
+        });
+    });
     drop(app);fs::remove_dir_all(root).unwrap();
 }

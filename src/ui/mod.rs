@@ -190,6 +190,7 @@ struct Pane {
     folder_auto_pending: HashMap<PathBuf, Arc<AtomicBool>>,
     folder_manual_pending: HashMap<PathBuf,Arc<AtomicBool>>,
     folder_auto_visible: HashSet<PathBuf>,
+    folder_auto_candidates: Vec<(u64,usize,usize)>,
     folder_auto_times: HashMap<PathBuf, Instant>,
     folder_auto_paths: HashSet<PathBuf>,
     folder_auto_volume: Option<bool>,
@@ -279,6 +280,7 @@ impl Pane {
             }
         }
         self.folder_auto_visible.clear();
+        self.folder_auto_candidates.clear();
         self.folder_auto_times.clear();
     }
 
@@ -330,6 +332,7 @@ impl Pane {
             folder_auto_pending: HashMap::new(),
             folder_manual_pending: HashMap::new(),
             folder_auto_visible: HashSet::new(),
+            folder_auto_candidates: Vec::new(),
             folder_auto_times: HashMap::new(),
             folder_auto_paths: HashSet::new(),
             folder_auto_volume: None,
@@ -512,6 +515,7 @@ struct TypedSearch {
 #[derive(Default)]
 struct FolderLabelTrace {
     last: HashMap<PathBuf, String>,
+    first_exact_ms:HashMap<PathBuf,u64>,
     samples: u64,
     first_values: u64,
     markers_after_value: u64,
@@ -519,7 +523,7 @@ struct FolderLabelTrace {
     value_changes: u64,
 }
 impl FolderLabelTrace {
-    fn sample(&mut self, pane: &Pane) {
+    fn sample(&mut self, pane: &Pane, elapsed:Duration) {
         for path in &pane.folder_auto_visible {
             // Manual size calculations deliberately retain their own
             // progress and incomplete-result notation.
@@ -527,6 +531,9 @@ impl FolderLabelTrace {
                 continue;
             }
             self.samples += 1;
+            if pane.folder_bytes.contains_key(path)&&self.first_exact_ms.len()<512{
+                self.first_exact_ms.entry(path.clone()).or_insert(elapsed.as_millis() as u64);
+            }
             match pane.folder_size_display(path) {
                 Some(label) => {
                     if label.starts_with('~') || label.starts_with('\u{2248}') {
@@ -724,6 +731,7 @@ enum AsyncResult {
     RemoteCommand { site: String, command: String, host: String, result: Result<String, String> },
     /// Automatic folder size display result (panel, listing generation, folder, text).
     FolderSizeHint { pane: usize, path: PathBuf, bytes:u64, cancel: Arc<AtomicBool> },
+    FolderHintBatch { epoch:u64, values:Vec<(PathBuf,u64)> },
     FolderSizeRow { pane: usize, path: PathBuf, bytes: u64, automatic: bool, complete: bool, watch: Option<Arc<native::FolderSizeWatch>>, stable: bool, scanned: bool, work: ndr::folder_cache::ScanWork, audit_at: Instant, media: native::FolderSizeMedia, cancel: Arc<AtomicBool> },
     /// Received an update feed.
     /// Update feed result. bool = the silent check at startup (original [+0x54]; for a new version, only the menu bar button).
@@ -932,6 +940,7 @@ pub struct App {
     /// Whether it ever became the foreground window (GetForegroundWindow) during the startup check. Report's foreground.
     smoke_foreground: bool,
     smoke_folder_labels: [FolderLabelTrace; 2],
+    smoke_folder_tour: Vec<serde_json::Value>,
     /// Repaint causes counted in the startup check (--smoke-seconds) (file:line -> paint count).
     smoke_repaint_causes: std::collections::BTreeMap<String, u32>,
     /// Slowest frame in the startup check (ms).
@@ -955,15 +964,23 @@ pub struct App {
     smoke_tip_window: Option<[f32; 4]>,
     /// The opacity last applied to the window (0.0~1.0). Reapplied when WindowAlpha changes.
     applied_alpha: f32,
-    /// One low-priority enumeration worker shared by both panes.
+    /// Bounded short scan lane plus the existing full recursive worker.
     folder_size_queue: pane_chrome::FolderSizeQueue,
     folder_size_workers: bool,
+    folder_size_helper_started: bool,
+    folder_worker_stats:Arc<pane_chrome::FolderWorkerStats>,
     folder_size_shutdown: Arc<AtomicBool>,
-    folder_size_purge: Arc<AtomicBool>,
-    folder_size_recent_reset: Arc<AtomicBool>,
+    folder_size_purge: Arc<std::sync::atomic::AtomicU64>,
+    folder_size_recent_reset: Arc<std::sync::atomic::AtomicU64>,
     folder_size_prune_at: Instant,
-    folder_size_done: Option<Receiver<()>>,
+    folder_size_done: Vec<Receiver<()>>,
     folder_size_cache: HashMap<PathBuf, pane_chrome::FolderSizeObservation>,
+    // Prior-session hints are presentation-only, including across navigation.
+    folder_size_hints: HashMap<PathBuf,(u64,Instant)>,
+    folder_hint_checked: HashMap<PathBuf,Instant>,
+    folder_hint_pending: bool,
+    folder_hint_epoch:u64,
+    folder_schedule_turn: usize,
     folder_auto_busy: bool,
     /// Fetch the update feed (C# UpdateHttpClient). Swapped out in tests.
     http_get: fn(&str, usize) -> Result<ndr::update::HttpResponse, ndr::update::HttpError>,
@@ -1243,14 +1260,21 @@ impl App {
             vault_transfer: None,
             vault_clipboard: None,
             crumb_cache: HashMap::new(),
-            folder_size_queue: Arc::new((Mutex::new(std::collections::VecDeque::new()), std::sync::Condvar::new())),
+            folder_size_queue: Arc::new((Mutex::new(std::collections::VecDeque::new()), std::sync::Condvar::new(),Mutex::new(HashMap::new()))),
             folder_size_workers: false,
+            folder_size_helper_started:false,
+            folder_worker_stats:Arc::new(pane_chrome::FolderWorkerStats::default()),
             folder_size_shutdown: Arc::new(AtomicBool::new(false)),
-            folder_size_purge: Arc::new(AtomicBool::new(false)),
-            folder_size_recent_reset: Arc::new(AtomicBool::new(false)),
+            folder_size_purge: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            folder_size_recent_reset: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             folder_size_prune_at: Instant::now(),
-            folder_size_done: None,
+            folder_size_done: Vec::new(),
             folder_size_cache: HashMap::new(),
+            folder_size_hints: HashMap::new(),
+            folder_hint_checked:HashMap::new(),
+            folder_hint_pending:false,
+            folder_hint_epoch:0,
+            folder_schedule_turn:0,
             folder_auto_busy: false,
             file_drag: None,
             native_drag_reset: None,
@@ -1264,6 +1288,7 @@ impl App {
             hwnd: 0,
             smoke_foreground: false,
             smoke_folder_labels: Default::default(),
+            smoke_folder_tour: Vec::new(),
             smoke_repaint_causes: Default::default(),
             smoke_slowest_frame_ms: 0.0,
             smoke_slow_frames: 0,
@@ -1499,7 +1524,7 @@ impl App {
                 } else {
                     ctx.request_repaint_after(due - now);
                 }
-            } else if wanted.is_some() {
+            } else if wanted.is_some() && !self.folder_auto_busy {
                 // A write through another hard-link name need not notify
                 // this directory. Only panes with observed links poll.
                 if let Some(due)=self.panes[index].link_recheck {
@@ -1565,8 +1590,14 @@ impl App {
         let applying=Instant::now();
         let index=listing.pane;
         let timing=listing.timing_us;
-        if listing.result.is_ok(){self.panes[index].link_recheck=listing.hardlinks.then(||Instant::now()+Duration::from_secs(5));}
-        else{self.panes[index].link_recheck=None;}
+        if let Ok(entries)=listing.result.as_ref(){
+            let pane=&self.panes[index];
+            let rows=if listing.partial.is_some(){&pane.entries}else{entries};
+            let discover=listing.cache_revision.is_some()&&rows.len()<=ndr::listing_cache::ALIAS_AUDIT_ROWS+1
+                &&rows.iter().any(|e|!e.is_dir&&!e.drive&&e.attributes&0x400==0);
+            let interval=if listing.hardlinks{Some(5)}else if discover{Some(12)}else{None};
+            self.panes[index].link_recheck=interval.map(|seconds|Instant::now()+Duration::from_secs(seconds));
+        }else{self.panes[index].link_recheck=None;}
         if listing.partial.is_some(){
             // Any ambiguity initiates a full enumeration inside this helper.
             if self.try_apply_partial_listing(listing){
@@ -1624,7 +1655,7 @@ impl App {
                 (marks, pane.first_column, pane.cursor, self.pending_focus[listing.pane].is_some())
             });
             pane.summary = None;
-            if kept.is_none() {
+            if kept.is_none() && listing.result.is_ok() {
                 pane.cancel_manual_folder_jobs();
                 pane.cancel_automatic_folder_jobs();
                 pane.folder_auto_paths.clear();
@@ -1895,6 +1926,17 @@ impl App {
                 AsyncResult::ArchiveEntriesOpened { pane, archive, password, opened, failures, navigate_archives } => self.archive_entries_opened(pane, archive, password, opened, failures, navigate_archives),
                 AsyncResult::ArchivePassword { archive, reply } => self.password_request = Some(PasswordRequest { archive, reply }),
                 AsyncResult::TextSource { path, edit } => self.text_source_ready(path, edit),
+                AsyncResult::FolderHintBatch{epoch,values}=>{
+                    self.folder_hint_pending=false;
+                    if epoch==self.folder_hint_epoch{
+                        for (path,bytes) in values{
+                            if !self.folder_size_cache.contains_key(&path){
+                                self.remember_folder_hint(path,bytes);
+                            }
+                        }
+                        ctx.request_repaint();
+                    }
+                }
                 AsyncResult::FolderSizeHint { pane, path, bytes, cancel } => {
                     let text=ndr::parity::size_to_str(bytes,&self.settings.text("SizeUnit","Auto"),self.settings.flag("UseThousandsSeparator",true));
                     let p = &mut self.panes[pane];
@@ -1905,6 +1947,7 @@ impl App {
                         && p.folder_auto_pending.get(&path).is_some_and(|token| Arc::ptr_eq(token, &cancel))
                         && !p.folder_sizes.get(&path).is_some_and(Option::is_some) {
                         p.folder_auto_hints += 1;
+                        Self::insert_folder_hint(&mut self.folder_size_hints,path.clone(),bytes);
                         p.folder_hint_bytes.insert(path.clone(),bytes);
                         p.folder_sizes.insert(path, Some(text));
                         ctx.request_repaint();
@@ -1925,6 +1968,7 @@ impl App {
                         let track=automatic||auto_enabled&&watch.is_some()&&self.panes[pane].vault.is_none()
                             &&self.panes[pane].archive.is_none()&&self.panes[pane].remote.is_none();
                         if track && complete && stable {
+                            self.folder_size_hints.remove(&path);
                             self.cache_folder_size(path.clone(), bytes, watch, audit_at, media);
                         }
                         if automatic {
@@ -2562,6 +2606,7 @@ impl eframe::App for App {
         self.tree_drop_rows.clear();
         for pane in &mut self.panes {
             pane.folder_auto_visible.clear();
+            pane.folder_auto_candidates.clear();
         }
         // Original TfMain: panes (frames) fill the space between pToolbar (alTop) and bbFunctions (alBottom) without gaps (FUN_0043d7c0: pane width = window width -
         // visible VertSplitter and pVertBar widths). Fixed: previously the egui default panel margin (8) and gaps left 13 px above, 9 below and 16 in the middle.
@@ -2657,7 +2702,7 @@ impl eframe::App for App {
         if let Some(seconds) = self.options.smoke_seconds {
             if self.options.report.is_some() {
                 for (trace, pane) in self.smoke_folder_labels.iter_mut().zip(&self.panes) {
-                    trace.sample(pane);
+                    trace.sample(pane,self.started.elapsed());
                 }
             }
             self.shot_step(ctx);
@@ -2702,6 +2747,14 @@ impl eframe::App for App {
                         "paneSummary":self.panes.each_ref().map(|p|p.summary.as_ref().map(|s|serde_json::json!({"bytes":s.bytes,"files":s.files,"folders":s.folders}))),"listingCache":self.listing_cache.report(),"startup":self.smoke_startup,"loadedMs":self.smoke_loaded_ms,"tipWindow":self.smoke_tip_window,"viewportPoints":[viewport.width(),viewport.height()],"nativePixelsPerPoint":native_scale,"pixelsPerPoint":ctx.pixels_per_point(),"folderSizes":[folder_stats(&self.panes[0]),folder_stats(&self.panes[1])],"folderLabelTrace":self.smoke_folder_labels.each_ref().map(FolderLabelTrace::report),"folderCacheEntries":self.folder_size_cache.len(),"folderCacheWatches":self.folder_size_cache.values().filter(|v|v.watch.is_some()).count()});
                     report["folderRows"]=serde_json::json!(self.panes.each_ref().map(|p|p.folder_sizes.iter().map(|(path,label)|
                         serde_json::json!({"path":path.to_string_lossy(),"label":label,"bytes":p.folder_bytes.get(path),"hintBytes":p.folder_hint_bytes.get(path),"pending":p.folder_auto_pending.contains_key(path)||p.folder_manual_pending.contains_key(path)})).collect::<Vec<_>>()));
+                    report["folderVisible"]=serde_json::json!(self.panes.each_ref().map(|p|{
+                        let mut paths:Vec<_>=p.folder_auto_visible.iter().collect();paths.sort();
+                        paths.into_iter().map(|path|serde_json::json!({"path":path.to_string_lossy(),"label":p.folder_size_display(path),"bytes":p.folder_bytes.get(path),"hintBytes":p.folder_hint_bytes.get(path)})).collect::<Vec<_>>()
+                    }));
+                    report["folderScheduler"]=self.folder_worker_stats.report();
+                    report["folderFirstExactMs"]=serde_json::json!(self.smoke_folder_labels.each_ref().map(|t|&t.first_exact_ms));
+                    report["folderTour"]=serde_json::json!(self.smoke_folder_tour);
+                    report["folderPages"]=serde_json::json!(self.panes.each_ref().map(|p|serde_json::json!({"rows":p.page.rows,"columns":p.page.columns,"first":p.first_column})));
                     report["overlayPaths"] = self.overlay_icons.len().into();
                     report["overlaySharedTextures"] = self.overlay_texture_pool.len().into();
                     report["aboutText"]=serde_json::json!(self.msgboxes.iter().find(|b|b.program_icon).map(|b|&b.text));
@@ -2807,7 +2860,10 @@ impl eframe::App for App {
         self.settings.set_strings("ExecutableHistory", rows);
         self.save();
         // Cache is disposable: never let a slow volume hold up exit.
-        if let Some(done) = self.folder_size_done.take() { let _ = done.recv_timeout(Duration::from_millis(300)); }
+        let deadline=Instant::now()+Duration::from_millis(300);
+        for done in self.folder_size_done.drain(..){
+            let _=done.recv_timeout(deadline.saturating_duration_since(Instant::now()));
+        }
     }
 }
 /// Drive type is application text; volume labels are OS/user data.

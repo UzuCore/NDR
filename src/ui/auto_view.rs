@@ -78,12 +78,17 @@ impl App {
         let always = self.side_flag(index, "AlwaysShowFolderSize", false) || self.side_flag(index, "AutoFolderSize", false);
         // Original OnGetFieldMaxWidth (FUN_00485ae8): "drwxrwxrwx" on any FTP-mode pane (FTP lists show permission texts too).
         let sftp = self.panes[index].remote.is_some();
-        let size = max[3] + 10.0;
+        // When the count is explicitly fixed, a narrow pane may have
+        // less room than the natural size cell plus its icon/header.
+        // Reserve room inside EACH column, never spill into its neighbor.
+        let size = if self.side_flag(index,"AutoFolderSize",false)&&always {
+            (max[3]+10.0).min((column_width-header-20.0).max(0.0))
+        }else{max[3]+10.0};
         let name0 = self.original_adjusted_name_width(ui, &fm);
         let ext0 = if attach { 0.0 } else { self.original_adjusted_ext_width(ui, &fm) };
         let mut widths = [None; 6];
         let mut width = header + name0 + ext0;
-        if always {
+        if always&&size>=14.0 {
             widths[2] = Some(size);
             width += size;
         }
@@ -91,7 +96,7 @@ impl App {
             let mut room = column_width - header;
             if always && column_width < size {
                 widths[2] = None;
-            } else if always {
+            } else if let Some(size)=widths[2] {
                 room -= size;
             }
             self.original_fit_name_fields(ui, &fm, room, attach)
@@ -231,7 +236,6 @@ impl App {
         let headers = self.detail_columns(self.language == "ko");
         let width = ui.available_width();
         let column_width = (width / columns as f32).floor().max(1.0);
-        let (name_width, widths) = self.auto_widths(ui, index, column_width, &headers);
         // Row list per column (with group headers inserted, C# ApplyGroupView + GroupStyle).
         let mode = self.settings.text(&Self::side_key(index, "GroupMode"), "None");
         let category = self.settings.text(&Self::side_key(index, "FolderCategoryMode"), "Auto");
@@ -304,6 +308,8 @@ impl App {
                     }
                     area
                         .show_rows(ui, row_height, list.len(), |ui, range| {
+                            let row_width=ui.available_width().min(column_width).max(1.0);
+                            let (name_width,widths)=self.auto_widths(ui,index,row_width,&headers);
                             for line in range {
                                 let row = match &list[line] {
                                     DetailRow::Header(label) => {
@@ -313,7 +319,7 @@ impl App {
                                     DetailRow::Item(row) => *row,
                                 };
                                 if widths[2].is_some() {
-                                    self.queue_folder_size(index, row);
+                                    self.note_visible_folder_size(index,row,line.saturating_mul(columns).saturating_add(number));
                                 }
                                 let icon = self.file_icon(ui.ctx(), index, row);
                                 let icon = self.row_icon_for_skin(index, row, icon);
@@ -564,7 +570,7 @@ impl App {
                 let visible = egui::Rect::from_min_max(origin + egui::vec2(viewport.min.x, viewport.min.y), origin + egui::vec2(viewport.min.x + columns as f32 * column_width, viewport.max.y));
                 ui.set_clip_rect(ui.clip_rect().intersect(visible));
                 let shown_first = ((viewport.min.x / column_width).floor().max(0.0)) as usize;
-                let shown_last = ((viewport.max.x / column_width).ceil() as usize).min(total_columns);
+                let shown_last = ((viewport.max.x / column_width).ceil() as usize).min(total_columns).min(shown_first.saturating_add(columns));
                 // Original Paint (0x7d61ec; +0x386, not style 3): NXLINE vertical lines between visible columns (i x item width - 1) from top + 4 to bottom - 4.
                 if column_lines {
                     let stroke = egui::Stroke::new(1.0_f32, line_color);
@@ -586,7 +592,7 @@ impl App {
                             ui.painter().hline(cell.left()..=cell.right(), y, egui::Stroke::new(1.0_f32, line_color));
                         }
                         if widths[2].is_some() {
-                            self.queue_folder_size(index, row);
+                            self.note_visible_folder_size(index,row,line.saturating_mul(columns).saturating_add(column-shown_first));
                         }
                         let icon = self.file_icon(ui.ctx(), index, row);
                         let icon = self.row_icon_for_skin(index, row, icon);
@@ -597,7 +603,7 @@ impl App {
                         let texts = &pane.view.cells[row];
                         let default = if entry.is_dir { Color32::from_rgb(228, 188, 85) } else if entry.hidden { Color32::GRAY } else { ui.visuals().text_color() };
                         let color = pane.view.colors[row].map_or(default, |(r, g, b)| Color32::from_rgb(r, g, b));
-                        let label = if auto || entry.drive || original.is_some() { texts[0].to_string() } else { entry.name.clone() };
+                        let label = if auto || entry.drive || original.is_some() { texts[0].as_ref() } else { entry.name.as_str() };
                         if let Some(o) = original.filter(|_| cursor_row || marked) {
                             let bar = super::skin_pane::focus_bar(color, o.back, o.select, cursor_row, marked, bar_focus);
                             ui.painter().extend(super::skin_pane::focus_bar_shapes(cell, &bar));
@@ -642,7 +648,8 @@ impl App {
                                 // Original DrawListItem: an uncounted folder's RES DIR text keeps the item color (counted sizes use the size colors).
                                 let color_column = if *column == DetailColumn::Size && entry.is_dir && folder_size.is_none() { DetailColumn::Name } else { *column };
                                 let metric_color = original.map_or(ui.visuals().weak_text_color(), |o| o.cell(color_column, color, entry.attributes, cursor_row, bar_focus));
-                                let metric_rect = egui::Rect::from_min_size(egui::pos2(x, cell.top()), egui::vec2(w, item_height));
+                                let metric_rect = egui::Rect::from_min_size(egui::pos2(x, cell.top()), egui::vec2(w, item_height)).intersect(cell);
+                                if metric_rect.width()<=0.0{break;}
                                 match &original {
                                     // Original DrawListItem cell alignment (size right, date/time at both ends, the rest left).
                                     Some(o) => super::panes::paint_original_cell(ui, metric_rect, *column, text, metric_color, cursor_row, o, list_style),
