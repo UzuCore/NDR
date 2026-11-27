@@ -1264,6 +1264,51 @@ fn scrolling_cancels_obsolete_automatic_jobs_but_not_manual_requests() {
 }
 
 #[test]
+fn manual_folder_size_preempts_pending_auto_work_in_both_panes() {
+    let (root, ctx, mut app) = fixture("folder-manual-priority");
+    let left = root.join("left");
+    for name in ["pending-a", "pending-b", "manual-a", "manual-b"] {
+        fs::create_dir_all(left.join(name)).unwrap();
+        fs::write(left.join(name).join("data"), b"fixture").unwrap();
+    }
+    app.refresh(0);
+    app.navigate(1, left.clone(), true);
+    wait(&mut app, &ctx);
+    app.settings.set_flag("LeftAutoFolderSize", true);
+    app.settings.set_flag("RightAutoFolderSize", true);
+    // Keep this a deterministic scheduler test rather than racing the worker.
+    app.folder_size_workers = true;
+    let row = |app: &App, pane: usize, name: &str| app.panes[pane].entries.iter().position(|e| e.name == name).unwrap();
+    let a = row(&app, 0, "pending-a");
+    let b = row(&app, 1, "pending-b");
+    let m1 = row(&app, 0, "manual-a");
+    let m2 = row(&app, 1, "manual-b");
+    app.enqueue_folder_size(0, m1);
+    app.queue_folder_size(0, a);
+    app.queue_folder_size(1, b);
+    let a_path = left.join("pending-a");
+    let b_path = left.join("pending-b");
+    let a_token = app.panes[0].folder_auto_pending[&a_path].clone();
+    let b_token = app.panes[1].folder_auto_pending[&b_path].clone();
+    app.enqueue_folder_size(1, m2);
+    assert!(a_token.load(Ordering::Relaxed) && b_token.load(Ordering::Relaxed));
+    assert!(!app.panes[0].folder_sizes.contains_key(&a_path));
+    assert!(!app.panes[1].folder_sizes.contains_key(&b_path));
+    assert_eq!(app.panes[0].folder_sizes.get(&left.join("manual-a")), Some(&None));
+    assert_eq!(app.panes[1].folder_sizes.get(&left.join("manual-b")), Some(&None));
+    app.queue_folder_size(0, a);
+    app.queue_folder_size(1, b);
+    {
+        let queue = app.folder_size_queue.0.lock().unwrap();
+        assert_eq!(queue.len(), 4);
+        assert!(queue.iter().take(2).all(|job| !job.automatic && !job.cancel.load(Ordering::Relaxed)));
+        assert!(queue.iter().skip(2).all(|job| job.automatic && !job.cancel.load(Ordering::Relaxed)));
+    }
+    drop(app);
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn refresh_keeps_marks_and_folder_sizes_like_the_original() {
     let (root, ctx, mut app) = fixture("refresh-keep");
     assert!(app.current_skin().is_some());

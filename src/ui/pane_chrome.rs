@@ -833,6 +833,19 @@ impl App {
 
     /// Counts a folder row's size separately (shared by the automatic display and the original miCalculateSelectedFolderSizeClick).
     pub(super) fn enqueue_folder_size(&mut self, index: usize, row: usize) {
+        // Manual work must not wait for a huge automatic scan. Preserve
+        // completed totals and all other manual requests.
+        for pane in &mut self.panes {
+            for (path, token) in pane.folder_auto_pending.drain() {
+                token.store(true, Ordering::Relaxed);
+                pane.folder_auto_paths.remove(&path);
+                pane.folder_auto_visible.remove(&path);
+                pane.folder_sizes.remove(&path);
+                pane.folder_bytes.remove(&path);
+            }
+        }
+        let (queue, _) = &*self.folder_size_queue;
+        queue.lock().unwrap_or_else(|e| e.into_inner()).retain(|job| !job.cancel.load(Ordering::Relaxed));
         self.enqueue_folder_size_job(index, row, false);
     }
 
@@ -922,6 +935,44 @@ pub(super) struct FolderSizeJob {
 
 pub(super) type FolderSizeQueue = Arc<(Mutex<std::collections::VecDeque<FolderSizeJob>>, std::sync::Condvar)>;
 
+/// Satisfy queued automatic observations of the same folder with one
+/// completed scan. Explicit, incomplete or cancelled work is independent.
+fn take_matching_automatic_jobs(queue: &mut std::collections::VecDeque<FolderSizeJob>, completed: &FolderSizeJob, complete: bool) -> Vec<FolderSizeJob> {
+    let mut matching = Vec::new();
+    if complete && completed.automatic && !completed.cancel.load(Ordering::Relaxed) {
+        let mut index = 0;
+        while index < queue.len() {
+            if queue[index].automatic && queue[index].path == completed.path && !queue[index].cancel.load(Ordering::Relaxed) {
+                matching.push(queue.remove(index).expect("index is in queue"));
+            } else { index += 1; }
+        }
+    }
+    matching
+}
+
+#[test]
+fn matching_folder_size_jobs_only_reuse_complete_live_automatic_results() {
+    let job = |pane, path: &str, automatic, cancelled| FolderSizeJob {
+        pane, generation: 1, path: PathBuf::from(path), cancel: Arc::new(AtomicBool::new(cancelled)),
+        automatic, unit: "Auto".into(), thousands: true,
+    };
+    let mut queue = std::collections::VecDeque::from([
+        job(1, "same", true, false), job(1, "same", false, false),
+        job(1, "same", true, true), job(1, "other", true, false),
+    ]);
+    let first = job(0, "same", true, false);
+    assert!(take_matching_automatic_jobs(&mut queue, &first, false).is_empty());
+    assert!(take_matching_automatic_jobs(&mut queue, &job(0, "same", false, false), true).is_empty());
+    assert!(take_matching_automatic_jobs(&mut queue, &job(0, "same", true, true), true).is_empty());
+    let matches = take_matching_automatic_jobs(&mut queue, &first, true);
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0].pane, 1);
+    assert_eq!(queue.len(), 3);
+    assert!(!queue[0].automatic);
+    assert!(queue[1].cancel.load(Ordering::Relaxed));
+    assert_eq!(queue[2].path, PathBuf::from("other"));
+}
+
 fn folder_size_worker(shared: FolderSizeQueue, tx: Sender<AsyncResult>, ctx: egui::Context) {
     // Keep interactive foreground I/O responsive even while a scan is active.
     unsafe {
@@ -950,11 +1001,16 @@ fn folder_size_worker(shared: FolderSizeQueue, tx: Sender<AsyncResult>, ctx: egu
         if job.cancel.load(Ordering::Relaxed) {
             continue;
         }
-        // Original DrawListItem: folder sizes (+0x60 != -1) are drawn with SizeToStr too.
-        let size = ndr::parity::size_to_str(summary.total_bytes, &job.unit, job.thousands);
-        let text = if summary.errors.is_empty() { size } else { format!("≥ {size}") };
-        if tx.send(AsyncResult::FolderSizeRow { pane: job.pane, generation: job.generation, path: job.path, text, bytes: summary.total_bytes, automatic: job.automatic, complete: summary.errors.is_empty(), cancel: job.cancel }).is_err() {
-            return;
+        let complete = summary.errors.is_empty();
+        let matches = take_matching_automatic_jobs(&mut queue.lock().unwrap_or_else(|e| e.into_inner()), &job, complete);
+        for job in std::iter::once(job).chain(matches) {
+            if job.cancel.load(Ordering::Relaxed) { continue; }
+            // Original DrawListItem: folder sizes (+0x60 != -1) are drawn with SizeToStr too.
+            let size = ndr::parity::size_to_str(summary.total_bytes, &job.unit, job.thousands);
+            let text = if complete { size } else { format!("≥ {size}") };
+            if tx.send(AsyncResult::FolderSizeRow { pane: job.pane, generation: job.generation, path: job.path, text, bytes: summary.total_bytes, automatic: job.automatic, complete, cancel: job.cancel }).is_err() {
+                return;
+            }
         }
         ctx.request_repaint();
     }

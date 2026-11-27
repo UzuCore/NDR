@@ -1325,7 +1325,17 @@ mod tests {
     #[test]
     #[ignore = "explicit repeated encrypted commit and compaction soak"]
     fn batch89_repeated_authenticated_commits_and_reopen() {
-        let root = fixture("batch89-soak");
+        repeated_authenticated_commits(32);
+    }
+
+    #[test]
+    #[ignore = "explicit longer owned encrypted-container soak"]
+    fn batch98_longer_authenticated_commits_and_reopen() {
+        repeated_authenticated_commits(128);
+    }
+
+    fn repeated_authenticated_commits(rounds: u8) {
+        let root = fixture("authenticated-soak");
         let path = root.join("data.ndr");
         let password = "correct secret";
         let mut vault = Vault::create(&path, password.into()).unwrap();
@@ -1333,7 +1343,7 @@ mod tests {
         let a = vault.add_folder(1, "A").unwrap();
         let b = vault.add_folder(1, "B").unwrap();
         let mut data = vec![0u8; 1024 * 1024];
-        for round in 0..32u8 {
+        for round in 0..rounds {
             data.fill(round);
             let id = vault.add_file(a, "payload.bin", &data).unwrap();
             vault.transfer_one(a, "payload.bin", b, "copy.bin", false, false).unwrap();
@@ -1359,7 +1369,7 @@ mod tests {
         assert_eq!(vault.read_file(sentinel).unwrap(), b"must survive");
         assert!(vault.list(a).unwrap().is_empty() && vault.list(b).unwrap().is_empty());
         drop(vault);
-        eprintln!("BATCH89 32 rounds, 4 reopens, final compaction and authentication: PASS");
+        eprintln!("VAULT {rounds} rounds, {} reopens, final compaction and authentication: PASS", rounds / 8);
         fs::remove_dir_all(root).unwrap();
     }
 

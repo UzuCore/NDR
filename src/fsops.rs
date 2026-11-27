@@ -1007,6 +1007,29 @@ mod tests {
         fs::remove_dir_all(p).unwrap();
     }
     #[test]
+    fn batch97_locked_destination_preserves_source_and_destination_on_failed_copy_or_move() {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
+        for moving in [false, true] {
+            let p = prepared();
+            let target = p.join("out/a");
+            // Real Windows sharing violation: a reader prevents replacement
+            // or deletion but still allows us to verify the existing bytes.
+            let locked = fs::OpenOptions::new().read(true).share_mode(FILE_SHARE_READ).open(&target).unwrap();
+            let events = copy(&p, moving, false, ConflictChoice::Overwrite);
+            assert!(events.iter().any(|e| matches!(e, Event::Error { .. } | Event::Failure { .. } | Event::Fatal(_))), "{events:?}");
+            assert_eq!(fs::read(p.join("in/a")).unwrap(), b"new");
+            assert_eq!(fs::read(&target).unwrap(), b"old");
+            assert_eq!(fs::read_dir(p.join("out")).unwrap().count(), 1, "no abandoned staging file");
+            drop(locked);
+            copy(&p, moving, false, ConflictChoice::Overwrite);
+            assert_eq!(fs::read(&target).unwrap(), b"new");
+            assert_eq!(p.join("in/a").exists(), !moving);
+            fs::remove_dir_all(p).unwrap();
+        }
+    }
+
+    #[test]
     fn move_only_removes_successful_source() {
         let p = prepared();
         copy(&p, true, false, ConflictChoice::Skip);

@@ -76,16 +76,23 @@ fn cached_cell<K: Eq + std::hash::Hash>(cache: &mut CellCache<K>, key: K, format
         return format();
     }
     cache.samples += 1;
-    let value = if let Some(value) = cache.entries.get(&key) {
+    // One hash-table probe on admission instead of get followed by insert.
+    let value = if cache.entries.len() < 4096 {
+        match cache.entries.entry(key) {
+            std::collections::hash_map::Entry::Occupied(entry) => {
+                cache.hits += 1;
+                entry.get().clone()
+            }
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                let value = format();
+                entry.insert(value.clone());
+                value
+            }
+        }
+    } else if let Some(value) = cache.entries.get(&key) {
         cache.hits += 1;
         value.clone()
-    } else {
-        let value = format();
-        if cache.entries.len() < 4096 {
-            cache.entries.insert(key, value.clone());
-        }
-        value
-    };
+    } else { format() };
     if cache.samples == 128 {
         if cache.hits < 8 {
             cache.entries.clear();
@@ -132,21 +139,41 @@ fn view_cache_and_buffers_are_bounded_and_reusable() {
 #[test]
 #[ignore = "explicit Release benchmark of bounded display text caches"]
 fn benchmark_display_cell_cache_100k() {
+    fn legacy_cell<K: Eq + std::hash::Hash>(cache: &mut CellCache<K>, key: K, format: impl FnOnce() -> String) -> String {
+        if cache.skip != 0 { cache.skip -= 1; return format(); }
+        cache.samples += 1;
+        let value = if let Some(value) = cache.entries.get(&key) {
+            cache.hits += 1; value.clone()
+        } else {
+            let value = format();
+            if cache.entries.len() < 4096 { cache.entries.insert(key, value.clone()); }
+            value
+        };
+        if cache.samples == 128 {
+            if cache.hits < 8 { cache.entries.clear(); cache.skip = 4096; }
+            cache.samples = 0; cache.hits = 0;
+        }
+        value
+    }
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
     let now = SystemTime::now();
-    for spread in ["repeated", "unique", "blocks", "mixed"] {
+    for spread in ["repeated", "unique", "blocks", "mixed", "date-unique", "size-unique", "abrupt"] {
         let inputs: Vec<_> = (0..100000u64).map(|i| {
             let slot = match spread {
                 "repeated" => i % 64,
                 "unique" => i,
                 "blocks" if i / 10_000 % 2 == 0 => i % 64,
                 "mixed" if i % 3 != 0 => i % 64,
+                "abrupt" if i / 6000 % 2 == 1 => i % 64,
                 _ => i + 100_000,
             };
-            (Some(UNIX_EPOCH + Duration::from_secs(1_600_000_000 + slot * 3607)), slot * 301)
+            let date_slot = if spread == "size-unique" { i % 64 } else { slot };
+            let size_slot = if spread == "date-unique" { i % 64 } else { slot };
+            (Some(UNIX_EPOCH + Duration::from_secs(1_600_000_000 + date_slot * 3607)), size_slot * 301)
         }).collect();
         let mut before_ms = Vec::new();
         let mut after_ms = Vec::new();
+        let mut prior_ms = Vec::new();
         let date = |modified| ndr::listing::list_date_text(modified, "yyyy-MM-dd", "HH:mm", Some(["Today", "Yesterday", "%d days ago"]), now);
         let size = |size| ndr::parity::size_to_str(size, "Auto", true);
         for i in 0..9 {
@@ -155,20 +182,31 @@ fn benchmark_display_cell_cache_100k() {
                 let rows: Vec<_>=inputs.iter().map(|&(d,s)| (date(d),size(s))).collect();
                 (t.elapsed().as_secs_f64()*1000.0, rows)
             };
-            let after = || {
+            let prior = || {
                 let t=Instant::now();
                 let (mut dates,mut sizes)=(CellCache::default(),CellCache::default());
                 let rows: Vec<_>=inputs.iter().map(|&(d,s)| (
-                    cached_cell(&mut dates,d,||date(d)),
+                    legacy_cell(&mut dates,d,||date(d)),
+                    legacy_cell(&mut sizes,s,||size(s)),
+                )).collect();
+                (t.elapsed().as_secs_f64()*1000.0,rows)
+            };
+            let after = || {
+                let t=Instant::now();
+                let (mut dates,mut sizes)=(CellCache::default(),CellCache::default());
+                let mut formatter=ndr::listing::ListDateFormatter::new("yyyy-MM-dd", "HH:mm", Some(["Today", "Yesterday", "%d days ago"]), now);
+                let rows: Vec<_>=inputs.iter().map(|&(d,s)| (
+                    cached_cell(&mut dates,d,||formatter.format(d)),
                     cached_cell(&mut sizes,s,||size(s)),
                 )).collect();
                 (t.elapsed().as_secs_f64()*1000.0,rows)
             };
-            let (a,b)=if i%2==0 {(before(),after())} else {let b=after();(before(),b)};
+            let (a,p,b)=match i%3 {0=>(before(),prior(),after()),1=>{let p=prior();let b=after();(before(),p,b)},_=>{let b=after();let a=before();(a,prior(),b)}};
             assert_eq!(a.1,b.1);
-            if i>0 {before_ms.push(a.0);after_ms.push(b.0);}
+            assert_eq!(a.1,p.1);
+            if i>0 {before_ms.push(a.0);prior_ms.push(p.0);after_ms.push(b.0);}
         }
-        eprintln!("BATCH87 cells100k spread={spread} old_ms={before_ms:?} new_ms={after_ms:?}");
+        eprintln!("BATCH95 cells100k spread={spread} uncached_ms={before_ms:?} build23_ms={prior_ms:?} new_ms={after_ms:?}");
     }
 }
 
@@ -299,6 +337,7 @@ impl App {
         let ftp_permissions = pane.remote.as_ref().filter(|r| !r.is_sftp()).and_then(|r| r.permissions.lock().ok().map(|m| (r.path.clone(), m.clone())));
         let mut date_texts = CellCache::default();
         let mut size_texts = CellCache::default();
+        let mut date_formatter = ndr::listing::ListDateFormatter::new(&date_format, &time_format, use_age.then(|| [age_labels[0].as_str(), age_labels[1].as_str(), age_labels[2].as_str()]), now);
         let mut shell_types = HashMap::<&str, String>::new();
         let mut item_colors = HashMap::<&str, (u8, u8, u8)>::new();
         let local = pane.archive.is_none() && pane.remote.is_none();
@@ -352,7 +391,7 @@ impl App {
                 if entry.is_dir { folder_size_text.clone() } else {
                     cached_cell(&mut size_texts, entry.size, || ndr::parity::size_to_str(entry.size, &unit, thousands))
                 },
-                cached_cell(&mut date_texts, entry.modified, || ndr::listing::list_date_text(entry.modified, &date_format, &time_format, use_age.then(|| [age_labels[0].as_str(), age_labels[1].as_str(), age_labels[2].as_str()]), now)),
+                cached_cell(&mut date_texts, entry.modified, || date_formatter.format(entry.modified)),
                 // Original DrawListItem field 5: FTP and SFTP list items (+0x78) show the permission text (+0x74), others GetAttrString (0x7b50a4, A/H/R/S in "____").
                 // FTP keeps the listing's own text (MLSD "perm" fact, e.g. "eldfmcp"; LIST "drwxr-xr-x"), as seen in the running original.
                 // Fixed: previously the C# text ("RHSA", "-"); FTP panes showed "____".

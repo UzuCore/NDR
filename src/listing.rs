@@ -249,6 +249,91 @@ pub fn list_date_text(modified: Option<SystemTime>, date_format: &str, time_form
     date_time_parts(modified, date_format, time_format, labels, now).map(|(date, clock)| format!("{date}{LIST_DATE_TIME_GAP}{clock}")).unwrap_or_default()
 }
 
+/// A single listing rebuild has a fixed format, locale and reference day.
+/// Keep its component strings locally instead of consulting the thread-local
+/// picture/expiry caches and cloning both components for every unique timestamp.
+pub struct ListDateFormatter<'a> {
+    date_picture: Option<Vec<u16>>,
+    time_picture: Option<Vec<u16>>,
+    labels: Option<[&'a str; 3]>,
+    today: chrono::NaiveDate,
+    dates: HashMap<chrono::NaiveDate, Option<String>>,
+    clocks: HashMap<u32, Option<String>>,
+    minute_precision: bool,
+}
+
+impl<'a> ListDateFormatter<'a> {
+    pub fn new(date_format: &str, time_format: &str, labels: Option<[&'a str; 3]>, now: SystemTime) -> Self {
+        let picture = |format: &str| (!format.is_empty()).then(|| wide(&dotnet_to_picture(format)));
+        Self {
+            date_picture: picture(date_format), time_picture: picture(time_format), labels,
+            today: today_of(now), dates: HashMap::new(), clocks: HashMap::new(),
+            // Only proven minute-only pictures; arbitrary custom formats keep
+            // second precision (including quoted/escaped format characters).
+            minute_precision: matches!(time_format, "HH:mm" | "H:mm" | "hh:mm" | "h:mm" | "h:mm tt" | "hh:mm tt" | "tt h:mm" | "tt hh:mm"),
+        }
+    }
+
+    pub fn format(&mut self, modified: Option<SystemTime>) -> String {
+        let Some(time) = modified else { return String::new() };
+        let local = chrono::DateTime::<chrono::Local>::from(time);
+        let day = local.date_naive();
+        let st = systemtime_of(&local);
+        let mut slot = u32::from(st.wHour) * 3600 + u32::from(st.wMinute) * 60;
+        if !self.minute_precision { slot += u32::from(st.wSecond); }
+        // Bound the memory retained for unusual, very large directories.
+        if self.dates.len() >= 8192 && !self.dates.contains_key(&day) { self.dates.clear(); }
+        if self.clocks.len() >= 8192 && !self.clocks.contains_key(&slot) { self.clocks.clear(); }
+        let date = self.dates.entry(day).or_insert_with(|| {
+            let age = self.labels.and_then(|labels| {
+                let days = if day > self.today { -1 } else { (self.today - day).num_days() };
+                match days {
+                    0 => Some(labels[0].to_owned()),
+                    1 => Some(labels[1].to_owned()),
+                    2..=30 => Some(labels[2].replace("%d", &days.to_string())),
+                    _ => None,
+                }
+            });
+            age.or_else(|| match &self.date_picture {
+                Some(picture) => win32_format_with(&st, picture, true),
+                None => Some(String::new()),
+            })
+        });
+        let clock = self.clocks.entry(slot).or_insert_with(|| match &self.time_picture {
+            Some(picture) => win32_format_with(&st, picture, false),
+            None => Some(String::new()),
+        });
+        match (date.as_deref(), clock.as_deref()) {
+            (Some(date), Some(clock)) => {
+                let mut text = String::with_capacity(date.len() + LIST_DATE_TIME_GAP.len_utf8() + clock.len());
+                text.push_str(date);
+                text.push(LIST_DATE_TIME_GAP);
+                text.push_str(clock);
+                text
+            }
+            _ => format!("{}{}{}", local.format("%Y-%m-%d"), LIST_DATE_TIME_GAP, local.format("%H:%M")),
+        }
+    }
+}
+
+#[test]
+fn listing_date_formatter_matches_legacy_formats_and_age_boundaries() {
+    use std::time::{Duration, UNIX_EPOCH};
+    let now = UNIX_EPOCH + Duration::from_secs(1_790_000_000);
+    let mut times = vec![None, Some(now), Some(now + Duration::from_secs(86400)), Some(UNIX_EPOCH)];
+    times.extend((0..=35).flat_map(|d| [0, 1, 59, 60, 3601, 86399].map(move |s| Some(now - Duration::from_secs(d * 86400 + s)))));
+    for date in ["yyyy-MM-dd", "ddd, MMM d yyyy", "yyyy/MM/dd", "", "yyyy 'literal' MM"] {
+        for clock in ["HH:mm", "H:mm", "h:mm tt", "tt hh:mm", "HH:mm:ss", "", "HH':'mm 's'"] {
+            for labels in [None, Some(["Today", "Yesterday", "%d days ago"])] {
+                let mut formatter = ListDateFormatter::new(date, clock, labels, now);
+                for &time in &times {
+                    assert_eq!(formatter.format(time), list_date_text(time, date, clock, labels, now), "{date} {clock} {time:?}");
+                }
+            }
+        }
+    }
+}
+
 /// (date text, time text) of original DateToStr (0x7df294) and TimeToStr (0x7df550). ("yyyy-MM-dd", "HH:mm") when a format is invalid.
 fn date_time_parts(modified: Option<SystemTime>, date_format: &str, time_format: &str, labels: Option<[&str; 3]>, now: SystemTime) -> Option<(String, String)> {
     let time = modified?;
