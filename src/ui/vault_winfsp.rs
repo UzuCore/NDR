@@ -18,6 +18,55 @@ const INTERNAL_ERROR: i32 = 0xC00000E5u32 as i32;
 
 fn fs_error(code: i32) -> FspError { FspError::NTSTATUS(code) }
 
+/// UI notification polling must not wait for a large external file's
+/// authenticated save. A busy lock defers the notice without consuming it.
+fn poll_revision<T>(state: &Mutex<T>, observed: &mut u64,
+    revision: impl FnOnce(&T) -> u64) -> Result<bool, String> {
+    let current = match state.try_lock() {
+        Ok(state) => revision(&state),
+        Err(std::sync::TryLockError::WouldBlock) => return Ok(false),
+        Err(error) => return Err(error.to_string()),
+    };
+    if current == *observed { return Ok(false); }
+    *observed = current;
+    Ok(true)
+}
+
+fn poll_error_notice<T>(state: &Mutex<T>, reported: &mut bool,
+    failed: impl FnOnce(&T) -> bool) -> bool {
+    let Ok(state) = state.try_lock() else { return false };
+    if !failed(&state) { *reported = false; return false; }
+    if *reported { return false; }
+    *reported = true;
+    true
+}
+
+#[test]
+fn batch393_busy_notification_poll_does_not_block_or_consume_notice() {
+    let state = Mutex::new((5u64,true));
+    let mut observed = 3;
+    let mut reported = false;
+    let held = state.lock().unwrap();
+    assert!(!poll_revision(&state,&mut observed,|s|s.0).unwrap());
+    assert_eq!(observed,3);
+    assert!(!poll_error_notice(&state,&mut reported,|s|s.1));
+    assert!(!reported);
+    drop(held);
+    assert!(poll_revision(&state,&mut observed,|s|s.0).unwrap());
+    assert!(poll_error_notice(&state,&mut reported,|s|s.1));
+    let held = state.lock().unwrap();
+    assert!(!poll_error_notice(&state,&mut reported,|s|s.1));
+    assert!(reported,"lock contention may not reset an existing notice");
+    drop(held);
+    assert!(!poll_revision(&state,&mut observed,|s|s.0).unwrap());
+    assert!(!poll_error_notice(&state,&mut reported,|s|s.1));
+    state.lock().unwrap().1=false;
+    assert!(!poll_error_notice(&state,&mut reported,|s|s.1));
+    assert!(!reported);
+    state.lock().unwrap().1=true;
+    assert!(poll_error_notice(&state,&mut reported,|s|s.1));
+}
+
 fn load_installed_winfsp_dll() -> bool {
     use std::os::windows::ffi::OsStrExt;
     use windows::Win32::System::LibraryLoader::LoadLibraryW;
@@ -521,18 +570,11 @@ impl VaultMount {
     /// and flush, without a separate UI confirmation. The pane may refresh
     /// after each successful commit while the virtual file remains mounted.
     pub fn take_saved_revision(&mut self) -> Result<bool, String> {
-        let revision = self.state.lock().map_err(|e| e.to_string())?.saved_revision;
-        if revision == self.observed_revision { return Ok(false); }
-        self.observed_revision = revision;
-        Ok(true)
+        poll_revision(&self.state, &mut self.observed_revision, |state| state.saved_revision)
     }
 
     pub fn take_save_error_notice(&mut self) -> bool {
-        let failed = self.state.lock().is_ok_and(|state| state.last_error.is_some());
-        if !failed { self.error_reported = false; return false; }
-        if self.error_reported { return false; }
-        self.error_reported = true;
-        true
+        poll_error_notice(&self.state, &mut self.error_reported, |state| state.last_error.is_some())
     }
 
     pub fn writer_gate(&self) -> Arc<Mutex<()>> {

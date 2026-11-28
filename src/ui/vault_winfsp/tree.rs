@@ -697,13 +697,10 @@ impl VaultTreeMount {
         })
     }
     pub fn take_saved_revision(&mut self) -> bool {
-        let revision = self.state.lock().map_or(0, |s| s.revision);
-        if revision == self.observed_revision { return false; }
-        self.observed_revision = revision;
-        true
+        poll_revision(&self.state, &mut self.observed_revision, |state| state.revision).unwrap_or(false)
     }
     pub fn take_save_error(&mut self) -> Option<String> {
-        self.state.lock().ok().and_then(|mut s| s.last_error.take())
+        self.state.try_lock().ok().and_then(|mut s| s.last_error.take())
     }
     pub fn finish(&mut self) -> Result<(), String> {
         let state = self.state.lock().map_err(|e| e.to_string())?;

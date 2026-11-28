@@ -190,6 +190,48 @@ fn installer_messages(language: &crate::compat::Language) -> std::collections::B
     ].into_iter().collect()
 }
 
+/// PowerShell is a console-subsystem program. Hiding a window after it
+/// starts can still flash a console. CREATE_NO_WINDOW prevents Windows
+/// from creating a console window while leaving WinForms dialogs available.
+fn hidden_installer_command() -> std::process::Command {
+    use std::process::{Command, Stdio};
+    let mut cmd = Command::new("powershell.exe");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd.args(["-NoLogo", "-NoProfile", "-NonInteractive", "-Sta", "-ExecutionPolicy", "Bypass"])
+        .stdin(Stdio::null());
+    cmd
+}
+
+/// Keep host diagnostics separate from update.log, whose exact success
+/// receipt is consumed by the restart and cache-maintenance code.
+fn installer_command(
+    script: &Path, archive: &Path, installation: &Path,
+    parent_pid: u32, messages: &Path,
+) -> Result<std::process::Command, String> {
+    let folder = archive.parent().ok_or("Update staging folder missing")?;
+    let host_log = folder.join("installer-host.log");
+    crate::fsops::ensure_plain_path(&host_log)?;
+    let output = std::fs::OpenOptions::new().write(true).create_new(true).open(&host_log)
+        .map_err(|e| format!("Could not launch updater: {e}"))?;
+    let errors = output.try_clone().map_err(|e| format!("Could not launch updater: {e}"))?;
+    let mut cmd = hidden_installer_command();
+    cmd.arg("-File").arg(script).arg("-Archive").arg(archive)
+        .arg("-Destination").arg(installation)
+        .arg("-ParentPid").arg(parent_pid.to_string())
+        .arg("-LogPath").arg(folder.join("update.log"))
+        .arg("-TextPath").arg(messages)
+        .arg("-ShowProgress")
+        .arg("-ManagedCache")
+        .stdout(std::process::Stdio::from(output))
+        .stderr(std::process::Stdio::from(errors));
+    Ok(cmd)
+}
+
 /// The script is external to NDR so that Windows can replace NDR.exe after exit.
 pub fn launch_update(archive: &Path, language: &crate::compat::Language) -> Result<(), String> {
     let executable = std::env::current_exe().map_err(|e| e.to_string())?;
@@ -206,15 +248,7 @@ pub fn launch_update(archive: &Path, language: &crate::compat::Language) -> Resu
     crate::fsops::ensure_plain_path(&messages)?;
     let locale = serde_json::to_vec(&installer_messages(language)).map_err(|e| e.to_string())?;
     std::fs::write(&messages, locale).map_err(|e| e.to_string())?;
-    std::process::Command::new("powershell.exe")
-        .args(["-NoProfile", "-NonInteractive", "-Sta", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File"])
-        .arg(&script).arg("-Archive").arg(archive)
-        .arg("-Destination").arg(installation)
-        .arg("-ParentPid").arg(std::process::id().to_string())
-        .arg("-LogPath").arg(folder.join("update.log"))
-        .arg("-TextPath").arg(&messages)
-        .arg("-ShowProgress")
-        .arg("-ManagedCache")
+    installer_command(&script, archive, installation, std::process::id(), &messages)?
         .spawn().map_err(|e| format!("Could not launch updater: {e}"))?;
     Ok(())
 }
@@ -314,6 +348,135 @@ pub fn evaluate(body: &[u8], current: &[u32]) -> Result<Manifest, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    fn update_fixture(label: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!("ndr-updater-{label}-{}-{}-\u{d55c}\u{ae00}",
+            std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir(&path).unwrap();
+        path
+    }
+
+    #[cfg(windows)]
+    fn wait_installer(mut child: std::process::Child) -> std::process::ExitStatus {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
+        loop {
+            if let Some(status) = child.try_wait().unwrap() { return status; }
+            if std::time::Instant::now() >= deadline {
+                // Only terminate the disposable child created by this test.
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("isolated updater timed out");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn batch401_hidden_powershell_has_no_console_window() {
+        use std::{fs, process::Stdio};
+        let root = update_fixture("console probe");
+        let script = root.join("probe.ps1");
+        let result = root.join("console.json");
+        fs::write(&script, r#"
+param([string]$ResultPath)
+$ErrorActionPreference = 'Stop'
+Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class NdrConsoleProbe { [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow(); [DllImport("kernel32.dll")] public static extern uint GetConsoleCP(); }'
+@{ window = [NdrConsoleProbe]::GetConsoleWindow().ToInt64(); codepage = [NdrConsoleProbe]::GetConsoleCP() } |
+    ConvertTo-Json -Compress | Set-Content -LiteralPath $ResultPath -Encoding ASCII
+"#).unwrap();
+        let stderr = root.join("stderr.log");
+        let child = hidden_installer_command().arg("-File").arg(&script).arg("-ResultPath").arg(&result)
+            .stdout(Stdio::null()).stderr(Stdio::from(fs::File::create(&stderr).unwrap())).spawn().unwrap();
+        assert!(wait_installer(child).success(), "{}", fs::read_to_string(&stderr).unwrap_or_default());
+        let report: serde_json::Value = serde_json::from_slice(&fs::read(&result).unwrap()).unwrap();
+        assert_eq!(report["window"].as_i64(), Some(0), "{report}");
+        // A headless console can retain a code page on Windows. It is the
+        // absence of a window handle (not the code page) that matters here.
+        assert!(report["codepage"].as_u64().is_some(), "{report}");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn batch402_hidden_installer_updates_isolated_package_and_preserves_settings() {
+        use std::{fs, process::Stdio};
+        let root = update_fixture("install probe");
+        let input = root.join("package");
+        let dest = root.join("isolated installation");
+        let work = root.join("session");
+        let required = [
+            ("NDR.exe", b"new executable".as_slice()),
+            ("Skins/black/conf.ini", b"black"),
+            ("Skins/classic/conf.ini", b"classic"),
+            ("Languages/ko.lang", b"language"),
+            ("Tools/7zip/7za.exe", b"tool"),
+        ];
+        for (name, bytes) in required {
+            let file = input.join(name);
+            fs::create_dir_all(file.parent().unwrap()).unwrap();
+            fs::write(&file, bytes).unwrap();
+        }
+        fs::create_dir_all(&dest).unwrap();
+        fs::create_dir_all(&work).unwrap();
+        fs::write(dest.join("NDR.exe"), b"old executable").unwrap();
+        fs::write(dest.join("settings.json"), b"settings must survive").unwrap();
+        fs::write(dest.join("favorites.ini"), b"favorites must survive").unwrap();
+        let archive = work.join("NDR-windows-x64.zip");
+        let zip_script = root.join("zip fixture.ps1");
+        fs::write(&zip_script, r#"
+param([string]$Source, [string]$Archive)
+$ErrorActionPreference='Stop'
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+[IO.Compression.ZipFile]::CreateFromDirectory($Source, $Archive)
+"#).unwrap();
+        let child = hidden_installer_command().arg("-File").arg(&zip_script)
+            .arg("-Source").arg(&input).arg("-Archive").arg(&archive)
+            .stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap();
+        assert!(wait_installer(child).success());
+        let script = work.join("apply-update.ps1");
+        write_installer_script(&script).unwrap();
+        let messages = work.join("installer-locale.json");
+        fs::write(&messages, b"{}").unwrap();
+        // Wait for an already-exited disposable process, never a live NDR.
+        let parent = hidden_installer_command().args(["-Command", "exit 0"])
+            .stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap();
+        let parent_pid = parent.id();
+        assert!(wait_installer(parent).success());
+        let mut cmd = installer_command(&script, &archive, &dest, parent_pid, &messages).unwrap();
+        cmd.arg("-SkipRestart");
+        let child = cmd.spawn().unwrap();
+        drop(cmd);
+        assert!(wait_installer(child).success(), "{}", fs::read_to_string(work.join("installer-host.log")).unwrap_or_default());
+        for (name, bytes) in required { assert_eq!(fs::read(dest.join(name)).unwrap(), bytes); }
+        assert_eq!(fs::read(dest.join("settings.json")).unwrap(), b"settings must survive");
+        assert_eq!(fs::read(dest.join("favorites.ini")).unwrap(), b"favorites must survive");
+        assert_eq!(fs::read(work.join("backup/NDR.exe")).unwrap(), b"old executable");
+        let receipt = fs::read_to_string(work.join("update.log")).unwrap();
+        assert_eq!(receipt.trim_start_matches('\u{feff}').trim(), "Update installed: 5 files");
+        assert!(work.join("installer-host.log").is_file());
+        assert!(installer_command(&script, &archive, &dest, parent_pid, &messages).is_err(),
+            "a second launcher must not overwrite the first host log");
+
+        // A startup lock failure must not damage an active/completed receipt
+        // and must still leave readable diagnostics with the console absent.
+        let blocked = root.join("blocked session");
+        fs::create_dir_all(blocked.join(".ndr-install.lock")).unwrap();
+        let blocked_archive = blocked.join("NDR-windows-x64.zip");
+        fs::copy(&archive, &blocked_archive).unwrap();
+        fs::write(blocked.join("update.log"), b"Update installed: 5 files").unwrap();
+        let mut cmd = installer_command(&script, &blocked_archive, &dest, parent_pid, &messages).unwrap();
+        cmd.arg("-SkipRestart");
+        let child = cmd.spawn().unwrap();
+        drop(cmd);
+        assert!(!wait_installer(child).success());
+        let host_log = fs::read(blocked.join("installer-host.log")).unwrap();
+        assert!(String::from_utf8_lossy(&host_log).contains("Invalid update session lock"));
+        assert_eq!(fs::read(blocked.join("update.log")).unwrap(), b"Update installed: 5 files");
+        assert_eq!(fs::read(dest.join("NDR.exe")).unwrap(), b"new executable");
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn emitted_installer_has_bom_and_intact_korean() {

@@ -239,7 +239,7 @@ pub fn clean_updates(root: &Path, now: SystemTime, max_bytes: u64, keep: usize) 
         let known_members = fs::read_dir(&path).ok().is_some_and(|items| items.into_iter().all(|item|
             item.ok().is_some_and(|item| matches!(item.file_name().to_str(),
                 Some("backup" | "extracted" | "NDR-windows-x64.zip" | "update.log" |
-                    "apply-update.ps1" | "installer-locale.json" | ".ndr-install.lock")))));
+                    "apply-update.ps1" | "installer-locale.json" | "installer-host.log" | ".ndr-install.lock")))));
         let discard = known_members && (index >= keep.max(1) || (index > 0 && report.bytes_after > max_bytes));
         if discard && remove_owned_tree(root, &path, stats, now) {
             report.removed += 1;
@@ -315,6 +315,7 @@ mod maintenance_tests {
     fn update_retention_preserves_two_backups_failed_and_active_work() {
         let root = fixture("updates");
         let a = update(&root,"ndr-update-build-21-1-100",true);
+        fs::write(a.join("installer-host.log"), b"diagnostic").unwrap();
         std::thread::sleep(Duration::from_millis(20));
         let b = update(&root,"ndr-update-build-22-1-101",true);
         std::thread::sleep(Duration::from_millis(20));

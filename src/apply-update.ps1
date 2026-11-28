@@ -106,20 +106,8 @@ function New-InstallProgress {
 # second installer invocation. Never truncate an existing lock file.
 $work = Split-Path -Parent ([IO.Path]::GetFullPath($Archive))
 $lockPath = Join-Path $work '.ndr-install.lock'
-if (Test-Path -LiteralPath $lockPath) {
-    $lockItem = Get-Item -LiteralPath $lockPath -Force
-    if ($lockItem.PSIsContainer -or ($lockItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
-        throw 'Invalid update session lock'
-    }
-}
-$installerLock = [IO.File]::Open($lockPath, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
-# A successful session is immutable and must not be started again while
-# another instance is pruning its redundant ZIP/extracted payload.
-if ((Test-Path -LiteralPath $LogPath -PathType Leaf) -and
-    ((Get-Content -LiteralPath $LogPath -Raw -Encoding UTF8).Trim() -match '^Update installed: [0-9]+ files$')) {
-    $installerLock.Dispose()
-    throw 'Update session is already complete'
-}
+$installerLock = $null
+$ownsSession = $false
 $staging = Join-Path $work 'extracted'
 $backup = Join-Path $work 'backup'
 # Only the app's own dedicated cache session is eligible for immediate
@@ -175,6 +163,21 @@ try {
         New-InstallProgress
         $script:installerForm.Show()
     }
+    # Early startup errors must also reach the normal GUI error handler,
+    # because the PowerShell host now has no console. Never overwrite a
+    # different installer's or a completed session's receipt.
+    if (Test-Path -LiteralPath $lockPath) {
+        $lockItem = Get-Item -LiteralPath $lockPath -Force
+        if ($lockItem.PSIsContainer -or ($lockItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+            throw 'Invalid update session lock'
+        }
+    }
+    $installerLock = [IO.File]::Open($lockPath, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+    if ((Test-Path -LiteralPath $LogPath -PathType Leaf) -and
+        ((Get-Content -LiteralPath $LogPath -Raw -Encoding UTF8).Trim() -match '^Update installed: [0-9]+ files$')) {
+        throw 'Update session is already complete'
+    }
+    $ownsSession = $true
     if (-not (Test-Path -LiteralPath $Archive -PathType Leaf)) { throw 'Verified update ZIP missing' }
     $root = [IO.Path]::GetFullPath($Destination).TrimEnd('\') + '\'
     if (-not (Test-Path -LiteralPath (Join-Path $root 'NDR.exe') -PathType Leaf)) { throw 'NDR installation missing' }
@@ -267,17 +270,30 @@ try {
     if ($script:installerForm) { $script:installerForm.Close(); $script:installerForm.Dispose() }
     exit 0
 } catch {
-    "Update failed: $_" | Set-Content -LiteralPath $LogPath -Encoding UTF8
+    $failure = "Update failed: $_"
+    $failurePath = Join-Path $work 'installer-host.log'
+    # The hidden launcher's redirected stderr is retained even when the
+    # normal receipt cannot be written, for example on a session-lock error.
+    Write-Error $failure -ErrorAction Continue
+    if ($ownsSession) {
+        try {
+            $failure | Set-Content -LiteralPath $LogPath -Encoding UTF8
+            $failurePath = $LogPath
+        } catch {
+            Write-Error "Could not write update receipt: $_" -ErrorAction Continue
+        }
+    }
     if ($script:installerForm) {
         $script:installerForm.ControlBox = $true
         Set-InstallProgress $script:installerText.failed 0
         $script:installerForm.TopMost = $false
-        $failureText = $script:installerText.failed + [Environment]::NewLine + [Environment]::NewLine + $LogPath
+        $failureMessage = if ($failurePath -eq $LogPath) { $script:installerText.failed } else { $script:installerText.failureTitle }
+        $failureText = $failureMessage + [Environment]::NewLine + [Environment]::NewLine + $failurePath
         [void][System.Windows.Forms.MessageBox]::Show($script:installerForm, $failureText, $script:installerText.failureTitle)
         $script:installerForm.Close()
         $script:installerForm.Dispose()
     }
     exit 1
 } finally {
-    $installerLock.Dispose()
+    if ($installerLock) { $installerLock.Dispose() }
 }
