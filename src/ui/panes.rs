@@ -1350,6 +1350,15 @@ impl App {
         // Stop recursive I/O as soon as navigation/refresh starts, not only
         // when the replacement listing has arrived.
         let same_folder = self.panes[index].listed.as_deref() == Some(location_key(&self.panes[index]).as_str());
+        // Explicit refresh and leaving the archive discard browsing-only
+        // metadata. Folder-to-folder navigation may reuse a verified index.
+        if same_folder || self.panes[index].archive.is_none() {
+            if let Ok(mut cache) = self.panes[index].archive_browse.lock() { *cache = None; }
+        }
+        #[cfg(feature="winfsp-vault")]
+        let allow_archive_cache = self.vault_mounts.is_empty() && self.vault_trees.is_empty();
+        #[cfg(not(feature="winfsp-vault"))]
+        let allow_archive_cache = true;
         if !same_folder{self.panes[index].link_recheck=None;}
         if same_folder {
             // A normal parent relist does not invalidate a recursive
@@ -1413,6 +1422,7 @@ impl App {
         let foreground_wait = foreground.then(|| foreground_listing_wait(&path));
         let show_hidden = pane.show_hidden;
         let archive = pane.archive.clone();
+        let archive_browse = pane.archive_browse.clone();
         let remote = pane.remote.clone();
         let tx = self.listing_tx.clone();
         let include_legacy = self.settings.flag("UseDescriptionFile", true);
@@ -1484,62 +1494,8 @@ impl App {
                     .map(|root| Entry { name: root.to_string_lossy().into_owned(), path: root, is_dir: true, size: 0, modified: None, hidden: false, attributes: 0x10, drive: true })
                     .collect())
             } else if let Some(location) = archive {
-                ndr::archive::list_with_skipped_devices(
-                    &location.file,
-                    if location.password.is_empty() {
-                        None
-                    } else {
-                        Some(&location.password)
-                    },
-                )
-                .map(|(items, skipped)| {
-                    skipped_device_names = skipped.len();
-                    let mut entries = std::collections::BTreeMap::new();
-                    // The current folder's own time, by the same rule as its row one level up: its folder entry, otherwise the first entry below it.
-                    // The original ".." of an archive subfolder shows that time; previously NDR used the archive file's time at every level.
-                    let current = location.prefix.trim_end_matches('/');
-                    let (mut own_time, mut first_below) = (None, None);
-                    for e in items {
-                        // Fix: on Windows 7-Zip reports with \, like "dir\sub\c.txt", so entering an archive subfolder ("dir/") looked empty.
-                        let key = e.key.replace('\\', "/");
-                        if !current.is_empty() {
-                            if key.trim_end_matches('/') == current {
-                                own_time = Some(e.modified);
-                            } else if first_below.is_none() && key.starts_with(&location.prefix) {
-                                first_below = Some(e.modified);
-                            }
-                        }
-                        if let Some(rest) = key.strip_prefix(&location.prefix) {
-                            let mut pieces = rest.split('/');
-                            if let Some(name) = pieces.next() {
-                                if name.is_empty() {
-                                    continue;
-                                }
-                                let folder = pieces.next().is_some() || e.is_dir;
-                                // If it is the item itself, use its time. A folder derived from an entry below it (the archive has no folder entry) uses, like the original FUN_00405e60,
-                                // the time (+0x414/0x418) of the first entry below that created the folder, and switches to the folder entry's time when a folder entry appears.
-                                let slot = entries.entry(name.to_owned()).or_insert(Entry {
-                                    path: PathBuf::from(format!("{}{name}", location.prefix)),
-                                    name: name.to_owned(),
-                                    is_dir: folder,
-                                    size: if folder { 0 } else { e.size },
-                                    modified: e.modified,
-                                    hidden: false,
-                                    attributes: if folder { 0x10 } else { 0 },
-                                    drive: false,
-                                });
-                                if rest.trim_end_matches('/') == name {
-                                    slot.modified = e.modified;
-                                }
-                            }
-                        }
-                    }
-                    let mut listed: Vec<Entry> = entries.into_values().collect();
-                    if let Some(modified) = own_time.or(first_below) {
-                        listed.insert(0, Entry::parent_item(PathBuf::from(".."), modified));
-                    }
-                    listed
-                })
+                super::archive_browse::read(&location, &archive_browse, allow_archive_cache, !same_folder, &listing_cancel)
+                    .map(|(entries, skipped)| { skipped_device_names = skipped; entries })
             } else {
                 listing_cache.read_revision(&path, show_hidden, reuse_listing, cache_enabled, &listing_cancel,partial_base).map(|read| {
                     cache_revision=read.revision;
@@ -1920,15 +1876,28 @@ impl App {
         // target the drive root. Preserve the row's role as well as its path.
         let role = |e: &Entry| if e.drive { 4u8 } else if e.is_parent() { 2 } else { 1 };
         let cursor = pane.entries.get(pane.cursor).map(|e| (e.path.clone(), role(e)));
-        let mut marked = HashMap::<PathBuf, u8>::with_capacity(pane.selected.len());
-        for entry in pane.selected.iter().filter_map(|&i| pane.entries.get(i)) {
-            *marked.entry(entry.path.clone()).or_default() |= role(entry);
+        // Ctrl+A is common in large directories. These two exact selection
+        // patterns can be recreated after sorting without cloning N paths.
+        let all_items = !pane.selected.is_empty() && pane.selected.iter().copied().eq(
+            pane.entries.iter().enumerate().filter(|(_, e)| !e.drive && !e.is_parent()).map(|(i, _)| i));
+        let all_files = !all_items && !pane.selected.is_empty() && pane.selected.iter().copied().eq(
+            pane.entries.iter().enumerate().filter(|(_, e)| !e.drive && !e.is_parent() && !e.is_dir).map(|(i, _)| i));
+        let mut marked = HashMap::<PathBuf, u8>::new();
+        if !all_items && !all_files {
+            marked.reserve(pane.selected.len());
+            for entry in pane.selected.iter().filter_map(|&i| pane.entries.get(i)) {
+                *marked.entry(entry.path.clone()).or_default() |= role(entry);
+            }
         }
         // Keep the Entry allocation and preserve parent/drive ordering,
         // including grouping and stable ties.
         ndr::listing::sort_pane_entries(&mut pane.entries, &options, &color,
             &group_mode, &category_mode, group_descending);
-        if marked.is_empty() {
+        if all_items || all_files {
+            pane.selected = pane.entries.iter().enumerate()
+                .filter(|(_, e)| !e.drive && !e.is_parent() && (all_items || !e.is_dir))
+                .map(|(i, _)| i).collect();
+        } else if marked.is_empty() {
             pane.selected.clear();
         } else {
             pane.selected = pane.entries.iter().enumerate()

@@ -142,6 +142,11 @@ impl MountData {
         self.previous_read = None;
     }
 
+    fn invalidate_cached_page(&mut self, page: u64) {
+        if self.read_cache.as_ref().is_some_and(|(index, _)| *index == page) { self.read_cache = None; }
+        if self.previous_read.as_ref().is_some_and(|(index, _)| *index == page) { self.previous_read = None; }
+    }
+
     fn original_visible_size(&self) -> u64 {
         self.original_size.min(self.truncate_floor.unwrap_or(u64::MAX))
     }
@@ -178,12 +183,12 @@ impl MountData {
             let within = (position % PAGE) as usize;
             let take = (length - done).min(STREAM_CHUNK_SIZE - within);
             let out = &mut buffer[done..done + take];
-            out.fill(0);
-            if let Some(staged) = self.pages.get(&page) {
+            // Fully populated pages overwrite the destination once. Only
+            // sparse/truncated suffixes need explicit zeroing.
+            let copied = if let Some(staged) = self.pages.get(&page) {
                 let available = take.min(staged.len().saturating_sub(within));
-                if available > 0 {
-                    out[..available].copy_from_slice(&staged[within..within + available]);
-                }
+                if available > 0 { out[..available].copy_from_slice(&staged[within..within + available]); }
+                available
             } else {
                 let visible = self.staged_pages.get(&page).map_or_else(
                     || self.original_visible_size().saturating_sub(page * PAGE).min(PAGE) as usize,
@@ -191,11 +196,11 @@ impl MountData {
                 if within < visible {
                     let plaintext = self.cached_page(page)?;
                     let available = take.min(visible - within).min(plaintext.len().saturating_sub(within));
-                    if available > 0 {
-                        out[..available].copy_from_slice(&plaintext[within..within + available]);
-                    }
-                }
-            }
+                    if available > 0 { out[..available].copy_from_slice(&plaintext[within..within + available]); }
+                    available
+                } else { 0 }
+            };
+            out[copied..].fill(0);
             done += take;
         }
         Ok(done)
@@ -236,7 +241,7 @@ impl MountData {
             plain[visible..].zeroize();
             plain.truncate(visible);
         }
-        self.clear_read_cache();
+        self.invalidate_cached_page(page);
         self.pages.insert(page, plain);
         self.staged_pages.remove(&page);
         Ok(())
@@ -253,15 +258,32 @@ impl MountData {
             let page = position / PAGE;
             let within = (position % PAGE) as usize;
             let take = (buffer.len() - done).min(STREAM_CHUNK_SIZE - within);
-            if let Err(error) = self.load_dirty_page(page, within == 0 && take == STREAM_CHUNK_SIZE) {
-                // Return a short successful write if earlier pages were
-                // accepted. The OS can retry the rest without losing them.
+            let written = (|| {
+                if within == 0 && take == STREAM_CHUNK_SIZE {
+                    // Full overwrite needs neither old authenticated bytes
+                    // nor a zero-filled plaintext page before copying.
+                    if !self.pages.contains_key(&page) { self.evict_dirty_page()?; }
+                    let source = &buffer[done..done + take];
+                    if let Some(existing) = self.pages.get_mut(&page).filter(|bytes| bytes.len() == take) {
+                        existing.copy_from_slice(source);
+                    } else {
+                        self.pages.insert(page, Zeroizing::new(source.to_vec()));
+                    }
+                    self.staged_pages.remove(&page);
+                    self.invalidate_cached_page(page);
+                } else {
+                    self.load_dirty_page(page, false)?;
+                    let staged = self.pages.get_mut(&page).unwrap();
+                    if staged.len() < within + take { resize_plain_page(staged, within + take); }
+                    staged[within..within + take].copy_from_slice(&buffer[done..done + take]);
+                }
+                Ok::<(), String>(())
+            })();
+            if let Err(error) = written {
+                // Preserve accepted pages on short writes.
                 if done > 0 { return Ok(done); }
                 return Err(error);
             }
-            let staged = self.pages.get_mut(&page).unwrap();
-            if staged.len() < within + take { resize_plain_page(staged, within + take); }
-            staged[within..within + take].copy_from_slice(&buffer[done..done + take]);
             done += take;
             self.size = self.size.max(offset + done as u64);
             self.dirty = true;
@@ -397,6 +419,9 @@ impl SingleFileFs {
     }
     fn info(&self, file: bool) -> FileInfo {
         let size = if file { self.state.lock().unwrap().size } else { 0 };
+        Self::info_for_size(file, size)
+    }
+    fn info_for_size(file: bool, size: u64) -> FileInfo {
         FileInfo {
             file_attributes: if file { 0x20 } else { 0x10 },
             file_size: size,
@@ -460,8 +485,7 @@ impl FileSystemContext for SingleFileFs {
         } else { buffer.len() };
         let written = state.write_at(&buffer[..max_length], start)
             .map_err(|_| fs_error(INTERNAL_ERROR))?;
-        drop(state);
-        *info = self.info(true);
+        *info = Self::info_for_size(true, state.size);
         Ok(written as u32)
     }
     fn set_file_size(&self, context: &Handle, new_size: u64,
@@ -471,8 +495,7 @@ impl FileSystemContext for SingleFileFs {
         if allocation_only { *info = self.info(true); return Ok(()); }
         let mut state = self.state.lock().unwrap();
         state.resize(new_size);
-        drop(state);
-        *info = self.info(true); Ok(())
+        *info = Self::info_for_size(true, state.size); Ok(())
     }
     fn overwrite(&self, context: &Handle,
         _attributes: u32, _replace_attributes: bool, _allocation_size: u64,
@@ -480,8 +503,7 @@ impl FileSystemContext for SingleFileFs {
         if !matches!(context, Handle::File) { return Err(fs_error(ACCESS_DENIED)); }
         let mut state = self.state.lock().unwrap();
         state.overwrite();
-        drop(state);
-        *info = self.info(true); Ok(())
+        *info = Self::info_for_size(true, state.size); Ok(())
     }
     fn set_basic_info(&self, context: &Handle, _attributes: u32,
         _created: u64, _accessed: u64, _written: u64, _changed: u64,

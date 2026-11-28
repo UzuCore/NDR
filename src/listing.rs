@@ -380,6 +380,7 @@ pub fn compare_text(a: &str, b: &str, logical: bool) -> Ordering {
 
 /// Base of compare_text: between UTF-16 texts already ending with NUL.
 pub(crate) fn compare_wide(a: &[u16], b: &[u16], logical: bool) -> Ordering {
+    if a == b { return Ordering::Equal; }
     // SAFETY: both buffers are NUL-terminated and live through the call.
     let result = unsafe {
         if logical {
@@ -470,11 +471,21 @@ fn stable_partition_prefix<T>(rows: &mut [T], is_prefix: impl Fn(&T) -> bool) ->
         return split;
     }
     let tail = &mut rows[split..];
-    let mut order = Vec::with_capacity(tail.len());
-    order.extend(tail.iter().enumerate().filter_map(|(i, row)| is_prefix(row).then_some(i)));
-    let extra = order.len();
-    order.extend(tail.iter().enumerate().filter_map(|(i, row)| (!is_prefix(row)).then_some(i)));
-    apply_order(tail, &mut order);
+    let extra = if u32::try_from(tail.len()).is_ok() {
+        let mut order = Vec::with_capacity(tail.len());
+        order.extend(tail.iter().enumerate().filter_map(|(i, row)| is_prefix(row).then_some(i as u32)));
+        let extra = order.len();
+        order.extend(tail.iter().enumerate().filter_map(|(i, row)| (!is_prefix(row)).then_some(i as u32)));
+        apply_small_order(tail, &mut order);
+        extra
+    } else {
+        let mut order = Vec::with_capacity(tail.len());
+        order.extend(tail.iter().enumerate().filter_map(|(i, row)| is_prefix(row).then_some(i)));
+        let extra = order.len();
+        order.extend(tail.iter().enumerate().filter_map(|(i, row)| (!is_prefix(row)).then_some(i)));
+        apply_order(tail, &mut order);
+        extra
+    };
     split + extra
 }
 
@@ -523,7 +534,9 @@ fn sort_group(list: &mut [Entry], mode: &str, descending: bool, logical: bool, c
     if mode == "None" {
         // Even unsorted files keep stable priority buckets.
         if priority {
-            list.sort_by_key(priority_rank);
+            // Stable priority buckets with no comparator-driven Entry
+            // moves; already ranked normal directories allocate nothing.
+            stable_priority_buckets(list);
         }
         return;
     }
@@ -538,6 +551,46 @@ fn sort_group(list: &mut [Entry], mode: &str, descending: bool, logical: bool, c
         sort_group_words::<usize>(list,mode,descending,logical,color,priority,capacity);
     }
 }
+fn stable_priority_buckets(list: &mut [Entry]) {
+    if list.windows(2).all(|pair| priority_rank(&pair[0]) <= priority_rank(&pair[1])) { return; }
+    let mut counts = [0usize; 5];
+    for row in list.iter() { counts[priority_rank(row) as usize] += 1; }
+    let mut next = 0;
+    for count in &mut counts { let n = *count; *count = next; next += n; }
+    if let Ok(n) = u32::try_from(list.len()) {
+        let mut order = vec![0u32; n as usize];
+        for (i, row) in list.iter().enumerate() {
+            let dest = &mut counts[priority_rank(row) as usize];
+            order[*dest] = i as u32;
+            *dest += 1;
+        }
+        apply_small_order(list, &mut order);
+    } else {
+        let mut order = vec![0usize; list.len()];
+        for (i, row) in list.iter().enumerate() {
+            let dest = &mut counts[priority_rank(row) as usize];
+            order[*dest] = i;
+            *dest += 1;
+        }
+        apply_order(list, &mut order);
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn batch437_priority_buckets_match_stable_sort() {
+    let mut rows: Vec<Entry> = (0..10001).map(|i| Entry {
+        path: std::path::PathBuf::from(i.to_string()), name: i.to_string(), is_dir: false,
+        size: i, modified: None, hidden: false,
+        attributes: match i % 4 { 0 => FILE_ATTRIBUTE_PINNED, 1 => FILE_ATTRIBUTE_RECALL_ON_OPEN, _ => 0 },
+        drive: false,
+    }).collect();
+    let mut expected = rows.clone();
+    expected.sort_by_key(priority_rank);
+    stable_priority_buckets(&mut rows);
+    assert!(rows.iter().zip(expected).all(|(a,b)| a.path == b.path && a.attributes == b.attributes));
+}
+
 trait WordOffset:Copy{
     fn from_offset(value:usize)->Self;
     fn offset(self)->usize;

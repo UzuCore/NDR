@@ -485,7 +485,11 @@ pub(super) fn build_view(plan: &ViewPlan, entries: &[Entry], descriptions: &Hash
     local: bool, detect_vault: bool, mut view: PaneView, cancel: Option<&AtomicBool>) -> Option<PaneView> {
     let ViewPlan { attach, case, date_format, time_format, use_age, age_labels, unit, thousands,
         folder_size_text, vault_type, folder_type, group_mode, category_mode, show_group_name,
-        show_file_type, folder, drive, fore, extension_colors, group_labels } = plan.clone();
+        show_file_type, folder, drive, fore, extension_colors, group_labels } = plan;
+    // Presentation plans own localization and extension-color maps.
+    // Borrow those maps rather than deep-cloning them on every build.
+    let (attach, case, use_age, thousands, show_group_name, show_file_type, folder, drive, fore) =
+        (*attach, *case, *use_age, *thousands, *show_group_name, *show_file_type, *folder, *drive, *fore);
     let basic = move |key: &str| match key {
         "NXFOLDER" => folder, "NXDRIVE" => drive, _ => fore,
     };

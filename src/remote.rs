@@ -241,6 +241,7 @@ struct Ftp {
     tls: Option<native_tls::TlsConnector>,
     host: String,
     encoding: &'static encoding_rs::Encoding,
+    mlsd_supported: bool,
 }
 
 enum Wire {
@@ -782,14 +783,11 @@ impl Drop for LocalTree {
 }
 
 fn remote_child(parent: &str, name: &str) -> String {
-    format!(
-        "{}{name}",
-        if parent.ends_with('/') {
-            parent.to_owned()
-        } else {
-            format!("{parent}/")
-        }
-    )
+    let mut path = String::with_capacity(parent.len() + name.len() + 1);
+    path.push_str(parent);
+    if !parent.ends_with('/') { path.push('/'); }
+    path.push_str(name);
+    path
 }
 
 fn unique_local_path(destination: &Path) -> Result<PathBuf, String> {
@@ -857,6 +855,7 @@ fn socket(host: &str, port: u16) -> Result<TcpStream, String> {
         match TcpStream::connect_timeout(&address, remaining) {
             Ok(stream) => {
                 set_timeout(&stream)?;
+                stream.set_nodelay(true).map_err(err)?;
                 return Ok(stream);
             }
             Err(error) => last = error.to_string(),
@@ -880,26 +879,66 @@ fn check_cancel(cancel: &AtomicBool) -> Result<(), String> {
     }
 }
 
-fn copy_cancel(
+/// Report bounded in-flight progress without reporting a file as
+/// committed before the final protocol reply, integrity check and rename.
+fn copy_cancel_reporting(
     reader: &mut impl Read,
     writer: &mut impl Write,
     cancel: &AtomicBool,
+    offset: u64,
+    size_hint: Option<u64>,
+    report: &mut dyn FnMut(u64),
 ) -> Result<u64, String> {
-    let mut buffer = [0u8; 128 * 1024];
-    let mut total = 0;
+    // Small files do not need to zero 128 KiB on every transfer. The
+    // size hint controls the buffer only; we still read to EOF.
+    let capacity = size_hint.unwrap_or(128 * 1024).clamp(4096, 128 * 1024) as usize;
+    let mut buffer = vec![0u8; capacity];
+    let mut total = 0u64;
+    let mut last_report = None::<Instant>;
     loop {
         check_cancel(cancel)?;
-        let count = reader.read(&mut buffer).map_err(err)?;
-        if count == 0 {
-            break;
-        }
+        let count = match reader.read(&mut buffer) {
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            other => other.map_err(err)?,
+        };
+        if count == 0 { break; }
         check_cancel(cancel)?;
         writer.write_all(&buffer[..count]).map_err(err)?;
-        total += count as u64;
+        total = total.checked_add(count as u64).ok_or("Transfer size overflow")?;
+        let now = Instant::now();
+        if last_report.is_none_or(|last| now.duration_since(last) >= Duration::from_millis(100)) {
+            report(offset.checked_add(total).ok_or("Transfer size overflow")?);
+            // A pause/cancel requested by the observer takes effect before
+            // another read or final protocol/transaction commit.
+            check_cancel(cancel)?;
+            last_report = Some(Instant::now());
+        }
     }
     check_cancel(cancel)?;
     writer.flush().map_err(err)?;
     Ok(total)
+}
+
+#[cfg(test)]
+#[test]
+fn batch418_transfer_reports_before_commit_and_honors_cancel() {
+    let source = vec![7u8; 300_000];
+    let cancel = AtomicBool::new(false);
+    let mut output = Vec::new();
+    let mut seen = Vec::new();
+    let n = copy_cancel_reporting(&mut &source[..], &mut output, &cancel, 40, Some(source.len() as u64), &mut |bytes| seen.push(bytes)).unwrap();
+    assert_eq!(n, source.len() as u64);
+    assert_eq!(output, source);
+    assert!(!seen.is_empty() && seen[0] > 40 && seen[0] < 40 + n);
+    let mut partial = Vec::new();
+    let error = copy_cancel_reporting(&mut &source[..], &mut partial, &cancel, 0, None, &mut |_| cancel.store(true, Ordering::Relaxed)).unwrap_err();
+    assert!(error.contains("cancelled"));
+    assert!(partial.len() > 0 && partial.len() < source.len());
+}
+
+#[cfg(test)]
+fn copy_cancel(reader: &mut impl Read, writer: &mut impl Write, cancel: &AtomicBool) -> Result<u64, String> {
+    copy_cancel_reporting(reader, writer, cancel, 0, None, &mut |_| {})
 }
 
 fn temp_name() -> String {
@@ -1063,7 +1102,7 @@ impl Client {
         use crate::fsops::ConflictChoice;
         let mut pending = vec![(remote.to_owned(), local.to_owned())];
         let mut merged_directory_times = Vec::new();
-        let (mut bytes, mut files) = (0, 0);
+        let (mut bytes, mut files) = (0u64, 0u64);
         while let Some((source, mut destination)) = pending.pop() {
             check_cancel(cancel)?;
             let entry = self
@@ -1089,8 +1128,10 @@ impl Client {
                 if choice == ConflictChoice::Resume {
                     // Original FUN_00467f0c (+0x40): receives from the size of the local partial file and appends. Overwrites when resuming is impossible.
                     if can_resume && meta.len() < entry.size {
-                        self.download_resume(&source, &destination, cancel)?;
-                        bytes += entry.size;
+                        let count = self.download_resume_reporting(&source, &destination, cancel, &mut |count| {
+                            progress(TransferProgress { path: source.clone(), bytes: bytes.saturating_add(count), files });
+                        })?;
+                        bytes = bytes.saturating_add(count);
                         files += 1;
                         progress(TransferProgress { path: source, bytes, files });
                         continue;
@@ -1122,8 +1163,10 @@ impl Client {
                         continue;
                     }
                     ConflictChoice::Overwrite if !entry.is_dir && meta.is_file() => {
-                        self.download(&source, &destination, cancel)?;
-                        bytes += entry.size;
+                        let count = self.download_reporting(&source, &destination, cancel, &mut |count| {
+                            progress(TransferProgress { path: source.clone(), bytes: bytes.saturating_add(count), files });
+                        })?;
+                        bytes = bytes.saturating_add(count);
                         files += 1;
                         progress(TransferProgress {
                             path: source,
@@ -1207,7 +1250,7 @@ impl Client {
         use crate::fsops::ConflictChoice;
         let mut pending = vec![(local.to_owned(), remote.to_owned())];
         let mut merged_directory_times = Vec::new();
-        let (mut bytes, mut files) = (0, 0);
+        let (mut bytes, mut files) = (0u64, 0u64);
         while let Some((source, mut destination)) = pending.pop() {
             check_cancel(cancel)?;
             let meta = local_regular_metadata(&source)?;
@@ -1227,8 +1270,10 @@ impl Client {
                 if choice == ConflictChoice::Resume {
                     // Original FUN_0087c2f0 (Synapse StoreFile Restore) and SFTP PutFile (resume): appends the rest after the remote partial file.
                     if can_resume && entry.size < meta.len() {
-                        self.upload_resume(&source, &destination, cancel)?;
-                        bytes += meta.len();
+                        let count = self.upload_resume_reporting(&source, &destination, cancel, &mut |count| {
+                            progress(TransferProgress { path: destination.clone(), bytes: bytes.saturating_add(count), files });
+                        })?;
+                        bytes = bytes.saturating_add(count);
                         files += 1;
                         progress(TransferProgress { path: destination, bytes, files });
                         continue;
@@ -1259,8 +1304,10 @@ impl Client {
                         continue;
                     }
                     ConflictChoice::Overwrite if meta.is_file() && !entry.is_dir => {
-                        self.upload(&source, &destination, cancel)?;
-                        bytes += meta.len();
+                        let count = self.upload_reporting(&source, &destination, cancel, &mut |count| {
+                            progress(TransferProgress { path: destination.clone(), bytes: bytes.saturating_add(count), files });
+                        })?;
+                        bytes = bytes.saturating_add(count);
                         files += 1;
                         progress(TransferProgress {
                             path: destination,
@@ -1427,10 +1474,12 @@ impl Client {
             return Err("Symbolic links are not followed during tree downloads".into());
         }
         if !entry.is_dir {
-            self.download(remote, local, cancel)?;
+            let count = self.download_reporting(remote, local, cancel, &mut |count| {
+                progress(TransferProgress { path: remote.into(), bytes: count, files: 0 });
+            })?;
             progress(TransferProgress {
                 path: remote.into(),
-                bytes: entry.size,
+                bytes: count,
                 files: 1,
             });
             return Ok(());
@@ -1443,7 +1492,7 @@ impl Client {
         fs::create_dir(&temporary.0).map_err(err)?;
         let mut stack = vec![(remote.to_owned(), temporary.0.clone())];
         let mut directory_times = Vec::new();
-        let (mut bytes, mut files) = (0, 0);
+        let (mut bytes, mut files) = (0u64, 0u64);
         while let Some((remote, destination)) = stack.pop() {
             check_cancel(cancel)?;
             let current = self
@@ -1473,8 +1522,10 @@ impl Client {
                     fs::create_dir(&target).map_err(err)?;
                     stack.push((child, target));
                 } else {
-                    self.download(&child, &target, cancel)?;
-                    bytes += entry.size;
+                    let count = self.download_reporting(&child, &target, cancel, &mut |count| {
+                        progress(TransferProgress { path: child.clone(), bytes: bytes.saturating_add(count), files });
+                    })?;
+                    bytes = bytes.saturating_add(count);
                     files += 1;
                     progress(TransferProgress {
                         path: child,
@@ -1515,10 +1566,12 @@ impl Client {
             return Err("Tree upload destination already exists".into());
         }
         if meta.is_file() {
-            self.upload(local, remote, cancel)?;
+            let count = self.upload_reporting(local, remote, cancel, &mut |count| {
+                progress(TransferProgress { path: remote.into(), bytes: count, files: 0 });
+            })?;
             progress(TransferProgress {
                 path: remote.into(),
-                bytes: meta.len(),
+                bytes: count,
                 files: 1,
             });
             return Ok(());
@@ -1531,7 +1584,7 @@ impl Client {
         let result = (|| {
             let mut stack = vec![(local.to_owned(), temporary.clone())];
             let mut directory_times = Vec::new();
-            let (mut bytes, mut files) = (0, 0);
+            let (mut bytes, mut files) = (0u64, 0u64);
             while let Some((source, destination)) = stack.pop() {
                 check_cancel(cancel)?;
                 let meta = local_regular_metadata(&source)?;
@@ -1553,8 +1606,10 @@ impl Client {
                         self.mkdir(&target)?;
                         stack.push((entry.path(), target));
                     } else if meta.is_file() {
-                        self.upload(&entry.path(), &target, cancel)?;
-                        bytes += meta.len();
+                        let count = self.upload_reporting(&entry.path(), &target, cancel, &mut |count| {
+                            progress(TransferProgress { path: target.clone(), bytes: bytes.saturating_add(count), files });
+                        })?;
+                        bytes = bytes.saturating_add(count);
                         files += 1;
                         progress(TransferProgress {
                             path: target,
@@ -1607,7 +1662,7 @@ impl Client {
             return Err("Refusing recursive delete of a root or dot path".into());
         }
         let mut stack = vec![(remote.trim_end_matches('/').to_owned(), false)];
-        let (mut bytes, mut files) = (0, 0);
+        let (mut bytes, mut files) = (0u64, 0u64);
         while let Some((path, after_children)) = stack.pop() {
             check_cancel(cancel)?;
             let entry = self
@@ -1890,6 +1945,10 @@ impl Client {
 
     /// Original FUN_00467f0c (+0x40 resume download, start = local size): appends the rest of the remote file after the local partial file (FTP REST, SFTP seek).
     pub fn download_resume(&mut self, remote: &str, local: &Path, cancel: &AtomicBool) -> Result<(), String> {
+        self.download_resume_reporting(remote, local, cancel, &mut |_| {}).map(|_| ())
+    }
+
+    fn download_resume_reporting(&mut self, remote: &str, local: &Path, cancel: &AtomicBool, report: &mut dyn FnMut(u64)) -> Result<u64, String> {
         validate_text(remote)?;
         check_cancel(cancel)?;
         let meta = local_regular_metadata(local)?;
@@ -1899,6 +1958,7 @@ impl Client {
         let offset = meta.len();
         let mut output = OpenOptions::new().append(true).open(local).map_err(err)?;
         let mut remote_times = None;
+        let mut transferred = 0u64;
         let result: Result<(), String> = match self.backend()? {
             Backend::Ftp(ftp) => (|| {
                 let size = ftp.stream.size(remote).ok().map(|n| n as u64);
@@ -1909,7 +1969,8 @@ impl Client {
                 }
                 ftp.stream.rest(offset).map_err(err)?;
                 let mut data = ftp.data("RETR", remote)?;
-                let copied = copy_cancel(&mut data, &mut output, cancel)?;
+                let copied = copy_cancel_reporting(&mut data, &mut output, cancel, offset, size.map(|n| n.saturating_sub(offset)), report)?;
+                transferred = offset.checked_add(copied).ok_or("Transfer size overflow")?;
                 ftp.stream.finalize_retr_stream(data).map_err(err)?;
                 if size.is_some_and(|size| size != offset + copied) {
                     return Err("Resumed download size did not match remote file".into());
@@ -1927,7 +1988,8 @@ impl Client {
                 }
                 let mut input = sftp.open(path).map_err(err)?;
                 input.seek(SeekFrom::Start(offset)).map_err(err)?;
-                let copied = copy_cancel(&mut input, &mut output, cancel)?;
+                let copied = copy_cancel_reporting(&mut input, &mut output, cancel, offset, stat.size.map(|n| n.saturating_sub(offset)), report)?;
+                transferred = offset.checked_add(copied).ok_or("Transfer size overflow")?;
                 input.close().map_err(err)?;
                 if stat.size.is_some_and(|size| size != offset + copied) {
                     return Err("Resumed download size did not match remote file".into());
@@ -1946,12 +2008,16 @@ impl Client {
         {
             self.warnings.push(format!("Resumed bytes received; timestamps could not be preserved for {}: {error}", local.display()));
         }
-        Ok(())
+        Ok(transferred)
     }
 
     /// Original FUN_0087c2f0 (FTP resume upload = Synapse StoreFile Restore: REST remote size + STOR) and SFTP PutFile (resume):
     /// appends the rest of the local file after the remote partial file. It writes in place, so no temporary name is used.
     pub fn upload_resume(&mut self, local: &Path, remote: &str, cancel: &AtomicBool) -> Result<(), String> {
+        self.upload_resume_reporting(local, remote, cancel, &mut |_| {}).map(|_| ())
+    }
+
+    fn upload_resume_reporting(&mut self, local: &Path, remote: &str, cancel: &AtomicBool, report: &mut dyn FnMut(u64)) -> Result<u64, String> {
         validate_text(remote)?;
         check_cancel(cancel)?;
         let meta = local_regular_metadata(local)?;
@@ -1971,11 +2037,13 @@ impl Client {
         let source_mtime = filetime::FileTime::from_last_modification_time(&meta).unix_seconds();
         let source_atime = filetime::FileTime::from_last_access_time(&meta).unix_seconds();
         let mut metadata_warning = None;
+        let mut transferred = 0u64;
         let result: Result<(), String> = match self.backend()? {
             Backend::Ftp(ftp) => (|| {
                 ftp.stream.rest(offset).map_err(err)?;
                 let mut data = ftp.data("STOR", remote)?;
-                let copied = copy_cancel(&mut input, &mut data, cancel)?;
+                let copied = copy_cancel_reporting(&mut input, &mut data, cancel, offset, Some(meta.len().saturating_sub(offset)), report)?;
+                transferred = offset.checked_add(copied).ok_or("Transfer size overflow")?;
                 ftp.stream.finalize_put_stream(data).map_err(err)?;
                 if offset + copied != meta.len() {
                     return Err("Upload source size changed during transfer".into());
@@ -1992,7 +2060,8 @@ impl Client {
                 let path = sftp_path(remote)?;
                 let mut output = sftp.open_mode(path, OpenFlags::WRITE, 0o600, OpenType::File).map_err(err)?;
                 output.seek(SeekFrom::Start(offset)).map_err(err)?;
-                let copied = copy_cancel(&mut input, &mut output, cancel)?;
+                let copied = copy_cancel_reporting(&mut input, &mut output, cancel, offset, Some(meta.len().saturating_sub(offset)), report)?;
+                transferred = offset.checked_add(copied).ok_or("Transfer size overflow")?;
                 output.close().map_err(err)?;
                 if offset + copied != meta.len() || sftp.stat(path).map_err(err)?.size != Some(meta.len()) {
                     return Err("Resumed upload size verification failed".into());
@@ -2011,15 +2080,14 @@ impl Client {
         if result.is_err() && matches!(self.backend, Some(Backend::Ftp(_))) {
             self.invalidate();
         }
-        result
+        result.map(|_| transferred)
     }
 
-    pub fn download(
-        &mut self,
-        remote: &str,
-        local: &Path,
-        cancel: &AtomicBool,
-    ) -> Result<(), String> {
+    pub fn download(&mut self, remote: &str, local: &Path, cancel: &AtomicBool) -> Result<(), String> {
+        self.download_reporting(remote, local, cancel, &mut |_| {}).map(|_| ())
+    }
+
+    fn download_reporting(&mut self, remote: &str, local: &Path, cancel: &AtomicBool, report: &mut dyn FnMut(u64)) -> Result<u64, String> {
         validate_text(remote)?;
         check_cancel(cancel)?;
         validate_local_name(remote.rsplit('/').next().unwrap_or(""))?;
@@ -2037,6 +2105,7 @@ impl Client {
         let (temp, mut output) = LocalTemp::create(local)?;
         let mut remote_times = None;
         let mut metadata_warning = None;
+        let mut transferred = 0u64;
         let result: Result<(), String> = match self.backend()? {
             Backend::Ftp(ftp) => (|| {
                 let size = ftp.stream.size(remote).ok().map(|n| n as u64);
@@ -2050,7 +2119,8 @@ impl Client {
                     Err(error) => return Err(err(error)),
                 }
                 let mut data = ftp.data("RETR", remote)?;
-                let copied = copy_cancel(&mut data, &mut output, cancel)?;
+                let copied = copy_cancel_reporting(&mut data, &mut output, cancel, 0, size, report)?;
+                transferred = 0u64.checked_add(copied).ok_or("Transfer size overflow")?;
                 ftp.stream.finalize_retr_stream(data).map_err(err)?;
                 if size.is_some_and(|size| size != copied) {
                     return Err("Download size did not match remote file".into());
@@ -2077,7 +2147,8 @@ impl Client {
                         return Err("Download source must be a regular file; symbolic links are not followed".into());
                     }
                     let mut input = sftp.open(path).map_err(err)?;
-                    let copied = copy_cancel(&mut input, &mut output, cancel)?;
+                    let copied = copy_cancel_reporting(&mut input, &mut output, cancel, 0, stat.size, report)?;
+                transferred = 0u64.checked_add(copied).ok_or("Transfer size overflow")?;
                     input.close().map_err(err)?;
                     if stat.size.is_some_and(|size| size != copied) {
                         return Err("Download size did not match remote file".into());
@@ -2108,15 +2179,15 @@ impl Client {
             ));
         }
         check_cancel(cancel)?;
-        temp.commit(local)
+        temp.commit(local)?;
+        Ok(transferred)
     }
 
-    pub fn upload(
-        &mut self,
-        local: &Path,
-        remote: &str,
-        cancel: &AtomicBool,
-    ) -> Result<(), String> {
+    pub fn upload(&mut self, local: &Path, remote: &str, cancel: &AtomicBool) -> Result<(), String> {
+        self.upload_reporting(local, remote, cancel, &mut |_| {}).map(|_| ())
+    }
+
+    fn upload_reporting(&mut self, local: &Path, remote: &str, cancel: &AtomicBool, report: &mut dyn FnMut(u64)) -> Result<u64, String> {
         validate_text(remote)?;
         check_cancel(cancel)?;
         let meta = fs::symlink_metadata(local).map_err(err)?;
@@ -2135,10 +2206,12 @@ impl Client {
         let source_mtime = filetime::FileTime::from_last_modification_time(&meta).unix_seconds();
         let source_atime = filetime::FileTime::from_last_access_time(&meta).unix_seconds();
         let mut metadata_warning = None;
+        let mut transferred = 0u64;
         let result = match self.backend()? {
             Backend::Ftp(ftp) => (|| {
                 let mut data = ftp.data("STOR", &temporary)?;
-                let copied = copy_cancel(&mut input, &mut data, cancel)?;
+                let copied = copy_cancel_reporting(&mut input, &mut data, cancel, 0, Some(meta.len()), report)?;
+                transferred = 0u64.checked_add(copied).ok_or("Transfer size overflow")?;
                 ftp.stream.finalize_put_stream(data).map_err(err)?;
                 if copied != meta.len() {
                     return Err("Upload source size changed during transfer".into());
@@ -2163,7 +2236,8 @@ impl Client {
                         OpenType::File,
                     )
                     .map_err(err)?;
-                let copied = copy_cancel(&mut input, &mut output, cancel)?;
+                let copied = copy_cancel_reporting(&mut input, &mut output, cancel, 0, Some(meta.len()), report)?;
+                transferred = 0u64.checked_add(copied).ok_or("Transfer size overflow")?;
                 output.close().map_err(err)?;
                 if copied != meta.len()
                     || sftp.stat(sftp_path(&temporary)?).map_err(err)?.size != Some(copied)
@@ -2229,7 +2303,7 @@ impl Client {
         if result.is_err() {
             let _ = self.delete(&temporary, false);
         }
-        result
+        result.map(|_| transferred)
     }
 
     fn commit_upload(&mut self, temporary: &str, remote: &str) -> Result<(), String> {
@@ -2429,6 +2503,7 @@ impl Ftp {
             tls,
             host: config.host.clone(),
             encoding,
+            mlsd_supported: true,
         })
     }
     // MLSD is allowed to report a symlink-to-directory as type=dir. Recursive
@@ -2438,7 +2513,9 @@ impl Ftp {
         let previous = self.stream.pwd().map_err(err)?;
         validate_text(path)?;
         validate_text(&previous)?;
-        self.stream.cwd(path).map_err(err)?;
+        validate_text(path)?;
+        let changed = path != previous && path != ".";
+        if changed { self.stream.cwd(path).map_err(err)?; }
         let result = (|| {
             let lines = if self.passive {
                 self.stream.list(None).map_err(err)?
@@ -2457,7 +2534,7 @@ impl Ftp {
                 })
                 .collect()
         })();
-        let restore = self.stream.cwd(&previous).map_err(err);
+        let restore = if changed { self.stream.cwd(&previous).map_err(err) } else { Ok(()) };
         match (result, restore) {
             (Ok(entries), Ok(())) => Ok(entries),
             (Err(e), _) => Err(e),
@@ -2468,15 +2545,23 @@ impl Ftp {
     fn list(&mut self, path: &str) -> Result<Vec<RemoteEntry>, String> {
         let previous = self.stream.pwd().map_err(err)?;
         validate_text(&previous)?;
-        self.stream.cwd(path).map_err(err)?;
+        validate_text(path)?;
+        let changed = path != previous && path != ".";
+        if changed { self.stream.cwd(path).map_err(err)?; }
         let result = (|| {
-            let machine = if self.passive {
-                self.stream.mlsd(None).map_err(err)
+            // Unsupported commands are session capabilities, not per-folder
+            // failures. Avoid retrying a rejected MLSD on every refresh.
+            let machine = if !self.mlsd_supported { None } else if self.passive {
+                Some(self.stream.mlsd(None).map_err(err))
             } else {
-                self.active_listing("MLSD")
+                Some(self.active_listing("MLSD"))
             };
+            let unsupported = |error: &str| error.contains("500") || error.contains("502") || error.contains("504");
+            if machine.as_ref().is_some_and(|r| r.as_ref().err().is_some_and(|e| unsupported(e))) {
+                self.mlsd_supported = false;
+            }
             match machine {
-                Ok(lines) => lines
+                Some(Ok(lines)) => lines
                     .iter()
                     .filter_map(|line| match parse_mlsd(line) {
                         Ok(Some(e)) => Some(Ok(e)),
@@ -2484,9 +2569,7 @@ impl Ftp {
                         Err(e) => Some(Err(e)),
                     })
                     .collect(),
-                Err(error)
-                    if error.contains("500") || error.contains("502") || error.contains("504") =>
-                {
+                None | Some(Err(_)) if !self.mlsd_supported => {
                     let lines = if self.passive {
                         self.stream.list(None).map_err(err)?
                     } else {
@@ -2517,10 +2600,11 @@ impl Ftp {
                         })
                         .collect()
                 }
-                Err(e) => Err(e),
+                Some(Err(e)) => Err(e),
+                None => Err("FTP listing capability unavailable".into()),
             }
         })();
-        let restore = self.stream.cwd(&previous).map_err(err);
+        let restore = if changed { self.stream.cwd(&previous).map_err(err) } else { Ok(()) };
         match (result, restore) {
             (Ok(entries), Ok(())) => Ok(entries),
             (Err(e), _) => Err(e),

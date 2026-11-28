@@ -1,4 +1,5 @@
 mod archive_dialog;
+mod archive_browse;
 mod archive_edit;
 mod auto_view;
 mod skin_pane;
@@ -160,6 +161,7 @@ struct Pane {
     listing_cancel: Arc<AtomicBool>,
     error: Option<String>,
     archive: Option<ArchiveLocation>,
+    archive_browse: Arc<Mutex<Option<Arc<archive_browse::ArchiveBrowseSnapshot>>>>,
     /// Open SQLCipher container presented as a directory inside this pane.
     vault: Option<vault_window::PaneVault>,
     /// Original panel FTP mode (FUN_00481948 == 2): the connection and the remote folder. path stays as the local folder from before connecting.
@@ -318,6 +320,7 @@ impl Pane {
             listing_cancel: Arc::new(AtomicBool::new(false)),
             error: None,
             archive: None,
+            archive_browse: Arc::default(),
             vault: None,
             remote: None,
             ftp_connect_serial: 0,

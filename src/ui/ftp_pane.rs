@@ -1052,6 +1052,7 @@ impl App {
         let started = self.start_task(title, move |events, cancel| {
             let outcome = (|| {
                 let mut fs = remote.fs.lock().map_err(|_| "FTP connection is unavailable".to_owned())?;
+                let mut last_event = None::<std::time::Instant>;
                 // The transport already recursively lists each directory
                 // while downloading. Do not repeat that entire traversal
                 // before the first file can start.
@@ -1069,7 +1070,11 @@ impl App {
                     let mut resolve = |src: &str, dst: &str, info: &ndr::remote::ConflictInfo| ask_remote_conflict(&events, &cancel, src, dst, info);
                     let mut progress = |p: TransferProgress| {
                         set_row(&rows, row, |r| r.done = p.bytes);
-                        let _ = events.send(Event::Progress { path: PathBuf::from(p.path), bytes: p.bytes, files: p.files });
+                        let now = std::time::Instant::now();
+                        if last_event.is_none_or(|last| now.duration_since(last) >= Duration::from_millis(80)) {
+                            let _ = events.send(Event::Progress { path: PathBuf::from(p.path), bytes: p.bytes, files: p.files });
+                            last_event = Some(now);
+                        }
                         super::commands::wait_while_paused(&pause, &cancel);
                     };
                     match fs.download(source, &local, &cancel, &mut resolve, &mut progress) {
@@ -1148,6 +1153,7 @@ impl App {
         let started = self.start_task(title, move |events, cancel| {
             let outcome = (|| {
                 let mut fs = remote.fs.lock().map_err(|_| "FTP connection is unavailable".to_owned())?;
+                let mut last_event = None::<std::time::Instant>;
                 let mut skipped_any = false;
                 // Avoid a second full local traversal before upload.
                 for (row, local) in items.iter().enumerate() {
@@ -1173,7 +1179,11 @@ impl App {
                     };
                     let mut progress = |p: TransferProgress| {
                         set_row(&rows, row, |r| r.done = p.bytes);
-                        let _ = events.send(Event::Progress { path: PathBuf::from(p.path), bytes: p.bytes, files: p.files });
+                        let now = std::time::Instant::now();
+                        if last_event.is_none_or(|last| now.duration_since(last) >= Duration::from_millis(80)) {
+                            let _ = events.send(Event::Progress { path: PathBuf::from(p.path), bytes: p.bytes, files: p.files });
+                            last_event = Some(now);
+                        }
                         super::commands::wait_while_paused(&pause, &cancel);
                     };
                     match fs.upload(local, &destination, &cancel, &mut resolve, &mut progress) {
@@ -1359,14 +1369,14 @@ impl App {
         let header = |i: usize| headers.get(i).cloned().unwrap_or_default();
         let paused = self.ftp_pause.load(Ordering::Relaxed);
         let mut action = None;
-        let (rows, (done, total, percent), unknown, has_rows, speed) = self.ftp_results.lock().map(|r| {
+        let (row_count, (done, total, percent), unknown, has_rows, speed) = self.ftp_results.lock().map(|r| {
             let summary = ftp_totals(&r);
             let unknown = r.iter().any(|row| row.size.is_none() && matches!(row.state, RowState::Waiting | RowState::Running));
             let speed = ftp_speed(&r, std::time::Instant::now());
-            let rows = if self.results_collapsed { Vec::new() } else {
-                r.iter().filter(|row| row.state != RowState::Done).cloned().collect()
+            let row_count = if self.results_collapsed { 0 } else {
+                r.iter().filter(|row| row.state != RowState::Done).count()
             };
-            (rows, summary, unknown, !r.is_empty(), speed)
+            (row_count, summary, unknown, !r.is_empty(), speed)
         }).unwrap_or_default();
         let transferring = self.ftp_transferring();
         // Original NXPaintPanel1 (height 21): btnFTPPause (1,0 75x21) btnFTPAbort (78,0 75x21) pbFTPTransfer (159,2 150x16)
@@ -1434,24 +1444,34 @@ impl App {
             ui.visuals_mut().override_text_color = Some(text);
             ui.visuals_mut().faint_bg_color = back;
         }
-        egui::ScrollArea::vertical().id_salt("ftp-results").auto_shrink([false, false]).show(ui, |ui| {
-            egui::Grid::new("ftp-results-grid").striped(true).num_columns(5).spacing([12.0, 4.0]).show(ui, |ui| {
-                for i in 0..5 {
-                    ui.label(RichText::new(header(i)).strong().family(egui::FontFamily::Name(super::BOLD_FONT_FAMILY.into())));
-                }
-                ui.end_row();
-                // Original FUN_0043f04c event 2 (item end): removes that row from lvFTPProgress.
-                // Original event 4 (build the list): the first cell is empty (lvFTPProgress has no image list), then Local, Progress, (percentage), Remote.
-                for row in rows.iter().filter(|r| r.state != RowState::Done) {
-                    let (bar, percent_text) = row.progress_cells_localized(percent, language);
-                    ui.label("");
-                    ui.label(&row.local);
-                    ui.label(RichText::new(bar).monospace());
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| ui.label(percent_text));
-                    ui.label(&row.remote);
-                    ui.end_row();
-                }
-            });
+        // Fixed column widths make row virtualization independent of
+        // off-screen long paths. Only visible strings are cloned/layouted.
+        let width = ui.available_width().max(1.0);
+        let row_height = ui.text_style_height(&egui::TextStyle::Body).max(16.0) + 4.0;
+        let column_widths = [width * 0.03, width * 0.37, width * 0.13, width * 0.10, width * 0.37];
+        let paint_row = |ui: &mut egui::Ui, labels: [&str; 5], heading: bool, stripe: bool| {
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(width, row_height), egui::Sense::hover());
+            if stripe { ui.painter().rect_filled(rect, 0.0, ui.visuals().faint_bg_color); }
+            let mut x = rect.left();
+            for (i, (label, w)) in labels.into_iter().zip(column_widths).enumerate() {
+                let cell = egui::Rect::from_min_size(egui::pos2(x + 2.0, rect.top()), egui::vec2((w - 4.0).max(1.0), row_height));
+                let mut text = RichText::new(label);
+                if heading { text = text.strong().family(egui::FontFamily::Name(super::BOLD_FONT_FAMILY.into())); }
+                if i == 2 && !heading { text = text.monospace(); }
+                let response = ui.put(cell, egui::Label::new(text).truncate());
+                if !label.is_empty() { response.on_hover_text(label); }
+                x += w;
+            }
+        };
+        let headings = [header(0), header(1), header(2), header(3), header(4)];
+        paint_row(ui, headings.each_ref().map(String::as_str), true, false);
+        egui::ScrollArea::vertical().id_salt("ftp-results").auto_shrink([false, false]).show_rows(ui, row_height, row_count, |ui, range| {
+            let visible = self.ftp_results.lock().map(|rows| rows.iter().filter(|row| row.state != RowState::Done)
+                .skip(range.start).take(range.len()).cloned().collect::<Vec<_>>()).unwrap_or_default();
+            for (i, row) in range.zip(visible) {
+                let (bar, pct) = row.progress_cells_localized(percent, language);
+                paint_row(ui, ["", &row.local, &bar, &pct, &row.remote], false, i % 2 != 0);
+            }
         });
         });
         // Original btnFTPShowDetailClick (0x441114): height > 30 becomes 22 (button row only), otherwise 100. btnFTPCloseProgressClick (0x4410f0): hides pBottom and splBottom.

@@ -201,7 +201,7 @@ fn direct_archive_inputs(sources: &[PathBuf], output: &Path, cancel: &AtomicBool
     let mut guards = Vec::with_capacity(sources.len());
     // Bound the number of open handles. The safe snapshot path still
     // handles larger selections, directories, virtual volumes and aliases.
-    if sources.len() > 512 { return Ok(None); }
+    if sources.len() > 2048 { return Ok(None); }
     let output_existing = fs::canonicalize(output).ok();
     for source in sources {
         check_cancel(cancel)?;
@@ -293,7 +293,7 @@ pub fn create_with_progress(
     #[cfg(test)]
     let allow_direct = allow_direct && !ARCHIVE_TEST_FORCE_SNAPSHOT.with(|flag| flag.get());
     let direct = if allow_direct && program.is_none() && wrapped.is_none() && !options.append
-        && matches!(extension.as_str(), "7z" | "zip" | "tar" | "gz" | "bz2" | "xz") {
+        && matches!(extension.as_str(), "7z" | "zip" | "tar" | "gz" | "bz2" | "xz" | "alz" | "egg") {
         direct_archive_inputs(sources, output, cancel)?
     } else { None };
     let snapshot = unique_path(&temporary, "archive-input");
@@ -872,7 +872,11 @@ pub fn list(archive: &Path, password: Option<&str>) -> Result<Vec<ArchiveEntry>,
 /// entries that were intentionally hidden rather than exposed as filesystem
 /// paths. Callers can show a warning without marking the entire archive bad.
 pub fn list_with_skipped_devices(archive: &Path, password: Option<&str>) -> Result<(Vec<ArchiveEntry>, Vec<String>), String> {
-    list_details(archive, password, &AtomicBool::new(false)).map(|(entries, _, _, skipped)| (entries, skipped))
+    list_with_skipped_devices_cancel(archive, password, &AtomicBool::new(false))
+}
+/// Archive pane navigation must cancel a superseded engine listing.
+pub fn list_with_skipped_devices_cancel(archive: &Path, password: Option<&str>, cancel: &AtomicBool) -> Result<(Vec<ArchiveEntry>, Vec<String>), String> {
+    list_details(archive, password, cancel).map(|(entries, _, _, skipped)| (entries, skipped))
 }
 fn list_cancel(
     archive: &Path,
@@ -932,11 +936,19 @@ fn list_details(
         }
     }
     let mut encrypted = HashSet::new();
-    for block in text.replace("\r\n", "\n").split("\n\n") {
-        if block.lines().any(|l| l == "Encrypted = +") {
-            if let Some(key) = block.lines().find_map(|l| l.strip_prefix("Path = ")) {
-                encrypted.insert(key.to_owned());
+    let mut key: Option<&str> = None;
+    let mut is_encrypted = false;
+    for line in text.lines().chain(std::iter::once("")) {
+        if line.is_empty() {
+            if is_encrypted {
+                if let Some(path) = key { encrypted.insert(path.to_owned()); }
             }
+            key = None;
+            is_encrypted = false;
+        } else if key.is_none() && line.starts_with("Path = ") {
+            key = line.strip_prefix("Path = ");
+        } else if line == "Encrypted = +" {
+            is_encrypted = true;
         }
     }
     Ok((entries, encrypted, iso9660_fallback, skipped_devices))
@@ -971,80 +983,83 @@ fn inspect_tree(path: &Path) -> Result<(), String> {
     }
     Ok(())
 }
+/// The snapshot owns its destination and never changes the original.
+/// Depth-first iteration avoids queuing every file/path pair in wide
+/// directories; restore directory metadata immediately after its children.
 fn copy_tree(source: &Path, target: &Path, cancel: &AtomicBool, buffer: &mut Vec<u8>) -> Result<(), String> {
-    use std::io::Write;
-    let mut pending = vec![(source.to_owned(), target.to_owned())];
-    let mut directories = Vec::new();
-    while let Some((source, target)) = pending.pop() {
-        check_cancel(cancel)?;
-        ensure_plain_path(&source)?;
-        let metadata = fs::symlink_metadata(&source).map_err(|e| e.to_string())?;
-        if is_reparse(&metadata) {
-            return Err("Archive source links are rejected".into());
-        }
-        if metadata.is_dir() {
-            fs::create_dir(&target).map_err(|e| e.to_string())?;
-            for e in fs::read_dir(&source).map_err(|e| e.to_string())? {
-                check_cancel(cancel)?;
-                let e = e.map_err(|e| e.to_string())?;
-                let name = e.file_name();
-                pending.push((source.join(&name), target.join(name)));
-            }
-            directories.push((target, metadata));
-        } else if metadata.is_file() {
-            let mut input = crate::fsops::open_read_sequential(&source, metadata.len())?;
-            let mut output = fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&target)
-                .map_err(|e| e.to_string())?;
-            // A snapshot can contain thousands of tiny files. Grow one
-            // operation-local buffer only as needed instead of zeroing 1 MiB
-            // for every member. Check cancellation between reads as before.
-            let buffer_len = metadata.len().clamp(4096, 1024 * 1024) as usize;
-            if buffer.len() < buffer_len {
-                buffer.resize(buffer_len, 0);
-            }
-            let mut copied = 0;
-            while copied < metadata.len() {
-                check_cancel(cancel)?;
-                let want = (metadata.len()-copied).min(buffer_len as u64) as usize;
-                let n = input.read(&mut buffer[..want]).map_err(|e| e.to_string())?;
-                if n == 0 {
-                    break;
-                }
-                output.write_all(&buffer[..n]).map_err(|e| e.to_string())?;
-                copied += n as u64;
-            }
-            let current = input.metadata().map_err(|e| e.to_string())?;
-            if copied != metadata.len() || current.len() != metadata.len() || current.modified().ok() != metadata.modified().ok() {
-                return Err("Archive source changed while taking the snapshot".into());
-            }
-            crate::fsops::preserve_times(&output, &metadata)?;
-            output
-                .set_permissions(metadata.permissions())
-                .map_err(|e| e.to_string())?;
-        } else {
-            return Err("Only ordinary archive sources are supported".into());
-        }
+    struct Frame {
+        target: PathBuf,
+        metadata: fs::Metadata,
+        children: fs::ReadDir,
     }
-    for (target, metadata) in directories.into_iter().rev() {
+    fn enter(source: &Path, target: &Path, cancel: &AtomicBool, buffer: &mut Vec<u8>) -> Result<Option<Frame>, String> {
+        use std::io::Write;
         check_cancel(cancel)?;
-        let mut options = fs::OpenOptions::new();
-        options.write(true);
-        #[cfg(windows)]
-        {
-            use std::os::windows::fs::OpenOptionsExt;
-            options.custom_flags(0x02000000);
+        ensure_plain_path(source)?;
+        let metadata = fs::symlink_metadata(source).map_err(|e| e.to_string())?;
+        if is_reparse(&metadata) { return Err("Archive source links are rejected".into()); }
+        if metadata.is_dir() {
+            fs::create_dir(target).map_err(|e| e.to_string())?;
+            let children = fs::read_dir(source).map_err(|e| e.to_string())?;
+            return Ok(Some(Frame { target: target.to_owned(), metadata, children }));
         }
-        let directory = options.open(&target).map_err(|e| e.to_string())?;
-        crate::fsops::preserve_times(&directory, &metadata)?;
-        directory
-            .set_permissions(metadata.permissions())
-            .map_err(|e| e.to_string())?;
+        if !metadata.is_file() { return Err("Only ordinary archive sources are supported".into()); }
+        let mut input = crate::fsops::open_read_sequential(source, metadata.len())?;
+        let opened = input.metadata().map_err(|e| e.to_string())?;
+        if !opened.is_file() || is_reparse(&opened) || opened.len() != metadata.len()
+            || opened.modified().ok() != metadata.modified().ok() {
+            return Err("Archive source changed before taking the snapshot".into());
+        }
+        let mut output = fs::OpenOptions::new().write(true).create_new(true).open(target).map_err(|e| e.to_string())?;
+        let buffer_len = metadata.len().clamp(4096, 1024 * 1024) as usize;
+        if buffer.len() < buffer_len { buffer.resize(buffer_len, 0); }
+        let mut copied = 0;
+        while copied < metadata.len() {
+            check_cancel(cancel)?;
+            let want = (metadata.len() - copied).min(buffer_len as u64) as usize;
+            let n = input.read(&mut buffer[..want]).map_err(|e| e.to_string())?;
+            if n == 0 { break; }
+            output.write_all(&buffer[..n]).map_err(|e| e.to_string())?;
+            copied += n as u64;
+        }
+        let current = input.metadata().map_err(|e| e.to_string())?;
+        if copied != metadata.len() || current.len() != metadata.len() || current.modified().ok() != metadata.modified().ok() {
+            return Err("Archive source changed while taking the snapshot".into());
+        }
+        crate::fsops::preserve_times(&output, &metadata)?;
+        output.set_permissions(metadata.permissions()).map_err(|e| e.to_string())?;
+        Ok(None)
+    }
+    let Some(root) = enter(source, target, cancel, buffer)? else { return Ok(()); };
+    let mut stack = vec![root];
+    while let Some(frame) = stack.last_mut() {
+        check_cancel(cancel)?;
+        if let Some(child) = frame.children.next() {
+            let child = child.map_err(|e| e.to_string())?;
+            let target = frame.target.join(child.file_name());
+            let source = child.path();
+            if let Some(next) = enter(&source, &target, cancel, buffer)? {
+                if stack.len() >= 256 { return Err("Archive source exceeds supported directory depth".into()); }
+                stack.push(next);
+            }
+        } else {
+            let Frame { target, metadata, children } = stack.pop().unwrap();
+            drop(children);
+            let mut options = fs::OpenOptions::new();
+            options.write(true);
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::OpenOptionsExt;
+                options.custom_flags(0x02000000);
+            }
+            let directory = options.open(&target).map_err(|e| e.to_string())?;
+            crate::fsops::preserve_times(&directory, &metadata)?;
+            directory.set_permissions(metadata.permissions()).map_err(|e| e.to_string())?;
+        }
     }
     Ok(())
 }
+
 struct Commit {
     installed: Vec<PathBuf>,
     backups: Vec<(PathBuf, PathBuf)>,
@@ -1695,8 +1710,9 @@ pub fn delete_entries(archive: &Path, keys: &[String], password: Option<&str>, c
     let arguments = keys.iter().map(|k| entry_arg(k)).collect::<Result<Vec<_>, _>>()?;
     let (before, _, _, skipped_devices) = list_details(archive, password, cancel)?;
     reject_edit_if_device_entries(&skipped_devices)?;
+    let before_index = ExistingArchiveIndex::new(&before);
     for key in keys {
-        if existing_archive_entry(&before, key).is_none() {
+        if before_index.find(key).is_none() {
             return Err(format!("Archive entry does not exist; nothing deleted: {key}"));
         }
     }
@@ -1705,7 +1721,8 @@ pub fn delete_entries(archive: &Path, keys: &[String], password: Option<&str>, c
         command.args(&arguments);
         execute(command, cancel)?;
         let after = list_cancel(copy, password, cancel)?;
-        if let Some(key) = keys.iter().find(|key| existing_archive_entry(&after, key).is_some()) {
+        let after_index = ExistingArchiveIndex::new(&after);
+        if let Some(key) = keys.iter().find(|key| after_index.find(key).is_some()) {
             return Err(format!("Archive deletion was not applied: {key}"));
         }
         Ok(())
@@ -1729,6 +1746,7 @@ pub fn rename_entries(archive: &Path, renames: &[(String, String)], password: Op
     }).collect::<Result<Vec<_>, _>>()?;
     let (entries, _, _, skipped_devices) = list_details(archive, password, cancel)?;
     reject_edit_if_device_entries(&skipped_devices)?;
+    let index = ExistingArchiveIndex::new(&entries);
     let mut targets = HashSet::new();
     let mut sources = HashSet::new();
     for (from, to, _, _) in &validated {
@@ -1738,10 +1756,10 @@ pub fn rename_entries(archive: &Path, renames: &[(String, String)], password: Op
         if !targets.insert(to.replace('\\', "/").to_lowercase()) {
             return Err(format!("Multiple archive items cannot be renamed to the same destination: {to}"));
         }
-        if existing_archive_entry(&entries, from).is_none() {
+        if index.find(from).is_none() {
             return Err(format!("Archive entry does not exist; nothing renamed: {from}"));
         }
-        if existing_archive_entry(&entries, to).is_some() && !from.eq_ignore_ascii_case(to) {
+        if index.find(to).is_some() && !from.eq_ignore_ascii_case(to) {
             return Err(format!("Archive rename destination already exists: {to}"));
         }
         let normalized_from = from.replace('\\', "/").to_lowercase();
@@ -1756,14 +1774,15 @@ pub fn rename_entries(archive: &Path, renames: &[(String, String)], password: Op
             command.arg(from_arg).arg(to_arg);
             execute(command, cancel)?;
             let actual = list_cancel(copy, password, cancel)?;
-            if existing_archive_entry(&actual, target).is_none() {
+            let actual_index = ExistingArchiveIndex::new(&actual);
+            if actual_index.find(target).is_none() {
                 return Err(format!("Archive rename destination missing after update: {target}"));
             }
             if source.eq_ignore_ascii_case(target) {
                 if !actual.iter().any(|e| e.key.replace('\\', "/") == target.replace('\\', "/")) {
                     return Err(format!("Archive case-only rename did not take effect: {source} -> {target}"));
                 }
-            } else if existing_archive_entry(&actual, source).is_some() {
+            } else if actual_index.find(source).is_some() {
                 return Err(format!("Archive rename source still exists after update: {source}"));
             }
         }
@@ -1791,15 +1810,42 @@ pub fn add_entries(archive: &Path, prefix: &str, sources: &[PathBuf], password: 
 
 /// An explicit directory entry is not required: an archive with "dir/file.txt"
 /// already has a "dir" for purposes of collision detection.
-fn existing_archive_entry(entries: &[ArchiveEntry], key: &str) -> Option<ArchiveEntry> {
-    let wanted = key.replace('\\', "/").trim_end_matches('/').to_lowercase();
-    let normal = |k: &str| k.replace('\\', "/").trim_end_matches('/').to_lowercase();
-    entries.iter().find(|e| normal(&e.key) == wanted).cloned().or_else(|| {
-        let prefix = format!("{wanted}/");
-        entries.iter().any(|e| normal(&e.key).starts_with(&prefix)).then(|| ArchiveEntry {
+struct ExistingArchiveIndex<'a> {
+    entries: &'a [ArchiveEntry],
+    keys: Vec<(String, usize)>,
+}
+impl<'a> ExistingArchiveIndex<'a> {
+    fn new(entries: &'a [ArchiveEntry]) -> Self {
+        let mut keys: Vec<_> = entries.iter().enumerate().map(|(i, e)|
+            (e.key.replace('\\', "/").trim_end_matches('/').to_lowercase(), i)).collect();
+        keys.sort_unstable();
+        Self { entries, keys }
+    }
+    fn find(&self, key: &str) -> Option<ArchiveEntry> {
+        let wanted = key.replace('\\', "/").trim_end_matches('/').to_lowercase();
+        let at = self.keys.partition_point(|(k, _)| k < &wanted);
+        if let Some((k, index)) = self.keys.get(at) {
+            if k == &wanted { return Some(self.entries[*index].clone()); }
+        }
+        let mut prefix = wanted;
+        prefix.push('/');
+        let at = self.keys.partition_point(|(k, _)| k < &prefix);
+        self.keys.get(at).is_some_and(|(k, _)| k.starts_with(&prefix)).then(|| ArchiveEntry {
             key: key.to_owned(), is_dir: true, size: 0, size_known: true, modified: None,
         })
-    })
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn batch432_existing_index_resolves_implicit_and_exact_names() {
+    let entries = parse_listing("Path = Top\\Sub\\file.txt\nSize = 7\n\nPath = Top\\other.txt\nSize = 4").unwrap();
+    let index = ExistingArchiveIndex::new(&entries);
+    assert!(index.find("top").unwrap().is_dir);
+    assert!(index.find("TOP/sub/").unwrap().is_dir);
+    assert_eq!(index.find("top/sub/FILE.txt").unwrap().size, 7);
+    assert!(index.find("to").is_none());
+    assert!(index.find("Top/sub/file").is_none());
 }
 
 /// A merged folder must resolve *nested* name collisions too. Otherwise 7-Zip
@@ -1811,7 +1857,7 @@ fn stage_merged_archive_folder(
     source: &Path,
     target: &Path,
     key: &str,
-    existing: &[ArchiveEntry],
+    existing: &ExistingArchiveIndex<'_>,
     cancel: &AtomicBool,
     conflicts: &mut dyn FnMut(&Path, &ArchiveEntry) -> AddConflict,
     skipped: &mut Vec<PathBuf>,
@@ -1840,7 +1886,7 @@ fn stage_merged_archive_folder(
         let mut skip = false;
         loop {
             let child_key = format!("{key}/{name}");
-            let Some(entry) = existing_archive_entry(existing, &child_key) else { break };
+            let Some(entry) = existing.find(&child_key) else { break };
             match conflicts(&child_path, &entry) {
                 AddConflict::Merge if entry.is_dir == directory => {
                     merge_folder = directory;
@@ -1901,7 +1947,8 @@ pub fn add_entries_with(
     // Existing items (a folder counts even without a separate folder entry when items below it exist).
     let (existing, _, _, skipped_devices) = list_details(archive, password, cancel)?;
     reject_edit_if_device_entries(&skipped_devices)?;
-    let find = |key: &str| existing_archive_entry(&existing, key);
+    let existing = ExistingArchiveIndex::new(&existing);
+    let find = |key: &str| existing.find(key);
     let snapshot = unique_path(&std::env::temp_dir(), "archive-add");
     fs::create_dir(&snapshot).map_err(|e| e.to_string())?;
     let result = (|| {
@@ -2358,12 +2405,12 @@ fn extraction_manifest(entries: &[ArchiveEntry]) -> Result<HashMap<String, (bool
         let name = entry.key.replace('\\', "/").to_lowercase();
         let mut parent = name.as_str();
         while let Some((ancestor, _)) = parent.rsplit_once('/') {
-            match expected.entry(ancestor.to_owned()) {
-                std::collections::hash_map::Entry::Occupied(e) if !e.get().0 => {
-                    return Err(format!("Archive file/directory collision: {ancestor}"));
-                }
-                std::collections::hash_map::Entry::Occupied(_) => {}
-                std::collections::hash_map::Entry::Vacant(e) => { e.insert((true, None)); }
+            match expected.get(ancestor) {
+                Some((false, _)) => return Err(format!("Archive file/directory collision: {ancestor}")),
+                // Every inserted directory already has all its ancestors
+                // present (or will have them by the end of this walk).
+                Some((true, _)) => break,
+                None => { expected.insert(ancestor.to_owned(), (true, None)); }
             }
             parent = ancestor;
         }
@@ -2445,11 +2492,12 @@ fn selected_root_moves(entries: &[ArchiveEntry], wanted: &[String]) -> Result<Ve
     Ok(moves)
 }
 
-fn write_archive_listfile(path: &Path, names: impl Iterator<Item = String>) -> Result<(), String> {
+fn write_archive_listfile(path: &Path, names: impl Iterator<Item = impl AsRef<str>>) -> Result<(), String> {
     use std::io::Write;
     let file = fs::OpenOptions::new().write(true).create_new(true).open(path).map_err(|e| e.to_string())?;
     let mut writer = std::io::BufWriter::new(file);
     for name in names {
+        let name = name.as_ref();
         // The validated list contains literal names, not switches or lines.
         if name.contains(['\r', '\n', '\0', '"']) { return Err("Unsafe archive list name".into()); }
         // 7-Zip trims unquoted leading spaces in list files. Quoted literal
@@ -2496,12 +2544,12 @@ fn extract_batch(
         if iso9660_fallback { cmd.arg("-tiso"); }
         if !wanted.is_empty() {
             let include = work_absolute.join("include.txt");
-            write_archive_listfile(&include, entries.iter().map(|e| e.key.clone()))?;
+            write_archive_listfile(&include, entries.iter().map(|e| e.key.as_str()))?;
             cmd.arg(format!("-i@{}", include.display()));
         }
         if !skipped_devices.is_empty() {
             let exclude = work_absolute.join("exclude.txt");
-            write_archive_listfile(&exclude, skipped_devices.iter().cloned())?;
+            write_archive_listfile(&exclude, skipped_devices.iter())?;
             cmd.arg(format!("-x@{}", exclude.display()));
         }
         password_arg(&mut cmd, password)?;
@@ -2527,7 +2575,8 @@ fn extract_batch(
                 // Preserve per-member password recovery and legacy handling
                 // of exceptional decoder failures. Cancel never retries.
                 check_cancel(cancel)?;
-                if may_need_password_retry || password_failure(&error) {
+                let terminal = matches!(original_error_key(&error), Some("DISKISFULL" | "CANNOT_FIND_NEXTVOLUME" | "CANNOT_CREATEFILE"));
+                if !terminal && (may_need_password_retry || password_failure(&error)) {
                     engine_progress(0, None, "");
                     return Ok(BatchExtraction::RetryIndividually);
                 }
@@ -3568,6 +3617,31 @@ mod tests {
         let cancelled_target = root.join("cancelled");
         assert!(copy_tree(&root.join("source0"), &cancelled_target, &cancel, &mut buffer).is_err());
         assert!(!cancelled_target.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn batch434_direct_alz_egg_keep_literal_names_and_contents() {
+        let root = fixture();
+        let src = root.join("src");
+        fs::create_dir_all(src.join("sub")).unwrap();
+        let names = ["plain.txt", " leading.txt", "@literal.txt", "-switch.txt"];
+        for name in names { fs::write(src.join(name), name.as_bytes()).unwrap(); }
+        fs::write(src.join("sub/plain.txt"), b"unselected").unwrap();
+        let sources: Vec<_> = names.iter().map(|name| src.join(name)).collect();
+        let cancel = AtomicBool::new(false);
+        for extension in ["alz", "egg"] {
+            let archive = root.join(format!("direct.{extension}"));
+            let options = crate::commands::ArchiveOptions { extension: extension.into(), level: 5,
+                password: String::new(), volume_bytes: None, recursive: true, append: false };
+            create_configured(&sources, &archive, &options, &cancel).unwrap();
+            let entries = list(&archive, None).unwrap();
+            assert_eq!(entries.len(), names.len(), "{extension}");
+            let destination = root.join(format!("out-{extension}"));
+            extract(&archive, &destination, None, &cancel).unwrap();
+            for name in names { assert_eq!(fs::read(destination.join(name)).unwrap(), name.as_bytes(), "{extension}"); }
+            assert!(!destination.join("sub").exists());
+        }
         fs::remove_dir_all(root).unwrap();
     }
 

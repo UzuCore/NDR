@@ -363,19 +363,29 @@ impl App {
     pub(super) fn cycle_selection(&mut self, shift: bool) {
         let select_folders = self.settings.flag("SelectFolders", false);
         let pane = &mut self.panes[self.active];
-        let files: Vec<usize> = (0..pane.entries.len()).filter(|&i| !pane.entries[i].is_dir).collect();
-        // Original SelectAll (0x7dcb00) selects kind 3 (files) and, when folders are included, kind 1 (folders) only (no drive items).
-        let folders: Vec<usize> = (0..pane.entries.len()).filter(|&i| pane.entries[i].is_dir && !pane.entries[i].drive && !pane.entries[i].is_parent()).collect();
+        let is_file = |e: &Entry| !e.is_dir && !e.drive && !e.is_parent();
+        let is_folder = |e: &Entry| e.is_dir && !e.drive && !e.is_parent();
         if pane.selected.is_empty() {
-            let include_folders = files.is_empty() || (select_folders ^ shift);
-            pane.selected = (0..pane.entries.len()).filter(|&i| !pane.entries[i].drive && !pane.entries[i].is_parent() && (include_folders || !pane.entries[i].is_dir)).collect();
+            let include_folders = !pane.entries.iter().any(is_file) || (select_folders ^ shift);
+            pane.selected = pane.entries.iter().enumerate()
+                .filter(|(_, e)| is_file(e) || (include_folders && is_folder(e)))
+                .map(|(i, _)| i).collect();
             return;
         }
-        // The ".." row is not selected, like the original (+0x67).
-        let no_folder_marked = !folders.is_empty() && folders.iter().all(|i| !pane.selected.contains(i));
-        let all_files_marked = files.iter().all(|i| pane.selected.contains(i));
-        if no_folder_marked && all_files_marked {
-            pane.selected.extend(folders);
+        // No file/folder index vectors: scan the sorted marks and rows
+        // together in linear time instead of N tree lookups.
+        let mut marks = pane.selected.iter().copied().peekable();
+        let mut all_files_marked = true;
+        let mut any_folder = false;
+        let mut folder_marked = false;
+        for (i, e) in pane.entries.iter().enumerate() {
+            while marks.peek().is_some_and(|&m| m < i) { marks.next(); }
+            let selected = marks.peek().is_some_and(|&m| m == i);
+            if is_file(e) && !selected { all_files_marked = false; }
+            if is_folder(e) { any_folder = true; folder_marked |= selected; }
+        }
+        if any_folder && !folder_marked && all_files_marked {
+            pane.selected.extend(pane.entries.iter().enumerate().filter(|(_, e)| is_folder(e)).map(|(i, _)| i));
         } else {
             pane.selected.clear();
         }

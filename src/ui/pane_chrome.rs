@@ -425,7 +425,7 @@ impl App {
                 .filter(|e| e.is_dir && e.name != "." && e.name != "..")
                 .map(|e| (PathBuf::from(super::ftp_pane::join_remote(&folder, &e.name)), e.name))
                 .collect();
-            children.sort_by(|a, b| a.1.to_uppercase().cmp(&b.1.to_uppercase()));
+            children.sort_by_cached_key(|child| child.1.to_uppercase());
             self.crumb_cache.insert(key, children.clone());
             return children;
         }
@@ -458,7 +458,7 @@ impl App {
                 .map(|mut children| {
                     // Original FUN_0048c548 uses FindFirstFileW/FindNextFileW order (NTFS = upper-cased name order). Fixed: read_dir order
                     // is unspecified and could differ from name order.
-                    children.sort_by(|a, b| a.1.to_uppercase().cmp(&b.1.to_uppercase()));
+                    children.sort_by_cached_key(|child| child.1.to_uppercase());
                     children
                 })
                 .unwrap_or_default()
