@@ -693,7 +693,18 @@ impl App {
         if in_archive.is_some() && matches!(mode, ExtractMode::CurrentFolder | ExtractMode::Auto) {
             return;
         }
-        let selected = self.target_entries(i);
+        // Same-location watcher/drive refresh leaves the old rows visible
+        // and preserves the selected paths. Auto Extract is a read-only
+        // operation on those explicit archive paths, so it need not lose
+        // the shortcut during this brief refresh. The extraction worker
+        // reopens and validates the archive; a missing/invalid archive is
+        // reported normally. Never read stale rows from a different folder,
+        // remote location, or encrypted/virtual listing.
+        let pane=&self.panes[i];
+        let same_local_relist=mode==ExtractMode::Auto && pane.loading
+            && pane.archive.is_none() && pane.remote.is_none() && pane.vault.is_none()
+            && pane.listed.as_deref()==Some(location_key(pane).as_str());
+        let selected=if same_local_relist{self.displayed_target_entries(i)}else{self.target_entries(i)};
         let command_folder = self.command_directory(i);
         let archives: Vec<PathBuf> = match &in_archive {
             Some(location) => vec![archive::first_volume_path(&location.file)],

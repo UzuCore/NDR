@@ -37,6 +37,187 @@ fn press(app: &mut App, ctx: &egui::Context, key: egui::Key, modifiers: egui::Mo
 }
 const NONE: egui::Modifiers = egui::Modifiers::NONE;
 
+/// Use a real ZIP so this covers both keyboard routing and extraction.
+fn alt_q_fixture(label:&str)->(PathBuf,egui::Context,App,PathBuf) {
+    let (root,ctx,mut app)=fixture(label,"ko");
+    let zip=root.join("left/auto-test.zip");
+    ndr::archive::create(&[root.join("left/a.txt")],&zip,None,&AtomicBool::new(false)).unwrap();
+    app.refresh(0);wait(&mut app,&ctx);
+    app.active=0;
+    app.panes[0].selected.clear();
+    app.panes[0].cursor=app.panes[0].entries.iter().position(|e|e.path==zip).unwrap();
+    (root,ctx,app,zip)
+}
+
+fn alt_q_frame(app:&mut App,ctx:&egui::Context,ime:bool,frame_modifiers:egui::Modifiers) {
+    let mut events=Vec::new();
+    if ime { events.push(egui::Event::Ime(egui::ImeEvent::Commit("b".into()))); }
+    events.push(egui::Event::Key{key:egui::Key::Q,physical_key:Some(egui::Key::Q),pressed:true,repeat:false,modifiers:egui::Modifiers::ALT});
+    events.push(egui::Event::Key{key:egui::Key::Q,physical_key:Some(egui::Key::Q),pressed:false,repeat:false,modifiers:frame_modifiers});
+    let raw=egui::RawInput{events,modifiers:frame_modifiers,..Default::default()};
+    let _=ctx.run(raw,|ctx|app.keyboard(ctx));
+}
+
+#[test]
+fn alt_q_extract_survives_ime_commit_and_alt_release_in_same_frame() {
+    let(root,ctx,mut app,zip)=alt_q_fixture("alt-q-ime");
+    alt_q_frame(&mut app,&ctx,true,egui::Modifiers::NONE);
+    assert!(app.job.is_some(),"Alt+Q must win over IME commit");
+    assert!(app.msgboxes.is_empty());
+    finish_archive_clipboard_job(&mut app,&ctx);
+    assert_eq!(fs::read(root.join("left/auto-test/a.txt")).unwrap(),b"a");
+    assert!(zip.is_file());
+    drop(app);fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn alt_q_extract_during_same_folder_refresh_uses_visible_archive() {
+    let(root,ctx,mut app,zip)=alt_q_fixture("alt-q-relist");
+    // Deterministic simulation of an in-flight watcher relist: displayed
+    // rows still belong to the same location, not another directory.
+    assert_eq!(app.panes[0].listed.as_deref(),Some(location_key(&app.panes[0]).as_str()));
+    app.panes[0].loading=true;
+    alt_q_frame(&mut app,&ctx,false,egui::Modifiers::ALT);
+    assert!(app.job.is_some(),"same-location relist must not swallow extraction");
+    assert!(app.msgboxes.is_empty());
+    app.panes[0].loading=false;
+    finish_archive_clipboard_job(&mut app,&ctx);
+    assert_eq!(fs::read(root.join("left/auto-test/a.txt")).unwrap(),b"a");
+    assert!(zip.is_file());
+    drop(app);fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn alt_q_never_extracts_previous_folder_rows_during_navigation() {
+    let(root,ctx,mut app,_zip)=alt_q_fixture("alt-q-navigation");
+    app.panes[0].path=root.join("right");
+    app.panes[0].loading=true;
+    alt_q_frame(&mut app,&ctx,false,egui::Modifiers::ALT);
+    assert!(app.job.is_none());
+    assert!(!root.join("left/auto-test").exists());
+    assert!(!root.join("right/auto-test").exists());
+    assert!(!app.msgboxes.is_empty());
+    drop(app);fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn alt_q_respects_custom_shortcut_assignment() {
+    let(root,ctx,mut app,_zip)=alt_q_fixture("alt-q-custom");
+    let mut map=compat::ShortcutMap::parse(None);
+    map.set_binding("miArcExtractAuto","Alt+Shift+Q").unwrap();
+    map.set_binding("miSelectAll","Alt+Q").unwrap();
+    app.settings.set_text("OriginalShortcutMapText",&map.to_text());
+    alt_q_frame(&mut app,&ctx,true,egui::Modifiers::NONE);
+    assert!(app.job.is_none());
+    assert!(!app.panes[0].selected.is_empty(),"custom Alt+Q must win over the default");
+    drop(app);fs::remove_dir_all(root).unwrap();
+}
+
+
+fn shortcut_batch(app:&mut App,ctx:&egui::Context, key:egui::Key, modifiers:egui::Modifiers, ime:bool){
+    let mut events=vec![egui::Event::Key{key:egui::Key::A,physical_key:None,pressed:true,repeat:false,modifiers:NONE}];
+    if ime{events.push(egui::Event::Ime(egui::ImeEvent::Commit("b".into())));}
+    events.push(egui::Event::Key{key,physical_key:Some(key),pressed:true,repeat:false,modifiers});
+    events.push(egui::Event::Key{key,physical_key:Some(key),pressed:false,repeat:false,modifiers:NONE});
+    let _=ctx.run(egui::RawInput{events,modifiers:NONE,..Default::default()},|ctx|app.keyboard(ctx));
+}
+
+#[test]
+fn shortcut_batch_ctrl_extract_wins_over_unrelated_key_and_ime(){
+    let(root,ctx,mut app,_)=alt_q_fixture("ctrl-extract-batch");
+    shortcut_batch(&mut app,&ctx,egui::Key::E,CTRL,true);
+    assert!(!app.original_dialogs.is_empty() || app.job.is_some() || app.popup.is_some(),"Ctrl+E must open the extraction command");
+    drop(app);fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn shortcut_batch_f2_rename_and_relist_deferral(){
+    let(root,ctx,mut app)=fixture("rename-relist","ko");
+    app.panes[0].cursor=app.panes[0].entries.iter().position(|e|e.name=="a.txt").unwrap();
+    app.panes[0].loading=true;
+    shortcut_batch(&mut app,&ctx,egui::Key::F2,NONE,true);
+    assert!(app.pending_list_command.is_some(),"F2 waits for same-folder relist");
+    assert!(app.original_dialogs.is_empty());
+    app.panes[0].loading=false;
+    let _=ctx.run(egui::RawInput::default(),|ctx|app.keyboard(ctx));
+    assert!(app.pending_list_command.is_none());
+    assert!(!app.original_dialogs.is_empty(),"F2 opens rename after unchanged relist");
+    assert!(root.join("left/a.txt").exists());
+    drop(app);fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn shortcut_batch_relist_changed_target_is_not_replayed(){
+    let(root,ctx,mut app)=fixture("rename-relist-changed","ko");
+    app.panes[0].cursor=app.panes[0].entries.iter().position(|e|e.name=="a.txt").unwrap();
+    app.panes[0].loading=true;
+    shortcut_batch(&mut app,&ctx,egui::Key::R,ALT,true);
+    assert!(app.pending_list_command.is_some());
+    app.panes[0].loading=false;
+    let row=app.panes[0].cursor;
+    app.panes[0].entries[row].size+=1;
+    let _=ctx.run(egui::RawInput::default(),|ctx|app.keyboard(ctx));
+    assert!(app.pending_list_command.is_none());
+    assert!(app.original_dialogs.is_empty());
+    assert!(app.job.is_none());
+    drop(app);fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn shortcut_batch_relist_new_input_cancels_pending_command(){
+    let(root,ctx,mut app)=fixture("rename-relist-cancel","ko");
+    app.panes[0].cursor=app.panes[0].entries.iter().position(|e|e.name=="a.txt").unwrap();
+    app.panes[0].loading=true;
+    shortcut_batch(&mut app,&ctx,egui::Key::R,ALT,false);
+    assert!(app.pending_list_command.is_some());
+    app.panes[0].loading=false;
+    let _=ctx.run(egui::RawInput{events:vec![egui::Event::Key{key:egui::Key::Escape,physical_key:None,pressed:true,repeat:false,modifiers:NONE}],..Default::default()},|ctx|app.keyboard(ctx));
+    assert!(app.pending_list_command.is_none());
+    assert!(app.original_dialogs.is_empty());
+    drop(app);fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn shortcut_batch_navigation_uses_press_modifiers(){
+    let(root,ctx,mut app)=fixture("nav-modifiers","ko");
+    let first=app.panes[0].entries.iter().position(|e|!e.is_dir).unwrap();
+    app.panes[0].cursor=0;
+    shortcut_batch(&mut app,&ctx,egui::Key::Home,CTRL,true);
+    assert_eq!(app.panes[0].cursor,first);
+    app.panes[0].cursor=first;
+    shortcut_batch(&mut app,&ctx,egui::Key::ArrowDown,SHIFT,false);
+    assert!(app.panes[0].selected.contains(&first));
+    assert!(app.panes[0].selected.contains(&(first+1)));
+    drop(app);fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn shortcut_batch_native_clipboard_retains_press_modifiers(){
+    use ndr::shell_menu::{ClipboardKeyKind as K,ClipboardKeyPress as P};
+    let mut raw=egui::RawInput{events:vec![egui::Event::Copy,egui::Event::Cut,egui::Event::Paste("x".into())],modifiers:NONE,..Default::default()};
+    restore_captured_clipboard_keys(&mut raw,vec![
+        P{kind:K::Copy,vk:0x2d,ctrl:true,shift:false,alt:false},
+        P{kind:K::Cut,vk:0x2e,ctrl:false,shift:true,alt:false},
+        P{kind:K::Paste,vk:0x56,ctrl:true,shift:true,alt:false},
+        P{kind:K::Paste,vk:0x2d,ctrl:false,shift:true,alt:false},
+    ]);
+    let keys=raw.events.iter().filter_map(|event|match event{
+        egui::Event::Key{key,modifiers,pressed:true,..}=>Some((*key,modifiers.ctrl,modifiers.shift,modifiers.alt)),_=>None
+    }).collect::<Vec<_>>();
+    assert_eq!(keys,vec![(egui::Key::Insert,true,false,false),(egui::Key::Delete,false,true,false),(egui::Key::V,true,true,false),(egui::Key::Insert,false,true,false)]);
+}
+
+#[test]
+fn shortcut_batch_native_clipboard_never_invents_delete_or_alt_paste(){
+    use ndr::shell_menu::{ClipboardKeyKind as K,ClipboardKeyPress as P};
+    let mut raw=egui::RawInput::default();
+    restore_captured_clipboard_keys(&mut raw,vec![
+        P{kind:K::Cut,vk:0x2e,ctrl:true,shift:true,alt:false},
+        P{kind:K::Paste,vk:0x56,ctrl:true,shift:false,alt:true},
+    ]);
+    assert!(raw.events.is_empty());
+}
+
 #[test]
 fn shortcut_creation_keys_and_menu_accelerators_are_updated() {
     let keys = compat::ShortcutMap::parse(None);

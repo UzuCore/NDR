@@ -83,6 +83,13 @@ impl App {
         if p.loading {
             return vec![];
         }
+        self.displayed_target_entries(pane)
+    }
+
+    /// Only for callers that have independently proved the displayed rows
+    /// belong to the current location. Never use during actual navigation.
+    pub(super) fn displayed_target_entries(&self,pane:usize)->Vec<Entry>{
+        let p=&self.panes[pane];
         ndr::parity::collect_items(p.entries.len(), &p.selected, Some(p.cursor)).into_iter().filter_map(|i| p.entries.get(i).filter(|e| !e.drive && !e.is_parent()).cloned()).collect()
     }
 

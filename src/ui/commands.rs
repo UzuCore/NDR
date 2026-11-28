@@ -87,8 +87,9 @@ impl App {
     /// Original FUN_0042d518 (to the right) / FUN_0042d910 (to the left): the vertical bar copy buttons and shortcut command (FUN_00443f14), skin theme:
     /// nothing with a single pane. When both are local folders, always ask with TITLE_FILEOPERATION / MSG_TORIGHT or MSG_TOLEFT (%s = COPY or MOVE);
     /// local<->FTP uploads or downloads. The original did nothing when an archive location was involved; per user request NDR adds into or extracts from archives.
-    pub(super) fn original_copy_to_other(&mut self,source:usize,moving:bool,_ctx:&egui::Context){
+    pub(super) fn original_copy_to_other(&mut self,source:usize,moving:bool,ctx:&egui::Context){
         if !self.dual{return;}
+        if self.defer_list_command(source,super::keyboard::DeferredListAction::CopyOther{source,moving,confirm:true},ctx){return;}
         let target=1-source;
         if self.panes[source].archive.is_some()||self.panes[target].archive.is_some(){self.archive_route_to_other(source,moving);return;}
         if self.ftp_route_copy(source){return;}
@@ -105,7 +106,8 @@ impl App {
             if result==ndr::msgbox::IDYES{app.transfer_from(source,sources,destination,moving,super::file_operation::TransferKind::OtherPane);}
         });
     }
-    pub(super) fn copy_to_other(&mut self,source:usize,moving:bool,_ctx:&egui::Context){
+    pub(super) fn copy_to_other(&mut self,source:usize,moving:bool,ctx:&egui::Context){
+        if self.defer_list_command(source,super::keyboard::DeferredListAction::CopyOther{source,moving,confirm:false},ctx){return;}
         if self.panes.iter().any(|pane| pane.vault.is_some()) {
             self.status = self.catalog("NDR.UI_VAULT_CLIPBOARD_COPY", "암호화 폴더와의 복사·이동은 클립보드 붙여넣기를 이용하세요.", "Use clipboard paste to copy or move items to or from an encrypted folder.");
             return;
@@ -623,6 +625,10 @@ impl App {
         }
     }
     pub(super) fn dispatch(&mut self, id: &str, ctx: &egui::Context) {
+        if self.shortcut_routing && self.panes[self.active].loading && super::keyboard::selection_command(id)
+            && self.defer_list_command(self.active,super::keyboard::DeferredListAction::Dispatch(id.to_owned()),ctx){
+            return;
+        }
         if matches!(id, "copyToOther" | "moveToOther" | "contextCopyTo" | "contextMoveTo")
             && self.panes.iter().any(|pane| pane.vault.is_some()) {
             let source = self.active;
@@ -802,7 +808,7 @@ impl App {
             "historyBack"=>self.dispatch("back",ctx),"historyForward"=>self.dispatch("forward",ctx),"batchRename"=>self.dispatch("advancedRename",ctx),
             "deleteToolbar"=>{
                 // Original Recycle Bin button FUN_0042f13c: chooses by Shift/Ctrl/Alt at the time of the click.
-                let Some(target)=recycle_button_target(ctx.input(|i|i.modifiers)) else { return };
+                let Some(target)=recycle_button_target(self.command_modifiers(ctx)) else { return };
                 self.dispatch(target,ctx)
             },"extractToolbar"=>self.dispatch("extractSelected",ctx),
             "open"=>self.open_current(),
@@ -880,11 +886,11 @@ impl App {
                 }
             },
             // Original miDeleteClick (0x431c04): if Shift (GetKeyState 0x10) is down when chosen, the last argument of FUN_0042c734 is 1 = permanent delete.
-            "deleteRecycle"|"deletePermanent"=>self.delete_items(id=="deleteRecycle"&&!ctx.input(|i|i.modifiers.shift)),
+            "deleteRecycle"|"deletePermanent"=>self.delete_items(id=="deleteRecycle"&&!self.command_modifiers(ctx).shift),
             "shred"=>self.shred_items(),
-            "copyFullPath"|"copyPathOnly"|"copyName"=>{let escape=ctx.input(|input|input.modifiers.shift);self.copy_item_paths(match id{"copyName"=>ndr::parity::PathPart::Name,"copyPathOnly"=>ndr::parity::PathPart::Folder,_=>ndr::parity::PathPart::Full},escape);},
+            "copyFullPath"|"copyPathOnly"|"copyName"=>{let escape=self.command_modifiers(ctx).shift;self.copy_item_paths(match id{"copyName"=>ndr::parity::PathPart::Name,"copyPathOnly"=>ndr::parity::PathPart::Folder,_=>ndr::parity::PathPart::Full},escape);},
             "copyFolder"=>{let value=if let Some(remote)=&self.panes[i].remote { remote.address() } else { path.to_string_lossy().into_owned() };result=(self.clipboard_writer)(&value);},
-            "selectAll" => {let shift=ctx.input(|i|i.modifiers.shift);self.cycle_selection(shift);},
+            "selectAll" => {let shift=self.command_modifiers(ctx).shift;self.cycle_selection(shift);},
             "invertSelection" => self.original_invert_selection(),
             // Original Edit menu miSelect ("Select\tSpacebar"): toggles the current item's mark like Space.
             "select"=>self.select_current_and_move(),

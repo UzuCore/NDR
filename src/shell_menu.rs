@@ -441,23 +441,41 @@ pub fn properties(paths: &[PathBuf]) -> Result<(), String> {
     unsafe { selection.menu.InvokeCommand((&invoke as *const CMINVOKECOMMANDINFOEX).cast()) }.map_err(|e| e.to_string())
 }
 
-/// The original NexusFile takes Ctrl+V (Shift+Insert) as a shortcut. egui-winit sends no event for the paste key when the clipboard has no text
-/// (only a file list), so a main window subclass counts WM_KEYDOWN (take_paste_keys).
-static PASTE_KEYS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+/// egui-winit replaces clipboard chords with unmodified Copy/Cut/Paste
+/// events and drops paste when clipboard text is empty. Keep the modifier
+/// state at WM_KEYDOWN, not the state when the next egui frame is drawn.
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+pub enum ClipboardKeyKind {Copy,Cut,Paste}
+#[derive(Clone,Copy,Debug)]
+pub struct ClipboardKeyPress {
+    pub kind:ClipboardKeyKind,
+    pub vk:u16,
+    pub ctrl:bool,
+    pub shift:bool,
+    pub alt:bool,
+}
+static CLIPBOARD_KEYS:std::sync::Mutex<Vec<ClipboardKeyPress>>=std::sync::Mutex::new(Vec::new());
 static PASTE_DEFAULT: std::sync::OnceLock<DefaultSubclass> = std::sync::OnceLock::new();
 /// The "Num *", "Num +", "Num -", "Num /", "Num 0-9" and "Num ." keys of the original shortcut table. egui has no numpad keys (Num * has no event at all,
 /// the rest share names with ordinary keys), so the subclass records (virtual key, Ctrl, Shift, Alt) (take_numpad_keys).
 static NUMPAD_KEYS: std::sync::Mutex<Vec<(u16, bool, bool, bool)>> = std::sync::Mutex::new(Vec::new());
 unsafe extern "system" fn paste_key_proc(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM, _id: usize, _data: usize) -> LRESULT {
     if message == WM_KEYDOWN || message == WM_SYSKEYDOWN {
-        use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_CONTROL, VK_INSERT, VK_MENU, VK_SHIFT};
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_CONTROL, VK_INSERT, VK_DELETE, VK_MENU, VK_SHIFT};
         let down = |key: u16| unsafe { GetKeyState(key as i32) } < 0;
         let (ctrl, shift, alt) = (down(VK_CONTROL), down(VK_SHIFT), down(VK_MENU));
         let key = wparam.0;
-        // Ctrl+V and Ctrl+Shift+V (original miPasteAsShortcut, Shift+Ctrl+V) both come from egui-winit as Paste, which it drops with no clipboard text.
-        // Previously only Ctrl+V without Shift was counted, so paste as shortcut did nothing.
-        if message == WM_KEYDOWN && !alt && ((key == b'V' as usize && ctrl) || (key == VK_INSERT as usize && shift && !ctrl)) {
-            PASTE_KEYS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        // Mirror egui-winit's cut -> copy -> paste classification.
+        let kind=if ctrl&&key==b'X' as usize || shift&&key==VK_DELETE as usize {
+            Some(ClipboardKeyKind::Cut)
+        }else if ctrl&&(key==b'C' as usize||key==VK_INSERT as usize){
+            Some(ClipboardKeyKind::Copy)
+        }else if ctrl&&key==b'V' as usize||shift&&key==VK_INSERT as usize {
+            Some(ClipboardKeyKind::Paste)
+        }else{None};
+        if let Some(kind)=kind {
+            let mut keys=CLIPBOARD_KEYS.lock().unwrap_or_else(|e|e.into_inner());
+            if keys.len()<128 {keys.push(ClipboardKeyPress{kind,vk:key as u16,ctrl,shift,alt});}
         }
         // The original list also opens the right-click menu with the Apps key (VK_APPS, WM_CONTEXTMENU at -1, -1) (FUN_00484e8c). egui has no such key.
         if message == WM_KEYDOWN && key == 0x5d {
@@ -490,9 +508,9 @@ pub fn take_context_keys() -> u32 {
     CONTEXT_KEYS.swap(0, std::sync::atomic::Ordering::Relaxed)
 }
 
-/// Paste key presses counted since the last call.
-pub fn take_paste_keys() -> u32 {
-    PASTE_KEYS.swap(0, std::sync::atomic::Ordering::Relaxed)
+/// Clipboard chords captured for the current frame.
+pub fn take_clipboard_keys()->Vec<ClipboardKeyPress>{
+    std::mem::take(&mut *CLIPBOARD_KEYS.lock().unwrap_or_else(|e|e.into_inner()))
 }
 
 /// Numpad keys pressed since the last call (virtual key, Ctrl, Shift, Alt).

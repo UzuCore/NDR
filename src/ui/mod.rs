@@ -471,6 +471,35 @@ pub(super) fn restore_clipboard_keys(raw: &mut egui::RawInput, pastes: u32, inse
         raw.events.push(key(paste_key));
     }
 }
+/// Restore native clipboard events with their actual per-press chords.
+pub(super) fn restore_captured_clipboard_keys(raw:&mut egui::RawInput,presses:Vec<ndr::shell_menu::ClipboardKeyPress>){
+    use ndr::shell_menu::ClipboardKeyKind as K;
+    let mut remaining=presses.into_iter().map(Some).collect::<Vec<_>>();
+    let as_event=|press:ndr::shell_menu::ClipboardKeyPress| {
+        let key=match press.vk {
+            0x2d=>egui::Key::Insert,0x2e=>egui::Key::Delete,
+            0x43=>egui::Key::C,0x58=>egui::Key::X,0x56=>egui::Key::V,_=>return None,
+        };
+        Some(egui::Event::Key{key,physical_key:Some(key),pressed:true,repeat:false,
+            modifiers:egui::Modifiers{ctrl:press.ctrl,command:press.ctrl,shift:press.shift,alt:press.alt,..Default::default()}})
+    };
+    for event in &mut raw.events {
+        let kind=match event {egui::Event::Copy=>K::Copy,egui::Event::Cut=>K::Cut,egui::Event::Paste(_)=>K::Paste,_=>continue};
+        if let Some(slot)=remaining.iter_mut().find(|p|p.is_some_and(|p|p.kind==kind)){
+            if let Some(key)=slot.take().and_then(as_event){*event=key;}
+        }
+    }
+    // No text on the clipboard: winit omits the paste event. Recover only
+    // genuine native paste chords, never synthesize a missing delete/cut.
+    let mut unmatched=remaining.into_iter().flatten().filter(|p|p.kind==K::Paste&&!p.alt);
+    while let Some(press)=unmatched.next(){
+        let Some(event)=as_event(press)else{continue};
+        let already=raw.events.iter().any(|e|matches!((e,&event),
+            (egui::Event::Key{key:a,modifiers:am,pressed:true,..},egui::Event::Key{key:b,modifiers:bm,..}) if a==b&&am==bm));
+        if !already{raw.events.push(event);}
+    }
+}
+
 /// A panel location as a single string (local folder, archive file + inner path, FTP host + path). Used to tell whether the same location was re-read.
 fn location_key(pane: &Pane) -> String {
     if let Some(container) = &pane.vault {
@@ -1028,6 +1057,10 @@ pub struct App {
     auth_pending: Vec<usize>,
     /// Numpad keys received by the original shortcut table (original name, Shift). raw_input_hook pushes them and keyboard executes them.
     pending_numpad: Vec<(String, bool)>,
+    /// A single keyboard command awaiting a fresh, matching local listing.
+    pending_list_command: Option<keyboard::DeferredListCommand>,
+    shortcut_routing: bool,
+    shortcut_modifiers: Option<egui::Modifiers>,
     /// The Apps key was pressed (right-click menu of the current panel's list, the key path of the original FUN_00484e8c).
     pending_context_key: bool,
     pending_shell_menu: Option<(u64, Vec<PathBuf>)>,
@@ -1349,6 +1382,9 @@ impl App {
             clipboard_files_reader: if cfg!(test) { || Ok((vec![], false)) } else { native::read_clipboard_files },
             auth_pending: Vec::new(),
             pending_numpad: Vec::new(),
+            pending_list_command: None,
+            shortcut_routing: false,
+            shortcut_modifiers: None,
             pending_context_key: false,
             pending_shell_menu: None,
             current_directory: None,
@@ -2528,7 +2564,7 @@ impl eframe::App for App {
         // Memory: the egui glyph atlas width is the GPU maximum texture size (NVIDIA 32768 -> 16384), so a few more rows cost tens of MB.
         // At 2048 it grows downward only as needed (the real limit on the rendering side stays the same).
         raw_input.max_texture_side = Some(raw_input.max_texture_side.unwrap_or(2048).min(2048));
-        let pastes = ndr::shell_menu::take_paste_keys();
+        let clipboard_keys = ndr::shell_menu::take_clipboard_keys();
         let numpad = ndr::shell_menu::take_numpad_keys();
         let context_keys = ndr::shell_menu::take_context_keys();
         // Windows delivers Alt+key as WM_SYSCHAR, which never types: in the original, Alt+` (FocusAddressBar) opens the address field with the whole
@@ -2544,10 +2580,13 @@ impl eframe::App for App {
             _ => true,
         });
         let text_focus = ctx.memory(|m| m.focused()).is_some_and(|id| egui::text_edit::TextEditState::load(ctx, id).is_some());
-        if !text_focus {
+        if !text_focus && raw_input.focused {
+            restore_captured_clipboard_keys(raw_input,clipboard_keys);
+            // Fallback for dedicated clipboard keys or an unavailable
+            // native subclass; existing text-widget behavior is untouched.
             use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_DELETE, VK_INSERT};
             let down = |vk: i32| unsafe { GetKeyState(vk) } < 0;
-            restore_clipboard_keys(raw_input, pastes, down(VK_INSERT as i32), down(VK_DELETE as i32), down(b'X' as i32));
+            restore_clipboard_keys(raw_input,0,down(VK_INSERT as i32),down(VK_DELETE as i32),down(b'X' as i32));
             if !self.keyboard_blocked(ctx) {
                 for (vk, ctrl, shift, alt) in numpad {
                     if let Some(original) = self.numpad_shortcut(vk, ctrl, shift, alt) {

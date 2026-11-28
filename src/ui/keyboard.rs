@@ -7,6 +7,44 @@
 use super::remote_window::wpf_key;
 use super::*;
 
+#[derive(Debug)]
+pub(super) enum DeferredListAction {
+    Dispatch(String),
+    CopyOther { source:usize, moving:bool, confirm:bool },
+}
+pub(super) struct DeferredListCommand {
+    action:DeferredListAction,
+    source:usize,
+    active:usize,
+    locations:[String;2],
+    tabs:[usize;2],
+    generation:u64,
+    modifiers:Option<egui::Modifiers>,
+    cursor:Option<Entry>,
+    targets:Vec<Entry>,
+    deadline:Instant,
+}
+
+fn same_command_entry(a:&Entry,b:&Entry)->bool{
+    a.path==b.path && a.name==b.name && a.is_dir==b.is_dir && a.size==b.size
+        && a.modified==b.modified && a.attributes==b.attributes && a.drive==b.drive
+}
+
+pub(super) fn selection_command(id:&str)->bool{
+    matches!(id,
+        "open"|"openAll"|"openInNewTab"|"openWith"|"openWithParameters"|
+        "rename"|"advancedRename"|"batchRename"|"copy"|"cut"|"copyFullPath"|"copyPathOnly"|"copyName"|"copyToOther"|"moveToOther"|
+        "copyToFolder"|"moveToFolder"|"deleteRecycle"|"deletePermanent"|"deleteToolbar"|"shred"|
+        "textView"|"textEdit"|"properties"|"attributes"|"archiveProperties"|"description"|
+        "checksum"|"calculateFolderSize"|"split"|"join"|"merge"|"archiveAdd"|"archiveMove"|
+        "createArchive"|"createZip"|"extractSelected"|"extractCurrent"|"extractNewFolder"|
+        "extractToolbar"|"archiveInstall"|"shortcut"|"explorerMenu"|
+        "contextView"|"contextEdit"|"contextCopy"|"contextCut"|"contextCopyTo"|"contextMoveTo"|
+        "contextDelete"|"contextRename"|"contextAttributes"|"contextDescription"|
+        "contextArchiveAdd"|"contextProperties")
+        || id.starts_with("checksum:")
+}
+
 impl App {
     /// In the original main window keys always go to the list (TNXCustomFileListView) (buttons have no TabStop). egui moves key focus to buttons
     /// with Tab or arrows, turns Enter/Space on a focused button into a click, and wants_keyboard_input is true meanwhile, cutting off list keys.
@@ -24,7 +62,18 @@ impl App {
         ctx.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
     }
 
-    pub(super) fn keyboard(&mut self, ctx: &egui::Context) {
+    pub(super) fn keyboard(&mut self,ctx:&egui::Context){
+        self.shortcut_routing=true;
+        self.keyboard_inner(ctx);
+        self.shortcut_routing=false;
+        self.shortcut_modifiers=None;
+    }
+
+    pub(super) fn command_modifiers(&self,ctx:&egui::Context)->egui::Modifiers{
+        self.shortcut_modifiers.unwrap_or_else(||ctx.input(|i|i.modifiers))
+    }
+
+    fn keyboard_inner(&mut self, ctx: &egui::Context) {
         self.menu_letter = None;
         self.menu_targets_seen = std::mem::take(self.menu_targets.get_mut());
         // Key focus of the pane folder tree: returns to the list when another pane becomes current or the pane is clicked outside the tree (the list).
@@ -44,6 +93,8 @@ impl App {
             || self.job.as_ref().is_some_and(|j| j.modal.is_some())
             || self.popup.is_some()
         {
+            self.pending_numpad.clear();
+            self.pending_list_command=None;
             return;
         }
         // Original ApplicationEvents1Message (0x442984): WM_XBUTTONDOWN (0x20b) with XBUTTON1 is HistoryBack, XBUTTON2 is HistoryForward.
@@ -56,6 +107,8 @@ impl App {
         }
         // While a menu is open (original Windows menu mode) keys do not go to the pane. A typed letter picks that menu's item with the access letter.
         if egui::Popup::is_any_open(ctx) {
+            self.pending_numpad.clear();
+            self.pending_list_command=None;
             self.menu_letter = ctx.input(|i| i.events.iter().find_map(|e| if let egui::Event::Text(t) = e { t.chars().next() } else { None })).map(|c| c.to_ascii_lowercase());
             // Windows menus: with several items on one access letter, the selection only moves to the next one (Enter runs it).
             if let Some(letter) = self.menu_letter {
@@ -71,13 +124,58 @@ impl App {
             return;
         }
         self.drop_widget_focus(ctx);
-        // Numpad keys of the original shortcut table (collected by raw_input_hook).
-        for (original, shift) in std::mem::take(&mut self.pending_numpad) {
-            self.run_original_shortcut(&original, shift, ctx);
-        }
-        // Original FormShortCut (0x42b36c) checks shortcuts only while the file list has focus: with focus in a text field no list key is taken.
-        if ctx.wants_keyboard_input() {
+        // Discard native events when a real text widget owns focus.
+        let numpad=std::mem::take(&mut self.pending_numpad);
+        if ctx.wants_keyboard_input() || !ctx.input(|i|i.focused) {
+            self.pending_list_command=None;
             return;
+        }
+        if !numpad.is_empty(){self.pending_list_command=None;}
+        if self.resume_list_command(ctx) { return; }
+        // One command per frame: never run a second numpad command into
+        // a dialog opened by the first, or leave a command pending.
+        for (original,shift) in numpad {
+            self.shortcut_modifiers=Some(egui::Modifiers{shift,..ctx.input(|i|i.modifiers)});
+            if self.run_original_shortcut(&original,shift,ctx) {
+                self.consume_shortcut_input(ctx);
+                return;
+            }
+        }
+        // Explicit command chords and non-text function keys must be
+        // resolved before IME/quick search. Use each key's own modifier
+        // snapshot, not the end-of-frame state (keys may already be up).
+        let (keys,has_text,has_ime)=ctx.input(|i|{
+            let keys=i.events.iter().filter_map(|event|match event {
+                egui::Event::Key{key,pressed:true,modifiers,..}=>Some((*key,*modifiers)),
+                _=>None,
+            }).collect::<Vec<_>>();
+            (keys,i.events.iter().any(|e|matches!(e,egui::Event::Text(t) if !t.is_empty())),
+                i.events.iter().any(|e|matches!(e,egui::Event::Ime(_))))
+        });
+        let altgr=|m:egui::Modifiers|m.ctrl&&m.alt&&has_text;
+        let priority=|key:egui::Key,m:egui::Modifiers| {
+            !altgr(m) && (m.ctrl||m.alt
+                || key.name().strip_prefix('F').is_some_and(|n|n.parse::<u8>().is_ok())
+                || matches!(key,egui::Key::Insert|egui::Key::Delete)&&!has_ime)
+        };
+        for &(key,modifiers) in &keys {
+            if !priority(key,modifiers){continue;}
+            self.shortcut_modifiers=Some(modifiers);
+            if self.shortcut_key(key,modifiers,ctx) {
+                self.consume_shortcut_input(ctx);
+                return;
+            }
+            // Ctrl+Home/End/Page and Ctrl+Shift range navigation are
+            // list commands too, not IME text.
+            if modifiers.ctrl&&!modifiers.alt&&self.list_navigation_key(key,modifiers) {
+                self.consume_shortcut_input(ctx);
+                self.clear_released_shift(ctx);
+                return;
+            }
+            if self.unbound_menu_access(key,modifiers) {
+                self.consume_shortcut_input(ctx);
+                return;
+            }
         }
         // When the pane folder tree has focus, TTreeView keys come first (the rest go to the same KeyDown FUN_0048423c as the list).
         if self.tree_keys(ctx) {
@@ -89,7 +187,7 @@ impl App {
         // command (FUN_0048423c), not WMChar quick search. egui also supplies
         // Text("C") with Shift+C; allowing quick search to consume that text
         // silently prevents the drive shortcut even with hanshdrive enabled.
-        let shift_drive = pressed_key(ctx).is_some_and(|(key, modifiers)| {
+        let shift_drive = keys.iter().copied().any(|(key, modifiers)| {
             if !modifiers.shift || modifiers.ctrl || modifiers.alt || self.panes[self.active].remote.is_some()
                 || !(native::english_input_language() || self.settings.flag("UseAlternateDriveHandling", false))
             {
@@ -103,24 +201,101 @@ impl App {
         if !shift_drive && self.original_typed_search(ctx) {
             return;
         }
-        let pressed = pressed_key(ctx);
-        if let Some((key, modifiers)) = pressed {
-            if self.shortcut_key(key, modifiers, ctx) {
-                // The keys that ran the command belong to it: a window the command opens is drawn later in this frame and would otherwise take
-                // the same Enter as its own OK (Alt+Enter opened the description box and closed it at once with nothing saved).
-                ctx.input_mut(|i| i.events.retain(|e| !matches!(e, egui::Event::Key { pressed: true, .. } | egui::Event::Text(_))));
+        // Check every remaining press, not just the first key in a
+        // coalesced event batch. Do not dispatch a printable AltGr chord.
+        for (key,modifiers) in keys {
+            if priority(key,modifiers)||altgr(modifiers){continue;}
+            self.shortcut_modifiers=Some(modifiers);
+            if self.shortcut_key(key,modifiers,ctx) {
+                self.consume_shortcut_input(ctx);
                 return;
             }
-            // Original TToolBar (tbFile ... tbHelp) CM_DIALOGCHAR: an Alt+letter that is not a shortcut presses the menu button with that access letter.
-            if modifiers.alt && !modifiers.ctrl && !modifiers.shift {
-                let name = key.name();
-                if name.len() == 1 && name.as_bytes()[0].is_ascii_alphanumeric() {
-                    self.menu_access = name.chars().next().map(|c| c.to_ascii_lowercase());
-                    return;
-                }
-            }
+            if self.unbound_menu_access(key,modifiers) { return; }
         }
+        self.shortcut_modifiers=None;
         self.list_navigation(ctx);
+    }
+
+    /// A watcher relist is not a navigation. For commands that require
+    /// fresh rows, remember the exact visible selection for a bounded
+    /// interval. Never execute against stale rows from another folder.
+    pub(super) fn defer_list_command(&mut self,source:usize,action:DeferredListAction,ctx:&egui::Context)->bool{
+        let pane=&self.panes[source];
+        if !self.shortcut_routing || !pane.loading || pane.archive.is_some()
+            || pane.remote.is_some() || pane.vault.is_some() {return false;}
+        let location=location_key(pane);
+        if pane.listed.as_deref()!=Some(location.as_str()) || pane.entries.is_empty(){
+            self.status=self.catalog("NDR.UI_SHORTCUT_LOADING","폴더를 읽는 중입니다. 목록이 표시되면 다시 실행하세요.","Reading the folder. Retry when the list is ready.");
+            return true;
+        }
+        let cursor=pane.entries.get(pane.cursor).cloned();
+        let targets=self.displayed_target_entries(source);
+        let deadline=Instant::now()+Duration::from_secs(3);
+        self.pending_list_command=Some(DeferredListCommand{
+            action,source,active:self.active,locations:self.panes.each_ref().map(location_key),
+            tabs:self.panes.each_ref().map(|p|p.tab),generation:pane.generation,
+            modifiers:self.shortcut_modifiers,cursor,targets,deadline,
+        });
+        self.status=self.catalog("NDR.UI_SHORTCUT_WAIT_REFRESH","목록을 갱신한 후 선택한 작업을 실행합니다.","Running the selected command after the list refreshes.");
+        ctx.request_repaint_after(Duration::from_secs(3));
+        true
+    }
+
+    fn resume_list_command(&mut self,ctx:&egui::Context)->bool{
+        let Some(pending)=self.pending_list_command.take()else{return false};
+        // A new key/click means a new intention. Release events and
+        // pointer motion alone must not cancel a quick key chord.
+        let new_input=ctx.input(|i|i.events.iter().any(|e|matches!(e,
+            egui::Event::Key{pressed:true,..}|egui::Event::PointerButton{pressed:true,..}|
+            egui::Event::Text(_)|egui::Event::Copy|egui::Event::Cut|egui::Event::Paste(_)|
+            egui::Event::Ime(egui::ImeEvent::Commit(_)|egui::ImeEvent::Preedit(_)))));
+        if new_input {return false;}
+        let pane=&self.panes[pending.source];
+        let still_same=self.active==pending.active && self.panes.each_ref().map(location_key)==pending.locations
+            && self.panes.each_ref().map(|p|p.tab)==pending.tabs && pane.generation==pending.generation;
+        if !still_same || Instant::now()>=pending.deadline || pane.error.is_some(){
+            self.status=self.catalog("NDR.UI_SHORTCUT_RETRY","목록이 변경되었거나 갱신 중입니다. 작업을 다시 실행하세요.","The list changed or is still refreshing. Retry the command.");
+            return false;
+        }
+        if pane.loading{
+            ctx.request_repaint_after(pending.deadline.saturating_duration_since(Instant::now()));
+            self.pending_list_command=Some(pending);
+            return false;
+        }
+        let cursor=pane.entries.get(pane.cursor);
+        let cursor_matches=match (pending.cursor.as_ref(),cursor){
+            (Some(a),Some(b))=>same_command_entry(a,b),(None,None)=>true,_=>false,
+        };
+        let targets=self.target_entries(pending.source);
+        let targets_match=targets.len()==pending.targets.len() && targets.iter().zip(&pending.targets).all(|(a,b)|same_command_entry(a,b));
+        if !cursor_matches || !targets_match{
+            self.status=self.catalog("NDR.UI_SHORTCUT_RETRY","목록이 변경되었거나 갱신 중입니다. 작업을 다시 실행하세요.","The list changed or is still refreshing. Retry the command.");
+            return false;
+        }
+        self.shortcut_modifiers=pending.modifiers;
+        match pending.action{
+            DeferredListAction::Dispatch(id)=>self.dispatch(&id,ctx),
+            DeferredListAction::CopyOther{source,moving,confirm:true}=>self.original_copy_to_other(source,moving,ctx),
+            DeferredListAction::CopyOther{source,moving,confirm:false}=>self.copy_to_other(source,moving,ctx),
+        }
+        true
+    }
+
+    fn consume_shortcut_input(&mut self,ctx:&egui::Context) {
+        // The opened dialog must not see the triggering Enter, text or
+        // stale IME composition. Preserve quick search for ordinary keys.
+        if ctx.input(|i|i.events.iter().any(|e|matches!(e,egui::Event::Ime(_)))) {
+            self.typed_search[self.active]=TypedSearch::default();
+        }
+        ctx.input_mut(|i|i.events.retain(|e|!matches!(e,egui::Event::Key{pressed:true,..}|egui::Event::Text(_)|egui::Event::Ime(_)|egui::Event::Copy|egui::Event::Cut|egui::Event::Paste(_))));
+    }
+
+    fn unbound_menu_access(&mut self,key:egui::Key,modifiers:egui::Modifiers)->bool{
+        let name=key.name();
+        if modifiers.alt&&!modifiers.ctrl&&!modifiers.shift&&name.len()==1&&name.as_bytes()[0].is_ascii_alphanumeric(){
+            self.menu_access=name.chars().next().map(|c|c.to_ascii_lowercase());
+            true
+        }else{false}
     }
 
     /// Sets work folder N (original FUN_0042fa5c / FUN_00479904): set and save, with no notice (the C# status text was removed).
@@ -491,136 +666,100 @@ impl App {
     }
 
     /// Original ArrowKey `[` / `]` (without Ctrl, Alt, Shift): moves between the drive items at the end of the list (`list_keys::bracket_target`).
-    fn bracket_keys(&mut self, ctx: &egui::Context) {
-        // Original KeyDown (0x7d7338) -> ArrowKey: `[` and `]` are taken unless Ctrl (without Shift) is down. With Shift it also does the range selection after.
-        // Fixed: previously nothing happened with Shift.
-        let (open, close, shift) = ctx.input(|i| {
-            let allowed = !i.modifiers.ctrl && !i.modifiers.alt && !i.modifiers.command;
-            (allowed && i.key_pressed(egui::Key::OpenBracket), allowed && i.key_pressed(egui::Key::CloseBracket), i.modifiers.shift)
-        });
-        if !open && !close {
-            return;
-        }
-        let pane = &mut self.panes[self.active];
-        if pane.loading || pane.entries.is_empty() {
-            return;
-        }
-        let count = pane.entries.len();
-        let cursor = pane.cursor.min(count - 1);
-        let on_drive = pane.entries[cursor].drive;
-        if let Some(target) = list_keys::bracket_target(cursor, count, pane.drive_count(), on_drive, open) {
-            if target != cursor {
-                pane.cursor = target;
-                pane.reveal = true;
-                if shift {
-                    let anchor = *pane.shift_anchor.get_or_insert(cursor);
-                    pane.selected.clear();
-                    for i in anchor.min(target)..=anchor.max(target) {
-                        pane.selected.insert(i);
-                    }
-                    pane.drop_drive_marks();
-                } else {
-                    pane.shift_anchor = None;
+    fn bracket_keys(&mut self,ctx:&egui::Context) {
+        let keys=ctx.input(|i|i.events.iter().filter_map(|e|match e{
+            egui::Event::Key{key:key @ (egui::Key::OpenBracket|egui::Key::CloseBracket),pressed:true,modifiers,..}
+                if !modifiers.ctrl&&!modifiers.alt&&!modifiers.command=>Some((*key,modifiers.shift)),
+            _=>None,
+        }).collect::<Vec<_>>());
+        for (key,shift) in keys {
+            let pane=&mut self.panes[self.active];
+            if pane.loading||pane.entries.is_empty(){return;}
+            let count=pane.entries.len();
+            let cursor=pane.cursor.min(count-1);
+            let on_drive=pane.entries[cursor].drive;
+            if let Some(target)=list_keys::bracket_target(cursor,count,pane.drive_count(),on_drive,key==egui::Key::OpenBracket) {
+                if target!=cursor {
+                    pane.cursor=target;
+                    pane.reveal=true;
+                    if shift {
+                        let anchor=*pane.shift_anchor.get_or_insert(cursor);
+                        pane.selected.clear();
+                        for i in anchor.min(target)..=anchor.max(target){pane.selected.insert(i);}
+                        pane.drop_drive_marks();
+                    }else{pane.shift_anchor=None;}
                 }
             }
         }
     }
 
-    /// Moves the list cursor (egui has no list box, so this is done by hand). Original TNXCustomFileListView::ArrowKey (0x7d69dc):
-    /// Up, Down, Left, Right, PageUp, PageDown, Home and End move using the page info of the view style (`list_keys::arrow_target`), and after moving the cursor
-    /// is scrolled into view (SetItemIndex). Moving with Shift clears the selection and selects from where Shift was pressed (SetShiftDownIndex) to the cursor, like the original.
-    fn list_navigation(&mut self, ctx: &egui::Context) {
+    /// Navigation uses the modifier snapshot on each press. A frame may
+    /// contain both the press and modifier release, or several arrows.
+    fn list_navigation(&mut self,ctx:&egui::Context){
+        let keys=ctx.input(|i|i.events.iter().filter_map(|e|match e{
+            egui::Event::Key{key,pressed:true,modifiers,..}=>Some((*key,*modifiers)),_=>None
+        }).collect::<Vec<_>>());
+        for (key,m) in keys{self.list_navigation_key(key,m);}
+        self.clear_released_shift(ctx);
+    }
+
+    fn clear_released_shift(&mut self,ctx:&egui::Context){
+        if !ctx.input(|i|i.modifiers.shift){
+            for pane in &mut self.panes{pane.shift_anchor=None;}
+        }
+    }
+
+    fn list_navigation_key(&mut self,key:egui::Key,m:egui::Modifiers)->bool{
         use list_keys::ListKey;
-        ctx.input(|input| {
-            let m = input.modifiers;
-            if input.key_pressed(egui::Key::Tab) && !m.ctrl && !m.alt {
-                self.active = 1 - self.active;
+        if m.alt{return false;}
+        if key==egui::Key::Tab&&!m.ctrl{
+            self.active=1-self.active;
+            return true;
+        }
+        let list_key=match key{
+            egui::Key::ArrowUp=>ListKey::Up,
+            egui::Key::ArrowDown=>ListKey::Down,
+            egui::Key::ArrowLeft=>ListKey::Left,
+            egui::Key::ArrowRight=>ListKey::Right,
+            egui::Key::PageUp=>ListKey::PageUp,
+            egui::Key::PageDown=>ListKey::PageDown,
+            egui::Key::Home=>ListKey::Home,
+            egui::Key::End=>ListKey::End,
+            _=>return false,
+        };
+        if m.ctrl&&!m.shift&&!matches!(list_key,ListKey::PageUp|ListKey::PageDown|ListKey::Home|ListKey::End){
+            return false;
+        }
+        let pane=&mut self.panes[self.active];
+        if !m.shift{pane.shift_anchor=None;}
+        let length=pane.entries.len();
+        if length==0 || pane.loading&&pane.listed.as_deref()!=Some(location_key(pane).as_str()){return true;}
+        let old=pane.cursor.min(length-1);
+        let cursor=if m.ctrl&&!m.shift{
+            let drives=pane.drive_count();
+            let folders=pane.entries.iter().filter(|e|e.is_dir&&!e.drive).count();
+            list_keys::ctrl_target(folders,length-folders-drives,drives,length,list_key).unwrap_or(old)
+        }else{
+            if pane.page.style==list_keys::ListStyle::Details{
+                let step=match key{egui::Key::ArrowLeft=>-20.0,egui::Key::ArrowRight=>20.0,_=>0.0};
+                pane.detail_x=(pane.detail_x+step).max(0.0);
             }
-            let pane = &mut self.panes[self.active];
-            let length = pane.entries.len();
-            if !m.shift {
-                // Original KeyUp (0x7d7410): releasing Shift (VK_SHIFT) forgets the Shift anchor (+0x3d0 = -1).
-                pane.shift_anchor = None;
-            }
-            if length == 0 || m.alt {
-                return;
-            }
-            let old = pane.cursor.min(length - 1);
-            // Original KeyDown and ArrowKey: Ctrl alone uses the Ctrl keys below; Ctrl+Shift moves like the Shift keys.
-            if m.ctrl && !m.shift {
-                // Ctrl (without Shift) keys of original ArrowKey: first item, last folder, first file, last file (`list_keys::ctrl_target`).
-                // The last file is before the drive items (kind 4) at the end of the list.
-                let drives = pane.drive_count();
-                let folders = pane.entries.iter().filter(|e| e.is_dir && !e.drive).count();
-                let files = length - folders - drives;
-                let keys = [
-                    (egui::Key::PageUp, ListKey::PageUp),
-                    (egui::Key::PageDown, ListKey::PageDown),
-                    (egui::Key::Home, ListKey::Home),
-                    (egui::Key::End, ListKey::End),
-                ];
-                let mut cursor = old;
-                for (key, list_key) in keys {
-                    if input.key_pressed(key) {
-                        if let Some(target) = list_keys::ctrl_target(folders, files, drives, length, list_key) {
-                            cursor = target;
-                        }
-                    }
-                }
-                if cursor != old {
-                    pane.cursor = cursor;
-                    pane.reveal = true;
-                }
-                return;
-            }
-            let keys = [
-                (egui::Key::ArrowUp, ListKey::Up),
-                (egui::Key::ArrowDown, ListKey::Down),
-                (egui::Key::ArrowLeft, ListKey::Left),
-                (egui::Key::ArrowRight, ListKey::Right),
-                (egui::Key::PageUp, ListKey::PageUp),
-                (egui::Key::PageDown, ListKey::PageDown),
-                (egui::Key::Home, ListKey::Home),
-                (egui::Key::End, ListKey::End),
-            ];
-            let mut cursor = old;
-            // Original ArrowKey (style 2): Left and Right do not move the cursor; with a horizontal bar they decrease (never below 0) or
-            // increase the horizontal position by 20 (stopping at the bar end, clipped next frame). Fixed: previously nothing happened.
-            if pane.page.style == list_keys::ListStyle::Details {
-                let steps = input.num_presses(egui::Key::ArrowRight) as f32 - input.num_presses(egui::Key::ArrowLeft) as f32;
-                if steps != 0.0 {
-                    pane.detail_x = (pane.detail_x + steps * 20.0).max(0.0);
-                }
-            }
-            for (key, list_key) in keys {
-                for _ in 0..input.num_presses(key) {
-                    // Original ArrowKey style 3 PageUp and PageDown scroll by row pixels (row heights differ per row).
-                    if let (list_keys::ListStyle::Thumbnails, ListKey::PageUp | ListKey::PageDown, Some((tops, heights, offset, view, columns))) = (pane.page.style, list_key, pane.thumb_rows.as_ref()) {
-                        cursor = list_keys::thumbnail_page_target(tops, heights, *columns, *offset, *view, cursor, length, list_key == ListKey::PageDown);
-                        continue;
-                    }
-                    cursor = list_keys::arrow_target(&pane.page, cursor, length, list_key);
-                }
-            }
-            if cursor == old {
-                return;
-            }
-            pane.cursor = cursor;
-            pane.reveal = true;
-            if m.shift {
-                // Original ArrowKey: Shift clears the selection and selects from the Shift anchor to the new position; Ctrl+Shift keeps it and
-                // adds from the position before moving to the new one.
-                let anchor = *pane.shift_anchor.get_or_insert(old);
-                let from = if m.ctrl { old } else { anchor };
-                if !m.ctrl {
-                    pane.selected.clear();
-                }
-                for i in from.min(cursor)..=from.max(cursor) {
-                    pane.selected.insert(i);
-                }
+            if let (list_keys::ListStyle::Thumbnails,ListKey::PageUp|ListKey::PageDown,Some((tops,heights,offset,view,columns)))=(pane.page.style,list_key,pane.thumb_rows.as_ref()){
+                list_keys::thumbnail_page_target(tops,heights,*columns,*offset,*view,old,length,list_key==ListKey::PageDown)
+            }else{list_keys::arrow_target(&pane.page,old,length,list_key)}
+        };
+        if cursor!=old{
+            pane.cursor=cursor;
+            pane.reveal=true;
+            if m.shift{
+                let anchor=*pane.shift_anchor.get_or_insert(old);
+                let from=if m.ctrl{old}else{anchor};
+                if !m.ctrl{pane.selected.clear();}
+                for i in from.min(cursor)..=from.max(cursor){pane.selected.insert(i);}
                 pane.drop_drive_marks();
             }
-        });
+        }
+        true
     }
 
     /// Items of the original miColumn (miColAuto, separator, miCol1-6), checked by the current value. Other set values (7-19) are shown too like C#. Returns the chosen command.
@@ -742,18 +881,6 @@ impl App {
         }).collect()).unwrap_or_default()
     }
 }
-
-/// Keys and modifiers pressed this frame. C# MainWindow HandleKeyboardAsync does not filter IsRepeat, so
-/// holding a key reruns the command on repeat input too (only the remote window filters repeats).
-fn pressed_key(ctx: &egui::Context) -> Option<(egui::Key, egui::Modifiers)> {
-    ctx.input(|i| {
-        i.events.iter().find_map(|event| match event {
-            egui::Event::Key { key, pressed: true, modifiers, .. } => Some((*key, *modifiers)),
-            _ => None,
-        })
-    })
-}
-
 
 /// Turns the pressed key into original shortcut text (the form TextToShortCut reads, e.g. "Ctrl+Shift+F2", "/").
 /// Fixed: punctuation keys are written as the character ("/") instead of the egui name ("Slash") (original TextToShortCut("/") = VK_OEM_2).
