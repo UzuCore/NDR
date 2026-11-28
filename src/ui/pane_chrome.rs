@@ -488,7 +488,7 @@ impl App {
                     let address = remote.address();
                     self.panes[index].address = address;
                 }
-                self.refresh(index);
+                self.refresh_remote_navigation(index);
             }
         }
     }
@@ -841,18 +841,23 @@ impl App {
     fn warm_visible_folder_hints(&mut self){
         if cfg!(test)||self.folder_hint_pending{return}
         let now=Instant::now();
-        self.folder_hint_checked.retain(|_,at|now.saturating_duration_since(*at)<Duration::from_secs(30));
         let mut paths=Vec::new();
+        let mut seen=HashSet::new();
         for pane in &self.panes{
             if pane.loading||pane.error.is_some()||pane.folder_auto_volume!=Some(true)||pane.vault.is_some()||pane.remote.is_some()||pane.archive.is_some(){continue}
             for path in &pane.folder_auto_visible{
                 if paths.len()>=256{break}
                 if pane.folder_sizes.get(path).is_some_and(Option::is_some)||self.folder_size_cache.contains_key(path)
-                    ||self.folder_size_hints.contains_key(path)||self.folder_hint_checked.contains_key(path)||paths.contains(path){continue}
+                    ||self.folder_size_hints.contains_key(path)
+                    ||self.folder_hint_checked.get(path).is_some_and(|at|now.saturating_duration_since(*at)<Duration::from_secs(30))
+                    ||!seen.insert(path){continue}
                 paths.push(path.clone());
             }
         }
         if paths.is_empty(){return}
+        // Prune expired attempts only before starting a new disk batch,
+        // instead of scanning up to 2048 keys on every frame.
+        self.folder_hint_checked.retain(|_,at|now.saturating_duration_since(*at)<Duration::from_secs(30));
         if self.folder_hint_checked.len()+paths.len()>2048{
             let mut oldest:Vec<_>=self.folder_hint_checked.iter().map(|(p,t)|(p.clone(),*t)).collect();
             oldest.sort_unstable_by_key(|(_,t)|*t);

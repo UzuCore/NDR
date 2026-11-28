@@ -877,6 +877,7 @@ pub struct App {
     thumbnail_visible:HashSet<views::ThumbnailKey>,
     /// C# FileVisualConverter.IconCache: a small shell icon per extension (lowercase, folder = "<DIR>"). None is remembered if unreadable.
     file_icons: HashMap<String, Option<egui::TextureHandle>>,
+    file_icon_used: HashMap<String, Instant>,
     /// A transient Windows shell icon failure must not permanently hide an
     /// extension/folder icon. Limit retries to avoid querying Shell each frame.
     file_icon_failed_at: HashMap<String, Instant>,
@@ -891,6 +892,7 @@ pub struct App {
     skin_crumb_press: bool,
     /// Whether each extension (lowercase, no dot) has a per-file shell icon (system.per_file_icon, asked only once).
     per_file_icon_types: HashMap<String, bool>,
+    per_file_icon_used: HashMap<String, Instant>,
     /// C# ShellOverlayIconCache (per path, cleared when it exceeds 512) plus the pending paths and where to send to the overlay worker thread (STA).
     overlay_icons: HashMap<PathBuf, Option<egui::TextureHandle>>,
     overlay_texture_pool: HashMap<(usize, usize, Vec<u8>), (egui::TextureHandle, usize)>,
@@ -1242,12 +1244,14 @@ impl App {
             thumbnail_tx: None,
             thumbnail_visible:HashSet::new(),
             file_icons: HashMap::new(),
+            file_icon_used: HashMap::new(),
             file_icon_failed_at: HashMap::new(),
             ghost_icons: HashMap::new(),
             skin_cache: None,
             skin_crumb_menu: None,
             skin_crumb_press: false,
             per_file_icon_types: HashMap::new(),
+            per_file_icon_used: HashMap::new(),
             overlay_icons: HashMap::new(),
             overlay_texture_pool: HashMap::new(),
             overlay_icon_failed_at: HashMap::new(),

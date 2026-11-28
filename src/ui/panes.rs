@@ -1329,20 +1329,26 @@ impl LocalListingPlan {
 
 impl App {
     pub(super) fn refresh(&mut self, index: usize) {
-        self.refresh_inner(index, true, false);
+        self.refresh_inner(index, true, false, false);
     }
 
     pub(super) fn refresh_after_startup(&mut self, index: usize) {
-        self.refresh_inner(index, false, false);
+        self.refresh_inner(index, false, false, false);
     }
 
     pub(super) fn refresh_after_folder_change(&mut self, index: usize) {
         // Watch-triggered updates may reuse a validated snapshot. Explicit
         // same-folder refresh (F5, operations, option changes) always reads.
-        self.refresh_inner(index, false, true);
+        self.refresh_inner(index, false, true, false);
     }
 
-    fn refresh_inner(&mut self, index: usize, foreground: bool, from_watch: bool) {
+    /// Only an intentional move between remote folders may use a cached
+    /// server listing; F5 and operation refreshes always hit the server.
+    pub(super) fn refresh_remote_navigation(&mut self, index: usize) {
+        self.refresh_inner(index, true, false, true);
+    }
+
+    fn refresh_inner(&mut self, index: usize, foreground: bool, from_watch: bool, remote_navigation: bool) {
         self.panes[index].listing_cancel.store(true, Ordering::Relaxed);
         let presentation = (self.panes[index].vault.is_none() && self.panes[index].archive.is_none()
             && self.panes[index].remote.is_none() && !is_drives(&self.panes[index].path))
@@ -1487,7 +1493,7 @@ impl App {
             let mut structural=false;
             let reading=Instant::now();
             let mut result = if let Some(remote) = remote {
-                super::ftp_pane::list_remote(&remote, show_hidden, &listing_cancel)
+                super::ftp_pane::list_remote(&remote, show_hidden, remote_navigation && !same_folder, &listing_cancel)
             } else if let Some(drives) = drives {
                 Ok(drives
                     .into_iter()

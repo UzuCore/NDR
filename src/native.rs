@@ -128,6 +128,9 @@ pub fn spawn_folder_watch(path: PathBuf, stop: std::sync::Arc<std::sync::atomic:
 pub struct FolderSizeWatch {
     handle: usize,
     identity: (u32, u64, u64),
+    // Notifications are level-triggered and never reset. Once signalled
+    // or failed, avoid repeating kernel waits on this retired observation.
+    changed: std::sync::atomic::AtomicBool,
     links: std::sync::Mutex<(Vec<FolderLinkProbe>,bool)>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -170,11 +173,17 @@ impl FolderSizeWatch {
             FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME |
             FILE_NOTIFY_CHANGE_SIZE |
             FILE_NOTIFY_CHANGE_ATTRIBUTES) };
-        if handle.is_null() || handle == INVALID_HANDLE_VALUE { None } else { Some(Self { handle: handle as usize, identity, links:Default::default() }) }
+        if handle.is_null() || handle == INVALID_HANDLE_VALUE { None } else { Some(Self { handle: handle as usize, identity, changed:Default::default(), links:Default::default() }) }
     }
 
     pub fn unchanged(&self) -> bool {
-        unsafe { windows_sys::Win32::System::Threading::WaitForSingleObject(self.handle as HANDLE, 0) == WAIT_TIMEOUT }
+        use std::sync::atomic::Ordering;
+        if self.changed.load(Ordering::Acquire) { return false; }
+        if unsafe { windows_sys::Win32::System::Threading::WaitForSingleObject(self.handle as HANDLE, 0) } != WAIT_TIMEOUT {
+            self.changed.store(true, Ordering::Release);
+            return false;
+        }
+        !self.changed.load(Ordering::Acquire)
     }
 
     pub fn matches_path(&self, path: &Path) -> bool {
@@ -1172,6 +1181,15 @@ pub fn set_explorer_integration(enable: bool) -> Result<(), String> {
 /// back to the icon share it per extension; here every file asks the shell, which gives the same icon for those.
 /// IShellItemImageFactory (SIIGBF_RESIZETOFIT) covers both steps.
 pub fn thumbnail(path: &Path, side: u32) -> Result<(usize, usize, Vec<u8>), String> {
+    thumbnail_cancel(path, side, &std::sync::atomic::AtomicBool::new(false))
+}
+
+/// The shell call itself is synchronous, but obsolete queued requests
+/// must not spend another half-second retrying E_PENDING on scroll.
+pub fn thumbnail_cancel(path: &Path, side: u32, cancel: &std::sync::atomic::AtomicBool) -> Result<(usize, usize, Vec<u8>), String> {
+    use std::sync::atomic::Ordering;
+    let check = || if cancel.load(Ordering::Relaxed) { Err("Thumbnail request cancelled".to_owned()) } else { Ok(()) };
+    check()?;
     use windows::{
         Win32::{
             Foundation::SIZE,
@@ -1191,6 +1209,7 @@ pub fn thumbnail(path: &Path, side: u32) -> Result<(usize, usize, Vec<u8>), Stri
     // E_PENDING is also retried a few times.
     static SHELL_THUMBNAILS: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _one_at_a_time = SHELL_THUMBNAILS.lock().unwrap_or_else(|e| e.into_inner());
+    check()?;
     unsafe {
         let initialized = CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_ok();
         let image = (|| -> Result<_, String> {
@@ -1199,6 +1218,7 @@ pub fn thumbnail(path: &Path, side: u32) -> Result<(usize, usize, Vec<u8>), Stri
                     .map_err(|e| e.to_string())?;
             let mut tries = 0;
             loop {
+                check()?;
                 match factory.GetImage(SIZE { cx: side, cy: side }, SIIGBF_RESIZETOFIT) {
                     Err(e) if e.code().0 as u32 == 0x8000_000A && tries < 20 => {
                         tries += 1;
@@ -1213,6 +1233,10 @@ pub fn thumbnail(path: &Path, side: u32) -> Result<(usize, usize, Vec<u8>), Stri
         }
         let bitmap = image?;
         let handle = bitmap.0;
+        if let Err(error) = check() {
+            DeleteObject(handle);
+            return Err(error);
+        }
         let mut data: BITMAP = std::mem::zeroed();
         if GetObjectW(
             handle,

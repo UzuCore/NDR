@@ -70,7 +70,7 @@ impl App {
             thread::spawn(move || {
                 for ThumbnailRequest{key,cancel} in rx {
                     let image=if !cancel.load(Ordering::Relaxed)&&key.still_current(){
-                        let image=native::thumbnail(&key.path,key.side);
+                        let image=native::thumbnail_cancel(&key.path,key.side,&cancel);
                         if !cancel.load(Ordering::Relaxed)&&key.still_current(){image}else{Err("Thumbnail request expired".into())}
                     }else{Err("Thumbnail request expired".into())};
                     if result.send(AsyncResult::Image{key,cancel,image}).is_err(){break}
@@ -262,11 +262,22 @@ impl App {
             return true;
         }
         let Some(extension) = path.extension().map(|e| e.to_string_lossy().to_lowercase()) else { return false };
-        let hook = self.system.per_file_icon;
-        if self.per_file_icon_types.len() >= 256 && !self.per_file_icon_types.contains_key(&extension) {
-            if let Some(old) = self.per_file_icon_types.keys().next().cloned() { self.per_file_icon_types.remove(&old); }
+        let now = Instant::now();
+        if let Some(&cached) = self.per_file_icon_types.get(&extension) {
+            if let Some(used) = self.per_file_icon_used.get_mut(&extension) { *used = now; }
+            return cached;
         }
-        *self.per_file_icon_types.entry(extension).or_insert_with_key(|e| hook(e))
+        if self.per_file_icon_types.len() >= 256 {
+            if let Some(old) = self.per_file_icon_types.keys()
+                .min_by_key(|key| self.per_file_icon_used.get(*key).copied()).cloned() {
+                self.per_file_icon_types.remove(&old);
+                self.per_file_icon_used.remove(&old);
+            }
+        }
+        let value = (self.system.per_file_icon)(&extension);
+        self.per_file_icon_used.insert(extension.clone(), now);
+        self.per_file_icon_types.insert(extension, value);
+        value
     }
 
     pub(super) fn file_icon(&mut self, ctx: &egui::Context, index: usize, row: usize) -> Option<egui::TextureHandle> {
@@ -428,6 +439,7 @@ impl App {
             path.extension().map(|e| format!(".{}", e.to_string_lossy().to_lowercase())).unwrap_or_default()
         };
         if let Some(cached) = self.file_icons.get(&key) {
+            if let Some(used) = self.file_icon_used.get_mut(&key) { *used = Instant::now(); }
             if cached.is_some() {
                 return cached.clone();
             }
@@ -457,11 +469,16 @@ impl App {
             ctx.request_repaint_after(ICON_RETRY_INTERVAL);
         }
         if self.file_icons.len() >= 256 && !self.file_icons.contains_key(&key) {
-            if let Some(old) = self.file_icons.keys().find(|k| k.as_str() != "<DIR>").cloned() {
+            // Reopening a folder with many distinct types should retain
+            // its recently used icons, not randomly discard hot entries.
+            if let Some(old) = self.file_icons.keys().filter(|k| k.as_str() != "<DIR>")
+                .min_by_key(|k| self.file_icon_used.get(*k).copied()).cloned() {
                 if let Some(Some(t)) = self.file_icons.remove(&old) { self.ghost_icons.remove(&t.id()); }
                 self.file_icon_failed_at.remove(&old);
+                self.file_icon_used.remove(&old);
             }
         }
+        self.file_icon_used.insert(key.clone(), Instant::now());
         self.file_icons.insert(key, texture.clone());
         texture
     }

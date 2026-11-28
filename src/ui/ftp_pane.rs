@@ -78,6 +78,13 @@ pub(super) trait PaneFs: Send {
     fn pwd(&mut self) -> Result<String, String>;
     fn change_directory(&mut self, current: &str, path: &str) -> Result<(String, Option<String>), String>;
     fn list(&mut self, path: &str) -> Result<Vec<RemoteEntry>, String>;
+    // Only panel navigation may reuse a short-lived browsing snapshot.
+    // File operations and explicit refresh must use authoritative queries.
+    fn list_browse(&mut self, path: &str, _reuse: bool) -> Result<Arc<[RemoteEntry]>, String> {
+        self.list(path).map(Arc::from)
+    }
+    // Update logging context without fabricating a protocol exchange.
+    fn set_browse_context(&mut self, _path: &str) {}
     fn download(&mut self, remote: &str, local: &Path, cancel: &AtomicBool, resolve: &mut dyn FnMut(&str, &str, &ndr::remote::ConflictInfo) -> ConflictChoice, progress: &mut dyn FnMut(TransferProgress)) -> Result<(), String>;
     fn upload(&mut self, local: &Path, remote: &str, cancel: &AtomicBool, resolve: &mut dyn FnMut(&str, &str, &ndr::remote::ConflictInfo) -> ConflictChoice, progress: &mut dyn FnMut(TransferProgress)) -> Result<(), String>;
     /// Original FTP engine FUN_0045d0b4 (new folder), FUN_0045d214 (rename), FUN_0045de18 (delete folder/file list).
@@ -172,6 +179,7 @@ impl PaneFs for LoggedFs {
         self.set_prefix(path);
         self.run(|fs| fs.list(path))
     }
+    fn set_browse_context(&mut self, path: &str) { self.set_prefix(path); }
     fn download(&mut self, remote: &str, local: &Path, cancel: &AtomicBool, resolve: &mut dyn FnMut(&str, &str, &ndr::remote::ConflictInfo) -> ConflictChoice, progress: &mut dyn FnMut(TransferProgress)) -> Result<(), String> {
         self.run(|fs| fs.download(remote, local, cancel, resolve, progress))
     }
@@ -198,6 +206,161 @@ impl PaneFs for LoggedFs {
     }
 }
 
+const BROWSE_TTL: Duration = Duration::from_secs(4);
+const BROWSE_COUNT: usize = 16;
+const BROWSE_BYTES: usize = 4 * 1024 * 1024;
+
+struct BrowseListing {
+    path: String,
+    fetched: Instant,
+    rows: Arc<[RemoteEntry]>,
+    bytes: usize,
+}
+
+/// A cache belongs to exactly one authenticated connection. It is neither
+/// persisted nor used for conflicts, permission checks, or file mutations.
+pub(super) struct CachedPaneFs {
+    inner: Box<dyn PaneFs>,
+    listings: std::collections::VecDeque<BrowseListing>,
+    bytes: usize,
+}
+impl CachedPaneFs {
+    pub(super) fn new(inner: Box<dyn PaneFs>) -> Self {
+        Self { inner, listings: Default::default(), bytes: 0 }
+    }
+    fn clear(&mut self) {
+        self.listings.clear();
+        self.bytes = 0;
+    }
+    fn remove(&mut self, at: usize) -> BrowseListing {
+        let entry = self.listings.remove(at).unwrap();
+        self.bytes -= entry.bytes;
+        entry
+    }
+    fn expire(&mut self, now: Instant) {
+        let mut at = 0;
+        while at < self.listings.len() {
+            if now.saturating_duration_since(self.listings[at].fetched) >= BROWSE_TTL {
+                self.remove(at);
+            } else { at += 1; }
+        }
+    }
+    fn hit(&mut self, path: &str, now: Instant) -> Option<Arc<[RemoteEntry]>> {
+        self.expire(now);
+        let at = self.listings.iter().position(|entry| entry.path == path)?;
+        let entry = self.remove(at);
+        let rows = entry.rows.clone();
+        // A hit updates the eviction order but never extends freshness.
+        self.bytes += entry.bytes;
+        self.listings.push_back(entry);
+        Some(rows)
+    }
+    fn remember(&mut self, path: &str, rows: Arc<[RemoteEntry]>, fetched: Instant) {
+        self.expire(fetched);
+        if let Some(at) = self.listings.iter().position(|entry| entry.path == path) { self.remove(at); }
+        let bytes = rows.iter().fold(path.len().saturating_add(std::mem::size_of::<BrowseListing>()), |bytes, row| {
+            bytes.saturating_add(std::mem::size_of::<RemoteEntry>())
+                .saturating_add(row.name.capacity())
+                .saturating_add(row.permission.as_ref().map_or(0, String::capacity))
+        });
+        if bytes > BROWSE_BYTES { return; }
+        while self.listings.len() >= BROWSE_COUNT || self.bytes.saturating_add(bytes) > BROWSE_BYTES {
+            self.remove(0);
+        }
+        self.bytes += bytes;
+        self.listings.push_back(BrowseListing { path: path.into(), fetched, rows, bytes });
+    }
+}
+impl PaneFs for CachedPaneFs {
+    fn pwd(&mut self) -> Result<String, String> {
+        let result = self.inner.pwd();
+        if result.is_err() { self.clear(); }
+        result
+    }
+    fn change_directory(&mut self, current: &str, path: &str) -> Result<(String, Option<String>), String> {
+        self.clear();
+        self.inner.change_directory(current, path)
+    }
+    fn list(&mut self, path: &str) -> Result<Vec<RemoteEntry>, String> {
+        let result = self.inner.list(path);
+        if result.is_err() { self.clear(); }
+        else if let Some(at) = self.listings.iter().position(|entry| entry.path == path) { self.remove(at); }
+        result
+    }
+    fn list_browse(&mut self, path: &str, reuse: bool) -> Result<Arc<[RemoteEntry]>, String> {
+        if reuse {
+            if let Some(rows) = self.hit(path, Instant::now()) {
+                self.inner.set_browse_context(path);
+                return Ok(rows);
+            }
+        } else {
+            self.clear();
+        }
+        let fetched = Instant::now();
+        let rows: Arc<[RemoteEntry]> = Arc::from(self.list(path)?);
+        self.remember(path, rows.clone(), fetched);
+        Ok(rows)
+    }
+    fn download(&mut self, remote: &str, local: &Path, cancel: &AtomicBool, resolve: &mut dyn FnMut(&str, &str, &ndr::remote::ConflictInfo) -> ConflictChoice, progress: &mut dyn FnMut(TransferProgress)) -> Result<(), String> {
+        let result = self.inner.download(remote, local, cancel, resolve, progress);
+        if result.is_err() { self.clear(); }
+        result
+    }
+    fn upload(&mut self, local: &Path, remote: &str, cancel: &AtomicBool, resolve: &mut dyn FnMut(&str, &str, &ndr::remote::ConflictInfo) -> ConflictChoice, progress: &mut dyn FnMut(TransferProgress)) -> Result<(), String> {
+        self.clear();
+        self.inner.upload(local, remote, cancel, resolve, progress)
+    }
+    fn mkdir(&mut self, path: &str) -> Result<(), String> {
+        self.clear(); self.inner.mkdir(path)
+    }
+    fn rename(&mut self, from: &str, to: &str) -> Result<(), String> {
+        self.clear(); self.inner.rename(from, to)
+    }
+    fn delete(&mut self, path: &str, is_dir: bool, cancel: &AtomicBool) -> Result<(), String> {
+        self.clear(); self.inner.delete(path, is_dir, cancel)
+    }
+    fn chmod(&mut self, path: &str, mode: u32) -> Result<(), String> {
+        self.clear(); self.inner.chmod(path, mode)
+    }
+    fn command(&mut self, command: &str) -> Result<String, String> {
+        // An arbitrary FTP control command may mutate any subtree.
+        self.clear(); self.inner.command(command)
+    }
+    fn close(&mut self) { self.clear(); self.inner.close(); }
+}
+
+
+#[cfg(test)]
+#[test]
+fn batch452_remote_browse_cache_enforces_age_and_budget() {
+    struct NeverFs;
+    impl PaneFs for NeverFs {
+        fn pwd(&mut self)->Result<String,String>{unreachable!()}
+        fn change_directory(&mut self,_:&str,_:&str)->Result<(String,Option<String>),String>{unreachable!()}
+        fn list(&mut self,_:&str)->Result<Vec<RemoteEntry>,String>{unreachable!()}
+        fn download(&mut self,_:&str,_:&Path,_:&AtomicBool,_:&mut dyn FnMut(&str,&str,&ndr::remote::ConflictInfo)->ConflictChoice,_:&mut dyn FnMut(TransferProgress))->Result<(),String>{unreachable!()}
+        fn upload(&mut self,_:&Path,_:&str,_:&AtomicBool,_:&mut dyn FnMut(&str,&str,&ndr::remote::ConflictInfo)->ConflictChoice,_:&mut dyn FnMut(TransferProgress))->Result<(),String>{unreachable!()}
+        fn mkdir(&mut self,_:&str)->Result<(),String>{unreachable!()}
+        fn rename(&mut self,_:&str,_:&str)->Result<(),String>{unreachable!()}
+        fn delete(&mut self,_:&str,_:bool,_:&AtomicBool)->Result<(),String>{unreachable!()}
+        fn chmod(&mut self,_:&str,_:u32)->Result<(),String>{unreachable!()}
+        fn command(&mut self,_:&str)->Result<String,String>{unreachable!()}
+        fn close(&mut self){}
+    }
+    let mut cache=CachedPaneFs::new(Box::new(NeverFs));
+    let now=Instant::now();
+    let rows:Arc<[RemoteEntry]>=Arc::from(vec![RemoteEntry{name:"sample".into(),..Default::default()}]);
+    for i in 0..BROWSE_COUNT {cache.remember(&format!("/{i}"),rows.clone(),now);}
+    assert!(Arc::ptr_eq(&rows,&cache.hit("/0",now).unwrap()));
+    cache.remember("/new",rows.clone(),now);
+    assert_eq!(cache.listings.len(),BROWSE_COUNT);
+    assert!(cache.hit("/1",now).is_none());
+    assert!(cache.hit("/0",now+BROWSE_TTL).is_none());
+    assert_eq!(cache.bytes,0);
+    let huge:Arc<[RemoteEntry]>=Arc::from(vec![RemoteEntry{name:"x".repeat(BROWSE_BYTES),..Default::default()}]);
+    cache.remember("/huge",huge,now);
+    assert!(cache.listings.is_empty());
+}
 /// An FTP-mode pane's connection and its current remote folder.
 #[derive(Clone)]
 pub(super) struct PaneRemote {
@@ -631,7 +794,7 @@ fn to_entry(remote: &PaneRemote, item: &RemoteEntry) -> Entry {
 
 /// Read the remote listing (the FTP side of refresh). "." and ".." are dropped. Like the original FUN_0045bb0c, when hidden view is off, names starting with '.' are also dropped.
 /// Fix: previously dot files were always shown regardless of Alt+Z.
-pub(super) fn list_remote(remote: &PaneRemote, show_hidden: bool, cancel: &AtomicBool) -> Result<Vec<Entry>, String> {
+pub(super) fn list_remote(remote: &PaneRemote, show_hidden: bool, reuse: bool, cancel: &AtomicBool) -> Result<Vec<Entry>, String> {
     let cancelled = || cancel.load(Ordering::Relaxed);
     if cancelled() { return Err("Transfer cancelled".into()); }
     let mut fs = remote.fs.lock().map_err(|_| "FTP connection is unavailable".to_owned())?;
@@ -639,17 +802,17 @@ pub(super) fn list_remote(remote: &PaneRemote, show_hidden: bool, cancel: &Atomi
     // perform another network round trip, or replace the new listing's
     // metadata. Keep this session lock through snapshot publication.
     if cancelled() { return Err("Transfer cancelled".into()); }
-    let items = fs.list(&remote.path)?;
+    let items = fs.list_browse(&remote.path, reuse)?;
     if cancelled() { return Err("Transfer cancelled".into()); }
     let mut entries = Vec::with_capacity(items.len());
     let mut modes = std::collections::HashMap::new();
     let mut permissions = std::collections::HashMap::new();
-    for item in items {
+    for item in items.iter() {
         if cancelled() { return Err("Transfer cancelled".into()); }
         if item.name == "." || item.name == ".." || (!show_hidden && item.name.starts_with('.')) { continue; }
         if let Some(mode) = item.mode { modes.insert(join_remote(&remote.path, &item.name), mode); }
-        entries.push(to_entry(remote, &item));
-        if let Some(permission) = item.permission { permissions.insert(join_remote(&remote.path, &item.name), permission); }
+        entries.push(to_entry(remote, item));
+        if let Some(permission) = &item.permission { permissions.insert(join_remote(&remote.path, &item.name), permission.clone()); }
     }
     if cancelled() { return Err("Transfer cancelled".into()); }
     if let Ok(mut current) = remote.modes.lock() { *current = Arc::new(modes); }
@@ -789,7 +952,7 @@ impl App {
                 };
                 let home = fs.pwd()?;
                 let path = if initial.trim().is_empty() { home } else { fs.change_directory(&home, initial.trim())?.0 };
-                Ok(PaneRemote { fs: Arc::new(Mutex::new(fs)), host, protocol, port, path, busy: Arc::new(AtomicBool::new(false)), modes: Arc::default(), permissions: Arc::default(), log })
+                Ok(PaneRemote { fs: Arc::new(Mutex::new(Box::new(CachedPaneFs::new(fs)))), host, protocol, port, path, busy: Arc::new(AtomicBool::new(false)), modes: Arc::default(), permissions: Arc::default(), log })
             });
             let _ = tx.send(AsyncResult::FtpConnectFinished { pane: index, serial, request: Box::new(request), result });
         });
@@ -905,7 +1068,7 @@ impl App {
         remote.path = join_remote(&remote.path, name);
         let address = remote.address();
         self.panes[index].address = address;
-        self.refresh(index);
+        self.refresh_remote_navigation(index);
     }
 
     /// The parent folder of an FTP pane (unchanged at the root).
@@ -922,7 +1085,7 @@ impl App {
         self.panes[index].address = address;
         // Original FUN_00486694 (moving up): put the cursor on the folder we left.
         self.pending_focus[index] = (!child.is_empty()).then_some(child);
-        self.refresh(index);
+        self.refresh_remote_navigation(index);
     }
 
     /// The root of an FTP pane.
@@ -935,7 +1098,7 @@ impl App {
         remote.path = "/".into();
         let address = remote.address();
         self.panes[index].address = address;
-        self.refresh(index);
+        self.refresh_remote_navigation(index);
     }
 
     /// Copy text only, never expose a virtual FTP row as a Windows file.

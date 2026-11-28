@@ -196,6 +196,9 @@ pub struct Vault {
     // of the higher-level writer reservation (unpublished pages may be
     // appended between NDR transfer chunks, but never change its index).
     writer_io: std::sync::Arc<std::sync::Mutex<()>>,
+    // Exact authenticated header bytes and the file length they were
+    // checked against. A reload still reads the backing file every time.
+    verified_header: Option<([u8; 128], u64)>,
 }
 /// Windows FILETIME (100 ns ticks from 1601-01-01 UTC).
 fn current_filetime() -> u64 {
@@ -465,7 +468,7 @@ impl Vault {
             file: self.file.clone(), key: Zeroizing::new(*self.key),
             index: self.index.clone(), generation: self.generation,
             pending: None, opened: self.opened, last_used: self.last_used,
-            gate: None, writer_io: self.writer_io.clone(),
+            gate: None, writer_io: self.writer_io.clone(), verified_header: self.verified_header,
         })
     }
 
@@ -473,6 +476,7 @@ impl Vault {
     /// commits an authenticated index, without requiring the password again.
     pub fn reload_after_mount(&mut self) -> Result<(), String> {
         if self.pending.is_some() { return Err("Cannot refresh during encrypted transfer".into()); }
+        let verified = self.verified_header.take();
         let mut header = [0u8;128];
         let len = {
             let io = self.writer_io.clone();
@@ -480,6 +484,14 @@ impl Vault {
             read_exact_at(&self.read_handle, &mut header, 0)?;
             self.handle.metadata().map_err(|e| e.to_string())?.len()
         };
+        if verified.as_ref() == Some(&(header, len)) {
+            self.verified_header = verified;
+            self.touch();
+            return Ok(());
+        }
+        // Do not reuse any previous verification after a changed or
+        // truncated header. Changed bytes always take both HMAC checks.
+        self.verified_header = None;
         if &header[..8] != MAGIC { return Err("Encrypted container header changed".into()); }
         let first = read_slot(&header, 0, len, &self.key)?;
         let second = read_slot(&header, 1, len, &self.key)?;
@@ -491,6 +503,7 @@ impl Vault {
         // Opening a tree with many files should not decode and parse the
         // entire authenticated index for every Explorer attribute query.
         if generation == self.generation {
+            self.verified_header = Some((header, len));
             self.touch();
             return Ok(());
         }
@@ -509,6 +522,7 @@ impl Vault {
         }
         self.index = index;
         self.generation = generation;
+        self.verified_header = Some((header, len));
         self.touch();
         Ok(())
     }
@@ -533,7 +547,7 @@ impl Vault {
             let key = derive((*password).clone(), &header[8..24])?;
             let read_handle = independent_reader(&handle, path)?;
             let mut result = Self {handle,read_handle,file:path.to_path_buf(),key,index:Index::empty(),
-                generation:0,pending:None,opened:Instant::now(),last_used:Instant::now(),gate:Some(gate),writer_io:Default::default()};
+                generation:0,pending:None,opened:Instant::now(),last_used:Instant::now(),gate:Some(gate),writer_io:Default::default(),verified_header:None};
             result.commit_index()?;
             Ok::<_,String>(result)
         })();
@@ -580,8 +594,10 @@ impl Vault {
         }
         handle.seek(SeekFrom::End(0)).map_err(|e|e.to_string())?;
         let read_handle = independent_reader(&handle, &file)?;
-        Ok(Self{handle,read_handle,file,key,index,generation,pending:None,opened:Instant::now(),last_used:Instant::now(),gate:Some(gate),writer_io:Default::default()})
-    }    fn commit_index(&mut self) -> Result<(), String> {
+        Ok(Self{handle,read_handle,file,key,index,generation,pending:None,opened:Instant::now(),last_used:Instant::now(),gate:Some(gate),writer_io:Default::default(),verified_header:Some((header,len))})
+    }
+    fn commit_index(&mut self) -> Result<(), String> {
+        self.verified_header = None;
         self.index.check()?;
         let data = Zeroizing::new(serde_json::to_vec(&self.index).map_err(|e| e.to_string())?);
         if data.len() > MAX_META { return Err("Encrypted folder index exceeds 64 MiB".into()); }
@@ -1283,7 +1299,7 @@ impl Vault {
         let mut rebuilt=Self {
             handle:temp,read_handle:stage_read,file:stage.clone(),key:Zeroizing::new(*self.key),
             index:self.index.clone(),generation:0,pending:None,
-            opened:self.opened,last_used:self.last_used,gate:None,writer_io:Default::default(),
+            opened:self.opened,last_used:self.last_used,gate:None,writer_io:Default::default(),verified_header:None,
         };
         // Several internal copies can share the same authenticated ciphertext
         // block. Keep that relationship while re-encrypting each LIVE block once.
@@ -1653,6 +1669,36 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    #[test]
+    fn batch460_verified_header_cache_revalidates_tampering_and_peer_commits() {
+        let root = std::env::temp_dir().join(format!("ndr-header-cache-{}-{}",std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        std::fs::create_dir_all(&root).unwrap();
+        let file = root.join("test.ndr");
+        let mut vault = Vault::create(&file, "header-cache-test-password".into()).unwrap();
+        vault.reload_after_mount().unwrap();
+        let (header, length) = vault.verified_header.unwrap();
+        vault.reload_after_mount().unwrap();
+        assert_eq!(vault.verified_header, Some((header,length)));
+        // Corrupt a pointer MAC, without changing the file length.
+        vault.handle.seek(SeekFrom::Start(127)).unwrap();
+        vault.handle.write_all(&[header[127]^1]).unwrap();
+        vault.handle.sync_all().unwrap();
+        assert!(vault.reload_after_mount().is_err());
+        assert!(vault.verified_header.is_none());
+        vault.handle.seek(SeekFrom::Start(127)).unwrap();
+        vault.handle.write_all(&header[127..]).unwrap();
+        vault.handle.sync_all().unwrap();
+        vault.reload_after_mount().unwrap();
+        let mut peer = vault.fork_for_mount().unwrap();
+        let id = peer.add_file(1, "added.txt", b"authenticated peer edit").unwrap();
+        vault.reload_after_mount().unwrap();
+        assert_eq!(vault.read_file(id).unwrap(),b"authenticated peer edit");
+        assert_ne!(vault.verified_header.unwrap().0,header);
+        drop(peer);
+        drop(vault);
+        std::fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn batch381_staged_chunks_are_private_until_commit_and_bound_to_container() {
         let root=fixture("staged-pages");let path=root.join("main.ndr");let other=root.join("other.ndr");

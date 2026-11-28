@@ -547,6 +547,39 @@ fn fake_pane_connect(config: &Config) -> Result<Box<dyn super::ftp_pane::PaneFs>
     Ok(Box::new(FakeFtp))
 }
 
+#[test]
+fn batch451_remote_browse_cache_is_session_scoped_and_invalidates_on_mutation() {
+    use super::ftp_pane::{CachedPaneFs, PaneFs};
+    let _guard = REMOTE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    {
+        let mut store = FAKE_FTP.lock().unwrap();
+        store.clear();
+        store.insert("/pub/a.txt".into(), (false, b"a".to_vec()));
+        store.insert("/PUB/upper.txt".into(), (false, b"b".to_vec()));
+    }
+    let mut first = CachedPaneFs::new(Box::new(FakeFtp));
+    let mut second = CachedPaneFs::new(Box::new(FakeFtp));
+    let old = first.list_browse("/pub", false).unwrap();
+    assert_eq!(old.len(), 1);
+    assert!(Arc::ptr_eq(&old, &first.list_browse("/pub", true).unwrap()));
+    assert_eq!(first.list_browse("/PUB", true).unwrap()[0].name, "upper.txt");
+    FAKE_FTP.lock().unwrap().insert("/pub/new.txt".into(), (false, b"new".to_vec()));
+    assert_eq!(second.list_browse("/pub", true).unwrap().len(), 2);
+    assert_eq!(first.list("/pub").unwrap().len(), 2); // fresh operation query
+    let fresh = first.list_browse("/pub", false).unwrap();
+    assert_eq!(fresh.len(), 2);
+    assert!(!Arc::ptr_eq(&old, &fresh));
+    first.mkdir("/pub/folder").unwrap();
+    assert_eq!(first.list_browse("/pub", true).unwrap().len(), 3);
+    let before = first.list_browse("/pub", true).unwrap();
+    assert!(first.rename("/pub/nonexistent", "/pub/x").is_err());
+    assert!(!Arc::ptr_eq(&before, &first.list_browse("/pub", true).unwrap()));
+    let before = first.list_browse("/pub", true).unwrap();
+    first.command("NOOP").unwrap();
+    assert!(!Arc::ptr_eq(&before, &first.list_browse("/pub", true).unwrap()));
+    first.close();
+}
+
 fn ftp_clipboard_fixture(label: &str) -> (PathBuf, egui::Context, App) {
     let (root, ctx, mut app) = fixture(label, "ko");
     {
@@ -729,13 +762,21 @@ fn ftp_pane_mode_connects_lists_transfers_and_disconnects_like_the_original() {
     assert!(app.ftp_log_reserve(0, 0.0) > 60.0);
     assert_eq!(log_lines(&app).first().map(String::as_str), Some(" > PWD"));
     assert_eq!(log_lines(&app).last().map(String::as_str), Some("/ > LIST"));
-    // Open folder.
+    // Open folder. A warm browsing cache does not send LIST again;
+    // the log must reflect actual protocol traffic, not synthetic commands.
+    let previous_log = log_lines(&app);
     app.panes[0].cursor = 0;
     app.open_current();
     wait_until(&mut app, &ctx, |app| !app.panes[0].loading);
     assert_eq!(names(&app, 0), ["..", "a.txt"], "a remote subfolder starts with \"..\"");
     assert_eq!(app.address_text(0), "ftp://ftp.example/pub");
-    assert_eq!(log_lines(&app).last().map(String::as_str), Some("/pub > LIST"), "sent lines start with the current remote folder");
+    let after = log_lines(&app);
+    assert!(after == previous_log || after.last().map(String::as_str) == Some("/pub > LIST"));
+    let log = app.panes[0].remote.as_ref().unwrap().log.as_ref().unwrap();
+    assert_eq!(log.lock().unwrap().prefix, "/pub", "cache hits update log context");
+    app.refresh(0);
+    wait_until(&mut app, &ctx, |app| !app.panes[0].loading);
+    assert_eq!(log_lines(&app).last().map(String::as_str), Some("/pub > LIST"), "explicit refresh sends a real LIST with the current path");
     // Original miShredClick (0x431c60) -> FUN_0042c734: the FTP mode branch shows the FTP delete confirmation (no Recycle Bin button) regardless of the mode.
     app.panes[0].cursor = app.panes[0].entries.iter().position(|e| e.name == "a.txt").unwrap();
     app.dispatch("shred", &ctx);

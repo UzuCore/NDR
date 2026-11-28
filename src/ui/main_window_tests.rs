@@ -2389,6 +2389,28 @@ fn archive_folder_icon_cache_never_uses_a_drive_root_or_virtual_entry_path() {
 }
 
 #[test]
+fn batch456_extension_icon_cache_retains_recent_types_and_folder_icon() {
+    let (root,ctx,mut app)=fixture("extension-icon-lru");
+    app.file_icons.clear(); app.file_icon_failed_at.clear(); app.file_icon_used.clear();
+    app.system.file_icon=|_,_| Some((2,2,[230,188,84,255].repeat(4)));
+    let _ = app.any_path_icon(&ctx,Path::new("folder"),true).unwrap();
+    let now=Instant::now();
+    for i in 0..255 {
+        let path=PathBuf::from(format!("file.ext{i}"));
+        let _ = app.any_path_icon(&ctx,&path,false).unwrap();
+        app.file_icon_used.insert(format!(".ext{i}"),now-Duration::from_secs((256-i) as u64));
+    }
+    let hot=app.any_path_icon(&ctx,Path::new("file.ext0"),false).unwrap().id();
+    let _ = app.any_path_icon(&ctx,Path::new("file.newtype"),false).unwrap();
+    assert_eq!(app.file_icons.len(),256);
+    assert!(app.file_icons.contains_key("<DIR>"));
+    assert!(!app.file_icons.contains_key(".ext1"));
+    assert_eq!(app.file_icons[".ext0"].as_ref().unwrap().id(),hot);
+    assert_eq!(app.file_icon_used.len(),256);
+    drop(app); fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn transient_missing_or_invisible_folder_icon_recovers_instead_of_being_cached_forever() {
     let (root, ctx, mut app) = fixture("icon-retry");
     FLAKY_FOLDER_ICON_CALLS.with(|calls| calls.set(0));
