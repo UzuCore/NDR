@@ -145,10 +145,10 @@ fn settings_window_commits_like_csharp() {
     app.settings_action(SettingsAction::Apply, &ctx);
     assert!(app.settings_form().is_some());
     // Original btnListFont (change font): the name and size chosen in the font box go to the row, the style (TFontStyles byte) to ListFontStyle.
-    // The list size field is pixels (initially 16 = 12 points), the font box points: choosing 12 points gives 16 pixels.
+    // The list's stored layout is 16 pixels (12pt); both the summary and the picker now show points.
     app.font_picker = |name, size, style| { assert_eq!((name, size, style), ("Segoe UI", 12.0, 0), "the current font goes in as points"); Some(("Tahoma".into(), 12.0, 3)) };
     app.settings_action(SettingsAction::ChooseFont(false), &ctx);
-    assert_eq!((text_of(&mut app, "ListFont"), text_of(&mut app, "ListFontSize")), ("Tahoma".to_owned(), "16".to_owned()), "12 points = 16 pixels");
+    assert_eq!((text_of(&mut app, "ListFont"), text_of(&mut app, "ListFontSize")), ("Tahoma".to_owned(), "12".to_owned()), "the summary matches the picker in points");
     assert_eq!(app.settings_form().unwrap().draft.values.get("ListFontStyle"), Some(&serde_json::json!(3)));
     app.font_picker = |_, size, style| { assert_eq!((size, style), (9.0, 0), "the folder tree size stays in points"); Some(("Gulim".into(), 9.0, 4)) };
     app.settings_action(SettingsAction::ChooseFont(true), &ctx);
@@ -384,8 +384,175 @@ fn list_font_size_only_sizes_the_file_list_like_csharp() {
     assert_eq!(body, super::BASE_TEXT_SIZE);
     app.settings.values.insert("ListFontSize".into(), serde_json::json!(99));
     app.apply_preferences(&ctx);
-    assert_eq!(app.list_font_size, 32.0);
+    assert_eq!(app.list_font_size, 40.0);
     let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn font_settings_roundtrip_points_apply_cancel_restart_and_independent_tree() {
+    let (root,ctx,mut app)=fixture("font-roundtrip","ko");
+    app.apply_preferences(&ctx);
+    assert_eq!(app.list_font_size,16.0);
+    assert_eq!(app.tree_font_size,12.0);
+    app.dispatch("options",&ctx);
+    assert_eq!(text_of(&mut app,"ListFontSize"),"12");
+    app.font_picker=|name,size,style|{
+        assert_eq!((name,size,style),("Segoe UI",12.0,0));
+        Some(("Tahoma".into(),9.0,7))
+    };
+    app.settings_action(SettingsAction::ChooseFont(false),&ctx);
+    assert_eq!(text_of(&mut app,"ListFontSize"),"9");
+    assert_eq!(app.list_font_size,16.0,"draft must not affect the live list");
+    app.settings_action(SettingsAction::Apply,&ctx);
+    app.apply_preferences(&ctx);
+    assert_eq!(app.list_font_size,12.0);
+    assert_eq!(app.list_font_style,7);
+    assert_eq!(app.tree_font_size,12.0);
+    assert_eq!(app.settings.values["ListFontSize"].as_f64(),Some(12.0));
+    assert_eq!(text_of(&mut app,"ListFontSize"),"9");
+    app.font_picker=|name,size,style|{
+        assert_eq!((name,size,style),("Tahoma",9.0,7));
+        Some(("Tahoma".into(),11.0,7))
+    };
+    app.settings_action(SettingsAction::ChooseFont(false),&ctx);
+    app.settings_action(SettingsAction::Apply,&ctx);
+    app.apply_preferences(&ctx);
+    assert_eq!(text_of(&mut app,"ListFontSize"),"11");
+    assert!((app.list_font_size-14.666667).abs()<0.001);
+    app.font_picker=|_,size,style|{
+        assert_eq!((size,style),(11.0,7));
+        None
+    };
+    app.settings_action(SettingsAction::ChooseFont(false),&ctx);
+    assert_eq!(text_of(&mut app,"ListFontSize"),"11");
+    app.font_picker=|_,size,style|{
+        assert_eq!((size,style),(9.0,0));
+        Some(("Gulim".into(),18.0,12))
+    };
+    app.settings_action(SettingsAction::ChooseFont(true),&ctx);
+    app.settings_action(SettingsAction::Apply,&ctx);
+    app.apply_preferences(&ctx);
+    assert_eq!(app.tree_font_size,24.0);
+    assert_eq!(app.tree_font_style,12);
+    assert!((app.list_font_size-14.666667).abs()<0.001);
+    assert_eq!(text_of(&mut app,"FolderTreeFontSize"),"18");
+    assert_eq!(app.settings.values["FolderTreeFontSize"].as_f64(),Some(18.0));
+    app.font_picker=|_,_,_|Some(("Segoe UI".into(),30.0,0));
+    app.settings_action(SettingsAction::ChooseFont(false),&ctx);
+    app.settings_action(SettingsAction::Cancel,&ctx);
+    app.apply_preferences(&ctx);
+    assert_eq!(app.settings.text("ListFont",""),"Tahoma");
+    assert!((app.list_font_size-14.666667).abs()<0.001);
+    let saved=ndr::settings::Settings::load(&root.join("profile/settings.json")).unwrap();
+    assert_eq!(saved.text("FolderTreeFont",""),"Gulim");
+    assert_eq!(saved.values["FolderTreeFontSize"].as_f64(),Some(18.0));
+    assert_eq!(ndr::settings::list_font_display_points(ndr::settings::list_font_pixels(&saved)),11.0);
+    drop(app);
+    let restarted=egui::Context::default();
+    let mut app=App::from_context(&restarted,Options{profile:Some(root.join("profile")),language:Some("ko".into()),..Default::default()});
+    app.apply_preferences(&restarted);
+    assert!((app.list_font_size-14.666667).abs()<0.001);
+    assert_eq!(app.tree_font_size,24.0);
+    assert_eq!((app.list_font_style,app.tree_font_style),(7,12));
+    app.dispatch("options",&restarted);
+    assert_eq!(text_of(&mut app,"ListFontSize"),"11");
+    assert_eq!(text_of(&mut app,"FolderTreeFontSize"),"18");
+    drop(app);fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn font_settings_all_sizes_preserve_units_and_legacy_appearance() {
+    let (root,ctx,mut app)=fixture("font-size-range","en");
+    // Every tenth-point choice accepted by the native picker, including
+    // former clamping failures (6-7pt tree, 25-30pt list).
+    for step in 60..=300 {
+        let points=step as f64/10.0;
+        let text=points.to_string();
+        app.dispatch("options",&ctx);
+        set_text(&mut app,"ListFontSize",&text);
+        set_text(&mut app,"FolderTreeFontSize",&text);
+        let mut committed=app.settings_form().unwrap().commit().unwrap();
+        committed.normalize();
+        let pixels=ndr::settings::list_font_pixels(&committed);
+        assert_eq!(ndr::settings::list_font_display_points(pixels),points,"{points}pt");
+        assert!((pixels-ndr::settings::font_layout_pixels(points)).abs()<0.0001);
+        assert_eq!(ndr::settings::tree_font_points(&committed),points);
+        app.settings_action(SettingsAction::Cancel,&ctx);
+    }
+    for px in [8.0,9.0,13.0,15.0,16.0,20.0,32.0] {
+        app.settings.values.insert("ListFontSize".into(),serde_json::json!(px));
+        app.dispatch("options",&ctx);
+        let saved=app.settings_form().unwrap().commit().unwrap();
+        assert_eq!(saved.values["ListFontSize"].as_f64(),Some(px),"unchanged old profile");
+        app.settings_action(SettingsAction::Cancel,&ctx);
+    }
+    drop(app);fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn font_settings_rendered_summary_shows_points_not_pixels() {
+    let (root,ctx,mut app)=fixture("font-summary-render","ko");
+    app.apply_preferences(&ctx);
+    app.dispatch("options",&ctx);
+    app.font_picker=|_,_,_|Some(("A very long installed font family name".into(),9.0,3));
+    app.settings_action(SettingsAction::ChooseFont(false),&ctx);
+    app.font_picker=|_,_,_|Some(("Tahoma".into(),18.0,0));
+    app.settings_action(SettingsAction::ChooseFont(true),&ctx);
+    fn collect(shape:&egui::Shape,texts:&mut Vec<String>){
+        match shape{
+            egui::Shape::Text(t)=>texts.push(t.galley.job.text.clone()),
+            egui::Shape::Vec(v)=>for s in v{collect(s,texts)},
+            _=>{}
+        }
+    }
+    for (tab,size) in [(0,"9 pt"),(1,"18 pt")] {
+        app.settings_form().unwrap().tab=tab;
+        let raw=egui::RawInput{screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(1600.,950.))),..Default::default()};
+        let output=ctx.run(raw,|ctx|{
+            egui::CentralPanel::default().show(ctx,|ui|{
+                super::settings_window::settings_ui(ui,app.settings_form().unwrap(),false,false);
+            });
+        });
+        let mut texts=Vec::new();
+        for c in output.shapes { collect(&c.shape,&mut texts); }
+        assert!(texts.iter().any(|t|t.starts_with(size)),"{size}: {texts:?}");
+    }
+    drop(app);fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn font_settings_real_families_and_tree_render_metrics_are_independent() {
+    let (root,ctx,mut app)=fixture("font-real-families","ko");
+    app.system.font_file=native::font_file;
+    // Exercise an actual installed English face and a Korean family alias.
+    app.settings.set_text("ListFont","Tahoma");
+    app.settings.values.insert("ListFontSize".into(),serde_json::json!(12.0));
+    app.settings.values.insert("ListFontStyle".into(),serde_json::json!(1));
+    let tree_family = if native::font_file("Malgun Gothic").is_some() { "맑은 고딕" } else { "Tahoma" };
+    app.settings.set_text("FolderTreeFont",tree_family);
+    app.settings.values.insert("FolderTreeFontSize".into(),serde_json::json!(24.0));
+    app.settings.values.insert("FolderTreeFontStyle".into(),serde_json::json!(12));
+    app.apply_preferences(&ctx);
+    assert!(app.prepared_list_font.as_ref().unwrap().data.is_some());
+    assert!(app.prepared_tree_font.as_ref().unwrap().data.is_some(),"localized installed family must resolve");
+    let raw=egui::RawInput{screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(900.,700.))),..Default::default()};
+    let _=ctx.run(raw,|ctx|{
+        let list=egui::FontId::new(app.list_font_size,egui::FontFamily::Name(super::LIST_FONT_FAMILY.into()));
+        let tree=egui::FontId::new(app.tree_font_size,egui::FontFamily::Name(super::TREE_FONT_FAMILY.into()));
+        ctx.fonts_mut(|fonts|{
+            assert!(fonts.row_height(&tree)>fonts.row_height(&list));
+            let a=fonts.layout_no_wrap("Abc".into(),list,Color32::WHITE);
+            let b=fonts.layout_no_wrap("Abc".into(),tree,Color32::WHITE);
+            assert!(b.size().x>a.size().x && b.size().y>a.size().y);
+        });
+        assert_eq!(ctx.style().text_styles[&egui::TextStyle::Body].size,super::BASE_TEXT_SIZE);
+        let form=super::folder_tree_dialog::FolderTreeForm::new(&app.settings,&app.profile,vec![],vec![]);
+        assert_eq!(form.font_size,32.0);
+        assert_eq!(form.font_style,12);
+    });
+    assert_eq!(app.list_font_size,12.0);
+    assert_eq!(app.tree_font_size,32.0);
+    drop(app);fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -513,6 +680,7 @@ thread_local! {
 #[test]
 fn list_font_style_picks_the_styled_font_file_like_the_original() {
     let (root, ctx, mut app) = fixture("list-font-style", "en");
+    app.apply_preferences(&ctx);
     app.system.font_file = |name| {
         FONT_LOOKUPS.with(|l| l.borrow_mut().push(name.to_owned()));
         None

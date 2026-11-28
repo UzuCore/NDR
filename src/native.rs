@@ -926,6 +926,26 @@ pub fn spawn_drive_watch(stop: std::sync::Arc<std::sync::atomic::AtomicBool>, on
 pub fn ready_drives() -> Vec<PathBuf> {
     drives().into_iter().filter(|root| volume_label(root).is_some()).collect()
 }
+/// Build the ready-drive rows from the same volume response used to decide
+/// readiness. In particular, a slow network/USB provider is not asked for its
+/// volume information twice during a single list refresh.
+pub fn ready_drive_items() -> Vec<(PathBuf, Option<(String, u32, Option<(u64, u64)>)>)> {
+    collect_ready_drive_items(drives(), volume_label, |root, label| {
+        drive_item_info_with_volume(root, Some(label))
+    })
+}
+
+fn collect_ready_drive_items(
+    roots: Vec<PathBuf>,
+    mut volume: impl FnMut(&Path) -> Option<String>,
+    mut item: impl FnMut(&Path, &str) -> (String, u32, Option<(u64, u64)>),
+) -> Vec<(PathBuf, Option<(String, u32, Option<(u64, u64)>)>)> {
+    roots.into_iter().filter_map(|root| {
+        let label = volume(&root)?;
+        let info = item(&root, &label);
+        Some((root, Some(info)))
+    }).collect()
+}
 /// Original TNXDriveList.Refresh (0x7b7df0): among A~Z from GetLogicalDrives, those whose GetDriveTypeW is not 0 (unknown) or 1 (no root).
 /// CD and card readers without media are included too.
 pub fn listed_drives() -> Vec<PathBuf> {
@@ -1231,6 +1251,9 @@ pub fn thumbnail_cancel(path: &Path, side: u32, cancel: &std::sync::atomic::Atom
         if initialized {
             CoUninitialize();
         }
+        // Serialize only shell extraction (provider E_PENDING), not the
+        // private bitmap conversion; the factory has already been released.
+        drop(_one_at_a_time);
         let bitmap = image?;
         let handle = bitmap.0;
         if let Err(error) = check() {
@@ -1279,9 +1302,10 @@ pub fn thumbnail_cancel(path: &Path, side: u32, cancel: &std::sync::atomic::Atom
         );
         DeleteDC(dc);
         DeleteObject(handle);
-        if copied == 0 {
-            return Err(std::io::Error::last_os_error().to_string());
+        if copied != height as i32 {
+            return Err("Incomplete thumbnail bitmap read".into());
         }
+        check()?;
         let has_alpha = pixels.chunks_exact(4).any(|p| p[3] != 0);
         for pixel in pixels.chunks_exact_mut(4) {
             pixel.swap(0, 2);
@@ -1844,6 +1868,11 @@ fn drive_name_with_volume(root: &Path, kind: u32, label: Option<&str>) -> String
 /// The TNXDriveInfo of a This PC drive item: (label, type, provider-reported free/total when available).
 /// Refresh (0x7b7554) does not read the size if the type is 0 or 1, and reads only fixed disks when there is no display.
 pub fn drive_item_info(root: &Path) -> Option<(String, u32, Option<(u64, u64)>)> {
+    let volume = volume_label(root);
+    Some(drive_item_info_with_volume(root, volume.as_deref()))
+}
+
+fn drive_item_info_with_volume(root: &Path, volume: Option<&str>) -> (String, u32, Option<(u64, u64)>) {
     use windows_sys::Win32::Storage::FileSystem::{GetDiskFreeSpaceExW, GetDriveTypeW};
     let name = wide(root.as_os_str());
     // SAFETY: NUL-terminated root string.
@@ -1851,8 +1880,7 @@ pub fn drive_item_info(root: &Path) -> Option<(String, u32, Option<(u64, u64)>)>
     let (mut free, mut total) = (0u64, 0u64);
     // Fix (user request): the original reads the size only for fixed disks, but connected (volume-readable) network drives are read too.
     // Disconnected network drives can be slow, so they are not read, like the original.
-    let volume = volume_label(root);
-    let label = drive_name_with_volume(root, kind, volume.as_deref());
+    let label = drive_name_with_volume(root, kind, volume);
     let connected = kind == 4 && volume.is_some();
     // SAFETY: NUL-terminated root string; out pointers refer to live locals.
     // MYBOX and some USB volumes report DRIVE_REMOVABLE (2) despite
@@ -1863,7 +1891,25 @@ pub fn drive_item_info(root: &Path) -> Option<(String, u32, Option<(u64, u64)>)>
     let sizes = ((kind == 3 || connected || removable_ready)
         && unsafe { GetDiskFreeSpaceExW(name.as_ptr(), &mut free, &mut total, ptr::null_mut()) } != 0
         && total > 0 && free <= total).then_some((free, total));
-    Some((label, kind, sizes))
+    (label, kind, sizes)
+}
+
+#[test]
+fn ready_drive_items_reuse_one_volume_response_per_root() {
+    use std::cell::RefCell;
+    let probes = RefCell::new(Vec::new());
+    let items = RefCell::new(Vec::new());
+    let roots: Vec<_> = ["C:\\", "F:\\", "N:\\"].into_iter().map(PathBuf::from).collect();
+    let result = collect_ready_drive_items(roots.clone(), |root| {
+        probes.borrow_mut().push(root.to_path_buf());
+        if root == roots[1] { None } else if root == roots[0] { Some("Local".into()) } else { Some(String::new()) }
+    }, |root, label| {
+        items.borrow_mut().push((root.to_path_buf(), label.to_owned()));
+        (label.to_owned(), 3, Some((10, 20)))
+    });
+    assert_eq!(*probes.borrow(), roots);
+    assert_eq!(*items.borrow(), vec![(roots[0].clone(), "Local".into()), (roots[2].clone(), String::new())]);
+    assert_eq!(result, vec![(roots[0].clone(), Some(("Local".into(), 3, Some((10, 20))))), (roots[2].clone(), Some((String::new(), 3, Some((10, 20)))))]);
 }
 
 #[cfg(test)]
@@ -2416,6 +2462,19 @@ pub fn choose_color(initial: u32) -> Option<u32> {
     (unsafe { ChooseColorW(&mut choose) } != 0).then_some(choose.rgbResult & 0x00FF_FFFF)
 }
 
+fn font_dialog_height(points: f32, dpi: i32) -> i32 {
+    -((points * dpi as f32 / 72.0).round() as i32)
+}
+
+#[test]
+fn font_dialog_initial_height_uses_screen_dpi() {
+    assert_eq!(font_dialog_height(9.0, 96), -12);
+    assert_eq!(font_dialog_height(9.0, 120), -15);
+    assert_eq!(font_dialog_height(9.0, 144), -18);
+    assert_eq!(font_dialog_height(9.0, 192), -24);
+    assert_eq!(font_dialog_height(12.0, 144), -24);
+}
+
 /// Original btnFontClick (TFontDialog.Execute, initial Options = fdEffects): the Windows font dialog (ChooseFontW).
 /// Initial value = (name, points, original TFontStyles byte: 1 bold, 2 italic, 4 underline, 8 strikeout). On OK the same set. It is modal.
 pub fn choose_font(name: &str, points: f32, style: u8) -> Option<(String, f32, u8)> {
@@ -2426,8 +2485,20 @@ pub fn choose_font(name: &str, points: f32, style: u8) -> Option<(String, f32, u
     for (slot, unit) in font.lfFaceName.iter_mut().zip(name.encode_utf16().take(31)) {
         *slot = unit;
     }
-    let points = if points > 0.0 { points } else { 9.0 };
-    font.lfHeight = -((points * 96.0 / 72.0).round() as i32);
+    use windows_sys::Win32::Graphics::Gdi::{GetDC, GetDeviceCaps, ReleaseDC, LOGPIXELSY};
+    let points = if points.is_finite() && points > 0.0 { points } else { 9.0 }
+        .clamp(crate::settings::MIN_FONT_POINTS as f32, crate::settings::MAX_FONT_POINTS as f32);
+    // CHOOSEFONT interprets LOGFONT height in screen device pixels, not
+    // egui logical pixels. Initial size must account for Windows DPI.
+    let dpi = unsafe {
+        let dc = GetDC(std::ptr::null_mut());
+        if dc.is_null() { 96 } else {
+            let dpi = GetDeviceCaps(dc, LOGPIXELSY as i32);
+            ReleaseDC(std::ptr::null_mut(), dc);
+            if dpi > 0 { dpi } else { 96 }
+        }
+    };
+    font.lfHeight = font_dialog_height(points, dpi);
     font.lfWeight = if style & 1 != 0 { 700 } else { 400 };
     font.lfItalic = u8::from(style & 2 != 0);
     font.lfUnderline = u8::from(style & 4 != 0);
@@ -2438,8 +2509,8 @@ pub fn choose_font(name: &str, points: f32, style: u8) -> Option<(String, f32, u
     choose.iPointSize = (points * 10.0).round() as i32;
     // Original btnFontClick (0x44e668): MinFontSize 6, MaxFontSize 30, Options + fdForceFontExist + fdLimitSize (CF_FORCEFONTEXIST, CF_LIMITSIZE).
     // Previously any size could be chosen.
-    choose.nSizeMin = 6;
-    choose.nSizeMax = 30;
+    choose.nSizeMin = crate::settings::MIN_FONT_POINTS as i32;
+    choose.nSizeMax = crate::settings::MAX_FONT_POINTS as i32;
     choose.Flags = CF_INITTOLOGFONTSTRUCT | CF_SCREENFONTS | CF_NOVERTFONTS | CF_EFFECTS | CF_FORCEFONTEXIST | CF_LIMITSIZE;
     // SAFETY: the LOGFONTW lives across the modal call.
     if unsafe { ChooseFontW(&mut choose) } == 0 {
@@ -3048,7 +3119,63 @@ pub fn font_file(family: &str) -> Option<(PathBuf, u32)> {
             }
         }
     }
-    None
+    // ChooseFontW may return localized family names (for example, Gulim
+    // in Korean), whereas the registry value is English. DirectWrite
+    // resolves the installed font family and real collection face index.
+    directwrite_font_file(family)
+}
+
+/// Registry names cover the common fast path. The system font collection
+/// handles localized names and font files not named like a registry entry.
+fn directwrite_font_file(name: &str) -> Option<(PathBuf, u32)> {
+    use windows::{Win32::Graphics::DirectWrite::*,core::{Interface,PCWSTR}};
+    if name.trim().is_empty() || name.contains('\0') { return None; }
+    unsafe {
+        let factory: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED).ok()?;
+        let mut collection = None;
+        factory.GetSystemFontCollection(&mut collection,false).ok()?;
+        let collection = collection?;
+        let find_family = |name: &str| {
+            let mut index=0;
+            let mut exists=windows::core::BOOL(0);
+            collection.FindFamilyName(PCWSTR(wide(name).as_ptr()),&mut index,&mut exists).ok()?;
+            if exists.as_bool() { collection.GetFontFamily(index).ok() } else { None }
+        };
+        let (family,bold,italic) = if let Some(family)=find_family(name) {
+            (family,false,false)
+        } else {
+            let (base,bold,italic)=if let Some(base)=name.strip_suffix(" Bold Italic") { (base,true,true) }
+                else if let Some(base)=name.strip_suffix(" Bold") { (base,true,false) }
+                else if let Some(base)=name.strip_suffix(" Italic") { (base,false,true) }
+                else { return None };
+            (find_family(base)?,bold,italic)
+        };
+        let font=family.GetFirstMatchingFont(if bold { DWRITE_FONT_WEIGHT_BOLD } else { DWRITE_FONT_WEIGHT_NORMAL },
+            DWRITE_FONT_STRETCH_NORMAL, if italic { DWRITE_FONT_STYLE_ITALIC } else { DWRITE_FONT_STYLE_NORMAL }).ok()?;
+        // egui loads a real font file; do not misrepresent a synthetic
+        // DirectWrite simulation as a distinct bold/italic face.
+        if font.GetSimulations()!=DWRITE_FONT_SIMULATIONS_NONE
+            || (bold && font.GetWeight().0<700)
+            || (italic && font.GetStyle()==DWRITE_FONT_STYLE_NORMAL) { return None; }
+        let face=font.CreateFontFace().ok()?;
+        let mut count=0u32;
+        face.GetFiles(&mut count,None).ok()?;
+        if count!=1 { return None; }
+        let mut file=None;
+        face.GetFiles(&mut count,Some(&mut file)).ok()?;
+        let file=file?;
+        let mut key=std::ptr::null_mut();
+        let mut key_size=0u32;
+        file.GetReferenceKey(&mut key,&mut key_size).ok()?;
+        let loader:IDWriteLocalFontFileLoader=file.GetLoader().ok()?.cast().ok()?;
+        let length=loader.GetFilePathLengthFromKey(key,key_size).ok()? as usize;
+        if length>32767 { return None; }
+        let mut path=vec![0u16;length+1];
+        loader.GetFilePathFromKey(key,key_size,&mut path).ok()?;
+        use std::os::windows::ffi::OsStringExt;
+        let path=PathBuf::from(std::ffi::OsString::from_wide(&path[..length]));
+        path.is_file().then(||(path,face.GetIndex()))
+    }
 }
 
 #[cfg(test)]

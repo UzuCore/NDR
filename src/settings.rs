@@ -5,6 +5,36 @@ pub const CURRENT_SCHEMA_VERSION: i64 = 6;
 
 /// Default file list (pane) font size (ListFontSize, pixels). User decision: 16 px (the original default\nexusfile.ini has "Segoe UI",9 = 12 px).
 pub const DEFAULT_LIST_FONT_PIXELS: f64 = 16.;
+pub const MIN_FONT_POINTS: f64 = 6.0;
+pub const MAX_FONT_POINTS: f64 = 30.0;
+pub const MIN_LIST_FONT_PIXELS: f64 = MIN_FONT_POINTS * 96.0 / 72.0;
+pub const MAX_LIST_FONT_PIXELS: f64 = MAX_FONT_POINTS * 96.0 / 72.0;
+
+/// Logical 96-DPI pixels for egui, without rounding away the selected
+/// point size. The legacy INI importer retains its historical rounding.
+pub fn font_layout_pixels(points: f64) -> f64 {
+    points * 96.0 / 72.0
+}
+
+/// Existing JSON values are logical pixels. Keep the historical
+/// half-point convention for legacy integral pixel values. New fractional
+/// values round-trip to the Windows dialog's tenth-point precision.
+pub fn list_font_display_points(pixels: f64) -> f64 {
+    if pixels.fract() == 0.0 { font_pixels_to_points(pixels) }
+    else { (pixels * 72.0 / 96.0 * 10.0).round() / 10.0 }
+}
+
+pub fn list_font_pixels(settings: &Settings) -> f64 {
+    settings.values.get("ListFontSize").and_then(Value::as_f64)
+        .filter(|v| v.is_finite()).unwrap_or(DEFAULT_LIST_FONT_PIXELS)
+        .clamp(MIN_LIST_FONT_PIXELS, MAX_LIST_FONT_PIXELS)
+}
+
+pub fn tree_font_points(settings: &Settings) -> f64 {
+    settings.values.get("FolderTreeFontSize").and_then(Value::as_f64)
+        .filter(|v| v.is_finite()).unwrap_or(9.0)
+        .clamp(MIN_FONT_POINTS, MAX_FONT_POINTS)
+}
 
 /// Original font size (points, TFont.Size) to pixels: original FUN_00644e70 Height = MulDiv(size, PixelsPerInch 96, 72) (rounded).
 pub fn font_points_to_pixels(points: f64) -> f64 {
@@ -230,9 +260,9 @@ impl Settings {
             ("TreeWindowTop", 10., -16384., 16384.),
             ("TreeWindowWidth", 800., 400., 8192.),
             ("TreeWindowHeight", 600., 300., 8192.),
-            ("FolderTreeFontSize", 9., 8., 32.),
+            ("FolderTreeFontSize", 9., MIN_FONT_POINTS, MAX_FONT_POINTS),
             ("FolderTreeItemWidth", 130., 32., 4096.),
-            ("ListFontSize", DEFAULT_LIST_FONT_PIXELS, 8., 32.),
+            ("ListFontSize", DEFAULT_LIST_FONT_PIXELS, MIN_LIST_FONT_PIXELS, MAX_LIST_FONT_PIXELS),
         ] {
             let value = self
                 .values
@@ -329,6 +359,10 @@ impl Settings {
             if !self.values.get(key).is_some_and(Value::is_string) {
                 self.set_text(key, default);
             }
+        }
+        for key in ["ListFontStyle", "FolderTreeFontStyle"] {
+            let style = self.values.get(key).and_then(Value::as_i64).unwrap_or(0) & 0x0F;
+            self.values.insert(key.into(), json!(style));
         }
         for key in ["ListFont", "FolderTreeFont"] {
             let font = self.text(key, "Segoe UI");

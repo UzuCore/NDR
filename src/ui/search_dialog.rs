@@ -160,7 +160,9 @@ impl SearchForm {
 
     /// AddAllDrives: all non-network drives.
     pub(super) fn add_all_drives(&mut self) {
-        let drives: Vec<String> = native::drives().into_iter().map(|d| d.to_string_lossy().into_owned()).filter(|d| Path::new(d).is_dir() && !native::is_network_drive(Path::new(d))).collect();
+        // Exclude mapped network drives before touching their filesystem:
+        // is_dir on a disconnected share can block the search dialog.
+        let drives: Vec<String> = native::drives().into_iter().filter(|d| !native::is_network_drive(d) && d.is_dir()).map(|d| d.to_string_lossy().into_owned()).collect();
         for drive in &drives {
             add_unique(self, drive);
         }

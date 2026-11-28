@@ -1573,7 +1573,8 @@ pub fn ensure_plain_path(path: &Path) -> Result<(), String> {
     plain_metadata(path).map(|_| ())
 }
 
-fn plain_metadata(path: &Path) -> Result<Option<fs::Metadata>, String> {
+/// Validate all existing path components and return the already checked leaf.
+pub(crate) fn plain_metadata(path: &Path) -> Result<Option<fs::Metadata>, String> {
     let mut metadata = None;
     for (index, p) in path.ancestors().enumerate() {
         // Only the leaf needs full Metadata (size, timestamps, permissions).
@@ -2322,7 +2323,8 @@ impl Job {
             fs::create_dir_all(&d).map_err(|e| e.to_string())?;
             let mut all = true;
             // C# CopyDirectoryAsync: subfolders first, then files.
-            let mut children = Vec::new();
+            let mut directories = Vec::new();
+            let mut files = Vec::new();
             for item in fs::read_dir(s).map_err(|e| e.to_string())? {
                 self.check()?;
                 let item = item.map_err(|e| e.to_string())?;
@@ -2333,14 +2335,15 @@ impl Job {
                     continue;
                 }
                 let directory = item.metadata().map(|m| attribute_directory(&m)).unwrap_or(false);
-                children.push((!directory, name));
+                if directory { directories.push(name); } else { files.push(name); }
             }
-            children.sort_by_key(|(file, _)| *file);
-            let count = children.len();
-            for (index, (_, name)) in children.into_iter().enumerate() {
+            // Stable, linear partition: preserve the original enumeration
+            // order within folders and files, without sorting name records.
+            let count = directories.len() + files.len();
+            for (index, name) in directories.into_iter().chain(files).enumerate() {
                 let child_boundary = boundary || index + 1 < count;
-                let path = s.join(&name);
-                match self.copy_depth(&path, &d.join(name), moving, depth + 1, child_boundary) {
+                let path = listing_child_path(s,&name);
+                match self.copy_depth(&path, &listing_child_path(&d,&name), moving, depth + 1, child_boundary) {
                     Ok(done) => all &= done,
                     Err(e) => {
                         if self.cancel.load(Ordering::Relaxed) {
@@ -2405,7 +2408,10 @@ impl Job {
             while copied < m.len() {
                 self.check()?;
                 let want = (m.len()-copied).min(buffer_len as u64) as usize;
-                let n = input.read(&mut self.copy_buffer[..want]).map_err(|e| e.to_string())?;
+                let n = match input.read(&mut self.copy_buffer[..want]) {
+                    Err(e) if e.kind()==std::io::ErrorKind::Interrupted => continue,
+                    result => result.map_err(|e|e.to_string())?,
+                };
                 if n == 0 {
                     break;
                 }
@@ -2673,7 +2679,10 @@ impl Job {
             while copied < m.len() {
                 self.check()?;
                 let want = (m.len()-copied).min(chunk as u64) as usize;
-                let n = input.read(&mut self.copy_buffer[..want]).map_err(|e| e.to_string())?;
+                let n = match input.read(&mut self.copy_buffer[..want]) {
+                    Err(e) if e.kind()==std::io::ErrorKind::Interrupted => continue,
+                    result => result.map_err(|e|e.to_string())?,
+                };
                 if n == 0 {
                     break;
                 }

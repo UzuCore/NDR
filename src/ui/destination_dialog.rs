@@ -501,6 +501,21 @@ impl App {
         entries.into_iter().filter(|(path, _, _)| !path.trim().is_empty() && Path::new(path).is_dir()).take(limit).map(|(p, c, _)| (p, c)).collect()
     }
 
+    /// Refresh the destination list after a background drive probe. The
+    /// typed destination is not overwritten by the metadata refresh.
+    pub(super) fn update_destination_drives(&mut self, items: &[(PathBuf, Option<super::panes::DriveInfo>)]) {
+        let Some(form) = self.destination_form() else { return };
+        let drives: Vec<_> = items.iter().filter_map(|(root, info)| {
+            let (name, kind, sizes) = info.as_ref()?;
+            Some(DestinationDrive { root: root.to_string_lossy().into_owned(), name: name.clone(), kind: *kind, sizes: *sizes })
+        }).collect();
+        if form.drives == drives { return; }
+        let selected = original_items(form).get(form.selected).map(|(item, _)| item.path().to_owned());
+        form.drives = drives;
+        let rows = original_items(form);
+        form.selected = selected.as_ref().and_then(|path| rows.iter().position(|(item, _)| item.path() == path)).unwrap_or_else(|| form.selected.min(rows.len().saturating_sub(1)));
+    }
+
     fn destination_form(&mut self) -> Option<&mut DestinationForm> {
         match self.original_dialogs.last_mut().map(|d| &mut d.kind) {
             Some(DialogKind::Destination(form)) => Some(form),
@@ -531,7 +546,7 @@ impl App {
         let drive_items = if cfg!(test) {
             (self.system.ready_drives)().into_iter().map(|root| { let info = (self.system.drive_item)(&root); (root, info) }).collect()
         } else {
-            super::panes::cached_drive_items(&self.drive_list, self.system.ready_drives, self.system.drive_item)
+            super::panes::cached_drive_items(&self.drive_list, native::ready_drive_items, Some(self.egui_ctx.clone()))
         };
         let drives = drive_items
             .into_iter()

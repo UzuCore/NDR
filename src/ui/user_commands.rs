@@ -356,13 +356,25 @@ impl App {
         // Original and C# ListFont (font name) plus the original style (ListFontStyle, TFontStyles: 1 bold, 2 italic): only when they change,
         // the font file of that face ("name Bold" etc., otherwise the nearest or regular face) is read and the "list" family rebuilt (the normal font when not found).
         let (list_font,style,size,key)=super::startup::list_font_config(&self.settings,&self.language);
+        let (tree_face,tree_style,tree_size,tree_key)=super::startup::tree_font_config(&self.settings,&self.language);
         self.list_font_size=size;
         self.list_font_style=style;
-        if self.list_font_name.as_deref()!=Some(key.as_str()){
-            let prepared=self.prepared_list_font.take().filter(|f|f.key==key)
-                .unwrap_or_else(||super::startup::prepare_list_font(&list_font,style,size,key.clone(),self.system.font_file));
-            super::set_app_fonts(ctx,prepared.data,style&1!=0,prepared.korean_scale,&self.language);
+        self.tree_font_size=tree_size;
+        self.tree_font_style=tree_style;
+        if self.list_font_name.as_deref()!=Some(key.as_str()) || self.tree_font_name.as_deref()!=Some(tree_key.as_str()) {
+            // Retain the prepared font data for the unchanged family; a
+            // change to the tree must not reload the list or vice versa.
+            if self.prepared_list_font.as_ref().is_none_or(|f|f.key!=key) {
+                self.prepared_list_font=Some(super::startup::prepare_list_font(&list_font,style,size,key.clone(),self.system.font_file));
+            }
+            if self.prepared_tree_font.as_ref().is_none_or(|f|f.key!=tree_key) {
+                self.prepared_tree_font=Some(super::startup::prepare_list_font(&tree_face,tree_style,tree_size,tree_key.clone(),self.system.font_file));
+            }
+            let list=self.prepared_list_font.as_ref().unwrap();
+            let tree=self.prepared_tree_font.as_ref().unwrap();
+            super::set_app_fonts_with_tree(ctx,list.data,style&1!=0,list.korean_scale,tree.data,tree_style&1!=0,tree.korean_scale,&self.language);
             self.list_font_name=Some(key);
+            self.tree_font_name=Some(tree_key);
         }
         ctx.style_mut(|style| {
             for text_style in [

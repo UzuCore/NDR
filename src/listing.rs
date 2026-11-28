@@ -628,7 +628,10 @@ fn sort_group_words<I:WordOffset>(list:&mut [Entry],mode:&str,descending:bool,lo
         let (ka, kb) = (&keys[i], &keys[j]);
         ka.rank.cmp(&kb.rank).then_with(|| {
             let (a, b) = (&list[i], &list[j]);
-            let base = || compare_wide(&words[ka.start.offset()..ka.extension.offset()], &words[kb.start.offset()..kb.extension.offset()], logical);
+            let base = || {
+                let (a,b)=(&words[ka.start.offset()..ka.extension.offset()],&words[kb.start.offset()..kb.extension.offset()]);
+                if a==b { Ordering::Equal } else { compare_wide(a,b,logical) }
+            };
             let ext = || {
                 let end=|index:usize|keys.get(index+1).map_or(words.len(),|k|k.start.offset());
                 let (a, b) = (&words[ka.extension.offset()..end(i)], &words[kb.extension.offset()..end(j)]);
@@ -690,8 +693,7 @@ fn apply_order<T>(rows: &mut [T], order: &mut [usize]) {
 }
 
 /// Group categories of FileTypeCatalog (extensions with the dot, case-insensitive).
-pub fn group_category(extension: &str) -> &'static str {
-    const TABLE: &[(&str, &[&str])] = &[
+const GROUP_CATEGORIES: &[(&str, &[&str])] = &[
         ("Archives", &[".7z", ".ace", ".alz", ".arj", ".br", ".bz2", ".cab", ".deb", ".dmg", ".egg", ".esd", ".gz", ".iso", ".lz", ".lz4", ".lzh", ".lzma", ".lzo", ".pkg", ".rar", ".rpm", ".tar", ".tgz", ".wim", ".xar", ".xz", ".z", ".zip", ".zst", ".zstd"]),
         ("Images", &[".arw", ".avif", ".bmp", ".cr2", ".cr3", ".dng", ".emf", ".gif", ".heic", ".heif", ".ico", ".jfi", ".jfif", ".jif", ".jpe", ".jpeg", ".jpg", ".jxl", ".nef", ".orf", ".png", ".psd", ".raw", ".rw2", ".svg", ".tif", ".tiff", ".webp", ".wmf", ".xcf"]),
         ("Audio", &[".aac", ".ac3", ".aif", ".aiff", ".alac", ".amr", ".ape", ".dff", ".dsf", ".flac", ".m4a", ".m4b", ".mid", ".midi", ".mka", ".mp3", ".oga", ".ogg", ".opus", ".wav", ".wma"]),
@@ -702,13 +704,23 @@ pub fn group_category(extension: &str) -> &'static str {
         ("Spreadsheets", &[".csv", ".numbers", ".ods", ".xls", ".xlsb", ".xlsm", ".xlsx", ".xlt", ".xltm", ".xltx"]),
         ("Presentations", &[".key", ".odp", ".pot", ".potm", ".potx", ".pps", ".ppsm", ".ppsx", ".ppt", ".pptm", ".pptx"]),
     ];
-    // In C# a later category wins (.ts is Code after Video, .html is Code).
+/// Immutable extension catalog. Preserve the original later-category-wins
+/// behavior, including .ts, without scanning every category for every row.
+pub fn group_category(extension: &str) -> &'static str {
+    static INDEX: std::sync::OnceLock<HashMap<&'static str, &'static str>> = std::sync::OnceLock::new();
+    let index = INDEX.get_or_init(|| {
+        let mut index = HashMap::new();
+        for &(category, extensions) in GROUP_CATEGORIES {
+            for &extension in extensions { index.insert(extension, category); }
+        }
+        index
+    });
     let lower: Cow<'_, str> = if extension.bytes().any(|b| b.is_ascii_uppercase()) {
         Cow::Owned(extension.to_ascii_lowercase())
     } else {
         Cow::Borrowed(extension)
     };
-    TABLE.iter().rev().find(|(_, list)| list.contains(&lower.as_ref())).map_or("Other", |(name, _)| name)
+    index.get(lower.as_ref()).copied().unwrap_or("Other")
 }
 
 /// FileGroupingService.GetGroupKey: "order|name". Folders are "01|Folders" ("05|Folders" when the folder category is not Auto in category grouping).
@@ -778,6 +790,11 @@ pub fn sort_groups(entries: &mut [Entry], mode: &str, folder_category_mode: &str
     let mut groups = Vec::new();
     let mut ids = HashMap::new();
     let mut extensions = HashMap::new();
+    // Many copied/extracted files have identical timestamps. Reuse their
+    // exact local-calendar group, but bound the temporary lookup on large
+    // directories with unique timestamps.
+    let mut time_groups = HashMap::new();
+    const TIME_GROUP_LIMIT: usize = 4096;
     let row_groups: Vec<usize> = entries.iter().map(|e| {
         let mut intern = || {
             let key = group_key_cow(e, mode, folder_category_mode);
@@ -789,6 +806,13 @@ pub fn sort_groups(entries: &mut [Entry], mode: &str, folder_category_mode: &str
         };
         if !e.is_dir && matches!(mode, "Category" | "Extension") {
             *extensions.entry(list_extension(&e.name)).or_insert_with(&mut intern)
+        } else if !e.is_dir && mode == "Time" {
+            if let Some(&id) = time_groups.get(&e.modified) { id }
+            else {
+                let id = intern();
+                if time_groups.len() < TIME_GROUP_LIMIT { time_groups.insert(e.modified,id); }
+                id
+            }
         } else {
             intern()
         }
@@ -1358,6 +1382,55 @@ mod tests {
             })
         });
         entries.extend(keyed.into_iter().map(|(_, e)| e));
+    }
+
+    #[test]
+    fn category_index_matches_legacy_table_for_every_extension() {
+        for extension in GROUP_CATEGORIES.iter().flat_map(|(_,extensions)|extensions.iter().copied()).chain([".none",".TS","", ".unknown"]) {
+            let lower=extension.to_ascii_lowercase();
+            let expected=GROUP_CATEGORIES.iter().rev().find(|(_,list)|list.contains(&lower.as_str())).map_or("Other",|(name,_)|*name);
+            assert_eq!(group_category(extension),expected);
+            assert_eq!(group_category(&extension.to_ascii_uppercase()),expected);
+        }
+        assert_eq!(group_category(".ts"),"Code");
+    }
+
+    #[test]
+    fn time_groups_match_reference_with_repeats_and_bounded_cache_overflow() {
+        let originals:Vec<_>=(0..6000).map(|i| {
+            let mut e=entry(&format!("file-{i}"),i%251==0,i as u64,0);
+            e.modified=if i%9==0 {None} else {Some(SystemTime::UNIX_EPOCH+Duration::from_secs(if i%7==0{42}else{i as u64*86411}))};
+            e
+        }).collect();
+        for descending in [false,true] {
+            let mut expected=originals.clone();let mut actual=originals.clone();
+            legacy_group_sort(&mut expected,"Time","Auto",descending);
+            sort_groups(&mut actual,"Time","Auto",descending);
+            assert_eq!(names(&actual),names(&expected));
+        }
+    }
+
+    #[test]
+    #[ignore = "explicit category lookup benchmark"]
+    fn batch510_category_index_benchmark() {
+        let extensions:Vec<_>=GROUP_CATEGORIES.iter().flat_map(|(_,extensions)|extensions.iter().copied()).chain([".unknown",".zzz",".TS"]).collect();
+        let mut old=Vec::new();let mut new=Vec::new();
+        for round in 0..5 {
+            for indexed in [round%2==0,round%2!=0] {
+                let started=std::time::Instant::now();
+                for i in 0..200_000 {
+                    let extension=std::hint::black_box(extensions[i%extensions.len()]);
+                    let result=if indexed {group_category(extension)} else {
+                        let lower: Cow<'_,str>=if extension.bytes().any(|b|b.is_ascii_uppercase()) {Cow::Owned(extension.to_ascii_lowercase())}else{Cow::Borrowed(extension)};
+                        GROUP_CATEGORIES.iter().rev().find(|(_,list)|list.contains(&lower.as_ref())).map_or("Other",|(name,_)|*name)
+                    };
+                    std::hint::black_box(result);
+                }
+                if indexed {new.push(started.elapsed().as_secs_f64()*1000.0)} else {old.push(started.elapsed().as_secs_f64()*1000.0)}
+            }
+        }
+        old.sort_by(f64::total_cmp);new.sort_by(f64::total_cmp);
+        eprintln!("BATCH510_CATEGORY 200k legacy_ms={:.3} indexed_ms={:.3}",old[2],new[2]);
     }
 
     #[test]

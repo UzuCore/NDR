@@ -86,6 +86,36 @@ pub(super) fn summarize(entries: &[Entry]) -> PaneSummary {
     summary
 }
 
+/// Full contiguous selection is exactly the existing pane summary.
+/// Arbitrary or invalid selections still use a single allocation-free scan.
+fn marked_totals(pane:&Pane)->(usize,u64,bool) {
+    let first=usize::from(pane.entries.first().is_some_and(Entry::is_parent));
+    let end=pane.entries.len().saturating_sub(pane.drive_count());
+    let count=end.saturating_sub(first);
+    if count!=0 && pane.selected.len()==count && pane.selected.first()==Some(&first) && pane.selected.last()==Some(&(end-1)) {
+        if let Some(summary)=pane.summary.as_ref().filter(|s|s.files+s.folders==count) {
+            return (count,summary.bytes,summary.folders!=0);
+        }
+    }
+    pane.selected.iter().filter_map(|&i|pane.entries.get(i)).filter(|e|!e.drive&&!e.is_parent()).fold((0usize,0u64,false),|(count,bytes,folder),e|{
+        (count+1,if e.is_dir{bytes}else{bytes.saturating_add(e.size)},folder||e.is_dir)
+    })
+}
+
+#[test]
+fn batch555_selection_totals_match_reference_without_allocating() {
+    let mut pane=Pane::new(PathBuf::from("C:/"),false);
+    let make=|name:&str,dir:bool,size:u64,drive:bool|Entry{path:PathBuf::from(name),name:name.into(),is_dir:dir,size,modified:None,hidden:false,attributes:if dir{16}else{0},drive};
+    pane.entries=vec![Entry::parent_item(PathBuf::from("C:\\\\"),None),make("dir",true,0,false),make("a.txt",false,5,false),make("b.zip",false,9,false),make("C:\\\\",true,0,true)];
+    pane.summary=Some(summarize(&pane.entries));
+    for mask in 0..64 {
+        pane.selected=(0..6).filter(|i|mask&(1<<i)!=0).collect();
+        let marked:Vec<_>=pane.selected.iter().filter_map(|&i|pane.entries.get(i)).filter(|e|!e.drive&&!e.is_parent()).collect();
+        let expected=(marked.len(),marked.iter().filter(|e|!e.is_dir).map(|e|e.size).sum(),marked.iter().any(|e|e.is_dir));
+        assert_eq!(marked_totals(&pane),expected);
+    }
+}
+
 impl App {
     /// NDR status text in the skin theme (the original has no status bar): overlaid for 4 seconds at the bottom left of the window (right above the function key row, `bottom_inset`)
     /// without shrinking the list area. A new text restarts the count. The text itself (self.status) is kept.
@@ -341,11 +371,10 @@ impl App {
             &res("FOLDERINFO", "<c000000><b>%d</b></c> Folder, <c000000><b>%d</b></c> File (<b>%s</b>)"),
             &[&summary.folders.to_string(), &summary.files.to_string(), &localized_byte_size(&self.language_pack, summary.bytes)],
         );
-        let marked: Vec<&Entry> = pane.selected.iter().filter_map(|i| pane.entries.get(*i)).filter(|e| !e.drive && !e.is_parent()).collect();
-        if !marked.is_empty() {
-            let bytes = marked.iter().filter(|e| !e.is_dir).fold(0u64, |total, e| total.saturating_add(e.size));
-            let plus = if marked.iter().any(|e| e.is_dir) { "+" } else { "" };
-            let selected = ndr::markup::substitute(&res("SELECTED_INFO", "Selected: <b>%d</b> objects (<b>%s</b> bytes)"), &[&marked.len().to_string(), &format!("{}{plus}", n0(bytes as usize))]);
+        let (marked,bytes,has_folder)=marked_totals(pane);
+        if marked!=0 {
+            let plus=if has_folder { "+" } else { "" };
+            let selected = ndr::markup::substitute(&res("SELECTED_INFO", "Selected: <b>%d</b> objects (<b>%s</b> bytes)"), &[&marked.to_string(), &format!("{}{plus}", n0(bytes as usize))]);
             return (counts, String::new(), selected, String::new());
         }
         match &pane.disk {
@@ -410,7 +439,8 @@ impl App {
             self.compute_view(index);
         }
         let pane = &self.panes[index];
-        let summary = pane.summary.clone().unwrap_or_default();
+        let empty=PaneSummary::default();
+        let summary=pane.summary.as_ref().unwrap_or(&empty);
         let folder = if super::panes::is_drives(&pane.path) {
             // C# UpdatePaneInfoBars: "::drives::" and N drives (no disk text).
             let count = pane.entries.len();
@@ -460,18 +490,20 @@ impl App {
             }
         };
         let count = |n: usize| self.catalog("NDR.UI_PANE_EXTENSION_COUNT", "{0}개", "{0}").replace("{0}", &n0(n));
-        let selected_files: Vec<&Entry> = selected.iter().map(|r| &pane.entries[*r]).filter(|e| !e.is_dir).collect();
-        let extension = if !selected_files.is_empty() {
-            // C# GroupBy (extensions in order of first appearance in the selection) -> the first 4.
-            let mut groups: Vec<(String, usize)> = Vec::new();
+        let mut selected_files=selected.iter().map(|r|&pane.entries[*r]).filter(|e|!e.is_dir).peekable();
+        let extension=if selected_files.peek().is_some() {
+            // Only the first four groups are displayed. Count those exact
+            // groups without retaining or searching thousands of others.
+            let no_extension=self.catalog("NDR.UI_PANE_NO_EXTENSION","(확장자 없음)","(no extension)");
+            let mut groups:Vec<(&str,usize)>=Vec::with_capacity(4);
             for entry in selected_files {
-                let key = match ndr::parity::list_extension(&entry.name) {
-                    "" => self.catalog("NDR.UI_PANE_NO_EXTENSION", "(확장자 없음)", "(no extension)"),
-                    e => e.to_owned(),
-                };
-                match groups.iter_mut().find(|(k, _)| k.eq_ignore_ascii_case(&key)) {
-                    Some((_, n)) => *n += 1,
-                    None => groups.push((key, 1)),
+                let ext=ndr::parity::list_extension(&entry.name);
+                let key=if ext.is_empty(){no_extension.as_str()}else{ext};
+                let can_add=groups.len()<4;
+                match groups.iter_mut().find(|(k,_)|k.eq_ignore_ascii_case(key)) {
+                    Some((_,n))=>*n+=1,
+                    None if can_add=>groups.push((key,1)),
+                    None=>{}
                 }
             }
             groups.iter().take(4).map(|(k, n)| format!("{k} {}", count(*n))).collect::<Vec<_>>().join(" · ")

@@ -83,6 +83,11 @@ pub(super) trait PaneFs: Send {
     fn list_browse(&mut self, path: &str, _reuse: bool) -> Result<Arc<[RemoteEntry]>, String> {
         self.list(path).map(Arc::from)
     }
+    fn list_browse_cancel(&mut self, path: &str, reuse: bool, cancel: &AtomicBool) -> Result<Arc<[RemoteEntry]>, String> {
+        if cancel.load(Ordering::Relaxed) { return Err("Operation cancelled".into()); }
+        self.list_browse(path, reuse)
+    }
+    fn browse_epoch(&self) -> u64 { 0 }
     // Update logging context without fabricating a protocol exchange.
     fn set_browse_context(&mut self, _path: &str) {}
     fn download(&mut self, remote: &str, local: &Path, cancel: &AtomicBool, resolve: &mut dyn FnMut(&str, &str, &ndr::remote::ConflictInfo) -> ConflictChoice, progress: &mut dyn FnMut(TransferProgress)) -> Result<(), String>;
@@ -108,6 +113,10 @@ impl PaneFs for Client {
     fn list(&mut self, path: &str) -> Result<Vec<RemoteEntry>, String> {
         Client::list(self, path)
     }
+    fn list_browse_cancel(&mut self, path: &str, _reuse: bool, cancel: &AtomicBool) -> Result<Arc<[RemoteEntry]>, String> {
+        self.list_for_browse(path, cancel).map(Arc::from)
+    }
+    fn browse_epoch(&self) -> u64 { Client::browse_epoch(self) }
     fn download(&mut self, remote: &str, local: &Path, cancel: &AtomicBool, resolve: &mut dyn FnMut(&str, &str, &ndr::remote::ConflictInfo) -> ConflictChoice, progress: &mut dyn FnMut(TransferProgress)) -> Result<(), String> {
         self.download_tree_with_conflicts(remote, local, cancel, resolve, progress)
     }
@@ -127,6 +136,7 @@ impl PaneFs for Client {
         Client::chmod(self, path, mode)
     }
     fn command(&mut self, command: &str) -> Result<String, String> {
+        self.disable_browse_reconnect();
         Client::command(self, command)
     }
     fn close(&mut self) {
@@ -136,7 +146,7 @@ impl PaneFs for Client {
 
 /// The real connection (RemoteHooks.pane_connect default).
 pub(super) fn connect_client(config: &Config) -> Result<Box<dyn PaneFs>, String> {
-    Client::connect(config).map(|client| Box::new(client) as Box<dyn PaneFs>)
+    Client::connect_for_browse(config).map(|client| Box::new(client) as Box<dyn PaneFs>)
 }
 
 /// Original FTP engine +0x74 (log pane): record the control lines this connection sends and receives into the log.
@@ -179,6 +189,11 @@ impl PaneFs for LoggedFs {
         self.set_prefix(path);
         self.run(|fs| fs.list(path))
     }
+    fn list_browse_cancel(&mut self, path: &str, reuse: bool, cancel: &AtomicBool) -> Result<Arc<[RemoteEntry]>, String> {
+        self.set_prefix(path);
+        self.run(|fs| fs.list_browse_cancel(path, reuse, cancel))
+    }
+    fn browse_epoch(&self) -> u64 { self.inner.browse_epoch() }
     fn set_browse_context(&mut self, path: &str) { self.set_prefix(path); }
     fn download(&mut self, remote: &str, local: &Path, cancel: &AtomicBool, resolve: &mut dyn FnMut(&str, &str, &ndr::remote::ConflictInfo) -> ConflictChoice, progress: &mut dyn FnMut(TransferProgress)) -> Result<(), String> {
         self.run(|fs| fs.download(remote, local, cancel, resolve, progress))
@@ -288,6 +303,10 @@ impl PaneFs for CachedPaneFs {
         result
     }
     fn list_browse(&mut self, path: &str, reuse: bool) -> Result<Arc<[RemoteEntry]>, String> {
+        self.list_browse_cancel(path, reuse, &AtomicBool::new(false))
+    }
+    fn list_browse_cancel(&mut self, path: &str, reuse: bool, cancel: &AtomicBool) -> Result<Arc<[RemoteEntry]>, String> {
+        if cancel.load(Ordering::Relaxed) { return Err("Operation cancelled".into()); }
         if reuse {
             if let Some(rows) = self.hit(path, Instant::now()) {
                 self.inner.set_browse_context(path);
@@ -297,7 +316,12 @@ impl PaneFs for CachedPaneFs {
             self.clear();
         }
         let fetched = Instant::now();
-        let rows: Arc<[RemoteEntry]> = Arc::from(self.list(path)?);
+        let epoch = self.inner.browse_epoch();
+        let result = self.inner.list_browse_cancel(path, false, cancel);
+        if result.is_err() || epoch != self.inner.browse_epoch() { self.clear(); }
+        else if let Some(at) = self.listings.iter().position(|entry| entry.path == path) { self.remove(at); }
+        let rows = result?;
+        if cancel.load(Ordering::Relaxed) { return Err("Operation cancelled".into()); }
         self.remember(path, rows.clone(), fetched);
         Ok(rows)
     }
@@ -802,7 +826,7 @@ pub(super) fn list_remote(remote: &PaneRemote, show_hidden: bool, reuse: bool, c
     // perform another network round trip, or replace the new listing's
     // metadata. Keep this session lock through snapshot publication.
     if cancelled() { return Err("Transfer cancelled".into()); }
-    let items = fs.list_browse(&remote.path, reuse)?;
+    let items = fs.list_browse_cancel(&remote.path, reuse, cancel)?;
     if cancelled() { return Err("Transfer cancelled".into()); }
     let mut entries = Vec::with_capacity(items.len());
     let mut modes = std::collections::HashMap::new();

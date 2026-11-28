@@ -24,7 +24,7 @@ pub(super) fn foreground_listing_wait(path: &Path) -> Duration {
         && bytes[0].is_ascii_alphabetic()
         && bytes[1] == b':'
         && (bytes[2] == b'\\' || bytes[2] == b'/')
-        && ndr::native::is_network_drive(Path::new(&display[..3]))
+        && matches!(ndr::native::drive_type_name(Path::new(&display[..3])), "Removable" | "Network" | "CDRom" | "Unknown" | "NoRootDirectory")
     {
         return Duration::from_millis(8);
     }
@@ -105,8 +105,9 @@ pub(super) struct DriveListCache {
     items: Vec<(PathBuf, Option<DriveInfo>)>,
     refreshing: bool,
     revision: u64,
-    /// The functions that filled it (SystemHooks ready_drives, drive_item). If they change (e.g. test fakes), re-read.
-    source: Option<(usize, usize)>,
+    published: u64,
+    /// The function that filled it; changing the source retires its snapshot.
+    source: Option<usize>,
 }
 
 impl DriveListCache {
@@ -114,56 +115,72 @@ impl DriveListCache {
     pub(super) fn invalidate(cache: &std::sync::Arc<std::sync::Mutex<DriveListCache>>) {
         if let Ok(mut guard) = cache.lock() {
             guard.at = None;
-            guard.refreshing = false;
             guard.revision = guard.revision.wrapping_add(1);
         }
+    }
+
+    pub(super) fn update_since(cache: &Arc<Mutex<Self>>, seen: u64) -> Option<(u64, Vec<(PathBuf, Option<DriveInfo>)>)> {
+        let guard = cache.lock().ok()?;
+        (guard.published != seen).then(|| (guard.published, guard.items.clone()))
     }
 }
 
-/// Cached drive list: if read within the last 5 seconds, return it as-is; if expired, return it as-is and re-read once in the background. On the first call, read immediately.
-pub(super) fn cached_drive_items(cache: &std::sync::Arc<std::sync::Mutex<DriveListCache>>, ready: fn() -> Vec<PathBuf>, item: fn(&Path) -> Option<DriveInfo>) -> Vec<(PathBuf, Option<DriveInfo>)> {
-    let read = move || ready().into_iter().map(|root| { let info = item(&root); (root, info) }).collect::<Vec<_>>();
-    let source = Some((ready as usize, item as usize));
-    let revision;
-    {
-        let Ok(mut guard) = cache.lock() else { return read() };
+/// Never block folder enumeration or a dialog on a slow drive provider.
+/// A single worker owns the refresh, even across repeated invalidations.
+pub(super) fn cached_drive_items(cache: &Arc<Mutex<DriveListCache>>, read: fn() -> Vec<(PathBuf, Option<DriveInfo>)>, ctx: Option<egui::Context>) -> Vec<(PathBuf, Option<DriveInfo>)> {
+    let source = Some(read as usize);
+    let (items, cold, revision) = {
+        let Ok(mut guard) = cache.lock() else { return Vec::new() };
         if guard.source != source {
             guard.at = None;
-            guard.refreshing = false;
+            guard.items.clear();
             guard.revision = guard.revision.wrapping_add(1);
             guard.source = source;
         }
-        revision = guard.revision;
-        let at = guard.at;
-        match at {
-            Some(at) if at.elapsed() < Duration::from_secs(5) => return guard.items.clone(),
-            Some(_) => {
-                let items = guard.items.clone();
-                if !guard.refreshing {
-                    guard.refreshing = true;
-                    let cache = cache.clone();
-                    thread::spawn(move || {
-                        let fresh = read();
-                        if let Ok(mut guard) = cache.lock() && guard.revision == revision {
-                            guard.items = fresh;
-                            guard.at = Some(Instant::now());
-                            guard.refreshing = false;
-                            guard.source = source;
-                        }
-                    });
-                }
-                return items;
-            }
-            None => {}
+        if guard.refreshing || guard.at.is_some_and(|at| at.elapsed() < Duration::from_secs(5)) {
+            return guard.items.clone();
         }
+        guard.refreshing = true;
+        (guard.items.clone(), guard.at.is_none(), guard.revision)
+    };
+    let (done, wait) = mpsc::sync_channel(1);
+    let shared = cache.clone();
+    let test_wait = ctx.is_none();
+    let spawned = thread::Builder::new().name("ndr-drive-metadata".into()).spawn(move || {
+        let mut revision = revision;
+        loop {
+            // Provider calls cannot be forcibly interrupted. Keep exactly one
+            // read in flight and never publish a superseded generation.
+            let fresh = read();
+            let Ok(mut guard) = shared.lock() else { return };
+            if guard.source != source {
+                guard.refreshing = false;
+                if let Some(ctx) = &ctx { ctx.request_repaint(); }
+                return;
+            }
+            if guard.revision != revision {
+                revision = guard.revision;
+                continue;
+            }
+            if guard.items != fresh {
+                guard.items = fresh;
+                guard.published = guard.published.wrapping_add(1);
+            }
+            guard.at = Some(Instant::now());
+            guard.refreshing = false;
+            let _ = done.send(guard.items.clone());
+            drop(guard);
+            if let Some(ctx) = &ctx { ctx.request_repaint(); }
+            break;
+        }
+    });
+    if spawned.is_err() {
+        if let Ok(mut guard) = cache.lock() { guard.refreshing = false; }
+        return items;
     }
-    let fresh = read();
-    if let Ok(mut guard) = cache.lock() && guard.revision == revision {
-        guard.items = fresh.clone();
-        guard.at = Some(Instant::now());
-        guard.source = source;
-    }
-    fresh
+    if cold {
+        wait.recv_timeout(if test_wait { Duration::from_secs(2) } else { Duration::from_millis(12) }).unwrap_or(items)
+    } else { items }
 }
 
 /// Break lines only at word (space) boundaries, like Win32 DrawTextW DT_WORDBREAK. A word longer than the width stays on one line (wider than the area).
@@ -1457,8 +1474,9 @@ impl App {
         let coalesce= !cfg!(test) && local && !drives_view && ndr::listing_cache::supported_local_path(&path);
         let reuse_listing = !same_folder || from_watch;
         // Tests keep fake drives per thread, so they bypass the cache (the cache itself is the cached_drive_items test).
+        let drive_ctx = self.egui_ctx.clone();
         let drive_items = move |cache: &std::sync::Arc<std::sync::Mutex<DriveListCache>>| {
-            if cfg!(test) { ready_drives().into_iter().map(|root| { let info = drive_item(&root); (root, info) }).collect() } else { cached_drive_items(cache, ready_drives, drive_item) }
+            if cfg!(test) { ready_drives().into_iter().map(|root| { let info = drive_item(&root); (root, info) }).collect() } else { cached_drive_items(cache, ndr::native::ready_drive_items, Some(drive_ctx.clone())) }
         };
         // Drive hooks are thread-local in tests; keep test reads on the
         // caller. Production enumerates drives on the listing worker too.

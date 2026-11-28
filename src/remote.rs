@@ -706,6 +706,57 @@ enum Backend {
 pub struct Client {
     backend: Option<Backend>,
     warnings: Vec<String>,
+    browse_config: Option<BrowseConfig>,
+    browse_epoch: u64,
+    browse_cwd: Option<String>,
+}
+
+/// Runtime-only credentials for a single pane session. Never serialize or
+/// reuse across sites; erase the retained authentication secrets on drop.
+struct BrowseConfig(Config);
+impl Drop for BrowseConfig {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        self.0.password.zeroize();
+        self.0.key_passphrase.zeroize();
+    }
+}
+
+struct BrowseFailure {
+    message: String,
+    retry: bool,
+    ftp_status: Option<u32>,
+}
+impl From<String> for BrowseFailure {
+    fn from(message: String) -> Self { Self { message, retry: false, ftp_status: None } }
+}
+impl From<&str> for BrowseFailure {
+    fn from(message: &str) -> Self { message.to_owned().into() }
+}
+impl BrowseFailure {
+    fn io(e: std::io::Error) -> Self {
+        use std::io::ErrorKind::*;
+        let retry = matches!(e.kind(), ConnectionReset | ConnectionAborted | BrokenPipe | NotConnected | TimedOut | WouldBlock | UnexpectedEof | NetworkUnreachable | HostUnreachable);
+        Self { message: e.to_string(), retry, ftp_status: None }
+    }
+    fn ftp(e: FtpError) -> Self {
+        let message = e.to_string();
+        match e {
+            FtpError::ConnectionError(io) => Self { message, ..Self::io(io) },
+            FtpError::UnexpectedResponse(response) => {
+                let status = response.status as u32;
+                Self { message, retry: status == 421, ftp_status: Some(status) }
+            }
+            _ => message.into(),
+        }
+    }
+    fn ssh(e: ssh2::Error) -> Self {
+        // libssh2 transport/timeout errors; exclude authentication, host
+        // verification, permission, missing path and malformed listing.
+        let retry = matches!(e.code(), ssh2::ErrorCode::Session(-7 | -9 | -13 | -26 | -30 | -43) | ssh2::ErrorCode::SFTP(6 | 7));
+        Self { message: e.to_string(), retry, ftp_status: None }
+    }
+    fn disconnected(message: &str) -> Self { Self { message: message.into(), retry: true, ftp_status: None } }
 }
 
 fn err(error: impl std::fmt::Display) -> String {
@@ -1836,8 +1887,23 @@ impl Client {
         Ok(Self {
             backend: Some(backend),
             warnings: Vec::new(),
+            browse_config: None,
+            browse_epoch: 0,
+            browse_cwd: None,
         })
     }
+
+    /// Only the pane browsing adapter opts in. Transfers, raw commands,
+    /// conflict checks and recursive operations retain their original path.
+    pub fn connect_for_browse(config: &Config) -> Result<Self, String> {
+        let mut client = Self::connect(config)?;
+        client.browse_config = Some(BrowseConfig(config.clone()));
+        Ok(client)
+    }
+
+    pub fn browse_epoch(&self) -> u64 { self.browse_epoch }
+
+    pub fn disable_browse_reconnect(&mut self) { self.browse_config = None; }
 
     fn backend(&mut self) -> Result<&mut Backend, String> {
         self.backend
@@ -1846,7 +1912,7 @@ impl Client {
     }
 
     pub fn pwd(&mut self) -> Result<String, String> {
-        match self.backend()? {
+        let result = match self.backend()? {
             Backend::Ftp(ftp) => ftp.stream.pwd().map_err(err),
             Backend::Sftp { sftp, .. } => sftp
                 .realpath(Path::new("."))
@@ -1854,7 +1920,9 @@ impl Client {
                 .into_os_string()
                 .into_string()
                 .map_err(|_| "SFTP returned a non-Unicode path".into()),
-        }
+        };
+        if let Ok(path) = &result { self.browse_cwd = Some(path.clone()); }
+        result
     }
 
     /// C# RemoteWindow.NavigateAsync. FTP sends the path as is as "CWD path" (CDUP for ".."), and even when refused reads the server-chosen path with PWD
@@ -1896,11 +1964,59 @@ impl Client {
     }
 
     pub fn list(&mut self, path: &str) -> Result<Vec<RemoteEntry>, String> {
+        let result = self.list_checked(path);
+        if result.as_ref().is_err_and(|e| e.retry) {
+            self.invalidate();
+            self.browse_epoch = self.browse_epoch.wrapping_add(1);
+        }
+        result.map_err(|e| e.message)
+    }
+
+    pub fn list_for_browse(&mut self, path: &str, cancel: &AtomicBool) -> Result<Vec<RemoteEntry>, String> {
+        self.list_for_browse_with_connect(path,cancel,Self::connect)
+    }
+
+    // Private connection seam permits owned test fixtures to trust a local
+    // CA without changing the system trust store or production TLS policy.
+    fn list_for_browse_with_connect(&mut self,path:&str,cancel:&AtomicBool,connect:impl FnOnce(&Config)->Result<Self,String>)->Result<Vec<RemoteEntry>,String>{
+        check_cancel(cancel)?;
+        let first = match self.list_checked(path) {
+            Ok(rows) => return Ok(rows),
+            Err(e) => e,
+        };
+        // Do not replay a relative path or a failed server-side operation.
+        // One fresh authenticated connection, at most one listing retry.
+        if !first.retry { return Err(first.message); }
+        self.invalidate();
+        self.browse_epoch = self.browse_epoch.wrapping_add(1);
+        if !path.starts_with('/') || self.browse_config.is_none() { return Err(first.message); }
+        check_cancel(cancel)?;
+        let config = &self.browse_config.as_ref().unwrap().0;
+        let mut fresh = connect(config).map_err(|e| format!("{}; reconnect failed: {e}", first.message))?;
+        check_cancel(cancel)?;
+        // Restore the confirmed control CWD before exposing the new session
+        // to later explicit operations. SFTP pane paths are absolute.
+        if config.protocol.eq_ignore_ascii_case("ftp") || config.protocol.eq_ignore_ascii_case("ftps") {
+            let cwd = self.browse_cwd.as_deref().ok_or("Cannot safely restore FTP working directory")?;
+            let home = fresh.pwd()?;
+            if home != cwd {
+                let (restored, rejected) = fresh.change_directory(&home, cwd)?;
+                if rejected.is_some() || restored != cwd { return Err("Could not restore FTP working directory after reconnect".into()); }
+            }
+        }
+        check_cancel(cancel)?;
+        let rows = fresh.list_checked(path).map_err(|e| e.message)?;
+        check_cancel(cancel)?;
+        self.backend = fresh.backend.take();
+        Ok(rows)
+    }
+
+    fn list_checked(&mut self, path: &str) -> Result<Vec<RemoteEntry>, BrowseFailure> {
         validate_text(path)?;
-        match self.backend()? {
+        match self.backend.as_mut().ok_or_else(|| BrowseFailure::disconnected("Connection is closed; reconnect before continuing"))? {
             Backend::Ftp(ftp) => ftp.list(path),
             Backend::Sftp { sftp, .. } => {
-                let mut directory = sftp.opendir(sftp_path(path)?).map_err(err)?;
+                let mut directory = sftp.opendir(sftp_path(path)?).map_err(BrowseFailure::ssh)?;
                 let mut entries = Vec::new();
                 loop {
                     match directory.readdir() {
@@ -1924,10 +2040,10 @@ impl Client {
                             });
                         }
                         Err(e) if e.code() == ssh2::ErrorCode::Session(-16) => break, // libssh2's readdir EOF.
-                        Err(e) => return Err(err(e)),
+                        Err(e) => return Err(BrowseFailure::ssh(e)),
                     }
                 }
-                directory.close().map_err(err)?;
+                directory.close().map_err(BrowseFailure::ssh)?;
                 Ok(entries)
             }
         }
@@ -2447,6 +2563,9 @@ impl Client {
     }
 
     pub fn close(&mut self) -> Result<(), String> {
+        self.browse_config = None;
+        self.browse_cwd = None;
+        self.browse_epoch = self.browse_epoch.wrapping_add(1);
         match self.backend.take() {
             Some(Backend::Ftp(mut ftp)) => ftp.stream.quit().map_err(err),
             Some(Backend::Sftp { mut sftp, session }) => {
@@ -2542,22 +2661,21 @@ impl Ftp {
         }
     }
 
-    fn list(&mut self, path: &str) -> Result<Vec<RemoteEntry>, String> {
-        let previous = self.stream.pwd().map_err(err)?;
+    fn list(&mut self, path: &str) -> Result<Vec<RemoteEntry>, BrowseFailure> {
+        let previous = self.stream.pwd().map_err(BrowseFailure::ftp)?;
         validate_text(&previous)?;
         validate_text(path)?;
         let changed = path != previous && path != ".";
-        if changed { self.stream.cwd(path).map_err(err)?; }
-        let result = (|| {
+        if changed { self.stream.cwd(path).map_err(BrowseFailure::ftp)?; }
+        let result: Result<Vec<RemoteEntry>, BrowseFailure> = (|| {
             // Unsupported commands are session capabilities, not per-folder
             // failures. Avoid retrying a rejected MLSD on every refresh.
             let machine = if !self.mlsd_supported { None } else if self.passive {
-                Some(self.stream.mlsd(None).map_err(err))
+                Some(self.stream.mlsd(None).map_err(BrowseFailure::ftp))
             } else {
-                Some(self.active_listing("MLSD"))
+                Some(self.active_listing_checked("MLSD"))
             };
-            let unsupported = |error: &str| error.contains("500") || error.contains("502") || error.contains("504");
-            if machine.as_ref().is_some_and(|r| r.as_ref().err().is_some_and(|e| unsupported(e))) {
+            if machine.as_ref().is_some_and(|r| r.as_ref().err().is_some_and(|e| matches!(e.ftp_status, Some(500 | 502 | 504)))) {
                 self.mlsd_supported = false;
             }
             match machine {
@@ -2566,14 +2684,14 @@ impl Ftp {
                     .filter_map(|line| match parse_mlsd(line) {
                         Ok(Some(e)) => Some(Ok(e)),
                         Ok(None) => None,
-                        Err(e) => Some(Err(e)),
+                        Err(e) => Some(Err(e.into())),
                     })
                     .collect(),
                 None | Some(Err(_)) if !self.mlsd_supported => {
                     let lines = if self.passive {
-                        self.stream.list(None).map_err(err)?
+                        self.stream.list(None).map_err(BrowseFailure::ftp)?
                     } else {
-                        self.active_listing("LIST")?
+                        self.active_listing_checked("LIST")?
                     };
                     lines
                         .into_iter()
@@ -2604,11 +2722,13 @@ impl Ftp {
                 None => Err("FTP listing capability unavailable".into()),
             }
         })();
-        let restore = if changed { self.stream.cwd(&previous).map_err(err) } else { Ok(()) };
+        // Do not issue a second control command on a known failed transport.
+        if result.as_ref().is_err_and(|e| e.retry) { return result; }
+        let restore = if changed { self.stream.cwd(&previous).map_err(BrowseFailure::ftp) } else { Ok(()) };
         match (result, restore) {
             (Ok(entries), Ok(())) => Ok(entries),
             (Err(e), _) => Err(e),
-            (_, Err(e)) => Err(format!("Could not restore FTP working directory: {e}")),
+            (_, Err(mut e)) => { e.message = format!("Could not restore FTP working directory: {}", e.message); Err(e) },
         }
     }
 
@@ -2623,12 +2743,16 @@ impl Ftp {
     }
 
     fn active_data(&mut self, command: &str) -> Result<Box<dyn TransferStream>, String> {
+        self.active_data_checked(command).map_err(|e| e.message)
+    }
+
+    fn active_data_checked(&mut self, command: &str) -> Result<Box<dyn TransferStream>, BrowseFailure> {
         let control = self.stream.get_ref();
         let listener =
-            TcpListener::bind((control.local_addr().map_err(err)?.ip(), 0)).map_err(err)?;
-        listener.set_nonblocking(true).map_err(err)?;
-        let peer = control.peer_addr().map_err(err)?.ip();
-        let address = listener.local_addr().map_err(err)?;
+            TcpListener::bind((control.local_addr().map_err(BrowseFailure::io)?.ip(), 0)).map_err(BrowseFailure::io)?;
+        listener.set_nonblocking(true).map_err(BrowseFailure::io)?;
+        let peer = control.peer_addr().map_err(BrowseFailure::io)?.ip();
+        let address = listener.local_addr().map_err(BrowseFailure::io)?;
         if let Err(error) = self.stream.eprt(address) {
             if let (std::net::IpAddr::V4(ip), FtpError::UnexpectedResponse(response)) =
                 (address.ip(), &error)
@@ -2641,27 +2765,27 @@ impl Ftp {
                             &format!("PORT {a},{b},{c},{d},{},{}", port / 256, port % 256),
                             &[Status::CommandOk],
                         )
-                        .map_err(err)?;
+                        .map_err(BrowseFailure::ftp)?;
                 } else {
-                    return Err(err(error));
+                    return Err(BrowseFailure::ftp(error));
                 }
             } else {
-                return Err(err(error));
+                return Err(BrowseFailure::ftp(error));
             }
         }
         self.stream
             .custom_command(command, &[Status::AboutToSend, Status::AlreadyOpen])
-            .map_err(err)?;
+            .map_err(BrowseFailure::ftp)?;
         let deadline = Instant::now() + TIMEOUT;
         let data = loop {
             match listener.accept() {
                 Ok((stream, address)) if address.ip() == peer => break stream,
                 Ok(_) => {}
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
-                Err(e) => return Err(err(e)),
+                Err(e) => return Err(BrowseFailure::io(e)),
             }
             if Instant::now() >= deadline {
-                return Err("Active FTP data accept timed out".into());
+                return Err(BrowseFailure::disconnected("Active FTP data accept timed out"));
             }
             std::thread::sleep(Duration::from_millis(10));
         };
@@ -2675,13 +2799,17 @@ impl Ftp {
     }
 
     fn active_listing(&mut self, command: &str) -> Result<Vec<String>, String> {
-        let mut data = self.active_data(command)?;
+        self.active_listing_checked(command).map_err(|e| e.message)
+    }
+
+    fn active_listing_checked(&mut self, command: &str) -> Result<Vec<String>, BrowseFailure> {
+        let mut data = self.active_data_checked(command)?;
         let mut bytes = Vec::new();
-        data.read_to_end(&mut bytes).map_err(err)?;
+        data.read_to_end(&mut bytes).map_err(BrowseFailure::io)?;
         drop(data);
         self.stream
             .finalize_retr_stream(std::io::empty())
-            .map_err(err)?;
+            .map_err(BrowseFailure::ftp)?;
         let text = self
             .encoding
             .decode_without_bom_handling_and_without_replacement(&bytes)
@@ -2997,6 +3125,14 @@ if protocol in ('ftp', 'ftps', 'ftp-euc-kr', 'ftps-euc-kr'):
     handler.abstracted_fs = LinkFS
     base_handler = handler
     class Handler(base_handler):
+        def ftp_PWD(self,line):
+            marker=os.path.join(root,'drop-next-pwd')
+            if os.path.exists(marker):
+                os.unlink(marker)
+                self.respond('421 Injected connection loss')
+                self.close_when_done()
+                return
+            return super().ftp_PWD(line)
         def ftp_MFMT(self,p,timeval):
             if os.path.exists(os.path.join(root,'reject-metadata')):
                 self.respond('502 Timestamp updates are unsupported.'); return
@@ -3708,6 +3844,9 @@ else:
                 let mut client = Client {
                     backend: Some(Backend::Ftp(Box::new(ftp))),
                     warnings: Vec::new(),
+                    browse_config: None,
+                    browse_epoch: 0,
+                    browse_cwd: None,
                 };
                 let source = fixture.root.join("tls-source");
                 let output = fixture.root.join("tls-output");
@@ -3759,6 +3898,91 @@ else:
                 assert!(client.change_directory(&back, "missing").is_err());
             }
             let _ = client.close();
+        }
+    }
+
+    #[test]
+    #[ignore = "owned localhost integration; requires Python pyftpdlib and paramiko"]
+    fn owned_browse_reconnect_fixture() {
+        let cancel = AtomicBool::new(false);
+        for protocol in ["ftp", "sftp"] {
+            let fixture = Fixture::start(protocol);
+            let mut config = fixture.config(protocol);
+            if protocol == "sftp" {
+                config.fingerprint = fs::read_to_string(fixture.root.join("host-fingerprint.txt")).unwrap();
+            }
+            let mut client = Client::connect_for_browse(&config).unwrap();
+            let home = client.pwd().unwrap();
+            fs::write(fixture.root.join("note.txt"), b"x").unwrap();
+            let sub = format!("{}/sub", home.trim_end_matches('/'));
+            client.mkdir(&sub).unwrap();
+            let (inside, _) = client.change_directory(&home, &sub).unwrap();
+            let epoch = client.browse_epoch();
+            if protocol == "ftp" {
+                fs::write(fixture.root.join("drop-next-pwd"), b"x").unwrap();
+            } else {
+                client.invalidate();
+            }
+            let rows = client.list_for_browse(&home, &cancel).unwrap();
+            assert!(rows.iter().any(|r| r.name == "note.txt"), "{protocol}");
+            assert_eq!(client.browse_epoch(), epoch + 1);
+            if protocol == "ftp" { assert_eq!(client.pwd().unwrap(), inside); }
+            let epoch = client.browse_epoch();
+            assert!(client.list_for_browse(&format!("{}/missing", home.trim_end_matches('/')), &cancel).is_err());
+            assert_eq!(client.browse_epoch(), epoch);
+            client.invalidate();
+            assert!(client.mkdir(&format!("{}/never-replay", home.trim_end_matches('/'))).is_err());
+            assert!(!fixture.root.join("never-replay").exists());
+            if protocol == "sftp" {
+                client.browse_config.as_mut().unwrap().0.fingerprint = format!("SHA256:{}", STANDARD_NO_PAD.encode([0u8;32]));
+                assert!(client.list_for_browse(&home,&cancel).unwrap_err().contains("host_key_mismatch"));
+                assert!(client.backend.is_none());
+            } else {
+                cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+                let epoch = client.browse_epoch();
+                assert!(client.list_for_browse(&home,&cancel).is_err());
+                assert_eq!(client.browse_epoch(),epoch);
+                cancel.store(false,std::sync::atomic::Ordering::SeqCst);
+                client.disable_browse_reconnect();
+                assert!(client.list_for_browse(&home,&cancel).is_err());
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "owned localhost FTPS integration; requires Python pyftpdlib and pyOpenSSL"]
+    fn owned_ftps_browse_reconnect_fixture() {
+        let fixture=Fixture::start("ftps");
+        let mut config=fixture.config("ftps");
+        config.host="localhost".into();
+        let cert=native_tls::Certificate::from_pem(&fs::read(fixture.root.join("fixture-cert.pem")).unwrap()).unwrap();
+        let mut builder=native_tls::TlsConnector::builder();builder.add_root_certificate(cert);
+        let tls=builder.build().unwrap();
+        let connect=|config:&Config|->Result<Client,String>{
+            let ftp=Ftp::connect(config,socket(&config.host,config.port)?,encoding_rs::UTF_8,Some(tls.clone()))?;
+            Ok(Client{backend:Some(Backend::Ftp(Box::new(ftp))),warnings:Vec::new(),browse_config:None,browse_epoch:0,browse_cwd:None})
+        };
+        let cancel=AtomicBool::new(false);
+        fs::write(fixture.root.join("note.txt"),b"TLS reconnect").unwrap();
+        for passive in [true,false] {
+            config.passive=passive;
+            let mut client=connect(&config).unwrap();
+            client.browse_config=Some(BrowseConfig(config.clone()));
+            let home=client.pwd().unwrap();
+            let sub=format!("{}/tls-{}",home.trim_end_matches('/'),passive);
+            client.mkdir(&sub).unwrap();
+            let (inside,rejected)=client.change_directory(&home,&sub).unwrap();
+            assert!(rejected.is_none());
+            let epoch=client.browse_epoch();
+            fs::write(fixture.root.join("drop-next-pwd"),b"x").unwrap();
+            let rows=client.list_for_browse_with_connect(&home,&cancel,&connect).unwrap();
+            assert!(rows.iter().any(|r|r.name=="note.txt"));
+            assert_eq!(client.browse_epoch(),epoch+1);
+            assert_eq!(client.pwd().unwrap(),inside);
+            // The production connector cannot trust the test-only root.
+            client.invalidate();
+            assert!(client.list_for_browse(&home,&cancel).is_err());
+            assert!(client.backend.is_none());
         }
     }
 

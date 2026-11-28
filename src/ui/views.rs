@@ -104,6 +104,17 @@ impl App {
         let image = image.ok().filter(|(w,h,p)| *w > 0 && *h > 0 && *w <= 1024 && *h <= 1024
             && w.checked_mul(*h).and_then(|n| n.checked_mul(4)) == Some(p.len()));
         let bytes = image.as_ref().map_or(0, |(_,_,pixels)| pixels.len());
+        // Once a new version is available, retire older versions of this
+        // path at the same thumbnail size. Keep independent size variants.
+        if bytes!=0 {
+            let mut retired=0usize;
+            self.images.retain(|old,cached| {
+                let keep=old==&key || old.path!=key.path || old.side!=key.side;
+                if !keep { retired=retired.saturating_add(cached.bytes); }
+                keep
+            });
+            self.image_bytes=self.image_bytes.saturating_sub(retired);
+        }
         if let Some(old) = self.images.remove(&key) { self.image_bytes = self.image_bytes.saturating_sub(old.bytes); }
         while self.images.len() >= THUMBNAIL_CACHE_LIMIT || self.image_bytes.saturating_add(bytes) > THUMBNAIL_BYTES_LIMIT {
             let Some(oldest) = self.images.iter().min_by_key(|(_,v)| v.used).map(|(k,_)| k.clone()) else { break };
@@ -205,23 +216,23 @@ pub(super) fn thumbnail_lines(text: &str, width: f32, max_lines: usize, glyph: &
 
 /// Original GetThumbnailTextHeight(0x7e1858): needed line count (up to max_lines) × (line height + spacing), plus 8 for a drive item (kind 4).
 pub(super) fn thumbnail_text_height(text: &str, width: f32, max_lines: usize, spacing: f32, line_height: f32, drive: bool, glyph: &mut dyn FnMut(char) -> f32) -> f32 {
-    let chars: Vec<char> = text.chars().collect();
-    let (mut lines, mut offset) = (0usize, 0usize);
+    // Only count the first visible lines. Do not allocate or decode a
+    // potentially very long suffix that cannot affect the tile height.
+    let mut chars=text.chars().peekable();
+    let mut lines=0usize;
     loop {
-        lines += 1;
-        let mut total = 0.0;
-        let n = chars[offset.min(chars.len())..]
-            .iter()
-            .take_while(|&&c| {
-                total += glyph(c);
-                total <= width
-            })
-            .count()
-            .max(1);
-        if chars.len() <= offset + n || lines >= max_lines.max(1) {
-            break;
+        lines+=1;
+        let mut total=0.0;
+        let mut n=0;
+        while let Some(&c)=chars.peek() {
+            total+=glyph(c);
+            if total<=width { chars.next(); n+=1; }
+            else {
+                if n==0 { chars.next(); }
+                break;
+            }
         }
-        offset += n;
+        if chars.peek().is_none() || lines>=max_lines.max(1) { break; }
     }
     lines as f32 * (line_height + spacing) + if drive { 8.0 } else { 0.0 }
 }
@@ -461,7 +472,7 @@ impl App {
             image = native::shell_stock_folder_icon()
                 .filter(|(width, height, rgba)| valid_small_icon_pixels(*width, *height, rgba));
         }
-        let texture = image.map(|(width, height, rgba)| self.icon_texture(ctx, format!("ndr-file-icon{key}"), width, height, &rgba));
+        let texture = image.map(|(width, height, rgba)| self.shared_small_icon(ctx, format!("ndr-file-icon{key}"), width, height, rgba));
         if texture.is_some() {
             self.file_icon_failed_at.remove(&key);
         } else {
@@ -473,7 +484,7 @@ impl App {
             // its recently used icons, not randomly discard hot entries.
             if let Some(old) = self.file_icons.keys().filter(|k| k.as_str() != "<DIR>")
                 .min_by_key(|k| self.file_icon_used.get(*k).copied()).cloned() {
-                if let Some(Some(t)) = self.file_icons.remove(&old) { self.ghost_icons.remove(&t.id()); }
+                if let Some(Some(t)) = self.file_icons.remove(&old) { self.release_overlay_texture(t.id()); }
                 self.file_icon_failed_at.remove(&old);
                 self.file_icon_used.remove(&old);
             }
@@ -487,28 +498,37 @@ impl App {
     /// Exact-pixel interning for small shell icons. Paths still own their
     /// independent cache entries; a ghost texture lives until its last owner.
     pub(super) fn shared_overlay_texture(&mut self, ctx: &egui::Context, path: &Path, width: usize, height: usize, rgba: Vec<u8>) -> egui::TextureHandle {
+        self.shared_small_icon(ctx, format!("ndr-overlay|{}", path.display()),width,height,rgba)
+    }
+
+    /// Extension and per-path shell results can be identical. Intern both
+    /// without copying pixels into the reverse ownership index.
+    fn shared_small_icon(&mut self,ctx:&egui::Context,name:String,width:usize,height:usize,rgba:Vec<u8>)->egui::TextureHandle {
         if width > 64 || height > 64 {
-            return self.icon_texture(ctx, format!("ndr-overlay|{}", path.display()), width, height, &rgba);
+            return self.icon_texture(ctx, name, width, height, &rgba);
         }
-        let key = (width, height, rgba);
+        let key = (width, height, Arc::<[u8]>::from(rgba));
         if let Some((texture, refs)) = self.overlay_texture_pool.get_mut(&key) {
             *refs += 1;
             return texture.clone();
         }
-        let texture = self.icon_texture(ctx, format!("ndr-overlay|{}", path.display()), width, height, &key.2);
+        let texture = self.icon_texture(ctx, name, width, height, &key.2);
+        self.icon_pool_by_id.insert(texture.id(),key.clone());
         self.overlay_texture_pool.insert(key, (texture.clone(), 1));
         texture
     }
 
     pub(super) fn release_overlay_texture(&mut self, id: egui::TextureId) {
-        let mut shared = false;
-        self.overlay_texture_pool.retain(|_, (texture, refs)| {
-            if texture.id() != id { return true; }
-            *refs = refs.saturating_sub(1);
-            shared = *refs != 0;
-            shared
-        });
-        if !shared { self.ghost_icons.remove(&id); }
+        // O(1) reverse lookup. Keep the dimmed icon until the last owner.
+        if let Some(key)=self.icon_pool_by_id.get(&id) {
+            if let Some((_, refs))=self.overlay_texture_pool.get_mut(key) {
+                *refs=refs.saturating_sub(1);
+                if *refs != 0 { return; }
+            }
+            self.overlay_texture_pool.remove(key);
+            self.icon_pool_by_id.remove(&id);
+        }
+        self.ghost_icons.remove(&id);
     }
 
     pub(super) fn icon_texture(&mut self, ctx: &egui::Context, name: String, width: usize, height: usize, rgba: &[u8]) -> egui::TextureHandle {
@@ -643,16 +663,25 @@ impl App {
                     // Original GetThumbnailRowHeight (0x7d6920): the tallest GetThumbnailTextHeight (cell width, 2, 4) of the row's items plus the
                     // fixed item height; rows before the last read it from the stored item tops, which come from the same sum.
                     let heights: Vec<f32> = ui.fonts_mut(|fonts| {
+                        // Glyph widths are invariant within this font/layout
+                        // pass. Bound the memo even for diverse Unicode names.
+                        let mut widths=HashMap::<char,f32>::new();
+                        let mut glyph=|c| {
+                            if let Some(&w)=widths.get(&c) { return w; }
+                            let w=fonts.glyph_width(&font,c);
+                            if widths.len()<4096 { widths.insert(c,w); }
+                            w
+                        };
                         (0..rows)
                             .map(|r| {
                                 let tallest = pane.entries[r * columns..((r + 1) * columns).min(entry_count)]
                                     .iter()
                                     .map(|entry| {
-                                        let caption = match pane.drive_infos.get(&entry.path).filter(|_| entry.drive) {
-                                            Some((label, _, _)) => format!("{label} ({}:)", entry.name.trim_end_matches(['\\', ':'])),
-                                            None => entry.name.clone(),
-                                        };
-                                        thumbnail_text_height(&caption, thumb, 4, 2.0, line_height, entry.drive, &mut |c| fonts.glyph_width(&font, c))
+                                        let caption=if entry.drive {
+                                            pane.drive_infos.get(&entry.path).map(|(label,_,_)|std::borrow::Cow::Owned(format!("{label} ({}:)",entry.name.trim_end_matches(['\\',':']))))
+                                                .unwrap_or(std::borrow::Cow::Borrowed(entry.name.as_str()))
+                                        } else { std::borrow::Cow::Borrowed(entry.name.as_str()) };
+                                        thumbnail_text_height(&caption,thumb,4,2.0,line_height,entry.drive,&mut glyph)
                                     })
                                     .fold(0.0f32, f32::max);
                                 thumb + 12.0 + tallest
@@ -1044,7 +1073,7 @@ impl App {
             reveal = true;
         }
         let rows = self.cached_pane_tree_rows(index);
-        let font = egui::FontId::new(self.list_font_size, egui::FontFamily::Name(super::LIST_FONT_FAMILY.into()));
+        let font = egui::FontId::new(self.tree_font_size, egui::FontFamily::Name(super::TREE_FONT_FAMILY.into()));
         let row_height = (ui.fonts_mut(|f| f.row_height(&font)).ceil() + 2.0).max(18.0);
         // The tree's own area stops 1 px before the right edge, where FUN_0048e2e0 draws the lframetree line (width - 1); the scroll bar ends next to it.
         let inner_rect = rect.with_max_x(rect.right() - 1.0);
@@ -1170,7 +1199,10 @@ impl App {
                         }
                     }
                 } else {
-                    ui.painter().galley(egui::pos2(text_rect.left() + 2.0, row.center().y - galley.size().y / 2.0), galley, if selected { selected_text } else { text });
+                    let color = if selected { selected_text } else { text };
+                    let drawn = egui::Rect::from_min_size(egui::pos2(text_rect.left() + 2.0, row.center().y - galley.size().y / 2.0),galley.size());
+                    ui.painter().galley(drawn.min, galley, color);
+                    super::tree_text_effects(ui.painter(), drawn, color, self.tree_font_style);
                 }
                 if response.clicked() && !editing {
                     let on_arrow = response.interact_pointer_pos().is_some_and(|p| arrow.contains(p));
@@ -1538,6 +1570,55 @@ mod tests {
         assert_eq!(thumbnail_lines("abcdefghijklmnop", 35.0, 4, &mut glyph), ["abc", "def", "ghi", "jk..."]);
         assert_eq!(thumbnail_lines("ab", 35.0, 4, &mut glyph), ["ab"]);
         assert!(thumbnail_lines("", 35.0, 4, &mut glyph).is_empty());
+    }
+
+    fn legacy_thumbnail_height(text:&str,width:f32,max_lines:usize,spacing:f32,line_height:f32,drive:bool,glyph:&mut dyn FnMut(char)->f32)->f32 {
+        let chars:Vec<char>=text.chars().collect();
+        let(mut lines,mut offset)=(0usize,0usize);
+        loop {
+            lines+=1;
+            let mut total=0.0;
+            let n=chars[offset.min(chars.len())..].iter().take_while(|&&c|{total+=glyph(c);total<=width}).count().max(1);
+            if chars.len()<=offset+n||lines>=max_lines.max(1){break}
+            offset+=n;
+        }
+        lines as f32*(line_height+spacing)+if drive{8.0}else{0.0}
+    }
+
+    #[test]
+    fn thumbnail_height_streaming_matches_legacy_all_widths() {
+        let long="very-long-file-name".repeat(500);
+        for text in ["","a","abcdef","a.b c d","\u{ac00}\u{b098}\u{b2e4}\u{1f680}.png","e\u{301}.txt",long.as_str()] {
+            for width in [0.0,1.0,7.0,12.5,50.0,120.0,512.0] {
+                for lines in 0..=5 {
+                    for drive in [false,true] {
+                        assert_eq!(thumbnail_text_height(text,width,lines,2.0,14.0,drive,&mut glyph),
+                            legacy_thumbnail_height(text,width,lines,2.0,14.0,drive,&mut glyph));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[ignore="explicit thumbnail layout microbenchmark"]
+    fn batch560_thumbnail_layout_benchmark() {
+        let names:Vec<_>=(0..40_000).map(|i|format!("file-{i:06}-{}{}.png","\u{ac00}\u{b098}".repeat(i%8),"example".repeat(i%5))).collect();
+        let mut old=Vec::new();let mut new=Vec::new();
+        for round in 0..5 {
+            for optimized in [round%2==0,round%2!=0] {
+                let started=Instant::now();
+                let mut sum=0.0;
+                for name in &names {
+                    sum+=if optimized{thumbnail_text_height(name,120.0,4,2.0,14.0,false,&mut glyph)}
+                    else{legacy_thumbnail_height(name,120.0,4,2.0,14.0,false,&mut glyph)};
+                }
+                std::hint::black_box(sum);
+                if optimized{new.push(started.elapsed().as_secs_f64()*1000.0)}else{old.push(started.elapsed().as_secs_f64()*1000.0)}
+            }
+        }
+        old.sort_by(f64::total_cmp);new.sort_by(f64::total_cmp);
+        eprintln!("BATCH560_THUMB 40k legacy_ms={:.3} streaming_ms={:.3}",old[2],new[2]);
     }
 
     #[test]

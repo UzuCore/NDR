@@ -1476,9 +1476,14 @@ fn select_folder_job(jobs:&std::collections::VecDeque<FolderSizeJob>,
     if quick&&(active.values().any(|(automatic,_)|!*automatic)||jobs.iter().any(|j|!j.automatic&&!j.cancel.load(Ordering::Relaxed))){
         return None
     }
+    // Build deferred-path exclusions once instead of searching the queue
+    // for each short-lane candidate. Borrow the paths; do not clone them.
+    let deferred: HashSet<&Path> = if quick {
+        jobs.iter().filter(|j|j.bulk_only&&!j.cancel.load(Ordering::Relaxed)).map(|j|j.path.as_path()).collect()
+    } else { HashSet::new() };
     jobs.iter().position(|j|{
         !j.cancel.load(Ordering::Relaxed)&&!active.contains_key(&j.path)&&
-        (!quick||j.automatic&&!j.bulk_only&&!jobs.iter().any(|other|other.path==j.path&&other.bulk_only&&!other.cancel.load(Ordering::Relaxed)))
+        (!quick||j.automatic&&!j.bulk_only&&!deferred.contains(j.path.as_path()))
     })
 }
 fn defer_folder_job(queue:&Mutex<std::collections::VecDeque<FolderSizeJob>>,mut job:FolderSizeJob,stats:&FolderWorkerStats){
@@ -1496,11 +1501,12 @@ fn defer_folder_job(queue:&Mutex<std::collections::VecDeque<FolderSizeJob>>,mut 
 fn take_matching_automatic_jobs(queue: &mut std::collections::VecDeque<FolderSizeJob>, completed: &FolderSizeJob, complete: bool) -> Vec<FolderSizeJob> {
     let mut matching = Vec::new();
     if complete && completed.automatic && !completed.cancel.load(Ordering::Relaxed) {
-        let mut index = 0;
-        while index < queue.len() {
-            if queue[index].automatic && queue[index].path == completed.path && !queue[index].cancel.load(Ordering::Relaxed) {
-                matching.push(queue.remove(index).expect("index is in queue"));
-            } else { index += 1; }
+        // Stable linear partition instead of repeated middle removals.
+        for _ in 0..queue.len() {
+            let job = queue.pop_front().expect("original queue length");
+            if job.automatic && job.path == completed.path && !job.cancel.load(Ordering::Relaxed) {
+                matching.push(job);
+            } else { queue.push_back(job); }
         }
     }
     matching

@@ -1638,24 +1638,61 @@ fn drive_list_cache_does_not_ask_the_drives_on_every_listing() {
     // A held list like the original TNXDriveList: within 5 seconds it does not ask again; invalidating it asks again right away.
     use std::sync::atomic::{AtomicUsize, Ordering};
     static ASKED: AtomicUsize = AtomicUsize::new(0);
-    fn ready() -> Vec<PathBuf> {
+    fn read() -> Vec<(PathBuf, Option<super::panes::DriveInfo>)> {
         ASKED.fetch_add(1, Ordering::SeqCst);
-        vec![PathBuf::from("C:\\")]
-    }
-    fn item(_: &Path) -> Option<super::panes::DriveInfo> {
-        Some(("Local Disk".into(), 3, Some((1, 2))))
+        vec![(PathBuf::from("C:\\"), Some(("Local Disk".into(), 3, Some((1, 2)))))]
     }
     let cache: Arc<Mutex<super::panes::DriveListCache>> = Default::default();
-    let first = super::panes::cached_drive_items(&cache, ready, item);
+    let first = super::panes::cached_drive_items(&cache, read, None);
     assert_eq!(first.len(), 1);
-    let _ = super::panes::cached_drive_items(&cache, ready, item);
+    let _ = super::panes::cached_drive_items(&cache, read, None);
     assert_eq!(ASKED.load(Ordering::SeqCst), 1, "a fresh cache is reused");
     super::panes::DriveListCache::invalidate(&cache);
-    let again = super::panes::cached_drive_items(&cache, ready, item);
+    let again = super::panes::cached_drive_items(&cache, read, None);
     assert_eq!((again, ASKED.load(Ordering::SeqCst)), (first, 2), "after invalidate the drives are read again");
 }
 
 /// Original FUN_004856d8: when there are marks, pressing in empty list space and dragging more than 8 pixels drags the marked items. It does not scroll the list by dragging.
+#[test]
+fn slow_drive_metadata_is_single_flight_and_never_publishes_invalidated_rows() {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    static CALLS: AtomicUsize = AtomicUsize::new(0);
+    static RELEASE: AtomicBool = AtomicBool::new(false);
+    fn slow() -> Vec<(PathBuf, Option<super::panes::DriveInfo>)> {
+        let call = CALLS.fetch_add(1, Ordering::SeqCst);
+        if call == 0 {
+            let start = std::time::Instant::now();
+            while !RELEASE.load(Ordering::SeqCst) && start.elapsed() < std::time::Duration::from_secs(3) {
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+        }
+        vec![(PathBuf::from("C:\\"), Some((format!("drive-{call}"), 3, None)))]
+    }
+    let cache: Arc<Mutex<super::panes::DriveListCache>> = Default::default();
+    let ctx = egui::Context::default();
+    let start = std::time::Instant::now();
+    assert!(super::panes::cached_drive_items(&cache, slow, Some(ctx.clone())).is_empty());
+    assert!(start.elapsed() < std::time::Duration::from_secs(1));
+    while CALLS.load(Ordering::SeqCst) == 0 && start.elapsed() < std::time::Duration::from_secs(1) { std::thread::yield_now(); }
+    for _ in 0..8 {
+        super::panes::DriveListCache::invalidate(&cache);
+        assert!(super::panes::cached_drive_items(&cache, slow, Some(ctx.clone())).is_empty());
+    }
+    assert_eq!(CALLS.load(Ordering::SeqCst), 1);
+    RELEASE.store(true, Ordering::SeqCst);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    loop {
+        if let Some((revision, rows)) = super::panes::DriveListCache::update_since(&cache, 0) {
+            assert_eq!(revision, 1);
+            assert_eq!(rows[0].1.as_ref().unwrap().0, "drive-1");
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "drive worker never published");
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    assert_eq!(CALLS.load(Ordering::SeqCst), 2);
+}
+
 #[test]
 fn skin_drag_from_empty_list_space_drags_the_marks() {
     let (root, ctx, mut app) = fixture("emptydrag");
@@ -3018,6 +3055,71 @@ fn show_folders_adds_a_tree_inside_the_active_pane() {
 /// and each time the pane goes to that folder. Left collapses an expanded item and goes to the parent from a collapsed one. A letter goes to the next item starting with it.
 /// Clicking the list returns focus to the list.
 #[test]
+fn font_preferences_render_file_rows_and_both_tree_views_at_configured_sizes() {
+    use ndr::shell_tree::{ShellNode, Special};
+    let (root,ctx,mut app)=fixture("font-render-views");
+    app.settings.set_text("ListFont","Tahoma");
+    app.settings.values.insert("ListFontSize".into(),serde_json::json!(12.0));
+    app.settings.set_text("FolderTreeFont","Segoe UI");
+    app.settings.values.insert("FolderTreeFontSize".into(),serde_json::json!(18.0));
+    app.settings.values.insert("FolderTreeFontStyle".into(),serde_json::json!(12));
+    app.settings.set_flag("AttachExtensionToName",true);
+    app.settings.set_flag("ShowIcons",false);
+    app.system.font_file=native::font_file;
+    app.apply_preferences(&ctx);
+    fn inspect(shape:&egui::Shape,found:&mut Vec<(String,egui::FontId)>){
+        match shape{
+            egui::Shape::Text(t)=>for section in &t.galley.job.sections{
+                found.push((t.galley.job.text.clone(),section.format.font_id.clone()));
+            },
+            egui::Shape::Vec(v)=>for s in v{inspect(s,found)},
+            _=>{}
+        }
+    }
+    let raw=||egui::RawInput{screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(1400.,850.))),..Default::default()};
+    let list_family=egui::FontFamily::Name(super::LIST_FONT_FAMILY.into());
+    let tree_family=egui::FontFamily::Name(super::TREE_FONT_FAMILY.into());
+    for view in ["Details","Names","Thumbnails"]{
+        app.settings.set_text("LeftViewStyle",view);
+        app.refresh(0);wait(&mut app,&ctx);
+        let out=ctx.run(raw(),|ctx|{
+            egui::CentralPanel::default().show(ctx,|ui|app.pane_ui(ui,0,ctx));
+        });
+        let mut found=Vec::new();
+        for c in out.shapes{inspect(&c.shape,&mut found);}
+        assert!(found.iter().any(|(text,font)|text.contains("a.txt")&&font.family==list_family&&(font.size-12.0).abs()<0.01),"{view}: {found:?}");
+    }
+    let node=|path:&Path,name:&str,has_children|ShellNode{key:path.to_path_buf(),name:name.into(),path:Some(path.to_path_buf()),has_children,special:Special::None,ghosted:false};
+    let branch=root.join("left");
+    app.shell_desktop=Some(node(&root,"tree-root",true));
+    app.tree_cache.insert((root.clone(),app.panes[0].show_hidden),vec![node(&branch,"tree-branch",false)]);
+    app.panes[0].tree_open.insert(root.clone());
+    app.panes[0].tree_synced=Some(app.panes[0].path.clone());
+    let out=ctx.run(raw(),|ctx|{
+        egui::CentralPanel::default().show(ctx,|ui|{
+            app.pane_tree_ui(ui,0,egui::Rect::from_min_size(egui::pos2(8.,8.),egui::vec2(300.,500.)));
+        });
+    });
+    let mut found=Vec::new();
+    for c in out.shapes{inspect(&c.shape,&mut found);}
+    assert!(found.iter().any(|(text,font)|text=="tree-branch"&&font.family==tree_family&&font.size==24.0),"{found:?}");
+    let mut form=super::folder_tree_dialog::FolderTreeForm::new(&app.settings,&app.profile,vec![],vec![]);
+    form.tree=ndr::folder_tree::build(&branch,&form.options,&AtomicBool::new(false),&mut |_|{});
+    form.expand_all(true);
+    let colors=super::folder_tree_dialog::TreeColors::read(&app.settings);
+    let out=ctx.run(raw(),|ctx|{
+        egui::CentralPanel::default().show(ctx,|ui|{
+            super::folder_tree_dialog::folder_tree_ui(ui,&mut form,&app.language_pack,&colors,egui::vec2(900.,650.),true,&[]);
+        });
+    });
+    let mut found=Vec::new();
+    for c in out.shapes{inspect(&c.shape,&mut found);}
+    assert!(found.iter().any(|(_,font)|font.family==tree_family&&font.size==24.0),"{found:?}");
+    assert!(form.rows_visible<30,"large tree font must increase row height");
+    drop(app);fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn cached_nested_folder_tree_renders_without_reloading_children() {
     use ndr::shell_tree::{ShellNode, Special};
     let (root, ctx, mut app) = fixture("tree-cached-subtrees");
@@ -4335,6 +4437,26 @@ fn sorted_partial_edits_match_full_order_in_extension_size_modified_and_attribut
 }
 
 #[test]
+fn extension_and_path_icons_share_pixels_without_losing_last_owner() {
+    let (root,ctx,mut app)=fixture("shared-extension-overlay");
+    app.system.file_icon=|_,_|Some((2,2,[33,97,171,255].repeat(4)));
+    let a=app.any_path_icon(&ctx,Path::new("f.unique-test-a"),false).unwrap();
+    let b=app.any_path_icon(&ctx,Path::new("f.unique-test-b"),false).unwrap();
+    let c=app.shared_overlay_texture(&ctx,&root.join("c"),2,2,[33,97,171,255].repeat(4));
+    assert_eq!(a.id(),b.id());assert_eq!(b.id(),c.id());
+    assert!(app.icon_pool_by_id.contains_key(&a.id()));
+    for key in [".unique-test-a",".unique-test-b"] {
+        let texture=app.file_icons.remove(key).unwrap().unwrap();
+        app.release_overlay_texture(texture.id());
+        assert!(app.ghost_icons.contains_key(&c.id()));
+    }
+    app.release_overlay_texture(c.id());
+    assert!(!app.ghost_icons.contains_key(&c.id()));
+    assert!(!app.icon_pool_by_id.contains_key(&c.id()));
+    drop(app);fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn equal_overlay_pixels_share_texture_and_release_only_last_owner() {
     let (root,ctx,mut app)=fixture("overlay-shared-pixels");
     let a=app.shared_overlay_texture(&ctx,&root.join("a"),16,16,vec![255;1024]);
@@ -4345,6 +4467,30 @@ fn equal_overlay_pixels_share_texture_and_release_only_last_owner() {
     app.release_overlay_texture(a.id());assert!(app.ghost_icons.contains_key(&b.id()));
     app.release_overlay_texture(b.id());assert!(!app.ghost_icons.contains_key(&b.id()));
     app.release_overlay_texture(c.id());assert!(app.overlay_texture_pool.is_empty());
+    drop(app);fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn thumbnail_replacement_retires_old_version_but_preserves_other_sizes() {
+    use super::views::ThumbnailKey;
+    let(root,ctx,mut app)=fixture("thumbnail-versions");
+    let mut entry=app.panes[0].entries.iter().find(|e|e.name=="a.txt").unwrap().clone();
+    let first=ThumbnailKey::new(&entry,120);
+    let second_size=ThumbnailKey::new(&entry,200);
+    for key in [first.clone(),second_size.clone()]{
+        let token=Arc::new(AtomicBool::new(false));
+        app.image_requests.insert(key.clone(),token.clone());
+        app.finish_thumbnail(&ctx,key,token,Ok((16,16,vec![255;1024])));
+    }
+    entry.size+=1;
+    let updated=ThumbnailKey::new(&entry,120);
+    let token=Arc::new(AtomicBool::new(false));
+    app.image_requests.insert(updated.clone(),token.clone());
+    app.finish_thumbnail(&ctx,updated.clone(),token,Ok((16,16,vec![255;1024])));
+    assert!(!app.images.contains_key(&first));
+    assert!(app.images.contains_key(&updated));
+    assert!(app.images.contains_key(&second_size));
+    assert_eq!(app.image_bytes,2048);
     drop(app);fs::remove_dir_all(root).unwrap();
 }
 

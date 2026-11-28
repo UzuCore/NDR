@@ -715,6 +715,7 @@ impl App {
         if stale && !self.drive_cache_pending {
             self.drive_cache_pending = true;
             let tx = self.async_tx.clone();
+            let generation = self.drive_cache_generation;
             thread::spawn(move || {
                 // Original TNXDriveList.Refresh: drives of types other than 0 and 1 get a button even without media. Fixed: previously only ready drives.
                 let drives = native::listed_drives()
@@ -728,7 +729,7 @@ impl App {
                         (root, tip)
                     })
                     .collect();
-                let _ = tx.send(AsyncResult::Drives(drives));
+                let _ = tx.send(AsyncResult::Drives(generation, drives));
             });
         }
         // Cache OS data, not translated text: changing the language is immediate,

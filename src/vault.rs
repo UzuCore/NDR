@@ -2,7 +2,7 @@
 //! Inspired by the appendable single-file block index of CoverFS, but not
 //! derived from its crypto implementation. AES-256-GCM is provided by OpenSSL.
 //! No SQL, no virtual-drive driver, no plaintext staging on normal operations.
-use openssl::{hash::MessageDigest, pkcs5::pbkdf2_hmac, pkey::PKey, rand::rand_bytes, sign::Signer, symm::{decrypt_aead, encrypt_aead, Cipher}};
+use openssl::{hash::MessageDigest, pkcs5::pbkdf2_hmac, pkey::PKey, rand::rand_bytes, sign::Signer, symm::{encrypt_aead, Cipher, Crypter, Mode}};
 use serde::{Deserialize, Serialize};
 use std::{collections::{BTreeMap, HashMap, HashSet}, fs::{self, File, OpenOptions}, io::{Read, Seek, SeekFrom, Write}, path::{Path, PathBuf}, time::{Duration, Instant}};
 use zeroize::{Zeroize, Zeroizing};
@@ -344,10 +344,14 @@ fn record_size(len: usize) -> Result<u64, String> {
         .map_err(|e| e.to_string())
 }
 fn put_record(handle: &mut File, key: &[u8;32], kind: u8, plaintext: &[u8]) -> Result<Block, String> {
+    let offset = handle.seek(SeekFrom::End(0)).map_err(|e| e.to_string())?;
+    put_record_at_offset(handle, key, kind, plaintext, offset)
+}
+/// Caller owns the writer lock and positioned the file at offset.
+fn put_record_at_offset(handle: &mut File, key: &[u8;32], kind: u8, plaintext: &[u8], offset: u64) -> Result<Block, String> {
     let limit = if kind == KIND_META { MAX_META } else if kind == KIND_DATA { STREAM_CHUNK_SIZE } else { return Err("Invalid encrypted record type".into()); };
     if plaintext.len() > limit { return Err("Encrypted record exceeds size limit".into()); }
     let length = u32::try_from(plaintext.len()).map_err(|_| "Encrypted record is too large")?;
-    let offset = handle.seek(SeekFrom::End(0)).map_err(|e| e.to_string())?;
     let mut nonce = [0u8;12];
     rand_bytes(&mut nonce).map_err(|e| e.to_string())?;
     let mut aad = [0u8;5];
@@ -394,27 +398,84 @@ fn read_exact_at(handle: &File, mut target: &mut [u8], offset: u64) -> Result<()
     Ok(())
 }
 
+/// Operation-local scratch space, never a plaintext page cache. Each read
+/// verifies the record's current bytes. Plaintext is zeroized on drop or
+/// failed authentication, and never returned before GCM finalize succeeds.
+#[derive(Default)]
+pub struct VaultReadBuffer {
+    record: Vec<u8>,
+    plain: Zeroizing<Vec<u8>>,
+}
+impl VaultReadBuffer {
+    /// Retain the allocation, but erase authenticated plaintext between
+    /// cooperative transfer frames, including when the UI is paused.
+    pub fn wipe_plaintext(&mut self) { self.plain.as_mut_slice().zeroize(); }
+    fn read<'a>(&'a mut self, handle: &File, key: &[u8;32], size: u64, block: &Block, expected: u8) -> Result<&'a [u8], String> {
+        let result = self.decrypt_record(handle,key,size,block,expected);
+        if let Err(error) = result {
+            self.plain.zeroize();
+            return Err(error);
+        }
+        Ok(&self.plain)
+    }
+
+    fn decrypt_record(&mut self, handle: &File, key: &[u8;32], size: u64, block: &Block, expected: u8) -> Result<(), String> {
+        let limit = if expected == KIND_META { MAX_META } else if expected == KIND_DATA { STREAM_CHUNK_SIZE } else { return Err("Invalid encrypted record type".into()); };
+        if block.size as usize > limit { return Err("Encrypted record exceeds size limit".into()); }
+        if block.offset < HEADER_SIZE || block.offset.checked_add(record_size(block.size as usize)?).is_none_or(|end| end > size) {
+            return Err("Encrypted block points outside container".into());
+        }
+        self.record.resize(RECORD_HEADER + block.size as usize, 0);
+        read_exact_at(handle, &mut self.record, block.offset)?;
+        let (header, cipher) = self.record.split_at(RECORD_HEADER);
+        if header[0] != expected || u32::from_le_bytes(header[1..5].try_into().unwrap()) != block.size {
+            return Err("Encrypted record header mismatch".into());
+        }
+        let mut record_aad = [0u8;13];
+        record_aad[..5].copy_from_slice(&header[..5]);
+        record_aad[5..].copy_from_slice(&block.offset.to_le_bytes());
+        let algorithm=Cipher::aes_256_gcm();
+        let needed=cipher.len().checked_add(algorithm.block_size()).ok_or("Encrypted record length overflow")?;
+        // Avoid reallocating a live plaintext buffer. The old allocation
+        // is scrubbed by Zeroizing before it is released.
+        if needed > self.plain.capacity() {
+            self.plain=Zeroizing::new(vec![0;needed]);
+        } else {
+            if needed < self.plain.len() { self.plain[needed..].zeroize(); }
+            self.plain.resize(needed,0);
+        }
+        // Same AES-GCM operations as openssl::symm::decrypt_aead, writing
+        // into reusable, zeroizing storage instead of a fresh Vec.
+        let decrypted=(|| -> Result<usize,openssl::error::ErrorStack> {
+            let mut crypter=Crypter::new(algorithm,Mode::Decrypt,key,Some(&header[5..17]))?;
+            crypter.aad_update(&record_aad)?;
+            let count=crypter.update(cipher,&mut self.plain)?;
+            crypter.set_tag(&header[17..33])?;
+            Ok(count+crypter.finalize(&mut self.plain[count..])?)
+        })().map_err(|_| "Wrong password, damaged encrypted container, or authentication failure".to_owned())?;
+        if decrypted != block.size as usize { return Err("Encrypted record length mismatch".into()); }
+        self.plain[decrypted..].zeroize();
+        self.plain.truncate(decrypted);
+        Ok(())
+    }
+}
+
+/// Capture the backing length once for a synchronous operation over its
+/// authenticated index. For UI streaming, recheck the backing length on
+/// every call rather than retaining a length across frames.
+struct RecordReader<'a> { handle: &'a File, key: &'a [u8;32], size: u64, scratch: VaultReadBuffer }
+impl<'a> RecordReader<'a> {
+    fn new(handle: &'a File, key: &'a [u8;32]) -> Result<Self, String> {
+        Ok(Self { handle, key, size: handle.metadata().map_err(|e| e.to_string())?.len(), scratch:Default::default() })
+    }
+    fn read(&mut self, block: &Block, expected: u8) -> Result<&[u8], String> {
+        self.scratch.read(self.handle,self.key,self.size,block,expected)
+    }
+}
 fn get_record(handle: &File, key: &[u8;32], block: &Block, expected: u8) -> Result<Zeroizing<Vec<u8>>, String> {
-    let limit = if expected == KIND_META { MAX_META } else if expected == KIND_DATA { STREAM_CHUNK_SIZE } else { return Err("Invalid encrypted record type".into()); };
-    if block.size as usize > limit { return Err("Encrypted record exceeds size limit".into()); }
-    let size = handle.metadata().map_err(|e| e.to_string())?.len();
-    if block.offset < HEADER_SIZE || block.offset.checked_add(record_size(block.size as usize)?).is_none_or(|end| end > size) {
-        return Err("Encrypted block points outside container".into());
-    }
-    // Fetch the contiguous authenticated header and ciphertext together.
-    // Bounds and GCM authentication remain identical to NDRV3.
-    let mut record = vec![0u8; RECORD_HEADER + block.size as usize];
-    read_exact_at(handle, &mut record, block.offset)?;
-    let (header, cipher) = record.split_at(RECORD_HEADER);
-    if header[0] != expected || u32::from_le_bytes(header[1..5].try_into().unwrap()) != block.size {
-        return Err("Encrypted record header mismatch".into());
-    }
-    let mut record_aad = [0u8;13];
-    record_aad[..5].copy_from_slice(&header[..5]);
-    record_aad[5..].copy_from_slice(&block.offset.to_le_bytes());
-    let plain = decrypt_aead(Cipher::aes_256_gcm(), key, Some(&header[5..17]), &record_aad, cipher, &header[17..33])
-        .map_err(|_| "Wrong password, damaged encrypted container, or authentication failure".to_owned())?;
-    Ok(Zeroizing::new(plain))
+    let mut reader=RecordReader::new(handle,key)?;
+    reader.read(block,expected)?;
+    Ok(std::mem::take(&mut reader.scratch.plain))
 }
 // Authenticate both metadata pointers using a keyed HMAC over the v3 header
 // prefix, slot index, and generation/offset/length. A silent downgrade on
@@ -634,6 +695,20 @@ impl Vault {
         let io = self.writer_io.clone();
         let _io = io.lock().map_err(|_| "Encrypted writer lock poisoned")?;
         put_record(&mut self.handle, &self.key, KIND_DATA, bytes)
+    }
+
+    fn append_blocks(&mut self, bytes: &[u8]) -> Result<Vec<Block>,String> {
+        let io = self.writer_io.clone();
+        let _io = io.lock().map_err(|_| "Encrypted writer lock poisoned")?;
+        let mut blocks = Vec::with_capacity(bytes.len().div_ceil(STREAM_CHUNK_SIZE));
+        if bytes.is_empty() { return Ok(blocks); }
+        let mut offset = self.handle.seek(SeekFrom::End(0)).map_err(|e| e.to_string())?;
+        for chunk in bytes.chunks(STREAM_CHUNK_SIZE) {
+            let next = offset.checked_add(record_size(chunk.len())?).ok_or("Encrypted record offset overflow")?;
+            blocks.push(put_record_at_offset(&mut self.handle, &self.key, KIND_DATA, chunk, offset)?);
+            offset = next;
+        }
+        Ok(blocks)
     }
 
     /// Write only ciphertext to this container. No plaintext scratch file,
@@ -865,7 +940,7 @@ impl Vault {
         for (child,name) in children{count+=self.clone_tree(child,id,&name,depth+1)?;}
         Ok(count)
     }
-    fn other_tree(&mut self,source:&Vault,source_id:i64,to:i64,name:&str,depth:usize)->Result<usize,String>{
+    fn other_tree(&mut self,source:&Vault,source_id:i64,to:i64,name:&str,depth:usize,reader:&mut RecordReader<'_>)->Result<usize,String>{
         if depth>64{return Err("Encrypted folder depth exceeded".into());}
         let entry=source.item(source_id)?;
         let id=self.new_item(to,name,entry.folder)?;
@@ -880,16 +955,14 @@ impl Vault {
         if !entry.folder{
             let mut copied=Vec::with_capacity(entry.blocks.len());
             for block in &entry.blocks{
-                let plain=get_record(&source.read_handle,&source.key,block,KIND_DATA)?;
+                let plain=reader.read(block,KIND_DATA)?;
                 copied.push(self.append_data(&plain)?);
             }
             let target=self.index.items.get_mut(&id).unwrap();target.size=entry.size;target.blocks=copied;
             return Ok(1);
         }
-        let children:Vec<_>=source.index.items.values().filter(|i|i.parent==source_id)
-            .map(|i|(i.id,i.name.clone())).collect();
         let mut count=1;
-        for (child,name) in children{count+=self.other_tree(source,child,id,&name,depth+1)?;}
+        for child in source.index.items.values().filter(|i|i.parent==source_id){count+=self.other_tree(source,child.id,id,&child.name,depth+1,reader)?;}
         Ok(count)
     }
     pub fn transfer_items(&mut self,from:i64,names:&[String],to:i64,moving:bool)->Result<usize,String>{
@@ -936,11 +1009,12 @@ impl Vault {
             return Err("Use internal transfer for same container".into());
         }
         self.folder(to)?;source.folder(from)?;
+        let mut reader=RecordReader::new(&source.read_handle,&source.key)?;
         self.transaction(|this|{
             let mut count=0;
             for name in names{
                 let id=source.child(from,name).ok_or("Encrypted source item is missing")?.id;
-                count+=this.other_tree(source,id,to,name,0)?;
+                count+=this.other_tree(source,id,to,name,0,&mut reader)?;
             }
             Ok(count)
         })
@@ -951,7 +1025,8 @@ impl Vault {
             return Err("Use same-container transfer for same encrypted file".into());
         }
         let id=source.child(from,name).ok_or("Encrypted source item is missing")?.id;
-        self.transaction(|this|{this.replace(to,target_name,replace)?;this.other_tree(source,id,to,target_name,0)})
+        let mut reader=RecordReader::new(&source.read_handle,&source.key)?;
+        self.transaction(|this|{this.replace(to,target_name,replace)?;this.other_tree(source,id,to,target_name,0,&mut reader)})
     }
     pub fn add_folder(&mut self,parent:i64,name:&str)->Result<i64,String>{self.transaction(|this|this.new_item(parent,name,true))}
     pub fn add_mounted_entry(&mut self,parent:i64,name:&str,folder:bool,attributes:u32)->Result<i64,String>{
@@ -971,11 +1046,9 @@ impl Vault {
         if data.len()>MAX_FILE_SIZE{return Err("File exceeds in-memory editing safety limit".into());}
         self.transaction(|this|{
             let id=this.new_item(parent,name,false)?;
-            for chunk in data.chunks(STREAM_CHUNK_SIZE){
-                let block=this.append_data(chunk)?;
-                let item=this.index.items.get_mut(&id).unwrap();
-                item.blocks.push(block);item.size+=chunk.len() as u64;
-            }
+            let blocks=this.append_blocks(data)?;
+            let item=this.index.items.get_mut(&id).unwrap();
+            item.blocks=blocks;item.size=data.len() as u64;
             Ok(id)
         })
     }
@@ -1061,6 +1134,27 @@ impl Vault {
         let item=self.item(id)?;if item.folder{return Err("Encrypted item is a folder".into());}
         item.blocks.get(ordinal as usize).map(|block|get_record(&self.read_handle,&self.key,block,KIND_DATA)).transpose()
     }
+    /// Read into operation-owned scratch; no unauthenticated bytes escape.
+    /// The caller cannot retain the borrowed bytes while reading another page.
+    pub fn stream_read_chunk_buffered<'a>(&self,id:i64,ordinal:i64,scratch:&'a mut VaultReadBuffer)->Result<Option<&'a [u8]>,String>{
+        // Clear previous plaintext on all invalid/EOF paths as well.
+        let block=(|| {
+            if ordinal<0{return Err("Invalid encrypted chunk ordinal".to_owned());}
+            let item=self.item(id)?;
+            if item.folder{return Err("Encrypted item is a folder".into());}
+            Ok(item.blocks.get(ordinal as usize))
+        })();
+        let block=match block {
+            Ok(Some(block))=>block,
+            Ok(None)=>{scratch.plain.zeroize();return Ok(None)},
+            Err(error)=>{scratch.plain.zeroize();return Err(error)},
+        };
+        let size=match self.read_handle.metadata(){
+            Ok(m)=>m.len(),
+            Err(error)=>{scratch.plain.zeroize();return Err(error.to_string())},
+        };
+        scratch.read(&self.read_handle,&self.key,size,block,KIND_DATA).map(Some)
+    }
     pub fn commit_stream_file(&mut self)->Result<(),String>{
         let before=self.pending.take().ok_or("No encrypted stream open")?;
         if let Err(error)=self.commit_index(){self.index=before;return Err(error);}Ok(())
@@ -1138,7 +1232,7 @@ impl Vault {
             Ok(count)
         })
     }
-    fn export_tree(&self,id:i64,name:&str,target:&Path,created:&mut Vec<PathBuf>,depth:usize)->Result<usize,String>{
+    fn export_tree(&self,id:i64,name:&str,target:&Path,created:&mut Vec<PathBuf>,depth:usize,reader:&mut RecordReader<'_>)->Result<usize,String>{
         if depth>64{return Err("Encrypted folder depth exceeded".into());}
         valid_name(name)?;if reserved(name){return Err("Reserved Windows export name".into());}
         let item=self.item(id)?;
@@ -1147,16 +1241,14 @@ impl Vault {
         if item.folder{
             fs::create_dir(&path).map_err(|e|e.to_string())?;
             created.push(path.clone());
-            let children:Vec<_>=self.index.items.values().filter(|i|i.parent==id)
-                .map(|i|(i.id,i.name.clone())).collect();
             let mut count=1;
-            for (child,name) in children{count+=self.export_tree(child,&name,&path,created,depth+1)?;}
+            for child in self.index.items.values().filter(|i|i.parent==id){count+=self.export_tree(child.id,&child.name,&path,created,depth+1,reader)?;}
             Ok(count)
         }else{
             let mut output=OpenOptions::new().write(true).create_new(true).open(&path).map_err(|e|e.to_string())?;
             created.push(path);
             for block in &item.blocks{
-                let data=get_record(&self.read_handle,&self.key,block,KIND_DATA)?;
+                let data=reader.read(block,KIND_DATA)?;
                 output.write_all(&data).map_err(|e|e.to_string())?;
             }
             output.flush().map_err(|e|e.to_string())?;
@@ -1165,12 +1257,13 @@ impl Vault {
     }
     pub fn export_items(&mut self,parent:i64,names:&[String],destination:&Path)->Result<usize,String>{
         self.folder(parent)?;ensure_real_dir(destination)?;
+        let mut reader=RecordReader::new(&self.read_handle,&self.key)?;
         let mut created=Vec::new();
         let result=(||{
             let mut count=0;
             for name in names{
                 let id=self.child(parent,name).ok_or("Encrypted source item does not exist")?.id;
-                count+=self.export_tree(id,name,destination,&mut created,0)?;
+                count+=self.export_tree(id,name,destination,&mut created,0,&mut reader)?;
             }
             Ok(count)
         })();
@@ -1179,6 +1272,7 @@ impl Vault {
     pub fn export_one(&mut self,from:i64,name:&str,destination:&Path,target_name:&str,replace:bool)->Result<usize,String>{
         valid_name(target_name)?;ensure_real_dir(destination)?;self.folder(from)?;
         let id=self.child(from,name).ok_or("Encrypted source item does not exist")?.id;
+        let mut reader=RecordReader::new(&self.read_handle,&self.key)?;
         let final_path=destination.join(target_name);
         let mut backup=None;
         if let Ok(meta)=fs::symlink_metadata(&final_path){
@@ -1192,7 +1286,7 @@ impl Vault {
             backup=Some(spare);
         }
         let mut created=Vec::new();
-        let result=self.export_tree(id,target_name,destination,&mut created,0);
+        let result=self.export_tree(id,target_name,destination,&mut created,0,&mut reader);
         if result.is_err(){
             cleanup(&created);
             if let Some(spare)=&backup{
@@ -1209,21 +1303,19 @@ impl Vault {
     pub fn read_file(&mut self,id:i64)->Result<Vec<u8>,String>{
         let size=self.stream_file_size(id)?;
         if size>MAX_FILE_SIZE as u64{return Err("File too large for in-memory editing; export to edit".into());}
-        let mut result=Vec::with_capacity(size as usize);
+        let mut result=Zeroizing::new(Vec::with_capacity(size as usize));
+        let mut reader=RecordReader::new(&self.read_handle,&self.key)?;
         for block in &self.item(id)?.blocks{
-            let plain=get_record(&self.read_handle,&self.key,block,KIND_DATA)?;
+            let plain=reader.read(block,KIND_DATA)?;
             result.extend_from_slice(&plain);
         }
-        Ok(result)
+        Ok(std::mem::take(&mut *result))
     }
     pub fn update_file(&mut self,id:i64,data:&[u8])->Result<(),String>{
         if data.len()>MAX_FILE_SIZE{return Err("File exceeds in-memory editing safety limit".into());}
         if self.item(id)?.folder{return Err("Encrypted item is a folder".into());}
         self.transaction(|this|{
-            let mut blocks=Vec::new();
-            for chunk in data.chunks(STREAM_CHUNK_SIZE){
-                blocks.push(this.append_data(chunk)?);
-            }
+            let blocks=this.append_blocks(data)?;
             let item=this.index.items.get_mut(&id).unwrap();item.size=data.len() as u64;item.blocks=blocks;Ok(())
         })
     }
@@ -1304,12 +1396,13 @@ impl Vault {
         // Several internal copies can share the same authenticated ciphertext
         // block. Keep that relationship while re-encrypting each LIVE block once.
         let mut mapping=HashMap::<(u64,u32),Block>::new();
+        let mut reader=RecordReader::new(&self.read_handle,&self.key)?;
         for item in rebuilt.index.items.values_mut(){
             if item.folder{continue;}
             for block in &mut item.blocks{
                 let key=(block.offset,block.size);
                 let new=if let Some(existing)=mapping.get(&key){existing.clone()}else{
-                    let plain=get_record(&self.read_handle,&self.key,block,KIND_DATA)?;
+                    let plain=reader.read(block,KIND_DATA)?;
                     let new=put_record(&mut rebuilt.handle,&rebuilt.key,KIND_DATA,&plain)?;
                     mapping.insert(key,new.clone());
                     new
@@ -1338,11 +1431,12 @@ impl Vault {
     }
     pub fn verify_integrity(&self)->Result<(),String>{
         self.index.check()?;
+        let mut reader=RecordReader::new(&self.read_handle,&self.key)?;
         for item in self.index.items.values(){
             if item.folder{continue;}
             let mut sum=0u64;
             for block in &item.blocks{
-                get_record(&self.read_handle,&self.key,block,KIND_DATA)?;
+                reader.read(block,KIND_DATA)?;
                 sum=sum.checked_add(block.size as u64).ok_or("Encrypted size overflow")?;
             }
             if sum!=item.size{return Err("Encrypted file length mismatch".into());}
@@ -1435,6 +1529,106 @@ mod tests {
         let root=std::env::temp_dir().join(format!("ndr-v2-{label}-{}-{}",
             std::process::id(),std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
         fs::create_dir_all(&root).unwrap();root
+    }
+    #[test]
+    fn buffered_stream_read_reuses_allocations_and_wipes_on_failure() {
+        let root=fixture("buffered-stream");
+        let path=root.join("stream.ndr");
+        let mut vault=Vault::create(&path,"buffered test password".into()).unwrap();
+        let page=vec![0xa7;STREAM_CHUNK_SIZE];
+        let id=vault.begin_stream_file(1,"data.bin",false).unwrap();
+        vault.stream_write_chunk(id,0,&page).unwrap();
+        vault.stream_write_chunk(id,1,&page).unwrap();
+        vault.stream_write_chunk(id,2,b"last page").unwrap();
+        vault.commit_stream_file().unwrap();
+        let mut scratch=VaultReadBuffer::default();
+        assert_eq!(vault.stream_read_chunk_buffered(id,0,&mut scratch).unwrap().unwrap(),&page[..]);
+        let ptr=scratch.plain.as_ptr();
+        let cipher_ptr=scratch.record.as_ptr();
+        scratch.wipe_plaintext();
+        assert!(scratch.plain.iter().all(|&b|b==0));
+        assert_eq!(vault.stream_read_chunk_buffered(id,1,&mut scratch).unwrap().unwrap(),&page[..]);
+        assert_eq!(scratch.plain.as_ptr(),ptr);
+        assert_eq!(scratch.record.as_ptr(),cipher_ptr);
+        assert_eq!(vault.stream_read_chunk_buffered(id,2,&mut scratch).unwrap().unwrap(),b"last page");
+        assert_eq!(scratch.plain.as_ptr(),ptr);
+        assert!(vault.stream_read_chunk_buffered(id,3,&mut scratch).unwrap().is_none());
+        assert!(scratch.plain.is_empty());
+        assert_eq!(vault.stream_read_chunk_buffered(id,0,&mut scratch).unwrap().unwrap(),&page[..]);
+        let tag=vault.item(id).unwrap().blocks[1].offset+17;
+        vault.handle.seek(SeekFrom::Start(tag)).unwrap();
+        let mut byte=[0u8;1];vault.handle.read_exact(&mut byte).unwrap();
+        byte[0]^=1;vault.handle.seek(SeekFrom::Start(tag)).unwrap();
+        vault.handle.write_all(&byte).unwrap();vault.handle.sync_all().unwrap();
+        assert!(vault.stream_read_chunk_buffered(id,1,&mut scratch).is_err());
+        assert!(scratch.plain.is_empty(),"authentication failure must erase plaintext");
+        assert!(vault.verify_integrity().is_err());
+        drop(vault);fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[ignore = "explicit sequential read throughput comparison"]
+    fn batch540_buffered_vault_read_benchmark() {
+        let root=fixture("buffered-bench");
+        let mut vault=Vault::create(&root.join("bench.ndr"),"benchmark password".into()).unwrap();
+        let page=vec![0x71;STREAM_CHUNK_SIZE];
+        let id=vault.begin_stream_file(1,"file.bin",false).unwrap();
+        for i in 0..8 {vault.stream_write_chunk(id,i,&page).unwrap();}
+        vault.commit_stream_file().unwrap();
+        let mut old=Vec::new();let mut new=Vec::new();
+        for round in 0..5 {
+            for buffered in [round%2==0,round%2!=0] {
+                let started=Instant::now();
+                let mut scratch=VaultReadBuffer::default();
+                for i in 0..8 {
+                    if buffered {
+                        let data=vault.stream_read_chunk_buffered(id,i,&mut scratch).unwrap().unwrap();
+                        assert_eq!(data.len(),STREAM_CHUNK_SIZE);
+                        std::hint::black_box(data[0]);
+                        scratch.wipe_plaintext();
+                    } else {
+                        let data=vault.stream_read_chunk(id,i).unwrap().unwrap();
+                        assert_eq!(data.len(),STREAM_CHUNK_SIZE);
+                        std::hint::black_box(data[0]);
+                    }
+                }
+                if buffered{new.push(started.elapsed().as_secs_f64()*1000.0)}else{old.push(started.elapsed().as_secs_f64()*1000.0)}
+            }
+        }
+        old.sort_by(f64::total_cmp);new.sort_by(f64::total_cmp);
+        eprintln!("BATCH540_VAULT 64MiB unbuffered_ms={:.3} buffered_ms={:.3}",old[2],new[2]);
+        drop(vault);fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn batched_vault_records_round_trip_and_authenticate_every_chunk() {
+        let root=fixture("batch-records");
+        let path=root.join("batch.ndr");
+        let mut vault=Vault::create(&path,"batch password".into()).unwrap();
+        let data:Vec<u8>=(0..STREAM_CHUNK_SIZE*2+17).map(|i| (i%251) as u8).collect();
+        let id=vault.add_file(1,"batch.bin",&data).unwrap();
+        let blocks=&vault.item(id).unwrap().blocks;
+        assert_eq!(blocks.len(),3);
+        for pair in blocks.windows(2) {
+            assert_eq!(pair[0].offset+record_size(pair[0].size as usize).unwrap(),pair[1].offset);
+        }
+        assert_eq!(vault.read_file(id).unwrap(),data);
+        vault.verify_integrity().unwrap();
+        vault.update_file(id,&data[1..]).unwrap();
+        assert_eq!(vault.read_file(id).unwrap(),data[1..]);
+        vault.verify_integrity().unwrap();
+        drop(vault);
+        let mut vault=Vault::unlock(&path,"batch password".into()).unwrap();
+        assert_eq!(vault.read_file(id).unwrap(),data[1..]);
+        let offset=vault.item(id).unwrap().blocks[1].offset+RECORD_HEADER as u64;
+        vault.handle.seek(SeekFrom::Start(offset)).unwrap();
+        let mut byte=[0u8;1]; vault.handle.read_exact(&mut byte).unwrap();
+        byte[0]^=0x80;
+        vault.handle.seek(SeekFrom::Start(offset)).unwrap();
+        vault.handle.write_all(&byte).unwrap();vault.handle.sync_all().unwrap();
+        assert!(vault.read_file(id).is_err());
+        assert!(vault.verify_integrity().is_err());
+        drop(vault);fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn six_character_password_is_allowed_but_five_is_rejected() {

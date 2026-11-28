@@ -734,7 +734,7 @@ enum AsyncResult {
     /// Status bar text to show after the job finishes.
     ArchiveStatus(String),
     /// Drive button list (root, tooltip).
-    Drives(Vec<(PathBuf, String)>),
+    Drives(u64, Vec<(PathBuf, String)>),
     /// A drive was added or removed (GetLogicalDrives bits changed; original SHCNE_DRIVEADD/DRIVEREMOVED handler FUN_00442bc8).
     DrivesChanged,
     /// Remote command result (site number, command, "host:port", output or error).
@@ -793,6 +793,10 @@ pub struct App {
     /// The ListFont name and bold/italic currently in the "list" font family (fonts are rebuilt when changed).
     list_font_name: Option<String>,
     prepared_list_font:Option<startup::PreparedListFont>,
+    tree_font_name: Option<String>,
+    prepared_tree_font: Option<startup::PreparedListFont>,
+    tree_font_size: f32,
+    tree_font_style: u8,
     /// Original ListFont style (TFontStyles byte: 1 bold, 2 italic, 4 underline, 8 strikethrough). Underline/strikethrough are applied directly to the list text.
     list_font_style: u8,
     /// C# Closing's WindowLeft/Top/Width/Height: the outer position and outer size (points) of the last normal (not maximized/minimized) window seen.
@@ -895,7 +899,8 @@ pub struct App {
     per_file_icon_used: HashMap<String, Instant>,
     /// C# ShellOverlayIconCache (per path, cleared when it exceeds 512) plus the pending paths and where to send to the overlay worker thread (STA).
     overlay_icons: HashMap<PathBuf, Option<egui::TextureHandle>>,
-    overlay_texture_pool: HashMap<(usize, usize, Vec<u8>), (egui::TextureHandle, usize)>,
+    overlay_texture_pool: HashMap<(usize, usize, Arc<[u8]>), (egui::TextureHandle, usize)>,
+    icon_pool_by_id: HashMap<egui::TextureId, (usize, usize, Arc<[u8]>)>,
     /// Local per-path shell/overlay icons may fail while Explorer is busy.
     /// Cache successes; retry failures only after a short backoff.
     overlay_icon_failed_at: HashMap<PathBuf, Instant>,
@@ -1072,6 +1077,8 @@ pub struct App {
     listing_lanes:[panes::ListingLane;2],
     listing_twin:Arc<panes::TwinPreparation>,
     drive_cache_pending: bool,
+    drive_cache_generation: u64,
+    drive_list_seen: u64,
 }
 mod startup;
 pub use startup::StartupApp;
@@ -1152,8 +1159,9 @@ impl App {
     }
 
     fn from_prepared_context(ctx: &egui::Context, options: Options, prepared: startup::PreparedStartup, foreground: bool) -> Self {
-        let startup::PreparedStartup { profile, settings, error, language, dual, panes_init, resources, language_pack, toolbar,list_font,.. } = prepared;
+        let startup::PreparedStartup { profile, settings, error, language, dual, panes_init, resources, language_pack, toolbar,list_font,tree_font,.. } = prepared;
         let (_,initial_style,initial_size,_)=startup::list_font_config(&settings,&language);
+        let (_,tree_style,tree_size,_)=startup::tree_font_config(&settings,&language);
         let [left, right] = panes_init.map(|(tabs, tab, show_hidden)| {
             let mut pane = Pane::new(tabs[tab].clone(), show_hidden);
             pane.tabs = tabs;
@@ -1186,6 +1194,10 @@ impl App {
             show_results: false,
             list_font_name: None,
             prepared_list_font:list_font,
+            tree_font_name:None,
+            prepared_tree_font:tree_font,
+            tree_font_size:tree_size,
+            tree_font_style:tree_style,
             list_font_style: initial_style,
             window_bounds: None,
             window_maximized: None,
@@ -1254,6 +1266,7 @@ impl App {
             per_file_icon_used: HashMap::new(),
             overlay_icons: HashMap::new(),
             overlay_texture_pool: HashMap::new(),
+            icon_pool_by_id: HashMap::new(),
             overlay_icon_failed_at: HashMap::new(),
             overlay_pending: HashSet::new(),
             overlay_last_used: HashMap::new(),
@@ -1363,6 +1376,8 @@ impl App {
             listing_lanes:Default::default(),
             listing_twin:Default::default(),
             drive_cache_pending: false,
+            drive_cache_generation: 0,
+            drive_list_seen: 0,
         };
         for pane in 0..2 {
             if foreground {
@@ -1517,6 +1532,23 @@ impl App {
             self.apply_listing(listing, &mut auth_panes);
         }
         self.after_listings(auth_panes, ctx);
+        // A slow provider may complete after the ordinary directory rows.
+        // Re-list once with the new drive snapshot when existing work is idle.
+        if !cfg!(test) && self.panes.iter().all(|p| !p.loading) {
+            if let Some((revision, items)) = panes::DriveListCache::update_since(&self.drive_list, self.drive_list_seen) {
+                self.drive_list_seen = revision;
+                self.update_destination_drives(&items);
+                if self.settings.flag("ShowDriveList", true) {
+                    for index in 0..self.panes.len() {
+                        if self.panes[index].remote.is_none() && self.panes[index].archive.is_none() && self.panes[index].vault.is_none() {
+                            let typed = std::mem::take(&mut self.typed_search[index]);
+                            self.refresh_after_folder_change(index);
+                            self.typed_search[index] = typed;
+                        }
+                    }
+                }
+            }
+        }
         self.listing_twin.retire_ready(self.panes.iter().all(|p|!p.loading));
         self.update_folder_watches(ctx);
     }
@@ -2098,8 +2130,10 @@ impl App {
                     self.overlay_icons.insert(path, texture);
                     ctx.request_repaint();
                 }
-                AsyncResult::Drives(drives) => {
-                    self.drive_cache = Some((Instant::now(), drives));
+                AsyncResult::Drives(generation, drives) => {
+                    if generation == self.drive_cache_generation {
+                        self.drive_cache = Some((Instant::now(), drives));
+                    }
                     self.drive_cache_pending = false;
                 }
                 AsyncResult::DrivesChanged => self.drives_changed(),
@@ -2114,6 +2148,7 @@ impl App {
     pub(super) fn drives_changed(&mut self) {
         panes::DriveListCache::invalidate(&self.drive_list);
         self.drive_cache = None;
+        self.drive_cache_generation = self.drive_cache_generation.wrapping_add(1);
         let show_drive_list = self.settings.flag("ShowDriveList", true);
         for index in 0..self.panes.len() {
             let pane = &self.panes[index];
@@ -2291,6 +2326,7 @@ pub(super) fn fade_foreground_layers(ctx: &egui::Context, alpha: f32) {
 
 /// Font family name of the file list (original and C# ListFont). Used as the Body and Button font only while drawing lists.
 pub(super) const LIST_FONT_FAMILY: &str = "list";
+pub(super) const TREE_FONT_FAMILY: &str = "folder-tree";
 /// Text size outside lists (pixels). The C# version applies ListFontSize only to lists, so the rest stays at the default 12.
 pub(super) const BASE_TEXT_SIZE: f32 = 12.0;
 
@@ -2299,6 +2335,14 @@ pub(super) fn list_text(text: impl Into<String>, style: u8) -> RichText {
     let text = RichText::new(text);
     let text = if style & 4 != 0 { text.underline() } else { text };
     if style & 8 != 0 { text.strikethrough() } else { text }
+}
+
+/// Apply the underline and strikeout bits to the actual measured tree
+/// text bounds, including selected rows and ancestor hints.
+pub(super) fn tree_text_effects(painter: &egui::Painter, drawn: egui::Rect, color: Color32, style: u8) {
+    let stroke = egui::Stroke::new(1.0, color);
+    if style & 4 != 0 { painter.hline(drawn.x_range(), drawn.bottom() - 1.5, stroke); }
+    if style & 8 != 0 { painter.hline(drawn.x_range(), drawn.center().y, stroke); }
 }
 
 /// App fonts: Malgun Gothic (Korean) before the egui defaults, and Segoe UI, the default font of Vista and later, at the very front like original WinMain (0x403568)
@@ -2347,6 +2391,12 @@ fn cjk_vertical_tweak(bytes: &[u8], reference: f32) -> egui::FontTweak {
 }
 
 pub(super) fn set_app_fonts(ctx: &egui::Context, list_font: Option<(&'static [u8], u32)>, list_bold: bool, list_korean_scale: f32, language: &str) {
+    set_app_fonts_with_tree(ctx, list_font, list_bold, list_korean_scale, None, false, 1.0, language);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn set_app_fonts_with_tree(ctx: &egui::Context, list_font: Option<(&'static [u8], u32)>, list_bold: bool, list_korean_scale: f32,
+    tree_font: Option<(&'static [u8], u32)>, tree_bold: bool, tree_korean_scale: f32, language: &str) {
     // Font files are memory-mapped (native::mapped_file) and passed as 'static: egui does not copy borrowed fonts (a Vec would be copied once more).
     let font = |path: &str| native::mapped_file(Path::new(path)).map(|bytes| Arc::new(egui::FontData::from_static(bytes)));
     let scaled = |path: &str| {
@@ -2425,6 +2475,25 @@ pub(super) fn set_app_fonts(ctx: &egui::Context, list_font: Option<(&'static [u8
         None => fonts.families.get(&egui::FontFamily::Proportional).cloned().unwrap_or_default(),
     };
     fonts.families.insert(egui::FontFamily::Name(LIST_FONT_FAMILY.into()), list);
+    // Tree preferences are independent of the list and base UI families.
+    let mut tree = fonts.families.get(&egui::FontFamily::Proportional).cloned().unwrap_or_default();
+    if tree_bold || (tree_korean_scale - 1.0).abs() > 0.001 {
+        let file = if tree_bold { "malgunbd.ttf" } else { "malgun.ttf" };
+        if let Some(bytes) = native::mapped_file(&windows.join("Fonts").join(file)) {
+            fonts.font_data.insert("TreeKorean".into(), Arc::new(egui::FontData::from_static(bytes)
+                .tweak(egui::FontTweak { scale: tree_korean_scale, ..Default::default() })));
+            for name in &mut tree {
+                if name == "Korean" { *name = "TreeKorean".into(); }
+            }
+        }
+    }
+    if let Some((bytes, index)) = tree_font {
+        let mut data = egui::FontData::from_static(bytes);
+        data.index = index;
+        fonts.font_data.insert("TreeFont".into(), Arc::new(data));
+        tree.insert(0, "TreeFont".into());
+    }
+    fonts.families.insert(egui::FontFamily::Name(TREE_FONT_FAMILY.into()), tree);
     // NXLabel markup <b> (original TNXLabel: the bold face of that font): Segoe UI Bold -> Malgun Gothic Bold -> normal font. The normal font when the files are missing.
     let mut bold = fonts.families.get(&egui::FontFamily::Proportional).cloned().unwrap_or_default();
     for (name, file) in [("KoreanBoldUI", "C:/Windows/Fonts/malgunbd.ttf"), ("UIBold", "C:/Windows/Fonts/segoeuib.ttf")] {
@@ -2790,7 +2859,9 @@ impl eframe::App for App {
                     report["folderTour"]=serde_json::json!(self.smoke_folder_tour);
                     report["folderPages"]=serde_json::json!(self.panes.each_ref().map(|p|serde_json::json!({"rows":p.page.rows,"columns":p.page.columns,"first":p.first_column})));
                     report["overlayPaths"] = self.overlay_icons.len().into();
-                    report["overlaySharedTextures"] = self.overlay_texture_pool.len().into();
+                    report["overlaySharedTextures"] = self.overlay_icons.values().filter_map(|t|t.as_ref()).map(|t|t.id())
+                        .filter(|id|self.icon_pool_by_id.contains_key(id)).collect::<HashSet<_>>().len().into();
+                    report["sharedIconTextures"] = self.overlay_texture_pool.len().into();
                     report["aboutText"]=serde_json::json!(self.msgboxes.iter().find(|b|b.program_icon).map(|b|&b.text));
                     let _ = std::fs::write(
                         path,

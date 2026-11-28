@@ -16,6 +16,7 @@ pub(super) struct PreparedStartup {
     pub(super) language_pack: compat::Language,
     pub(super) toolbar: ndr::commands::ToolbarConfig,
     pub(super) list_font:Option<PreparedListFont>,
+    pub(super) tree_font:Option<PreparedListFont>,
     pub(super) prepare_ms:u64,
 }
 
@@ -27,15 +28,25 @@ pub(super) struct PreparedListFont{
 pub(super) fn list_font_config(settings:&Settings,language:&str)->(String,u8,f32,String){
     let face=settings.text("ListFont","Segoe UI");
     let style=(settings.values.get("ListFontStyle").and_then(|v|v.as_i64()).unwrap_or(0)&0x0F) as u8;
-    let size=settings.values.get("ListFontSize").and_then(|v|v.as_f64())
-        .unwrap_or(ndr::settings::DEFAULT_LIST_FONT_PIXELS).clamp(8.0,32.0) as f32;
+    let size=ndr::settings::list_font_pixels(settings) as f32;
     let pixels=size.round() as i32;
     let key=format!("{face}\u{0}{}\u{0}{pixels}\u{0}{}",style&3,super::preferred_cjk_font(language).unwrap_or(""));
     (face,style,size,key)
 }
+pub(super) fn tree_font_config(settings:&Settings,language:&str)->(String,u8,f32,String){
+    let face=settings.text("FolderTreeFont","Segoe UI");
+    let style=(settings.values.get("FolderTreeFontStyle").and_then(|v|v.as_i64()).unwrap_or(0)&0x0F) as u8;
+    let size=ndr::settings::font_layout_pixels(ndr::settings::tree_font_points(settings)) as f32;
+    let key=format!("{face}\u{0}{}\u{0}{}\u{0}{}",style&3,size.round() as i32,super::preferred_cjk_font(language).unwrap_or(""));
+    (face,style,size,key)
+}
 pub(super) fn prepare_list_font(face:&str,style:u8,size:f32,key:String,find:fn(&str)->Option<(PathBuf,u32)>)->PreparedListFont{
-    let data=native::styled_font_names(face,style).iter().find_map(|name|find(name))
-        .and_then(|(path,index)|native::mapped_file(&path).map(|bytes|(bytes,index)));
+    let data=native::styled_font_names(face,style).iter().find_map(|name|{
+        let (path,index)=find(name)?;
+        let bytes=native::mapped_file(&path)?;
+        ab_glyph::FontRef::try_from_slice_and_index(bytes,index).ok()?;
+        Some((bytes,index))
+    });
     let hangul="\u{ac00}".repeat(10);
     let pixels=size.round() as i32;
     let korean_scale=native::gdi_text_widths(face,pixels,style,&[hangul.as_str()])
@@ -111,8 +122,12 @@ impl PreparedStartup {
             let (face,style,size,key)=list_font_config(&settings,&language);
             prepare_list_font(&face,style,size,key,native::font_file)
         });
+        let tree_font=(!cfg!(test)).then(||{
+            let (face,style,size,key)=tree_font_config(&settings,&language);
+            prepare_list_font(&face,style,size,key,native::font_file)
+        });
         Self { profile, settings, error, language, dual, panes_init: [left, right], resources, language_pack, toolbar,
-            list_font,prepare_ms:start.elapsed().as_millis() as u64 }
+            list_font,tree_font,prepare_ms:start.elapsed().as_millis() as u64 }
     }
 }
 

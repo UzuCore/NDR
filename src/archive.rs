@@ -343,7 +343,7 @@ pub fn create_with_progress(
             permissions.set_readonly(false);
             fs::set_permissions(&archive, permissions).map_err(|e| e.to_string())?;
         }
-        let snapshot_abs = resolve_archive_path(&snapshot).map_err(|e| e.to_string())?;
+        let snapshot_abs = snapshot_canonical;
         let input_dir = direct.as_ref().map_or(&snapshot_abs, |d| &d.directory);
         let source_paths: Vec<_> = source_paths
             .iter()
@@ -995,8 +995,8 @@ fn copy_tree(source: &Path, target: &Path, cancel: &AtomicBool, buffer: &mut Vec
     fn enter(source: &Path, target: &Path, cancel: &AtomicBool, buffer: &mut Vec<u8>) -> Result<Option<Frame>, String> {
         use std::io::Write;
         check_cancel(cancel)?;
-        ensure_plain_path(source)?;
-        let metadata = fs::symlink_metadata(source).map_err(|e| e.to_string())?;
+        let metadata = crate::fsops::plain_metadata(source)?
+            .ok_or_else(|| format!("Archive source does not exist: {}", source.display()))?;
         if is_reparse(&metadata) { return Err("Archive source links are rejected".into()); }
         if metadata.is_dir() {
             fs::create_dir(target).map_err(|e| e.to_string())?;
@@ -1017,7 +1017,10 @@ fn copy_tree(source: &Path, target: &Path, cancel: &AtomicBool, buffer: &mut Vec
         while copied < metadata.len() {
             check_cancel(cancel)?;
             let want = (metadata.len() - copied).min(buffer_len as u64) as usize;
-            let n = input.read(&mut buffer[..want]).map_err(|e| e.to_string())?;
+            let n = match input.read(&mut buffer[..want]) {
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                result => result.map_err(|e| e.to_string())?,
+            };
             if n == 0 { break; }
             output.write_all(&buffer[..n]).map_err(|e| e.to_string())?;
             copied += n as u64;

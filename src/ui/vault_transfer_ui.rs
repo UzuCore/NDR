@@ -60,6 +60,7 @@ pub(super) struct VaultStreamState {
     ordinal: i64,
     // Reuse the zeroized buffer rather than allocating 8 MiB on every frame.
     buffer: Zeroizing<Vec<u8>>,
+    read_scratch: ndr::vault::VaultReadBuffer,
     pub(super) done: u64,
     pub(super) total: u64,
 }
@@ -643,11 +644,11 @@ impl App {
             target_id = Some(pane.database.begin_stream_file(job.to_folder, destination_name, job.replace)?);
         }
         let buffer = Zeroizing::new(if input.is_some() {
-            vec![0u8; ndr::vault::STREAM_CHUNK_SIZE]
+            vec![0u8; total.min(ndr::vault::STREAM_CHUNK_SIZE as u64) as usize]
         } else { Vec::new() });
         Ok(Some(VaultStreamState { input, output, temp_path, destination_path,
             source_id, target_id, ordinal: 0,
-            buffer,
+            buffer, read_scratch:Default::default(),
             done: 0, total }))
     }
 
@@ -665,26 +666,15 @@ impl App {
     fn vault_task_stream_step(&mut self, job: &VaultTransferJob,
         stream: &mut VaultStreamState) -> Result<bool, String> {
         if stream.done < stream.total {
-            let fetched = if stream.input.is_none() {
-                let source = self.panes[job.source].vault.as_ref().ok_or("Encrypted source closed during transfer")?;
-                Some(source.database.stream_read_chunk(stream.source_id.ok_or("Missing encrypted source")?, stream.ordinal)?
-                    .ok_or("Encrypted source ended before the expected byte count")?)
+            let data: &[u8] = if let Some(input) = stream.input.as_mut() {
+                let amount=read_import_page(input,&mut stream.buffer,stream.total-stream.done)?;
+                &stream.buffer[..amount]
             } else {
-                None
+                let source=self.panes[job.source].vault.as_ref().ok_or("Encrypted source closed during transfer")?;
+                source.database.stream_read_chunk_buffered(stream.source_id.ok_or("Missing encrypted source")?,stream.ordinal,&mut stream.read_scratch)?
+                    .ok_or("Encrypted source ended before the expected byte count")?
             };
-            let amount = if let Some(input) = stream.input.as_mut() {
-                // A short OS read is not a full encrypted page. Fill the
-                // expected chunk (or the final remainder) before publishing.
-                read_import_page(input, &mut stream.buffer, stream.total - stream.done)?
-            } else { fetched.as_ref().map_or(0, |v| v.len()) };
-            if amount == 0 { return Err("Input file changed or ended unexpectedly; transaction rolled back".into()); }
-            // Option::map_or eagerly evaluates its default argument; for an
-            // encrypted source the import-only buffer is empty. Use a match
-            // so the unused buffer is never sliced or accessed.
-            let data: &[u8] = match fetched.as_ref() {
-                Some(bytes) => bytes.as_slice(),
-                None => &stream.buffer[..amount],
-            };
+            if data.is_empty() { return Err("Input file changed or ended unexpectedly; transaction rolled back".into()); }
             if stream.done.checked_add(data.len() as u64).ok_or("Transfer byte count overflow")? > stream.total {
                 return Err("Source size changed during transfer".into());
             }
@@ -696,6 +686,7 @@ impl App {
                     stream.ordinal, &data)?;
             }
             stream.done += data.len() as u64;
+            stream.read_scratch.wipe_plaintext();
             stream.ordinal += 1;
             return Ok(false);
         }

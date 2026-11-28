@@ -56,6 +56,8 @@ pub(super) struct FolderTreeForm {
     pub scan: Option<TreeScan>,
     pub options: ScanOptions,
     pub column: f32,
+    pub(super) font_size: f32,
+    pub(super) font_style: u8,
     pub show_icon: bool,
     pub tree_folder: PathBuf,
     pub in_root: bool,
@@ -190,6 +192,8 @@ impl FolderTreeForm {
             scan: None,
             options: ScanOptions { show_hidden: settings.flag("ShowHiddenFoldersInTree", false), excluded, max_level: Some(depth) },
             column: settings.values.get("FolderTreeItemWidth").and_then(|v| v.as_f64()).unwrap_or(130.0) as f32,
+            font_size: ndr::settings::font_layout_pixels(ndr::settings::tree_font_points(settings)) as f32,
+            font_style: (settings.values.get("FolderTreeFontStyle").and_then(|v|v.as_i64()).unwrap_or(0)&0x0F) as u8,
             show_icon: settings.flag("ShowFolderTreeIcons", true),
             tree_folder: profile.join("treedata"),
             in_root: settings.flag("SaveFolderTreeState", false),
@@ -842,7 +846,8 @@ fn draw_item(ui: &egui::Ui, painter: &egui::Painter, rect: egui::Rect, form: &Fo
         // Selected row: background (NXTOPENED if an opened folder, otherwise NXTFOCUSED) + text (NXTBACK) + dark border.
         let fill = if opened { colors.opened } else { colors.focused };
         painter.rect_filled(text_rect, 0.0, fill);
-        painter.text(text_rect.left_center(), egui::Align2::LEFT_CENTER, &text, font.clone(), colors.back);
+        let drawn = painter.text(text_rect.left_center(), egui::Align2::LEFT_CENTER, &text, font.clone(), colors.back);
+        super::tree_text_effects(painter,drawn,colors.back,form.font_style);
         let frame = Color32::from_rgb(fill.r().saturating_sub(0x46), fill.g().saturating_sub(0x46), fill.b().saturating_sub(0x46));
         painter.rect_stroke(text_rect.expand2(egui::vec2(1.0, 1.0)), 0.0, egui::Stroke::new(1.0_f32, frame), egui::StrokeKind::Inside);
         // Ancestor names not shown on this row are drawn in their columns (NXTHINT) — so the selected row reads like a path.
@@ -864,11 +869,14 @@ fn draw_item(ui: &egui::Ui, painter: &egui::Painter, rect: egui::Rect, form: &Fo
             let left = ax + if form.show_icon { 16.0 } else { 0.0 } + if is_top { 2.0 } else { 0.0 };
             let right = if is_top { ax + metrics.root - 16.0 } else { ax + metrics.name - 6.0 };
             let clip = egui::Rect::from_min_max(at(left, y + 1.0), at(right.max(left), y + metrics.row - 1.0));
-            painter.with_clip_rect(clip.intersect(rect)).text(clip.left_center(), egui::Align2::LEFT_CENTER, &tree.items[ancestor].name, font.clone(), colors.hint);
+            let clipped = painter.with_clip_rect(clip.intersect(rect));
+            let drawn = clipped.text(clip.left_center(), egui::Align2::LEFT_CENTER, &tree.items[ancestor].name, font.clone(), colors.hint);
+            super::tree_text_effects(&clipped,drawn,colors.hint,form.font_style);
         }
     } else {
         let color = if opened { colors.opened } else { colors.fore };
-        painter.text(text_rect.left_center(), egui::Align2::LEFT_CENTER, &text, font.clone(), color);
+        let drawn = painter.text(text_rect.left_center(), egui::Align2::LEFT_CENTER, &text, font.clone(), color);
+        super::tree_text_effects(painter,drawn,color,form.font_style);
     }
 }
 
@@ -1167,10 +1175,11 @@ pub(super) fn folder_tree_ui(ui: &mut egui::Ui, form: &mut FolderTreeForm, langu
         }
     }
     let tree_rect = egui::Rect::from_min_max(egui::pos2(drives_rect.right() + 1.0, main.top() + 1.0), main.max - egui::vec2(1.0, 1.0));
-    let font = egui::FontId::proportional(12.0);
+    let font = egui::FontId::new(form.font_size,egui::FontFamily::Name(super::TREE_FONT_FAMILY.into()));
     let root_name = form.tree.root.map(|r| form.tree.items[r].name.clone()).unwrap_or_default();
     let root_width = text_width(ui, &root_name, &font);
-    let metrics = Metrics { row: ROW_HEIGHT, column: form.column.max(40.0), name: form.column.max(40.0) - 12.0, root: if root_name.is_empty() { 50.0 } else { root_width + 36.0 } };
+    let row = (ui.fonts_mut(|fonts|fonts.row_height(&font)).ceil()+2.0).max(ROW_HEIGHT);
+    let metrics = Metrics { row, column: form.column.max(40.0), name: form.column.max(40.0) - 12.0, root: if root_name.is_empty() { 50.0 } else { root_width + 36.0 } };
     form.rows_visible = ((tree_rect.height() / metrics.row).floor() as usize).max(1);
     let root_label = form.drives.iter().find(|(r, _)| (form.root_of)(&r.to_string_lossy()).eq_ignore_ascii_case(&form.drive)).map(|(_, l)| l.clone()).unwrap_or_default();
     paint_tree(ui, tree_rect, form, colors, &root_label, &metrics, &font);

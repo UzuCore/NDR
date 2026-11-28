@@ -393,6 +393,11 @@ fn text_of(settings: &ndr::settings::Settings, key: &str) -> String {
         _ => String::new(),
     }
 }
+fn font_point_text(points: f64) -> String {
+    let shown = format!("{points:.1}");
+    shown.strip_suffix(".0").unwrap_or(&shown).to_owned()
+}
+
 fn number_text(settings: &ndr::settings::Settings, key: &str) -> String {
     settings.values.get(key).and_then(Value::as_f64).map(|v| if v.fract() == 0.0 { format!("{}", v as i64) } else { v.to_string() }).unwrap_or_default()
 }
@@ -579,7 +584,7 @@ impl SettingsForm {
             text("TimeFormat", language.localized("NDR.UI_SETTINGS_TIME_FORMAT_8BE286", "시간 형식", "Time format"), draft.text("TimeFormat", "HH:mm")),
             combo("SizeUnit", language.localized("NDR.UI_SETTINGS_SIZE_UNIT_048CB0", "크기 단위", "Size unit"), &["Auto", "B", "KB", "MB", "GB"], &draft.text("SizeUnit", "Auto")),
             text("ListFont", language.localized("NDR.UI_SETTINGS_LIST_FONT_F8A5D7", "목록 글꼴", "List font"), text_of(&draft, "ListFont")),
-            text("ListFontSize", language.localized("NDR.UI_SETTINGS_FONT_SIZE_54FFED", "글꼴 크기", "Font size"), number_text(&draft, "ListFontSize")),
+            text("ListFontSize", format!("{} (pt)", language.localized("NDR.UI_SETTINGS_FONT_SIZE_54FFED", "글꼴 크기", "Font size")), font_point_text(ndr::settings::list_font_display_points(ndr::settings::list_font_pixels(&draft)))),
             text("ThumbnailSize", language.localized("NDR.UI_SETTINGS_THUMBNAIL_SIZE_PX_670BAF", "미리 보기 크기 (px)", "Thumbnail size (px)"), number_text(&draft, "ThumbnailSize")),
             check("UseNexusFileColorMap", language.localized("NDR.UI_SETTINGS_USE_NEXUSFILE_COL_COLOR_65185B", "NexusFile .col 색상표 적용", "Use NexusFile .col color map"), false),
         ]);
@@ -636,7 +641,7 @@ impl SettingsForm {
             check("ShowFavoritesBar", language.localized("NDR.UI_SETTINGS_SHOW_THE_FAVORITES_BAR_8769EB", "즐겨찾기 바 표시", "Show the favorites bar"), true),
             text("FolderTreeDepth", language.localized("NDR.UI_SETTINGS_FOLDER_TREE_SCAN_DEPTH_AE4293", "폴더 트리 탐색 깊이 (1–64)", "Folder tree scan depth (1–64)"), number_text(&draft, "FolderTreeDepth")),
             text("FolderTreeFont", language.localized("NDR.UI_SETTINGS_FOLDER_TREE_FONT_9996B6", "폴더 트리 글꼴", "Folder tree font"), text_of(&draft, "FolderTreeFont")),
-            text("FolderTreeFontSize", language.localized("NDR.UI_SETTINGS_FOLDER_TREE_FONT_SIZE_10701D", "폴더 트리 글꼴 크기", "Folder tree font size"), number_text(&draft, "FolderTreeFontSize")),
+            text("FolderTreeFontSize", format!("{} (pt)", language.localized("NDR.UI_SETTINGS_FOLDER_TREE_FONT_SIZE_10701D", "폴더 트리 글꼴 크기", "Folder tree font size")), font_point_text(ndr::settings::tree_font_points(&draft))),
             text("FolderTreeItemWidth", language.localized("NDR.UI_SETTINGS_FOLDER_TREE_NAME_WIDTH_B9AB39", "폴더 트리 이름 너비 (px)", "Folder tree name width (px)"), number_text(&draft, "FolderTreeItemWidth")),
             text("TreeExcludedPaths", language.localized("NDR.UI_SETTINGS_FOLDER_TREE_EXCLUDED_PATHS_F8DB38", "폴더 트리 제외 경로 (세미콜론 구분)", "Folder tree excluded paths (semicolon separated)"), draft.strings("FolderTreeExcludedPaths").join(";")),
         ]);
@@ -812,7 +817,21 @@ impl SettingsForm {
                         "TreeExcludedPaths" => {
                             values.insert("FolderTreeExcludedPaths".into(), json!(full_paths(value, true)));
                         }
-                        "ListFontSize" | "LeftFolderTreeWidth" | "RightFolderTreeWidth" | "FolderTreeItemWidth" | "FolderTreeFontSize" => {
+                        "ListFontSize" | "FolderTreeFontSize" => {
+                            if let Some(v) = float(value).filter(|v| v.is_finite()) {
+                                let points = v.clamp(ndr::settings::MIN_FONT_POINTS, ndr::settings::MAX_FONT_POINTS);
+                                if key == "ListFontSize" {
+                                    let original = ndr::settings::list_font_pixels(&self.draft);
+                                    // Apply/OK without a size edit must not change an
+                                    // older profile's already-rendered pixel size.
+                                    let pixels = if points == ndr::settings::list_font_display_points(original) {
+                                        original
+                                    } else { ndr::settings::font_layout_pixels(points) };
+                                    values.insert(key.clone(), json!(pixels));
+                                } else { values.insert(key.clone(), json!(points)); }
+                            }
+                        }
+                        "LeftFolderTreeWidth" | "RightFolderTreeWidth" | "FolderTreeItemWidth" => {
                             if let Some(v) = float(value) {
                                 values.insert(key.clone(), json!(v));
                             }
@@ -1044,8 +1063,11 @@ fn original_page(ui: &mut egui::Ui, form: &mut SettingsForm, tab: usize, origin:
             // Original FUN_0044cd58: wsprintfW("\"%s\",%d,%d", name, size, style (TFontStyles byte)).
             let style = form.draft.values.get("ListFontStyle").and_then(Value::as_i64).unwrap_or(0) & 0x0F;
             let rows = &mut form.tabs[tab];
-            let font = format!("{} \"{}\",{},{style}", label_of(rows, "ListFont"), label_value(rows, "ListFont"), label_value(rows, "ListFontSize"));
-            put_label(ui, at(44.0, 36.0, 170.0, 15.0), &font);
+            // Keep size visible even when the face name is very long.
+            let size = format!("{} pt - {}", label_value(rows, "ListFontSize"), label_of(rows, "ListFont"));
+            let font = format!("{} ({style})", label_value(rows, "ListFont"));
+            put_label(ui, at(22.0, 26.0, 184.0, 15.0), &size);
+            put_label(ui, at(22.0, 43.0, 184.0, 15.0), &font);
             if let Some(Row::FontButton { label, .. }) = rows.iter().find(|r| matches!(r, Row::FontButton { tree: false, .. })) {
                 if ui.put(at(51.0, 62.0, 140.0, 25.0), egui::Button::new(label.as_str())).clicked() {
                     action = Some(SettingsAction::ChooseFont(false));
@@ -1114,8 +1136,10 @@ fn original_page(ui: &mut egui::Ui, form: &mut SettingsForm, tab: usize, origin:
             put_label(ui, at(122.0 + tree_label_width, 138.0, 60.0, 15.0), &cap("Caption.TntLabel3", "pixel"));
             group_box(ui, at(32.0, 173.0, 225.0, 96.0), &cap("GroupBox.gbTreeFont", "Font"));
             let tree_style = form.draft.values.get("FolderTreeFontStyle").and_then(Value::as_i64).unwrap_or(0) & 0x0F;
-            let font = format!("{} \"{}\",{},{tree_style}", label_of(rows, "FolderTreeFont"), label_value(rows, "FolderTreeFont"), label_value(rows, "FolderTreeFontSize"));
-            put_label(ui, at(55.0, 205.0, 198.0, 15.0), &font);
+            let size = format!("{} pt - {}", label_value(rows, "FolderTreeFontSize"), label_of(rows, "FolderTreeFont"));
+            let font = format!("{} ({tree_style})", label_value(rows, "FolderTreeFont"));
+            put_label(ui, at(44.0, 192.0, 201.0, 15.0), &size);
+            put_label(ui, at(44.0, 209.0, 201.0, 15.0), &font);
             if let Some(Row::FontButton { label, .. }) = rows.iter().find(|r| matches!(r, Row::FontButton { tree: true, .. })) {
                 if ui.put(at(73.0, 232.0, 140.0, 25.0), egui::Button::new(label.as_str())).clicked() {
                     action = Some(SettingsAction::ChooseFont(true));
@@ -1929,17 +1953,18 @@ impl App {
         };
         let name = read(form, name_key);
         let size = read(form, size_key).trim().parse::<f32>().unwrap_or(0.0);
-        // The list font size (ListFontSize) is in pixels, the font box in points. The folder tree font size stays in points.
-        let size = if tree || size <= 0.0 { size } else { ndr::settings::font_pixels_to_points(size as f64) as f32 };
+        // Both settings rows and the Windows font box use points. Only
+        // the persisted file-list layout value is expressed in pixels.
         let style = (form.draft.values.get(style_key).and_then(Value::as_i64).unwrap_or(0) & 0x0F) as u8;
         let Some((name, size, style)) = (self.font_picker)(name.trim(), size, style) else { return };
-        let size = if tree { size } else { ndr::settings::font_points_to_pixels(size as f64) as f32 };
+        if !size.is_finite() { return; }
+        let size = (size as f64).clamp(ndr::settings::MIN_FONT_POINTS, ndr::settings::MAX_FONT_POINTS);
         let Some(form) = self.settings_form() else { return };
         if let Some(Row::Text { value, .. }) = form.row_mut(name_key) {
             *value = name;
         }
         if let Some(Row::Text { value, .. }) = form.row_mut(size_key) {
-            *value = if size.fract() == 0.0 { format!("{}", size as i64) } else { format!("{size}") };
+            *value = font_point_text(size);
         }
         form.draft.values.insert(style_key.into(), Value::from(style & 0x0F));
     }
