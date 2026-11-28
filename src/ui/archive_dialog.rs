@@ -35,6 +35,9 @@ pub(super) enum ExtractMode {
     CurrentFolder,
     NewFolder,
     Auto,
+    /// One always-separate directory per selected archive, named for
+    /// the archive set (multipart/composite extensions removed).
+    Each,
 }
 
 /// ArchiveCreateWindow input.
@@ -374,6 +377,62 @@ impl App {
         self.command_targets(self.active)
     }
 
+    /// Menu state follows the actual selected rows. All extraction
+    /// targets must be readable archive names, as in 7zip's menu.
+    /// No file-content probing or filesystem I/O while drawing the menu.
+    pub(super) fn archive_selection_state(&self,index:usize)->(usize,bool){
+        let pane=&self.panes[index];
+        if pane.loading||pane.archive.is_some()||pane.remote.is_some()
+            ||super::panes::is_drives(&pane.path)||!self.vault_has_filesystem(index){return (0,false);}
+        let mut count=0;let mut all=true;
+        let mut visit=|entry:&Entry|{
+            if entry.drive||entry.is_parent(){return;}
+            count+=1;
+            // Vault entry paths are virtual, but the entry name still
+            // identifies the format without reading the mounted drive.
+            if all{all=!entry.is_dir&&archive::bundled_can_browse(Path::new(&entry.name));}
+        };
+        if pane.selected.is_empty(){
+            if let Some(entry)=pane.entries.get(pane.cursor){visit(entry);}
+        }else{
+            for row in &pane.selected{if let Some(entry)=pane.entries.get(*row){visit(entry);}}
+        }
+        (count,count>0&&all)
+    }
+
+    /// Same one-ZIP-per-item behavior as UzuCore 7zip's CompressEach.
+    /// Reuse the existing native job, cancellation and 7-Zip engine.
+    pub(super) fn compress_each_command(&mut self){
+        let i=self.active;
+        let (count,_)=self.archive_selection_state(i);
+        if count<2{return;}
+        let sources=self.archive_sources();
+        if sources.len()!=count{return;}
+        let folder=self.command_directory(i);
+        let title=self.language_pack.text("formMain.Menu.mipCompressEach","Compress by each file/folder name");
+        let title=title.replace('&',"");
+        let caption=self.language_pack.text("RES.COMPRESSING","Adding to the archive...");
+        let progress=super::file_operation::ProgressInfo{
+            from:Some(folder.to_string_lossy().into_owned()),to:Some(folder.to_string_lossy().into_owned()),
+            total_files:Some(count as u64),prefer_bytes:false,caption:Some(caption),..Default::default()
+        };
+        let tx=self.async_tx.clone();
+        let done=self.language_pack.text("NDR.OP_ARCHIVE_INDIVIDUAL_ZIP_DONE","Individual ZIP archives created.");
+        let work=move |events:Sender<Event>,cancel:Arc<AtomicBool>|->Result<(),String>{
+            let base=folder.clone();
+            let progress_events=events.clone();
+            let sink:archive::EachZipProgress=Arc::new(move |completed,name|{
+                let _=progress_events.send(Event::Progress{path:base.join(name),bytes:0,files:completed as u64});
+            });
+            archive::create_each_zip(&sources,&folder,&cancel,Some(sink))?;
+            let _=tx.send(AsyncResult::ArchiveStatus(done));
+            Ok(())
+        };
+        if self.start_progress_task(title,progress,work){
+            if let Some(job)=self.job.as_mut(){job.custom_status=true;job.chime=true;}
+        }
+    }
+
     /// archiveAdd / archiveMove / createArchive / createZip.
     pub(super) fn archive_command(&mut self, kind: ArchiveKind) {
         if self.panes[self.active].archive.is_some() {
@@ -690,8 +749,26 @@ impl App {
     pub(super) fn extract_command(&mut self, mode: ExtractMode) {
         let i = self.active;
         let in_archive = self.panes[i].archive.clone();
-        if in_archive.is_some() && matches!(mode, ExtractMode::CurrentFolder | ExtractMode::Auto) {
+        if mode==ExtractMode::Each && !self.archive_selection_state(i).1 {return;}
+        if mode==ExtractMode::Auto{
+            self.trace_auto_extract("dispatch",&format!("pane={} inside_archive={} loading={}",i,in_archive.is_some(),self.panes[i].loading));
+        }
+        if in_archive.is_some() && mode==ExtractMode::CurrentFolder {
             return;
+        }
+        // Alt+Q means automatic extraction of the complete archive.
+        // Inside an archive use its containing file, not virtual member
+        // rows. The old early return made the chord silently do nothing.
+        if mode==ExtractMode::Auto {
+            if let Some(location)=in_archive.as_ref(){
+                let file=archive::first_volume_path(&location.file);
+                let parent=file.parent().map(Path::to_path_buf).unwrap_or_default();
+                // A nested archive is staged in the preview cache.
+                // Extract beside the original local folder, not into a
+                // disposable cache directory.
+                let base=if parent==self.panes[i].path{parent}else{self.panes[i].path.clone()};
+                return self.run_extract(vec![file],Vec::new(),location.password.clone(),base,mode);
+            }
         }
         // Same-location watcher/drive refresh leaves the old rows visible
         // and preserves the selected paths. Auto Extract is a read-only
@@ -723,6 +800,7 @@ impl App {
                 list
             }
         };
+        if mode==ExtractMode::Auto{self.trace_auto_extract("selection",&format!("selected={} archives={}",selected.len(),archives.len()));}
         if archives.is_empty() {
             return self.warn_operation(&self.language_pack.text("NDR.OP_ARCHIVE_SELECT_AN_ARCHIVE_OR_OPEN_ONE_FIRST", "Select an archive or open one first."));
         }
@@ -784,6 +862,11 @@ impl App {
                     ExtractMode::NewFolder => {
                         destination = archive::available_extract_folder(&base, &archive::extract_folder_name(archive_path))?;
                         new_destination = true;
+                    }
+                    ExtractMode::Each => {
+                        let name=archive::base_name(archive_path);
+                        destination=archive::available_extract_folder(&base,&name)?;
+                        new_destination=true;
                     }
                     ExtractMode::Auto => {
                         let single = match archive::prepare_extraction(archive_path, known.as_deref(), &cancel, &mut passwords, Some(&language)) {
@@ -861,6 +944,7 @@ impl App {
         } else {
             self.start_progress_task(title, progress, work)
         };
+        if mode==ExtractMode::Auto{self.trace_auto_extract("start",&format!("started={started}"));}
         if started {
             if let Some(job) = self.job.as_mut() {
                 job.custom_status = true;

@@ -114,6 +114,124 @@ fn alt_q_respects_custom_shortcut_assignment() {
 }
 
 
+#[test]
+fn native_alt_recovery_corrects_missing_and_mistranslated_events_without_duplicates(){
+    use ndr::shell_menu::NativeAltKey as P;
+    let q=P{vk:b'Q' as u16,shift:false};
+    let mut raw=egui::RawInput{events:vec![egui::Event::Ime(egui::ImeEvent::Commit("b".into()))],..Default::default()};
+    assert_eq!(keyboard::restore_native_alt_shortcuts(&mut raw,&[q],None),1);
+    let count=|raw:&egui::RawInput|raw.events.iter().filter(|e|matches!(e,egui::Event::Key{key:egui::Key::Q,pressed:true,modifiers:m,..} if m.alt&&!m.ctrl)).count();
+    assert_eq!(count(&raw),1);
+    assert_eq!(keyboard::restore_native_alt_shortcuts(&mut raw,&[q],None),0);
+    assert_eq!(count(&raw),1);
+    let mut raw=egui::RawInput{events:vec![egui::Event::Key{key:egui::Key::Q,physical_key:Some(egui::Key::Q),pressed:true,repeat:false,modifiers:NONE}],..Default::default()};
+    assert_eq!(keyboard::restore_native_alt_shortcuts(&mut raw,&[q],None),1);
+    assert_eq!(raw.events.len(),1);
+    assert_eq!(count(&raw),1);
+    let mut map=compat::ShortcutMap::parse(None);
+    map.set_binding("miArcExtractAuto","Alt+Shift+Q").unwrap();
+    let mut raw=egui::RawInput::default();
+    assert_eq!(keyboard::restore_native_alt_shortcuts(&mut raw,&[q],Some(&map.to_text())),0);
+    assert!(raw.events.is_empty());
+}
+
+#[test]
+fn native_alt_q_win32_message_extracts_real_zip_without_egui_key_event(){
+    use windows_sys::Win32::UI::WindowsAndMessaging::{CreateWindowExW,DestroyWindow,SendMessageW,HWND_MESSAGE,WM_SYSKEYDOWN,WM_SYSKEYUP};
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetKeyboardState,SetKeyboardState};
+    use std::ptr::{null,null_mut};
+    let(root,ctx,mut app,zip)=alt_q_fixture("native-alt-q-win32");
+    let class:Vec<u16>="STATIC".encode_utf16().chain(Some(0)).collect();
+    let hwnd=unsafe{CreateWindowExW(0,class.as_ptr(),null(),0,0,0,1,1,HWND_MESSAGE,null_mut(),null_mut(),null())};
+    assert!(!hwnd.is_null(),"owned message-only test HWND");
+    struct OwnedWindow(windows_sys::Win32::Foundation::HWND);
+    impl Drop for OwnedWindow{fn drop(&mut self){unsafe{DestroyWindow(self.0);}}}
+    let window=OwnedWindow(hwnd);
+    ndr::shell_menu::install_paste_key_hook(hwnd as isize).unwrap();
+    ndr::shell_menu::take_native_alt_keys();
+    // GetKeyState belongs to this test thread; no SendInput, no user
+    // window activation, and no change to another thread's key state.
+    let mut saved=[0u8;256];
+    assert_ne!(unsafe{GetKeyboardState(saved.as_mut_ptr())},0);
+    let mut clear=saved;
+    for k in [0x10,0x11,0x12,0xa0,0xa1,0xa2,0xa3,0xa4,0xa5]{clear[k]=0;}
+    assert_ne!(unsafe{SetKeyboardState(clear.as_ptr())},0);
+    let lparam=(1isize<<29)|(0x10<<16)|1;
+    unsafe{SendMessageW(hwnd,WM_SYSKEYDOWN,b'Q' as usize,lparam);SendMessageW(hwnd,WM_SYSKEYUP,b'Q' as usize,lparam|(1isize<<30)|(1isize<<31));SetKeyboardState(saved.as_ptr());}
+    // Deliberately supply no egui Key(Q): only the Windows message
+    // received by the actual main-window subclass can recover the chord.
+    let mut raw=egui::RawInput{events:vec![egui::Event::Ime(egui::ImeEvent::Commit("b".into()))],focused:true,..Default::default()};
+    eframe::App::raw_input_hook(&mut app,&ctx,&mut raw);
+    assert!(raw.events.iter().any(|e|matches!(e,egui::Event::Key{key:egui::Key::Q,pressed:true,modifiers:m,..} if m.alt)));
+    let _=ctx.run(raw,|ctx|app.keyboard(ctx));
+    assert!(app.job.is_some(),"actual Win32 chord must start extraction");
+    finish_archive_clipboard_job(&mut app,&ctx);
+    assert_eq!(fs::read(root.join("left/auto-test/a.txt")).unwrap(),b"a");
+    assert!(zip.is_file());
+    let trace=fs::read_to_string(root.join("profile/cache/shortcut-diagnostics.log")).unwrap();
+    assert!(trace.contains("native=1 recovered=1"));
+    assert!(trace.contains("stage=start started=true"));
+    assert!(!trace.contains(&root.to_string_lossy().to_string()));
+    drop(window);drop(app);fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn alt_q_inside_open_archive_extracts_whole_container(){
+    let(root,ctx,mut app,zip)=alt_q_fixture("alt-q-open-archive");
+    app.open_current();
+    wait(&mut app,&ctx);
+    assert!(app.panes[0].archive.is_some());
+    app.panes[0].selected.clear();
+    app.panes[0].cursor=0;
+    alt_q_frame(&mut app,&ctx,false,NONE);
+    assert!(app.job.is_some(),"open archive must not silently ignore Auto Extract");
+    finish_archive_clipboard_job(&mut app,&ctx);
+    assert_eq!(fs::read(root.join("left/auto-test/a.txt")).unwrap(),b"a");
+    assert!(zip.is_file());
+    drop(app);fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn alt_q_same_frame_list_press_extracts_new_selection(){
+    let(root,ctx,mut app,_)=alt_q_fixture("alt-q-fast-click");
+    let right=root.join("right");
+    let zip=right.join("new.zip");
+    ndr::archive::create(&[root.join("left/b.txt")],&zip,None,&AtomicBool::new(false)).unwrap();
+    app.settings.set_text("LeftViewStyle","Details");
+    app.settings.set_text("RightViewStyle","Details");
+    app.refresh(1);wait(&mut app,&ctx);
+    draw_panes(&mut app,&ctx);
+    app.active=0;
+    // In this fixture the right pane has a parent row and a ZIP.
+    let pane=&app.panes[1];
+    let row=pane.entries.iter().position(|e|e.path==zip).unwrap();
+    let rect=pane.list_rect.unwrap();
+    let height=(app.list_text_height().unwrap_or(14.0)+2.0).max(16.0)+app.list_line_space();
+    let pos=egui::pos2(rect.left()+20.0,rect.top()+(row as f32+0.5)*height);
+    let events=vec![
+        egui::Event::PointerMoved(pos),
+        egui::Event::PointerButton{pos,button:egui::PointerButton::Primary,pressed:true,modifiers:NONE},
+        egui::Event::Key{key:egui::Key::Q,physical_key:Some(egui::Key::Q),pressed:true,repeat:false,modifiers:ALT},
+        egui::Event::Key{key:egui::Key::Q,physical_key:Some(egui::Key::Q),pressed:false,repeat:false,modifiers:NONE},
+    ];
+    let raw=egui::RawInput{events,screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(1400.0,850.0))),..Default::default()};
+    let _=ctx.run(raw,|ctx|{
+        assert!(app.keyboard_after_list_press(ctx));
+        egui::CentralPanel::default().show(ctx,|ui|ui.columns(2,|columns|{
+            app.pane_ui(&mut columns[0],0,ctx);
+            app.pane_ui(&mut columns[1],1,ctx);
+        }));
+        assert_eq!(app.active,1);
+        assert_eq!(app.panes[1].entries[app.panes[1].cursor].path,zip);
+        app.keyboard(ctx);
+    });
+    assert!(app.job.is_some());
+    finish_archive_clipboard_job(&mut app,&ctx);
+    assert_eq!(fs::read(right.join("new/b.txt")).unwrap(),b"b");
+    assert!(!root.join("left/auto-test").exists());
+    drop(app);fs::remove_dir_all(root).unwrap();
+}
+
 fn shortcut_batch(app:&mut App,ctx:&egui::Context, key:egui::Key, modifiers:egui::Modifiers, ime:bool){
     let mut events=vec![egui::Event::Key{key:egui::Key::A,physical_key:None,pressed:true,repeat:false,modifiers:NONE}];
     if ime{events.push(egui::Event::Ime(egui::ImeEvent::Commit("b".into())));}
@@ -284,6 +402,149 @@ fn finish_archive_clipboard_job(app: &mut App, ctx: &egui::Context) {
         }
         assert!(Instant::now() < until, "archive clipboard operation timed out: {}", app.status);
         thread::sleep(Duration::from_millis(5));
+    }
+}
+
+#[test]
+fn archive_each_context_menu_uses_actual_selection_and_supported_formats(){
+    let (root,ctx,mut app)=fixture("archive-each-menu","ko");
+    let left=root.join("left");
+    let cancel=AtomicBool::new(false);
+    ndr::archive::create(&[left.join("a.txt")],&left.join("one.ZIP"),None,&cancel).unwrap();
+    ndr::archive::create(&[left.join("b.txt")],&left.join("two.7z"),None,&cancel).unwrap();
+    fs::write(left.join("unsupported.ace"),b"unsupported").unwrap();
+    fs::create_dir(left.join("folder.zip")).unwrap();
+    app.refresh(0);wait(&mut app,&ctx);app.active=0;
+    let row=|app:&App,name:&str|app.panes[0].entries.iter().position(|e|e.name==name).unwrap();
+    let flags=|app:&App|{
+        let items=app.list_menu_items(0);
+        let enabled=|id:&str|items.iter().flatten().find(|(_,c,_)|*c==id).unwrap().2;
+        (enabled("archiveAdd"),enabled("compressEach"),enabled("extractAuto"),enabled("extractEach"))
+    };
+    for name in ["a.txt","folder1","folder.zip","unsupported.ace"]{
+        app.panes[0].cursor=row(&app,name);
+        assert_eq!(flags(&app),(true,false,false,false),"{name}");
+        assert_eq!(app.archive_menu_state().item("extractAuto"),(true,false));
+    }
+    for name in ["one.ZIP","two.7z"]{
+        app.panes[0].cursor=row(&app,name);
+        assert_eq!(flags(&app),(true,false,true,true),"{name}");
+        assert_eq!(app.archive_menu_state().item("extractAuto"),(true,true));
+    }
+    let (txt,one,two,dir)=(row(&app,"a.txt"),row(&app,"one.ZIP"),row(&app,"two.7z"),row(&app,"folder1"));
+    app.panes[0].selected=[txt,one].into_iter().collect();
+    assert_eq!(flags(&app),(true,true,false,false));
+    app.dispatch("extractEach",&ctx);
+    assert!(app.job.is_none());
+    app.panes[0].selected=[txt,dir].into_iter().collect();
+    assert_eq!(flags(&app),(true,true,false,false));
+    app.panes[0].selected=[one,two].into_iter().collect();
+    assert_eq!(flags(&app),(true,true,true,true));
+    app.panes[0].loading=true;
+    assert_eq!(flags(&app),(false,false,false,false));
+    app.panes[0].loading=false;
+    app.panes[0].selected.clear();
+    app.panes[0].cursor=one;
+    app.open_current();wait(&mut app,&ctx);
+    assert!(app.panes[0].archive.is_some());
+    assert_eq!(flags(&app),(false,false,true,false));
+    drop(app);fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn archive_each_compress_menu_dispatch_creates_separate_zip_archives(){
+    let(root,ctx,mut app)=fixture("archive-each-compress","ko");
+    let left=root.join("left");
+    fs::write(left.join("folder1/nested.txt"),b"folder payload").unwrap();
+    let a=app.panes[0].entries.iter().position(|e|e.name=="a.txt").unwrap();
+    let b=app.panes[0].entries.iter().position(|e|e.name=="b.txt").unwrap();
+    let dir=app.panes[0].entries.iter().position(|e|e.name=="folder1").unwrap();
+    app.active=0;app.panes[0].selected=[a,b,dir].into_iter().collect();
+    app.dispatch("compressEach",&ctx);
+    assert!(app.job.is_some());
+    finish_archive_clipboard_job(&mut app,&ctx);
+    for (name,key) in [("a.zip","a.txt"),("b.zip","b.txt"),("folder1.zip","folder1/nested.txt")]{
+        let entries=ndr::archive::list(&left.join(name),None).unwrap();
+        assert_eq!(entries.iter().filter(|e|!e.is_dir).map(|e|e.key.replace('\\',"/")).collect::<Vec<_>>(),vec![key.to_owned()],"{name}");
+    }
+    assert_eq!(fs::read(left.join("a.txt")).unwrap(),b"a");
+    assert_eq!(fs::read(left.join("b.txt")).unwrap(),b"b");
+    assert_eq!(fs::read(left.join("folder1/nested.txt")).unwrap(),b"folder payload");
+    drop(app);fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn archive_each_extract_uses_unique_named_folders_even_for_single_root(){
+    let(root,ctx,mut app)=fixture("archive-each-extract","ko");
+    let left=root.join("left");
+    let cancel=AtomicBool::new(false);
+    fs::write(left.join("folder1/nested.txt"),b"inside root").unwrap();
+    ndr::archive::create(&[left.join("folder1")],&left.join("same.zip"),None,&cancel).unwrap();
+    ndr::archive::create(&[left.join("a.txt")],&left.join("same.7z"),None,&cancel).unwrap();
+    fs::create_dir(left.join("same")).unwrap();
+    fs::write(left.join("same/keep.txt"),b"preserve").unwrap();
+    app.refresh(0);wait(&mut app,&ctx);
+    app.active=0;app.panes[0].selected=app.panes[0].entries.iter().enumerate().filter(|(_,e)|matches!(e.name.as_str(),"same.zip"|"same.7z")).map(|(i,_)|i).collect();
+    assert_eq!(app.panes[0].selected.len(),2);
+    app.dispatch("extractEach",&ctx);
+    assert!(app.job.is_some());
+    finish_archive_clipboard_job(&mut app,&ctx);
+    let folders=[left.join("same(2)"),left.join("same(3)")];
+    assert_eq!(folders.iter().filter(|p|p.join("folder1/nested.txt").is_file()).count(),1);
+    assert_eq!(folders.iter().filter(|p|p.join("a.txt").is_file()).count(),1);
+    assert_eq!(fs::read(left.join("same/keep.txt")).unwrap(),b"preserve");
+    assert!(left.join("same.zip").is_file()&&left.join("same.7z").is_file());
+    drop(app);fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn archive_each_extract_deduplicates_multipart_set_and_removes_composite_suffix(){
+    let(root,ctx,mut app)=fixture("archive-each-split","en");
+    let left=root.join("left");let cancel=AtomicBool::new(false);
+    let payload:Vec<u8>=(0..8192).map(|i|(i%251)as u8).collect();
+    fs::write(left.join("payload.bin"),&payload).unwrap();
+    let options=ndr::commands::ArchiveOptions{extension:"7z".into(),level:0,password:String::new(),volume_bytes:Some(1024),recursive:true,append:false};
+    ndr::archive::create_configured(&[left.join("payload.bin")],&left.join("split.7z"),&options,&cancel).unwrap();
+    let options=ndr::commands::ArchiveOptions{extension:"tar.gz".into(),level:5,password:String::new(),volume_bytes:None,recursive:true,append:false};
+    ndr::archive::create_configured(&[left.join("b.txt")],&left.join("bundle.tar.gz"),&options,&cancel).unwrap();
+    app.refresh(0);wait(&mut app,&ctx);app.active=0;
+    app.panes[0].selected=app.panes[0].entries.iter().enumerate().filter(|(_,e)|e.name.starts_with("split.7z.")||e.name=="bundle.tar.gz").map(|(i,_)|i).collect();
+    assert!(app.panes[0].selected.len()>3);
+    assert!(app.archive_selection_state(0).1);
+    app.dispatch("extractEach",&ctx);
+    assert!(app.job.is_some());
+    finish_archive_clipboard_job(&mut app,&ctx);
+    assert_eq!(fs::read(left.join("split/payload.bin")).unwrap(),payload);
+    // Like the existing bundled 7-Zip extraction, tar.gz unwraps one
+    // compression layer. Check the named directory and validate the
+    // actual TAR member, rather than assuming recursive decompression.
+    let outer=ndr::archive::list(&left.join("bundle.tar.gz"),None).unwrap();
+    let member=outer.iter().find(|e|!e.is_dir).unwrap();
+    let inner=left.join("bundle").join(&member.key);
+    assert!(inner.is_file(),"the GZip member must be extracted into bundle");
+    let tar=ndr::archive::list(&inner,None).unwrap();
+    assert_eq!(tar.iter().filter(|e|!e.is_dir).map(|e|e.key.as_str()).collect::<Vec<_>>(),vec!["b.txt"]);
+    assert!(!left.join("split(2)").exists()&&!left.join("bundle.tar").exists());
+    drop(app);fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn archive_each_all_40_languages_have_primary_menu_labels(){
+    let directory=resource_dir().join("Languages");
+    let codes=compat::available_codes(&directory);
+    assert_eq!(codes.len(),40);
+    let keys=["formMain.Menu.miArcExtractAuto","formMain.Menu.mipArcExtractAuto","formMain.Menu.mipCompressEach","formMain.Menu.mipExtractEach","NDR.OP_ARCHIVE_INDIVIDUAL_ZIP_DONE"];
+    for code in codes{
+        let language=compat::Language::load(&directory,&code);
+        for key in keys{
+            let text=language.primary_raw(key).unwrap_or_else(||panic!("{code}: {key} missing"));
+            assert!(!text.is_empty()&&!text.contains('�'),"{code}: {key}: {text}");
+        }
+        if code=="ko"{
+            assert_eq!(language.primary_raw(keys[1]),Some("&Q. 알아서 압축 풀기"));
+            assert_eq!(language.primary_raw(keys[2]),Some("각 파일/폴더명으로 압축하기"));
+            assert_eq!(language.primary_raw(keys[3]),Some("각 파일명으로 압축 풀기"));
+        }
     }
 }
 
@@ -785,8 +1046,10 @@ fn list_right_click_menu_follows_the_original_context_popup() {
     let commands: Vec<(&str, bool)> = items.iter().flatten().map(|(_, command, enabled)| (*command, *enabled)).collect();
     assert_eq!(commands.first().map(|c| c.0), Some("explorerMenu"), "{commands:?}");
     for (command, enabled) in &commands {
-        if *command != "paste" {
-            assert!(enabled, "{command} is enabled like the original pmMain");
+        if matches!(*command,"extractAuto"|"extractEach"|"compressEach"){
+            assert!(!enabled,"{command} must be disabled for one ordinary file");
+        }else if *command != "paste" {
+            assert!(enabled, "{command} is enabled for the selected ordinary file");
         }
     }
     assert!(commands.iter().any(|c| c.0 == "openWith"), "a focused file shows open with / view / edit");

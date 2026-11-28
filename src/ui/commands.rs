@@ -684,8 +684,8 @@ impl App {
                 // drive, not a pseudo path beneath the physical .ndr file.
                 "advancedRename" | "batchRename" |
                 "extractSelected" | "extractCurrent" | "extractNewFolder" |
-                "extractAuto" | "extractToolbar" | "contextAutoExtract" |
-                "archiveAdd" | "archiveMove" | "contextArchiveAdd" |
+                "extractAuto" | "extractEach" | "extractToolbar" | "contextAutoExtract" |
+                "compressEach" | "archiveAdd" | "archiveMove" | "contextArchiveAdd" |
                 "createArchive" | "createZip" | "checksum" |
                 "archiveProperties" | "properties" | "attributes" | "contextAttributes" | "copyFullPath" |
                 "copyPathOnly" | "copyName" | "copyFolder" |
@@ -790,10 +790,10 @@ impl App {
         let i = self.active;
         // Original CopySelection (-> +0xd08): starting copy, move, delete, shred, description, advanced rename, rename, attributes, extract, add to archive or
         // create shortcut saves the current marks for "Restore Selection" (skin theme). Save list and merge save them only when confirmed.
-        const REMEMBERS: [&str; 25] = [
+        const REMEMBERS: [&str; 27] = [
             "copyToOther", "moveToOther", "copyToFolder", "moveToFolder", "contextCopyTo", "contextMoveTo", "deleteRecycle", "deletePermanent", "contextDelete", "shred",
             "description", "contextDescription", "advancedRename", "rename", "contextRename", "attributes", "contextAttributes",
-            "extractSelected", "extractCurrent", "extractNewFolder", "extractAuto", "contextAutoExtract", "archiveAdd", "shortcut", "batchRename",
+            "extractSelected", "extractCurrent", "extractNewFolder", "extractAuto", "extractEach", "contextAutoExtract", "archiveAdd", "compressEach", "shortcut", "batchRename",
         ];
         if REMEMBERS.contains(&id) {
             self.remember_marks();
@@ -944,6 +944,8 @@ impl App {
             "join"=>self.join_command(),"merge"=>self.merge_text_files_command(),
             "archiveAdd"=>self.archive_command(super::archive_dialog::ArchiveKind::Add),"archiveMove"=>self.archive_command(super::archive_dialog::ArchiveKind::Move),"createArchive"=>self.archive_command(super::archive_dialog::ArchiveKind::Create),"createZip"=>self.archive_command(super::archive_dialog::ArchiveKind::Zip),
             "extractSelected"=>self.extract_command(super::archive_dialog::ExtractMode::Selected),"extractCurrent"=>self.extract_command(super::archive_dialog::ExtractMode::CurrentFolder),"extractNewFolder"=>self.extract_command(super::archive_dialog::ExtractMode::NewFolder),"extractAuto"=>self.extract_command(super::archive_dialog::ExtractMode::Auto),
+            "compressEach"=>self.compress_each_command(),
+            "extractEach"=>self.extract_command(super::archive_dialog::ExtractMode::Each),
             "archiveInstall"=>self.install_archive_command(),
             "command"=>self.command_prompt(),
             "openWithParameters"=>self.open_with_parameters(),"openWith"=>self.open_with_command(),

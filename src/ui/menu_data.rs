@@ -135,7 +135,7 @@ pub const MENUS: &[(&str,&str,&str,&[(&str,&str,&str)])] = &[
 ("extractSelected","선택 항목 압축 풀기…","Extract..."),
 ("extractCurrent","현재 폴더에 압축 풀기","Extract into current folder"),
 ("extractNewFolder","새 폴더를 만들어 압축 풀기","Extract after creating a new folder"),
-("extractAuto","자동 압축 풀기","Auto Extract"),
+("extractAuto","알아서 압축 풀기","Smart extract"),
 ("-","",""),
 ("archiveInstall","압축 파일 설치…","Archive install"),
 ("-","",""),

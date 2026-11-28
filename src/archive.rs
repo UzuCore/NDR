@@ -243,7 +243,20 @@ pub fn create_with_progress(
     cancel: &AtomicBool,
     progress: Option<ProgressSink>,
 ) -> Result<(), String> {
+    create_with_progress_policy(sources,output,options,program,cancel,progress,false)
+}
+
+/// The ordinary archive editor can replace a confirmed archive family.
+/// Individual compression must never replace or append to any destination.
+fn create_with_progress_policy(
+    sources:&[PathBuf], output:&Path, options:&crate::commands::ArchiveOptions,
+    program:Option<&ExternalProgram>, cancel:&AtomicBool, progress:Option<ProgressSink>,
+    new_zip_only:bool,
+)->Result<(),String>{
     check_cancel(cancel)?;
+    if new_zip_only && (options.append || options.volume_bytes.is_some() || program.is_some() || options.extension!="zip") {
+        return Err("Individual ZIP creation requires a new, unsplit ZIP archive".into());
+    }
     if sources.is_empty() {
         return Err("No archive sources".into());
     }
@@ -454,12 +467,92 @@ pub fn create_with_progress(
         execute(verify, cancel)?;
         check_cancel(cancel)?;
         drop(direct);
-        commit_artifacts(&output_stage, parent, expected, cancel)
+        if new_zip_only {
+            // A new ZIP is a single validated artifact. Publish with a
+            // no-replace move, including if a competing file appeared
+            // after the name was reserved. Never call the replacing
+            // family commit used by the regular archive editor.
+            let staged=output_stage.join(expected);
+            ensure_plain_path(&staged)?;
+            if !staged.is_file() || fs::read_dir(&output_stage).map_err(|e|e.to_string())?.count()!=1 {
+                return Err("Individual ZIP must produce exactly one archive".into());
+            }
+            ensure_plain_path(output)?;
+            rename_new(&staged,output)
+        }else{
+            commit_artifacts(&output_stage, parent, expected, cancel)
+        }
     })();
     let _ = fs::remove_dir_all(&snapshot);
     let _ = fs::remove_dir_all(&output_stage);
     result
 }
+/// UzuCore 7zip CompressFilesEach / GUI a-each: one independent ZIP
+/// per source, file stem or full folder name, with numbered collisions.
+/// Scan the destination directory once (not once per selected item).
+/// Existing archives, directories, split ZIP families and sources are
+/// never overwritten. Stop on cancellation/error; completed ZIPs stay.
+pub type EachZipProgress=std::sync::Arc<dyn Fn(usize,&str)+Send+Sync>;
+pub fn create_each_zip(sources:&[PathBuf],folder:&Path,cancel:&AtomicBool,progress:Option<EachZipProgress>)->Result<Vec<PathBuf>,String>{
+    check_cancel(cancel)?;
+    if sources.is_empty(){return Err("No archive sources".into());}
+    ensure_plain_path(folder)?;
+    let directory=resolve_archive_path(folder)?;
+    let mut occupied=HashSet::new();
+    let mut zip_families=HashSet::new();
+    for item in fs::read_dir(folder).map_err(|e|e.to_string())?{
+        check_cancel(cancel)?;
+        let item=item.map_err(|e|e.to_string())?;
+        let path=item.path();
+        if archive_format(&path).as_deref()==Some("zip"){
+            occupied.insert(item.file_name().to_string_lossy().to_lowercase());
+            zip_families.insert(base_name(&path).to_lowercase());
+        }
+    }
+    let options=crate::commands::ArchiveOptions{
+        extension:"zip".into(),level:5,password:String::new(),volume_bytes:None,recursive:true,append:false,
+    };
+    let mut created=Vec::with_capacity(sources.len());
+    for (index,source) in sources.iter().enumerate(){
+        check_cancel(cancel)?;
+        ensure_plain_path(source)?;
+        let meta=fs::symlink_metadata(source).map_err(|e|e.to_string())?;
+        if is_reparse(&meta)||(!meta.is_file()&&!meta.is_dir()){return Err("Unsupported archive source".into());}
+        if meta.is_dir()&&directory.starts_with(resolve_archive_path(source)?){
+            return Err("Archive destination lies inside a selected source folder".into());
+        }
+        let stem=if meta.is_dir(){source.file_name()}else{source.file_stem()}
+            .and_then(|n|n.to_str()).filter(|s|!s.is_empty()).ok_or("Invalid archive source name")?;
+        let mut chosen=None;
+        for number in 1..=100_000u32{
+            let base=if number==1{stem.to_owned()}else{format!("{stem} ({number})")};
+            let name=format!("{base}.zip");
+            validate_key(&name)?;
+            let name_key=name.to_lowercase();
+            let base_key=base.to_lowercase();
+            if occupied.contains(&name_key)||zip_families.contains(&base_key){continue;}
+            let output=folder.join(&name);
+            match fs::symlink_metadata(&output){
+                Ok(_)=>{occupied.insert(name_key);continue;}
+                Err(e) if e.kind()==std::io::ErrorKind::NotFound=>{},
+                Err(e)=>return Err(e.to_string()),
+            }
+            // Also reserve the chosen name against later selected items.
+            occupied.insert(name_key);zip_families.insert(base_key);
+            chosen=Some(output);break;
+        }
+        let output=chosen.ok_or("No unused ZIP archive name")?;
+        let label=source.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        // Progress counts completed selected items, not synthetic byte
+        // totals. The source label updates before every individual ZIP.
+        if let Some(sink)=&progress{sink(index,&label);}
+        create_with_progress_policy(std::slice::from_ref(source),&output,&options,None,cancel,None,true)?;
+        created.push(output);
+        if let Some(sink)=&progress{sink(index+1,&label);}
+    }
+    Ok(created)
+}
+
 /// Locate configured/bundled resources, or the Rust project's debug resources.
 pub fn seven_zip_path() -> Result<PathBuf, String> {
     let mut roots = Vec::new();
@@ -3562,6 +3655,57 @@ mod tests {
         assert!(verify_extracted_manifest(&root,extraction_manifest(std::slice::from_ref(&entry)).unwrap(),&cancel).is_err());
         let mut collision=entry.clone();collision.key="sub".into();
         assert!(extraction_manifest(&[entry,collision]).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn archive_each_zip_names_and_collisions_preserve_every_source(){
+        let root=fixture();
+        let cancel=AtomicBool::new(false);
+        let dir=root.join("folder.with.dot");
+        fs::create_dir(&dir).unwrap();
+        fs::write(dir.join("nested.txt"),b"nested").unwrap();
+        let a=root.join("same.txt");let b=root.join("same.bin");
+        fs::write(&a,b"first").unwrap();fs::write(&b,b"second").unwrap();
+        let original=root.join("same.zip");
+        fs::write(&original,b"existing archive sentinel").unwrap();
+        let split=root.join("same (2).zip.001");
+        fs::write(&split,b"existing volume sentinel").unwrap();
+        fs::create_dir(root.join("same (3).zip")).unwrap();
+        let created=create_each_zip(&[a.clone(),b.clone(),dir.clone()],&root,&cancel,None).unwrap();
+        assert_eq!(created,vec![root.join("same (4).zip"),root.join("same (5).zip"),root.join("folder.with.dot.zip")]);
+        let keys=|p:&Path|list(p,None).unwrap().into_iter().filter(|e|!e.is_dir).map(|e|e.key.replace('\\',"/")).collect::<Vec<_>>();
+        assert_eq!(keys(&created[0]),vec!["same.txt".to_owned()]);
+        assert_eq!(keys(&created[1]),vec!["same.bin".to_owned()]);
+        assert_eq!(keys(&created[2]),vec!["folder.with.dot/nested.txt".to_owned()]);
+        assert_eq!(fs::read(a).unwrap(),b"first");
+        assert_eq!(fs::read(b).unwrap(),b"second");
+        assert_eq!(fs::read(dir.join("nested.txt")).unwrap(),b"nested");
+        assert_eq!(fs::read(original).unwrap(),b"existing archive sentinel");
+        assert_eq!(fs::read(split).unwrap(),b"existing volume sentinel");
+        assert!(root.join("same (3).zip").is_dir());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn archive_each_zip_atomic_publication_refuses_existing_output(){
+        let root=fixture();
+        let source=root.join("source.txt");let dest=root.join("destination.zip");
+        fs::write(&source,b"source").unwrap();
+        fs::write(&dest,b"do not overwrite").unwrap();
+        let options=crate::commands::ArchiveOptions{
+            extension:"zip".into(),level:5,password:String::new(),volume_bytes:None,recursive:true,append:false,
+        };
+        assert!(create_with_progress_policy(&[source.clone()],&dest,&options,None,&AtomicBool::new(false),None,true).is_err());
+        assert_eq!(fs::read(&dest).unwrap(),b"do not overwrite");
+        assert_eq!(fs::read(&source).unwrap(),b"source");
+        assert_eq!(fs::read_dir(&root).unwrap().count(),2);
+        assert!(create_each_zip(&[source],&root,&AtomicBool::new(true),None).is_err());
+        assert_eq!(fs::read_dir(&root).unwrap().count(),2);
+        // The individual writer must also reject a folder that contains
+        // its destination (including the destination folder itself).
+        assert!(create_each_zip(&[root.clone()],&root,&AtomicBool::new(false),None).is_err());
+        assert_eq!(fs::read_dir(&root).unwrap().count(),2);
         fs::remove_dir_all(root).unwrap();
     }
 

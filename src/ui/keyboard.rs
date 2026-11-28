@@ -7,6 +7,53 @@
 use super::remote_window::wpf_key;
 use super::*;
 
+/// Convert an owned-window Win32 Alt press back to the original key
+/// namespace. A native chord is authoritative only for a configured
+/// command, never for text input, AltGr or an OS-reserved chord.
+fn alt_virtual_key(vk:u16)->Option<egui::Key>{
+    match vk{
+        0x30..=0x39|0x41..=0x5a=>egui::Key::from_name(&(vk as u8 as char).to_string()),
+        0x70..=0x7b=>egui::Key::from_name(&format!("F{}",vk-0x70+1)),
+        0x0d=>Some(egui::Key::Enter),0x21=>Some(egui::Key::PageUp),0x22=>Some(egui::Key::PageDown),
+        0x23=>Some(egui::Key::End),0x24=>Some(egui::Key::Home),0x25=>Some(egui::Key::ArrowLeft),
+        0x26=>Some(egui::Key::ArrowUp),0x27=>Some(egui::Key::ArrowRight),0x28=>Some(egui::Key::ArrowDown),
+        0xba=>Some(egui::Key::Semicolon),0xbb=>Some(egui::Key::Equals),0xbc=>Some(egui::Key::Comma),
+        0xbd=>Some(egui::Key::Minus),0xbe=>Some(egui::Key::Period),0xbf=>Some(egui::Key::Slash),
+        0xc0=>Some(egui::Key::Backtick),0xdb=>Some(egui::Key::OpenBracket),0xdc=>Some(egui::Key::Backslash),
+        0xdd=>Some(egui::Key::CloseBracket),0xde=>Some(egui::Key::Quote),_=>None,
+    }
+}
+
+pub(super) fn restore_native_alt_shortcuts(raw:&mut egui::RawInput,presses:&[ndr::shell_menu::NativeAltKey],custom:Option<&str>)->usize{
+    if presses.is_empty(){return 0;}
+    let map=compat::ShortcutMap::parse(custom);
+    let mut used=vec![false;raw.events.len()];
+    let mut recovered=0;
+    for press in presses{
+        let Some(key)=alt_virtual_key(press.vk)else{continue};
+        let modifiers=egui::Modifiers{alt:true,shift:press.shift,..Default::default()};
+        if map.resolve(compat::text_to_shortcut(&original_shortcut_text(key,modifiers))).is_none(){continue;}
+        let matching=|e:&egui::Event|matches!(e,egui::Event::Key{key:k,physical_key,pressed:true,modifiers:m,..}
+            if !m.ctrl && (*k==key||*physical_key==Some(key)));
+        let preferred=raw.events.iter().take(used.len()).enumerate().position(|(i,e)|!used[i]&&matching(e)&&matches!(e,egui::Event::Key{modifiers:m,..} if m.alt));
+        let index=preferred.or_else(||raw.events.iter().take(used.len()).enumerate().position(|(i,e)|!used[i]&&matching(e)));
+        if let Some(i)=index{
+            used[i]=true;
+            if let egui::Event::Key{key:k,physical_key,modifiers:m,..}=&mut raw.events[i]{
+                if *k!=key||*m!=modifiers{recovered+=1;}
+                *k=key;*physical_key=Some(key);*m=modifiers;
+            }
+        }else{
+            raw.events.push(egui::Event::Key{key,physical_key:Some(key),pressed:true,repeat:false,modifiers});
+            // A framework release can exist without a press. Keep key
+            // state from remaining latched when Alt has already gone up.
+            if !raw.modifiers.alt{raw.events.push(egui::Event::Key{key,physical_key:Some(key),pressed:false,repeat:false,modifiers:raw.modifiers});}
+            recovered+=1;
+        }
+    }
+    recovered
+}
+
 #[derive(Debug)]
 pub(super) enum DeferredListAction {
     Dispatch(String),
@@ -37,7 +84,7 @@ pub(super) fn selection_command(id:&str)->bool{
         "copyToFolder"|"moveToFolder"|"deleteRecycle"|"deletePermanent"|"deleteToolbar"|"shred"|
         "textView"|"textEdit"|"properties"|"attributes"|"archiveProperties"|"description"|
         "checksum"|"calculateFolderSize"|"split"|"join"|"merge"|"archiveAdd"|"archiveMove"|
-        "createArchive"|"createZip"|"extractSelected"|"extractCurrent"|"extractNewFolder"|
+        "createArchive"|"createZip"|"compressEach"|"extractEach"|"extractSelected"|"extractCurrent"|"extractNewFolder"|
         "extractToolbar"|"archiveInstall"|"shortcut"|"explorerMenu"|
         "contextView"|"contextEdit"|"contextCopy"|"contextCut"|"contextCopyTo"|"contextMoveTo"|
         "contextDelete"|"contextRename"|"contextAttributes"|"contextDescription"|
@@ -62,6 +109,64 @@ impl App {
         ctx.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
     }
 
+    /// Use the previous frame's actual list rectangle, never an address
+    /// bar, tree, toolbar, or floating window.
+    pub(super) fn list_press_pane(&self,ctx:&egui::Context,events:&[egui::Event])->Option<usize>{
+        events.iter().find_map(|e|match e{
+            egui::Event::PointerButton{pos,button:egui::PointerButton::Primary,pressed:true,..}
+                if ctx.layer_id_at(*pos).is_none_or(|l|l.order==egui::Order::Background)
+                =>self.panes.iter().enumerate().find(|(_,p)|p.list_rect.is_some_and(|r|r.contains(*pos))).map(|(i,_)|i),
+            _=>None,
+        })
+    }
+
+    pub(super) fn release_list_text_focus(&mut self,ctx:&egui::Context){
+        if let Some(id)=ctx.memory(|m|m.focused()){
+            if id==egui::Id::new("ndr-toolbar-query")||id==egui::Id::new(("ndr-address",0usize))||id==egui::Id::new(("ndr-address",1usize)){
+                ctx.memory_mut(|m|m.surrender_focus(id));
+                for pane in 0..2{if self.panes[pane].address_editing{self.end_address_edit(pane);}}
+            }
+        }
+    }
+
+    /// If the click and Alt chord arrived in the same batch, draw and
+    /// apply the row press first. Never run against the old pane/cursor.
+    pub(super) fn keyboard_after_list_press(&mut self,ctx:&egui::Context)->bool{
+        let events=ctx.input(|i|{
+            (i.pointer.primary_pressed()&&i.events.iter().any(|e|matches!(e,egui::Event::Key{pressed:true,modifiers:m,..} if m.alt&&!m.ctrl))).then(||i.events.clone())
+        });
+        let Some(events)=events else{return false};
+        let map=compat::ShortcutMap::parse(self.settings.values.get("OriginalShortcutMapText").and_then(|v|v.as_str()));
+        let bound=events.iter().any(|e|match e{
+            egui::Event::Key{key,pressed:true,modifiers:m,..} if m.alt&&!m.ctrl=>map.resolve(compat::text_to_shortcut(&original_shortcut_text(*key,*m))).is_some(),
+            _=>false,
+        });
+        let pending=if bound{self.list_press_pane(ctx,&events)}else{None};
+        if pending.is_some()&&!self.keyboard_blocked(ctx){
+            self.release_list_text_focus(ctx);
+            self.menu_letter=None;
+            self.menu_access=None;
+            true
+        }else{false}
+    }
+
+    /// Only Alt+Q/extraction diagnostics, stored locally and bounded.
+    /// Never record actual paths, text input, clipboard, or passwords.
+    pub(super) fn trace_auto_extract(&self,stage:&str,detail:&str){
+        use std::io::Write;
+        let dir=self.profile.join("cache");
+        let path=dir.join("shortcut-diagnostics.log");
+        if ndr::fsops::ensure_plain_path(&path).is_err(){return;}
+        if std::fs::create_dir_all(&dir).is_err(){return;}
+        let reset=std::fs::metadata(&path).is_ok_and(|m|m.len()>=64*1024);
+        let mut options=std::fs::OpenOptions::new();
+        options.create(true).write(true);
+        if reset{options.truncate(true);}else{options.append(true);}
+        if let Ok(mut file)=options.open(path){
+            let _=writeln!(file,"{} stage={} {}",chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"),stage,detail);
+        }
+    }
+
     pub(super) fn keyboard(&mut self,ctx:&egui::Context){
         self.shortcut_routing=true;
         self.keyboard_inner(ctx);
@@ -74,6 +179,14 @@ impl App {
     }
 
     fn keyboard_inner(&mut self, ctx: &egui::Context) {
+        let auto=ctx.input(|i|i.events.iter().any(|e|matches!(e,egui::Event::Key{key:egui::Key::Q,pressed:true,modifiers:m,..} if m.alt&&!m.ctrl&&!m.shift)));
+        if auto{
+            let p=&self.panes[self.active];
+            self.trace_auto_extract("keyboard",&format!("pane={} loading={} archive={} remote={} vault={} marked={} cursor={} job_block={} dialogs={} messages={} popup={} focused={} wants_keyboard={}",
+                self.active,p.loading,p.archive.is_some(),p.remote.is_some(),p.vault.is_some(),p.selected.len(),p.cursor,
+                self.job.as_ref().is_some_and(|j|!j.finished),self.original_dialogs.len(),self.msgboxes.len(),self.popup.is_some()||egui::Popup::is_any_open(ctx),
+                ctx.input(|i|i.focused),ctx.wants_keyboard_input()));
+        }
         self.menu_letter = None;
         self.menu_targets_seen = std::mem::take(self.menu_targets.get_mut());
         // Key focus of the pane folder tree: returns to the list when another pane becomes current or the pane is clicked outside the tree (the list).

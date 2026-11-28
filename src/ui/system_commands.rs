@@ -72,6 +72,7 @@ pub(super) fn palette_visuals(palette: &ThemePalette) -> egui::Visuals {
 pub(super) struct ArchiveMenuState {
     pub selected: bool,
     pub current: bool,
+    pub can_compress: bool,
     /// Original pmEditPopup: miEditPaste.Enabled = IsClipboardFormatAvailable(CF_HDROP).
     pub paste: bool,
     /// Original pmEditPopup: miRestoreLastSel.Enabled = saved selection count > 0.
@@ -91,20 +92,21 @@ pub(super) struct ArchiveMenuState {
     pub ftp_any: bool,
     /// The current pane is inside an archive (original pane mode 1).
     pub in_archive: bool,
-    /// Skin theme (original look): uses the original pmArchivePopup rules.
+    /// Skin presentation marker; archive eligibility is shared by all themes.
     pub original: bool,
 }
 
 impl ArchiveMenuState {
-    /// (visible, enabled). extractCurrent/extractAuto are enabled only with a chosen archive (C# version). The skin theme, like the original pmArchivePopup (0x43a4e4),
-    /// enables miArcExtractToCurr (+0x5c0), miArcExtractToFolder (+0x7bc) and miArcExtractAuto (+0x72c) unless the pane mode is 1 (inside an archive).
+    /// (visible, enabled). All themes use selection-aware extraction
+    /// eligibility. Smart extract can also operate on the opened archive.
     /// archiveInstall only with a chosen archive,
     /// archiveProperties visible and enabled only with a chosen or current archive. Paste, restore last selection and last destination are
     /// enabled only when there is something to use, like the original. The rest stay as is.
     pub fn item(&self, command: &str) -> (bool, bool) {
         match command {
-            "extractCurrent" | "extractAuto" | "extractNewFolder" if self.original => (true, !self.in_archive),
-            "extractCurrent" | "extractAuto" => (true, self.selected),
+            "extractCurrent" | "extractNewFolder" => (true,self.selected&&!self.in_archive),
+            "extractAuto" | "extractSelected" => (true,self.selected||self.current),
+            "archiveAdd" | "archiveMove" => (true,self.can_compress),
             "archiveInstall" => (self.selected, self.selected),
             "archiveProperties" => {
                 let available = self.selected || self.current;
@@ -125,12 +127,15 @@ impl ArchiveMenuState {
 }
 
 impl App {
-    /// C# UpdateArchiveMenuItems: hasSelectedArchive = an archive among the files chosen on a local pane,
-    /// hasCurrentArchive = inside an archive that exists.
+    /// Use the same supported-format and local-selection checks as the
+    /// right-click menu; do not inspect archive contents while rendering.
     pub(super) fn archive_menu_state(&self) -> ArchiveMenuState {
         let i = self.active;
-        let selected = self.panes[i].archive.is_none() && self.target_entries(i).iter().any(|e| !e.is_dir && ndr::archive::archive_format(&e.path).is_some());
-        let current = self.panes[i].archive.as_ref().is_some_and(|l| l.file.is_file());
+        let (count,selected)=self.archive_selection_state(i);
+        let idle=!self.job.as_ref().is_some_and(|j|!j.finished)&&self.background_jobs.is_empty();
+        let selected=selected&&idle;
+        let current=idle&&!self.panes[i].loading&&self.panes[i].archive.as_ref().is_some_and(|l|ndr::archive::bundled_can_browse(&l.file));
+        let can_compress=idle&&count>0;
         // Rust also pastes archive items through the NDR internal clipboard, so those count as pasteable too.
         let paste = self.vault_clipboard.is_some() || self.clipboard.is_some() || native::clipboard_has_files();
         let restore = !self.last_selection[i].is_empty();
@@ -140,7 +145,7 @@ impl App {
         let (history_back, history_forward) = (!self.panes[i].back.is_empty(), !self.panes[i].forward.is_empty());
         let find_next = !self.last_find.is_empty();
         let file_info_bar = self.settings.flag("ShowFileInfoBar", true);
-        ArchiveMenuState { selected, current, paste, restore, last_destination, history_back, history_forward, find_next, file_info_bar, ftp_active, ftp_any, in_archive: self.panes[i].archive.is_some(), original: false }
+        ArchiveMenuState { selected, current, can_compress, paste, restore, last_destination, history_back, history_forward, find_next, file_info_bar, ftp_active, ftp_any, in_archive: self.panes[i].archive.is_some(), original: false }
     }
 
     /// Check marks of the View menu (Checked of original pmViewPopup 0x436fb8, C# AddToggleMenuItem): None is an ordinary item.
@@ -523,7 +528,8 @@ mod tests {
         assert_eq!(none.item("extractAuto"), (true, false));
         assert_eq!(none.item("archiveInstall"), (false, false));
         assert_eq!(none.item("archiveProperties"), (false, false));
-        assert_eq!(none.item("extractSelected"), (true, true));
+        assert_eq!(none.item("extractSelected"), (true, false));
+        assert_eq!(none.item("archiveAdd"),(true,false));
         // original pmEditPopup / pmFolderPopup
         assert_eq!(none.item("paste"), (true, false));
         assert_eq!(none.item("restoreSelection"), (true, false));
@@ -540,16 +546,16 @@ mod tests {
         let inside = ArchiveMenuState { current: true, ..Default::default() };
         assert_eq!(inside.item("archiveProperties"), (true, true));
         assert_eq!(inside.item("archiveInstall"), (false, false));
-        assert_eq!(inside.item("extractAuto"), (true, false));
+        assert_eq!(inside.item("extractAuto"), (true, true));
         let picked = ArchiveMenuState { selected: true, ..Default::default() };
         assert_eq!(picked.item("extractCurrent"), (true, true));
         assert_eq!(picked.item("archiveInstall"), (true, true));
         assert_eq!(picked.item("archiveProperties"), (true, true));
-        // Original pmArchivePopup (skin theme): enabled outside archives regardless of the selection.
+        // All skins now honor the same supported-archive selection.
         let original = ArchiveMenuState { original: true, ..Default::default() };
-        assert_eq!((original.item("extractCurrent"), original.item("extractAuto")), ((true, true), (true, true)));
+        assert_eq!((original.item("extractCurrent"), original.item("extractAuto")), ((true, false), (true, false)));
         let original_inside = ArchiveMenuState { original: true, in_archive: true, current: true, ..Default::default() };
-        assert_eq!((original_inside.item("extractCurrent"), original_inside.item("extractAuto")), ((true, false), (true, false)));
+        assert_eq!((original_inside.item("extractCurrent"), original_inside.item("extractAuto")), ((true, false), (true, true)));
     }
 
     #[test]

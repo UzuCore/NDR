@@ -613,27 +613,33 @@ impl App {
         let rows: Vec<usize> = if pane.loading {
             vec![]
         } else if pane.selected.is_empty() {
-            pane.entries.get(pane.cursor).map(|_| vec![pane.cursor]).unwrap_or_default()
+            pane.entries.get(pane.cursor).filter(|e|!e.drive&&!e.is_parent()).map(|_| vec![pane.cursor]).unwrap_or_default()
         } else {
-            pane.selected.iter().copied().filter(|i| *i < pane.entries.len()).collect()
+            pane.selected.iter().copied().filter(|i|pane.entries.get(*i).is_some_and(|e|!e.drive&&!e.is_parent())).collect()
         };
         let local = pane.archive.is_none();
         let archive = pane.archive.is_some();
         let writable_archive = archive && self.editable_archive(index).is_some();
         let has = !rows.is_empty();
         // Original pmMainPopup (0x437f54): when the focused item is a file (+0x3c == 3) shows mipOpenWith, mipView and mipEdit; shows mipOpenInNewTab only on a local pane (kind 0)
-        // when the focused item is a folder (1). mipArcExtractAuto is enabled on local panes.
+        // when the focused item is a folder (1). Archive commands follow the selected supported formats below.
         let focused = (!pane.loading).then(|| pane.entries.get(pane.cursor)).flatten();
         let focused_file = focused.is_some_and(|e| !e.is_dir);
         // Original 0x438003: mipOpenInNewTab.Visible = pane kind 0 (local) && focused item kind 1 (folder). Independent of the tabs setting (the handler checks it on click).
         // Drive rows of the My PC view are original kind 4, so it is not shown.
         let new_tab = local && pane.remote.is_none() && focused.is_some_and(|e| e.is_dir && !e.drive) && !super::panes::is_drives(&pane.path);
-        // Original pmMainPopup (0x437f54): mipEditPaste.Enabled = IsClipboardFormatAvailable(CF_HDROP), mipArcExtractAuto.Enabled =
-        // local pane. Other items are always enabled (the menu appears only when an item is clicked on a local pane, `list_menu_kind`).
+        // Original pmMainPopup (0x437f54): mipEditPaste.Enabled = IsClipboardFormatAvailable(CF_HDROP).
+        // Archive commands are now enabled only for valid selected targets.
         // Fixed: previously every frame while the menu was open opened the clipboard and read the file list (blocking other programs' clipboard writes,
         // and a clipboard change at the same time released the data being read). Like the original it only checks whether the format exists.
         let paste = (local || writable_archive) && (self.vault_clipboard.is_some() || self.clipboard.is_some() || self.archive_clipboard.is_some() || native::clipboard_has_files());
-        let auto_extract = local;
+        let (archive_sources,all_archives)=self.archive_selection_state(index);
+        let current_archive=archive&&!pane.loading&&pane.archive.as_ref().is_some_and(|l|ndr::archive::bundled_can_browse(&l.file));
+        let archive_idle=!self.job.as_ref().is_some_and(|j|!j.finished)&&self.background_jobs.is_empty();
+        let can_add=archive_idle&&archive_sources>0;
+        let compress_each=archive_idle&&archive_sources>1;
+        let auto_extract=archive_idle&&(all_archives||current_archive);
+        let extract_each=archive_idle&&all_archives;
         // Original mipExplorerMenu (+0x770) is untouched by pmMainPopup, so it is always visible.
         let explorer = local && has;
         // Original text (with &): & is removed when drawing, and a letter typed while the menu is open (menu_letter) picks the item with that access letter.
@@ -675,8 +681,10 @@ impl App {
             Some((text("mipChangeAttr", "속성/시간 변경…"), "attributes", local && has)),
             Some((text("mipDescription", "설명 추가/편집…"), "description", local && has)),
             None,
-            Some((text("mipAddToArchive", "압축 파일에 추가…"), "archiveAdd", local && has)),
-            Some((text("mipArcExtractAuto", "자동 압축 풀기"), "extractAuto", auto_extract)),
+            Some((text("mipAddToArchive", "압축 파일에 추가…"), "archiveAdd", can_add)),
+            Some((text("mipCompressEach", "Compress by each file/folder name"), "compressEach", compress_each)),
+            Some((text("mipArcExtractAuto", "Smart extract"), "extractAuto", auto_extract)),
+            Some((text("mipExtractEach", "Extract to each archive name"), "extractEach", extract_each)),
             None,
             Some((text("mipProperties", "속성"), "properties", local && has)),
         ]);

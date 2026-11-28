@@ -2565,6 +2565,7 @@ impl eframe::App for App {
         // At 2048 it grows downward only as needed (the real limit on the rendering side stays the same).
         raw_input.max_texture_side = Some(raw_input.max_texture_side.unwrap_or(2048).min(2048));
         let clipboard_keys = ndr::shell_menu::take_clipboard_keys();
+        let native_alt_keys=ndr::shell_menu::take_native_alt_keys();
         let numpad = ndr::shell_menu::take_numpad_keys();
         let context_keys = ndr::shell_menu::take_context_keys();
         // Windows delivers Alt+key as WM_SYSCHAR, which never types: in the original, Alt+` (FocusAddressBar) opens the address field with the whole
@@ -2580,6 +2581,21 @@ impl eframe::App for App {
             _ => true,
         });
         let text_focus = ctx.memory(|m| m.focused()).is_some_and(|id| egui::text_edit::TextEditState::load(ctx, id).is_some());
+        // Restore Alt chords before egui sees the frame, even if the
+        // framework lost its focus flag while this window is foreground.
+        let focused=raw_input.focused||(!native_alt_keys.is_empty()&&self.hwnd!=0&&native::is_foreground(self.hwnd));
+        let list_click=!native_alt_keys.is_empty()&&self.list_press_pane(ctx,&raw_input.events).is_some();
+        let alt_q=native_alt_keys.iter().any(|p|p.vk==b'Q' as u16&&!p.shift)
+            ||raw_input.events.iter().any(|e|matches!(e,egui::Event::Key{key:egui::Key::Q,pressed:true,modifiers:m,..} if m.alt&&!m.ctrl&&!m.shift));
+        let blocked=self.keyboard_blocked(ctx);
+        let recovered=if focused&&(!text_focus||list_click)&&!blocked{
+            raw_input.focused=true;
+            let custom=self.settings.values.get("OriginalShortcutMapText").and_then(|v|v.as_str());
+            keyboard::restore_native_alt_shortcuts(raw_input,&native_alt_keys,custom)
+        }else{0};
+        if alt_q{
+            self.trace_auto_extract("raw",&format!("native={} recovered={} focused={} text_focus={} list_click={} blocked={}",native_alt_keys.len(),recovered,focused,text_focus,list_click,blocked));
+        }
         if !text_focus && raw_input.focused {
             restore_captured_clipboard_keys(raw_input,clipboard_keys);
             // Fallback for dedicated clipboard keys or an unavailable
@@ -2698,7 +2714,8 @@ impl eframe::App for App {
         self.poll(ctx);
         self.vault_security_tick(ctx);
         self.vault_transfer_tick(ctx);
-        self.keyboard(ctx);
+        let late_keyboard=self.keyboard_after_list_press(ctx);
+        if !late_keyboard{self.keyboard(ctx);}
         self.sync_current_directory();
         for pane in &mut self.panes {
             pane.drop_drive_marks();
@@ -2823,6 +2840,11 @@ impl eframe::App for App {
                 self.pane_ui(ui, self.active, ctx);
             }
         });
+        if late_keyboard{
+            self.release_list_text_focus(ctx);
+            self.keyboard(ctx);
+            self.sync_current_directory();
+        }
         self.finish_visible_folder_size_frame(ctx);
         self.retire_offscreen_thumbnails();
         self.drag_drop_frame(ctx);

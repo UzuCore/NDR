@@ -455,6 +455,31 @@ pub struct ClipboardKeyPress {
     pub alt:bool,
 }
 static CLIPBOARD_KEYS:std::sync::Mutex<Vec<ClipboardKeyPress>>=std::sync::Mutex::new(Vec::new());
+
+/// Only explicit Alt chords on NDR's own window, not a global keyboard
+/// hook. Capture the Win32 event before the framework translates it.
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+pub struct NativeAltKey { pub vk:u16, pub shift:bool }
+static ALT_KEYS:std::sync::Mutex<Vec<NativeAltKey>>=std::sync::Mutex::new(Vec::new());
+
+fn capture_alt_key(message:u32,vk:usize,lparam:isize,ctrl:bool,shift:bool,alt:bool)->Option<NativeAltKey>{
+    // Bit 29 is the documented WM_SYSKEYDOWN Alt-context flag. The
+    // framework can report Alt released or an IME Process key later.
+    if ctrl || !(alt || (message==WM_SYSKEYDOWN && (lparam as usize)&(1<<29)!=0)) {return None;}
+    let vk=if vk==0xe5 {
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::{MapVirtualKeyW,MAPVK_VSC_TO_VK_EX};
+        let scan=((lparam as usize>>16)&0xff) as u32;
+        if scan==0{return None;}
+        (unsafe{MapVirtualKeyW(scan,MAPVK_VSC_TO_VK_EX)}) as usize
+    }else{vk};
+    // Leave OS Alt+Tab/F4/Esc, system menu and keypad handling alone.
+    if !matches!(vk,0x30..=0x39|0x41..=0x5a|0x70..=0x72|0x74..=0x7b|0x0d|0x21..=0x28|0xba..=0xc0|0xdb..=0xde){return None;}
+    Some(NativeAltKey{vk:vk as u16,shift})
+}
+
+pub fn take_native_alt_keys()->Vec<NativeAltKey>{
+    std::mem::take(&mut *ALT_KEYS.lock().unwrap_or_else(|e|e.into_inner()))
+}
 static PASTE_DEFAULT: std::sync::OnceLock<DefaultSubclass> = std::sync::OnceLock::new();
 /// The "Num *", "Num +", "Num -", "Num /", "Num 0-9" and "Num ." keys of the original shortcut table. egui has no numpad keys (Num * has no event at all,
 /// the rest share names with ordinary keys), so the subclass records (virtual key, Ctrl, Shift, Alt) (take_numpad_keys).
@@ -465,6 +490,15 @@ unsafe extern "system" fn paste_key_proc(hwnd: HWND, message: u32, wparam: WPARA
         let down = |key: u16| unsafe { GetKeyState(key as i32) } < 0;
         let (ctrl, shift, alt) = (down(VK_CONTROL), down(VK_SHIFT), down(VK_MENU));
         let key = wparam.0;
+        if let Some(chord)=capture_alt_key(message,key,lparam.0,ctrl,shift,alt){
+            let mut keys=ALT_KEYS.lock().unwrap_or_else(|e|e.into_inner());
+            if keys.len()<64 {keys.push(chord);}
+            drop(keys);
+            // An IME-consumed key may never wake the egui event loop.
+            // Invalidation schedules a regular WM_PAINT/redraw without
+            // activating a window or injecting another key.
+            unsafe{windows_sys::Win32::Graphics::Gdi::InvalidateRect(hwnd.0,std::ptr::null(),0);}
+        }
         // Mirror egui-winit's cut -> copy -> paste classification.
         let kind=if ctrl&&key==b'X' as usize || shift&&key==VK_DELETE as usize {
             Some(ClipboardKeyKind::Cut)
@@ -485,6 +519,9 @@ unsafe extern "system" fn paste_key_proc(hwnd: HWND, message: u32, wparam: WPARA
             NUMPAD_KEYS.lock().unwrap_or_else(|e| e.into_inner()).push((key as u16, ctrl, shift, alt));
         }
     }
+    if message==WM_KILLFOCUS || message==WM_NCDESTROY {
+        ALT_KEYS.lock().unwrap_or_else(|e|e.into_inner()).clear();
+    }
     match PASTE_DEFAULT.get() {
         Some(default) => unsafe { default(hwnd, message, wparam, lparam) },
         None => LRESULT(0),
@@ -492,12 +529,11 @@ unsafe extern "system" fn paste_key_proc(hwnd: HWND, message: u32, wparam: WPARA
 }
 /// Installs the paste key subclass on the main window (once). comctl32 keeps it until the program ends.
 pub fn install_paste_key_hook(hwnd: isize) -> Result<(), String> {
-    if PASTE_DEFAULT.get().is_some() {
-        return Ok(());
-    }
     let api = SubclassApi::load()?;
     let _ = PASTE_DEFAULT.set(api.default);
     let installed = unsafe { (api.set)(HWND(hwnd as *mut core::ffi::c_void), Some(paste_key_proc), 0x4E44_4950, 0) };
+    // Keep the DLL loaded once the default proc has been stored, even
+    // if this HWND failed. Subsequent windows can retry installation.
     std::mem::forget(api);
     if installed.as_bool() { Ok(()) } else { Err("SetWindowSubclass failed".into()) }
 }
