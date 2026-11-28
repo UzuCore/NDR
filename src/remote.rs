@@ -31,6 +31,8 @@ pub struct ProtocolLog {
     /// Prefix of sent lines (original FTP engine +0x1c: current remote folder).
     pub prefix: String,
     pub selected: Option<usize>,
+    /// Monotonic append counter, even when old lines are discarded.
+    pub revision: u64,
     /// suppaftp logs the first line of a multi-line reply twice, so the next received line is skipped.
     skip_received: bool,
 }
@@ -49,10 +51,42 @@ impl ProtocolLog {
     pub fn received(&mut self, line: &str) {
         self.push(line.trim_end_matches(['\r', '\n']).to_owned());
     }
-    fn push(&mut self, line: String) {
+    fn push(&mut self, mut line: String) {
+        // Long-running directory transfers must not accumulate an
+        // unbounded control log. Trim in batches to amortize Vec shifts.
+        const LIMIT: usize = 4096;
+        const TRIM: usize = 512;
+        const MAX_LINE: usize = 4096;
+        if line.len() > MAX_LINE {
+            let mut end = MAX_LINE;
+            while !line.is_char_boundary(end) { end -= 1; }
+            line.truncate(end);
+            line.push_str("...");
+            line.shrink_to_fit();
+        }
+        if self.lines.len() >= LIMIT { self.lines.drain(..TRIM); }
         self.lines.push(line);
         self.selected = Some(self.lines.len() - 1);
+        self.revision = self.revision.wrapping_add(1);
     }
+}
+
+#[cfg(test)]
+#[test]
+fn batch411_protocol_log_retains_bounded_recent_lines() {
+    let mut log = ProtocolLog::default();
+    for i in 0..9000 {
+        log.received(&format!("200 line {i}"));
+    }
+    assert_eq!(log.revision, 9000);
+    assert!(log.lines.len() <= 4096);
+    assert_eq!(log.lines.last().map(String::as_str), Some("200 line 8999"));
+    log.sent("PASS private-password");
+    assert!(!log.lines.last().unwrap().contains("private-password"));
+    log.received(&"\u{d55c}".repeat(3000));
+    assert!(log.lines.last().unwrap().len() <= 4099);
+    assert!(log.lines.last().unwrap().ends_with("..."));
+    assert_eq!(log.selected, Some(log.lines.len() - 1));
 }
 
 thread_local! {

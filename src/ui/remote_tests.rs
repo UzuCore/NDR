@@ -96,7 +96,9 @@ fn remote_window_follows_the_csharp_connection_and_local_flows() {
     let _serial = REMOTE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let (root, ctx, mut app) = fixture("ko", "ko");
     let left = root.join("left");
-    app.dispatch("remote", &ctx);
+    // Keep the legacy form's isolated coverage separate from the new
+    // user-facing command, which now opens the panel connection prompt.
+    app.open_remote_window(None, None);
     assert_eq!(app.original_dialogs.last().unwrap().title, "NDR 원격 연결");
     wait_local(&mut app, &ctx);
     {
@@ -304,17 +306,18 @@ fn remote_sites_editor_and_command_follow_the_csharp_flows() {
     assert!(app.original_dialogs.is_empty());
     let sites = rw::load_sites(&app.settings);
     assert_eq!((sites.len(), sites[0].name.as_str(), sites[0].user.as_str()), (1, "alpha", "me"));
-    // Connect: saves and opens the remote window with that site, connecting at once.
+    // Connect: saves and connects the active panel using the same profile.
+    app.remote_hooks.pane_connect = fake_pane_connect;
+    FAKE_FTP_CONFIGS.lock().unwrap().clear();
+    let pane = app.active;
     app.dispatch("sites", &ctx);
     app.sites_action(SitesAction::Connect, &ctx);
-    let dialog = app.original_dialogs.last().unwrap();
-    assert!(matches!(&dialog.kind, DialogKind::Remote(f) if f.protocol == 2 && f.host == "ftp.example.invalid" && f.user == "me" && f.password == "secret" && !f.quick_options_visible()));
-    wait_until(&mut app, &ctx, |app| !app.msgboxes.is_empty());
-    assert_eq!(boxed(&app), ("Remote connection failed".to_owned(), "530 Login incorrect.".to_owned()));
-    app.answer_message_box(1, &ctx);
-    let config = connects().pop().unwrap();
+    assert!(app.original_dialogs.is_empty());
+    wait_until(&mut app, &ctx, |app| app.panes[pane].remote.is_some() && !app.panes[pane].loading);
+    let config = FAKE_FTP_CONFIGS.lock().unwrap().pop().unwrap();
     assert_eq!((config.protocol.as_str(), config.port, config.name.as_str()), ("SFTP", 22, "alpha"));
-    app.remote_action(RemoteAction::Close, &ctx);
+    assert_eq!((config.host.as_str(), config.user.as_str(), config.password.as_str()), ("ftp.example.invalid", "me", "secret"));
+    app.ftp_disconnect();
     // Delete: FTPSITE_DELCONFIRM yes/no.
     app.dispatch("sites", &ctx);
     app.sites_action(SitesAction::Delete, &ctx);
@@ -365,7 +368,7 @@ fn remote_window_transfers_against_an_owned_ftp_server() {
     std::io::BufReader::new(child.stdout.take().unwrap()).read_line(&mut line).unwrap();
     let port = line.trim().to_owned();
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        app.dispatch("remote", &ctx);
+        app.open_remote_window(None, None);
         wait_local(&mut app, &ctx);
         app.remote_action(RemoteAction::Protocol(0), &ctx);
         {
@@ -553,7 +556,7 @@ fn ftp_clipboard_fixture(label: &str) -> (PathBuf, egui::Context, App) {
     }
     app.panes[1].remote = Some(super::ftp_pane::PaneRemote {
         fs: Arc::new(Mutex::new(Box::new(FakeFtp))),
-        host: "ftp.example.invalid".into(), path: "/pub".into(),
+        host: "ftp.example.invalid".into(), protocol: "SFTP".into(), port: 22, path: "/pub".into(),
         busy: Default::default(), modes: Default::default(), permissions: Default::default(), log: None,
     });
     (root, ctx, app)
@@ -905,7 +908,7 @@ fn ftp_quick_connect_follows_the_original_tfftpquickconnect() {
     assert_eq!((config.protocol.as_str(), config.host.as_str(), config.port, config.user.as_str(), config.password.as_str()), ("SFTP", "sftp.example", 22, "me", "secret"));
     assert_eq!(app.ftp_site_items(), vec![(0, "&1. sftp.example".to_owned())]);
     assert_eq!(app.settings.strings("RecentRemoteHosts"), ["sftp.example"]);
-    assert_eq!(app.address_text(1), "ftp://sftp.example/");
+    assert_eq!(app.address_text(1), "sftp://sftp.example/");
     // Cancel does nothing.
     app.active = 0;
     app.dispatch("ftpQuickConnect", &ctx);

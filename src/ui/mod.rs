@@ -164,6 +164,8 @@ struct Pane {
     vault: Option<vault_window::PaneVault>,
     /// Original panel FTP mode (FUN_00481948 == 2): the connection and the remote folder. path stays as the local folder from before connecting.
     remote: Option<ftp_pane::PaneRemote>,
+    ftp_connect_serial: u64,
+    ftp_connect_pending: bool,
     /// Original FTP log pane height (starts at 60, changed via the upper splitter bar).
     ftp_log_height: f32,
     descriptions: HashMap<String, String>,
@@ -318,6 +320,8 @@ impl Pane {
             archive: None,
             vault: None,
             remote: None,
+            ftp_connect_serial: 0,
+            ftp_connect_pending: false,
             ftp_log_height: ftp_pane::FTP_LOG_HEIGHT,
             descriptions: HashMap::new(),
             view: PaneView::default(),
@@ -751,8 +755,7 @@ enum AsyncResult {
     /// Read a shell overlay icon (C# ProcessShellOverlayIcons). None means use the extension icon.
     OverlayIcon { path: PathBuf, image: Option<(usize, usize, Vec<u8>)> },
     /// Original FUN_004408f8: panel FTP connection succeeded / failed.
-    FtpConnected { pane: usize, remote: ftp_pane::PaneRemote },
-    FtpFailed { error: String },
+    FtpConnectFinished { pane: usize, serial: u64, request: Box<ftp_pane::PaneConnectRequest>, result: Result<ftp_pane::PaneRemote, String> },
     /// An FTP panel new-folder/rename finished (panel, name to place the cursor on, error).
     FtpEdited { pane: usize, focus: Option<String>, error: Option<String> },
     FtpReply { result: Result<String, String> },
@@ -2064,8 +2067,7 @@ impl App {
                 }
                 AsyncResult::ChecksumDone { serial, value } => self.checksum_done(serial, value),
                 AsyncResult::TempCounted { folder, files, bytes } => self.empty_temp_counted(folder, files, bytes),
-                AsyncResult::FtpConnected { pane, remote } => self.ftp_connected(pane, remote),
-                AsyncResult::FtpFailed { error } => self.ftp_failed(error),
+                AsyncResult::FtpConnectFinished { pane, serial, request, result } => self.ftp_connect_finished(pane, serial, *request, result),
                 AsyncResult::FtpEdited { pane, focus, error } => self.ftp_edited(pane, focus, error),
                 AsyncResult::FtpReply { result } => self.ftp_reply(result),
                 AsyncResult::OverlayIcon { path, image } => {

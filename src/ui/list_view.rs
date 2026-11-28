@@ -481,7 +481,7 @@ impl ViewPlan {
 
 pub(super) fn build_view(plan: &ViewPlan, entries: &[Entry], descriptions: &HashMap<String, String>,
     drive_infos: &HashMap<PathBuf, (String, u32, Option<(u64, u64)>)>,
-    sftp_modes: Option<(String, HashMap<String, u32>)>, ftp_permissions: Option<(String, HashMap<String, String>)>,
+    sftp_modes: Option<(String, Arc<HashMap<String, u32>>)>, ftp_permissions: Option<(String, Arc<HashMap<String, String>>)>,
     local: bool, detect_vault: bool, mut view: PaneView, cancel: Option<&AtomicBool>) -> Option<PaneView> {
     let ViewPlan { attach, case, date_format, time_format, use_age, age_labels, unit, thousands,
         folder_size_text, vault_type, folder_type, group_mode, category_mode, show_group_name,

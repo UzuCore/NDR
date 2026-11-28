@@ -388,10 +388,11 @@ impl App {
     /// C# ShowProperties: the shell properties window of the first chosen item, otherwise of the current folder.
     pub(super) fn properties_command(&mut self) {
         let i = self.active;
+        if self.panes[i].remote.is_some() { return self.ftp_properties(i); }
         // Original miPropertiesClick (0x432208): when there is a cursor item and the location is not FTP or an archive. Without marks and with the cursor on a drive (kind 4),
         // that drive's properties; otherwise the multi-file properties window of all collected items (marks, otherwise the cursor) (skin theme).
         let pane = &self.panes[i];
-        if pane.archive.is_some() || pane.remote.is_some() {
+        if pane.archive.is_some() {
             return;
         }
         let Some(cursor) = pane.entries.get(pane.cursor).cloned() else { return };

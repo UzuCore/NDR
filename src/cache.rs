@@ -63,15 +63,30 @@ pub struct CleanupReport {
 struct TreeStats { bytes: u64, newest: SystemTime }
 
 fn tree_stats(path: &Path, check_open: bool) -> Option<TreeStats> {
-    // Iterative traversal bounds stack depth even for deeply nested archives.
+    // Keep only pending directories, not a PathBuf for every file in a
+    // wide directory. Accounting can use Windows' enumerated metadata;
+    // the destructive recheck still obtains fresh metadata.
     let mut pending = vec![path.to_path_buf()];
     let mut result = TreeStats { bytes: 0, newest: SystemTime::UNIX_EPOCH };
     while let Some(p) = pending.pop() {
+        // Recheck every directory before entering it, even in accounting
+        // mode; enumerated metadata alone is not a reparse-point guard.
         let m = fs::symlink_metadata(&p).ok()?;
         if crate::fsops::is_reparse(&m) { return None; }
         result.newest = result.newest.max(m.modified().ok()?).max(m.created().ok()?);
         if m.is_dir() {
-            for child in fs::read_dir(&p).ok()? { pending.push(child.ok()?.path()); }
+            for child in fs::read_dir(&p).ok()? {
+                let child = child.ok()?;
+                let meta = if check_open { fs::symlink_metadata(child.path()).ok()? } else { child.metadata().ok()? };
+                if crate::fsops::is_reparse(&meta) { return None; }
+                if meta.is_dir() {
+                    pending.push(child.path());
+                } else if meta.is_file() {
+                    result.newest = result.newest.max(meta.modified().ok()?).max(meta.created().ok()?);
+                    if check_open { let _guard = OpenOptions::new().read(true).share_mode(0).open(child.path()).ok()?; }
+                    result.bytes = result.bytes.saturating_add(meta.len());
+                } else { return None; }
+            }
         } else if m.is_file() {
             // Even a reader that allows deletion can still need the path.
             // A zero-sharing probe refuses existing read/write handles.
@@ -113,6 +128,19 @@ fn owner_may_be_alive(pid: u32) -> bool {
     unsafe { CloseHandle(handle); }
     alive
 }
+// Real PIDs and filesystem timestamps are not deterministic test
+// fixtures. Probe a nonexistent PID and derive the test clock from the
+// actual on-disk timestamps instead of racing Windows' cached clock.
+#[cfg(test)]
+pub(crate) fn fixture_dead_owner() -> u32 {
+    (0..1024).map(|n| u32::MAX - n).find(|&pid| !owner_may_be_alive(pid)).expect("nonexistent fixture PID")
+}
+
+#[cfg(test)]
+pub(crate) fn fixture_clock(root: &Path) -> SystemTime {
+    SystemTime::now().max(tree_stats(root, false).expect("fixture metadata").newest) + Duration::from_secs(1)
+}
+
 fn maintenance_lock(root: &Path) -> Option<File> {
     if !root.is_dir() || crate::fsops::ensure_plain_path(root).is_err() { return None; }
     let path = root.join(".ndr-maintenance.lock");
@@ -286,14 +314,27 @@ mod maintenance_tests {
         fs::write(p.join("sub/file.txt"), b"preview").unwrap(); p
     }
     #[test]
+    fn batch406_future_timestamp_remains_protected() {
+        let root = fixture("future");
+        let p = preview(&root, &format!(".ndr-trash-{}-7", fixture_dead_owner()));
+        let now = fixture_clock(&root);
+        filetime::set_file_mtime(p.join("sub/file.txt"), filetime::FileTime::from_system_time(now + DAY)).unwrap();
+        let report = clean_previews(&root, PREVIEW_AGE, now, 0, 0);
+        assert_eq!(report.removed, 0);
+        assert_eq!(report.protected, 1);
+        assert_eq!(clean_previews(&root, PREVIEW_AGE, now + DAY * 2, 0, 0).removed, 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
     fn preview_budget_protects_live_locked_young_and_unknown_sessions() {
         let root = fixture("previews");
-        let old = preview(&root, ".ndr-entry-1-10");
-        let locked = preview(&root, ".ndr-entry-1-11");
+        let pid = fixture_dead_owner();
+        let old = preview(&root, &format!(".ndr-entry-{pid}-10"));
+        let locked = preview(&root, &format!(".ndr-entry-{pid}-11"));
         let live = preview(&root, &format!(".ndr-entry-{}-12", std::process::id()));
         let unknown = preview(&root, ".ndr-entry-unrecognized");
         let guard = OpenOptions::new().read(true).share_mode(7).open(locked.join("sub/file.txt")).unwrap();
-        let now = SystemTime::now();
+        let now = fixture_clock(&root);
         let r = clean_previews(&root, PREVIEW_AGE, now, 0, 0);
         assert_eq!(r.removed, 0, "minimum age");
         let r = clean_previews(&root, PREVIEW_AGE, now + DAY * 2, 0, 0);
@@ -314,19 +355,20 @@ mod maintenance_tests {
     #[test]
     fn update_retention_preserves_two_backups_failed_and_active_work() {
         let root = fixture("updates");
-        let a = update(&root,"ndr-update-build-21-1-100",true);
+        let pid = fixture_dead_owner();
+        let a = update(&root,&format!("ndr-update-build-21-{pid}-100"),true);
         fs::write(a.join("installer-host.log"), b"diagnostic").unwrap();
         std::thread::sleep(Duration::from_millis(20));
-        let b = update(&root,"ndr-update-build-22-1-101",true);
+        let b = update(&root,&format!("ndr-update-build-22-{pid}-101"),true);
         std::thread::sleep(Duration::from_millis(20));
-        let c = update(&root,"ndr-update-build-23-1-102",true);
-        let failed = update(&root,"ndr-update-build-24-1-103",false);
+        let c = update(&root,&format!("ndr-update-build-23-{pid}-102"),true);
+        let failed = update(&root,&format!("ndr-update-build-24-{pid}-103"),false);
         let live = update(&root,&format!("ndr-update-build-25-{}-104",std::process::id()),true);
         let unknown = update(&root,"other",true);
-        let installing = update(&root,"ndr-update-build-26-1-105",true);
+        let installing = update(&root,&format!("ndr-update-build-26-{pid}-105"),true);
         let install_guard = OpenOptions::new().read(true).write(true).create_new(true).share_mode(0)
             .open(installing.join(".ndr-install.lock")).unwrap();
-        let now = SystemTime::now();
+        let now = fixture_clock(&root);
         assert_eq!(clean_updates(&root,now,0,2).removed,0);
         let r = clean_updates(&root,now + DAY * 2,u64::MAX,2);
         assert_eq!(r.removed,1);
@@ -347,7 +389,7 @@ mod maintenance_tests {
         let root = fixture("reparse");
         let outside = fixture("outside");
         fs::write(outside.join("personal.txt"), b"keep").unwrap();
-        let p = root.join(".ndr-entry-1-1"); fs::create_dir_all(&p).unwrap();
+        let p = root.join(format!(".ndr-entry-{}-1",fixture_dead_owner())); fs::create_dir_all(&p).unwrap();
         let status = std::process::Command::new("cmd.exe").args(["/c","mklink","/J"])
             .arg(p.join("link")).arg(&outside).output().unwrap();
         assert!(status.status.success(), "{:?}", status);

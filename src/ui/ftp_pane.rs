@@ -10,7 +10,7 @@
 //! - New folder in an FTP pane (miNewFolderClick 0x432378 → FUN_0045d0b4), rename (miRenameClick 0x4351cc → TfRename, FUN_0045d214),
 //!   delete (miDeleteClick 0x431c04 → FUN_0042c734: always a delete confirmation (no recycle bin) → FUN_0045de18).
 use super::original_dialogs::{DeleteWarningChoice, DeleteWarningMode, DialogKind, DialogResult};
-use super::remote_window::{PermissionAction, PermissionForm, SiteProfile, load_sites, parent_path, parse_port, prepare_host, store_sites};
+use super::remote_window::{PermissionAction, PermissionForm, SiteProfile, load_sites, parent_path, prepare_host, store_sites};
 use super::*;
 use ndr::msgbox::{MB_ICONEXCLAMATION, MB_OK};
 use ndr::remote::{Client, Config, RemoteEntry, TransferProgress};
@@ -203,23 +203,33 @@ impl PaneFs for LoggedFs {
 pub(super) struct PaneRemote {
     pub fs: Arc<Mutex<Box<dyn PaneFs>>>,
     pub host: String,
+    pub protocol: String,
+    pub port: u16,
     pub path: String,
     /// Original [+0xd6c]+0x14 (FTP engine transferring).
     pub busy: Arc<AtomicBool>,
     /// Permission bits from the last listing (remote path → mode). Original item +0x74 (the value passed to TfFTPAttributes).
-    pub modes: Arc<Mutex<std::collections::HashMap<String, u32>>>,
+    pub modes: Arc<Mutex<Arc<std::collections::HashMap<String, u32>>>>,
     /// Permission texts from the last FTP listing (remote path → MLSD "perm" fact or LIST mode column), shown in the attribute cell.
-    pub permissions: Arc<Mutex<std::collections::HashMap<String, String>>>,
+    pub permissions: Arc<Mutex<Arc<std::collections::HashMap<String, String>>>>,
     /// The lines of the original pane +0x358 FTP log pane (FUN_0048d7ac). Absent on the first connection to an SFTP site.
     /// The adapter's client setup FUN_0045adac attaches an IO handler whose sent (FUN_0045afd0, direction 1) and received
     /// (FUN_0045b0b4, direction 0) callbacks forward each control line to the adapter's OnLog event (+0x48), which fills this pane.
     pub log: Option<Arc<Mutex<ndr::remote::ProtocolLog>>>,
 }
 
+/// A pending connection keeps its saved-profile identity. A user-approved
+/// SFTP key is persisted only after authentication succeeds.
+pub(super) struct PaneConnectRequest {
+    site: SiteProfile,
+    password: String,
+    saved: Option<SiteProfile>,
+}
+
 impl PaneRemote {
     /// Whether this is an SFTP site (no FTP log pane, like the original).
     pub(super) fn is_sftp(&self) -> bool {
-        self.log.is_none()
+        self.protocol.eq_ignore_ascii_case("SFTP")
     }
 
     /// Path of a list item ("ftp://host/folder/name"). It cannot be opened as a local path (the first segment contains ":").
@@ -228,13 +238,28 @@ impl PaneRemote {
     }
     /// The remote part of item_path.
     pub(super) fn remote_of(&self, path: &Path) -> Option<String> {
-        let text = path.to_string_lossy().replace('\\', "/");
+        // A Unix server can have a literal backslash in a filename.
+        // Replacing it with "/" would target a different remote item.
+        let text = path.as_os_str().to_str()?;
         let rest = text.strip_prefix(&format!("ftp://{}", self.host)).or_else(|| text.strip_prefix(&format!("ftp:/{}", self.host)))?;
+        if !rest.is_empty() && !rest.starts_with('/') { return None; }
         Some(if rest.is_empty() { "/".to_owned() } else { rest.to_owned() })
     }
-    /// The address bar text ("ftp://host/path").
+    /// Show the real protocol/port in user-visible addresses. Internal row
+    /// paths retain the legacy ftp:// pseudo-path encoding.
+    pub(super) fn endpoint(&self) -> String {
+        let host = if self.host.contains(':') && !self.host.starts_with('[') {
+            format!("[{}]", self.host)
+        } else { self.host.clone() };
+        let default_port = if self.is_sftp() { 22 } else { 21 };
+        let authority = if self.port == default_port { host } else { format!("{host}:{}", self.port) };
+        format!("{}://{authority}", self.protocol.to_ascii_lowercase())
+    }
+    pub(super) fn url(&self, path: &str) -> String {
+        format!("{}{}{}", self.endpoint(), if path.starts_with('/') { "" } else { "/" }, path)
+    }
     pub(super) fn address(&self) -> String {
-        format!("ftp://{}{}", self.host, if self.path.starts_with('/') { self.path.clone() } else { format!("/{}", self.path) })
+        self.url(&self.path)
     }
 }
 
@@ -257,6 +282,7 @@ pub(super) fn site_menu_caption(index: usize, name: &str) -> String {
 /// Original TfFTPQuickConnect (cbHost·ePort·eUser·ePassword·chkPassive·chkAddToSites).
 #[derive(Clone, Debug)]
 pub(super) struct FtpQuickForm {
+    pub protocol: String,
     pub host: String,
     pub port: String,
     pub user: String,
@@ -265,6 +291,43 @@ pub(super) struct FtpQuickForm {
     pub add_to_sites: bool,
     pub recent_hosts: Vec<String>,
     pub pane: usize,
+}
+
+/// Accept both a hostname and a remote URL. Keep credentials out of host
+/// history and reject invalid ports instead of silently truncating them.
+fn quick_endpoint(form: &FtpQuickForm) -> Option<(String, String, i64, String)> {
+    let input = form.host.trim();
+    let mut protocol = form.protocol.clone();
+    let mut endpoint = input;
+    if let Some((scheme, rest)) = input.split_once("://") {
+        protocol = scheme.to_ascii_uppercase();
+        // Never silently downgrade a selected encrypted connection.
+        if protocol != form.protocol && form.protocol != "FTP" { return None; }
+        endpoint = rest;
+    }
+    if !matches!(protocol.as_str(), "FTP" | "FTPS" | "SFTP") { return None; }
+    let (authority, initial) = endpoint.split_once('/').map_or((endpoint, String::new()), |(host, path)| (host, format!("/{path}")));
+    if authority.is_empty() || authority.contains(['@', '?', '#']) || authority.chars().any(|c| c.is_whitespace() || c.is_control())
+        || initial.chars().any(char::is_control) {
+        return None;
+    }
+    let (host, embedded_port) = if let Some(rest) = authority.strip_prefix('[') {
+        let (host, tail) = rest.split_once(']')?;
+        let port = if tail.is_empty() { None } else { Some(tail.strip_prefix(':')?) };
+        (host, port)
+    } else if authority.matches(':').count() == 1 {
+        let (host, port) = authority.rsplit_once(':')?;
+        (host, Some(port))
+    } else { (authority, None) };
+    if host.is_empty() || host.contains(['/', '\\', '[', ']']) { return None; }
+    let mut port = embedded_port.unwrap_or(form.port.trim()).parse::<u16>().ok().filter(|&n| n != 0)?;
+    if embedded_port.is_none() && input.contains("://") && protocol != form.protocol {
+        let previous_default = if form.protocol == "SFTP" { 22 } else { 21 };
+        if port == previous_default { port = if protocol == "SFTP" { 22 } else { 21 }; }
+    }
+    if protocol == "FTP" && port == 22 { protocol = "SFTP".into(); }
+    if protocol == "SFTP" && form.user.trim().is_empty() { return None; }
+    Some((protocol, host.to_owned(), i64::from(port), initial))
 }
 
 /// Original TfFTPQuickConnect (ClientWidth 424 × ClientHeight 164): lURL(13,22) cbHost(94,20 220×21), lPort(320,23) ePort(364,20 49×21 centered),
@@ -278,19 +341,20 @@ pub(super) fn ftp_quick_ui(ui: &mut egui::Ui, form: &mut FtpQuickForm, language:
     let user = raw("Caption.lUser", "&User:");
     let password = raw("Caption.lPassword", "&Password:");
     let port = raw("Caption.lPort", "&Port:");
+    let protocol = language.text("formFTPSiteManager.Caption.lServerType", "&Server type");
     let passive = raw("Caption.chkPassive", "Passive Mode(&S)");
     let add = raw("Caption.chkAddToSites", "&Add to the FTP site list");
     let ok = raw("Caption.btnOk", "&Connect");
     let cancel = raw("Caption.btnCancel", "Cancel");
     let measure = |s: &str| super::original_dialogs::caption_width(ui, s);
-    let label_width = [&address, &user, &password].into_iter().map(|s| measure(s) + 8.0).fold(81.0_f32, f32::max);
+    let label_width = [&address, &user, &password, &protocol].into_iter().map(|s| measure(s) + 8.0).fold(81.0_f32, f32::max);
     let field = 13.0 + label_width;
     let port_width = (measure(&port) + 6.0).max(44.0);
     let button_width = (measure(&ok).max(measure(&cancel)) + 22.0).max(75.0);
     let width = (field + 226.0 + port_width + 60.0).max(13.0 + measure(&passive) + 44.0)
         .max(13.0 + measure(&add) + 36.0 + 2.0 * button_width + 32.0).max(424.0);
     let mut result = None;
-    let (area, _) = ui.allocate_exact_size(egui::vec2(width, 191.0), egui::Sense::hover());
+    let (area, _) = ui.allocate_exact_size(egui::vec2(width, 220.0), egui::Sense::hover());
     let at = |x: f32, y: f32, w: f32, h: f32| egui::Rect::from_min_size(area.min + egui::vec2(x, y), egui::vec2(w, h));
     let (host_id, port_id, user_id, password_id) = (egui::Id::new("ftp-quick-host"), egui::Id::new("ftp-quick-port"), egui::Id::new("ftp-quick-user"), egui::Id::new("ftp-quick-password"));
     super::original_dialogs::access_label(ui, at(13.0, 22.0, label_width - 4.0, 18.0), &address, host_id);
@@ -298,6 +362,7 @@ pub(super) fn ftp_quick_ui(ui: &mut egui::Ui, form: &mut FtpQuickForm, language:
     // Previously the ▼ showed only with recent hosts and nothing had the focus.
     let host_width = width - field - port_width - 88.0;
     let host = ui.put(at(field, 20.0, host_width, 21.0), egui::TextEdit::singleline(&mut form.host).id(host_id));
+    let mut address_changed = host.changed();
     if first_frame {
         host.request_focus();
     }
@@ -307,11 +372,24 @@ pub(super) fn ftp_quick_ui(ui: &mut egui::Ui, form: &mut FtpQuickForm, language:
                 for host in form.recent_hosts.clone() {
                     if ui.button(&host).clicked() {
                         form.host = host;
+                        address_changed = true;
                         ui.close();
                     }
                 }
             });
         });
+    }
+    if address_changed {
+        if let Some((scheme, _)) = form.host.trim().split_once("://") {
+            let scheme = scheme.to_ascii_uppercase();
+            if matches!(scheme.as_str(), "FTP" | "FTPS" | "SFTP") && scheme != form.protocol {
+                let old_default = if form.protocol == "SFTP" { "22" } else { "21" };
+                if form.port.trim().is_empty() || form.port.trim() == old_default {
+                    form.port = if scheme == "SFTP" { "22".into() } else { "21".into() };
+                }
+                form.protocol = scheme;
+            }
+        }
     }
     super::original_dialogs::access_label(ui, at(width - port_width - 60.0, 23.0, port_width - 2.0, 18.0), &port, port_id);
     ui.put(at(width - 60.0, 20.0, 49.0, 21.0), egui::TextEdit::singleline(&mut form.port).id(port_id).horizontal_align(egui::Align::Center));
@@ -319,12 +397,31 @@ pub(super) fn ftp_quick_ui(ui: &mut egui::Ui, form: &mut FtpQuickForm, language:
     ui.put(at(field, 57.0, (width - field - 11.0).min(260.0), 21.0), egui::TextEdit::singleline(&mut form.user).id(user_id));
     super::original_dialogs::access_label(ui, at(13.0, 86.0, label_width - 4.0, 18.0), &password, password_id);
     ui.put(at(field, 84.0, (width - field - 11.0).min(260.0), 21.0), egui::TextEdit::singleline(&mut form.password).id(password_id).password(true));
-    super::original_dialogs::access_checkbox(ui, at(13.0, 116.0, width - 24.0, 20.0), &mut form.passive, &passive);
-    super::original_dialogs::access_checkbox(ui, at(13.0, 159.0, width - 2.0 * button_width - 42.0, 20.0), &mut form.add_to_sites, &add);
-    if super::original_dialogs::access_button(ui, at(width - 19.0 - 2.0 * button_width, 155.0, button_width, 25.0), &ok) {
+    let protocol_id = egui::Id::new("ftp-quick-protocol");
+    super::original_dialogs::access_label(ui, at(13.0, 115.0, label_width - 4.0, 18.0), &protocol, protocol_id);
+    let old_protocol = form.protocol.clone();
+    ui.scope_builder(egui::UiBuilder::new().max_rect(at(field, 112.0, 140.0, 22.0)), |ui| {
+        egui::ComboBox::from_id_salt(protocol_id).selected_text(&form.protocol).width(136.0).show_ui(ui, |ui| {
+            for value in ["FTP", "FTPS", "SFTP"] {
+                ui.selectable_value(&mut form.protocol, value.to_owned(), value);
+            }
+        });
+    });
+    if old_protocol != form.protocol {
+        let default = if old_protocol == "SFTP" { "22" } else { "21" };
+        if form.port.trim().is_empty() || form.port.trim() == default {
+            form.port = if form.protocol == "SFTP" { "22".into() } else { "21".into() };
+        }
+    }
+    let passive_enabled = form.protocol != "SFTP";
+    ui.add_enabled_ui(passive_enabled, |ui| {
+        super::original_dialogs::access_checkbox(ui, at(13.0, 145.0, width - 24.0, 20.0), &mut form.passive, &passive);
+    });
+    super::original_dialogs::access_checkbox(ui, at(13.0, 188.0, width - 2.0 * button_width - 42.0, 20.0), &mut form.add_to_sites, &add);
+    if super::original_dialogs::access_button(ui, at(width - 19.0 - 2.0 * button_width, 184.0, button_width, 25.0), &ok) {
         result = Some(true);
     }
-    if super::original_dialogs::access_button(ui, at(width - 11.0 - button_width, 155.0, button_width, 25.0), &cancel) {
+    if super::original_dialogs::access_button(ui, at(width - 11.0 - button_width, 184.0, button_width, 25.0), &cancel) {
         result = Some(false);
     }
     if enter && result.is_none() {
@@ -355,18 +452,22 @@ pub(super) enum RowState {
     Failed(String),
 }
 
-/// Original FUN_0043f04c event 1: overall progress (bytes received, total bytes, percent). 100% when the total is unknown (0).
+/// Sum the known totals and transferred bytes in one pass. An unknown
+/// folder size is not treated as 100% complete.
 pub(super) fn ftp_totals(rows: &[FtpResultRow]) -> (u64, u64, u64) {
-    let total: u64 = rows.iter().map(|r| r.size.unwrap_or(0)).sum();
-    let done: u64 = rows
-        .iter()
-        .map(|r| match r.state {
+    let (mut done, mut total, mut unknown) = (0u64, 0u64, false);
+    for r in rows {
+        let size = r.size.unwrap_or(r.done);
+        total = total.saturating_add(size);
+        unknown |= r.size.is_none() && matches!(r.state, RowState::Waiting | RowState::Running);
+        let received = match r.state {
             RowState::Done => r.size.unwrap_or(r.done),
             RowState::Running | RowState::Cancelled | RowState::Failed(_) => r.size.map_or(r.done, |s| r.done.min(s)),
             RowState::Waiting => 0,
-        })
-        .sum();
-    let percent = if total == 0 { 100 } else { (done.min(total) as u128 * 100 / total as u128) as u64 };
+        };
+        done = done.saturating_add(received);
+    }
+    let percent = if unknown { 0 } else if total == 0 { 100 } else { (done.min(total) as u128 * 100 / total as u128) as u64 };
     (done, total, percent)
 }
 
@@ -402,12 +503,13 @@ impl FtpResultRow {
 
     fn progress_cells_localized(&self, overall: u64, language: &compat::Language) -> (String, String) {
         let percent = match self.size.filter(|s| *s > 0) {
-            Some(size) => self.done.min(size) * 100 / size,
+            Some(size) => (u128::from(self.done.min(size)) * 100 / u128::from(size)) as u64,
             None => overall.min(100),
         };
         let bar = |percent: u64| std::iter::repeat_n(if self.upload { '>' } else { '<' }, (percent / 10) as usize).collect::<String>();
         match &self.state {
             RowState::Waiting => (String::new(), String::new()),
+            RowState::Running if self.size.is_none() => (self.progress_text_localized(language), String::new()),
             RowState::Running => (bar(percent), format!("{percent}%")),
             RowState::Done => (bar(100), "100%".into()),
             RowState::Cancelled | RowState::Failed(_) => (self.progress_text_localized(language), String::new()),
@@ -427,7 +529,7 @@ impl FtpResultRow {
         match &self.state {
             RowState::Waiting => String::new(),
             RowState::Running => match self.size.filter(|s| *s > 0) {
-                Some(size) => format!("{}%", self.done.min(size) * 100 / size),
+                Some(size) => format!("{}%", u128::from(self.done.min(size)) * 100 / u128::from(size)),
                 None => super::remote_window::net_template(language.text("NDR.NET_FTP_BYTES", "{count} bytes"), &[("count", &self.done.to_string())]),
             },
             RowState::Done => "100%".into(),
@@ -448,6 +550,7 @@ fn set_row(rows: &Mutex<Vec<FtpResultRow>>, index: usize, update: impl FnOnce(&m
 /// Original queue preparation FUN_00466e66: before the first transfer every folder item is expanded (FUN_00466168 remote, FUN_00465e6c local)
 /// and each file size is added to the queue total (+0x20/+0x24, reported as event 4). NDR keeps one row per chosen item, so a folder row
 /// gets the sum of the file sizes below it. Symbolic links and reparse points are not followed, like the transfer itself.
+#[cfg(test)]
 pub(super) fn remote_tree_size(list: &mut dyn FnMut(&str) -> Result<Vec<RemoteEntry>, String>, folder: &str, cancel: &AtomicBool) -> Option<u64> {
     let (mut total, mut pending) = (0u64, vec![folder.to_owned()]);
     while let Some(directory) = pending.pop() {
@@ -470,6 +573,7 @@ pub(super) fn remote_tree_size(list: &mut dyn FnMut(&str) -> Result<Vec<RemoteEn
 
 /// Local side of `remote_tree_size` (upload of a folder). Original FUN_00465e6c walks FindFirstFileW("*") and adds files with nFileSizeLow only.
 /// Fixed: files of 4 GB or more counted wrong in the original; the full 64-bit size is used here.
+#[cfg(test)]
 pub(super) fn local_tree_size(folder: &Path, cancel: &AtomicBool) -> Option<u64> {
     use std::os::windows::fs::MetadataExt;
     let (mut total, mut pending) = (0u64, vec![folder.to_path_buf()]);
@@ -500,6 +604,8 @@ pub(super) fn ftp_allows(id: &str) -> bool {
         "filter", "newTab", "closeTab", "historyBack", "historyForward", "back", "forward", "favoritesMenu", "switchPane",
         // The FTP mode (2) branch of the original miNewFolderClick(0x432378)·miRenameClick(0x4351cc)·miDeleteClick(0x431c04 → FUN_0042c734).
         "newFolder", "rename", "deleteRecycle", "deletePermanent", "deleteToolbar", "shred", "attributes",
+        "copyToFolder", "copyName", "copyFullPath", "copyPathOnly", "copyFolder", "properties",
+        "contextCopyTo", "contextPaste", "contextRename", "contextDelete", "contextAttributes", "contextProperties",
         // Original miCommandLineClick(0x438598): in FTP mode, the input is sent as an FTP control command.
         "command",
         // Original miMapNetworkDriveClick(0x435144)·miUnmapNetworkDriveClick(0x4350bc): open regardless of mode (re-reading happens only when local).
@@ -525,18 +631,30 @@ fn to_entry(remote: &PaneRemote, item: &RemoteEntry) -> Entry {
 
 /// Read the remote listing (the FTP side of refresh). "." and ".." are dropped. Like the original FUN_0045bb0c, when hidden view is off, names starting with '.' are also dropped.
 /// Fix: previously dot files were always shown regardless of Alt+Z.
-pub(super) fn list_remote(remote: &PaneRemote, show_hidden: bool) -> Result<Vec<Entry>, String> {
-    let items = remote.fs.lock().map_err(|_| "FTP connection is unavailable".to_owned())?.list(&remote.path)?;
-    let items: Vec<&RemoteEntry> = items.iter().filter(|e| e.name != "." && e.name != ".." && (show_hidden || !e.name.starts_with('.'))).collect();
-    if let Ok(mut modes) = remote.modes.lock() {
-        modes.clear();
-        modes.extend(items.iter().filter_map(|e| Some((join_remote(&remote.path, &e.name), e.mode?))));
+pub(super) fn list_remote(remote: &PaneRemote, show_hidden: bool, cancel: &AtomicBool) -> Result<Vec<Entry>, String> {
+    let cancelled = || cancel.load(Ordering::Relaxed);
+    if cancelled() { return Err("Transfer cancelled".into()); }
+    let mut fs = remote.fs.lock().map_err(|_| "FTP connection is unavailable".to_owned())?;
+    // Superseded requests queued behind an upload or a slow LIST must not
+    // perform another network round trip, or replace the new listing's
+    // metadata. Keep this session lock through snapshot publication.
+    if cancelled() { return Err("Transfer cancelled".into()); }
+    let items = fs.list(&remote.path)?;
+    if cancelled() { return Err("Transfer cancelled".into()); }
+    let mut entries = Vec::with_capacity(items.len());
+    let mut modes = std::collections::HashMap::new();
+    let mut permissions = std::collections::HashMap::new();
+    for item in items {
+        if cancelled() { return Err("Transfer cancelled".into()); }
+        if item.name == "." || item.name == ".." || (!show_hidden && item.name.starts_with('.')) { continue; }
+        if let Some(mode) = item.mode { modes.insert(join_remote(&remote.path, &item.name), mode); }
+        entries.push(to_entry(remote, &item));
+        if let Some(permission) = item.permission { permissions.insert(join_remote(&remote.path, &item.name), permission); }
     }
-    if let Ok(mut permissions) = remote.permissions.lock() {
-        permissions.clear();
-        permissions.extend(items.iter().filter_map(|e| Some((join_remote(&remote.path, &e.name), e.permission.clone()?))));
-    }
-    Ok(items.into_iter().map(|e| to_entry(remote, e)).collect())
+    if cancelled() { return Err("Transfer cancelled".into()); }
+    if let Ok(mut current) = remote.modes.lock() { *current = Arc::new(modes); }
+    if let Ok(mut current) = remote.permissions.lock() { *current = Arc::new(permissions); }
+    Ok(entries)
 }
 
 impl App {
@@ -564,9 +682,12 @@ impl App {
 
     /// Original miFTPQuickConnectClick → FUN_0043e9f8(window, pane, address): TfFTPQuickConnect. The address is the first cbHost value (the command line's "ftp://…").
     pub(super) fn ftp_quick_connect(&mut self, host: String) {
+        let lower = host.to_ascii_lowercase();
+        let protocol = if lower.starts_with("sftp://") { "SFTP" } else if lower.starts_with("ftps://") { "FTPS" } else { "FTP" };
         let form = FtpQuickForm {
+            protocol: protocol.into(),
             host,
-            port: "21".into(),
+            port: if protocol == "SFTP" { "22".into() } else { "21".into() },
             user: String::new(),
             password: String::new(),
             passive: true,
@@ -577,51 +698,76 @@ impl App {
         let title = self.language_pack.text("formFTPQuickConnect.Form.Caption", "FTP Quick Connection");
         self.push_original_dialog(title, DialogKind::FtpQuickConnect(Box::new(form)), |app, result, _| {
             let DialogResult::FtpQuickConnect(Some(form)) = result else { return };
-            let host = prepare_host(form.host.trim());
-            if host.is_empty() {
-                return;
-            }
-            // FUN_0043e9f8: port (StrToInt, default 21); SFTP when 22.
-            let port = parse_port(&form.port);
+            let Some((protocol, host, port, initial)) = quick_endpoint(&form) else {
+                return app.ftp_invalid_endpoint();
+            };
             let site = SiteProfile {
                 name: host.clone(),
-                protocol: if port == 22 { "SFTP".into() } else { "FTP".into() },
+                protocol,
                 host: host.clone(),
                 port,
                 user: form.user.clone(),
-                encrypted_password: native::protect_secret(&form.password).unwrap_or_default(),
-                remote_directory: String::new(),
+                encrypted_password: if form.add_to_sites { native::protect_secret(&form.password).unwrap_or_default() } else { String::new() },
+                remote_directory: initial,
                 passive: form.passive,
                 ..Default::default()
             };
             if form.add_to_sites {
-                let mut sites = load_sites(&app.settings);
-                sites.push(site.clone());
-                store_sites(&mut app.settings, &sites);
-                app.save();
+                app.save_quick_connect_site(site.clone());
             }
             let mut hosts = app.settings.strings("RecentRemoteHosts");
             hosts.retain(|h| !h.eq_ignore_ascii_case(&form.host));
             hosts.insert(0, form.host.clone());
             hosts.truncate(20);
             app.settings.set_strings("RecentRemoteHosts", hosts);
+            app.save();
             app.ftp_connect(form.pane, site, form.password);
         });
     }
 
+    fn ftp_invalid_endpoint(&mut self) {
+        let title = self.language_pack.text("NDR.NET_REMOTE_CONNECTION", "Remote connection");
+        let detail = self.language_pack.text("NDR.NET_ENTER_A_HOST_A_USER_NAME_AND_A", "Enter a host, a user name and a valid port.");
+        self.system_box(&title, &detail, MB_OK | MB_ICONEXCLAMATION, |_, _, _| {});
+    }
+
     /// Original FUN_004408f8: connect the pane in FTP mode (if it is an FTP pane already transferring, FUN_00440d24 blocks it).
     pub(super) fn ftp_connect(&mut self, index: usize, site: SiteProfile, password: String) {
+        let saved = load_sites(&self.settings).into_iter().find(|s| s == &site);
+        self.ftp_start_connect(index, PaneConnectRequest { site, password, saved });
+    }
+
+    pub(super) fn ftp_cancel_connect(&mut self, index: usize) {
+        let pane = &mut self.panes[index];
+        pane.ftp_connect_serial = pane.ftp_connect_serial.wrapping_add(1);
+        pane.ftp_connect_pending = false;
+    }
+
+    fn ftp_start_connect(&mut self, index: usize, request: PaneConnectRequest) {
         if self.panes[index].remote.as_ref().is_some_and(|r| r.busy.load(Ordering::Relaxed)) {
             return self.ftp_box("FTP_CANNOTDISCONNECT", "Cannot be disconnected while any operation is working.");
         }
+        self.ftp_cancel_connect(index);
+        let site = &request.site;
+        let protocol = site.protocol.to_ascii_uppercase();
+        let host = prepare_host(site.host.trim());
+        let Ok(port) = u16::try_from(site.port) else { return self.ftp_invalid_endpoint(); };
+        if host.is_empty() || port == 0 || !matches!(protocol.as_str(), "FTP" | "FTPS" | "SFTP")
+            || (protocol == "SFTP" && site.user.trim().is_empty()) {
+            return self.ftp_invalid_endpoint();
+        }
+        let private_key = PathBuf::from(&site.private_key_path);
+        if protocol == "SFTP" && !site.private_key_path.is_empty() && !private_key.is_file() {
+            return self.ftp_failed(self.language_pack.text("NDR.NET_THE_PRIVATE_KEY_FILE_WAS_NOT_FOUND", "The private key file was not found."));
+        }
         let config = Config {
             name: site.name.clone(),
-            protocol: site.protocol.clone(),
-            host: prepare_host(&site.host),
-            port: site.port as u16,
+            protocol: protocol.clone(),
+            host: host.clone(),
+            port,
             user: site.user.clone(),
-            password,
-            private_key: PathBuf::from(&site.private_key_path).is_file().then(|| PathBuf::from(&site.private_key_path)).unwrap_or_default(),
+            password: request.password.clone(),
+            private_key,
             key_passphrase: native::unprotect_secret(&site.encrypted_key_passphrase).unwrap_or_default(),
             fingerprint: site.known_host_fingerprint.clone(),
             passive: site.passive,
@@ -629,11 +775,11 @@ impl App {
         };
         let connect = self.remote_hooks.pane_connect;
         let initial = site.remote_directory.clone();
-        let host = config.host.clone();
         let tx = self.async_tx.clone();
-        // Original FUN_004408f8: if the site type is not "sftp", create a log pane (FUN_0048d7ac(pane, 1); keep the existing one if present).
-        let existing = self.panes[index].remote.as_ref().and_then(|r| r.log.clone());
-        let log = existing.or_else(|| (!site.protocol.eq_ignore_ascii_case("sftp")).then(Arc::default));
+        // New sessions must not inherit the protocol/log of the old one.
+        let log = (protocol != "SFTP").then(Arc::default);
+        self.panes[index].ftp_connect_pending = true;
+        let serial = self.panes[index].ftp_connect_serial;
         self.status = super::remote_window::net_template(self.language_pack.text("NDR.NET_FTP_CONNECTING", "Connecting to {host}…"), &[("host", &host)]);
         thread::spawn(move || {
             let result = ndr::remote::with_protocol_log(log.as_ref(), || connect(&config)).and_then(|fs| {
@@ -643,13 +789,69 @@ impl App {
                 };
                 let home = fs.pwd()?;
                 let path = if initial.trim().is_empty() { home } else { fs.change_directory(&home, initial.trim())?.0 };
-                Ok((fs, path))
+                Ok(PaneRemote { fs: Arc::new(Mutex::new(fs)), host, protocol, port, path, busy: Arc::new(AtomicBool::new(false)), modes: Arc::default(), permissions: Arc::default(), log })
             });
-            let _ = tx.send(match result {
-                Ok((fs, path)) => AsyncResult::FtpConnected { pane: index, remote: PaneRemote { fs: Arc::new(Mutex::new(fs)), host, path, busy: Arc::new(AtomicBool::new(false)), modes: Arc::default(), permissions: Arc::default(), log } },
-                Err(error) => AsyncResult::FtpFailed { error },
-            });
+            let _ = tx.send(AsyncResult::FtpConnectFinished { pane: index, serial, request: Box::new(request), result });
         });
+    }
+
+    pub(super) fn ftp_connect_finished(&mut self, index: usize, serial: u64, mut request: PaneConnectRequest, result: Result<PaneRemote, String>) {
+        if self.panes[index].ftp_connect_serial != serial || !self.panes[index].ftp_connect_pending {
+            if let Ok(remote) = result { close_later(remote); }
+            return;
+        }
+        self.panes[index].ftp_connect_pending = false;
+        match result {
+            Ok(remote) => {
+                if self.panes[index].remote.as_ref().is_some_and(|r| r.busy.load(Ordering::Relaxed)) {
+                    close_later(remote);
+                    return self.ftp_box("FTP_CANNOTDISCONNECT", "Cannot be disconnected while any operation is working.");
+                }
+                self.discard_vault(index);
+                if self.panes[index].vault.is_some() {
+                    close_later(remote);
+                    return;
+                }
+                if let Some(before) = request.saved.take() {
+                    if before.known_host_fingerprint != request.site.known_host_fingerprint {
+                        let mut sites = load_sites(&self.settings);
+                        if let Some(site) = sites.iter_mut().find(|s| **s == before) {
+                            site.known_host_fingerprint = request.site.known_host_fingerprint.clone();
+                            store_sites(&mut self.settings, &sites);
+                            self.save();
+                        }
+                    }
+                }
+                self.ftp_connected(index, remote);
+            }
+            Err(error) => {
+                let challenge = serde_json::from_str::<serde_json::Value>(&error).ok()
+                    .filter(|v| matches!(v.get("kind").and_then(|v| v.as_str()), Some("unknown_host_key" | "host_key_mismatch")));
+                if request.site.protocol.eq_ignore_ascii_case("SFTP") {
+                    if let Some(challenge) = challenge {
+                        let changed = challenge["kind"] == "host_key_mismatch";
+                        let candidate = challenge["candidate"].as_str().unwrap_or_default().to_owned();
+                        if !candidate.starts_with("SHA256:") { return self.ftp_failed(error); }
+                        let title = self.language_pack.text(if changed { "NDRSFTPHostKey.ChangedTitle" } else { "NDRSFTPHostKey.FirstUseTitle" }, if changed { "SFTP server key changed" } else { "SFTP server verification" });
+                        let host_label = self.language_pack.text("NDRSFTPHostKey.HostLabel", "Host");
+                        let fingerprint_label = self.language_pack.text("NDRSFTPHostKey.FingerprintLabel", "SHA-256");
+                        let question = self.language_pack.text("NDRSFTPHostKey.TrustQuestion", "Trust this key and continue?");
+                        let prompt = format!("{host_label}: {}:{}\r\n{fingerprint_label}: {candidate}\r\n\r\n{question}", request.site.host, request.site.port);
+                        self.system_box(&title, &prompt, ndr::msgbox::MB_YESNO | MB_ICONEXCLAMATION, move |app, answer, _| {
+                            if app.panes[index].ftp_connect_serial != serial { return; }
+                            if answer == ndr::msgbox::IDYES {
+                                request.site.known_host_fingerprint = candidate;
+                                app.ftp_start_connect(index, request);
+                            } else {
+                                app.status.clear();
+                            }
+                        });
+                        return;
+                    }
+                }
+                self.ftp_failed(error);
+            }
+        }
     }
 
     pub(super) fn ftp_connected(&mut self, index: usize, remote: PaneRemote) {
@@ -679,7 +881,8 @@ impl App {
     /// Original miFTPDisconnectClick(0x43e8d4): FTP_CANNOTDISCONNECT if transferring, otherwise disconnect and go to a local folder.
     pub(super) fn ftp_disconnect(&mut self) {
         let i = self.active;
-        let Some(remote) = self.panes[i].remote.clone() else { return };
+        self.ftp_cancel_connect(i);
+        let Some(remote) = self.panes[i].remote.clone() else { self.status.clear(); return };
         if remote.busy.load(Ordering::Relaxed) {
             return self.ftp_box("FTP_CANNOTDISCONNECT", "Cannot be disconnected while any operation is working.");
         }
@@ -697,6 +900,7 @@ impl App {
     /// is the joined path rather than the server's resolved one. Connect FUN_0045cd40 also starts a TTimer whose OnTimer (0x45e6b0) is
     /// an empty function, so there is no keep-alive to port.
     pub(super) fn ftp_open_dir(&mut self, index: usize, name: &str) {
+        self.ftp_cancel_connect(index);
         let Some(remote) = self.panes[index].remote.as_mut() else { return };
         remote.path = join_remote(&remote.path, name);
         let address = remote.address();
@@ -706,6 +910,7 @@ impl App {
 
     /// The parent folder of an FTP pane (unchanged at the root).
     pub(super) fn ftp_parent(&mut self, index: usize) {
+        self.ftp_cancel_connect(index);
         let Some(remote) = self.panes[index].remote.as_mut() else { return };
         let parent = parent_path(&remote.path);
         if parent == remote.path.trim_end_matches('/') || remote.path == "/" {
@@ -722,6 +927,7 @@ impl App {
 
     /// The root of an FTP pane.
     pub(super) fn ftp_root(&mut self, index: usize) {
+        self.ftp_cancel_connect(index);
         let Some(remote) = self.panes[index].remote.as_mut() else { return };
         if remote.path == "/" {
             return;
@@ -732,6 +938,76 @@ impl App {
         self.refresh(index);
     }
 
+    /// Copy text only, never expose a virtual FTP row as a Windows file.
+    pub(super) fn ftp_copy_paths(&mut self, index: usize, part: ndr::parity::PathPart) {
+        let Some(remote) = self.panes[index].remote.as_ref() else { return };
+        let entries = self.target_entries(index);
+        let values: Vec<String> = entries.iter().filter_map(|entry| {
+            let path = remote.remote_of(&entry.path)?;
+            Some(match &part {
+                ndr::parity::PathPart::Name => entry.name.clone(),
+                ndr::parity::PathPart::Folder => remote.url(&parent_path(&path)),
+                ndr::parity::PathPart::Full => remote.url(&path),
+            })
+        }).collect();
+        if !values.is_empty() { let _ = (self.clipboard_writer)(&values.join("\r\n")); }
+    }
+
+    /// Show the server's listing metadata without issuing local filesystem
+    /// requests or claiming a folder size/permission the server did not send.
+    pub(super) fn ftp_properties(&mut self, index: usize) {
+        let Some(remote) = self.panes[index].remote.as_ref() else { return };
+        let entries = self.target_entries(index);
+        let Some(entry) = entries.first() else { return };
+        let path = remote.remote_of(&entry.path).unwrap_or_default();
+        let label = |key: &str, fallback: &str| self.language_pack.text(key, fallback);
+        let title = label("formMain.Menu.mipProperties", "Properties").replace('&', "");
+        let mut lines = vec![entry.name.clone(), format!("{}: {}", label("NDR.NET_REMOTE_PATH", "Remote path"), remote.url(&path))];
+        if entry.is_dir {
+            lines.push(label("RES.FOLDER", "Folder"));
+        } else {
+            lines.push(format!("{}: {}", label("RES.FIELD_SIZE", "Size"), super::format_size(entry.size)));
+        }
+        if let Some(time) = entry.modified {
+            lines.push(format!("{}: {}", label("RES.FIELD_DATEMODIFIED", "Modified"), chrono::DateTime::<chrono::Local>::from(time).format("%Y-%m-%d %H:%M:%S")));
+        }
+        if let Some(mode) = remote.modes.try_lock().ok().and_then(|m| m.get(&path).copied()) {
+            lines.push(format!("{}: {:04o}", label("NDR.NET_REMOTE_PERMISSIONS", "Remote permissions"), mode));
+        } else if let Some(value) = remote.permissions.try_lock().ok().and_then(|m| m.get(&path).cloned()) {
+            lines.push(format!("{}: {value}", label("NDR.NET_REMOTE_PERMISSIONS", "Remote permissions")));
+        }
+        self.system_box(&title, &lines.join("\r\n"), MB_OK, |_, _, _| {});
+    }
+
+    pub(super) fn ftp_choose_upload_files(&mut self, index: usize) {
+        let Some(remote) = self.panes[index].remote.as_ref() else { return };
+        if remote.busy.load(Ordering::Relaxed) { return self.ftp_box("FTPENGINE_BUSY", "Other files are still being transferred."); }
+        let title = self.language_pack.text("NDR.NET_SELECT_FILES_TO_UPLOAD", "Select files to upload");
+        let other = &self.panes[1-index];
+        let initial = (other.remote.is_none() && other.archive.is_none() && other.vault.is_none()).then_some(other.path.as_path());
+        let paths = (self.remote_hooks.open_files)(&title, initial);
+        if !paths.is_empty() { self.ftp_upload_paths(index, paths, None); }
+    }
+
+    pub(super) fn ftp_choose_upload_folder(&mut self, index: usize) {
+        let Some(remote) = self.panes[index].remote.clone() else { return };
+        if remote.busy.load(Ordering::Relaxed) { return self.ftp_box("FTPENGINE_BUSY", "Other files are still being transferred."); }
+        let initial = self.panes[1-index].path.clone();
+        let title = self.language_pack.text("NDR.NET_SELECT_A_FOLDER_TO_UPLOAD", "Select a folder to upload");
+        self.folder_tree_dialog(&initial, Some(title), move |app, folder, _| {
+            if let Some(folder) = folder {
+                if !folder.is_dir() || folder.parent().is_none() {
+                    let detail = app.language_pack.text("NDR.NET_SELECT_A_FOLDER_INSIDE_THE_DRIVE_INSTEAD_OF", "Select a folder inside the drive instead of the drive root.");
+                    app.warn_operation(&detail);
+                    return;
+                }
+                if app.panes[index].remote.as_ref().is_some_and(|current| Arc::ptr_eq(&current.fs, &remote.fs) && current.path == remote.path) {
+                    app.ftp_upload_paths(index, vec![folder], None);
+                }
+            }
+        });
+    }
+
     /// Original miFTPGetClick(0x4412f8): if the current pane is FTP, choose an FTP_GET destination and then download.
     pub(super) fn ftp_download_command(&mut self) {
         let i = self.active;
@@ -739,7 +1015,7 @@ impl App {
             return;
         }
         let other = &self.panes[1 - i];
-        let initial = if other.remote.is_none() && other.archive.is_none() { other.path.clone() } else { PathBuf::new() };
+        let initial = if other.remote.is_none() && other.archive.is_none() && other.vault.is_none() { other.path.clone() } else { PathBuf::new() };
         self.select_destination(super::destination_dialog::DestinationPurpose::FtpGet, initial, None, move |app, destination| {
             app.ftp_download(i, destination);
         });
@@ -759,10 +1035,11 @@ impl App {
         if items.is_empty() {
             return;
         }
+        if !self.ftp_transfer_slot_available() { return; }
         let rows = self.ftp_results.clone();
         if let Ok(mut list) = rows.lock() {
             list.clear();
-            list.extend(items.iter().map(|(source, name, size, _)| FtpResultRow { upload: false, local: destination.join(name).to_string_lossy().into_owned(), remote: source.clone(), size: (*size > 0).then_some(*size), done: 0, state: RowState::Waiting, started: None }));
+            list.extend(items.iter().map(|(source, name, size, is_dir)| FtpResultRow { upload: false, local: destination.join(name).to_string_lossy().into_owned(), remote: source.clone(), size: (!*is_dir).then_some(*size), done: 0, state: RowState::Waiting, started: None }));
         }
         // End of original FUN_0043f800: show the bottom pane (pBottom).
         self.show_results = true;
@@ -775,11 +1052,9 @@ impl App {
         let started = self.start_task(title, move |events, cancel| {
             let outcome = (|| {
                 let mut fs = remote.fs.lock().map_err(|_| "FTP connection is unavailable".to_owned())?;
-                for (row, (source, _, _, is_dir)) in items.iter().enumerate() {
-                    if *is_dir && let Some(size) = remote_tree_size(&mut |path| fs.list(path), source, &cancel) {
-                        set_row(&rows, row, |r| r.size = Some(size));
-                    }
-                }
+                // The transport already recursively lists each directory
+                // while downloading. Do not repeat that entire traversal
+                // before the first file can start.
                 for (row, (source, name, _, _)) in items.iter().enumerate() {
                     super::commands::wait_while_paused(&pause, &cancel);
                     if cancel.load(Ordering::Relaxed) {
@@ -798,7 +1073,7 @@ impl App {
                         super::commands::wait_while_paused(&pause, &cancel);
                     };
                     match fs.download(source, &local, &cancel, &mut resolve, &mut progress) {
-                        Ok(()) => set_row(&rows, row, |r| r.state = RowState::Done),
+                        Ok(()) => set_row(&rows, row, |r| { if r.size.is_none() { r.size = Some(r.done); } r.state = RowState::Done; }),
                         Err(error) => {
                             let state = if cancel.load(Ordering::Relaxed) { RowState::Cancelled } else { RowState::Failed(error.clone()) };
                             set_row(&rows, row, |r| r.state = state);
@@ -828,7 +1103,7 @@ impl App {
     /// Original miFTPPutClick(0x441168): upload only when one pane is FTP and the other is local (otherwise FTP_PUTCRITERIA).
     pub(super) fn ftp_upload_command(&mut self) {
         let (left, right) = (self.panes[0].remote.is_some(), self.panes[1].remote.is_some());
-        let local = |app: &App, i: usize| app.panes[i].remote.is_none() && app.panes[i].archive.is_none();
+        let local = |app: &App, i: usize| app.panes[i].remote.is_none() && app.panes[i].archive.is_none() && app.panes[i].vault.is_none();
         match (left, right) {
             (true, false) if local(self, 1) => self.ftp_upload(1, 0),
             (false, true) if local(self, 0) => self.ftp_upload(0, 1),
@@ -852,6 +1127,7 @@ impl App {
         if items.is_empty() {
             return;
         }
+        if !self.ftp_transfer_slot_available() { return; }
         let rows = self.ftp_results.clone();
         if let Ok(mut list) = rows.lock() {
             list.clear();
@@ -873,11 +1149,7 @@ impl App {
             let outcome = (|| {
                 let mut fs = remote.fs.lock().map_err(|_| "FTP connection is unavailable".to_owned())?;
                 let mut skipped_any = false;
-                for (row, local) in items.iter().enumerate() {
-                    if local.is_dir() && let Some(size) = local_tree_size(local, &cancel) {
-                        set_row(&rows, row, |r| r.size = Some(size));
-                    }
-                }
+                // Avoid a second full local traversal before upload.
                 for (row, local) in items.iter().enumerate() {
                     super::commands::wait_while_paused(&pause, &cancel);
                     if cancel.load(Ordering::Relaxed) {
@@ -905,7 +1177,7 @@ impl App {
                         super::commands::wait_while_paused(&pause, &cancel);
                     };
                     match fs.upload(local, &destination, &cancel, &mut resolve, &mut progress) {
-                        Ok(()) => set_row(&rows, row, |r| r.state = RowState::Done),
+                        Ok(()) => set_row(&rows, row, |r| { if r.size.is_none() { r.size = Some(r.done); } r.state = RowState::Done; }),
                         Err(error) => {
                             let state = if cancel.load(Ordering::Relaxed) { RowState::Cancelled } else { RowState::Failed(error.clone()) };
                             set_row(&rows, row, |r| r.state = state);
@@ -953,6 +1225,14 @@ impl App {
     }
 
     /// Whether an FTP transfer is in progress (original [+0xd6c]+0x14).
+    // A refused second job must not erase the active transfer queue.
+    fn ftp_transfer_slot_available(&mut self) -> bool {
+        if self.job.as_ref().is_some_and(|j| !j.finished) || !self.background_jobs.is_empty() {
+            self.status = self.catalog("NDR.UI_OPERATION_RUNNING", "이미 다른 작업을 진행 중입니다.", "An operation is already running");
+            false
+        } else { true }
+    }
+
     fn ftp_transferring(&self) -> bool {
         self.panes.iter().any(|p| p.remote.as_ref().is_some_and(|r| r.busy.load(Ordering::Relaxed)))
     }
@@ -1026,7 +1306,9 @@ impl App {
         let height = self.panes[index].ftp_log_height;
         let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), height), egui::Sense::hover());
         ui.painter().rect_filled(rect, 0.0, back);
-        let (lines, selected) = log.lock().map(|l| (l.lines.clone(), l.selected)).unwrap_or_default();
+        // Only the visible log rows are copied, rather than cloning every
+        // retained string on each repaint.
+        let (count, revision) = log.lock().map(|l| (l.lines.len(), l.revision)).unwrap_or_default();
         let row = ui.text_style_height(&egui::TextStyle::Body) + 1.0;
         let highlight = {
             let (r, g, b) = native::system_color(13);
@@ -1039,31 +1321,34 @@ impl App {
         let mut clicked = None;
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::top_down(egui::Align::Min)));
         child.spacing_mut().item_spacing.y = 0.0;
-        let count_id = egui::Id::new(("ndr-ftp-log-count", index));
+        let count_id = egui::Id::new(("ndr-ftp-log-revision", index));
+        let stamp = (Arc::as_ptr(&log) as usize, revision);
         let mut area = egui::ScrollArea::vertical().id_salt(("ndr-ftp-log", index)).auto_shrink([false, false]);
-        if ui.ctx().data(|d| d.get_temp::<usize>(count_id)) != Some(lines.len()) {
-            area = area.vertical_scroll_offset(lines.len() as f32 * row);
+        if ui.ctx().data(|d| d.get_temp::<(usize, u64)>(count_id)) != Some(stamp) {
+            area = area.vertical_scroll_offset(count as f32 * row);
         }
-        area.show_rows(&mut child, row, lines.len(), |ui, range| {
-            for i in range {
+        area.show_rows(&mut child, row, count, |ui, range| {
+            let (visible, selected) = log.lock().ok().filter(|l| l.revision == revision)
+                .map(|l| (l.lines.get(range.clone()).unwrap_or_default().to_vec(), l.selected)).unwrap_or_default();
+            for (i, line) in range.zip(visible) {
                 let (line_rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), row), egui::Sense::click());
                 let chosen = selected == Some(i);
                 if chosen {
                     ui.painter().rect_filled(line_rect, 0.0, highlight);
                 }
-                ui.painter().with_clip_rect(line_rect).text(line_rect.left_center() + egui::vec2(2.0, 0.0), egui::Align2::LEFT_CENTER, &lines[i], egui::TextStyle::Body.resolve(ui.style()), if chosen { highlight_text } else { text });
+                ui.painter().with_clip_rect(line_rect).text(line_rect.left_center() + egui::vec2(2.0, 0.0), egui::Align2::LEFT_CENTER, line, egui::TextStyle::Body.resolve(ui.style()), if chosen { highlight_text } else { text });
                 if response.clicked() {
                     clicked = Some(i);
                 }
             }
         });
-        ui.ctx().data_mut(|d| d.insert_temp(count_id, lines.len()));
+        ui.ctx().data_mut(|d| d.insert_temp(count_id, stamp));
         if let Some(i) = clicked {
             if let Ok(mut log) = log.lock() {
-                log.selected = Some(i);
+                if log.revision == revision { log.selected = Some(i); }
             }
         }
-        if !lines.is_empty() && self.panes[index].remote.as_ref().is_some_and(|r| r.busy.load(Ordering::Relaxed)) {
+        if count != 0 && self.panes[index].remote.as_ref().is_some_and(|r| r.busy.load(Ordering::Relaxed)) {
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
         }
     }
@@ -1074,7 +1359,15 @@ impl App {
         let header = |i: usize| headers.get(i).cloned().unwrap_or_default();
         let paused = self.ftp_pause.load(Ordering::Relaxed);
         let mut action = None;
-        let rows = self.ftp_results.lock().map(|r| r.clone()).unwrap_or_default();
+        let (rows, (done, total, percent), unknown, has_rows, speed) = self.ftp_results.lock().map(|r| {
+            let summary = ftp_totals(&r);
+            let unknown = r.iter().any(|row| row.size.is_none() && matches!(row.state, RowState::Waiting | RowState::Running));
+            let speed = ftp_speed(&r, std::time::Instant::now());
+            let rows = if self.results_collapsed { Vec::new() } else {
+                r.iter().filter(|row| row.state != RowState::Done).cloned().collect()
+            };
+            (rows, summary, unknown, !r.is_empty(), speed)
+        }).unwrap_or_default();
         let transferring = self.ftp_transferring();
         // Original NXPaintPanel1 (height 21): btnFTPPause (1,0 75x21) btnFTPAbort (78,0 75x21) pbFTPTransfer (159,2 150x16)
         // lFTPTransferred (315,4), at the right end btnFTPShowDetail (">>", right - 46, 19x19) btnFTPCloseProgress ("X", right - 21).
@@ -1096,12 +1389,18 @@ impl App {
             action = Some(1);
         }
         // Original FUN_0043f04c event 1: pbFTPTransfer = percentage, lFTPTransferred = "%d %% (received / total) - speed". Without a transfer, 0 and empty text.
-        let (done, total, percent) = ftp_totals(&rows);
-        let running = transferring && !rows.is_empty();
-        ui.put(at(159.0, 2.0, 150.0, 16.0), egui::ProgressBar::new(if running { percent as f32 / 100.0 } else { 0.0 }).desired_height(16.0).corner_radius(0.0));
+        let running = transferring && has_rows;
+        if running && unknown {
+            ui.put(at(159.0, 2.0, 150.0, 16.0), egui::Spinner::new().size(14.0));
+        } else {
+            ui.put(at(159.0, 2.0, 150.0, 16.0), egui::ProgressBar::new(if running { percent as f32 / 100.0 } else { 0.0 }).desired_height(16.0).corner_radius(0.0));
+        }
         if running {
-            let speed = ftp_speed(&rows, std::time::Instant::now());
-            let text = ftp_transferred_text(percent, &localized_byte_size(&self.language_pack, done), &localized_byte_size(&self.language_pack, total), speed);
+            let text = if unknown {
+                format!("{} - {speed:.2} KB/s", localized_byte_size(&self.language_pack, done))
+            } else {
+                ftp_transferred_text(percent, &localized_byte_size(&self.language_pack, done), &localized_byte_size(&self.language_pack, total), speed)
+            };
             super::original_dialogs::put_left(ui, at(315.0, 3.0, (bar.width() - 315.0 - 52.0).max(0.0), 16.0), egui::Label::new(text).truncate());
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
         }
@@ -1387,12 +1686,12 @@ impl App {
         let target = 1 - source;
         match (self.panes[source].remote.is_some(), self.panes[target].remote.is_some()) {
             (false, false) => false,
-            (true, false) if self.panes[target].archive.is_none() => {
+            (true, false) if self.panes[target].archive.is_none() && self.panes[target].vault.is_none() => {
                 let destination = self.panes[target].path.clone();
                 self.ftp_download(source, destination);
                 true
             }
-            (false, true) if self.panes[source].archive.is_none() => {
+            (false, true) if self.panes[source].archive.is_none() && self.panes[source].vault.is_none() => {
                 self.ftp_upload(source, target);
                 true
             }
@@ -1462,8 +1761,9 @@ mod tests {
         // Original FUN_0043f04c event 1: received bytes x 100 / total bytes. Finished rows count their whole size, waiting rows 0.
         let rows = [row(Some(1000), 1000, RowState::Done), row(Some(3000), 1000, RowState::Running), row(Some(4000), 0, RowState::Waiting)];
         assert_eq!(ftp_totals(&rows), (2000, 8000, 25));
-        // When the total is unknown, 100% (original iVar6 starts at 100).
-        assert_eq!(ftp_totals(&[row(None, 10, RowState::Running)]).2, 100);
+        // A folder whose total has not been enumerated displays transferred
+        // bytes with an indeterminate progress indicator.
+        assert_eq!(ftp_totals(&[row(None, 10, RowState::Running)]), (10, 10, 0));
         // lFTPTransferred: "%d %% (%s / %s) - %s" (wsprintf %% = %), speed via FormatFloat("0.00 KB/s").
         assert_eq!(ftp_transferred_text(25, "1.95 KB", "7.81 KB", 12.345), "25 % (1.95 KB / 7.81 KB) - 12.35 KB/s");
     }
@@ -1474,8 +1774,9 @@ mod tests {
         assert_eq!(row(Some(1000), 370, RowState::Running).progress_cells(0, true), ("<<<".to_owned(), "37%".to_owned()));
         let upload = FtpResultRow { upload: true, ..row(Some(1000), 1000, RowState::Running) };
         assert_eq!(upload.progress_cells(0, true), (">>>>>>>>>>".to_owned(), "100%".to_owned()));
-        // When the item size is unknown, the overall percentage.
-        assert_eq!(row(None, 5, RowState::Running).progress_cells(42, true), ("<<<<".to_owned(), "42%".to_owned()));
+        // Unknown folder size must not display a misleading percentage.
+        let unknown = row(None, 5, RowState::Running).progress_cells(42, true);
+        assert!(unknown.0.contains('5') && unknown.1.is_empty());
         // Waiting rows are blank, failed rows show the state text.
         assert_eq!(row(Some(10), 0, RowState::Waiting).progress_cells(0, true), (String::new(), String::new()));
         assert_eq!(row(Some(10), 0, RowState::Failed("550".into())).progress_cells(0, true), ("550".to_owned(), String::new()));

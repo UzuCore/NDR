@@ -166,7 +166,7 @@ impl App {
         let Some(path) = pane.tabs.get(pane.tab).cloned() else { return };
         pane.archive = None;
         self.active = index;
-        let special = super::panes::is_drives(&path) || path.to_string_lossy().starts_with("ftp://") || path.to_string_lossy().starts_with("sftp://");
+        let special = super::panes::is_drives(&path) || path.to_string_lossy().starts_with("ftp://") || path.to_string_lossy().starts_with("ftps://") || path.to_string_lossy().starts_with("sftp://");
         let mut target = path.clone();
         if !special {
             while !target.exists() {
@@ -312,7 +312,7 @@ impl App {
         if let Some(remote) = self.panes[index].remote.clone() {
             // Original FUN_0048aa30 (FTP mode): "/%s%s" path. The host segment = root.
             let parts: Vec<&str> = remote.path.split('/').filter(|p| !p.is_empty()).collect();
-            if crumb(ui, &format!("ftp://{}", remote.host), parts.is_empty()) {
+            if crumb(ui, &remote.endpoint(), parts.is_empty()) {
                 chosen = Some(AddressAction::Navigate(CrumbTarget::Remote("/".into())));
             }
             let mut path = String::new();
@@ -506,7 +506,7 @@ impl App {
             }
             return;
         }
-        if lower.starts_with("ftp://") {
+        if lower.starts_with("ftp://") || lower.starts_with("ftps://") || lower.starts_with("sftp://") {
             return self.ftp_quick_connect(value.to_owned());
         }
         self.navigate_address(index, value);
@@ -609,6 +609,7 @@ impl App {
     /// pmMain items (text, command, enabled). None is a separator (leading, trailing and doubled separators removed).
     pub(super) fn list_menu_items(&self, index: usize) -> Vec<Option<(String, &'static str, bool)>> {
         let pane = &self.panes[index];
+        if pane.remote.is_some() { return self.ftp_list_menu_items(index); }
         let rows: Vec<usize> = if pane.loading {
             vec![]
         } else if pane.selected.is_empty() {
@@ -692,6 +693,55 @@ impl App {
             reduced.pop();
         }
         reduced
+    }
+
+    /// Remote paths are not Windows files. Only expose commands which
+    /// have a real remote implementation, even when Explorer-menu mode
+    /// is enabled for local panels.
+    fn ftp_list_menu_items(&self, index: usize) -> Vec<Option<(String, &'static str, bool)>> {
+        let pane = &self.panes[index];
+        let remote = pane.remote.as_ref().expect("remote menu");
+        let idle = !remote.busy.load(Ordering::Relaxed) && !pane.loading && !pane.ftp_connect_pending;
+        let valid = |e: &Entry| !e.is_parent() && !e.drive;
+        let has = !pane.loading && if pane.selected.is_empty() {
+            pane.entries.get(pane.cursor).is_some_and(valid)
+        } else {
+            pane.selected.iter().any(|&i| pane.entries.get(i).is_some_and(valid))
+        };
+        let folder = !pane.loading && pane.entries.get(pane.cursor).is_some_and(|e| e.is_dir);
+        let other = &self.panes[1-index];
+        let local_other = self.dual && other.remote.is_none() && other.archive.is_none()
+            && other.vault.is_none() && !other.loading && !super::panes::is_drives(&other.path);
+        let upload_selected = local_other && if other.selected.is_empty() {
+            other.entries.get(other.cursor).is_some_and(valid)
+        } else {
+            other.selected.iter().any(|&i| other.entries.get(i).is_some_and(valid))
+        };
+        let paste = self.vault_clipboard.is_none() && (self.clipboard.is_some() || self.archive_clipboard.is_some() || native::clipboard_has_files());
+        let text = |key: &str, fallback: &str| self.language_pack.text(key, fallback);
+        vec![
+            Some((text("formMain.Menu.miOpen", "Open"), "open", idle && folder)),
+            Some((text("formMain.Menu.miFTPGet", "Download selected items"), "ftpDownload", idle && has)),
+            Some((text(if index == 0 { "RES.FUNC_COPYTORIGHT" } else { "RES.FUNC_COPYTOLEFT" }, "Copy to the other pane"), "copyToOther", idle && has && local_other)),
+            None,
+            Some((text("formMain.Menu.miFTPPut", "Upload selected items"), "ftpUpload", idle && upload_selected)),
+            Some((text("NDR.NET_SELECT_FILES_TO_UPLOAD", "Select files to upload"), "ftpUploadFiles", idle)),
+            Some((text("NDR.NET_SELECT_A_FOLDER_TO_UPLOAD", "Select a folder to upload"), "ftpUploadFolder", idle)),
+            Some((text("formMain.Menu.mipEditPaste", "Paste"), "paste", idle && paste)),
+            None,
+            Some((text("formMain.Menu.miNewFolder", "New folder"), "newFolder", idle)),
+            Some((text("formMain.Menu.mipRename", "Rename"), "rename", idle && has)),
+            Some((text("formMain.Menu.mipDelete", "Delete"), "deletePermanent", idle && has)),
+            Some((text("NDR.NET_REMOTE_PERMISSIONS", "Remote permissions"), "attributes", idle && has)),
+            None,
+            Some((text("formMain.Menu.miCopyFileName", "Copy file name"), "copyName", has)),
+            Some((text("formMain.Menu.miCopyFullPath", "Copy full path"), "copyFullPath", has)),
+            Some((text("formMain.Menu.miCopyPath", "Copy folder path"), "copyPathOnly", has)),
+            Some((text("formMain.Menu.mipProperties", "Properties"), "properties", has)),
+            None,
+            Some((text("NDR.NET_REFRESH_REMOTE_FOLDER", "Refresh remote folder"), "refresh", idle)),
+            Some((text("formMain.Menu.miFTPDisconnect", "Disconnect"), "ftpDisconnect", !remote.busy.load(Ordering::Relaxed))),
+        ]
     }
 
     fn draw_list_menu(&self, ui: &mut egui::Ui, items: Vec<Option<(String, &'static str, bool)>>) -> Option<&'static str> {

@@ -126,6 +126,9 @@ impl App {
     /// C# CopyPathToClipboard (original 0x43317c): items like FUN_00485bbc, Shift doubles every backslash,
     /// CRLF between lines, nothing copied without items, clipboard failures are silent.
     pub(super) fn copy_item_paths(&mut self,part:ndr::parity::PathPart,escape:bool){
+        if self.panes[self.active].remote.is_some() {
+            return self.ftp_copy_paths(self.active, part);
+        }
         let pane=&self.panes[self.active];
         let indices=ndr::parity::collect_items(pane.entries.len(),&pane.selected,(!pane.loading).then_some(pane.cursor));
         let archive_file=pane.archive.as_ref().map(|a|a.file.to_string_lossy().into_owned());
@@ -712,6 +715,11 @@ impl App {
         }
         if matches!(id, "paste" | "contextPaste") && self.vault_clipboard.is_some()
             && self.panes[self.active].vault.is_none() {
+            if self.panes[self.active].remote.is_some() {
+                let detail = self.language_pack.text("NDR.NET_SELECT_LOCAL_FILES_OR_FOLDERS_TO_UPLOAD", "Select local files or folders to upload.");
+                self.warn_operation(&detail);
+                return;
+            }
             if self.vault_paste_selection_to_local() { return; }
         }
         if matches!(id, "copy" | "cut" | "contextCopy" | "contextCut") {
@@ -731,6 +739,8 @@ impl App {
             "ftpDisconnect" => return self.ftp_disconnect(),
             "ftpDownload" => return self.ftp_download_command(),
             "ftpUpload" => return self.ftp_upload_command(),
+            "ftpUploadFiles" => return self.ftp_choose_upload_files(self.active),
+            "ftpUploadFolder" => return self.ftp_choose_upload_folder(self.active),
             "toggleResults" => return self.toggle_results(),
             _ => {}
         }
@@ -825,6 +835,7 @@ impl App {
             // the other pane, editable to a folder in the same pane); at an archive location FUN_00439bac (choose the extraction destination). FTP locations upload/download.
             "copyToOther"|"moveToOther" if self.panes[i].remote.is_none()&&self.panes[1-i].remote.is_none()=>self.copy_move_to_folder(id=="moveToOther"),
             "copyToOther"|"moveToOther"=>self.copy_to_other(i,id=="moveToOther",ctx),
+            "copyToFolder" if self.panes[i].remote.is_some()=>self.ftp_download_command(),
             "copyToFolder"|"moveToFolder"=>self.copy_move_to_folder(id=="moveToFolder"),
             "copy"|"cut"=>{
                 if !targets.is_empty(){
@@ -872,7 +883,7 @@ impl App {
             "deleteRecycle"|"deletePermanent"=>self.delete_items(id=="deleteRecycle"&&!ctx.input(|i|i.modifiers.shift)),
             "shred"=>self.shred_items(),
             "copyFullPath"|"copyPathOnly"|"copyName"=>{let escape=ctx.input(|input|input.modifiers.shift);self.copy_item_paths(match id{"copyName"=>ndr::parity::PathPart::Name,"copyPathOnly"=>ndr::parity::PathPart::Folder,_=>ndr::parity::PathPart::Full},escape);},
-            "copyFolder"=>{result=(self.clipboard_writer)(&path.to_string_lossy());},
+            "copyFolder"=>{let value=if let Some(remote)=&self.panes[i].remote { remote.address() } else { path.to_string_lossy().into_owned() };result=(self.clipboard_writer)(&value);},
             "selectAll" => {let shift=ctx.input(|i|i.modifiers.shift);self.cycle_selection(shift);},
             "invertSelection" => self.original_invert_selection(),
             // Original Edit menu miSelect ("Select\tSpacebar"): toggles the current item's mark like Space.
@@ -930,7 +941,7 @@ impl App {
             "archiveInstall"=>self.install_archive_command(),
             "command"=>self.command_prompt(),
             "openWithParameters"=>self.open_with_parameters(),"openWith"=>self.open_with_command(),
-            "remote"=>self.open_remote_window(None,None),"sites"=>self.open_remote_sites(),
+            "remote"=>self.ftp_quick_connect(String::new()),"sites"=>self.open_remote_sites(),
             "remoteCommand"=>self.run_remote_command(),
             "shortcut"=>self.shortcut_command(),
             "pasteShortcut"=>self.paste_shortcut_command(),

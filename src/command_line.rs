@@ -34,7 +34,7 @@ pub fn lstrcmpi(a: &str, b: &str) -> i32 {
     unsafe { windows_sys::Win32::Globalization::lstrcmpiW(wide(a).as_ptr(), wide(b).as_ptr()) }
 }
 
-/// Parse: PathGetArgsW gives the arguments, PathRemoveArgsW the program name. "ftp://" or "http://" (case-sensitive) means FTP/HTTP, the name "cd" changes folder.
+/// Parse: PathGetArgsW gives the arguments, PathRemoveArgsW the program name. FTP/FTPS/SFTP URLs use panel quick connect; the name "cd" changes folder.
 pub fn parse(command: &str) -> ParsedCommand {
     let mut buffer = wide(command);
     // SAFETY: PathGetArgsW returns a pointer into the NUL-terminated buffer; PathRemoveArgsW edits it in place.
@@ -46,7 +46,8 @@ pub fn parse(command: &str) -> ParsedCommand {
     // SAFETY: as above; the buffer keeps its terminator.
     unsafe { windows_sys::Win32::UI::Shell::PathRemoveArgsW(buffer.as_mut_ptr()) };
     let file_name = from_wide(&buffer);
-    let kind = if file_name.starts_with("ftp://") {
+    let lower = file_name.to_ascii_lowercase();
+    let kind = if lower.starts_with("ftp://") || lower.starts_with("ftps://") || lower.starts_with("sftp://") {
         CommandKind::Ftp
     } else if file_name.starts_with("http://") {
         CommandKind::Http
@@ -251,7 +252,9 @@ mod tests {
         assert_eq!(parse("\"C:\\Program Files\\x.exe\" -v").file_name, "\"C:\\Program Files\\x.exe\"", "PathRemoveArgsW keeps the quotes");
         assert_eq!(parse("CD ..").kind, CommandKind::ChangeDirectory);
         assert_eq!(parse("ftp://host/dir").kind, CommandKind::Ftp);
-        assert_eq!(parse("FTP://host").kind, CommandKind::Local, "the scheme test is case-sensitive");
+        assert_eq!(parse("FTP://host").kind, CommandKind::Ftp);
+        assert_eq!(parse("ftps://host").kind, CommandKind::Ftp);
+        assert_eq!(parse("sftp://host").kind, CommandKind::Ftp);
         assert_eq!(parse("http://example.invalid").kind, CommandKind::Http);
         let mut history = vec!["dir".to_owned(), "Notepad".to_owned()];
         remember_local_command(&mut history, "notepad", true);

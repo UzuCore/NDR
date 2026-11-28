@@ -358,13 +358,15 @@ impl App {
     /// C# ManageRemoteSitesAsync.
     pub(super) fn open_remote_sites(&mut self) {
         let form = SitesForm::new(load_sites(&self.settings));
+        let pane = self.active;
         let title = self.site_title();
-        self.push_original_dialog(title, DialogKind::RemoteSites(Box::new(form)), |app, result, _| {
+        self.push_original_dialog(title, DialogKind::RemoteSites(Box::new(form)), move |app, result, _| {
             let DialogResult::RemoteSites(Some((sites, connect))) = result else { return };
             store_sites(&mut app.settings, &sites);
             app.save();
             if let Some(profile) = connect.and_then(|i| sites.get(i)).cloned() {
-                app.open_remote_window(Some(profile), None);
+                let password = native::unprotect_secret(&profile.encrypted_password).unwrap_or_default();
+                app.ftp_connect(pane, profile, password);
             }
         });
     }

@@ -736,13 +736,16 @@ fn parse_listing_with_devices_filtered(text: &str, skip_reserved: bool) -> Resul
     let mut entries = Vec::new();
     let mut seen = HashSet::new();
     let mut skipped_devices = Vec::new();
-    for block in text.replace("\r\n", "\n").split("\n\n") {
+    // lines() understands both CRLF and LF. Do not allocate a second
+    // complete copy of a potentially multi-megabyte 7-Zip listing.
+    let mut lines = text.lines().peekable();
+    while lines.peek().is_some() {
         let mut key = None;
         let mut dir = false;
         let mut size = 0;
         let mut size_known = true;
         let mut modified = None;
-        for line in block.lines() {
+        for line in lines.by_ref().take_while(|line| !line.is_empty()) {
             if let Some(v) = line.strip_prefix("Path = ") {
                 key = Some(v.to_owned())
             } else if let Some(v) = line.strip_prefix("Modified = ") {
@@ -798,6 +801,19 @@ fn parse_listing_with_devices_filtered(text: &str, skip_reserved: bool) -> Resul
 #[cfg(test)]
 fn parse_listing(text: &str) -> Result<Vec<ArchiveEntry>, String> {
     parse_listing_with_devices_filtered(text, false).map(|(entries, _)| entries)
+}
+#[cfg(test)]
+#[test]
+fn batch415_listing_parses_crlf_lf_and_last_record_without_copy() {
+    let text = "Path = dir\nFolder = +\nSize = 0\n\nPath = dir/a.txt\nSize = 7";
+    let lf = parse_listing(text).unwrap();
+    let crlf = parse_listing(&text.replace('\n', "\r\n")).unwrap();
+    assert_eq!(lf.len(), 2);
+    assert_eq!(crlf.len(), 2);
+    for (a, b) in lf.iter().zip(&crlf) {
+        assert_eq!((&a.key, a.is_dir, a.size, a.size_known), (&b.key, b.is_dir, b.size, b.size_known));
+    }
+    assert_eq!((&lf[1].key[..], lf[1].size), ("dir/a.txt", 7));
 }
 /// Some single-stream 7zip+ handlers emit `Size = ...` without `Path =`
 /// under `l -slt -ba`, although extraction produces one real file.
@@ -4044,21 +4060,27 @@ mod entry_tests {
         use std::os::windows::fs::OpenOptionsExt;
         use std::time::{Duration, SystemTime};
         let root = std::env::temp_dir().join(format!("ndr-clean-{}-{}", std::process::id(), SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
-        for name in [".ndr-entry-1-0", ".ndr-entry-2-0", ".ndr-entry-3-0", "other"] {
+        let pid = crate::cache::fixture_dead_owner();
+        let first = format!(".ndr-entry-{pid}-1");
+        let second = format!(".ndr-entry-{pid}-2");
+        let busy = format!(".ndr-entry-{pid}-3");
+        let trash = format!(".ndr-trash-{pid}-4");
+        for name in [first.as_str(), second.as_str(), busy.as_str(), "other"] {
             fs::create_dir_all(root.join(name).join("sub")).unwrap();
             fs::write(root.join(name).join("sub").join("a.txt"), b"x").unwrap();
         }
-        fs::create_dir_all(root.join(".ndr-trash-9-0")).unwrap();
+        fs::create_dir_all(root.join(&trash)).unwrap();
         let week = Duration::from_secs(7 * 24 * 3600);
+        let now = crate::cache::fixture_clock(&root);
         // By the current time everything is recent: only the leftover trash folders are removed.
-        assert_eq!(clean_stale_temp_entries(&root, week, SystemTime::now()), 1);
-        assert!(root.join(".ndr-entry-1-0").is_dir() && !root.join(".ndr-trash-9-0").exists());
+        assert_eq!(clean_stale_temp_entries(&root, week, now), 1);
+        assert!(root.join(&first).is_dir() && !root.join(&trash).exists());
         // 8 days later: the folder with an open file (no delete sharing) and the folder with another name stay.
-        let locked = fs::OpenOptions::new().read(true).share_mode(1).open(root.join(".ndr-entry-3-0").join("sub").join("a.txt")).unwrap();
-        let later = SystemTime::now() + Duration::from_secs(8 * 24 * 3600);
+        let locked = fs::OpenOptions::new().read(true).share_mode(1).open(root.join(&busy).join("sub").join("a.txt")).unwrap();
+        let later = now + Duration::from_secs(8 * 24 * 3600);
         assert_eq!(clean_stale_temp_entries(&root, week, later), 2);
-        assert!(!root.join(".ndr-entry-1-0").exists() && !root.join(".ndr-entry-2-0").exists());
-        assert!(root.join(".ndr-entry-3-0").join("sub").join("a.txt").is_file(), "in use: kept whole");
+        assert!(!root.join(&first).exists() && !root.join(&second).exists());
+        assert!(root.join(&busy).join("sub").join("a.txt").is_file(), "in use: kept whole");
         assert!(root.join("other").is_dir());
         drop(locked);
         assert_eq!(clean_stale_temp_entries(&root, week, later), 1);

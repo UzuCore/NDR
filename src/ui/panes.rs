@@ -962,8 +962,8 @@ impl App {
     /// the drive if a drive, otherwise the selected items or the cursor item); otherwise pmMain.
     pub(super) fn list_menu_kind(&self, index: usize) -> ListMenu {
         let pane = &self.panes[index];
-        if pane.vault.is_some() { return ListMenu::Main; }
-        if pane.archive.is_some() || pane.remote.is_some() || pane.loading {
+        if pane.vault.is_some() || pane.remote.is_some() { return ListMenu::Main; }
+        if pane.archive.is_some() || pane.loading {
             return ListMenu::None;
         }
         let Some(focused) = pane.entries.get(pane.cursor) else { return ListMenu::None };
@@ -982,6 +982,7 @@ impl App {
     /// the selected items or the cursor item); if on, show pmMain at the press point (the opposite of the right-button menu).
     pub(super) fn rocker_menu_kind(&self, index: usize) -> ListMenu {
         let pane = &self.panes[index];
+        if pane.remote.is_some() { return ListMenu::Main; }
         let Some(focused) = pane.entries.get(pane.cursor) else { return ListMenu::None };
         let drive_cursor = pane.selected.is_empty() && focused.drive;
         if !self.settings.flag("UseExplorerMenu", false) || drive_cursor {
@@ -1476,7 +1477,7 @@ impl App {
             let mut structural=false;
             let reading=Instant::now();
             let mut result = if let Some(remote) = remote {
-                super::ftp_pane::list_remote(&remote, show_hidden)
+                super::ftp_pane::list_remote(&remote, show_hidden, &listing_cancel)
             } else if let Some(drives) = drives {
                 Ok(drives
                     .into_iter()
@@ -1626,6 +1627,7 @@ impl App {
         }
     }
     pub(super) fn navigate(&mut self, index: usize, path: PathBuf, remember: bool) {
+        self.ftp_cancel_connect(index);
         // Any real filesystem navigation leaves the encrypted virtual folder.
         self.discard_vault(index);
         // If an editor still owns a virtual-file handle, discard_vault
@@ -2517,14 +2519,17 @@ impl App {
                 }
                 // The list right-button menu (every paint, regardless of whether rows were drawn). The original OnContextPopup(FUN_00484e8c) chooses what to show.
                 // The key (Apps, MousePos -1, -1) is for the current pane only: if there is no selection and the cursor item is "..", do not show it, and the position is the bottom-left of the cursor item's cell.
-                let mouse_menu = super::skin_pane::take_pane_menu_request(ctx, index);
+                let mouse_menu = super::skin_pane::take_pane_menu_request(ctx, index)
+                    || (self.panes[index].remote.is_some() && ui.rect_contains_pointer(list_rect)
+                        && ui.input(|i| i.pointer.button_clicked(egui::PointerButton::Secondary)));
+                if mouse_menu && self.panes[index].remote.is_some() { activate = true; }
                 let key_menu = index == self.active && std::mem::take(&mut self.pending_context_key);
                 let parent_only = self.panes[index].selected.is_empty() && self.panes[index].entries.get(self.panes[index].cursor).is_some_and(|e| e.is_parent());
                 // Original FUN_00485078: the left button pressed while the right button is held (after moving the cursor to the pressed row) → rocker_menu_kind.
                 let rocker = ui.rect_contains_pointer(list_rect) && ui.input(|i| i.pointer.button_pressed(egui::PointerButton::Primary) && i.pointer.button_down(egui::PointerButton::Secondary));
                 let kind = if rocker {
                     self.rocker_menu_kind(index)
-                } else if mouse_menu || (key_menu && !parent_only) {
+                } else if mouse_menu || (key_menu && (!parent_only || self.panes[index].remote.is_some())) {
                     self.list_menu_kind(index)
                 } else {
                     ListMenu::None

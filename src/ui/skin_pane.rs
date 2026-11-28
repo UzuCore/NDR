@@ -730,7 +730,7 @@ impl App {
         if let Some(remote) = &pane.remote {
             // Original FUN_0048c548 (FTP mode 2, level > 0): the ">" after a segment lists that remote folder's subfolders through the
             // enumerator (TNXFTPEnumerator slot +0x1c = FUN_0045c948). `folder` carries the remote path ("/" for the host segment).
-            segments.push(CrumbSegment { label: format!("ftp://{}", remote.host), target: CrumbTarget::Remote("/".into()), folder: Some(PathBuf::from("/")) });
+            segments.push(CrumbSegment { label: remote.endpoint(), target: CrumbTarget::Remote("/".into()), folder: Some(PathBuf::from("/")) });
             let mut path = String::new();
             for part in remote.path.split('/').filter(|p| !p.is_empty()) {
                 path.push('/');
